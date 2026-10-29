@@ -1052,17 +1052,22 @@ impl Session {
                         Leave::Held { from, to }
                     } else {
                         self.give_back_aux_ships(&led);
+                        self.refund_defenders(&led);
                         Leave::Dropped
                     };
                 self.space.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
+                self.refund_defenders(&BTreeSet::new());
                 // The berths' odds, search timers and persons outlast the
                 // traffic, as the original's ship table does (see the
-                // `kept_berths` module).
+                // `kept_berths` module), and the stellars' defences, as its
+                // stellar records do (see the `stellar_defence` module).
                 let kept = self.space.traffic.kept_berths();
+                let defences = self.space.traffic.take_defences();
                 self.space.traffic = Traffic::new();
+                self.space.traffic.keep_defences(defences);
                 // A new traffic reads reused slots' picks, exit cursors and
                 // blink timers and search timers by the rulebook.
                 self.space

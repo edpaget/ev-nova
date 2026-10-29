@@ -126,10 +126,21 @@ pub fn defenders_of(stellar: StellarId, npcs: &[Npc]) -> usize {
 /// module docs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StellarDefences {
-    /// The ships left of each stellar whose count has changed (+0x466).
-    left: BTreeMap<StellarId, i16>,
+    /// The ships left of each stellar whose count has been read or
+    /// changed (+0x466), with its raw `DefCount` (+0x468), which a refund
+    /// is capped at once its system's stellars are no longer at hand.
+    left: BTreeMap<StellarId, Count>,
     /// The stellars under attack (+0x47).
     under_attack: BTreeSet<StellarId>,
+}
+
+/// A stellar's defence ships left and its raw `DefCount`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Count {
+    /// Its ships left (+0x466).
+    left: i16,
+    /// Its `DefCount`, raw (+0x468).
+    def_count: i16,
 }
 
 impl StellarDefences {
@@ -139,33 +150,43 @@ impl StellarDefences {
     pub fn left(&self, site: &LandingSite) -> i16 {
         self.left
             .get(&site.id)
-            .copied()
-            .unwrap_or_else(|| initial_left(site.def_count))
+            .map_or_else(|| initial_left(site.def_count), |count| count.left)
     }
 
-    /// Sets `stellar`'s defence ships left to `left`: the planet comm
+    /// Sets `site`'s defence ships left to `left`: the planet comm
     /// dialog's arithmetic and the saved counts write it
     /// (rdm:phase/play-feel-4/phase-2-planet-comm-dialog, phase 3).
-    pub fn set_left(&mut self, stellar: StellarId, left: i16) {
-        self.left.insert(stellar, left);
+    pub fn set_left(&mut self, site: &LandingSite, left: i16) {
+        self.left.insert(
+            site.id,
+            Count {
+                left,
+                def_count: site.def_count,
+            },
+        );
+    }
+
+    /// Keeps `site`'s count, its decode while it has none, so a refund
+    /// finds its `DefCount`: each defender's spawn does.
+    pub fn know(&mut self, site: &LandingSite) {
+        let left = self.left(site);
+        self.set_left(site, left);
     }
 
     /// Spends one of `site`'s defence ships (`decw` +0x466 @0x43c39).
     pub fn spend(&mut self, site: &LandingSite) {
         let left = self.left(site).saturating_sub(1);
-        self.left.insert(site.id, left);
+        self.set_left(site, left);
     }
 
-    /// Gives one of `site`'s defence ships back, capped at its raw
-    /// `DefCount` (`_DeleteAllComputerShips` @0x3c046-0x3c06f).
-    pub fn refund(&mut self, site: &LandingSite) {
-        let left = self.left(site).saturating_add(1);
-        let left = if left > site.def_count {
-            site.def_count
-        } else {
-            left
-        };
-        self.left.insert(site.id, left);
+    /// Gives one of `stellar`'s defence ships back, capped at its raw
+    /// `DefCount` (`_DeleteAllComputerShips` @0x3c046-0x3c06f); nothing
+    /// for a stellar whose count was never kept
+    /// ([`StellarDefences::know`]), which has sent up no defender.
+    pub fn refund(&mut self, stellar: StellarId) {
+        if let Some(count) = self.left.get_mut(&stellar) {
+            count.left = count.left.saturating_add(1).min(count.def_count);
+        }
     }
 
     /// Whether `stellar` is under attack (+0x47).
@@ -278,14 +299,13 @@ impl Traffic {
         self.defences.recompute(nav, &self.npcs);
     }
 
-    /// Gives back one defence ship to its stellar of `sites` for each of
-    /// its defenders among the NPCs not in `kept`, as their system's
-    /// ships are dropped (`_DeleteAllComputerShips` @0x3c02a-0x3c06f; see
+    /// Gives back one defence ship to its stellar for each of its
+    /// defenders among the NPCs not in `kept`, as their system's ships are
+    /// dropped (`_DeleteAllComputerShips` @0x3c02a-0x3c06f; see
     /// [`StellarDefences::refund`]). A ship marked as a mission's
     /// auxiliary ship gives its slot one back instead, as the original's
-    /// branch for +0x8a comes first (@0x3bfce-0x3c028). A stellar not
-    /// among `sites` gets none back.
-    pub fn refund_defenders(&mut self, kept: &BTreeSet<NpcId>, sites: &[LandingSite]) {
+    /// branch for +0x8a comes first (@0x3bfce-0x3c028).
+    pub fn refund_defenders(&mut self, kept: &BTreeSet<NpcId>) {
         let refunds: Vec<StellarId> = self
             .npcs
             .iter()
@@ -293,9 +313,7 @@ impl Traffic {
             .filter_map(|npc| npc.defends)
             .collect();
         for stellar in refunds {
-            if let Some(site) = sites.iter().find(|site| site.id == stellar) {
-                self.defences.refund(site);
-            }
+            self.defences.refund(stellar);
         }
     }
 
@@ -328,6 +346,7 @@ impl Traffic {
         gate: Gate,
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<NpcId> {
+        self.defences.know(site);
         let ship = defender(&self.table, site, gate, &mut *chance)?;
         // `_SpecificDudeSpawn` rolls no afterburner and places no fleet.
         let came = self.add(
@@ -431,18 +450,25 @@ mod tests {
         assert_eq!(defences.left(&earth), 8);
         defences.spend(&earth);
         assert_eq!(defences.left(&earth), 7);
-        defences.refund(&earth);
-        defences.refund(&earth);
+        defences.refund(earth.id);
+        defences.refund(earth.id);
         assert_eq!(
             defences.left(&earth),
             9,
             "above 1000 the raw cap is out of reach"
         );
         let small = site(129, 3);
-        defences.refund(&small);
+        defences.refund(small.id);
+        assert_eq!(
+            defences.left(&small),
+            3,
+            "a count never kept is left as it is"
+        );
+        defences.know(&small);
+        defences.refund(small.id);
         assert_eq!(defences.left(&small), 3, "capped at the raw DefCount");
         defences.spend(&small);
-        defences.refund(&small);
+        defences.refund(small.id);
         assert_eq!(defences.left(&small), 3);
     }
 
@@ -668,7 +694,7 @@ mod tests {
     fn a_stellar_under_attack_sends_up_one_defender_a_pass_to_its_wave_while_it_has_ships() {
         let listed = [earth(3)];
         let mut traffic = traffic_of(defence_table("", false));
-        traffic.defences_mut().set_left(StellarId(128), 5);
+        traffic.defences_mut().set_left(&listed[0], 5);
         traffic.defences_mut().alarm(StellarId(128));
         for (pass_no, (count, left)) in [(1, 4), (2, 3), (3, 2), (3, 2)].into_iter().enumerate() {
             pass(&mut traffic, &listed);
@@ -697,7 +723,7 @@ mod tests {
         pass(&mut traffic, &listed);
         assert_eq!(up(&traffic, 128), 0, "not under attack");
         traffic.defences_mut().alarm(StellarId(128));
-        traffic.defences_mut().set_left(StellarId(128), 0);
+        traffic.defences_mut().set_left(&listed[0], 0);
         pass(&mut traffic, &listed);
         assert_eq!(up(&traffic, 128), 0, "none left");
         assert_eq!(traffic.defences().left(&listed[0]), 0, "nothing spent");
@@ -770,20 +796,14 @@ mod tests {
         assert_eq!(traffic.defences().left(&listed[0]), 0);
         let ids: Vec<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
         traffic.npcs_mut()[2].aux = Some(1);
-        traffic.refund_defenders(&BTreeSet::from([ids[1]]), &listed);
+        traffic.refund_defenders(&BTreeSet::from([ids[1]]));
         assert_eq!(
             traffic.defences().left(&listed[0]),
             1,
             "one dropped, one kept, one aux"
         );
-        traffic.refund_defenders(&BTreeSet::new(), &[]);
-        assert_eq!(
-            traffic.defences().left(&listed[0]),
-            1,
-            "a stellar not among the sites"
-        );
         traffic.npcs_mut()[2].aux = None;
-        traffic.refund_defenders(&BTreeSet::new(), &listed);
+        traffic.refund_defenders(&BTreeSet::new());
         assert_eq!(
             traffic.defences().left(&listed[0]),
             3,
@@ -794,7 +814,7 @@ mod tests {
     #[test]
     fn the_defences_are_handed_on_across_a_reset() {
         let mut traffic = traffic_of(defence_table("", false));
-        traffic.defences_mut().set_left(StellarId(128), 4);
+        traffic.defences_mut().set_left(&earth(3), 4);
         let taken = traffic.take_defences();
         assert_eq!(traffic.defences(), &StellarDefences::default());
         let mut next = traffic_of(defence_table("", false));

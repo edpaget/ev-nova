@@ -190,7 +190,8 @@ impl Session {
     /// it then raises each system to its head's level @0x32b13-0x32b8f)
     /// the known set worked out afresh (`Chart::rework_known`,
     /// @0x32b7b, @0x32b91-0x32c10) and the rescue kept
-    /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), before its stellars;
+    /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), and every stellar's
+    /// under-attack mark cleared (@0x32d5d), before its stellars;
     /// then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it and the sheet each counts the frames of,
@@ -199,6 +200,9 @@ impl Session {
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         self.chart
             .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
+        // Every stellar's +0x47 cleared (@0x32d5d; see the
+        // `stellar_defence` module).
+        self.space.traffic.defences_mut().clear();
         let reshown = self.reshow();
         let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(

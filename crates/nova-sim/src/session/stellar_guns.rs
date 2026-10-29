@@ -18,9 +18,11 @@
 //!
 //! - dominated: its `Flags2` [`DOMINATED`] bit, the only domination the
 //!   engine has (hail domination is task `planet-domination`'s);
-//! - defended (+0x47): never, as the engine spawns no stellar defence
-//!   ships (task `planet-domination`), so a `Flags2` 0x0200 stellar
-//!   (Earth, Port Kane, Pyrogenesis I, New Ireland) never fires;
+//! - defended (+0x47): whether it is under attack, as this frame's +0x47
+//!   pass left it, just before the guns: one of its defence ships is in
+//!   the system (see the `stellar_defence` module). A `Flags2` 0x0200
+//!   stellar (Earth, Port Kane, Pyrogenesis I, New Ireland) fires only
+//!   then;
 //! - the player's standing: `G`, its own government or else the system's;
 //!   the record as [`RuleKey::LegalRecords`] reads it at the stellar
 //!   (`_IsThreatToStellar` @0x9fb8, the per-system record by the engine);
@@ -95,7 +97,7 @@ impl Session {
                     govt: site.govt,
                     flags2: site.flags2,
                     dominated: site.flags2 & DOMINATED != 0,
-                    defended: false,
+                    defended: self.space.traffic.defences().under_attack(site.id),
                     standing: Standing {
                         govt: judge,
                         record,
@@ -546,10 +548,45 @@ mod tests {
     }
 
     #[test]
-    fn a_stellar_waiting_for_its_defenders_never_fires() {
+    fn a_stellar_waiting_for_its_defenders_holds_fire_with_none_in_the_system() {
         let mut guarded = armed_128();
         guarded.sites[0].1[0].flags2 = crate::combat::stellar_guns::GUARDED_BY_DEFENDERS;
         assert!(!fires_at(&guarded, -1000, |_| {}));
+    }
+
+    /// `session` with NPC `id` defending `stellar`.
+    fn defended_by(session: &mut Session, id: u32, stellar: i16) {
+        let npc = crate::traffic::npc::Npc {
+            defends: Some(StellarId(stellar)),
+            ..crate::traffic::fixture::npc(id, crate::stats::ShipStats::new(FAST, &[]))
+        };
+        session.space.traffic.add_npc(npc);
+    }
+
+    /// Whether the guarded stellar 128 fires at a criminal beside it on
+    /// the pass after a defender of `stellar` comes into the populated
+    /// system.
+    fn fires_once_defended_by(stellar: i16) -> bool {
+        let mut guarded = armed_128();
+        guarded.sites[0].1[0].flags2 = crate::combat::stellar_guns::GUARDED_BY_DEFENDERS;
+        let mut session = beside_128(&guarded, -7);
+        work(&mut session, &guarded);
+        assert!(fired(&mut session).is_empty(), "no defender yet");
+        defended_by(&mut session, 900, stellar);
+        work(&mut session, &guarded);
+        !fired(&mut session).is_empty()
+    }
+
+    #[test]
+    fn a_stellar_waiting_for_its_defenders_fires_once_one_is_in_the_system() {
+        assert!(
+            fires_once_defended_by(128),
+            "the frame's +0x47 pass marks it before the guns (@0x443d4)"
+        );
+        assert!(
+            !fires_once_defended_by(129),
+            "another stellar's defender doesn't count"
+        );
     }
 
     #[test]

@@ -612,6 +612,7 @@ mod status_cargo;
 mod steering;
 #[cfg(test)]
 mod stellar_attackers;
+mod stellar_defence;
 mod stellar_guns;
 mod stellar_picks;
 mod stellars;
@@ -1875,8 +1876,9 @@ impl Session {
     /// ([`Entry::entrance`]: a take-off, the start, the pod's rescue)
     /// re-snapped, mission escorts too, beside the player.
     ///
-    /// The ships dropped give their aux ships back, but the fleet's
-    /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
+    /// The ships dropped give their aux ships back, and their defence
+    /// ships to their stellars (see the `stellar_defence` module), but the
+    /// fleet's escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
     /// above 4 that the player leads, defending no stellar, of no
     /// mission slot and not disabled, whole (@0x3bf7e-0x3bfb6). A
     /// disabled escort has left the fleet already, and mission escorts
@@ -1901,6 +1903,7 @@ impl Session {
         let kept: BTreeSet<NpcId> = self.space.escorts.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.space.fleet_kept(&self.pilot);
         self.give_back_aux_ships(&kept);
+        self.refund_defenders(&kept);
         let table = self
             .chart
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
@@ -5530,7 +5533,9 @@ impl Session {
     /// person, who lives on or is gone for good as
     /// [`RuleKey::CapturedPerson`] reads (see the `capture` module),
     /// intact, its armour at half its most, its cloak's fade and direction
-    /// zeroed (@0x946e3, @0x946f9), and then as [`Session::fleet_up`]
+    /// zeroed (@0x946e3, @0x946f9), defending no stellar (+0x8c = -1,
+    /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
+    /// and then as [`Session::fleet_up`]
     /// says: a mission's special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
     /// `captured_mission_ship` module). Its voice's variant is rolled on
@@ -5554,6 +5559,7 @@ impl Session {
         npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
         npc.condition = Condition::Intact;
         npc.cloak = crate::cloak::Cloak::default();
+        npc.defends = None;
         self.fleet_up(id, None);
         // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
         // see the `voices` module).
@@ -6558,8 +6564,9 @@ impl Chart {
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
-    /// ships, persons and fleets, the pilot's person escorts aside, and
-    /// the `düde`s of the active missions' special ships.
+    /// ships, persons and fleets, the pilot's person escorts aside, the
+    /// `düde`s of the active missions' special ships, and the
+    /// `DefenseDude`s of the stellars it lists.
     fn spawn_table(
         &self,
         pilot: &Pilot,
@@ -6587,6 +6594,21 @@ impl Chart {
         table.add_mission_dudes(
             catalog,
             &mission_ships::mission_dudes(pilot, statics),
+            &statics.ships,
+            &statics.outfits,
+            &statics.arsenal,
+            setup.npc_items(),
+        );
+        // The `DefenseDude`s of the stellars the system lists, which its
+        // defence fleets are drawn from (see the `stellar_defence` module).
+        let defence: Vec<_> = self
+            .listed
+            .iter()
+            .filter_map(|site| site.defense_dude)
+            .collect();
+        table.add_mission_dudes(
+            catalog,
+            &defence,
             &statics.ships,
             &statics.outfits,
             &statics.arsenal,

@@ -49,7 +49,10 @@
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]); then the stellar guns
+//!    settled ([`Session::ship_loop`]); then the +0x47 pass, each nav
+//!    stellar with a defence ship in the system marked under attack
+//!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
+//!    stellar guns
 //!    (`_HandleStellarWeapons` @0x444d7, after `_HandleStellarSprites`
 //!    @0x444d2), each armed stellar firing at its target (see the
 //!    `stellar_guns` module).
@@ -342,6 +345,10 @@ impl Session {
             None => Motion::Again,
         };
         self.ship_loop(start, motion, pass, rules, chance);
+        // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
+        // ship loop and before the guns read it (see the
+        // `stellar_defence` module).
+        self.mark_defended_stellars();
         // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
         // (@0x444d7).
         self.stellar_guns(pass, rules, chance);
