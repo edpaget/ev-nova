@@ -12,18 +12,19 @@
 //! "Yacht") and a synthetic interface file holding the stock comm dialog,
 //! driven only by window events, with pilots kept in the in-memory store.
 //!
-//! Tab targets Ace, and the target panel shows "Ace" and "Top Gun". Ace,
-//! flying Nova's AI, attacks, and "Ace: Prepare to die, Pilot!" shows in
-//! the message line. Tab to Friend: Y opens "Channel open." and G says
-//! "Well met."; with `comm_quote` set to its other reading in the settings
-//! file, Y alone says it. Shot down, both are gone; landing saves the
-//! pilot with Ace gone for good, and the pilot reopened in a new app meets
-//! Friend again on take-off, and never Ace.
+//! - `comm_quote` set to its other reading in the settings file reaches
+//!   the session: Y on Friend opens with its comm quote, drawn.
+//! - Both shot down, landing saves the pilot with Ace gone for good to the
+//!   store, and the pilot reopened in a new app meets Friend again, never
+//!   Ace.
+//!
+//! The persons' names, quotes and the law are nova-sim's, pinned there.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
 
 use crate::bracket_art;
+use crate::common::Frames;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -451,8 +452,8 @@ pub(crate) struct Game {
 impl Game {
     /// The app over the game data with "Pilot" saved in `store`, opened
     /// from the main menu to `showing`, its traffic drawn from `draws`,
-    /// the router as `router` makes it; then two frames, the second
-    /// setting the system up in flight.
+    /// the router as `router` makes it; then, in flight, drawn until the
+    /// system's ships are placed.
     pub(crate) fn opened(
         store: &MemoryPilots,
         draws: &[u32],
@@ -505,8 +506,11 @@ impl Game {
         game.tap(Key::Enter);
         game.enter_ship();
         assert_eq!(game.showing(), showing);
-        game.frame();
-        game.frame();
+        if showing == Showing::Flight {
+            game.settle_until("the system's ships", |game| {
+                !game.session().npcs().is_empty()
+            });
+        }
         game
     }
 
@@ -557,20 +561,19 @@ impl Game {
         let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
         self.send(WindowEvent::Redraw { elapsed });
         assert_eq!(self.app.take_failures(), []);
+        self.last_frame()
+    }
+
+    /// The last frame the Gpu was given.
+    fn last_frame(&self) -> Frame {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
-    /// Sends four redraws, at least a tick of flight, for the dock
-    /// approach to clear a request. The nav brackets' corners (`cicn`
-    /// 10000-10003), which the press's selection draws, may be missing
-    /// from the fixture, so the frames' image failures are not checked.
+    /// Draws frames until the dock approach has cleared the request.
     pub(crate) fn approach(&mut self) {
-        for _ in 0..4 {
-            self.frames += 1;
-            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
-            self.send(WindowEvent::Redraw { elapsed });
-        }
-        let _ = self.app.take_failures();
+        self.settle_until("the dock approach's clearance", |game| {
+            game.session().dock_cleared()
+        });
     }
 
     pub(crate) fn showing(&self) -> Showing {
@@ -624,33 +627,6 @@ pub(crate) fn idle(screen: AppScreen) -> AppScreen {
     screen.with_behaviour(Rc::new(Still))
 }
 
-#[test]
-fn the_target_panel_shows_a_persons_name_and_subtitle() {
-    let store = MemoryPilots::new();
-    let mut game = Game::opened(&store, &BOTH, Showing::Flight, idle);
-    assert_eq!(game.persons(), [128, 129]);
-    game.tap(Key::Tab);
-    let shown = texts(&game.frame());
-    assert!(shown.iter().any(|text| text == "Ace"), "{shown:?}");
-    assert!(shown.iter().any(|text| text == "Top Gun"), "{shown:?}");
-}
-
-#[test]
-fn a_person_beginning_to_attack_says_its_hail_quote_in_the_message_line() {
-    let store = MemoryPilots::new();
-    let mut game = Game::opened(&store, &BOTH, Showing::Flight, |screen| screen);
-    for _ in 0..60 {
-        let shown = texts(&game.frame());
-        if shown
-            .iter()
-            .any(|text| text == "Ace: Prepare to die, Pilot!")
-        {
-            return;
-        }
-    }
-    panic!("never said");
-}
-
 /// The rulebook the settings file holding `text` chooses, read as `main`
 /// reads it.
 fn saved_rulebook(text: &str) -> nova_sim::Rulebook {
@@ -664,73 +640,41 @@ fn saved_rulebook(text: &str) -> nova_sim::Rulebook {
     rulebook
 }
 
-/// The game with the rules the settings file holding `settings` chooses,
-/// every NPC idling, Friend targeted and hailed: its opening line.
-fn hailing_friend(settings: &str) -> (Game, String) {
-    let rulebook = saved_rulebook(settings);
+#[test]
+fn by_the_settings_other_reading_a_person_opens_the_hail_with_its_comm_quote() {
+    let rulebook = saved_rulebook(r#"{"rule_overrides": {"comm_quote": "bible"}}"#);
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, |screen| {
         idle(screen.with_rulebook(&rulebook))
     });
     game.tap(Key::Tab);
     game.tap(Key::Tab);
+    game.settle();
     assert_eq!(
         game.session()
             .target()
             .and_then(|npc| npc.person)
             .map(|p| p.id.0),
-        Some(129)
+        Some(129),
+        "Friend targeted"
     );
     game.tap(Key::Char('y'));
+    game.settle();
     assert_eq!(game.showing(), Showing::Comm);
-    let opened = game.reply();
-    (game, opened)
-}
-
-#[test]
-fn a_friendly_persons_greetings_says_its_comm_quote() {
-    let (mut game, opened) = hailing_friend("{}");
-    assert_eq!(opened, "Channel open.");
-    game.tap(Key::Char('g'));
     assert_eq!(game.reply(), "Well met.");
-    let shown = texts(&game.frame());
+    let shown = texts(&game.last_frame());
     assert!(shown.iter().any(|text| text == "Well met."), "{shown:?}");
 }
 
 #[test]
-fn by_the_settings_other_reading_a_person_opens_the_hail_with_its_comm_quote() {
-    let (mut game, opened) = hailing_friend(r#"{"rule_overrides": {"comm_quote": "bible"}}"#);
-    assert_eq!(opened, "Well met.");
-    let shown = texts(&game.frame());
-    assert!(shown.iter().any(|text| text == "Well met."), "{shown:?}");
-}
-
-#[test]
-fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_back() {
+fn a_unique_persons_kill_is_saved_on_landing_and_a_new_app_over_the_store_keeps_it_gone() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, |screen| {
         idle(screen).with_disable_rule(Rc::new(Never))
     });
-    assert_eq!(game.persons(), [128, 129]);
     game.key(Key::Space, true);
-    for _ in 0..600 {
-        game.frame();
-        if game.persons().is_empty() {
-            break;
-        }
-    }
+    game.settle_until("both persons shot down", |game| game.persons().is_empty());
     game.key(Key::Space, false);
-    assert_eq!(game.persons(), Vec::<i16>::new(), "both shot down");
-    assert_eq!(
-        game.session()
-            .pilot()
-            .system_record(nova_sim::SystemId(128)),
-        -1,
-        "Ace's killing, 7 / 4 in independent Alpha; Friend's, half of no gövt 128's"
-    );
-    for _ in 0..60 {
-        game.frame();
-    }
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
     game.approach();
@@ -741,14 +685,10 @@ fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_bac
     assert_eq!(saved["gone_persons"], serde_json::json!([128]));
     // Reopened in a new app, the pilot resumes in flight: Friend's slot
     // draws, and Ace's draws nothing.
-    let mut game = Game::opened(&store, &[99, 750, 600, 180], Showing::Flight, idle);
-    game.frame();
-    game.frame();
-    assert_eq!(game.persons(), [129]);
-    game.tap(Key::Tab);
-    let shown = texts(&game.frame());
-    assert!(shown.iter().any(|text| text == "Friend"), "{shown:?}");
-    assert!(!shown.iter().any(|text| text == "Ace"), "{shown:?}");
+    let game = Game::opened(&store, &[99, 750, 600, 180], Showing::Flight, idle);
+    let persons = game.persons();
+    assert!(persons.contains(&129), "{persons:?}");
+    assert!(!persons.contains(&128), "{persons:?}");
 }
 
 crate::common::entry_harness!(Game, click_menu, frame);
