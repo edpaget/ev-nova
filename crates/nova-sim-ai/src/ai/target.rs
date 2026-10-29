@@ -106,7 +106,12 @@
 //!    the next ally (@0x8a4e4-0x8a50e, then @0x8a5de). It sets the target
 //!    and goal 4 itself (@0x8a5b0-0x8a5c1) and makes no
 //!    `_AIMakeShipAttackPlayer` call, even when T is the player, so no
-//!    attack quote comes of it.
+//!    attack quote comes of it. The original tests no condition of the
+//!    ally; the engine's ally is arrived, active and not disabled
+//!    ([`Npc::active_not_disabled`]), standing in for the disabled reset
+//!    that wipes a disabled or breaking-up ally's goal at its next think,
+//!    which spares a stellar's defence ship breaking up (@0x2d6f), so one
+//!    is helped.
 //! 7. **The hunt** (@0x8a90d-0x8ad36): the player is a candidate when it
 //!    is hostile ([`hostile_to_player`]), or when **the enemy-class
 //!    roll** makes it one (@0x8a90d-0x8a9c7): for a ship not led by the
@@ -121,7 +126,10 @@
 //!    Every NPC enemy that is seen is a candidate (@0x8aa5e-0x8aade), one
 //!    downed or breaking up only when the ship has destroying weapons
 //!    ([`fire::destroys`]: `_IsDisabled` holds of a breaking-up ship, and
-//!    there is no dying test), but never one it spares (below; the
+//!    there is no dying test), but a stellar's defence ship breaking up
+//!    always, as `_IsDisabled` never holds for it (@0x2d6f,
+//!    [`Npc::active_not_disabled`]; the hunt then drops it as breaking
+//!    up), but never one it spares (below; the
 //!    original has no such test, see the note). The candidate pass
 //!    ([`candidates`](crate::ai::candidates)) then takes the nearest, of the heaviest class when
 //!    the ship has escorts (@0x8ac24-0x8ad07). A pick of the player turns
@@ -516,7 +524,7 @@ fn pick_by_steps(
     let destroys = fire::destroys(npc);
     let enemies = others()
         .filter(|other| {
-            (other.condition == Condition::Intact || destroys)
+            (other.active_not_disabled() || destroys)
                 && govts.npc_enemies(npc.govt, other.govt)
                 && !spares(npc, ShipRef::Npc(other.id), around, rules)
         })
@@ -575,8 +583,8 @@ fn helped(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRe
         .into_iter()
         .filter(|ally| {
             ally.id != npc.id
-                && around.live(ShipRef::Npc(ally.id))
-                && ally.condition == Condition::Intact
+                && ally.arrived()
+                && ally.active_not_disabled()
                 && ally.govt.is_some()
                 && govts.allies(npc.govt, ally.govt)
         })
@@ -1216,6 +1224,26 @@ mod tests {
     }
 
     #[test]
+    fn an_enemy_defence_ship_breaking_up_is_a_candidate_as_it_is_not_disabled() {
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let downed = Npc {
+            condition: dying,
+            ..ship(2, ENEMY, 10.0, 0.0)
+        };
+        let far = ship(3, NEUTRAL, 500.0, 0.0);
+        assert_eq!(chosen(0, &[me(), downed, far.clone()], None, 0, NEAR), None);
+        let guard = crate::traffic::fixture::breaking_up_guard(ship(2, ENEMY, 10.0, 0.0));
+        assert_eq!(
+            chosen(0, &[me(), guard, far], None, 0, NEAR),
+            Some(n(2)),
+            "@0x8aa5e, @0x2d6f"
+        );
+    }
+
+    #[test]
     fn a_xenophobe_takes_the_nearest_of_the_player_and_its_npc_enemies() {
         let npcs = [
             me(),
@@ -1306,6 +1334,23 @@ mod tests {
         let mut stronger = npcs.clone();
         stronger[2].hull.strength = 101.0;
         assert_eq!(chosen(0, &stronger, None, 0, NEAR), None, "too strong");
+    }
+
+    #[test]
+    fn a_ship_helps_an_allied_defence_ship_breaking_up() {
+        // The help tests no condition of the ally (@0x8a418-0x8a60b); the
+        // engine's stands in for the disabled reset's wipe of its goal,
+        // which never wipes a defence ship breaking up (@0x2d6f).
+        let mut guard = crate::traffic::fixture::breaking_up_guard(ship(2, ALLY, 1000.0, 0.0));
+        guard.goal = Goal::Attack(n(3));
+        // A breaking-up ally adds no friend strength (@0x82675).
+        let mut pirate = ship(3, NEUTRAL, 3000.0, 0.0);
+        pirate.hull.strength = 10.0;
+        let npcs = [me(), guard, pirate];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
+        let mut downed = npcs.clone();
+        downed[1].defends = None;
+        assert_eq!(chosen(0, &downed, None, 0, NEAR), None);
     }
 
     #[test]

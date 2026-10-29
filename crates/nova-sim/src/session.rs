@@ -2485,9 +2485,11 @@ impl Session {
     /// Raises [`Fate::Disabled`] for each NPC that `was` intact before the
     /// fight's tick and is no longer: disabled, or broken up at once, which
     /// the original counts as disabled too (`_DamageShip` @0x3ae5b,
-    /// @0x3af8b), as [`Session::punish`] convicts it of both. A mission's
-    /// special ship is counted disabled, drawing on `chance` (see the
-    /// `mission_ships` module).
+    /// @0x3af8b), as [`Session::punish`] convicts it of both. A stellar's
+    /// defence ship is neither, as `_IsDisabled` never holds for it
+    /// (@0x2d6f, [`Condition::stored_disabled`]). A mission's special ship
+    /// is counted disabled, drawing on `chance` (see the `mission_ships`
+    /// module).
     fn raise_disabled(&mut self, was: &[NpcBefore], chance: &mut dyn Chance) {
         let downed: Vec<NpcId> = self
             .space
@@ -2495,7 +2497,7 @@ impl Session {
             .npcs()
             .iter()
             .filter(|npc| {
-                npc.condition != Condition::Intact
+                npc.condition.stored_disabled(npc.defends.is_some())
                     && was
                         .iter()
                         .any(|before| before.id == npc.id && before.condition == Condition::Intact)

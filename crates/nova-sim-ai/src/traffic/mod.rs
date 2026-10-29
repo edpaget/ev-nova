@@ -2111,7 +2111,7 @@ impl Traffic {
                             RuleSource::Engine => true,
                             RuleSource::Bible => npc.arrived(),
                         };
-                        (answers && npc.condition == Condition::Intact)
+                        (answers && npc.active_not_disabled())
                             .then(|| behaviour.react(npc, strike, &around))
                     })
                     .collect()
@@ -4956,6 +4956,47 @@ mod tests {
             "not its turn"
         );
         assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_answers_a_hit() {
+        // The victim branch tests no condition (@0x3bbe2-0x3bd8c), and
+        // the disabled reset never wipes a defence ship breaking up, which
+        // `_IsDisabled` never calls disabled (@0x2d6f).
+        #[derive(Debug)]
+        struct Samaritan;
+        impl Behaviour for Samaritan {
+            fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+                npc.goal
+            }
+            fn react(&self, _: &Npc, _: &Strike, _: &Surroundings) -> Reaction {
+                Reaction {
+                    target: Some(ShipRef::Player),
+                    provoked: 0.0,
+                    goal: None,
+                }
+            }
+        }
+        for (defends, answers) in [(true, true), (false, false)] {
+            let mut traffic = populated(1, 4);
+            traffic.ticks = 1;
+            let guard = crate::traffic::fixture::breaking_up_guard(traffic.npcs[0].clone());
+            traffic.npcs[0] = Npc {
+                defends: guard.defends.filter(|_| defends),
+                ..guard
+            };
+            traffic.tick_in(
+                &Samaritan,
+                World::new(&[]),
+                &[struck(5, 1.0)],
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(
+                traffic.npcs()[0].target == Some(ShipRef::Player),
+                answers,
+                "defends: {defends}"
+            );
+        }
     }
 
     /// `count` NPCs at rest, deciding only on tick 0 (so never again),

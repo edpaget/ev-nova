@@ -60,7 +60,11 @@ impl Behaviour for DeathStar {
         self.decision(npc, around, chance).goal
     }
 
-    /// `_DeathStarAI`'s think (see the module docs).
+    /// `_DeathStarAI`'s think (see the module docs). Its
+    /// [`Condition::disabled`](crate::combat::hull::Condition::disabled) read
+    /// never meets a stellar's defence ship:
+    /// a stellar attacker is a `ShipBehav` 2 mission ship, and a defence
+    /// ship carries no mission mark (+0xc8d2 = -1, @0x3d387).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if npc.condition.disabled() || npc.goal == Goal::CountWait {
             return Decision {

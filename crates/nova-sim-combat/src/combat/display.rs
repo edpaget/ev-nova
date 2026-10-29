@@ -115,9 +115,7 @@ impl Combat {
         self.displays.push(Displayed {
             ship: fighter.ship,
             slot: fighter.slot,
-            // A defence ship is never disabled by its armour (@0x2d6f), so
-            // breaking up it stays in its layer.
-            disabled: ship_layer::disabled(*fighter.condition) && fighter.defends.is_none(),
+            disabled: ship_layer::disabled(*fighter.condition, fighter.defends.is_some()),
         });
         if self.dying_block(fighter) {
             let wreck = fighter.ship;

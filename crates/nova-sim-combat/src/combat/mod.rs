@@ -1537,7 +1537,15 @@ impl Combat {
             let before = taken(fighter.reserves);
             let hurt = !immune(fighter.ship_type);
             if hurt {
-                shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
+                let defends = fighter.defends.is_some();
+                shockwave::hit(
+                    fighter.reserves,
+                    condition,
+                    defends,
+                    &fighter.hull,
+                    rule,
+                    damage,
+                );
             }
             if !hurt {
                 continue;
@@ -2809,7 +2817,15 @@ impl Combat {
             let before = taken(fighter.reserves);
             let was_disabled = fighter.disabled_now(rule);
             let was_dying = fighter.condition.dying_or_destroyed(fighter.reserves.armor);
-            damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
+            let defends = fighter.defends.is_some();
+            damage::take(
+                fighter.reserves,
+                hit,
+                &fighter.hull,
+                rule,
+                was_disabled,
+                defends,
+            );
             // `_HandleShipHit`'s victory voice (@0x36c7f-0x36d45): a
             // shot's direct hit that starts its ship dying. A beam's hit is
             // direct too, but `_HandleBeams` speaks none; a lock takes no
@@ -3008,11 +3024,12 @@ impl Combat {
                 None
             }
             Condition::Intact | Condition::Disabled => {
-                let armor = fighter.reserves.armor;
-                // `_IsDisabled` never asks a defence ship's armour (@0x2d6f).
-                let disabled = fighter.defends.is_none()
-                    && holds_armour(armor)
-                    && rule.disabled(armor, &fighter.hull);
+                let disabled = hull::under_armour_line(
+                    fighter.reserves.armor,
+                    &fighter.hull,
+                    rule,
+                    fighter.defends.is_some(),
+                );
                 let downed = (disabled && *fighter.condition == Condition::Intact).then(|| {
                     self.events.push(CombatEvent::Disabled { ship });
                     Downed::Disabled
@@ -3285,12 +3302,17 @@ impl Fighter<'_> {
 
     /// Whether `_IsDisabled` holds for the ship now (@0x2ce6-0x2e0d), as
     /// `rule` says: held disabled, not intact, or its armour under the
-    /// line ([`damage::disabled`]). Unlike [`Fighter::as_target`]'s, it
-    /// reads the armour the hits landed so far have left, before its
-    /// condition settles.
+    /// line ([`hull::under_armour_line`]), a defence ship only held.
+    /// Unlike [`Fighter::as_target`]'s, it reads the armour the hits
+    /// landed so far have left, before its condition settles.
     fn disabled_now(&self, rule: &dyn DisableRule) -> bool {
         self.disabled_as_tick_began()
-            || (self.defends.is_none() && damage::disabled(self.reserves.armor, &self.hull, rule))
+            || hull::under_armour_line(
+                self.reserves.armor,
+                &self.hull,
+                rule,
+                self.defends.is_some(),
+            )
     }
 
     /// The ship as shots and beams see it.

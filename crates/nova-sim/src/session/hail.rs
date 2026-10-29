@@ -301,8 +301,10 @@ impl Session {
         // The escape pod's class is mute whoever leads it: the class test
         // (@0x62145) follows the escort shortcut (@0x620a2-0x620bb).
         let mute = self.dispositions(npc).mute;
+        // `_IsDisabled` (@0x62157), which a stellar's defence ship
+        // breaking up is not (@0x2d6f).
         if npc.ship == ESCAPE_POD_SHIP
-            || npc.condition != Condition::Intact
+            || !npc.active_not_disabled()
             || (mute && npc.escort.is_none())
         {
             return Err(HailRefusal::NoResponse);
@@ -1048,6 +1050,24 @@ pub(super) mod tests {
             assert_eq!(hailed, Err(HailRefusal::NoResponse));
             assert!(asked.is_empty(), "{asked:?}");
         }
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_answers_as_it_is_not_disabled() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let target = npc(&mut session);
+        target.defends = Some(crate::catalog::StellarId(128));
+        target.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_ok());
+        npc(&mut session).defends = None;
+        assert_eq!(
+            hail_with(&mut session, &catalog, &opening(0)).0,
+            Err(HailRefusal::NoResponse)
+        );
     }
 
     #[test]

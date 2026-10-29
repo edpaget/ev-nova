@@ -131,7 +131,10 @@
 //!   (@0x82b82, @0x82b97), but `_AIDispatch`'s disabled reset
 //!   (@0x8fece-0x8ff13) wipes both at its next think, nearly always in the
 //!   same frame. The engine has no such reset yet, so a disabled NPC asks
-//!   for nothing here (`Traffic::react` takes intact NPCs alone): writing
+//!   for nothing here (`Traffic::react` takes only NPCs that are active and
+//!   not disabled, [`Npc::active_not_disabled`](crate::traffic::npc::Npc::active_not_disabled),
+//!   a stellar's defence ship breaking up included, as the reset never
+//!   wipes one, @0x2d6f): writing
 //!   the goal now would carry it through self-repair. rdm phase
 //!   weapons-fidelity-cross-roadmap/phase-2-disabled-ships-take-a-good-samaritans-write
 //!   owns it, behind escort-fleet-fidelity's disabled reset.

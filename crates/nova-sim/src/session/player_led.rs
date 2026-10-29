@@ -140,8 +140,8 @@ impl Session {
                                 .is_displayed(&self.setup, ShipRef::Npc(npc.id), slot_of(npc))
                         })
                         .map(|npc| {
-                            let layer =
-                                ShipLayer::of(disabled(npc.condition), npc.escorts_player());
+                            let disabled = disabled(npc.condition, npc.defends.is_some());
+                            let layer = ShipLayer::of(disabled, npc.escorts_player());
                             (ShipRef::Npc(npc.id), layer)
                         });
                     let player = (self.setup.shown(&self.ship.fit.hull)
@@ -328,7 +328,8 @@ impl Setup {
 impl PlayerShip {
     /// The layer the player stands in: never led.
     fn player_layer(&self) -> ShipLayer {
-        ShipLayer::of(disabled(self.player_condition()), false)
+        // The player defends no stellar.
+        ShipLayer::of(disabled(self.player_condition(), false), false)
     }
 }
 

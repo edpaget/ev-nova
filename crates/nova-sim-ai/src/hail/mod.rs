@@ -330,7 +330,8 @@ impl<'a> Hail<'a> {
         let me = ShipRef::Npc(npc.id);
         // `_IsRefuellingPlayer` @0x820fd and `_IsRepairingPlayer`
         // @0x8213a: active, not `_IsDisabled`, target 0, goal 9 or 0xf. A
-        // hailed ship is active.
+        // hailed ship is active. A stellar's defence ship never assists, so
+        // `Condition::disabled` stands for `_IsDisabled` here.
         let assisting_player = matches!(npc.goal, Goal::Assist(_))
             && npc.target == Some(ShipRef::Player)
             && !npc.condition.disabled();

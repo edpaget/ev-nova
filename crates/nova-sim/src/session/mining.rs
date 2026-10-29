@@ -22,8 +22,14 @@
 //! *Disabled ships count.* The disabled reset writes +0x9a = -1 just
 //! before it jumps to the tail (@0x8feda → @0x8ff13 → @0x90032), so a
 //! disabled or breaking-up ship of the miner bits sets the flag whatever
-//! leader it had: here, any [`Condition::disabled`] ship of the bits that
-//! reaches its think.
+//! leader it had: here, any ship of the bits that reaches its think and
+//! that `_IsDisabled` holds for ([`Npc::is_disabled`](crate::traffic::npc::Npc::is_disabled)).
+//!
+//! *Defence ships.* `_AIDispatch` routes a stellar's defence ship to
+//! `_DefenseShipAI` (@0x8ff4d-0x8ff5a) before the miner (@0x8ff64), so one
+//! of the miner bits sets nothing, breaking up included, as `_IsDisabled`
+//! never holds for it then (@0x2d6f). Held disabled, the reset clears its
+//! stellar (@0x8fef8) and it takes the tail, setting the flag.
 //!
 //! *Ordering against the original.* The flag is derived live as the
 //! asteroid step runs ([`Session::tick_asteroids`]), not set by this
@@ -41,8 +47,6 @@ use super::Space;
 use crate::ai::dispatch_gate::reaches_think;
 use crate::ai::miner::{MINER_BITS, thinks_for};
 #[cfg(doc)]
-use crate::combat::hull::Condition;
-#[cfg(doc)]
 use crate::session::Session;
 
 impl Space {
@@ -53,7 +57,7 @@ impl Space {
         self.traffic.npcs().iter().any(|npc| {
             reaches_think(npc)
                 && npc.miner & MINER_BITS != 0
-                && (thinks_for(npc) || npc.condition.disabled())
+                && ((thinks_for(npc) && npc.defends.is_none()) || npc.is_disabled())
         })
     }
 }
@@ -130,6 +134,26 @@ mod tests {
         assert_eq!(slot0, moved, "slot 1's, moved on");
         assert_eq!(session.space.asteroids.get(1), None, "slot 1 freed");
         true
+    }
+
+    #[test]
+    fn a_defence_ship_of_the_miner_bits_sets_no_miners_active_unless_disabled() {
+        // `_AIDispatch` routes it to `_DefenseShipAI` (@0x8ff4d-0x8ff5a)
+        // before the miner (@0x8ff64); held disabled, the reset clears its
+        // stellar and it takes the tail (@0x8fef8, @0x8ff13), but breaking
+        // up it is not disabled (@0x2d6f).
+        let guard = |condition| Npc {
+            defends: Some(crate::catalog::StellarId(128)),
+            condition,
+            ..miner(1, MINES)
+        };
+        assert!(!refills(vec![guard(Condition::Intact)]));
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert!(!refills(vec![guard(dying)]));
+        assert!(refills(vec![guard(Condition::Disabled)]));
     }
 
     #[test]

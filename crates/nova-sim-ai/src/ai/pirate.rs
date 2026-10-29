@@ -369,7 +369,10 @@ fn classify(target: ShipRef, around: &Surroundings) -> Class {
 /// The disabled-warship drop's test (@0x8c7b4-0x8c837): `target` is a
 /// disabled NPC among `around` of a class whose `InherentAI` is above 2,
 /// not a former escort, and `npc` holds no destroying weapon or is fully
-/// dry.
+/// dry. Its [`Condition::disabled`] read never meets a stellar's defence
+/// ship breaking up, which `_IsDisabled` would not call disabled
+/// (@0x2d6f): the think's head drops a dying target first (`_IsDying`
+/// @0x8c315).
 fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
     let ShipRef::Npc(id) = target else {
         return false;

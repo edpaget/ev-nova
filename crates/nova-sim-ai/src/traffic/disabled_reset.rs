@@ -2,7 +2,8 @@
 //! ([`Traffic::reset_disabled`]).
 //!
 //! **The warp cancel** (@0x8fcc8-0x8fce9). Every dispatch of a ship that is
-//! `_IsDisabled` (disabled or breaking up, [`Condition::disabled`]) with
+//! `_IsDisabled` (disabled or breaking up, but for a stellar's defence
+//! ship only held, [`Npc::is_disabled`]) with
 //! +0x50 above 0 writes +0x50 = -1.0 (float 0xdd04c), before the dispatch's
 //! -900 test: a dispatched ship, not an escape pod (@0x8fb62) and one with
 //! AI (@0x4427e). So a disabled ship's warp restarts from nothing once it
@@ -17,7 +18,9 @@
 //! substate 0. Here:
 //!
 //! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::defends`]
-//!   none (a defence ship held disabled stops defending), [`Npc::provoked`]
+//!   none (a defence ship held disabled stops defending; one breaking up
+//!   is not disabled, @0x2d6f, so it keeps defending and counts for its
+//!   stellar's wave until it is gone), [`Npc::provoked`]
 //!   none, [`Goal::Idle`], and its substate's state, [`Npc::pursuit`] and
 //!   [`Npc::docking`], none;
 //! - by the engine's reading of
@@ -56,8 +59,6 @@ use super::pod_flight;
 use super::regroup;
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, dispatch_gate};
-#[cfg(doc)]
-use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 
 impl Traffic {
@@ -76,14 +77,14 @@ impl Traffic {
 
 /// `npc`'s warp cancelled while it is disabled (see the module docs).
 fn cancel_warp(npc: &mut Npc) {
-    if !pod_flight::is_pod(npc) && !npc.no_ai && npc.condition.disabled() && npc.warp.stage > 0.0 {
+    if !pod_flight::is_pod(npc) && !npc.no_ai && npc.is_disabled() && npc.warp.stage > 0.0 {
         npc.warp.give_up();
     }
 }
 
 /// Whether `npc` reaches the reset (see the module docs).
 fn resets(npc: &Npc) -> bool {
-    npc.condition.disabled() && dispatch_gate::reaches_think(npc) && !regroup::paused(npc)
+    npc.is_disabled() && dispatch_gate::reaches_think(npc) && !regroup::paused(npc)
 }
 
 /// `npc`'s reset, by `reading` of
@@ -208,6 +209,29 @@ mod tests {
         let id = traffic.add_npc(guard);
         ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
         assert_eq!(of(&traffic, id).defends, None, "+0x8c = -1 (@0x8fef8)");
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_is_not_disabled_and_so_neither_reset_nor_its_warp_cancelled() {
+        // `_IsDisabled` never holds for it by its armour (@0x2d6f).
+        let mut guard = npc(0, ShipStats::new(FAST, &[]));
+        guard.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        guard.defends = Some(crate::catalog::StellarId(128));
+        guard.target = Some(ShipRef::Player);
+        guard.warp.stage = 0.5;
+        assert!(!resets(&guard), "@0x8fece");
+        let before = guard.warp.stage;
+        cancel_warp(&mut guard);
+        assert_eq!(guard.warp.stage, before, "@0x8fcc8");
+        let mut traffic = Traffic::with_interval(1);
+        let id = traffic.add_npc(guard);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let guard = of(&traffic, id);
+        assert_eq!(guard.defends, Some(crate::catalog::StellarId(128)));
+        assert_eq!(guard.target, Some(ShipRef::Player));
     }
 
     #[test]

@@ -257,7 +257,9 @@
 //!   at most [`HIT_WAIT`] ticks.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
-//!   never lands or jumps. A disabled or breaking-up one also slows by
+//!   never lands or jumps. A stellar's defence ship breaking up is not
+//!   disabled (@0x2d6f), and `_HandleShip`'s drift reads `_IsDisabled`
+//!   (@0x33846, @0x34424), so it steers on. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
 use crate::ai::lost_sight;
@@ -1014,7 +1016,10 @@ fn glide(
 }
 
 /// Flies `npc` one tick when it has no say in its flight: entering a
-/// gate or waiting at one, drifting while not intact, gliding in from
+/// gate or waiting at one, drifting while `_IsDisabled` holds or it is
+/// destroyed (`_HandleShip` reads `_IsDisabled` once, @0x33846, for its
+/// drag @0x33950 and its drift @0x34424, so a stellar's defence ship
+/// breaking up still steers, [`Npc::active_not_disabled`]), gliding in from
 /// hyperspace (intact or disabled), bursting out of a gate, or holding
 /// its course after either (see the module docs), on `handling` under
 /// `flight`, as `inertia` says, its burst ending at `speeds`'
@@ -1032,7 +1037,7 @@ fn unsteered(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
     let flown = Flown { handling, inertia };
-    match (npc.mode, npc.condition == Condition::Intact) {
+    match (npc.mode, npc.active_not_disabled()) {
         (Mode::EnteringGate { gate, ticks_left }, _) => {
             return Some(enter_gate(npc, gate, ticks_left, flown));
         }
@@ -1088,9 +1093,10 @@ fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> 
 /// A disabled or breaking-up `npc`'s drag before it moves: its velocity,
 /// and its speed along its heading with it, inertialess or not, slowed by
 /// [`flight::DISABLED_DRAG`] (@0x33950-0x339a1, @0x3398f-0x339a1). Any
-/// other is left.
+/// other is left, a stellar's defence ship breaking up included, as
+/// `_IsDisabled` never calls it disabled ([`Npc::is_disabled`], @0x2d6f).
 fn disabled_drag(npc: &mut Npc) {
-    if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
+    if npc.is_disabled() {
         flight::drag(&mut npc.state);
         npc.speed *= flight::DISABLED_DRAG;
     }
@@ -2373,6 +2379,22 @@ mod tests {
     }
 
     #[test]
+    fn a_defence_ship_breaking_up_is_not_dragged() {
+        let mut guard = crate::traffic::fixture::breaking_up_guard(crate::traffic::fixture::npc(
+            1,
+            ShipStats::default(),
+        ));
+        guard.state.velocity = Vec2::new(1.0, -2.0);
+        guard.speed = 3.0;
+        disabled_drag(&mut guard);
+        assert_eq!(
+            (guard.state.velocity, guard.speed),
+            (Vec2::new(1.0, -2.0), 3.0),
+            "@0x2d6f"
+        );
+    }
+
+    #[test]
     fn a_disabled_or_breaking_up_ship_slows_by_0_995_a_tick_before_it_moves() {
         for condition in [
             Condition::Disabled,
@@ -2394,6 +2416,30 @@ mod tests {
             }
             assert_eq!(ship.state.velocity, expected, "{condition:?}");
         }
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_steers_on_as_it_is_not_disabled() {
+        let dying = Condition::Dying {
+            ticks_left: 4,
+            starting: false,
+        };
+        let mut guard = crate::traffic::fixture::breaking_up_guard(npc(
+            AVERAGE,
+            Goal::JumpOut,
+            at(0.0, -2000.0, 1.0, -2.0, 90.0),
+        ));
+        fly(&mut guard, &[], None);
+        assert_ne!(guard.state, drifted(dying), "not dragged (@0x33950)");
+        assert_ne!(
+            guard.state,
+            drifted(Condition::Destroyed),
+            "not drifting (@0x34424, @0x2d6f)"
+        );
+        let mut downed = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+        downed.condition = dying;
+        fly(&mut downed, &[], None);
+        assert_eq!(downed.state, drifted(dying));
     }
 
     #[test]

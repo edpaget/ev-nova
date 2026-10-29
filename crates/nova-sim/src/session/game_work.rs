@@ -1186,6 +1186,40 @@ mod tests {
         assert_eq!(fates(&session), [disabled], "once");
     }
 
+    #[test]
+    fn a_defence_ship_broken_up_by_a_hit_raises_no_disabled_fate() {
+        // `_DamageShip`'s `_IsDisabled` after the hit (@0x3ae5b, @0x3af8b)
+        // never holds for a defence ship (@0x2d6f).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.defends = Some(crate::catalog::StellarId(128));
+        npc.reserves.shield.now = 0.0;
+        npc.reserves.armor.now = 1.0;
+        npc.hull.death_delay = 30;
+        session.hold_trigger(FIRE);
+        let mut ticks = 0;
+        while session.npcs()[0].condition == Condition::Intact {
+            work(&mut session, &catalog, Controls::default());
+            session.hold_trigger(Trigger::default());
+            ticks += 1;
+            assert!(ticks < 20, "never hit");
+        }
+        assert!(matches!(
+            session.npcs()[0].condition,
+            Condition::Dying { .. }
+        ));
+        let disabled = StoryEvent::ShipFate {
+            ship: NpcId(0),
+            fate: Fate::Disabled,
+        };
+        assert!(
+            !fates(&session).contains(&disabled),
+            "{:?}",
+            fates(&session)
+        );
+    }
+
     /// Every NPC keeps its goal.
     #[derive(Debug)]
     struct Keeping;

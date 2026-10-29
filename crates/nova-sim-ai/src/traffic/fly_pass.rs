@@ -155,7 +155,10 @@ impl Traffic {
                 npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
                 // `_AIDispatch` runs no high level for a disabled ship, nor
-                // the high level past its AI wait (`jump_with_leader`).
+                // the high level past its AI wait (`jump_with_leader`). A
+                // stellar's defence ship breaking up is not disabled
+                // (@0x2d6f), but it holds no warp and no carrier, so neither
+                // step below changes it.
                 if npc.condition == Condition::Intact && !npc.high_level_waits() {
                     warp_out::hold_stage(npc);
                     jump_with_leader::turn_back(npc, world.npc_jump_fuel);

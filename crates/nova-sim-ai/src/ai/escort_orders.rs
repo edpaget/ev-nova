@@ -243,7 +243,7 @@ impl<'a> Target<'a> {
             Some(ShipRef::Npc(id)) => {
                 let ship = around.npc(id).or_else(|| around.held_gone(leader));
                 Self {
-                    disabled: ship.is_some_and(|ship| ship.condition.disabled()),
+                    disabled: ship.is_some_and(Npc::is_disabled),
                     attacker: ship.filter(|ship| {
                         ship.target == Some(ShipRef::Npc(leader.id))
                             && ship.goal.attacking().is_some()
@@ -447,6 +447,16 @@ mod tests {
         let npcs = [low(n(2)), attacker(2, 3000.0)];
         assert_eq!(issued(&npcs), [1, 1, 1, 0]);
         assert_eq!(issued(&[leader(Goal::Attack(n(2)), 0.0)]), [1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn a_target_defence_ship_breaking_up_reads_as_not_disabled() {
+        let low = aiming(leader(Goal::Attack(n(2)), 32.99), n(2));
+        let npcs = [
+            low,
+            crate::traffic::fixture::breaking_up_guard(attacker(2, 100.0)),
+        ];
+        assert_eq!(issued(&npcs), [1, 1, 1, 0], "@0x2d6f");
     }
 
     #[test]

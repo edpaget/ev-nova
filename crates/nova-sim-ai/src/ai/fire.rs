@@ -909,7 +909,10 @@ fn sight<'a>(
 /// The turret `npc`, intact, finds to fire at `ship` among `around` by
 /// `rules`, if any: `_AIFireTurret`'s search on its target +0x70
 /// (@0x80b15-0x80e3c), whatever its goal. A disabled shooter searches
-/// nothing (@0x80afa-0x80b01).
+/// nothing (@0x80afa-0x80b01). Its only caller is the gate wait of an
+/// escort or fighter ([`escort::unprovoked`](crate::ai::escort::unprovoked)),
+/// which a stellar's defence ship, leaderless and spawned flying, never
+/// is, so the intact test never meets one breaking up.
 #[must_use]
 pub fn turret_find(
     npc: &Npc,
