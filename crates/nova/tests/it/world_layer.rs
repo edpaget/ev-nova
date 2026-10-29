@@ -1,13 +1,15 @@
 //! Flight's world layer through the whole app, over the persons' game
-//! ([`crate::persons`]): flight draws its scene into the world layer, and
-//! its HUD, every text and the dialogs over it into the overlay, in a 4:3
-//! and a 16:9 window; the spaceport draws no world.
+//! ([`crate::persons`]): flight's frame reaches the Gpu as its world layer
+//! then an overlay, in a 4:3 and a 16:9 window, a hail's comm dialog is
+//! drawn over flight's world, and the spaceport draws no world. What goes
+//! in which layer, and where, is nova-view's, pinned there.
 
 use nova::app::Showing;
 use nova_render::{Batch, Frame, QuadInstance};
 use nova_sim::fixture::MemoryPilots;
 use nova_view::{DrawCommand, DrawLayer, DrawList, Key, Screen};
 
+use crate::common::Frames;
 use crate::persons::{BOTH, Game, idle};
 
 const WORLD: DrawLayer = DrawLayer::World;
@@ -44,43 +46,14 @@ fn flying(window: (u32, u32), store: &MemoryPilots) -> Game {
 }
 
 #[test]
-fn flight_draws_its_scene_in_the_world_and_its_hud_and_text_over_it() {
+fn flights_frame_reaches_the_gpu_as_its_world_then_an_overlay_in_both_windows() {
     for window in WINDOWS {
         let store = MemoryPilots::new();
         let mut game = flying(window, &store);
         let frame = game.frame();
-        let (w, h) = (frame.logical.w as f32, frame.logical.h as f32);
-        // The scene first, in the world (the fixture has no stars' sheet,
-        // so no stars).
         assert_eq!(frame.layer(0), WORLD, "{window:?}");
-        // The player's ship, at the play area's centre left of the 194-wide
-        // status bar, and the two NPCs above it, in the world.
-        let world = quads_in(&frame, WORLD);
-        let centred = |quad: &QuadInstance| {
-            let dest = quad.dest;
-            let (x, y) = (dest.x + dest.w / 2.0, dest.y + dest.h / 2.0);
-            (x - ((w - 194.0) / 2.0).trunc()).abs() <= 1.0 && (y - (h / 2.0).trunc()).abs() <= 1.0
-        };
-        assert!(world.iter().any(centred), "{window:?}: {world:?}");
-        assert!(world.len() >= 3, "{window:?}: {world:?}");
-        // The status bar, at the view's right edge, over the world, which
-        // has nothing under it.
-        let bar = quads_in(&frame, OVERLAY)
-            .into_iter()
-            .find(|quad| (quad.dest.x + quad.dest.w - w).abs() < 0.5)
-            .expect("the status bar");
-        assert!(
-            world
-                .iter()
-                .all(|quad| quad.dest.x + quad.dest.w <= bar.dest.x),
-            "{window:?}: {world:?}"
-        );
-        // Every text over the world.
-        assert!(texts_in(&frame, WORLD).is_empty(), "{window:?}");
-        assert!(
-            texts_in(&frame, OVERLAY).contains(&"No Target".to_owned()),
-            "{window:?}"
-        );
+        assert!(!quads_in(&frame, WORLD).is_empty(), "{window:?}");
+        assert!(!texts_in(&frame, OVERLAY).is_empty(), "{window:?}");
     }
 }
 
@@ -88,9 +61,10 @@ fn flight_draws_its_scene_in_the_world_and_its_hud_and_text_over_it() {
 fn a_hails_comm_dialog_over_widened_flight_is_overlay() {
     let store = MemoryPilots::new();
     let mut game = flying((1920, 1080), &store);
-    game.tap(Key::Tab);
-    game.tap(Key::Tab);
-    game.tap(Key::Char('y'));
+    for key in [Key::Tab, Key::Tab, Key::Char('y')] {
+        game.tap(key);
+        game.settle();
+    }
     assert_eq!(game.showing(), Showing::Comm);
     let frame = game.frame();
     let mut comm = DrawList::new();
@@ -119,7 +93,9 @@ fn the_spaceport_draws_no_world() {
     let store = MemoryPilots::new();
     let mut game = flying((1920, 1080), &store);
     game.tap(Key::Char('l'));
-    game.approach();
+    game.settle_until("the dock approach's clearance", |game| {
+        game.session().dock_cleared()
+    });
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     let frame = game.frame();
