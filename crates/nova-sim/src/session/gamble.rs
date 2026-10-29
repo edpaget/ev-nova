@@ -245,8 +245,9 @@ mod tests {
             .expect("a race");
         assert_eq!(second.winner, 1);
         assert!(session.open_bar(&mut NeverFires));
+        // Were 1 still the last, it would be drawn again, giving 2.
         let third = session
-            .race(0, Bet::House, &mut Scripted::rolling(&[1]))
+            .race(0, Bet::House, &mut Scripted::rolling(&[1, 2]))
             .expect("a race");
         assert_eq!(third.winner, 1, "the bar's opening forgot the last");
     }
