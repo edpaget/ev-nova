@@ -438,11 +438,33 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the nav keys, otherwise at most one stellar picked
     /// ([`FlightView::select_stellar`]).
     pub(super) fn slot_keys_frame(&mut self) {
-        let polled = !self.jump_under_way() && self.takes(PlayerCommand::Nav);
+        let polled = self.slot_block_polled();
         let menu_open = self.escort_menu.is_open();
         if let Some(pick) = self.slot_block.frame(&self.held, menu_open, polled) {
             self.select_stellar(pick);
         }
+    }
+
+    /// Whether the slot block polls its keys this frame: not while a jump
+    /// is under way (@0x69d2b-0x69d32) or the session refuses the nav keys.
+    fn slot_block_polled(&self) -> bool {
+        !self.jump_under_way() && self.takes(PlayerCommand::Nav)
+    }
+
+    /// Whether the flight holds input a later frame will act on, for a
+    /// test harness to draw frames until it has settled rather than count
+    /// them. Every flight key acts at its press, its latch's frame run
+    /// then ([`Screen::input`](crate::Screen::input)), but the stellar
+    /// slot keys, which go to the slot block's next frame
+    /// ([`FlightView::slot_keys_frame`]): so this is the slot block's
+    /// queue, its presses and a pick's latch still to clear (the
+    /// `slot_block` module's `SlotBlock::queued`). A key held down is not
+    /// queued input.
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn input_queued(&self) -> bool {
+        let menu_open = self.escort_menu.is_open();
+        self.slot_block
+            .queued(&self.held, menu_open, self.slot_block_polled())
     }
 
     /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
