@@ -20,7 +20,6 @@ mod flight;
 mod galaxy_map;
 mod hire;
 mod hyperspace;
-mod hyperspace_outfits;
 mod land_key;
 mod landing;
 mod menu_commands;
