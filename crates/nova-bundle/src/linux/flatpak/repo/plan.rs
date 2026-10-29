@@ -419,8 +419,9 @@ pub fn stage_repo(
 
 /// `sign`: decides again, imports the secret, checks it is the committed
 /// key's, commits the staged build onto the channel's branch, signs,
-/// prunes and makes deltas, checks the tree fits Pages, then writes the
-/// `.flatpakref` and the repo-following bundle.
+/// prunes and makes deltas, writes the `.flatpakref` and the
+/// repo-following bundle, then checks the tree fits Pages. Any failure
+/// fails the job, so nothing it wrote is uploaded.
 ///
 /// # Errors
 ///
@@ -484,7 +485,8 @@ fn publish(
             secret: fingerprint,
         });
     }
-    let repo = repo(&paths.pages);
+    let flatpakref = paths.pages.join(flatpakref_name(channel));
+    let bundle = paths.dist.join(ASSET);
     run_steps(
         &[
             Step::Run(commit_from(
@@ -496,17 +498,6 @@ fn publish(
                 build,
             )),
             Step::Run(update_repo(&paths.work, &paths.pages, &fingerprint)),
-            Step::RemoveDir(repo.join("tmp")),
-        ],
-        process,
-        files,
-    )?;
-    let tree = bundle::run(process, &probe::listing(&paths.pages))?;
-    probe::check_size(&probe::parse_listing(&tree)?)?;
-    let flatpakref = paths.pages.join(flatpakref_name(channel));
-    let bundle = paths.dist.join(ASSET);
-    run_steps(
-        &[
             Step::Write {
                 path: flatpakref.clone(),
                 bytes: flatpakref::render(spec, channel, &host.url, key).into_bytes(),
@@ -520,10 +511,16 @@ fn publish(
                 &paths.pages,
                 &paths.dist,
             )),
+            // ostree's scratch space, not published. ostree can't open a
+            // repo without it, so it goes after the last tool that opens
+            // the repo.
+            Step::RemoveDir(repo(&paths.pages).join("tmp")),
         ],
         process,
         files,
     )?;
+    let tree = bundle::run(process, &probe::listing(&paths.pages))?;
+    probe::check_size(&probe::parse_listing(&tree)?)?;
     Ok(Outcome::Published { flatpakref, bundle })
 }
 
@@ -1172,8 +1169,6 @@ mod tests {
                     ])
                     .arg(&repo),
             ),
-            Event::RemoveDir(repo.join("tmp")),
-            Event::Run(probe::listing(&paths.pages)),
             Event::Write(
                 paths.pages.join("ev-nova-nightly.flatpakref"),
                 flatpakref::render(&spec, Channel::Nightly, URL, &committed()).into_bytes(),
@@ -1191,6 +1186,8 @@ mod tests {
                     .arg(paths.dist.join("ev-nova-x86_64-unknown-linux-gnu.flatpak"))
                     .args(["io.example.nova", "nightly"]),
             ),
+            Event::RemoveDir(repo.join("tmp")),
+            Event::Run(probe::listing(&paths.pages)),
         ]);
         expected.extend(cleanup_events(&paths.work, true));
         expected
@@ -1373,7 +1370,7 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_tree_fails_after_update_repo() {
+    fn an_oversized_tree_fails_once_the_tree_is_complete() {
         let big = format!("{}\trepo/deltas/xx/big\n12\trepo/config\n", MAX_FILE + 1);
         let respond = {
             let base = answers("200", FPR);
@@ -1397,10 +1394,20 @@ mod tests {
             ran.message()
         );
         assert!(ran.ran("flatpak", "build-update-repo"));
-        assert!(!ran.ran("flatpak", "build-bundle"));
+        let paths = sign_paths();
+        let checked = ran
+            .events
+            .iter()
+            .position(|e| *e == Event::Run(probe::listing(&paths.pages)))
+            .expect("the tree is listed");
         assert!(
-            !ran.events.iter().any(|e| matches!(e, Event::Write(..))),
-            "no .flatpakref"
+            ran.events[..checked].contains(&Event::RemoveDir(paths.pages.join("repo").join("tmp"))),
+            "tmp/ is gone before the tree is measured"
+        );
+        assert_eq!(
+            ran.events[checked + 1..],
+            cleanup_events(&paths.work, true)[..],
+            "nothing but the cleanup after the refusal"
         );
     }
 

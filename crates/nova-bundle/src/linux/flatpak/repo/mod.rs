@@ -35,11 +35,11 @@
 //! build-commit-from` (whose parent is the mirrored head; a build with the
 //! same content as the head commits nothing), signs the summary, prunes
 //! to [`KEPT_COMMITS`] commits per branch and makes static deltas with
-//! `flatpak build-update-repo`, checks the tree fits Pages
-//! ([`probe::check_size`]), writes the `.flatpakref`
-//! ([`flatpakref::render`]), and builds the bundle with `--repo-url` and
+//! `flatpak build-update-repo`, writes the `.flatpakref`
+//! ([`flatpakref::render`]), builds the bundle with `--repo-url` and
 //! `--gpg-keys`, from the signed repo, so an install of it follows the
-//! repo.
+//! repo, drops ostree's scratch `tmp/`, and checks the tree fits Pages
+//! ([`probe::check_size`]).
 //!
 //! # When nothing is published
 //!

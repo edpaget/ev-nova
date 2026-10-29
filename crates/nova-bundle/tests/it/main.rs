@@ -8,10 +8,16 @@ mod appcast;
 mod build_id;
 mod env;
 mod files;
+#[cfg(target_os = "linux")]
+mod flatpak_home;
 mod flatpak_metadata;
+#[cfg(unix)]
+mod gpg_repo_key;
 mod linux_desktop;
 #[cfg(target_os = "linux")]
 mod linux_flatpak;
+#[cfg(target_os = "linux")]
+mod linux_flatpak_repo;
 #[cfg(target_os = "linux")]
 mod linux_tarball;
 #[cfg(target_os = "macos")]
@@ -21,6 +27,8 @@ mod macos_tools;
 mod process;
 mod signer;
 mod site;
+#[cfg(unix)]
+mod throwaway_key;
 #[cfg(windows)]
 mod windows_installer;
 #[cfg(windows)]

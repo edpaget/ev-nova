@@ -22,9 +22,7 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
 
 use nova_bundle::bundle::metadata;
 use nova_bundle::channel;
@@ -34,6 +32,7 @@ use nova_bundle::ports::Process;
 use nova_bundle::spec::BundleSpec;
 use nova_bundle::system::{StdEnv, StdProcess};
 
+use crate::flatpak_home::{Dirs, Guard, os, refs, stdout};
 use crate::flatpak_metadata::{expected_permissions, flatpak_version, permissions};
 
 const VARIABLE: &str = "NOVA_FLATPAK";
@@ -43,107 +42,6 @@ fn spec() -> BundleSpec {
         .run(&metadata(&OsString::from(env!("CARGO"))))
         .expect("cargo metadata");
     BundleSpec::from_metadata(&json).expect("spec")
-}
-
-/// The test's own home and XDG directories.
-struct Dirs {
-    _tmp: tempfile::TempDir,
-    home: PathBuf,
-    data: PathBuf,
-    config: PathBuf,
-    cache: PathBuf,
-    runtime: PathBuf,
-}
-
-impl Dirs {
-    fn new() -> Self {
-        let tmp = tempfile::tempdir().expect("temp dir");
-        let dir = |name: &str| {
-            let dir = tmp.path().join(name);
-            fs::create_dir_all(&dir).expect("a test dir");
-            dir
-        };
-        let home = dir("home");
-        let runtime = dir("runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).expect("0700");
-        Self {
-            data: dir("data"),
-            config: dir("config"),
-            cache: dir("cache"),
-            home,
-            runtime,
-            _tmp: tmp,
-        }
-    }
-
-    /// `program` with `args`, its home and XDG directories the test's.
-    fn command(&self, program: &str, args: &[&OsStr]) -> Command {
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", &self.data)
-            .env("XDG_CONFIG_HOME", &self.config)
-            .env("XDG_CACHE_HOME", &self.cache)
-            .env("XDG_RUNTIME_DIR", &self.runtime)
-            .stdin(Stdio::null());
-        command
-    }
-
-    /// Runs `flatpak` with `args`, panicking with its output unless it
-    /// succeeds, and returns its standard output.
-    fn flatpak(&self, args: &[&OsStr]) -> String {
-        let output = self
-            .command("flatpak", args)
-            .output()
-            .unwrap_or_else(|e| panic!("flatpak {args:?}: {e}"));
-        stdout(&format!("flatpak {args:?}"), &output)
-    }
-
-    /// The exported share tree of the user installation.
-    fn exports(&self) -> PathBuf {
-        self.data.join("flatpak").join("exports").join("share")
-    }
-}
-
-fn stdout(what: &str, output: &Output) -> String {
-    assert!(
-        output.status.success(),
-        "{what}: {}\n{}\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn os(args: &[&str]) -> Vec<OsString> {
-    args.iter().map(OsString::from).collect()
-}
-
-fn refs(args: &[OsString]) -> Vec<&OsStr> {
-    args.iter().map(OsString::as_os_str).collect()
-}
-
-/// Uninstalls the app (and the runtime it pulled) from the test's
-/// installation, even when an assertion failed.
-struct Guard<'a> {
-    home: &'a Dirs,
-    id: String,
-}
-
-impl Drop for Guard<'_> {
-    fn drop(&mut self) {
-        for args in [
-            os(&["uninstall", "--user", "-y", "--noninteractive", &self.id]),
-            os(&["uninstall", "--user", "-y", "--noninteractive", "--unused"]),
-        ] {
-            let status = self.home.command("flatpak", &refs(&args)).status();
-            if !status.as_ref().is_ok_and(std::process::ExitStatus::success) {
-                eprintln!("cleanup: flatpak {args:?} failed: {status:?}");
-            }
-        }
-    }
 }
 
 #[test]
@@ -165,10 +63,7 @@ fn installs_with_exactly_the_recorded_permissions_zenity_and_the_exports() {
         REMOTE,
         RUNTIME_REPO,
     ])));
-    let _guard = Guard {
-        home: &home,
-        id: id.clone(),
-    };
+    let _guard = Guard::new(&home, &id);
     let mut install = os(&["install", "--user", "-y", "--noninteractive", "--bundle"]);
     install.push(bundle.into_os_string());
     home.flatpak(&refs(&install));
