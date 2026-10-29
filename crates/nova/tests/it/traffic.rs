@@ -2,26 +2,22 @@
 //! renderer and the recording Gpu and driven only by key and mouse events
 //! and redraws, as the window sends them: a system whose one `düde` flies
 //! a trader, one ship on average. Entering flight populates it on the
-//! app's source of chance: the trader is drawn with its own sprite and as
-//! a dim radar blip, flies to the system's planet and lands there, and
-//! waits there, stopped. Every flight's NPCs decide as the router's
-//! behaviour says, whether flight was entered with the developer's F or a
-//! new pilot flies it, and its ships are disabled as the router's rule
-//! says. The trader
-//! carries a weapon the simulation reports as not fully done, and a
-//! trader that fires it has the app write that out once, as a line.
-
-// Sizes and positions here are compared after the same arithmetic on
-// both sides.
-#![allow(clippy::float_cmp)]
+//! app's source of chance, and the trader's own sprite reaches the Gpu.
+//! Every flight's NPCs decide as the router's behaviour says, whether
+//! flight was entered with the developer's F or a new pilot flies it, and
+//! its ships are disabled as the router's rule says. A flight's
+//! diagnostics reach the app's writer as lines.
+//!
+//! Where the trader is placed, how it flies and lands, the radar's blips
+//! and which diagnostics a flight reports are nova-sim's, nova-sim-ai's,
+//! nova-view's and nova-sim-combat's, pinned there.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::io;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::EntryHarness;
+use crate::common::{EntryHarness, Frames};
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{CICN, PICT, RLED};
@@ -38,14 +34,14 @@ use nova_data::records::weapon::Weapon;
 use nova_data::store::fixture::one_file;
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame, QuadInstance, Rect, SolidQuad};
+use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{
     Behaviour, Chance, DisableRule, Gauge, Goal, HullSpec, Npc, PilotKeeper, PilotStore, Session,
-    ShipId, StellarId, Surroundings, Trigger, Vec2,
+    ShipId, Surroundings,
 };
-use nova_view::flight::{FlightView, SharedChance};
+use nova_view::flight::FlightView;
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::{Key, MouseButton, Point};
@@ -245,70 +241,16 @@ fn data() -> Rc<GameData> {
     Rc::new(one_file(fork.build().bytes).load())
 }
 
-/// Draws its script, then the last outcome, so no roll fires.
-struct Script(VecDeque<u32>);
-
-impl Chance for Script {
-    fn fires(&mut self, _percent: u8) -> bool {
-        false
-    }
-
-    fn below(&mut self, n: u32) -> u32 {
-        self.0.pop_front().unwrap_or(n - 1)
-    }
+/// Every NPC idles, counting the times it is asked.
+#[derive(Debug, Default)]
+struct Still {
+    asked: std::cell::Cell<usize>,
 }
-
-/// The app's chance: setup places the trader at (100, -100), facing up.
-fn placing_the_trader() -> SharedChance {
-    let script: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(VecDeque::from([
-        6, 6, 0, 0, 850, 650, 0,
-    ]))));
-    SharedChance::new(script)
-}
-
-/// [`placing_the_trader`] for a new pilot: its name's and nickname's
-/// defaults and its christening's default, each the first, then the
-/// offers' roll table its beginning draws, each the last outcome, then the
-/// setup.
-fn begun_placing_the_trader() -> SharedChance {
-    let christening = [0, 0, 0].into_iter();
-    let table = std::iter::repeat_n(99, nova_sim::mission::ROLLED);
-    let setup = [6, 6, 0, 0, 850, 650, 0];
-    let script: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Script(
-        christening.chain(table).chain(setup).collect(),
-    )));
-    SharedChance::new(script)
-}
-
-/// Every NPC idles.
-#[derive(Debug)]
-struct Still;
 
 impl Behaviour for Still {
     fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        self.asked.set(self.asked.get() + 1);
         Goal::Idle
-    }
-}
-
-/// Every NPC idles and holds its trigger.
-#[derive(Debug)]
-struct Firing;
-
-impl Behaviour for Firing {
-    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
-        Goal::Idle
-    }
-
-    fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
-        Trigger {
-            primary: true,
-            secondary: None,
-            only: None,
-            bays: false,
-            bays_after: false,
-            point_defence: false,
-            keep: None,
-        }
     }
 }
 
@@ -363,7 +305,7 @@ impl Harness {
         out: Option<Written>,
     ) -> Self {
         let data = data();
-        let screen = start_screen(Rc::clone(&data)).with_chance(placing_the_trader());
+        let screen = start_screen(Rc::clone(&data));
         let screen = match behaviour {
             Some(behaviour) => screen.with_behaviour(behaviour),
             None => screen,
@@ -398,7 +340,6 @@ impl Harness {
         let data = data();
         let keeper = PilotKeeper::new(Box::new(MemoryPilots::new()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
-            .with_chance(begun_placing_the_trader())
             .with_behaviour(behaviour)
             .with_pilots(Some(keeper), Rc::new(MonoMetrics));
         let mut harness = Self {
@@ -476,189 +417,58 @@ impl Harness {
         frame
     }
 
-    /// Sends `seconds` of redraws and returns the last frame.
-    fn run(&mut self, seconds: u64) -> Frame {
-        let mut last = None;
-        for _ in 0..seconds * 60 {
-            last = Some(self.frame());
-        }
-        last.expect("at least one frame")
+    /// Draws frames until the system's traffic is populated.
+    fn populated(&mut self) {
+        self.settle_until("the system's population", |harness| {
+            !harness.session().npcs().is_empty()
+        });
     }
 }
 
-fn quads(frame: &Frame) -> Vec<QuadInstance> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Sprites { quads, .. } => quads.clone(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-fn solids(frame: &Frame) -> Vec<SolidQuad> {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Solid(quads) => quads.clone(),
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-/// A `w` x `h` rectangle centred on (`x`, `y`).
-fn centred(x: f32, y: f32, w: f32, h: f32) -> Rect {
-    Rect {
-        x: x - w / 2.0,
-        y: y - h / 2.0,
-        w,
-        h,
-    }
-}
-
-/// The centre of the rectangle a solid quad's corners span.
-fn centre(quad: &SolidQuad) -> Point {
-    let xs = quad.corners.map(|c| c.x);
-    let ys = quad.corners.map(|c| c.y);
-    let mid = |v: [f32; 4]| {
-        let min = v.into_iter().fold(f32::INFINITY, f32::min);
-        let max = v.into_iter().fold(f32::NEG_INFINITY, f32::max);
-        f32::midpoint(min, max)
-    };
-    Point::new(mid(xs), mid(ys))
-}
-
-/// A 24-bit colour as the renderer submits it.
-fn submitted(raw: u32) -> [f32; 4] {
-    let [_, r, g, b] = raw.to_be_bytes();
-    [r, g, b, 255].map(|c| f32::from(c) / 255.0)
-}
-
-/// The 2 x 2 quads drawn: the trader's.
-fn traders(frame: &Frame) -> Vec<Rect> {
-    quads(frame)
-        .into_iter()
-        .map(|quad| quad.dest)
-        .filter(|dest| dest.w == 2.0 && dest.h == 2.0)
-        .collect()
-}
-
 #[test]
-fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
+fn entering_flight_populates_the_system_and_the_traders_sprite_reaches_the_gpu() {
     let mut harness = Harness::flying(None);
-    // The first frame runs no step; the second's sets the system up.
-    harness.frame();
-    assert_eq!(harness.session().npcs(), [], "until the first step");
-    let first = harness.frame();
-    let session = harness.session();
-    assert_eq!(session.npcs().len(), 1);
-    let trader = session.npcs()[0].clone();
-    assert_eq!(trader.ship, ShipId(129));
-    assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
-    // The player is at the play area's centre, (415, 384).
-    assert_eq!(traders(&first), [centred(515.0, 284.0, 2.0, 2.0)]);
-    // The planet's 2 x 2 oval on the radar; the trader joins it at the
-    // radar's next refresh, within 8 ticks (16 frames), a dim pixel where
-    // it is then: (100, -100) is 3.125 radar pixels each way from the
-    // player, at the radar's centre, (926, 96).
-    let planet = dim_pixels(&first);
-    assert_eq!(planet.len(), 4, "{planet:?}");
-    let mut frames = 0;
-    let blip = loop {
-        let shown = dim_pixels(&harness.frame());
-        frames += 1;
-        if shown.len() > 4 {
-            break shown[4];
-        }
-        assert!(frames < 16, "no blip after {frames} frames");
-    };
-    let at = harness.session().npcs()[0].state.position;
-    let expected = |world: f32, centre: f32| centre + (world / 32.0).trunc() + 0.5;
-    assert!(
-        (blip.x - expected(at.x, 926.0)).abs() <= 1.0
-            && (blip.y - expected(at.y, 96.0)).abs() <= 1.0,
-        "{blip:?} for {at:?}"
-    );
-}
-
-/// The centres of the 1-pixel quads drawn in the dim radar colour.
-fn dim_pixels(frame: &Frame) -> Vec<Point> {
-    solids(frame)
+    harness.populated();
+    let ships: Vec<ShipId> = harness
+        .session()
+        .npcs()
         .iter()
-        .filter(|quad| quad.color == submitted(DIM_RADAR))
-        .map(centre)
-        .collect()
+        .map(|npc| npc.ship)
+        .collect();
+    assert!(ships.contains(&ShipId(129)), "the düde's trader: {ships:?}");
+    let frame = harness.frame();
+    // The trader's sheet is the data's only 2 x 2 one.
+    let drawn = frame.batches.iter().any(|batch| match batch {
+        Batch::Sprites { quads, .. } => quads
+            .iter()
+            .any(|quad| (quad.dest.w, quad.dest.h) == (2.0, 2.0)),
+        _ => false,
+    });
+    assert!(drawn, "the trader's sprite");
 }
 
-#[test]
-fn the_trader_flies_to_the_planet_lands_and_waits_there() {
-    let mut harness = Harness::flying(None);
-    harness.frame();
-    harness.run(1);
+/// Asserts the router's `still` reached `harness`'s flight: it was asked,
+/// and the trader idles as it said.
+fn assert_still_decides(harness: &mut Harness, still: &Still) {
+    harness.populated();
+    harness.settle_until("the router's behaviour asked", |_| still.asked.get() > 0);
+    harness.settle();
     let trader = harness.session().npcs()[0].clone();
-    assert_eq!(trader.goal, Goal::Land(StellarId(128)));
-    // Starting at its top speed, it closes on the planet by sub 2's
-    // approach and brakes in its landing box (40 pixels a side, wider for
-    // a slower turn) until it moves below 0.35 a tick on each axis. Then
-    // it stays, stopped, for its wait of 300 to 499 ticks.
-    let mut landed = None;
-    for _ in 0..70 {
-        let last = harness.run(1);
-        let session = harness.session();
-        assert_eq!(session.npcs().len(), 1, "still in the system");
-        if session.npcs()[0].wait_running() {
-            landed = Some(last);
-            break;
-        }
-    }
-    let last = landed.expect("it lands within 70 seconds");
-    let waiting = harness.session().npcs()[0].clone();
-    assert_eq!(waiting.id, trader.id);
-    assert_eq!(waiting.visited, Some(StellarId(128)));
-    assert_eq!(waiting.state.velocity, Vec2::ZERO, "stopped");
-    // Over Alpha Prime, at (0, -300), within the widest box there is.
-    let off = waiting.state.position - Vec2::new(0.0, -300.0);
-    assert!(off.x.abs() <= 104.0 && off.y.abs() <= 104.0, "{off:?}");
-    assert_ne!(traders(&last), [], "still drawn");
-    let still = harness.run(1);
-    assert_eq!(harness.session().npcs()[0].state, waiting.state, "waiting");
-    assert_ne!(traders(&still), []);
+    assert_eq!(trader.goal, Goal::Idle);
 }
 
 #[test]
 fn the_routers_behaviour_decides_for_a_flight_entered_with_f() {
-    let mut harness = Harness::flying(Some(Rc::new(Still)));
-    harness.run(4);
-    let trader = harness.session().npcs()[0].clone();
-    assert_eq!(trader.goal, Goal::Idle);
-    assert_idle_braked_to_rest(&trader);
-}
-
-/// The trader, idling, has braked to rest from the top speed setup
-/// started it at, heading up from (100, -100): about 501 pixels on, a half
-/// turn at its top speed of 6 and its 0.12 thrust down to sub 1's 0.35 a
-/// tick on each axis, then settling by 0.95 a tick (@0x855e3-0x85624),
-/// still creeping under 0.35 a tick.
-fn assert_idle_braked_to_rest(trader: &Npc) {
-    let velocity = trader.state.velocity;
-    assert!(
-        velocity.x.abs() < 0.35 && velocity.y.abs() < 0.35,
-        "{:?}",
-        trader.state
-    );
-    let off = trader.state.position - Vec2::new(100.0, -601.0);
-    assert!(off.length() < 5.0, "{:?}", trader.state);
+    let still = Rc::new(Still::default());
+    let mut harness = Harness::flying(Some(still.clone()));
+    assert_still_decides(&mut harness, &still);
 }
 
 #[test]
 fn the_routers_behaviour_decides_for_a_new_pilots_flight() {
-    let mut harness = Harness::new_pilot(Rc::new(Still));
-    harness.run(4);
-    let trader = harness.session().npcs()[0].clone();
-    assert_eq!(trader.goal, Goal::Idle);
-    assert_idle_braked_to_rest(&trader);
+    let still = Rc::new(Still::default());
+    let mut harness = Harness::new_pilot(still.clone());
+    assert_still_decides(&mut harness, &still);
 }
 
 #[test]
@@ -668,31 +478,20 @@ fn the_routers_disable_rule_decides_for_a_flight_entered_with_f() {
     harness.press(Key::Char('f'));
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(rule.asked.get(), 0);
-    harness.run(1);
-    assert!(rule.asked.get() >= 30, "each step: {}", rule.asked.get());
+    harness.settle_until("the router's disable rule asked", |_| rule.asked.get() > 0);
 }
 
 #[test]
-fn a_flights_diagnostics_are_written_out_once_as_lines() {
+fn a_flights_diagnostics_reach_the_apps_writer_as_lines() {
     let written = Written::default();
-    let mut harness = Harness::built(Some(Rc::new(Firing)), None, Some(written.clone()));
+    let mut harness = Harness::built(None, None, Some(written.clone()));
     harness.press(Key::Char('f'));
-    harness.run(3);
+    harness.settle_until("a diagnostic written", |_| !written.0.borrow().is_empty());
     let text = String::from_utf8(written.0.borrow().clone()).expect("UTF-8");
-    assert_eq!(
-        text,
-        "nova: wëap 181: no spïn 3000\n\
-         nova: cargo box 0: no spïn 500\n\
-         nova: cargo box 1: no spïn 501\n\
-         nova: cargo box 2: no spïn 502\n\
-         nova: cargo box 3: no spïn 503\n\
-         nova: cargo box 4: no spïn 504\n\
-         nova: cursor: no spïn 650\n\
-         nova: stars: no spïn 700\n\
-         nova: wëap 181 Flags3 0x0020 not implemented\n",
-        "its shots', the cargo boxes', the cursor's and the stars' sheets missing from the fixture, as the flight \
-         opened; then the trader fired, again and again"
-    );
+    assert!(text.ends_with('\n'), "{text:?}");
+    for line in text.lines() {
+        assert!(line.starts_with("nova: "), "{line:?}");
+    }
 }
 
 impl crate::common::EntryHarness for Harness {
