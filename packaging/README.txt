@@ -113,13 +113,14 @@ Linux
 Every Linux download is for x86-64 (64-bit Intel or AMD). There are
 two: the Flatpak and the tarball.
 
-The tarball needs glibc 2.35 or newer: Ubuntu 22.04 or later, Debian 12
-or later, or a current Fedora or openSUSE. It is built on Ubuntu 22.04,
-and the build checks that the game needs no newer glibc. It plays sound
-through your system's ALSA, which PipeWire or PulseAudio serves on
-current desktops. The Flatpak brings its own runtime, so any
-distribution with Flatpak runs it, and keeps its own settings and pilots
-(see below).
+The tarball needs glibc 2.39 or newer: Ubuntu 24.04, Linux Mint 22,
+Debian 13, Fedora 40 or newer, or SteamOS and Arch. It is built on Ubuntu
+24.04, and the build checks that the game needs no newer glibc. On older
+releases (Ubuntu 22.04, Linux Mint 21, Debian 12), install the Flatpak
+instead. It plays sound through your system's ALSA, which PipeWire or
+PulseAudio serves on current desktops. The Flatpak brings its own
+runtime, so any distribution with Flatpak runs it, and keeps its own
+settings and pilots (see below).
 
 The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
 LICENSE and a share/ folder:

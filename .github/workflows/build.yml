@@ -46,13 +46,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Built in an ubuntu:22.04 container, so the tarball's binary
-          # needs no glibc newer than 2.35, the floor packaging/README.txt
-          # records. The image outlives GitHub's
-          # ubuntu-22.04 runner. The Flatpak is built in ci.yml's `flatpak` job.
+          # Built in an ubuntu:24.04 container, so the tarball's binary
+          # needs no glibc newer than 2.39, the floor packaging/README.txt
+          # records. The pinned image keeps the floor fixed whatever runner
+          # image hosts it. Older systems use the Flatpak, built in ci.yml's
+          # `flatpak` job.
           - name: x86_64-unknown-linux-gnu
             os: ubuntu-24.04
-            container: ubuntu:22.04
+            container: ubuntu:24.04
             target: x86_64-unknown-linux-gnu
           # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
           # on the arm64 runner and packs the bundle (crates/nova-bundle).
@@ -98,6 +99,7 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           apt-get update
+          # libasound2-dev keeps its name on 24.04; only the runtime package became libasound2t64.
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
       # The commit to build: the pushed one for the nightly, the nightly's

@@ -2,7 +2,7 @@
 //!
 //! It skips, passing, unless `NOVA_TARBALL` names a built `.tar.gz`, so
 //! neither `mise run ci` nor a developer's test run needs one. CI's Linux
-//! `build` leg (the `ubuntu:22.04` container) packs it and sets it.
+//! `build` leg (the `ubuntu:24.04` container) packs it and sets it.
 //!
 //! It unpacks the tarball with `tar xzf` into a directory the test owns
 //! and checks its one top-level directory: executable `nova` and
