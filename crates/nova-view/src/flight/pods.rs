@@ -53,11 +53,12 @@
 //! the murk writes the sprite's +0xb0/+0xb4 and the fade +0xa8, so the
 //! two compose.
 //!
-//! Left out: `_WrapPlayerPosition`'s shift (@0x68232), as the engine has
-//! no wrap.
+//! The player's wrap carries them ([`EscapePods::carry`]), its velocity
+//! kept.
 
 use std::num::NonZeroU16;
 
+use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::trig::intercept_angle;
 use nova_sim::{Chance, Vec2};
 
@@ -66,6 +67,14 @@ use super::murk::{murk_tint, sprite_murk};
 use super::slot_pool::SlotPool;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, Point};
+
+/// Moves the place `at` if `wrap` reaches it.
+pub(super) fn carry_point(wrap: &PlayerWrap, at: &mut Point) {
+    let mut place = Vec2::new(at.x, at.y);
+    if wrap.carry(&mut place) {
+        *at = Point::new(place.x, place.y);
+    }
+}
 
 /// The most pods kept at once under the caps: `_podData`'s 32 entries
 /// (`cmpl $0x20` @0x456bc).
@@ -163,6 +172,14 @@ impl EscapePods {
         };
         pod.step();
         self.pods.insert(pod, cap);
+    }
+
+    /// Carries each pod within `wrap`'s reach: `_WrapPlayerPosition`'s loop
+    /// of `_podData` (@0x6822f-0x682b1), which leaves its velocity.
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for pod in self.pods.iter_mut() {
+            carry_point(wrap, &mut pod.at);
+        }
     }
 
     /// Steps every pod, then frees those whose life is below 0.
@@ -512,6 +529,31 @@ mod tests {
             .collect();
         let screen = |x| camera.world_to_screen(Point::new(x, 0.0)).x;
         assert_eq!(drawn, [screen(30.0), screen(20.0)], "the new one first");
+    }
+
+    #[test]
+    fn a_wrap_carries_the_pods_within_its_reach_and_leaves_their_velocities() {
+        use nova_sim::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
+        let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+        let wrap = PlayerWrap::of(player).expect("past the edge");
+        let mut pods = EscapePods::default();
+        for x in [player.x - 100.0, player.x - WRAP_EDGE - 5.0] {
+            let at = Point::new(x, 40.0);
+            pods.spawn(
+                at,
+                Point::new(1.0, 0.0),
+                false,
+                &looks(),
+                &mut script(&[0, 0]),
+            );
+        }
+        let before = pods.pods();
+        pods.carry(&wrap);
+        let after = pods.pods();
+        assert_eq!(after[0].at.x, before[0].at.x - WRAP_SHIFT);
+        assert_eq!(after[0].at.y, before[0].at.y);
+        assert_eq!(after[0].velocity, before[0].velocity);
+        assert_eq!(after[1], before[1]);
     }
 
     #[test]

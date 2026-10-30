@@ -157,11 +157,12 @@ use std::collections::BTreeMap;
 
 use nova_sim::combat::ParticleBurst;
 use nova_sim::combat::weapon::Explosion as Blast;
+use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::murk::{murk_tint, sprite_murk};
-use super::pods::{EscapePods, Pod};
+use super::pods::{EscapePods, Pod, carry_point};
 use super::slot_pool::SlotPool;
 use super::weapons::LOOPED_SOUND;
 use crate::draw::lights_tint;
@@ -765,6 +766,17 @@ impl Effects {
     /// list.
     pub fn take_sounds(&mut self) -> Vec<CombatSound> {
         std::mem::take(&mut self.sounds)
+    }
+
+    /// Carries the explosions within `wrap`'s reach
+    /// (`_WrapPlayerPosition`'s loop of `_explodData` @0x68097-0x68119) and
+    /// the escape pods. The particles stay, as no code in the routine reads
+    /// `_gParticleArray`: they leave the screen.
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for explosion in self.explosions.iter_mut() {
+            carry_point(wrap, &mut explosion.at);
+        }
+        self.pods.carry(wrap);
     }
 
     /// Clears everything: the explosions, the debris, the sounds, the

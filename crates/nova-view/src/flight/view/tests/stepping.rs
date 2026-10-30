@@ -11,6 +11,7 @@ use nova_sim::flight_frame::ShipPlace;
 use nova_sim::flight_frame::{
     FlightEvent, FrameShip, FrameShot, PassReport, RaisedLine, StepInput, StepReport, StepRun,
 };
+use nova_sim::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
 use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
 
 use super::faked_travel::{faked_lasts, shown_to_flight};
@@ -670,13 +671,18 @@ impl Chance for Middling {
 /// A view of the stars' sheet, its stars scattered about the origin on a
 /// [`Middling`] chance.
 fn starry_stepping() -> Faked {
+    starry_about(Vec2::ZERO)
+}
+
+/// [`starry_stepping`], its stars scattered about `ship`.
+fn starry_about(ship: Vec2) -> Faked {
     let catalog = starry();
     let mut view = stepping(catalog);
     view.looks = Looks::read(&starry(), []);
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Middling::default()));
     view.effects_chance = SharedChance::new(chance);
     let surroundings =
-        super::super::stars::surroundings_at((Vec2::ZERO, 0), VIEW_SIZE, anchor(), &view.looks);
+        super::super::stars::surroundings_at((ship, 0), VIEW_SIZE, anchor(), &view.looks);
     super::super::stars::reset(
         &mut view.stars,
         &surroundings,
@@ -805,6 +811,266 @@ fn a_star_of_factor_0_stays_fixed_in_world_units() {
 }
 
 // The comm and the quotes.
+
+// The player's wrap: what the view carries as it reaches the pass that ran
+// it (see the `stepping` module).
+
+/// Where the ship stood as it wrapped.
+const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 40.0);
+
+/// What the wrap added.
+const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
+
+/// The ship's move a pass.
+const MOVE: Vec2 = Vec2::new(8.0, -4.0);
+
+fn wrap() -> PlayerWrap {
+    PlayerWrap::of(STOOD).expect("past the edge")
+}
+
+/// A pass that ended with the ship at `at`, `wrap` run at its head.
+fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
+    PassReport {
+        ships: vec![the_player(at)],
+        player_position: at,
+        wrap,
+        ..PassReport::default()
+    }
+}
+
+/// The ship's place before a step, at `at`.
+fn place(at: Vec2) -> ShipPlace {
+    ShipPlace {
+        position: at,
+        ..ShipPlace::default()
+    }
+}
+
+/// The frame after a wrap on a step's one pass: the ship [`MOVE`]d on past
+/// where it landed, and [`NPC`], from `npc` before the step to `npc_now`,
+/// in the frame.
+fn after_a_wrap(view: &mut Faked, npc: Vec2, npc_now: Vec2) {
+    let at = STOOD + SHIFT + MOVE;
+    let mut flown = in_sol();
+    flown.ships = vec![the_player(at), the_npc(npc_now)];
+    view.sim.set_frame(flown);
+    let run = StepRun {
+        before: vec![(ShipRef::Player, place(STOOD)), (NPC, place(npc))],
+        passes: vec![wrapping(at, Some(wrap()))],
+        ..StepRun::default()
+    };
+    frame(
+        view,
+        StepReport {
+            steps: vec![run],
+            stopped: false,
+        },
+    );
+}
+
+fn close(a: Point, b: Point, within: f32) -> bool {
+    (a.x - b.x).hypot(a.y - b.y) <= within
+}
+
+#[test]
+fn across_a_wrap_the_ships_and_the_camera_are_drawn_within_a_passs_move_of_the_frame() {
+    let mut view = stepping(catalog());
+    let near = STOOD + Vec2::new(-100.0, 30.0);
+    after_a_wrap(&mut view, near, near + SHIFT + MOVE);
+    let (player, npc) = (view.frame.ships[0], view.frame.ships[1]);
+    let step = MOVE.length();
+    for alpha in [0.0, 0.25, 0.5, 1.0] {
+        view.alpha = alpha;
+        let frame_at = |ship: &FrameShip| Point::new(ship.position.x, ship.position.y);
+        let shown = view.shown_position();
+        assert!(close(shown, frame_at(&player), step), "{alpha}: {shown:?}");
+        let (shown, _) = view.shown_npc(&npc);
+        assert!(close(shown, frame_at(&npc), step), "{alpha}: {shown:?}");
+        let camera = view.camera();
+        let (ship, screen) = (frame_at(&player), camera.world_to_screen(frame_at(&player)));
+        let drawn = camera.world_to_screen(view.shown_position());
+        assert!(close(drawn, camera.anchor(), 1e-3), "{alpha}: {ship:?}");
+        assert!(close(screen, drawn, step + 1.0), "{alpha}: {screen:?}");
+    }
+}
+
+#[test]
+fn an_npc_the_wrap_left_is_drawn_where_the_frame_has_it() {
+    let mut view = stepping(catalog());
+    let far = STOOD - Vec2::new(WRAP_EDGE, 0.0);
+    after_a_wrap(&mut view, far, far);
+    let npc = view.frame.ships[1];
+    for alpha in [0.0, 0.5, 1.0] {
+        view.alpha = alpha;
+        assert_eq!(view.shown_npc(&npc).0, Point::new(far.x, far.y), "{alpha}");
+    }
+}
+
+/// A frame of one step of `passes` whose ship stood at `from`.
+fn step_from(view: &mut Faked, from: Vec2, passes: Vec<PassReport>) {
+    let run = StepRun {
+        before: vec![(ShipRef::Player, place(from))],
+        passes,
+        ..StepRun::default()
+    };
+    let report = StepReport {
+        steps: vec![run],
+        stopped: false,
+    };
+    frame(view, report);
+}
+
+/// Asserts each of the stars moved `by` the ship's move, its factor's.
+fn scrolled_by(view: &Faked, before: &[Star; 20], by: Vec2) {
+    let mut scrolled = 0;
+    for (star, was) in stars_now(view).iter().zip(before) {
+        if was.factor > 0.0 {
+            scrolled += 1;
+        }
+        assert_eq!(star.x, was.x - was.factor * by.x);
+        assert_eq!(star.y, was.y - was.factor * by.y);
+    }
+    assert!(scrolled > 0, "some star has a factor");
+}
+
+#[test]
+fn a_first_pass_wrap_scrolls_the_stars_by_the_ships_move_and_not_the_shift() {
+    let mut view = starry_stepping();
+    let before = stars_now(&view);
+    let at = STOOD + SHIFT + MOVE;
+    step_from(&mut view, STOOD, vec![wrapping(at, Some(wrap()))]);
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE);
+}
+
+#[test]
+fn a_second_pass_wrap_leaves_the_first_passs_scroll_alone() {
+    let (start, first) = (STOOD - MOVE - MOVE, STOOD - MOVE);
+    let mut view = starry_about(first);
+    let before = stars_now(&view);
+    let passes = vec![
+        PassReport {
+            double_time: true,
+            ..wrapping(first, None)
+        },
+        PassReport {
+            double_time: true,
+            ..wrapping(STOOD + SHIFT + MOVE, Some(wrap()))
+        },
+    ];
+    step_from(&mut view, start, passes);
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
+    assert_eq!(view.previous.position, start + SHIFT);
+}
+
+#[test]
+fn a_wrap_marks_the_stars_so_none_streaks_across_it() {
+    let mut view = starry_stepping();
+    frame(&mut view, one_step(vec![wrapping(Vec2::ZERO, None)]));
+    let at = STOOD + SHIFT + MOVE;
+    step_from(&mut view, STOOD, vec![wrapping(at, Some(wrap()))]);
+    // Drawn at its placement at any alpha, as a jumped star is.
+    let list = |view: &Faked, alpha: f32| {
+        let mut view_list = DrawList::new();
+        let sheet = view.looks.star_sheet().expect("the stars' sheet");
+        view.stars.draw(&mut view_list, sheet, alpha);
+        view_list
+    };
+    assert_eq!(list(&view, 0.0), list(&view, 1.0));
+}
+
+/// Effects at `near` and `far` of [`STOOD`]: an explosion, a pod and a puff
+/// each, and particles at `near`.
+fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
+    let shot_at = |id, at| FrameShot {
+        id: ShotId(id),
+        weapon: BLASTER,
+        position: at,
+        ..record::shot()
+    };
+    let exploded = |at| CombatEvent::Exploded {
+        at,
+        explosion: Explosion {
+            boom: BoomId(128),
+            extra: false,
+        },
+        size: 0.0,
+    };
+    let podded = |at| CombatEvent::PodEjected {
+        ship: NPC,
+        at,
+        velocity: Vec2::ZERO,
+    };
+    let burst = CombatEvent::Particles(nova_sim::combat::ParticleBurst {
+        at: near,
+        speed: 0.0,
+        variation: 0,
+        life: (300, 300),
+        color: 0x00FF_8000,
+        count: 1,
+        spread: 0.0,
+    });
+    let pass = PassReport {
+        shots: vec![shot_at(1, near), shot_at(2, far)],
+        smoke_frame: true,
+        combat: vec![
+            exploded(near),
+            exploded(far),
+            podded(near),
+            podded(far),
+            burst,
+        ],
+        ..wrapping(STOOD, None)
+    };
+    frame(view, one_step(vec![pass]));
+}
+
+/// [`effects_about`]'s places, as lists of where each explosion, pod and
+/// puff is and each particle.
+fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
+    (
+        view.effects
+            .explosions()
+            .iter()
+            .map(|boom| boom.at)
+            .collect(),
+        view.effects.pods().iter().map(|pod| pod.at).collect(),
+        view.shot_looks
+            .smoke()
+            .puffs()
+            .iter()
+            .map(|puff| puff.at)
+            .collect(),
+        view.effects.particles()[0].at,
+    )
+}
+
+#[test]
+fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_far_stay() {
+    let catalog = blaster_looking(|look| {
+        look.flags = crate::flight::smoke::SMALL_SMOKE;
+        look.smoke_set = 1;
+    });
+    let mut view = stepping(catalog);
+    let (near, far) = (
+        STOOD + Vec2::new(-100.0, 0.0),
+        STOOD - Vec2::new(WRAP_EDGE, 0.0),
+    );
+    effects_about(&mut view, near, far);
+    let (booms, pods, puffs, particle) = places(&view);
+    assert_eq!((booms.len(), pods.len(), puffs.len()), (2, 2, 2));
+    let drift = view.effects.pods()[0].velocity.x;
+    frame(
+        &mut view,
+        one_step(vec![wrapping(STOOD + SHIFT, Some(wrap()))]),
+    );
+    let shifted = |at: Point| Point::new(at.x + SHIFT.x, at.y + SHIFT.y);
+    let (now_booms, now_pods, now_puffs, now_particle) = places(&view);
+    assert_eq!(now_booms, [shifted(booms[0]), booms[1]]);
+    assert!((now_pods[0].x - (shifted(pods[0]).x + drift)).abs() < 1e-2);
+    assert!((now_pods[1].x - (pods[1].x + drift)).abs() < 1e-2);
+    assert_eq!(now_puffs, [puffs[0] + SHIFT, puffs[1]]);
+    assert_eq!(now_particle.x, particle.x, "the particles aren't carried");
+}
 
 /// A note of NPC 0's repairs.
 fn repaired() -> CommNote {

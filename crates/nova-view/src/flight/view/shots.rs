@@ -6,6 +6,7 @@
 //! is the view's, drawn on the effects' chance, never the simulation's.
 
 use nova_sim::flight_frame::PassReport;
+use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{Chance, Vec2};
 
 use crate::DrawList;
@@ -86,6 +87,11 @@ impl ShotLooks {
     /// player's ship at `viewer` in a system of effective murk `murk`.
     pub(super) fn draw_smoke(&self, list: &mut DrawList, camera: &Camera, viewer: Vec2, murk: u8) {
         self.smoke.draw(list, camera, viewer, murk);
+    }
+
+    /// Carries the smoke by `wrap`.
+    pub(super) fn carry(&mut self, wrap: &PlayerWrap) {
+        self.smoke.carry(wrap);
     }
 
     /// The smoke the shots have left.

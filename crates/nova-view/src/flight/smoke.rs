@@ -49,6 +49,7 @@
 //! (@0x35ccf, @0x2e3bc), which the engine never has.
 
 use nova_sim::Vec2;
+use nova_sim::player_wrap::PlayerWrap;
 
 use super::catalog::SmokeSheet;
 use super::murk::{murk_tint, sprite_murk};
@@ -160,6 +161,14 @@ impl SmokePuffs {
         self.puffs.insert(puff, caps.then_some(MAX_PUFFS));
     }
 
+    /// Carries each puff within `wrap`'s reach: `_WrapPlayerPosition`'s
+    /// loop of `_smokeData` (@0x681a7-0x68229).
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for puff in self.puffs.iter_mut() {
+            wrap.carry(&mut puff.at);
+        }
+    }
+
     /// Ages every puff a tick, freeing each past its last frame, as
     /// `_HandleSmoke` does after it shows them.
     pub fn step(&mut self) {
@@ -200,6 +209,23 @@ mod tests {
     use crate::DrawCommand;
 
     const SET_0: SmokeSheet = SmokeSheet { first_icon: 1000 };
+
+    #[test]
+    fn a_wrap_carries_the_puffs_within_its_reach() {
+        use nova_sim::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
+        let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+        let wrap = PlayerWrap::of(player).expect("past the edge");
+        let mut puffs = SmokePuffs::default();
+        let (near, far) = (
+            player - Vec2::new(100.0, 0.0),
+            player - Vec2::new(WRAP_EDGE, 0.0),
+        );
+        puffs.spawn(near, 0, Some(SET_0), false);
+        puffs.spawn(far, 0, Some(SET_0), false);
+        puffs.carry(&wrap);
+        let at: Vec<Vec2> = puffs.puffs().iter().map(|puff| puff.at).collect();
+        assert_eq!(at, [near - Vec2::new(WRAP_SHIFT, 0.0), far]);
+    }
 
     #[test]
     fn a_shots_smoke_is_its_kind_by_its_flags() {

@@ -29,12 +29,31 @@
 //! read ([`Presentation`]) are the view's own, held from the rulebook the
 //! view is built with and as its rules change.
 //!
+//! **The player's wrap** (`_WrapPlayerPosition`, `nova_sim`'s
+//! [`PlayerWrap`]). The view keeps some tables the routine moves, and the
+//! places each step began from, so it carries them as it reaches the pass
+//! that wrapped ([`PassReport::wrap`]), before that pass's effects:
+//! [`StepRun::before`]'s places, each NPC's by the wrap's test, so the
+//! drawing moves on from them; the explosions, pods and smoke; and the
+//! stars are marked as moved, so none streaks across the 25,000. As the
+//! scroll reads the ship's place after the carry, a wrap on the first pass
+//! scrolls by the ship's own move, and one on double time's second leaves
+//! the first's alone, as the original's second-pass write of
+//! `_lastFramePlayerPos` (@0x6836b-0x68386) is overwritten unread.
+//!
+//! An NPC's place is tested as the step began where the session tests it
+//! at the wrap. They can disagree only for one within a pass's flight of
+//! 15,000 from the player on double time's second pass, whose drawn path
+//! then runs 15,000 to 40,000 from the player, off screen, so the report
+//! names no NPCs.
+//!
 //! **The frame after the steps.** Once the report is replayed the kept
 //! frame is filled afresh ([`FlightView::refresh_frame`]), so the frame's
 //! ships are where the steps left them, the places each step began from
 //! ([`StepRun::before`]) being where the drawing moves them from.
 
 use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
+use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
 
 use crate::Key;
@@ -194,6 +213,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.keep_before(run);
             for (at, pass) in run.passes.iter().enumerate() {
                 quotes.extend(pass.quotes.iter().cloned());
+                if let Some(wrap) = pass.wrap {
+                    self.carry_wrap(&wrap);
+                }
                 let first = (at == 0).then_some(self.previous.position);
                 self.step_effects(pass, first, anchor);
             }
@@ -218,6 +240,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 ShipRef::Npc(id) => self.npc_previous.push((id, place)),
             }
         }
+    }
+
+    /// Carries what the view keeps by `wrap`, as the pass that ran it is
+    /// reached (see the module docs).
+    fn carry_wrap(&mut self, wrap: &PlayerWrap) {
+        self.previous.position = wrap.carried(self.previous.position);
+        for (_, place) in &mut self.npc_previous {
+            wrap.carry(&mut place.position);
+        }
+        self.effects.carry(wrap);
+        self.shot_looks.carry(wrap);
+        self.stars.mark_jumped();
     }
 
     /// Steps the view's effects, flashes, glows, shot looks and stars
