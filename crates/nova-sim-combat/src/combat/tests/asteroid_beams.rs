@@ -254,3 +254,22 @@ fn by_the_engines_nearest_a_berth_its_ship_left_weighs_by_where_it_was_noted() {
         assert!(close_by(cut, Vec2::new(end, 0.0)), "{noted}: {cut:?}");
     }
 }
+
+#[test]
+fn by_the_engines_nearest_a_wrap_moves_the_position_noted_for_an_empty_berth() {
+    // `_WrapPlayerPosition` moves the empty slot's +0x18 (@0x67f93-0x6800e)
+    // and the pass reads it there (@0x317f2-0x3180c): noted 25,000 back, A
+    // comes to 10 behind, and asteroid 1 is weighed by it. Beyond the
+    // wrap's reach, it stays, and the nearer asteroid wins.
+    use crate::player_wrap::{PlayerWrap, WRAP_SHIFT};
+    let stood = Vec2::new(-15_010.0, 0.0);
+    let wrap = PlayerWrap::of(stood).expect("past the edge");
+    for (noted, end) in [(-10.0 - WRAP_SHIFT, 144.0), (-40_000.0, 54.0)] {
+        let mut combat = by_the_engines_nearest();
+        let mut left = [Ship::at(1, noted, 0.0)];
+        combat.note_slots(&left.iter_mut().map(Ship::fighter).collect::<Vec<_>>());
+        combat.carry(&wrap, Vec::new());
+        let cut = cut_by_berth_3(&mut combat, vec![player_at(-100.0)]);
+        assert!(close_by(cut, Vec2::new(end, 0.0)), "{noted}: {cut:?}");
+    }
+}

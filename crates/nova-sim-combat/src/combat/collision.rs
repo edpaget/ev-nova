@@ -156,14 +156,14 @@
 //! after the pass (`Combat::settle_struck`), as nothing in the pass reads
 //! them but whether a ship is destroyed, which no hit there changes.
 
-use super::asteroid_hit;
+use super::asteroid_hit::{self, Rock};
 use super::asteroid_walk::{AsteroidField, Shown, Struck, WalkTurn};
 use super::damage::Hit;
 use super::hull::DisableRule;
 use super::ion::Dose;
 use super::lineup::Lineup;
 use super::planet_type::BlastKind;
-use super::projectile::{Shot, ShotLayer};
+use super::projectile::{Shot, ShotLayer, Target};
 use super::stellar::StellarTarget;
 use super::{
     Arsenal, Combat, CombatEvent, Fighter, Landed, Push, ShipRef, blasted, defence, position_of,
@@ -284,7 +284,11 @@ impl Combat {
                         continue;
                     };
                     let target = &lineup.seen[ship];
-                    let Some(at) = shot.touches(from, target) else {
+                    let met = Target {
+                        position: target.position - self.left_back(shot),
+                        ..*target
+                    };
+                    let Some(at) = shot.touches(from, &met) else {
                         continue;
                     };
                     if !lineup.seen_sides().shot_can_hit(shot, target) {
@@ -371,6 +375,7 @@ impl Combat {
                 continue;
             };
             let mut turn = WalkTurn::begin(slot, asteroid, field.types);
+            turn.rock.position = self.rock_sprite(turn.rock.position);
             for &index in entry {
                 let shot = &shots[index];
                 if spent[index] || !takes(shot) {
@@ -379,7 +384,11 @@ impl Combat {
                 let Some(from) = shot.moved_from else {
                     continue;
                 };
-                if let Some(at) = asteroid_hit::touches(shot, from, &turn.rock) {
+                let rock = Rock {
+                    position: turn.rock.position - self.left_back(shot),
+                    ..turn.rock
+                };
+                if let Some(at) = asteroid_hit::touches(shot, from, &rock) {
                     spent[index] = true;
                     let met = (shot, Struck::Turn(&mut turn), at);
                     self.land_on_asteroid(met, (fighters, lineup), rule, (field, chance));
@@ -449,7 +458,11 @@ impl Combat {
                 if spent[missile]
                     || shot.layer != ShotLayer::Homing
                     || shot.moved_from.is_none()
-                    || !defence::sprites_meet(&shots[pd], shot, camera)
+                    || !defence::sprites_meet(
+                        &self.shot_sprite(&shots[pd]),
+                        &self.shot_sprite(shot),
+                        camera,
+                    )
                 {
                     continue;
                 }
