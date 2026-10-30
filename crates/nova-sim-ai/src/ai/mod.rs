@@ -644,8 +644,7 @@ pub struct Surroundings<'a> {
     /// what the destination pick walks and the stellar it picked is looked
     /// up in ([`idle`], [`idle_block`], [`miner`], [`react`]), owner- and
     /// active-blind as `_SelectRandomStellarDest` is (see
-    /// [`destination`](crate::traffic::destination)).
-    /// [`Surroundings::new`] gives `sites`.
+    /// [`destination`]). [`Surroundings::new`] gives `sites`.
     pub listed: &'a [LandingSite],
     /// Every NPC in the system, the one deciding among them.
     pub npcs: &'a [Npc],
@@ -1273,12 +1272,12 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 /// Whether `npc` can still fly its goal among `around`: a stellar the
 /// system still lists, shown or not ([`Surroundings::listed`], as the
 /// high level reads the stellar's record by its +0x6c, state 1 @0x8d8d7,
-/// state 20 @0x8db8a), and landable, a gate still listed (state 20 tests no landability
-/// again), a jump out (state 2 tests no fuel), a hold, or a drift (goal
-/// 0xe, which its high level ends: the trader AIs' idle blocks run only on
-/// goal 0, `_WimpyTraderAI` @0x8b06c, `_BraveTraderAI` @0x8b4d6). Idling,
-/// following once the lead is gone, fighting and inspecting are no goals
-/// to keep.
+/// state 20 @0x8db8a), and landable, a gate still listed (state 20 tests
+/// no landability again), a jump out (state 2 tests no fuel), a hold, or a
+/// drift (goal 0xe, which its high level ends: the trader AIs' idle blocks
+/// run only on goal 0, `_WimpyTraderAI` @0x8b06c, `_BraveTraderAI`
+/// @0x8b4d6). Idling, following once the lead is gone, fighting and
+/// inspecting are no goals to keep.
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
         Goal::Land(stellar) => around
