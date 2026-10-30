@@ -60,6 +60,7 @@ use crate::outfit_effects::Rgb15;
 use crate::planet_comm::{PlanetCommItem, PlanetCommView};
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::player_info::PlayerInfo;
+use crate::player_wrap::PlayerWrap;
 use crate::red_alert::AlertIcon;
 use crate::reserves::{Gauge, Reserves};
 use crate::session::{
@@ -1586,6 +1587,9 @@ pub struct PassReport {
     pub double_time: bool,
     /// The quotes the pass said, in order.
     pub quotes: Vec<PersonQuote>,
+    /// The wrap of the player at the pass's head, if it ran, which the
+    /// view carries its own effects by.
+    pub wrap: Option<PlayerWrap>,
 }
 
 /// A ship as a [`FlightFrame`] and a [`PassReport`] carry it: one record

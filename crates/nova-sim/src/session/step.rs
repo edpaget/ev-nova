@@ -190,8 +190,10 @@ impl Session {
 
     /// What `run`'s step leaves at its end, taken into it: the line it
     /// raised last, and whether it cleared an escort class's kept order
-    /// (see the module docs).
+    /// (see the module docs). A wrap a rescue's unreported pass left is
+    /// dropped, as the view lays itself out afresh.
     fn take_step_ends(&mut self, run: &mut StepRun) {
+        self.out.player_wrap = None;
         run.last_line = self.out.last_line.take();
         run.class_orders_cleared = std::mem::take(&mut self.out.class_orders_cleared);
     }
@@ -224,6 +226,7 @@ impl Session {
             player_position: self.player().position,
             double_time: self.double_time(),
             quotes: self.take_quotes(),
+            wrap: self.out.player_wrap.take(),
         }
     }
 }
@@ -235,7 +238,9 @@ mod tests {
     use crate::combat::CombatEvent;
     use crate::flight::Controls;
     use crate::flight_frame::RaisedLine;
+    use crate::geometry::Vec2;
     use crate::hail::CommNote;
+    use crate::player_wrap::{PlayerWrap, WRAP_EDGE};
     use crate::session::PersonQuote;
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{FakePilotCatalog, catalog};
@@ -939,6 +944,54 @@ mod tests {
             double_time: session.double_time(),
             quotes: session.take_quotes(),
             combat: session.take_combat_events(),
+            wrap: session.out.player_wrap.take(),
         }
+    }
+
+    // The wrap (see the `player_wrap` module).
+
+    /// [`catalog`]'s session flown a pass, the ship at `at` at `velocity`.
+    fn flying_at(catalog: &FakePilotCatalog, at: Vec2, velocity: Vec2) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        steps(&mut session, catalog, &StepInput::default(), 1);
+        session.ship.player.position = at;
+        session.ship.player.velocity = velocity;
+        session
+    }
+
+    #[test]
+    fn a_wrap_is_on_the_report_of_the_advance_pass_it_ran_on_alone() {
+        let catalog = catalog();
+        let past = Vec2::new(WRAP_EDGE + 1.0, 0.0);
+        let mut session = flying_at(&catalog, past, Vec2::ZERO);
+        let report = steps(&mut session, &catalog, &StepInput::default(), 2);
+        let wraps: Vec<_> = report.steps.iter().map(|run| run.passes[0].wrap).collect();
+        assert_eq!(wraps, [PlayerWrap::of(past), None]);
+    }
+
+    #[test]
+    fn a_wrap_is_on_the_report_of_double_times_second_pass_when_it_ran_there() {
+        let catalog = catalog();
+        let near = Vec2::new(WRAP_EDGE - 1.0, 0.0);
+        let mut session = flying_at(&catalog, near, Vec2::new(2.0, 0.0));
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        session.set_double_time_key(true);
+        let report = steps(&mut session, &catalog, &input, 2);
+        let wraps: Vec<_> = report.steps[0].passes.iter().map(|p| p.wrap).collect();
+        assert_eq!(wraps, [None, PlayerWrap::of(near + Vec2::new(2.0, 0.0))]);
+        assert!(report.steps[1].passes.iter().all(|p| p.wrap.is_none()));
+    }
+
+    #[test]
+    fn a_rescues_dropped_wrap_reaches_no_report() {
+        let catalog = catalog();
+        let mut session = in_the_pod(&catalog, 1);
+        session.ship.player.position = Vec2::new(WRAP_EDGE + 1.0, 0.0);
+        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert!(report.steps[0].rescued.is_some());
+        assert_eq!(session.out.player_wrap, None, "dropped");
     }
 }
