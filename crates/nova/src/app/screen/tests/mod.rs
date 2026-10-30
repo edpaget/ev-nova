@@ -43,6 +43,7 @@ use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{INFO_DIALOG, MissionInfoScreen};
 use nova_view::spaceport::offer::{OFFER_DIALOG, PICTURE_OFFER_DIALOG};
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
+use nova_view::ui::DescDialog;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::DescShown;
@@ -88,6 +89,7 @@ use nova_view::ui::plunder::{
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
+mod about_movies;
 mod appear;
 mod capture_naming;
 mod christening;

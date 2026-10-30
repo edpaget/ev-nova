@@ -349,8 +349,8 @@ use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::text_input::TextInputDialog;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
-    PrefsDialog, YesNoDialog,
+    AssignmentDialog, CommDialog, DialogResources, HaggleDialog, PlunderDialog, PrefsDialog,
+    YesNoDialog,
 };
 use nova_view::{Color, Input, Key, MenuCommand, Navigator, Point, Prefs, Sound};
 use nova_view::{FullscreenKind, Scaling};
@@ -552,8 +552,10 @@ pub struct AppScreen {
     map_borders: bool,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
-    /// The About dialog, or the main menu's X text, while it is open.
-    about: Option<DescDialog>,
+    /// The About text, or the main menu's X text, while it or its movie
+    /// is open: its own `dësc`, shown with its movie and graphic as
+    /// `_ShowTextDialog(0, 0, 1)` shows it (@0x16062, @0x1acde).
+    about: Option<MissionDialogs>,
     /// The `dësc` the open [`about`](Self::about) dialog shows.
     about_text: i16,
     /// The spaceport, while the ship is landed.

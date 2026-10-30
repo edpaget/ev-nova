@@ -154,6 +154,7 @@ impl Screen for AppScreen {
         }
         self.settle_offer();
         self.drop_closed_missions();
+        self.drop_closed_about();
         self.advance_appear(dt);
         self.advance_entry(dt);
         self.advance_fade_in(dt);
@@ -444,6 +445,9 @@ impl Screen for AppScreen {
     fn hides_pointer(&self) -> bool {
         if let Some(hides) = self.entry_hides_pointer() {
             return hides;
+        }
+        if let Some(about) = &self.about {
+            return about.hides_pointer();
         }
         match self.showing() {
             Showing::Movie => match (&self.missions, &self.offer) {

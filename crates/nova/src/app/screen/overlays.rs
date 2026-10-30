@@ -11,9 +11,10 @@ use nova_view::spaceport::missions::INFO_DIALOG;
 use nova_view::spaceport::offer::{
     OFFER_DIALOG, OfferChoice, OfferDialog, OfferTemplates, PICTURE_OFFER_DIALOG,
 };
+use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
-use nova_view::ui::mission_dialogs::MissionDialogs;
+use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
 use nova_view::ui::player_info::{
     BackgroundSizes, PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG,
 };
@@ -25,7 +26,7 @@ use nova_view::ui::{
 };
 use nova_view::{FullscreenKind, Input, Key, Screen, ScreenAction, VideoMode};
 
-use super::port_dialogs::{abort_and_refresh, desc_dialog, start_up_words};
+use super::port_dialogs::{abort_and_refresh, start_up_words};
 use super::{ABOUT_TEXT, AppScreen, ENTERED, MENU_X_TEXT, NO_INTERFACE, Side};
 use crate::app::keyboard_access::prefs_focus_ring;
 
@@ -68,7 +69,12 @@ impl AppScreen {
     /// [`open_about`](Self::open_about) opens the About text. The About
     /// text and the main menu's X text ([`MENU_X_TEXT`]) are first loaded
     /// and munged as `_DoAboutBox` and `_MainScreenKey` do before
-    /// `_ShowTextDialog` ([`AppScreen::main_screen_words`]).
+    /// `_ShowTextDialog` ([`AppScreen::main_screen_words`]). Each is shown
+    /// with its third argument 1 (@0x16062, @0x1acde), so it plays its own
+    /// `dësc`'s movie before it or, `Flags` 0x0001 set, after it, whatever
+    /// `desc_movie_globals` says, and a `Graphic` above 127 shows it in the
+    /// picture variant: through [`MissionDialogs`], which says how. An
+    /// empty text with no movie before it shows nothing (@0x5a7b0).
     pub(super) fn open_text(&mut self, id: i16) {
         if self.dialogs.is_none() {
             return;
@@ -81,31 +87,63 @@ impl AppScreen {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        let ring = self.dialog_focus_ring();
-        let dialog = text.and_then(|text| desc_dialog(dialogs, &self.data, &text, ring));
-        match dialog {
-            Ok(dialog) => {
-                let below = self.shown_mut();
-                below.cancel_pointer();
-                below.release_keys();
-                self.about = Some(dialog);
-                self.about_text = id;
+        let checked =
+            text.and_then(|text| dialogs.resources.dialog_template(DESC_DIALOG).map(|_| text));
+        let text = match checked {
+            Ok(text) => text,
+            Err(reason) => {
+                eprintln!("nova: cannot show dësc {id}: {reason}");
+                return;
             }
-            Err(reason) => eprintln!("nova: cannot show dësc {id}: {reason}"),
+        };
+        let Some(mut queue) = self.text_dialogs() else {
+            return;
+        };
+        queue.show_descs(vec![DescShown {
+            text,
+            graphic: self.data.description_graphic(id),
+            movie: self.data.description_movie(id),
+        }]);
+        if !queue.is_open() {
+            return;
+        }
+        let below = self.shown_mut();
+        below.cancel_pointer();
+        below.release_keys();
+        self.about = Some(queue);
+        self.about_text = id;
+    }
+
+    /// Drops the About text once it and its movies are done, keeping its
+    /// sounds. What was pressed under its last movie is dropped with it:
+    /// the side beneath let go of its keys as it opened.
+    pub(super) fn drop_closed_about(&mut self) {
+        if let Some(about) = &mut self.about
+            && !about.is_open()
+        {
+            about.take_unclaimed();
+            self.sounds.extend(about.take_sounds());
+            self.about = None;
         }
     }
 
     /// The About text or the X text `id` as the original loads and munges
-    /// it: with a game held, whose session started, its conditional text
-    /// resolved for that pilot (`_LoadDescription`, about @0x16021, X
-    /// @0x1ac9d, through [`FlightView::load_description`]: the rank
-    /// governments reset, the `l33t` mode's draws) and its tags filled
-    /// for it with no mission (`_MungeBriefing(0, -1)`, about @0x16035, X
-    /// @0x1acb1, [`nova_sim::Session::plain_text`]), as the original reads
-    /// the player globals of the pilot loaded; with none, as before any
-    /// pilot ([`start_up_words`]).
+    /// it: with a game in play (flight or the spaceport shown) or held,
+    /// whose session started, its conditional text resolved for that
+    /// pilot (`_LoadDescription`, about @0x16021, X @0x1ac9d, through
+    /// [`FlightView::load_description`]: the rank governments reset, the
+    /// `l33t` mode's draws, and the last `dësc` loaded, whose after-movie a
+    /// later `STR#` text plays) and its tags filled for it with no mission
+    /// (`_MungeBriefing(0, -1)`, about @0x16035, X @0x1acb1,
+    /// [`nova_sim::Session::plain_text`]), as the original reads the
+    /// player globals of the pilot loaded; with none, as before any pilot
+    /// ([`start_up_words`]).
     pub(super) fn main_screen_words(&mut self, id: i16) -> Result<String, String> {
-        if let Some(game) = self.game.as_mut().filter(|game| game.failure().is_none()) {
+        let game = match self.side {
+            Side::Flight | Side::Spaceport => self.flight.as_mut(),
+            Side::MainMenu | Side::Ships | Side::Galaxy => self.game.as_mut(),
+        };
+        if let Some(game) = game.filter(|game| game.failure().is_none()) {
             let text = game.load_description(id)?;
             return Ok(game.plain_text(&text));
         }
@@ -287,15 +325,13 @@ impl AppScreen {
             .map(|(_, question)| question as &mut dyn Screen)
     }
 
-    /// The About dialog's input; it closes once Done is activated.
+    /// The About dialog's input; it closes once Done is activated and its
+    /// after-movie, if any, has ended.
     pub(super) fn about_input(&mut self, input: &Input) -> ScreenAction {
         if let Some(about) = &mut self.about {
             about.input(input);
-            if about.closed() {
-                self.sounds.extend(about.take_sounds());
-                self.about = None;
-            }
         }
+        self.drop_closed_about();
         ScreenAction::None
     }
 
@@ -390,22 +426,29 @@ impl AppScreen {
     /// needed; none without dialogs.
     pub(super) fn flight_missions(&mut self) -> Option<&mut MissionDialogs> {
         if self.missions.is_none() {
-            let dialogs = self.dialogs.as_ref()?;
-            self.missions = Some(
-                MissionDialogs::new(
-                    DescTemplates {
-                        plain: dialogs.resources.dialog_template(DESC_DIALOG),
-                        picture: dialogs.resources.dialog_template(PICTURE_DESC_DIALOG),
-                    },
-                    dialogs.resources.dialog_template(INFO_DIALOG),
-                    Rc::clone(&dialogs.metrics),
-                    self.data.button_style(),
-                )
-                .with_movies(self.movies.clone())
-                .with_focus_ring(self.dialog_focus_ring()),
-            );
+            self.missions = Some(self.text_dialogs()?);
         }
         self.missions.as_mut()
+    }
+
+    /// Text dialogs, nothing open, built from the interface file's "Desc
+    /// Dialog", both variants, and mission info screen, playing movies as
+    /// the preference says; none without dialogs.
+    fn text_dialogs(&self) -> Option<MissionDialogs> {
+        let dialogs = self.dialogs.as_ref()?;
+        Some(
+            MissionDialogs::new(
+                DescTemplates {
+                    plain: dialogs.resources.dialog_template(DESC_DIALOG),
+                    picture: dialogs.resources.dialog_template(PICTURE_DESC_DIALOG),
+                },
+                dialogs.resources.dialog_template(INFO_DIALOG),
+                Rc::clone(&dialogs.metrics),
+                self.data.button_style(),
+            )
+            .with_movies(self.movies.clone())
+            .with_focus_ring(self.dialog_focus_ring()),
+        )
     }
 
     /// Tells flight of each mission text over flight closed or dropped

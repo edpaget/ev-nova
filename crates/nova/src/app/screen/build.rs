@@ -29,6 +29,7 @@ use nova_view::spaceport::missions::MissionInfoScreen;
 use nova_view::spaceport::offer::OfferDialog;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
+use nova_view::ui::mission_dialogs::MissionDialogs;
 use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
@@ -657,10 +658,11 @@ impl AppScreen {
         self.prefs
     }
 
-    /// The About dialog, or the main menu's X text, while it is open.
+    /// The About dialog, or the main menu's X text, while it shows: not
+    /// while its movie plays.
     #[must_use]
     pub fn about(&self) -> Option<&DescDialog> {
-        self.about.as_ref()
+        self.about.as_ref().and_then(MissionDialogs::text)
     }
 
     /// The Preferences dialog, while it is open.
