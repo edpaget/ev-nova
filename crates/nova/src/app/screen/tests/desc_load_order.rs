@@ -34,7 +34,7 @@ fn held_mission(travel: i16, tons: i16, pickup: i16, comp: i16) -> Vec<u8> {
 
 /// What the pilot holds as she lands at Alpha Prime (128).
 #[derive(Clone, Copy)]
-enum Held {
+pub(super) enum Held {
     /// Mission 130, 5 tons of food loaded at 128 (`PickupMode` 1), and
     /// mission 131, 6 tons loaded as it starts, to Beta Prime (129): 4
     /// tons free in a hull of 10, so 130's pickup finds no space.
@@ -48,7 +48,7 @@ enum Held {
 /// as the pilot begins, and `dësc` 5000 naming "Comp.mov" as its
 /// after-movie; movies played through a new [`MockMoviePlayer`] as
 /// `prefs` say; Ada flying, landed with two L presses.
-fn landed(held: Held, prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
+pub(super) fn landed(held: Held, prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
     let (on_start, missions): (&[u8], _) = match held {
         Held::NoSpace => (
             b"S130 S131",
@@ -109,7 +109,7 @@ fn after_movie(screen: &AppScreen) -> Option<String> {
 }
 
 /// The text shown over the spaceport, on one line.
-fn text_shown(screen: &AppScreen) -> Option<String> {
+pub(super) fn text_shown(screen: &AppScreen) -> Option<String> {
     spaceport(screen)
         .mission_text()
         .map(|text| text.lines().join(" "))
@@ -146,7 +146,7 @@ fn with_movies_off_the_last_loaded_after_a_landing_is_its_comp_text() {
 
 /// Closes each text shown with Enter and ticks every movie out, until the
 /// spaceport shows.
-fn through_to_the_spaceport(screen: &mut AppScreen) {
+pub(super) fn through_to_the_spaceport(screen: &mut AppScreen) {
     for _ in 0..8 {
         match screen.showing() {
             Showing::Spaceport if text_shown(screen).is_none() => return,
@@ -159,10 +159,8 @@ fn through_to_the_spaceport(screen: &mut AppScreen) {
     panic!("never reached the spaceport: {:?}", screen.showing());
 }
 
-// With movies on, the landing's texts show over its movie, where the
-// original plays the movie (@0x632a7) before `_DoPortDialog` (@0x63381):
-// rdm:phase/movies/phase-9-landing-movie-before-land-texts. These tests
-// pin only what the load order decides.
+// With movies on, these pin only what the load order decides; the order
+// of the landing's movie and its texts is `landing_texts_after_movie`'s.
 
 #[test]
 fn with_movies_on_the_no_space_text_plays_the_ports_after_movie() {

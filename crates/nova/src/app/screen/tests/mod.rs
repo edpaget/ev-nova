@@ -101,6 +101,7 @@ mod entry;
 mod flight;
 mod game;
 mod jump_white;
+mod landing_texts_after_movie;
 mod launch;
 mod map_find;
 mod menu;

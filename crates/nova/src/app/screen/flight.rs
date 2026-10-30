@@ -287,6 +287,13 @@ impl AppScreen {
     /// next, the spaceport or flight
     /// ([`FlightView::take_movie_replay`]), as the original's queued
     /// events reach the next event loop. Nothing while it plays.
+    ///
+    /// After a landing, the land checks' texts the movie held
+    /// ([`FlightView::take_mission_texts`]) and the venues' offers settle
+    /// over the opened spaceport before the replay, as `_DoPortDialog`
+    /// shows the spaceport (@0x5faff), then runs `_MissionLandCheck`
+    /// (@0x5fbeb) and `_OfferMissionFromPort` (@0x5fc37) before its own
+    /// loop: the replayed keys reach the first text.
     pub(super) fn settle_flight_movie(&mut self) {
         let Some(flight) = self.flight.as_mut().filter(|flight| !flight.playing()) else {
             return;
@@ -294,6 +301,7 @@ impl AppScreen {
         let replay = flight.take_movie_replay();
         if let Some(stellar) = flight.take_landing() {
             self.show_spaceport(stellar);
+            self.settle_script();
         }
         for input in replay {
             let _ = self.routed_input(&input);
