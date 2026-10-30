@@ -116,6 +116,7 @@ mod ship_drawing;
 mod shots;
 mod stars;
 mod stellar_looks;
+mod stellar_passes;
 mod stellars;
 mod stepping;
 mod whole_pixels;

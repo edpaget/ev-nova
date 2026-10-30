@@ -130,7 +130,23 @@ impl Frames {
         drawn: NonZeroU16,
         chance: &mut dyn Chance,
     ) {
-        match self.advance(data, destroyed, counted, chance) {
+        self.step_by(1, data, destroyed, counted, drawn, chance);
+    }
+
+    /// One pass at `gain` ticks, as [`Frames::step`] runs one at 1: the
+    /// timer takes the gain (`_gSpeedMult`, @0x2e810-0x2e825) and the
+    /// threshold is tested whatever it is, so at gain 0 a delay of 0, or a
+    /// timer already there, still advances.
+    pub fn step_by(
+        &mut self,
+        gain: u8,
+        data: AnimationData,
+        destroyed: bool,
+        counted: NonZeroU16,
+        drawn: NonZeroU16,
+        chance: &mut dyn Chance,
+    ) {
+        match self.advance(gain, data, destroyed, counted, chance) {
             None => self.shown = 0,
             Some(true) => self.shown = self.current % drawn.get(),
             Some(false) => {}
@@ -151,14 +167,29 @@ impl Frames {
         counted: NonZeroU16,
         chance: &mut dyn Chance,
     ) {
-        let _ = self.advance(data, destroyed, counted, chance);
+        self.step_frozen_by(1, data, destroyed, counted, chance);
     }
 
-    /// One tick of the timer and the current and next frames over
-    /// `counted`: `None` when the stellar does not animate, else whether
-    /// the current frame advanced.
+    /// One pass at `gain` ticks for a stellar whose sprite slot shows a
+    /// frame frozen, as [`Frames::step_frozen`] runs one at 1 (see
+    /// [`Frames::step_by`]).
+    pub fn step_frozen_by(
+        &mut self,
+        gain: u8,
+        data: AnimationData,
+        destroyed: bool,
+        counted: NonZeroU16,
+        chance: &mut dyn Chance,
+    ) {
+        let _ = self.advance(gain, data, destroyed, counted, chance);
+    }
+
+    /// One pass of `gain` ticks on the timer and the current and next
+    /// frames over `counted`: `None` when the stellar does not animate,
+    /// else whether the current frame advanced.
     fn advance(
         &mut self,
+        gain: u8,
         data: AnimationData,
         destroyed: bool,
         counted: NonZeroU16,
@@ -167,7 +198,7 @@ impl Frames {
         if !is_animated(data, destroyed, counted) {
             return None;
         }
-        self.timer += 1;
+        self.timer += u64::from(gain);
         // Wide, where the original's 16-bit `imul ax` wraps (@0x2ec62);
         // a threshold of 0 or less is met at once.
         let delay = i64::from(data.delay);
@@ -786,6 +817,58 @@ mod tests {
             shown.push(frames.shown());
         }
         assert_eq!(shown, [0, 0, 1]);
+    }
+
+    #[test]
+    fn at_gain_0_the_timer_stands_and_the_frames_stay() {
+        let (every_2, four) = (data(2, 0), count(4));
+        let mut frames = Frames::new();
+        frames.step_by(0, every_2, false, four, four, &mut NeverFires);
+        assert_eq!(frames, Frames::new());
+    }
+
+    #[test]
+    fn at_gain_0_a_delay_of_0_still_advances() {
+        let (no_delay, four) = (data(0, 0), count(4));
+        let mut frames = Frames::new();
+        frames.step_by(0, no_delay, false, four, four, &mut NeverFires);
+        assert_eq!(frames.shown(), 1);
+    }
+
+    #[test]
+    fn at_gain_0_a_timer_past_the_threshold_fires() {
+        let (every_2, four) = (data(2, 0), count(4));
+        let mut frames = Frames {
+            timer: 3,
+            ..Frames::new()
+        };
+        frames.step_by(0, every_2, false, four, four, &mut NeverFires);
+        assert_eq!((frames.current, frames.timer), (1, 0));
+    }
+
+    #[test]
+    fn at_gain_0_a_frozen_stellar_tests_its_threshold_with_its_frame_kept() {
+        let (every_2, four) = (data(2, 0), count(4));
+        let mut frames = Frames {
+            timer: 2,
+            ..Frames::new()
+        };
+        frames.step_frozen_by(0, every_2, false, four, &mut NeverFires);
+        assert_eq!((frames.current, frames.timer, frames.shown()), (1, 0, 0));
+        let before = frames;
+        frames.step_frozen_by(0, every_2, false, four, &mut NeverFires);
+        assert_eq!(frames, before);
+    }
+
+    #[test]
+    fn gain_1_is_a_step() {
+        let (every_2, four) = (data(2, 0), count(4));
+        let (mut by, mut plain) = (Frames::new(), Frames::new());
+        for tick in 0..9 {
+            by.step_by(1, every_2, false, four, four, &mut NeverFires);
+            plain.step(every_2, false, four, four, &mut NeverFires);
+            assert_eq!(by, plain, "{tick}");
+        }
     }
 
     #[test]
