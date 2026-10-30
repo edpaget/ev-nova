@@ -908,3 +908,24 @@ fn a_hypergate_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
     assert_eq!(harness.session().loaded_after_movie(), None);
     assert!(reel.calls().is_empty());
 }
+
+#[test]
+fn a_flight_key_pressed_under_a_hypergates_movie_reaches_flight_after_the_come_out() {
+    let (mut harness, _) = gamma_picked_filmed(true);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Movie);
+    harness.key(Key::Up, true);
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() != Showing::Movie
+    });
+    assert_eq!(harness.session().system(), SystemId(130), "entered");
+    let out = harness.ship().velocity.length();
+    for _ in 0..60 {
+        harness.frame();
+    }
+    assert!(
+        harness.ship().velocity.length() > out,
+        "the Up pressed under the movie thrusts once the gate lets go: {:?}",
+        harness.ship()
+    );
+}

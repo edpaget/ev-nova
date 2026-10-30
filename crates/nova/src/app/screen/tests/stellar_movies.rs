@@ -1,8 +1,11 @@
 //! The router over flight's stellar movies
 //! (rdm:phase/movies/phase-3-stellar-desc-movies): a landing at a stellar
 //! whose `dësc` names a movie shows the movie, then the spaceport; with
-//! movies off it goes straight to the spaceport; and the movie holds
-//! flight's input, Escape among it.
+//! movies off it goes straight to the spaceport; the movie holds
+//! flight's input, Escape among it; and a key pressed under it reaches the
+//! spaceport once it runs out. The gate's counterpart, a flight key
+//! reaching flight after a hypergate's come-out, is in the `nova` crate's
+//! `tests/it/hyperspace.rs`, beside the hypergate fixture.
 
 use super::*;
 
@@ -64,4 +67,26 @@ fn escape_during_the_landings_movie_leaves_neither_flight_nor_the_movie() {
     assert_eq!(screen.showing(), Showing::Movie);
     screen.input(&key(Key::Space, true));
     assert_eq!(screen.showing(), Showing::Spaceport, "Space skips it");
+}
+
+#[test]
+fn a_key_pressed_under_the_landings_movie_reaches_the_spaceport_once_it_runs_out() {
+    let (mut screen, _) = filmed_port(Prefs::default());
+    land_twice(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert_eq!(screen.showing(), Showing::Movie, "queued, not acted on");
+    for _ in 0..2 {
+        screen.tick(Duration::from_millis(16));
+    }
+    assert_eq!(
+        screen.showing(),
+        Showing::Flight,
+        "the spaceport is shown, then its Escape leaves it"
+    );
+    assert_eq!(
+        flight(&screen).session().expect("flying").landed(),
+        None,
+        "taken off"
+    );
 }
