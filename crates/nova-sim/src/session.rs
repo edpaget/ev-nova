@@ -587,6 +587,7 @@ mod player_info;
 mod player_led;
 mod player_repair;
 mod player_ship;
+mod player_wrap;
 mod players_hits;
 mod plunder_ammo;
 mod plunder_loop;
@@ -1626,7 +1627,8 @@ impl Session {
     /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
     /// the tractor's hold on the player and the screen's white, at the very
     /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
-    /// modules), then its lost-target check (see the `lost_target`
+    /// modules), then the player's wrap (see the `player_wrap` module),
+    /// then its lost-target check (see the `lost_target`
     /// module), then the tribbles and perishables on a due frame, the Red
     /// Alert's check, and its blink on the advance pass alone, as
     /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
@@ -1636,6 +1638,7 @@ impl Session {
         // the `tractor_hold` module).
         self.hold_player(pass);
         self.ship.gamma_tick(self.mode.jump());
+        self.wrap_player_position();
         self.let_go_of_lost_target();
         if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
             let capacity = self.capacity();

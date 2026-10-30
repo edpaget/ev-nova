@@ -16,6 +16,7 @@ use crate::hail::CommNote;
 use crate::hire::PayNote;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::player_wrap::PlayerWrap;
 use crate::sound::SimSound;
 
 use super::{InterfaceLoad, MissionShown, PersonQuote, SessionEvent, TextBar};
@@ -92,6 +93,10 @@ pub(super) struct Outbox {
     /// last took it (see the `class_orders` and `step` modules); never
     /// saved.
     pub(super) class_orders_cleared: bool,
+    /// The wrap of the player at the head of the pass under way, until
+    /// its report takes it (see the `player_wrap` and `step` modules);
+    /// never saved.
+    pub(super) player_wrap: Option<PlayerWrap>,
 }
 
 impl Outbox {
