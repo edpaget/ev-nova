@@ -155,7 +155,8 @@ fn successor(npcs: &[Npc], lead: NpcId) -> Option<NpcId> {
 impl Npc {
     /// It leaves its fleet: no leader (+0x9a = -1), no carrier, holding its
     /// class's capacities again ([`Npc::leave_carrier`]), and its class's
-    /// `InherentAI` (+0x12) as its AI type. The one writer of both: the
+    /// `InherentAI` (+0x12) as its AI type, the disabled reset's mark
+    /// ([`Npc::kept_escort_ai`]) cleared. The one writer of both: the
     /// succession, the disabled reset
     /// ([`disabled_reset`](super::disabled_reset)), `_EscortAI`'s lost
     /// parent ([`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet))
@@ -164,6 +165,7 @@ impl Npc {
         self.leave_carrier();
         self.leader = None;
         self.ai_type = AiType::from_raw(self.hull.inherent_ai);
+        self.kept_escort_ai = false;
     }
 
     /// It follows `successor`, its lost lead's successor (see the module
@@ -372,6 +374,16 @@ mod tests {
             (35.0, 30.0),
             "its class's capacity, what it holds kept"
         );
+    }
+
+    #[test]
+    fn a_ship_leaving_its_fleet_forgets_the_disabled_resets_mark() {
+        let mut marked = npc(1, ShipStats::new(FAST, &[]));
+        marked.kept_escort_ai = true;
+        marked.hull.inherent_ai = 3;
+        marked.leave_fleet();
+        assert!(!marked.kept_escort_ai);
+        assert_eq!(marked.original_ai_type(), 3);
     }
 
     // The successor.

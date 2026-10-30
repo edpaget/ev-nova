@@ -2498,6 +2498,7 @@ impl Traffic {
             let Some(decision) = decision else {
                 continue;
             };
+            npc.settle_original_ai_type();
             let calls = decision.comm_call.into_iter().chain(
                 decision
                     .calls_reinforcements

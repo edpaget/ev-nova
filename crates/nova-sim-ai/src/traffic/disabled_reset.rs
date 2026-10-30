@@ -27,7 +27,10 @@
 //!   of its fleet ([`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet));
 //!   any other led ship leaves its fleet now ([`Npc::leave_fleet`]),
 //!   taking its class's `InherentAI` at the reset rather than at that
-//!   think, as the engine has no AI type 6 for it to keep meanwhile (rdm:phase/escort-fleet-fidelity-followups/phase-4-led-ships-read-as-ai-type-6);
+//!   think, and is marked ([`Npc::kept_escort_ai`]) so that it reads as
+//!   the original's AI type 6 meanwhile ([`Npc::original_ai_type`]),
+//!   which +0x88 keeps until that think, or for its stay if it thinks as
+//!   a miner ([`Npc::settle_original_ai_type`]);
 //! - by the other reading it keeps its leader, as the port had it.
 //!
 //! +0x8c isn't modelled: the engine has no defence ships
@@ -101,6 +104,7 @@ fn reset(npc: &mut Npc, reading: RuleSource) {
             npc.leader = None;
         } else {
             npc.leave_fleet();
+            npc.kept_escort_ai = true;
         }
     }
 }
@@ -217,6 +221,45 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_led_ship_keeps_the_original_ai_type_six_by_the_engine() {
+        let mut traffic = fleet(Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let led = of(&traffic, LED);
+        assert!(led.kept_escort_ai);
+        assert_eq!(led.original_ai_type(), 6);
+        let mut traffic = fleet(Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Bible, &mut NeverFires);
+        let led = of(&traffic, LED);
+        assert!(!led.kept_escort_ai, "its leader reads 6 already");
+        assert_eq!(led.original_ai_type(), 6);
+    }
+
+    #[test]
+    fn a_disabled_bribed_led_ship_keeps_reading_one_through_the_reset() {
+        let mut traffic = fleet(Condition::Disabled);
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        led.expect("there").spared = true;
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let led = of(&traffic, LED);
+        assert_eq!(led.ai_type, AiType::Warship, "its class's InherentAI");
+        assert_eq!(led.original_ai_type(), 1, "the bribe's word is kept");
+    }
+
+    #[test]
+    fn a_disabled_led_ship_reads_its_own_type_after_its_first_think_once_whole() {
+        let mut traffic = fleet(Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, LED).original_ai_type(), 6, "still disabled");
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        led.expect("there").condition = Condition::Intact;
+        traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+        let whole = of(&traffic, LED);
+        assert!(!whole.kept_escort_ai);
+        assert_eq!(whole.original_ai_type(), 3, "its class's InherentAI");
+    }
+
+    #[test]
     fn by_the_other_reading_it_keeps_its_leader_and_loses_the_rest() {
         let mut traffic = fleet(Condition::Disabled);
         ticked(&mut traffic, RuleSource::Bible, &mut NeverFires);
@@ -275,6 +318,8 @@ mod tests {
         assert!(was_reset(disabled), "{disabled:?}");
         assert_eq!(disabled.leader, None);
         assert!(disabled.carrier.is_some(), "AI type 5 lasts");
+        assert!(!disabled.kept_escort_ai);
+        assert_eq!(disabled.original_ai_type(), 5);
         assert_eq!(disabled.ai_type, AiType::WimpyTrader);
         assert_eq!(disabled.reserves.shield.max, 39.99, "a fighter's capacity");
         // Whole again, its first think is `_EscortAI`'s lost parent.
