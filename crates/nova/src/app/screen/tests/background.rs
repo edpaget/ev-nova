@@ -125,6 +125,7 @@ fn back_the_last_pointer_move_reaches_the_main_menu() {
     screen.tick(mac_ticks(20));
     assert_eq!(rollover(&screen), Some((6, 32)), "not yet");
     screen.focus_gained();
+    assert!(!screen.take_quit(), "over Quit, not on it");
     screen.tick(mac_ticks(1));
     screen.tick(mac_ticks(20));
     assert_eq!(rollover(&screen), Some((2, 32)), "over Quit, the last move");
@@ -142,6 +143,7 @@ fn away_a_pointer_leaving_is_kept_too() {
     switch_out(&mut screen);
     screen.input(&Input::PointerLeft);
     screen.focus_gained();
+    assert!(!screen.take_quit());
     screen.tick(mac_ticks(1));
     screen.tick(mac_ticks(20));
     assert_eq!(rollover(&screen), Some((6, 32)), "over no button");

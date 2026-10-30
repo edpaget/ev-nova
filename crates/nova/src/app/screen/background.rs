@@ -55,7 +55,7 @@
 
 use std::time::Duration;
 
-use nova_view::{Input, Screen, ScreenAction, Sound, UiSound};
+use nova_view::{Input, Screen, Sound, UiSound};
 
 use super::{AppScreen, Side};
 
@@ -81,16 +81,16 @@ impl AppScreen {
 
     /// The app came back to the front: the pointer's last move or leave
     /// while away goes to the screen, and the next tick is the last away.
-    /// Not away, nothing.
+    /// Not away, nothing. A pointer move or leave never quits: the router
+    /// quits only on a key, and no screen under it asks to, so its answer
+    /// isn't read.
     pub(super) fn come_back(&mut self) {
         let Some(away) = &mut self.away else {
             return;
         };
         away.back = true;
-        if let Some(pointer) = away.pointer.take()
-            && self.input(&pointer) == ScreenAction::Quit
-        {
-            self.quit_due = true;
+        if let Some(pointer) = away.pointer.take() {
+            self.input(&pointer);
         }
     }
 
