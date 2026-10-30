@@ -16,6 +16,9 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # A button exactly two caps wide: its overlapping caps meet, and
+    # `three_slice` gives the same two caps with no middle.
+    "nova-view/src/ui/button\\.rs:[0-9]+:[0-9]+: replace < with <= in Button::draw$",
     # The full keyboard access adapters forward the real macOS setting;
     # no test may read it (hermetic tests), so none can see what they
     # return. The port's decision is tested on fakes (`nova::app`'s
