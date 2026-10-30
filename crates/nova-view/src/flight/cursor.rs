@@ -11,8 +11,9 @@
 //!   (@0x38053-0x38069); here a pointer move does
 //!   ([`HoverCursor::pointer`]), and each step does while a button is
 //!   down ([`HoverCursor::button`]). Ours is told of a button rather than
-//!   reading `_Button` live, so a release lost outside the window ends the
-//!   hold at [`HoverCursor::left`];
+//!   reading `_Button` live, so a release that won't reach flight ends the
+//!   hold where it is lost: at [`HoverCursor::left`] outside the window,
+//!   and at `FlightView::let_go_of_input` when flight gives up its input;
 //! - at the end of each frame (@0x38427-0x3844d) it drops a level once a
 //!   second (60 `_TickCount`s) has passed since that stamp, or on any frame
 //!   the byte at `0x3b5550` is set, `_keyPressedThisFrame`, which

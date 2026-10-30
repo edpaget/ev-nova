@@ -218,6 +218,77 @@ fn a_tick_reads_the_gates_at_the_head_of_its_pass_so_a_step_changes_the_next() {
     assert_eq!(faked_cursor_alpha(&view), ONE, "this one began allowed");
 }
 
+/// `view` with the pointer on it and the left button pressed.
+pub(super) fn button_down(view: &mut Faked) {
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at: NOWHERE,
+    });
+}
+
+/// Past a second of ticks, the button's hold on `view` gone: the cursor
+/// has faded past the one level a key's press costs. No release is sent,
+/// as the dialog that opened over flight took it.
+pub(super) fn fades_with_no_release(view: &mut Faked) {
+    for _ in 0..40 {
+        view.tick(TICK);
+    }
+    let alpha = faked_cursor_alpha(view).expect("the cursor drawn");
+    assert!(Some(alpha) < ONE, "still held whole: {alpha}");
+}
+
+#[test]
+fn p_opening_its_screen_lets_go_of_the_button() {
+    let mut view = in_flight();
+    button_down(&mut view);
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.input(&key(PLAYER_INFO_KEY, true));
+    fades_with_no_release(&mut view);
+}
+
+#[test]
+fn losing_the_keys_lets_go_of_the_button_as_its_release_may_never_come() {
+    // Focus lost, with `_Button` read live by the original (@0x3803b):
+    // ours counts it as the release, as it does the keys.
+    let mut view = in_flight();
+    button_down(&mut view);
+    view.release_keys();
+    fades_with_no_release(&mut view);
+}
+
+#[test]
+fn a_key_that_opens_nothing_keeps_the_button_held() {
+    let mut view = in_flight();
+    button_down(&mut view);
+    view.sim.queue_answer(Answer::PlayerInfoPressed(false));
+    view.input(&key(PLAYER_INFO_KEY, true));
+    view.input(&key(PLAYER_INFO_KEY, false));
+    view.tick(TICK);
+    assert_eq!(faked_cursor_alpha(&view), ONE, "the press's level");
+    for _ in 0..40 {
+        view.tick(TICK);
+    }
+    assert_eq!(faked_cursor_alpha(&view), WHOLE, "restamped");
+}
+
+#[test]
+fn a_map_opened_with_the_button_down_still_takes_its_release_for_the_cursor() {
+    let mut view = in_flight();
+    button_down(&mut view);
+    tap(&mut view, MAP_KEY);
+    assert!(view.map_open());
+    view.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+        at: NOWHERE,
+    });
+    tap(&mut view, MAP_KEY);
+    assert!(!view.map_open());
+    fades_with_no_release(&mut view);
+}
+
 #[test]
 fn a_key_typed_into_the_map_latches_no_fade_for_after_it_closes() {
     let mut view = in_flight();

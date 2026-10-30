@@ -107,6 +107,17 @@ fn b_sends_the_board_and_holds_the_plunder_dialog_once_letting_go_of_the_keys() 
 }
 
 #[test]
+fn b_opening_the_plunder_dialog_lets_go_of_the_mouse_button_too() {
+    let mut view = super::faked_screen::in_flight();
+    super::key_fades::button_down(&mut view);
+    opened(&mut view);
+    view.input(&key(BOARD_KEY, true));
+    assert!(view.take_boarding().is_some(), "opened");
+    view.let_go_of_boarding();
+    super::key_fades::fades_with_no_release(&mut view);
+}
+
+#[test]
 fn the_plunder_dialog_names_its_good_and_outfit_as_the_flight_names_them() {
     let mut view = sol();
     opened(&mut view);

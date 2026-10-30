@@ -115,9 +115,10 @@ impl<
     /// course map doesn't take no longer closes it, and a map waiting for
     /// M's release closes ([`FlightView::close_map`]): ours can't read the
     /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
-    /// (@0xa19b-0xa1dc), so losing them counts as the release.
+    /// (@0xa19b-0xa1dc), so losing them counts as the release. So it does
+    /// for a mouse button, which `_Button` reads live (@0x3803b).
     fn release_keys(&mut self) {
-        self.held.clear();
+        self.let_go_of_input();
         self.map.release_keys();
         self.map_key_held = false;
         if self.map_closing {

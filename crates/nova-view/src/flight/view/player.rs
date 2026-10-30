@@ -93,7 +93,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn ask_player_info(&mut self) -> ScreenAction {
         if self.press_player_info() {
             self.pending_player_info = true;
-            self.held.clear();
+            self.let_go_of_input();
         }
         ScreenAction::None
     }

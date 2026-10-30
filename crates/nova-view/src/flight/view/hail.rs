@@ -34,15 +34,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match self.send_gated(FlightCommand::Hail { option }) {
             Answer::Hailed(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::Hailed(Hailed::Escort(view)) => {
                 self.pending_escort_dialog = Some(view);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::Hailed(Hailed::Stellar(view)) => {
                 self.pending_planet_comm = Some(view);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::Hailed(Hailed::Offer(offer)) => self.hold_offer(offer),
             Answer::HailRefused(refusal) => {
@@ -72,7 +72,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
-            self.held.clear();
+            self.let_go_of_input();
         }
     }
 

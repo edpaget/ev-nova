@@ -173,6 +173,27 @@ fn y_answered_with_a_dialog_leaves_no_key_held_as_the_dialog_takes_its_release()
 }
 
 #[test]
+fn y_answered_with_a_dialog_lets_go_of_the_mouse_button_too() {
+    for answer in [
+        Hailed::Comm(hail_view("Channel open.")),
+        Hailed::Stellar(planet_view(128)),
+        Hailed::Escort(escort_view(None)),
+        Hailed::Offer(VenueOffer::Prompt(prompt("Help?"))),
+    ] {
+        let mut view = super::faked_screen::in_flight();
+        super::key_fades::button_down(&mut view);
+        view.sim.queue_answer(Answer::Hailed(answer));
+        view.input(&key(HAIL_KEY, true));
+        view.take_hail();
+        view.take_escort_dialog();
+        view.take_planet_comm();
+        view.take_offer();
+        view.hang_up();
+        super::key_fades::fades_with_no_release(&mut view);
+    }
+}
+
+#[test]
 fn y_refused_stays_held_until_its_release() {
     let mut view = sol();
     view.input(&key(HAIL_KEY, true));

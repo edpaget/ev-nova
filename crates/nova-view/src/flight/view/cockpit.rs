@@ -431,6 +431,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Lets go of the flight keys and the mouse button: flight is giving
+    /// up its input, to a dialog over it or by the router's
+    /// [`Screen::release_keys`](crate::Screen::release_keys), so their
+    /// releases will never reach it. The one place that does: the
+    /// original reads both live (`_KeyCheck` @0xa19b-0xa1dc, `_Button`
+    /// @0x3803b), and ours has only the events flight is given. The
+    /// paths that keep the input in flight (the course map, a gate's
+    /// exit) clear `held` alone, as their releases still come here.
+    pub(super) fn let_go_of_input(&mut self) {
+        self.held.clear();
+        self.cursor.button(false);
+    }
+
     /// One frame of the keys `_HandlePlayer` polls with a latch before the
     /// Board and jump keys, with those held down, in its order: Option-\`
     /// and the Nav Off / Hyperspace Mode block

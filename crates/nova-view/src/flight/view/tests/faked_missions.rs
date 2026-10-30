@@ -564,6 +564,17 @@ fn i_opening_the_info_screen_leaves_no_key_held_as_the_screen_takes_its_release(
 }
 
 #[test]
+fn i_opening_the_info_screen_lets_go_of_the_mouse_button_too() {
+    let mut view = super::faked_screen::in_flight();
+    super::key_fades::button_down(&mut view);
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(info())));
+    view.input(&key(MISSION_INFO_KEY, true));
+    assert_eq!(view.take_mission_info_request(), Some(info()));
+    super::key_fades::fades_with_no_release(&mut view);
+}
+
+#[test]
 fn i_with_no_mission_to_show_stays_held_until_its_release() {
     let mut view = faked(in_sol());
     view.sim
