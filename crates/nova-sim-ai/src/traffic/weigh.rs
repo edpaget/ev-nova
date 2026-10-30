@@ -75,7 +75,7 @@ mod tests {
     use super::*;
     use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, govts, n, player, ship};
     use crate::combat::fixture::strike;
-    use crate::traffic::npc::{AiType, Npc};
+    use crate::traffic::npc::{AiType, Npc, NpcId};
     use nova_sim_base::fixture::Draws;
 
     /// A traffic of `npcs`.
@@ -146,6 +146,48 @@ mod tests {
         traffic.weigh_strikes(&world, &mut strikes, &mut Draws::of(&[1, 0]));
         assert_eq!(strikes.map(|strike| strike.answered), [false, true]);
         assert_eq!(strays(&traffic), [0.0]);
+    }
+
+    #[test]
+    fn a_stray_hit_on_a_ship_jumping_out_adds_nothing_and_one_on_a_jumping_leaders_escort_keeps_its_add()
+     {
+        let govts = govts(0, 0);
+        let world = World {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..World::new(&[])
+        };
+        let weigh = |lead_stage: f32| {
+            let mut jumping = ship(1, NEUTRAL, AiType::Warship, 0.0, 0.0);
+            jumping.warp.stage = 3.0;
+            jumping.stray = 30.0;
+            let mut escort = ship(2, NEUTRAL, AiType::Warship, 0.0, 0.0);
+            escort.leader = Some(NpcId(3));
+            escort.stray = 60.0;
+            let mut lead = ship(3, NEUTRAL, AiType::Warship, 0.0, 0.0);
+            lead.warp.stage = lead_stage;
+            let mut traffic = of(vec![jumping, escort, lead]);
+            let mut strikes = [stray(1, 4.0), stray(2, 4.0)];
+            // The escort's roll comes up 0: not forgiven, and from 60 the
+            // aim would answer it.
+            let mut chance = Draws::of(&[0]);
+            traffic.weigh_strikes(&world, &mut strikes, &mut chance);
+            (
+                strikes.map(|strike| strike.answered),
+                strays(&traffic),
+                chance.asked,
+            )
+        };
+        assert_eq!(
+            weigh(1.0),
+            ([false, false], vec![30.0, 67.0, 0.0], vec![4]),
+            "the jumping ship draws and adds nothing; the escort keeps 60 + 7"
+        );
+        assert_eq!(
+            weigh(0.0),
+            ([false, true], vec![30.0, 0.0, 0.0], vec![4]),
+            "its leader not jumping, the escort answers and its add is zeroed"
+        );
     }
 
     #[test]
