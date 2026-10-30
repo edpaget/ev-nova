@@ -1350,6 +1350,32 @@ mod tests {
     }
 
     #[test]
+    fn a_gun_only_escort_keeps_its_gun_find_at_a_guard_bursting_out_but_not_at_one_in_its_gate() {
+        let mut gunner = escort();
+        gunner.armament = Armament::new([(gun(), 1)]);
+        let at_guard = |mode: Mode| {
+            let mut guard = raider(3, 0.0, -50.0, n(1));
+            guard.mode = mode;
+            let npcs = [lead(Goal::Idle), gunner.clone(), guard];
+            command(&npcs, follow(Some(n(3))))
+        };
+        assert_eq!(
+            at_guard(Mode::LeavingGate { tick: 1 }),
+            (
+                Trigger {
+                    keep: Some(WeaponId(141)),
+                    ..DEFENCE
+                },
+                Some(n(3))
+            )
+        );
+        assert_eq!(
+            at_guard(Mode::Emerging { ticks_left: 5 }),
+            (DEFENCE, Some(n(3)))
+        );
+    }
+
+    #[test]
     fn in_formation_it_drops_a_guard_disabled_or_gone_and_fires_nothing() {
         let mut down = raider(3, 0.0, -50.0, n(1));
         down.condition = Condition::Disabled;

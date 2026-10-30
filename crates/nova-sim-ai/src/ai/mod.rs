@@ -922,21 +922,37 @@ impl<'a> Surroundings<'a> {
         }
     }
 
-    /// Whether `ship` is here to be fought: in the system, intact or
-    /// disabled, and not still jumping in or coming out of a gate (seen by
-    /// no ship while it waits there, `_ShipVisibleToShip` @0x972d, and
-    /// unfought while it bursts out, as during the glide). A ship holding
-    /// its course after its glide or burst ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) is here:
-    /// its goal is 0, which `_ShipVisibleToShip` sees ([`Npc::arrived`]).
-    /// So is one held at its gate ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)),
-    /// its goal 4.
+    /// Whether `ship`'s slot is active (+0xb8): in the system and not
+    /// destroyed, however it arrives, breaking up included
+    /// ([`Condition::active`]). Most of the original's searches and keeps
+    /// read this alone.
+    #[must_use]
+    pub fn active(&self, ship: ShipRef) -> bool {
+        self.condition_of(ship).is_some_and(Condition::active)
+    }
+
+    /// Whether `ship`'s slot is active and it is not breaking up: +0xb8 and
+    /// `_IsDying`, as the attack block reads its target (@0x8e3df,
+    /// @0x8e3ef) ([`Condition::standing`]). No routine that asks reads how
+    /// the ship arrives.
+    #[must_use]
+    pub fn standing(&self, ship: ShipRef) -> bool {
+        self.condition_of(ship).is_some_and(Condition::standing)
+    }
+
+    /// Whether `ship` is [`standing`](Self::standing) and done arriving
+    /// ([`Npc::arrived`]). None of the original's routines reads this: the
+    /// only arrival they test of another ship is goal 0x15, through
+    /// `_ShipVisibleToShip` (@0x972d). It serves the port's own other
+    /// readings alone, `CarriedAi` ([`carried`]) and
+    /// [`HitFocus`](crate::RuleKey::HitFocus) ([`react`]).
     #[must_use]
     pub fn live(&self, ship: ShipRef) -> bool {
-        let jumping_in = match ship {
+        let arriving = match ship {
             ShipRef::Player => false,
             ShipRef::Npc(id) => self.npc(id).is_some_and(|npc| !npc.arrived()),
         };
-        !jumping_in && self.condition_of(ship).is_some_and(Condition::standing)
+        !arriving && self.standing(ship)
     }
 }
 
@@ -2130,6 +2146,76 @@ mod tests {
         assert_eq!(around.system_govt, None);
         assert_eq!(around.record, 0);
         assert_eq!(*around.govts, Governments::default());
+    }
+
+    /// Ships 1 to 7, each in its mode or condition: flying, gliding in,
+    /// waiting in its gate, on the last frame of that wait, bursting out,
+    /// disabled and breaking up.
+    fn every_arrival() -> Vec<Npc> {
+        let modes = [
+            Mode::Flying,
+            Mode::JumpingIn { tick: 1 },
+            Mode::Emerging { ticks_left: 3 },
+            Mode::LeavingGate { tick: 0 },
+            Mode::LeavingGate { tick: 1 },
+        ];
+        let mut npcs: Vec<Npc> = (1..)
+            .zip(modes)
+            .map(|(id, mode)| Npc {
+                mode,
+                ..npc(id, AiType::Warship)
+            })
+            .collect();
+        for (id, condition) in [
+            (6, Condition::Disabled),
+            (
+                7,
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+            ),
+        ] {
+            npcs.push(Npc {
+                condition,
+                ..npc(id, AiType::Warship)
+            });
+        }
+        npcs
+    }
+
+    #[test]
+    fn an_active_ship_holds_its_slot_however_it_arrives_or_breaks_up() {
+        let npcs = every_arrival();
+        let around = Surroundings::new(&[], &npcs);
+        for id in 1..=7 {
+            assert!(around.active(ShipRef::Npc(NpcId(id))), "{id}");
+        }
+        assert!(!around.active(ShipRef::Npc(NpcId(9))), "not here");
+        assert!(!around.active(P), "no player");
+    }
+
+    #[test]
+    fn a_standing_ship_holds_its_slot_and_is_not_breaking_up() {
+        let npcs = every_arrival();
+        let around = Surroundings::new(&[], &npcs);
+        for id in 1..=6 {
+            assert!(around.standing(ShipRef::Npc(NpcId(id))), "{id}");
+        }
+        assert!(!around.standing(ShipRef::Npc(NpcId(7))), "dying");
+        assert!(!around.standing(ShipRef::Npc(NpcId(9))), "not here");
+        assert!(!around.standing(P), "no player");
+    }
+
+    #[test]
+    fn a_ship_destroyed_where_it_stood_holds_no_slot() {
+        let npcs = [Npc {
+            condition: Condition::Destroyed,
+            ..npc(1, AiType::Warship)
+        }];
+        let around = Surroundings::new(&[], &npcs);
+        assert!(!around.active(ShipRef::Npc(NpcId(1))));
+        assert!(!around.standing(ShipRef::Npc(NpcId(1))));
     }
 
     #[test]

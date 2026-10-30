@@ -598,7 +598,9 @@ fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool)
 /// live in the system (`_AILaunchFighter` from `_HighLevelAIHandler`'s
 /// attack block, @0x8e6fa).
 fn launches(npc: &Npc, around: &Surroundings) -> bool {
-    npc.goal.attacking().is_some_and(|ship| around.live(ship))
+    npc.goal
+        .attacking()
+        .is_some_and(|ship| around.standing(ship))
 }
 
 /// Whether `npc` launches its fighters after its passes, as the snipe
@@ -625,7 +627,7 @@ fn launches_after_passes(npc: &Npc, around: &Surroundings, second: Option<Weapon
             .attacking()
             .filter(|_| !around.fighter_room || second.is_some())
     });
-    let Some(ship) = after.filter(|&ship| around.live(ship)) else {
+    let Some(ship) = after.filter(|&ship| around.active(ship)) else {
         return false;
     };
     around.state_of(ship).is_some_and(|at| {
@@ -952,7 +954,7 @@ fn sight_of<'a>(
     around: &Surroundings,
     rules: FireRules,
 ) -> Option<Sight<'a>> {
-    if !around.live(ship) {
+    if !around.active(ship) {
         return None;
     }
     let at = around.state_of(ship)?;
@@ -1199,7 +1201,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{Mode, NpcId};
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::weapon;
 
@@ -1674,11 +1676,18 @@ mod tests {
             }
         };
         assert!(trigger_at_npc(&npc, 0.0, -100.0, dying).point_defence);
-        let arriving = |other: &mut Npc| {
-            other.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
+        let gliding = |other: &mut Npc| {
+            other.mode = Mode::JumpingIn { tick: 0 };
         };
-        assert!(trigger_at_npc(&npc, 0.0, -100.0, arriving).point_defence);
-        assert_eq!(trigger_at_npc(&npc, 0.0, -100.0, arriving).only, None);
+        let glide = trigger_at_npc(&npc, 0.0, -100.0, gliding);
+        assert!(glide.point_defence);
+        assert_eq!(glide.only, id(130), "goal 0 or 8, which it sees");
+        let in_gate = |other: &mut Npc| {
+            other.mode = Mode::Emerging { ticks_left: 5 };
+        };
+        let waiting = trigger_at_npc(&npc, 0.0, -100.0, in_gate);
+        assert!(waiting.point_defence);
+        assert_eq!(waiting.only, None, "goal 0x15, which it doesn't");
     }
 
     #[test]
@@ -2624,13 +2633,119 @@ mod tests {
         assert_eq!((unseen.only, unseen.keep), (None, id(131)));
         let seen = trigger_at_npc(&npc, 0.0, -100.0, |_| {});
         assert_eq!(seen.only, id(131));
-        let gone = trigger_at_npc(&npc, 0.0, -100.0, |other| {
-            other.condition = Condition::Dying {
-                ticks_left: 3,
-                starting: false,
-            };
-        });
-        assert_eq!((gone.only, gone.keep), (None, id(131)), "not live");
+        let gone = trigger_at_npc(&npc, 0.0, -100.0, destroyed);
+        assert_eq!((gone.only, gone.keep), (None, id(131)), "no slot");
+    }
+
+    /// How a ship arrives, and whether `_ShipVisibleToShip` sees it then
+    /// (only goal 0x15 is hidden, @0x972d).
+    const ARRIVALS: [(Mode, bool); 4] = [
+        (Mode::JumpingIn { tick: 1 }, true),
+        (Mode::LeavingGate { tick: 1 }, true),
+        (Mode::LeavingGate { tick: 0 }, false),
+        (Mode::Emerging { ticks_left: 5 }, false),
+    ];
+
+    fn breaking_up(other: &mut Npc) {
+        other.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+    }
+
+    fn destroyed(other: &mut Npc) {
+        other.condition = Condition::Destroyed;
+    }
+
+    #[test]
+    fn the_turret_pass_sees_an_arriving_ship_as_ship_visible_to_ship_does() {
+        let npc = shooter(&[guided(130, 4)], ATTACK);
+        for (mode, seen) in ARRIVALS {
+            assert_eq!(
+                fired_at_npc(&npc, 0.0, -100.0, |other| other.mode = mode),
+                seen.then_some(WeaponId(130)),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gun_pass_sees_an_arriving_ship_as_ship_visible_to_ship_does() {
+        let npc = shooter(&[gun(128, 1, 1)], ATTACK);
+        for (mode, seen) in ARRIVALS {
+            assert_eq!(
+                fired_at_npc(&npc, 0.0, -100.0, |other| other.mode = mode),
+                seen.then_some(WeaponId(128)),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_searches_of_a_goal_less_shooter_see_an_arriving_ship_as_ship_visible_to_ship_does() {
+        let npc = shooter(&[gun(128, 1, 1), guided(130, 4)], Goal::Idle);
+        let at = ShipRef::Npc(NpcId(2));
+        for (mode, seen) in ARRIVALS {
+            let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+            other.state.position = SHOOTER + Vec2::new(0.0, -100.0);
+            other.mode = mode;
+            let npcs = [npc.clone(), other];
+            let around = Surroundings::new(&[], &npcs);
+            let rules = FireRules::default();
+            assert_eq!(
+                turret_find(&npc, at, &around, rules),
+                seen.then_some(WeaponId(130)),
+                "{mode:?}"
+            );
+            assert_eq!(
+                gun_find(&npc, at, &around, rules),
+                seen.then_some(WeaponId(128)),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_missile_pass_fires_at_every_arrival_for_it_reads_no_sight() {
+        // `_AIFireMissile`'s preamble (@0x8115d-0x8121c) reads the slot and
+        // the cloak, and never calls `_ShipVisibleToShip`.
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        for (mode, _) in ARRIVALS {
+            assert_eq!(
+                fired_at_npc(&npc, 0.0, -300.0, |other| other.mode = mode),
+                id(131),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_missile_pass_holds_at_a_cloaked_ship_in_its_gate_without_a_scanner() {
+        // @0x811e7, @0x811f6.
+        let in_gate = |other: &mut Npc| {
+            cloaked(other);
+            other.mode = Mode::Emerging { ticks_left: 5 };
+        };
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, in_gate), None);
+        let sees = scanning(npc, SEES_CLOAKED);
+        assert_eq!(fired_at_npc(&sees, 0.0, -300.0, in_gate), id(131));
+    }
+
+    #[test]
+    fn every_pass_fires_at_a_ship_breaking_up_and_none_at_one_destroyed() {
+        // Each preamble reads the slot +0xb8 alone (@0x7ff11, @0x80b32,
+        // @0x8119a), never `_IsDying`.
+        let passes = [
+            (gun(128, 1, 1), -100.0, 128),
+            (guided(130, 4), -100.0, 130),
+            (missile(131), -300.0, 131),
+        ];
+        for (weapon, y, fires) in passes {
+            let npc = shooter(&[short(127), weapon], ATTACK);
+            assert_eq!(fired_at_npc(&npc, 0.0, y, breaking_up), id(fires));
+            assert_eq!(fired_at_npc(&npc, 0.0, y, destroyed), None);
+        }
     }
 
     #[test]
@@ -3036,7 +3151,7 @@ mod tests {
     }
 
     #[test]
-    fn no_fighters_launch_fleeing_idle_or_at_a_ship_gone_or_jumping_in() {
+    fn no_fighters_launch_fleeing_idle_or_at_a_ship_gone_or_breaking_up() {
         let all = [gun(128, 1, 1)];
         for goal in [
             Goal::Flee(ShipRef::Player),
@@ -3049,15 +3164,52 @@ mod tests {
         }
         let at = ShipRef::Npc(NpcId(7));
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[]), "gone");
-        let mut arriving = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
-        arriving.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
-        assert!(!bays(&shooter(&all, Goal::Attack(at)), &[arriving]));
         let mut wreck = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
-        wreck.condition = Condition::Dying {
-            ticks_left: 3,
-            starting: false,
-        };
+        breaking_up(&mut wreck);
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
+    }
+
+    #[test]
+    fn fighters_launch_at_a_ship_however_it_arrives() {
+        // The attack block reads the slot and `_IsDying` (@0x8e3df, @0x8e3ef)
+        // and `_AILaunchFighter` the slot (@0x813ab): neither reads sight.
+        let all = [gun(128, 1, 1)];
+        let at = ShipRef::Npc(NpcId(7));
+        for (mode, _) in ARRIVALS {
+            let mut arriving = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
+            arriving.mode = mode;
+            assert!(
+                bays(&shooter(&all, Goal::Attack(at)), &[arriving]),
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plunderers_snipe_launches_at_a_ship_gliding_in_or_breaking_up_and_not_at_one_destroyed() {
+        // The snipe's `_AILaunchFighter` reads the slot alone (@0x813ab).
+        let mut npc = shooter(
+            &[gun(128, 1, 1), bay(150)],
+            Goal::Plunder {
+                ship: ShipRef::Npc(NpcId(2)),
+                hopeless: true,
+            },
+        );
+        npc.rounds = LauncherRounds::from([(WeaponId(150), 2)]);
+        let launches_after = |target: &dyn Fn(&mut Npc)| {
+            let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+            other.state.position = SHOOTER + Vec2::new(0.0, -200.0);
+            target(&mut other);
+            let npcs = [npc.clone(), other];
+            let around = Surroundings::new(&[], &npcs);
+            trigger(&npc, &around, FireRules::default()).bays_after
+        };
+        assert!(launches_after(&|_| {}), "flying");
+        assert!(launches_after(
+            &|other| other.mode = Mode::JumpingIn { tick: 1 }
+        ));
+        assert!(launches_after(&breaking_up));
+        assert!(!launches_after(&destroyed));
     }
 
     /// A launcher of `id` firing rounds of weapon `id + 10`.
@@ -3568,7 +3720,6 @@ mod tests {
     #[test]
     fn a_waiting_npc_fires_nothing_but_its_point_defence_and_bays_and_keeps_its_pick() {
         use crate::catalog::StellarId;
-        use crate::traffic::npc::Mode;
         let mut npc = shooter(&[gun(128, 1, 1)], ATTACK);
         npc.trigger = FULL;
         let waits = [

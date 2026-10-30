@@ -355,8 +355,9 @@ pub fn hold_trigger(npc: &Npc) -> Trigger {
 /// of it is active: the engine's [`Condition::active`], whatever its
 /// [`Mode`](crate::traffic::npc::Mode). Such a target is kept, and
 /// `_AIFireTurret` runs on it; its search skips one it does not see
-/// (`_ShipVisibleToShip` @0x80b69, which hides a ship waiting in its
-/// gate, goal 0x15, @0x972d).
+/// (`_ShipVisibleToShip` @0x80b69, which hides a ship with goal 0x15
+/// alone, @0x972d: one waiting in its gate, up to the last frame of that
+/// wait, [`Npc::emerging`]).
 /// `_AIFireTurret` runs the point defence first unless the shooter is
 /// disabled (@0x80afa-0x80b0d), then searches by `rules`
 /// ([`fire::turret_find`]) for the single best turret: a find becomes
@@ -1095,14 +1096,15 @@ mod tests {
         // (+0xb8, @0x80e7b) and `_IsDisabled` (@0x80e87): a ship gliding
         // in, waiting in its gate or bursting out holds its slot from its
         // spawn (+0xb8 = 1, @0x3c90b), so it is kept, not dropped, and
-        // `_AIFireTurret` runs on it. Its search sees no ship waiting in
-        // its gate (`_ShipVisibleToShip` @0x972d), so only the point
-        // defence runs; what it sees of one gliding in or bursting out is
-        // rdm:phase/escort-fleet-fidelity-followups/phase-1-turret-sight-of-arriving-ships's.
-        for mode in [
-            Mode::JumpingIn { tick: 1 },
-            Mode::Emerging { ticks_left: 5 },
-            Mode::LeavingGate { tick: 1 },
+        // `_AIFireTurret` runs on it. Its search sees no ship of goal 0x15
+        // (`_ShipVisibleToShip` @0x972d), so only the point defence runs
+        // at one waiting in its gate or on the last frame of that wait, and
+        // the turret fires at one gliding in or bursting out (goal 0 or 8).
+        for (mode, fires) in [
+            (Mode::JumpingIn { tick: 1 }, turret_pick(140)),
+            (Mode::Emerging { ticks_left: 5 }, DEFENCE),
+            (Mode::LeavingGate { tick: 0 }, DEFENCE),
+            (Mode::LeavingGate { tick: 1 }, turret_pick(140)),
         ] {
             let mut arriving = pirate(2, 100.0, 0.0);
             arriving.mode = mode;
@@ -1120,10 +1122,7 @@ mod tests {
             );
             let (trigger, target) = command(ENGINE, &npcs);
             assert_eq!(target, Some(n(2)), "{mode:?}: not dropped");
-            assert!(trigger.point_defence, "{mode:?}: point defence");
-            if matches!(mode, Mode::Emerging { .. }) {
-                assert_eq!(trigger, DEFENCE, "{mode:?}: unseen, no turret");
-            }
+            assert_eq!(trigger, fires, "{mode:?}");
         }
     }
 
