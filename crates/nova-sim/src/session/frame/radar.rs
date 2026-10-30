@@ -6,7 +6,8 @@
 use super::super::Session;
 use crate::catalog::LandingSite;
 use crate::flight_frame::FrameRadarStellar;
-use crate::landing::{HYPERGATE, StellarFlags, WORMHOLE};
+use crate::gate::GateKind;
+use crate::landing::StellarFlags;
 
 impl Session {
     /// Fills `into` with each stellar the system lists, shown or not, in
@@ -26,10 +27,10 @@ impl Session {
 }
 
 /// Whether `site`'s blip is a square: a station (`Flags` 0x10), a
-/// hypergate or a wormhole (`Flags2` 0x3000; @0x49939-0x49946). The
-/// radar reads no master for the shape.
+/// hypergate or a wormhole (`Flags2` 0x3000, [`GateKind::of`];
+/// @0x49939-0x49946). The radar reads no master for the shape.
 fn is_square(site: &LandingSite) -> bool {
-    site.flags & StellarFlags::STATION != 0 || site.flags2 & (HYPERGATE | WORMHOLE) != 0
+    site.flags & StellarFlags::STATION != 0 || GateKind::of(site.flags2).is_some()
 }
 
 #[cfg(test)]
