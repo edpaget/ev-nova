@@ -313,14 +313,20 @@ impl Screen for AppScreen {
     /// wait is left alone), then replays what arrived meanwhile, in
     /// order, through [`Screen::input`]: a replayed key that holds again
     /// queues the rest. A quit a replayed input asks is kept for
-    /// [`Screen::take_quit`].
+    /// [`Screen::take_quit`]. When the action opens the New Pilot dialog,
+    /// what it flushes ([`flushed_on_opening`]) is dropped first.
     fn keyed_click_ended(&mut self) {
         let Some(MenuHold::Click(action)) = self.menu_hold else {
             return;
         };
         self.menu_hold = None;
+        let had_new_pilot = self.new_pilot.is_some();
         self.run_menu_action(action);
-        for held in std::mem::take(&mut self.held) {
+        let mut held = std::mem::take(&mut self.held);
+        if !had_new_pilot && self.new_pilot.is_some() {
+            held.retain(|held| !flushed_on_opening(held));
+        }
+        for held in held {
             match held {
                 Held::Input(input) => {
                     if self.input(&input) == ScreenAction::Quit {
@@ -548,4 +554,16 @@ impl AppScreen {
         };
         Point::new(x, 0.0)
     }
+}
+
+/// Whether the New Pilot dialog, opening as a keyed click ends, drops
+/// `held`: `_DoNewPilotNameDialog` flushes every queued event but disk
+/// events before its loop (`FlushEvents(0xff7f, 0)` @0x16807-0x16816), so
+/// every input held through the click goes, but a key's release, kept so
+/// its held state settles (the dialog acts on presses only). The pointer
+/// cancels and key releases the router queued in their place still run,
+/// and a window close is already dropped under a dialog
+/// ([`AppScreen::replay_close`]).
+pub(super) fn flushed_on_opening(held: &Held) -> bool {
+    matches!(held, Held::Input(input) if !matches!(input, Input::Key { pressed: false, .. }))
 }

@@ -219,18 +219,55 @@ fn a_and_x_show_the_about_text_and_desc_32766_both_munged_before_any_pilot() {
     assert_eq!(screen.showing(), Showing::MainMenu);
 }
 
+/// `_DoNewPilotNameDialog` flushes every queued event but disk events
+/// before its loop (`FlushEvents(0xff7f, 0)` @0x16807-0x16816), so what was
+/// typed or pressed during N's keyed click is dropped as the dialog opens.
 #[test]
-fn input_during_a_keyed_click_is_replayed_in_order_once_it_ends() {
+fn input_during_ns_keyed_click_is_flushed_as_the_new_pilot_dialog_opens() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     screen.input(&Input::Text('n'));
     screen.input(&key(Key::Char('b'), true));
     screen.input(&Input::Text('b'));
+    screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Char('b'), false));
     assert_eq!(screen.showing(), Showing::MainMenu);
     screen.keyed_click_ended();
-    assert_eq!(screen.showing(), Showing::NewPilot);
-    assert_eq!(screen.new_pilot().expect("open").name(), "b");
+    assert_eq!(screen.showing(), Showing::NewPilot, "Return dropped too");
+    assert_eq!(
+        screen.new_pilot().expect("open").name(),
+        "",
+        "the drawn default (no STR# 128), not \"b\""
+    );
+}
+
+#[test]
+fn the_new_pilot_flush_keeps_releases_and_the_routers_own_steps() {
+    // A release is kept through the flush: the dialog acts on presses
+    // only, and the key's held state settles.
+    assert!(!super::super::screen_impl::flushed_on_opening(
+        &Held::Input(key(Key::Char('b'), false))
+    ));
+    for dropped in [
+        Held::Input(key(Key::Char('b'), true)),
+        Held::Input(Input::Text('b')),
+        Held::Input(Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: Point::new(0.0, 0.0),
+        }),
+    ] {
+        assert!(
+            super::super::screen_impl::flushed_on_opening(&dropped),
+            "{dropped:?}"
+        );
+    }
+    for kept in [Held::CancelPointer, Held::ReleaseKeys, Held::Close] {
+        assert!(
+            !super::super::screen_impl::flushed_on_opening(&kept),
+            "{kept:?}"
+        );
+    }
 }
 
 #[test]
