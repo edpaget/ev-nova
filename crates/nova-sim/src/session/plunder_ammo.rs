@@ -49,6 +49,7 @@ impl Session {
     pub(super) fn ammo_outfit(&self, slot: WeaponId) -> Option<OutfitId> {
         crate::board::ammo_outfit(
             &self.statics.outfits,
+            &self.statics.ammo_outfits,
             slot,
             self.setup.rules.source_for(RuleKey::PlunderAmmoOutfit),
         )

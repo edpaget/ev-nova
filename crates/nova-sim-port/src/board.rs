@@ -150,7 +150,7 @@ use std::fmt::Debug;
 use crate::board_repair::Recovery;
 use crate::catalog::{OutfitId, OutfitRecord, PersonId, ShipId, WeaponId};
 use crate::chance::Chance;
-use crate::combat::armament::MOD_AMMO;
+use crate::combat::armament::{MOD_AMMO, lowest_ammo_outfit};
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{FIRST_AMMO_WEAPON, WeaponSpec};
 use crate::flight::ShipState;
@@ -317,28 +317,31 @@ pub struct AmmoOffer {
 }
 
 /// The outfit a boarding's Ammo press takes the rounds of weapon `slot`
-/// as, among `records`, read as `source` says
-/// ([`RuleKey::PlunderAmmoOutfit`]): by the engine the lowest-ID outfit
-/// whose *first* mod is `ModType` 3 naming `slot`, as `_DoPlunderDialog`
-/// scans the 512 records' first `ModType` (+0x4) and `ModVal` (+0xc)
-/// alone (@0x93cdc-0x93d08); by the other reading the lowest-ID one with
-/// such a mod in any slot. `None` when none matches: the press then beeps
-/// and takes nothing (@0x93d0a-0x93d2f).
+/// as, read as `source` says ([`RuleKey::PlunderAmmoOutfit`]): by the
+/// engine the lowest-ID outfit among `records` whose *first* mod is
+/// `ModType` 3 naming `slot`, as `_DoPlunderDialog` scans the 512 records'
+/// first `ModType` (+0x4) and `ModVal` (+0xc) alone (@0x93cdc-0x93d08); by
+/// the other reading the outfit the dialog names them by, the lowest-ID
+/// one with such a mod in any slot, looked up among `ammo_outfits`
+/// ([`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits))
+/// by [`lowest_ammo_outfit`], as [`HeldRounds::named`] is. `None` when
+/// none matches: the press then beeps and takes nothing
+/// (@0x93d0a-0x93d2f).
 #[must_use]
 pub fn ammo_outfit(
     records: &[OutfitRecord],
+    ammo_outfits: &[(WeaponId, OutfitId)],
     slot: WeaponId,
     source: RuleSource,
 ) -> Option<OutfitId> {
-    let names = |&(kind, val): &(i16, i16)| kind == MOD_AMMO && val == slot.0;
-    records
-        .iter()
-        .filter(|record| match source {
-            RuleSource::Engine => names(&record.mods[0]),
-            RuleSource::Bible => record.mods.iter().any(names),
-        })
-        .map(|record| record.id)
-        .min()
+    match source {
+        RuleSource::Engine => records
+            .iter()
+            .filter(|record| record.mods[0] == (MOD_AMMO, slot.0))
+            .map(|record| record.id)
+            .min(),
+        RuleSource::Bible => lowest_ammo_outfit(ammo_outfits, slot),
+    }
 }
 
 /// Whether the player, carrying `carried`, fires the rounds of a boarded
@@ -1794,13 +1797,19 @@ mod tests {
     #[test]
     fn ammo_outfit_takes_the_first_mod_alone_by_the_engine_and_any_mod_by_the_other_reading() {
         use crate::catalog::OutfitRecord;
-        use crate::combat::armament::MOD_AMMO;
+        use crate::combat::armament::{Arsenal, MOD_AMMO};
         use nova_sim_catalog::fixture::outfit;
         let later = outfit(200, &[(1, 141), (MOD_AMMO, 140)]);
         let first = outfit(210, &[(MOD_AMMO, 140)]);
         let other = outfit(205, &[(MOD_AMMO, 141)]);
         let find = |records: &[OutfitRecord], source| {
-            ammo_outfit(records, WeaponId(140), source).map(|id| id.0)
+            ammo_outfit(
+                records,
+                &Arsenal::ammo_outfits(records),
+                WeaponId(140),
+                source,
+            )
+            .map(|id| id.0)
         };
         let both = [first.clone(), later.clone(), other.clone()];
         assert_eq!(find(&both, RuleSource::Engine), Some(210));
