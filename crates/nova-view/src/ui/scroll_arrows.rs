@@ -610,6 +610,18 @@ mod tests {
             at: dialog.item_bounds(3).expect("the text").center(),
         });
         assert_eq!(offset(&dialog), 20.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, true), down(true, false)].concat(),
+            "pressed while the pointer is on it"
+        );
+        dialog.input(&Input::PointerMoved(Point::new(0.0, 0.0)));
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(true, false)].concat(),
+            "unpressed off it"
+        );
+        dialog.input(&Input::PointerMoved(at));
         assert_eq!(dialog.input(&left(false, at)), None);
         assert_eq!(offset(&dialog), 20.0 - ARROW_UNITS);
     }
