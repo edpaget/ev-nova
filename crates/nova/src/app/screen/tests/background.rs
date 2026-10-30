@@ -27,9 +27,10 @@ fn coasting() -> AppScreen {
     screen
 }
 
-/// Sends the app to the background as the app does: its keys let go of
-/// first.
+/// Sends the app to the background as the app does: its press and its
+/// keys let go of first.
 pub(super) fn switch_out(screen: &mut AppScreen) {
+    screen.cancel_pointer();
     screen.release_keys();
     screen.focus_lost();
 }

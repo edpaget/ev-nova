@@ -16,11 +16,12 @@
 //!   kept and passed on as the app comes back: the first idle after a
 //!   resume reads `GetMouse`, so the screen sees where the pointer is now.
 //!   The rest isn't replayed, as the original's filter-less loop takes the
-//!   events from the queue too. Letting go of the pointer and the keys and
-//!   the window's close are untouched: the app lets go before it says the
-//!   focus went. What a hold kept (a keyed click's, which ends by its
-//!   sound, not by a tick) passed this gate as it arrived, and is replayed
-//!   past it.
+//!   events from the queue too. A release has nothing left to end: the
+//!   app abandons the press and lets go of the keys before it says the
+//!   focus went, as the original's `Button()` goes false wherever the
+//!   pointer is. The window's close is untouched. What a hold kept (a
+//!   keyed click's, which ends by its sound, not by a tick) passed this
+//!   gate as it arrived, and is replayed past it.
 //! - **The menu commands** aren't input, and pass. The original's event
 //!   loops take Apple events whatever `_inBackground` says
 //!   (`AEProcessAppleEvent` @0x1b242, @0x568e1, @0x599a9), and no handler

@@ -22,6 +22,16 @@ fn going_to_the_background_asks_for_one_redraw_and_that_one_for_none() {
     assert_eq!(window.redraws, 2, "no next one");
 }
 
+/// The press ends here, not with its release, which is dropped in the
+/// background.
+#[test]
+fn going_to_the_background_abandons_the_screens_press() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let mut app = app(&window);
+    handle(&mut app, &mut window, WindowEvent::FocusLost);
+    assert_eq!(app.screen().cancels, 1);
+}
+
 #[test]
 fn coming_back_asks_for_a_redraw_and_the_redraws_after_ask_again() {
     let mut window = FakeWindow::new((1024, 768), 1.0);

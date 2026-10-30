@@ -236,6 +236,32 @@ fn tab_opens_the_map_and_its_frame_reaches_the_gpu() {
     assert!(shows(&frame, "Alpha"), "a system's name from the data");
 }
 
+/// A press lost with the focus is over: the original's `Button()` goes
+/// false wherever the pointer is, and the release is dropped in the
+/// background, so nothing else would end it.
+#[test]
+fn a_press_lost_with_the_focus_drags_the_map_no_further() {
+    let (mut harness, _) = Harness::open_map();
+    let view = |harness: &Harness| {
+        *harness
+            .app
+            .screen()
+            .galaxy_map()
+            .view()
+            .expect("the viewer")
+    };
+    let before = view(&harness);
+    harness.point(Point::new(500.0, 400.0));
+    harness.button(true);
+    harness.send(WindowEvent::FocusLost);
+    harness.button(false);
+    harness.point(Point::new(600.0, 400.0));
+    harness.send(WindowEvent::FocusGained);
+    assert_eq!(view(&harness), before, "the move passed on as it came back");
+    harness.point(Point::new(700.0, 400.0));
+    assert_eq!(view(&harness), before, "and the moves after");
+}
+
 #[test]
 fn keys_reach_the_map() {
     let (mut harness, _) = Harness::open_map();

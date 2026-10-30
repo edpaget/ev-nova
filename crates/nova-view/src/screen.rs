@@ -128,11 +128,11 @@ pub trait Screen {
     fn draw(&self, list: &mut DrawList);
     /// Abandons any pointer gesture in progress (a held button, a drag)
     /// without completing it: what follows is not a click or a drop. Called
-    /// when the screen stops receiving input, such as when the app hides it,
-    /// since the button's release will then go elsewhere, and when the
-    /// primary button is let go of outside the game (in a letterbox bar or
-    /// off the window), where the release has no point to reach the screen
-    /// at. Does nothing by default.
+    /// when the screen stops receiving input (the app hides it, or the
+    /// window loses focus), since the button's release will then go
+    /// elsewhere, and when the primary button is let go of outside the game
+    /// (in a letterbox bar or off the window), where the release has no
+    /// point to reach the screen at. Does nothing by default.
     fn cancel_pointer(&mut self) {}
     /// Forgets every key it holds as down, as if each had been released.
     /// Called when the screen stops receiving input (the app hides it, or

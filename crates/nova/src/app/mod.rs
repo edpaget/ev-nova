@@ -748,12 +748,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 
     /// The window went to the background, the original's suspend event,
     /// which runs `_SwitchedOut` (@0x4f381): an exclusive mode is left,
-    /// the screen's keys are let go of, and the screen is told, halting
-    /// the warp-ups and stopping the playing music; its sounds are fed to
-    /// the audio at once, not at the next redraw. A focus loss reported
-    /// before the window was ever focused would spend the music at
-    /// launch, where the original's suspend only follows a resume; winit
-    /// reports none such.
+    /// the screen's press is abandoned and its keys are let go of, as a
+    /// release in the background reaches no screen, and the screen is
+    /// told, halting the warp-ups and stopping the playing music; its
+    /// sounds are fed to the audio at once, not at the next redraw. A
+    /// focus loss reported before the window was ever focused would spend
+    /// the music at launch, where the original's suspend only follows a
+    /// resume; winit reports none such.
     ///
     /// The app is then in the background: it asks for one redraw, so the
     /// picture the switch-out leaves (the main menu's rollover on its none
@@ -761,6 +762,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// [`App::redraw`]).
     fn focus_lost(&mut self, window: &mut impl WindowPort) {
         self.fullscreen.focus_lost(window);
+        self.screen.cancel_pointer();
         self.screen.release_keys();
         self.screen.focus_lost();
         self.feed_audio();
