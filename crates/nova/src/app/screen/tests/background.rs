@@ -190,6 +190,50 @@ fn away_the_main_menu_under_the_preferences_doesnt_idle() {
     assert_eq!(rollover(&screen), Some((2, 16)), "as it stood");
 }
 
+/// Under its appear the menu waits unseen: nothing idles it, away or not,
+/// and it stands as it stood, its rollover not put on the none frame in
+/// full.
+#[test]
+fn away_the_main_menu_under_its_appear_doesnt_idle() {
+    let store = MemoryPilots::new();
+    let mut screen = with_dialogs(data()).with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+    assert!(screen.appear_holds_menu());
+    let quit = screen
+        .main_menu()
+        .expect("a main menu")
+        .press_point(MenuChoice::Quit);
+    screen.input(&Input::PointerMoved(quit));
+    let (shown, picture) = (rollover(&screen), drawn(&screen));
+    assert_eq!(shown, Some((6, 0)));
+    switch_out(&mut screen);
+    screen.tick(mac_ticks(20));
+    assert_eq!(rollover(&screen), shown, "as it stood");
+    assert_eq!(drawn(&screen), picture, "its slides too");
+}
+
+/// Under an entry the menu isn't ticked, away or not.
+#[test]
+fn away_the_main_menu_under_an_entry_doesnt_idle() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_with_dialogs(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    let quit = screen
+        .main_menu()
+        .expect("a main menu")
+        .press_point(MenuChoice::Quit);
+    screen.input(&Input::PointerMoved(quit));
+    screen.tick(mac_ticks(4));
+    choose(&mut screen, MenuChoice::EnterShip);
+    assert!(screen.entering());
+    let (shown, picture) = (rollover(&screen), drawn(&screen));
+    assert_ne!(shown, Some((6, 32)), "not already the none frame in full");
+    switch_out(&mut screen);
+    screen.tick(mac_ticks(20));
+    assert_eq!(rollover(&screen), shown, "as it stood");
+    assert_eq!(drawn(&screen), picture, "its slides too");
+}
+
 #[test]
 fn back_the_first_tick_says_how_long_the_app_was_away_and_flight_ticks_after() {
     let mut screen = coasting();
