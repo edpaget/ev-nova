@@ -314,6 +314,11 @@
 //! ([`classic_offset`](nova_view::view_shape::classic_offset)), where the
 //! original's `_CenterWindow` puts a dialog in a window that wide, and take
 //! the pointer moved back to match. Flight places its own course map so.
+//! A cinematic movie's black window and fades, and a text's fade-in on a
+//! faded screen, cover the whole widened view from that frame, as the
+//! original's movie window is its main window; the router tells the shared
+//! [`Movies`] the view the side shown fills as the side or the size
+//! changes (`AppScreen::movie_view`).
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`](nova_view::Screen::take_sounds), and what it shows through

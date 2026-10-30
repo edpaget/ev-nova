@@ -6,7 +6,8 @@
 //! `STR#` text after it (a shop's, the escorts' report) starts a movie
 //! that finds no file and plays nothing; the About text (32767) and the X
 //! text (32766) name none; and the stock first `chär`'s `IntroTextID` is
-//! -1, so its intro shows no text.
+//! -1, so its intro shows no text. No stock `dësc` has the cinematic flag
+//! (`Flags` 0x0004, rdm:phase/movies/phase-8-cinematic-movie-widened).
 //!
 //! Driven with movies on, About, X and an entry through the stock intro
 //! start no movie. A landing at Aurora, whose `dësc` names a movie that
@@ -99,6 +100,41 @@ fn only_4778_has_an_after_movie_of_no_file_and_about_x_and_the_intro_name_none()
     assert_eq!(data.description_movie(32766), None, "X");
     let intro = data.first_character_intro().expect("the first chär");
     assert_eq!(intro.text, None, "IntroTextID -1 (@0x170ad)");
+}
+
+#[test]
+fn no_stock_desc_is_cinematic() {
+    // rdm:phase/movies/phase-8-cinematic-movie-widened records this: no
+    // stock movie fades the screen or covers the view, so the cinematic
+    // staging over a widened view is pinned over fixture data.
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ids = data.ids(Desc::TYPE).to_vec();
+    assert!(ids.len() > 1000, "precondition: the stock dësc");
+    let cinematic: Vec<i16> = ids
+        .iter()
+        .copied()
+        .filter(|&id| match data.get::<Desc>(id) {
+            Some(Ok(desc)) => desc.record.flags.0 & 0x0004 != 0,
+            other => panic!("dësc {id} doesn't decode: {other:?}"),
+        })
+        .collect();
+    assert_eq!(cinematic, Vec::<i16>::new(), "dësc with Flags 0x0004");
+    let filmed: Vec<i16> = ids
+        .iter()
+        .copied()
+        .filter(|&id| {
+            data.description_movie(id)
+                .is_some_and(|movie| movie.cinematic)
+        })
+        .collect();
+    assert_eq!(
+        filmed,
+        Vec::<i16>::new(),
+        "dësc whose movie is staged as cinematic"
+    );
 }
 
 /// The app driven as the window drives it, its movies played through a

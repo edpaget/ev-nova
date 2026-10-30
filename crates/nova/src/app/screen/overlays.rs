@@ -39,12 +39,13 @@ impl AppScreen {
 
     /// Hides the side shown, first cancelling its pointer gesture and
     /// letting go of its keys (their releases will go elsewhere), and shows
-    /// `side`.
+    /// `side`, telling the movies the view it shows.
     pub(super) fn switch_to(&mut self, side: Side) {
         let hidden = self.shown_mut();
         hidden.cancel_pointer();
         hidden.release_keys();
         self.side = side;
+        self.movies.set_view(self.movie_view());
     }
 
     /// Shows flight, building it the first time, and remembers the side to

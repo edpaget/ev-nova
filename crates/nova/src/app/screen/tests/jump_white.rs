@@ -135,3 +135,29 @@ fn a_mission_text_under_the_warps_white_fades_in_from_black_and_the_white_is_lit
         "the white fades in again over 1.5 s on the next pass: {relit}"
     );
 }
+
+#[test]
+fn a_mission_text_fading_in_under_the_warps_white_covers_the_widened_view() {
+    use super::widescreen::{WIDE, black_across};
+    let mut screen = lit();
+    screen.set_widened_size(WIDE);
+    screen.show_over_flight(vec![DescShown {
+        text: "Done.".to_owned(),
+        graphic: None,
+        movie: None,
+    }]);
+    assert_eq!(
+        black_across(&screen, WIDE.0).last(),
+        Some(&255),
+        "from black, over the whole widened view"
+    );
+    for _ in 0..30 {
+        screen.tick(Duration::from_nanos(1_000_000_000 / 60));
+    }
+    assert!(
+        black_across(&screen, WIDE.0)
+            .last()
+            .is_some_and(|&alpha| alpha > 0 && alpha < 255),
+        "half way in, still over the whole view"
+    );
+}

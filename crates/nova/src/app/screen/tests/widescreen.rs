@@ -1,5 +1,6 @@
 use super::death::{landed_took_off_and_breaking_up, until_exploded};
 use super::encounters::{boarded, hailing};
+use super::missions::filmed;
 use super::port::{in_the_bar_by, scrolled_to};
 use super::*;
 
@@ -10,7 +11,7 @@ use nova_view::ViewShape;
 // classic, and the dialogs over flight in their 1024 x 768 frame, centred.
 
 /// A 16:9 window's widened size.
-const WIDE: (f32, f32) = (1365.0, 768.0);
+pub(super) const WIDE: (f32, f32) = (1365.0, 768.0);
 
 /// How far right a 1024-wide frame sits in [`WIDE`].
 const OFFSET: Point = Point::new(170.0, 0.0);
@@ -29,6 +30,150 @@ fn moved(overlay: &dyn Screen) -> Vec<DrawCommand> {
     let mut list = DrawList::new();
     list.extend_translated(&classic, OFFSET);
     list.iter().cloned().collect()
+}
+
+/// The alphas of the black rects drawn across `screen`'s whole frame
+/// from x 0 to `width`, top to bottom, in order: a movie's or a fade's
+/// cover. Which rect nova-view puts there is its own tests' to say; these
+/// ask only whether the router's frame is covered.
+#[allow(clippy::float_cmp)]
+pub(super) fn black_across(screen: &AppScreen, width: f32) -> Vec<u8> {
+    drawn(screen)
+        .iter()
+        .filter_map(|command| match *command {
+            DrawCommand::Line {
+                from,
+                to,
+                width: high,
+                color,
+            } if from.x == 0.0
+                && to.x == width
+                && high == 768.0
+                && (color.r, color.g, color.b) == (0, 0, 0) =>
+            {
+                Some(color.a)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether any black rect drawn over `screen` reaches past x `right`
+/// or before x 0.
+fn black_beyond(screen: &AppScreen, right: f32) -> bool {
+    drawn(screen).iter().any(|command| {
+        matches!(*command, DrawCommand::Line { from, to, color, .. }
+            if (color.r, color.g, color.b) == (0, 0, 0)
+                && (from.x < 0.0 || to.x > right))
+    })
+}
+
+/// A text over flight whose movie, "Text.mov", has `Flags` `flags`.
+fn filmed_text(flags: u16) -> DescShown {
+    DescShown {
+        text: "Well done.".to_owned(),
+        graphic: None,
+        movie: nova_sim::DescMovie::from_desc("Text.mov", flags),
+    }
+}
+
+/// The router flying, its movies played through a mock player, told the
+/// window is 16:9 on the main menu first when `widened_first`.
+fn flying_filmed_widened(widened_first: bool) -> AppScreen {
+    let (mut screen, _) = filmed(0, "Job.", 0, Prefs::default());
+    if widened_first {
+        screen = widened(screen);
+    }
+    create(&mut screen, "Ada");
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen
+}
+
+/// The router flying, its movies played through a mock player.
+fn flying_filmed() -> AppScreen {
+    flying_filmed_widened(false)
+}
+
+/// Ticks `screen` by `millis` in 16 ms frames.
+fn ticked_for(screen: &mut AppScreen, millis: u64) {
+    for _ in 0..millis.div_ceil(16) {
+        screen.tick(Duration::from_millis(16));
+    }
+}
+
+/// The mission dialogs' own drawing, moved by the router's overlay
+/// offset.
+fn missions_moved(screen: &AppScreen) -> Vec<DrawCommand> {
+    let missions = screen.missions.as_ref().expect("built");
+    let mut own = DrawList::new();
+    missions.draw(&mut own);
+    assert!(!own.is_empty());
+    let mut list = DrawList::new();
+    list.extend_translated(&own, screen.overlay_offset());
+    list.iter().cloned().collect()
+}
+
+#[test]
+fn a_cinematic_mission_movie_over_widened_flight_covers_the_whole_view() {
+    for widen_first in [false, true] {
+        let mut screen = flying_filmed_widened(widen_first);
+        screen.show_over_flight(vec![filmed_text(0x0004)]);
+        if !widen_first {
+            screen = widened(screen);
+        }
+        ticked_for(&mut screen, 500);
+        assert!(
+            black_across(&screen, WIDE.0)
+                .iter()
+                .any(|&alpha| alpha > 0 && alpha < 255),
+            "{widen_first}: the fade out over the whole widened view, told the \
+             size before flight showed or as it shows"
+        );
+        ticked_for(&mut screen, 1600);
+        assert_eq!(screen.showing(), Showing::Movie);
+        assert!(
+            black_across(&screen, WIDE.0).contains(&255),
+            "{widen_first}: the black window over the whole widened view"
+        );
+    }
+}
+
+#[test]
+fn a_plain_mission_movie_over_widened_flight_is_centred_where_center_window_puts_it() {
+    let mut screen = widened(flying_filmed());
+    screen.show_over_flight(vec![filmed_text(0)]);
+    let list: Vec<DrawCommand> = drawn(&screen).iter().cloned().collect();
+    assert!(
+        list.ends_with(&missions_moved(&screen)),
+        "the movie's own drawing, moved by the dialogs' offset"
+    );
+    assert!(black_across(&screen, WIDE.0).is_empty(), "no cover");
+}
+
+#[test]
+fn a_cinematic_movie_in_a_4_by_3_window_draws_as_before() {
+    let mut screen = flying_filmed();
+    screen.show_over_flight(vec![filmed_text(0x0004)]);
+    ticked_for(&mut screen, 2100);
+    assert_eq!(screen.overlay_offset(), Point::new(0.0, 0.0));
+    let list: Vec<DrawCommand> = drawn(&screen).iter().cloned().collect();
+    assert!(list.ends_with(&missions_moved(&screen)), "its own drawing");
+    assert!(!black_beyond(&screen, 1024.0), "nothing past the frame");
+}
+
+#[test]
+fn the_spaceports_movies_stay_classic_after_a_resize_in_flight() {
+    let (mut screen, _) = filmed(0, "Job.", 0x0004, Prefs::default());
+    create(&mut screen, "Ada");
+    let mut screen = widened(screen);
+    land_twice(&mut screen);
+    assert_eq!(screen.view_shape(), ViewShape::Classic);
+    ticked_for(&mut screen, 1500);
+    assert!(
+        !black_across(&screen, 1024.0).is_empty(),
+        "its black window over the classic screen"
+    );
+    assert!(!black_beyond(&screen, 1024.0), "and no wider");
 }
 
 /// Whether `screen`'s frame has flight's status bar, or why it has none,

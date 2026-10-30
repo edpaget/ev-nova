@@ -64,7 +64,12 @@ pub(super) fn landed_filmed(
 }
 
 /// [`landed_filmed`], before any pilot is made.
-fn filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
+pub(super) fn filmed(
+    flags: u16,
+    text: &str,
+    movie: u16,
+    prefs: Prefs,
+) -> (AppScreen, Rc<MockMoviePlayer>) {
     let mut mission = venue_mission(SPACEPORT);
     mission[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
     let offer = filmed_desc_of(text, "Offer.mov", movie);

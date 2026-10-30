@@ -105,3 +105,19 @@ fn a_cinematic_landing_movie_hides_the_pointer_once_its_fade_out_is_over() {
     assert_eq!(screen.showing(), Showing::Movie, "still playing");
     assert!(screen.hides_pointer(), "_HideTheCursor (@0x55a73)");
 }
+
+#[test]
+fn a_cinematic_landing_movie_over_widened_flight_covers_the_whole_view() {
+    use super::widescreen::{WIDE, black_across};
+    let (mut screen, _) = filmed_port(0x0004, Prefs::default());
+    screen.set_widened_size(WIDE);
+    land_twice(&mut screen);
+    assert_eq!(screen.showing(), Showing::Movie);
+    screen.tick(nova_view::movie::MOVIE_FADE_FOR);
+    screen.tick(nova_view::movie::MOVIE_FADE_FOR);
+    assert_eq!(screen.showing(), Showing::Movie, "still playing");
+    assert!(
+        black_across(&screen, WIDE.0).contains(&255),
+        "the black window over the whole widened view"
+    );
+}

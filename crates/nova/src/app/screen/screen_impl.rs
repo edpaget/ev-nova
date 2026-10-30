@@ -202,7 +202,8 @@ impl Screen for AppScreen {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
         // The dialogs, in their 1024 x 768 frame, centred over a widened
-        // flight.
+        // flight; a cinematic movie's cover and a text's fade-in reach
+        // from there over the whole view (`movie_view`).
         let offset = self.overlay_offset();
         let mut dialogs = DrawList::new();
         let under_map = [
@@ -498,12 +499,13 @@ impl Screen for AppScreen {
     }
 
     /// Keeps `size` for every flight, and tells those built, shown or
-    /// held.
+    /// held, and the movies, if flight shows.
     fn set_widened_size(&mut self, size: (f32, f32)) {
         self.widened = size;
         for flight in self.flights_mut() {
             flight.set_view_size(size);
         }
+        self.movies.set_view(self.movie_view());
     }
 
     /// Quit and Preferences… as their Command chords, and About as I's
@@ -542,5 +544,18 @@ impl AppScreen {
             0.0
         };
         Point::new(x, 0.0)
+    }
+
+    /// The size of the view the side shown fills, which a cinematic
+    /// movie and a text's fade-in cover ([`Movies::set_view`](nova_view::movie::Movies::set_view)): the
+    /// widened view over flight, Nova's 1024 x 768 elsewhere. The router
+    /// writes it to the shared movies as the side or the size changes,
+    /// and no draw writes it.
+    pub(super) fn movie_view(&self) -> (f32, f32) {
+        if self.view_shape() == ViewShape::Widened {
+            self.widened
+        } else {
+            CLASSIC_VIEW
+        }
     }
 }
