@@ -126,8 +126,10 @@ pub fn calls_target(npc: &Npc) -> bool {
 /// Who among `npcs`, the ships the player leads, says the victory over
 /// `victim`, a shot's direct hit having started it dying (`_HandleShipHit`
 /// @0x36c7f-0x36d45): the highest berth among those active, not the
-/// victim, targeting it, attacking, not mute, and of an AI type above 2:
-/// a carried fighter (5), a mission escort (6) or one that doesn't trade.
+/// victim, targeting it, attacking, not mute, and of the original's AI
+/// type above 2 ([`Npc::original_ai_type`], @0x36cd8): every ship the
+/// player leads is a carried fighter (5) or an escort (6), whatever its
+/// class; a fighter one of them launched is an NPC's carried fighter (5).
 /// Every such ship speaks in slot order, so the last one's message
 /// stands.
 pub fn victory_speaker<'a>(
@@ -141,7 +143,7 @@ pub fn victory_speaker<'a>(
                 && npc.target == Some(victim)
                 && matches!(npc.goal, Goal::Attack(_))
                 && !npc.hull.mute
-                && (npc.carrier.is_some() || npc.mission_escort() || !npc.ai_type.trades())
+                && npc.original_ai_type() > 2
         })
         .max_by_key(|npc| npc.berth)
 }
@@ -336,6 +338,18 @@ mod tests {
         let mut itself = attacker(9, 9, VICTIM);
         itself.target = Some(VICTIM);
         assert_eq!(victor(&[itself]), None, "the victim itself");
+    }
+
+    #[test]
+    fn a_hired_or_captured_escort_of_a_trader_class_says_the_victory() {
+        // Every ship the player leads is the original's AI type 5 or 6.
+        let mut hired = attacker(1, 9, VICTIM);
+        hired.ai_type = AiType::WimpyTrader;
+        hired.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        assert_eq!(victor(&[hired]), Some(NpcId(1)));
     }
 
     #[test]
