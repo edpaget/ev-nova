@@ -438,14 +438,13 @@ impl Behaviour for NovaAi {
     }
 
     /// A mission ship of `ShipBehav` 0 targets the player, and none once
-    /// it gives up on it ([`NovaAi::mission_hunt`]) or the attack block
-    /// drops it breaking up ([`attack_drop::drops`]).
+    /// it gives up on it ([`NovaAi::mission_hunt`]). The traffic writes
+    /// none of this over a decision that cleared the target
+    /// ([`Decision::clears_target`]), as the attack block's does
+    /// ([`attack_drop`]).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match self.mission_hunt(npc, around) {
-            Some(true) => {
-                let attack = Goal::Attack(ShipRef::Player);
-                (!attack_drop::drops(npc, attack, false, around)).then_some(ShipRef::Player)
-            }
+            Some(true) => Some(ShipRef::Player),
             Some(false) => None,
             None => self.thinker(npc, around).target(npc, around),
         }
@@ -1875,7 +1874,6 @@ mod tests {
         assert!(!decision.calls_reinforcements, "@0x8e3f6 skips @0x8e70d");
         let dropped = taking(&npcs[0], decision);
         assert_eq!(ai.trigger(&dropped, &around), Trigger::default());
-        assert_eq!(ai.target(&dropped, &around), None, "target -1 stands");
     }
 
     #[test]
@@ -2042,13 +2040,14 @@ mod tests {
                 starting: false,
             },
         );
+        let dropped = ai.decision(&armed[0], &dying, &mut Draws::of(&[]));
         assert_eq!(
-            ai.decide(&armed[0], &dying, &mut Draws::of(&[])),
+            dropped.goal,
             Goal::Idle,
             "with destroying weapons it doesn't leave, and the attack block \
              drops the player breaking up (@0x8e3ef)"
         );
-        assert_eq!(ai.target(&armed[0], &dying), None, "target -1 (@0x8e717)");
+        assert!(dropped.clears_target, "target -1 (@0x8e717)");
     }
 
     #[test]

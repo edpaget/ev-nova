@@ -167,6 +167,8 @@ pub mod approach_flight;
 #[cfg(test)]
 mod area_cloak_tests;
 pub mod assist_think;
+#[cfg(test)]
+mod attack_drop_tests;
 pub mod autopilot;
 pub mod berth_blink;
 pub mod berth_exits;
@@ -1382,6 +1384,10 @@ impl Traffic {
             .iter()
             .map(|decision| decision.is_some_and(|decision| decision.keeps_pursuit))
             .collect();
+        let clears: Vec<bool> = decisions
+            .iter()
+            .map(|decision| decision.is_some_and(|decision| decision.clears_target))
+            .collect();
         let turning: Vec<(NpcId, bool)> = self
             .npcs
             .iter()
@@ -1441,7 +1447,10 @@ impl Traffic {
             let (trigger, target) = if decides[index] {
                 (
                     behaviour.trigger(npc, &around),
-                    Some(behaviour.target(npc, &around)),
+                    // A cleared target is the frame's last word: a target
+                    // step that works its answer out afresh (a defender's
+                    // think, a mission hunt) would refill it.
+                    Some(behaviour.target(npc, &around).filter(|_| !clears[index])),
                 )
             } else if regroup::paused(npc) {
                 let wait = behaviour.gate_wait(npc, &around);

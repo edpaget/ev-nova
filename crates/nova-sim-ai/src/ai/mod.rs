@@ -1049,7 +1049,10 @@ pub struct Decision {
     /// Whether the think left the ship with no target (+0x70 = -1) though
     /// its goal is no fight: `_PirateWarshipAI`'s search (@0x8c35d) finding
     /// nothing. The traffic clears [`Npc::target`] as it takes the goal; a
-    /// goal it keeps with a target keeps the target.
+    /// goal it keeps with a target keeps the target. The frame ends with
+    /// none: the traffic writes nothing of [`Behaviour::target`]'s over it,
+    /// so the next think finds no target, whatever its thinker's target
+    /// step works out afresh (the attack block's -1, @0x8e717).
     pub clears_target: bool,
     /// Whether the think dropped its fight leaving its sub-goal as it was:
     /// `_PirateWarshipAI`'s disabled-warship drop writes the goal and the

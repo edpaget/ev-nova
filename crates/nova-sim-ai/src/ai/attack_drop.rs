@@ -22,6 +22,10 @@
 //! - One that can't see its target: the lost-sight block ends the handler
 //!   first (@0x8d85a, @0x8d8a6, [`lost_sight`](crate::ai::lost_sight)).
 //!
+//! The target -1 stands to the end of the frame for every thinker, a
+//! target step that works its answer out afresh included
+//! ([`Decision::clears_target`]), so the ship's next think finds no target.
+//!
 //! A plunder (goal 0xd) has its own block, and the pirate's think drops a
 //! victim breaking up before it (@0x8c315-0x8c330).
 //!
