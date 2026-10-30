@@ -580,6 +580,7 @@ mod player_led;
 mod player_repair;
 mod player_ship;
 mod players_hits;
+mod plunder_ammo;
 mod plunder_loop;
 mod port;
 mod precalced;
@@ -5235,10 +5236,12 @@ impl Session {
     }
 
     /// What `npc` has on board to plunder: among the rest, the rounds on
-    /// each of its launchers, each the player's to take as the ammunition
-    /// outfit of lowest ID naming the launcher when a weapon the player
-    /// carries fires them ([`board::player_fires`](crate::board::player_fires), by the rulebook's
-    /// [`RuleKey::PlunderAmmoBays`]).
+    /// each of its launchers, offered when a weapon the player carries
+    /// fires them ([`board::player_fires`](crate::board::player_fires), by
+    /// the rulebook's [`RuleKey::PlunderAmmoBays`]) and named by the
+    /// ammunition outfit of lowest ID naming the launcher in any slot.
+    /// The Ammo press finds the outfit it takes them as afresh (see the
+    /// `plunder_ammo` module).
     fn prize(&self, npc: &Npc) -> Prize {
         let record = self.statics.ship_record(npc.ship);
         let fields = record.map(|record| record.fields).unwrap_or_default();
@@ -5265,14 +5268,13 @@ impl Session {
                         slot,
                         rounds: u32::try_from(rounds).ok()?,
                         bay: launcher.guidance_99(),
-                        outfit: crate::board::player_fires(launcher, &carried, bays)
-                            .then(|| {
-                                crate::combat::armament::lowest_ammo_outfit(
-                                    &self.statics.ammo_outfits,
-                                    slot,
-                                )
-                            })
-                            .flatten(),
+                        fires: crate::board::player_fires(launcher, &carried, bays),
+                        // Any slot, as `_PlunderDialogUpdate` names them
+                        // (@0x92be2-0x92ccf).
+                        named: crate::combat::armament::lowest_ammo_outfit(
+                            &self.statics.ammo_outfits,
+                            slot,
+                        ),
                     })
                 })
                 .collect(),
@@ -5329,7 +5331,9 @@ impl Session {
     /// Every press but Abort first rolls the armed self-destruct on
     /// `chance` and otherwise disarms it, a [`Take::Miss`] and a take
     /// whose value is not on board included; such a take beeps its
-    /// refusal and takes nothing. A capture is rolled as `rule` says.
+    /// refusal and takes nothing, as does an Ammo press that finds no
+    /// outfit to take the rounds as (see the `plunder_ammo` module), the
+    /// offer kept. A capture is rolled as `rule` says.
     /// Each press beeps as `_DoPlunderDialog` does, and each that leaves
     /// the dialog open counts the message line down one tick.
     pub fn plunder(
@@ -5398,10 +5402,17 @@ impl Session {
                 // @0x93cc9; see the `precalced` module), before it looks
                 // for rounds on board.
                 self.reset_precalced();
-                let Some((outfit, rounds)) = plunder.ammo.take() else {
+                let Some(offer) = plunder.ammo else {
                     return self.space.refuse_take(&mut self.out, aboard);
                 };
-                let count = self.take_ammo(outfit, rounds);
+                // The scan for the outfit (@0x93cdc-0x93d08): with none, the
+                // refusal's beep (@0x93d2f), the offer kept.
+                let Some(outfit) = self.ammo_outfit(offer.slot) else {
+                    return self.space.refuse_take(&mut self.out, aboard);
+                };
+                // Only the take clears the offer (@0x94000-0x9400a).
+                plunder.ammo = None;
+                let count = self.take_ammo(outfit, offer.rounds);
                 (Taken::Ammo { outfit, count }, AMMO_GROWTH)
             }
             Take::Energy => {
@@ -5432,64 +5443,6 @@ impl Session {
         plunder.threshold = (f64::from(plunder.threshold) * growth) as u32;
         plunder.armed = true;
         self.space.keep_plunder_open(aboard, taken)
-    }
-
-    /// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
-    /// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
-    /// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
-    fn raised_max_of(&self, record: &OutfitRecord) -> i64 {
-        raised_max_of(&self.pilot, &self.statics, &self.setup, record)
-    }
-
-    /// Takes up to `rounds` of ammunition outfit `outfit`, one at a time
-    /// while the free mass covers it and it is below its `Max` as
-    /// `ModType` 27 raises it (read again for each, as `_HasMaxOfItem` is
-    /// at @0x93d9f), and gives how many; the ship is refitted with them.
-    ///
-    /// Each round is admitted by the outfit's raw `Mass` (`movswl 0x2`
-    /// @0x93d6f, `cmpl`/`jl` @0x93d74-0x93d76), not scaled by Flags
-    /// 0x0400 (`_AdjustedItemMass` is not called), against the free mass
-    /// `_ShipFreeMass` gives again each round (@0x93d62), which does scale
-    /// the rounds already taken.
-    ///
-    /// The session resets after each round taken (@0x93dcb; see the
-    /// `precalced` module), as the ammunition button does before the first
-    /// (@0x93cc9).
-    fn take_ammo(&mut self, outfit: OutfitId, rounds: u32) -> u32 {
-        let Some(record) = self
-            .statics
-            .outfits
-            .iter()
-            .find(|record| record.id == outfit)
-            .cloned()
-        else {
-            return 0;
-        };
-        let unit = i64::from(record.mass);
-        let mut count = 0;
-        while count < rounds
-            && i64::from(self.pilot.owned(outfit)) < self.raised_max_of(&record)
-            && outfitter::free_mass(
-                self.ship.fit.fields,
-                &self.ship.standard(),
-                &self.pilot.outfits,
-                &self.statics.outfits,
-                &self.setup.rules,
-            ) >= unit
-        {
-            *self.pilot.outfits.entry(outfit).or_default() += 1;
-            count += 1;
-            // The reset after each round (@0x93dcb).
-            self.reset_precalced();
-        }
-        self.ship.refit(
-            &mut self.pilot,
-            &self.statics,
-            &self.setup,
-            true,
-            self.setup.script_reserves(),
-        );
-        count
     }
 
     /// Rolls the capture of the ship `aboard` boards, at its odds as
@@ -25261,8 +25214,8 @@ pub(super) mod tests {
     // Boarding and capture.
 
     use crate::board::{
-        Assigned, Assignment, BoardRefusal, Boarding, MAX_ESCORTS, NovaBoarding, PlunderView, Take,
-        Taken,
+        AmmoOffer, Assigned, Assignment, BoardRefusal, Boarding, MAX_ESCORTS, NovaBoarding,
+        PlunderView, Take, Taken,
     };
     use crate::pilot::Escort;
 
@@ -26012,17 +25965,34 @@ pub(super) mod tests {
     /// drawn before the energy.
     const AMMO_DRAWS: [u32; 7] = [0, 2, 0, 3, 0, 17, 5];
 
-    pub(super) fn ammo_session(catalog: &FakePilotCatalog) -> Session {
+    /// [`alongside`] in `catalog`, boarded on [`AMMO_DRAWS`]: the session
+    /// and what the boarding did.
+    pub(super) fn ammo_boarding(
+        catalog: &FakePilotCatalog,
+    ) -> (Session, Result<Boarding, BoardRefusal>) {
         let mut session = alongside(catalog);
         let opened = session.board(
             &NovaLaw::default(),
             &NovaBoarding::default(),
             &mut Draws::of(&AMMO_DRAWS),
         );
+        (session, opened)
+    }
+
+    /// The rockets' offer of [`ammo_aboard`]: 9 rounds of weapon 140, named
+    /// by outfit 310.
+    pub(super) const ROCKETS_OFFERED: AmmoOffer = AmmoOffer {
+        slot: ROCKET,
+        rounds: 9,
+        named: Some(OutfitId(310)),
+    };
+
+    pub(super) fn ammo_session(catalog: &FakePilotCatalog) -> Session {
+        let (session, opened) = ammo_boarding(catalog);
         assert_eq!(
             opened,
             Ok(Boarding::Opened(PlunderView {
-                ammo: Some((OutfitId(310), 9)),
+                ammo: Some(ROCKETS_OFFERED),
                 ..ON_BOARD
             }))
         );
@@ -27108,14 +27078,17 @@ pub(super) mod tests {
     }
 
     /// What boarding `catalog`'s trader, by `rules`, offers of ammunition:
-    /// the outfit and its rounds.
-    fn ammo_offered(catalog: &FakePilotCatalog, rules: Rulebook) -> Option<(OutfitId, u32)> {
+    /// the outfit naming it, and its rounds.
+    fn ammo_offered(
+        catalog: &FakePilotCatalog,
+        rules: Rulebook,
+    ) -> Option<(Option<OutfitId>, u32)> {
         let mut session = alongside(catalog).with_rules(rules);
         // Draws fitting with and without the rounds' draw.
         let mut chance = Draws::of(&[0, 2, 0, 3, 0, 0, 0]);
         let opened = session.board(&NovaLaw::default(), &NovaBoarding::default(), &mut chance);
         match opened {
-            Ok(Boarding::Opened(view)) => view.ammo,
+            Ok(Boarding::Opened(view)) => view.ammo.map(|ammo| (ammo.named, ammo.rounds)),
             other => panic!("{other:?}"),
         }
     }
@@ -27124,7 +27097,7 @@ pub(super) mod tests {
     fn the_rounds_on_board_are_one_launchers_own_that_the_player_fires() {
         assert_eq!(
             ammo_offered(&hail_and_storm(30, 50), Rulebook::default()),
-            Some((OutfitId(320), 30)),
+            Some((Some(OutfitId(320)), 30)),
             "155's own 30, not 161's too"
         );
         assert_eq!(
@@ -27147,7 +27120,7 @@ pub(super) mod tests {
         }
         assert_eq!(
             ammo_offered(&storm_fired, Rulebook::default()),
-            Some((OutfitId(321), 50)),
+            Some((Some(OutfitId(321)), 50)),
             "a weapon of the player's firing 161's rounds"
         );
     }
@@ -27179,7 +27152,7 @@ pub(super) mod tests {
                 &carrier,
                 Rulebook::default().with_override(RuleKey::PlunderAmmoBays, RuleSource::Bible)
             ),
-            Some((OutfitId(320), 30)),
+            Some((Some(OutfitId(320)), 30)),
             "passed by"
         );
     }

@@ -519,8 +519,8 @@ pub use ai::{
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use board::{
-    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, MissionBoardLine, NovaBoarding,
-    Plunder, PlunderView, Take, Taken,
+    AmmoOffer, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, MissionBoardLine,
+    NovaBoarding, Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,

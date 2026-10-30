@@ -136,7 +136,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let (good, outfit) = names(
             &self.names,
             view.cargo.map(|(good, _)| good),
-            view.ammo.map(|(outfit, _)| outfit),
+            view.ammo.and_then(|ammo| ammo.named),
         );
         Some(PlunderShown {
             view,

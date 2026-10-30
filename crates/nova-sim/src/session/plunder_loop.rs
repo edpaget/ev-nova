@@ -21,7 +21,9 @@
 //! fitting @0x93f77; energy @0x94095), the capture's successful roll
 //! (@0x94368), and a person's grant line as the dialog opens (@0x933fe).
 //! [`SimSound::Refused`] (`_beepSnd[3]`, 153): a take with nothing on
-//! board (@0x93ad2, @0x93cb8, @0x93d2f, @0x94256), a failed capture
+//! board (@0x93ad2, @0x93cb8, @0x93d2f, @0x94256), or an Ammo press whose
+//! rounds no outfit's first mod names (@0x93d2f; see the `plunder_ammo`
+//! module), a failed capture
 //! (@0x94936) and a full fleet (@0x9487f). Silent: a miss, the capture's
 //! own self-destruct (@0x942de-0x94336) and the escort path
 //! (@0x9459b-0x947cf).
