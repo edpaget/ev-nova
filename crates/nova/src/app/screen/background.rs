@@ -16,10 +16,26 @@
 //!   kept and passed on as the app comes back: the first idle after a
 //!   resume reads `GetMouse`, so the screen sees where the pointer is now.
 //!   The rest isn't replayed, as the original's filter-less loop takes the
-//!   events from the queue too. Letting go of the pointer and the keys,
-//!   the window's close and the menu commands are untouched: the app lets
-//!   go before it says the focus went, and a quit from the Dock works in
-//!   the background, as `_QuitAEVTHandler` does.
+//!   events from the queue too. Letting go of the pointer and the keys and
+//!   the window's close are untouched: the app lets go before it says the
+//!   focus went. What a hold kept (a keyed click's, which ends by its
+//!   sound, not by a tick) passed this gate as it arrived, and is replayed
+//!   past it.
+//! - **The menu commands** aren't input, and pass. The original's event
+//!   loops take Apple events whatever `_inBackground` says
+//!   (`AEProcessAppleEvent` @0x1b242, @0x568e1, @0x599a9), and no handler
+//!   reads it: not `_QuitAEVTHandler` (@0x5619e), `_PrefAEVTHandler`
+//!   (@0x5617b, `_DoPrefsDialog`) nor `_AppEventHandler`'s `pref` and
+//!   `abou` (@0xcccf1, @0xcccb0).
+//!   - **Quit**, the menu's, the Dock's, a logout's or the updater's,
+//!     quits at once. What holds it in the front (the appear, the entry,
+//!     a keyed click, Quit's delay, the intro's text) is paused here or
+//!     waits for a key, so waiting would keep it until the app is back,
+//!     where the original's loops run to their end and take it.
+//!   - **Preferences…** and **About** do what they do in the front, under
+//!     the same gates and holds: what they open stands still until the
+//!     app is back, as any dialog does here, and the app asks for one
+//!     redraw to show it.
 //! - **The main menu**, when it is the screen a tick would idle, idles in
 //!   the background
 //!   ([`MainMenu::idle_in_background`](nova_view::menu::MainMenu::idle_in_background)): its logo and
@@ -76,6 +92,11 @@ impl AppScreen {
         {
             self.quit_due = true;
         }
+    }
+
+    /// Whether the app is in the background now, not yet back.
+    pub(super) fn is_away(&self) -> bool {
+        self.away.is_some_and(|away| !away.back)
     }
 
     /// Whether `input` stops here, the app in the background: a pointer

@@ -82,9 +82,10 @@
 //!   whose sounds reach the audio at once. While the window is in the
 //!   background the app asks for no redraws, as the original sleeps
 //!   there with the game paused: losing focus asks for one, to draw what
-//!   the switch-out leaves, and focus coming back starts them again. Each
-//!   redraw ticks the screen by the time since the last, so the screen
-//!   counts the time away.
+//!   the switch-out leaves, a menu command asks for one, to show what it
+//!   opened, and focus coming back starts them again. Each redraw ticks
+//!   the screen by the time since the last, so the screen counts the time
+//!   away.
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
 //!   display gets its own mode back. Nothing is saved on the way out.
 //!
@@ -892,7 +893,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 })
             }
             WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
-            WindowEvent::Menu(command) => game(self.route_menu(command)),
+            WindowEvent::Menu(command) => game(self.route_menu(command, window)),
             WindowEvent::CheckForUpdates => game(self.check_for_updates()),
         }
     }
@@ -906,9 +907,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// `_MyModalDialog` @0x59965, `_PlayQTMovie` @0x55e23,
     /// `_LoopingMovieIdle` @0x55902), waking twice a second to draw
     /// nothing new, as the game is paused there. The engine asks for no
-    /// redraws instead, until the platform asks for one or the focus comes
-    /// back. Each redraw still ticks the screen by the time since the last
-    /// one, so the screen counts the time away.
+    /// redraws instead, until the platform or a menu command asks for one
+    /// or the focus comes back. Each redraw still ticks the screen by the
+    /// time since the last one, so the screen counts the time away.
     fn redraw(
         &mut self,
         elapsed: Duration,

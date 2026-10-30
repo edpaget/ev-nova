@@ -60,3 +60,34 @@ fn while_away_the_screen_still_ticks_by_the_time_since_the_last_redraw() {
         "the router counts the time away"
     );
 }
+
+/// `_DoPrefsDialog` reads no `_inBackground`: what a command opens while
+/// the app asks for no redraws still shows.
+#[test]
+fn a_menu_command_in_the_background_asks_for_a_redraw() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let mut app = app(&window);
+    handle(&mut app, &mut window, WindowEvent::FocusLost);
+    redraw_at(&mut app, &mut window, 16);
+    let asked = window.redraws;
+    handle(
+        &mut app,
+        &mut window,
+        WindowEvent::Menu(MenuCommand::Preferences),
+    );
+    assert_eq!(window.redraws, asked + 1);
+    redraw_at(&mut app, &mut window, 32);
+    assert_eq!(window.redraws, asked + 1, "and that one for none");
+}
+
+#[test]
+fn a_menu_command_in_the_front_asks_for_no_redraw_of_its_own() {
+    let mut window = FakeWindow::new((1024, 768), 1.0);
+    let mut app = app(&window);
+    handle(
+        &mut app,
+        &mut window,
+        WindowEvent::Menu(MenuCommand::Preferences),
+    );
+    assert_eq!(window.redraws, 0);
+}

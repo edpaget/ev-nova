@@ -4,6 +4,7 @@
 //! nothing holds input or is in front; and the menu greys each where it
 //! would do nothing.
 
+use super::background::switch_out;
 use super::*;
 use nova_view::MenuCommand;
 use nova_view::fade::DEATH_FADE_FOR;
@@ -476,6 +477,113 @@ fn about_is_greyed_wherever_it_opens_nothing() {
             state.name
         );
     }
+}
+
+/// `_QuitAEVTHandler` (@0x5619e) reads no `_inBackground`, and each event
+/// loop hands it the event whatever the flag says (@0x1b242, @0x568e1,
+/// @0x599a9). What holds a quit in the front is paused here, or waits for
+/// a key, so waiting would keep it until the app is back.
+#[test]
+fn away_quit_quits_at_once_everywhere() {
+    for state in states() {
+        let mut screen = (state.make)();
+        switch_out(&mut screen);
+        assert_eq!(
+            screen.menu_command(MenuCommand::Quit),
+            ScreenAction::Quit,
+            "{}",
+            state.name
+        );
+    }
+}
+
+/// The app is back but for its first tick: its gates hold again, and
+/// that tick lets them go on.
+#[test]
+fn back_quit_waits_where_it_does_in_the_front() {
+    let mut screen = starting_up();
+    switch_out(&mut screen);
+    screen.focus_gained();
+    assert_eq!(screen.menu_command(MenuCommand::Quit), ScreenAction::None);
+    assert!(!screen.take_quit());
+}
+
+/// `_PrefAEVTHandler` (@0x5617b) and `_AppEventHandler`'s `pref`
+/// (@0xcccf1) read no `_inBackground` either: the Preferences open as in
+/// the front, or wait where the front's wait, and stand still until the
+/// app is back.
+#[test]
+fn away_preferences_do_what_they_do_in_the_front() {
+    for state in states() {
+        let mut screen = (state.make)();
+        let was_open = screen.preferences().is_some();
+        switch_out(&mut screen);
+        assert_eq!(
+            screen.menu_command(MenuCommand::Preferences),
+            ScreenAction::None,
+            "{}",
+            state.name
+        );
+        comes_back(&mut screen);
+        (state.then)(&mut screen);
+        let held = matches!(
+            state.name,
+            "the start-up appear, not ended" | "a keyed click, not ended"
+        );
+        let opened = !was_open && screen.preferences().is_some();
+        assert_eq!(opened, state.preferences && !held, "{}", state.name);
+        assert!(!screen.take_quit(), "{}", state.name);
+    }
+}
+
+/// `_AppEventHandler`'s `abou` (@0xcccb0) reads no `_inBackground` either.
+#[test]
+fn away_about_does_what_it_does_in_the_front() {
+    for state in states() {
+        let mut screen = (state.make)();
+        let was_open = screen.about().is_some();
+        switch_out(&mut screen);
+        screen.menu_command(MenuCommand::About);
+        comes_back(&mut screen);
+        (state.then)(&mut screen);
+        let opened = !was_open && screen.about().is_some();
+        assert_eq!(opened, state.about, "{}", state.name);
+    }
+}
+
+/// Past the gate what the entry and the appear hold wait for the return,
+/// as they do for their ends; a keyed click's sound ends while away too,
+/// and what it held has already passed the gate, the command's chord
+/// among it.
+#[test]
+fn away_preferences_held_by_a_keyed_click_open_as_it_ends() {
+    let mut screen = keyed_click();
+    switch_out(&mut screen);
+    screen.menu_command(MenuCommand::Preferences);
+    assert!(screen.preferences().is_none(), "held");
+    screen.keyed_click_ended();
+    assert!(screen.preferences().is_some());
+}
+
+/// Only the menu's commands pass: the chords typed are keys, dropped as
+/// any key is, on every side.
+#[test]
+fn away_the_chords_typed_do_nothing() {
+    for state in states() {
+        let mut screen = (state.make)();
+        let was_open = screen.preferences().is_some();
+        switch_out(&mut screen);
+        assert!(!by_keys(&mut screen, Key::Char('q')), "{}", state.name);
+        assert!(!by_keys(&mut screen, PREFERENCES_KEY), "{}", state.name);
+        assert_eq!(screen.preferences().is_some(), was_open, "{}", state.name);
+        assert!(!screen.take_quit(), "{}", state.name);
+    }
+}
+
+/// The app comes back and its first tick, the last away, passes.
+fn comes_back(screen: &mut AppScreen) {
+    screen.focus_gained();
+    screen.tick(Duration::ZERO);
 }
 
 #[test]

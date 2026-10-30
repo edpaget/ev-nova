@@ -104,21 +104,7 @@ impl Screen for AppScreen {
         if self.away_takes_input(input) {
             return ScreenAction::None;
         }
-        // The original is inside Quit's `Delay`, then exits.
-        if self.quit_in.is_some() || self.quit_due {
-            return ScreenAction::None;
-        }
-        if let Some(action) = self.entry_input(input) {
-            return action;
-        }
-        if let Some(action) = self.appear_input(input) {
-            return action;
-        }
-        if let Some(hold) = self.menu_hold {
-            self.hold_input(hold, input);
-            return ScreenAction::None;
-        }
-        self.routed_input(input)
+        self.input_past_away(input)
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -357,7 +343,8 @@ impl Screen for AppScreen {
 
     /// Runs the main-menu action held for its keyed click, if any (E's
     /// wait is left alone), then replays what arrived meanwhile, in
-    /// order, through [`Screen::input`]: a replayed key that holds again
+    /// order, as [`Screen::input`] takes it past the background's gate,
+    /// which it passed as it arrived: a replayed key that holds again
     /// queues the rest. A quit a replayed input asks is kept for
     /// [`Screen::take_quit`]. When the action opens the New Pilot dialog,
     /// what it flushes ([`flushed_on_opening`]) is dropped first.
@@ -375,7 +362,7 @@ impl Screen for AppScreen {
         for held in held {
             match held {
                 Held::Input(input) => {
-                    if self.input(&input) == ScreenAction::Quit {
+                    if self.input_past_away(&input) == ScreenAction::Quit {
                         self.quit_due = true;
                     }
                 }
@@ -579,6 +566,27 @@ impl Screen for AppScreen {
 }
 
 impl AppScreen {
+    /// `input` as [`Screen::input`] takes it once past the background's
+    /// gate: Quit's delay, the entry, the appear and a keyed click's hold
+    /// each stop it or hold it first, and otherwise it is routed.
+    pub(super) fn input_past_away(&mut self, input: &Input) -> ScreenAction {
+        // The original is inside Quit's `Delay`, then exits.
+        if self.quit_in.is_some() || self.quit_due {
+            return ScreenAction::None;
+        }
+        if let Some(action) = self.entry_input(input) {
+            return action;
+        }
+        if let Some(action) = self.appear_input(input) {
+            return action;
+        }
+        if let Some(hold) = self.menu_hold {
+            self.hold_input(hold, input);
+            return ScreenAction::None;
+        }
+        self.routed_input(input)
+    }
+
     /// `input` routed as the router routes it with nothing holding it:
     /// Caps Lock's double time, the route and the frame-rate readout
     /// kept ([`AppScreen::keep_frame_rate`]), then what the set
