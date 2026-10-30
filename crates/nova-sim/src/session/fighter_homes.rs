@@ -143,6 +143,7 @@ mod tests {
     use crate::testkit::npc as testkit_npc;
     use crate::testkit::{Draws, FAST, FakePilotCatalog, outfit, ship, work};
     use crate::traffic::npc::{AiType, Npc};
+    use crate::traffic::warp_out::WarpGoal;
 
     /// [`carrying`], the player's ship holding no bay.
     fn bayless() -> FakePilotCatalog {
@@ -187,6 +188,27 @@ mod tests {
         assert!(until_docked(&mut session, &catalog, 300).is_some());
         assert_eq!(session.pilot().owned(VIPERS), 1, "a round");
         assert!(!session.take_save_due(), "as any dock");
+    }
+
+    #[test]
+    fn a_fighter_turned_back_from_a_jump_with_no_bay_stays_out_that_same_half() {
+        // `begin_fly`'s turn-back writes goal 5 (@0x8d575-0x8d625) as the
+        // half begins, so the fighter docks that half unless the list of
+        // those with no bay is read after it.
+        let catalog = bayless();
+        let mut session = fleet(&catalog, 0, vec![out()]);
+        session.take_save_due();
+        let at = session.player().position;
+        let fighter = session.space.traffic.npcs_mut()[0].id;
+        let npc = session.space.npc_mut(fighter).expect("out");
+        npc.state.position = at + Vec2::new(5.0, 0.0);
+        npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        npc.class_fuel = 0;
+        assert_eq!(until_docked(&mut session, &catalog, 1), None, "still out");
+        let npc = session.space.npc(fighter).expect("still in the system");
+        assert_eq!(npc.goal, Goal::Dock(ShipRef::Player), "turned back");
+        assert_eq!(session.pilot().escorts().len(), 1);
+        assert!(!session.take_save_due(), "nothing lost");
     }
 
     /// `session`'s `fighter` Viper of `raider`, 10 off it within its reach,
