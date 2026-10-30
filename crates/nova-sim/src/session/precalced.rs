@@ -445,6 +445,32 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_wormhole_with_no_exit_trims_the_cargo_past_the_holds() {
+        // `_HandlePlayerDockRequest` runs its tail on the -1 too
+        // (@0x66f17-0x66f20), reset and all (@0x6709b).
+        use crate::catalog::StellarId;
+        use crate::gate::GateRefusal;
+        use crate::session::tests::{at_wormhole, wormholes};
+        let holes = wormholes();
+        let catalog = FakePilotCatalog {
+            gates: holes
+                .gates
+                .iter()
+                .filter(|gate| gate.id == StellarId(400))
+                .copied()
+                .collect(),
+            ..holes
+        };
+        let mut session = at_wormhole(&catalog);
+        let trimmed = overloaded(&mut session);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit)
+        );
+        assert_eq!(cargo(&session), trimmed, "@0x6709b");
+    }
+
+    #[test]
     fn flying_a_pilot_and_beginning_a_game_trim_the_cargo_past_the_holds() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
