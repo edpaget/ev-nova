@@ -1976,6 +1976,7 @@ mod tests {
             unit_mass: i64::from(mass),
             owned,
             max,
+            at_max: i32::from(owned) >= i32::from(max),
         }
     }
 

@@ -101,7 +101,7 @@ use crate::chance::Chance;
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_walks;
 use crate::grant::{GrantStock, held_to_max};
-use crate::has_max::ItemRoom;
+use crate::has_max::{AtMax, ItemFacts, ItemRoom, has_max_of_item};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
 use crate::outfitter::{self, Hardpoints, resale, unit_mass, unit_price};
 use crate::pilot::{ExploredLevel, Pilot};
@@ -314,8 +314,31 @@ impl PlayerShip {
         })
     }
 
-    /// `record` as a grant sees it on the pilot's ship, its `Max` as the
-    /// `ModType` 27 outfits owned raise it.
+    /// Which of `_HasMaxOfItem`'s limits (@0x4512-0x4894) `record` is at
+    /// on the pilot's ship, as the boarding's calls read it
+    /// (`_DoPlunderDialog` @0x93119, @0x93192, @0x93d9f; see
+    /// [`has_max`](crate::has_max)): none when it may have more.
+    pub(super) fn at_max(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        record: &OutfitRecord,
+    ) -> Option<AtMax> {
+        self.with_room(pilot, statics, setup, |room| {
+            has_max_of_item(&ItemFacts::of(
+                record,
+                &pilot.outfits,
+                &statics.outfits,
+                room,
+            ))
+        })
+    }
+
+    /// `record` as a grant sees it on the pilot's ship: its `Max` as the
+    /// `ModType` 27 outfits owned raise it, and whether it is at its
+    /// maximum ([`at_max`](Self::at_max)) as the pick's `_HasMaxOfItem`
+    /// reads it (@0x93119, @0x93192).
     pub(super) fn grant_stock(
         &self,
         pilot: &Pilot,
@@ -330,6 +353,7 @@ impl PlayerShip {
             unit_mass: unit_mass(record, self.fit.fields.mass, &setup.rules),
             owned: pilot.owned(record.id),
             max: clamp_i16(super::raised_max_of(pilot, statics, setup, record)),
+            at_max: self.at_max(pilot, statics, setup, record).is_some(),
         }
     }
 

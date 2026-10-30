@@ -18,9 +18,11 @@
 //! 1. *The odds*: `Rand(100) + 1` at most `GrantProb` grants
 //!    ([`GRANT_ROLL`]).
 //! 2. *The candidates* ([`candidates`]): the outfits whose `ItemClass` is
-//!    the `GrantClass` and that the player owns fewer than `Max` of, a
-//!    `Max` that `ModType` 27 raises read raised; with none, nothing is
-//!    granted.
+//!    the `GrantClass` and that are not at their maximum, as
+//!    `_HasMaxOfItem` reads it whole ([`has_max`](crate::has_max)): an ID
+//!    in 128-639, below the ammunition cap, below the `Max` as `ModType`
+//!    27 raises it, and for a gun or a turret room under the ship's
+//!    `MaxGun` or `MaxTur`; with none, nothing is granted.
 //! 3. *The pick*: one of k candidates in ascending ID by `Rand(k)`, drawn
 //!    only when k is 2 or more. The original draws `Rand(512)` until it
 //!    lands on a candidate, so each is as likely.
@@ -102,7 +104,8 @@ impl PersonGrant {
 }
 
 /// One outfit as a grant sees it: its `ItemClass`, its raw `Mass`, how
-/// many the player owns and its `Max`, as `ModType` 27 raises it.
+/// many the player owns, its `Max` as `ModType` 27 raises it, and whether
+/// it is at its maximum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GrantStock {
     /// The outfit.
@@ -119,8 +122,14 @@ pub struct GrantStock {
     /// How many the player owns.
     pub owned: u16,
     /// Its `Max`, as `ModType` 27 raises it (see
-    /// [`outfitter`](crate::outfitter)), held to an `i16`.
+    /// [`outfitter`](crate::outfitter)), held to an `i16`: what
+    /// [`held_to_max`] holds a grant to.
     pub max: i16,
+    /// Whether the player holds the most of it it may, as the pick's
+    /// `_HasMaxOfItem` (@0x93119, @0x93192) reads it: out of range, at its
+    /// ammunition cap or its raised `Max`, or a gun or turret past the
+    /// ship's limit ([`has_max_of_item`](crate::has_max::has_max_of_item)).
+    pub at_max: bool,
 }
 
 /// What a grant gave: `count` of `outfit`, the outfit picked; a count of
@@ -136,15 +145,13 @@ pub struct Granted {
 }
 
 /// The outfits of `stock` a grant of `class` may pick: those of its
-/// `ItemClass` the player owns fewer than `Max` of (`_HasMaxOfItem`
-/// @0x93119), in `stock`'s order.
+/// `ItemClass` not at their maximum ([`GrantStock::at_max`],
+/// `_HasMaxOfItem` @0x93119), in `stock`'s order.
 #[must_use]
 pub fn candidates(class: i16, stock: &[GrantStock]) -> Vec<GrantStock> {
     stock
         .iter()
-        .filter(|outfit| {
-            outfit.item_class == class && i32::from(outfit.owned) < i32::from(outfit.max)
-        })
+        .filter(|outfit| outfit.item_class == class && !outfit.at_max)
         .copied()
         .collect()
 }
@@ -309,6 +316,7 @@ mod tests {
             unit_mass: 1,
             owned,
             max: 10,
+            at_max: owned >= 10,
         };
         vec![
             outfit(128, 7, 0),
@@ -319,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn the_candidates_are_the_outfits_of_the_class_owned_below_their_max() {
+    fn the_candidates_are_the_outfits_of_the_class_not_at_their_maximum() {
         let stock = stock();
         assert_eq!(
             candidates(7, &stock)
@@ -329,13 +337,27 @@ mod tests {
             [OutfitId(128), OutfitId(129)]
         );
         assert_eq!(candidates(9, &stock).len(), 0);
-        let none_allowed = GrantStock { max: 0, ..stock[0] };
-        assert_eq!(candidates(7, &[none_allowed]).len(), 0, "Max 0");
-        let below = GrantStock {
-            owned: 9,
-            ..stock[0]
+    }
+
+    #[test]
+    fn an_outfit_at_its_maximum_is_no_candidate_though_fewer_than_max_are_owned() {
+        // A gun past `MaxGun`, a turret past `MaxTur` or ammunition at its
+        // cap: `_HasMaxOfItem` holds (@0x93119) with `Max` to spare.
+        let full = GrantStock {
+            at_max: true,
+            ..stock()[0]
         };
-        assert_eq!(candidates(7, &[below]).len(), 1, "one below its Max");
+        assert_eq!(candidates(7, &[full]).len(), 0);
+        let past_max = GrantStock {
+            owned: 12,
+            at_max: false,
+            ..stock()[0]
+        };
+        assert_eq!(
+            candidates(7, &[past_max]).len(),
+            1,
+            "the decision, not the count, rules"
+        );
     }
 
     /// The grant `grant` gives from `stock` with `free` mass free, by the
@@ -421,6 +443,7 @@ mod tests {
             unit_mass,
             owned,
             max: 10,
+            at_max: owned >= 10,
         }
     }
 

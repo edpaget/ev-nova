@@ -27452,6 +27452,57 @@ pub(super) mod tests {
         }
     }
 
+    /// Ace's grant, on a pilot's class (128) of `limit` guns or turrets as
+    /// `flag` says, with the booster flagged `flag` and the pilot owning
+    /// one other outfit (201) flagged so: what it granted.
+    fn granted_past_a_limit(flag: u16, limit: i16) -> Option<Granted> {
+        let mut catalog = granting();
+        booster(&mut catalog).flags = flag;
+        catalog.outfits.push(OutfitRecord {
+            flags: flag,
+            ..outfit(201, &[])
+        });
+        let class = catalog
+            .ship_records
+            .iter_mut()
+            .find(|record| record.id == ShipId(128))
+            .expect("the pilot's class");
+        (class.max_gun, class.max_tur) = if flag == crate::outfitter::OutfitFlags::GUN {
+            (limit, 9)
+        } else {
+            (9, limit)
+        };
+        let mut session = alongside_ace(&catalog);
+        assert_eq!(session.pilot.ship, ShipId(128));
+        session.pilot.outfits.insert(OutfitId(201), 1);
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok(), "{boarded:?}");
+        session.take_grant()
+    }
+
+    #[test]
+    fn a_grant_skips_a_gun_at_max_gun_and_picks_it_with_room() {
+        // `_DoPlunderDialog`'s pick asks `_HasMaxOfItem` (@0x93119), whose
+        // gun limit reads the class's `MaxGun` (@0x472b-0x47b7).
+        let gun = crate::outfitter::OutfitFlags::GUN;
+        assert_eq!(granted_past_a_limit(gun, 1), None);
+        assert_eq!(
+            granted_past_a_limit(gun, 2).map(|granted| granted.outfit),
+            Some(OutfitId(200))
+        );
+    }
+
+    #[test]
+    fn a_grant_skips_a_turret_at_max_tur_and_picks_it_with_room() {
+        // The turret limit reads the class's `MaxTur` (@0x47bd-0x4866).
+        let turret = crate::outfitter::OutfitFlags::TURRET;
+        assert_eq!(granted_past_a_limit(turret, 1), None);
+        assert_eq!(
+            granted_past_a_limit(turret, 2).map(|granted| granted.outfit),
+            Some(OutfitId(200))
+        );
+    }
+
     #[test]
     fn a_raised_max_past_an_i16_is_held_to_its_range() {
         for (value, held) in [

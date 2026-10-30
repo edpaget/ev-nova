@@ -5228,6 +5228,8 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
             ),
             owned: 0,
             max: outfit.max,
+            // None owned: at its maximum only with a `Max` of none or less.
+            at_max: outfit.max <= 0,
         })
         .collect();
     let rule = nova_sim::NovaBoarding::default();
