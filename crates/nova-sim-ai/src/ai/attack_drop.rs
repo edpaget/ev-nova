@@ -13,9 +13,10 @@
 //! `_LowLevelAIHandler`'s passes then find no target. So nothing fires at
 //! a ship breaking up but a ship that doesn't reach the block:
 //!
-//! - One whose AI wait runs (+0x4c above 0): the handler returns at once
-//!   (@0x8d4b9-0x8d4d2), though a think that ended the wait
-//!   ([`Decision::ends_wait`]) wrote it first.
+//! - One whose AI wait runs (+0x4c above 0, [`Npc::wait_running`], which
+//!   also reads the wait the engine keeps in a gate mode's count): the
+//!   handler returns at once (@0x8d4b9-0x8d4d2), though a think that ended
+//!   the wait ([`Decision::ends_wait`]) wrote it first.
 //! - One in the regroup pause ([`regroup`](crate::ai::regroup)), which
 //!   runs no high level.
 //! - One that can't see its target: the lost-sight block ends the handler
@@ -48,7 +49,7 @@ use crate::traffic::npc::Npc;
 /// the module docs); `ends_wait` as [`Decision::ends_wait`].
 #[must_use]
 pub fn drops(npc: &Npc, goal: Goal, ends_wait: bool, around: &Surroundings) -> bool {
-    (npc.ai_wait == 0 || ends_wait)
+    (!npc.wait_running() || ends_wait)
         && goal
             .attacking()
             .is_some_and(|ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. })))
@@ -75,7 +76,7 @@ mod tests {
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
     use crate::ai::{CommCall, Help};
     use crate::combat::ShipRef;
-    use crate::traffic::npc::AiType;
+    use crate::traffic::npc::{AiType, Mode};
 
     const DYING: Condition = Condition::Dying {
         ticks_left: 3,
@@ -171,5 +172,20 @@ mod tests {
             ..attack
         };
         assert_eq!(after(3, ended, DYING).goal, Goal::Idle, "@0x83d62 first");
+    }
+
+    #[test]
+    fn a_wait_kept_in_the_gate_hold_skips_the_handler_unless_the_think_ended_it() {
+        let mut held = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
+        held.mode = Mode::HeldAtGate { ticks_left: 20 };
+        let mut other = ship(2, TRADERS, AiType::Warship, 100.0, 0.0);
+        other.condition = DYING;
+        let npcs = [held, other];
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -500.0), 0);
+        let attack = Goal::Attack(n(2));
+        assert!(!drops(&npcs[0], attack, false, &around), "@0x8d4d2");
+        assert!(drops(&npcs[0], attack, true, &around), "@0x83d62 first");
     }
 }

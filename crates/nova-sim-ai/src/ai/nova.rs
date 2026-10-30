@@ -1893,6 +1893,27 @@ mod tests {
         assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
     }
 
+    #[test]
+    fn a_hunter_held_at_its_gate_keeps_its_attack_on_a_player_breaking_up() {
+        // +0x4c is above 0 through the hold, though the engine keeps it in
+        // the mode's count: the handler jumps out at its head (@0x8d4b9
+        // -0x8d4d2 → 0x8fb47), so goal 4, +0x70 and +0x96 stand until the
+        // wait ends.
+        let ai = NovaAi::default();
+        let mut hunter = gunned(mission_ship(of(1, AiType::Warship), 0));
+        hunter.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 };
+        hunter.goal = Goal::Attack(ShipRef::Player);
+        hunter.target = Some(ShipRef::Player);
+        hunter.provoked = 5.0;
+        let npcs = [hunter];
+        let around = with_player(&npcs, BREAKING_UP);
+        let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Attack(ShipRef::Player), "goal 4");
+        assert!(!decision.clears_target, "+0x70 stands");
+        assert!(!decision.forgets_provocation, "+0x96 stands");
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+    }
+
     /// [`with_player`], the player cloaked.
     fn with_cloaked_player(npcs: &[Npc], condition: Condition) -> Surroundings<'_> {
         let mut around = with_player(npcs, condition);
