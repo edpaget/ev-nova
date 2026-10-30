@@ -109,3 +109,22 @@ fn a_file_that_isn_t_a_movie_doesn_t_open() {
     assert!(MovieFile::open(&path).is_none());
     assert!(MovieFile::open(&dir.path().join("missing.mov")).is_none());
 }
+
+#[test]
+fn only_the_video_stream_s_packets_are_decoded() {
+    let (movie, frames) = decode_all("with-audio.mov");
+    assert_eq!(movie.size(), (64, 32));
+    let ms = Duration::from_millis(1);
+    let times: Vec<Duration> = frames.iter().map(|frame| frame.at).collect();
+    let expected: Vec<Duration> = (0..10).map(|i| ms * 100 * i).collect();
+    assert_eq!(times, expected);
+}
+
+#[test]
+fn frames_are_timed_from_the_stream_s_start() {
+    let (movie, frames) = decode_all("offset.mov");
+    let ms = Duration::from_millis(1);
+    let times: Vec<Duration> = frames.iter().map(|frame| frame.at).collect();
+    assert_eq!(times, [Duration::ZERO, ms * 100, ms * 200]);
+    assert_eq!(movie.duration(), Some(ms * 300));
+}

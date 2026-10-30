@@ -47,3 +47,22 @@ the palette from the sample description) and yuv410p (svq1).
 FFmpeg has no SVQ3 (Sorenson Video 3) encoder, so no SVQ3 fixture exists:
 the decoder is configured in, and checked to be there, but no SVQ3 movie
 is decoded in the tests.
+
+## `with-audio.mov` and `offset.mov`
+
+Two movies for how the decoder picks and times a stream:
+
+```sh
+# The H.264 movie above with a second stream, a 1 s AAC tone, whose
+# packets interleave with the video's: only the video's are decoded.
+ffmpeg -f lavfi -i "nullsrc=size=64x32:rate=10,geq=lum='16+N*20':cb=128:cr=128,format=yuv420p" \
+  -f lavfi -i "sine=frequency=440:sample_rate=8000:duration=1" \
+  -frames:v 10 -c:v libx264 -profile:v main -bf 2 -g 10 \
+  -x264-params bframes=2:b-adapt=0:scenecut=0 -c:a aac -b:a 16k -ac 1 -shortest \
+  -map_metadata -1 -f mov with-audio.mov
+
+# Three Animation frames whose stream starts at 0.5 s (an empty edit):
+# frames are timed from the stream's start.
+ffmpeg -f lavfi -i "nullsrc=size=64x32:rate=10,geq=lum='16+N*20':cb=128:cr=128,format=yuv420p" \
+  -frames:v 3 -c:v qtrle -pix_fmt rgb24 -output_ts_offset 0.5 -map_metadata -1 -f mov offset.mov
+```

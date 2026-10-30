@@ -216,3 +216,31 @@ impl Open for FfmpegOpen {
         MovieFile::open(path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_positive_length_is_known() {
+        assert_eq!(known(5), Some(5));
+        assert_eq!(known(0), None);
+        assert_eq!(known(i64::MIN), None, "AV_NOPTS_VALUE");
+    }
+
+    #[test]
+    fn ticks_become_a_duration_through_the_time_base() {
+        let ms = Duration::from_millis(1);
+        assert_eq!(to_duration(1024, Rational(1, 10_240)), ms * 100);
+        assert_eq!(
+            to_duration(3, Rational(1001, 30_000)),
+            Duration::from_micros(100_100)
+        );
+        assert_eq!(to_duration(-5, Rational(1, 10)), Duration::ZERO, "clamped");
+        assert_eq!(
+            to_duration(5, Rational(1, 0)),
+            Duration::ZERO,
+            "no time base"
+        );
+    }
+}
