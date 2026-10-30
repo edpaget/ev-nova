@@ -54,10 +54,12 @@
 //! Hold or Return it coasts the whole `Count`.
 //!
 //! **Docking.** A fighter that docks ([`Outcome::Docked`]) goes back
-//! aboard its carrier ([`Armament::stow`](crate::Armament::stow)): the
-//! player's leaves the fleet, its round going to the first fighter
-//! outfit of its bay, with no save due; one no bay of the player's
-//! launches is lost, which makes one. An NPC's fighter whose carrier is
+//! aboard its carrier ([`Armament::stow`](crate::Armament::stow)), in the
+//! bay of its type or its sprite base: the player's leaves the fleet, its
+//! round going to the first fighter outfit of its bay, with no save due.
+//! One with no bay stays out at its carrier (see the `fighter_homes`
+//! module), or by the other reading of [`RuleKey::FighterNoBay`] is lost,
+//! which makes a save due. An NPC's fighter whose carrier is
 //! gone from the system or not intact is succeeded at the next think, its
 //! carrier being its leader (`nova_sim_ai::traffic::succession`): it leads
 //! the carrier's fleet or follows the fighter that does, an escort now,
@@ -274,8 +276,9 @@ impl Session {
 
     /// Takes NPC `id` aboard its carrier when its flight's `outcome` docked
     /// it (see the module docs): the player's leaves the fleet, its round
-    /// to its bay, and one no bay launches is lost, which makes a save
-    /// due; any other outcome is left alone. The ship loop settles each dock at the fighter's own
+    /// to its bay, and one with no bay, docking by the other reading of
+    /// [`RuleKey::FighterNoBay`], is lost, which makes a save due; any
+    /// other outcome is left alone. The ship loop settles each dock at the fighter's own
     /// slot, as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
     /// (@0x87fef), so no later slot's step finds the player's fighter gone
     /// from the system but still in the fleet.
@@ -285,7 +288,10 @@ impl Session {
         };
         match carrier {
             ShipRef::Player => {
-                let stowed = self.ship.stow_fighter(&mut self.pilot, &self.statics, ship);
+                let base = self.statics.arsenal.sprite_base(ship);
+                let stowed = self
+                    .ship
+                    .stow_fighter(&mut self.pilot, &self.statics, ship, base);
                 self.unfleet(id);
                 if !stowed {
                     self.out.save_due = true;
@@ -358,13 +364,14 @@ pub(super) fn fighter_can_jump(
 
 impl Session {
     /// Every fighter out goes back aboard at once, a round to the bay
-    /// launching its type, as docking gives (`_InstantFighterRecall`
-    /// @0x5df3); one no bay launches is lost, which makes a save due.
+    /// launching its exact type, which is all `_InstantFighterRecall`
+    /// walks (@0x5df3, @0x5e45-0x5e7e); one no bay launches is lost, which
+    /// makes a save due.
     fn recall_fighters(&mut self) {
         for fighter in self.drop_fighters(|_, _, _| false) {
             if !self
                 .ship
-                .stow_fighter(&mut self.pilot, &self.statics, fighter.ship)
+                .stow_fighter(&mut self.pilot, &self.statics, fighter.ship, fighter.ship)
             {
                 self.out.save_due = true;
             }
@@ -545,22 +552,23 @@ impl Outbox {
 }
 
 impl PlayerShip {
-    /// A fighter of ship type `ship` goes back aboard, a round to the bay
-    /// launching its type among `pilot`'s outfits, sourced from
-    /// `statics`' ammunition outfits ([`Armament::stow`](crate::Armament::stow)):
-    /// whether a bay took it. A fighter that docks, one recalled and one
-    /// boarded back (see the `board_repair` module) all go aboard so.
+    /// A fighter of ship type `ship`, walking for `base` too, goes back
+    /// aboard, a round to the bay launching either among `pilot`'s outfits,
+    /// sourced from `statics`' ammunition outfits
+    /// ([`Armament::stow`](crate::Armament::stow)): whether a bay took it.
+    /// A fighter that docks and one boarded back (see the `board_repair`
+    /// module) walk for their sprite base, one recalled for its own type.
     pub(super) fn stow_fighter(
         &mut self,
         pilot: &mut Pilot,
         statics: &Statics,
         ship: ShipId,
+        base: ShipId,
     ) -> bool {
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
             sources: &statics.ammo_outfits,
         };
-        let base = statics.arsenal.sprite_base(ship);
         self.fit.armament.stow(ship, base, &mut rounds)
     }
 
@@ -1864,6 +1872,24 @@ pub(super) mod tests {
         };
         assert!(!room(3, vec![variant_out]), "one of the type asked is out");
         assert!(room(3, vec![out()]), "a Viper out isn't of the type asked");
+    }
+
+    #[test]
+    fn by_the_other_recall_a_variant_finds_no_bay_of_its_sprite_base() {
+        // `_InstantFighterRecall` walks the exact type alone
+        // (@0x5e45-0x5e7e).
+        let catalog = variants();
+        let rules = Rulebook::default().with_override(RuleKey::FighterRecall, RuleSource::Bible);
+        let variant = Escort {
+            ship: VARIANT,
+            ..out()
+        };
+        let mut session = flying_by(&catalog, pilot(&catalog, 0, vec![variant]), rules);
+        session.take_save_due();
+        session.leave_with_fighters(false);
+        assert_eq!(session.pilot().escorts(), []);
+        assert_eq!(session.pilot().owned(VIPERS), 0, "no round");
+        assert!(session.take_save_due(), "lost");
     }
 
     #[test]
@@ -4123,6 +4149,63 @@ pub(super) mod tests {
             Ok(()),
             "the Dart bay has room, the Viper bay none"
         );
+    }
+
+    #[test]
+    fn the_outfitters_count_of_a_fighter_outfit_is_the_owned_count_with_a_fighter_out() {
+        // The grid's corner count reads `_outfitsOwned` alone
+        // (@0x57471-0x574cb), as #219 and #220 do; only the Sell counts
+        // fighters out (@0x5cb2a-0x5cb8e).
+        let catalog = spaceport();
+        let mut session = fleet(&catalog, 2, vec![out()]);
+        land_now(&mut session).expect("lands");
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(outfitter.row(VIPERS).expect("for sale").owned, 2);
+        assert_eq!(
+            session.launchers()[&VIPER_BAY].rounds,
+            3,
+            "the Sell's count"
+        );
+    }
+
+    // A bay whose `AmmoType` names no ship record.
+
+    /// [`carrying`] with no record of the Viper its bay launches.
+    fn recordless() -> FakePilotCatalog {
+        let mut catalog = carrying();
+        catalog.ship_records.retain(|record| record.id != VIPER);
+        catalog
+    }
+
+    #[test]
+    fn the_players_bay_with_no_ship_record_launches_nothing_and_spends_nothing() {
+        let catalog = recordless();
+        let mut session = fleet(&catalog, 2, Vec::new());
+        session.take_save_due();
+        launch(&mut session, &catalog);
+        assert_eq!(session.pilot().owned(VIPERS), 2, "the round put back");
+        assert_eq!(session.pilot().escorts(), [], "no fleet change");
+        assert_eq!(vipers(&session), []);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn an_npcs_bay_with_no_ship_record_launches_nothing_and_puts_its_round_back() {
+        let catalog = recordless();
+        let (mut session, raider, _) = raided(&catalog);
+        let spent = 1;
+        session.space.npc_mut(raider).expect("there").rounds = LauncherRounds::from([(BAY, spent)]);
+        let sortie = Sortie {
+            carrier: ShipRef::Npc(raider),
+            bay: BAY,
+            ship: VIPER,
+            from: ShipState::default(),
+            heading: 0.0,
+            target: None,
+        };
+        assert_eq!(session.launch_fighters(&[sortie], &mut NeverFires), []);
+        assert_eq!(aboard(&session, raider), 2, "a round again");
+        assert_eq!(vipers(&session), []);
     }
 
     /// A missile launcher, 170, of `MaxAmmo` 10, held by outfit 171.

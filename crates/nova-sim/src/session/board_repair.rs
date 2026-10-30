@@ -127,9 +127,10 @@ impl Session {
     /// system, or stays out when no bay's walk finds it one (see the module
     /// docs).
     fn dock_boarded(&mut self, npc: &Npc) {
+        let base = self.statics.arsenal.sprite_base(npc.ship);
         if self
             .ship
-            .stow_fighter(&mut self.pilot, &self.statics, npc.ship)
+            .stow_fighter(&mut self.pilot, &self.statics, npc.ship, base)
         {
             self.mark_boarded(npc.id);
             self.leave(npc.id);
