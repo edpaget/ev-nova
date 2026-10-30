@@ -17,13 +17,19 @@
 //! by [`RuleKey::HypergateMovieDesc`]'s engine reading it loads the `dësc`
 //! numbered as the picked `sÿst`, and by the other reading the gate's own.
 //!
+//! The refusals are the entry's own, read without acting: the pending
+//! gate ([`Session::pending_gate`]) and the hypergate's route
+//! ([`Session::hypergate_route`]), which [`Session::enter_hypergate`]
+//! reads too, and [`gate::wormhole_leads_anywhere`], which the wormhole's
+//! exit reads too.
+//!
 //! [`ScreenAsk::GateEntryDesc`]: crate::flight_frame::ScreenAsk::GateEntryDesc
 
 use super::Session;
 use crate::PilotCatalog;
 use crate::catalog::StellarId;
 use crate::flight_frame::GateEntry;
-use crate::gate::{self, GateKind, has_links, hypergate_exit};
+use crate::gate::{self, GateKind};
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
@@ -44,25 +50,11 @@ impl Session {
             GateEntry::Hypergate(_) => GateKind::Hypergate,
             GateEntry::Wormhole => GateKind::Wormhole,
         };
-        let here = self
-            .ship
-            .warp
-            .gate
-            .filter(|&stellar| self.gate_kind(stellar) == Some(kind))?;
+        let here = self.pending_gate(kind)?;
         let sites = catalog.gate_sites();
         match entry {
             GateEntry::Hypergate(to) => {
-                let to = to?;
-                let links = Self::links_of(&sites, here);
-                let system_of = |id: StellarId| {
-                    self.chart
-                        .galaxy
-                        .system_of(id, self.statics.listers(id), self.pilot.system)
-                };
-                if !has_links(&links) {
-                    return None;
-                }
-                hypergate_exit(&links, &sites, to, system_of, self.chart.galaxy.map())?;
+                let (to, _) = self.hypergate_route(here, to, &sites).ok()?;
                 Some(
                     match self.setup.rules.source_for(RuleKey::HypergateMovieDesc) {
                         RuleSource::Engine => to.0,
