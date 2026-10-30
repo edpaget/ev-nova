@@ -74,7 +74,12 @@
 //! key keeps going, but only on the outfit the key went down on: when an
 //! order removes its cell, a held key stops until it is pressed again),
 //! ask for one of the selected outfit, and each is
-//! greyed when its button is not enabled ([`Outfitter::can`]). With Option held (Alt
+//! greyed when its button is not enabled ([`Outfitter::can`]). At a
+//! stellar with no tech ([`Outfitter::buy_hidden`]) Buy is not drawn at
+//! all, up, greyed or pressed (`_DrawOutfitButtons` @0x29f23-0x29f2a), yet
+//! a click where it is, or B, still buys when it is enabled
+//! (`_TrackOutfitButtons` @0x2a1ec-0x2a202, `_OutfitFilter`
+//! @0x5817a-0x58190), silently. With Option held (Alt
 //! here, [`COUNT_KEY`]), Buy or Sell asks for a count instead, as
 //! `_DoOutfitDialog` does (@0x5c0c0-0x5c1aa for a buy, @0x5c5e3-0x5c628
 //! for a sale): when the outfitter says it asks
@@ -1011,11 +1016,14 @@ impl OutfitterScreen {
     }
 
     /// Greys Buy and Sell when one of the selected outfit could not be
-    /// bought or sold.
+    /// bought or sold, and leaves Buy undrawn at a stellar with no tech
+    /// ([`Outfitter::buy_hidden`]).
     fn regrey(&mut self) {
         let buys = self.allows(Direction::Buy);
         let sells = self.allows(Direction::Sell);
+        let buy_drawn = !self.outfitter.buy_hidden;
         if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_drawn(BUY_ITEM, buy_drawn);
             laid.dialog.set_greyed(BUY_ITEM, !buys);
             laid.dialog.set_greyed(SELL_ITEM, !sells);
         }
@@ -4976,5 +4984,70 @@ mod tests {
                 "{ring:?}"
             );
         }
+    }
+
+    /// The outfitter at a stellar with no tech, the first cell (a light
+    /// blaster that can be bought) picked.
+    fn no_tech() -> OutfitterScreen {
+        screen_of(Outfitter {
+            buy_hidden: true,
+            ..outfitter()
+        })
+    }
+
+    /// Whether anything is drawn at Buy's top-left corner, or its label.
+    fn draws_buy(screen: &OutfitterScreen) -> bool {
+        let buy = item(screen, BUY_ITEM);
+        drawn(screen).iter().any(|command| match command {
+            DrawCommand::StretchedPicture { top_left, .. } => *top_left == buy.min,
+            DrawCommand::Text { text, .. } => text == BUY_LABEL,
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn at_a_stellar_with_no_tech_buy_is_not_drawn_up_or_pressed() {
+        let mut screen = no_tech();
+        assert!(!draws_buy(&screen));
+        let words = words(&screen);
+        assert!(words.iter().any(|word| word == DONE_LABEL), "{words:?}");
+        assert!(words.iter().any(|word| word == SELL_LABEL), "{words:?}");
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: item(&screen, BUY_ITEM).center(),
+        });
+        assert!(!draws_buy(&screen), "no pressed look");
+    }
+
+    #[test]
+    fn at_a_stellar_with_no_tech_a_click_where_buy_is_or_b_still_buys() {
+        let mut screen = no_tech();
+        click_item(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+    }
+
+    #[test]
+    fn at_a_stellar_with_no_tech_an_outfit_that_cannot_be_bought_takes_no_click() {
+        let mut screen = no_tech();
+        click_cell(&mut screen, 3);
+        click_item(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn buy_hidden_lasts_through_a_new_outfitter_and_goes_with_it() {
+        let mut screen = screen();
+        assert!(draws_buy(&screen));
+        screen.set_outfitter(Outfitter {
+            buy_hidden: true,
+            ..outfitter()
+        });
+        assert!(!draws_buy(&screen));
+        screen.set_outfitter(outfitter());
+        assert!(draws_buy(&screen));
+        assert_eq!(drawn(&screen), drawn(&super::tests::screen()));
     }
 }
