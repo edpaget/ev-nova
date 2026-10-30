@@ -211,7 +211,9 @@ impl PilotList {
         }
     }
 
-    /// What is at `at`, if anything takes clicks there.
+    /// What is at `at`, if anything takes clicks there. Each area is
+    /// hit-tested half-open, as Navigation Services' `PtInRect` is, so an
+    /// edge two rows share is the lower row's.
     fn target(&self, at: Point) -> Option<Target> {
         if self.open.contains(at) {
             return Some(Target::Open);
@@ -220,7 +222,10 @@ impl PilotList {
             return Some(Target::Cancel);
         }
         (self.first..self.keys.len())
-            .find(|&index| self.row(index).is_some_and(|row| row.contains(at)))
+            .find(|&index| {
+                self.row(index)
+                    .is_some_and(|row| row.contains_half_open(at))
+            })
             .map(Target::Row)
     }
 
@@ -428,6 +433,18 @@ mod tests {
         let mut pilots = list(&["Ada", "Bob"]);
         let bob = pilots.row(1).expect("shown").center();
         assert_eq!(click(&mut pilots, bob), []);
+        assert_eq!(pilots.selected(), Some(1));
+        assert_eq!(pilots.take_outcome(), open("Bob"));
+    }
+
+    /// Navigation Services, which this stands in for, hit-tests half-open
+    /// as `PtInRect` does: the edge two rows share is the lower row's top.
+    #[test]
+    fn a_press_on_the_edge_two_rows_share_selects_the_lower() {
+        let mut pilots = list(&["Ada", "Bob", "Cy"]);
+        let (ada, bob) = (pilots.row(0).expect("shown"), pilots.row(1).expect("shown"));
+        assert_eq!(ada.max.y, bob.min.y, "the rows touch");
+        click(&mut pilots, Point::new(ada.center().x, ada.max.y));
         assert_eq!(pilots.selected(), Some(1));
         assert_eq!(pilots.take_outcome(), open("Bob"));
     }

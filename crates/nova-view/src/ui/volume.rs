@@ -138,12 +138,14 @@ impl VolumeControl {
         self.level
     }
 
-    /// The arrow at `at`, if any: only the arrows take clicks.
+    /// The arrow at `at`, if any: only the arrows take clicks. Each is
+    /// hit-tested half-open, as the Dialog Manager's `PtInRect` does, so
+    /// the edge the two share is the down arrow's.
     #[must_use]
     pub fn arrow_at(&self, at: Point) -> Option<Arrow> {
         [Arrow::Up, Arrow::Down]
             .into_iter()
-            .find(|&arrow| self.arrow_rect(arrow).contains(at))
+            .find(|&arrow| self.arrow_rect(arrow).contains_half_open(at))
     }
 
     fn arrow_rect(&self, arrow: Arrow) -> Bounds {
@@ -368,10 +370,28 @@ mod tests {
         assert_eq!(control.arrow_at(stock().up.center()), Some(Arrow::Up));
         assert_eq!(control.arrow_at(stock().down.center()), Some(Arrow::Down));
         assert_eq!(control.arrow_at(at(172.0, 185.0)), Some(Arrow::Up));
-        assert_eq!(control.arrow_at(at(183.0, 203.0)), Some(Arrow::Down));
-        for elsewhere in [stock().label.center(), stock().value.center(), at(0.0, 0.0)] {
+        assert_eq!(control.arrow_at(at(182.0, 202.0)), Some(Arrow::Down));
+        for elsewhere in [
+            stock().label.center(),
+            stock().value.center(),
+            at(0.0, 0.0),
+            at(183.0, 203.0),
+        ] {
             assert_eq!(control.arrow_at(elsewhere), None, "{elsewhere:?}");
         }
+    }
+
+    /// The Dialog Manager hit-tests the arrows' picture items half-open,
+    /// as `PtInRect` does, so the edge they share, y = 194, is the down
+    /// arrow's top.
+    #[test]
+    fn a_press_on_the_edge_the_arrows_share_steps_down() {
+        assert_eq!(stock().up.max.y, 194.0);
+        assert_eq!(stock().down.min.y, 194.0);
+        let mut control = control(3);
+        assert_eq!(control.arrow_at(at(177.0, 194.0)), Some(Arrow::Down));
+        assert!(click(&mut control, at(177.0, 194.0)));
+        assert_eq!(control.level(), 2);
     }
 
     #[test]

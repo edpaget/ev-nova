@@ -1732,6 +1732,29 @@ mod tests {
         assert_eq!(placed[9].0, "Sol (130)", "the others still do");
     }
 
+    /// `_TrackPlayerInfoButtons` tests the press and the held pointer with
+    /// `PtInRect` (@0x27cea, @0x27d56). The tabs leave a pixel between
+    /// them, so a tab's right edge is on none.
+    #[test]
+    fn a_press_on_a_tabs_right_edge_misses() {
+        let mut screen = screen();
+        click_button(&mut screen, PlayerInfoButton::Tab(Tab::Extras));
+        let general = screen
+            .button_bounds(PlayerInfoButton::Tab(Tab::General))
+            .expect("laid out");
+        let cargo = screen
+            .button_bounds(PlayerInfoButton::Tab(Tab::Cargo))
+            .expect("laid out");
+        assert!(general.max.x < cargo.min.x, "a gap between them");
+        let y = general.center().y;
+        click(&mut screen, Point::new(general.max.x, y));
+        assert_eq!(screen.tab(), Tab::Extras, "the right edge misses");
+        click(&mut screen, Point::new(general.center().x, general.max.y));
+        assert_eq!(screen.tab(), Tab::Extras, "the bottom edge misses");
+        click(&mut screen, Point::new(general.max.x - 1.0, y));
+        assert_eq!(screen.tab(), Tab::General, "a pixel inside");
+    }
+
     #[test]
     fn a_tab_click_shows_its_tab_and_draws_it_pressed() {
         let mut screen = screen();

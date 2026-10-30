@@ -155,12 +155,14 @@ impl<T: PickerEntry> Picker<T> {
         self.entries[self.selected]
     }
 
-    /// The arrow at `at`, if any: only the arrows take clicks.
+    /// The arrow at `at`, if any: only the arrows take clicks. Each is
+    /// hit-tested half-open, as the Dialog Manager's `PtInRect` does, so
+    /// the edge the two share is the down arrow's.
     #[must_use]
     pub fn arrow_at(&self, at: Point) -> Option<Arrow> {
         [Arrow::Up, Arrow::Down]
             .into_iter()
-            .find(|&arrow| self.arrow_rect(arrow).contains(at))
+            .find(|&arrow| self.arrow_rect(arrow).contains_half_open(at))
     }
 
     fn arrow_rect(&self, arrow: Arrow) -> Bounds {
@@ -321,6 +323,33 @@ mod tests {
                 color: COLOR,
             })
         );
+    }
+
+    /// The arrows are hit-tested half-open, as the Dialog Manager's
+    /// `PtInRect` tests the volume's: the edge they share is the down
+    /// arrow's top, and the down arrow's right and bottom edges are off it.
+    #[test]
+    #[allow(clippy::float_cmp)] // Whole pixels.
+    fn a_press_on_the_edge_the_arrows_share_steps_down() {
+        let mut picker = Picker::new(row(), vec![NATIVE, SHARP], NATIVE);
+        let PickerRects { up, down, .. } = picker.rects();
+        assert_eq!(up.max.y, down.min.y, "stacked");
+        let shared = Point::new(up.center().x, up.max.y);
+        assert_eq!(picker.arrow_at(shared), Some(Arrow::Down));
+        assert_eq!(picker.arrow_at(up.min), Some(Arrow::Up));
+        assert_eq!(picker.arrow_at(down.max), None);
+        assert_eq!(
+            picker.arrow_at(Point::new(down.max.x - 1.0, down.max.y - 1.0)),
+            Some(Arrow::Down)
+        );
+        let press = |pressed| Input::PointerButton {
+            button: crate::input::MouseButton::Left,
+            pressed,
+            at: shared,
+        };
+        picker.input(&press(true));
+        assert!(picker.input(&press(false)), "stepped");
+        assert_eq!(picker.selected(), SHARP);
     }
 
     #[test]
