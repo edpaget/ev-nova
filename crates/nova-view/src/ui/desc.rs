@@ -1090,6 +1090,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_page_down_moves_exactly_250_units_over_a_wheels_leftover() {
+        let mut desc = long_desc();
+        desc.input(&wheel_units(1.0));
+        desc.input(&wheel_units(-0.6));
+        assert_eq!(desc.scroll_offset(), 1.0);
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.scroll_offset(), 251.0);
+    }
+
     /// The filter's not-handled fall-through (@0x523fc) leaves the text as
     /// it was, a wheel's leftover included: scrolling up from the top
     /// would drop it.

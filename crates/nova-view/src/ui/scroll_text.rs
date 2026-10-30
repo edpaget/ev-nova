@@ -38,7 +38,8 @@ pub struct ScrollText {
     first: usize,
     /// What wheel and trackpad scrolls have moved short of a whole line,
     /// or of a whole pixel when pixel-scrolled, in logical units, toward
-    /// the end for positive.
+    /// the end for positive. When pixel-scrolled only a wheel adds to it or
+    /// spends it, so every other scroll moves its exact amount.
     pending: f32,
     /// Where a pixel-scrolled text is; none for one of whole lines.
     pixels: Option<PixelScroll>,
@@ -252,15 +253,25 @@ impl ScrollText {
     }
 
     /// Scrolls by a wheel's `delta` when `at` is over the box, through
-    /// [`Self::scroll_units`].
+    /// [`Self::scroll_units`]. A pixel-scrolled text moves instead by the
+    /// whole pixels the wheel has built up, keeping the rest for the next
+    /// wheel: only a trackpad scrolls by fractions.
     fn wheel(&mut self, delta: ScrollDelta, at: Point) -> bool {
         if !self.rect.contains(at) {
             return false;
         }
-        self.scroll_units(match delta {
+        let units = match delta {
             ScrollDelta::Lines(lines) => lines * self.line_height,
             ScrollDelta::Units(units) => units,
-        });
+        };
+        if let Some(pixels) = self.pixels {
+            self.pending += units;
+            let whole = self.pending.trunc();
+            self.pending -= whole;
+            self.pixels = Some(self.moved_pixels(pixels, whole));
+        } else {
+            self.scroll_units(units);
+        }
         true
     }
 
@@ -270,20 +281,21 @@ impl ScrollText {
     /// end the first line already sits at. That drops what a move cut
     /// short at an end had left over, so a scroll back moves at once.
     ///
-    /// A pixel-scrolled text moves a whole pixel at a time instead, as
-    /// `_ScrollDialogText`'s immediate path does (@0x518ea-0x51983), keeping
-    /// what falls short of one. A scroll that moves no whole pixel leaves
-    /// the flags alone. A positive one that leaves the text where it was
+    /// A pixel-scrolled text moves exactly `units`, as `_ScrollDialogText`'s
+    /// immediate path does (@0x518ea-0x51983): every amount it is given is
+    /// whole, and a fraction is cut. A wheel's leftover plays no part. It
+    /// stays for the next wheel, unless it points past the end the text
+    /// then sits at. A positive scroll that leaves the text where it was
     /// clears "can scroll down", and any other sets it. So a page landing
     /// exactly on the end leaves it set until the next try fails. The
     /// original's gates keep a text that fits from getting here, but a
     /// wheel isn't gated, so a text that can't move never sets it.
     pub fn scroll_units(&mut self, units: f32) {
-        self.pending += units;
         if let Some(pixels) = self.pixels {
-            self.pixels = Some(self.moved_pixels(pixels));
+            self.pixels = Some(self.moved_pixels(pixels, units.trunc()));
             return;
         }
+        self.pending += units;
         let whole = (self.pending / self.line_height).trunc();
         self.pending -= whole * self.line_height;
         self.scroll_by(whole as isize);
@@ -298,11 +310,10 @@ impl ScrollText {
         }
     }
 
-    /// `pixels` moved by the whole pixels of what is pending, keeping the
-    /// rest unless it points past the end the text then sits at.
-    fn moved_pixels(&mut self, pixels: PixelScroll) -> PixelScroll {
-        let whole = self.pending.trunc();
-        self.pending -= whole;
+    /// `pixels` moved by `whole` pixels, dropping what is pending if it
+    /// points past the end the text then sits at. No whole pixel leaves the
+    /// flags alone.
+    fn moved_pixels(&mut self, pixels: PixelScroll, whole: f32) -> PixelScroll {
         let most = self.max_offset();
         let mut moved = pixels;
         if whole != 0.0 {
@@ -845,7 +856,7 @@ mod tests {
         text.scroll_units(5.0);
         let mut text = text.pixel_scrolled();
         assert_eq!((text.offset(), text.first()), (0.0, 0));
-        text.scroll_units(0.5);
+        text.input(&units(0.5));
         assert_eq!(text.offset(), 0.0, "the 5 units over are gone");
     }
 
@@ -938,12 +949,12 @@ mod tests {
         text.scroll_units(84.0);
         text.scroll_units(1.0);
         assert!(!text.can_scroll_down());
-        text.scroll_units(-0.4);
+        text.input(&units(-0.4));
         assert_eq!(text.offset(), 84.0);
         assert!(!text.can_scroll_down(), "no whole pixel, no scroll");
-        text.scroll_units(-0.4);
+        text.input(&units(-0.4));
         assert_eq!(text.offset(), 84.0);
-        text.scroll_units(-0.4);
+        text.input(&units(-0.4));
         assert_eq!(text.offset(), 83.0, "1.2 is a pixel");
         assert!(text.can_scroll_down());
     }
@@ -952,40 +963,114 @@ mod tests {
     fn a_sub_pixel_leftover_keeps_its_sign_through_a_whole_pixel() {
         let mut text = pixels();
         text.scroll_units(10.0);
-        text.scroll_units(-1.5);
+        text.input(&units(-1.5));
         assert_eq!(text.offset(), 9.0);
-        text.scroll_units(-0.5);
+        text.input(&units(-0.5));
         assert_eq!(text.offset(), 8.0, "the half left over and this half");
     }
 
     #[test]
     fn a_leftover_past_either_end_is_dropped() {
         let mut text = pixels();
-        text.scroll_units(-0.5);
-        text.scroll_units(0.5);
+        text.input(&units(-0.5));
+        text.input(&units(0.5));
         assert_eq!(text.offset(), 0.0, "the first half past the top is gone");
-        text.scroll_units(0.6);
+        text.input(&units(0.6));
         assert_eq!(text.offset(), 1.0);
         let mut text = pixels();
         text.scroll_units(84.0);
-        text.scroll_units(0.5);
-        text.scroll_units(-0.5);
+        text.input(&units(0.5));
+        text.input(&units(-0.5));
         assert_eq!(text.offset(), 84.0, "the half past the end is gone");
-        text.scroll_units(-0.6);
+        text.input(&units(-0.6));
         assert_eq!(text.offset(), 83.0);
         let mut text = pixels();
-        text.scroll_units(84.5);
-        text.scroll_units(-1.0);
+        text.input(&units(84.5));
+        text.input(&units(-1.0));
         assert_eq!(text.offset(), 83.0, "a move cut short keeps nothing");
     }
 
     #[test]
     fn a_leftover_inside_the_text_is_kept() {
         let mut text = pixels();
+        text.input(&units(1.5));
+        assert_eq!(text.offset(), 1.0);
+        text.input(&units(0.5));
+        assert_eq!(text.offset(), 2.0);
+    }
+
+    /// Fifty lines scrolled by pixels to 300, far from either end.
+    fn mid_tall() -> ScrollText {
+        let lines: Vec<String> = (0..50).map(|n| format!("l{n}")).collect();
+        let mut text = scroll(&lines.join("\r"), 36.0).pixel_scrolled();
+        text.scroll_units(300.0);
+        text
+    }
+
+    /// A page, an arrow's click and a hold's step are whole amounts. Only a
+    /// fractional trackpad delta leaves a leftover, and it isn't theirs.
+    #[test]
+    fn a_step_moves_its_exact_amount_whatever_a_wheel_left_over() {
+        for leftover in [-0.6, 0.6] {
+            for step in [250.0, -250.0, ARROW_UNITS, -ARROW_UNITS, 1.0, -1.0] {
+                let mut text = mid_tall();
+                text.input(&units(leftover));
+                text.scroll_units(step);
+                assert_eq!(text.offset(), 300.0 + step, "{leftover} {step}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_arrow_steps_exactly_ten_pixels_whatever_a_wheel_left_over() {
+        for leftover in [-0.6, 0.6] {
+            for (arrow, step) in [
+                (ScrollArrow::Up, -ARROW_UNITS),
+                (ScrollArrow::Down, ARROW_UNITS),
+            ] {
+                let mut text = mid_tall();
+                text.input(&units(leftover));
+                text.scroll_arrow(arrow);
+                assert_eq!(text.offset(), 300.0 + step, "{leftover} {arrow:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_steps_fraction_is_cut_and_not_kept() {
+        let mut text = pixels();
         text.scroll_units(1.5);
         assert_eq!(text.offset(), 1.0);
-        text.scroll_units(0.5);
+        text.scroll_units(1.5);
         assert_eq!(text.offset(), 2.0);
+    }
+
+    #[test]
+    fn a_step_leaves_a_wheels_leftover_for_the_next_wheel() {
+        let mut text = mid_tall();
+        text.input(&units(-0.6));
+        text.scroll_units(1.0);
+        text.input(&units(-0.6));
+        assert_eq!(text.offset(), 300.0, "1.2 is a pixel");
+    }
+
+    #[test]
+    fn a_step_that_reaches_an_end_drops_a_leftover_past_it() {
+        let mut text = pixels();
+        text.scroll_units(83.0);
+        text.input(&units(0.6));
+        text.scroll_units(1.0);
+        text.input(&units(-0.6));
+        text.input(&units(-0.6));
+        assert_eq!(text.offset(), 83.0, "the 0.6 past the end is gone");
+    }
+
+    #[test]
+    fn a_whole_line_step_still_shares_the_wheels_leftover() {
+        let mut text = ten_lines();
+        text.input(&units(6.0));
+        text.scroll_units(6.0);
+        assert_eq!(text.first(), 1);
     }
 
     #[test]
