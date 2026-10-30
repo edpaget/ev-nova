@@ -5325,6 +5325,20 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_on_the_last_frame_of_its_gate_wait_is_unseen_as_it_is_waiting_so_it_says_its_quote() {
+        // Its goal is still 0x15, so `_ShipVisibleToShip(ship, player)`
+        // hides it (@0x81bc6 → @0x972d) and it is no threat to the gate.
+        let said = |mode| {
+            let mut traffic = quoting_traffic(1);
+            traffic.npcs[0].mode = mode;
+            quotes_on_the_hit(traffic, &World::new(&[]))
+        };
+        assert_eq!(said(Mode::LeavingGate { tick: 0 }), [NpcId(0)]);
+        assert_eq!(said(Mode::Emerging { ticks_left: 60 }), [NpcId(0)]);
+        assert_eq!(said(Mode::LeavingGate { tick: 1 }), [], "goal 8: seen");
+    }
+
+    #[test]
     fn a_flying_ship_inspecting_docking_or_following_says_its_quote_on_the_players_hit() {
         // Goals 7, 5 and 0xa are left out of the target clause
         // (@0x81bf3-0x81c28).

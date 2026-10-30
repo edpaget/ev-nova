@@ -29,13 +29,13 @@
 //!   [`targetable`] does not either. A click on a ship (`_HandlePlayer`
 //!   @0x6a480-0x6a4a3) applies the same gate, but ship clicks are not
 //!   modelled (rdm task nav-selection-follow-up). A
-//!   ship waiting at the hypergate or wormhole it comes out of
-//!   ([`Npc::emerging`]) is not targetable
-//!   (`_AIShipIsEmergingFromHypergate` @0x7e2e8, read by
+//!   ship waiting at the hypergate or wormhole it comes out of, to the
+//!   last frame of its wait ([`Npc::emerging`], goal 0x15), is not
+//!   targetable (`_AIShipIsEmergingFromHypergate` @0x7e2e8, read by
 //!   `_FindNearestShipToPlayer` @0x9330 and the next and previous
 //!   searches @0xa42d-0xa918, `_FindNextShipInSystem` @0xa801), and a
-//!   target emerging is let go (`_HandlePlayer` @0x686a4); once it bursts
-//!   out of the gate it is a candidate again.
+//!   target emerging is let go (`_HandlePlayer` @0x686a4); from its next
+//!   frame, bursting out of the gate, it is a candidate again.
 //! - Target Select (Tab, `_FindNextShipInSystem` @0xa5b1, its caller
 //!   `_HandlePlayer` @0x69f1c-0x69ffb) walks the ship table up, in
 //!   [`Npc::berth`] order (a tie, which the original's table cannot
@@ -68,8 +68,6 @@
 use crate::cloak::Scanner;
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
-#[cfg(doc)]
-use crate::traffic::npc::Mode;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// How a target command picks.
@@ -96,7 +94,7 @@ pub enum TargetPick {
 
 /// Whether `npc` is there to be targeted at all, whatever its cloak: it
 /// is intact or disabled, and not emerging from a gate
-/// ([`Mode::Emerging`]). Every search and the lost-target check start
+/// ([`Npc::emerging`]). Every search and the lost-target check start
 /// from this, each adding its own cloak exception.
 fn alive_and_present(npc: &Npc) -> bool {
     matches!(npc.condition, Condition::Intact | Condition::Disabled) && !npc.emerging()
@@ -120,7 +118,7 @@ pub(crate) fn type_targetable(npc: &Npc, scanner: Scanner) -> bool {
 /// Whether `npc` is a candidate for Target Select (`escorts` false) or
 /// Escort Select (`escorts` true) among `npcs` for a player of
 /// `scanner`: intact or disabled, not emerging from a gate
-/// ([`Mode::Emerging`]), not cloaked unless `scanner` targets cloaked
+/// ([`Npc::emerging`]), not cloaked unless `scanner` targets cloaked
 /// ships or the search is Escort Select, of a type it may pick
 /// ([`type_targetable`], with no exception for Escort Select), and in the
 /// escort class ([`escort_class`]) just when the search is Escort Select
@@ -392,13 +390,18 @@ mod tests {
         waiting.mode = Mode::Emerging { ticks_left: 30 };
         let mut leaving = intact(2, 20.0, 0.0);
         leaving.mode = Mode::LeavingGate { tick: 1 };
-        let npcs = [waiting, leaving, intact(3, 30.0, 0.0)];
+        // Its wait just out, its goal still 0x15 (`Npc::emerging`).
+        let mut last_frame = intact(4, 5.0, 0.0);
+        last_frame.mode = Mode::LeavingGate { tick: 0 };
+        assert!(!targetable(&last_frame, false), "a target is let go");
+        let npcs = [last_frame, waiting, leaving, intact(3, 30.0, 0.0)];
         assert!(!cycles(&npcs[0], &npcs, BLIND, false));
-        assert!(cycles(&npcs[1], &npcs, BLIND, false));
+        assert!(!cycles(&npcs[1], &npcs, BLIND, false));
+        assert!(cycles(&npcs[2], &npcs, BLIND, false));
         assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
-        assert_eq!(nearest_(&npcs[..1], Vec2::ZERO, |_| true), None);
+        assert_eq!(nearest_(&npcs[..2], Vec2::ZERO, |_| true), None);
         assert_eq!(next(&npcs, None, BLIND), Some(NpcId(2)));
-        assert_eq!(next(&npcs[..1], None, BLIND), None);
+        assert_eq!(next(&npcs[..2], None, BLIND), None);
     }
 
     #[test]
