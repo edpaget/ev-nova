@@ -12,9 +12,12 @@
 //! @0x66f29, its one caller) and a hypergate's or wormhole's exit alike
 //! (`_PlayerEnterHypergate` @0x66edb and `_PlayerEnterWormhole` @0x66f12
 //! join it at 0x66f40), so both start the grace here: [`Session::take_off`]
-//! and a gate's exit. A cancelled hypergate (-1, @0x66ef2-0x66f08) skips
-//! the tail, as the engine's refused entry starts nothing. No jump
-//! arrival, pod rescue or flight start writes it. The take-off frame's
+//! and a gate's exit. Only a hypergate's -1 (no exit, @0x66ef2-0x66f08)
+//! skips the tail, as the engine's refused hypergate starts nothing; a
+//! wormhole's -1 is never tested (@0x66f17-0x66f20), so a wormhole that
+//! leads nowhere runs the tail and starts the grace too (see the
+//! `wormhole_no_exit` module). No jump arrival, pod rescue or flight
+//! start writes it. The take-off frame's
 //! own key reads see -15, and frame k after it -15 + k, so the keys are
 //! refused on 15 frames and taken from the 16th.
 //!
@@ -234,6 +237,27 @@ mod tests {
             .expect("enters");
         let _ = session.take_sounds();
         assert_eq!(keys(&mut session), refused());
+    }
+
+    #[test]
+    fn a_wormhole_with_no_exit_starts_the_grace_too() {
+        // `_HandlePlayerDockRequest` doesn't test the wormhole's -1
+        // (@0x66f17-0x66f20), so the tail's -15 is written (@0x67673).
+        let mut catalog = wormholes();
+        catalog
+            .gates
+            .retain(|site| site.id == crate::catalog::StellarId(400));
+        let mut session = at_wormhole(&catalog);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(crate::gate::GateRefusal::NoExit)
+        );
+        let _ = session.take_sounds();
+        for tick in 0..15 {
+            assert_eq!(keys(&mut session), refused(), "after {tick} ticks");
+            work(&mut session, &catalog, Controls::default());
+        }
+        assert_eq!(keys(&mut session), taken(), "after 15 ticks");
     }
 
     #[test]

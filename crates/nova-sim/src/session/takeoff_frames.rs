@@ -9,7 +9,8 @@
 //! at ebp-0x298, @0x66ee9), the exit gate then takes its counted count -
 //! 1 as current and next, and -`AnimDelay` as its timer
 //! (@0x675fc-0x67646). A hypergate entered with no exit skips both
-//! (@0x66ef2-0x66f08). Then the stellars are rebuilt (@0x67653), each
+//! (@0x66ef2-0x66f08); a wormhole that leads nowhere runs the reset and
+//! opens no gate (see the `wormhole_no_exit` module). Then the stellars are rebuilt (@0x67653), each
 //! slot showing its current frame: frame 0.
 //!
 //! The session resets the gates it keeps ([`Space::reset_gate_frames`];
@@ -152,6 +153,32 @@ mod tests {
         session
             .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
             .expect("enters");
+        assert_eq!(session.space.gate_sprites[&KEPT], reset(stepped()));
+        assert!(
+            session
+                .space
+                .gate_sprites
+                .values()
+                .all(|sprite| *sprite == reset(*sprite)),
+            "none opened: {:?}",
+            session.space.gate_sprites
+        );
+        assert_eq!(resets_told(&mut session), 1);
+    }
+
+    #[test]
+    fn a_wormhole_with_no_exit_resets_every_gate_and_opens_none() {
+        // Its -1 runs the tail with ebp-0x2a3 clear (@0x67122-0x6714d):
+        // the reset (@0x675ce-0x675fa) and no exit gate.
+        let mut catalog = wormholes();
+        catalog.gates.retain(|site| site.id == StellarId(400));
+        let mut session = at_wormhole(&catalog);
+        keep_stepped(&mut session);
+        session.take_events();
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit)
+        );
         assert_eq!(session.space.gate_sprites[&KEPT], reset(stepped()));
         assert!(
             session

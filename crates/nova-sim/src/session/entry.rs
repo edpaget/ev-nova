@@ -520,7 +520,8 @@ fn jump(hops: usize, placed: bool) -> Resets {
 /// selection is let go and the mode kept, the take-off's tail that the
 /// gates join (@0x66edb-0x66f40, @0x674d2); the hypergate then turns the
 /// nav system off itself ([`Session::enter_hypergate`]). The asteroid
-/// field is killed (@0x63f47, @0x645f6).
+/// field is killed (@0x63f47, @0x645f6), and the explosions pending with
+/// it, as the dock request's tail sets `_killExplods` (@0x66f63).
 fn gate() -> Resets {
     Resets::of(
         &[
@@ -528,6 +529,7 @@ fn gate() -> Resets {
             Reset::Explore,
             Reset::Thrust,
             Reset::Combat,
+            Reset::Explosions,
             Reset::Boxes,
             Reset::Asteroids,
             Reset::Strikes,
@@ -1322,6 +1324,7 @@ mod tests {
                     Reset::Stellar,
                     Reset::Explore,
                     Reset::Thrust,
+                    Reset::Explosions,
                     Reset::FightersOut,
                     Reset::ArrivalSound,
                 ],

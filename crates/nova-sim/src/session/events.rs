@@ -9,7 +9,9 @@
 //!   one it was: a purchase, Use As My Ship, or `C`, `E` or `H`.
 //! - [`SessionEvent::SystemChanged`]: the system whose stellars are flown
 //!   in was entered afresh, another system or the same one rebuilt: a
-//!   jump's arrival, a gate's exit, a move in flight, a relocation to
+//!   jump's arrival, a gate's exit, a wormhole that leads nowhere (its
+//!   ships set up afresh in the system the player stays in; see the
+//!   `wormhole_no_exit` module), a move in flight, a relocation to
 //!   another system, or the take-off after a landed move to another
 //!   system.
 //! - [`SessionEvent::StellarChanged`]: the player was put at another
@@ -40,12 +42,13 @@
 //!   that entry's `SystemChanged`: the flight view scatters its stars
 //!   afresh about the ship. An `M` or `N` move, a developer tools' move
 //!   and a take-off keep them.
-//! - [`SessionEvent::StellarFramesReset`]: a take-off or a hypergate's or
-//!   wormhole's exit reset every stellar's current and next frames to 0,
-//!   as the original's dock request does (see the `takeoff_frames`
-//!   module), told after that entry's other events: the flight view
-//!   resets the frames of every stellar it shows and keeps before it lays
-//!   out or draws the scene again. A refused gate tells nothing.
+//! - [`SessionEvent::StellarFramesReset`]: a take-off, a hypergate's or
+//!   wormhole's exit, or a wormhole that leads nowhere reset every
+//!   stellar's current and next frames to 0, as the original's dock
+//!   request does (see the `takeoff_frames` module), told after that
+//!   entry's other events: the flight view resets the frames of every
+//!   stellar it shows and keeps before it lays out or draws the scene
+//!   again. Only a refused hypergate tells nothing.
 //!
 //! The session's other one-shot outputs (its sounds, messages, pay notes,
 //! fighter notes and the rest, each with its own `take_*`) are drained

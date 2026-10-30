@@ -3542,6 +3542,54 @@
 //!   `Session::prepare_all_sprites` steps no stellar or gate. Filed as
 //!   rdm:phase/play-feel-4-followups/phase-4-prepare-all-sprites-steps-stellar-animation.
 //!
+//! ## Checked for play-feel-4 phase 16
+//!
+//! `_PlayerEnterWormhole`'s no-exit path and the tail of
+//! `_HandlePlayerDockRequest` it joins (@0x66f40-0x67682), with both exit
+//! locals -1.
+//!
+//! - **The refusal.** The link loop finds no active exit
+//!   (@0x6409a-0x6409d → 0x6461c), says #84 + #86 (`_DisplayComm`
+//!   @0x646a3, 250 ticks), plays `_beepSnd[3]`, `snd ` 153 (`PlaySound`
+//!   @0x646cb, priority 1) and returns -1 (@0x646d0 → 0x6479b), before
+//!   its starfield, course restart, cloak fade and placement (@0x646da
+//!   on). The dock request stores -1 in ebp-0x288 and ebp-0x298
+//!   (@0x66f17-0x66f20) and jumps to 0x66f40 untested.
+//! - **The tail, in the system the player stays in.** The kill flags
+//!   `_killShots`, `_killBoxes`, `_killExplods`, `_killSmoke`,
+//!   `_killAsteroids` (@0x66f40-0x66f6f); the take-off fold
+//!   (@0x66f72-0x66fc4); every `_beamData` record's +0x10 = -1
+//!   (@0x66fc4-0x66fe6); the player's bank +0xc8e4, display timers
+//!   +0xc8f0/+0xc8e8, ion charge +0x5c, glow +0xc8d4, boarded +0xb9 and
+//!   ion colour +0xb0 = 0 (@0x66fe8-0x67020); `_escortMenuOnscreen`,
+//!   `_dockPermission` = 0 and the target +0x70 = -1 (@0x6705a-0x67069);
+//!   `_antiEscortDelay` = Rand(30)+30 (@0x6706f-0x67084);
+//!   `_DeleteAllComputerShips(0, 1)` (@0x67096) and
+//!   `_ResetPlayerPrecalcedValues` (@0x6709b); the gate-exit block skipped
+//!   (ebp-0x2a3, -0x2a2, -0x2a1 all 0, @0x67122-0x67153), so no
+//!   enter-system hook, no gate loops and no `_EnterMoreShips` pass;
+//!   `_SetupShipsInSystem(+0x74, 1)` (@0x674c2) and the rebuild
+//!   (@0x674c7); +0x6c = -1 and `_CueNextHyperRouteDest`
+//!   (@0x674d2-0x674d8); the frames' reset with no exit gate
+//!   (@0x675ce-0x675fa); `_PrepareAllSprites`, the rebuild and
+//!   `_PrepareAllSprites` (@0x6764e-0x67658); `_frameCounter` = -15
+//!   (@0x67673).
+//! - **Kept.** The position, velocity and thrust (only the glow is
+//!   zeroed); the course; the system's exploration; the date. Nothing is
+//!   saved, and no arrival sound or message plays.
+//! - **The display timers.** +0xc8f0 is the shield flash and +0xc8e8 the
+//!   weapon glow, both held by the flight view, which drops them as it
+//!   lays the scene out afresh.
+//! - **Sound**: `snd ` 153 alone, `nova_sim::SimSound::Refused`.
+//! - **Left out.** `_SpawnBountyHunter` (@0x674dd), modelled at no call
+//!   site (task `planet-domination`); the screen redraws
+//!   (@0x6702a-0x6703d, @0x670c8-0x6711d, @0x6765d-0x6767d), which the
+//!   view does every frame; `_ClearStarfield` (@0x670a0-0x670c3), a no-op
+//!   in a negative-Murk system the player never left.
+//! - **Built here**: the tail (the session's `wormhole_no_exit` module),
+//!   and for every gate exit the fold, the player block and
+//!   `_killExplods`, which `Session::come_out` had left out.
+//!
 //! ## Checked for play-feel-4 phase 15
 //!
 //! `_DrawStatusRadar`'s stellar loop (@0x498a0-0x49a8e), re-read against

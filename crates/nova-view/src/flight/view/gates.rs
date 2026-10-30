@@ -103,10 +103,19 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// Shows what the original says when entering a gate is refused, if
     /// anything: a cancelled hypergate jump, or a wormhole leading
     /// nowhere. A hypergate without links says nothing.
+    ///
+    /// A wormhole leading nowhere still runs the dock request's tail
+    /// (`nova_sim::Session::enter_wormhole`): the view catches up with
+    /// the flight's events once ([`FlightView::catch_up`]), which lays the
+    /// system it stays in out afresh, its old ships, shots, smoke and
+    /// effects let go and its new ships' sheets read; then shuts the
+    /// escort menu (@0x6705a) and says why. The beep is the flight's.
     fn gate_refused(&mut self, refusal: GateRefusal) {
         match refusal {
             GateRefusal::Cancelled => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
             GateRefusal::NoExit => {
+                self.catch_up();
+                self.shut_escort_menu();
                 self.say_for(gate_refusal_message(GateKind::Wormhole), GATE_REFUSAL_TICKS);
             }
             GateRefusal::NoLinks | GateRefusal::NotAtGate => {}

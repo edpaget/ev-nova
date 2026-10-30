@@ -526,16 +526,90 @@ fn l_at_a_wormhole_passes_through_it_with_a_flash_whatever_the_preference() {
     }
 }
 
+/// What the view says of a wormhole with no exit.
+const NO_EXIT: &str =
+    "Your ship is unable to enter this wormhole - the radiation levels are too extreme.";
+
 #[test]
 fn a_wormhole_with_no_exit_says_why() {
     let mut view = faked(sol());
     view.sim.queue_answer(at_gate(GateKind::Wormhole));
     view.sim
         .queue_answer(Answer::GateRefused(GateRefusal::NoExit));
+    view.sim.queue_event(FlightEvent::Sound(SimSound::Refused));
     view.land();
     assert_eq!(view.jump_effect(), None);
-    let why = "Your ship is unable to enter this wormhole - the radiation levels are too extreme.";
-    faked_lasts(&mut view, why, GATE_REFUSAL_TICKS);
+    assert_eq!(
+        view.drained_sounds(),
+        [Sound::Sim(SimSound::Refused)],
+        "the flight's beep (@0x646cb), and none of the view's"
+    );
+    faked_lasts(&mut view, NO_EXIT, GATE_REFUSAL_TICKS);
+}
+
+#[test]
+fn a_wormhole_with_no_exit_lays_the_scene_out_afresh_once_from_the_flights_events() {
+    // The dock request's tail deletes the ships, kills the shots and the
+    // smoke (@0x66f40-0x66f6f, @0x67096) and sets the system up again
+    // (@0x674c2), in the system the ship stays in.
+    let mut view = world(armed(0, &[BLASTER]), sol());
+    raise(
+        &mut view,
+        &[CombatEvent::Exploded {
+            at: Vec2::ZERO,
+            explosion: nova_sim::catalog::Explosion::decode(0).expect("type 0"),
+            size: 0.0,
+        }],
+    );
+    assert_ne!(*view.effects(), Effects::default());
+    let mut flash = ShieldFlash::default();
+    flash.hit(false);
+    view.flashes.insert(ShipRef::Player, flash);
+    view.npc_previous = vec![(
+        nova_sim::NpcId(0),
+        ShipPlace {
+            position: Vec2::ZERO,
+            heading: 0.0,
+        },
+    )];
+    let mut after = sol();
+    after
+        .ships
+        .push(record::npc(7, 131, Vec2::new(100.0, 0.0), 0.0));
+    view.sim.queue_answer(at_gate(GateKind::Wormhole));
+    view.sim.queue_answer_telling(
+        Answer::GateRefused(GateRefusal::NoExit),
+        after,
+        vec![
+            FlightEvent::Session(SessionEvent::SystemChanged),
+            FlightEvent::Session(SessionEvent::StellarFramesReset),
+        ],
+    );
+    view.land();
+    assert_eq!(*view.effects(), Effects::default(), "the old scene let go");
+    assert!(view.flashes.is_empty());
+    assert!(view.npc_previous.is_empty(), "the old ships gone");
+    assert!(
+        view.npc_sheets.contains_key(&ShipId(131)),
+        "the new ships' sheets read"
+    );
+    assert!(!view.catch_up().system, "laid out once, not again");
+    assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    faked_lasts(&mut view, NO_EXIT, GATE_REFUSAL_TICKS);
+}
+
+#[test]
+fn a_wormhole_with_no_exit_shuts_the_escort_menu() {
+    // `_escortMenuOnscreen` = 0 (@0x6705a).
+    let mut view = faked(super::faked_escorts::fleet_of(&[EscortClass::Warship]));
+    assert!(view.escort_key(MENU_KEY));
+    assert!(view.escort_menu().is_open());
+    view.sim.queue_answer(at_gate(GateKind::Wormhole));
+    view.sim
+        .queue_answer(Answer::GateRefused(GateRefusal::NoExit));
+    view.land();
+    assert!(!view.escort_menu().is_open());
+    faked_lasts(&mut view, NO_EXIT, GATE_REFUSAL_TICKS);
 }
 
 #[test]

@@ -649,6 +649,7 @@ mod vacated_berths;
 mod voices;
 mod wait_for_me;
 mod warp_stage;
+mod wormhole_no_exit;
 mod y_explosion;
 
 use capture::CaptureFuel;
@@ -3689,7 +3690,11 @@ impl Session {
     /// `Session::with_wormholes` says otherwise), read from `catalog`.
     /// Any outcome ends the entry and lets go of the nav selection, the
     /// mode kept, as the take-off's tail the original's wormhole joins
-    /// does (@0x66edb-0x66f40, @0x674d2); a refusal changes nothing else.
+    /// does (@0x66edb-0x66f40, @0x674d2). With no exit it beeps
+    /// [`SimSound::Refused`] and still runs that tail in the system the
+    /// player stays in, which is set up afresh, the take-off grace
+    /// started, the ship left where it is ([`Session::refuse_no_exit`]; see
+    /// the `wormhole_no_exit` module).
     ///
     /// Out of a hypergate or wormhole the ship comes out as the session's
     /// [`GateArrivalRule`] says (the engine's unless
@@ -3745,7 +3750,7 @@ impl Session {
         let Some(exit) =
             wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
         else {
-            self.chart.deselect();
+            self.refuse_no_exit(catalog, chance);
             return Err(GateRefusal::NoExit);
         };
         let (site, system) = (*exit.site, exit.system);
@@ -3797,7 +3802,9 @@ impl Session {
         // A gate's exit joins the take-off's path before its seed
         // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
         // (@0x6709b; see the `precalced` module), whose `_ResetPlayer`
-        // writes -1 to +0xc908 (see the `stray_words` module).
+        // writes -1 to +0xc908 (see the `stray_words` module). Its fold
+        // and player block come first (@0x66f72-0x67020).
+        self.ship.dock_tail_reset();
         self.space.arm_strength_timer(chance);
         self.reset_precalced();
         self.ship.fate.pod_zeroed = false;
@@ -4087,11 +4094,9 @@ impl Session {
         // them. The take-off's restart of the auxiliary ships comes
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
-        // The dock request's tail clears the player's ionization, charge
-        // and colour, before the strength timer (@0x67008, @0x67020).
-        self.ship.ion = Ion::default();
-        // Its fold (@0x66f83-0x66ff6; see the `ship_display` module).
-        self.ship.take_off_fold();
+        // The dock request's tail's fold and player block, before the
+        // strength timer (@0x66f72-0x67020; the glow is already out).
+        self.ship.dock_tail_reset();
         self.space.arm_strength_timer(chance);
         // The dock request's reset, after the stay's days and before the
         // setup (@0x6709b; see the `precalced` module), whose
@@ -10570,7 +10575,7 @@ pub(super) mod tests {
     }
 
     /// An escort of ship class `ship`, out of no bay.
-    fn fleet_escort(ship: i16) -> Escort {
+    pub(super) fn fleet_escort(ship: i16) -> Escort {
         Escort {
             ship: ShipId(ship),
             reserves: Reserves::default(),
