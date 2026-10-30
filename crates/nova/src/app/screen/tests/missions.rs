@@ -64,6 +64,9 @@ pub(super) fn landed_filmed(
 }
 
 /// [`landed_filmed`], before any pilot is made.
+/// The size of the movies [`filmed`]'s player plays.
+pub(super) const REEL: (u32, u32) = (160, 120);
+
 pub(super) fn filmed(
     flags: u16,
     text: &str,
@@ -76,7 +79,7 @@ pub(super) fn filmed(
     let fork = game_data_fork(true, true, true, 100, b"", b"", None)
         .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
         .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &offer);
-    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let reel = MockMoviePlayer::playing(REEL, 2);
     let store = MemoryPilots::new();
     let screen = AppScreen::new(loaded(&fork))
         .with_prefs(prefs)

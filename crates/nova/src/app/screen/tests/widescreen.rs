@@ -1,11 +1,12 @@
 use super::death::{landed_took_off_and_breaking_up, until_exploded};
 use super::encounters::{boarded, hailing};
-use super::missions::filmed;
+use super::missions::{REEL, filmed};
 use super::port::{in_the_bar_by, scrolled_to};
 use super::*;
 
 use nova_sim::Rulebook;
 use nova_view::ViewShape;
+use nova_view::movie::MovieStage;
 
 // The router in a 16:9 window: flight widened, every other screen
 // classic, and the dialogs over flight in their 1024 x 768 frame, centred.
@@ -113,6 +114,22 @@ fn missions_moved(screen: &AppScreen) -> Vec<DrawCommand> {
     list.iter().cloned().collect()
 }
 
+/// A plain "Text.mov" stage's black window, as the stage draws it in its
+/// frame's coordinates, playing a movie [`REEL`] in size.
+fn plain_window() -> DrawList {
+    let player = MockMoviePlayer::playing(REEL, 2);
+    let mut stage = MovieStage::new(
+        nova_sim::DescMovie::from_desc("Text.mov", 0).expect("a movie"),
+        player as Rc<dyn MoviePlayer>,
+    );
+    stage.begin();
+    let mut drawn = DrawList::new();
+    stage.draw(&mut drawn);
+    let mut window = DrawList::new();
+    window.push(drawn.iter().next().expect("drawn").clone());
+    window
+}
+
 #[test]
 fn a_cinematic_mission_movie_over_widened_flight_covers_the_whole_view() {
     for widen_first in [false, true] {
@@ -142,10 +159,18 @@ fn a_cinematic_mission_movie_over_widened_flight_covers_the_whole_view() {
 fn a_plain_mission_movie_over_widened_flight_is_centred_where_center_window_puts_it() {
     let mut screen = widened(flying_filmed());
     screen.show_over_flight(vec![filmed_text(0)]);
+    assert_eq!(screen.showing(), Showing::Movie);
     let list: Vec<DrawCommand> = drawn(&screen).iter().cloned().collect();
     assert!(
         list.ends_with(&missions_moved(&screen)),
         "the movie's own drawing, moved by the dialogs' offset"
+    );
+    let mut window = DrawList::new();
+    window.extend_translated(&plain_window(), screen.overlay_offset());
+    let window = window.iter().next().expect("its black window").clone();
+    assert!(
+        list.contains(&window),
+        "its black window, where the stage puts it, moved by the dialogs' offset"
     );
     assert!(black_across(&screen, WIDE.0).is_empty(), "no cover");
 }
@@ -155,9 +180,14 @@ fn a_cinematic_movie_in_a_4_by_3_window_draws_as_before() {
     let mut screen = flying_filmed();
     screen.show_over_flight(vec![filmed_text(0x0004)]);
     ticked_for(&mut screen, 2100);
+    assert_eq!(screen.showing(), Showing::Movie);
     assert_eq!(screen.overlay_offset(), Point::new(0.0, 0.0));
     let list: Vec<DrawCommand> = drawn(&screen).iter().cloned().collect();
     assert!(list.ends_with(&missions_moved(&screen)), "its own drawing");
+    assert!(
+        black_across(&screen, 1024.0).contains(&255),
+        "its black window over the classic frame"
+    );
     assert!(!black_beyond(&screen, 1024.0), "nothing past the frame");
 }
 
