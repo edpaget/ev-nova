@@ -714,6 +714,20 @@ mod tests {
     }
 
     #[test]
+    fn by_the_other_reading_a_kept_order_wins_over_the_record_seed_through_an_entry() {
+        let catalog = carrying();
+        let escorts = vec![uncarried(), out()];
+        let mut session = flying(&catalog, escorts, RuleSource::Bible);
+        command(&mut session, FIGHTERS, EscortCommand::Dock);
+        assert_eq!(session.pilot().escorts()[0].order, None, "in formation");
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(
+            kept(&session, EscortClass::Fighter),
+            Some(EscortOrder::Dock)
+        );
+    }
+
+    #[test]
     fn by_the_other_reading_a_mission_escorts_order_stands_through_an_entry() {
         use crate::session::mission_escorts::tests::escorting;
         use crate::session::mission_ships::tests::{accepted, ships_catalog, take_off, tick};
@@ -734,6 +748,8 @@ mod tests {
                 .map(crate::traffic::npc::Npc::escort_order)
                 .collect();
             assert_eq!(orders, [kept; 2], "{source:?}");
+            let class = session.player_led().next().expect("escorting").class;
+            assert_eq!(row(&session, class).order, kept, "{source:?}");
         }
     }
 }
