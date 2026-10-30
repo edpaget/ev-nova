@@ -44,6 +44,7 @@ use crate::input::{Input, Key};
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
+use super::scroll_arrows::ScrollArrow;
 use super::scroll_text::ScrollText;
 use super::slice::{Axis, three_slice};
 
@@ -259,6 +260,10 @@ pub enum Role {
         /// text straight on whatever is below.
         backing: Option<TextBacking>,
     },
+    /// One of a text dialog's scroll arrows, over the dialog's first
+    /// scrolling text. It is enabled whatever the template says, as the
+    /// original's filter hit-tests the arrows itself.
+    ScrollArrow(ScrollArrow),
     /// Not there at all: not drawn, not hit-tested and never focused, as
     /// if it were outside the dialog. Any kind of item can be hidden.
     Hidden,
@@ -326,6 +331,8 @@ enum Widget {
     },
     /// A picture stretched over the item.
     Picture(ImageKey),
+    /// A scroll arrow, drawn from the first scrolling text's flags.
+    ScrollArrow(ScrollArrow),
     /// Laid out and hit-tested, but not drawn.
     Blank,
 }
@@ -470,12 +477,17 @@ impl Dialog {
                     && local.min.x < width
                     && local.max.y > 0.0
                     && local.min.y < height;
-                let enabled = item.enabled && role != Some(&Role::Greyed);
+                let template_enabled = item.enabled
+                    || matches!(
+                        (&item.kind, role),
+                        (ItemSpec::User, Some(Role::ScrollArrow(_)))
+                    );
+                let enabled = template_enabled && role != Some(&Role::Greyed);
                 let bounds = local.offset(origin);
                 Item {
                     bounds,
                     enabled,
-                    template_enabled: item.enabled,
+                    template_enabled,
                     shown,
                     drawn: true,
                     widget: widget(&item.kind, role, bounds, enabled, &metrics),
@@ -898,6 +910,14 @@ impl Dialog {
                     let at = item.bounds;
                     list.stretched_picture(*image, at.min, at.width(), at.height());
                 }
+                Widget::ScrollArrow(arrow) => {
+                    let button = self
+                        .scroll_text()
+                        .and_then(|text| arrow.button(item.bounds, text));
+                    if let Some(button) = button {
+                        button.draw(false, &self.skin, &self.style, &self.metrics, list);
+                    }
+                }
                 Widget::Blank => {}
             }
         }
@@ -935,6 +955,7 @@ fn widget(
             fill: None,
         },
         (ItemSpec::User, Some(Role::Button(label))) => button(label),
+        (ItemSpec::User, Some(Role::ScrollArrow(arrow))) => Widget::ScrollArrow(*arrow),
         (
             ItemSpec::User,
             Some(Role::ScrollText {

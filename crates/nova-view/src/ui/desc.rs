@@ -48,6 +48,7 @@ use crate::text::{TextMetrics, wrap};
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use super::picture_variant::VariantTemplates;
+use super::scroll_arrows::ScrollArrow;
 pub use super::scroll_text::ARROW_UNITS;
 use super::scroll_text::ScrollText;
 use super::text_shrink::shrink_to_text;
@@ -61,10 +62,12 @@ pub const DONE_ITEM: usize = 1;
 /// The text box's item.
 pub const TEXT_ITEM: usize = 3;
 
-/// The scroll-up arrow's item, which the shrink moves with Done.
+/// The scroll-up arrow's item ([`ScrollArrow::Up`]), which the shrink moves
+/// with Done.
 pub const SCROLL_UP_ITEM: usize = 5;
 
-/// The scroll-down arrow's item, which the shrink moves with Done.
+/// The scroll-down arrow's item ([`ScrollArrow::Down`]), which the shrink
+/// moves with Done.
 pub const SCROLL_DOWN_ITEM: usize = 6;
 
 /// How far Home and End scroll the text, in the original's pixels (the
@@ -243,6 +246,8 @@ impl DescDialog {
                     backing: None,
                 },
             ),
+            (SCROLL_UP_ITEM, Role::ScrollArrow(ScrollArrow::Up)),
+            (SCROLL_DOWN_ITEM, Role::ScrollArrow(ScrollArrow::Down)),
         ];
         let dialog = Dialog::new(template, &roles, metrics)
             .with_buttons(ButtonSkin::NOVA, style)
@@ -1235,6 +1240,95 @@ mod tests {
                 ]
             );
         }
+    }
+
+    // The arrows, items 5 and 6.
+
+    /// The cap pictures drawn at `item`.
+    fn caps_at(desc: &DescDialog, item: usize) -> Vec<ImageKey> {
+        let at = desc.dialog().item_bounds(item).expect("the item").min;
+        drawn(desc)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::StretchedPicture {
+                    image, top_left, ..
+                } if *top_left == at => Some(*image),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A press and release of the left button at `at`.
+    fn click(desc: &mut DescDialog, at: Point) {
+        for pressed in [true, false] {
+            desc.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    #[test]
+    fn stock_3003_draws_its_arrows_after_the_text_at_items_5_and_6() {
+        let long = "line\r".repeat(29) + "line";
+        let desc = stock_desc(&long);
+        let (normal, disabled) = (ButtonSkin::NOVA.normal, ButtonSkin::NOVA.disabled);
+        assert_eq!(caps_at(&desc, SCROLL_UP_ITEM), [disabled.left]);
+        assert_eq!(caps_at(&desc, SCROLL_DOWN_ITEM), [normal.left]);
+        let commands = drawn(&desc);
+        let up = desc.dialog().item_bounds(SCROLL_UP_ITEM).expect("up");
+        let cap = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::StretchedPicture { top_left, .. }
+                    if *top_left == up.min)
+            })
+            .expect("up's cap");
+        assert!(
+            commands[..cap].iter().any(|command| matches!(
+                command,
+                DrawCommand::Text {
+                    font: Font::Geneva,
+                    ..
+                }
+            )),
+            "the text first"
+        );
+    }
+
+    /// A shrunk 3003's text always fits its box.
+    #[test]
+    fn a_shrunk_3003_draws_neither_arrow_and_a_press_on_them_scrolls_nothing() {
+        let mut desc = stock_desc("A short text.");
+        for item in [SCROLL_UP_ITEM, SCROLL_DOWN_ITEM] {
+            assert_eq!(caps_at(&desc, item), [], "{item}");
+            let at = desc.dialog().item_bounds(item).expect("the arrow").center();
+            click(&mut desc, at);
+            assert_eq!(desc.scroll_offset(), 0.0, "{item}");
+        }
+        assert!(!desc.closed());
+    }
+
+    #[test]
+    fn the_picture_variant_draws_its_arrows_at_its_own_rects() {
+        let mut picture = stock_template();
+        picture.items[SCROLL_UP_ITEM - 1].bounds = rect(330.0, 215.0, 23.0, 23.0);
+        picture.items[SCROLL_DOWN_ITEM - 1].bounds = rect(363.0, 215.0, 23.0, 23.0);
+        let long = "line\r".repeat(29) + "line";
+        let desc = DescDialog::pictured(
+            &picture,
+            &long,
+            5008,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        let (normal, disabled) = (ButtonSkin::NOVA.normal, ButtonSkin::NOVA.disabled);
+        assert_eq!(caps_at(&desc, SCROLL_UP_ITEM), [disabled.left]);
+        assert_eq!(caps_at(&desc, SCROLL_DOWN_ITEM), [normal.left]);
+        let at = desc.dialog().item_bounds(SCROLL_UP_ITEM).expect("up");
+        let bounds = desc.dialog().bounds();
+        assert_eq!(at.min.y - bounds.min.y, 215.0);
     }
 
     /// `_TextDialogFilter` @0x51f77 maps no Tab or Space.
