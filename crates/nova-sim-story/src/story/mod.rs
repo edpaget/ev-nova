@@ -3003,8 +3003,8 @@
 //!     next + 1 (@0x2ed2e, @0x2eddc);
 //!   - the order of `_Rand`'s draws and its generator;
 //!   - the dock request's take-off reset, outside this function
-//!     (`_HandlePlayerDockRequest` @0x675ce-0x67653):
-//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!     (`_HandlePlayerDockRequest` @0x675ce-0x67653), since built by
+//!     rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset (see "Built by play-feel-4 phase 14").
 //!
 //! ## Checked for stellar-fidelity phase 10
 //!
@@ -3058,8 +3058,9 @@
 //!   gate exit whose escort loop runs @0x674ef-0x675c8, @0x675fc-0x67646
 //!   sets the stellar at ebp−0x298's current and next frames to count − 1
 //!   and its timer to −`AnimDelay`; then `_HandleStellarSystemVisibility`
-//!   rebuilds (@0x67653). Filed as
-//!   rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!   rebuilds (@0x67653). Built by
+//!   rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset; "Checked for play-feel-4 phase 14" names the byte and the
+//!   stellar.
 //!
 //! ## Built by stellar-fidelity phase 12
 //!
@@ -3105,8 +3106,8 @@
 //!     the array comes from an uncleared `_NewPtr` @0x1b7d4): the engine
 //!     uses 1, as the new-slot reset gives;
 //!   - the dock request's take-off reset (`_HandlePlayerDockRequest`
-//!     @0x675ce-0x67646), already
-//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset;
+//!     @0x675ce-0x67646), since built by
+//!     rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset (see "Built by play-feel-4 phase 14");
 //!   - the integer widths: +0x476/+0x478 are 16-bit and the timer a 32-bit
 //!     float;
 //!   - the galaxy viewer (`nova_view::system::SystemView`), which still
@@ -3444,6 +3445,99 @@
 //!   no owner, then opens `_DoPlanetCommDialog` (@0x6204b), whose only
 //!   +0x74 reads are the player's system, for records: a selection
 //!   another visible system owns answers.
+//!
+//! ## Built by play-feel-4 phase 14
+//!
+//! The dock request's reset of every stellar's frames, and the exit gate
+//! opened (see "Checked for play-feel-4 phase 14"):
+//!
+//! - **The session** (`nova_sim::Session`'s `takeoff_frames` module):
+//!   the take-off (`Session::lift_off`, after the setup) and every
+//!   hypergate's or wormhole's exit (after the escorts are led out) reset
+//!   every gate sprite kept, shown or not: current and next frame 0, the
+//!   timer kept. A gate first shown after it starts at current 0, next 0,
+//!   timer 0. Out of a hypergate the exit gate then takes its counted
+//!   count - 1 as current and next, and -`AnimDelay` as its timer
+//!   (`nova_sim::gate_sprite::GateSprite::exit_gate`), so it shows its
+//!   last frame and, released, closes from its open frame - 1 after
+//!   2 × `AnimDelay` - 1 ticks. Each raises
+//!   `nova_sim::SessionEvent::StellarFramesReset`; a refused hypergate
+//!   resets nothing.
+//! - **The view** (`nova_view`'s flight view) takes the event in the
+//!   catch-up after the take-off or the exit, before the scene is laid
+//!   out or drawn again, and resets the frames of every stellar shown
+//!   (`SystemScene::take_off_reset`) and kept (`KeptFrames::reset`), so
+//!   the scene left behind is kept zeroed and the new one resumes zeroed,
+//!   frame 0 shown. A stellar first shown after it starts at current 0,
+//!   next 0, timer 0.
+//! - **Readings.** No key: the Bible says nothing, and the engine had no
+//!   other reading. No sound.
+//! - **Left out**: the 16-bit decrement of an empty slot's count (0xffff
+//!   for no frames): the gate doesn't animate then, and the engine takes
+//!   frame 0, which draws the same.
+//!
+//! ## Checked for play-feel-4 phase 14
+//!
+//! Read with `objdump --x86-asm-syntax=intel -d` on
+//! `EV Nova.app/Contents/MacOS/EV Nova`, `_HandlePlayerDockRequest`
+//! (@0x66691).
+//!
+//! - **Which entries reach the reset.** The dock branch picks a path by
+//!   the dock stellar's `Flags` (+0x34): 0x1000 calls
+//!   `_PlayerEnterHypergate` (@0x66edb), which returns the exit gate's
+//!   `spöb` index in ax; ebp-0x298 = that index and ebp-0x288 = -1
+//!   (@0x66ee0-0x66ee9), and a -1 return (no exit) jumps to @0x67eef
+//!   (@0x66ef2-0x66f08), skipping the reset. 0x2000 calls
+//!   `_PlayerEnterWormhole` (@0x66f12): ebp-0x298 = -1 and ebp-0x288 =
+//!   the wormhole exit (@0x66f17-0x66f20). Anything else calls
+//!   `_PlayerLandOnStellar` (@0x66f29), which runs the whole stay and
+//!   returns at take-off; both locals -1 (@0x66f2e-0x66f37). All three
+//!   join at @0x66f40 and run to @0x675ce with no way out of the
+//!   function, and the three callees have no other callers. So the reset
+//!   runs on every take-off, every hypergate exit and every wormhole
+//!   exit, and is skipped only by a hypergate entered with no exit.
+//! - **The locals.** ebp-0x298 is the hypergate exit stellar (a `spöb`
+//!   index, or -1), set @0x66ee9. ebp-0x2a3 is the "came out of a
+//!   hypergate" byte, (ebp-0x298 != -1), set @0x6712a (`setne`). Beside
+//!   them ebp-0x2a2 is "came out of a wormhole" (@0x67140) and ebp-0x2a1
+//!   either one (@0x6714d), which gates
+//!   `_MissionHandlePlayerEnteredNewSystem` and the escort loops
+//!   (@0x67153, @0x674e2). The escort loop @0x674ef-0x675c8 picks its exit
+//!   by ebp-0x2a3 (`cmovel` @0x67502-0x6750f), as `RuleKey::GateEscorts`
+//!   builds.
+//! - **The reset** (@0x675ce-0x675fa): for all 2048 `spöb` records
+//!   (stride 0x498, to 0x24c000) the current frame +0x476 = 0 and the
+//!   next +0x478 = 0. The timer +0x490 is not written, for any stellar,
+//!   gate or not, kept, never shown or not shown alike.
+//! - **The exit gate** (@0x675fc-0x67646), only when ebp-0x2a3 is set:
+//!   current = the counted count +0x474 - 1 (16-bit, @0x67616-0x6761e);
+//!   next = that current, read again (@0x67629-0x67630); timer =
+//!   -`AnimDelay` (+0x470, sign-extended) as a float (@0x67639-0x67646). A
+//!   wormhole's exit or a take-off sets no gate.
+//! - **Then** `_PrepareAllSprites` (@0x6764e), the rebuild
+//!   `_HandleStellarSystemVisibility` (@0x67653, which shows each slot at
+//!   its current frame modulo its count: frame 0), and `_PrepareAllSprites`
+//!   again (@0x67658).
+//! - **Never-shown records.** After a reset a stellar or gate the flight
+//!   has never shown has next 0, not the launch's 1: `_InitObjects` set
+//!   its current and timer to 0, and the new-slot reset
+//!   (@0x331da-0x331fb) is left out (see "Built by stellar-fidelity phase
+//!   12").
+//! - **Sound**: none in @0x674cc-0x67658. The callees are
+//!   `_CueNextHyperRouteDest`, `_SpawnBountyHunter`,
+//!   `_AIMakeShipEmergeFromHyperGate`, `_PrepareAllSprites` and the
+//!   rebuild; `_AdjustSoundVolume` @0x6766e sets the volume and plays
+//!   nothing.
+//! - **A divergence, filed.** `_PrepareAllSprites` calls
+//!   `_HandleStellarSprites` (@0x3a7c9), which never reads the frozen flag
+//!   `*0x3b523c` (no reference in @0x2e713-0x2ef2c) and adds `_gSpeedMult`
+//!   to the timer (@0x2e810-0x2e825). So every `_PrepareAllSprites` steps
+//!   each shown stellar's and gate's animation a tick: twice after this
+//!   reset before the first frame, and at every other entry that runs it.
+//!   weapons-fidelity phase 47 recorded it as display only, which is wrong
+//!   for the timer and the frames. The engine's
+//!   `Session::prepare_all_sprites` steps no stellar or gate. Filed as
+//!   rdm:phase/play-feel-4-followups/phase-4-prepare-all-sprites-steps-stellar-animation.
 //!
 //! ## Built by stellar-fidelity phase 15
 //!

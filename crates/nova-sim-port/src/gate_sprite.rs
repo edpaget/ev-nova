@@ -46,6 +46,13 @@
 //! With `AnimDelay` 0 or less the threshold is met every tick, so a stock
 //! hypergate (42 frames, `AnimDelay` 0) opens over 21 ticks.
 //!
+//! Outside the sprite tick, every take-off and gate exit resets each
+//! gate's frames to 0, its timer kept ([`GateSprite::take_off_reset`]),
+//! and opens the hypergate the player came out of at its last frame, its
+//! timer at -`AnimDelay` ([`GateSprite::exit_gate`];
+//! `_HandlePlayerDockRequest` @0x675ce-0x67646). The timer is signed for
+//! it.
+//!
 //! The engine differs where the original would hang: a random pick with
 //! no frame left to pick (frames - `o` is 1, say) spins forever in the
 //! original; the engine keeps the next frame it had. `Frame0Bias` ×
@@ -166,7 +173,9 @@ impl GateAnimation {
 pub struct GateSprite {
     current: u16,
     next: u16,
-    timer: u64,
+    /// Signed: the exit gate's starts at -`AnimDelay`
+    /// ([`GateSprite::exit_gate`]).
+    timer: i64,
 }
 
 impl Default for GateSprite {
@@ -187,6 +196,43 @@ impl GateSprite {
         }
     }
 
+    /// The take-off's reset of every `spöb` (`_HandlePlayerDockRequest`
+    /// @0x675ce-0x675fa): its current and next frames to 0, its timer
+    /// kept. It runs at every take-off and every hypergate's or
+    /// wormhole's exit, for every gate, shown or not.
+    pub fn take_off_reset(&mut self) {
+        self.current = 0;
+        self.next = 0;
+    }
+
+    /// A gate the flight first shows after a take-off's reset: frame 0,
+    /// next 0, its timer at 0, as the reset leaves the `spöb` record that
+    /// `_InitObjects` set (@0x1c8b9-0x1c8d1).
+    #[must_use]
+    pub fn after_reset() -> Self {
+        let mut sprite = Self::new();
+        sprite.take_off_reset();
+        sprite
+    }
+
+    /// The hypergate the player comes out of, after the take-off's reset
+    /// (`_HandlePlayerDockRequest` @0x675fc-0x67646): its current and
+    /// next frames its counted count - 1, its timer -`AnimDelay`. So it
+    /// shows its last frame and, released, holds it 2 × `AnimDelay` - 1
+    /// ticks before it closes, or steps on its first tick with an
+    /// `AnimDelay` of 0. With no frames (an empty slot, which never
+    /// animates) the original's 16-bit decrement gives 0xffff; the engine
+    /// takes frame 0, which draws the same.
+    #[must_use]
+    pub fn exit_gate(anim: &GateAnimation) -> Self {
+        let last = anim.frames.saturating_sub(1);
+        Self {
+            current: last,
+            next: last,
+            timer: -i64::from(anim.delay),
+        }
+    }
+
     /// One tick of `anim`'s gate, `destroyed` or not, `held_open` or not,
     /// its random picks drawn on `chance`.
     pub fn step(
@@ -200,7 +246,7 @@ impl GateSprite {
             return;
         }
         self.timer += 1;
-        if i128::from(self.timer) < i128::from(anim.threshold(self.current, held_open)) {
+        if self.timer < anim.threshold(self.current, held_open) {
             return;
         }
         self.timer = 0;
@@ -775,6 +821,80 @@ mod tests {
         assert_eq!(approach_reach(33, true), 72.0, "72.6");
         assert_eq!(approach_reach(5, true), 11.0);
         assert_eq!(approach_reach(32, false), 64.0);
+    }
+
+    #[test]
+    fn a_take_off_reset_zeroes_its_frames_and_keeps_its_timer() {
+        let anim = gate(8, 3);
+        let mut sprite = GateSprite::new();
+        // Frame 2 after 6 ticks, then one more: its timer at 1.
+        run(&mut sprite, &anim, 7, true, &mut NeverFires);
+        assert_eq!(sprite.shown(&anim, false), 2);
+        sprite.take_off_reset();
+        assert_eq!(
+            sprite,
+            GateSprite {
+                current: 0,
+                next: 0,
+                timer: 1
+            }
+        );
+        // Two ticks more reach the delay: it opens a frame from 0.
+        assert_eq!(run(&mut sprite, &anim, 2, true, &mut NeverFires), [0, 1]);
+    }
+
+    #[test]
+    fn a_gate_first_shown_after_a_reset_is_closed_with_next_0_and_its_timer_0() {
+        assert_eq!(
+            GateSprite::after_reset(),
+            GateSprite {
+                current: 0,
+                next: 0,
+                timer: 0
+            }
+        );
+    }
+
+    #[test]
+    fn the_exit_gate_shows_its_last_frame_for_twice_its_delay_less_1_then_closes_from_below_open() {
+        // 8 frames, o = 4, AnimDelay 3: from -3 the timer reaches 3 on
+        // the 6th tick.
+        let anim = gate(8, 3);
+        let mut sprite = GateSprite::exit_gate(&anim);
+        assert_eq!(sprite.shown(&anim, false), 7);
+        assert_eq!(
+            run(&mut sprite, &anim, 7, false, &mut NeverFires),
+            [7, 7, 7, 7, 7, 3, 3]
+        );
+    }
+
+    #[test]
+    fn a_stock_exit_gate_with_delay_0_steps_on_its_first_tick() {
+        let anim = gate(42, 0);
+        let mut sprite = GateSprite::exit_gate(&anim);
+        assert_eq!(sprite.shown(&anim, false), 41);
+        assert_eq!(run(&mut sprite, &anim, 2, false, &mut NeverFires), [20, 19]);
+    }
+
+    #[test]
+    fn the_exit_gate_held_open_plays_on_through_its_loop_after_twice_its_delay() {
+        // 6 frames, o = 3, AnimDelay 1: from -1 it steps on the 2nd tick.
+        let anim = gate(6, 1);
+        let mut sprite = GateSprite::exit_gate(&anim);
+        assert_eq!(
+            sprite,
+            GateSprite {
+                current: 5,
+                next: 5,
+                timer: -1
+            }
+        );
+        // Next 5, as the original sets it: the loop's first step shows 5
+        // again, then wraps to 3.
+        assert_eq!(
+            run(&mut sprite, &anim, 4, true, &mut NeverFires),
+            [5, 5, 3, 4]
+        );
     }
 
     #[test]

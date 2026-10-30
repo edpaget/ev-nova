@@ -635,6 +635,7 @@ mod stray_words;
 mod swarm_formation;
 mod system_background;
 mod take_off_moves;
+mod takeoff_frames;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
@@ -3821,6 +3822,9 @@ impl Session {
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
+        // The frames' reset, the exit gate opened out of a hypergate
+        // (@0x675ce-0x67646; see the `takeoff_frames` module).
+        self.reset_stellar_frames((kind == GateKind::Hypergate).then_some(exit.id));
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
         // out, and again after the stellars' visibility (@0x67658): every
         // NPC's fade steps twice.
@@ -4096,6 +4100,9 @@ impl Session {
         self.reset_precalced();
         self.ship.fate.pod_zeroed = false;
         self.populate(catalog, chance);
+        // The frames' reset (@0x675ce-0x675fa; see the `takeoff_frames`
+        // module).
+        self.reset_stellar_frames(None);
         self.out.sounds.push(SimSound::TookOff);
         self.out.save_due = true;
         self.run.raise(StoryEvent::TookOff { stellar });
@@ -28760,7 +28767,11 @@ pub(super) mod tests {
             .expect("through");
         assert_eq!(
             session.take_events(),
-            [SessionEvent::SystemChanged, SessionEvent::StarfieldReset]
+            [
+                SessionEvent::SystemChanged,
+                SessionEvent::StarfieldReset,
+                SessionEvent::StellarFramesReset
+            ]
         );
         let catalog = wormholes();
         for (roll, system) in [(0, 131), (1, 130)] {
@@ -28771,7 +28782,11 @@ pub(super) mod tests {
             );
             assert_eq!(
                 session.take_events(),
-                [SessionEvent::SystemChanged, SessionEvent::StarfieldReset],
+                [
+                    SessionEvent::SystemChanged,
+                    SessionEvent::StarfieldReset,
+                    SessionEvent::StellarFramesReset
+                ],
                 "{system}"
             );
         }
@@ -30155,7 +30170,13 @@ pub(super) mod tests {
         );
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.chart.sites, [planet(141, 0.0, 0.0)]);
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [
+                SessionEvent::SystemChanged,
+                SessionEvent::StellarFramesReset
+            ]
+        );
         assert!(on_the_map(session));
     }
 

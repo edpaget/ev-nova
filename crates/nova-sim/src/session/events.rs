@@ -40,6 +40,12 @@
 //!   that entry's `SystemChanged`: the flight view scatters its stars
 //!   afresh about the ship. An `M` or `N` move, a developer tools' move
 //!   and a take-off keep them.
+//! - [`SessionEvent::StellarFramesReset`]: a take-off or a hypergate's or
+//!   wormhole's exit reset every stellar's current and next frames to 0,
+//!   as the original's dock request does (see the `takeoff_frames`
+//!   module), told after that entry's other events: the flight view
+//!   resets the frames of every stellar it shows and keeps before it lays
+//!   out or draws the scene again. A refused gate tells nothing.
 //!
 //! The session's other one-shot outputs (its sounds, messages, pay notes,
 //! fighter notes and the rest, each with its own `take_*`) are drained
@@ -67,6 +73,9 @@ pub enum SessionEvent {
     StellarsRebuilt,
     /// The flight's starfield is drawn afresh about the ship.
     StarfieldReset,
+    /// Every stellar's frames were reset, as a take-off or a gate's exit
+    /// resets them.
+    StellarFramesReset,
 }
 
 impl Session {

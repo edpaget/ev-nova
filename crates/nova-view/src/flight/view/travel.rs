@@ -230,6 +230,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
                 SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
                 SessionEvent::StarfieldReset => redrawn.stars = true,
+                SessionEvent::StellarFramesReset => redrawn.frames_reset = true,
             }
         }
         if redrawn.galaxy {

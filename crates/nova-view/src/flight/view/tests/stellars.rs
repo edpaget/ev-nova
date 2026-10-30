@@ -322,6 +322,7 @@ fn each_event_asks_for_its_own_redraw() {
         SessionEvent::StellarChanged,
         SessionEvent::StellarsRebuilt,
         SessionEvent::StarfieldReset,
+        SessionEvent::StellarFramesReset,
     ] {
         view.sim.queue_event(FlightEvent::Session(event));
     }
@@ -335,6 +336,7 @@ fn each_event_asks_for_its_own_redraw() {
             galaxy: false,
             rebuilt: true,
             stars: true,
+            frames_reset: true,
         }
     );
     assert_eq!(view.catch_up_then(|_, _| {}), Redrawn::default(), "taken");

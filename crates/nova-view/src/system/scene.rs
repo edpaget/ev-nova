@@ -395,6 +395,16 @@ impl SystemScene {
         }
     }
 
+    /// The take-off's reset (`_HandlePlayerDockRequest` @0x675ce-0x675fa,
+    /// play-feel-4 phase 14): every stellar's current and next frames to
+    /// 0, its timer kept, and frame 0 shown, as the rebuild after it shows
+    /// the current frame (@0x67653; [`Frames::take_off_reset`]).
+    pub fn take_off_reset(&mut self) {
+        for stellar in &mut self.stellars {
+            stellar.frames.take_off_reset();
+        }
+    }
+
     /// Steps every stellar's animation `ticks` ticks of 1/30 s, each
     /// random next frame (`Flags2` 0x0002) drawn on `chance`: a visual-only
     /// source, never the session's, as nothing the session decides reads
@@ -736,6 +746,38 @@ mod tests {
         }
         assert_eq!(shown, [[1, 1], [3, 2]]);
         assert_eq!(chance.asked, [3, 3], "only the random stellar draws");
+    }
+
+    #[test]
+    fn a_take_off_reset_shows_frame_0_on_every_stellar_and_restarts_them_from_next_0() {
+        let every_tick = |id, x| StellarContents {
+            animation: AnimationData {
+                delay: 1,
+                ..WORMHOLE
+            },
+            ..stellar(id, x, 0, Ok(sheet(1000 + id, 4)))
+        };
+        let catalog = FakeCatalog::new(vec![system(
+            134,
+            vec![every_tick(150, 0), every_tick(151, 100)],
+        )]);
+        let mut scene = SystemScene::load(&catalog, SystemId(134));
+        scene.step(2, &mut NeverFires);
+        assert_eq!(
+            drawn(&scene),
+            [ImageKey::sprite(1150, 2), ImageKey::sprite(1151, 2)]
+        );
+        scene.take_off_reset();
+        assert_eq!(
+            drawn(&scene),
+            [ImageKey::sprite(1150, 0), ImageKey::sprite(1151, 0)]
+        );
+        scene.step(2, &mut NeverFires);
+        assert_eq!(
+            drawn(&scene),
+            [ImageKey::sprite(1150, 1), ImageKey::sprite(1151, 1)],
+            "frame 0 again from next 0, then 1"
+        );
     }
 
     #[test]

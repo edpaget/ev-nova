@@ -29,6 +29,11 @@ pub(super) struct Space {
     /// closes, kept while it is not shown (see the `gate_sprites`
     /// module).
     pub(super) gate_sprites: BTreeMap<StellarId, GateSprite>,
+    /// The sprite a gate the flight first shows starts with: closed as
+    /// the launch leaves it, or as the take-off's reset leaves it once
+    /// the flight has taken off or come out of a gate (see the
+    /// `takeoff_frames` module).
+    pub(super) gate_sprite_afresh: GateSprite,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
     pub(super) comm_line: CommLine,
@@ -191,6 +196,7 @@ impl Space {
     pub(super) fn new() -> Self {
         Self {
             gate_sprites: BTreeMap::new(),
+            gate_sprite_afresh: GateSprite::new(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
             reinforcements_held: false,
