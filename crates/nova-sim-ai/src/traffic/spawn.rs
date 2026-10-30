@@ -366,7 +366,9 @@ impl Entry {
 /// whether a ship may.
 #[derive(Clone, Copy, Debug)]
 pub struct Stellars<'a> {
-    /// The system's stellars, as the galaxy overlay shows them.
+    /// Every stellar the system's `NavDefs` list, shown or not, as
+    /// `_PickEmergeStellar`'s `_SelectRandomStellarDest` walks them
+    /// (@0x7fc7, @0x806bd-0x8072e; [`World::listed`](crate::traffic::World::listed)).
     pub sites: &'a [LandingSite],
     /// Every government and their relations.
     pub govts: &'a Governments,
@@ -4508,6 +4510,27 @@ mod tests {
             ships[0].state.position,
             facing(90.0) * jump_in_distance()
         ));
+    }
+
+    #[test]
+    fn a_ship_may_come_out_of_a_gate_its_system_lists_but_does_not_show() {
+        // `_PickEmergeStellar` calls `_SelectRandomStellarDest` (@0x7fc7),
+        // which walks the system's `NavDefs` (@0x806bd-0x8072e).
+        let listed = gated(90);
+        let world = crate::traffic::World {
+            listed: &listed,
+            ..crate::traffic::World::new(&listed[..1])
+        };
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 1, 0]);
+        let ships = arrivals(&table(), 0, &mut nobody(), world.stellars(), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 2, 3]);
+        assert_eq!(
+            ships[0].entry,
+            Entry::Emerging {
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
+            }
+        );
     }
 
     #[test]

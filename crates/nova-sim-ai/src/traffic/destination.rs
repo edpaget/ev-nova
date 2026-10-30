@@ -14,6 +14,13 @@
 //!   `_BraveTraderAI` @0x8b554, `_WarshipAI` @0x8b906, @0x8ba4a and
 //!   @0x8c025, `_PirateWarshipAI` @0x8c490); and `_InterceptorAI`'s
 //!   patrol with (ship, 0, 1) (@0x8d027-0x8d03a).
+//! - **The stellars** are the system's 16 `NavDefs` slots (system
+//!   +0x2a, @0x806bd-0x8072e), with no test of the stellar's owner (+0x14)
+//!   or active byte (+0x44): every stellar the system lists, shown or
+//!   not, among them one another visible system owns
+//!   ([`World::listed`](crate::traffic::World::listed),
+//!   [`Surroundings::listed`](crate::ai::Surroundings::listed)). It
+//!   returns `NavDefs[slot]` (@0x80aa1-0x80ac8).
 //! - **Each stellar.** One is *ok* when it is landable
 //!   (`_StellarIsLandable` @0x8074e, [`is_landable`]: a destroyed one only
 //!   when only landable destroyed, `Flags` 0x80, an intact one only
@@ -65,10 +72,9 @@
 //! (@0x7fc16-0x7fc34). It tests no landability, destruction, distance from
 //! the centre or habitation.
 //!
-//! Left out, of no effect here:
-//!
-//! - A stellar listed in two nav slots weighs double in the `Rand(16)`
-//!   loop (@0x806c1-0x808f4). The engine's sites are distinct stellars.
+//! A stellar listed in two nav slots weighs double in the `Rand(16)` loop
+//! (@0x806c1-0x808f4); the listing keeps both copies, so it weighs double
+//! among the [`candidates`] too.
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::gate::GateKind;
@@ -218,6 +224,20 @@ mod tests {
             with(142, AVOIDS_HYPERGATES),
             with(143, PREFERS_HYPERGATES | PREFERS_WORMHOLES),
         ])
+    }
+
+    #[test]
+    fn a_stellar_listed_twice_is_a_candidate_twice() {
+        let listed = [
+            planet(128, 0.0, 0.0),
+            planet(129, 0.0, 0.0),
+            planet(128, 0.0, 0.0),
+        ];
+        let ids: Vec<i16> = candidates(SHIP, &listed, &govts(), Admit::All)
+            .iter()
+            .map(|site| site.id.0)
+            .collect();
+        assert_eq!(ids, [128, 129, 128], "weighs double (@0x806c1-0x808f4)");
     }
 
     fn hypergate(id: i16) -> LandingSite {

@@ -483,7 +483,11 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
 /// disabled as `other_disabled` says, with `beside` what it reads beside
 /// it (its swarm lead, a formation escort's guard and sight), at
 /// `speeds`, a dock it starts or a repair it completes noted in the
-/// half's docks, rolling on `chance`.
+/// half's docks, rolling on `chance`. Its goal's stellar is looked up
+/// among every stellar the system lists, shown or not ([`World::listed`]),
+/// as `_HighLevelAIHandler` reads the stellar's record (state 1 @0x8d8d7,
+/// state 20 @0x8db8a): every such goal names a stellar the traffic picked
+/// from the listing, which holds every stellar shown.
 fn fly_steered(
     npc: &mut Npc,
     pass: &mut FlyPass,
@@ -522,7 +526,7 @@ fn fly_steered(
     }
     let outcome = autopilot::fly(
         npc,
-        world.sites,
+        world.listed,
         world.type_widths,
         other.as_ref(),
         other_disabled,

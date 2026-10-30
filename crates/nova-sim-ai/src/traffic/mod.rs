@@ -223,6 +223,8 @@ mod launch_room;
 mod launch_think;
 pub mod leave_flight;
 #[cfg(test)]
+mod listed_stellar_tests;
+#[cfg(test)]
 mod lost_sight_ai_tests;
 #[cfg(test)]
 mod lost_sight_tests;
@@ -553,11 +555,14 @@ fn starting_cloak(cloaked: bool, gear: cloak::CloakGear, shield: &mut f32) -> Cl
 /// the player, the governments, and the player's legal record there.
 #[derive(Clone, Copy, Debug)]
 pub struct World<'a> {
-    /// The system's stellars.
+    /// The system's stellars, those the player's system shows.
     pub sites: &'a [LandingSite],
     /// Every stellar the system's `NavDefs` list, in order, shown or not
     /// (the original's system +0x2a): what the defence respawn walks
-    /// ([`stellar_defence`]). [`World::new`] gives `sites`.
+    /// ([`stellar_defence`]), what the NPCs pick their destinations among
+    /// and fly to ([`Surroundings::listed`], [`fly_pass`]) and what an
+    /// arrival may come out of ([`World::stellars`]). [`World::new`] gives
+    /// `sites`.
     pub listed: &'a [LandingSite],
     /// The player's ship, while it flies in the system.
     pub player: Option<PlayerSide>,
@@ -813,12 +818,13 @@ impl<'a> World<'a> {
         }
     }
 
-    /// The stellars arrivals may come out of, and the governments that
-    /// judge whether one may.
+    /// The stellars arrivals may come out of, every one the system lists
+    /// ([`World::listed`]), and the governments that judge whether one
+    /// may.
     #[must_use]
     pub fn stellars(self) -> Stellars<'a> {
         Stellars {
-            sites: self.sites,
+            sites: self.listed,
             govts: self.govts,
         }
     }
