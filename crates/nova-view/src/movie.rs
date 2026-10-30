@@ -63,11 +63,10 @@ use nova_sim::DescMovie;
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
-use crate::fade::{DEATH_FADE_FOR, ScreenFade};
+use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view_around_frame};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, MouseButton};
 use crate::system::camera::VIEW_SIZE;
-use crate::view_shape::classic_offset;
 
 /// A movie file's frames: opened, decoded and drawn (`NewMovieFromDataRef`,
 /// `MoviesTask`). It decides nothing of how the original plays a movie.
@@ -194,7 +193,7 @@ impl Movies {
     /// Sets the size of the view the main window shows now, for every
     /// clone: Nova's 1024 x 768, or flight's widened view. A holder's
     /// 1024 x 768 frame sits centred in it,
-    /// [`classic_offset`] to the right.
+    /// [`classic_offset`](crate::view_shape::classic_offset) to the right.
     /// The game's edge writes it as the screen it shows changes shape.
     pub fn set_view(&self, view: (f32, f32)) {
         self.view.set(view);
@@ -303,12 +302,18 @@ fn bounds((x, y, width, height): (i32, i32, i32, i32)) -> Bounds {
 }
 
 /// The whole of a view `view` in size, in the coordinates of the 1024 x
-/// 768 frame centred in it: left, top, width and height. The main window a
-/// cinematic movie covers.
+/// 768 frame centred in it ([`whole_view_around_frame`]), in whole units:
+/// left, top, width and height. The main window a cinematic movie covers,
+/// the same rect a text's fade-in on the faded screen covers.
 #[allow(clippy::cast_possible_truncation)]
 fn cover(view: (f32, f32)) -> (i32, i32, i32, i32) {
-    let offset = classic_offset(view.0) as i32;
-    (-offset, 0, view.0 as i32, view.1 as i32)
+    let whole = whole_view_around_frame(view);
+    (
+        whole.min.x as i32,
+        whole.min.y as i32,
+        whole.width() as i32,
+        whole.height() as i32,
+    )
 }
 
 /// The classic 1024 x 768 main window, which a plain movie's box is
