@@ -6,7 +6,10 @@
 //! (@0x3baea-0x3baf1, a jump to 0x3bef9): the ship hit and the lead of an
 //! escort hit take no target and no provocation, the Good Samaritans
 //! stay put, no person's grudge is held and the ship doesn't cloak when
-//! hit (see [`react`](crate::ai::react) and the session's settle step).
+//! hit (see [`react`](crate::ai::react)). The session's settle step
+//! weighs each of the fight's strikes in its own turn, after the
+//! reactions of the strikes before it and just before its own
+//! ([`Traffic::answer_in_turn`](crate::traffic::Traffic::answer_in_turn)).
 //! Its decloak (@0x3bf1f) comes after and still runs for any direct hit.
 //!
 //! [`verdict`] works the flag out in the original's order. `si` is the

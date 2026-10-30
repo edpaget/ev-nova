@@ -281,8 +281,7 @@ use crate::ai::lost_sight::{self, LostSight, SearchTimer};
 use crate::ai::pursuit::{self, Pursuit, PursuitRules};
 use crate::ai::swarm;
 use crate::ai::{
-    Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
-    reinforcements,
+    Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Surroundings, reinforcements,
 };
 use crate::combat::ion::Ion;
 use afterburners::AfterburnerRoll;
@@ -1982,10 +1981,16 @@ impl Traffic {
 
     /// Each intact NPC answers each of `strikes` in `world` that was
     /// answered ([`Strike::answered`]), as `behaviour` says, now, as
-    /// [`Traffic::tick_in`]'s step 2 does: the hit's own step (see
+    /// [`Traffic::tick_in`]'s step 2 does (see
     /// `nova_sim::Session::answer_strikes`). The strikes are answered one
     /// at a time, in the order they landed, each reading the NPCs as the
     /// strikes before it left them (see `Traffic::react`).
+    ///
+    /// They come here already weighed: the session's own calls (the Good
+    /// Samaritan call), or the fight's strikes kept while the traffic was
+    /// not answering. The fight's strikes the traffic answers as they
+    /// settle are weighed and answered together, each flag after the
+    /// reactions before it ([`Traffic::answer_in_turn`]).
     pub fn answer(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -2026,13 +2031,14 @@ impl Traffic {
     /// arrivals (the session's mission-ship arrivals, then
     /// `_EnterMoreShips`), against the NPCs as the previous pass's motion
     /// left them, where the original answered them as they landed. Only a
-    /// caller that skips `nova_sim::Session::answer_strikes` meets this:
-    /// `Session::game_work` and `Session::tick_again` answer after their
-    /// collision passes and after `_HandleShot`, and a flight answers what
-    /// each pass's close struck, so nothing is left for the think. A hit on it that
-    /// it answers (taking a target) cuts its wait, in its gate, held at it
-    /// or holding its course ([`autopilot::cut_wait`], `_DamageShip`
-    /// @0x3be6e-0x3be7c).
+    /// caller that skips `nova_sim::Session::answer_strikes`, or strikes
+    /// kept while the traffic wasn't answering, meet this: the session
+    /// answers the fight's strikes as each phase settles
+    /// ([`Traffic::answer_in_turn`]), and its own calls after the
+    /// collision passes and after `_HandleShot`, so nothing is left for
+    /// the think. A hit on it that it answers (taking a target) cuts its
+    /// wait, in its gate, held at it or holding its course
+    /// ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
     ///
     /// A ship still coming in answers as `_DamageShip` has it (see the
     /// [`ai::react`](crate::ai::react) module):
@@ -2066,9 +2072,8 @@ impl Traffic {
     /// runs before or after the gate changes nothing it sees, as in the
     /// original, whose decloak (@0x3bf1f) follows the reaction (@0x3be69).
     ///
-    /// A flight answers the fight's strikes in the hit's own step
-    /// ([`Traffic::answer`], from
-    /// `nova_sim::Session::answer_strikes`), so a
+    /// A flight answers the fight's strikes as each phase settles
+    /// ([`Traffic::answer_in_turn`], from the session's settle step), so a
     /// ship the player hit in its gate is held, and seen, on the frame of
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
@@ -2086,71 +2091,7 @@ impl Traffic {
         let view = world.gate_view();
         let wanted = in_turn::wanted_headings(&self.npcs);
         for strike in strikes {
-            let reactions: Vec<Option<Reaction>> = {
-                let around = Surroundings {
-                    wanted: Some(&wanted),
-                    ..world.around(&self.npcs)
-                };
-                self.grudges.extend(in_turn::grudge(strike, &around));
-                self.npcs
-                    .iter()
-                    .map(|npc| {
-                        let answers = match world.arrival_hits {
-                            RuleSource::Engine => true,
-                            RuleSource::Bible => npc.arrived(),
-                        };
-                        (answers && npc.condition == Condition::Intact)
-                            .then(|| behaviour.react(npc, strike, &around))
-                    })
-                    .collect()
-            };
-            for (at, reaction) in reactions.into_iter().enumerate() {
-                let Some(reaction) = reaction else {
-                    continue;
-                };
-                let id = self.npcs[at].id;
-                // The victim's reaction ran when it took a target or was
-                // provoked: an answered hit by no ship, which takes none,
-                // always has a nominal damage above none, as the answer
-                // flag's no-damage branch clears the rest (see
-                // `answer_flag`), so it cuts the wait as `_DamageShip`
-                // does for any source but slot 0 (@0x3bd7e-0x3be7c).
-                let ran = reaction.target.is_some() || reaction.provoked > 0.0;
-                let on_itself = strike.direct && ran && strike.ship == ShipRef::Npc(id);
-                let attacks_player = on_itself && strike.by == Some(ShipRef::Player);
-                if let Some(target) = reaction.target {
-                    self.npcs[at].target = Some(target);
-                }
-                if attacks_player {
-                    // `_DamageShip` sets the target (+0x70 @0x3bcf6) before
-                    // it calls `_AIMakeShipAttackPlayer` (@0x3be69), whose
-                    // gate reads the ship as this hit and those before it
-                    // left it (@0x89c53).
-                    self.turn_with_quote(id, view);
-                }
-                let npc = &mut self.npcs[at];
-                if attacks_player {
-                    // `_AIMakeShipAttackPlayer`'s +0x6c = -1 (@0x89d47),
-                    // whatever the ship was doing: a ship held at its gate
-                    // loses its gate there too (`Npc::hold_at_gate`).
-                    npc.travel_set = false;
-                }
-                if on_itself {
-                    autopilot::cut_wait(npc);
-                }
-                npc.provoked += reaction.provoked;
-                match npc.mode {
-                    Mode::JumpingIn { .. } | Mode::LeavingGate { .. } => {}
-                    Mode::Emerging { .. } if attacks_player || reaction.goal.is_some() => {
-                        npc.hold_at_gate();
-                    }
-                    _ => {
-                        if let Some(goal) = reaction.goal {
-                            npc.goal = goal;
-                        }
-                    }
-                }
-            }
+            self.answer_strike(behaviour, world, strike, &wanted, view);
         }
     }
 
