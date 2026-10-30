@@ -496,7 +496,7 @@ impl Screen for NewPilotDialog {
     /// Everything else goes to the dialog: a click in a field focuses it, a
     /// click on Strict Play ticks or clears it, a click on the gender
     /// control switches the gender, OK (or Return) creates the pilot unless
-    /// a field is over [`NAME_LIMIT`] (see [`NewPilotDialog::ok`]), and
+    /// a field is over [`NAME_LIMIT`] (see `NewPilotDialog::ok`), and
     /// Cancel cancels. Escape does nothing unless the rules make it cancel
     /// ([`NewPilotDialog::with_rules`]). It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
