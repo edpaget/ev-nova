@@ -566,9 +566,11 @@ impl AppScreen {
     /// ([`OfferTemplates::layout`]), or, without it or the metrics to lay
     /// it out, the dialog's own note that Return accepts it. Flight's
     /// cursor goes first, as `_HandlePlayerCommunication` and
-    /// `_HandlePlayerBoardAttempt` hide its sprite (@0x6225a, @0x658d6);
-    /// the keys stay held, as `_SetAllKeyCmdFlags` runs only after the
-    /// offer (@0x622ac).
+    /// `_HandlePlayerBoardAttempt` hide its sprite (@0x6225a, @0x658d6).
+    /// Only the pointer is cancelled here: flight's `hold_offer` has
+    /// already let go of its keys. The original keeps reading them live
+    /// over the offer's close
+    /// (rdm:phase/play-feel-7-fidelity/phase-2-flight-keys-still-down-after-a-dialog).
     pub(super) fn open_offer(&mut self, prompt: OfferPrompt) {
         if let Some(flight) = &mut self.flight {
             flight.cancel_pointer();
