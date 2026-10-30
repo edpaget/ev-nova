@@ -4,17 +4,25 @@
 //! 4778 (`mïsn` 906's) name a movie, and only 4778 has `Flags` 0x0001: its
 //! `MovieFile` is the one byte 0x01, which no Nova Files ships, so a
 //! `STR#` text after it (a shop's, the escorts' report) starts a movie
-//! that finds no file and plays nothing; the About text (32767) and the X text (32766) name none; and the
-//! stock first `chär`'s `IntroTextID` is -1, so its intro shows no text.
+//! that finds no file and plays nothing; the About text (32767) and the X
+//! text (32766) name none; and the stock first `chär`'s `IntroTextID` is
+//! -1, so its intro shows no text.
+//!
 //! Driven with movies on, About, X and an entry through the stock intro
-//! start no movie; and a landing at Aurora, whose `dësc` names a movie
-//! that isn't an after-movie, leaves the session's after-movie, which
-//! every shop's `STR#` text is handed, at none. The positive cases are pinned over fixture data (the
-//! `nova` crate's router tests). Skips, passing, when `NOVA_DATA` or the
+//! start no movie. A landing at Aurora, whose `dësc` names a movie that
+//! isn't an after-movie, leaves the session's after-movie, which every
+//! shop's `STR#` text is handed, at none; and the item 1 texts stock data
+//! reaches start no movie once they close: at Aurora the bar's nothing
+//! for hire (#224), the escorts' landing report and a sale alert (#207),
+//! and an empty shipyard's #223 where the stock data has one (Aurora's
+//! lists ships). No stock outfitter lists nothing, so #206 is out of
+//! reach. The positive cases are pinned over fixture data (the `nova`
+//! crate's router tests). Skips, passing, when `NOVA_DATA` or the
 //! interface file is missing.
 
 use crate::common;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -29,6 +37,7 @@ use nova_sim::fixture::MemoryPilots;
 use nova_sim::{
     Pilot, PilotCatalog, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, SystemId,
 };
+use nova_view::flight::SharedChance;
 use nova_view::menu::MenuChoice;
 use nova_view::menu::intro::IntroSource;
 use nova_view::movie::MoviePlayer;
@@ -145,11 +154,15 @@ crate::common::entry_harness!(Driver, click, redraw);
 /// The app over the stock data and interface file, movies on and played
 /// through `player`, the reopened pilot's intro read as `intro`, with
 /// a new stock pilot saved over `at` (its system, its stellar) when
-/// given; on the main menu. `None` when the interface file is missing.
+/// given, as `kit` edits its save, and drawing on `chance` when given (by
+/// default, nothing random fires); on the main menu. `None` when the
+/// interface file is missing.
 fn stock_app(
     player: &Rc<MockMoviePlayer>,
     intro: RuleSource,
     at: Option<(SystemId, i16)>,
+    kit: impl FnOnce(&mut serde_json::Value),
+    chance: Option<SharedChance>,
 ) -> Option<(Driver, Rc<GameData>)> {
     let dir = common::nova_data()?;
     let interface = match nova_data::open_interface(&dir) {
@@ -166,13 +179,14 @@ fn stock_app(
             serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
         save["system"] = serde_json::json!(system.0);
         save["stellar"] = serde_json::json!(stellar);
+        kit(&mut save);
         pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     }
     let store = MemoryPilots::new();
     let keeper = PilotKeeper::new(Box::new(store) as Box<dyn PilotStore>);
     keeper.save(&pilot).expect("saved");
     let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
-    let screen = start_screen(Rc::clone(&data))
+    let mut screen = start_screen(Rc::clone(&data))
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics)
         .with_rules(Rulebook::default().with_override(RuleKey::IntroForReopenedPilot, intro))
@@ -181,6 +195,9 @@ fn stock_app(
             ..Prefs::default()
         })
         .with_movie_player(Rc::clone(player) as Rc<dyn MoviePlayer>);
+    if let Some(chance) = chance {
+        screen = screen.with_chance(chance);
+    }
     let driver = Driver {
         app: App::new(&Window, Rc::clone(&data), crate::common::appeared(screen)),
         gpu: RecordingGpu::new(),
@@ -197,7 +214,7 @@ fn projector() -> Rc<MockMoviePlayer> {
 #[test]
 fn about_x_and_an_entry_through_the_stock_intro_start_no_movie() {
     let player = projector();
-    let Some((mut driver, _)) = stock_app(&player, RuleSource::Bible, None) else {
+    let Some((mut driver, _)) = stock_app(&player, RuleSource::Bible, None, |_| {}, None) else {
         return;
     };
     driver.send(WindowEvent::Menu(MenuCommand::About));
@@ -238,61 +255,257 @@ fn about_x_and_an_entry_through_the_stock_intro_start_no_movie() {
     assert!(player.calls().is_empty(), "{:?}", player.calls());
 }
 
-#[test]
-fn landing_at_aurora_leaves_a_last_desc_with_a_movie_but_no_after_movie_for_the_shops_texts() {
-    let Some(dir) = common::nova_data() else {
-        return;
-    };
-    let data = GameData::open(&dir, None).expect("the stock data opens");
-    let aurora = data
-        .ids(nova_data::records::system::System::TYPE)
+/// The system holding the stock stellar `stellar`.
+fn system_of(data: &GameData, stellar: i16) -> SystemId {
+    data.ids(nova_data::records::system::System::TYPE)
         .iter()
         .map(|&id| SystemId(id))
         .find(|&system| {
             data.landing_sites(system)
                 .iter()
-                .any(|site| site.id.0 == AURORA)
+                .any(|site| site.id.0 == stellar)
         })
-        .expect("Aurora is listed");
+        .expect("the stellar is listed")
+}
+
+impl Driver {
+    /// Opens the saved pilot, enters its ship and lands where it was
+    /// saved, the landing's movie played out: then over the spaceport.
+    fn open_and_land(&mut self) {
+        let open = self
+            .app
+            .screen()
+            .main_menu()
+            .expect("the main menu")
+            .press_point(MenuChoice::OpenPilot);
+        self.click(open);
+        self.press(Key::Enter);
+        self.enter_ship();
+        assert_eq!(self.showing(), Showing::Flight);
+        self.press(Key::Char('l'));
+        self.redraw();
+        self.redraw();
+        self.press(Key::Char('l'));
+        for _ in 0..4 {
+            self.redraw();
+        }
+        assert_eq!(self.showing(), Showing::Spaceport);
+    }
+
+    fn spaceport(&self) -> &nova_view::spaceport::SpaceportView {
+        self.app.screen().spaceport_view().expect("landed")
+    }
+
+    /// The `STR#` text up over the spaceport, its lines joined.
+    fn text_up(&self) -> Option<String> {
+        self.spaceport()
+            .mission_text()
+            .map(|text| text.lines().join(" "))
+    }
+
+    /// The session flight flies.
+    fn session(&self) -> &nova_sim::Session {
+        self.app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .session()
+            .expect("a session")
+    }
+}
+
+/// The stock app with a stock pilot saved over `stellar` as `kit` edits
+/// its save, drawing on `chance` when given, landed there; its movie
+/// player; and the movie calls made by then. `None` when the data is
+/// missing.
+fn landed_at(
+    stellar: i16,
+    kit: impl FnOnce(&mut serde_json::Value),
+    chance: Option<SharedChance>,
+) -> Option<(Driver, Rc<MockMoviePlayer>, usize)> {
+    let dir = common::nova_data()?;
+    let system = system_of(
+        &GameData::open(&dir, None).expect("the stock data opens"),
+        stellar,
+    );
     let player = projector();
-    let Some((mut driver, _)) = stock_app(&player, RuleSource::Engine, Some((aurora, AURORA)))
-    else {
+    let (mut driver, _) = stock_app(
+        &player,
+        RuleSource::Engine,
+        Some((system, stellar)),
+        kit,
+        chance,
+    )?;
+    driver.open_and_land();
+    let landed = player.calls().len();
+    Some((driver, player, landed))
+}
+
+/// The movie calls `player` was asked for after the first `landed`.
+fn since(player: &MockMoviePlayer, landed: usize) -> Vec<nova_view::movie::fixture::Call> {
+    player.calls().into_iter().skip(landed).collect()
+}
+
+#[test]
+fn landing_at_aurora_leaves_a_last_desc_with_a_movie_but_no_after_movie_for_the_shops_texts() {
+    let Some((driver, player, _)) = landed_at(AURORA, |_| {}, None) else {
         return;
     };
-    let open = driver
-        .app
-        .screen()
-        .main_menu()
-        .expect("the main menu")
-        .press_point(MenuChoice::OpenPilot);
-    driver.click(open);
-    driver.press(Key::Enter);
-    driver.enter_ship();
-    assert_eq!(driver.showing(), Showing::Flight);
-    driver.press(Key::Char('l'));
-    driver.redraw();
-    driver.redraw();
-    driver.press(Key::Char('l'));
-    let flyby = player.calls();
     assert_eq!(
-        flyby.first(),
+        player.calls().first(),
         Some(&nova_view::movie::fixture::Call::Start("flyby.qt".into())),
         "the landing loads and plays Aurora's dësc (@0x632a7)"
     );
-    for _ in 0..4 {
-        driver.redraw();
-    }
-    let session = driver
-        .app
-        .screen()
-        .flight_view()
-        .expect("flying")
-        .session()
-        .expect("a session");
     assert_eq!(
-        session.loaded_after_movie(),
+        driver.session().loaded_after_movie(),
         None,
         "the last dësc names a movie, but not after (`Flags` 0)"
     );
-    assert_eq!(driver.showing(), Showing::Spaceport);
+}
+
+#[test]
+fn nothing_for_hire_in_auroras_bar_starts_no_movie_once_it_closes() {
+    // No roll fires, so no class of a `HireRandom` below 100 is for hire
+    // today, as a day of the original's can roll.
+    let Some((mut driver, player, landed)) = landed_at(AURORA, |_| {}, None) else {
+        return;
+    };
+    driver.press(Key::Char('b'));
+    assert!(driver.spaceport().open_bar().is_some(), "the bar");
+    driver.press(Key::Char('h'));
+    assert_eq!(
+        driver.text_up().as_deref(),
+        Some(nova_sim::hire::NONE_FOR_HIRE),
+        "#224 (@0x5e8da)"
+    );
+    driver.press(Key::Enter);
+    driver.redraw();
+    assert_eq!(driver.text_up(), None, "closed");
+    assert_eq!(
+        driver.session().loaded_after_movie(),
+        None,
+        "the bar's dësc (@0x48f91) names no movie"
+    );
+    assert_eq!(since(&player, landed), []);
+}
+
+#[test]
+fn the_escorts_landing_report_at_aurora_starts_no_movie_once_it_closes() {
+    // A Shuttle in the fleet, marked for sale in the escort dialog.
+    let sold = |save: &mut serde_json::Value| {
+        let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
+        save["escorts"] = serde_json::json!([{
+            "ship": 128,
+            "reserves": {"shield": gauge(30.0), "armor": gauge(45.0), "fuel": gauge(300.0)},
+            "order": null,
+            "carried": false,
+            "wage": null,
+            "person": null,
+            "mark": "sell"
+        }]);
+    };
+    let Some((mut driver, player, landed)) = landed_at(AURORA, sold, None) else {
+        return;
+    };
+    assert_eq!(
+        driver.session().loaded_after_movie(),
+        None,
+        "Aurora's dësc was the last loaded"
+    );
+    driver.press(Key::Escape);
+    assert_eq!(driver.showing(), Showing::Spaceport, "held");
+    assert!(driver.text_up().is_some(), "the report (@0x407e8)");
+    driver.press(Key::Enter);
+    for _ in 0..4 {
+        driver.redraw();
+    }
+    assert_eq!(driver.showing(), Showing::Flight, "the leave goes on");
+    assert!(
+        driver.session().pilot().escorts().is_empty(),
+        "sold: the Shuttle's escort"
+    );
+    assert_eq!(since(&player, landed), []);
+}
+
+/// A chance where only rolls of 90 % or more fire, every draw the last
+/// outcome: an outfit of `BuyRandom` 90, the Mass Expansion, is on sale.
+struct Nineties;
+
+impl nova_sim::Chance for Nineties {
+    fn fires(&mut self, percent: u8) -> bool {
+        percent >= 90
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        n.saturating_sub(1)
+    }
+}
+
+/// The Mass Expansion: `Mass` -10, `BuyRandom` 90, tech level 4.
+const MASS_EXPANSION: i16 = 190;
+/// The Battery Pack: `Mass` 3, `BuyRandom` 100.
+const BATTERY_PACK: i16 = 256;
+
+#[test]
+fn a_sale_alert_in_auroras_outfitter_starts_no_movie_once_it_closes() {
+    // A Mass Expansion and three Battery Packs: selling the expansion
+    // would leave the Shuttle's free mass below none (#207).
+    let fitted = |save: &mut serde_json::Value| {
+        let outfits = save["outfits"].as_array_mut().expect("a list");
+        outfits.push(serde_json::json!({"outfit": MASS_EXPANSION, "count": 1}));
+        outfits.push(serde_json::json!({"outfit": BATTERY_PACK, "count": 3}));
+    };
+    let chance = SharedChance::new(Rc::new(RefCell::new(Nineties)));
+    let Some((mut driver, player, landed)) = landed_at(AURORA, fitted, Some(chance)) else {
+        return;
+    };
+    driver.press(Key::Char('o'));
+    let selected = |driver: &Driver| {
+        driver
+            .spaceport()
+            .open_outfitter()
+            .expect("outfitting")
+            .selected_outfit()
+    };
+    for _ in 0..40 {
+        if selected(&driver) == Some(nova_sim::OutfitId(MASS_EXPANSION)) {
+            break;
+        }
+        driver.press(Key::Right);
+    }
+    assert_eq!(selected(&driver), Some(nova_sim::OutfitId(MASS_EXPANSION)));
+    driver.press(Key::Char('s'));
+    let open = driver.spaceport().open_outfitter().expect("outfitting");
+    assert!(open.alert_dialog().is_some(), "the sale refused (@0x5c7a0)");
+    assert_eq!(
+        driver.session().loaded_after_movie(),
+        None,
+        "the selection's dësc (`_OutfitFilter` @0x58476) names no movie"
+    );
+    driver.press(Key::Escape);
+    driver.redraw();
+    let open = driver.spaceport().open_outfitter().expect("outfitting");
+    assert!(open.alert_dialog().is_none(), "closed");
+    assert_eq!(since(&player, landed), []);
+}
+
+/// Stellar 158, whose shipyard lists nothing for the stock pilot when no
+/// roll fires; its `dësc` names no movie.
+const EMPTY_SHIPYARD: i16 = 158;
+
+#[test]
+fn an_empty_shipyards_text_starts_no_movie_once_it_closes() {
+    let Some((mut driver, player, landed)) = landed_at(EMPTY_SHIPYARD, |_| {}, None) else {
+        return;
+    };
+    driver.press(Key::Char('s'));
+    assert_eq!(
+        driver.text_up().as_deref(),
+        Some(nova_view::spaceport::shipyard::NO_SHIPS),
+        "#223 (@0x5e8da)"
+    );
+    driver.press(Key::Enter);
+    driver.redraw();
+    assert_eq!(driver.text_up(), None, "closed");
+    assert_eq!(since(&player, landed), []);
 }
