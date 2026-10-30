@@ -116,7 +116,8 @@ impl Session {
     ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
     ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]),
-    ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]), and the
+    ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]),
+    ///   [`FlightCommand::SwitchedOut`] ([`Session::switched_out`]), and the
     ///   nav's saves and restores: [`Session::save_port_nav`],
     ///   [`Session::restore_port_nav`], [`Session::restore_bar_nav`],
     ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
@@ -194,6 +195,10 @@ impl Session {
             }
             FlightCommand::CommShown(ticks) => {
                 self.comm_shown(ticks);
+                Answer::Done
+            }
+            FlightCommand::SwitchedOut => {
+                self.switched_out();
                 Answer::Done
             }
             FlightCommand::Jump

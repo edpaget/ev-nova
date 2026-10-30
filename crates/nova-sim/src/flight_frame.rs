@@ -821,6 +821,10 @@ pub enum FlightCommand {
     /// the session's line follows it
     /// ([`Session::comm_shown`](crate::Session::comm_shown)).
     CommShown(u16),
+    /// The app was switched out: halt both warp-ups, as `_SwitchedOut`
+    /// does (@0x4f3a3-0x4f3e0;
+    /// [`Session::switched_out`](crate::Session::switched_out)). Not an ask.
+    SwitchedOut,
     /// Return (`ackComm`) cleared the message line: the session's for a
     /// tick while a line shows
     /// ([`Session::comm_acknowledged`](crate::Session::comm_acknowledged)).
@@ -1089,6 +1093,7 @@ impl FlightCommand {
             | Self::BeginFade
             | Self::EndPlay
             | Self::CommShown(_)
+            | Self::SwitchedOut
             | Self::CommAcknowledged
             | Self::CommTicked
             | Self::AnswerHail(_)

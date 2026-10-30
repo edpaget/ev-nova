@@ -629,6 +629,7 @@ mod stock_fold;
 mod story;
 mod stray_words;
 mod swarm_formation;
+mod switched_out;
 mod system_background;
 mod take_off_moves;
 mod takeoff_grace;
