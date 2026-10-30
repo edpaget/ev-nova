@@ -78,7 +78,8 @@ impl AiType {
 pub enum Mode {
     /// Gliding in from hyperspace, on this tick of the glide (from 0), at
     /// [`glide_speed`](crate::traffic::spawn::glide_speed): no steering
-    /// and no decisions.
+    /// and no decisions. Its goal is 8, or 0 before its first dispatch
+    /// (@0x8fd08), so `_ShipVisibleToShip` sees it (@0x972d).
     JumpingIn {
         /// The tick of the glide.
         tick: u32,
@@ -133,9 +134,10 @@ pub enum Mode {
     /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed)
     /// from 30, or from 15 when [`led_out`](Npc::led_out): no steering and
     /// no decisions. Tick 0 is the frame its wait runs out, its goal still
-    /// 0x15, so it still holds the gate's sprite open; from its first
-    /// moving tick it has goal 8 and is out of its gate (+0x6c = -1,
-    /// @0x8dd8a-0x8dd93), and lets go ([`Npc::holds_gate_open`]).
+    /// 0x15, so it still holds the gate's sprite open and no ship sees it
+    /// ([`Npc::emerging`]); from its first moving tick it has goal 8 and is
+    /// out of its gate (+0x6c = -1, @0x8dd8a-0x8dd93), lets go
+    /// ([`Npc::holds_gate_open`]) and is seen.
     LeavingGate {
         /// The tick of the burst.
         tick: u32,
@@ -1195,9 +1197,8 @@ impl Npc {
     /// A ship gliding in ([`Mode::JumpingIn`]) or bursting out of its gate
     /// ([`Mode::LeavingGate`]) runs no wait (`_HyperShipSpawn` sets only
     /// +0x50, @0x42b16), so it is a threat once it targets the player. At
-    /// the burst's tick 0 the original's ship still has goal 0x15 and is
-    /// unseen; the engine's [`Npc::emerging`] treats that tick as out of
-    /// the gate, as every reader of the player's sight does.
+    /// the burst's tick 0 its goal is still 0x15, so it is unseen
+    /// ([`Npc::emerging`]).
     ///
     /// It is the predicate for every reader of `_ExtendedIsThreatToPlayer`:
     ///
