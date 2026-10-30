@@ -70,8 +70,8 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// and the settings ([`FlightCommand::SetWindowWidth`],
-/// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`])
-/// done without taking an answer from the queue, as these follow-ups
+/// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`],
+/// [`FlightCommand::SetSpriteLoad`]) done without taking an answer from the queue, as these follow-ups
 /// ride along with the commands a test is about. Told to fail
 /// ([`FakeFlight::fail`]), its opening says why ([`FakeFlight::opening`]),
 /// it refuses every command but a description's load, still recording
@@ -354,6 +354,7 @@ impl FlightSim for FakeFlight {
                 | FlightCommand::SetWindowWidth(_)
                 | FlightCommand::SetDoubleTimeKey(_)
                 | FlightCommand::SetSoundQuiet(_)
+                | FlightCommand::SetSpriteLoad(_)
         );
         self.applied.push(command);
         if self.failure.is_some() {

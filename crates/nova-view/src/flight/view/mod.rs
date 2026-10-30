@@ -1460,6 +1460,13 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// Whether ships show their weapon glow, as the Weapon Effects
     /// preference says.
     weapon_effects: bool,
+    /// Whether ships draw their engine glow, as the Engine Glows
+    /// preference says.
+    engine_glows: bool,
+    /// What of each ship's sprites the session loads, as the Ship
+    /// Animations and Running Lights preferences say: the last load sent
+    /// it ([`FlightCommand::SetSpriteLoad`]).
+    sprite_load: nova_sim::combat::SpriteLoad,
     /// The player's sound preferences, which say whether the Red Alert
     /// blinks its icon ([`SoundPrefs::alert_quiet`]), as the session is
     /// told.

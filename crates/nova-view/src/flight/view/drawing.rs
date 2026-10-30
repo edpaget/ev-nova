@@ -467,7 +467,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             hull: true,
             murk,
             held: true,
-            glow: glow_level(npc.glow, tick, &glow_rolls),
+            glow: glow_level(npc.glow, tick, &glow_rolls).filter(|_| self.engine_glows),
             lights: npc.drawn.lights,
             weapon: self.glows.drawn(npc.ship).filter(|_| self.weapon_effects),
             shield: self.shield_drawn(npc.ship),
@@ -518,7 +518,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     hull: drawn == ShipDrawn::Full,
                     murk: 0,
                     held: false,
-                    glow: glow_level(player.glow, tick, &self.glow_rolls),
+                    glow: glow_level(player.glow, tick, &self.glow_rolls)
+                        .filter(|_| self.engine_glows),
                     lights: player.drawn.lights,
                     weapon: self
                         .glows

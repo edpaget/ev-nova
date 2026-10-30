@@ -9,6 +9,7 @@ use std::time::Duration;
 
 #[cfg(any(test, feature = "fixture"))]
 use nova_sim::SimCatalog;
+use nova_sim::combat::SpriteLoad;
 use nova_sim::flight_frame::{FlightCommand, FlightOpening, ScreenAnswer, ScreenAsk};
 use nova_sim::{ALERT_CICN, FixedStep, HashedRolls, Rulebook};
 
@@ -310,6 +311,55 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.weapon_effects
     }
 
+    /// The flight with ships drawing their engine glow or not, as the
+    /// Engine Glows preference is on (the default) or off. Off, the glow
+    /// still steps; only its layer is not drawn, as the original, without
+    /// the glow sprites, still steps the glow word (+0xc8d4) and skips
+    /// `_HandleShipDisplay`'s glow block (@0x22e07-0x22e25).
+    #[must_use]
+    pub fn with_engine_glows(self, engine_glows: bool) -> Self {
+        Self {
+            engine_glows,
+            ..self
+        }
+    }
+
+    /// Sets whether ships draw their engine glow.
+    pub fn set_engine_glows(&mut self, engine_glows: bool) {
+        self.engine_glows = engine_glows;
+    }
+
+    /// Whether ships draw their engine glow.
+    #[must_use]
+    pub fn engine_glows(&self) -> bool {
+        self.engine_glows
+    }
+
+    /// The flight with each ship's sprites loaded as `load` says, from
+    /// the Ship Animations and Running Lights preferences: the session is
+    /// told as the flight is built ([`FlightCommand::SetSpriteLoad`]),
+    /// before its first step and before any NPC comes in.
+    #[must_use]
+    pub fn with_sprite_load(mut self, load: SpriteLoad) -> Self {
+        self.set_sprite_load(load);
+        self
+    }
+
+    /// Sets what of each ship's sprites loads, as
+    /// [`FlightView::with_sprite_load`] does: the session is told, as any
+    /// command is ([`FlightView::send`]), the kept frame filled afresh
+    /// after it.
+    pub fn set_sprite_load(&mut self, load: SpriteLoad) {
+        self.sprite_load = load;
+        self.send(FlightCommand::SetSpriteLoad(load));
+    }
+
+    /// What of each ship's sprites the session was last told to load.
+    #[must_use]
+    pub fn sprite_load(&self) -> SpriteLoad {
+        self.sprite_load
+    }
+
     /// The flight with the player's sound preferences `prefs`, which say
     /// whether the Red Alert blinks its icon ([`SoundPrefs::alert_quiet`],
     /// [`FlightCommand::SetSoundQuiet`]).
@@ -547,6 +597,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             smoke_trails: true,
             parallax_starfield: true,
             weapon_effects: true,
+            engine_glows: true,
+            sprite_load: SpriteLoad::default(),
             sound_prefs: SoundPrefs::default(),
             alert_width: opening.alert_width,
             view: VIEW_SIZE,

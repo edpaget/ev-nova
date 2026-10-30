@@ -70,6 +70,7 @@ pub(super) fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
                     | FlightCommand::SetWindowWidth(_)
                     | FlightCommand::SetDoubleTimeKey(_)
                     | FlightCommand::SetSoundQuiet(_)
+                    | FlightCommand::SetSpriteLoad(_)
             )
         })
         .cloned()
@@ -1326,6 +1327,32 @@ fn the_sound_prefs_reach_the_session_when_set() {
             FlightCommand::SetSoundQuiet(true),
             FlightCommand::SetSoundQuiet(true),
             FlightCommand::SetSoundQuiet(false),
+        ],
+        "each told the flight"
+    );
+}
+
+#[test]
+fn the_sprite_load_reaches_the_session_as_the_flight_is_built_and_when_set() {
+    use nova_sim::combat::SpriteLoad;
+    let still = SpriteLoad {
+        ship_animations: false,
+        running_lights: true,
+    };
+    let view = in_flight();
+    assert_eq!(view.sprite_load(), SpriteLoad::default(), "all until told");
+    assert_eq!(view.sim.applied(), [], "nothing sent");
+    let mut view = in_flight().with_sprite_load(still);
+    assert_eq!(view.sprite_load(), still);
+    assert_eq!(view.sim.applied(), [FlightCommand::SetSpriteLoad(still)]);
+    assert_eq!(sent_since(&view, 0), [], "a setting");
+    view.set_sprite_load(SpriteLoad::default());
+    assert_eq!(view.sprite_load(), SpriteLoad::default());
+    assert_eq!(
+        view.sim.applied(),
+        [
+            FlightCommand::SetSpriteLoad(still),
+            FlightCommand::SetSpriteLoad(SpriteLoad::default()),
         ],
         "each told the flight"
     );
