@@ -5,7 +5,7 @@ use std::time::Duration;
 use nova_view::view_shape::classic_offset;
 use nova_view::{
     Diagnostic, DrawList, FullscreenKind, Input, MenuCommand, Point, Prefs, Scaling, Screen,
-    ScreenAction, Showing, Sound, VideoMode, ViewShape,
+    ScreenAction, Showing, Sound, UiSound, VideoMode, ViewShape,
 };
 
 use super::{
@@ -296,6 +296,19 @@ impl Screen for AppScreen {
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
+        }
+    }
+
+    /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
+    /// wherever the game is (its callers are `_DoMainScreen`,
+    /// `_IterateInGameEventLoop` and `_MyModalDialog`). The audio stops
+    /// the music if it plays (@0x4f390-0x4f3a0), and every flight held,
+    /// shown or not, halts its warp-ups (@0x4f3a3-0x4f3e0). No other
+    /// screen keeps a sound the switch-out stops.
+    fn focus_lost(&mut self) {
+        self.sounds.push(Sound::Ui(UiSound::SwitchedOut));
+        for flight in self.flights_mut() {
+            flight.focus_lost();
         }
     }
 

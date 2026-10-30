@@ -1097,6 +1097,47 @@ fn coming_back_to_the_front_reaches_the_game_held_on_the_main_screen() {
     assert_eq!(held(&screen), told);
 }
 
+/// The switch-out's sounds: the music's stop and the flight's warp-up
+/// halt, as `_SwitchedOut` makes them (@0x4f390-0x4f3e0).
+fn switched_out_sounds() -> [Sound; 2] {
+    [
+        Sound::Ui(UiSound::SwitchedOut),
+        Sound::Sim(nova_sim::sound::SimSound::Halt(
+            &nova_sim::sound::WARP_UP_HALTS,
+        )),
+    ]
+}
+
+#[test]
+fn going_to_the_background_stops_the_music_and_reaches_the_flight_shown() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    screen.take_sounds();
+    screen.focus_lost();
+    assert_eq!(screen.take_sounds(), switched_out_sounds());
+}
+
+#[test]
+fn going_to_the_background_reaches_the_game_held_on_the_main_screen() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    screen.take_sounds();
+    screen.focus_lost();
+    assert_eq!(screen.take_sounds(), switched_out_sounds());
+}
+
+#[test]
+fn going_to_the_background_on_the_main_menu_stops_the_music() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    screen.take_sounds();
+    screen.focus_lost();
+    assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::SwitchedOut)]);
+}
+
 #[test]
 fn a_new_pilot_flies_with_the_routers_hyperspace_effects() {
     let store = MemoryPilots::new();
