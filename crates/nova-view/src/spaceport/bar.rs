@@ -6,9 +6,22 @@
 //! The stock dialog is 263 x 185, centred, over `PICT` 8503: the bar text
 //! (`dësc` 10000 plus the stellar's ID less 128) in item 7, and below it
 //! Hire Escort (item 5, `STR#` 150 #13) and Gamble (item 2, #11) on one
-//! row, Holovid (item 3, #12) and Leave (item 1, #1) on the next. Gamble
-//! is not built yet, so it shows greyed. The screen enables its buttons
-//! itself, as the stock items are all disabled.
+//! row, Holovid (item 3, #12) and Leave (item 1, #1) on the next. The
+//! screen enables its buttons itself, as the stock items are all disabled.
+//!
+//! Gamble is always enabled (`_DrawBarButtons` @0x26e7f). Clicked, or with
+//! G or R (`_BarFilter`'s Mac virtual keys 0x05 and 0x0F, @0x47b1c-0x47b31;
+//! presses, never repeats), it asks what it opens
+//! ([`BarScreen::take_gamble_request`]): whoever holds the session opens
+//! the race over the bar ([`BarScreen::open_race`], [`RaceScreen`]) with
+//! cash above 0, or shows `STR#` 2002 #361 over the spaceport
+//! (`_DoBarDialog` @0x49136-0x4918c). A clicked Gamble stays drawn pressed
+//! under either until the bar redraws as it returns
+//! ([`BarScreen::release_gamble`]), as `_TrackBarButtons` (@0x26fd5) never
+//! redraws on release. The race takes every input until it closes back to
+//! the bar; its bets, its Help and its results go through the bar
+//! ([`BarScreen::take_race_bet`], [`BarScreen::take_race_help_request`],
+//! [`BarScreen::show_race_result`]).
 //!
 //! Hire Escort, clicked or with H or E (presses, never repeats), asks for
 //! the ships for hire ([`BarScreen::take_hire_request`]); it is greyed
@@ -40,8 +53,8 @@
 //! [`OfferDialog`] over the bar ([`BarScreen::open_offer`]), or rearms it
 //! ([`BarScreen::rearm`]) with the gap drawn. The offer's choice is taken
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
-//! again once rearmed. Nothing is asked while the hire screen, the news
-//! or an offer is open; the wait runs on or stops under them as
+//! again once rearmed. Nothing is asked while the hire screen, the news,
+//! the race or an offer is open; the wait runs on or stops under them as
 //! [`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock) reads it
 //! ([`BarScreen::with_offer_clock`]), and by the engine the hire screen
 //! restarts it as it opens ([`BarScreen::take_offer_restart`]).
@@ -72,6 +85,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::gamble::Bet;
 use nova_sim::hire::HIRE_ESCORT;
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
 use nova_sim::{HireList, MissionId, News, OfferPrompt, RuleSource, ShipId};
@@ -82,6 +96,7 @@ use super::layout::LEAVE_LABEL;
 use super::news::{NEWS_DIALOG, NewsScreen, shown_news_picture};
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
 use super::port_map::PortMap;
+use super::race::{RACE_DIALOG, RaceScreen};
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -154,6 +169,10 @@ pub const HOLOVID_LABEL: &str = "Holovid";
 /// The keys that press Hire Escort (`_BarFilter`: Mac virtual keys 4 and
 /// 14).
 pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
+
+/// The keys that press Gamble (`_BarFilter`: Mac virtual keys 0x05 and
+/// 0x0F, @0x47b1c-0x47b31).
+pub const GAMBLE_KEYS: [Key; 2] = [Key::Char('g'), Key::Char('r')];
 
 /// The keys that press Holovid, the News button (`_BarFilter`: Mac
 /// virtual keys 0x2D and 0x0D, @0x47b33-0x47b48).
@@ -229,6 +248,8 @@ struct Asks {
     player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
+    /// What Gamble opens: Gamble was pressed.
+    gamble: bool,
     /// The course map [`MAP_KEY`] asked for: the bar's, or the hire
     /// screen's.
     map: Option<PortMap>,
@@ -253,6 +274,11 @@ pub struct BarScreen {
     news_template: Result<DialogTemplate, String>,
     /// The news, while it is open.
     news: Option<NewsScreen>,
+    /// The race dialog's template, or why there is none, and the quantity
+    /// dialog's, its asked bet's.
+    race_templates: (Result<DialogTemplate, String>, Option<DialogTemplate>),
+    /// The race, while it is open.
+    race: Option<RaceScreen>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
     /// The movies its offers and its hire screen's ship loop play.
@@ -322,7 +348,6 @@ impl BarScreen {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(LEAVE_ITEM))
                 .with_cancel(Some(LEAVE_ITEM));
-            dialog.set_greyed(GAMBLE_ITEM, true);
             dialog.set_greyed(HIRE_ITEM, !room);
             Ok(Laid {
                 dialog,
@@ -343,6 +368,11 @@ impl BarScreen {
             hire_closed: false,
             news_template: Err(format!("the news dialog (DLOG {NEWS_DIALOG}) is not given")),
             news: None,
+            race_templates: (
+                Err(format!("the race dialog (DLOG {RACE_DIALOG}) is not given")),
+                None,
+            ),
+            race: None,
             offering: None,
             movies: Movies::none(),
             asks: Asks::default(),
@@ -389,6 +419,110 @@ impl BarScreen {
     #[must_use]
     pub fn news_screen(&self) -> Option<&NewsScreen> {
         self.news.as_ref()
+    }
+
+    /// The bar with its race laid out by `template`, the race dialog (or
+    /// saying why there is none), its asked bet in the quantity dialog
+    /// laid out by `quantity` (or its fallback).
+    #[must_use]
+    pub fn with_race(
+        self,
+        template: Result<DialogTemplate, String>,
+        quantity: Option<DialogTemplate>,
+    ) -> Self {
+        Self {
+            race_templates: (template, quantity),
+            ..self
+        }
+    }
+
+    /// Whether Gamble has asked what it opens since this was last asked:
+    /// whoever holds the session answers by opening the race
+    /// ([`BarScreen::open_race`]) or showing `STR#` 2002 #361 over the
+    /// spaceport.
+    pub fn take_gamble_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.gamble)
+    }
+
+    /// Opens the race over the bar, an asked bet staking at most
+    /// `asked_max`, its buttons taking the bar's focus ring.
+    pub fn open_race(&mut self, asked_max: i64) {
+        let Ok(laid) = &self.laid else {
+            return;
+        };
+        let layout = self
+            .race_templates
+            .0
+            .clone()
+            .map(|template| (template, Rc::clone(&laid.metrics.0)));
+        self.race = Some(
+            RaceScreen::new(layout, self.race_templates.1.clone(), self.style, asked_max)
+                .with_focus_ring(self.focus_ring),
+        );
+    }
+
+    /// The race, while it is open.
+    #[must_use]
+    pub fn race_screen(&self) -> Option<&RaceScreen> {
+        self.race.as_ref()
+    }
+
+    /// The racer and the bet the race asked for since this was last
+    /// taken, once ([`RaceScreen::take_bet`]).
+    pub fn take_race_bet(&mut self) -> Option<(u8, Bet)> {
+        self.race.as_mut()?.take_bet()
+    }
+
+    /// Whether the race's Help has asked for its text since this was last
+    /// asked ([`RaceScreen::take_help_request`]).
+    pub fn take_race_help_request(&mut self) -> bool {
+        self.race
+            .as_mut()
+            .is_some_and(RaceScreen::take_help_request)
+    }
+
+    /// The race asked for ran ([`RaceScreen::show_result`]).
+    pub fn show_race_result(&mut self, winner: u8, asked_max: i64) {
+        if let Some(race) = &mut self.race {
+            race.show_result(winner, asked_max);
+        }
+    }
+
+    /// The race's winnings were credited
+    /// ([`RaceScreen::winnings_collected`]).
+    pub fn race_winnings_collected(&mut self, asked_max: i64) {
+        if let Some(race) = &mut self.race {
+            race.winnings_collected(asked_max);
+        }
+    }
+
+    /// Whether the race has a winner waiting to show
+    /// ([`RaceScreen::revealing`]).
+    #[must_use]
+    pub fn race_revealing(&self) -> bool {
+        self.race.as_ref().is_some_and(RaceScreen::revealing)
+    }
+
+    /// Shows the race's winner waiting ([`RaceScreen::reveal`]).
+    pub fn reveal_race(&mut self) {
+        if let Some(race) = &mut self.race {
+            race.reveal();
+        }
+    }
+
+    /// The race asked for ran none ([`RaceScreen::no_race`]).
+    pub fn race_no_race(&mut self) {
+        if let Some(race) = &mut self.race {
+            race.no_race();
+        }
+    }
+
+    /// The bar redraws (`_BarDialogUpdate` @0x491ad), letting go of a
+    /// clicked Gamble left drawn pressed.
+    pub fn release_gamble(&mut self) {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.hold_pressed(None);
+        }
     }
 
     /// The bar with its dialogs' buttons taking the keyboard focus
@@ -675,6 +809,25 @@ impl BarScreen {
         }
     }
 
+    /// A press (never a repeat) of `key` on the bar laid out, in
+    /// `_BarFilter`'s order: the map key asks for the course map, and Hire
+    /// Escort's, Holovid's and Gamble's keys press them. Whether it was one
+    /// of them.
+    fn press_key(&mut self, key: Key) -> bool {
+        if key == MAP_KEY {
+            self.asks.map = Some(PortMap::Bar);
+        } else if HIRE_KEYS.contains(&key) {
+            self.ask();
+        } else if NEWS_KEYS.contains(&key) {
+            self.asks.news = true;
+        } else if GAMBLE_KEYS.contains(&key) {
+            self.asks.gamble = true;
+        } else {
+            return false;
+        }
+        true
+    }
+
     /// Asks for the ships for hire, if the fleet has room.
     fn ask(&mut self) {
         if self.room {
@@ -682,22 +835,43 @@ impl BarScreen {
         }
     }
 
-    /// Activates dialog item `item`: Leave leaves, and Hire Escort and
-    /// Holovid ask. Anything else does nothing.
+    /// Activates dialog item `item`: Leave leaves, and Hire Escort,
+    /// Holovid and Gamble ask, Gamble left drawn pressed, as
+    /// `_TrackBarButtons` (@0x26fd5) never redraws on release and the
+    /// Gamble branch draws no buttons before it (@0x49136). Anything else
+    /// does nothing.
     fn activate(&mut self, item: usize) {
         match item {
             LEAVE_ITEM => self.closed = true,
             HIRE_ITEM => self.ask(),
             HOLOVID_ITEM => self.asks.news = true,
+            GAMBLE_ITEM => {
+                self.asks.gamble = true;
+                if let Ok(laid) = &mut self.laid {
+                    laid.dialog.hold_pressed(Some(GAMBLE_ITEM));
+                }
+            }
             _ => {}
         }
     }
 }
 
 impl Screen for BarScreen {
-    /// The news, the offer and the hire screen each take every input
-    /// while open; otherwise every input goes to the bar. It never quits.
+    /// The race, the news, the offer and the hire screen each take every
+    /// input while open; otherwise every input goes to the bar. It never
+    /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(race) = &mut self.race {
+            race.input(input);
+            self.sounds.extend(race.take_sounds());
+            if race.closed() {
+                // `_PortDialogUpdate` and `_BarDialogUpdate` as the race
+                // returns (@0x49196-0x491ad).
+                self.race = None;
+                self.release_gamble();
+            }
+            return ScreenAction::None;
+        }
         if let Some(news) = &mut self.news {
             news.input(input);
             self.sounds.extend(news.take_sounds());
@@ -750,7 +924,7 @@ impl Screen for BarScreen {
             }
             return ScreenAction::None;
         }
-        let Ok(laid) = &mut self.laid else {
+        if self.laid.is_err() {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
                 pressed: true,
@@ -760,41 +934,23 @@ impl Screen for BarScreen {
                 self.closed = true;
             }
             return ScreenAction::None;
-        };
-        if *input
-            == (Input::Key {
-                key: MAP_KEY,
-                pressed: true,
-                repeat: false,
-            })
-        {
-            self.asks.map = Some(PortMap::Bar);
-            return ScreenAction::None;
         }
         if let Input::Key {
             key,
             pressed: true,
             repeat: false,
         } = *input
-            && HIRE_KEYS.contains(&key)
+            && self.press_key(key)
         {
-            self.ask();
-            return ScreenAction::None;
-        }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && NEWS_KEYS.contains(&key)
-        {
-            self.asks.news = true;
             return ScreenAction::None;
         }
         if is_mission_info_press(input) {
             self.asks.info = true;
             return ScreenAction::None;
         }
+        let Ok(laid) = &mut self.laid else {
+            return ScreenAction::None;
+        };
         let event = laid.dialog.input(input);
         if let Some(DialogEvent::Item(item)) = event {
             self.activate(item);
@@ -809,7 +965,7 @@ impl Screen for BarScreen {
         if let Some(hire) = &mut self.hire {
             hire.tick(dt);
         }
-        let covered = self.hire.is_some() || self.news.is_some();
+        let covered = self.hire.is_some() || self.news.is_some() || self.race.is_some();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
@@ -849,12 +1005,19 @@ impl Screen for BarScreen {
         if let Some(hire) = &self.hire {
             hire.draw(list);
         }
+        if let Some(race) = &self.race {
+            race.draw(list);
+        }
         if let Some(offering) = &self.offering {
             offering.draw(list);
         }
     }
 
     fn cancel_pointer(&mut self) {
+        if let Some(race) = &mut self.race {
+            race.cancel_pointer();
+            return;
+        }
         if self
             .offering
             .as_mut()
@@ -869,7 +1032,15 @@ impl Screen for BarScreen {
         }
     }
 
-    /// The sounds of the hire screen, the news and the offer, in order.
+    /// Lets go of the keys the race holds: Alt, and its asked bet's.
+    fn release_keys(&mut self) {
+        if let Some(race) = &mut self.race {
+            race.release_keys();
+        }
+    }
+
+    /// The sounds of the hire screen, the news, the race and the offer, in
+    /// order.
     /// The bar's own buttons are silent under the pointer, as
     /// `_TrackBarButtons` @0x26fd5 plays nothing.
     fn take_sounds(&mut self) -> Vec<Sound> {
@@ -1172,14 +1343,9 @@ mod tests {
             Some(rect(ORIGIN.x + 16.0, ORIGIN.y + 10.0, 230.0, 106.0))
         );
         let words = texts(&screen);
-        for label in [LEAVE_LABEL, HIRE_ESCORT, HOLOVID_LABEL] {
+        for label in [LEAVE_LABEL, HIRE_ESCORT, HOLOVID_LABEL, GAMBLE_LABEL] {
             assert!(enabled(&screen, label), "{label}: {words:?}");
         }
-        assert!(!enabled(&screen, GAMBLE_LABEL), "Gamble greyed");
-        assert!(
-            words.iter().any(|(text, _)| text == GAMBLE_LABEL),
-            "Gamble shown"
-        );
         assert_eq!(screen.problem(), None);
     }
 
@@ -1236,8 +1402,229 @@ mod tests {
         let mut screen = bar();
         click_item(&mut screen, GAMBLE_ITEM);
         assert!(!screen.closed());
-        assert!(!screen.take_hire_request(), "greyed, it does nothing");
+        assert!(!screen.take_hire_request());
         assert!(!screen.take_news_request());
+    }
+
+    #[test]
+    fn gamble_is_always_enabled_with_or_without_room_as_the_original_enables_it() {
+        for room in [true, false] {
+            let art = Rc::new(FakeArt {
+                asked: RefCell::default(),
+                pictures: BTreeSet::new(),
+                graphic: None,
+            });
+            let mut screen = bar_of(&art, room);
+            assert!(enabled(&screen, GAMBLE_LABEL), "room {room}");
+            screen.set_hire(&HireList {
+                room: !room,
+                ..list(0)
+            });
+            assert!(enabled(&screen, GAMBLE_LABEL), "room {}", !room);
+        }
+    }
+
+    #[test]
+    fn gamble_g_and_r_ask_to_gamble_on_a_press_only() {
+        let mut screen = bar();
+        assert!(!screen.take_gamble_request());
+        click_item(&mut screen, GAMBLE_ITEM);
+        assert!(screen.take_gamble_request());
+        assert!(!screen.take_gamble_request(), "once");
+        for gamble in GAMBLE_KEYS {
+            screen.input(&key(gamble, true));
+            assert!(!screen.take_gamble_request(), "{gamble:?} repeating");
+            screen.input(&key(gamble, false));
+            assert!(screen.take_gamble_request(), "{gamble:?}");
+        }
+        assert_eq!(GAMBLE_KEYS, [Key::Char('g'), Key::Char('r')]);
+        assert!(!screen.take_hire_request() && !screen.take_news_request());
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn a_clicked_gamble_stays_drawn_pressed_until_the_bar_redraws() {
+        let mut screen = bar();
+        click_item(&mut screen, GAMBLE_ITEM);
+        let held = |screen: &BarScreen| screen.dialog().and_then(Dialog::held_pressed);
+        assert_eq!(held(&screen), Some(GAMBLE_ITEM), "no redraw on release");
+        screen.release_gamble();
+        assert_eq!(held(&screen), None);
+        screen.input(&key(Key::Char('g'), false));
+        assert_eq!(held(&screen), None, "a key draws no press");
+    }
+
+    /// Stock `DITL` 1023's frame and items, enough to lay the race out.
+    fn race_template() -> DialogTemplate {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: rect(x, y, w, h),
+            enabled: false,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 470.0, 230.0),
+            placement: Placement::Center,
+            items: vec![
+                item(243.0, 196.0, 99.0, 25.0),
+                item(129.0, 196.0, 99.0, 25.0),
+                item(13.0, 88.0, 100.0, 100.0),
+                item(128.0, 88.0, 100.0, 100.0),
+                item(243.0, 88.0, 100.0, 100.0),
+                item(357.0, 88.0, 100.0, 100.0),
+            ],
+        }
+    }
+
+    fn racing() -> BarScreen {
+        bar().with_race(Ok(race_template()), None)
+    }
+
+    #[test]
+    fn the_race_opens_over_the_bar_and_takes_every_input_until_it_closes() {
+        let mut screen = racing();
+        click_item(&mut screen, GAMBLE_ITEM);
+        assert!(screen.take_gamble_request());
+        screen.open_race(4_000);
+        let race = screen.race_screen().expect("open");
+        assert_eq!(race.problem(), None, "its own template");
+        let words: Vec<String> = texts(&screen).into_iter().map(|(text, _)| text).collect();
+        assert!(words.iter().any(|text| text == "Cancel"), "{words:?}");
+        for taken in [
+            key(Key::Char('h'), false),
+            key(Key::Char('n'), false),
+            key(Key::Char('g'), false),
+            key(MAP_KEY, false),
+        ] {
+            screen.input(&taken);
+        }
+        assert!(!screen.take_hire_request() && !screen.take_news_request());
+        assert!(!screen.take_gamble_request() && screen.take_map_request().is_none());
+        let racer = screen
+            .race_screen()
+            .and_then(RaceScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(super::super::race::FIRST_RACER_ITEM + 1))
+            .expect("a racer")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: racer,
+            });
+        }
+        assert_eq!(
+            screen.take_race_bet(),
+            Some((1, nova_sim::gamble::Bet::House))
+        );
+        assert!(!screen.race_revealing(), "nothing run yet");
+        screen.show_race_result(1, 3_000);
+        assert!(screen.race_revealing());
+        screen.reveal_race();
+        assert!(!screen.race_revealing(), "shown");
+        assert_eq!(
+            screen.race_screen().map(|race| race.racer_look(1)),
+            Some(super::super::race::RacerLook::Winner)
+        );
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.race_screen().is_none(), "closed back to the bar");
+        assert!(!screen.closed(), "the bar stays open");
+        assert_eq!(
+            screen.dialog().and_then(Dialog::held_pressed),
+            None,
+            "the bar redrew"
+        );
+    }
+
+    /// The race the bar opens takes the bar's focus ring, given before the
+    /// race is laid out.
+    #[test]
+    fn the_race_takes_the_bars_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = racing().with_focus_ring(ring);
+            screen.open_race(4_000);
+            assert_eq!(
+                screen
+                    .race_screen()
+                    .and_then(RaceScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring)
+            );
+        }
+    }
+
+    #[test]
+    fn the_races_help_and_a_race_run_none_of_go_through_the_bar() {
+        let mut screen = racing();
+        screen.open_race(4_000);
+        let help = screen
+            .race_screen()
+            .and_then(RaceScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(super::super::race::HELP_ITEM))
+            .expect("Help")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: help,
+            });
+        }
+        assert!(screen.take_race_help_request());
+        assert!(!screen.take_race_help_request(), "once");
+        screen.race_no_race();
+        assert!(screen.race_screen().is_some());
+    }
+
+    #[test]
+    fn the_bar_lets_go_of_the_races_alt() {
+        let mut screen = racing();
+        screen.open_race(4_000);
+        screen.input(&key(Key::Alt, false));
+        screen.release_keys();
+        let racer = screen
+            .race_screen()
+            .and_then(RaceScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(super::super::race::FIRST_RACER_ITEM))
+            .expect("a racer")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: racer,
+            });
+        }
+        assert_eq!(
+            screen.take_race_bet(),
+            Some((0, nova_sim::gamble::Bet::House)),
+            "Alt let go: no ask"
+        );
+    }
+
+    #[test]
+    fn without_the_race_dialog_given_the_race_says_so() {
+        let mut screen = bar();
+        screen.open_race(10);
+        assert!(
+            screen
+                .race_screen()
+                .and_then(RaceScreen::problem)
+                .is_some_and(|why| why.contains("1023"))
+        );
+        screen.input(&key(Key::Enter, false));
+        assert!(screen.race_screen().is_none());
+    }
+
+    #[test]
+    fn by_the_engine_an_offer_due_under_the_race_is_asked_for_as_it_closes() {
+        let mut screen = offering().with_race(Ok(race_template()), None);
+        screen.open_race(10);
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while it is open");
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.race_screen().is_none());
+        screen.tick(ms(0));
+        assert!(screen.take_offer_request(), "at once once it closes");
     }
 
     #[test]

@@ -623,6 +623,39 @@ fn a_jumps_warp_sounds_reach_the_audio_port() {
     );
 }
 
+/// `_SwitchedOut` halts 128 then 129 as the app is switched out
+/// (@0x4f3a3-0x4f3e0), here mid-jump with the warp-up playing.
+#[test]
+fn losing_focus_halts_the_warp_ups_on_the_audio_port() {
+    let audio = RecordingAudio::new();
+    let log = audio.log();
+    let mut harness = Harness::flying();
+    harness.app = harness
+        .app
+        .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
+    harness.plot(129);
+    harness.fly_out();
+    harness.press(Key::Char('j'));
+    let warp_up_playing = |log: &Rc<RefCell<Vec<AudioCommand>>>| {
+        log.borrow()
+            .iter()
+            .any(|command| matches!(command, AudioCommand::PlayAtRate { .. }))
+    };
+    harness.settle_until("the warp-up", |_| warp_up_playing(&log));
+    assert_ne!(harness.session().system(), SystemId(129), "before arrival");
+    log.borrow_mut().clear();
+    harness.send(WindowEvent::FocusLost);
+    let halts: Vec<_> = log
+        .borrow()
+        .iter()
+        .filter_map(|command| match *command {
+            AudioCommand::Halt { sound } => Some(sound),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(halts, nova_sim::sound::WARP_UP_HALTS);
+}
+
 /// Fires every time, recording each percent it is asked.
 struct Always(Rc<RefCell<Vec<u8>>>);
 

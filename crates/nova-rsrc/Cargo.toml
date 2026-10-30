@@ -1,6 +1,6 @@
 [package]
 name = "nova-rsrc"
-description = "Reader for classic Mac OS resource forks (flattened .ndat / .rsrc files) and Windows .rez resource files"
+description = "Reader for classic Mac OS resource forks (flattened .ndat / .rsrc files, or wrapped in MacBinary .bin files) and Windows .rez resource files"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

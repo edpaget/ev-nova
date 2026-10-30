@@ -441,3 +441,62 @@ fn after_a_dialogs_map_flights_map_draws_with_no_marks() {
         );
     }
 }
+
+#[test]
+fn a_dialogs_map_closed_before_m_is_let_go_waits_for_its_release() {
+    // `_DoSystemMap`'s wait (@0x13a2e-0x13a46): each dialog opens it on
+    // M, so a close while M is still down waits, its restore with it.
+    let closes: [fn(&mut Faked); 2] = [
+        |view| view.port_map_input(&key(Key::Enter, true)),
+        Faked::close_map,
+    ];
+    for landed in [Some(StellarId(128)), None] {
+        for (n, close) in closes.into_iter().enumerate() {
+            let mut view = faked_dialogs(FlightFrame { landed, ..in_sol() }, MapMarks::NONE, MOON);
+            view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+            close(&mut view);
+            assert!(view.map_open, "close {n} waits, docked at {landed:?}");
+            assert_eq!(sent(&view), [], "close {n}: no restore yet");
+            view.port_map_input(&key(MAP, false));
+            assert!(!view.map_open, "close {n} on the release");
+            assert!(
+                sent(&view).contains(&FlightCommand::RestoreMapNav(SavedNav::of(MOON))),
+                "close {n}: restored on the release"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_dialogs_map_closed_by_m_pressed_again_waits_for_its_release() {
+    // M's own close reads M held (`_MapFilter` @0x144db-0x14587), so a
+    // second press after the first was let go waits as any close does.
+    for landed in [Some(StellarId(128)), None] {
+        let mut view = faked_dialogs(FlightFrame { landed, ..in_sol() }, MapMarks::NONE, MOON);
+        view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+        view.port_map_input(&key(MAP, false));
+        view.port_map_input(&key(MAP, true));
+        assert!(view.map_open, "waits for M's release, docked at {landed:?}");
+        assert_eq!(sent(&view), [], "no restore yet, docked at {landed:?}");
+        assert_eq!(view.ui_sounds, [], "no beep yet, docked at {landed:?}");
+        view.port_map_input(&key(MAP, false));
+        assert!(
+            !view.map_open,
+            "closed on the release, docked at {landed:?}"
+        );
+        assert!(
+            sent(&view).contains(&FlightCommand::RestoreMapNav(SavedNav::of(MOON))),
+            "restored on the release, docked at {landed:?}"
+        );
+        assert_eq!(view.ui_sounds, [], "a dialog's map closes in silence");
+    }
+}
+
+#[test]
+fn a_dialogs_map_closes_at_once_by_return_once_m_is_let_go() {
+    let mut view = faked_in_flight();
+    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+    view.port_map_input(&key(MAP, false));
+    view.port_map_input(&key(Key::Enter, true));
+    assert!(!view.map_open);
+}

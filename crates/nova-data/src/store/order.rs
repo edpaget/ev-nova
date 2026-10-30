@@ -60,9 +60,10 @@ const NOT_GAME_DATA: &[&str] = &[
 /// tree and ignored in the data directory. A file is ignored when its
 /// lower-cased extension is in the skip list (music, movies, documents,
 /// images); every other file is a candidate, including `.ndat`, `.npif`,
-/// Windows `.rez` files, files with no extension and names such as
-/// `Foo v1.2`, because classic plug-ins often have no extension or a dotted
-/// name.
+/// Windows `.rez` files, MacBinary `.bin` files, files with no extension and
+/// names such as `Foo v1.2`, because classic plug-ins often have no
+/// extension or a dotted name. Which format a candidate holds is decided
+/// later, by its content (`nova_rsrc::ResourceFile::from_bytes`).
 #[must_use]
 pub fn classify(name: &OsStr, kind: EntryKind, origin: Origin) -> Classified {
     if name.as_encoded_bytes().starts_with(b".") {
@@ -206,6 +207,8 @@ mod tests {
             ("shot.gif", File, PlugIn, not_game_data("gif")),
             ("x.rez", File, PlugIn, Candidate),
             ("X.REZ", File, Data, Candidate),
+            ("x.bin", File, PlugIn, Candidate),
+            ("X.BIN", File, Data, Candidate),
             ("Link", Symlink, PlugIn, Ignored(R::Symlink)),
             ("Link.ndat", Symlink, Data, Ignored(R::Symlink)),
             ("fifo", Other, PlugIn, Ignored(R::NotAFile)),

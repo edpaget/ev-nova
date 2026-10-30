@@ -17,9 +17,10 @@
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it ([`Session::player_display_step`]).
 //! 3. The collision passes (@0x43e70-0x44015), their hits settled and
-//!    answered at once, as `_DamageShip`'s reaction block runs in them,
-//!    a shot's hit that starts a ship dying queuing the victory of the
-//!    escort attacking it (`_HandleShipHit` @0x36c7f-0x36d45).
+//!    answered at once, each in turn, as `_DamageShip`'s reaction block
+//!    runs in them, a shot's hit that starts a ship dying queuing the
+//!    victory of the escort attacking it (`_HandleShipHit`
+//!    @0x36c7f-0x36d45).
 //! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
 //!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
 //!    module), the traffic's think half,
@@ -49,7 +50,10 @@
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]); then the stellar guns
+//!    settled ([`Session::ship_loop`]); then the +0x47 pass, each nav
+//!    stellar with a defence ship in the system marked under attack
+//!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
+//!    stellar guns
 //!    (`_HandleStellarWeapons` @0x444d7, after `_HandleStellarSprites`
 //!    @0x444d2), each armed stellar firing at its target (see the
 //!    `stellar_guns` module).
@@ -59,7 +63,7 @@
 //!    (`_HandleReinforcements` @0x44504); then the stellar hazards,
 //!    gravity's pull and the deadly stellars' kills (`_HandleGravity`
 //!    @0x44509, `_HandleDeadlyStellars` @0x4450e), then `_HandleBeams`
-//!    (@0x4453d), its hits settled and the field lent to it, so a beam
+//!    (@0x4453d), its hits settled and answered and the field lent to it, so a beam
 //!    meets each asteroid where this pass's step left it
 //!    ([`Session::beams_phase`], see the `asteroid_beams` module), then
 //!    what the pass leaves ([`Session::fight_tail`]).
@@ -97,9 +101,6 @@
 //!   where `_SpawnAsteroid` (@0x44243) runs before the AI: a new asteroid
 //!   is met by no shot until the next pass either way, and the step comes
 //!   before the beams in both (see the `asteroids` module).
-//! - What the close strikes (the beams, the shockwaves) is answered by the
-//!   caller after the pass ([`Session::answer_strikes`]), before the frame
-//!   is drawn.
 //! - The session's part of an escort a shot's blast or lock takes out of
 //!   the player's fleet (its record, AI type and cargo share) settles
 //!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
@@ -116,8 +117,9 @@
 //! session ([`Session::with_fighters`]): the player, then every NPC, each
 //! on the terms the session works out for it. A phase that lands hits is
 //! settled at once ([`Session::settle_landed`]): the player's downing
-//! lines, the pushes, the NPCs' fates, the strikes' answers, crimes and
-//! kills. A target that starts breaking up, emerging or cloaked in a
+//! lines, the pushes, the NPCs' fates, the crimes and kills, and each
+//! strike weighed and answered in turn, the beams' as `_HandleBeams`
+//! answers each beam hit as it lands (@0x4453d). A target that starts breaking up, emerging or cloaked in a
 //! phase stays the target through the pass and is let go at the next
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
@@ -297,9 +299,9 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         // The end of `_HandlePlayer` and its display (@0x43e29).
-        self.player_display_step(pass, rules, start.player_head(), chance);
+        self.player_display_step(behaviour, pass, rules, start.player_head(), chance);
         // The collision passes (@0x43e70-0x44015).
-        self.collision_passes(pass, rules, chance);
+        self.collision_passes(behaviour, pass, rules, chance);
         self.answer_strikes(behaviour);
         // The advance pass's AI (@0x44223-0x442ae).
         let thought = if let Some(catalog) = ai {
@@ -330,9 +332,15 @@ impl Session {
         // `_HandleShot` (@0x44385), its guidance reading the field
         // before `_HandleAsteroids` moves it.
         let spots = self.space.asteroid_spots();
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots_in(fighters, arena, &spots, chance);
-        });
+        self.land_phase(
+            behaviour,
+            pass,
+            rules,
+            chance,
+            |combat, fighters, arena, chance| {
+                combat.fly_shots_in(fighters, arena, &spots, chance);
+            },
+        );
         self.answer_strikes(behaviour);
         // The ship loop: `_HandleShip` (@0x44483) and `_HandleShipDisplay`
         // (@0x444ad), slot by slot.
@@ -341,7 +349,11 @@ impl Session {
             Some(None) => Motion::Populated,
             None => Motion::Again,
         };
-        self.ship_loop(start, motion, pass, rules, chance);
+        self.ship_loop(behaviour, start, motion, pass, rules, chance);
+        // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
+        // ship loop and before the guns read it (see the
+        // `stellar_defence` module).
+        self.mark_defended_stellars();
         // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
         // (@0x444d7).
         self.stellar_guns(pass, rules, chance);
@@ -355,7 +367,7 @@ impl Session {
         }
         // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
         // what the pass leaves.
-        self.beams_phase(pass, rules, chance);
+        self.beams_phase(behaviour, pass, rules, chance);
         self.fight_tail(rules, chance);
     }
 
@@ -510,6 +522,7 @@ impl Session {
             resists: player_terms.resists,
             sprite: player_terms.sprite,
             slot: crate::ship_layer::Slot::Player,
+            defends: None,
         }];
         let npcs = self.space.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -531,9 +544,10 @@ impl Session {
     /// ship, a deadly stellar's kill in the phase, `killed`, read as the
     /// condition the hits left (see the `player_downed` module); the
     /// pushes; each NPC newly
-    /// downed raising its fate; the strikes weighed, answered for crimes
-    /// and kills ([`Session::settle_strikes`]) and kept for the NPCs'
-    /// answers. A target the phase left dying or cloaked is kept: the next
+    /// downed raising its fate; the strikes answered for crimes and kills,
+    /// then weighed and answered by the NPCs in turn, as `behaviour` says
+    /// ([`Session::settle_strikes`]). A target the phase left dying or
+    /// cloaked is kept: the next
     /// pass's head lets go of it (see the `lost_target` module).
     ///
     /// Between the fates and the strikes, every escort the phase left
@@ -556,6 +570,7 @@ impl Session {
     /// loss waits for the phase's end.
     fn settle_landed(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         was: &[NpcBefore],
         (player_was, killed): (Condition, Option<Condition>),
         rules: Rules,
@@ -572,13 +587,14 @@ impl Session {
         self.raise_disabled(was, chance);
         self.space.sync_fleet(&mut self.pilot);
         self.lose_escorts(was, &struck);
-        self.settle_strikes((strikes, losses), was, rules.law, chance);
+        self.settle_strikes(behaviour, (strikes, losses), was, rules.law, chance);
     }
 
     /// Runs `phase`, one that lands hits, as [`Session::with_fighters`]
     /// does, then settles them ([`Session::settle_landed`]).
     pub(super) fn land_phase(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         pass: GamePass,
         rules: Rules,
         chance: &mut dyn Chance,
@@ -587,7 +603,7 @@ impl Session {
         let was = self.space.npcs_before();
         let player_was = self.ship.condition;
         self.with_fighters(pass, rules, chance, phase);
-        self.settle_landed(&was, (player_was, None), rules, chance);
+        self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
     }
 
     /// The pass's stellar hazards and its `_HandleBeams` on `pass` by
@@ -609,7 +625,13 @@ impl Session {
     /// tractor its asteroids, destroying each at once; the boxes of each
     /// one destroyed are spawned after it (see the `asteroid_beams`
     /// module).
-    pub(super) fn beams_phase(&mut self, pass: GamePass, rules: Rules, chance: &mut dyn Chance) {
+    pub(super) fn beams_phase(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        pass: GamePass,
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
         let hazards = self.stellar_hazards();
         let mut stellars = self.stellar_targets();
         let was = self.space.npcs_before();
@@ -627,7 +649,7 @@ impl Session {
         self.space.asteroids = asteroids;
         self.space.settle_asteroid_remains(&mut *chance);
         let killed = self.hold_stellar_kills();
-        self.settle_landed(&was, (player_was, killed), rules, chance);
+        self.settle_landed(behaviour, &was, (player_was, killed), rules, chance);
         self.strike_stellars(&stellars, rules.law, chance);
     }
 
@@ -640,6 +662,7 @@ impl Session {
     /// module).
     pub(super) fn collision_passes(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         pass: GamePass,
         rules: Rules,
         chance: &mut dyn Chance,
@@ -661,7 +684,7 @@ impl Session {
             combat.test_hits(fighters, arena, scenery, chance);
         });
         self.space.asteroids = asteroids;
-        self.settle_landed(&was, (player_was, None), rules, chance);
+        self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
         self.strike_stellars(&stellars, rules.law, chance);
         self.space.settle_asteroid_remains(&mut *chance);
     }
@@ -1176,6 +1199,40 @@ mod tests {
         assert_eq!(fates(&session), [disabled]);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(fates(&session), [disabled], "once");
+    }
+
+    #[test]
+    fn a_defence_ship_broken_up_by_a_hit_raises_no_disabled_fate() {
+        // `_DamageShip`'s `_IsDisabled` after the hit (@0x3ae5b, @0x3af8b)
+        // never holds for a defence ship (@0x2d6f).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.defends = Some(crate::catalog::StellarId(128));
+        npc.reserves.shield.now = 0.0;
+        npc.reserves.armor.now = 1.0;
+        npc.hull.death_delay = 30;
+        session.hold_trigger(FIRE);
+        let mut ticks = 0;
+        while session.npcs()[0].condition == Condition::Intact {
+            work(&mut session, &catalog, Controls::default());
+            session.hold_trigger(Trigger::default());
+            ticks += 1;
+            assert!(ticks < 20, "never hit");
+        }
+        assert!(matches!(
+            session.npcs()[0].condition,
+            Condition::Dying { .. }
+        ));
+        let disabled = StoryEvent::ShipFate {
+            ship: NpcId(0),
+            fate: Fate::Disabled,
+        };
+        assert!(
+            !fates(&session).contains(&disabled),
+            "{:?}",
+            fates(&session)
+        );
     }
 
     /// Every NPC keeps its goal.

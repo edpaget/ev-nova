@@ -18,8 +18,9 @@
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
 //!   ship picked at random among the others in the system (the player
 //!   first, then the NPCs in order), but not the one it last inspected
-//!   nor another interceptor (AI type 4, @0x8cd4e, @0x8cdfe: a ship with
-//!   no AI, [`Npc::no_ai`], reads as none, whatever its class); the
+//!   nor another interceptor (the original's AI type 4, @0x8cd4e,
+//!   @0x8cdfe, [`Npc::original_ai_type`]: a led one reads 6 and a ship
+//!   with no AI -1, whatever its class, so either may be picked); the
 //!   original retries `Rand(64)` slots, here one draw among them. It
 //!   picks only a ship it sees (`_ShipVisibleToShip`, @0x8cd5f in the
 //!   count, @0x8ce13 in the pick; [`sight`](super::sight)), the player
@@ -97,7 +98,7 @@ use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
 use crate::govt::INTERCEPTORS_RETREAT;
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::{AiType, Npc};
+use crate::traffic::npc::Npc;
 use crate::traffic::provocation::attack_breaking_up;
 
 /// How near, in pixels on either axis, an interceptor comes to the ship
@@ -305,8 +306,9 @@ fn re_pick(
 }
 
 /// A ship for `npc` to inspect among `around`, picked on `chance`: the
-/// player or an NPC, not itself, not another interceptor, not the one it
-/// last inspected nor the one it has just looked over.
+/// player or an NPC, not itself, not another unled interceptor (see the
+/// module docs), not the one it last inspected nor the one it has just
+/// looked over.
 fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
     let done = [npc.inspected, npc.goal.inspecting()];
     let player = (around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player))
@@ -314,7 +316,7 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
     let npcs = around
         .npcs
         .iter()
-        .filter(|other| other.id != npc.id && (other.no_ai || other.ai_type != AiType::Interceptor))
+        .filter(|other| other.id != npc.id && other.original_ai_type() != 4)
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| around.live(ship) && around.sees(npc, ship));
     let candidates: Vec<ShipRef> = player
@@ -347,6 +349,7 @@ mod tests {
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
     use crate::govt::{Governments, WARSHIPS_RETREAT};
+    use crate::traffic::npc::AiType;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -516,6 +519,29 @@ mod tests {
             (Goal::Inspect(n(2)), vec![2]),
             "AI type -1 is not 4 (@0x8cd4e)"
         );
+    }
+
+    #[test]
+    fn it_may_inspect_a_led_or_marked_interceptor_but_not_an_unled_one() {
+        // A led ship is the original's AI type 6, not 4 (@0x8cd4e).
+        let mut led = ship(2, POLICE, AiType::Interceptor, 500.0, 0.0);
+        led.leader = Some(crate::traffic::npc::NpcId(9));
+        let mut marked = ship(2, POLICE, AiType::Interceptor, 500.0, 0.0);
+        marked.kept_escort_ai = true;
+        marked.condition = crate::combat::hull::Condition::Disabled;
+        for other in [led, marked] {
+            let npcs = [police(), other];
+            let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[1]);
+            assert_eq!(
+                (goal, asked),
+                (Goal::Inspect(n(2)), vec![2]),
+                "{:?}",
+                npcs[1]
+            );
+        }
+        let npcs = [police(), ship(2, POLICE, AiType::Interceptor, 500.0, 0.0)];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[0]);
+        assert_eq!((goal, asked), (Goal::Inspect(P), vec![1]), "unled");
     }
 
     #[test]

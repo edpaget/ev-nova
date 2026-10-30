@@ -673,6 +673,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.stellar_lives()
     }
 
+    fn stellar_scripts(&self) -> Vec<cat::StellarScripts> {
+        self.data.stellar_scripts()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.data.fallback_frame_size()
     }
@@ -722,6 +726,10 @@ impl PilotCatalog for Probed<'_> {
 
     fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
         self.data.first_stellars()
+    }
+
+    fn nav_def_slots(&self) -> Vec<(SystemId, cat::NavDefSlots)> {
+        self.data.nav_def_slots()
     }
 
     fn nebulae(&self) -> Vec<cat::NebulaRecord> {

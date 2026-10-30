@@ -357,7 +357,8 @@ pub fn bomb_goes_off(
         cant_kill: true,
         cant_disable: true,
     };
-    take(reserves, hit, hull, rule, was_disabled);
+    // The player's ship, which defends no stellar.
+    take(reserves, hit, hull, rule, was_disabled, false);
 }
 
 /// Whether `record` has a slot of `mod_type`.

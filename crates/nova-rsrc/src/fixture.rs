@@ -5,11 +5,21 @@
 //! [`Layout`] records where every field landed so corruption tests can poke
 //! exact bytes with the [`BuiltFork`] helpers. [`RezBuilder`] takes the same
 //! calls and writes a Windows `.rez` file instead, with [`RezLayout`] and
-//! [`BuiltRez`] playing the same roles. [`forks`] holds the shared
-//! in-memory [`ForkReader`](crate::ForkReader) fake and the port's
-//! contract.
+//! [`BuiltRez`] playing the same roles. [`MacBinaryBuilder`] wraps a built
+//! fork in a MacBinary container, with [`BuiltMacBinary`] and
+//! [`MacBinaryLayout`]. [`forks`] holds the shared in-memory
+//! [`ForkReader`](crate::ForkReader) fake and the port's contract.
 
 pub mod forks;
+mod mac_binary;
+
+pub use mac_binary::{
+    BuiltMacBinary, MACBINARY_CRC_FIELD, MACBINARY_DATA_LEN_FIELD, MACBINARY_FILE_TYPE_FIELD,
+    MACBINARY_HEADER_LEN, MACBINARY_MIN_VERSION_FIELD, MACBINARY_NAME_FIELD,
+    MACBINARY_NAME_LEN_FIELD, MACBINARY_RESOURCE_LEN_FIELD, MACBINARY_SECONDARY_HEADER_FIELD,
+    MACBINARY_SIGNATURE, MACBINARY_SIGNATURE_FIELD, MACBINARY_VERSION_FIELD, MacBinaryBuilder,
+    MacBinaryLayout, MacBinaryVersion,
+};
 
 use crate::ResType;
 

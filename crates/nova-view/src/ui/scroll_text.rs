@@ -9,8 +9,9 @@ use crate::text::{TextMetrics, wrap};
 
 /// Text wrapped to a box's width once, when it is made, and shown as many
 /// whole lines as fit the box's height (at least one in a box as tall as
-/// the text's size), from a first line the arrow keys move, or a wheel or
-/// trackpad over the box. Nothing is drawn outside the box, so the
+/// the text's size), from a first line the arrow keys, a wheel or trackpad
+/// over the box, and an owner's page keys, Home and End (through
+/// [`ScrollText::scroll_units`]) move. Nothing is drawn outside the box, so the
 /// renderer needs no clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollText {
@@ -127,18 +128,41 @@ impl ScrollText {
         true
     }
 
-    /// Scrolls by `delta` when `at` is over the box, keeping what falls
-    /// short of a whole line for the next scroll, unless it points past the
-    /// end the first line already sits at. That drops what a move cut
-    /// short at an end had left over, so a scroll back moves at once.
+    /// Whether a line before the first shown is hidden: the original's
+    /// "can scroll up" (`*0xded4c`, which `_ScrollDialogText` @0x51839
+    /// sets).
+    #[must_use]
+    pub fn can_scroll_up(&self) -> bool {
+        self.first > 0
+    }
+
+    /// Whether a line after the last shown is hidden: the original's "can
+    /// scroll down" (`*0xded18`, which `_ScrollDialogText` @0x51839 sets).
+    #[must_use]
+    pub fn can_scroll_down(&self) -> bool {
+        self.first < self.lines.len().saturating_sub(self.visible)
+    }
+
+    /// Scrolls by a wheel's `delta` when `at` is over the box, through
+    /// [`Self::scroll_units`].
     fn wheel(&mut self, delta: ScrollDelta, at: Point) -> bool {
         if !self.rect.contains(at) {
             return false;
         }
-        self.pending += match delta {
+        self.scroll_units(match delta {
             ScrollDelta::Lines(lines) => lines * self.line_height,
             ScrollDelta::Units(units) => units,
-        };
+        });
+        true
+    }
+
+    /// Scrolls by `units` logical units (toward the end for positive) a
+    /// whole line for each line height they build up to, keeping what falls
+    /// short of a whole line for the next scroll, unless it points past the
+    /// end the first line already sits at. That drops what a move cut
+    /// short at an end had left over, so a scroll back moves at once.
+    pub fn scroll_units(&mut self, units: f32) {
+        self.pending += units;
         let whole = (self.pending / self.line_height).trunc();
         self.pending -= whole * self.line_height;
         self.scroll_by(whole as isize);
@@ -151,7 +175,6 @@ impl ScrollText {
         if self.first == last {
             self.pending = self.pending.min(0.0);
         }
-        true
     }
 
     /// Draws the lines shown, one text run each, a line height apart from
@@ -246,6 +269,57 @@ mod tests {
 
     fn units(n: f32) -> Input {
         wheel(ScrollDelta::Units(n))
+    }
+
+    #[test]
+    fn units_scroll_whole_lines_and_share_the_wheels_leftover() {
+        let mut text = ten_lines();
+        text.scroll_units(24.0);
+        assert_eq!(text.first(), 2);
+        text.scroll_units(5.0);
+        text.scroll_units(5.0);
+        assert_eq!(text.first(), 2);
+        text.scroll_units(5.0);
+        assert_eq!(text.first(), 3, "15 units are a line");
+        text.input(&units(9.0));
+        assert_eq!(text.first(), 4, "the 3 over and the wheel's 9 are a line");
+    }
+
+    #[test]
+    fn units_reach_both_ends_and_leave_nothing_over_there() {
+        let mut text = ten_lines();
+        text.scroll_units(9999.0);
+        assert_eq!(text.first(), 7);
+        text.scroll_units(-12.0);
+        assert_eq!(text.first(), 6, "exactly one line back from the end");
+        text.scroll_units(-9999.0);
+        assert_eq!(text.first(), 0);
+        text.scroll_units(12.0);
+        assert_eq!(text.first(), 1, "exactly one line on from the start");
+    }
+
+    #[test]
+    fn it_can_scroll_up_past_the_first_line_and_down_short_of_the_last() {
+        let mut text = ten_lines();
+        assert!(!text.can_scroll_up());
+        assert!(text.can_scroll_down());
+        text.scroll_by(1);
+        assert!(text.can_scroll_up());
+        assert!(text.can_scroll_down());
+        text.scroll_by(5);
+        assert!(text.can_scroll_down(), "one line short of the last");
+        text.scroll_by(1);
+        assert!(text.can_scroll_up());
+        assert!(!text.can_scroll_down());
+    }
+
+    #[test]
+    fn text_that_fits_the_box_can_scroll_neither_way() {
+        for text in ["ab\rcd", "a\rb\rc", ""] {
+            let text = scroll(text, 36.0);
+            assert!(!text.can_scroll_up(), "{text:?}");
+            assert!(!text.can_scroll_down(), "{text:?}");
+        }
     }
 
     #[test]

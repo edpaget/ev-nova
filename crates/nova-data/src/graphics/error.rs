@@ -26,15 +26,18 @@ pub enum GraphicsError {
         /// Length of the input.
         input_len: usize,
     },
-    /// A `rowBytes` field without the `PixMap` flag (bit 15): a plain
-    /// `BitMap`, which carries no colour.
+    /// A `rowBytes` field without the `PixMap` flag (bit 15), a plain
+    /// `BitMap`, where only a `PixMap` will do: a `PICT`'s direct-pixel
+    /// opcodes, a `cicn` or a `ppat`. (The `PICT` opcodes that copy indexed
+    /// pixels accept a 1-bit `BitMap`.)
     #[error("expected a PixMap at byte {offset:#x}, found a BitMap")]
     NotAPixMap {
         /// Where the `rowBytes` field starts.
         offset: usize,
     },
-    /// A `PICT` that is not version 2 (offset 10 is not `0x0011 0x02FF`).
-    #[error("unsupported PICT version at byte {offset:#x}: only version 2 is decoded")]
+    /// A `PICT` of neither version 1 (`0x11 0x01` at offset 10) nor version
+    /// 2 (`0x0011 0x02FF`).
+    #[error("unsupported PICT version at byte {offset:#x}: only versions 1 and 2 are decoded")]
     UnsupportedVersion {
         /// Where the version opcode starts.
         offset: usize,
@@ -47,8 +50,10 @@ pub enum GraphicsError {
         /// Where the opcode starts.
         offset: usize,
     },
-    /// A region whose size is too small to hold its bounding rectangle.
-    #[error("bad region size {size} at byte {offset:#x}")]
+    /// A malformed region: its size is too small to hold its bounding
+    /// rectangle or runs past the data, or its inversion points are odd in
+    /// number on a line, out of order or unterminated.
+    #[error("bad region of size {size} at byte {offset:#x}")]
     BadRegion {
         /// The region's size field.
         size: u16,
@@ -354,7 +359,7 @@ mod tests {
             ),
             (
                 GraphicsError::UnsupportedVersion { offset: 10 },
-                "unsupported PICT version at byte 0xa: only version 2 is decoded",
+                "unsupported PICT version at byte 0xa: only versions 1 and 2 are decoded",
             ),
             (
                 GraphicsError::UnsupportedOpcode {
@@ -365,7 +370,7 @@ mod tests {
             ),
             (
                 GraphicsError::BadRegion { size: 4, offset: 6 },
-                "bad region size 4 at byte 0x6",
+                "bad region of size 4 at byte 0x6",
             ),
             (
                 GraphicsError::UnsupportedPixMap {

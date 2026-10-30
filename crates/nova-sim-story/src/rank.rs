@@ -166,10 +166,12 @@
 //! government, 0x0004 its own or its allies, and an unaffiliated rank
 //! none. Neither function plays a sound.
 //!
-//! Left out: Demand Tribute's type-3 slaps (`_DoPlanetCommDialog` @0x975d0,
-//! @0x9773d, @0x9785f), with tribute (rdm:task/planet-domination); and
-//! the debug "destroy target" key (`_HandlePlayer` @0x6ecfe), which the
-//! engine does not model.
+//! Demand Tribute's type-3 slaps (`_DoPlanetCommDialog` @0x975d0,
+//! @0x9773d, @0x9785f) each run the pass, as `nova_sim::Session`'s planet
+//! comm dialog does.
+//!
+//! Left out: the debug "destroy target" key (`_HandlePlayer` @0x6ecfe),
+//! which the engine does not model.
 //!
 //! **Blessing** ([`blessing`], [`Blessing`]). `_PlayerBlessedByGovt(g,
 //! which)` (@0x2732-0x276b) returns the byte `govt[g]+0x84+which` (stride

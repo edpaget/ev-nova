@@ -86,7 +86,7 @@ impl Session {
 mod tests {
     use super::super::tests::filled;
     use super::*;
-    use crate::catalog::{GovtId, OutfitId, StarSystem, StellarId, SystemId};
+    use crate::catalog::{GovtId, OutfitId, StarSystem, SystemId};
     use crate::escort::{ClassRow, EscortClass};
     use crate::iff::{MOD_ANTI_INTERFERENCE, MOD_IFF, RadarGear};
     use crate::market::Good;
@@ -317,17 +317,6 @@ mod tests {
             Some(TargetTag::Code(GovtId(131))),
             "its government's"
         );
-    }
-
-    #[test]
-    fn a_shown_stellar_has_its_iff_and_one_not_shown_none() {
-        let mut session = Session::start(&three_stellars()).expect("starts");
-        session.chart.sites.remove(0);
-        let frame = filled(&session);
-        let iff = |id| frame.stellar(StellarId(id)).expect("listed").iff;
-        assert_eq!(iff(128), session.stellar_iff(StellarId(128)));
-        assert!(iff(128).is_some());
-        assert_eq!(iff(131), None, "not shown");
     }
 
     #[test]

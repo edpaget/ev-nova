@@ -1196,6 +1196,7 @@ mod on_the_maps {
             require: 0,
             inh_jam: [0; 4],
             skill_mult: 0,
+            ship_color: 0,
         }
     }
 

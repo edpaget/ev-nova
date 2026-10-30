@@ -100,6 +100,55 @@ pub(super) fn open_port_dialogs(
     }
 }
 
+/// Answers the bar's Gamble and its race through `flight`: Gamble's press
+/// with what it opens ([`FlightView::gamble_opening`]), a racer's bet with
+/// the race run and its result `dësc` loaded
+/// ([`FlightView::race`]), and Help with its `dësc` loaded
+/// ([`FlightView::race_help`]) and the after-movie the load left; then
+/// credits the winnings once the result text has closed
+/// ([`collect_race_winnings`]). A race that ran took the bet from the
+/// cash, so the shops are handed back ([`refresh_spaceport`]).
+pub(super) fn run_gamble(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_gamble_request()
+        && let Some(opening) = flight.gamble_opening()
+    {
+        spaceport.open_gamble(opening);
+    }
+    if let Some((racer, bet)) = spaceport.take_race_bet() {
+        let shown = flight.race(racer, bet);
+        let ran = shown.is_some();
+        spaceport.show_race(shown);
+        if ran {
+            refresh_spaceport(spaceport, flight);
+        }
+    }
+    if spaceport.take_race_help_request() {
+        let text = flight.race_help();
+        spaceport.show_race_help(&text, flight.sim().loaded_after_movie());
+    }
+    collect_race_winnings(spaceport, flight);
+}
+
+/// Credits the race's winnings through `flight` once `spaceport`'s result
+/// text has closed ([`SpaceportView::take_winnings_due`],
+/// [`FlightView::collect_winnings`]), and hands the race the most an
+/// asked bet can stake of the cash credited
+/// ([`SpaceportView::race_winnings_collected`]): after the spaceport's
+/// input, and after its tick, where a text closed by its movie's end
+/// closes. The winnings change the cash, so the shops are handed back
+/// ([`refresh_spaceport`]).
+pub(super) fn collect_race_winnings(
+    spaceport: &mut SpaceportView,
+    flight: &mut FlightView<Rc<GameData>>,
+) {
+    if spaceport.take_winnings_due()
+        && let Some(asked_max) = flight.collect_winnings()
+    {
+        spaceport.race_winnings_collected(asked_max);
+        refresh_spaceport(spaceport, flight);
+    }
+}
+
 /// Tells `flight` of the port dialog of `spaceport` that has closed
 /// ([`FlightView::close_port_dialog`]): its `_RefreshSAT`, then the nav's
 /// restore, as each of the original's dialogs closes, the bar's hire

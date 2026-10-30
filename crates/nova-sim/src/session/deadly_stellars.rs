@@ -739,7 +739,7 @@ pub(super) mod tests {
 
     /// `armed`'s catalog with the player's gun a 300-pixel beam lasting 3
     /// ticks, doing 5 energy damage.
-    fn beaming() -> FakePilotCatalog {
+    pub(in crate::session) fn beaming() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.weapons = vec![crate::catalog::WeaponRecord {
             guidance: 0,
@@ -756,27 +756,39 @@ pub(super) mod tests {
     fn the_players_beam_on_an_npc_a_deadly_stellar_kills_that_tick_strikes_nothing() {
         for rules in readings() {
             let catalog = beaming();
+            // The player fires its beam, then the stellars' and the beams'
+            // phase runs alone, so the NPC a deadly stellar kills is still
+            // in the traffic, as the kill left it, before the fight's
+            // housekeeping takes it out. The beams' strikes are answered
+            // as they settle, so what the beam struck shows in the NPC.
             let struck = |listed: &[LandingSite]| {
                 let mut session = among(&catalog, listed, listed.len(), rules);
-                session.hold_trigger(crate::session::tests::FIRE);
+                // Its target, so the hit is no stray one let pass.
+                session.chart.target = Some(NpcId(0));
                 let legal = session.pilot.legal.clone();
-                fight(&mut session);
-                let strikes: Vec<_> = session
-                    .space
-                    .strikes
-                    .iter()
-                    .filter(|strike| strike.ship == ShipRef::Npc(NpcId(0)))
-                    .copied()
-                    .collect();
-                (strikes, session.pilot.legal == legal, session.npcs().len())
+                let shield = session.npcs()[0].reserves.shield.now;
+                let pass = crate::combat::GamePass::Advance { double_time: false };
+                let chance: &mut dyn crate::chance::Chance = &mut NeverFires;
+                session.hold_trigger(crate::session::tests::FIRE);
+                session.player_fires(pass, Rules::default(), chance);
+                session.beams_phase(
+                    &crate::ai::NovaAi::default(),
+                    pass,
+                    Rules::default(),
+                    chance,
+                );
+                let npc = session.space.npc(NpcId(0)).expect("taken out only after");
+                let hit = npc.reserves.shield.now < shield;
+                let answered = npc.target == Some(ShipRef::Player);
+                (hit, answered, session.pilot.legal == legal)
             };
-            let (strikes, _, npcs) = struck(&[planet(140, 0.0, -150.0)]);
-            assert_eq!(strikes.len(), 1, "the beam hits it with no deadly stellar");
-            assert_eq!(npcs, 1);
-            let (strikes, lawful, npcs) = struck(&[on_the_npc()]);
-            assert_eq!(strikes, [], "killed before the beams");
+            let (hit, answered, _) = struck(&[planet(140, 0.0, -150.0)]);
+            assert!(hit, "the beam hits it with no deadly stellar");
+            assert!(answered, "and the hit is answered");
+            let (hit, answered, lawful) = struck(&[on_the_npc()]);
+            assert!(!hit, "killed before the beams");
+            assert!(!answered, "no strike to answer");
             assert!(lawful, "no crime");
-            assert_eq!(npcs, 0);
         }
     }
 

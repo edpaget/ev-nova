@@ -103,6 +103,8 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     view.input(&key(MAP, false));
     assert!(view.map_open());
     view.input(&key(MAP, true));
+    assert!(view.map_open(), "waits for M's release");
+    view.input(&key(MAP, false));
     assert!(!view.map_open());
     view.tick(TICK);
     assert_eq!(last_controls(&view), Controls::default(), "Up was let go");
@@ -736,7 +738,9 @@ fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
     view.tick(TICK);
     assert!(double_time_stepped(&view), "a jump");
     view.sim
-        .queue_answer(Answer::Hailed(nova_sim::Hailed::Stellar(StellarId(140))));
+        .queue_answer(Answer::Hailed(nova_sim::Hailed::Stellar(
+            super::planet_view(140),
+        )));
     tap(&mut view, HAIL_KEY);
     view.tick(TICK);
     assert!(double_time_stepped(&view), "a hail");
@@ -1084,23 +1088,27 @@ fn an_exploded_player_takes_no_command() {
     assert!(!view.escort_menu().is_open());
 }
 
-/// Home (`Key::Other` on this platform) has no binding, so it does
-/// nothing in every state, including the dead one the original reads it
-/// in (0x6884c, `_ResetPlayer(1)`, left out). This pins the unbound key,
-/// not the dead-state lockout, which `an_exploded_player_takes_no_command`
-/// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
+/// Home ([`Key::Home`], which only text dialogs take) has no flight
+/// binding, so it does nothing in every state, including the dead one the
+/// original reads it in (0x6884c, `_ResetPlayer(1)`, left out). End, the
+/// text dialogs' other new key, has none either. This pins the unbound
+/// keys, not the dead-state lockout, which
+/// `an_exploded_player_takes_no_command` and
+/// `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
 #[test]
-fn home_is_unbound_whether_flying_or_exploded() {
+fn home_and_end_are_unbound_whether_flying_or_exploded() {
     for build in [in_flight, || refusing(&EXPLODED)] {
-        let mut view = build();
-        assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
-        assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
-        view.tick(TICK);
-        assert_eq!(sent_since(&view, 0), []);
-        assert!(view.take_mission_info_request().is_none());
-        assert_eq!(view.take_landing(), None);
-        assert!(view.take_hail().is_none());
-        assert!(view.take_boarding().is_none());
+        for k in [Key::Home, Key::End] {
+            let mut view = build();
+            assert_eq!(view.input(&key(k, true)), ScreenAction::None, "{k:?}");
+            assert_eq!(view.input(&key(k, false)), ScreenAction::None, "{k:?}");
+            view.tick(TICK);
+            assert_eq!(sent_since(&view, 0), [], "{k:?}");
+            assert!(view.take_mission_info_request().is_none(), "{k:?}");
+            assert_eq!(view.take_landing(), None, "{k:?}");
+            assert!(view.take_hail().is_none(), "{k:?}");
+            assert!(view.take_boarding().is_none(), "{k:?}");
+        }
     }
 }
 

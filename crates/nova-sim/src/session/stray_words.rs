@@ -280,6 +280,32 @@ mod tests {
     }
 
     #[test]
+    fn a_zeroed_pod_word_reads_as_flying_after_a_wormhole_with_no_exit() {
+        // A wormhole that leads nowhere runs the dock request's tail,
+        // `_ResetPlayer` and all (@0x66f17-0x66f20, @0x6709b).
+        use crate::catalog::StellarId;
+        use crate::gate::GateRefusal;
+        use crate::session::tests::{at_wormhole, wormholes};
+        let holes = wormholes();
+        let catalog = FakePilotCatalog {
+            gates: holes
+                .gates
+                .iter()
+                .filter(|gate| gate.id == StellarId(400))
+                .copied()
+                .collect(),
+            ..holes
+        };
+        let mut session = at_wormhole(&catalog);
+        session.ship.fate.pod_zeroed = true;
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit)
+        );
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
+    }
+
+    #[test]
     fn a_player_in_the_pod_is_drawn_and_stepped() {
         let catalog = beamed();
         let mut session = session(&catalog, RuleSource::Engine);

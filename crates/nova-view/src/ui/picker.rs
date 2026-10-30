@@ -4,7 +4,8 @@
 //! and the Preferences dialog's Scaling list are pickers.
 //!
 //! Its arrows are drawn and tracked as the volume control's are
-//! ([`draw_arrow`], [`ButtonTracker`]), and its label is set as the
+//! ([`draw_arrow`], [`ButtonTracker`]): the interface file's `PICT`s 134
+//! (up) and 135 (down), 136 and 137 while held. Its label is set as the
 //! volume's number is.
 
 use crate::draw::DrawList;
@@ -154,12 +155,14 @@ impl<T: PickerEntry> Picker<T> {
         self.entries[self.selected]
     }
 
-    /// The arrow at `at`, if any: only the arrows take clicks.
+    /// The arrow at `at`, if any: only the arrows take clicks. Each is
+    /// hit-tested half-open, as the Dialog Manager's `PtInRect` does, so
+    /// the edge the two share is the down arrow's.
     #[must_use]
     pub fn arrow_at(&self, at: Point) -> Option<Arrow> {
         [Arrow::Up, Arrow::Down]
             .into_iter()
-            .find(|&arrow| self.arrow_rect(arrow).contains(at))
+            .find(|&arrow| self.arrow_rect(arrow).contains_half_open(at))
     }
 
     fn arrow_rect(&self, arrow: Arrow) -> Bounds {
@@ -236,8 +239,9 @@ impl<T: PickerEntry> Picker<T> {
     }
 
     /// Draws the chosen entry's label in Geneva at its rectangle's corner,
-    /// then the two arrows (each filled while pressed), and, when
-    /// `focused`, an outline round every part.
+    /// then the two arrows (the interface file's `PICT`s 134 and 135, or
+    /// 136 and 137 while pressed), and, when `focused`, an outline round
+    /// every part.
     pub fn draw(&self, focused: bool, list: &mut DrawList) {
         list.text_in(
             Font::Geneva,
@@ -248,8 +252,7 @@ impl<T: PickerEntry> Picker<T> {
             COLOR,
         );
         for arrow in [Arrow::Up, Arrow::Down] {
-            let filled = self.pressed(arrow);
-            draw_arrow(list, self.arrow_rect(arrow), arrow, filled, COLOR);
+            draw_arrow(list, self.arrow_rect(arrow), arrow, self.pressed(arrow));
         }
         if focused {
             outline(list, self.rects.bounds(), COLOR);
@@ -320,6 +323,33 @@ mod tests {
                 color: COLOR,
             })
         );
+    }
+
+    /// The arrows are hit-tested half-open, as the Dialog Manager's
+    /// `PtInRect` tests the volume's: the edge they share is the down
+    /// arrow's top, and the down arrow's right and bottom edges are off it.
+    #[test]
+    #[allow(clippy::float_cmp)] // Whole pixels.
+    fn a_press_on_the_edge_the_arrows_share_steps_down() {
+        let mut picker = Picker::new(row(), vec![NATIVE, SHARP], NATIVE);
+        let PickerRects { up, down, .. } = picker.rects();
+        assert_eq!(up.max.y, down.min.y, "stacked");
+        let shared = Point::new(up.center().x, up.max.y);
+        assert_eq!(picker.arrow_at(shared), Some(Arrow::Down));
+        assert_eq!(picker.arrow_at(up.min), Some(Arrow::Up));
+        assert_eq!(picker.arrow_at(down.max), None);
+        assert_eq!(
+            picker.arrow_at(Point::new(down.max.x - 1.0, down.max.y - 1.0)),
+            Some(Arrow::Down)
+        );
+        let press = |pressed| Input::PointerButton {
+            button: crate::input::MouseButton::Left,
+            pressed,
+            at: shared,
+        };
+        picker.input(&press(true));
+        assert!(picker.input(&press(false)), "stepped");
+        assert_eq!(picker.selected(), SHARP);
     }
 
     #[test]

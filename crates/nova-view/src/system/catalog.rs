@@ -56,11 +56,6 @@ pub struct StellarContents {
     pub dead_sprite: Option<Result<StellarSheet, String>>,
     /// Its animation fields.
     pub animation: AnimationData,
-    /// Whether the radar draws it as a square: a station (`Flags` 0x10),
-    /// hypergate or wormhole (`Flags2` 0x1000 or 0x2000), as
-    /// `_DrawStatusRadar` tells them apart (@0x49939-0x49946). Any other
-    /// stellar is an oval.
-    pub radar_square: bool,
 }
 
 /// One star system's contents.

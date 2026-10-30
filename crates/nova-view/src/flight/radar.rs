@@ -181,7 +181,8 @@ pub struct RadarStellar {
     pub position: Point,
     /// Whether it is drawn as a square: a station, hypergate or wormhole.
     pub square: bool,
-    /// The width of its sprite's frames, or `None` without one.
+    /// The width `_GetSpriteXSize` gives of its `Type` master, or `None`
+    /// while that master isn't loaded.
     pub sprite_width: Option<u32>,
     /// What IFF shows it as.
     pub iff: StellarIff,

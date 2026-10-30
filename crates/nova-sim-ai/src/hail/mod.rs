@@ -27,9 +27,10 @@
 //! - *mute* (no hail is answered, "No response."): `Flags` 0x0400 of its
 //!   government or of its ship type's inherent government;
 //! - *greedy* (a higher price, see [`deal`]): `Flags` 0x8000;
-//! - *bribable*: an independent ship always; a trader when its
-//!   government has `Flags` 0x2000; a warship or interceptor when it has
-//!   0x0200;
+//! - *bribable*: an independent ship always; a trader (the original's AI
+//!   type 2 or below, [`Npc::original_ai_type`], @0x95790) when its
+//!   government has `Flags` 0x2000; any other (a warship, an interceptor,
+//!   a led ship or a fighter) when it has 0x0200;
 //! - *untalkative* (Greetings alone, "No response."): `Flags2` 0x0001;
 //! - *quiet* (see [`RuleKey::QuietHails`](crate::RuleKey::QuietHails)):
 //!   `Flags2` 0x0008 of its government or its inherent government;
@@ -38,7 +39,8 @@
 //! - *battle help*: a rank of the pilot's with `Flags` 0x0400 that
 //!   reaches the ship's government (see [`favour`](crate::ai::favour),
 //!   by [`RuleKey::RankGovtReach`](crate::RuleKey::RankGovtReach));
-//! - *plunderer*: a warship or interceptor of `Flags` 0x1000;
+//! - *plunderer*: a ship of the original's AI type above 2 (@0x9585b) of
+//!   `Flags` 0x1000;
 //! - *xenophobe*: `Flags` 0x0001.
 //!
 //! The Bible agrees on each, or is read the engine's way without a stated
@@ -130,7 +132,7 @@ impl Dispositions {
         favour: Favour,
     ) -> Self {
         let govt = npc.govt;
-        let fights = !npc.ai_type.trades();
+        let fights = npc.original_ai_type() > 2;
         let bribable = match govt {
             None => true,
             Some(_) if fights => govts.flag(govt, BRIBABLE_WARSHIPS),
@@ -240,22 +242,16 @@ impl Hail<'_> {
     /// Request Assistance answers as an escort: "just an escort" when busy
     /// (`_DoCommDialog` @0x962ee-0x96304), free help at any threat
     /// (@0x964f8-0x9650f), and no refuel or repair (@0x96564-0x9656c).
-    /// The writers of +0x88 above 4 are a carried fighter's launch (5,
-    /// `_LaunchFighter` @0x3d771) and an escort's (6): a fleet's escorts
-    /// (`_HyperSpawnFleet` @0x421dc, `_SetupShipsInSystem` @0x430b6,
-    /// `_AICheckParentExists` @0x89491), a pirate's taken ship
-    /// (`_AIPlunderShipContents` @0x8495c), a mission escort (`_AIDispatch`
-    /// @0x8fc19) and the player's own (`_SpawnEscort` @0x3fed1, captures).
-    /// So: a ship that [escorts the player](Npc::escorts_player), escorts
-    /// a fleet lead ([`Npc::leader`]), or was launched from a carrier
-    /// ([`Npc::carrier`]); not one the player has paid off, which the
-    /// bribe made a wimpy trader (@0x961f8). AI types above 4 from data
-    /// are folded into the wimpy trader at the spawn
+    /// It reads [`Npc::original_ai_type`], whose module docs list the
+    /// writers of 5 and 6: a ship that escorts the player, a fleet lead or
+    /// a carrier, or a former escort the disabled reset marked; not an
+    /// NPC's escort the player has paid off, which the bribe made a wimpy
+    /// trader (@0x961f8). AI types above 4 from data are folded into the
+    /// wimpy trader at the spawn
     /// ([`AiType::from_raw`](crate::traffic::npc::AiType::from_raw)).
     #[must_use]
     pub fn escort_ai(&self) -> bool {
-        let npc = self.npc;
-        !npc.spared && (npc.escorts_player() || npc.leader.is_some() || npc.carrier.is_some())
+        self.npc.original_ai_type() > 4
     }
 
     /// Whether the ship hailed is a fighter out of a bay (see
@@ -339,9 +335,8 @@ impl<'a> Hail<'a> {
     /// `_ExtendedIsThreatToPlayer` holds for (@0x824b8,
     /// [`Npc::threatens_player_extended`], read whole with the player's
     /// sight) and `_IsShipMyEnemy` (@0x8196c) finds the ship's enemy
-    /// (@0x824cf). Two branches are left out: the extended test's stellar
-    /// defender (+0x8c, @0x81bd3), as the engine has no defence ships
-    /// (rdm:task/planet-domination), and `_IsShipMyEnemy`'s test that the
+    /// (@0x824cf), the extended test's stellar defender (+0x8c, @0x81bd3)
+    /// among them. One branch is left out: `_IsShipMyEnemy`'s test that the
     /// other is not the shareware nag ship (`+0xc8d0 != 0x3ff` @0x819a4,
     /// `_SpawnNagShip` @0x61b5), as the engine has none. Nothing plays a
     /// sound.
@@ -356,7 +351,8 @@ impl<'a> Hail<'a> {
     ) -> Self {
         // `_IsRefuellingPlayer` @0x820fd and `_IsRepairingPlayer`
         // @0x8213a: active, not `_IsDisabled`, target 0, goal 9 or 0xf. A
-        // hailed ship is active.
+        // hailed ship is active. A stellar's defence ship never assists, so
+        // `Condition::disabled` stands for `_IsDisabled` here.
         let assisting_player = matches!(npc.goal, Goal::Assist(_))
             && npc.target == Some(ShipRef::Player)
             && !npc.condition.disabled();
@@ -890,6 +886,39 @@ mod tests {
         assert!(of(AiType::Interceptor, Some(G), &govts).plunderer);
         assert!(!of(AiType::BraveTrader, Some(G), &govts).plunderer);
         assert!(!of(AiType::Warship, Some(G), &inherited()).plunderer);
+    }
+
+    #[test]
+    fn a_led_or_marked_trader_takes_bribes_and_plunders_as_a_warship_and_a_spared_one_as_a_trader()
+    {
+        // `_DoCommDialog` @0x95790 and @0x9585b read +0x88 above 2: a led
+        // ship is 6, a bribed one 1.
+        let warships = govts(BRIBABLE_WARSHIPS | PLUNDERS, 0, (0, 0));
+        let traders = govts(BRIBABLE_TRADERS, 0, (0, 0));
+        let disposed = |npc: &Npc, govts: &Governments| {
+            Dispositions::of(npc, Some(INHERENT), govts, Favour::default())
+        };
+        let mut led = ship();
+        led.ai_type = AiType::WimpyTrader;
+        led.govt = Some(G);
+        led.leader = Some(NpcId(0));
+        let marked = Npc {
+            leader: None,
+            kept_escort_ai: true,
+            ..led.clone()
+        };
+        for npc in [&led, &marked] {
+            let made = disposed(npc, &warships);
+            assert!(made.bribable && made.plunderer, "{made:?}");
+            assert!(!disposed(npc, &traders).bribable);
+        }
+        let spared = Npc {
+            spared: true,
+            ..led
+        };
+        assert!(disposed(&spared, &traders).bribable);
+        let made = disposed(&spared, &warships);
+        assert!(!made.bribable && !made.plunderer, "{made:?}");
     }
 
     #[test]

@@ -29,11 +29,16 @@
 //!
 //! # Sources
 //!
-//! - `PICT` version 2, `PixMap`, `ColorTable`: Apple, *Inside Macintosh:
-//!   Imaging With QuickDraw* (1994), appendix A "Picture Opcodes" (opcode
-//!   table, data lengths, the version 2 header, word alignment) and ch. 4
-//!   "Color QuickDraw" (the `PixMap` record, `packType`, the `ColorTable`
-//!   record).
+//! - `PICT` versions 1 and 2, `BitMap`, `PixMap`, `ColorTable`: Apple,
+//!   *Inside Macintosh: Imaging With QuickDraw* (1994), appendix A "Picture
+//!   Opcodes" (the version 1 and version 2 opcode tables and headers, data
+//!   lengths, word alignment in version 2 only, and the BitsRect,
+//!   PackBitsRgn and other pixel opcodes' data), ch. 1 (the `BitMap`
+//!   record) and ch. 4 "Color QuickDraw" (the `PixMap` record, `packType`,
+//!   the `ColorTable` record).
+//! - Regions: *Imaging With QuickDraw* ch. 2, the `Region` record; the
+//!   inversion-point layout of the data after its bounding box is a reading
+//!   of the format, with no code copied.
 //! - PackBits: Apple Technical Note TN1023 "Understanding PackBits"; its
 //!   worked example is a test vector.
 //! - `cicn`: *Imaging With QuickDraw* ch. 4, the `CIcon` record and "The
@@ -64,17 +69,32 @@
 //! - 29 `cicn`s (2, 4 and 8-bit) and 10 `ppat`s (8-bit, 64x64), all
 //!   indexed through sparse colour tables looked up by `value`.
 //!
+//! The interface file (`Nova-DF.rsrc`, or `Nova.rez` on Windows) holds 10
+//! `PICT`s, and `Nova.rez` one more (139). Five are version 1: 133, a
+//! PackBitsRect of a 1-bit `BitMap` with packed rows, and the 11x9 volume
+//! arrows 134-137, each a BitsRect of a 1-bit `BitMap` between comments.
+//! 139 is version 2, a PackBitsRgn of a 1-bit `PixMap` through a
+//! rectangular mask. Every one decodes.
+//!
 //! # Supported `PICT` opcodes
 //!
-//! `0000` NOP, `0001` Clip (skipped, not applied), `001E` DefHilite, `00A0`
-//! ShortComment, `00A1` LongComment, `0C00` HeaderOp, `00FF` EndPic, and the
-//! pixel opcodes `009A` DirectBitsRect (16-bit `packType` 0 or 3; 32-bit
-//! with three components, `packType` 0 or 4) and `0098` PackBitsRect (1, 2,
-//! 4 or 8-bit indexed, which plug-ins commonly use). Pixel opcodes must copy
-//! without scaling, in srcCopy or ditherCopy mode; several of them compose
-//! into one picture, and pixels none of them cover stay transparent. Every
-//! other opcode is [`GraphicsError::UnsupportedOpcode`], naming the opcode
-//! and its offset, rather than an approximation.
+//! Version 2: `0000` NOP, `0001` Clip (skipped, not applied), `001E`
+//! DefHilite, `00A0` ShortComment, `00A1` LongComment, `0C00` HeaderOp,
+//! `00FF` EndPic, and the pixel opcodes `009A` DirectBitsRect and `009B`
+//! DirectBitsRgn (16-bit `packType` 0 or 3; 32-bit with three components,
+//! `packType` 0 or 4), and `0090` BitsRect, `0091` BitsRgn, `0098`
+//! PackBitsRect and `0099` PackBitsRgn (a 1-bit `BitMap`, or a 1, 2, 4 or
+//! 8-bit indexed `PixMap`, which plug-ins commonly use). Version 1: the
+//! one-byte `00`, `01`, `A0`, `A1`, `90`, `91`, `98`, `99` and `FF`.
+//!
+//! A `BitMap` decodes set bits to opaque black and clear bits to opaque
+//! white. BitsRect and BitsRgn rows are never packed; the others are
+//! packed when `rowBytes` is 8 or more. The `Rgn` forms copy only inside
+//! their mask region, rectangular or of inversion points. Pixel opcodes
+//! must copy without scaling, in srcCopy or ditherCopy mode; several of
+//! them compose into one picture, and pixels none of them cover stay
+//! transparent. Every other opcode is [`GraphicsError::UnsupportedOpcode`],
+//! naming the opcode and its offset, rather than an approximation.
 //!
 //! # Bounded work
 //!
@@ -106,6 +126,7 @@ mod pict;
 mod pict_sheet;
 mod pixmap;
 mod reader;
+mod region;
 mod rled;
 mod rled8;
 mod sheet;

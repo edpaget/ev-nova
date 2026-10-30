@@ -395,7 +395,9 @@ pub fn unprovoked(
 /// @0x83a9b-0x83ad2, for every parent): none once the target's slot is
 /// inactive (+0xb8: gone from the system, or destroyed; a ship still
 /// arriving holds its slot, @0x3c90b) or, unless the order is Attack, once
-/// it is `_IsDisabled` ([`Condition::disabled`], breaking up included).
+/// it is `_IsDisabled` (breaking up included, but for a stellar's
+/// defence ship, @0x2d6f: [`Npc::is_disabled`], the player's
+/// [`Condition::disabled`]).
 /// Phase 1 of escort-fleet-fidelity left this step to the low level's
 /// [`unprovoked`], so a disabled guard stood until the next think.
 #[must_use]
@@ -406,7 +408,11 @@ pub fn valid_target(
 ) -> Option<ShipRef> {
     let target = npc.target?;
     let condition = around.condition_of(target)?;
-    if !condition.active() || (condition.disabled() && order != Some(EscortOrder::Attack)) {
+    let disabled = match target {
+        ShipRef::Npc(id) => around.npc(id).is_some_and(Npc::is_disabled),
+        ShipRef::Player => condition.disabled(),
+    };
+    if !condition.active() || (disabled && order != Some(EscortOrder::Attack)) {
         return None;
     }
     Some(target)
@@ -1037,6 +1043,14 @@ mod tests {
             valid_target(&targeting(escort(None)), Some(EscortOrder::Attack), &around),
             Some(n(2)),
             "attack keeps a disabled target"
+        );
+        let guard = crate::traffic::fixture::breaking_up_guard(pirate(2, 100.0, 0.0));
+        let npcs = [escort(None), guard];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            valid_target(&targeting(escort(None)), Some(EscortOrder::Defend), &around),
+            Some(n(2)),
+            "a defence ship breaking up is not disabled (@0x2d6f)"
         );
         let gone = having(escort(None), Goal::Idle, Some(n(9)));
         assert_eq!(
@@ -1784,20 +1798,27 @@ mod tests {
         // `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
         let mut trader = bystander(2, 3000.0, 0.0);
         trader.ai_type = AiType::WimpyTrader;
-        let npcs = [escort(None), trader];
         let strike = crate::combat::fixture::strike(n(2), ShipRef::Player);
         let govts = govts(0, 0);
+        let unled = [
+            Npc {
+                escort: None,
+                ..escort(None)
+            },
+            trader.clone(),
+        ];
         let around = Surroundings {
             player: Some(player(0.0, 0.0)),
             govts: &govts,
-            ..Surroundings::new(&[], &npcs)
+            ..Surroundings::new(&[], &unled)
         };
         assert!(
-            crate::ai::react::answer(&npcs[0], &strike, &around, RuleSource::Engine)
+            crate::ai::react::answer(&unled[0], &strike, &around, RuleSource::Engine)
                 .goal
                 .is_some(),
-            "a warship would answer"
+            "a warship of no fleet would answer"
         );
+        let npcs = [escort(None), trader];
         assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
     }
 

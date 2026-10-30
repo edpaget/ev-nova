@@ -43,6 +43,7 @@ use crate::combat::{CombatEvent, ShipRef};
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
+use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
@@ -55,6 +56,8 @@ use crate::landing::LandingRefusal;
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::outfit_effects::Rgb15;
+use crate::planet_comm::{PlanetCommItem, PlanetCommView};
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::player_info::PlayerInfo;
 use crate::red_alert::AlertIcon;
@@ -170,6 +173,11 @@ pub struct FlightFrame {
     /// Each stellar the system lists, in its nav order, shown or not, and
     /// how it is drawn ([`FrameStellar`]).
     pub stellars: Vec<FrameStellar>,
+    /// Each stellar the system lists, shown or not, in its `NavDefs`
+    /// order, as the radar draws it ([`FrameRadarStellar`]): kept apart
+    /// from [`FlightFrame::stellars`], whose order puts the stellars shown
+    /// first.
+    pub radar_stellars: Vec<FrameRadarStellar>,
     /// The player's effective murk, which the world is murked by
     /// ([`Session::effective_murk`](crate::Session::effective_murk)).
     pub effective_murk: u8,
@@ -265,6 +273,7 @@ impl Default for FlightFrame {
             cargo_boxes: Vec::new(),
             asteroids: Vec::new(),
             stellars: Vec::new(),
+            radar_stellars: Vec::new(),
             effective_murk: 0,
             system_murk: 0,
             system_background: None,
@@ -821,6 +830,10 @@ pub enum FlightCommand {
     /// the session's line follows it
     /// ([`Session::comm_shown`](crate::Session::comm_shown)).
     CommShown(u16),
+    /// The app was switched out: halt both warp-ups, as `_SwitchedOut`
+    /// does (@0x4f3a3-0x4f3e0;
+    /// [`Session::switched_out`](crate::Session::switched_out)). Not an ask.
+    SwitchedOut,
     /// Return (`ackComm`) cleared the message line: the session's for a
     /// tick while a line shows
     /// ([`Session::comm_acknowledged`](crate::Session::comm_acknowledged)).
@@ -865,6 +878,12 @@ pub enum FlightCommand {
     /// A press in the escort dialog
     /// ([`Session::press_escort`](crate::Session::press_escort)).
     PressEscort(EscortButton),
+    /// A press in the planet comm dialog
+    /// ([`Session::press_planet_comm`](crate::Session::press_planet_comm)).
+    PressPlanetComm(PlanetCommItem),
+    /// A choice in the planet comm dialog's bribe haggle
+    /// ([`Session::haggle_bribe`](crate::Session::haggle_bribe)).
+    HaggleBribe(Haggle),
     /// An order in the exchange
     /// ([`Session::trade`](crate::Session::trade)).
     Trade(Order),
@@ -878,16 +897,10 @@ pub enum FlightCommand {
     /// ([`Session::close_outfitter`](crate::Session::close_outfitter)).
     CloseOutfitter,
     /// An outfitter order of up to `count`, as the dialog's Buy or Sell
-    /// runs it ([`Session::outfit_order`](crate::Session::outfit_order)).
+    /// runs it ([`Session::outfit_order`](crate::Session::outfit_order)):
+    /// a count of none is the quantity dialog's Cancel, which still counts
+    /// the outfit day when the button passed.
     Outfit {
-        /// The outfit, bought or sold.
-        order: OutfitOrder,
-        /// How many to buy or sell.
-        count: u32,
-    },
-    /// An outfitter order of up to `count` that counts a Cancel's outfit
-    /// day ([`Session::outfit_counted_run`](crate::Session::outfit_counted_run)).
-    OutfitCounted {
         /// The outfit, bought or sold.
         order: OutfitOrder,
         /// How many to buy or sell.
@@ -916,6 +929,17 @@ pub enum FlightCommand {
     /// The bar's hire screen closes
     /// ([`Session::close_hire`](crate::Session::close_hire)).
     CloseHire,
+    /// Bet `bet` on the bar race's `racer`, 0 to 3, drawing its winner
+    /// ([`Session::race`](crate::Session::race)).
+    Race {
+        /// The racer bet on.
+        racer: u8,
+        /// The stake.
+        bet: Bet,
+    },
+    /// The race's result text has closed: credit the winnings due
+    /// ([`Session::collect_winnings`](crate::Session::collect_winnings)).
+    CollectWinnings,
     /// The mission computer opens
     /// ([`Session::open_mission_computer`](crate::Session::open_mission_computer)).
     OpenMissionComputer,
@@ -1101,6 +1125,7 @@ impl FlightCommand {
             | Self::BeginFade
             | Self::EndPlay
             | Self::CommShown(_)
+            | Self::SwitchedOut
             | Self::CommAcknowledged
             | Self::CommTicked
             | Self::AnswerHail(_)
@@ -1109,18 +1134,21 @@ impl FlightCommand {
             | Self::Plunder(_)
             | Self::LetGoOfBoarding
             | Self::PressEscort(_)
+            | Self::PressPlanetComm(_)
+            | Self::HaggleBribe(_)
             | Self::Trade(_)
             | Self::Recharge
             | Self::OpenOutfitter
             | Self::CloseOutfitter
             | Self::Outfit { .. }
-            | Self::OutfitCounted { .. }
             | Self::OpenShipyard
             | Self::BuyShip { .. }
             | Self::DeclineShip(_)
             | Self::OpenBar
             | Self::Hire(_)
             | Self::CloseHire
+            | Self::Race { .. }
+            | Self::CollectWinnings
             | Self::OpenMissionComputer
             | Self::ShowComputerRow(_)
             | Self::ShowInfoRow(_)
@@ -1295,17 +1323,30 @@ pub enum Answer {
     /// What the escort dialog shows after a [`FlightCommand::PressEscort`]:
     /// `None` once it closes, or when it was not open.
     EscortDialog(Option<EscortDialogView>),
+    /// What the planet comm dialog shows after a
+    /// [`FlightCommand::PressPlanetComm`] or a [`FlightCommand::HaggleBribe`]:
+    /// `None` once it closes (Close Channel, or a bribe paid), or when it
+    /// was not open.
+    PlanetComm(Option<PlanetCommView>),
     /// What a [`FlightCommand::Trade`] traded, or why it was refused.
     Traded(Result<u32, TradeRefusal>),
     /// What a [`FlightCommand::Recharge`] cost, or why it was refused.
     Recharged(Result<i64, RechargeRefusal>),
-    /// The run of a [`FlightCommand::Outfit`] or a
-    /// [`FlightCommand::OutfitCounted`], refused at its first pass or not.
+    /// The run of a [`FlightCommand::Outfit`], refused at its first pass
+    /// or not.
     Outfitted(OutfitRun),
     /// What a [`FlightCommand::BuyShip`] bought, or why it was refused.
     ShipBought(Result<ShipPurchase, ShipRefusal>),
     /// What a [`FlightCommand::Hire`] hired, or why it was refused.
     Hired(Result<Hired, HireRefusal>),
+    /// The race a [`FlightCommand::Race`] ran.
+    Raced(RaceRun),
+    /// The winnings a [`FlightCommand::CollectWinnings`] credited: the
+    /// most the next asked bet can stake of the cash credited.
+    WinningsCollected {
+        /// [`asked_max`](crate::gamble::asked_max) of the cash credited.
+        asked_max: i64,
+    },
     /// The mission computer a [`FlightCommand::OpenMissionComputer`]
     /// opened, or why it has nothing.
     MissionComputer(Result<MissionComputer, ComputerRefusal>),
@@ -1493,8 +1534,9 @@ pub struct StepRun {
     /// Each ship's place before the step: the player's first, then each
     /// NPC's in the system's order.
     pub before: Vec<(ShipRef, ShipPlace)>,
-    /// The comm notes taken at the advance pass's end: what the step
-    /// before raised after its own take, then this step's.
+    /// The comm notes taken at the advance pass's end, and again at
+    /// double time's second's: what was raised before the step's first
+    /// take, then this step's.
     pub comm: Vec<CommNote>,
     /// Each pass that ran to its end: the advance pass, then double
     /// time's second; none when the rescue settled on the advance pass.
@@ -1502,6 +1544,43 @@ pub struct StepRun {
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.
     pub rescued: Option<ShipPlace>,
+    /// The line the step raised last, whatever its kind: what
+    /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
+    /// when it raised none.
+    pub last_line: Option<RaisedLine>,
+    /// Whether `_HandlePlayer`'s class-order bookkeeping cleared an escort
+    /// class's kept order on this step's passes (@0x6e37d, @0x6e43f), each
+    /// clear showing the escort menu in full again, unstamped, while it
+    /// shows (`_ShowEscortMenu` @0x5664a, called @0x6e388 and @0x6e446).
+    /// It plays no sound.
+    pub class_orders_cleared: bool,
+}
+
+/// One line on the message line as `_DisplayComm` (@0x90201) takes it:
+/// each call overwrites the count (@0x9024b) and the one slot
+/// (@0x90251-0x90265), so the line a frame ends on is the last raised,
+/// whatever its kind.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RaisedLine {
+    /// A message, in the session's terms.
+    Message(SimMessage),
+    /// What an NPC assisting the player did.
+    Comm(CommNote),
+    /// A hail quote said.
+    Quote(PersonQuote),
+}
+
+impl RaisedLine {
+    /// How long the line shows: its own kind's ticks
+    /// ([`SimMessage::ticks`], [`CommNote::ticks`], [`PersonQuote::ticks`]).
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        match self {
+            Self::Message(message) => message.ticks(),
+            Self::Comm(note) => note.ticks(),
+            Self::Quote(quote) => quote.ticks(),
+        }
+    }
 }
 
 /// One pass of a step as it stood at the pass's end, after the NPCs
@@ -1574,6 +1653,12 @@ pub struct FrameShip {
     pub cloak: CloakShown,
     /// Its ion tint as its last display left it, if it glows.
     pub ion_tint: Option<IonTint>,
+    /// Its paint, `_GetShipPaintColor`'s (@0x7d0c-0x7dc0) result: the
+    /// pilot's for the player, an NPC's person's `Color`, or else its
+    /// government's `ShipColor`; `None` unpainted (see the
+    /// `session::ship_paint` module). The view draws its hull and alt
+    /// layer in it.
+    pub paint: Option<Rgb15>,
     /// Its fade at a gate it comes out of or enters ([`GateFade`]).
     pub gate: GateFade,
     /// Where its hover and click box is
@@ -1617,6 +1702,7 @@ impl Default for FrameShip {
             glow: 0,
             cloak: CloakShown::Opaque,
             ion_tint: None,
+            paint: None,
             gate: GateFade::None,
             hover: HoverPlace::Own,
             framed: None,
@@ -1847,8 +1933,25 @@ pub struct FrameStellar {
     /// one or isn't shown
     /// (`Session::gate_frame`).
     pub gate_frame: Option<u16>,
-    /// What IFF shows it as on the radar, or `None` for one that isn't
-    /// shown (`Session::stellar_iff`).
+}
+
+/// A stellar its system lists, shown or not, as the radar draws its blip
+/// (`_DrawStatusRadar`'s stellar loop, @0x498a0-0x49a8e; see the `story`
+/// module's "Checked for play-feel-4 phase 15").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameRadarStellar {
+    /// Which stellar.
+    pub id: StellarId,
+    /// Where it is, in world units (`spöb` +0x4/+0x6).
+    pub position: Vec2,
+    /// Whether its blip is a square: a station (`Flags` 0x10), hypergate
+    /// or wormhole (`Flags2` 0x1000 or 0x2000; @0x49939-0x49946).
+    pub square: bool,
+    /// The width `_GetSpriteXSize` gives of its `Type` master
+    /// (@0x499e8-0x49a0a), which sizes the oval: `None` while the master
+    /// is not loaded (`Space::radar_type_width`).
+    pub type_width: Option<u32>,
+    /// What IFF shows it as (`Session::stellar_iff`).
     pub iff: Option<StellarIff>,
 }
 
@@ -2048,6 +2151,8 @@ mod tests {
                 C::PressEscort(crate::escort_dialog::EscortButton::Close),
                 None,
             ),
+            (C::PressPlanetComm(PlanetCommItem::Close), None),
+            (C::HaggleBribe(Haggle::Accept), None),
             (C::CommAcknowledged, None),
             (C::CommTicked, None),
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),
@@ -2080,7 +2185,6 @@ mod tests {
             C::OpenOutfitter,
             C::CloseOutfitter,
             C::Outfit { order, count: 1 },
-            C::OutfitCounted { order, count: 1 },
             C::OpenShipyard,
             C::BuyShip {
                 ship: ShipId(129),
@@ -2207,7 +2311,6 @@ mod tests {
             frozen: false,
             counts_none: false,
             gate_frame: None,
-            iff: None,
         };
         let frame = FlightFrame {
             stellars: vec![stellar(131, true), stellar(128, true), stellar(129, false)],
@@ -2220,10 +2323,11 @@ mod tests {
 
     #[test]
     fn drawn_boxes_give_each_ships_box_and_none_for_a_ship_without() {
-        let square = |x| DrawnBox {
-            centre: Vec2::new(x, 0.0),
-            width: 10,
-            height: 10,
+        let square = |x| {
+            DrawnBox::at(crate::navigation::SpriteRect::centred(
+                Vec2::new(x, 0.0),
+                (10, 10),
+            ))
         };
         let boxes = DrawnBoxes {
             player: Some(square(0.0)),

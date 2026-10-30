@@ -1,6 +1,6 @@
 //! What the session fills and the view takes: the sounds, messages,
-//! events and notes raised since they were last taken, and the flags the
-//! view asks after, each taken with its `take_*` method, and all of them
+//! events and notes raised since they were last taken, the line raised
+//! last ([`Outbox::raise`]), and the flags the view asks after, each taken with its `take_*` method, and all of them
 //! drained as one stream of `FlightEvent`s by
 //! [`Session::drain_events`](super::Session::drain_events)
 //! (see the `flight_events` module). Nothing in the session reads them
@@ -10,6 +10,7 @@ use crate::bay::FighterNote;
 use crate::board::MissionBoardLine;
 use crate::combat::report::Reports;
 use crate::control::ScriptNote;
+use crate::flight_frame::RaisedLine;
 use crate::grant::Granted;
 use crate::hail::CommNote;
 use crate::hire::PayNote;
@@ -22,6 +23,7 @@ use super::{InterfaceLoad, MissionShown, PersonQuote, SessionEvent, TextBar};
 /// What the session fills for the view to take, in `Session`'s former
 /// field order.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, each taken on its own
 pub(super) struct Outbox {
     /// The sounds emitted since they were last taken.
     pub(super) sounds: Vec<SimSound>,
@@ -45,8 +47,8 @@ pub(super) struct Outbox {
     /// What the NPCs assisting the player have done since this was last
     /// taken.
     pub(super) comm: Vec<CommNote>,
-    /// What a test raises as double time's second pass would, said onto
-    /// [`Outbox::comm`] as that pass ends (see the `step` module).
+    /// What a test raises as double time's second pass would, raised
+    /// onto [`Outbox::comm`] as that pass ends (see the `step` module).
     #[cfg(test)]
     pub(super) second_pass_comm: Vec<CommNote>,
     /// What the player's fighters met as it left systems since this was
@@ -82,4 +84,26 @@ pub(super) struct Outbox {
     /// ([`Session::take_takeoff_nav`](super::Session::take_takeoff_nav));
     /// never saved.
     pub(super) takeoff_nav: Option<NavMode>,
+    /// The line raised last, what `_DisplayComm`'s one slot holds
+    /// (@0x90251), until a step takes it (see the `step` module); never
+    /// saved.
+    pub(super) last_line: Option<RaisedLine>,
+    /// Whether a pass cleared an escort class's kept order since a step
+    /// last took it (see the `class_orders` and `step` modules); never
+    /// saved.
+    pub(super) class_orders_cleared: bool,
+}
+
+impl Outbox {
+    /// Raises `line`: puts it on its kind's list (the messages, the comm
+    /// notes or the quotes) and records it as the line raised last, as
+    /// `_DisplayComm` replaces its slot with each line (@0x90251-0x90265).
+    pub(super) fn raise(&mut self, line: RaisedLine) {
+        match &line {
+            RaisedLine::Message(message) => self.messages.push(message.clone()),
+            RaisedLine::Comm(note) => self.comm.push(note.clone()),
+            RaisedLine::Quote(quote) => self.quotes.push(quote.clone()),
+        }
+        self.last_line = Some(line);
+    }
 }

@@ -70,11 +70,13 @@ impl Ctab {
     }
 }
 
-/// Builds a version 2 `PICT` from opcodes. `frame` and other rectangles are
+/// Builds a version 2 (or, from [`PictBuilder::v1`], version 1) `PICT`
+/// from opcodes. `frame` and other rectangles are
 /// `[top, left, bottom, right]`.
 #[derive(Clone, Debug)]
 pub struct PictBuilder {
     frame: [i16; 4],
+    version: u8,
     bytes: Vec<u8>,
 }
 
@@ -86,17 +88,41 @@ impl PictBuilder {
         let mut bytes = vec![0, 0];
         bytes.extend(rect_bytes(frame));
         bytes.extend([0x00, 0x11, 0x02, 0xFF]);
-        Self { frame, bytes }
+        Self {
+            frame,
+            version: 2,
+            bytes,
+        }
     }
 
-    /// Any opcode and its data, after a pad byte if needed to reach an even
-    /// offset.
+    /// A version 1 picture: the 12-byte header (`picSize` 0, `picFrame`,
+    /// then `0x11 0x01`), after which every opcode is one byte and nothing
+    /// is padded to an even offset.
+    #[must_use]
+    pub fn v1(frame: [i16; 4]) -> Self {
+        let mut bytes = vec![0, 0];
+        bytes.extend(rect_bytes(frame));
+        bytes.extend([0x11, 0x01]);
+        Self {
+            frame,
+            version: 1,
+            bytes,
+        }
+    }
+
+    /// Any opcode and its data. In version 2, the opcode is a word after a
+    /// pad byte if needed to reach an even offset; in version 1 it is its
+    /// low byte, written where the last opcode ended.
     #[must_use]
     pub fn raw(mut self, opcode: u16, data: &[u8]) -> Self {
-        if self.bytes.len() % 2 == 1 {
-            self.bytes.push(0);
+        if self.version == 1 {
+            self.bytes.push(opcode as u8);
+        } else {
+            if self.bytes.len() % 2 == 1 {
+                self.bytes.push(0);
+            }
+            self.bytes.extend(opcode.to_be_bytes());
         }
-        self.bytes.extend(opcode.to_be_bytes());
         self.bytes.extend_from_slice(data);
         self
     }
@@ -148,6 +174,61 @@ impl PictBuilder {
     /// `009A` DirectBitsRect.
     #[must_use]
     pub fn direct_bits(self, bits: &DirectBits) -> Self {
+        self.direct_op(0x009A, bits, None)
+    }
+
+    /// `009B` DirectBitsRgn: [`PictBuilder::direct_bits`] copying only
+    /// inside `region` (from [`rect_region`] or [`inversion_region`]).
+    #[must_use]
+    pub fn direct_bits_rgn(self, bits: &DirectBits, region: &[u8]) -> Self {
+        self.direct_op(0x009B, bits, Some(region))
+    }
+
+    /// `0090` BitsRect: a `BitMap` or indexed `PixMap`, its rows unpacked.
+    #[must_use]
+    pub fn bits_rect(self, bits: &impl Bits) -> Self {
+        self.bits_op(0x0090, bits, None, false)
+    }
+
+    /// `0091` BitsRgn: [`PictBuilder::bits_rect`] copying only inside
+    /// `region`.
+    #[must_use]
+    pub fn bits_rgn(self, bits: &impl Bits, region: &[u8]) -> Self {
+        self.bits_op(0x0091, bits, Some(region), false)
+    }
+
+    /// `0098` PackBitsRect: a `BitMap` or indexed `PixMap`, its rows
+    /// raw below 8 `rowBytes` and PackBits-packed with byte counts above.
+    #[must_use]
+    pub fn packbits_rect(self, bits: &impl Bits) -> Self {
+        self.bits_op(0x0098, bits, None, true)
+    }
+
+    /// `0099` PackBitsRgn: [`PictBuilder::packbits_rect`] copying only
+    /// inside `region`.
+    #[must_use]
+    pub fn packbits_rgn(self, bits: &impl Bits, region: &[u8]) -> Self {
+        self.bits_op(0x0099, bits, Some(region), true)
+    }
+
+    /// One of the `0090`-`0099` family: the map, the copy rectangles and
+    /// mode, the mask region if any, then the rows.
+    fn bits_op(self, opcode: u16, bits: &impl Bits, region: Option<&[u8]>, packed: bool) -> Self {
+        let mut data = bits.map();
+        data.extend(bits.copy());
+        data.extend(region.unwrap_or_default());
+        for row in bits.rows() {
+            if packed {
+                data.extend(pack_row(&row, bits.row_bytes(), 1));
+            } else {
+                data.extend(row);
+            }
+        }
+        self.raw(opcode, &data)
+    }
+
+    /// `009A` or `009B`.
+    fn direct_op(self, opcode: u16, bits: &DirectBits, region: Option<&[u8]>) -> Self {
         let mut data = vec![0, 0, 0, 0xFF]; // baseAddr
         data.extend(pixmap_bytes(&PixMapSpec {
             row_bytes: bits.row_bytes,
@@ -159,9 +240,8 @@ impl PictBuilder {
             cmp_size: bits.cmp_size,
             pm_table: 0,
         }));
-        data.extend(rect_bytes(bits.src));
-        data.extend(rect_bytes(bits.dst));
-        data.extend(bits.mode.to_be_bytes());
+        data.extend(copy_bytes(bits.src, bits.dst, bits.mode));
+        data.extend(region.unwrap_or_default());
         let unit = match bits.pixels {
             DirectPixels::Rgb555(_) => 2,
             DirectPixels::Rgb888(_) => 1,
@@ -169,35 +249,7 @@ impl PictBuilder {
         for row in bits.rows() {
             data.extend(pack_row(&row, bits.row_bytes, unit));
         }
-        self.raw(0x009A, &data)
-    }
-
-    /// `0098` PackBitsRect.
-    #[must_use]
-    pub fn packbits_rect(self, bits: &IndexedBits) -> Self {
-        let mut data = pixmap_bytes(&PixMapSpec {
-            row_bytes: bits.row_bytes,
-            bounds: bits.bounds,
-            pack_type: 0,
-            pixel_type: 0,
-            pixel_size: bits.bits,
-            cmp_count: 1,
-            cmp_size: bits.bits,
-            pm_table: 0,
-        });
-        data.extend(bits.ctab.bytes());
-        data.extend(rect_bytes(bits.src));
-        data.extend(rect_bytes(bits.dst));
-        data.extend(bits.mode.to_be_bytes());
-        let width = rect_width(bits.bounds);
-        for row in bits.indices.chunks(width) {
-            data.extend(pack_row(
-                &index_row(row, bits.bits, bits.row_bytes),
-                bits.row_bytes,
-                1,
-            ));
-        }
-        self.raw(0x0098, &data)
+        self.raw(opcode, &data)
     }
 
     /// `00FF` EndPic.
@@ -227,6 +279,125 @@ pub fn rgb888_pict(width: i16, height: i16, pixels: &[[u8; 3]]) -> Vec<u8> {
 /// A QuickDraw rectangle's 8 bytes.
 fn rect_bytes(rect: [i16; 4]) -> Vec<u8> {
     rect.iter().flat_map(|v| v.to_be_bytes()).collect()
+}
+
+/// A pixel opcode's source rectangle, destination rectangle and mode.
+fn copy_bytes(src: [i16; 4], dst: [i16; 4], mode: u16) -> Vec<u8> {
+    let mut out = rect_bytes(src);
+    out.extend(rect_bytes(dst));
+    out.extend(mode.to_be_bytes());
+    out
+}
+
+/// The end of a region line, and of the region: `0x7FFF`.
+const REGION_END: i16 = 0x7FFF;
+
+/// A rectangular region: its size word (10) and its bounding box.
+#[must_use]
+pub fn rect_region(bbox: [i16; 4]) -> Vec<u8> {
+    let mut out = 10u16.to_be_bytes().to_vec();
+    out.extend(rect_bytes(bbox));
+    out
+}
+
+/// A region of inversion points: its size word, its bounding box, then for
+/// each line its `y`, the `x`s where membership flips relative to the line
+/// above, and `0x7FFF`; then a final `0x7FFF`. Lines are `(y, xs)`.
+#[must_use]
+pub fn inversion_region(bbox: [i16; 4], lines: &[(i16, &[i16])]) -> Vec<u8> {
+    let mut body = rect_bytes(bbox);
+    for (y, xs) in lines {
+        body.extend(y.to_be_bytes());
+        for x in *xs {
+            body.extend(x.to_be_bytes());
+        }
+        body.extend(REGION_END.to_be_bytes());
+    }
+    body.extend(REGION_END.to_be_bytes());
+    let mut out = ((body.len() + 2) as u16).to_be_bytes().to_vec();
+    out.extend(body);
+    out
+}
+
+/// The pixels of a `0090`, `0091`, `0098` or `0099` opcode: a 1-bit
+/// [`BitMap`] or an indexed `PixMap` ([`IndexedBits`]).
+pub trait Bits {
+    /// The `BitMap` (`rowBytes`, bounds) or `PixMap` record, then a
+    /// `PixMap`'s colour table.
+    fn map(&self) -> Vec<u8>;
+    /// The source rectangle, destination rectangle and mode.
+    fn copy(&self) -> Vec<u8>;
+    /// `rowBytes`, without flags.
+    fn row_bytes(&self) -> u16;
+    /// Each row, unpacked, `rowBytes` long.
+    fn rows(&self) -> Vec<Vec<u8>>;
+}
+
+/// A 1-bit QuickDraw `BitMap`: `rowBytes` with bit 15 clear, bounds, and
+/// rows of bits, leftmost pixel in the high bit. A set bit is black.
+#[derive(Clone, Debug)]
+pub struct BitMap {
+    /// The bounds, `[top, left, bottom, right]`.
+    pub bounds: [i16; 4],
+    /// The source rectangle, within `bounds`.
+    pub src: [i16; 4],
+    /// The destination rectangle, within the picture frame.
+    pub dst: [i16; 4],
+    /// The transfer mode.
+    pub mode: u16,
+    /// `rowBytes`: by default the fewest bytes that hold a row.
+    pub row_bytes: u16,
+    /// Row-major bits covering `bounds`: `true` is set.
+    pub set: Vec<bool>,
+}
+
+impl BitMap {
+    /// `set` bits covering `bounds`, copied whole to the same rectangle.
+    #[must_use]
+    pub fn new(bounds: [i16; 4], set: &[bool]) -> Self {
+        Self {
+            bounds,
+            src: bounds,
+            dst: bounds,
+            mode: 0,
+            row_bytes: min_row_bytes(rect_width(bounds), 1),
+            set: set.to_vec(),
+        }
+    }
+
+    /// Bits from rows of text, `#` set and anything else clear, covering
+    /// `bounds`.
+    #[must_use]
+    pub fn from_art(bounds: [i16; 4], rows: &[&str]) -> Self {
+        let set: Vec<bool> = rows
+            .iter()
+            .flat_map(|row| row.chars().map(|c| c == '#'))
+            .collect();
+        Self::new(bounds, &set)
+    }
+}
+
+impl Bits for BitMap {
+    fn map(&self) -> Vec<u8> {
+        let mut out = self.row_bytes.to_be_bytes().to_vec();
+        out.extend(rect_bytes(self.bounds));
+        out
+    }
+
+    fn copy(&self) -> Vec<u8> {
+        copy_bytes(self.src, self.dst, self.mode)
+    }
+
+    fn row_bytes(&self) -> u16 {
+        self.row_bytes
+    }
+
+    fn rows(&self) -> Vec<Vec<u8>> {
+        let bits: Vec<u8> = self.set.iter().map(|&b| u8::from(b)).collect();
+        bits.chunks(rect_width(self.bounds).max(1))
+            .map(|row| index_row(row, 1, self.row_bytes))
+            .collect()
+    }
 }
 
 /// A `DirectBitsRect` (`009A`) pixel opcode. The constructors fill in a
@@ -385,8 +556,9 @@ fn rect_width(rect: [i16; 4]) -> usize {
     (i32::from(rect[3]) - i32::from(rect[1])) as usize
 }
 
-/// A `PackBitsRect` (`0098`) pixel opcode: indexed pixels with a colour
-/// table, copying the whole of `bounds` to the same rectangle.
+/// An indexed `PixMap` pixel opcode (`0090`, `0091`, `0098` or `0099`):
+/// indexed pixels with a colour table, copying the whole of `bounds` to the
+/// same rectangle.
 #[derive(Clone, Debug)]
 pub struct IndexedBits {
     /// The `PixMap` bounds, `[top, left, bottom, right]`.
@@ -421,6 +593,38 @@ impl IndexedBits {
             ctab: ctab.clone(),
             indices: indices.to_vec(),
         }
+    }
+}
+
+impl Bits for IndexedBits {
+    fn map(&self) -> Vec<u8> {
+        let mut out = pixmap_bytes(&PixMapSpec {
+            row_bytes: self.row_bytes,
+            bounds: self.bounds,
+            pack_type: 0,
+            pixel_type: 0,
+            pixel_size: self.bits,
+            cmp_count: 1,
+            cmp_size: self.bits,
+            pm_table: 0,
+        });
+        out.extend(self.ctab.bytes());
+        out
+    }
+
+    fn copy(&self) -> Vec<u8> {
+        copy_bytes(self.src, self.dst, self.mode)
+    }
+
+    fn row_bytes(&self) -> u16 {
+        self.row_bytes
+    }
+
+    fn rows(&self) -> Vec<Vec<u8>> {
+        self.indices
+            .chunks(rect_width(self.bounds).max(1))
+            .map(|row| index_row(row, self.bits, self.row_bytes))
+            .collect()
     }
 }
 

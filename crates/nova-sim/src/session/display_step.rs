@@ -8,7 +8,9 @@
 //! both passes:
 //!
 //! 1. The death timer ticks (@0x6d7e6-0x6d7f8,
-//!    [`Condition::count_down`]).
+//!    [`Condition::count_down`]); then the escort classes' kept orders
+//!    are settled (@0x6e2e8-0x6e452, see the `class_orders` module), each
+//!    clear reported to the step.
 //! 2. The klaxon (@0x6f1e4-0x6f227): [`SimSound::Klaxon`] while the
 //!    timer, after its tick, is above 1.0. A timer the display set on the
 //!    last pass has ticked, so the klaxon sounds from the pass after the
@@ -39,6 +41,7 @@
 
 use super::Session;
 use super::game_work::PlayerHead;
+use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{Combat, GamePass, Rules};
@@ -51,12 +54,19 @@ impl Session {
     /// `chance` (see the module docs).
     pub(super) fn player_display_step(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         pass: GamePass,
         rules: Rules,
         head: PlayerHead,
         chance: &mut dyn Chance,
     ) {
         self.ship.condition.count_down();
+        if self
+            .space
+            .settle_class_orders(&mut self.pilot, &self.statics)
+        {
+            self.out.class_orders_cleared = true;
+        }
         if matches!(
             self.ship.condition,
             Condition::Dying {
@@ -71,9 +81,15 @@ impl Session {
         self.player_cloak_tick(head.disabled);
         self.ship.step_cloak_fade(&self.pilot, &self.statics);
         let was_destroyed = self.ship.condition == Condition::Destroyed;
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
-            Combat::display_player(combat, fighters, arena);
-        });
+        self.land_phase(
+            behaviour,
+            pass,
+            rules,
+            chance,
+            |combat, fighters, arena, _| {
+                Combat::display_player(combat, fighters, arena);
+            },
+        );
         self.lay_out_displayed();
         if !was_destroyed && self.ship.condition == Condition::Destroyed {
             self.settle_player_explosion();

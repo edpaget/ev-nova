@@ -93,7 +93,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x5f284, @0x5b8a8), unmarked and silently. Its close is
     /// [`FlightView::close_map`]'s in port, then the caller's restore (see
     /// the module docs).
+    ///
+    /// Each screen opens it only on the map key, so it opens with
+    /// [`MAP_KEY`](super::MAP_KEY) held, and a close before its release
+    /// waits for it ([`FlightView::close_map`]).
     pub fn open_port_screen_map(&mut self, screen: PortScreen) {
         self.open_map_as(MapOpening::Port(screen));
+        self.map_key_held = true;
     }
 }

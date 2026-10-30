@@ -102,11 +102,11 @@ pub const MAP_ITEM_CENTRE: (i32, i32) = (
 );
 
 /// Whether `at` is in item 3, as `PtInRect` tests it: its left and top
-/// edges in, its right and bottom edges out.
+/// edges in, its right and bottom edges out
+/// ([`Bounds::contains_half_open`]).
 #[must_use]
 pub fn in_map_item(at: Point) -> bool {
-    let area = map_area();
-    (area.min.x..area.max.x).contains(&at.x) && (area.min.y..area.max.y).contains(&at.y)
+    map_area().contains_half_open(at)
 }
 
 /// Draws the frame under the map (see the module docs): the dialog
@@ -239,10 +239,14 @@ impl MapDialog {
         }
     }
 
-    /// The map's transform: the scroll at item 3's centre.
+    /// The map's transform: the scroll at item 3's centre
+    /// ([`MAP_ITEM_CENTRE`]) in the dialog's port, at
+    /// [`DIALOG_ORIGIN`] (`_DrawMap`'s divide, [`MapPlace::transform`]).
+    #[allow(clippy::cast_possible_truncation)] // Whole screen pixels.
     #[must_use]
     pub fn transform(&self) -> Transform {
-        self.place.transform(map_centre())
+        let port = (DIALOG_ORIGIN.x as i32, DIALOG_ORIGIN.y as i32);
+        self.place.transform(port, MAP_ITEM_CENTRE)
     }
 
     /// A key press or repeat (`_MapFilter`): the arrows scroll
@@ -470,7 +474,7 @@ mod tests {
         assert!(dialog.borders_shown());
         assert_eq!(
             dialog.transform(),
-            MapPlace::new((10, -20)).transform(at(450.0, 346.0))
+            MapPlace::new((10, -20)).transform((212, 128), (238, 218))
         );
     }
 
@@ -820,7 +824,7 @@ mod tests {
         assert_eq!(map.place(), Some(&MapPlace::new((0, 0))));
         assert_eq!(
             map.transform(),
-            MapPlace::new((0, 0)).transform(at(450.0, 346.0))
+            MapPlace::new((0, 0)).transform((212, 128), (238, 218))
         );
     }
 

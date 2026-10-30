@@ -141,15 +141,104 @@ fn the_name_and_nickname_are_kept_culled_then_trimmed() {
     assert_eq!(store.keys(), ["Ace"]);
 }
 
+/// The New Pilot menu over `store` with `new_pilot_empty_name` read as
+/// `source`.
+fn empty_name_menu(store: &MemoryPilots, source: RuleSource) -> AppScreen {
+    new_pilot_menu(named_data(), store, 0)
+        .with_rules(Rulebook::default().with_override(RuleKey::NewPilotEmptyName, source))
+}
+
+/// New Pilot from the main menu, the drawn name deleted so `name` alone is
+/// typed even when empty, then Return with the focus still in the name.
+/// The platform sends no character for Return (`platform`'s text events
+/// drop control characters), so none is typed after it.
+fn confirm_typed_name(screen: &mut AppScreen, name: &str) {
+    assert_eq!(choose(screen, MenuChoice::NewPilot), ScreenAction::None);
+    assert_eq!(screen.showing(), Showing::NewPilot);
+    screen.input(&key(Key::Backspace, true));
+    type_text(screen, name);
+    screen.input(&key(Key::Enter, true));
+}
+
 #[test]
 fn a_name_culled_or_trimmed_to_nothing_is_refused() {
     let store = MemoryPilots::new();
-    let mut screen = new_pilot_menu(named_data(), &store, 0);
+    let mut screen = empty_name_menu(&store, RuleSource::Bible);
     confirm_new_pilot(&mut screen, "the ;x", "");
     assert_eq!(screen.showing(), Showing::NewPilot);
     assert_eq!(
         screen.new_pilot().expect("open").refusal(),
         Some(UNUSABLE_NAME)
+    );
+    assert_eq!(store.writes(), 0);
+}
+
+#[test]
+fn by_the_other_reading_an_empty_name_is_refused() {
+    for typed in ["", "the "] {
+        let store = MemoryPilots::new();
+        let mut screen = empty_name_menu(&store, RuleSource::Bible);
+        confirm_typed_name(&mut screen, typed);
+        assert_eq!(screen.showing(), Showing::NewPilot, "{typed:?}");
+        assert_eq!(
+            screen.new_pilot().expect("open").refusal(),
+            Some(UNUSABLE_NAME)
+        );
+        assert_eq!(store.writes(), 0);
+    }
+}
+
+/// By the engine's reading an empty name goes on, as `_DoesPilotExist("")`
+/// answers no (@0x72def-0x72e6a): no replace question, even with pilots
+/// saved, and the pilot plays but `_SavePilotFile` writes nothing.
+#[test]
+fn by_the_engines_reading_an_empty_name_is_christened_and_never_saved() {
+    for typed in ["", "the "] {
+        let store = MemoryPilots::new();
+        save_pilot(&store, &named_data(), "Ada", "Old");
+        let writes = store.writes();
+        let mut screen = empty_name_menu(&store, RuleSource::Engine);
+        confirm_typed_name(&mut screen, typed);
+        assert_eq!(screen.showing(), Showing::Christening, "{typed:?}");
+        christen(&mut screen);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(held(&screen).name(), "");
+        assert_eq!(store.writes(), writes, "never saved");
+        assert_eq!(store.keys(), ["Ada"]);
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn a_blank_name_or_dots_are_refused_by_both_readings() {
+    for source in [RuleSource::Engine, RuleSource::Bible] {
+        for typed in ["   ", "..", "."] {
+            let store = MemoryPilots::new();
+            let mut screen = empty_name_menu(&store, source);
+            confirm_typed_name(&mut screen, typed);
+            assert_eq!(screen.showing(), Showing::NewPilot, "{source:?} {typed:?}");
+            assert_eq!(
+                screen.new_pilot().expect("open").refusal(),
+                Some(UNUSABLE_NAME)
+            );
+            assert_eq!(store.writes(), 0);
+        }
+    }
+}
+
+/// A name over 24 characters confirmed through the router beeps, as
+/// `_DoNewPilotNameDialog` does (`SysBeep(0)` @0x1696f), and the dialog
+/// stays open.
+#[test]
+fn a_name_over_24_characters_beeps_and_stays_in_the_dialog() {
+    let store = MemoryPilots::new();
+    let mut screen = new_pilot_menu(named_data(), &store, 0);
+    screen.take_sounds();
+    confirm_new_pilot(&mut screen, &"x".repeat(25), "");
+    assert_eq!(screen.showing(), Showing::NewPilot);
+    assert!(
+        screen.take_sounds().contains(&Sound::Ui(UiSound::Alert)),
+        "the alert"
     );
     assert_eq!(store.writes(), 0);
 }

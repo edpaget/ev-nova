@@ -328,8 +328,7 @@ impl Session {
     /// `_MakeEscortsHyperWithParent` (@0x3fd54-0x3fdea): each ship the
     /// player leads takes its +0x50 and clock, lets go of its target and
     /// follows its jump ([`Npc::follow_player_jump`]). Its test of +0x8c,
-    /// the stellar a ship defends, always holds: the engine has no
-    /// defence ships.
+    /// the stellar a ship defends, always holds: a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
     ///
     /// [`Npc::follow_player_jump`]: crate::traffic::npc::Npc::follow_player_jump
     fn make_escorts_hyper(&mut self) {

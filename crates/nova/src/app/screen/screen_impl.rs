@@ -5,7 +5,7 @@ use std::time::Duration;
 use nova_view::view_shape::classic_offset;
 use nova_view::{
     Diagnostic, DrawList, FullscreenKind, Input, MenuCommand, Point, Prefs, Scaling, Screen,
-    ScreenAction, Showing, Sound, VideoMode, ViewShape,
+    ScreenAction, Showing, Sound, UiSound, VideoMode, ViewShape,
 };
 
 use super::{
@@ -152,6 +152,7 @@ impl Screen for AppScreen {
         } else if !self.appear_holds_menu() && !self.entry_holds() {
             self.tell_menu_pointer();
             self.shown_mut().tick(dt);
+            self.collect_race_winnings();
         }
         self.settle_offer();
         self.drop_closed_missions();
@@ -223,6 +224,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
             self.escort_dialog
+                .as_ref()
+                .map(|dialog| dialog as &dyn Screen),
+            self.planet_comm
                 .as_ref()
                 .map(|dialog| dialog as &dyn Screen),
             self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
@@ -297,9 +301,39 @@ impl Screen for AppScreen {
         }
         self.command_held = false;
         self.keys_held = MenuKeys::default();
+        // A mission dialog's map over flight sits among the overlays, in
+        // front of the dialog it opened from, so flight lets go too: its
+        // map waiting for M's release closes
+        // ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)).
+        if self.flight_dialog_map_open() {
+            self.flight.as_mut().expect(ENTERED).release_keys();
+        }
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
+        }
+    }
+
+    /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
+    /// wherever the game is (its callers are `_DoMainScreen`,
+    /// `_IterateInGameEventLoop` and `_MyModalDialog`). The audio stops
+    /// the music if it plays (@0x4f390-0x4f3a0), and every flight held,
+    /// shown or not, halts its warp-ups (@0x4f3a3-0x4f3e0). No other
+    /// screen keeps a sound the switch-out stops.
+    fn focus_lost(&mut self) {
+        self.sounds.push(Sound::Ui(UiSound::SwitchedOut));
+        for flight in self.flights_mut() {
+            flight.focus_lost();
+        }
+    }
+
+    /// Tells every flight held, shown or not, that the window came back
+    /// to the front: the original's `_SwitchedIn` (@0x513cc-0x513dc)
+    /// zeroes the frame-rate readout's counters wherever the game is.
+    /// No other screen keeps time across the switch.
+    fn focus_gained(&mut self) {
+        for flight in self.flights_mut() {
+            flight.focus_gained();
         }
     }
 
@@ -307,14 +341,20 @@ impl Screen for AppScreen {
     /// wait is left alone), then replays what arrived meanwhile, in
     /// order, through [`Screen::input`]: a replayed key that holds again
     /// queues the rest. A quit a replayed input asks is kept for
-    /// [`Screen::take_quit`].
+    /// [`Screen::take_quit`]. When the action opens the New Pilot dialog,
+    /// what it flushes ([`flushed_on_opening`]) is dropped first.
     fn keyed_click_ended(&mut self) {
         let Some(MenuHold::Click(action)) = self.menu_hold else {
             return;
         };
         self.menu_hold = None;
+        let had_new_pilot = self.new_pilot.is_some();
         self.run_menu_action(action);
-        for held in std::mem::take(&mut self.held) {
+        let mut held = std::mem::take(&mut self.held);
+        if !had_new_pilot && self.new_pilot.is_some() {
+            held.retain(|held| !flushed_on_opening(held));
+        }
+        for held in held {
             match held {
                 Held::Input(input) => {
                     if self.input(&input) == ScreenAction::Quit {
@@ -379,6 +419,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.escort_dialog
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.planet_comm
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),
@@ -524,11 +567,13 @@ impl Screen for AppScreen {
 
 impl AppScreen {
     /// `input` routed as the router routes it with nothing holding it:
-    /// Caps Lock's double time, the route, then what the set expressions
-    /// queued settled and a save that is due made.
+    /// Caps Lock's double time, the route and the frame-rate readout
+    /// kept ([`AppScreen::keep_frame_rate`]), then what the set
+    /// expressions queued settled and a save that is due made.
     pub(super) fn routed_input(&mut self, input: &Input) -> ScreenAction {
         self.double_time_key(input);
         let action = self.route(input);
+        self.keep_frame_rate();
         self.settle_script();
         self.save_if_due();
         action
@@ -556,4 +601,16 @@ impl AppScreen {
             CLASSIC_VIEW
         }
     }
+}
+
+/// Whether the New Pilot dialog, opening as a keyed click ends, drops
+/// `held`: `_DoNewPilotNameDialog` flushes every queued event but disk
+/// events before its loop (`FlushEvents(0xff7f, 0)` @0x16807-0x16816), so
+/// every input held through the click goes, but a key's release, kept so
+/// its held state settles (the dialog acts on presses only). The pointer
+/// cancels and key releases the router queued in their place still run,
+/// and a window close is already dropped under a dialog
+/// ([`AppScreen::replay_close`]).
+pub(super) fn flushed_on_opening(held: &Held) -> bool {
+    matches!(held, Held::Input(input) if !matches!(input, Input::Key { pressed: false, .. }))
 }

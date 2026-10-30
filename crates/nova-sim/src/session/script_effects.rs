@@ -2312,22 +2312,36 @@ pub(super) mod tests {
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.take_events(), [], "the stellars wait");
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [
+                SessionEvent::SystemChanged,
+                SessionEvent::StellarFramesReset
+            ]
+        );
     }
 
     #[test]
-    fn a_landed_move_within_the_system_or_back_to_it_tells_nothing() {
+    fn a_landed_move_within_the_system_or_back_to_it_tells_no_move() {
         let catalog = moving();
         for text in ["N130", "M130", "M131 M130"] {
             let mut session = landed(&catalog);
             moved(&mut session, &catalog, text);
             assert_eq!(session.take_events(), [], "{text}: settled");
             session.take_off(&catalog, &mut NeverFires);
-            assert_eq!(session.take_events(), [], "{text}: taken off");
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::StellarFramesReset],
+                "{text}: taken off, the frames' reset alone"
+            );
         }
         let mut session = landed(&catalog);
         session.take_off(&catalog, &mut NeverFires);
-        assert_eq!(session.take_events(), [], "a plain take-off");
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::StellarFramesReset],
+            "a plain take-off"
+        );
     }
 
     #[test]
@@ -2338,7 +2352,13 @@ pub(super) mod tests {
         let _ = settle(&mut session, &catalog);
         assert_eq!(session.take_events(), [], "held");
         let _ = take_off(&mut session, &catalog);
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [
+                SessionEvent::SystemChanged,
+                SessionEvent::StellarFramesReset
+            ]
+        );
     }
 
     #[test]

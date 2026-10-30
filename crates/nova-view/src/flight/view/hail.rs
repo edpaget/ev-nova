@@ -1,12 +1,15 @@
 //! [`FlightView`]'s hail over the [`FlightSim`] port: the comm key, the
 //! comm dialog's presses and close, the escort dialog a fleet escort
-//! opens in its place, and the offer a person makes in its place, each
-//! held for the router. What a ship answers is the flight's
+//! opens in its place, the offer a person makes in its place, and the
+//! planet comm dialog a stellar that answers opens, each held for the
+//! router. What a ship or a stellar answers is the flight's
 //! (`nova_sim::Session::hail_key`, `nova_sim::Session::answer`,
-//! `nova_sim::Session::haggle`).
+//! `nova_sim::Session::haggle`, `nova_sim::Session::press_planet_comm`,
+//! `nova_sim::Session::haggle_bribe`).
 
 use nova_sim::escort_dialog::{EscortButton, EscortDialogView};
 use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim::planet_comm::{PlanetCommItem, PlanetCommView};
 use nova_sim::{Haggle, HailView, Hailed, VenueOffer};
 
 use crate::Key;
@@ -19,12 +22,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// once the flight takes the comm key ([`FlightView::send_gated`]), or
     /// says why not: a hail answered is held for the router
     /// ([`FlightView::take_hail`]), the escort dialog a fleet escort opens
-    /// in its place ([`FlightView::take_escort_dialog`]) and a mission
-    /// offered in its place ([`FlightView::take_offer`](FlightView#method.take_offer)),
-    /// each letting go of the flight keys; one accepted at once shows
-    /// nothing, and so does a navigation stellar that answers, as its comm
-    /// dialog is not built. A refusal's beep is the flight's, drained with
-    /// its sounds.
+    /// in its place ([`FlightView::take_escort_dialog`]), a mission
+    /// offered in its place ([`FlightView::take_offer`](FlightView#method.take_offer))
+    /// and the planet comm dialog a navigation stellar that answers opens
+    /// ([`FlightView::take_planet_comm`]), each letting go of the flight
+    /// keys, as `_SetAllKeyCmdFlags` does after the dialog (@0x62067); a
+    /// mission accepted at once shows nothing. A refusal's beep is the
+    /// flight's, drained with its sounds.
     pub(super) fn hail(&mut self) {
         let option = self.held.contains(&Key::Alt);
         match self.send_gated(FlightCommand::Hail { option }) {
@@ -36,15 +40,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 self.pending_escort_dialog = Some(view);
                 self.held.clear();
             }
+            Answer::Hailed(Hailed::Stellar(view)) => {
+                self.pending_planet_comm = Some(view);
+                self.held.clear();
+            }
             Answer::Hailed(Hailed::Offer(offer)) => self.hold_offer(offer),
             Answer::HailRefused(refusal) => {
                 if let Some(text) = hail_refusal_message(refusal) {
                     self.say_for(text, MESSAGE_TICKS);
                 }
             }
-            // The planet comm dialog (`_DoPlanetCommDialog`) is not built
-            // yet: rdm:task/planet-domination opens it on a stellar's
-            // answer. A hail the flight refused does nothing.
+            // A hail the flight refused does nothing.
             _ => {}
         }
     }
@@ -70,6 +76,41 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the dialog.
     pub fn take_escort_dialog(&mut self) -> Option<EscortDialogView> {
         self.pending_escort_dialog.take()
+    }
+
+    /// The planet comm dialog just opened, once: the router takes it to
+    /// show the dialog.
+    pub fn take_planet_comm(&mut self) -> Option<PlanetCommView> {
+        self.pending_planet_comm.take()
+    }
+
+    /// Presses `item` in the planet comm dialog
+    /// ([`FlightCommand::PressPlanetComm`]): what it shows after, or none
+    /// once it closes. A close refreshes the HUD, as the original's
+    /// `_RedrawStatus(1)` does (@0x97b3d); a press the flight refused, with
+    /// no flight to press, does nothing.
+    pub fn press_planet_comm(&mut self, item: PlanetCommItem) -> Option<PlanetCommView> {
+        self.planet_comm_answer(FlightCommand::PressPlanetComm(item))
+    }
+
+    /// Makes `choice` in the planet comm dialog's bribe haggle
+    /// ([`FlightCommand::HaggleBribe`]): what the dialog shows after, or
+    /// none once a bribe paid closes it, refreshing the HUD as a close
+    /// does ([`FlightView::press_planet_comm`]).
+    pub fn haggle_bribe(&mut self, choice: Haggle) -> Option<PlanetCommView> {
+        self.planet_comm_answer(FlightCommand::HaggleBribe(choice))
+    }
+
+    /// Sends `command`, a planet comm dialog's, and gives what the dialog
+    /// shows after, refreshing the HUD when it closed.
+    fn planet_comm_answer(&mut self, command: FlightCommand) -> Option<PlanetCommView> {
+        let Answer::PlanetComm(view) = self.send(command) else {
+            return None;
+        };
+        if view.is_none() {
+            self.redraw_status();
+        }
+        view
     }
 
     /// Presses `button` in the escort dialog

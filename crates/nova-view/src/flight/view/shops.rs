@@ -317,24 +317,15 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
         self.outfit_counted(order, 1).map(|_| ())
     }
 
-    /// Buys or sells up to `count` of an outfit
-    /// ([`FlightCommand::OutfitCounted`],
-    /// `nova_sim::Session::outfit_counted_run`), on the flight's chance,
-    /// giving how many went through; a flight that never started has no
-    /// outfitter. The bar is redrawn after it
-    /// (`FlightView::after_outfit_order`).
+    /// Buys or sells up to `count` of an outfit, as
+    /// [`outfit_order`](Self::outfit_order) does, giving how many went
+    /// through; a flight that never started has no outfitter.
     ///
     /// # Errors
     ///
     /// The [`OutfitRefusal`] of its first pass.
     pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
-        let before = self.interface_now();
-        let run = match self.send(FlightCommand::OutfitCounted { order, count }) {
-            Answer::Outfitted(run) => run,
-            _ => no_outfitter(),
-        };
-        self.after_outfit_order(before.as_ref(), run.button_passed);
-        run.run.counted()
+        self.outfit_order(order, count).run.counted()
     }
 
     /// Buys or sells up to `count` of an outfit ([`FlightCommand::Outfit`],

@@ -47,9 +47,14 @@
 //! above the disabled ships and below the smoke, the shots and the flying
 //! ships ([`SpriteLayer::Boxes`](nova_sim::sprite_layer::SpriteLayer::Boxes)).
 //!
-//! Left out: the pods' murk (`_HandleSpriteMurkiness` @0x39fbc,
-//! rdm:task/murk-other-sprites); and `_WrapPlayerPosition`'s shift
-//! (@0x68232), as the engine has no wrap.
+//! A pod is murked at its position, seen from the player's ship
+//! ([`murk`](super::murk); `_HandleSpriteMurkiness` @0x39f90-0x39fbc,
+//! rdm:phase/play-feel-4/phase-17-murk-other-sprites), on top of its fade:
+//! the murk writes the sprite's +0xb0/+0xb4 and the fade +0xa8, so the
+//! two compose.
+//!
+//! Left out: `_WrapPlayerPosition`'s shift (@0x68232), as the engine has
+//! no wrap.
 
 use std::num::NonZeroU16;
 
@@ -57,6 +62,7 @@ use nova_sim::trig::intercept_angle;
 use nova_sim::{Chance, Vec2};
 
 use super::catalog::Looks;
+use super::murk::{murk_tint, sprite_murk};
 use super::slot_pool::SlotPool;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, Point};
@@ -167,8 +173,18 @@ impl EscapePods {
         });
     }
 
-    /// Draws each pod shown, as `looks` says, where `camera` shows it.
-    pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
+    /// Draws each pod shown, as `looks` says, where `camera` shows it,
+    /// murked as seen from the player's ship at `viewer` in a system of
+    /// effective murk `murk` ([`sprite_murk`]), as `_HandleEscapePods`
+    /// murks it at its position (@0x39f90-0x39fbc) before its fade.
+    pub fn draw(
+        &self,
+        list: &mut DrawList,
+        camera: &Camera,
+        looks: &Looks,
+        viewer: Vec2,
+        murk: u8,
+    ) {
         let Some(sheet) = looks.pod_sheet() else {
             return;
         };
@@ -176,6 +192,8 @@ impl EscapePods {
             let Some(tint) = pod.tint() else {
                 continue;
             };
+            let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), viewer, murk);
+            let tint = murk_tint(tint, level);
             let frame = sheet.image.frame(pod.frame);
             let at = camera.world_to_screen(pod.at);
             if pod.life >= POD_FADE {
@@ -325,7 +343,13 @@ mod tests {
     fn a_pod_is_drawn_on_its_frame_at_its_tint() {
         let pods = spawned(&[20, 90, 5]);
         let mut list = DrawList::new();
-        pods.draw(&mut list, &Camera::centred_on(Point::default()), &looks());
+        pods.draw(
+            &mut list,
+            &Camera::centred_on(Point::default()),
+            &looks(),
+            Vec2::ZERO,
+            0,
+        );
         let drawn: Vec<_> = list
             .into_iter()
             .filter_map(|command| match command {
@@ -339,6 +363,8 @@ mod tests {
             &mut unread,
             &Camera::centred_on(Point::default()),
             &Looks::default(),
+            Vec2::ZERO,
+            0,
         );
         assert!(unread.into_iter().next().is_none(), "no sheet, no pod");
     }
@@ -348,7 +374,13 @@ mod tests {
         let mut pods = spawned(&[20, 90, 5]);
         let blends = |pods: &EscapePods| -> Vec<(Color, Blend)> {
             let mut list = DrawList::new();
-            pods.draw(&mut list, &Camera::centred_on(Point::default()), &looks());
+            pods.draw(
+                &mut list,
+                &Camera::centred_on(Point::default()),
+                &looks(),
+                Vec2::ZERO,
+                0,
+            );
             list.into_iter()
                 .filter_map(|command| match command {
                     DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend)),
@@ -365,6 +397,41 @@ mod tests {
         assert_eq!(pods.pods()[0].life, POD_FADE - 1);
         assert_eq!(blends(&pods), [(tint, Blend::OrCrossfade)], "at 31");
         assert_eq!(tint.a, 247, "31/32");
+    }
+
+    #[test]
+    fn a_pod_far_from_the_viewer_in_murk_is_darkened_opaque_or_fading() {
+        let mut pods = spawned(&[20, 90, 5]);
+        let tints = |pods: &EscapePods, viewer: Vec2| -> Vec<(Color, Blend)> {
+            let mut list = DrawList::new();
+            let camera = Camera::centred_on(Point::default());
+            pods.draw(&mut list, &camera, &looks(), viewer, 100);
+            list.into_iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let pod = pods.pods()[0];
+        let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), Vec2::ZERO, 100);
+        assert!(level > 0, "murky out here: {level}");
+        let opaque = murk_tint(Color::WHITE, level);
+        assert_eq!(tints(&pods, Vec2::ZERO), [(opaque, Blend::Normal)]);
+        let beside = Vec2::new(pod.at.x, pod.at.y);
+        assert_eq!(
+            tints(&pods, beside),
+            [(Color::WHITE, Blend::Normal)],
+            "untinted at the viewer"
+        );
+        while pods.pods()[0].life >= POD_FADE {
+            pods.step();
+        }
+        let pod = pods.pods()[0];
+        let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), Vec2::ZERO, 100);
+        let fading = murk_tint(pod.tint().expect("shown"), level);
+        assert_ne!(fading, pod.tint().expect("shown"));
+        assert_eq!(tints(&pods, Vec2::ZERO), [(fading, Blend::OrCrossfade)]);
     }
 
     #[test]
@@ -435,7 +502,7 @@ mod tests {
         assert_eq!(xs(&pods), [30.0, 20.0], "in slot order");
         let camera = Camera::centred_on(Point::default());
         let mut list = DrawList::new();
-        pods.draw(&mut list, &camera, &looks());
+        pods.draw(&mut list, &camera, &looks(), Vec2::ZERO, 0);
         let drawn: Vec<f32> = list
             .into_iter()
             .filter_map(|command| match command {

@@ -34,7 +34,11 @@
 //!   arg +0x20 skips (@0x3b44d, @0x3bf1f). Cloak-when-hit is in the
 //!   reaction block (@0x3bb95-0x3bbdd), so it needs the strike answered
 //!   ([`Strike::answered`], see the `answer_flag` module) too; the decloak
-//!   comes after the block, and any direct hit makes it. Cloak-when-hit's
+//!   comes after the block, and any direct hit makes it. While the traffic
+//!   answers the fight's strikes as they settle, each strike's cloak runs
+//!   in its own turn, after its flag and before its reaction
+//!   ([`npc_takes_hit`]), so cloak-when-hit reads the goal the earlier
+//!   strikes' reactions left (`_IsShipFightingMe` @0x3bbc9). Cloak-when-hit's
 //!   conditions also start the burst weapons of the ship's class on their
 //!   burst reload (`_AIForceBurstReload` @0x84c37), cloaked already or
 //!   not.
@@ -53,6 +57,7 @@
 
 use super::{PlayerShip, Session, Space, Statics};
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
+use crate::combat::armament::Arsenal;
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
 use crate::pilot::Pilot;
@@ -225,29 +230,49 @@ impl Space {
         reserves: RuleSource,
         strikes: &[Strike],
     ) {
-        for strike in strikes.iter().filter(|strike| strike.direct) {
+        for strike in strikes {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
-            let arsenal = &statics.arsenal;
             let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
                 continue;
             };
-            let can_cloak = npc.can_cloak(reserves);
-            // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
-            // hit only for a ship source (@0x3bb9f), as if it were
-            // attacking; nor does an unanswered one, whose reaction block
-            // is skipped.
-            let holds =
-                !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
-            // The fight has already taken the hit's damage, as `_DamageShip`
-            // does (@0x3ac11-0x3acbd) before it cloaks (@0x3bbdd), so a cloak
-            // that zeroes shields zeroes what the hit left.
-            let shield = &mut npc.reserves.shield.now;
-            if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds, shield) {
-                npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
-            }
+            npc_takes_hit(npc, &statics.arsenal, reserves, strike);
         }
+    }
+}
+
+/// `npc`'s cloak as it takes `strike`, by the weapon records of `arsenal`,
+/// whether it can cloak reading `reserves` ([`RuleKey::CloakReserves`]):
+/// cloak-when-hit, its burst reload with it, then the decloak (see
+/// [`Space::cloak_hits`] and the module docs). A strike that is no direct
+/// hit does nothing (@0x3b44d, @0x3bf1f).
+///
+/// The traffic calls it in each strike's turn, after its answer flag and
+/// before its reaction (`Session::answer_landed`), as `_DamageShip` does,
+/// so cloak-when-hit reads the goal the earlier strikes' reactions left
+/// (`_IsShipFightingMe` @0x3bbc9).
+pub(super) fn npc_takes_hit(
+    npc: &mut Npc,
+    arsenal: &Arsenal,
+    reserves: RuleSource,
+    strike: &Strike,
+) {
+    if !strike.direct {
+        return;
+    }
+    let can_cloak = npc.can_cloak(reserves);
+    // A hit by no ship never cloaks it: `_DamageShip` cloaks on a
+    // hit only for a ship source (@0x3bb9f), as if it were
+    // attacking; nor does an unanswered one, whose reaction block
+    // is skipped.
+    let holds = !strike.answered || strike.by.is_none_or(|by| npc.goal.attacking() == Some(by));
+    // The fight has already taken the hit's damage, as `_DamageShip`
+    // does (@0x3ac11-0x3acbd) before it cloaks (@0x3bbdd), so a cloak
+    // that zeroes shields zeroes what the hit left.
+    let shield = &mut npc.reserves.shield.now;
+    if cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, holds, shield) {
+        npc.armament.force_burst_reload(&arsenal.of_class(npc.ship));
     }
 }
 

@@ -3,7 +3,9 @@
 //! A [`DialogTemplate`] is the dialog's window and items in the core's own
 //! terms, as [`DialogResources`](super::DialogResources) reads them. A
 //! [`Dialog`] places it on the screen and gives its items life: standard
-//! buttons and static text work as they are, and the caller gives each
+//! buttons and static text work as they are, picture items draw their
+//! interface-file `PICT` stretched over their rectangle (and nothing when
+//! the interface file lacks it, as stock 1431), and the caller gives each
 //! application-drawn (user) item its meaning with a [`Role`]. Items are
 //! numbered from 1, as the Dialog Manager numbers them.
 //!
@@ -20,6 +22,14 @@
 //! buttons and Space presses the focused one, kept for accessibility by
 //! the user's decision of 2026-10-28. The `dialog_focus_ring` rule's engine
 //! reading ([`FocusRing::Off`]) gives the original's dialogs.
+//!
+//! Two screens' filters do map Tab: the exchange's (`_TradeFilter`
+//! @0x4e184, Shift stepping back) and the mission computer's
+//! (`_MissionFilter` @0x9f8cc) step their list's selection. There the
+//! ring keeps Tab under [`FocusRing::Tab`], and the screen's row step
+//! takes it under [`FocusRing::Off`] (see
+//! [`TradeScreen`](crate::spaceport::trade::TradeScreen) and
+//! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)).
 
 use std::rc::Rc;
 
@@ -194,6 +204,12 @@ pub enum ItemSpec {
     EditText(String),
     /// A picture: this interface-file `PICT`.
     Picture(i16),
+    /// A picture item whose `PICT` the interface file does not hold, as
+    /// stock "Desc Dialog"'s item 2 names `PICT` 1431: laid out and
+    /// hit-tested, but drawing nothing, as `DrawPicture` of a nil handle
+    /// draws nothing. The absence is the original's normal behaviour, not
+    /// a fault, so it is never reported.
+    MissingPicture(i16),
     /// An icon with this ID.
     Icon(i16),
     /// A control from this `CNTL`.
@@ -308,11 +324,14 @@ enum Widget {
         scrolls: bool,
         fill: Option<(Bounds, Color)>,
     },
+    /// A picture stretched over the item.
+    Picture(ImageKey),
     /// Laid out and hit-tested, but not drawn.
     Blank,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Independent facts, each read on its own.
 struct Item {
     /// Where it is on the screen.
     bounds: Bounds,
@@ -323,6 +342,10 @@ struct Item {
     /// Whether any of it is inside the dialog: items wholly outside are
     /// neither drawn nor hit-tested.
     shown: bool,
+    /// Whether it is drawn: an undrawn item that is shown still takes
+    /// clicks and keys, but draws nothing and takes no focus
+    /// ([`Dialog::set_drawn`]).
+    drawn: bool,
     widget: Widget,
 }
 
@@ -389,6 +412,8 @@ pub struct Dialog {
     /// The item a press is held on, by index, and its tracking.
     tracked: Option<usize>,
     tracker: ButtonTracker,
+    /// The button held drawn pressed, by index ([`Dialog::hold_pressed`]).
+    held: Option<usize>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -406,9 +431,14 @@ impl Dialog {
     /// items given meaning by `roles` (item number, from 1, and role) and
     /// its text measured by `metrics`.
     ///
-    /// Standard buttons become buttons with their titles and static text
-    /// is wrapped in Geneva. [`Role::Hidden`] hides an item of any kind,
-    /// and [`Role::Greyed`] greys one. Pictures, check boxes, radio buttons, edit
+    /// Standard buttons become buttons with their titles, static text is
+    /// wrapped in Geneva, and a picture draws its interface-file `PICT`
+    /// ([`ImageKey::interface_picture`]) stretched over its rectangle, as
+    /// `DrawDialog` `DrawPicture`s each picture item into its rect; a
+    /// greyed picture draws the same, as the Dialog Manager doesn't dim
+    /// pictures. [`Role::Hidden`] hides an item of any kind, and
+    /// [`Role::Greyed`] greys one. Pictures the interface file lacks
+    /// ([`ItemSpec::MissingPicture`]), check boxes, radio buttons, edit
     /// text, controls, icons, other kinds and user items with no role are
     /// laid out and hit-tested but draw nothing. Items wholly outside the
     /// dialog's bounds, where stock dialogs park unused items, are hidden.
@@ -447,6 +477,7 @@ impl Dialog {
                     enabled,
                     template_enabled: item.enabled,
                     shown,
+                    drawn: true,
                     widget: widget(&item.kind, role, bounds, enabled, &metrics),
                 }
             })
@@ -464,6 +495,7 @@ impl Dialog {
             focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
+            held: None,
         }
     }
 
@@ -539,6 +571,21 @@ impl Dialog {
         found.enabled = found.template_enabled && !greyed;
         if let Widget::Button(button) = &mut found.widget {
             button.enabled = found.enabled;
+        }
+    }
+
+    /// Draws item `item` (from 1), the default, or leaves it undrawn: not
+    /// drawn up, pressed or held, and skipped by the focus, yet still
+    /// taking clicks and keys while it is shown and enabled, as the
+    /// outfitter's Buy at a stellar with no tech (`_DrawOutfitButtons`
+    /// @0x29f23-0x29f2a, `_TrackOutfitButtons` @0x2a1ec-0x2a202). No such
+    /// item, nothing changes.
+    pub fn set_drawn(&mut self, item: usize, drawn: bool) {
+        if let Some(found) = item
+            .checked_sub(1)
+            .and_then(|index| self.items.get_mut(index))
+        {
+            found.drawn = drawn;
         }
     }
 
@@ -618,6 +665,21 @@ impl Dialog {
         })
     }
 
+    /// The first scrolling text, if any, to scroll: the one
+    /// [`Self::scroll_text`] shows and Up and Down move.
+    pub(crate) fn scroll_text_mut(&mut self) -> Option<&mut ScrollText> {
+        self.items
+            .iter_mut()
+            .find_map(|item| match &mut item.widget {
+                Widget::Text {
+                    text,
+                    scrolls: true,
+                    ..
+                } => Some(text),
+                _ => None,
+            })
+    }
+
     fn item(&self, item: usize) -> Option<&Item> {
         self.items.get(item.checked_sub(1)?)
     }
@@ -673,18 +735,7 @@ impl Dialog {
     fn key(&mut self, key: Key, repeat: bool) -> Option<DialogEvent> {
         match key {
             Key::Up | Key::Down => {
-                let scroll = self
-                    .items
-                    .iter_mut()
-                    .find_map(|item| match &mut item.widget {
-                        Widget::Text {
-                            text,
-                            scrolls: true,
-                            ..
-                        } => Some(text),
-                        _ => None,
-                    });
-                if let Some(text) = scroll {
+                if let Some(text) = self.scroll_text_mut() {
                     text.input(&Input::Key {
                         key,
                         pressed: true,
@@ -707,16 +758,26 @@ impl Dialog {
         }
     }
 
-    /// Moves the focus to the next enabled, shown button after the focused
-    /// one, wrapping round; the first such button when none is focused.
+    /// Moves the focus to the next enabled, shown and drawn button after
+    /// the focused one, wrapping round; the first such button when none is
+    /// focused. An undrawn button takes no focus, as an outline round
+    /// nothing would draw what the original never does.
     fn focus_next(&mut self) {
         let count = self.items.len();
         let start = self.focus.map_or(0, |index| index + 1);
         self.focus = (0..count)
             .map(|step| (start + step) % count)
-            .find(|&index| self.items[index].active() && self.items[index].is_button());
+            .find(|&index| {
+                let item = &self.items[index];
+                item.active() && item.drawn && item.is_button()
+            });
     }
 
+    /// Picks the item under a press and tracks it. The pick and the
+    /// tracker are half-open, as `PtInRect` is in every in-game dialog's
+    /// tracker (`_TrackTextButtons` @0x26c4c and its kin) and in the
+    /// Dialog Manager: a press on an edge two items share goes to the
+    /// right or lower one.
     fn pointer(&mut self, input: &Input) -> Option<DialogEvent> {
         if let Input::PointerButton {
             pressed: true, at, ..
@@ -726,7 +787,7 @@ impl Dialog {
             self.tracked = self
                 .items
                 .iter()
-                .position(|item| item.active() && self.hit_area(item).contains(at));
+                .position(|item| item.active() && self.hit_area(item).contains_half_open(at));
         }
         let index = self.tracked?;
         let item = &self.items[index];
@@ -754,14 +815,37 @@ impl Dialog {
         }
     }
 
+    /// The item (numbered from 1) a press is held on while the pointer is
+    /// on it, which draws pressed; none otherwise.
+    #[must_use]
+    pub fn pressed_item(&self) -> Option<usize> {
+        self.tracked
+            .filter(|_| self.tracker.pressed())
+            .map(|index| index + 1)
+    }
+
+    /// Holds button `item` (numbered from 1) drawn pressed, whatever the
+    /// pointer does, until let go with `None`: a button the original
+    /// leaves drawn pressed after its click, as no redraw follows the
+    /// release (`_TrackBarButtons` @0x26fd5).
+    pub fn hold_pressed(&mut self, item: Option<usize>) {
+        self.held = item.map(|item| item - 1);
+    }
+
+    /// The button held drawn pressed ([`Dialog::hold_pressed`]), if any.
+    #[must_use]
+    pub fn held_pressed(&self) -> Option<usize> {
+        self.held.map(|index| index + 1)
+    }
+
     /// Abandons any click in progress without activating anything.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
         self.tracked = None;
     }
 
-    /// Draws the frame, if there is one, then each shown item in item
-    /// order. The focused button is outlined.
+    /// Draws the frame, if there is one, then each shown and drawn item in
+    /// item order. The focused button is outlined.
     pub fn draw(&self, list: &mut DrawList) {
         if let Some(frame) = &self.frame {
             let pieces = three_slice(
@@ -780,12 +864,13 @@ impl Dialog {
             }
         }
         for (index, item) in self.items.iter().enumerate() {
-            if !item.shown {
+            if !(item.shown && item.drawn) {
                 continue;
             }
             match &item.widget {
                 Widget::Button(button) => {
-                    let pressed = self.tracked == Some(index) && self.tracker.pressed();
+                    let pressed = (self.tracked == Some(index) && self.tracker.pressed())
+                        || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
                     if self.focus == Some(index) {
                         outline(list, item.bounds, self.style.up);
@@ -796,6 +881,10 @@ impl Dialog {
                         fill_rect(list, *area, *color);
                     }
                     text.draw(list);
+                }
+                Widget::Picture(image) => {
+                    let at = item.bounds;
+                    list.stretched_picture(*image, at.min, at.width(), at.height());
                 }
                 Widget::Blank => {}
             }
@@ -820,6 +909,7 @@ fn widget(
     };
     match (kind, role) {
         (ItemSpec::Button(title), _) => button(title),
+        (ItemSpec::Picture(id), _) => Widget::Picture(ImageKey::interface_picture(*id)),
         (ItemSpec::StaticText(text), _) => Widget::Text {
             text: ScrollText::new(
                 text,
@@ -1276,12 +1366,96 @@ mod tests {
                     wrap_width: None,
                     color: STATIC_TEXT_COLOR,
                 },
+                interface_picture(130, rect(334.0 + 7.0, 329.0 + 5.0, 32.0, 32.0)),
                 picture(normal.left, cancel.min.x, 13.0),
                 picture(normal.middle, cancel.min.x + 13.0, 44.0),
                 picture(normal.right, cancel.max.x - 13.0, 13.0),
                 label("Cancel", cancel),
             ]
         );
+    }
+
+    /// A 100 x 50 dialog at the origin holding `items`.
+    fn fixed(items: Vec<ItemTemplate>) -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 100.0, 50.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// The interface file's `PICT` `id` stretched over `bounds`.
+    fn interface_picture(id: i16, bounds: Bounds) -> DrawCommand {
+        DrawCommand::StretchedPicture {
+            image: ImageKey::interface_picture(id),
+            top_left: bounds.min,
+            width: bounds.width(),
+            height: bounds.height(),
+        }
+    }
+
+    #[test]
+    fn a_picture_item_draws_its_interface_pict_stretched_over_it() {
+        let at = rect(7.0, 5.0, 40.0, 20.0);
+        let dialog = dialog(&fixed(vec![item(at, false, ItemSpec::Picture(130))]), &[]);
+        assert_eq!(drawn(&dialog), [interface_picture(130, at)]);
+    }
+
+    #[test]
+    fn pictures_draw_in_item_order_among_the_other_items() {
+        let (first, text, last) = (
+            rect(0.0, 0.0, 10.0, 10.0),
+            rect(20.0, 0.0, 30.0, 20.0),
+            rect(60.0, 0.0, 10.0, 10.0),
+        );
+        let dialog = dialog(
+            &fixed(vec![
+                item(first, false, ItemSpec::Picture(129)),
+                item(text, false, ItemSpec::StaticText("Hi".into())),
+                item(last, false, ItemSpec::Picture(130)),
+            ]),
+            &[],
+        );
+        let commands = drawn(&dialog);
+        assert_eq!(commands.len(), 3);
+        assert_eq!(commands[0], interface_picture(129, first));
+        assert!(matches!(commands[1], DrawCommand::Text { .. }));
+        assert_eq!(commands[2], interface_picture(130, last));
+    }
+
+    #[test]
+    fn hidden_and_parked_pictures_draw_nothing() {
+        let parked = dialog(&yes_no(), &[(4, Role::Hidden)]);
+        assert!(
+            !drawn(&parked).iter().any(
+                |command| matches!(command, DrawCommand::StretchedPicture { image, .. }
+                    if image.kind == crate::ImageKind::InterfacePict)
+            ),
+            "item 2 is parked outside, item 4 hidden"
+        );
+    }
+
+    #[test]
+    fn a_greyed_picture_still_draws() {
+        let at = rect(7.0, 5.0, 40.0, 20.0);
+        let dialog = dialog(
+            &fixed(vec![item(at, true, ItemSpec::Picture(130))]),
+            &[(1, Role::Greyed)],
+        );
+        assert_eq!(drawn(&dialog), [interface_picture(130, at)]);
+    }
+
+    #[test]
+    fn a_picture_the_interface_file_lacks_is_laid_out_but_draws_nothing() {
+        let at = rect(7.0, 5.0, 40.0, 20.0);
+        let mut dialog = dialog(
+            &fixed(vec![item(at, true, ItemSpec::MissingPicture(1431))]),
+            &[],
+        );
+        assert_eq!(drawn(&dialog), []);
+        assert!(dialog.item_shown(1));
+        assert_eq!(dialog.item_bounds(1), Some(at));
+        assert_eq!(click(&mut dialog, at.center()), Some(DialogEvent::Item(1)));
     }
 
     #[test]
@@ -1380,15 +1554,111 @@ mod tests {
         assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
         dialog.input(&Input::PointerMoved(ok));
         assert_eq!(first_picture(&dialog), pressed_left);
-        // Cancel draws normally while OK is held.
+        // Cancel draws normally while OK is held (after OK's four
+        // commands, the text and the picture).
         let commands = drawn(&dialog);
         assert!(matches!(
-            commands[5],
+            commands[6],
             DrawCommand::StretchedPicture { image, .. } if image == ButtonSkin::NOVA.normal.left
         ));
         dialog.cancel_pointer();
         assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
         assert_eq!(dialog.input(&release(ok)), None);
+    }
+
+    /// Every dialog's tracker hit-tests with `PtInRect` (`_TrackTextButtons`
+    /// @0x26c4c and its kin): the left and top edges in, the right and
+    /// bottom out.
+    #[test]
+    fn a_press_on_an_items_right_or_bottom_edge_reports_nothing() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let r = dialog.item_bounds(1).expect("OK");
+        let c = r.center();
+        for edge in [at(r.max.x, c.y), at(c.x, r.max.y)] {
+            assert_eq!(click(&mut dialog, edge), None, "{edge:?}");
+        }
+        for on in [
+            at(r.max.x - 1.0, c.y),
+            at(c.x, r.max.y - 1.0),
+            at(r.min.x, c.y),
+            at(c.x, r.min.y),
+        ] {
+            assert_eq!(click(&mut dialog, on), Some(DialogEvent::Item(1)), "{on:?}");
+        }
+    }
+
+    #[test]
+    fn a_press_on_an_edge_two_items_share_goes_to_the_right_or_lower_one() {
+        let template = DialogTemplate {
+            bounds: rect(0.0, 0.0, 100.0, 50.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(0.0, 0.0, 10.0, 10.0), true, ItemSpec::User),
+                item(rect(10.0, 0.0, 10.0, 10.0), true, ItemSpec::User),
+                item(rect(0.0, 10.0, 10.0, 10.0), true, ItemSpec::User),
+            ],
+        };
+        let mut dialog = dialog(&template, &[]);
+        assert_eq!(
+            click(&mut dialog, at(10.0, 5.0)),
+            Some(DialogEvent::Item(2))
+        );
+        assert_eq!(
+            click(&mut dialog, at(5.0, 10.0)),
+            Some(DialogEvent::Item(3))
+        );
+    }
+
+    #[test]
+    fn a_held_button_shows_off_it_on_its_right_or_bottom_edge() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let r = dialog.item_bounds(1).expect("OK");
+        let c = r.center();
+        let first_picture = |dialog: &Dialog| match drawn(dialog)[0] {
+            DrawCommand::StretchedPicture { image, .. } => image,
+            ref other => panic!("{other:?}"),
+        };
+        dialog.input(&press(c));
+        for edge in [at(r.max.x, c.y), at(c.x, r.max.y)] {
+            dialog.input(&Input::PointerMoved(edge));
+            assert_eq!(
+                first_picture(&dialog),
+                ButtonSkin::NOVA.normal.left,
+                "{edge:?}"
+            );
+        }
+        dialog.input(&Input::PointerMoved(at(r.max.x - 1.0, c.y)));
+        assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.pressed.left);
+    }
+
+    #[test]
+    fn the_item_pressed_is_the_one_held_while_the_pointer_is_on_it() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        assert_eq!(dialog.pressed_item(), None);
+        dialog.input(&press(ok));
+        assert_eq!(dialog.pressed_item(), Some(1));
+        dialog.input(&Input::PointerMoved(at(0.0, 0.0)));
+        assert_eq!(dialog.pressed_item(), None, "off it");
+        dialog.input(&Input::PointerMoved(ok));
+        assert_eq!(dialog.pressed_item(), Some(1));
+        dialog.input(&release(ok));
+        assert_eq!(dialog.pressed_item(), None, "released");
+    }
+
+    #[test]
+    fn a_button_held_pressed_draws_pressed_until_let_go() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let first_picture = |dialog: &Dialog| match drawn(dialog)[0] {
+            DrawCommand::StretchedPicture { image, .. } => image,
+            ref other => panic!("{other:?}"),
+        };
+        dialog.hold_pressed(Some(1));
+        assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.pressed.left);
+        assert_eq!(dialog.held_pressed(), Some(1));
+        dialog.hold_pressed(None);
+        assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
+        assert_eq!(dialog.held_pressed(), None);
     }
 
     #[test]
@@ -1846,7 +2116,7 @@ mod tests {
             ItemSpec::CheckBox("Check".into()),
             ItemSpec::Radio("Radio".into()),
             ItemSpec::EditText("Edit".into()),
-            ItemSpec::Picture(5),
+            ItemSpec::MissingPicture(5),
             ItemSpec::Icon(6),
             ItemSpec::Control(7),
             ItemSpec::Other,
@@ -1896,11 +2166,11 @@ mod tests {
         let commands = drawn(&dialog);
         let disabled = ButtonSkin::NOVA.disabled;
         assert!(matches!(
-            commands[5],
+            commands[6],
             DrawCommand::StretchedPicture { image, .. } if image == disabled.left
         ));
         assert!(matches!(
-            &commands[8],
+            &commands[9],
             DrawCommand::Text { text, color, .. }
                 if text == "Cancel" && *color == ButtonStyle::STOCK.grey
         ));
@@ -1945,6 +2215,64 @@ mod tests {
         dialog.set_greyed(0, true);
         dialog.set_greyed(99, true);
         assert_eq!(drawn(&dialog), before);
+    }
+
+    #[test]
+    fn an_undrawn_button_draws_nothing_up_pressed_or_held() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        dialog.set_drawn(1, false);
+        let hidden = super::tests::dialog(&yes_no(), &[(1, Role::Hidden)]);
+        assert_eq!(drawn(&dialog), drawn(&hidden), "up");
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        dialog.input(&press(ok));
+        assert_eq!(dialog.pressed_item(), Some(1));
+        assert_eq!(drawn(&dialog), drawn(&hidden), "pressed");
+        dialog.cancel_pointer();
+        dialog.hold_pressed(Some(1));
+        assert_eq!(drawn(&dialog), drawn(&hidden), "held");
+    }
+
+    #[test]
+    fn an_undrawn_button_still_takes_a_click_and_its_key() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        dialog.set_drawn(1, false);
+        assert!(dialog.item_shown(1));
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        assert_eq!(click(&mut dialog, ok), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+    }
+
+    #[test]
+    fn an_undrawn_greyed_button_takes_no_click() {
+        let mut dialog = dialog(&yes_no(), &[(1, Role::Greyed)]);
+        dialog.set_drawn(1, false);
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        assert_eq!(click(&mut dialog, ok), None);
+        assert_eq!(dialog.input(&key(Key::Enter)), None);
+    }
+
+    #[test]
+    fn tab_skips_an_undrawn_button() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        dialog.set_drawn(1, false);
+        let mut order = Vec::new();
+        for _ in 0..2 {
+            dialog.input(&key(Key::Tab));
+            order.push(dialog.focus());
+        }
+        assert_eq!(order, [Some(5), Some(5)], "only Cancel takes the focus");
+    }
+
+    #[test]
+    fn drawing_a_button_again_restores_it_and_no_item_is_nothing() {
+        let built = dialog(&yes_no(), &[]);
+        let mut dialog = built.clone();
+        dialog.set_drawn(1, false);
+        dialog.set_drawn(1, true);
+        assert_eq!(drawn(&dialog), drawn(&built));
+        dialog.set_drawn(0, false);
+        dialog.set_drawn(99, false);
+        assert_eq!(drawn(&dialog), drawn(&built));
     }
 
     #[test]

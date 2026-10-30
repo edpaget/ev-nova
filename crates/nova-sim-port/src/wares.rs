@@ -187,6 +187,15 @@ pub fn by_tech_level(tech_level: i16, site: &LandingSite) -> bool {
     tech_level <= site.tech_level || site.special_tech.contains(&tech_level)
 }
 
+/// Whether `site` has no tech, as `_DoOutfitDialog` reads it to hide the
+/// outfitter's Buy (`*0xded64`, @0x5bb67-0x5bb9d): a `TechLevel` of
+/// exactly 0 (a negative one keeps Buy) and no `SpecialTech` slot above 0
+/// (`jg` @0x5bb88), so a slot of 0 or below counts as none.
+#[must_use]
+pub fn has_no_tech(site: &LandingSite) -> bool {
+    site.tech_level == 0 && !site.special_tech.iter().any(|&slot| slot > 0)
+}
+
 /// The outfit `TechLevel` tech never sells: `_SetupPortAvailableItems`
 /// skips the tech test for it (`cmpw $0x7fff` @0xbf93).
 pub const OUTFIT_TECH_NEVER: i16 = i16::MAX;

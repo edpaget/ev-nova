@@ -198,6 +198,8 @@ mod fleet_escort_tests;
 pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
+#[cfg(test)]
+mod gate_approach_tests;
 pub mod gate_entry;
 pub mod gone;
 #[cfg(test)]
@@ -212,6 +214,8 @@ mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 pub mod ionization;
+#[cfg(test)]
+mod jump_out_hit_tests;
 pub mod jump_with_leader;
 pub mod kept_berths;
 pub mod land_flight;
@@ -220,6 +224,8 @@ mod landed_stay_tests;
 mod launch_room;
 mod launch_think;
 pub mod leave_flight;
+#[cfg(test)]
+mod listed_stellar_tests;
 #[cfg(test)]
 mod lost_sight_ai_tests;
 #[cfg(test)]
@@ -234,6 +240,7 @@ mod odds_cache_ai_tests;
 #[cfg(test)]
 mod odds_cache_tests;
 pub mod on_line;
+pub mod original_ai_type;
 pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
@@ -259,6 +266,7 @@ mod skill_rolls;
 pub mod snipe;
 pub mod spawn;
 pub mod stellar_attack;
+pub mod stellar_defence;
 #[cfg(test)]
 mod stop_tests;
 pub mod strength;
@@ -278,8 +286,7 @@ use crate::ai::lost_sight::{self, LostSight, SearchTimer};
 use crate::ai::pursuit::{self, Pursuit, PursuitRules};
 use crate::ai::swarm;
 use crate::ai::{
-    Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Reaction, Surroundings,
-    reinforcements,
+    Behaviour, CommCall, Decision, GateWait, Goal, PlayerSide, Surroundings, reinforcements,
 };
 use crate::combat::ion::Ion;
 use afterburners::AfterburnerRoll;
@@ -550,8 +557,15 @@ fn starting_cloak(cloaked: bool, gear: cloak::CloakGear, shield: &mut f32) -> Cl
 /// the player, the governments, and the player's legal record there.
 #[derive(Clone, Copy, Debug)]
 pub struct World<'a> {
-    /// The system's stellars.
+    /// The system's stellars, those the player's system shows.
     pub sites: &'a [LandingSite],
+    /// Every stellar the system's `NavDefs` list, in order, shown or not
+    /// (the original's system +0x2a): what the defence respawn walks
+    /// ([`stellar_defence`]), what the NPCs pick their destinations among
+    /// and fly to ([`Surroundings::listed`], [`fly_pass`]) and what an
+    /// arrival may come out of ([`World::stellars`]). [`World::new`] gives
+    /// `sites`.
+    pub listed: &'a [LandingSite],
     /// The player's ship, while it flies in the system.
     pub player: Option<PlayerSide>,
     /// Every government and their relations.
@@ -587,6 +601,11 @@ pub struct World<'a> {
     /// 0 by the Bible
     /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
     pub spawn_reserve: u32,
+    /// The ship-table slots a stellar's defence ship leaves free as it
+    /// spawns: [`DEFENCE_RESERVE`](stellar_defence::DEFENCE_RESERVE) by
+    /// the engine, 0 by the Bible
+    /// ([`RuleKey::SpawnReserve`](crate::RuleKey::SpawnReserve)).
+    pub defence_reserve: u32,
     /// Which ships answer a hit ([`Traffic::tick_in`]'s reactions): every
     /// intact one by the engine, as `_DamageShip` has it, or only those
     /// that have arrived ([`Npc::arrived`]) by the other reading
@@ -736,11 +755,12 @@ static NOVA_DISABLE: NovaDisable = NovaDisable;
 pub static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
 
 impl<'a> World<'a> {
-    /// `sites` alone: no player, no governments, no record, no person
+    /// `sites` alone, every one listed: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
     /// factor on the led ships' top speed, the original's flight rules,
     /// no damage aimed, no gate's
-    /// width known, the engine's [`SPAWN_RESERVE`], the engine's readings,
+    /// width known, the engine's [`SPAWN_RESERVE`] and
+    /// [`DEFENCE_RESERVE`](stellar_defence::DEFENCE_RESERVE), the engine's readings,
     /// no cloak scanner, no asteroid in slot 0, no cargo boxes, no
     /// reinforcements coming,
     /// no government marked by an IFF scrambler, Nova's disable rule,
@@ -753,6 +773,7 @@ impl<'a> World<'a> {
         let bare = Surroundings::new(sites, &[]);
         Self {
             sites,
+            listed: sites,
             player: None,
             govts: bare.govts,
             system_govt: None,
@@ -764,6 +785,7 @@ impl<'a> World<'a> {
             targeted: bare.targeted,
             type_widths: &NO_TYPE_WIDTHS,
             spawn_reserve: SPAWN_RESERVE,
+            defence_reserve: stellar_defence::DEFENCE_RESERVE,
             arrival_hits: RuleSource::Engine,
             snipe_brake_lead: RuleSource::Engine,
             hit_focus: RuleSource::Engine,
@@ -798,12 +820,13 @@ impl<'a> World<'a> {
         }
     }
 
-    /// The stellars arrivals may come out of, and the governments that
-    /// judge whether one may.
+    /// The stellars arrivals may come out of, every one the system lists
+    /// ([`World::listed`]), and the governments that judge whether one
+    /// may.
     #[must_use]
     pub fn stellars(self) -> Stellars<'a> {
         Stellars {
-            sites: self.sites,
+            sites: self.listed,
             govts: self.govts,
         }
     }
@@ -832,6 +855,7 @@ impl<'a> World<'a> {
     pub fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
         Surroundings {
             sites: self.sites,
+            listed: self.listed,
             npcs,
             player: self.player,
             govts: self.govts,
@@ -953,6 +977,11 @@ pub struct Traffic {
     /// Each think's voice cue since they were last taken, in the order
     /// the ships thought ([`Traffic::take_voice_cues`]).
     voice_cues: Vec<(NpcId, crate::escort_voice::VoiceCue)>,
+    /// The stellars' defence ships left and which are under attack, kept
+    /// here so the defence respawn in [`Traffic::enter_more_ships`] reads
+    /// it on every caller, and handed on across a traffic Reset
+    /// ([`Traffic::take_defences`]; see [`stellar_defence`]).
+    defences: stellar_defence::StellarDefences,
 }
 
 /// The docks the ships started and the repairs they completed in one
@@ -1036,6 +1065,7 @@ impl Traffic {
             launch_room: None,
             fuel_given: 0.0,
             voice_cues: Vec::new(),
+            defences: stellar_defence::StellarDefences::default(),
         }
     }
 
@@ -1621,11 +1651,12 @@ impl Traffic {
     /// exit, before the first frame (`_HandlePlayerDockRequest`
     /// @0x672f2), which its session runs.
     ///
-    /// Two steps of the pass are left out: the stellar defence respawn
-    /// between them (@0x43c45-0x43d10, `_SpawnStellarDefenseShip`
-    /// @0x43c11), as no stellar holds defence ships here, and
-    /// `_SpawnNagShip` (@0x43d15), the shareware nag. The pass's
-    /// mission-slot loop (@0x434a2-0x43b0e) is its session's.
+    /// Between them it runs the stellar defence respawn (@0x43c45-0x43d10):
+    /// at most one defence ship for the first stellar of the world's
+    /// listed stellars that is due one ([`stellar_defence`]). One step of
+    /// the pass is left out: `_SpawnNagShip` (@0x43d15), the shareware
+    /// nag. The pass's mission-slot loop (@0x434a2-0x43b0e) is its
+    /// session's.
     pub fn enter_more_ships(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
         let mut draw = PersonDraw {
             world: world.persons,
@@ -1647,6 +1678,7 @@ impl Traffic {
             world.flight.npc_formation,
             &mut *chance,
         );
+        self.respawn_defender(&world, draw.world.gate(), &mut *chance);
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
@@ -1737,6 +1769,8 @@ impl Traffic {
     /// loses its lead, its carrier and its target, its provocation -1
     /// ([`gate_entry::RELEASED_PROVOCATION`]), takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
+    /// over a bribe's ([`Npc::overwrite_bribe`], as the original's write
+    /// has no AI type test, @0x8dcdf-0x8dcfd),
     /// and heads into the same gate on its own, its mode as it was. A
     /// fighter so freed decides by its own AI type, as the original's AI
     /// type 5 becomes at most 3.
@@ -1751,6 +1785,7 @@ impl Traffic {
                 follower.leader = None;
                 follower.leave_carrier();
                 follower.ai_type = gate_entry::released_ai_type(ai_type);
+                follower.overwrite_bribe();
                 follower.target = None;
                 follower.provoked = gate_entry::RELEASED_PROVOCATION;
                 follower.goal = Goal::EnterGate(gate);
@@ -1976,10 +2011,16 @@ impl Traffic {
 
     /// Each intact NPC answers each of `strikes` in `world` that was
     /// answered ([`Strike::answered`]), as `behaviour` says, now, as
-    /// [`Traffic::tick_in`]'s step 2 does: the hit's own step (see
+    /// [`Traffic::tick_in`]'s step 2 does (see
     /// `nova_sim::Session::answer_strikes`). The strikes are answered one
     /// at a time, in the order they landed, each reading the NPCs as the
     /// strikes before it left them (see `Traffic::react`).
+    ///
+    /// They come here already weighed: the session's own calls (the Good
+    /// Samaritan call), or the fight's strikes kept while the traffic was
+    /// not answering. The fight's strikes the traffic answers as they
+    /// settle are weighed and answered together, each flag after the
+    /// reactions before it ([`Traffic::answer_in_turn`]).
     pub fn answer(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1995,7 +2036,10 @@ impl Traffic {
     /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
     /// flag skips the whole reaction block, @0x3baea), as `behaviour`
     /// says; by the other reading of [`World::arrival_hits`] only those
-    /// that have arrived ([`Npc::arrived`]) do.
+    /// that have arrived ([`Npc::arrived`]) do. A ship jumping out, or one
+    /// whose NPC leader is, never reaches here: its strike isn't
+    /// [`answered`](Strike::answered) (`_DamageShip` @0x3b46a,
+    /// @0x3bab7-0x3bae4).
     ///
     /// The strikes are answered one at a time, in the order the session
     /// holds them (the order they landed), as `_DamageShip` runs hit by
@@ -2017,13 +2061,14 @@ impl Traffic {
     /// arrivals (the session's mission-ship arrivals, then
     /// `_EnterMoreShips`), against the NPCs as the previous pass's motion
     /// left them, where the original answered them as they landed. Only a
-    /// caller that skips `nova_sim::Session::answer_strikes` meets this:
-    /// `Session::game_work` and `Session::tick_again` answer after their
-    /// collision passes and after `_HandleShot`, and a flight answers what
-    /// each pass's close struck, so nothing is left for the think. A hit on it that
-    /// it answers (taking a target) cuts its wait, in its gate, held at it
-    /// or holding its course ([`autopilot::cut_wait`], `_DamageShip`
-    /// @0x3be6e-0x3be7c).
+    /// caller that skips `nova_sim::Session::answer_strikes`, or strikes
+    /// kept while the traffic wasn't answering, meet this: the session
+    /// answers the fight's strikes as each phase settles
+    /// ([`Traffic::answer_in_turn`]), and its own calls after the
+    /// collision passes and after `_HandleShot`, so nothing is left for
+    /// the think. A hit on it that it answers (taking a target) cuts its
+    /// wait, in its gate, held at it or holding its course
+    /// ([`autopilot::cut_wait`], `_DamageShip` @0x3be6e-0x3be7c).
     ///
     /// A ship still coming in answers as `_DamageShip` has it (see the
     /// [`ai::react`](crate::ai::react) module):
@@ -2057,9 +2102,8 @@ impl Traffic {
     /// runs before or after the gate changes nothing it sees, as in the
     /// original, whose decloak (@0x3bf1f) follows the reaction (@0x3be69).
     ///
-    /// A flight answers the fight's strikes in the hit's own step
-    /// ([`Traffic::answer`], from
-    /// `nova_sim::Session::answer_strikes`), so a
+    /// A flight answers the fight's strikes as each phase settles
+    /// ([`Traffic::answer_in_turn`], from the session's settle step), so a
     /// ship the player hit in its gate is held, and seen, on the frame of
     /// the hit, as the original answers inside `_HandleShot` (@0x44385);
     /// [`Traffic::tick_in`] answers those its caller leaves.
@@ -2077,71 +2121,7 @@ impl Traffic {
         let view = world.gate_view();
         let wanted = in_turn::wanted_headings(&self.npcs);
         for strike in strikes {
-            let reactions: Vec<Option<Reaction>> = {
-                let around = Surroundings {
-                    wanted: Some(&wanted),
-                    ..world.around(&self.npcs)
-                };
-                self.grudges.extend(in_turn::grudge(strike, &around));
-                self.npcs
-                    .iter()
-                    .map(|npc| {
-                        let answers = match world.arrival_hits {
-                            RuleSource::Engine => true,
-                            RuleSource::Bible => npc.arrived(),
-                        };
-                        (answers && npc.condition == Condition::Intact)
-                            .then(|| behaviour.react(npc, strike, &around))
-                    })
-                    .collect()
-            };
-            for (at, reaction) in reactions.into_iter().enumerate() {
-                let Some(reaction) = reaction else {
-                    continue;
-                };
-                let id = self.npcs[at].id;
-                // The victim's reaction ran when it took a target or was
-                // provoked: an answered hit by no ship, which takes none,
-                // always has a nominal damage above none, as the answer
-                // flag's no-damage branch clears the rest (see
-                // `answer_flag`), so it cuts the wait as `_DamageShip`
-                // does for any source but slot 0 (@0x3bd7e-0x3be7c).
-                let ran = reaction.target.is_some() || reaction.provoked > 0.0;
-                let on_itself = strike.direct && ran && strike.ship == ShipRef::Npc(id);
-                let attacks_player = on_itself && strike.by == Some(ShipRef::Player);
-                if let Some(target) = reaction.target {
-                    self.npcs[at].target = Some(target);
-                }
-                if attacks_player {
-                    // `_DamageShip` sets the target (+0x70 @0x3bcf6) before
-                    // it calls `_AIMakeShipAttackPlayer` (@0x3be69), whose
-                    // gate reads the ship as this hit and those before it
-                    // left it (@0x89c53).
-                    self.turn_with_quote(id, view);
-                }
-                let npc = &mut self.npcs[at];
-                if attacks_player {
-                    // `_AIMakeShipAttackPlayer`'s +0x6c = -1 (@0x89d47),
-                    // whatever the ship was doing: a ship held at its gate
-                    // loses its gate there too (`Npc::hold_at_gate`).
-                    npc.travel_set = false;
-                }
-                if on_itself {
-                    autopilot::cut_wait(npc);
-                }
-                npc.provoked += reaction.provoked;
-                match npc.mode {
-                    Mode::JumpingIn { .. } | Mode::LeavingGate { .. } => {}
-                    Mode::Emerging { .. } if attacks_player || reaction.goal.is_some() => {
-                        npc.hold_at_gate();
-                    }
-                    _ => {
-                        if let Some(goal) = reaction.goal {
-                            npc.goal = goal;
-                        }
-                    }
-                }
-            }
+            self.answer_strike(behaviour, world, strike, &wanted, view);
         }
     }
 
@@ -2497,6 +2477,7 @@ impl Traffic {
             let Some(decision) = decision else {
                 continue;
             };
+            npc.settle_original_ai_type();
             let calls = decision.comm_call.into_iter().chain(
                 decision
                     .calls_reinforcements
@@ -2859,6 +2840,8 @@ impl Traffic {
                 display,
                 odds: odds_cache::STALE,
                 no_ai: false,
+                kept_escort_ai: false,
+                defends: None,
             };
             npc.join_govt(ship.govt, govts);
             self.write_berth_person(berth, name);
@@ -4550,7 +4533,6 @@ mod tests {
             &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
             None,
@@ -4752,6 +4734,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_bribed_follower_released_at_its_leads_gate_reads_the_leads_type_not_its_bribe() {
+        // The release copies the lead's +0x88, capped at 3
+        // (@0x8dcdf-0x8dcfd), with no AI type test, over the bribe's 1
+        // (`_DoCommDialog` @0x961f8).
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].ai_type = AiType::Interceptor;
+        traffic.npcs[0].goal = Goal::EnterGate(GATE);
+        traffic.npcs[1].leader = Some(NpcId(0));
+        traffic.npcs[1].ai_type = AiType::WimpyTrader;
+        traffic.npcs[1].spared = true;
+        assert_eq!(traffic.npcs[1].original_ai_type(), 1, "bribed");
+        traffic.tick(&Keep, &[gate_at_centre()], &mut Draws::of(&[]));
+        let released = &traffic.npcs[1];
+        assert_eq!(released.leader, None);
+        assert_eq!(
+            released.original_ai_type(),
+            gate_entry::released_ai_type(AiType::Interceptor).raw()
+        );
+        assert!(!released.spared, "the bribe's word is overwritten");
+    }
+
     /// Answers every hit on itself by attacking the player.
     #[derive(Debug)]
     struct Turning;
@@ -4934,6 +4938,47 @@ mod tests {
             "not its turn"
         );
         assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_answers_a_hit() {
+        // The victim branch tests no condition (@0x3bbe2-0x3bd8c), and
+        // the disabled reset never wipes a defence ship breaking up, which
+        // `_IsDisabled` never calls disabled (@0x2d6f).
+        #[derive(Debug)]
+        struct Samaritan;
+        impl Behaviour for Samaritan {
+            fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+                npc.goal
+            }
+            fn react(&self, _: &Npc, _: &Strike, _: &Surroundings) -> Reaction {
+                Reaction {
+                    target: Some(ShipRef::Player),
+                    provoked: 0.0,
+                    goal: None,
+                }
+            }
+        }
+        for (defends, answers) in [(true, true), (false, false)] {
+            let mut traffic = populated(1, 4);
+            traffic.ticks = 1;
+            let guard = crate::traffic::fixture::breaking_up_guard(traffic.npcs[0].clone());
+            traffic.npcs[0] = Npc {
+                defends: guard.defends.filter(|_| defends),
+                ..guard
+            };
+            traffic.tick_in(
+                &Samaritan,
+                World::new(&[]),
+                &[struck(5, 1.0)],
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(
+                traffic.npcs()[0].target == Some(ShipRef::Player),
+                answers,
+                "defends: {defends}"
+            );
+        }
     }
 
     /// `count` NPCs at rest, deciding only on tick 0 (so never again),
@@ -5375,7 +5420,7 @@ mod tests {
     #[test]
     fn every_intact_npc_answers_a_strike_by_the_engine() {
         // `_DamageShip` drops a reaction only while +0x50 is above 0, a
-        // ship jumping out (@0x3b4b0-0x3b4c2).
+        // ship jumping out (@0x3b46a, weighed by the answer flag).
         assert_eq!(World::new(&[]).arrival_hits, RuleSource::Engine);
         assert_eq!(
             reacting(RuleSource::Engine),

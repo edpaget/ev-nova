@@ -7,7 +7,8 @@
 use super::faked_world::{world, world_by};
 use super::*;
 use crate::flight::radar::RadarShip;
-use nova_sim::flight_frame::{FrameShip, FrameTarget};
+use crate::flight::radar::{IRect, RadarColor, RadarMark};
+use nova_sim::flight_frame::{FrameRadarStellar, FrameShip, FrameTarget};
 use nova_sim::{AlertIcon, ShipIff, StellarIff, TargetStatus, TargetTag};
 
 /// A view over a flight scripted to show `frame`, read from `catalog` by
@@ -184,8 +185,8 @@ fn the_radar_shows_each_ship_by_its_records_iff_and_the_frames_target() {
 #[test]
 fn a_stellars_radar_colour_is_its_records_iff_unlandable_without_one() {
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
-    frame.stellars[0].iff = Some(StellarIff::Hostile);
-    frame.stellars[1].iff = None;
+    frame.radar_stellars[0].iff = Some(StellarIff::Hostile);
+    frame.radar_stellars[1].iff = None;
     let view = world(catalog(), frame);
     let iffs: Vec<_> = view
         .radar_now(&view.frame)
@@ -194,6 +195,122 @@ fn a_stellars_radar_colour_is_its_records_iff_unlandable_without_one() {
         .map(|stellar| stellar.iff)
         .collect();
     assert_eq!(iffs, [StellarIff::Hostile, StellarIff::Unlandable]);
+}
+
+/// Sol's frame with stellar 200 listed on the radar at (320, 0), its
+/// `Type` master `type_width` wide, though not in the scene.
+fn listing_200(type_width: Option<u32>) -> FlightFrame {
+    let mut frame = among(Vec::new());
+    frame.radar_stellars.push(FrameRadarStellar {
+        type_width,
+        ..record::radar_stellar(StellarId(200), Vec2::new(320.0, 0.0))
+    });
+    frame
+}
+
+/// The radar's mark at screen pixel (`x`, `y`), if one is centred there.
+fn mark_at(view: &Faked, x: i32, y: i32) -> Option<RadarMark> {
+    radar_marks(view).into_iter().find(|mark| match mark {
+        RadarMark::Oval { rect, .. } | RadarMark::Square { rect, .. } => {
+            (1..=3).any(|inset| *rect == IRect::around(x, y, inset))
+        }
+        _ => false,
+    })
+}
+
+#[test]
+fn a_stellar_listed_but_not_shown_gets_a_blip_sized_by_its_type_master() {
+    // `_DrawStatusRadar` draws every `NavDefs` entry (@0x498ad-0x498c5)
+    // and sizes the oval by the `Type` master (@0x499e8-0x49a47): which
+    // stellars are listed and their master's width are the session's.
+    let loaded = barred(catalog(), listing_200(Some(200)));
+    assert!(
+        loaded
+            .scene()
+            .expect("laid out")
+            .stellars()
+            .iter()
+            .all(|stellar| stellar.id != StellarId(200)),
+        "not in the scene"
+    );
+    assert_eq!(
+        mark_at(&loaded, 936, 96),
+        Some(RadarMark::Oval {
+            rect: IRect::around(936, 96, 3),
+            color: RadarColor::Dim,
+        }),
+        "200 wide: the 6x6 oval"
+    );
+    let unloaded = barred(catalog(), listing_200(None));
+    assert_eq!(
+        mark_at(&unloaded, 936, 96),
+        Some(RadarMark::Oval {
+            rect: IRect::around(936, 96, 1),
+            color: RadarColor::Dim,
+        }),
+        "unloaded: the 2x2 oval"
+    );
+}
+
+#[test]
+fn a_blip_is_sized_by_the_type_master_not_the_sheet_drawn() {
+    // Stellar 150 draws a 300-wide sheet in the scene, but its `Type`
+    // master is unloaded: the smallest oval.
+    let catalog = FakeCatalog {
+        sol_more: vec![StellarContents {
+            sprite: Ok(StellarSheet {
+                image: crate::SheetImage::Rled(1150),
+                frames: std::num::NonZeroU16::MIN,
+                frame_width: 300,
+                frame_height: 300,
+            }),
+            ..stellar(150, "Wide", (320, 0), 1)
+        }],
+        sites: {
+            let mut sites = catalog().sites;
+            sites.push(site(150, (320.0, 0.0), 0));
+            sites
+        },
+        ..catalog()
+    };
+    let mut frame = among(Vec::new());
+    frame.stellars.push(record::stellar(StellarId(150)));
+    frame.radar_stellars.push(FrameRadarStellar {
+        type_width: None,
+        ..record::radar_stellar(StellarId(150), Vec2::new(320.0, 0.0))
+    });
+    let view = barred(catalog, frame);
+    assert!(
+        view.scene()
+            .expect("laid out")
+            .stellars()
+            .iter()
+            .any(|stellar| stellar.id == StellarId(150)),
+        "in the scene"
+    );
+    assert_eq!(
+        mark_at(&view, 936, 96),
+        Some(RadarMark::Oval {
+            rect: IRect::around(936, 96, 1),
+            color: RadarColor::Dim,
+        })
+    );
+}
+
+#[test]
+fn the_radar_draws_the_stellars_in_the_listings_order() {
+    let mut frame = among(Vec::new());
+    frame.radar_stellars = [(129, 300.0), (200, 320.0), (128, -320.0)]
+        .map(|(id, x)| record::radar_stellar(StellarId(id), Vec2::new(x, 0.0)))
+        .to_vec();
+    let view = barred(catalog(), frame);
+    let xs: Vec<f32> = view
+        .radar_now(&view.frame)
+        .stellars
+        .iter()
+        .map(|stellar| stellar.position.x)
+        .collect();
+    assert_eq!(xs, [300.0, 320.0, -320.0]);
 }
 
 #[test]

@@ -7,7 +7,7 @@ use nova_data::records::ship::Ship;
 use nova_data::store::order::IgnoreReason;
 use nova_data::store::{GameData, IgnoredEntry, OpenError, Origin};
 use nova_rsrc::LoadError;
-use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
+use nova_rsrc::fixture::{ForkBuilder, MacBinaryBuilder, MacBinaryVersion, RezBuilder};
 
 /// A ship whose `holds` field (at offset 0) is `holds`.
 fn ship_bytes(holds: i16) -> Vec<u8> {
@@ -137,6 +137,67 @@ fn rez_data_files_and_plugins_load_from_real_folders() {
         (20, "Override.rez".to_owned())
     );
     assert_eq!(holds_and_source(&data, 131), (5, "Override.rez".to_owned()));
+}
+
+/// Opens a store over `Nova Files` (ships 128 and 129) and a `Plug-Ins`
+/// folder holding `Override.<ext>` and `Sub/Extra.<ext>`, each written by
+/// `wrap` from a fork of ships, and returns `(holds, source)` for every
+/// ship.
+fn plug_in_store(ext: &str, wrap: impl Fn(Vec<u8>, bool) -> Vec<u8>) -> Vec<(i16, String)> {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let data_dir = tmp.path().join("Nova Files");
+    let plugins = tmp.path().join("Plug-Ins");
+    fs::create_dir_all(&data_dir).expect("mkdir");
+    fs::create_dir_all(plugins.join("Sub")).expect("mkdir");
+    fs::write(
+        data_dir.join("Nova Data 1.ndat"),
+        ships(&[(128, 1), (129, 1)]),
+    )
+    .expect("write");
+    fs::write(
+        plugins.join(format!("Override.{ext}")),
+        wrap(ships(&[(129, 20), (131, 5)]), false),
+    )
+    .expect("write");
+    fs::write(
+        plugins.join("Sub").join(format!("Extra.{ext}")),
+        wrap(ships(&[(131, 9)]), true),
+    )
+    .expect("write");
+
+    let data = GameData::open(&data_dir, Some(&plugins)).expect("opens");
+    assert!(data.failed().is_empty(), "{:?}", data.failed());
+    assert!(data.ignored().is_empty(), "{:?}", data.ignored());
+    [128, 129, 131]
+        .into_iter()
+        .map(|id| holds_and_source(&data, id))
+        .collect()
+}
+
+#[test]
+fn macbinary_plugins_override_like_the_bare_forks() {
+    let bare = plug_in_store("npif", |fork, _| fork);
+    let wrapped = plug_in_store("bin", |fork, iii| {
+        let version = if iii {
+            MacBinaryVersion::III
+        } else {
+            MacBinaryVersion::II
+        };
+        MacBinaryBuilder::new(fork).version(version).build().bytes
+    });
+    assert_eq!(
+        bare,
+        [
+            (1, "Nova Data 1.ndat".to_owned()),
+            (20, "Override.npif".to_owned()),
+            (9, "Extra.npif".to_owned()),
+        ]
+    );
+    let renamed: Vec<(i16, String)> = wrapped
+        .into_iter()
+        .map(|(holds, source)| (holds, source.replace(".bin", ".npif")))
+        .collect();
+    assert_eq!(renamed, bare);
 }
 
 /// A classic plug-in keeps its resources in the file's resource fork.

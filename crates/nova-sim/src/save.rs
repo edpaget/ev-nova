@@ -13,6 +13,11 @@
 //! engine's reading `Session::load` drops them, as the original's open
 //! clears `_hyperRoute`.
 //!
+//! The system last jumped from is always saved too. Whether a load keeps
+//! it is [`RuleKey::LoadedJumpedFrom`](crate::RuleKey::LoadedJumpedFrom)'s:
+//! by the engine's reading `Session::load` forgets it, as the original's
+//! open sets player +0x94 to -1.
+//!
 //! - Version 1: the name, ship, system, the stellar last landed on, date,
 //!   cash, reserves and course.
 //! - Version 2: adds the explored systems and the legal records, none in
@@ -138,6 +143,16 @@
 //!   `+0xe8ae[i]` (`_LoadPilotData` @0x75a75-0x75ad3), set in the escort
 //!   dialog (see [`escort_dialog`](crate::escort_dialog)). No older
 //!   save could mark one, so the upgrade gives `null`.
+//! - Version 35: adds each overlaid stellar's domination (`dominated` on
+//!   each `galaxy.stellars` entry), the original's +0x46 that
+//!   `_WritePilotData` keeps at pilot +0xdf2e + i (@0x72576-0x72580), and
+//!   the stellars' defence ships left (`defence_ships`, each `stellar`,
+//!   `left` and its `def_count` as the save knew it, by ascending ID),
+//!   +0x466 at +0x6 + 2i (@0x7282d, @0x7285e); a stellar with no entry
+//!   has its decode. The session's load drops either for a stellar the
+//!   data no longer lists and zeroes a dominated stellar's count (see the
+//!   session's `stellar_defence` module). No older save kept them, so the
+//!   upgrade gives `false` and `[]`.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -237,9 +252,10 @@ use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
+use crate::traffic::stellar_defence::DefenceShips;
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 34;
+pub const CURRENT: u64 = 35;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -599,7 +615,7 @@ struct SavedCountdown {
 }
 
 /// What the overlay changes of a stellar: `destroyed` is `None` while it
-/// is not.
+/// is not, and `dominated` whether the player dominated it.
 #[derive(Serialize, Deserialize)]
 struct SavedStellar {
     stellar: i16,
@@ -607,6 +623,16 @@ struct SavedStellar {
     govt: Option<SavedGovt>,
     #[serde(deserialize_with = "Option::deserialize")]
     destroyed: Option<SavedCountdown>,
+    dominated: bool,
+}
+
+/// A stellar's defence ships left, with its raw `DefCount` as the save
+/// knew it.
+#[derive(Serialize, Deserialize)]
+struct SavedDefenceShips {
+    stellar: i16,
+    left: i16,
+    def_count: i16,
 }
 
 /// Whether a nebula is active, as the overlay says.
@@ -643,6 +669,7 @@ impl From<&GalaxyOverlay> for SavedGalaxy {
                     destroyed: change.destroyed.map(|countdown| SavedCountdown {
                         days_left: countdown.days_left,
                     }),
+                    dominated: change.dominated,
                 })
                 .collect(),
             nebulae: overlay
@@ -671,6 +698,7 @@ impl From<SavedGalaxy> for GalaxyOverlay {
                 days_left: saved.days_left,
             });
             overlay.set_destroyed(id, destroyed);
+            overlay.set_dominated(id, stellar.dominated);
         }
         for nebula in saved.nebulae {
             overlay.set_nebula_active(NebulaId(nebula.nebula), Some(nebula.active));
@@ -992,6 +1020,7 @@ struct Saved {
     crons: Vec<SavedCron>,
     ranks: Vec<i16>,
     seen_intro: bool,
+    defence_ships: Vec<SavedDefenceShips>,
 }
 
 /// A saved reinforcement countdown: a system and its days left.
@@ -1165,6 +1194,7 @@ pub fn encode(pilot: &Pilot) -> String {
         crons: saved_crons(&pilot.crons),
         ranks: pilot.ranks.iter().map(|rank| rank.0).collect(),
         seen_intro: pilot.seen_intro,
+        defence_ships: saved_defence_ships(&pilot.defence_ships),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -1205,7 +1235,43 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     course_start,
     nickname,
     escort_marks,
+    dominations,
 ];
+
+/// Version 34 to 35: no stellar dominated, and every defence count its
+/// decode, as no older save kept them.
+fn dominations(save: &mut Value) {
+    if let Some(stellars) = save
+        .pointer_mut("/galaxy/stellars")
+        .and_then(Value::as_array_mut)
+    {
+        for stellar in stellars.iter_mut().filter_map(Value::as_object_mut) {
+            stellar.insert("dominated".to_owned(), Value::Bool(false));
+        }
+    }
+    add_empty(save, &["defence_ships"]);
+}
+
+/// The defence ships left `ships` holds, as a save keeps them.
+fn saved_defence_ships(ships: &DefenceShips) -> Vec<SavedDefenceShips> {
+    ships
+        .saved()
+        .map(|(stellar, left, def_count)| SavedDefenceShips {
+            stellar: stellar.0,
+            left,
+            def_count,
+        })
+        .collect()
+}
+
+/// The defence ships left `saved` keeps.
+fn defence_ships_of(saved: &[SavedDefenceShips]) -> DefenceShips {
+    let mut ships = DefenceShips::default();
+    for saved in saved {
+        ships.set_left_of(StellarId(saved.stellar), saved.def_count, saved.left);
+    }
+    ships
+}
 
 /// Version 33 to 34: no escort is marked for an upgrade or a sale, as
 /// the escort dialog that marks them was not built.
@@ -1626,6 +1692,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         crons: crons_of(saved.crons),
         ranks: saved.ranks.into_iter().map(RankId).collect(),
         seen_intro: saved.seen_intro,
+        defence_ships: defence_ships_of(&saved.defence_ships),
     })
 }
 
@@ -1788,6 +1855,7 @@ mod tests {
             ranks: BTreeSet::from([RankId(140), RankId(128)]),
             seen_intro: true,
             nickname: String::new(),
+            defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
         }
     }
 
@@ -1940,7 +2008,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 34);
+        assert_eq!(CURRENT, 35);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -1959,9 +2027,10 @@ mod tests {
                     {"system": 300, "visible": true, "govt": {"govt": 140}}
                 ],
                 "stellars": [
-                    {"stellar": 150, "govt": {"govt": null}, "destroyed": null},
-                    {"stellar": 151, "govt": {"govt": 128}, "destroyed": {"days_left": 3}},
-                    {"stellar": 152, "govt": null, "destroyed": {"days_left": 0}}
+                    {"stellar": 150, "govt": {"govt": null}, "destroyed": null, "dominated": false},
+                    {"stellar": 151, "govt": {"govt": 128},
+                        "destroyed": {"days_left": 3}, "dominated": false},
+                    {"stellar": 152, "govt": null, "destroyed": {"days_left": 0}, "dominated": false}
                 ],
                 "nebulae": [
                     {"nebula": 128, "active": false},
@@ -2035,7 +2104,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 34"), "{text}");
+        assert!(text.contains("\n  \"version\": 35"), "{text}");
     }
 
     #[test]
@@ -3104,8 +3173,8 @@ mod tests {
         assert_eq!(
             value["galaxy"]["stellars"],
             serde_json::json!([
-                {"stellar": 150, "govt": {"govt": 128}, "destroyed": null},
-                {"stellar": 151, "govt": null, "destroyed": {"days_left": 0}}
+                {"stellar": 150, "govt": {"govt": 128}, "destroyed": null, "dominated": false},
+                {"stellar": 151, "govt": null, "destroyed": {"days_left": 0}, "dominated": false}
             ])
         );
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
@@ -3755,6 +3824,95 @@ mod tests {
         value["version"] = serde_json::Value::from(CURRENT);
         let text = value.to_string();
         assert!(unusable(&text).contains("mark"), "{}", unusable(&text));
+    }
+
+    /// [`seasoned`] dominating stellar 150, with stellar 151's defence
+    /// ships left at 3 of `DefCount` 7006 and 152's at 0 of 5.
+    fn dominating() -> Pilot {
+        let mut pilot = seasoned();
+        pilot.galaxy.set_dominated(StellarId(150), true);
+        pilot.defence_ships.set_left_of(StellarId(151), 7006, 3);
+        pilot.defence_ships.set_left_of(StellarId(152), 5, 0);
+        pilot
+    }
+
+    #[test]
+    fn a_domination_and_the_defence_ships_left_survive_a_round_trip() {
+        let pilot = dominating();
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(
+            value["galaxy"]["stellars"],
+            serde_json::json!([
+                {"stellar": 150, "govt": {"govt": null}, "destroyed": null, "dominated": true},
+                {"stellar": 151, "govt": {"govt": 128}, "destroyed": {"days_left": 3}, "dominated": false},
+                {"stellar": 152, "govt": null, "destroyed": {"days_left": 0}, "dominated": false}
+            ])
+        );
+        assert_eq!(
+            value["defence_ships"],
+            serde_json::json!([
+                {"stellar": 151, "left": 3, "def_count": 7006},
+                {"stellar": 152, "left": 0, "def_count": 5}
+            ])
+        );
+        assert_eq!(decode(&text), Ok(pilot));
+    }
+
+    /// `pilot` saved at version 34: no domination or defence ships left
+    /// kept.
+    fn at_version_34(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(34);
+        for stellar in value["galaxy"]["stellars"].as_array_mut().expect("a list") {
+            stellar
+                .as_object_mut()
+                .expect("an object")
+                .remove("dominated");
+        }
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("defence_ships");
+        value.to_string()
+    }
+
+    #[test]
+    fn a_version_34_save_loads_with_none_dominated_and_the_decoded_counts() {
+        let pilot = decode(&at_version_34(&dominating())).expect("loads");
+        assert_eq!(pilot, seasoned());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["galaxy"]["stellars"][0]["dominated"], false);
+        assert_eq!(value["defence_ships"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn the_upgrade_from_34_adds_dominated_false_and_no_defence_ships() {
+        let mut value: serde_json::Value = serde_json::json!({
+            "galaxy": {"systems": [], "stellars": [{"stellar": 150}], "nebulae": []}
+        });
+        dominations(&mut value);
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "galaxy": {
+                    "systems": [],
+                    "stellars": [{"stellar": 150, "dominated": false}],
+                    "nebulae": []
+                },
+                "defence_ships": []
+            })
+        );
+    }
+
+    #[test]
+    fn a_current_save_missing_a_stellars_domination_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_34(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(unusable(&text).contains("dominated"), "{}", unusable(&text));
     }
 
     /// `pilot` saved at version 32: no nickname kept, nor any escort's
@@ -4526,12 +4684,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 34", "\"version\": 35");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 35 }));
+        let newer = encode(&seasoned()).replace("\"version\": 35", "\"version\": 36");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 36 }));
         assert_eq!(
-            SaveError::Newer { version: 35 }.to_string(),
+            SaveError::Newer { version: 36 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 35, and this version of Nova reads up to 34)."
+             (it is version 36, and this version of Nova reads up to 35)."
         );
     }
 

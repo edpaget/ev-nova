@@ -468,11 +468,11 @@ fn an_outfitter_order_sends_its_count_and_hands_back_the_flights_run() {
                 order: BUY_TANK,
                 count: 3
             },
-            FlightCommand::OutfitCounted {
+            FlightCommand::Outfit {
                 order: BUY_TANK,
                 count: 2
             },
-            FlightCommand::OutfitCounted {
+            FlightCommand::Outfit {
                 order: BUY_TANK,
                 count: 1
             },
@@ -704,7 +704,7 @@ type PortStep = fn(&mut Faked);
 
 /// The orders the port's `_DrawStatus` follows, each with the answer it
 /// goes through on: each draws the nav the shipyard's restore marked.
-fn drawing_orders() -> [(&'static str, Answer, PortStep); 11] {
+fn drawing_orders() -> [(&'static str, Answer, PortStep); 10] {
     [
         ("a trade", Answer::Traded(Ok(10)), |view| {
             assert!(view.trade(BUY_FOOD).is_ok());
@@ -746,17 +746,10 @@ fn drawing_orders() -> [(&'static str, Answer, PortStep); 11] {
             },
         ),
         (
-            "a counted order's Cancel",
-            Answer::Outfitted(run(0, true, None)),
-            |view| {
-                assert_eq!(view.outfit_counted(BUY_TANK, 0), Ok(0));
-            },
-        ),
-        (
             "an outfitter run's Cancel",
             Answer::Outfitted(run(0, true, None)),
             |view| {
-                view.outfit_order(BUY_TANK, 0);
+                assert_eq!(view.outfit_counted(BUY_TANK, 0), Ok(0));
             },
         ),
         (

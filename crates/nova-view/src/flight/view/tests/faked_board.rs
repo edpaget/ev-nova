@@ -50,7 +50,11 @@ const ON_BOARD: PlunderView = PlunderView {
     ship: ShipId(129),
     credits: 5750,
     cargo: Some((Good::Commodity(0), 13)),
-    ammo: Some((OutfitId(310), 2)),
+    ammo: Some(nova_sim::AmmoOffer {
+        slot: nova_sim::WeaponId(140),
+        rounds: 2,
+        named: Some(OutfitId(310)),
+    }),
     fuel: 170,
     odds: 43,
 };

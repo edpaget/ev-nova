@@ -95,11 +95,12 @@
 //!   is `mp3`, `mov`, `txt`, `rtf`, `md`, `pdf`, `htm`, `html`, `jpg`,
 //!   `jpeg`, `png` or `gif`.
 //! - Everything else is attempted, including `.ndat`, `.npif`, Windows
-//!   `.rez` files, files with no extension and dotted names like `Foo v1.2`:
-//!   classic plug-ins often have no extension. A file's data fork (a
-//!   flattened fork or a `.rez` file, told apart by content) wins;
-//!   otherwise its real resource fork is read. A `.rez` file sorts by its
-//!   name like any other file.
+//!   `.rez` files, MacBinary `.bin` files, files with no extension and
+//!   dotted names like `Foo v1.2`: classic plug-ins often have no
+//!   extension. A file's data fork (a flattened fork, a `.rez` file or a
+//!   MacBinary file, told apart by content) wins if it parses; otherwise
+//!   its real resource fork is read. A `.rez` or `.bin` file sorts by its
+//!   own name like any other file, at any depth of the plug-ins tree.
 //!
 //! In the stock Mac `Nova Files`, the 21 `.ndat` files load and the music
 //! and four race movies are ignored, so nothing fails; the same holds for

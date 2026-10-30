@@ -870,6 +870,7 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
     let cadence = view.hud_cadence;
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().stellars = vec![record::stellar(StellarId(140))];
+    view.sim.frame_mut().radar_stellars = vec![record::radar_stellar(StellarId(140), Vec2::ZERO)];
     view.arrival_frame();
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
     let stellars: Vec<Point> = view

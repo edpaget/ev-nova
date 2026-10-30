@@ -45,6 +45,7 @@ use std::collections::BTreeSet;
 
 use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
+use super::stock_fold::folds_stock;
 use super::{MissionRun, Outbox, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
@@ -175,6 +176,9 @@ impl Session {
 
     /// Applies one set operator beyond the bit writes and `R(...)`.
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
+        if folds_stock(op) {
+            self.ship.fold_stock();
+        }
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit, chance),
             SetOp::RemoveOutfit(outfit) => {

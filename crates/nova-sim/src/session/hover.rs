@@ -164,11 +164,7 @@ mod tests {
 
     impl AllAt {
         fn square(&self) -> DrawnBox {
-            DrawnBox {
-                centre: self.0,
-                width: 60,
-                height: 60,
-            }
+            DrawnBox::at(crate::navigation::SpriteRect::centred(self.0, (60, 60)))
         }
     }
 
@@ -257,11 +253,7 @@ mod tests {
 
     /// A 60-pixel square at `at`, too tall for the click margin.
     fn square(at: Vec2) -> DrawnBox {
-        DrawnBox {
-            centre: at,
-            width: 60,
-            height: 60,
-        }
+        DrawnBox::at(crate::navigation::SpriteRect::centred(at, (60, 60)))
     }
 
     impl Drawn {

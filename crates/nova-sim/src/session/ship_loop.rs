@@ -50,6 +50,7 @@ use std::collections::BTreeSet;
 use super::game_work::PassStart;
 use super::npc_escape::{AtStep, escape_may_run};
 use super::{Session, Space, TrafficMarks};
+use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules, ShipRef};
 use crate::traffic::npc::NpcId;
@@ -105,6 +106,7 @@ impl Session {
     /// fall.
     pub(super) fn ship_loop(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         start: &PassStart,
         motion: Motion,
         pass: GamePass,
@@ -138,21 +140,39 @@ impl Session {
                 .condition_of(id)
                 .filter(|&was| escape_may_run(was, at_step));
             let Some(was) = was else {
-                self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-                    combat.handle_npc(fighters, arena, ship, &mut shown, chance);
-                });
+                self.land_phase(
+                    behaviour,
+                    pass,
+                    rules,
+                    chance,
+                    |combat, fighters, arena, chance| {
+                        combat.handle_npc(fighters, arena, ship, &mut shown, chance);
+                    },
+                );
                 continue;
             };
             // `_HandleShip`'s dying block (@0x35080-0x3557b) comes between
             // its death timer (@0x35083) and its display (@0x444ad).
-            self.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-                combat.step_npc(fighters, arena, ship, chance);
-            });
+            self.land_phase(
+                behaviour,
+                pass,
+                rules,
+                chance,
+                |combat, fighters, arena, chance| {
+                    combat.step_npc(fighters, arena, ship, chance);
+                },
+            );
             self.step_stray_words(chance);
             self.npc_escape(was, at_step, chance);
-            self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
-                combat.display_npc(fighters, arena, ship, &mut shown);
-            });
+            self.land_phase(
+                behaviour,
+                pass,
+                rules,
+                chance,
+                |combat, fighters, arena, _| {
+                    combat.display_npc(fighters, arena, ship, &mut shown);
+                },
+            );
         }
         if let Some(fly) = fly {
             self.space.traffic.end_fly(fly);

@@ -84,7 +84,11 @@ impl Space {
     /// NPC `ship` has been repaired by a ship docked with it (see the
     /// module docs): unboarded, then, while disabled, its armour raised
     /// as the player's is, `_IsDisabled` holding a mission's rescue ship
-    /// disabled at any armour; silently.
+    /// disabled at any armour; silently. A stellar's defence ship is stored
+    /// disabled only while it is held
+    /// ([`Condition::stored_disabled`](crate::combat::hull::Condition::stored_disabled)),
+    /// and one breaking up is not [`Condition::Disabled`], so the
+    /// defence-ship branch of `_IsDisabled` (@0x2d6f) never changes this.
     pub(super) fn npc_repaired(
         &mut self,
         pilot: &Pilot,
@@ -224,6 +228,30 @@ mod tests {
         }
         session.space.count_down_comm_line();
         assert!(session.comm_line().free_for_calls(), "240 ticks");
+    }
+
+    #[test]
+    fn a_repairs_note_is_the_line_raised_last_for_its_ticks() {
+        let catalog = catalog();
+        let (mut session, helper) = downed(&catalog, Rc::new(Below20::default()));
+        session.space.say(
+            &mut session.out,
+            crate::SimMessage::FleetArrivalQuote("Hail".to_owned()),
+        );
+        answer(&mut session, helper);
+        let note = CommNote {
+            from: helper,
+            comm_name: "Shuttle".to_owned(),
+            ship_name: "Kestrel".to_owned(),
+            done: Help::Repair,
+        };
+        let mut line = crate::comm_line::CommLine::default();
+        line.show(note.ticks());
+        assert_eq!(session.comm_line(), line);
+        assert_eq!(
+            session.out.last_line,
+            Some(crate::flight_frame::RaisedLine::Comm(note))
+        );
     }
 
     /// `session` with a second NPC, a copy of its first, disabled and

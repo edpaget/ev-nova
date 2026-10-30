@@ -67,7 +67,9 @@
 //! ([`Session::with_rules`]): by the engine, every escort's order
 //! is reset to formation, as the original's `_RespawnEscort` (@0x3d546)
 //! and `_HandlePlayer` (@0x6e3bb-0x6e44b) do; by the other reading, the
-//! orders are kept.
+//! orders are kept. In flight, a class's order stands only while a ship of
+//! it that took a command is out (see the
+//! [`class_orders`](super::class_orders) module).
 //!
 //! **Commands** ([`Session::command_escorts`], `_IssueNewEscortCommand`
 //! @0x660d5): a command goes to every escort of its group, hired or a
@@ -203,7 +205,13 @@ pub(super) struct KeptEscort {
 
 impl Session {
     /// The escorts enter the system (see the module docs): by the
-    /// engine their standing orders are reset, and each is placed beside
+    /// engine their standing orders are reset; by the other reading of
+    /// [`RuleKey::EscortOrders`] each ship of the player's placed, or come
+    /// with the system as a mission's, is marked when its class keeps an
+    /// order ([`Space::mark_kept_orders`]), so the kept orders stand
+    /// through the class-order bookkeeping of the next pass (see the
+    /// `class_orders` module). No mark from the system left stands, as
+    /// its ships are gone. Each escort is placed beside
     /// the player, for [`Session::place_entering_escorts`] to put on its
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
@@ -226,7 +234,11 @@ impl Session {
         kept: &[KeptEscort],
         chance: &mut dyn Chance,
     ) {
-        if self.setup.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
+        // Every ship marked is gone with the system left (see the
+        // `class_orders` module).
+        self.space.escorts.commanded.clear();
+        let reset = self.setup.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine;
+        if reset {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
             }
@@ -292,6 +304,9 @@ impl Session {
                 Some(id)
             })
             .collect();
+        if !reset {
+            self.space.mark_kept_orders();
+        }
         self.space.traffic.reserve(BTreeSet::new());
         self.space.escorts.restock = false;
     }
@@ -428,6 +443,8 @@ impl Session {
             // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
             odds: crate::traffic::odds_cache::STALE,
             no_ai: false,
+            kept_escort_ai: false,
+            defends: None,
         };
         npc.independent();
         // A carried fighter holds a fighter's capacities, keeping what its
@@ -774,6 +791,14 @@ impl Session {
     /// "attacking target" when the report says so (@0x6660a-0x6663c), else
     /// the acknowledgement, queued on the voice channel (see the `voices`
     /// module).
+    ///
+    /// Each escort placed whose order before the command differs from the
+    /// command's (a Return to Hangar compared as given, so one that is no
+    /// carried fighter is marked though it keeps formation) is marked as
+    /// having taken a command (@0x66183-0x66190; see the `class_orders`
+    /// module). The mark follows the same change test as the order, which
+    /// rdm:phase/escort-fleet-fidelity-followups/phase-11-left-out-of-escorts-run-dry
+    /// moves onto the order word; the mark moves with it.
     pub(crate) fn command_escorts(
         &mut self,
         group: EscortGroup,
@@ -799,6 +824,7 @@ impl Session {
         let mut changed = false;
         let mut recalled = false;
         let mut voters = Vec::new();
+        let mut marked = Vec::new();
         for index in 0..self.pilot.escorts.len() {
             if !group.holds(self.space.escort_class(&self.pilot, &self.statics, index)) {
                 continue;
@@ -807,9 +833,11 @@ impl Session {
             let (order, recall) = order_for(command, escort.carried, escort.order);
             recalled |= recall;
             let reordered = escort.order != order;
+            let marks = command.order() != escort.order;
             changed |= reordered;
             escort.order = order;
             let placed = self.space.escorts.fleet.get(index).copied().flatten();
+            marked.extend(placed.filter(|_| marks));
             let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) else {
                 continue;
             };
@@ -843,10 +871,16 @@ impl Session {
             let (order, recall) = order_for(command, false, mark.order);
             recalled |= recall;
             let reordered = mark.order != order;
+            if command.order() != mark.order {
+                marked.push(id);
+            }
             mark.order = order;
             let voter = obey(npc, command, target, reordered);
             changed |= voter.changed;
             voters.push(voter);
+        }
+        for id in marked {
+            self.space.mark_commanded(id);
         }
         if changed {
             self.out.sounds.push(crate::SimSound::EscortsCommanded);
@@ -1108,8 +1142,9 @@ impl Space {
     /// the original's one order per class does (`_EscortAI`
     /// @0x83ad8-0x83b2b): its first escort's (`class_row`),
     /// else the last order given the class (kept across a jump or a
-    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it),
-    /// Return to Hangar excepted. A fighter the player launches and a
+    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it, and
+    /// in flight while a ship of the class that took a command is out; see
+    /// the `class_orders` module), Return to Hangar excepted. A fighter the player launches and a
     /// mission escort joining both take it.
     pub(super) fn class_order(
         &self,
@@ -1143,12 +1178,14 @@ pub(super) fn reset_released(npc: &mut Npc) {
 /// alike: of no government, and so of no government's factor, keeping
 /// its skill, its AI type `inherent` (its ship type's `InherentAI`) when
 /// known, no longer a former escort, of no leader but the player, keeping
-/// formation with no target of its own.
+/// formation with no target of its own. Its +0x88 = 6 overwrites a bribe
+/// ([`Npc::overwrite_bribe`]; `_DoPlunderDialog` @0x9461f).
 pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.independent();
     if let Some(ai_type) = inherent {
         npc.ai_type = ai_type;
     }
+    npc.overwrite_bribe();
     npc.former = None;
     npc.leader = None;
     npc.goal = Goal::Formation { guard: None };
@@ -1832,6 +1869,24 @@ pub(super) mod tests {
         session.enlist(id, escort(WARSHIP, worn(), None));
         let ship = session.space.npc(id).expect("there");
         assert_eq!((ship.govt, ship.skill_mult, ship.skill), (None, 1.0, 0.8));
+    }
+
+    #[test]
+    fn a_bribed_ship_enlisted_loses_its_bribe_so_its_release_takes_its_classs_ai() {
+        // The capture writes +0x88 = 6 (`_DoPlunderDialog` @0x9461f) over
+        // the bribe's 1 (`_DoCommDialog` @0x961f8).
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let id = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        let ship = session.space.npc_mut(id).expect("there");
+        ship.take_bribe();
+        ship.hull.inherent_ai = 3;
+        session.enlist(id, escort(WARSHIP, worn(), None));
+        assert!(!session.space.npc(id).expect("there").spared);
+        session.release_led(id);
+        let released = session.space.npc(id).expect("there");
+        assert_eq!(released.ai_type, AiType::Warship);
+        assert_eq!(released.original_ai_type(), 3);
     }
 
     /// Ionizes the first escort red, then checks that, once the fleet

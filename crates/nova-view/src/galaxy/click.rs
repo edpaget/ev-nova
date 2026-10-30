@@ -12,7 +12,7 @@
 use super::catalog::SystemId;
 use super::model::GalaxyModel;
 use super::view::Transform;
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 
 /// How far each side of a system's point its hit box reaches: the point
 /// rect inset by −10 (`InsetRect` @0x12f3e), a 20 × 20 box.
@@ -31,10 +31,24 @@ pub fn hits(model: &GalaxyModel, at: Point, transform: &Transform) -> Vec<System
         .iter()
         .filter(|system| {
             let (h, v) = transform.pixel(system.position());
-            (h - HIT_HALF..h + HIT_HALF).contains(&x) && (v - HIT_HALF..v + HIT_HALF).contains(&y)
+            hit_box(h, v).contains_half_open(pixel(x, y))
         })
         .map(|system| system.entry.id)
         .collect()
+}
+
+/// The 20 × 20 hit box round the whole-pixel point (h, v), tested half-open
+/// as `PtInRect` tests it ([`Bounds::contains_half_open`]).
+#[allow(clippy::cast_precision_loss)] // Screen pixels.
+fn hit_box(h: i32, v: i32) -> Bounds {
+    let side = (2 * HIT_HALF) as f32;
+    Bounds::at(pixel(h - HIT_HALF, v - HIT_HALF), side, side)
+}
+
+/// The whole pixel (x, y) as a point.
+#[allow(clippy::cast_precision_loss)] // Screen pixels.
+fn pixel(x: i32, y: i32) -> Point {
+    Point::new(x as f32, y as f32)
 }
 
 /// `at` truncated toward zero, as the event's point is whole pixels.
@@ -80,11 +94,13 @@ mod tests {
         list.iter().copied().map(SystemId).collect()
     }
 
-    /// A transform drawing (0, 0) at (450, 346), at `zoom`.
+    /// The course map's transform drawing (0, 0) at (450, 346), at
+    /// `zoom`: the dialog's port at (212, 128), item 3's centre (238, 218)
+    /// in it.
     fn transform(zoom: f64) -> Transform {
         MapPlace::new((0, 0))
             .with_zoom(zoom)
-            .transform(Point::new(450.0, 346.0))
+            .transform((212, 128), (238, 218))
     }
 
     /// One system, 128, at (40, 20).
@@ -117,6 +133,29 @@ mod tests {
             assert_eq!(hit(h, v + 10), ids(&[]), "{zoom}: bottom");
             assert_eq!(hit(h - 11, v), ids(&[]), "{zoom}: past left");
             assert_eq!(hit(h, v - 11), ids(&[]), "{zoom}: past top");
+        }
+    }
+
+    #[test]
+    fn a_system_is_hit_where_the_original_draws_it_at_two_zooms() {
+        // From 0.5625, two steps out put (−36, −36) at (413, 309) and one
+        // (−66, −66) at (361, 257), a pixel up and left of the f32 scale's.
+        for (steps, (x, y), hit, missed) in [
+            (2, (-36, -36), (403.5, 299.5), (423.5, 319.5)),
+            (1, (-66, -66), (351.5, 247.5), (371.5, 267.5)),
+        ] {
+            let mut place = MapPlace::new((0, 0));
+            for _ in 0..steps {
+                assert!(place.zoom_out());
+            }
+            let transform = place.transform((212, 128), (238, 218));
+            let model = GalaxyModel::new(Galaxy {
+                systems: vec![system(128, x, y)],
+                ..Galaxy::default()
+            });
+            let press = |(x, y): (f32, f32)| hits(&model, Point::new(x, y), &transform);
+            assert_eq!(press(hit), ids(&[128]), "{steps}: the box's top-left");
+            assert_eq!(press(missed), ids(&[]), "{steps}: past its bottom-right");
         }
     }
 

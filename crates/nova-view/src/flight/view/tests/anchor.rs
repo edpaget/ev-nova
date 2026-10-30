@@ -158,7 +158,11 @@ fn a_click_where_a_ship_is_drawn_sends_its_box_there_and_its_brackets_frame_it()
                 .find(|&&(id, _)| id == NpcId(0))
                 .expect("boxed")
                 .1;
-            assert_eq!(boxed.centre, Vec2::new(-300.0, 0.0), "where it is drawn");
+            assert_eq!(
+                super::box_centre(boxed),
+                at(-300.0, 0.0),
+                "where it is drawn"
+            );
             let hud = nova_sim::flight_frame::FrameHud {
                 target_brackets: Some(nova_sim::brackets::TargetBrackets {
                     npc: NpcId(0),

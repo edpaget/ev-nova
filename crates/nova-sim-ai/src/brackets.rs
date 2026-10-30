@@ -38,15 +38,14 @@
 //! Neither routine plays a sound: the selection sounds are
 //! `_HandlePlayer`'s.
 //!
-//! Left out: the defender case of the ship frame (+0x8c != −1 with the
-//! player as parent, @0x2ffd3), as ours has no ship led by the player
-//! that defends a stellar; and `_SWIsSpriteInRect`'s per-frame insets
+//! Never reached: the defender case of the ship frame (+0x8c != −1 with
+//! the player as parent, @0x2ffd3), as a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar. Left out:
+//! `_SWIsSpriteInRect`'s per-frame insets
 //! (frame +0x2e-+0x34), as ours has no trimmed frame bounds and uses the
 //! whole sprite.
 
 use crate::catalog::StellarId;
 use crate::cloak::Area;
-use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -123,7 +122,8 @@ pub enum Standing {
 /// names, if it is in the system), among `npcs`, stands for its
 /// brackets, in `_HandleWeapTargetSprites`'s order (@0x2ffac-0x30021):
 /// disabled (`_IsDisabled`, as `nova_sim::iff::ship_iff`
-/// reads it); else the player's escort or a ship one leads, the
+/// reads it, [`Npc::is_disabled`]: not a stellar's defence ship breaking
+/// up); else the player's escort or a ship one leads, the
 /// parent/grandparent rule of `_ColorCodeShip` (@0x4b46-0x4b8f); else a
 /// threat to the player or a ship the player leads (`_IsThreatToPlayer`
 /// @0x2ffe2, [`Npc::threatens_player_among`]); else neutral. Unlike `_ColorCodeShip`, which
@@ -131,7 +131,7 @@ pub enum Standing {
 /// still an escort here.
 #[must_use]
 pub fn standing(npc: &Npc, leader: Option<&Npc>, npcs: &[Npc]) -> Standing {
-    if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
+    if npc.is_disabled() {
         Standing::Disabled
     } else if npc.escorts_player() || leader.is_some_and(Npc::escorts_player) {
         Standing::Escort
@@ -182,6 +182,7 @@ mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
@@ -249,6 +250,12 @@ mod tests {
 
     fn in_condition(npc: Npc, condition: Condition) -> Npc {
         Npc { condition, ..npc }
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_is_not_bracketed_disabled() {
+        let guard = crate::traffic::fixture::breaking_up_guard(npc(1, ShipStats::default()));
+        assert_eq!(standing(&guard, None, &[]), Standing::Neutral, "@0x2d6f");
     }
 
     #[test]

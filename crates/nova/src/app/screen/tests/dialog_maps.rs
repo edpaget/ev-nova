@@ -37,6 +37,8 @@ fn m_on_an_offer_over_flight_opens_its_map_and_m_closes_back_to_the_offer() {
     screen.input(&key(MAP, false));
     assert_eq!(map_sounds(&mut screen), [], "opened in silence");
     screen.input(&key(MAP, true));
+    assert!(flight(&screen).map_open(), "waits for M's release");
+    screen.input(&key(MAP, false));
     assert!(!flight(&screen).map_open(), "M closes it");
     assert_eq!(screen.showing(), Showing::Offer, "back to the offer");
     assert_eq!(map_sounds(&mut screen), [], "closed in silence");
@@ -102,4 +104,18 @@ fn command_comma_on_a_dialogs_map_over_flight_opens_the_preferences_unless_find_
     command_comma(&mut screen);
     assert!(screen.preferences().is_none(), "Find takes every key");
     assert!(flight(&screen).map_finding());
+}
+
+#[test]
+fn losing_the_keys_completes_a_dialogs_map_close_over_flight() {
+    // The map waits for M's release (`_DoSystemMap` @0x13a2e-0x13a46);
+    // focus lost counts as the release, though the offer is in front of
+    // flight among the overlays.
+    let mut screen = offered_in_flight();
+    screen.input(&key(MAP, true));
+    screen.input(&key(Key::Escape, true));
+    assert!(flight(&screen).map_open(), "waits for M's release");
+    screen.release_keys();
+    assert!(!flight(&screen).map_open(), "closed");
+    assert_eq!(screen.showing(), Showing::Offer, "back to the offer");
 }

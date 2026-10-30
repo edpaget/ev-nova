@@ -2,7 +2,8 @@
 //! ([`Traffic::reset_disabled`]).
 //!
 //! **The warp cancel** (@0x8fcc8-0x8fce9). Every dispatch of a ship that is
-//! `_IsDisabled` (disabled or breaking up, [`Condition::disabled`]) with
+//! `_IsDisabled` (disabled or breaking up, but for a stellar's defence
+//! ship only held, [`Npc::is_disabled`]) with
 //! +0x50 above 0 writes +0x50 = -1.0 (float 0xdd04c), before the dispatch's
 //! -900 test: a dispatched ship, not an escape pod (@0x8fb62) and one with
 //! AI (@0x4427e). So a disabled ship's warp restarts from nothing once it
@@ -16,7 +17,10 @@
 //! defended stellar +0x8c = -1, its provocation +0x96 = 0, goal and
 //! substate 0. Here:
 //!
-//! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::provoked`]
+//! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::defends`]
+//!   none (a defence ship held disabled stops defending; one breaking up
+//!   is not disabled, @0x2d6f, so it keeps defending and counts for its
+//!   stellar's wave until it is gone), [`Npc::provoked`]
 //!   none, [`Goal::Idle`], and its substate's state, [`Npc::pursuit`] and
 //!   [`Npc::docking`], none;
 //! - by the engine's reading of
@@ -27,11 +31,14 @@
 //!   of its fleet ([`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet));
 //!   any other led ship leaves its fleet now ([`Npc::leave_fleet`]),
 //!   taking its class's `InherentAI` at the reset rather than at that
-//!   think, as the engine has no AI type 6 for it to keep meanwhile (rdm:phase/escort-fleet-fidelity-followups/phase-4-led-ships-read-as-ai-type-6);
+//!   think (a bribed one keeps the bribe's, as the original's +0x88
+//!   does), and is marked ([`Npc::kept_escort_ai`]) so that it reads as
+//!   the original's AI type 6 meanwhile ([`Npc::original_ai_type`]),
+//!   which +0x88 keeps until that think, or for its stay if it thinks as
+//!   a miner ([`Npc::settle_original_ai_type`]);
 //! - by the other reading it keeps its leader, as the port had it.
 //!
-//! +0x8c isn't modelled: the engine has no defence ships
-//! (rdm:task/planet-domination). The reset precedes goal 0x15's skip
+//! The reset precedes goal 0x15's skip
 //! (@0x8ff18), so a ship disabled in its gate is reset too; which of its
 //! goals that ship keeps is
 //! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
@@ -56,8 +63,6 @@ use super::pod_flight;
 use super::regroup;
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, dispatch_gate};
-#[cfg(doc)]
-use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 
 impl Traffic {
@@ -76,22 +81,23 @@ impl Traffic {
 
 /// `npc`'s warp cancelled while it is disabled (see the module docs).
 fn cancel_warp(npc: &mut Npc) {
-    if !pod_flight::is_pod(npc) && !npc.no_ai && npc.condition.disabled() && npc.warp.stage > 0.0 {
+    if !pod_flight::is_pod(npc) && !npc.no_ai && npc.is_disabled() && npc.warp.stage > 0.0 {
         npc.warp.give_up();
     }
 }
 
 /// Whether `npc` reaches the reset (see the module docs).
 fn resets(npc: &Npc) -> bool {
-    npc.condition.disabled() && dispatch_gate::reaches_think(npc) && !regroup::paused(npc)
+    npc.is_disabled() && dispatch_gate::reaches_think(npc) && !regroup::paused(npc)
 }
 
 /// `npc`'s reset, by `reading` of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
 /// docs).
-fn reset(npc: &mut Npc, reading: RuleSource) {
+pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.target = None;
     npc.travel_set = false;
+    npc.defends = None;
     npc.provoked = 0.0;
     npc.goal = Goal::Idle;
     npc.pursuit = Pursuit::default();
@@ -101,6 +107,7 @@ fn reset(npc: &mut Npc, reading: RuleSource) {
             npc.leader = None;
         } else {
             npc.leave_fleet();
+            npc.kept_escort_ai = true;
         }
     }
 }
@@ -199,6 +206,40 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_defence_ship_stops_defending_its_stellar() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut guard = npc(0, ShipStats::new(FAST, &[]));
+        guard.condition = Condition::Disabled;
+        guard.defends = Some(crate::catalog::StellarId(128));
+        let id = traffic.add_npc(guard);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        assert_eq!(of(&traffic, id).defends, None, "+0x8c = -1 (@0x8fef8)");
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_is_not_disabled_and_so_neither_reset_nor_its_warp_cancelled() {
+        // `_IsDisabled` never holds for it by its armour (@0x2d6f).
+        let mut guard = npc(0, ShipStats::new(FAST, &[]));
+        guard.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        guard.defends = Some(crate::catalog::StellarId(128));
+        guard.target = Some(ShipRef::Player);
+        guard.warp.stage = 0.5;
+        assert!(!resets(&guard), "@0x8fece");
+        let before = guard.warp.stage;
+        cancel_warp(&mut guard);
+        assert_eq!(guard.warp.stage, before, "@0x8fcc8");
+        let mut traffic = Traffic::with_interval(1);
+        let id = traffic.add_npc(guard);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let guard = of(&traffic, id);
+        assert_eq!(guard.defends, Some(crate::catalog::StellarId(128)));
+        assert_eq!(guard.target, Some(ShipRef::Player));
+    }
+
+    #[test]
     fn a_disabled_led_ship_loses_its_leader_target_travel_provocation_and_goal_by_the_engine() {
         for condition in [
             Condition::Disabled,
@@ -214,6 +255,47 @@ mod tests {
             assert_eq!(led.leader, None, "{condition:?}");
             assert_eq!(led.ai_type, AiType::Warship, "its class's InherentAI now");
         }
+    }
+
+    #[test]
+    fn a_disabled_led_ship_keeps_the_original_ai_type_six_by_the_engine() {
+        let mut traffic = fleet(Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let led = of(&traffic, LED);
+        assert!(led.kept_escort_ai);
+        assert_eq!(led.original_ai_type(), 6);
+        let mut traffic = fleet(Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Bible, &mut NeverFires);
+        let led = of(&traffic, LED);
+        assert!(!led.kept_escort_ai, "its leader reads 6 already");
+        assert_eq!(led.original_ai_type(), 6);
+    }
+
+    #[test]
+    fn a_disabled_bribed_led_ship_keeps_reading_one_through_the_reset() {
+        let mut traffic = fleet(Condition::Disabled);
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        led.expect("there").take_bribe();
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let led = of(&traffic, LED);
+        assert_eq!(led.leader, None);
+        assert!(led.spared);
+        assert_eq!(led.ai_type, AiType::WimpyTrader, "not its class's 3");
+        assert_eq!(led.original_ai_type(), 1, "the bribe's word is kept");
+    }
+
+    #[test]
+    fn a_disabled_led_ship_reads_its_own_type_after_its_first_think_once_whole() {
+        let mut traffic = fleet(Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, LED).original_ai_type(), 6, "still disabled");
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        led.expect("there").condition = Condition::Intact;
+        traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+        let whole = of(&traffic, LED);
+        assert!(!whole.kept_escort_ai);
+        assert_eq!(whole.original_ai_type(), 3, "its class's InherentAI");
     }
 
     #[test]
@@ -275,6 +357,8 @@ mod tests {
         assert!(was_reset(disabled), "{disabled:?}");
         assert_eq!(disabled.leader, None);
         assert!(disabled.carrier.is_some(), "AI type 5 lasts");
+        assert!(!disabled.kept_escort_ai);
+        assert_eq!(disabled.original_ai_type(), 5);
         assert_eq!(disabled.ai_type, AiType::WimpyTrader);
         assert_eq!(disabled.reserves.shield.max, 39.99, "a fighter's capacity");
         // Whole again, its first think is `_EscortAI`'s lost parent.

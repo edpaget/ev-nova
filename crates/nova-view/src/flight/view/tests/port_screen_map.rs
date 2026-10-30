@@ -107,7 +107,9 @@ fn each_port_screens_map_closing_cues_no_course() {
         for close in [key(MAP, true), key(Key::Enter, true)] {
             let mut view = faked_docked();
             view.open_port_screen_map(screen);
+            view.port_map_input(&key(MAP, false));
             view.port_map_input(&close);
+            view.port_map_input(&key(MAP, false));
             assert!(!view.map_open, "{screen:?}: {close:?} closes it");
             assert!(
                 !sent(&view).contains(&FlightCommand::CueCourse),
@@ -215,5 +217,79 @@ fn a_clear_route_on_a_port_screens_map_is_undone() {
             Some(&FlightCommand::RestoreMapSelection(SavedNav::of(EARTH))),
             "{screen:?}: put back"
         );
+    }
+}
+
+#[test]
+fn each_port_screens_map_closed_before_m_is_let_go_waits_for_its_release() {
+    // `_DoSystemMap`'s wait (@0x13a2e-0x13a46): each screen opens it on
+    // M, so a close while M is still down waits.
+    let closes: [fn(&mut Faked); 3] = [
+        |view| view.port_map_input(&key(Key::Enter, true)),
+        |view| view.port_map_input(&key(LAND, true)),
+        Faked::close_map,
+    ];
+    for screen in SCREENS {
+        for (n, close) in closes.into_iter().enumerate() {
+            let mut view = faked_docked();
+            view.open_port_screen_map(screen);
+            close(&mut view);
+            assert!(view.map_open, "{screen:?}: close {n} waits");
+            assert_eq!(sent(&view), [], "{screen:?}: close {n}: no restore yet");
+            view.port_map_input(&key(MAP, false));
+            assert!(!view.map_open, "{screen:?}: close {n} on the release");
+            assert!(!sent(&view).is_empty(), "{screen:?}: close {n}: restored");
+        }
+    }
+}
+
+#[test]
+fn each_port_screens_map_closed_by_m_pressed_again_waits_for_its_release() {
+    // M's own close reads M held (`_MapFilter` @0x144db-0x14587), so a
+    // second press after the first was let go waits as any close does.
+    for screen in SCREENS {
+        let mut view = faked_docked();
+        view.open_port_screen_map(screen);
+        view.port_map_input(&key(MAP, false));
+        view.port_map_input(&key(MAP, true));
+        assert!(view.map_open, "{screen:?}: waits for M's release");
+        assert_eq!(sent(&view), [], "{screen:?}: no restore yet");
+        assert_eq!(view.ui_sounds, [], "{screen:?}: no beep yet");
+        view.port_map_input(&key(MAP, false));
+        assert!(!view.map_open, "{screen:?}: closed on the release");
+        assert!(
+            sent(&view).contains(&FlightCommand::RestoreMapSelection(SavedNav::of(EARTH))),
+            "{screen:?}: restored on the release"
+        );
+        assert_eq!(view.ui_sounds, [], "{screen:?}: in silence, docked");
+    }
+}
+
+#[test]
+fn the_bars_map_closed_by_m_pressed_again_waits_for_its_release() {
+    let mut view = faked_docked();
+    view.open_bar_map();
+    view.port_map_input(&key(MAP, false));
+    view.port_map_input(&key(MAP, true));
+    assert!(view.map_open, "waits for M's release");
+    assert_eq!(sent(&view), [], "no restore yet");
+    assert_eq!(view.ui_sounds, [], "no beep yet");
+    view.port_map_input(&key(MAP, false));
+    assert!(!view.map_open, "closed on the release");
+    assert!(
+        sent(&view).contains(&FlightCommand::RestoreBarNav),
+        "the bar's nav put back on the release"
+    );
+    assert_eq!(view.ui_sounds, [], "in silence, docked");
+}
+
+#[test]
+fn each_port_screens_map_closes_at_once_by_return_once_m_is_let_go() {
+    for screen in SCREENS {
+        let mut view = faked_docked();
+        view.open_port_screen_map(screen);
+        view.port_map_input(&key(MAP, false));
+        view.port_map_input(&key(Key::Enter, true));
+        assert!(!view.map_open, "{screen:?}");
     }
 }

@@ -789,6 +789,30 @@ mod tests {
         assert_eq!(dialogs.take_sounds(), [], "silent");
     }
 
+    /// A mission text is a "Desc Dialog", so `_TextDialogFilter`'s scroll
+    /// keys reach it.
+    #[test]
+    fn a_mission_text_scrolls_with_home_end_and_the_page_keys() {
+        let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
+        let first = |dialogs: &MissionDialogs| dialogs.text().expect("open").first_line();
+        let text = dialogs.text().expect("open");
+        let visible = text.dialog().scroll_text().expect("scrolls").visible();
+        let last = text.lines().len() - visible;
+        assert!(last > 0, "the text overflows its box");
+        dialogs.input(&key(Key::End));
+        assert_eq!(first(&dialogs), last);
+        dialogs.input(&key(Key::Home));
+        assert_eq!(first(&dialogs), 0);
+        dialogs.input(&key(Key::PageDown));
+        let paged = first(&dialogs);
+        assert!(paged > 0);
+        dialogs.input(&key(Key::PageUp));
+        assert!(first(&dialogs) < paged);
+        assert!(dialogs.text().is_some(), "still open");
+    }
+
     #[test]
     fn mission_infos_map_key_asks_for_the_map_of_its_selected_slot_unless_refused() {
         let m = crate::flight::view::MAP_KEY;

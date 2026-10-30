@@ -94,7 +94,8 @@ pub enum Mode {
     /// an escort or fighter given a target (see the traffic's tick).
     ///
     /// It answers a hit as a flying ship does: its hyperspace state +0x50,
-    /// which `_DamageShip` reads to skip a reaction (@0x3b4b0-0x3b4c2),
+    /// which `_DamageShip` reads to skip a reaction (the gate @0x3b46a,
+    /// built in [`answer_flag`](crate::ai::answer_flag)),
     /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
     /// its target and the damage as provocation, and its wait is cut to
     /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both
@@ -264,7 +265,9 @@ pub struct Npc {
     /// drops it by the engine's reading of
     /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
     /// ([`disabled_reset`](crate::traffic::disabled_reset)); and
-    /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`.
+    /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`. With
+    /// one, it reads as the original's AI type 6
+    /// ([`Npc::original_ai_type`]).
     pub leader: Option<NpcId>,
     /// Its ship type's class as an escort, which the escorts' threat
     /// scores weigh (see [`escort`](crate::escort)).
@@ -354,8 +357,11 @@ pub struct Npc {
     /// scooped of another commodity is kept beside the first
     /// ([`NpcHold`]).
     pub cargo: NpcHold,
-    /// Whether the player has paid it to spare it: it never targets the
-    /// player again.
+    /// Whether the player has paid it to spare it ([`Npc::take_bribe`]):
+    /// it never targets the player again, until a later write of the
+    /// original's +0x88 over the bribe's 1 clears this
+    /// ([`Npc::overwrite_bribe`]; see
+    /// [`original_ai_type`](super::original_ai_type)).
     pub spared: bool,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
@@ -374,6 +380,12 @@ pub struct Npc {
     /// system's ships are dropped (see the `nova_sim::mission::aux_ships`
     /// module); none for any other ship.
     pub aux: Option<u8>,
+    /// The stellar it defends, the original's ship +0x8c: set only by
+    /// the defence fleet's spawn (`_SpawnStellarDefenseShip` @0x3d387, see
+    /// [`stellar_defence`](crate::traffic::stellar_defence)), and cleared
+    /// by a capture, a pirate taking it into its fleet and the disabled
+    /// reset; none for every other ship.
+    pub defends: Option<StellarId>,
     /// Its cloak: how far it has faded, and which way (see
     /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked
     /// (`ShipStart` 2) starts fading in.
@@ -518,9 +530,15 @@ pub struct Npc {
     /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers
     /// no hit (`_DamageShip` @0x3b459), and reads as no AI type to the
     /// readers that test another ship's (`_InterceptorAI` @0x8cd4e,
-    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad).
-    /// Never saved.
+    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad), as
+    /// [`Npc::original_ai_type`] reads it. Never saved.
     pub no_ai: bool,
+    /// Whether it keeps the original's AI type 6 after the disabled reset
+    /// took it out of its fleet (`_AIDispatch` @0x8feda leaves +0x88 alone)
+    /// until its first think once whole (`_EscortAI` @0x8394b-0x8397b,
+    /// @0x83c4a), or for its whole stay if it thinks as a miner
+    /// (@0x8ff76-0x8ff8d). See [`Npc::original_ai_type`]. Never saved.
+    pub kept_escort_ai: bool,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
@@ -792,6 +810,31 @@ impl Npc {
         self.escort.is_some() || self.mission_escort()
     }
 
+    /// Whether `_IsDisabled` (@0x2ce6-0x2e0d) holds for it, as its stored
+    /// condition answers it
+    /// ([`Condition::stored_disabled`], which owns the defence ship's
+    /// branch 3, @0x2d6f): disabled or breaking up, but for a stellar's
+    /// defence ship ([`Npc::defends`]), which is disabled only while it is
+    /// held, and so not while it breaks up. A destroyed ship's slot is
+    /// inactive, which every reader skips, so it is not disabled here.
+    ///
+    /// Every reader of `_IsDisabled` on an NPC that may be a defence ship
+    /// asks it. The readers left on [`Condition::disabled`] or an intact
+    /// test say why a defence ship breaking up never reaches them.
+    #[must_use]
+    pub fn is_disabled(&self) -> bool {
+        self.condition.active() && self.condition.stored_disabled(self.defends.is_some())
+    }
+
+    /// Whether its slot is active and `_IsDisabled` does not hold for it
+    /// ([`Npc::is_disabled`]): intact, or a stellar's defence ship breaking
+    /// up. The readers that test "active and not disabled" (the threat
+    /// tests, the gate's approach) ask it.
+    #[must_use]
+    pub fn active_not_disabled(&self) -> bool {
+        self.condition.active() && !self.is_disabled()
+    }
+
     /// Whether it is scooping up asteroid boxes, `_AIShipIsScooping`
     /// (@0x88727): by its goal ([`Goal::scooping`]), a miner's state 17,
     /// [`Goal::Scoop`].
@@ -962,7 +1005,8 @@ impl Npc {
         }
     }
 
-    /// Whether it fights `ship` directly: it is intact, flying, and
+    /// Whether it fights `ship` directly: it is active and not disabled
+    /// ([`Npc::active_not_disabled`]), flying, and
     /// attacking, sniping at or fleeing from it, or stopped holding it as
     /// its target ([`Npc::fought`]).
     ///
@@ -973,9 +1017,7 @@ impl Npc {
     /// ([`Npc::threatens_player_among`]).
     #[must_use]
     pub fn threatens(&self, ship: ShipRef) -> bool {
-        self.condition == Condition::Intact
-            && self.mode == Mode::Flying
-            && self.fought() == Some(ship)
+        self.active_not_disabled() && self.mode == Mode::Flying && self.fought() == Some(ship)
     }
 
     /// Whether it threatens the NPC `ship`, as `_ExtendedIsThreatToShip`
@@ -989,8 +1031,8 @@ impl Npc {
     /// never threatens it; its AI state is none of 5, 7, 9, 10, 11, 12,
     /// 15, 18; and its target (+0x70) is `ship` (@0x81aa9-0x81b03) or an
     /// active ship in slots 1-63, other than itself, whose leader is
-    /// `ship` (@0x81ab2-0x81b59). Here [`Condition::Intact`] stands for
-    /// the active and disabled tests and [`Npc::fought`] (the quarry of an
+    /// `ship` (@0x81ab2-0x81b59). Here [`Npc::active_not_disabled`]
+    /// stands for the active and disabled tests and [`Npc::fought`] (the quarry of an
     /// attack, snipe or flight, or a stop's kept target) for the AI states
     /// and the target. Unlike `_IsThreatToPlayer`, there is
     /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
@@ -1009,7 +1051,7 @@ impl Npc {
     /// ([`Npc::threatens_player_among`]).
     #[must_use]
     pub fn threatens_npc_among(&self, ship: NpcId, npcs: &[Npc]) -> bool {
-        self.condition == Condition::Intact
+        self.active_not_disabled()
             && self.mode == Mode::Flying
             && self.leader != Some(ship)
             && match self.fought() {
@@ -1072,7 +1114,8 @@ impl Npc {
     /// AI state is none of 5, 7, 9, 10, 11, 12, 15, 18 (@0x7f536-0x7f56b),
     /// and its target is the player (@0x7f56d) or a ship in slots 1-63
     /// whose leader (+0x9a) is the player (@0x7f572-0x7f590). Here
-    /// [`Condition::Intact`] stands for the active and disabled tests,
+    /// [`Npc::active_not_disabled`] stands for the active and disabled
+    /// tests,
     /// [`Mode::Flying`] with no [`Npc::ai_wait`] for the wait (a ship
     /// coming out of a gate or jumping in has one, and so does a flying
     /// pirate docked or holding after a plunder, or a ship it took into
@@ -1089,7 +1132,7 @@ impl Npc {
     /// this one test stands for both branches.
     #[must_use]
     pub fn threatens_player_or_led(&self, led: impl Fn(NpcId) -> bool) -> bool {
-        self.condition == Condition::Intact
+        self.active_not_disabled()
             && self.mode == Mode::Flying
             && self.ai_wait == 0
             && match self.fought() {
@@ -1125,13 +1168,13 @@ impl Npc {
     /// waiting in its gate never, see [`cloak::visible`](crate::cloak::visible)).
     ///
     /// It is no threat when it is not intact (inactive, @0x81b82, or
-    /// `_IsDisabled`, @0x81b92), when the player leads it (+0x9a == 0,
+    /// `_IsDisabled`, @0x81b92, which a stellar's defence ship breaking up
+    /// is not, @0x2d6f), when the player leads it (+0x9a == 0,
     /// @0x81b9f), when it has no target (+0x70 == -1, @0x81bad), or when it
     /// is unseen. Otherwise it is a threat for any of:
     ///
-    /// - **A stellar defender** (+0x8c != -1, @0x81bd3): not modelled, as
-    ///   the engine has no defence ships; rdm:task/planet-domination owns
-    ///   them.
+    /// - **A stellar defender** ([`Npc::defends`], +0x8c != -1, @0x81bd3):
+    ///   always, whatever its target and goal.
     /// - **The target clause**: it [threatens the player or a ship the
     ///   player leads](Npc::threatens_player_or_led) by [`Npc::fought`],
     ///   or its target ([`Npc::target`], the hit's, which
@@ -1178,7 +1221,6 @@ impl Npc {
     ///   lead's own (`_AIFightThreatToParent` @0x81e83-0x81e9d,
     ///   [`escort::fight_threats`](crate::escort::fight_threats)).
     ///
-    /// The stellar-defender clause above is planet-domination's.
     #[must_use]
     pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
         let led = |id: NpcId| npcs.iter().any(|n| n.id == id && n.escorts_player());
@@ -1188,8 +1230,12 @@ impl Npc {
             None => false,
         };
         let has_target = self.target.is_some() || self.goal.quarry().is_some();
-        if !seen || self.condition != Condition::Intact || self.escorts_player() || !has_target {
+        let inactive = !self.condition.active();
+        if !seen || inactive || self.is_disabled() || self.escorts_player() || !has_target {
             return false;
+        }
+        if self.defends.is_some() {
+            return true;
         }
         let in_threat_goal = !self.goal.spares_player_threat();
         let by_target = self.threatens_player_or_led(led)
@@ -1422,14 +1468,15 @@ impl Npc {
 
     /// Whether it heads in to `gate`, at `at`, strictly inside `reach` of
     /// it on both axes, holding its sprite open (`_HandleStellarSprites`
-    /// @0x2e8dd-0x2e9a2): intact (`_IsDisabled` @0x2e8a3), bound to land
+    /// @0x2e8dd-0x2e9a2): not disabled (`_IsDisabled` @0x2e8a3,
+    /// [`Npc::active_not_disabled`]), bound to land
     /// on it or enter it (`_AIShipIsShipGoingToStellar` @0x895d6, goal 1
     /// or 0x14 with its travel stellar the gate), whatever its mode.
     #[must_use]
     pub fn approaches_gate(&self, gate: StellarId, at: Vec2, reach: f32) -> bool {
         let bound = matches!(self.goal, Goal::Land(to) | Goal::EnterGate(to) if to == gate);
         let off = self.state.position - at;
-        bound && self.condition == Condition::Intact && off.x.abs() < reach && off.y.abs() < reach
+        bound && self.active_not_disabled() && off.x.abs() < reach && off.y.abs() < reach
     }
 
     /// Whether it is done coming into the system, there to be seen,
@@ -2529,6 +2576,115 @@ mod tests {
             ..plain(1)
         };
         assert!(!elsewhere.threatens_player_extended(&[], true));
+    }
+
+    #[test]
+    fn a_seen_stellar_defender_with_a_target_threatens_the_player_whatever_it_fights() {
+        let guard = Npc {
+            defends: Some(StellarId(128)),
+            target: Some(ShipRef::Npc(NpcId(5))),
+            goal: Goal::Land(StellarId(128)),
+            ..plain(1)
+        };
+        assert!(guard.threatens_player_extended(&[], true), "@0x81bd3");
+        assert!(!guard.threatens_player_extended(&[], false), "unseen");
+        let idle = Npc {
+            target: None,
+            goal: Goal::Idle,
+            ..guard.clone()
+        };
+        assert!(
+            !idle.threatens_player_extended(&[], true),
+            "no target (@0x81bad)"
+        );
+        let breaking_up = Npc {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..guard.clone()
+        };
+        assert!(
+            breaking_up.threatens_player_extended(&[], true),
+            "`_IsDisabled` never holds for a defender by its armour"
+        );
+        let held = Npc {
+            condition: Condition::Disabled,
+            ..guard
+        };
+        assert!(!held.threatens_player_extended(&[], true));
+        let destroyed = Npc {
+            condition: Condition::Destroyed,
+            ..held
+        };
+        assert!(
+            !destroyed.threatens_player_extended(&[], true),
+            "inactive (@0x81b82)"
+        );
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_threatens_and_approaches_as_it_is_not_disabled() {
+        // `_ExtendedIsThreatToShip` (@0x81a33-0x81a4a), `_IsThreatToPlayer`
+        // (@0x7f501) and the gate's approach (@0x2e8a3) test `_IsDisabled`,
+        // which a defence ship breaking up is not (@0x2d6f).
+        let earth = StellarId(128);
+        let guard = |goal| Npc {
+            goal,
+            defends: Some(earth),
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..plain(1)
+        };
+        let attacking = guard(Goal::Attack(ShipRef::Player));
+        assert!(attacking.active_not_disabled());
+        assert!(attacking.threatens(ShipRef::Player));
+        assert!(attacking.threatens_player_or_led(|_| false));
+        let led = Npc {
+            leader: Some(NpcId(1)),
+            ..plain(2)
+        };
+        let at_led = guard(Goal::Attack(ShipRef::Npc(NpcId(2))));
+        assert!(at_led.threatens_npc_among(NpcId(1), &[plain(1), led]));
+        let at = guard(Goal::Land(earth)).state.position;
+        assert!(guard(Goal::Land(earth)).approaches_gate(earth, at, 50.0));
+        let not_defending = Npc {
+            defends: None,
+            ..attacking
+        };
+        assert!(!not_defending.active_not_disabled());
+        assert!(!not_defending.threatens(ShipRef::Player));
+        let gone = Npc {
+            condition: Condition::Destroyed,
+            ..guard(Goal::Attack(ShipRef::Player))
+        };
+        assert!(!gone.active_not_disabled(), "inactive");
+    }
+
+    #[test]
+    fn a_defence_ship_is_disabled_only_held_and_any_other_disabled_or_breaking_up() {
+        let breaking_up = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let npc = |condition, defends| Npc {
+            condition,
+            defends,
+            ..plain(1)
+        };
+        let earth = Some(StellarId(128));
+        for defends in [None, earth] {
+            assert!(!npc(Condition::Intact, defends).is_disabled());
+            assert!(npc(Condition::Disabled, defends).is_disabled(), "held");
+            assert!(
+                !npc(Condition::Destroyed, defends).is_disabled(),
+                "an inactive slot is read as no ship"
+            );
+        }
+        assert!(npc(breaking_up, None).is_disabled());
+        assert!(!npc(breaking_up, earth).is_disabled(), "@0x2d6f");
     }
 
     #[test]

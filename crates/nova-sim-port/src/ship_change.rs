@@ -92,7 +92,8 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord, WeaponId};
 pub use crate::combat::armament::Arrays;
-use crate::outfitter::{Hardpoints, ItemRoom, OutfitFlags, item_limit};
+use crate::has_max::{ItemRoom, item_limit};
+use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::rulebook::RuleSource;
 
 /// The outfit flags `H` keeps an outfit by, by the engine: persistent

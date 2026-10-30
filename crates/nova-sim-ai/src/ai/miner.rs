@@ -35,8 +35,9 @@
 //! - **The shuttle** (@0x8b35f-0x8b463): while its AI wait (+0x4c) runs
 //!   ([`Npc::wait_running`]), state 0 with no travel stellar
 //!   ([`Goal::Idle`]). Otherwise it keeps the stellar it is bound for
-//!   (+0x6c), if still among the system's, or picks the nearest
-//!   ([`select_nearest_any_stellar`]), leaving out the stellar it last
+//!   (+0x6c), if the system still lists it, shown or not, or picks the
+//!   nearest the system lists ([`select_nearest_any_stellar`] over
+//!   [`Surroundings::listed`]), leaving out the stellar it last
 //!   visited (+0x92, [`Npc::visited`], @0x8b373). With a stellar, and not
 //!   leaving or fleeing (states 2 and 3), it lands there (state 1),
 //!   recording it as visited on every think it heads off, a fresh pick or
@@ -185,11 +186,11 @@ pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
     shuttle(npc, around, state, nav)
 }
 
-/// The stellar a ship flying `goal` is bound for (+0x6c), while it is
-/// still among `around`'s.
+/// The stellar a ship flying `goal` is bound for (+0x6c), while the
+/// system still lists it, shown or not ([`Surroundings::listed`]).
 fn bound_for(goal: Goal, around: &Surroundings) -> Option<StellarId> {
     match goal {
-        Goal::Land(stellar) if around.sites.iter().any(|site| site.id == stellar) => Some(stellar),
+        Goal::Land(stellar) if around.listed.iter().any(|site| site.id == stellar) => Some(stellar),
         _ => None,
     }
 }
@@ -205,7 +206,7 @@ fn shuttle(npc: &Npc, around: &Surroundings, state: Goal, nav: Option<StellarId>
         select_nearest_any_stellar(
             npc.state.position,
             npc.govt,
-            around.sites,
+            around.listed,
             around.govts,
             npc.visited,
         )
@@ -351,6 +352,35 @@ mod tests {
             deciding(&bound, &gone, None),
             Goal::Land(StellarId(129)),
             "its stellar gone, it picks again"
+        );
+    }
+
+    #[test]
+    fn a_shuttle_picks_and_keeps_the_nearest_stellar_listed_shown_or_not() {
+        // 129, the nearest, is listed but not shown: `_SelectNearestAnyStellar`
+        // walks the 16 nav slots (@0x7fb00-0x7fc7b).
+        let listed = stellars();
+        let shown = [listed[0], listed[2]];
+        let npcs = [miner(SCOOPS, false)];
+        let around = Surroundings {
+            listed: &listed,
+            ..Surroundings::new(&shown, &npcs)
+        };
+        assert_eq!(decide(&npcs[0], &around), Goal::Land(StellarId(129)));
+        let mut bound = npcs[0].clone();
+        bound.goal = Goal::Land(StellarId(129));
+        let npcs = [bound.clone()];
+        let around = Surroundings {
+            listed: &listed,
+            ..Surroundings::new(&shown, &npcs)
+        };
+        let mut far = bound.clone();
+        far.goal = Goal::Land(StellarId(128));
+        assert_eq!(decide(&far, &around), Goal::Land(StellarId(128)));
+        assert_eq!(
+            decide(&bound, &around),
+            Goal::Land(StellarId(129)),
+            "kept though not shown"
         );
     }
 

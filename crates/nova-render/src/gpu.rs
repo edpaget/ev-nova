@@ -143,6 +143,12 @@ pub enum Batch {
         /// [`QuadInstance::tint`]).
         quads: Vec<QuadInstance>,
     },
+    /// Untextured quads whose colour is OR-ed into what is beneath them per
+    /// 5-bit channel ([`DrawCommand::OrFill`](nova_view::DrawCommand::OrFill)):
+    /// each quad's `dest` is the rect, its `tint` the straight colour, and
+    /// its `uv` and `colorize` unused. Every quad reads the same copy of
+    /// the scene, so no two in one batch overlap.
+    OrFill(Vec<QuadInstance>),
     /// Untextured quads.
     Solid(Vec<SolidQuad>),
     /// Text runs.

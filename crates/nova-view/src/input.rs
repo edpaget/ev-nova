@@ -18,6 +18,12 @@ pub enum Key {
     /// Page Down (fn+Down on a Mac laptop), which the shop grids take as
     /// Down.
     PageDown,
+    /// Home (fn+Left on a Mac laptop, Mac key code 0x73), which takes a
+    /// text dialog's box to the start of its text.
+    Home,
+    /// End (fn+Right on a Mac laptop, Mac key code 0x77), which takes a
+    /// text dialog's box to the end of its text.
+    End,
     /// Return or Enter.
     Enter,
     /// Escape.

@@ -1,7 +1,8 @@
 //! Reader for classic Mac OS resource forks, as stored in EV Nova's `.ndat`
-//! files, and for the Windows `.rez` files that hold the same resources.
+//! files, for the Windows `.rez` files that hold the same resources, and
+//! for MacBinary (`.bin`) files that wrap a fork.
 //!
-//! This crate knows the two container formats, not EV Nova: it hands out raw
+//! This crate knows these container formats, not EV Nova: it hands out raw
 //! type codes, IDs, names and data, and leaves their meaning to callers.
 //!
 //! # Format
@@ -37,12 +38,63 @@
 //! shared by several resources. The format has no attributes, so
 //! [`Resource::attributes`] is always 0 for a `.rez` resource.
 //!
+//! ## MacBinary
+//!
+//! Classic plug-ins were often shipped as MacBinary (`.bin`) files, which
+//! the original's launcher decodes with Apple's `macbinary` tool before the
+//! game starts. A MacBinary file is a 128-byte header, an optional
+//! secondary header (its length, a big-endian `u16` at byte 120, rounded
+//! up to 128 bytes), the data fork padded to a multiple of 128 bytes, then
+//! the resource fork, whose trailing padding is optional. The fork lengths
+//! are big-endian `u32`s at bytes 83 and 87.
+//!
+//! A header is accepted as Apple's tool accepts it:
+//!
+//! - It is at least 128 bytes long and bytes 0, 74 and 82 are zero.
+//! - When bytes 101 to 125 are all zero it is MacBinary I, accepted when
+//!   the name length (byte 1) is 63 or less and the two forks are not both
+//!   empty. A name length of 0 is accepted, and fork lengths have no cap.
+//!   These rules apply even when the header's CRC matches its zero CRC
+//!   field, as a zero-filled file's does: Apple's tool rejects that file
+//!   as a "false-positive MacBinary-I", so it keeps its fork error.
+//! - Otherwise it is MacBinary II if the CRC-16/XMODEM of bytes 0 to 123
+//!   equals the `u16` at byte 124, or III when bytes 102 to 105 are also
+//!   `mBIN`. The version bytes 122 and 123 are ignored, and both forks may
+//!   be empty.
+//!
+//! Only the fork with the resources is kept; the Finder metadata is not
+//! read. As the original's `_EVOpenResourceFile` (0xa5287) opens the
+//! decoded file's data fork first and falls back to its resource fork on
+//! any failure, a data fork that parses as a flattened fork wins, and the
+//! resource fork is read otherwise. Either is read only as a flattened
+//! fork, never as `.rez` or nested MacBinary. [`ResourceFile::format`]
+//! says which was read.
+//!
 //! ## Format detection
 //!
 //! [`ResourceFile::from_bytes`] picks the parser from the content, never
-//! from a file extension: bytes starting with the `BRGR` magic are read as
-//! `.rez`, anything else as a resource fork. The magic cannot misfire on a
-//! fork: there it would be a data offset of over 1 GB.
+//! from a file extension:
+//!
+//! 1. Bytes starting with the `BRGR` magic are read as `.rez`. The magic
+//!    cannot misfire on a fork: there it would be a data offset of over
+//!    1 GB.
+//! 2. Bytes that parse as a flattened fork are a fork.
+//! 3. Only if that parse fails are the bytes checked for a MacBinary
+//!    header. Bytes that are not MacBinary keep the fork's error.
+//!
+//! The order means no fork can be misread as MacBinary, whatever its byte
+//! 102 holds. Nor does a real MacBinary file parse as a fork: a name length
+//! (byte 1) of 1 or more puts the fork's data offset at 64 KiB or more,
+//! and a short zero-padded name makes the map length 0. The stock `.ndat` files all
+//! start `00 00 01 00`, which fails the MacBinary header checks anyway.
+//!
+//! A buffer shorter than 128 bytes is recognised as a truncated MacBinary
+//! header only by the III signature: 106 to 127 bytes with byte 0 zero
+//! and `mBIN` at byte 102. A shorter or unsigned one keeps its fork error.
+//!
+//! [`ResourceFile::load`] applies the same rule to a file on disk: its
+//! data fork wins if it parses, and otherwise its real resource fork is
+//! read.
 //!
 //! ## Strictness
 //!
@@ -50,7 +102,12 @@
 //! out-of-bounds offset, duplicate type or ID, overlapping reference
 //! lists, compressed fork resource, or `.rez` resource that names a missing
 //! entry, the map entry, the wrong type or an unterminated name is a
-//! [`ParseError`], never a panic or a silently dropped resource.
+//! [`ParseError`], never a panic or a silently dropped resource. So is a
+//! MacBinary fork that runs past the end of the file, a truncated III
+//! header, a III header with a bad CRC, or a MacBinary file with no
+//! resource fork. A malformed fork inside MacBinary is
+//! [`ParseError::MacBinaryResourceFork`], whose
+//! [`source`](std::error::Error::source) is the fork's own error.
 //!
 //! # Example
 //!
@@ -142,16 +199,38 @@
 //! than dropped, and the format is small. Sending the `.ok() // FIXME` fixes
 //! upstream to `macbinary` remains possible future work; if that lands, this
 //! crate could switch to it behind the same public API.
+//!
+//! The MacBinary *container* is read in-house too, not with `macbinary`'s
+//! `detect` and `parse`. A spike ran them over synthetic headers (valid I,
+//! II and III, and corrupted variants) and the 21 stock `.ndat` files. They
+//! never panic or truncate silently, but:
+//!
+//! - A truncated header can't be told apart from "not MacBinary" (both are
+//!   `BadVersion`).
+//! - Every overrun (data fork, resource fork, padding or secondary header)
+//!   is the same untyped `BadEof`, and the header's fork lengths are
+//!   private, so an error can't say which fork or how long.
+//! - `detect` returns III for any buffer of 128 bytes or more with `mBIN`
+//!   at byte 102 and a zero first byte, checking neither the CRC nor bytes
+//!   74 and 82, so a fork holding `mBIN` there is misdetected.
+//! - Its acceptance differs from Apple's tool, which the original's
+//!   launcher runs: it rejects name lengths of 0 and of 32 to 63.
+//!
+//! The container is 128 bytes, a CRC and two padded lengths, so this crate
+//! reads it with errors that name the defect and hands the fork to its own
+//! strict parser. `macbinary` checks the MacBinary fixture builder (CRC,
+//! padding, fork placement) in this crate's tests.
 
 mod error;
 mod file;
 mod fs;
+mod macbin;
 mod parse;
 mod res_type;
 mod rez;
 
 pub use error::{LoadError, ParseError, Section};
-pub use file::{Resource, ResourceFile};
+pub use file::{Format, Resource, ResourceFile};
 pub use fs::{Fork, ForkReader, StdForkReader};
 pub use res_type::ResType;
 

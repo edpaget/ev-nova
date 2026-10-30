@@ -242,7 +242,10 @@ impl Traffic {
 /// following the player while the player is `_IsDisabled`
 /// (@0x900e3-0x9011e); or led by an NPC there and not `_IsDisabled` that
 /// attacks (goal 4, [`Goal::attacking`]) while its own stage is 1.0 or
-/// below (@0x90125-0x9019c).
+/// below (@0x90125-0x9019c). Its `_IsDisabled` reads ([`Condition::disabled`])
+/// never meet a stellar's defence ship breaking up: the lead is the player
+/// or a ship this one follows, and a defence ship leads none, spawning
+/// alone (`_SpawnStellarDefenseShip` @0x3d387, leader -1).
 fn cancelled(npc: &Npc, npcs: &[Npc], player: Option<Condition>) -> bool {
     if !dispatch_gate::takes_jump_path(npc) || !npc.follows_leaders_jump() {
         return false;

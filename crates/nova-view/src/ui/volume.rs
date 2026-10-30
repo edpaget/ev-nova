@@ -1,15 +1,23 @@
 //! A volume control: a label, the level as a number and two arrows that
 //! step it, as "new prefs dialog" lays its Sound Volume out.
 //!
-//! The arrows are the interface file's `PICT`s 134 and 135 in the
-//! original (136 and 137 pressed), which cannot be drawn yet: each is
-//! drawn here as an 11 x 9 triangle, row by row, outlined at rest and
-//! filled while pressed.
+//! The arrows are the interface file's 11 x 9 `PICT`s, drawn stretched
+//! over their items as the Dialog Manager draws a picture item: 134 ("Up
+//! arrow", `DITL` 4003 item 7) and 135 ("Down Arrow", item 6) at rest.
+//! While an arrow is held it draws 136 or 137 instead, the same box filled
+//! with the arrow cut out of it. The Mac OS X build never draws any of
+//! these: its Preferences is the Cocoa `EVPrefsDialogController`, whose
+//! volume is an `NSStepper`, and none of its `GetPicture` calls names
+//! 134-137. So the arrows come from the classic dialog's resources alone,
+//! and 136 and 137 being the pressed looks is a reading of their pixels.
+//! No sound comes with a press: the Dialog Manager plays none for a
+//! picture item.
 
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
+use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::sound::MAX_LEVEL;
 
@@ -55,6 +63,15 @@ impl VolumeRects {
     }
 }
 
+/// The up arrow at rest: `PICT` 134 "Up arrow", `DITL` 4003 item 7.
+pub const UP_ARROW: i16 = 134;
+/// The down arrow at rest: `PICT` 135 "Down Arrow", `DITL` 4003 item 6.
+pub const DOWN_ARROW: i16 = 135;
+/// The up arrow held: `PICT` 136, 134 pressed.
+pub const UP_ARROW_PRESSED: i16 = 136;
+/// The down arrow held: `PICT` 137, 135 pressed.
+pub const DOWN_ARROW_PRESSED: i16 = 137;
+
 /// One of the two arrows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arrow {
@@ -62,6 +79,19 @@ pub enum Arrow {
     Up,
     /// Lowers the level.
     Down,
+}
+
+impl Arrow {
+    /// The interface-file picture this arrow draws, at rest or `pressed`.
+    #[must_use]
+    pub const fn picture(self, pressed: bool) -> ImageKey {
+        ImageKey::interface_picture(match (self, pressed) {
+            (Self::Up, false) => UP_ARROW,
+            (Self::Down, false) => DOWN_ARROW,
+            (Self::Up, true) => UP_ARROW_PRESSED,
+            (Self::Down, true) => DOWN_ARROW_PRESSED,
+        })
+    }
 }
 
 /// A volume level, 0 through [`MAX_LEVEL`], that its arrows and the arrow
@@ -108,12 +138,14 @@ impl VolumeControl {
         self.level
     }
 
-    /// The arrow at `at`, if any: only the arrows take clicks.
+    /// The arrow at `at`, if any: only the arrows take clicks. Each is
+    /// hit-tested half-open, as the Dialog Manager's `PtInRect` does, so
+    /// the edge the two share is the down arrow's.
     #[must_use]
     pub fn arrow_at(&self, at: Point) -> Option<Arrow> {
         [Arrow::Up, Arrow::Down]
             .into_iter()
-            .find(|&arrow| self.arrow_rect(arrow).contains(at))
+            .find(|&arrow| self.arrow_rect(arrow).contains_half_open(at))
     }
 
     fn arrow_rect(&self, arrow: Arrow) -> Bounds {
@@ -191,8 +223,8 @@ impl VolumeControl {
     }
 
     /// Draws the label and the level in Geneva at their rectangles'
-    /// corners, then the two arrows (each filled while pressed), and, when
-    /// `focused`, an outline round every part.
+    /// corners, then the two arrows (each its pressed picture while
+    /// pressed), and, when `focused`, an outline round every part.
     pub fn draw(&self, focused: bool, list: &mut DrawList) {
         let rects = self.rects;
         list.text_in(
@@ -212,8 +244,7 @@ impl VolumeControl {
             COLOR,
         );
         for arrow in [Arrow::Up, Arrow::Down] {
-            let filled = self.pressed(arrow);
-            draw_arrow(list, self.arrow_rect(arrow), arrow, filled, COLOR);
+            draw_arrow(list, self.arrow_rect(arrow), arrow, self.pressed(arrow));
         }
         if focused {
             outline(list, rects.bounds(), COLOR);
@@ -221,38 +252,15 @@ impl VolumeControl {
     }
 }
 
-/// Draws `arrow` as a triangle filling `rect` (11 x 9 for the stock
-/// arrows): its point at the top for [`Arrow::Up`], at the bottom for
-/// [`Arrow::Down`], each row a 1-unit line, its edges only unless
-/// `filled`.
-pub fn draw_arrow(list: &mut DrawList, rect: Bounds, arrow: Arrow, filled: bool, color: Color) {
-    // Whole rows only: the stock arrows are 9 rows high.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let height = rect.height().round().max(1.0) as u16;
-    let center = rect.center().x;
-    let widest = (rect.width() - 1.0) / 2.0;
-    let base = height - 1;
-    for from_point in 0..height {
-        let half = if base == 0 {
-            widest
-        } else {
-            (f32::from(from_point) * widest / f32::from(base)).round()
-        };
-        let y = match arrow {
-            Arrow::Up => rect.min.y + f32::from(from_point) + 0.5,
-            Arrow::Down => rect.max.y - f32::from(from_point) - 0.5,
-        };
-        let (left, right) = (center - half - 0.5, center + half + 0.5);
-        let mut span = |from: f32, to: f32| {
-            list.line(Point::new(from, y), Point::new(to, y), 1.0, color);
-        };
-        if filled || from_point == base || half == 0.0 {
-            span(left, right);
-        } else {
-            span(left, left + 1.0);
-            span(right - 1.0, right);
-        }
-    }
+/// Draws `arrow`'s picture ([`Arrow::picture`]), its pressed one when
+/// `pressed`, stretched over `rect` (11 x 9 for the stock arrows).
+pub fn draw_arrow(list: &mut DrawList, rect: Bounds, arrow: Arrow, pressed: bool) {
+    list.stretched_picture(
+        arrow.picture(pressed),
+        rect.min,
+        rect.width(),
+        rect.height(),
+    );
 }
 
 #[cfg(test)]
@@ -260,6 +268,7 @@ pub fn draw_arrow(list: &mut DrawList, rect: Bounds, arrow: Arrow, filled: bool,
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::image::ImageKey;
     use crate::input::MouseButton;
 
     fn at(x: f32, y: f32) -> Point {
@@ -316,18 +325,19 @@ mod tests {
         list.iter().cloned().collect()
     }
 
-    fn arrow(rect: Bounds, arrow: Arrow, filled: bool) -> Vec<DrawCommand> {
+    fn arrow(rect: Bounds, arrow: Arrow, pressed: bool) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
-        draw_arrow(&mut list, rect, arrow, filled, COLOR);
+        draw_arrow(&mut list, rect, arrow, pressed);
         list.iter().cloned().collect()
     }
 
-    fn row(left: f32, right: f32, y: f32) -> DrawCommand {
-        DrawCommand::Line {
-            from: at(left, y),
-            to: at(right, y),
-            width: 1.0,
-            color: COLOR,
+    /// The interface file's `PICT` `id` stretched over `rect`.
+    fn picture(id: i16, rect: Bounds) -> DrawCommand {
+        DrawCommand::StretchedPicture {
+            image: ImageKey::interface_picture(id),
+            top_left: rect.min,
+            width: rect.width(),
+            height: rect.height(),
         }
     }
 
@@ -360,10 +370,28 @@ mod tests {
         assert_eq!(control.arrow_at(stock().up.center()), Some(Arrow::Up));
         assert_eq!(control.arrow_at(stock().down.center()), Some(Arrow::Down));
         assert_eq!(control.arrow_at(at(172.0, 185.0)), Some(Arrow::Up));
-        assert_eq!(control.arrow_at(at(183.0, 203.0)), Some(Arrow::Down));
-        for elsewhere in [stock().label.center(), stock().value.center(), at(0.0, 0.0)] {
+        assert_eq!(control.arrow_at(at(182.0, 202.0)), Some(Arrow::Down));
+        for elsewhere in [
+            stock().label.center(),
+            stock().value.center(),
+            at(0.0, 0.0),
+            at(183.0, 203.0),
+        ] {
             assert_eq!(control.arrow_at(elsewhere), None, "{elsewhere:?}");
         }
+    }
+
+    /// The Dialog Manager hit-tests the arrows' picture items half-open,
+    /// as `PtInRect` does, so the edge they share, y = 194, is the down
+    /// arrow's top.
+    #[test]
+    fn a_press_on_the_edge_the_arrows_share_steps_down() {
+        assert_eq!(stock().up.max.y, 194.0);
+        assert_eq!(stock().down.min.y, 194.0);
+        let mut control = control(3);
+        assert_eq!(control.arrow_at(at(177.0, 194.0)), Some(Arrow::Down));
+        assert!(click(&mut control, at(177.0, 194.0)));
+        assert_eq!(control.level(), 2);
     }
 
     #[test]
@@ -441,42 +469,25 @@ mod tests {
     }
 
     #[test]
-    fn a_filled_arrow_is_one_line_a_row_widening_to_the_base() {
-        let up = stock().up;
-        let rows = arrow(up, Arrow::Up, true);
-        assert_eq!(rows.len(), 9);
-        // Centred on x = 177.5; the half-width grows 5/8 a row, rounded.
-        assert_eq!(rows[0], row(177.0, 178.0, 185.5));
-        assert_eq!(rows[1], row(176.0, 179.0, 186.5));
-        assert_eq!(rows[4], row(174.0, 181.0, 189.5));
-        assert_eq!(rows[8], row(172.0, 183.0, 193.5));
-        let down = arrow(stock().down, Arrow::Down, true);
-        assert_eq!(down[0], row(177.0, 178.0, 202.5), "pointing down");
-        assert_eq!(down[8], row(172.0, 183.0, 194.5));
+    fn the_arrows_are_the_interface_files_pictures_134_to_137() {
+        assert_eq!(Arrow::Up.picture(false), ImageKey::interface_picture(134));
+        assert_eq!(Arrow::Down.picture(false), ImageKey::interface_picture(135));
+        assert_eq!(Arrow::Up.picture(true), ImageKey::interface_picture(136));
+        assert_eq!(Arrow::Down.picture(true), ImageKey::interface_picture(137));
     }
 
     #[test]
-    fn an_outlined_arrow_draws_each_rows_ends_and_the_whole_base() {
-        let up = stock().up;
-        let lines = arrow(up, Arrow::Up, false);
-        // The point, two ends on each of the seven rows between, the base.
-        assert_eq!(lines.len(), 1 + 7 * 2 + 1);
-        assert_eq!(lines[0], row(177.0, 178.0, 185.5));
-        assert_eq!(lines[1], row(176.0, 177.0, 186.5));
-        assert_eq!(lines[2], row(178.0, 179.0, 186.5));
-        assert_eq!(lines[15], row(172.0, 183.0, 193.5));
-    }
-
-    #[test]
-    fn a_one_row_arrow_is_one_line_across() {
-        let flat = ltrb(10.0, 20.0, 13.0, 21.0);
-        for filled in [false, true] {
-            assert_eq!(
-                arrow(flat, Arrow::Up, filled),
-                [row(10.0, 13.0, 20.5)],
-                "{filled}"
-            );
-        }
+    fn an_arrow_is_its_picture_stretched_over_its_rect() {
+        assert_eq!(
+            arrow(stock().up, Arrow::Up, false),
+            [picture(134, stock().up)]
+        );
+        assert_eq!(
+            arrow(stock().down, Arrow::Down, true),
+            [picture(137, stock().down)]
+        );
+        let wide = ltrb(10.0, 20.0, 40.0, 25.0);
+        assert_eq!(arrow(wide, Arrow::Down, false), [picture(135, wide)]);
     }
 
     fn text(text: &str, origin: Point) -> DrawCommand {
@@ -497,23 +508,27 @@ mod tests {
             text("Sound Volume:", stock().label.min),
             text("5", stock().value.min),
         ];
-        expected.extend(arrow(stock().up, Arrow::Up, false));
-        expected.extend(arrow(stock().down, Arrow::Down, false));
+        expected.extend([picture(134, stock().up), picture(135, stock().down)]);
         assert_eq!(drawn(&control, false), expected);
         assert_eq!((TEXT_SIZE, COLOR), (12.0, Color::WHITE));
     }
 
     #[test]
-    fn a_pressed_arrow_is_filled() {
+    fn a_held_arrow_draws_its_pressed_picture() {
         let mut control = control(5);
         control.input(&button(true, stock().down.center()));
         let mut expected = vec![
             text("Sound Volume:", stock().label.min),
             text("5", stock().value.min),
         ];
-        expected.extend(arrow(stock().up, Arrow::Up, false));
-        expected.extend(arrow(stock().down, Arrow::Down, true));
+        expected.extend([picture(134, stock().up), picture(137, stock().down)]);
         assert_eq!(drawn(&control, false), expected);
+        control.input(&Input::PointerMoved(stock().up.center()));
+        assert_eq!(
+            drawn(&control, false)[3],
+            picture(135, stock().down),
+            "off the arrow, it is at rest"
+        );
     }
 
     #[test]

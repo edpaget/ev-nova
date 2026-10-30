@@ -6,6 +6,11 @@
 pub enum ImageKind {
     /// A `PICT` picture: one frame.
     Pict,
+    /// A `PICT` picture from the interface file (`Nova-DF.rsrc`, or
+    /// `Nova.rez` on Windows), such as a dialog's picture item: one frame.
+    /// It resolves only in the interface file, never in the game data, so a
+    /// game-data `PICT` with the same ID never shadows it (nor it one).
+    InterfacePict,
     /// An `rlëD` sprite sheet: one or more equal-sized frames.
     Rled,
     /// An `rlëD`'s solid runs alone (its opcode-4 runs of one colour), one
@@ -46,6 +51,16 @@ impl ImageKey {
     pub const fn picture(id: i16) -> Self {
         Self {
             kind: ImageKind::Pict,
+            id,
+            frame: 0,
+        }
+    }
+
+    /// The interface file's `PICT` `id` ([`ImageKind::InterfacePict`]).
+    #[must_use]
+    pub const fn interface_picture(id: i16) -> Self {
+        Self {
+            kind: ImageKind::InterfacePict,
             id,
             frame: 0,
         }
@@ -129,6 +144,20 @@ mod tests {
                 frame: 0
             }
         );
+    }
+
+    #[test]
+    fn an_interface_picture_is_frame_zero_of_an_interface_pict() {
+        let key = ImageKey::interface_picture(134);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::InterfacePict,
+                id: 134,
+                frame: 0
+            }
+        );
+        assert_ne!(key, ImageKey::picture(134));
     }
 
     #[test]

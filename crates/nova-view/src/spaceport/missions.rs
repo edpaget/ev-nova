@@ -22,9 +22,17 @@
 //! listed; whoever holds the session accepts it and hands the computer
 //! back ([`MissionComputerScreen::set_computer`]), as the original closes
 //! the dialog after an accept and opens it again. Leave, Return, Enter,
-//! Escape and L leave; no key accepts (`_MissionFilter` @0x9f885-0x9f8af).
-//! Up and Down move the selection. Without its dialog, the screen says
-//! why, and Return or Escape still leaves.
+//! Escape and L leave (`_MissionFilter` @0x9f885-0x9f8af); A
+//! ([`ACCEPT_KEY`], a press) accepts the selected offer, as Accept does
+//! (@0x9f8b4-0x9f8c7). Up and Down (key repeats too) move the selection a
+//! row, wrapping from the last offer to the first and back (@0x9faf2,
+//! @0x9fce3), and show the offer selected. Under the engine reading of
+//! the `dialog_focus_ring` rule ([`FocusRing::Off`]), a Tab press steps
+//! to the next offer as Down does, Shift or not (@0x9f8cc; the original
+//! steps on autoKey too, but dialog keys are press-only by the user's
+//! decision of 2026-10-23). By default ([`FocusRing::Tab`]) Tab moves the
+//! dialog's button focus instead and the selection stays. Without its
+//! dialog, the screen says why, and Return or Escape still leaves.
 //!
 //! The stock mission info screen is 471 x 155, centred, over `PICT` 8517:
 //! the heading "Currently active missions:" (`STR#` 2002 #360) in item 3
@@ -114,6 +122,11 @@ const NO_LIST: Bounds = Bounds {
 /// The keys that leave the mission computer, besides Leave: Return (and
 /// Enter), Escape and L (`_MissionFilter` @0x9f885-0x9f8af, @0xa0212).
 pub const LEAVE_KEYS: [Key; 3] = [Key::Enter, Key::Escape, Key::Char('l')];
+
+/// The key that accepts the selected offer: A (key code 0x00), on a
+/// press only, giving Accept when a row is selected and nothing otherwise
+/// (`_MissionFilter` @0x9f8b4-0x9f8c7, @0xa0201).
+pub const ACCEPT_KEY: Key = Key::Char('a');
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
 #[derive(Clone)]
@@ -413,8 +426,10 @@ impl MissionComputerScreen {
 }
 
 impl Screen for MissionComputerScreen {
-    /// Up, Down and a press on the list go to the list; the leave keys
-    /// leave; everything else goes to the dialog. It never quits.
+    /// The leave keys leave and A accepts; Up, Down and (under
+    /// [`FocusRing::Off`]) Tab step the list, wrapping, and a press on the
+    /// list selects a row; everything else goes to the dialog. It never
+    /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key,
@@ -441,6 +456,39 @@ impl Screen for MissionComputerScreen {
         let Ok(laid) = &mut self.laid else {
             return ScreenAction::None;
         };
+        // `_MissionFilter` steps on Tab (@0x9f8cc, no Shift test), Down
+        // (@0x9faf2) and Up (@0x9fce3), wrapping at the ends. Tab steps
+        // only under the engine reading, where the focus ring doesn't
+        // take it, and on a press only, though the original steps on
+        // autoKey too; the arrows keep their repeats.
+        let ring = laid.dialog.focus_ring();
+        let step = match *input {
+            Input::Key {
+                key: Key::Tab,
+                pressed: true,
+                repeat: false,
+            } if ring == FocusRing::Off => Some(true),
+            Input::Key {
+                key: key @ (Key::Up | Key::Down),
+                pressed: true,
+                ..
+            } => Some(key == Key::Down),
+            Input::Key {
+                key: ACCEPT_KEY,
+                pressed: true,
+                repeat: false,
+            } => {
+                self.accepted = self.selected_mission();
+                return ScreenAction::None;
+            }
+            _ => None,
+        };
+        if let Some(forward) = step {
+            if laid.rows.step_wrapping(forward) {
+                self.show_selected();
+            }
+            return ScreenAction::None;
+        }
         if on_list(&laid.dialog, LIST_ITEM, input) {
             if laid.rows.input(input) {
                 self.show_selected();
@@ -1215,8 +1263,146 @@ mod tests {
         assert_eq!(screen.take_accept(), Some(MissionId(131)));
         assert_eq!(screen.take_accept(), None, "once");
         assert!(!screen.closed());
+        let mut off = super::tests::screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_accept(), None, "Space accepts nothing");
+    }
+
+    /// Three offers: 130, 131 and 132.
+    fn three() -> MissionComputer {
+        let mut three = computer();
+        three.rows.push(row(132, "Fly", "Take wing."));
+        three
+    }
+
+    /// Each selected mission, shown and asked for, after each of `inputs`.
+    fn stepped(screen: &mut MissionComputerScreen, inputs: &[Input]) -> Vec<Option<i16>> {
+        screen.take_text_request();
+        inputs
+            .iter()
+            .map(|input| {
+                screen.input(input);
+                let selected = screen.selected_mission();
+                assert_eq!(screen.take_text_request(), selected, "asked for");
+                selected.map(|mission| mission.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn up_and_down_wrap_at_the_ends_of_the_computer() {
+        let mut screen = screen_of(three());
+        assert_eq!(
+            stepped(&mut screen, &[key(Key::Up), key(Key::Down), key(Key::Down)]),
+            [Some(132), Some(130), Some(131)]
+        );
+        let repeat = Input::Key {
+            key: Key::Down,
+            pressed: true,
+            repeat: true,
+        };
+        assert_eq!(
+            stepped(&mut screen, &[repeat, repeat]),
+            [Some(132), Some(130)],
+            "repeats step and wrap too"
+        );
+        let release = Input::Key {
+            key: Key::Up,
+            pressed: false,
+            repeat: false,
+        };
+        screen.input(&release);
+        assert_eq!(screen.selected_mission(), Some(MissionId(130)));
+        assert_eq!(screen.take_text_request(), None, "a release steps nothing");
+    }
+
+    #[test]
+    fn tab_steps_the_offers_and_wraps_under_the_engine_reading() {
+        let mut screen = screen_of(three()).with_focus_ring(FocusRing::Off);
+        assert_eq!(
+            stepped(&mut screen, &[key(Key::Tab); 3]),
+            [Some(131), Some(132), Some(130)]
+        );
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Take this to Mars.");
+        assert_eq!(screen.dialog().and_then(Dialog::focus), None, "no ring");
+        assert_eq!(screen.take_accept(), None);
+        assert!(!screen.closed());
+    }
+
+    /// `_MissionFilter`'s Tab branch tests no Shift (@0x9f8cc).
+    #[test]
+    fn shift_tab_also_steps_forward_on_the_computer() {
+        let mut screen = screen_of(three()).with_focus_ring(FocusRing::Off);
+        screen.input(&key(Key::Shift));
+        screen.input(&key(Key::Tab));
+        assert_eq!(screen.selected_mission(), Some(MissionId(131)));
+    }
+
+    /// The original steps on autoKey too (@0x9f883), but dialog keys are
+    /// press-only by the user's decision of 2026-10-23.
+    #[test]
+    fn a_tab_repeat_or_release_steps_no_offer() {
+        let mut screen = screen().with_focus_ring(FocusRing::Off);
+        for (pressed, repeat) in [(true, true), (false, false)] {
+            screen.input(&Input::Key {
+                key: Key::Tab,
+                pressed,
+                repeat,
+            });
+        }
+        assert_eq!(screen.selected_mission(), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn tab_up_and_down_on_an_empty_computer_step_nothing() {
+        let mut screen = screen_of(MissionComputer {
+            rows: Vec::new(),
+            ..computer()
+        })
+        .with_focus_ring(FocusRing::Off);
+        assert_eq!(
+            stepped(&mut screen, &[key(Key::Tab), key(Key::Up), key(Key::Down)]),
+            [None, None, None]
+        );
+    }
+
+    #[test]
+    fn under_the_focus_ring_tab_moves_the_button_focus_not_the_offer() {
+        let mut screen = screen_of(three());
+        screen.take_text_request();
+        screen.input(&key(Key::Tab));
+        assert_eq!(screen.selected_mission(), Some(MissionId(130)));
+        assert_eq!(screen.take_text_request(), None);
+        assert_eq!(screen.dialog().and_then(Dialog::focus), Some(ACCEPT_ITEM));
         screen.input(&key(Key::Space));
-        assert_eq!(screen.take_accept(), None, "no key accepts");
+        assert_eq!(screen.take_accept(), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn a_accepts_the_selected_offer() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = screen().with_focus_ring(ring);
+            screen.input(&key(Key::Down));
+            screen.input(&key(ACCEPT_KEY));
+            assert_eq!(screen.take_accept(), Some(MissionId(131)), "{ring:?}");
+            assert!(!screen.closed());
+            for (pressed, repeat) in [(true, true), (false, false)] {
+                screen.input(&Input::Key {
+                    key: ACCEPT_KEY,
+                    pressed,
+                    repeat,
+                });
+            }
+            assert_eq!(screen.take_accept(), None, "keyDown only");
+            let mut empty = screen_of(MissionComputer {
+                rows: Vec::new(),
+                ..computer()
+            })
+            .with_focus_ring(ring);
+            empty.input(&key(ACCEPT_KEY));
+            assert_eq!(empty.take_accept(), None, "nothing selected");
+        }
+        assert_eq!(ACCEPT_KEY, Key::Char('a'));
     }
 
     #[test]
@@ -1384,9 +1570,9 @@ mod tests {
                     pressed: true,
                     repeat: true,
                 },
-                1,
+                0,
             ),
-            (key(Key::Up), 0),
+            (key(Key::Up), 1),
             (key(Key::Up), 0),
         ] {
             screen.input(&input);
@@ -1697,7 +1883,8 @@ mod tests {
     #[test]
     fn up_and_down_move_the_missions_and_never_scroll_the_black_boxed_quickbrief() {
         // As at base: Up and Down go to the list, so nothing scrolls the
-        // QuickBrief; each mission's shows from its first line.
+        // QuickBrief; each mission's shows from its first line. They stop
+        // at the ends: `_MissionInfoFilter` @0x9d6e5 is not yet read.
         let mut screen = MissionInfoScreen::new(
             Ok((info_template(), Rc::new(MonoMetrics))),
             MissionInfo {
@@ -2005,22 +2192,24 @@ mod tests {
     /// Return and Escape to items without a click sound.
     #[test]
     fn keyboard_activation_is_silent_as_the_original_on_the_computer() {
-        for k in [
-            Key::Tab,
-            Key::Up,
-            Key::Down,
-            MISSION_INFO_KEY,
-            crate::ui::player_info::PLAYER_INFO_KEY,
-            Key::Char('a'),
-        ]
-        .into_iter()
-        .chain(LEAVE_KEYS)
-        {
-            let mut screen = screen();
-            for input in press_and_release(k) {
-                screen.input(&input);
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            for k in [
+                Key::Tab,
+                Key::Up,
+                Key::Down,
+                MISSION_INFO_KEY,
+                crate::ui::player_info::PLAYER_INFO_KEY,
+                ACCEPT_KEY,
+            ]
+            .into_iter()
+            .chain(LEAVE_KEYS)
+            {
+                let mut screen = screen().with_focus_ring(ring);
+                for input in press_and_release(k) {
+                    screen.input(&input);
+                }
+                assert_eq!(screen.take_sounds(), [], "{k:?} ({ring:?})");
             }
-            assert_eq!(screen.take_sounds(), [], "{k:?}");
         }
     }
 

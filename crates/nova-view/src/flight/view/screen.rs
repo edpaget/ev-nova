@@ -18,9 +18,9 @@ use crate::{
 };
 
 use super::{
-    BOARD_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY,
-    LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
-    ZOOM_OUT_KEY,
+    BOARD_KEY, FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY,
+    JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, NEAREST_KEY, SELECT_KEY, TARGET_KEY, ZOOM_IN_KEY,
+    ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY,
 };
 
 impl<
@@ -127,11 +127,31 @@ impl<
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
     /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
-    /// course map doesn't take no longer closes it.
+    /// course map doesn't take no longer closes it, and a map waiting for
+    /// M's release closes ([`FlightView::close_map`]): ours can't read the
+    /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
+    /// (@0xa19b-0xa1dc), so losing them counts as the release.
     fn release_keys(&mut self) {
         self.held.clear();
         self.map.release_keys();
         self.map_key_held = false;
+        if self.map_closing {
+            self.close_map();
+        }
+    }
+
+    /// The frame-rate readout starts afresh, "Calculating FPS..." on the
+    /// next frame while it is shown, as `_SwitchedIn` zeroes its counters
+    /// (@0x513cc-0x513dc).
+    fn focus_gained(&mut self) {
+        self.switched_in();
+    }
+
+    /// The flight halts both warp-ups, as `_SwitchedOut` does
+    /// (@0x4f3a3-0x4f3e0; `FlightCommand::SwitchedOut`). A flight that
+    /// failed to start refuses it, as any command.
+    fn focus_lost(&mut self) {
+        self.send(nova_sim::flight_frame::FlightCommand::SwitchedOut);
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
@@ -191,14 +211,21 @@ impl<
             self.movie_tick(dt);
             return;
         }
+        self.elapse_frame_rate(dt);
         self.catch_up();
         self.fade_frame(dt);
         if self.map_open {
-            // The map's own frame: its borders' null events.
-            self.map.tick(dt);
+            // The map's own frame: its borders' null events, none while
+            // it waits for M's release (`_BusyIdle` runs none).
+            if !self.map_closing {
+                self.map.tick(dt);
+            }
             return;
         }
         if self.death_frame(dt) {
+            // `_PlayGame` goes on counting and showing while the player
+            // is dead, the fade to black included.
+            self.frame_rate_frame();
             return;
         }
         self.step_stellars(dt);
@@ -206,6 +233,9 @@ impl<
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         self.run_steps(steps);
+        // After the lines the steps relayed, as `_PlayGame`'s readout
+        // comes after `_DoPlayGameWork`.
+        self.frame_rate_frame();
         self.update_escort_menu(steps);
         self.alpha = alpha;
         self.step_cursor(steps);
@@ -240,6 +270,8 @@ impl<
         if self.map_open {
             // M types into Find while it is open.
             if press == Some(MAP_KEY) && !self.map.finding() {
+                // M's own close reads M held, so it waits for the release.
+                self.map_key_held = true;
                 self.close_map();
             } else {
                 self.map_input(input);
@@ -295,6 +327,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(FRAME_RATE_KEY) => self.toggle_frame_rate(),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {

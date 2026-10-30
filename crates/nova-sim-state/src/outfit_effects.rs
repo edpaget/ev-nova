@@ -163,7 +163,30 @@ impl Rgb15 {
             g: ((bits >> 5) & 31) as u8,
             b: (bits & 31) as u8,
         };
-        (paint != Self { r: 0, g: 0, b: 0 }).then_some(paint)
+        paint.painted()
+    }
+
+    /// The paint a `përs` `Color` or a `gövt` `ShipColor` of `colour`,
+    /// `00RRGGBB`, gives: each channel the top 5 bits of its byte,
+    /// `(c >> 19) & 31`, `(c >> 11) & 31` and `(c >> 3) & 31`, as
+    /// `_LoadObjectData` unpacks them (@0x7c2a4-0x7c2e4,
+    /// @0x7bcf9-0x7bd33); `None`, unpainted, for (0, 0, 0), as
+    /// `_GetShipPaintColor` (@0x7d8c-0x7da7) reads it. So a colour whose
+    /// bytes are all below 8 is unpainted.
+    #[must_use]
+    pub fn of_rgb(colour: u32) -> Option<Self> {
+        let channel = |shift: u32| ((colour >> shift) & 31) as u8;
+        Self {
+            r: channel(19),
+            g: channel(11),
+            b: channel(3),
+        }
+        .painted()
+    }
+
+    /// It, unless it is (0, 0, 0), which is unpainted.
+    fn painted(self) -> Option<Self> {
+        (self != Self { r: 0, g: 0, b: 0 }).then_some(self)
     }
 }
 
@@ -391,6 +414,33 @@ mod tests {
             Some(Rgb15::of(1)),
             "only the first"
         );
+    }
+
+    #[test]
+    fn a_ship_colour_keeps_the_top_five_bits_of_each_byte_and_none_unpaints() {
+        assert_eq!(
+            Rgb15::of_rgb(0x00F8_1008),
+            Some(Rgb15 { r: 31, g: 2, b: 1 })
+        );
+        assert_eq!(
+            Rgb15::of_rgb(0xFFFF_FFFF),
+            Some(Rgb15 {
+                r: 31,
+                g: 31,
+                b: 31
+            }),
+            "the top byte is no colour"
+        );
+        assert_eq!(Rgb15::of_rgb(0x0000_0008), Some(Rgb15 { r: 0, g: 0, b: 1 }));
+        assert_eq!(Rgb15::of_rgb(0x0000_0800), Some(Rgb15 { r: 0, g: 1, b: 0 }));
+        assert_eq!(Rgb15::of_rgb(0x0008_0000), Some(Rgb15 { r: 1, g: 0, b: 0 }));
+        assert_eq!(Rgb15::of_rgb(0), None, "unpainted");
+        assert_eq!(
+            Rgb15::of_rgb(0x0007_0707),
+            None,
+            "only the low bits: unpainted"
+        );
+        assert_eq!(Rgb15::of_rgb(0xFF00_0000), None);
     }
 
     #[test]

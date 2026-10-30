@@ -224,6 +224,31 @@ impl Frames {
         }
     }
 
+    /// The take-off's reset (`_HandlePlayerDockRequest` @0x675ce-0x675fa,
+    /// play-feel-4 phase 14): the current and next frames to 0, the timer
+    /// kept, then shown as the rebuild that follows shows it (@0x67653,
+    /// [`Frames::reshow`]): frame 0, the current frame 0 modulo any sheet,
+    /// and graphic type 0's frame 0 alike.
+    pub fn take_off_reset(&mut self) {
+        self.current = 0;
+        self.next = 0;
+        self.shown = 0;
+    }
+
+    /// A stellar's state the first time a flight shows it after a
+    /// take-off's reset: frame 0 current and shown, frame 0 next, the
+    /// timer at 0, as the reset leaves the `spöb` record `_InitObjects`
+    /// set (@0x1c8c5-0x1c8d1).
+    #[must_use]
+    pub const fn after_reset() -> Self {
+        Self {
+            current: 0,
+            next: 0,
+            timer: 0,
+            shown: 0,
+        }
+    }
+
     /// A rebuild point: the sheet drawn, of `drawn` frames, shows the
     /// current frame, modulo its frame count (@0x33096); or frame 0 when
     /// it is graphic type 0's, which fills an empty slot (@0x332d0).
@@ -735,5 +760,40 @@ mod tests {
         assert_eq!(frames.shown(), 2);
         frames.step(every_tick, false, four, count(3), &mut NeverFires);
         assert_eq!(frames.shown(), 1);
+    }
+
+    #[test]
+    fn a_take_off_reset_zeroes_the_frames_keeps_the_timer_and_shows_frame_0() {
+        let (every_2, four) = (data(2, 0), count(4));
+        let mut frames = Frames::new();
+        for _ in 0..5 {
+            frames.step(every_2, false, four, four, &mut NeverFires);
+        }
+        assert_eq!(
+            (frames.current, frames.next, frames.timer, frames.shown()),
+            (2, 3, 1, 2)
+        );
+        frames.take_off_reset();
+        assert_eq!(
+            (frames.current, frames.next, frames.timer, frames.shown()),
+            (0, 0, 1, 0)
+        );
+        // The timer carries on: one tick reaches the delay, and the
+        // current takes next 0; then frame 1 two ticks on.
+        let mut shown = Vec::new();
+        for _ in 0..3 {
+            frames.step(every_2, false, four, four, &mut NeverFires);
+            shown.push(frames.shown());
+        }
+        assert_eq!(shown, [0, 0, 1]);
+    }
+
+    #[test]
+    fn a_stellar_first_shown_after_a_reset_has_next_0_and_its_timer_0() {
+        let afresh = Frames::after_reset();
+        assert_eq!(
+            (afresh.current, afresh.next, afresh.timer, afresh.shown()),
+            (0, 0, 0, 0)
+        );
     }
 }

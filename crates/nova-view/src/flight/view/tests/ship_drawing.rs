@@ -20,7 +20,7 @@ use nova_sim::flight_frame::{FrameShip, PassReport, StepReport, StepRun};
 
 /// A `shän` display of `flags`, `sets` base sets and `AnimDelay` `delay`,
 /// its lights sprite steady.
-fn display(flags: u16, sets: i16, delay: i16) -> ShipDisplay {
+pub(super) fn display(flags: u16, sets: i16, delay: i16) -> ShipDisplay {
     ShipDisplay {
         flags,
         base_sets: sets,
@@ -78,7 +78,11 @@ fn now(view: &Faked) -> u64 {
 
 /// [`trafficked`] with NPC ship 129 of `npc` (72 frames a turn) and the
 /// player's 128 of `player` (36), the NPC's sheet `sheet` when given.
-fn shown(player: ShipDisplay, npc: ShipDisplay, sheet: Option<ShipSheet>) -> FakeCatalog {
+pub(super) fn shown(
+    player: ShipDisplay,
+    npc: ShipDisplay,
+    sheet: Option<ShipSheet>,
+) -> FakeCatalog {
     FakeCatalog {
         hulls: vec![
             shown_hull(128, player, 36, &[]),
@@ -90,7 +94,7 @@ fn shown(player: ShipDisplay, npc: ShipDisplay, sheet: Option<ShipSheet>) -> Fak
 }
 
 /// The NPC's sheet: `rlëD` 2001 of 72 rotations, glow 2101, lights 2201.
-fn npc_sheet() -> ShipSheet {
+pub(super) fn npc_sheet() -> ShipSheet {
     ShipSheet {
         image_id: 2001,
         rotations: NonZeroU16::new(72).expect("non-zero"),
@@ -141,7 +145,7 @@ fn npc_shown(heading: f32) -> FrameShip {
 /// A scripted flight from `catalog` by `rules`: the player and NPC 0 as
 /// [`player_shown`] and [`npc_shown`] have them, the NPC facing
 /// `heading`, in a system of effective murk `murk`, a tick in.
-fn shown_by(catalog: FakeCatalog, heading: f32, murk: u8, rules: &Rulebook) -> Faked {
+pub(super) fn shown_by(catalog: FakeCatalog, heading: f32, murk: u8, rules: &Rulebook) -> Faked {
     let mut frame = in_sol_with(vec![player_shown(), npc_shown(heading)]);
     frame.effective_murk = murk;
     let mut view = world_by(catalog, frame, rules);
@@ -150,20 +154,20 @@ fn shown_by(catalog: FakeCatalog, heading: f32, murk: u8, rules: &Rulebook) -> F
 }
 
 /// [`shown_by`] Nova's rules, the system clear.
-fn flying_with(catalog: FakeCatalog, heading: f32) -> Faked {
+pub(super) fn flying_with(catalog: FakeCatalog, heading: f32) -> Faked {
     shown_by(catalog, heading, 0, &Rulebook::default())
 }
 
 /// Shows `view`'s frame with ship `at` (0 the player, 1 the NPC) changed
 /// by `change`.
-fn redrawn(view: &mut Faked, at: usize, change: impl FnOnce(&mut FrameShip)) {
+pub(super) fn redrawn(view: &mut Faked, at: usize, change: impl FnOnce(&mut FrameShip)) {
     let mut frame = view.frame.clone();
     change(&mut frame.ships[at]);
     shows(view, frame);
 }
 
 /// NPC 0's id.
-const NPC_0: NpcId = NpcId(0);
+pub(super) const NPC_0: NpcId = NpcId(0);
 
 #[test]
 fn the_player_is_drawn_on_the_set_its_display_picked_banked_or_level() {
@@ -474,7 +478,7 @@ fn an_npc_whose_alt_shows_none_draws_no_alt_layer() {
 /// drawn.
 fn npc_hull(view: &Faked, npc: &FrameShip) -> Option<Color> {
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, npc, &|_| VIEW_CENTER, npc.heading);
     list.iter().find_map(|command| match *command {
         DrawCommand::Sprite { image, tint, .. } | DrawCommand::Colorized { image, tint, .. }
             if image.id == 2001 =>
@@ -537,7 +541,7 @@ fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothin
     let mut npc = npc_record(&view, NPC_0);
     npc.cloak = CloakShown::Fading(25.0);
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     let hull = list.iter().find_map(|command| match *command {
         DrawCommand::Sprite {
             image,
@@ -556,7 +560,7 @@ fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothin
     // A hidden full fade draws no hull, glow or lights.
     npc.cloak = CloakShown::Hidden;
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     assert_eq!(list.iter().count(), 0, "no weapon glow lit");
 }
 
@@ -578,7 +582,7 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
     let level = view.glows.drawn(npc.ship).expect("lit");
     npc.cloak = CloakShown::Hidden;
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     let drawn: Vec<_> = list
         .iter()
         .map(|command| match *command {
@@ -606,7 +610,7 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
     npc.gate = GateFade::Emerging { ticks_left: 100 };
     assert_eq!(npc_tint(npc.gate), None);
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     assert_eq!(list.iter().count(), 0, "hidden at its gate");
 }
 
@@ -642,7 +646,7 @@ fn npc_drawn_ionized(
     npc.ion_tint = tint;
     let murk = sprite_murk(npc.position, player, view.frame.effective_murk);
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     (list, murk)
 }
 

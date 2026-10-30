@@ -75,6 +75,9 @@
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`](navigation::stellar_under)), as the original does.
+//! - [`planet_comm`]: the planet comm dialog's decisions: a hailed
+//!   stellar's refusal, its bribe and the haggle over it, Demand
+//!   Tribute's outcomes and Release ([`PlanetComm`](planet_comm::PlanetComm)).
 //! - [`scan`]: a warship's or an interceptor's scan of the player: whether
 //!   it goes on ([`scan::goes_on`]) and the illegal `jünk` or outfit it
 //!   finds after the mission cargo ([`scan::contraband`]).
@@ -126,6 +129,7 @@ pub mod hover;
 pub mod hyperspace;
 pub mod jump_arrival;
 pub mod navigation;
+pub mod planet_comm;
 pub mod scan;
 pub mod scoop;
 pub mod targeting;

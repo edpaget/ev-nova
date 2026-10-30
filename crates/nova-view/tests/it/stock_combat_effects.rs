@@ -191,7 +191,7 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
     assert_eq!(effects.pods().len(), 1);
     let mut list = DrawList::new();
     let camera = nova_view::system::camera::Camera::centred_on(Point::new(0.0, 0.0));
-    effects.draw_pods(&mut list, &camera, &looks);
+    effects.draw_pods(&mut list, &camera, &looks, Vec2::ZERO, 0);
     let drawn = list
         .into_iter()
         .filter(|command| {

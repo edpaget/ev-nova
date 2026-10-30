@@ -73,15 +73,16 @@ use crate::ai::{Goal, leave};
 #[cfg(doc)]
 use crate::ai::{afterburner, swarm};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
-use crate::catalog::{OutfitId, ShipId, WeaponId};
+use crate::catalog::{OutfitId, ShipId};
 use crate::chance::Chance;
-use crate::combat::armament::{Fold, MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
+use crate::combat::armament::{Fold, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
 use crate::combat::weapon::WeaponSpec;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
+use crate::has_max;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
 use crate::pilot::{Escort, Pilot};
@@ -216,12 +217,23 @@ impl Session {
 
     /// The player's fighter `npc` joins the fleet, launched while the
     /// player targets `target` (see the module docs): its number.
+    ///
+    /// A lone launch's clear of a kept Return to Hangar
+    /// ([`Space::clear_lone_return`]) is reported as the class-order
+    /// bookkeeping's clears are: `_LaunchFighter` writes -1 (@0x3db4d), and
+    /// the bookkeeping later in the same `_HandlePlayer` clears -1 to 0
+    /// (@0x6e42d-0x6e446), as the new fighter is unmarked and no other
+    /// ship is the player's, showing the escort menu again while it shows
+    /// (see the `class_orders` module). The engine has no -1, so the launch
+    /// reports it.
     fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) -> NpcId {
         let escort_type = self
             .statics
             .ship_record(npc.ship)
             .map(|record| record.escort_type);
-        self.space.clear_lone_return(escort_type);
+        if self.space.clear_lone_return(escort_type) {
+            self.out.class_orders_cleared = true;
+        }
         let target = target
             .filter(|_| self.setup.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
@@ -523,43 +535,26 @@ impl PlayerShip {
         self.fit.armament.stow(ship, &mut rounds)
     }
 
-    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
-    /// `MaxAmmo` above 0, the most of it the player may own: that
-    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
-    /// included, as the 16-bit product the original compares
-    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
-    /// [`MOD_AMMO`] mod in a later slot is not capped, so
-    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
-    /// is not read here.
-    pub(super) fn ammo_caps(&self, statics: &Statics) -> BTreeMap<OutfitId, i16> {
-        let mut caps = BTreeMap::new();
-        for record in &statics.outfits {
-            let (kind, val) = record.mods[0];
-            if kind != MOD_AMMO {
-                continue;
-            }
-            let weapon = WeaponId(val);
-            let Some(spec) = statics
-                .arsenal
-                .weapon(weapon)
-                .filter(|spec| spec.max_ammo > 0)
-            else {
-                continue;
-            };
-            let launchers: u32 = self
-                .fit
-                .armament
-                .mounts()
+    /// For every outfit whose first mod is `ModType` 3
+    /// ([`MOD_AMMO`](crate::combat::armament::MOD_AMMO)) naming a weapon of `MaxAmmo` above 0, the most of it the player may
+    /// own: that `MaxAmmo` times the player's launchers of the weapon,
+    /// stock weapons included, a wide product where the original's is
+    /// 16-bit (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa; see
+    /// [`has_max::ammo_cap`]). An outfit with `ModType` 3 in a later
+    /// slot is not capped.
+    pub(super) fn ammo_caps(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> BTreeMap<OutfitId, i64> {
+        self.with_room(pilot, statics, setup, |room| {
+            statics
+                .outfits
                 .iter()
-                .filter(|mount| mount.spec.id == weapon)
-                .map(|mount| mount.count)
-                .sum();
-            caps.insert(
-                record.id,
-                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
-            );
-        }
-        caps
+                .filter_map(|record| Some((record.id, has_max::ammo_cap(record, room)?)))
+                .collect()
+        })
     }
 }
 
@@ -579,13 +574,15 @@ impl Space {
     /// in the system, a kept Return to Hangar for the fighters' class is
     /// none (`_LaunchFighter` @0x3db0f-0x3db4d: the fighters' order,
     /// `0x3b5394[0]`, becomes -1 when it is 3 and no other active slot has
-    /// the player as its parent).
-    fn clear_lone_return(&mut self, escort_type: Option<i16>) {
+    /// the player as its parent). Whether it cleared it.
+    fn clear_lone_return(&mut self, escort_type: Option<i16>) -> bool {
         let alone = self.player_led().next().is_none();
         let fighters = &mut self.escorts.class_orders[0];
-        if escort_type == Some(0) && alone && *fighters == Some(EscortOrder::Dock) {
+        let clears = escort_type == Some(0) && alone && *fighters == Some(EscortOrder::Dock);
+        if clears {
             *fighters = None;
         }
+        clears
     }
 
     /// NPC `carrier`'s fighter `npc` joins it (see the module docs): led
@@ -729,6 +726,8 @@ fn fighter(
         // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
         odds: crate::traffic::odds_cache::STALE,
         no_ai: false,
+        kept_escort_ai: false,
+        defends: None,
     };
     fighter.independent();
     fighter.take_carrier(carrier, capacity);
@@ -1119,6 +1118,7 @@ pub(super) mod tests {
         // The ship loop's displays (@0x444ad).
         let start = super::super::game_work::PassStart::of(&session);
         session.ship_loop(
+            &crate::ai::NovaAi::default(),
             &start,
             super::super::ship_loop::Motion::Again,
             pass,
@@ -1393,10 +1393,29 @@ pub(super) mod tests {
             None,
             "no escort to change"
         );
-        assert_eq!(
-            launched_order(&mut session, &catalog),
-            Some(EscortOrder::Hold)
-        );
+        let id = launch_now(&mut session).expect("launched");
+        let duty = session.space.npc(id).and_then(|npc| npc.escort);
+        assert_eq!(duty.and_then(|duty| duty.order), Some(EscortOrder::Hold));
+        assert_eq!(session.pilot().escorts()[0].order, Some(EscortOrder::Hold));
+        // No ship of its class took the command, so the pass's class-order
+        // bookkeeping sends the class to formation (see the `class_orders`
+        // module).
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(session.pilot().escorts()[0].order, None);
+    }
+
+    /// One Viper launched from the player's bay at once, outside a pass
+    /// ([`Session::launch_fighter`]): its number.
+    fn launch_now(session: &mut Session) -> Option<NpcId> {
+        let sortie = Sortie {
+            carrier: ShipRef::Player,
+            bay: BAY,
+            ship: VIPER,
+            from: *session.player(),
+            heading: 0.0,
+            target: None,
+        };
+        session.launch_fighter(&sortie, &mut NeverFires)
     }
 
     #[test]
@@ -1408,14 +1427,17 @@ pub(super) mod tests {
     }
 
     /// The fighters' kept class order after a launch from `session`, with
-    /// Return to Hangar given every class first.
-    fn kept_after_launch(session: &mut Session, catalog: &FakePilotCatalog) -> Option<EscortOrder> {
+    /// Return to Hangar given every class first: the launch's own, made
+    /// outside a pass, as the pass's class-order bookkeeping that follows
+    /// it clears a Return no marked fighter holds anyway (see the
+    /// `class_orders` module).
+    fn kept_after_launch(session: &mut Session) -> Option<EscortOrder> {
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert_eq!(
             session.space.escorts.class_orders[0],
             Some(EscortOrder::Dock)
         );
-        launch(session, catalog);
+        launch_now(session).expect("launched");
         session.space.escorts.class_orders[0]
     }
 
@@ -1425,14 +1447,10 @@ pub(super) mod tests {
         // fighter of `EscortType` 0, no other active ship of parent 0, and
         // the fighters' order (0x3b5394[0]) Return becomes -1.
         let catalog = carrying();
-        assert_eq!(
-            kept_after_launch(&mut alone(&catalog), &catalog),
-            None,
-            "alone"
-        );
+        assert_eq!(kept_after_launch(&mut alone(&catalog)), None, "alone");
         let mut escorted = fleet(&catalog, 2, vec![warship(None)]);
         assert_eq!(
-            kept_after_launch(&mut escorted, &catalog),
+            kept_after_launch(&mut escorted),
             Some(EscortOrder::Dock),
             "an escort out"
         );
@@ -1442,7 +1460,7 @@ pub(super) mod tests {
             work(&mut session, &catalog, Controls::default());
         }
         assert_eq!(
-            kept_after_launch(&mut session, &catalog),
+            kept_after_launch(&mut session),
             Some(EscortOrder::Dock),
             "a fighter out"
         );
@@ -1450,7 +1468,7 @@ pub(super) mod tests {
         catalog.ship_records[1].escort_type = 2;
         let mut session = alone(&catalog);
         assert_eq!(
-            kept_after_launch(&mut session, &catalog),
+            kept_after_launch(&mut session),
             Some(EscortOrder::Dock),
             "not of EscortType 0"
         );
@@ -1459,6 +1477,26 @@ pub(super) mod tests {
             Some(EscortOrder::Dock),
             "its own class's kept too"
         );
+    }
+
+    #[test]
+    fn a_lone_fighter_launched_under_a_kept_return_reports_the_clear_on_its_pass() {
+        // `_LaunchFighter`'s -1 (@0x3db4d) is cleared to 0 later in the same
+        // `_HandlePlayer` (@0x6e42d-0x6e446), which shows the escort menu
+        // again while it shows.
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        session.command_escorts(
+            EscortGroup::Class(EscortClass::Fighter),
+            EscortCommand::Dock,
+            &mut NeverFires,
+        );
+        launch(&mut session, &catalog);
+        assert_eq!(session.space.escorts.class_orders, [None; 4]);
+        assert!(session.out.class_orders_cleared, "reported");
+        let mut session = alone(&catalog);
+        launch(&mut session, &catalog);
+        assert!(!session.out.class_orders_cleared, "none kept: none cleared");
     }
 
     #[test]
@@ -4058,14 +4096,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_ammunition_cap_is_a_16_bit_product() {
+    fn the_ammunition_cap_is_a_wide_product() {
         let mut catalog = missile_port();
         catalog.weapons.last_mut().expect("weapon 174").max_ammo = 16_384;
-        // 16,384 x 2 wraps to -32,768: none can be bought.
-        assert_eq!(
-            ammo_for_sale(&catalog, &[(175, 2)], UNCAPPED),
-            Err(crate::outfitter::OutfitRefusal::MaxOwned)
-        );
+        // 16,384 x 2 is 32,768, where the original's `imulw` wraps it to
+        // -32,768; integer widths are not replicated, so one buys.
+        assert_eq!(ammo_for_sale(&catalog, &[(175, 2)], UNCAPPED), Ok(()));
         assert_eq!(ammo_for_sale(&catalog, &[(175, 1)], UNCAPPED), Ok(()));
     }
 

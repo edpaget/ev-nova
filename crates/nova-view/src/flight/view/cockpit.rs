@@ -31,10 +31,11 @@ use nova_sim::flight_frame::FlightCommand;
 use super::slot_block;
 use super::{
     BOARD_KEY, DESELECT_KEY, EJECT_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY,
-    ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FlightView, HAIL_KEY, HYPER_SELECT_KEY,
-    HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY, MENU_CLOSE_KEY, NAV_OFF_KEY,
-    NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY, SELECT_KEY, SELF_DESTRUCT_KEY,
-    STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY, ZOOM_OUT_KEY, window_width,
+    ESCORT_RECALL_KEY, ESCORT_TICKS, FLIGHT_KEYS, FRAME_RATE_KEY, FlightView, HAIL_KEY,
+    HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JETTISON_KEY, JUMP_KEY, LAND_KEY, MAP_KEY,
+    MENU_CLOSE_KEY, NAV_OFF_KEY, NEAREST_KEY, NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY,
+    SELECT_KEY, SELF_DESTRUCT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY,
+    ZOOM_OUT_KEY, window_width,
 };
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -72,6 +73,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             EJECT_KEY => PlayerCommand::Eject,
             MISSION_INFO_KEY => PlayerCommand::MissionInfo,
             PLAYER_INFO_KEY => PlayerCommand::PlayerInfo,
+            FRAME_RATE_KEY => PlayerCommand::FrameRate,
             HYPER_SELECT_KEY => PlayerCommand::SelectSystem,
             HYPERSPACE_MODE_KEY => PlayerCommand::Nav,
             TARGET_KEY | NEAREST_KEY => PlayerCommand::Target,
@@ -114,7 +116,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   menu shows, fading out too (@0x6dd00-0x6e452);
     /// - the floating map's zoom keys, `-`, `=` and the keypad's `+`
     ///   ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`],
-    ///   @0x70f4e-0x71110).
+    ///   @0x70f4e-0x71110);
+    /// - the frame-rate key, F12 ([`FRAME_RATE_KEY`], @0x6e454-0x6e4bd).
     ///
     /// Every other key is ignored, as the original gates it on +0x50 ≤ 0:
     /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 and
@@ -135,7 +138,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY | JETTISON_KEY
             | MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY
             | ESCORT_HOLD_KEY | ESCORT_RECALL_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY
-            | ZOOM_IN_KEYPAD_KEY => true,
+            | ZOOM_IN_KEYPAD_KEY | FRAME_RATE_KEY => true,
             NAV_OFF_KEY => option,
             _ => menu_open && GROUP_KEYS.contains(&key),
         }
@@ -239,17 +242,34 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Runs the escort menu's frame for the `steps` flight steps the tick
-    /// ran ([`EscortMenu::update`]): one level of its fade for each, as
+    /// ran ([`EscortMenu::run_steps`]): one level of its fade for each, as
     /// `_HandlePlayer` drops one a frame, every frame, the warp's
     /// included, as the original runs it on every frame of a jump
     /// (@0x6df4a), with the escorts flying as the kept frame shows them
-    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)):
+    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)),
+    /// and shown in full again after each step of the tick's report that
+    /// cleared an escort class's kept order
+    /// (`nova_sim::flight_frame::StepRun::class_orders_cleared`):
     /// `Screen::tick` calls it right after the frame's steps, which fill
     /// the kept frame afresh. The fade's end beeps as Return's close does
     /// ([`FlightView::shut_escort_menu_by_key`]).
+    ///
+    /// In double time the original fades a level on each pass:
+    /// `_DoPlayGameWork` calls `_HandlePlayer` on both (@0x43e19) with no
+    /// pass argument, and nothing gates the fade (@0x6df4a-0x6e052) on the
+    /// pass. Ours drops one a step, the re-show after the step's drop:
+    /// rdm:phase/play-feel-5-followups/phase-7-handle-player-double-fade-and-arrival-orders.
     pub(super) fn update_escort_menu(&mut self, steps: u32) {
         let flying = self.frame.hud.escorts_flying;
-        if self.escort_menu.update(self.elapsed, steps, flying) {
+        let cleared = self
+            .step_report
+            .steps
+            .iter()
+            .map(|run| run.class_orders_cleared);
+        if self
+            .escort_menu
+            .run_steps(self.elapsed, steps, cleared, flying)
+        {
             self.shut_escort_menu_by_key();
         }
     }

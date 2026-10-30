@@ -101,6 +101,7 @@ impl AppScreen {
             person_rules: Rc::new(NovaPersons::default()),
             comm: None,
             escort_dialog: None,
+            planet_comm: None,
             leave_held: false,
             haggle: None,
             offer: None,
@@ -123,6 +124,7 @@ impl AppScreen {
             quit_in: None,
             quit_due: false,
             double_time: false,
+            frame_rate_shown: false,
             widened: CLASSIC_VIEW,
             pointer: None,
         }
@@ -289,6 +291,12 @@ impl AppScreen {
         self.escort_dialog.as_ref()
     }
 
+    /// The planet comm dialog, while a stellar hailed is talked to.
+    #[must_use]
+    pub fn planet_comm(&self) -> Option<&nova_view::ui::planet_comm::PlanetCommDialog> {
+        self.planet_comm.as_ref()
+    }
+
     /// The haggle dialog, while a price is asked.
     #[must_use]
     pub fn haggle(&self) -> Option<&HaggleDialog> {
@@ -413,6 +421,7 @@ impl AppScreen {
         .with_weapon_effects(self.flight_weapon_effects())
         .with_sound_prefs(self.prefs.sound)
         .with_double_time(self.double_time)
+        .with_frame_rate_shown(self.frame_rate_shown)
         .with_find(self.find_template(), self.data.button_style())
         .with_map_borders(self.map_borders);
         let flight = match self.course_map_zoom {
@@ -707,7 +716,8 @@ impl AppScreen {
         if self.haggle.is_some() {
             return Showing::Haggle;
         }
-        if self.comm.is_some() {
+        // The planet comm dialog shows as the comm dialog does.
+        if self.comm.is_some() || self.planet_comm.is_some() {
             return Showing::Comm;
         }
         if self.escort_dialog.is_some() {

@@ -6,7 +6,6 @@ use crate::catalog::WeaponId;
 use crate::chance::Chance;
 use crate::combat::aim::Aim;
 use crate::combat::hull::Condition;
-use crate::combat::report::Reports;
 use crate::combat::weapon::{EXCLUSIVE, WeaponSpec};
 
 impl Armament {
@@ -32,15 +31,11 @@ impl Armament {
     ///    other weapon's reload at its own plus
     ///    [`EXCLUSIVE_HOLD`](crate::combat::weapon::EXCLUSIVE_HOLD), where
     ///    that is higher (@0x814a6-0x814e1).
-    ///
-    /// Each flag it carries that the simulation ignores is reported to
-    /// `reports`, as for any weapon fired.
     pub fn launch_bay(
         &mut self,
         condition: Condition,
         rounds: &mut dyn Rounds,
         chance: &mut dyn Chance,
-        reports: &mut Reports,
         aim: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
     ) -> Option<Launch> {
         if condition != Condition::Intact {
@@ -51,7 +46,6 @@ impl Armament {
         let mount = &mut self.mounts[index];
         let aimed = aim(&mount.spec)?;
         let spec = mount.spec;
-        reports.fired(&spec);
         let inaccuracy = inaccuracy(spec.inaccuracy, chance);
         self.spend_launch(index, rounds);
         Some(Launch {
@@ -150,13 +144,9 @@ mod tests {
         rounds: &mut LauncherRounds,
         condition: Condition,
     ) -> Option<Launch> {
-        armament.launch_bay(
-            condition,
-            rounds,
-            &mut NeverFires,
-            &mut Reports::default(),
-            &mut |_| Some(Aim::along(90.0, Some(TARGET))),
-        )
+        armament.launch_bay(condition, rounds, &mut NeverFires, &mut |_| {
+            Some(Aim::along(90.0, Some(TARGET)))
+        })
     }
 
     fn reloads(armament: &Armament) -> Vec<f32> {

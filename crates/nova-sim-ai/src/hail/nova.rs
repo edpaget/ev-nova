@@ -36,6 +36,9 @@
 //!     ([`govt_hail_patch`](super::advice::govt_hail_patch)) when one
 //!     exists, else `STR#` 7000 + g, string r + 1 for a trader and r + 6
 //!     otherwise, g the government's index (ID - 128) and r the variant.
+//!     A trader is the original's AI type 2 or below (@0x91a0d,
+//!     [`Npc::original_ai_type`](crate::traffic::npc::Npc::original_ai_type)),
+//!     so a led trader reads as another.
 //!     An independent ship reads `'STR '` 10000 + r or 10005 + r, then
 //!     `STR#` 6999, which does not exist, so its line is blank;
 //!   - specific advice (0x4000, [`Reply::Advice`]): `STR#` 7500 +
@@ -251,7 +254,7 @@ impl Greetings {
         let npc = hail.npc;
         let (list, index, greet_if_blank, patch) = match hail.advice {
             Some(GOVT_HAIL) => {
-                let trader = npc.ai_type.trades();
+                let trader = npc.original_ai_type() <= 2;
                 let first = if trader { TRADER_HAIL } else { OTHER_HAIL };
                 let patch = govt_hail_patch(npc.govt, trader, hail.variant);
                 (govt_hails(npc.govt), variant + first, false, patch)
@@ -944,6 +947,20 @@ mod tests {
     }
 
     #[test]
+    fn a_led_trader_greets_with_the_hail_of_others() {
+        // `_LoadAdvice` @0x91a0d reads +0x88 above 2: a led ship is 6.
+        let led = Npc {
+            leader: Some(NpcId(0)),
+            ..of(AiType::BraveTrader, Some(130), 0x8000)
+        };
+        let hail = advising(&led, 2, Some(GOVT_HAIL));
+        assert_eq!(
+            press(&Greetings::default(), &hail),
+            govt_hail(7002, 2 + OTHER_HAIL, 10_037)
+        );
+    }
+
+    #[test]
     fn an_independent_ship_reads_the_list_before_the_first_governments() {
         let trader = of(AiType::WimpyTrader, None, 0x8000);
         let warship = of(AiType::Warship, None, 0x8000);
@@ -1490,7 +1507,9 @@ mod tests {
             };
             assert!(busy.escort_ai(), "{npc:?}");
             assert_eq!(press(&request, &busy), says(JUST_AN_ESCORT));
-            let mut spared = npc.clone();
+        }
+        // An NPC's fleet escort or fighter paid off is a wimpy trader.
+        for mut spared in above_four().into_iter().skip(1) {
             spared.spared = true;
             let busy = Hail {
                 busy: true,
@@ -1498,6 +1517,27 @@ mod tests {
             };
             assert!(!busy.escort_ai(), "paid off, it is a wimpy trader");
             assert_eq!(press(&request, &busy), says(BUSY));
+        }
+    }
+
+    #[test]
+    fn an_escort_of_the_players_paid_off_before_or_a_marked_former_escort_is_an_escort() {
+        // A capture writes 6 over the bribe's 1 (`_DoShipCapture`
+        // @0x41425), as a mission escort's dispatch does at every think
+        // (@0x8fc19); the disabled reset leaves 6 until the ship's first
+        // think once whole.
+        let mut captured = ship();
+        captured.spared = true;
+        captured.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let mut mission = mission_escort();
+        mission.spared = true;
+        let mut marked = ship();
+        marked.kept_escort_ai = true;
+        for npc in [captured, mission, marked] {
+            assert!(hail(&npc).escort_ai(), "{npc:?}");
         }
     }
 

@@ -148,6 +148,7 @@ fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
         .iter()
         .map(|batch| match batch {
             Batch::Sprites { quads, .. } => ("sprites", quads.len()),
+            Batch::OrFill(quads) => ("or-fill", quads.len()),
             Batch::Solid(quads) => ("solid", quads.len()),
             Batch::Text(runs) => ("text", runs.len()),
         })

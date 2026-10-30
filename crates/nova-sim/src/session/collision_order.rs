@@ -302,6 +302,7 @@ mod tests {
         assert_eq!(session.player_condition(), Condition::Disabled);
         assert_eq!(drawn_in(&session, ShipRef::Player), ShipLayer::Ships);
         session.player_display_step(
+            &crate::ai::NovaAi::default(),
             GamePass::Advance { double_time: false },
             Rules::default(),
             crate::session::game_work::PlayerHead::default(),

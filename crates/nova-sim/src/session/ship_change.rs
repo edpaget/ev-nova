@@ -389,6 +389,9 @@ impl Session {
         before_class: impl FnOnce(&mut Self),
     ) {
         self.pilot.outfits = change.outfits;
+        // A change of class rewrites the weapon array, so no stock top-up
+        // is held any more (see the `stock_fold` module).
+        self.ship.fold_stock();
         before_class(self);
         self.pilot.ship = ship.id;
         self.ship.fit.fields = ship.fields;

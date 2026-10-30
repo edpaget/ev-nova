@@ -233,8 +233,43 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
 
         assert_eq!(desc.input(&key(Key::Down)), nova_view::ScreenAction::None);
         assert_eq!(desc.first_line(), 1);
+        // `_TextDialogFilter`'s End and Home reach either end of it.
+        desc.input(&key(Key::End));
+        let last = desc.lines().len() - desc.dialog().scroll_text().expect("text").visible();
+        assert_eq!(desc.first_line(), last);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.first_line(), 0);
         desc.input(&key(Key::Enter));
         assert!(desc.closed());
+    }
+}
+
+/// `_ShowTextDialog` shrinks stock 3003 to a one-line text before
+/// `_CenterWindow` centres it (@0x5aac9-0x5ae16): 441 x 115, at
+/// 512 - trunc(441 / 2), 384 - trunc(115 / 2), Done 198 higher.
+#[test]
+fn a_one_line_text_shrinks_desc_dialog_to_441_by_115() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(DESC_DIALOG)
+            .expect("converts");
+        let desc = DescDialog::new(
+            &template,
+            "A one-line text.",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        let origin = Point::new(292.0, 327.0);
+        let dialog = desc.dialog();
+        assert_eq!(dialog.bounds(), Bounds::at(origin, 441.0, 115.0));
+        assert_eq!(
+            dialog.item_bounds(DONE_ITEM),
+            Some(rect(173.0, 83.0, 99.0, 25.0).offset(origin))
+        );
+        assert_eq!(
+            dialog.item_bounds(TEXT_ITEM),
+            Some(rect(11.0, 10.0, 417.0, 64.0).offset(origin))
+        );
     }
 }
 
@@ -1343,6 +1378,95 @@ fn every_dialog_opened_over_flight_is_centred() {
             }
         }
     }
+}
+
+#[test]
+fn the_race_dialog_lays_out_centred_with_its_six_items_where_recorded() {
+    use nova_view::spaceport::race::{RACE_DIALOG, RaceScreen};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(RACE_DIALOG)
+            .expect("converts");
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (470.0, 230.0)
+        );
+        let items: Vec<Bounds> = template.items.iter().map(|item| item.bounds).collect();
+        assert_eq!(
+            items,
+            [
+                rect(243.0, 196.0, 99.0, 25.0),
+                rect(129.0, 196.0, 99.0, 25.0),
+                rect(13.0, 88.0, 100.0, 100.0),
+                rect(128.0, 88.0, 100.0, 100.0),
+                rect(243.0, 88.0, 100.0, 100.0),
+                rect(357.0, 88.0, 100.0, 100.0),
+            ],
+            "{}",
+            path.display()
+        );
+        let race = RaceScreen::new(
+            Ok((template, Rc::new(MonoMetrics))),
+            None,
+            ButtonStyle::STOCK,
+            1000,
+        );
+        assert_eq!(race.problem(), None);
+        let texts: Vec<String> = drawn(&race)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["Cancel", "Help"], "{}", path.display());
+    }
+}
+
+#[test]
+fn the_races_background_and_its_sixteen_racer_pictures_decode_at_their_sizes() {
+    use nova_view::spaceport::race::{BACKGROUND, RacerLook};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let size = |id: i16| {
+        let image = picture(&data, id);
+        (image.width(), image.height())
+    };
+    assert_eq!(size(BACKGROUND.id), (470, 230), "PICT 8529");
+    for look in [
+        RacerLook::Normal,
+        RacerLook::Pressed,
+        RacerLook::Winner,
+        RacerLook::Loser,
+    ] {
+        for racer in 0..4 {
+            let id = look.picture(racer);
+            assert_eq!(size(id), (100, 100), "PICT {id}");
+        }
+    }
+}
+
+#[test]
+fn str_150_holds_the_bars_gamble_and_the_races_labels() {
+    use nova_view::spaceport::bar::GAMBLE_LABEL;
+    use nova_view::spaceport::layout::DONE_LABEL;
+    use nova_view::spaceport::race::{CANCEL_LABEL, HELP_LABEL};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let list = data
+        .get::<StrList>(150)
+        .expect("STR# 150 is in the stock data")
+        .expect("decodes")
+        .record
+        .clone();
+    assert_eq!(list.strings[10].as_str(), GAMBLE_LABEL, "#11");
+    assert_eq!(list.strings[33].as_str(), CANCEL_LABEL, "#34");
+    assert_eq!(list.strings[4].as_str(), DONE_LABEL, "#5");
+    assert_eq!(list.strings[57].as_str(), HELP_LABEL, "#58");
 }
 
 /// The `DLOG`s `_CenterWindow` moves are placed as it places them: the

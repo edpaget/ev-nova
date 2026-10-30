@@ -21,7 +21,7 @@
 
 use crate::ai::{Goal, Surroundings};
 use crate::combat::ShipRef;
-use crate::traffic::npc::{AiType, Npc};
+use crate::traffic::npc::Npc;
 
 /// A call a think makes on the message line, which the session answers
 /// after the tick's decisions (see the module docs).
@@ -49,9 +49,11 @@ pub fn when_fleeing(goal: Goal) -> Option<CommCall> {
 
 /// The call of a brave trader's think ending in `goal` among `around`: a
 /// distress call fleeing (state 3, @0x8b6bc-0x8b6cc), or attacking an NPC
-/// of AI type above 2, a warship or an interceptor (state 4, a target
-/// neither -1 nor the player, @0x8b6e3-0x8b71c); a ship with no AI
-/// ([`Npc::no_ai`](crate::traffic::npc::Npc::no_ai), -1) is neither. A
+/// of the original's AI type above 2 (state 4, a target neither -1 nor
+/// the player, @0x8b6e3-0x8b71c,
+/// [`Npc::original_ai_type`](crate::traffic::npc::Npc::original_ai_type)):
+/// a warship, an interceptor, a led ship or a fighter, disabled or not;
+/// not a ship with no AI (-1) or one the player has paid off (1). A
 /// ship gone from its slot is read in its record as it left
 /// ([`Surroundings::gone_npc`]), which the freed slot still holds.
 #[must_use]
@@ -61,9 +63,7 @@ pub fn brave_call(goal: Goal, around: &Surroundings) -> Option<CommCall> {
         Goal::Attack(ShipRef::Npc(id)) => around
             .npc(id)
             .or_else(|| around.gone_npc(id))
-            .filter(|target| {
-                !target.no_ai && matches!(target.ai_type, AiType::Warship | AiType::Interceptor)
-            })
+            .filter(|target| target.original_ai_type() > 2)
             .map(|_| CommCall::Distress),
         _ => None,
     }
@@ -127,7 +127,7 @@ pub fn threatens_player(npc: &Npc, around: &Surroundings, player_intact: bool) -
 mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, TRADERS, around, blessing_of, govts, n, ship, sites};
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{AiType, NpcId};
 
     /// The facts of a ship that calls.
     fn calling() -> DistressFacts {
@@ -208,6 +208,45 @@ mod tests {
             None,
             "AI type -1 is not above 2 (@0x8b707)"
         );
+    }
+
+    #[test]
+    fn a_brave_trader_attacking_a_led_carried_or_marked_trader_calls_and_a_spared_one_not() {
+        // A led ship is the original's AI type 6, a carried fighter 5, a
+        // disabled former escort 6 until it thinks whole, a bribed one 1.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut led = ship(2, PIRATES, AiType::WimpyTrader, 0.0, 100.0);
+        led.leader = Some(NpcId(9));
+        let mut fighter = ship(3, PIRATES, AiType::BraveTrader, 0.0, 100.0);
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(NpcId(9)),
+            window: 100.0,
+            reach: 40.0,
+        });
+        let mut marked = ship(4, PIRATES, AiType::WimpyTrader, 0.0, 100.0);
+        marked.kept_escort_ai = true;
+        marked.condition = crate::combat::hull::Condition::Disabled;
+        let mut spared = led.clone();
+        spared.id = NpcId(5);
+        spared.spared = true;
+        let npcs = [
+            ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0),
+            led,
+            fighter,
+            marked,
+            spared,
+        ];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        let call = |goal| brave_call(goal, &around);
+        assert_eq!(call(Goal::Attack(n(2))), Some(CommCall::Distress), "led");
+        assert_eq!(
+            call(Goal::Attack(n(3))),
+            Some(CommCall::Distress),
+            "carried"
+        );
+        assert_eq!(call(Goal::Attack(n(4))), Some(CommCall::Distress), "marked");
+        assert_eq!(call(Goal::Attack(n(5))), None, "spared");
     }
 
     #[test]

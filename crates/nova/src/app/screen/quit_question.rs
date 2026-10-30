@@ -50,7 +50,9 @@
 //!   the Cocoa Preferences window (`_RunPrefsDialog` @0xcd409) run the
 //!   system's modal loops, which never route it to `_MainScreenMouse`.
 //!   So it asks nothing and quits nothing, and a second close held behind
-//!   the first is dropped by the question's flush.
+//!   the first is dropped by the question's flush. The New Pilot
+//!   dialog's flush drops the keys and clicks held through N's click too,
+//!   all but their releases (`screen_impl::flushed_on_opening`).
 //! - Quit's choice is inside its `Delay` (@0x1a9fb) and then exits, never
 //!   reading it: the close is dropped and Quit quits after its delay.
 

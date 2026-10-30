@@ -6,7 +6,10 @@
 //! (@0x3baea-0x3baf1, a jump to 0x3bef9): the ship hit and the lead of an
 //! escort hit take no target and no provocation, the Good Samaritans
 //! stay put, no person's grudge is held and the ship doesn't cloak when
-//! hit (see [`react`](crate::ai::react) and the session's settle step).
+//! hit (see [`react`](crate::ai::react)). The session's settle step
+//! weighs each of the fight's strikes in its own turn, after the
+//! reactions of the strikes before it and just before its own
+//! ([`Traffic::answer_in_turn`](crate::traffic::Traffic::answer_in_turn)).
 //! Its decloak (@0x3bf1f) comes after and still runs for any direct hit.
 //!
 //! [`verdict`] works the flag out in the original's order. `si` is the
@@ -18,7 +21,8 @@
 //!
 //! | Branch | Addresses | What it does |
 //! |---|---|---|
-//! | Entry gate | @0x3b408-0x3b46e | only a direct hit ([`Strike::direct`]) on an NPC, not by itself, is weighed, and not on a ship with no AI ([`Npc::no_ai`], +0x88 at or below 0 @0x3b459: the player's eject hulk); anything else gives no answer and no provocation |
+//! | Entry gate | @0x3b408-0x3b461 | only a direct hit ([`Strike::direct`]) on an NPC, not by itself, is weighed, and not on a ship with no AI ([`Npc::no_ai`], +0x88 at or below 0 @0x3b459: the player's eject hulk); anything else gives no answer and no provocation |
+//! | Jump-out gate | @0x3b467-0x3b46e | a victim whose +0x50 is above 0 ([`Warp::under_way`](crate::traffic::warp_out::Warp::under_way)), jumping out, gives no answer and no provocation |
 //! | Kin | @0x3b4cd-0x3b4fc | set when a ship of another government hit it, the governments compared as raw words, so two independents are kin ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin)); clear for no ship |
 //! | Leaders | @0x3b503-0x3b571 | for a led ship (leader L, the player included): set when `si` isn't L, or a ship whose own leader isn't L hit it |
 //! | The record | @0x3b577-0x3b67e | a governed ship, in a governed system, not the player's target, cleared for the player or a ship it leads while the player's record there is at least twice its government's `CrimeTol` ([`Surroundings::record`]); then cleared for a ship of its own government. An independent ship: set for the player or a ship it leads |
@@ -29,22 +33,36 @@
 //! | Same leader | @0x3b94e-0x3b978 | cleared for a ship of the same leader |
 //! | Blessing | @0x3b9a9-0x3ba08 | for a stray hit still set: cleared for a governed ship allied with the player (`_AlliedWithPlayer` @0x6985: led by it, or by a ship it leads) whose government blesses it with peace ([`Surroundings::blessed`]) |
 //! | Grand fleet | @0x3ba14-0x3baa1 | cleared when the ship's leader's leader is an NPC attacker's leader's leader, the player included |
-//! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
+//! | Jumping leader | @0x3bab7-0x3bae4 | a victim whose NPC leader (slot 1-63, not the player) is jumping out is not answered; the stray add before it stands |
+//! | Docking | @0x3baf7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
 //! | Entry test | @0x3bb20-0x3bb74 | a fighter-class attacker (ship class +0xe, [`EscortClass::Fighter`]), the player's ship included, on a ship that isn't one, has a target and attacks (`_IsShipAttacking` @0x82f6a, goal 4: [`Goal::attacking`]), is not answered |
 //!
-//! Left out, for want of what they read (weapons-fidelity phase 37
-//! records each; the plunder docking of the table above, once among
-//! them, is built):
+//! Two more reads of the victim's +0x50 come after the jump-out gate:
+//! the "arriving" test (@0x3b97e-0x3b995, a `cmova` clearing the flag)
+//! and the shared tail @0x3b4b0-0x3b4c2 (entered at @0x3b4bc from the
+//! grand fleet's end and @0x3baad, and at @0x3b4b0 from the defence-ship
+//! path), which jumps to 0x3bef9. Nothing between the gate and them writes
+//! +0x50, so they always find it at 0 or below and never fire: dead code,
+//! recorded and not built. An arrival never writes the engine's stage
+//! (it spawns at none), so none of these tests catches it, whatever
+//! [`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits) says.
 //!
-//! - **Defence ships** (+0x8c, the stellar a ship defends): a self-hit by
-//!   one (@0x3b408-0x3b4c8; either way a ship hitting itself never
-//!   answers), fleetmates (@0x3b68e-0x3b6ec). Noted on rdm task
-//!   planet-domination, with the reaction block's defence-ship branches.
-//! - **The jump-out stage** (+0x50 above 0): the entry gate's test
-//!   (@0x3b46a), arriving (@0x3b97e, dead code after the gate) and a
-//!   victim whose leader jumps out (@0x3bab7-0x3bae4). They read the
-//!   jump-out stage of roadmap ship-handling-fidelity's phase 8, and are
-//!   rdm phase weapons-fidelity-cross-roadmap/phase-1-damage-ship-jump-out-stage.
+//! **Defence ships** (+0x8c, the stellar a ship defends,
+//! [`Npc::defends`]) take two branches of their own, each of which leaves
+//! the flag as the rows above already do, so nothing reads
+//! [`Npc::defends`] here:
+//!
+//! - a defender's self-hit (@0x3b411-0x3b4c8) clears the flag (@0x3b4b5)
+//!   and jumps to the docking test (@0x3bab7), where any other self-hit
+//!   leaves at the entry gate (@0x3b453): either way a ship hitting
+//!   itself never answers and adds no stray provocation;
+//! - a hit by a defender sharing the victim's leader (@0x3b68e-0x3b6ec)
+//!   clears the flag, as the same-leader row clears it for any ship of
+//!   that leader. A defender has no leader, as its spawn writes -1 and a
+//!   capture or a pirate's take clears its +0x8c, so it never arises.
+//!
+//! Left out:
+//!
 //! - **The nag ship**'s damage rewrite (@0x3a8bb-0x3a954) and its test in
 //!   `_IsShipMyEnemy` (@0x819a4): the engine has no nag ship. Recorded
 //!   only.
@@ -169,8 +187,10 @@ pub fn verdict(
         return Verdict::default();
     };
     // A victim of AI type -1 skips the whole block, its stray
-    // provocation too (@0x3b459-0x3b461).
-    if !strike.direct || strike.by == Some(strike.ship) || victim.no_ai {
+    // provocation too (@0x3b459-0x3b461), and so does one jumping out,
+    // its +0x50 above 0, tested after the AI type and skipped before the
+    // stray add (@0x3b467-0x3b46e).
+    if !strike.direct || strike.by == Some(strike.ship) || victim.no_ai || victim.warp.under_way() {
         return Verdict::default();
     }
     let attacker = Attacker::of(strike, around);
@@ -194,6 +214,7 @@ pub fn verdict(
     }
     answers = answers
         && !grand_fleet(victim, attacker, around)
+        && !leader_jumps_out(victim, around)
         && !docking(victim, attacker)
         && !entry_test(victim, attacker, around);
     Verdict { answers, stray }
@@ -334,7 +355,23 @@ fn grand_fleet(victim: &Npc, attacker: Attacker, around: &Surroundings) -> bool 
     theirs.is_some() && theirs == ours
 }
 
-/// Docking (@0x3bab7-0x3bb1a): whether an NPC hit `victim` while it docks
+/// Jumping leader (@0x3bab7-0x3bae4): whether `victim`'s NPC leader
+/// among `around` is jumping out, its +0x50 above 0
+/// ([`Warp::under_way`](crate::traffic::warp_out::Warp::under_way)). The
+/// original reads the victim's +0x9a and admits slots 1-63 only (`lea -1;
+/// cmpw $0x3e; ja` @0x3babe-0x3bac5), so a ship the player leads and an
+/// unled one never match, whatever the player's own stage. A leader no
+/// longer in the system reads as none, as [`Attacker::of`] reads a gone
+/// attacker: the original reads the stale slot, but a ship that warped
+/// out leaves with +0x50 = 0 (@0x859ae), so the answer is the same.
+fn leader_jumps_out(victim: &Npc, around: &Surroundings) -> bool {
+    match victim.leader_ref() {
+        Some(ShipRef::Npc(id)) => around.npc(id).is_some_and(|lead| lead.warp.under_way()),
+        _ => false,
+    }
+}
+
+/// Docking (@0x3baf7-0x3bb1a): whether an NPC hit `victim` while it docks
 /// (`_AIShipIsDocking` @0x83f95, sub-goal 0xf whatever the goal): with a
 /// ship it plunders, under goal 0xd or 4, or with the player it repairs,
 /// under goal 0xf, in sub 0xf ([`Npc::docking`] in [`DockSub::Dock`], see
@@ -376,6 +413,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::govt::Governments;
     use crate::traffic::npc::{AiType, Npc, NpcId};
+    use crate::traffic::warp_out::GIVEN_UP_STAGE;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::govt;
 
@@ -542,6 +580,133 @@ mod tests {
         };
         assert_eq!(scene.judge(&own, &[]), (Verdict::default(), vec![]));
         assert_eq!(scene.judge(&astray(own), &[]), (Verdict::default(), vec![]));
+    }
+
+    // The jump-out stage.
+
+    /// `npc` at jump-out stage `stage` (+0x50).
+    fn jumping(mut npc: Npc, stage: f32) -> Npc {
+        npc.warp.stage = stage;
+        npc
+    }
+
+    #[test]
+    fn a_ship_jumping_out_answers_no_hit_and_takes_no_stray_provocation() {
+        let govts = shooting(5);
+        for stage in [1.0, 0.5, 30.0] {
+            let mut victim = jumping(of(1, Some(TRADERS)), stage);
+            victim.stray = 60.0;
+            let npcs = [victim, of(2, Some(PIRATES))];
+            let scene = Scene::new(&npcs, &govts);
+            let weighty = Strike {
+                weight: 10.0,
+                ..astray(strike(n(1), P))
+            };
+            for hit in [strike(n(1), n(2)), strike(n(1), P), weighty] {
+                assert_eq!(
+                    scene.judge(&hit, &[]),
+                    (Verdict::default(), vec![]),
+                    "stage {stage}: {hit:?}"
+                );
+            }
+        }
+        for stage in [0.0, GIVEN_UP_STAGE] {
+            let npcs = [jumping(of(1, Some(TRADERS)), stage), of(2, Some(PIRATES))];
+            let scene = Scene::new(&npcs, &govts);
+            assert!(scene.answers(&strike(n(1), n(2))), "stage {stage}");
+        }
+    }
+
+    #[test]
+    fn a_ship_whose_npc_leader_jumps_out_answers_no_hit_but_keeps_its_stray_provocation() {
+        let govts = shooting(5);
+        let scene_with = |lead_stage: f32, lead: u32, attacker_stage: f32| {
+            let mut victim = led(of(1, Some(TRADERS)), lead);
+            victim.stray = 60.0;
+            [
+                victim,
+                jumping(of(2, Some(TRADERS)), lead_stage),
+                jumping(of(3, Some(PIRATES)), attacker_stage),
+            ]
+        };
+        let npcs = scene_with(1.0, 2, 0.0);
+        let scene = Scene::new(&npcs, &govts);
+        assert!(!scene.answers(&strike(n(1), n(3))), "its leader jumps out");
+        let weighty = Strike {
+            weight: 10.0,
+            ..astray(strike(n(1), P))
+        };
+        assert_eq!(
+            scene.judge(&weighty, &[]),
+            (
+                Verdict {
+                    answers: false,
+                    stray: 17.5
+                },
+                vec![]
+            ),
+            "the add comes before the leader's test"
+        );
+        for stage in [0.0, GIVEN_UP_STAGE] {
+            let npcs = scene_with(stage, 2, 0.0);
+            let scene = Scene::new(&npcs, &govts);
+            assert!(scene.answers(&strike(n(1), n(3))), "leader at {stage}");
+            assert_eq!(
+                scene.judge(&weighty, &[]),
+                (
+                    Verdict {
+                        answers: true,
+                        stray: 17.5
+                    },
+                    vec![]
+                ),
+                "leader at {stage}"
+            );
+        }
+        let npcs = scene_with(1.0, 9, 0.0);
+        let scene = Scene::new(&npcs, &govts);
+        assert!(scene.answers(&strike(n(1), n(3))), "a leader gone");
+        let npcs = scene_with(0.0, 2, 1.0);
+        let scene = Scene::new(&npcs, &govts);
+        assert!(
+            scene.answers(&strike(n(1), n(3))),
+            "only the victim's and its leader's stages count"
+        );
+    }
+
+    /// The player's stage isn't among the surroundings, and the original's
+    /// test admits leaders in slots 1-63 only (`lea -1; cmpw $0x3e; ja`
+    /// @0x3babe-0x3bac5), so a ship the player leads skips it.
+    #[test]
+    fn a_ship_the_player_leads_answers_whatever_the_players_jump() {
+        let govts = govts(0, 0);
+        let npcs = [escorting(of(1, Some(NEUTRAL))), of(2, Some(PIRATES))];
+        let scene = Scene::new(&npcs, &govts);
+        assert!(scene.answers(&strike(n(1), n(2))));
+    }
+
+    #[test]
+    fn a_defence_ships_own_hit_and_a_defending_fleetmates_go_unanswered() {
+        let govts = govts(0, 0);
+        let defending = |mut npc: Npc| {
+            npc.defends = Some(crate::catalog::StellarId(128));
+            npc
+        };
+        let npcs = [
+            defending(led(of(1, Some(TRADERS)), 9)),
+            defending(led(of(2, Some(PIRATES)), 9)),
+            of(9, Some(PIRATES)),
+        ];
+        let scene = Scene::new(&npcs, &govts);
+        assert_eq!(
+            scene.judge(&strike(n(1), n(1)), &[]),
+            (Verdict::default(), vec![]),
+            "the defender's self-hit (@0x3b411-0x3b4c8)"
+        );
+        assert!(
+            !scene.answers(&strike(n(1), n(2))),
+            "a defender of the same leader (@0x3b6d5)"
+        );
     }
 
     // Kin and leaders.

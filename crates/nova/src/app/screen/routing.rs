@@ -7,8 +7,9 @@ use nova_view::spaceport::offer::OfferChoice;
 use nova_view::{Input, Key, MenuCommand, MouseButton, Point, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::{
-    abort_and_refresh, close_mission_texts, close_port_dialogs, load_info_text, open_outfitter,
-    open_port_dialogs, open_port_map, open_shipyard, refresh_spaceport, refresh_status_bar,
+    abort_and_refresh, close_mission_texts, close_port_dialogs, collect_race_winnings,
+    load_info_text, open_outfitter, open_port_dialogs, open_port_map, open_shipyard,
+    refresh_spaceport, refresh_status_bar, run_gamble,
 };
 use nova_view::menu::MenuChoice;
 
@@ -28,7 +29,8 @@ impl AppScreen {
     /// and flight shows. Otherwise the input ends by redrawing the status
     /// bar when a closing the original ends in `_RefreshSAT` came
     /// (`refresh_status_bar`). Mission BBS and Hire Escort are answered
-    /// with the port dialogs' openings (`open_port_dialogs`).
+    /// with the port dialogs' openings (`open_port_dialogs`), and the bar's
+    /// Gamble and race through flight (`run_gamble`).
     ///
     /// The bar's map key opens flight's course map over the spaceport
     /// ([`FlightView::open_bar_map`](nova_view::flight::FlightView::open_bar_map)),
@@ -61,6 +63,7 @@ impl AppScreen {
         let hire = spaceport.take_hire();
         let accepted = spaceport.take_mission_accept();
         open_port_dialogs(spaceport, self.flight.as_mut().expect(ENTERED));
+        run_gamble(spaceport, self.flight.as_mut().expect(ENTERED));
         if spaceport.take_mission_info_request() {
             let info = self.flight.as_mut().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
@@ -191,6 +194,15 @@ impl AppScreen {
         load_info_text(spaceport, flight);
         if let Some(mission) = spaceport.take_offer_reload() {
             flight.reload_offer_desc(mission);
+        }
+    }
+
+    /// Credits the race's winnings through flight once the spaceport's
+    /// tick has closed its result text (`collect_race_winnings`), as a
+    /// text the movie before it left empty closes with no input.
+    pub(super) fn collect_race_winnings(&mut self) {
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            collect_race_winnings(spaceport, flight);
         }
     }
 
@@ -420,6 +432,7 @@ impl AppScreen {
             (self.haggle.is_some(), Overlay::Haggle),
             (self.comm.is_some(), Overlay::Comm),
             (self.escort_dialog.is_some(), Overlay::EscortDialog),
+            (self.planet_comm.is_some(), Overlay::PlanetComm),
             (self.flight_dialog_map_open(), Overlay::DialogMap),
             (self.missions.is_some(), Overlay::Missions),
             (self.offer.is_some(), Overlay::Offer),
@@ -481,6 +494,7 @@ impl AppScreen {
             Overlay::Haggle => self.haggle_input(moved),
             Overlay::Comm => self.comm_input(moved),
             Overlay::EscortDialog => self.escort_dialog_input(moved),
+            Overlay::PlanetComm => self.planet_comm_input(moved),
             Overlay::DialogMap => self.flight_dialog_map_input(input),
             Overlay::Missions => self.missions_input(moved),
             Overlay::Offer => self.offer_input(moved),
@@ -634,6 +648,7 @@ pub(super) enum Overlay {
     Haggle,
     Comm,
     EscortDialog,
+    PlanetComm,
     /// A mission dialog's map over flight.
     DialogMap,
     Missions,

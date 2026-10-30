@@ -1,9 +1,12 @@
 //! A synthetic interface file holding the stock "new prefs dialog"
-//! (`DLOG` and `DITL` 4003), item for item, for the tests that open the
-//! Preferences dialog through the app.
+//! (`DLOG` and `DITL` 4003), item for item, and the volume arrows it
+//! draws (`PICT`s 134-137, the stock pixels as version 1 pictures), for
+//! the tests that open the Preferences dialog through the app.
 
 use std::path::Path;
 
+use nova_data::graphics::PICT;
+use nova_data::graphics::fixture::{BitMap, PictBuilder};
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::store::fixture::one_file_at;
@@ -34,8 +37,84 @@ const PICTURE: u8 = 64;
 const USER: u8 = 0;
 const DISABLED: u8 = 0x80;
 
-/// Stock "new prefs dialog": `DLOG` 4003, 336 x 278 and centred, and its
-/// twenty-two items.
+/// The stock volume arrows, `#` a set (black) bit: `PICT`s 134 (up) and
+/// 135 (down) at rest, 136 and 137 pressed.
+const ARROWS: [(i16, [&str; 9]); 4] = [
+    (
+        134,
+        [
+            "..#######..",
+            ".#.......#.",
+            "#....#....#",
+            "#...###...#",
+            "#..#####..#",
+            "#.#######.#",
+            "#...###...#",
+            "#...###...#",
+            "#.........#",
+        ],
+    ),
+    (
+        135,
+        [
+            "#.........#",
+            "#...###...#",
+            "#...###...#",
+            "#.#######.#",
+            "#..#####..#",
+            "#...###...#",
+            "#....#....#",
+            ".#.......#.",
+            "..#######..",
+        ],
+    ),
+    (
+        136,
+        [
+            "..#######..",
+            ".#########.",
+            "#####.#####",
+            "####...####",
+            "###.....###",
+            "##.......##",
+            "####...####",
+            "####...####",
+            "###########",
+        ],
+    ),
+    (
+        137,
+        [
+            "###########",
+            "####...####",
+            "####...####",
+            "##.......##",
+            "###.....###",
+            "####...####",
+            "#####.#####",
+            ".#########.",
+            "..#######..",
+        ],
+    ),
+];
+
+/// Arrow `rows` as the stock picture holds it: a version 1 `PICT` of one
+/// BitsRect of an 11 x 9 `BitMap`, between a clip and comments.
+fn arrow(rows: &[&str]) -> Vec<u8> {
+    let frame = [0, 0, 9, 11];
+    PictBuilder::v1(frame)
+        .clip_rect(frame)
+        .short_comment(130)
+        .short_comment(142)
+        .bits_rect(&BitMap::from_art(frame, rows))
+        .short_comment(143)
+        .short_comment(131)
+        .end()
+        .build()
+}
+
+/// Stock "new prefs dialog": `DLOG` 4003, 336 x 278 and centred, its
+/// twenty-two items, and the arrow `PICT`s 134-137.
 pub fn interface() -> InterfaceData {
     let mut dlog = be(&[54, 37, 332, 373, 1]);
     dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
@@ -72,9 +151,14 @@ pub fn interface() -> InterfaceData {
     ];
     let mut ditl = be(&[items.len() as i16 - 1]);
     ditl.extend(items.concat());
-    let bytes = ForkBuilder::new()
-        .resource(Dlog::TYPE, 4003, None, &dlog)
-        .resource(Ditl::TYPE, 4003, None, &ditl)
+    let bytes = ARROWS
+        .iter()
+        .fold(
+            ForkBuilder::new()
+                .resource(Dlog::TYPE, 4003, None, &dlog)
+                .resource(Ditl::TYPE, 4003, None, &ditl),
+            |fork, (id, rows)| fork.resource(PICT, *id, None, &arrow(rows)),
+        )
         .build()
         .bytes;
     let path = Path::new("/Nova-DF.rsrc");

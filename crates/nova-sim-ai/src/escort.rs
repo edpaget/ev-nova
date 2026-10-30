@@ -414,9 +414,8 @@ pub const DEFEND_KEEP_SQ: f32 = 408_375.0;
 /// ([`Surroundings::seen_by_player`]). So a ship the player can't see is
 /// none, nor is a fellow escort, hired or a mission escort (@0x81b9f); a
 /// ship attacking the player or a ship it leads, one whose hit's target
-/// is the player, and a lead whose escort fights the player are. The
-/// stellar-defender clause (+0x8c, @0x81bd3) is left out, as the engine
-/// has no defence ships (rdm:task/planet-domination).
+/// is the player, a lead whose escort fights the player and a stellar's
+/// defence ship with any target (+0x8c, @0x81bd3) are.
 /// `_AIFightThreatToParent` makes no sight test of its own.
 pub fn threats<'a>(
     escort: &'a Npc,
@@ -1337,6 +1336,16 @@ mod tests {
             Some(NpcId(2)),
             "the lead, nearer than its escort"
         );
+    }
+
+    #[test]
+    fn a_stellars_defence_ship_with_a_target_is_a_threat() {
+        let escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        let mut guard = ship(2, MEDIUM, 100.0, 0.0, false);
+        guard.target = Some(crate::combat::ShipRef::Npc(NpcId(9)));
+        guard.defends = Some(crate::catalog::StellarId(128));
+        let npcs = [escort.clone(), guard];
+        assert_eq!(taken(&escort, &among(&npcs)).0, vec![NpcId(2)]);
     }
 
     #[test]

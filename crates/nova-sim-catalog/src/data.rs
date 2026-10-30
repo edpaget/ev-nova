@@ -41,12 +41,13 @@ use crate::catalog::{
     DescMovie, DescText, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
     Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
-    TrafficCatalog, WeaponId, WeaponRecord, explosion_sound, loaded_mod_val,
+    MissionRecord, MissionShip, MissionTexts, NavDefSlots, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts,
+    StockWeapon, StringPatch, SystemId, SystemReinforcements, SystemTraffic, SystemVisibility,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, explosion_sound,
+    loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -269,6 +270,7 @@ impl PilotCatalog for GameData {
                     govt: stellar.govt,
                     flags2: stellar.flags2.bits(),
                     destroyed: false,
+                    dominated_at_run_time: false,
                     graphic: stellar.graphic_type,
                     dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
                     dead_frame_size,
@@ -287,6 +289,8 @@ impl PilotCatalog for GameData {
                         dead_frames: dead_frame_size
                             .map_or(0, |_| frame_count(self, stellar.dead_type)),
                     },
+                    defense_dude: stellar.defense_dude.filter(|dude| dude.0 >= 128),
+                    def_count: stellar.def_count,
                 })
             })
             .collect()
@@ -449,6 +453,19 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let stellar = stellar.ok()?.record;
+                Some(StellarScripts {
+                    id: StellarId(id),
+                    on_dominate: self.set_expr(stellar.on_dominate.as_str()).into(),
+                    on_release: self.set_expr(stellar.on_release.as_str()).into(),
+                })
+            })
+            .collect()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
@@ -490,6 +507,20 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
+    /// One pass over every system's `nav_def`, each slot kept at its
+    /// index and emptied when its `spöb` doesn't load, as
+    /// [`GameData::landing_sites`] passes over it.
+    fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let slots = system.ok()?.record.nav_def.map(|slot| {
+                    slot.filter(|stellar| matches!(self.get::<Stellar>(stellar.0), Some(Ok(_))))
+                });
+                Some((SystemId(id), slots))
+            })
+            .collect()
+    }
+
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         // Systems come by ascending ID, so each stellar's come in order.
         let mut listed: BTreeMap<StellarId, Vec<SystemId>> = BTreeMap::new();
@@ -515,6 +546,9 @@ impl PilotCatalog for GameData {
                     flags2: stellar.flags2.bits(),
                     govt: stellar.govt,
                     min_status: stellar.min_status,
+                    tribute: stellar.tribute,
+                    tech_level: stellar.tech_level,
+                    def_count: stellar.def_count,
                 })
             })
             .collect()
@@ -970,6 +1004,7 @@ impl TrafficCatalog for GameData {
                     grant_class: record.grant_class,
                     grant_count: record.grant_count,
                     grant_prob: record.grant_prob,
+                    color: record.color,
                     mission_ship: record
                         .link_mission
                         .and_then(|mission| self.get::<Mission>(mission.0)?.ok())
@@ -1180,6 +1215,7 @@ impl CombatCatalog for GameData {
                     require: record.require.bits(),
                     inh_jam: record.inh_jam,
                     skill_mult: record.skill_mult,
+                    ship_color: record.ship_color,
                 })
             })
             .collect()
@@ -2542,6 +2578,9 @@ mod tests {
                     flags2: 0,
                     govt: Some(GovtId(140)),
                     min_status: 25,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
                 ListedStellar {
                     id: StellarId(129),
@@ -2550,6 +2589,9 @@ mod tests {
                     flags2: 0x2000,
                     govt: None,
                     min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
             ],
             "by ID, each system once by ID; unlisted 130, missing 999, and 133 listed only \
@@ -2586,6 +2628,29 @@ mod tests {
             .collect();
         assert_eq!(first, landing, "as the landing sites give it");
         assert_eq!(store(&[]).first_stellars(), []);
+    }
+
+    #[test]
+    fn each_systems_slots_keep_their_nav_def_index_with_gaps() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[999, -1, 129, 128])),
+            (System::TYPE, 131, system_with(&[])),
+            (System::TYPE, 133, short(system_with(&[128]))),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let mut slots = [None; crate::catalog::NAV_DEF_SLOTS];
+        slots[3] = Some(StellarId(128));
+        assert_eq!(
+            data.nav_def_slots(),
+            [
+                (SystemId(130), slots),
+                (SystemId(131), [None; crate::catalog::NAV_DEF_SLOTS])
+            ],
+            "missing 999, -1 and undecodable 129 empty, 128 kept at index 3; \
+             undecodable 133 left out"
+        );
+        assert_eq!(store(&[]).nav_def_slots(), []);
     }
 
     #[test]
@@ -2708,6 +2773,7 @@ mod tests {
                     govt: None,
                     flags2: 0x1200,
                     destroyed: false,
+                    dominated_at_run_time: false,
                     graphic: 0,
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
@@ -2722,6 +2788,8 @@ mod tests {
                         dead_frames: 1,
                         ..SiteAnimation::default()
                     },
+                    defense_dude: None,
+                    def_count: 0,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -2734,6 +2802,7 @@ mod tests {
                     govt: None,
                     flags2: 0,
                     destroyed: false,
+                    dominated_at_run_time: false,
                     graphic: 7,
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
@@ -2747,8 +2816,70 @@ mod tests {
                         dead_frames: 1,
                         ..SiteAnimation::default()
                     },
+                    defense_dude: None,
+                    def_count: 0,
                 },
             ]
+        );
+    }
+
+    /// `bytes`, a `spöb`, with this `DefenseDude` and `DefCount`.
+    fn defended(mut bytes: Vec<u8>, dude: i16, count: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x1C, &[dude, count]);
+        bytes
+    }
+
+    #[test]
+    fn a_listed_stellar_reads_its_tribute_tech_level_and_def_count_raw() {
+        let mut paid = paying(defended(stellar(0, 0, 0, 1, 0), 140, 7006), 250);
+        put_i16s(&mut paid, 0x0C, &[4]);
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129])),
+            (Stellar::TYPE, 128, paid),
+            (Stellar::TYPE, 129, stellar(0, 0, 0, 1, 0)),
+        ]);
+        assert_eq!(
+            data.listed_stellars()
+                .iter()
+                .map(|stellar| (
+                    stellar.id.0,
+                    stellar.tribute,
+                    stellar.tech_level,
+                    stellar.def_count
+                ))
+                .collect::<Vec<_>>(),
+            [(128, 250, 4, 7006), (129, 0, 0, 0)]
+        );
+    }
+
+    #[test]
+    fn a_landing_site_reads_its_defence_dude_and_its_raw_def_count() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130])),
+            (
+                Stellar::TYPE,
+                128,
+                defended(stellar(0, 0, 0, 1, 0), 140, 1082),
+            ),
+            (Stellar::TYPE, 129, defended(stellar(0, 0, 0, 1, 0), -1, 5)),
+            (
+                Stellar::TYPE,
+                130,
+                defended(stellar(0, 0, 0, 1, 0), 127, -3),
+            ),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130))
+                .iter()
+                .map(|site| (site.id.0, site.defense_dude, site.def_count))
+                .collect::<Vec<_>>(),
+            [
+                (128, Some(DudeId(140)), 1082),
+                (129, None, 5),
+                (130, None, -3),
+            ],
+            "a `DefenseDude` below 128 is none, as `_LoadObjectData` keeps -1 \
+             (@0x7770c-0x77725); `DefCount` raw"
         );
     }
 
@@ -3934,6 +4065,44 @@ mod tests {
     }
 
     #[test]
+    fn stellar_scripts_list_every_readable_spöbs_on_dominate_and_on_release() {
+        let mut ruled = stellar(0, 0, 0, 0, 0);
+        ruled[0x36..0x3A].copy_from_slice(b"b100");
+        ruled[0x135..0x13A].copy_from_slice(b"!b100");
+        let data = store(&[
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 0, 0)),
+            (Stellar::TYPE, 128, ruled),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let scripts = data.stellar_scripts();
+        assert_eq!(
+            scripts.iter().map(|script| script.id).collect::<Vec<_>>(),
+            [StellarId(128), StellarId(130)],
+            "the unreadable 129 left out"
+        );
+        assert_eq!(
+            scripts[0].on_dominate.tree().map(|expr| expr.ops.len()),
+            Some(1),
+            "b100"
+        );
+        assert_eq!(
+            scripts[0].on_release.tree().map(|expr| expr.ops.len()),
+            Some(1),
+            "!b100"
+        );
+        assert_eq!(scripts[1].on_dominate, Script::default(), "blank");
+        assert_eq!(scripts[1].on_release, Script::default(), "blank");
+        assert!(
+            shared_script(
+                &scripts[0].on_dominate,
+                &data.stellar_scripts()[0].on_dominate
+            ),
+            "parsed once"
+        );
+        assert_eq!(store(&[]).stellar_scripts(), []);
+    }
+
+    #[test]
     fn stellar_flags_lists_every_readable_spöb_by_id_with_its_flags() {
         let data = store(&[
             (Stellar::TYPE, 130, stellar(0, 0, 0, 0x20, 0)),
@@ -4433,6 +4602,7 @@ mod tests {
             require: 0x8000_0000_0000_0021,
             inh_jam: [25, 0, -3, 0],
             skill_mult: 150,
+            ship_color: 0,
         };
         assert_eq!(
             data.governments(),
@@ -4791,6 +4961,7 @@ mod tests {
                 grant_class: 0,
                 grant_count: 0,
                 grant_prob: 0,
+                color: 0,
                 mission_ship: None,
             },
             "the -1 and 127 weapon slots left out, HailPict 127 none"
@@ -4826,6 +4997,19 @@ mod tests {
             assert_eq!(person_name(resource), name, "{resource}");
         }
         assert_eq!(PERSON_NAME_CHARS, 29);
+    }
+
+    #[test]
+    fn a_persons_color_and_a_govts_ship_color_reach_their_records_raw() {
+        // `përs` +0x17A and `gövt` +0xA8, `00RRGGBB`, which
+        // `_LoadObjectData` unpacks (@0x7c2a4-0x7c2e4, @0x7bcf9-0x7bd33).
+        let mut painted = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
+        painted[0x17A..0x17E].copy_from_slice(&0x00F8_1008_u32.to_be_bytes());
+        let mut ruling = govt_bytes();
+        ruling[0xA8..0xAC].copy_from_slice(&0x0007_0707_u32.to_be_bytes());
+        let data = store(&[(Person::TYPE, 128, painted), (Govt::TYPE, 128, ruling)]);
+        assert_eq!(data.persons()[0].color, 0x00F8_1008);
+        assert_eq!(data.governments()[0].ship_color, 0x0007_0707);
     }
 
     #[test]

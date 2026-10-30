@@ -418,6 +418,7 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
         govt: None,
         flags2: 0,
         destroyed: false,
+        dominated_at_run_time: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,
@@ -428,6 +429,8 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 
@@ -606,6 +609,10 @@ impl PilotCatalog for FakeCatalog {
         self.lives.clone()
     }
 
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+        Vec::new()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         Some(
             self.moon
@@ -754,7 +761,6 @@ pub(in crate::flight) fn stellar(
             frame0_bias: 0,
             flags2: 0,
         },
-        radar_square: false,
     }
 }
 
@@ -1885,6 +1891,7 @@ pub(in crate::flight) fn damaging() -> FakeCatalog {
             require: 0,
             inh_jam: [0; 4],
             skill_mult: 0,
+            ship_color: 0,
         }],
         ..catalog
     }
@@ -1894,13 +1901,21 @@ pub(in crate::flight) fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
 }
 
+/// A layer `rlëD` `image_id` of `frames` frames, each [`LAYER_SIDE`]
+/// square.
 pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
         image_id,
         frames: NonZeroU16::new(frames).expect("non-zero"),
+        frame_width: LAYER_SIDE,
+        frame_height: LAYER_SIDE,
         solid: false,
     }
 }
+
+/// The side of a [`layer`]'s frames: even, so a layer stood at a whole
+/// pixel is centred on it.
+pub(in crate::flight) const LAYER_SIDE: u32 = 40;
 
 /// A look named `name` sounding `snd ` `sound`, its shots on `rlëD`
 /// `image` of 36 frames, if any.

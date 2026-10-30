@@ -1,8 +1,10 @@
 //! The Preferences dialog through the whole app: synthetic game data (a
 //! pilot flying over a planet that can be landed on, and Nova's button
 //! pictures) and a synthetic interface file holding the stock "new prefs
-//! dialog", laid out by the real glyphon metrics, drawn through the
-//! renderer into the recording Gpu and driven only by window events. The
+//! dialog" and its arrow pictures, laid out by the real glyphon metrics,
+//! drawn through the renderer (the game's images and the interface
+//! file's, as `main` wires them) into the recording Gpu and driven only
+//! by window events. The
 //! audio core plays into the recording audio port, and the settings are
 //! kept in the in-memory store, so the test sees what plays and what is
 //! saved, and "restarts" by reading the store back.
@@ -25,7 +27,7 @@ use nova_audio::{
     Audio, AudioCommand, AudioCore, AudioSettings, Priority, SettingsStore, SoundTable,
 };
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
-use nova_data::graphics::{PICT, RLED};
+use nova_data::graphics::{EightBitReading, PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::ship::Ship;
@@ -34,11 +36,11 @@ use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fixture::one_file;
-use nova_data::{GameData, Record, SoundId};
+use nova_data::{GameData, InterfaceData, Record, SoundId};
 use nova_render::WorldSpace;
 use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{Batch, FontFaces, Frame, GameImages};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_view::geometry::Point;
@@ -229,7 +231,7 @@ fn seeded() -> MemorySettings {
 }
 
 struct Harness {
-    app: App<Rc<GameData>>,
+    app: App<GameImages<Rc<GameData>>>,
     window: FakeWindow,
     gpu: RecordingGpu,
     log: AudioLog,
@@ -272,12 +274,16 @@ impl Harness {
             let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
             screen = screen.with_pilots(None, metrics);
         }
+        // The dialogs and the renderer share the interface file, as in
+        // `main`.
+        let interface = Rc::new(prefs_fixture::interface());
         let screen = screen
             .with_dialogs(
-                Rc::new(prefs_fixture::interface()),
+                Rc::<InterfaceData>::clone(&interface),
                 Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
             )
             .with_prefs(settings.prefs());
+        let images = GameImages::new(data, EightBitReading::AsDrawn).with_interface(interface);
         let audio = RecordingAudio::new();
         let log = audio.log();
         let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table)
@@ -286,7 +292,7 @@ impl Harness {
             fullscreen: Vec::new(),
         };
         Self {
-            app: App::new(&window, data, crate::common::appeared(screen))
+            app: App::new(&window, images, crate::common::appeared(screen))
                 .with_os(os)
                 .with_audio(core)
                 .with_settings(keeper),
@@ -1062,6 +1068,20 @@ impl Harness {
         self.click(ok);
         assert_ne!(self.showing(), Showing::Preferences, "closed");
     }
+}
+
+/// The volume arrows are the interface file's pictures, served through
+/// the real image source: the open dialog's frame uploads them, 11 x 9,
+/// and reports no image failure.
+#[test]
+fn the_preferences_draw_the_interface_files_arrow_pictures() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('p'));
+    assert_eq!(harness.showing(), Showing::Preferences);
+    let calls = harness.frame_calls();
+    assert!(uploads(&calls).contains(&(11, 9)), "{:?}", uploads(&calls));
+    assert_eq!(harness.app.take_failures(), []);
 }
 
 #[test]

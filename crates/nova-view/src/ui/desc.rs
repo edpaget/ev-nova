@@ -9,6 +9,23 @@
 //! (`_TextDialogUpdate` @0x51b7a, @0x51dc7-0x51e28). The choice reads the
 //! ID alone; a graphic whose `PICT` is missing leaves item 2 empty, as
 //! `GetPicture` finds nothing to draw.
+//!
+//! The plain dialog is shrunk to its text before it is placed
+//! ([`DescDialog::new`]), as `_ShowTextDialog` shrinks 3003
+//! (@0x5aac9-0x5adee, the rule in [`text_shrink`](super::text_shrink)),
+//! so `_CenterWindow` @0x5ae16 centres the shrunk window. It always takes
+//! the shrink; the picture variant never does, since the plain path alone
+//! leaves `*0x3b52a0` at −1 (@0x5a8eb, tested @0x5aad4). The shrink's own
+//! `MoveWindow` down by `trunc(0.3 × d)` (@0x5ab68-0x5abbe) is left out:
+//! `_CenterWindow` moves the window again before it shows, so nothing of it
+//! is seen.
+//!
+//! Its keys are `_TextDialogFilter`'s (@0x51f77): Return, Enter and Escape
+//! close it, and Home, End, Page Up and Page Down scroll the text by the
+//! original's pixel amounts, each only while the text can scroll its way,
+//! on the press alone (the user's standing press-only decision). Up and
+//! Down scroll a whole line, where the original's items 5 and 6 move 10 px.
+//! See [`DescDialog`]'s `Screen::input`.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -20,14 +37,15 @@ use crate::draw::DrawList;
 use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::image::ImageKey;
-use crate::input::Input;
+use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::text::TextMetrics;
+use crate::text::{TextMetrics, wrap};
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use super::picture_variant::VariantTemplates;
 use super::scroll_text::ScrollText;
+use super::text_shrink::shrink_to_text;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
 pub const DESC_DIALOG: i16 = 3003;
@@ -38,7 +56,26 @@ pub const DONE_ITEM: usize = 1;
 /// The text box's item.
 pub const TEXT_ITEM: usize = 3;
 
-/// The description's size, in Geneva: near the original's 9 to 10.
+/// The scroll-up arrow's item, which the shrink moves with Done.
+pub const SCROLL_UP_ITEM: usize = 5;
+
+/// The scroll-down arrow's item, which the shrink moves with Done.
+pub const SCROLL_DOWN_ITEM: usize = 6;
+
+/// How far Home and End scroll the text, in the original's pixels (the
+/// engine's logical units): `_TextDialogFilter` passes `_ScrollDialogText`
+/// 9999 (@0x52026, @0x520ca), past either end of any stock text.
+pub const HOME_END_UNITS: f32 = 9999.0;
+
+/// How far Page Up and Page Down scroll the text, in the original's pixels
+/// (the engine's logical units): 250 (@0x5206b, @0x52112).
+pub const PAGE_UNITS: f32 = 250.0;
+
+/// The description's font, which both lays it out and measures it for
+/// the shrink.
+pub const BODY_FONT: Font = Font::Geneva;
+
+/// The description's size, in [`BODY_FONT`]: near the original's 9 to 10.
 pub const BODY_SIZE: f32 = 10.0;
 
 /// The description's colour.
@@ -136,6 +173,13 @@ pub struct DescDialog {
 impl DescDialog {
     /// The dialog `template` (stock `DLOG` 3003) showing `text`, its button
     /// labelled in `style`, its text measured by `metrics`.
+    ///
+    /// Before it is placed, `template` is shrunk to `text` as
+    /// `_ShowTextDialog` shrinks it (@0x5aac9-0x5adee): the text's height
+    /// wrapped to item 3's width sets how far the bottom edge, Done, the
+    /// scroll arrows (items 5 and 6) and the text box's bottom come up
+    /// (see [`text_shrink`](super::text_shrink)). A text that fills the box
+    /// keeps the template's size. A template with no item 3 is not shrunk.
     #[must_use]
     pub fn new(
         template: &DialogTemplate,
@@ -143,7 +187,17 @@ impl DescDialog {
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        let mut desc = Self::laid(template, text, style, metrics);
+        let text_height = template.items.get(TEXT_ITEM - 1).map_or(0.0, |item| {
+            let lines = wrap(&metrics, BODY_FONT, BODY_SIZE, text, item.bounds.width());
+            lines.len() as f32 * metrics.line_height(BODY_FONT, BODY_SIZE)
+        });
+        let template = shrink_to_text(
+            template,
+            TEXT_ITEM,
+            &[DONE_ITEM, SCROLL_UP_ITEM, SCROLL_DOWN_ITEM],
+            text_height,
+        );
+        let mut desc = Self::laid(&template, text, style, metrics);
         desc.dialog = desc.dialog.with_frame(FRAME);
         desc
     }
@@ -178,7 +232,7 @@ impl DescDialog {
                 TEXT_ITEM,
                 Role::ScrollText {
                     text: text.to_owned(),
-                    font: Font::Geneva,
+                    font: BODY_FONT,
                     size: BODY_SIZE,
                     color: BODY_COLOR,
                     backing: None,
@@ -273,13 +327,56 @@ impl DescDialog {
 
 impl Screen for DescDialog {
     /// A press of [`MAP_KEY`](crate::flight::view::MAP_KEY) asks for the
-    /// map when it opens one ([`DescDialog::take_map_request`]); every
-    /// other event goes to the dialog, and activating Done closes it. It
-    /// never quits.
+    /// map when it opens one ([`DescDialog::take_map_request`]).
+    ///
+    /// Home, End, Page Up and Page Down scroll the text as
+    /// `_TextDialogFilter` @0x51f77 does, through `_ScrollDialogText`
+    /// @0x51839: while the text can scroll up (@0x51ff4), Home jumps
+    /// [`HOME_END_UNITS`] and Page Up [`PAGE_UNITS`] toward its start;
+    /// while it can scroll down (@0x52095), End and Page Down the same
+    /// toward its end. A key that can't scroll its way goes on to the
+    /// dialog, which ignores it, as the filter falls through to "not
+    /// handled" (@0x523fc). That leaves the text's state untouched, a
+    /// wheel's sub-line leftover included, where scrolling toward the end
+    /// the text sits at would drop it. They play no sound, as the
+    /// original's arms play none.
+    ///
+    /// They act on the press alone. The original's filter also takes
+    /// autoKey (event 5, @0x51f83-0x51f96) and so repeats them while held;
+    /// by the user's standing decision of 2026-10-23, dialog keys here
+    /// stay press-only, so repeats and releases do nothing.
+    ///
+    /// Up and Down stay with the dialog, a whole line each, repeats
+    /// included. The original turns them into items 5 and 6, which
+    /// `_ShowTextDialog` scrolls 10 px a press or repeat
+    /// (@0x5b0af-0x5b130); the engine's text box shows whole lines only
+    /// (one Geneva 10 line is about 12).
+    ///
+    /// Every other event goes to the dialog, and activating Done closes
+    /// it. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if is_map_press(input) {
             self.map_requested = self.map.is_some();
             return ScreenAction::None;
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && let Some(text) = self.dialog.scroll_text_mut()
+        {
+            let units = match key {
+                Key::Home if text.can_scroll_up() => Some(-HOME_END_UNITS),
+                Key::PageUp if text.can_scroll_up() => Some(-PAGE_UNITS),
+                Key::End if text.can_scroll_down() => Some(HOME_END_UNITS),
+                Key::PageDown if text.can_scroll_down() => Some(PAGE_UNITS),
+                _ => None,
+            };
+            if let Some(units) = units {
+                text.scroll_units(units);
+                return ScreenAction::None;
+            }
         }
         if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
             self.closed = true;
@@ -311,11 +408,12 @@ impl Screen for DescDialog {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
-    use crate::input::{Key, MouseButton};
+    use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -713,6 +811,320 @@ mod tests {
         desc.input(&key(Key::Space));
         assert!(desc.closed(), "Space on Done");
         assert_eq!(desc.take_sounds(), [], "Space");
+    }
+
+    // The shrink to the text, `_ShowTextDialog` @0x5aabe-0x5adee.
+
+    /// Stock `DLOG` 3003 and its `DITL`, placed by `_CenterWindow`: 441 x
+    /// 313, Done (1), the parked picture (2), the 417 x 262 text box (3),
+    /// the parked map item (4) and the scroll arrows (5, 6).
+    fn stock_template() -> DialogTemplate {
+        let item = |bounds| ItemTemplate {
+            bounds,
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 441.0, 313.0),
+            placement: Placement::CenterWindow,
+            items: vec![
+                item(rect(173.0, 281.0, 99.0, 25.0)),
+                item(rect(221.0, 329.0, 68.0, 30.0)),
+                item(rect(11.0, 10.0, 417.0, 262.0)),
+                item(rect(70.0, 345.0, 78.0, 25.0)),
+                item(rect(330.0, SCROLL_ARROW_Y, 23.0, 23.0)),
+                item(rect(363.0, SCROLL_ARROW_Y, 23.0, 23.0)),
+            ],
+        }
+    }
+
+    const SCROLL_ARROW_Y: f32 = 282.0;
+
+    fn stock_desc(text: &str) -> DescDialog {
+        DescDialog::new(
+            &stock_template(),
+            text,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+    }
+
+    fn centred(width: f32, height: f32) -> Bounds {
+        Bounds::at(
+            crate::ui::dialog::center_window(crate::ui::dialog::SCREEN, (width, height)),
+            width,
+            height,
+        )
+    }
+
+    #[test]
+    fn a_one_line_text_shrinks_3003_to_441_by_115_centred_on_the_window() {
+        let desc = stock_desc("A short text.");
+        let bounds = desc.dialog().bounds();
+        assert_eq!(bounds, centred(441.0, 115.0));
+        assert_eq!(bounds.min, Point::new(292.0, 327.0));
+        let local = |item| {
+            let at = desc.dialog().item_bounds(item).expect("item");
+            at.offset(Point::new(-bounds.min.x, -bounds.min.y))
+        };
+        assert_eq!(local(DONE_ITEM), rect(173.0, 83.0, 99.0, 25.0));
+        assert_eq!(local(SCROLL_UP_ITEM).min.y, SCROLL_ARROW_Y - 198.0);
+        assert_eq!(local(SCROLL_DOWN_ITEM).min.y, SCROLL_ARROW_Y - 198.0);
+        assert_eq!(local(TEXT_ITEM), rect(11.0, 10.0, 417.0, 64.0));
+        let text = desc.dialog().scroll_text().expect("text");
+        assert_eq!(text.rect().height(), 64.0);
+        assert_eq!(local(DESC_PICTURE_ITEM).min.y, 329.0, "parked");
+    }
+
+    #[test]
+    fn a_text_that_fills_the_box_keeps_3003_at_441_by_313() {
+        let long = "line\r".repeat(21) + "line";
+        let desc = stock_desc(&long);
+        assert_eq!(desc.lines().len(), 22, "264 high, over the 262 box");
+        let bounds = desc.dialog().bounds();
+        assert_eq!(bounds, centred(441.0, 313.0));
+        assert_eq!(bounds.min, Point::new(292.0, 228.0));
+        let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done");
+        assert_eq!(done.min.y - bounds.min.y, 281.0);
+    }
+
+    #[test]
+    fn the_text_is_measured_wrapped_to_the_text_boxs_width() {
+        // 85 characters wrap to two lines in the 417 wide box (83 a line
+        // at 5 each): 24 high, still under the 48 floor.
+        let wrapped = stock_desc(&("x ".repeat(42) + "x"));
+        assert_eq!(wrapped.lines().len(), 2);
+        assert_eq!(wrapped.dialog().bounds().height(), 115.0);
+        // Ten lines, 120 high: the dialog is 120 + 16 + 51 tall.
+        let ten = stock_desc(&("word\r".repeat(9) + "word"));
+        assert_eq!(ten.dialog().bounds().height(), 187.0);
+    }
+
+    #[test]
+    fn the_frame_spans_the_shrunk_dialog() {
+        let desc = stock_desc("A short text.");
+        let bounds = desc.dialog().bounds();
+        let commands = drawn(&desc);
+        assert!(
+            commands.contains(&DrawCommand::StretchedPicture {
+                image: FRAME.bottom,
+                top_left: Point::new(bounds.min.x, bounds.max.y - FRAME.bottom_height),
+                width: 441.0,
+                height: FRAME.bottom_height,
+            }),
+            "the bottom cap at the shrunk bottom: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn the_picture_variant_never_shrinks() {
+        let one_line = templates()
+            .open("one", Some(5008), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("shown");
+        assert_eq!(one_line.dialog().bounds(), rect(0.0, 0.0, 300.0, 120.0));
+        let pictured = DescDialog::pictured(
+            &stock_template(),
+            "one",
+            5008,
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        assert_eq!(pictured.dialog().bounds(), centred(441.0, 313.0));
+    }
+
+    #[test]
+    fn the_scroll_arrows_are_items_5_and_6() {
+        assert_eq!((SCROLL_UP_ITEM, SCROLL_DOWN_ITEM), (5, 6));
+    }
+
+    // Home, End, Page Up and Page Down, `_TextDialogFilter`
+    // @0x51ff4-0x52137.
+
+    /// Forty lines, "l0" to "l39", in [`template`]'s 3-line box (12 units
+    /// a line): the last first line is 37.
+    fn long_desc() -> DescDialog {
+        DescDialog::new(
+            &template(),
+            &forty_lines(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+    }
+
+    fn forty_lines() -> String {
+        (0..40)
+            .map(|n| format!("l{n}"))
+            .collect::<Vec<_>>()
+            .join("\r")
+    }
+
+    const LAST: usize = 37;
+
+    #[test]
+    fn page_down_scrolls_250_units_and_pages_average_250() {
+        let mut desc = long_desc();
+        assert_eq!(desc.lines().len(), 40);
+        assert_eq!(desc.input(&key(Key::PageDown)), ScreenAction::None);
+        assert_eq!(desc.first_line(), 20, "250 / 12, 10 over");
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.first_line(), LAST, "260 / 12 is 21, clamped");
+    }
+
+    #[test]
+    fn page_up_scrolls_back_250_units() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::PageUp));
+        assert_eq!(desc.first_line(), LAST - 20);
+    }
+
+    #[test]
+    fn end_reaches_the_last_line_and_home_the_first() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.first_line(), 0);
+    }
+
+    #[test]
+    fn at_the_top_home_and_page_up_do_nothing() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::Home));
+        desc.input(&key(Key::PageUp));
+        assert_eq!(desc.first_line(), 0);
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.first_line(), 20, "nothing left over past the top");
+    }
+
+    #[test]
+    fn at_the_end_end_and_page_down_do_nothing() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::PageDown));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::PageUp));
+        assert_eq!(
+            desc.first_line(),
+            LAST - 20,
+            "nothing left over past the end"
+        );
+    }
+
+    /// A wheel scroll of `units` over [`template`]'s text box.
+    fn wheel_units(units: f32) -> Input {
+        Input::Scroll {
+            delta: crate::input::ScrollDelta::Units(units),
+            at: Point::new(30.0, 20.0),
+        }
+    }
+
+    /// The filter's not-handled fall-through (@0x523fc) leaves the text as
+    /// it was, a wheel's leftover included: scrolling up from the top
+    /// would drop it.
+    #[test]
+    fn at_the_top_home_and_page_up_keep_the_wheels_leftover() {
+        let mut desc = long_desc();
+        desc.input(&wheel_units(5.0));
+        assert_eq!(desc.first_line(), 0);
+        desc.input(&key(Key::Home));
+        desc.input(&key(Key::PageUp));
+        desc.input(&wheel_units(7.0));
+        assert_eq!(desc.first_line(), 1, "the 5 left over and 7 are a line");
+    }
+
+    /// The mirror of
+    /// [`at_the_top_home_and_page_up_keep_the_wheels_leftover`].
+    #[test]
+    fn at_the_end_end_and_page_down_keep_the_wheels_leftover() {
+        let mut desc = long_desc();
+        desc.input(&key(Key::End));
+        desc.input(&wheel_units(-5.0));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::End));
+        desc.input(&key(Key::PageDown));
+        desc.input(&wheel_units(-7.0));
+        assert_eq!(
+            desc.first_line(),
+            LAST - 1,
+            "the 5 left over and 7 are a line"
+        );
+    }
+
+    #[test]
+    fn scroll_keys_are_press_only() {
+        for scroll in [Key::Home, Key::End, Key::PageUp, Key::PageDown] {
+            let mut desc = long_desc();
+            desc.input(&key(Key::PageDown));
+            for input in [
+                Input::Key {
+                    key: scroll,
+                    pressed: true,
+                    repeat: true,
+                },
+                Input::Key {
+                    key: scroll,
+                    pressed: false,
+                    repeat: false,
+                },
+            ] {
+                desc.input(&input);
+                assert_eq!(desc.first_line(), 20, "{input:?}");
+                assert!(!desc.closed(), "{input:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn scroll_keys_never_close_it_or_ask_for_the_map() {
+        let marks = MapMarks {
+            green: Some(nova_sim::SystemId(131)),
+            multi_arrows: false,
+        };
+        let mut desc = long_desc().with_map(Some(marks));
+        for scroll in [Key::End, Key::PageUp, Key::Home, Key::PageDown] {
+            assert_eq!(desc.input(&key(scroll)), ScreenAction::None);
+            assert!(!desc.closed(), "{scroll:?}");
+            assert_eq!(desc.take_map_request(), None, "{scroll:?}");
+            assert_eq!(desc.take_sounds(), [], "{scroll:?}");
+        }
+    }
+
+    #[test]
+    fn a_short_text_ends_at_its_last_first_line_and_one_line_never_moves() {
+        let mut five = desc();
+        five.input(&key(Key::End));
+        assert_eq!(five.first_line(), 2);
+        five.input(&key(Key::Home));
+        assert_eq!(five.first_line(), 0);
+        five.input(&key(Key::PageDown));
+        assert_eq!(five.first_line(), 2);
+        let mut one = DescDialog::new(&template(), "one", ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        for scroll in [Key::End, Key::PageDown] {
+            one.input(&key(scroll));
+            assert_eq!(one.first_line(), 0, "{scroll:?}");
+            assert!(!one.closed());
+        }
+    }
+
+    #[test]
+    fn the_picture_variant_takes_the_scroll_keys_too() {
+        let mut desc = templates()
+            .open(
+                &forty_lines(),
+                Some(5008),
+                ButtonStyle::STOCK,
+                Rc::new(MonoMetrics),
+            )
+            .expect("shown");
+        assert_eq!(desc.picture(), Some(5008));
+        desc.input(&key(Key::End));
+        assert_eq!(desc.first_line(), LAST);
+        desc.input(&key(Key::PageUp));
+        assert_eq!(desc.first_line(), LAST - 20);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.first_line(), 0);
     }
 
     /// `_TextDialogFilter` @0x51f77 maps no Tab or Space.

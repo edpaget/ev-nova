@@ -870,7 +870,11 @@ fn orders_in_the_trade_center_outfitter_and_shipyard_across_a_jump_are_restored_
     game.press(KeyCode::Enter);
     game.enter_ship();
     assert_eq!(game.showing(), Showing::Flight);
-    assert_eq!(game.pilot(), flown);
+    // All but the system last jumped from, which the load keeps or
+    // forgets as the `loaded_jumped_from` rule reads (pinned in nova-sim).
+    let mut opened = game.pilot();
+    opened.jumped_from = flown.jumped_from;
+    assert_eq!(opened, flown);
 }
 
 crate::common::entry_harness!(Harness, click, frame);

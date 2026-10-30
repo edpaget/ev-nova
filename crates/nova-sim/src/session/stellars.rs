@@ -137,7 +137,9 @@ use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
-use crate::landing::{LandingReach, StellarShown, TypeWidth, frame_radius, landing_reach};
+use crate::landing::{
+    LandingReach, OUT_OF_RANGE_FRAME_WIDTH, StellarShown, TypeWidth, frame_radius, landing_reach,
+};
 use crate::legal::{Crime, LegalCode};
 use crate::navigation::SpriteRect;
 use crate::pilot::Pilot;
@@ -190,7 +192,8 @@ impl Session {
     /// it then raises each system to its head's level @0x32b13-0x32b8f)
     /// the known set worked out afresh (`Chart::rework_known`,
     /// @0x32b7b, @0x32b91-0x32c10) and the rescue kept
-    /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), before its stellars;
+    /// (`Chart::keep_rescues`, @0x32c58-0x32ca1), and every stellar's
+    /// under-attack mark cleared (@0x32d5d), before its stellars;
     /// then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it and the sheet each counts the frames of,
@@ -199,6 +202,9 @@ impl Session {
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         self.chart
             .rebuild_chart(&mut self.pilot, &self.statics, &self.setup);
+        // Every stellar's +0x47 cleared (@0x32d5d; see the
+        // `stellar_defence` module).
+        self.space.traffic.defences_mut().clear();
         let reshown = self.reshow();
         let galaxy = &self.chart.galaxy;
         let rebuilt = self.space.rebuilt.rebuild(
@@ -302,14 +308,16 @@ impl Session {
         self.place_stellar_sprites();
     }
 
-    /// The width each hypergate and wormhole shown takes its entry box
-    /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
-    /// (see [`gate_entry`](crate::traffic::gate_entry)). A gate the
-    /// player's system does not hold ([`Chart::held_here`]) reads the
-    /// unloaded width, 150, as the owner test comes first (@0xacb9-0xacc1).
+    /// The width each hypergate and wormhole the system lists, shown or
+    /// not, takes its entry box by: the one `_GetStellarSpriteXSize` reads
+    /// of its `Type` master (see [`gate_entry`](crate::traffic::gate_entry)).
+    /// A gate the player's system does not hold ([`Chart::held_here`]),
+    /// such as one it lists but another visible system owns, which an NPC
+    /// may enter (see the `npc_destinations` module), reads the unloaded
+    /// width, 150, as the owner test comes first (@0xacb9-0xacc1).
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
         self.chart
-            .sites
+            .listed
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
             .map(|site| {
@@ -495,7 +503,9 @@ impl Session {
 
     /// The daily step's stellars (see the module docs): every damaged
     /// stellar's strength restored, every active stellar's gun timer
-    /// zeroed (see the `stellar_guns` module), then each destroyed
+    /// zeroed (see the `stellar_guns` module), every active dominated
+    /// stellar's defence fleet regrown (see the `dominated_stellars`
+    /// module), then each destroyed
     /// stellar in turn, by ascending ID, counts a day down, or regenerates
     /// and runs its `OnRegen` at once, through [`Session::run_set`],
     /// drawing on `chance`. The overlay is read again after each, so a
@@ -505,6 +515,8 @@ impl Session {
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.space.strength.clear();
         self.reset_gun_timers();
+        self.chart
+            .regrow_defences(&mut self.pilot, &self.statics, chance);
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
@@ -710,6 +722,25 @@ impl Space {
             self.rebuilt.type_width(site)
         } else {
             TypeWidth::Unloaded
+        }
+    }
+
+    /// The width the radar sizes `site`'s blip by, one of the stellars
+    /// its system lists, shown or not: what `_GetSpriteXSize` (@0x49a0a)
+    /// gives of its `Type` master, which `_DrawStatusRadar` indexes by the
+    /// `spöb`'s `Type` directly (@0x499e8-0x499f9). That is the `Type`
+    /// frame's width, 32 ([`OUT_OF_RANGE_FRAME_WIDTH`]) for a `spïn` that
+    /// counts no frames (@0x26d4-0x26fc), and `None` while the master is
+    /// not loaded (@0x499fc, @0x49a00-0x49a05), which draws the smallest
+    /// blip. Unlike [`Space::type_width`], it runs no owner test: that is
+    /// `_GetStellarSpriteXSize`'s (@0xacb9-0xacc1), which the radar does
+    /// not call, so a stellar another visible system owns reads its master
+    /// too.
+    pub(super) fn radar_type_width(&self, site: &LandingSite) -> Option<u32> {
+        match self.rebuilt.type_width(site) {
+            TypeWidth::Frame => site.frame_size.map(|(width, _)| width),
+            TypeWidth::OutOfRange => Some(OUT_OF_RANGE_FRAME_WIDTH),
+            TypeWidth::Unloaded => None,
         }
     }
 

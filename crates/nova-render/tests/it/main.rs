@@ -13,6 +13,7 @@ mod metal_fx;
 mod prefs_labels;
 mod sharp_bilinear;
 mod stock_fonts;
+mod stock_interface_images;
 mod stock_render;
 mod stock_super_xbr;
 mod stock_super_xbr_cost;

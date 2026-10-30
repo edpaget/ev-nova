@@ -280,6 +280,7 @@ fn a_port_screen_maps_close_sends_its_restore_and_fills_the_kept_frame() {
     let mut view = faked(docked(5.0));
     view.open_port_screen_map(crate::flight::PortScreen::Exchange);
     view.sim.queue_answer_showing(Answer::Done, docked(9.0));
+    view.port_map_input(&key(MAP, false));
     view.close_map();
     assert_eq!(sent(&view).last(), Some(&FlightCommand::PutBackPortNav));
     assert_eq!(

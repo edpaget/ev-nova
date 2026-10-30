@@ -249,6 +249,21 @@
 //! outfit does: `_PlayerShipTradeInPrice` @0xb079 counts the outfits owned
 //! and nothing else.
 //!
+//! The original tops them up in the ship's weapon array only, and the
+//! shipyard never calls `_ShipStatsToSystemInfo`, which turns that array
+//! into owned outfits. By the engine reading of
+//! [`RuleKey::PurchaseStockFold`](crate::RuleKey::PurchaseStockFold), what
+//! the top-up added ([`Purchase::held`]) stays out of the outfit counts the
+//! shipyard reads ([`outfit_counts`]: the trade-in, the carry and
+//! `Require`) until the next fold: the outfitter opening (@0x5bb57), the
+//! player info (@0x5a06a), the hire screen closing (@0x49235), a
+//! `G`/`D`/`C`/`E`/`H` set operator (@0x15439, @0x15466, @0x154b3) or a
+//! landing (@0x63211). A second purchase before then trades in without it
+//! and clears the weapon array (@0x5edba-0x5ee19), so it is lost unpaid. The
+//! armament and the status bar read the array, so they count it at once.
+//! By the other reading the top-up is owned at once. The session keeps the
+//! held part (`nova_sim::Session::buy_ship`).
+//!
 //! The evidence for the trade-in: the Bible's `Cost` says "the cost of the
 //! new ship minus 25% of the original cost of your current ship and
 //! upgrades"; an Ambrosia forum answer (Forum26 #004247, 2002) gives "25%
@@ -1605,6 +1620,13 @@ pub struct Purchase {
     /// What the pilot owns afterwards: the persistent outfits carried, the
     /// new class's default items on top, its stock topped up.
     pub outfits: BTreeMap<OutfitId, u16>,
+    /// The part of [`outfits`](Self::outfits) the stock top-up added and
+    /// still holds in the weapon array alone, by
+    /// [`RuleKey::PurchaseStockFold`](crate::RuleKey::PurchaseStockFold):
+    /// by the engine, what `fit_stock` added on top of the carry and the
+    /// default items, until the next fold ([`outfit_counts`]); by the
+    /// other reading, nothing.
+    pub held: BTreeMap<OutfitId, u16>,
     /// What the purchase writes on the pilot beside the class.
     pub settlement: Settlement,
     /// What it did, as `Session::buy_ship` reports it.
@@ -1630,6 +1652,67 @@ impl Settlement {
         pilot.cash = self.cash;
         pilot.cargo = self.cargo;
     }
+}
+
+/// A purchase's outfits before and after its stock top-up.
+struct Topped<'a> {
+    /// The purchase.
+    sale: &'a Sale<'a>,
+    /// The carry and the default items.
+    before: &'a BTreeMap<OutfitId, u16>,
+    /// Those with the stock topped up.
+    after: &'a BTreeMap<OutfitId, u16>,
+}
+
+impl Context for Topped<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.sale.rulebook()
+    }
+}
+
+/// What a purchase's stock top-up still holds in the weapon array alone,
+/// as [`RuleKey::PurchaseStockFold`](crate::RuleKey::PurchaseStockFold)
+/// says (see the module's Stock weapons).
+fn stock_held<'a>() -> Value<Topped<'a>, BTreeMap<OutfitId, u16>> {
+    Value::disputed(
+        "stock held",
+        "`_DoShipyardDialog` tops up the weapon array @0x5eebc-0x5ef92 and never calls \
+         `_ShipStatsToSystemInfo`, which the outfitter @0x5bb57, the player info @0x5a06a, the \
+         hire screen @0x49235, `G`/`D`/`C`/`E`/`H` @0x15439/@0x15466/@0x154b3 and a landing \
+         @0x63211 run",
+        RuleKey::PurchaseStockFold,
+        engine_held,
+        owned_at_once,
+    )
+}
+
+/// The engine's: everything the top-up added.
+fn engine_held(topped: &Topped) -> BTreeMap<OutfitId, u16> {
+    outfit_counts(topped.after, topped.before)
+}
+
+/// The other reading's: the top-up is owned at once, so nothing is held.
+fn owned_at_once(_: &Topped) -> BTreeMap<OutfitId, u16> {
+    BTreeMap::new()
+}
+
+/// The outfit counts `owned` leaves once the stock `held` in the weapon
+/// array alone is taken out, each saturating at none and dropped there:
+/// what `_PlayerShipTradeInPrice` @0xb079, the purchase's carry @0x5ee1b
+/// and `_GetPlayerContributeBits` read while a bought ship's top-up sits
+/// in the array (see the module's Stock weapons).
+#[must_use]
+pub fn outfit_counts(
+    owned: &BTreeMap<OutfitId, u16>,
+    held: &BTreeMap<OutfitId, u16>,
+) -> BTreeMap<OutfitId, u16> {
+    owned
+        .iter()
+        .filter_map(|(id, &count)| {
+            let left = count.saturating_sub(held.get(id).copied().unwrap_or(0));
+            (left > 0).then_some((*id, left))
+        })
+        .collect()
 }
 
 /// Which persistent outfits a purchase carries over, and what it sells
@@ -1803,8 +1886,14 @@ pub fn filled(stats: &ShipStats, rules: &Rulebook) -> Reserves {
 pub fn purchase(sale: &Sale, quote: Quote) -> Purchase {
     let carry = carried().of(sale);
     let defaults = tally(sale.new.defaults.iter().copied());
-    let mut outfits = merged(&carry.carried, &defaults);
+    let before = merged(&carry.carried, &defaults);
+    let mut outfits = before.clone();
     fit_stock(&mut outfits, sale.fits, sale.records);
+    let held = stock_held().of(&Topped {
+        sale,
+        before: &before,
+        after: &outfits,
+    });
     let stats = ShipStats::new(sale.new.fields, &outfit_mods(&outfits, sale.records));
     let refitted = Refitted { sale, stats };
     let (cargo, left_behind) = cargo_kept().of(&refitted);
@@ -1815,6 +1904,7 @@ pub fn purchase(sale: &Sale, quote: Quote) -> Purchase {
     });
     Purchase {
         outfits,
+        held,
         settlement: Settlement {
             cash,
             name: cull_name(sale.name),
@@ -3307,6 +3397,10 @@ mod tests {
         assert_eq!(trade_in_flux().about().reads(), Some(RuleKey::RankTradeIn));
         assert_eq!(cargo_kept().about().reads(), Some(RuleKey::PurchaseCargo));
         assert_eq!(carried().about().reads(), Some(RuleKey::PurchaseCarry));
+        assert_eq!(
+            stock_held().about().reads(),
+            Some(RuleKey::PurchaseStockFold)
+        );
         for plain in [
             *required().about(),
             *available().about(),
@@ -3666,6 +3760,93 @@ mod tests {
         };
         assert_eq!(fitting(12), (1, BTreeMap::new()));
         assert_eq!(fitting(13), (0, map(&[(140, 1)])));
+    }
+
+    /// A class whose stock is two blasters (weapon 128, by 205), a rocket
+    /// launcher (weapon 138, by 207) and 20 rockets (by 201), its default
+    /// item one blaster (205), bought by a pilot owning a persistent
+    /// blaster (140): what [`purchase`] works out by `rules`.
+    fn stocked_with_a_launcher(rules: Rulebook) -> Purchase {
+        let fits = [
+            StockFit {
+                outfit: OutfitId(205),
+                mod_type: MOD_WEAPON,
+                weapon: WeaponId(128),
+                count: 2,
+            },
+            StockFit {
+                outfit: OutfitId(207),
+                mod_type: MOD_WEAPON,
+                weapon: WeaponId(138),
+                count: 1,
+            },
+            StockFit {
+                outfit: OutfitId(201),
+                mod_type: MOD_AMMO,
+                weapon: WeaponId(138),
+                count: 20,
+            },
+        ];
+        let mut records = armoury();
+        records.push(outfit(207, &[(MOD_WEAPON, 138)]));
+        records.push(OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(140, &[(MOD_WEAPON, 128)])
+        });
+        let new = ShipRecord {
+            defaults: vec![(OutfitId(205), 1)],
+            ..heavy()
+        };
+        let pilot = owning(&[(140, 1)]);
+        purchase(
+            &Sale {
+                rules,
+                ..sale(&pilot, &new, "Kestrel", &fits, &records)
+            },
+            QUOTE,
+        )
+    }
+
+    #[test]
+    fn purchase_holds_the_stock_top_up_by_the_engine() {
+        let bought = stocked_with_a_launcher(Rulebook::default());
+        assert_eq!(
+            bought.held,
+            map(&[(201, 20), (207, 1)]),
+            "the launcher and its rounds; the default and the carried blaster make the two"
+        );
+        assert_eq!(
+            bought.outfits,
+            map(&[(140, 1), (201, 20), (205, 1), (207, 1)])
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_purchase_holds_nothing() {
+        let bought = stocked_with_a_launcher(
+            Rulebook::default().with_override(RuleKey::PurchaseStockFold, RuleSource::Bible),
+        );
+        assert_eq!(bought.held, BTreeMap::new());
+        assert_eq!(
+            bought.outfits,
+            map(&[(140, 1), (201, 20), (205, 1), (207, 1)])
+        );
+    }
+
+    #[test]
+    fn outfit_counts_takes_the_held_part_out() {
+        assert_eq!(
+            outfit_counts(
+                &map(&[(140, 1), (201, 20), (205, 2), (207, 1)]),
+                &map(&[(201, 25), (205, 1), (207, 1)])
+            ),
+            map(&[(140, 1), (205, 1)]),
+            "saturating at none, which is dropped; the unheld blaster untouched"
+        );
+        assert_eq!(
+            outfit_counts(&map(&[(205, 2)]), &BTreeMap::new()),
+            map(&[(205, 2)])
+        );
     }
 
     #[test]

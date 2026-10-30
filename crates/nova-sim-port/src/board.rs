@@ -58,7 +58,11 @@
 //! [`LauncherRounds`](crate::combat::armament::LauncherRounds)) that a
 //! weapon the player carries fires ([`player_fires`]), other than a
 //! guidance-99 weapon's, one drawn evenly among them (the original draws
-//! `Rand(256)` until it lands on one, @0x9251a-0x92564); and a draw of a tenth of its `Fuel`, in tens. A person (see
+//! `Rand(256)` until it lands on one, @0x9251a-0x92564), whether or not
+//! an outfit names them ([`AmmoOffer`]: the dialog names them by the
+//! lowest-ID outfit with a `ModType` 3 mod naming them in any slot, as
+//! `_PlunderDialogUpdate` does, @0x92be2-0x92ccf, and the Ammo press finds
+//! the outfit it takes them as afresh, [`ammo_outfit`]); and a draw of a tenth of its `Fuel`, in tens. A person (see
 //! [`person`](crate::person)) has no `düde`, so no booty and no cargo;
 //! the credits on board are its `Credits` as the
 //! [`BoardingRule::person_credits`] says ([`RuleKey::PersonCredits`]):
@@ -144,8 +148,9 @@
 use std::fmt::Debug;
 
 use crate::board_repair::Recovery;
-use crate::catalog::{OutfitId, PersonId, ShipId, WeaponId};
+use crate::catalog::{OutfitId, OutfitRecord, PersonId, ShipId, WeaponId};
 use crate::chance::Chance;
+use crate::combat::armament::{MOD_AMMO, lowest_ammo_outfit};
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{FIRST_AMMO_WEAPON, WeaponSpec};
 use crate::flight::ShipState;
@@ -287,10 +292,56 @@ pub struct HeldRounds {
     /// Whether that weapon is of guidance 99, a fighter bay's: its
     /// fighters, which cannot be plundered.
     pub bay: bool,
-    /// The ammunition outfit the player can take them as: the one of
-    /// lowest ID naming the slot's weapon. `None` when no weapon the
-    /// player carries fires them ([`player_fires`]).
-    pub outfit: Option<OutfitId>,
+    /// Whether a weapon the player carries fires them ([`player_fires`]):
+    /// only such rounds are offered.
+    pub fires: bool,
+    /// The outfit the dialog names them by: the one of lowest ID with a
+    /// `ModType` 3 mod naming the slot's weapon in any of its four slots,
+    /// as `_PlunderDialogUpdate` names them (@0x92be2-0x92ccf). `None`
+    /// when no outfit names them; they are offered all the same.
+    pub named: Option<OutfitId>,
+}
+
+/// The rounds a boarded ship offers: the weapon whose slot they are, how
+/// many, and the outfit the dialog names them by ([`HeldRounds::named`]).
+/// The Ammo press finds the outfit it takes them as afresh
+/// ([`ammo_outfit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AmmoOffer {
+    /// The weapon whose slot they are.
+    pub slot: WeaponId,
+    /// How many.
+    pub rounds: u32,
+    /// The outfit the dialog names them by, if any.
+    pub named: Option<OutfitId>,
+}
+
+/// The outfit a boarding's Ammo press takes the rounds of weapon `slot`
+/// as, read as `source` says ([`RuleKey::PlunderAmmoOutfit`]): by the
+/// engine the lowest-ID outfit among `records` whose *first* mod is
+/// `ModType` 3 naming `slot`, as `_DoPlunderDialog` scans the 512 records'
+/// first `ModType` (+0x4) and `ModVal` (+0xc) alone (@0x93cdc-0x93d08); by
+/// the other reading the outfit the dialog names them by, the lowest-ID
+/// one with such a mod in any slot, looked up among `ammo_outfits`
+/// ([`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits))
+/// by [`lowest_ammo_outfit`], as [`HeldRounds::named`] is. `None` when
+/// none matches: the press then beeps and takes nothing
+/// (@0x93d0a-0x93d2f).
+#[must_use]
+pub fn ammo_outfit(
+    records: &[OutfitRecord],
+    ammo_outfits: &[(WeaponId, OutfitId)],
+    slot: WeaponId,
+    source: RuleSource,
+) -> Option<OutfitId> {
+    match source {
+        RuleSource::Engine => records
+            .iter()
+            .filter(|record| record.mods[0] == (MOD_AMMO, slot.0))
+            .map(|record| record.id)
+            .min(),
+        RuleSource::Bible => lowest_ammo_outfit(ammo_outfits, slot),
+    }
 }
 
 /// Whether the player, carrying `carried`, fires the rounds of a boarded
@@ -349,9 +400,9 @@ pub struct Plunder {
     pub credits: i64,
     /// The cargo on board: a commodity and its tons.
     pub cargo: Option<(Good, u32)>,
-    /// The ammunition on board: the outfit the player takes it as, and
-    /// how many rounds.
-    pub ammo: Option<(OutfitId, u32)>,
+    /// The ammunition on board: the weapon whose rounds they are, how
+    /// many, and the outfit the dialog names them by.
+    pub ammo: Option<AmmoOffer>,
     /// The energy on board, in fuel units; none to take when 0.
     pub fuel: u32,
     /// The capture odds, in percent; Capture is offered only above 0.
@@ -382,11 +433,17 @@ impl Plunder {
             ((thousands * 1000.0) as i64).max(MIN_CREDITS)
         };
         let cargo = cargo(prize, chance);
-        let candidates: Vec<(OutfitId, u32)> = prize
+        // `_SetPlunderValues`' candidates (@0x924c1-0x9259b): rounds above
+        // none, not a bay's, that the player fires; no outfit is asked.
+        let candidates: Vec<AmmoOffer> = prize
             .rounds
             .iter()
-            .filter(|held| held.rounds > 0 && !held.bay)
-            .filter_map(|held| Some((held.outfit?, held.rounds)))
+            .filter(|held| held.rounds > 0 && !held.bay && held.fires)
+            .map(|held| AmmoOffer {
+                slot: held.slot,
+                rounds: held.rounds,
+                named: held.named,
+            })
             .collect();
         let ammo = if candidates.is_empty() {
             None
@@ -609,8 +666,9 @@ pub struct PlunderView {
     pub credits: i64,
     /// The cargo on board.
     pub cargo: Option<(Good, u32)>,
-    /// The ammunition on board: the outfit, and how many rounds.
-    pub ammo: Option<(OutfitId, u32)>,
+    /// The ammunition on board: the weapon, how many rounds, and the
+    /// outfit the dialog names them by.
+    pub ammo: Option<AmmoOffer>,
     /// The energy on board, in fuel units.
     pub fuel: u32,
     /// The capture odds, in percent.
@@ -1672,14 +1730,25 @@ mod tests {
         );
     }
 
-    /// Rounds on weapon `slot`: `rounds` of them, usable as outfit
-    /// `outfit`, a fighter bay's or not.
-    fn held(slot: i16, rounds: u32, bay: bool, outfit: Option<i16>) -> HeldRounds {
+    /// Rounds on weapon `slot`: `rounds` of them, which a weapon the
+    /// player carries fires or not, named by outfit `named`, a fighter
+    /// bay's or not.
+    fn held(slot: i16, rounds: u32, bay: bool, fires: bool, named: Option<i16>) -> HeldRounds {
         HeldRounds {
             slot: WeaponId(slot),
             rounds,
             bay,
-            outfit: outfit.map(OutfitId),
+            fires,
+            named: named.map(OutfitId),
+        }
+    }
+
+    /// The offer of `rounds` rounds of weapon `slot`, named by `named`.
+    fn offer(slot: i16, rounds: u32, named: Option<i16>) -> AmmoOffer {
+        AmmoOffer {
+            slot: WeaponId(slot),
+            rounds,
+            named: named.map(OutfitId),
         }
     }
 
@@ -1687,30 +1756,80 @@ mod tests {
     fn the_ammo_is_all_of_one_usable_weapons_rounds_drawn_among_them() {
         let armed = Prize {
             rounds: vec![
-                held(130, 4, false, Some(200)),
-                held(131, 0, false, Some(201)),
-                held(132, 9, true, Some(202)),
-                held(133, 5, false, None),
-                held(134, 12, false, Some(204)),
+                held(130, 4, false, true, Some(200)),
+                held(131, 0, false, true, Some(201)),
+                held(132, 9, true, true, Some(202)),
+                held(133, 5, false, false, Some(203)),
+                held(134, 12, false, true, Some(204)),
             ],
             ..prize(0)
         };
         let (plunder, asked) = roll(&armed, &[0, 1, 0]);
         assert_eq!(asked[..2], [26, 2], "two candidates: 130 and 134");
-        assert_eq!(plunder.ammo, Some((OutfitId(204), 12)));
+        assert_eq!(plunder.ammo, Some(offer(134, 12, Some(204))));
         let (plunder, _) = roll(&armed, &[0, 0, 0]);
-        assert_eq!(plunder.ammo, Some((OutfitId(200), 4)));
+        assert_eq!(plunder.ammo, Some(offer(130, 4, Some(200))));
         let unusable = Prize {
             rounds: vec![
-                held(131, 0, false, Some(201)),
-                held(132, 9, true, Some(202)),
-                held(133, 5, false, None),
+                held(131, 0, false, true, Some(201)),
+                held(132, 9, true, true, Some(202)),
+                held(133, 5, false, false, Some(203)),
             ],
             ..prize(0)
         };
         let (plunder, asked) = roll(&unusable, &[0, 0]);
         assert_eq!(plunder.ammo, None);
         assert_eq!(asked, [26, 30], "nothing drawn for ammo");
+    }
+
+    #[test]
+    fn rounds_the_player_fires_are_offered_though_no_outfit_names_them() {
+        // `_SetPlunderValues` (@0x924c1-0x9259b) looks up no outfit.
+        let unnamed = Prize {
+            rounds: vec![held(133, 5, false, true, None)],
+            ..prize(0)
+        };
+        let (plunder, asked) = roll(&unnamed, &[0, 0]);
+        assert_eq!(plunder.ammo, Some(offer(133, 5, None)));
+        assert_eq!(asked, [26, 1, 30]);
+    }
+
+    #[test]
+    fn ammo_outfit_takes_the_first_mod_alone_by_the_engine_and_any_mod_by_the_other_reading() {
+        use crate::catalog::OutfitRecord;
+        use crate::combat::armament::{Arsenal, MOD_AMMO};
+        use nova_sim_catalog::fixture::outfit;
+        let later = outfit(200, &[(1, 141), (MOD_AMMO, 140)]);
+        let first = outfit(210, &[(MOD_AMMO, 140)]);
+        let other = outfit(205, &[(MOD_AMMO, 141)]);
+        let find = |records: &[OutfitRecord], source| {
+            ammo_outfit(
+                records,
+                &Arsenal::ammo_outfits(records),
+                WeaponId(140),
+                source,
+            )
+            .map(|id| id.0)
+        };
+        let both = [first.clone(), later.clone(), other.clone()];
+        assert_eq!(find(&both, RuleSource::Engine), Some(210));
+        assert_eq!(find(&both, RuleSource::Bible), Some(200), "the lowest ID");
+        let alone = [later, other.clone()];
+        assert_eq!(find(&alone, RuleSource::Engine), None);
+        assert_eq!(find(&alone, RuleSource::Bible), Some(200));
+        let lower = outfit(209, &[(MOD_AMMO, 140)]);
+        assert_eq!(
+            find(&[first, lower], RuleSource::Engine),
+            Some(209),
+            "the lowest ID whatever the order"
+        );
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                find(std::slice::from_ref(&other), source),
+                None,
+                "{source:?}"
+            );
+        }
     }
 
     #[test]
@@ -1976,6 +2095,7 @@ mod tests {
             unit_mass: i64::from(mass),
             owned,
             max,
+            at_max: i32::from(owned) >= i32::from(max),
         }
     }
 
@@ -2147,7 +2267,7 @@ mod tests {
         let full = PlunderView {
             credits: 1,
             cargo: Some((Good::Commodity(0), 1)),
-            ammo: Some((OutfitId(200), 1)),
+            ammo: Some(offer(140, 1, Some(200))),
             fuel: 1,
             odds: 1,
             ..empty

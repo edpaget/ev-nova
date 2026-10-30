@@ -1,14 +1,22 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
 //! sheets, the sheets `spïn`s resolve to (a `PICT` pair cut into frames),
-//! `ppat` pixel patterns and `cicn` colour icons, decoded on request.
+//! `ppat` pixel patterns and `cicn` colour icons, decoded on request; and,
+//! when it is given one, from the interface file (`Nova-DF.rsrc` or
+//! `Nova.rez`): its `PICT`s, as [`ImageKind::InterfacePict`].
+//!
+//! The two files never answer for each other. An interface picture is
+//! looked up only in the interface file, so a game-data `PICT` with the
+//! same ID never stands in for it, and [`ImageKind::Pict`] never reads the
+//! interface file.
 
 use std::borrow::Borrow;
+use std::rc::Rc;
 
 use nova_data::graphics::{
     CICN, EightBitReading, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict,
     decode_ppat, decode_rled_as,
 };
-use nova_data::{GameData, SheetKind, SpinSpriteError};
+use nova_data::{GameData, InterfaceData, PictId, SheetKind, SpinSpriteError};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
@@ -19,17 +27,42 @@ use crate::images::{ImageError, ImageSource};
 /// It looks resources up in the store (later files winning) and decodes
 /// them on every call; the renderer keeps what it needs in the atlas. A
 /// masked picture is its picture with the mask picture applied
-/// ([`apply_mask`]); either one missing is [`ImageError::Missing`].
+/// ([`apply_mask`]); either one missing is [`ImageError::Missing`]. An
+/// interface picture comes from the interface file given to
+/// [`with_interface`](Self::with_interface); without one, or without that
+/// `PICT` in it, it is [`ImageError::Missing`].
 #[derive(Clone, Debug)]
 pub struct GameImages<D> {
     data: D,
     eight_bit: EightBitReading,
+    interface: Option<Rc<InterfaceData>>,
 }
 
 impl<D: Borrow<GameData>> GameImages<D> {
-    /// `data`'s images, with 8-bit sheets read as `eight_bit` says.
+    /// `data`'s images, with 8-bit sheets read as `eight_bit` says, and no
+    /// interface file.
     pub fn new(data: D, eight_bit: EightBitReading) -> Self {
-        Self { data, eight_bit }
+        Self {
+            data,
+            eight_bit,
+            interface: None,
+        }
+    }
+
+    /// These images, with the interface file's pictures resolved from
+    /// `interface`.
+    #[must_use]
+    pub fn with_interface(self, interface: Rc<InterfaceData>) -> Self {
+        Self {
+            interface: Some(interface),
+            ..self
+        }
+    }
+
+    /// The interface file's `PICT` `id`, decoded.
+    fn interface_picture(&self, id: i16) -> Result<Image, ImageError> {
+        let interface = self.interface.as_ref().ok_or(ImageError::Missing)?;
+        Ok(interface.picture(PictId(id)).ok_or(ImageError::Missing)??)
     }
 
     /// The frames `spïn` `id` resolves to ([`GameData::spin_sheet`]): an
@@ -67,6 +100,7 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
         };
         Ok(match kind {
             ImageKind::Pict => vec![decode_pict(bytes(PICT, id)?)?],
+            ImageKind::InterfacePict => vec![self.interface_picture(id)?],
             ImageKind::Rled => rled(id)?.into_frames(),
             ImageKind::RledSolid => rled(id)?.into_solid_frames().ok_or(ImageError::Missing)?,
             ImageKind::MaskedPict { mask } => {
@@ -82,7 +116,8 @@ impl<D: Borrow<GameData>> ImageSource for GameImages<D> {
 }
 
 /// The game data's images as the original draws them: [`GameImages`] with
-/// 8-bit sheets [`EightBitReading::AsDrawn`].
+/// 8-bit sheets [`EightBitReading::AsDrawn`] and no interface file, so an
+/// interface picture is [`ImageError::Missing`].
 impl ImageSource for GameData {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         GameImages::new(self, EightBitReading::AsDrawn).frames(kind, id)
@@ -94,11 +129,13 @@ mod tests {
 
     use nova_data::Record;
     use nova_data::graphics::GraphicsError;
+    use std::rc::Rc;
+
     use nova_data::graphics::fixture::{
-        Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
+        BitMap, Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder, rgb888_pict,
     };
     use nova_data::records::spin::Spin;
-    use nova_data::store::fixture::store_of;
+    use nova_data::store::fixture::{interface_of, store_of};
 
     use nova_rsrc::ResType;
 
@@ -466,6 +503,73 @@ mod tests {
                 .frames(ImageKind::Rled, 200)
                 .map(pixels),
             Ok(palette)
+        );
+    }
+
+    /// A version 1 picture of a 2x1 `BitMap`: black, then white.
+    fn interface_picture() -> Vec<u8> {
+        PictBuilder::v1([0, 0, 1, 2])
+            .bits_rect(&BitMap::new([0, 0, 1, 2], &[true, false]))
+            .end()
+            .build()
+    }
+
+    #[test]
+    fn an_interface_picture_comes_from_the_interface_file_alone() {
+        let data = store(&[(PICT, 128, picture()), (PICT, 131, picture())]);
+        let interface = Rc::new(interface_of(&[
+            (PICT, 128, interface_picture()),
+            (PICT, 129, interface_picture()),
+        ]));
+        let images =
+            GameImages::new(&data, EightBitReading::AsDrawn).with_interface(Rc::clone(&interface));
+        let frames = images.frames(ImageKind::InterfacePict, 128).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!((frames[0].width(), frames[0].height()), (2, 1));
+        assert_eq!(frames[0].pixel(0, 0), Some([0, 0, 0, 255]));
+        assert_eq!(frames[0].pixel(1, 0), Some([255, 255, 255, 255]));
+        // The game data's PICT 128 is still the game data's.
+        let game = images.frames(ImageKind::Pict, 128).unwrap();
+        assert_eq!((game[0].width(), game[0].height()), (3, 2));
+        // Neither file answers for the other.
+        assert_eq!(
+            images.frames(ImageKind::Pict, 129),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            images.frames(ImageKind::InterfacePict, 131),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            images.frames(ImageKind::InterfacePict, 130),
+            Err(ImageError::Missing)
+        );
+    }
+
+    #[test]
+    fn without_an_interface_file_an_interface_picture_is_missing() {
+        let data = store(&[(PICT, 128, picture())]);
+        let images = GameImages::new(&data, EightBitReading::AsDrawn);
+        assert_eq!(
+            images.frames(ImageKind::InterfacePict, 128),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            data.frames(ImageKind::InterfacePict, 128),
+            Err(ImageError::Missing)
+        );
+    }
+
+    #[test]
+    fn an_interface_picture_that_does_not_decode_is_a_decode_error() {
+        let data = store(&[]);
+        let interface = Rc::new(interface_of(&[(PICT, 128, vec![0; 3])]));
+        let images = GameImages::new(&data, EightBitReading::AsDrawn).with_interface(interface);
+        assert_eq!(
+            images.frames(ImageKind::InterfacePict, 128),
+            Err(ImageError::Decode(GraphicsError::UnexpectedEnd {
+                offset: 2
+            }))
         );
     }
 

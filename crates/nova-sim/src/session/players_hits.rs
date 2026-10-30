@@ -23,9 +23,12 @@
 //! phase's strikes settle, so it reads the [`EscortLoss`] the fight
 //! recorded.
 //!
-//! **Left out**: the target gate's +0x8c == -1 (@0x3ad81), which spares a
-//! stellar's defence ship, waits on stellar defence fleets
-//! (rdm:task/planet-domination); its +0xc8d0 <= 0x3fe (@0x3ad8f), which
+//! **The target gate** (@0x3ad81-0x3ad89): a hit on a stellar's defence
+//! ship (+0x8c not -1) is no crime and no kill, whoever struck it, as the
+//! block is skipped for it: the conviction and the credit read it from
+//! the victim as it was before the tick (`NpcBefore`).
+//!
+//! **Left out**: the target gate's +0xc8d0 <= 0x3fe (@0x3ad8f), which
 //! spares the shareware nag ship, can never apply here.
 //!
 //! [`Npc::leader_ref`]: crate::traffic::npc::Npc::leader_ref
@@ -112,6 +115,7 @@ mod tests {
             condition,
             govt: Some(GovtId(govt)),
             marked: false,
+            defends: false,
         }
     }
 
@@ -151,7 +155,13 @@ mod tests {
         was: &[NpcBefore],
     ) -> (Vec<(Crime, Option<GovtId>)>, i64) {
         let witness = Witness::default();
-        session.settle_strikes((strikes, losses), was, &witness, &mut NeverFires);
+        session.settle_strikes(
+            &crate::ai::NovaAi::default(),
+            (strikes, losses),
+            was,
+            &witness,
+            &mut NeverFires,
+        );
         (witness.seen.take(), session.pilot().combat_rating())
     }
 
@@ -217,6 +227,36 @@ mod tests {
             assert_eq!(seen, crimes, "{condition:?}");
             assert_eq!(rating, 2, "10 / 5, {condition:?}");
         }
+    }
+
+    #[test]
+    fn the_players_hits_on_a_stellars_defence_ship_are_no_crime_and_no_kill() {
+        let catalog = boardable();
+        for downed in [Downed::Disabled, Downed::BreakingUp] {
+            let mut session = alongside(&catalog);
+            let guard = NpcBefore {
+                defends: true,
+                ..was(NpcId(0), Condition::Intact, 140)
+            };
+            let (seen, rating) = settled(
+                &mut session,
+                vec![strike(NpcId(0), ShipRef::Player, downed)],
+                vec![],
+                &[guard],
+            );
+            assert_eq!(seen, [], "{downed:?}: @0x3ad81-0x3ad89");
+            assert_eq!(rating, 0, "{downed:?}");
+        }
+        // The same hit on a ship defending nothing convicts and credits.
+        let mut session = alongside(&catalog);
+        let (seen, rating) = settled(
+            &mut session,
+            vec![strike(NpcId(0), ShipRef::Player, Downed::BreakingUp)],
+            vec![],
+            &[was(NpcId(0), Condition::Intact, 140)],
+        );
+        assert!(!seen.is_empty());
+        assert!(rating > 0);
     }
 
     #[test]

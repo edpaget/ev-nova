@@ -117,10 +117,19 @@ impl<
     /// Shows what the original says when entering a gate is refused, if
     /// anything: a cancelled hypergate jump, or a wormhole leading
     /// nowhere. A hypergate without links says nothing.
+    ///
+    /// A wormhole leading nowhere still runs the dock request's tail
+    /// (`nova_sim::Session::enter_wormhole`): the view catches up with
+    /// the flight's events once ([`FlightView::catch_up`]), which lays the
+    /// system it stays in out afresh, its old ships, shots, smoke and
+    /// effects let go and its new ships' sheets read; then shuts the
+    /// escort menu (@0x6705a) and says why. The beep is the flight's.
     pub(super) fn gate_refused(&mut self, refusal: GateRefusal) {
         match refusal {
             GateRefusal::Cancelled => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
             GateRefusal::NoExit => {
+                self.catch_up();
+                self.shut_escort_menu();
                 self.say_for(gate_refusal_message(GateKind::Wormhole), GATE_REFUSAL_TICKS);
             }
             GateRefusal::NoLinks | GateRefusal::NotAtGate => {}
@@ -150,7 +159,21 @@ impl<
     /// module). The hypergate map closes silently:
     /// `_PlayerEnterHypergate` plays no beep around it (@0x6385b). See
     /// [`FlightView::close_map_then`] for the course map's close.
+    ///
+    /// While [`MAP_KEY`] is held the close waits for its release, as
+    /// `_DoSystemMap` does after every end of its loop, whichever close
+    /// ended it (@0x1394d-0x13957, then the wait @0x13a2e-0x13a46): the
+    /// map stays drawn, inert, and the whole close, the beep, the cue, the
+    /// borders' save, the opener's restore and the hypergate's entry,
+    /// runs on the release (`FlightView::closing_input`). A close asked
+    /// again meanwhile, such as the router's Escape, does nothing more.
+    /// No key gains a held or repeated action: each close still fires on
+    /// its press, and only the dialog's disposal and what follows wait.
     pub fn close_map(&mut self) {
+        if self.map_key_held {
+            self.map_closing = true;
+            return;
+        }
         self.close_map_then(|view, choice| {
             view.enter_with_movie(GateEntry::Hypergate(choice));
         });
@@ -200,6 +223,8 @@ impl<
             repeat: false,
         };
         if *input == closing && !self.map.finding() {
+            // M's own close reads M held, so it waits for the release.
+            self.map_key_held = true;
             self.close_map();
         } else {
             self.map_input(input);

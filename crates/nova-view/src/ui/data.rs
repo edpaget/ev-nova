@@ -38,21 +38,29 @@ impl DialogResources for InterfaceData {
             Some(Err(err)) => return Err(err.to_string()),
             Some(Ok((items, _))) => items.record.items,
         };
-        Ok(template(id, &dlog, items))
+        let has_picture = |pict: i16| self.resources().get(PICT, pict).is_some();
+        Ok(template(id, &dlog, items, has_picture))
     }
 }
 
 /// `DLOG` `id` (`dlog`) with `items`, in the core's terms, placed as
-/// [`Placement::for_dlog`] decides from its id and positioning word.
-fn template(id: i16, dlog: &Dlog, items: Vec<DialogItem>) -> DialogTemplate {
+/// [`Placement::for_dlog`] decides from its id and positioning word. A
+/// picture item is [`ItemSpec::MissingPicture`] when `has_picture` says the
+/// interface file lacks its `PICT`.
+fn template(
+    id: i16,
+    dlog: &Dlog,
+    items: Vec<DialogItem>,
+    has_picture: impl Fn(i16) -> bool,
+) -> DialogTemplate {
     DialogTemplate {
         bounds: bounds(dlog.bounds),
         placement: Placement::for_dlog(id, dlog.position),
-        items: items.into_iter().map(item).collect(),
+        items: items.into_iter().map(|it| item(it, &has_picture)).collect(),
     }
 }
 
-fn item(item: DialogItem) -> ItemTemplate {
+fn item(item: DialogItem, has_picture: impl Fn(i16) -> bool) -> ItemTemplate {
     let text = |text: nova_data::MacString| text.as_str().to_owned();
     ItemTemplate {
         bounds: bounds(item.bounds),
@@ -66,7 +74,8 @@ fn item(item: DialogItem) -> ItemTemplate {
             ItemKind::StaticText { text: body } => ItemSpec::StaticText(text(body)),
             ItemKind::EditText { text: body } => ItemSpec::EditText(text(body)),
             ItemKind::Icon { icon_id } => ItemSpec::Icon(icon_id),
-            ItemKind::Picture { pict } => ItemSpec::Picture(pict.0),
+            ItemKind::Picture { pict } if has_picture(pict.0) => ItemSpec::Picture(pict.0),
+            ItemKind::Picture { pict } => ItemSpec::MissingPicture(pict.0),
             ItemKind::Other { .. } => ItemSpec::Other,
         },
     }
@@ -250,7 +259,7 @@ mod tests {
                 item(
                     rect(221.0, 329.0, 68.0, 30.0),
                     false,
-                    ItemSpec::Picture(1431)
+                    ItemSpec::MissingPicture(1431)
                 ),
                 item(rect(11.0, 10.0, 417.0, 262.0), false, ItemSpec::User),
                 item(
@@ -266,6 +275,33 @@ mod tests {
                 item(small, true, ItemSpec::Icon(128)),
                 item(small, true, ItemSpec::Other),
             ]
+        );
+    }
+
+    #[test]
+    fn a_picture_item_is_missing_unless_the_interface_file_holds_its_pict() {
+        let items = ditl(&[
+            ditl_item([0, 0, 32, 32], 64, &130_i16.to_be_bytes()),
+            ditl_item([0, 40, 22, 222], 64, &1431_i16.to_be_bytes()),
+        ]);
+        let picture = nova_data::graphics::fixture::PictBuilder::new([0, 0, 32, 32])
+            .end()
+            .build();
+        let ui = interface(&[
+            (Dlog::TYPE, 128, dlog([0, 0, 100, 300], 128, &[])),
+            (nova_data::records::dialog_items::Ditl::TYPE, 128, items),
+            (PICT, 130, picture),
+        ]);
+        let kinds: Vec<ItemSpec> = ui
+            .dialog_template(128)
+            .expect("converts")
+            .items
+            .into_iter()
+            .map(|item| item.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [ItemSpec::Picture(130), ItemSpec::MissingPicture(1431)]
         );
     }
 

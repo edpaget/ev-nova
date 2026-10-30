@@ -18,6 +18,8 @@
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
 //! - [`flash`]: a ship's shield flash, the timer a hit sets and the level
 //!   its shield layer shows.
+//! - [`frame_rate`]: the frame-rate readout's meter, which counts the
+//!   frames drawn and says "Calculating FPS..." or "31 fps".
 //! - [`held_alt`]: a ship's alt layer as last drawn, which a disabled
 //!   ship of `shän` `Flags` 0x0020 keeps showing where it was.
 //! - [`floating`]: the floating map shown while H or `\` is held: its
@@ -75,6 +77,7 @@ pub mod escorts;
 mod fake_catalog;
 pub mod flash;
 pub mod floating;
+pub mod frame_rate;
 pub mod gate_colorize;
 pub mod held_alt;
 pub mod hud;
@@ -82,6 +85,7 @@ pub mod ion_tint;
 pub mod jump;
 pub mod lightning;
 pub mod murk;
+pub mod paint;
 pub(crate) mod pen;
 pub mod pods;
 pub mod radar;
@@ -113,4 +117,4 @@ pub use jump::{JumpEffect, JumpPhase};
 pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
-pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, SharedChance};
+pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, RaceShown, SharedChance};

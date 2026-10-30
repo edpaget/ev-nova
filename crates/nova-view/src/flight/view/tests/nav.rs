@@ -523,7 +523,7 @@ fn an_iff_outfit_turns_on_the_black_backdrop_and_the_cyan_player() {
     // `a_stellar_of_a_landing_blessed_government_is_cleared_whatever_its_record`).
     let mut frame = among(Vec::new());
     frame.hud.radar_gear.iff = true;
-    for stellar in &mut frame.stellars {
+    for stellar in &mut frame.radar_stellars {
         stellar.iff = Some(StellarIff::Cleared);
     }
     let view = barred(catalog(), frame);
@@ -571,7 +571,7 @@ fn a_stellar_of_a_landing_blessed_government_is_yellow_on_the_radar() {
     let earth = |iff| {
         let mut frame = among(Vec::new());
         frame.hud.radar_gear.iff = true;
-        frame.stellars[0].iff = Some(iff);
+        frame.radar_stellars[0].iff = Some(iff);
         let view = barred(catalog(), frame);
         radar_marks(&view)
             .into_iter()

@@ -219,18 +219,55 @@ fn a_and_x_show_the_about_text_and_desc_32766_both_munged_before_any_pilot() {
     assert_eq!(screen.showing(), Showing::MainMenu);
 }
 
+/// `_DoNewPilotNameDialog` flushes every queued event but disk events
+/// before its loop (`FlushEvents(0xff7f, 0)` @0x16807-0x16816), so what was
+/// typed or pressed during N's keyed click is dropped as the dialog opens.
 #[test]
-fn input_during_a_keyed_click_is_replayed_in_order_once_it_ends() {
+fn input_during_ns_keyed_click_is_flushed_as_the_new_pilot_dialog_opens() {
     let store = MemoryPilots::new();
     let mut screen = menu_with_dialogs(&store);
     screen.input(&Input::Text('n'));
     screen.input(&key(Key::Char('b'), true));
     screen.input(&Input::Text('b'));
+    screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Char('b'), false));
     assert_eq!(screen.showing(), Showing::MainMenu);
     screen.keyed_click_ended();
-    assert_eq!(screen.showing(), Showing::NewPilot);
-    assert_eq!(screen.new_pilot().expect("open").name(), "b");
+    assert_eq!(screen.showing(), Showing::NewPilot, "Return dropped too");
+    assert_eq!(
+        screen.new_pilot().expect("open").name(),
+        "",
+        "the drawn default (no STR# 128), not \"b\""
+    );
+}
+
+#[test]
+fn the_new_pilot_flush_keeps_releases_and_the_routers_own_steps() {
+    // A release is kept through the flush: the dialog acts on presses
+    // only, and the key's held state settles.
+    assert!(!super::super::screen_impl::flushed_on_opening(
+        &Held::Input(key(Key::Char('b'), false))
+    ));
+    for dropped in [
+        Held::Input(key(Key::Char('b'), true)),
+        Held::Input(Input::Text('b')),
+        Held::Input(Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: Point::new(0.0, 0.0),
+        }),
+    ] {
+        assert!(
+            super::super::screen_impl::flushed_on_opening(&dropped),
+            "{dropped:?}"
+        );
+    }
+    for kept in [Held::CancelPointer, Held::ReleaseKeys, Held::Close] {
+        assert!(
+            !super::super::screen_impl::flushed_on_opening(&kept),
+            "{kept:?}"
+        );
+    }
 }
 
 #[test]
@@ -999,6 +1036,108 @@ fn a_toggle_made_on_another_screen_reaches_a_flight_built_later() {
     assert!(flight_double_time(&screen), "the developer's flight");
 }
 
+fn flight_frame_rate(screen: &AppScreen) -> bool {
+    screen.flight_view().expect("flying").frame_rate_shown()
+}
+
+#[test]
+fn the_frame_rate_readout_toggled_in_flight_reaches_the_next_flight() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    assert!(!flight_frame_rate(&screen), "off at launch");
+    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, true));
+    screen.input(&key(nova_view::flight::view::FRAME_RATE_KEY, false));
+    assert!(flight_frame_rate(&screen), "toggled");
+    escape_to_menu(&mut screen);
+    create(&mut screen, "Bea");
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(pilot(&screen).name(), "Bea", "a flight built afresh");
+    assert!(flight_frame_rate(&screen), "the next flight");
+}
+
+/// `meter` as the flight's own switch-in leaves it: what the router's
+/// [`Screen::focus_gained`](nova_view::Screen::focus_gained) must reach.
+/// The meter's rules are nova-view's; the check that it changes keeps the
+/// tests below from passing on a flight never told.
+fn switched_in(
+    meter: &nova_view::flight::frame_rate::FrameRate,
+) -> nova_view::flight::frame_rate::FrameRate {
+    let mut told = meter.clone();
+    told.switched_in();
+    assert_ne!(&told, meter, "a switch-in the flight can see");
+    told
+}
+
+#[test]
+fn coming_back_to_the_front_reaches_the_flight_shown() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    let told = switched_in(flight(&screen).frame_rate());
+    screen.focus_gained();
+    assert_eq!(flight(&screen).frame_rate(), &told);
+}
+
+#[test]
+fn coming_back_to_the_front_reaches_the_game_held_on_the_main_screen() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    let held = |screen: &AppScreen| {
+        screen
+            .game_in_progress()
+            .expect("held")
+            .frame_rate()
+            .clone()
+    };
+    let told = switched_in(&held(&screen));
+    screen.focus_gained();
+    assert_eq!(held(&screen), told);
+}
+
+/// The switch-out's sounds: the music's stop and the flight's warp-up
+/// halt, as `_SwitchedOut` makes them (@0x4f390-0x4f3e0).
+fn switched_out_sounds() -> [Sound; 2] {
+    [
+        Sound::Ui(UiSound::SwitchedOut),
+        Sound::Sim(nova_sim::sound::SimSound::Halt(
+            &nova_sim::sound::WARP_UP_HALTS,
+        )),
+    ]
+}
+
+#[test]
+fn going_to_the_background_stops_the_music_and_reaches_the_flight_shown() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    screen.take_sounds();
+    screen.focus_lost();
+    assert_eq!(screen.take_sounds(), switched_out_sounds());
+}
+
+#[test]
+fn going_to_the_background_reaches_the_game_held_on_the_main_screen() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    escape_to_menu(&mut screen);
+    screen.take_sounds();
+    screen.focus_lost();
+    assert_eq!(screen.take_sounds(), switched_out_sounds());
+}
+
+#[test]
+fn going_to_the_background_on_the_main_menu_stops_the_music() {
+    let store = MemoryPilots::new();
+    let mut screen = menu(&store);
+    screen.take_sounds();
+    screen.focus_lost();
+    assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::SwitchedOut)]);
+}
+
 #[test]
 fn a_new_pilot_flies_with_the_routers_hyperspace_effects() {
     let store = MemoryPilots::new();
@@ -1054,10 +1193,34 @@ fn cancelling_new_pilot_goes_back_to_the_menu() {
     let mut screen = menu(&store);
     choose(&mut screen, MenuChoice::NewPilot);
     type_text(&mut screen, "Ada");
-    assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+    let cancel = screen
+        .new_pilot()
+        .expect("open")
+        .dialog()
+        .item_bounds(nova_view::ui::new_pilot::CANCEL_ITEM)
+        .expect("Cancel")
+        .center();
+    click_at(&mut screen, cancel);
     assert_eq!(screen.showing(), Showing::MainMenu);
     assert!(screen.new_pilot().is_none());
     assert_eq!(store.writes(), 0);
+}
+
+/// The New Pilot dialog opens with the router's rules: Escape cancels it
+/// only by the other reading of `new_pilot_escape`.
+#[test]
+fn escape_in_new_pilot_follows_the_rulebook() {
+    for (source, shown) in [
+        (RuleSource::Engine, Showing::NewPilot),
+        (RuleSource::Bible, Showing::MainMenu),
+    ] {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store)
+            .with_rules(Rulebook::default().with_override(RuleKey::NewPilotEscape, source));
+        choose(&mut screen, MenuChoice::NewPilot);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), shown, "{source:?}");
+    }
 }
 
 #[test]

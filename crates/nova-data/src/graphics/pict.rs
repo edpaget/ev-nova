@@ -1,8 +1,15 @@
-//! `PICT`: QuickDraw version 2 pictures.
+//! `PICT`: QuickDraw version 1 and version 2 pictures.
 //!
 //! Source: *Inside Macintosh: Imaging With QuickDraw* (1994) appendix A,
-//! "Picture Opcodes": the version 2 header, the opcode table and data
-//! lengths, and word alignment of opcodes.
+//! "Picture Opcodes": the version 1 header (`0x11 0x01`) and its one-byte
+//! opcodes, read with no alignment; the version 2 header, its two-byte
+//! opcodes and their word alignment; the opcode table and data lengths;
+//! and the data of the BitsRect, BitsRgn, PackBitsRect, PackBitsRgn,
+//! DirectBitsRect and DirectBitsRgn opcodes, whose `Rgn` forms add a mask
+//! region after the mode. A pixel opcode's map is a `PixMap` when bit 15
+//! of `rowBytes` is set, and otherwise a 1-bit `BitMap` (ch. 1), whose set
+//! bits draw in the black foreground and clear bits in the white
+//! background. The `region` module reads mask regions.
 
 use std::borrow::Cow;
 
@@ -13,21 +20,27 @@ use super::budget::check_budget;
 use super::color::{ColorTable, indices, rgb555};
 use super::image::Image;
 use super::packbits::unpack;
-use super::pixmap::{PixMap, QdRect};
+use super::pixmap::{PixMap, PixelMap, QdRect};
 use super::reader::Reader;
+use super::region::{MIN_REGION, Region};
 
 /// The `PICT` resource type.
 pub const PICT: ResType = ResType::new(*b"PICT");
 
 /// Offset of the version opcode, after `picSize` and `picFrame`.
 const VERSION_OFFSET: usize = 10;
-/// The version 2 opcode (`0x0011`) and its version word (`0x02FF`).
-const VERSION_2: [u16; 2] = [0x0011, 0x02FF];
+/// The version word after version 2's `0x0011` opcode.
+const VERSION_2_WORD: u16 = 0x02FF;
 
-/// Decodes a version 2 `PICT` to an image the size of its `picFrame`.
+/// Decodes a version 1 or version 2 `PICT` to an image the size of its
+/// `picFrame`.
 ///
-/// The `picSize` word and the HeaderOp's rectangle are ignored. Opcodes
-/// start at even offsets; bytes after EndPic are ignored.
+/// The `picSize` word and the HeaderOp's rectangle are ignored. Version 2
+/// opcodes are words at even offsets; version 1 opcodes are single bytes
+/// read where the previous opcode's data ended. Bytes after EndPic are
+/// ignored. A 1-bit `BitMap` decodes to opaque black (set bits) and white
+/// (clear bits); a `Rgn` opcode leaves pixels outside its mask as they
+/// were.
 ///
 /// # Example
 ///
@@ -67,20 +80,18 @@ pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
     let mut r = Reader::new(data);
     r.skip(2)?; // picSize: meaningless for pictures over 32 KB
     let frame = QdRect::read(&mut r)?;
-    if [r.u16()?, r.u16()?] != VERSION_2 {
-        return Err(GraphicsError::UnsupportedVersion {
-            offset: VERSION_OFFSET,
-        });
-    }
+    let version = Version::read(&mut r)?;
     let (width, height) = frame.size()?;
     check_budget(u64::from(width) * u64::from(height), data.len())?;
     let mut canvas = Image::transparent(width, height);
 
-    // Every opcode is at least two bytes, so the data runs out first.
+    // Every opcode is at least one byte, so the data runs out first.
     for _ in 0..data.len() {
-        r.align2()?;
-        let offset = r.pos();
-        match r.u16()? {
+        let (offset, opcode) = version.opcode(&mut r)?;
+        if !version.supports(opcode) {
+            return Err(GraphicsError::UnsupportedOpcode { opcode, offset });
+        }
+        match opcode {
             NOP | DEF_HILITE => {}
             SHORT_COMMENT => r.skip(2)?,
             LONG_COMMENT => {
@@ -90,10 +101,14 @@ pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
             }
             HEADER_OP => r.skip(24)?,
             CLIP => skip_region(&mut r)?,
-            DIRECT_BITS_RECT => direct_bits(&mut r, frame, &mut canvas)?,
-            PACK_BITS_RECT => packbits_rect(&mut r, frame, &mut canvas)?,
+            BITS_RECT => indexed_bits(&mut r, ROWS_RAW, frame, &mut canvas)?,
+            BITS_RGN => indexed_bits(&mut r, ROWS_RAW.masked(), frame, &mut canvas)?,
+            PACK_BITS_RECT => indexed_bits(&mut r, ROWS_PACKED, frame, &mut canvas)?,
+            PACK_BITS_RGN => indexed_bits(&mut r, ROWS_PACKED.masked(), frame, &mut canvas)?,
+            DIRECT_BITS_RECT => direct_bits(&mut r, ROWS_PACKED, frame, &mut canvas)?,
+            DIRECT_BITS_RGN => direct_bits(&mut r, ROWS_PACKED.masked(), frame, &mut canvas)?,
             END_PIC => return Ok(canvas),
-            opcode => return Err(GraphicsError::UnsupportedOpcode { opcode, offset }),
+            _ => return Err(GraphicsError::UnsupportedOpcode { opcode, offset }),
         }
     }
     Err(GraphicsError::UnexpectedEnd { offset: r.pos() })
@@ -106,11 +121,67 @@ const SHORT_COMMENT: u16 = 0x00A0;
 const LONG_COMMENT: u16 = 0x00A1;
 const END_PIC: u16 = 0x00FF;
 const HEADER_OP: u16 = 0x0C00;
+const BITS_RECT: u16 = 0x0090;
+const BITS_RGN: u16 = 0x0091;
 const PACK_BITS_RECT: u16 = 0x0098;
+const PACK_BITS_RGN: u16 = 0x0099;
 const DIRECT_BITS_RECT: u16 = 0x009A;
+const DIRECT_BITS_RGN: u16 = 0x009B;
 
-/// The smallest region: its size word and bounding rectangle.
-const MIN_REGION: u16 = 10;
+/// The opcodes a version 1 picture may hold. (Version 2 adds DefHilite,
+/// HeaderOp and the direct opcodes; [`decode_pict`]'s match is its list.)
+const VERSION_1_OPCODES: [u16; 9] = [
+    NOP,
+    CLIP,
+    SHORT_COMMENT,
+    LONG_COMMENT,
+    BITS_RECT,
+    BITS_RGN,
+    PACK_BITS_RECT,
+    PACK_BITS_RGN,
+    END_PIC,
+];
+
+/// A picture's format version, which decides how its opcodes are read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Version {
+    /// `0x11 0x01`: one-byte opcodes, read where the last one ended.
+    One,
+    /// `0x0011 0x02FF`: two-byte opcodes at even offsets.
+    Two,
+}
+
+impl Version {
+    /// Reads the version opcode at [`VERSION_OFFSET`].
+    fn read(r: &mut Reader<'_>) -> Result<Self, GraphicsError> {
+        let unsupported = GraphicsError::UnsupportedVersion {
+            offset: VERSION_OFFSET,
+        };
+        match [r.u8()?, r.u8()?] {
+            [0x11, 0x01] => Ok(Self::One),
+            [0x00, 0x11] if r.u16()? == VERSION_2_WORD => Ok(Self::Two),
+            _ => Err(unsupported),
+        }
+    }
+
+    /// The next opcode and its offset.
+    fn opcode(self, r: &mut Reader<'_>) -> Result<(usize, u16), GraphicsError> {
+        if self == Self::Two {
+            r.align2()?;
+        }
+        let offset = r.pos();
+        let opcode = match self {
+            Self::One => u16::from(r.u8()?),
+            Self::Two => r.u16()?,
+        };
+        Ok((offset, opcode))
+    }
+
+    /// Whether `opcode` belongs to this version.
+    fn supports(self, opcode: u16) -> bool {
+        self == Self::Two || VERSION_1_OPCODES.contains(&opcode)
+    }
+}
 
 /// Skips a region: a size word that counts itself, then the rest.
 fn skip_region(r: &mut Reader<'_>) -> Result<(), GraphicsError> {
@@ -122,9 +193,46 @@ fn skip_region(r: &mut Reader<'_>) -> Result<(), GraphicsError> {
     r.skip(usize::from(size - 2))
 }
 
-/// `009A` DirectBitsRect: a 16-bit or 32-bit `PixMap` (after a 4-byte
-/// `baseAddr`), the copy rectangles and mode, then the pixel rows.
-fn direct_bits(r: &mut Reader<'_>, frame: QdRect, canvas: &mut Image) -> Result<(), GraphicsError> {
+/// How a pixel opcode stores its rows and whether it copies through a mask
+/// region.
+#[derive(Clone, Copy, Debug)]
+struct PixelOp {
+    /// Rows are PackBits-packed when `rowBytes` is 8 or more (`0098`,
+    /// `0099`, `009A` and `009B`); otherwise they are always raw (BitsRect
+    /// and BitsRgn).
+    packed: bool,
+    /// A mask region follows the mode (the `Rgn` opcodes).
+    masked: bool,
+}
+
+impl PixelOp {
+    /// The same rows, copied through a mask region.
+    const fn masked(self) -> Self {
+        Self {
+            masked: true,
+            ..self
+        }
+    }
+}
+
+const ROWS_RAW: PixelOp = PixelOp {
+    packed: false,
+    masked: false,
+};
+const ROWS_PACKED: PixelOp = PixelOp {
+    packed: true,
+    masked: false,
+};
+
+/// `009A` DirectBitsRect and `009B` DirectBitsRgn: a 16-bit or 32-bit
+/// `PixMap` (after a 4-byte `baseAddr`), the copy rectangles and mode, the
+/// mask region for `009B`, then the pixel rows.
+fn direct_bits(
+    r: &mut Reader<'_>,
+    op: PixelOp,
+    frame: QdRect,
+    canvas: &mut Image,
+) -> Result<(), GraphicsError> {
     r.skip(4)?; // baseAddr
     let pm = PixMap::read(r)?;
     let format = match (pm.pixel_size, pm.cmp_count, pm.pack_type) {
@@ -139,30 +247,40 @@ fn direct_bits(r: &mut Reader<'_>, frame: QdRect, canvas: &mut Image) -> Result<
             });
         }
     };
-    copy_rows(r, &pm, &format, frame, canvas)
+    copy_rows(r, &pm, &format, op, frame, canvas)
 }
 
-/// `0098` PackBitsRect: an indexed `PixMap` (with no `baseAddr`), its
-/// colour table, the copy rectangles and mode, then the pixel rows.
-fn packbits_rect(
+/// `0090` BitsRect, `0091` BitsRgn, `0098` PackBitsRect and `0099`
+/// PackBitsRgn: a 1-bit `BitMap`, or an indexed `PixMap` and its colour
+/// table (neither after a `baseAddr`), the copy rectangles and mode, the
+/// mask region for the `Rgn` forms, then the pixel rows.
+fn indexed_bits(
     r: &mut Reader<'_>,
+    op: PixelOp,
     frame: QdRect,
     canvas: &mut Image,
 ) -> Result<(), GraphicsError> {
-    let pm = PixMap::read(r)?;
-    if !matches!(pm.pixel_size, 1 | 2 | 4 | 8) {
-        return Err(GraphicsError::UnsupportedPixMap {
-            pixel_size: pm.pixel_size,
-            pack_type: pm.pack_type,
-            cmp_count: pm.cmp_count,
-        });
-    }
-    let ctab = ColorTable::read(r)?;
+    let (pm, ctab) = match PixelMap::read(r)? {
+        PixelMap::BitMap { row_bytes, bounds } => (
+            PixMap::bitmap(row_bytes, bounds),
+            ColorTable::black_on_white(),
+        ),
+        PixelMap::PixMap(pm) => {
+            if !matches!(pm.pixel_size, 1 | 2 | 4 | 8) {
+                return Err(GraphicsError::UnsupportedPixMap {
+                    pixel_size: pm.pixel_size,
+                    pack_type: pm.pack_type,
+                    cmp_count: pm.cmp_count,
+                });
+            }
+            (pm, ColorTable::read(r)?)
+        }
+    };
     let format = RowFormat::Indexed {
         bits: pm.pixel_size,
         ctab: &ctab,
     };
-    copy_rows(r, &pm, &format, frame, canvas)
+    copy_rows(r, &pm, &format, op, frame, canvas)
 }
 
 /// srcCopy and ditherCopy, which both copy pixels unchanged.
@@ -247,12 +365,14 @@ impl RowFormat<'_> {
     }
 }
 
-/// Reads the copy rectangles, mode and rows of a pixel opcode whose
-/// `PixMap` is `pm`, and copies its source rectangle onto `canvas`.
+/// Reads the copy rectangles, mode, mask region (if `op` has one) and rows
+/// of a pixel opcode whose map is `pm`, and copies its source rectangle
+/// onto `canvas`, leaving the pixels outside the mask as they were.
 fn copy_rows(
     r: &mut Reader<'_>,
     pm: &PixMap,
     format: &RowFormat<'_>,
+    op: PixelOp,
     frame: QdRect,
     canvas: &mut Image,
 ) -> Result<(), GraphicsError> {
@@ -263,6 +383,11 @@ fn copy_rows(
     if mode != SRC_COPY && mode != DITHER_COPY {
         return Err(GraphicsError::UnsupportedTransferMode { mode });
     }
+    let mask = if op.masked {
+        Some(Region::read(r)?)
+    } else {
+        None
+    };
     let (width, height) = pm.bounds.size()?;
     let scaled = src.width() != dst.width() || src.height() != dst.height();
     if scaled || !pm.bounds.contains(src) || !frame.contains(dst) {
@@ -277,16 +402,25 @@ fn copy_rows(
     }
     let expected = format.expected(pm.row_bytes, width);
     for row in 0..height {
-        let bytes = read_row(r, pm.row_bytes, format.unit(), expected, row)?;
+        let bytes = if op.packed {
+            read_row(r, pm.row_bytes, format.unit(), expected, row)?
+        } else {
+            Cow::Borrowed(r.bytes(usize::from(pm.row_bytes))?)
+        };
         let y = i32::from(pm.bounds.top) + row as i32;
         if y < i32::from(src.top) || y >= i32::from(src.bottom) {
             continue;
         }
         let pixels = format.pixels(&bytes, width)?;
-        let canvas_y = y - i32::from(src.top) + i32::from(dst.top) - i32::from(frame.top);
+        let dst_y = y - i32::from(src.top) + i32::from(dst.top);
         for x in i32::from(src.left)..i32::from(src.right) {
-            let canvas_x = x - i32::from(src.left) + i32::from(dst.left) - i32::from(frame.left);
+            let dst_x = x - i32::from(src.left) + i32::from(dst.left);
+            if mask.as_ref().is_some_and(|m| !m.contains(dst_x, dst_y)) {
+                continue;
+            }
             if let Some(&pixel) = pixels.get((x - i32::from(pm.bounds.left)) as usize) {
+                let canvas_x = dst_x - i32::from(frame.left);
+                let canvas_y = dst_y - i32::from(frame.top);
                 canvas.put(canvas_x as u32, canvas_y as u32, pixel);
             }
         }
@@ -323,7 +457,9 @@ fn read_row<'a>(
 mod tests {
     use super::*;
     use crate::graphics::color::rgb555;
-    use crate::graphics::fixture::{Ctab, DirectBits, IndexedBits, PictBuilder};
+    use crate::graphics::fixture::{
+        BitMap, Ctab, DirectBits, IndexedBits, PictBuilder, inversion_region, rect_region,
+    };
 
     const FRAME: [i16; 4] = [0, 0, 3, 5];
 
@@ -377,18 +513,46 @@ mod tests {
     }
 
     #[test]
-    fn only_version_2_is_supported() {
-        let mut v1 = PictBuilder::new(FRAME).end().build();
-        v1[10..12].copy_from_slice(&[0x11, 0x01]);
-        assert_eq!(
-            decode_pict(&v1),
-            Err(GraphicsError::UnsupportedVersion { offset: 10 })
-        );
+    fn a_picture_of_neither_version_is_unsupported() {
         let mut garbage = PictBuilder::new(FRAME).end().build();
         garbage[12] = 0x01;
         assert_eq!(
             decode_pict(&garbage),
             Err(GraphicsError::UnsupportedVersion { offset: 10 })
+        );
+        for header in [[0x11, 0x02], [0x11, 0x00], [0x12, 0x01], [0x00, 0x00]] {
+            let mut pict = PictBuilder::v1(FRAME).end().build();
+            pict[10..12].copy_from_slice(&header);
+            assert_eq!(
+                decode_pict(&pict),
+                Err(GraphicsError::UnsupportedVersion { offset: 10 }),
+                "{header:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn version_1_pictures_decode() {
+        let pict = PictBuilder::v1(FRAME).end().build();
+        assert_eq!(pict.len(), 13);
+        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+    }
+
+    #[test]
+    fn a_truncated_version_1_picture_is_an_unexpected_end() {
+        let pict = PictBuilder::v1(FRAME).end().build();
+        for len in 0..pict.len() {
+            assert!(
+                matches!(
+                    decode_pict(&pict[..len]),
+                    Err(GraphicsError::UnexpectedEnd { .. })
+                ),
+                "{len}"
+            );
+        }
+        assert_eq!(
+            decode_pict(&pict[..12]),
+            Err(GraphicsError::UnexpectedEnd { offset: 12 })
         );
     }
 
@@ -521,8 +685,8 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_and_region_pixel_opcodes_are_unsupported() {
-        for opcode in [0x0090, 0x0091, 0x0099, 0x009B, 0x0011, 0x00FE] {
+    fn other_version_2_opcodes_are_unsupported() {
+        for opcode in [0x0011, 0x00FE, 0x0092, 0x009C, 0x0003] {
             let pict = PictBuilder::new(FRAME)
                 .nop()
                 .raw(opcode, &[0; 64])
@@ -1167,20 +1331,6 @@ mod tests {
     }
 
     #[test]
-    fn an_indexed_bitmap_is_not_a_pixmap() {
-        let bits = IndexedBits::new([0, 0, 1, 3], 4, &sparse_ctab(), &[0, 3, 1]);
-        let mut pict = PictBuilder::new([0, 0, 1, 3])
-            .packbits_rect(&bits)
-            .end()
-            .build();
-        pict[16] &= 0x7F;
-        assert_eq!(
-            decode_pict(&pict),
-            Err(GraphicsError::NotAPixMap { offset: 16 })
-        );
-    }
-
-    #[test]
     fn indexed_depths_other_than_1_2_4_and_8_are_unsupported() {
         for depth in [0, 3, 16, 32] {
             let mut bits = IndexedBits::new([0, 0, 1, 3], 8, &sparse_ctab(), &[0, 3, 1]);
@@ -1224,6 +1374,434 @@ mod tests {
         bits.dst = [1, 1, 2, 2];
         let image = decode_pict(&indexed_pict(&bits)).unwrap();
         assert_eq!(rgba(&image), [[0; 4], [0; 4], [0; 4], colour(0)]);
+    }
+
+    const BLACK_PX: [u8; 4] = [0, 0, 0, 255];
+    const WHITE_PX: [u8; 4] = [255, 255, 255, 255];
+    const CLEAR_PX: [u8; 4] = [0; 4];
+
+    /// The pixels of an image as rows of `#` (opaque black), `.` (opaque
+    /// white), ` ` (transparent) and `?` (anything else).
+    fn art(image: &Image) -> Vec<String> {
+        rgba(image)
+            .chunks(image.width() as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|&p| match p {
+                        BLACK_PX => '#',
+                        WHITE_PX => '.',
+                        CLEAR_PX => ' ',
+                        _ => '?',
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A 2x3 `BitMap` BitsRect in a version 1 picture, written out by hand.
+    #[test]
+    fn decodes_a_hand_written_version_1_bitmap() {
+        let bytes = [
+            &[0x00, 0x00][..],                                 // picSize
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03], // picFrame 3x2
+            &[0x11, 0x01],                                     // version 1
+            &[0x90],                                           // BitsRect
+            &[0x00, 0x02],                                     // rowBytes 2: a BitMap
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03], // bounds
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03], // srcRect
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03], // dstRect
+            &[0x00, 0x00],                                     // mode: srcCopy
+            &[0b1010_0000, 0x00, 0b0100_0000, 0xFF],           // rows, unpacked
+            &[0xFF],                                           // EndPic
+        ]
+        .concat();
+        let image = decode_pict(&bytes).unwrap();
+        assert_eq!(art(&image), ["#.#", ".#."]);
+        assert_eq!(image.pixel(0, 0), Some(BLACK_PX));
+        assert_eq!(image.pixel(1, 0), Some(WHITE_PX));
+    }
+
+    #[test]
+    fn version_1_opcodes_are_read_at_odd_offsets_without_padding() {
+        // NOP at 12, so the comment is at 13 and its kind at 14.
+        let pict = PictBuilder::v1(FRAME)
+            .nop()
+            .short_comment(0x8200)
+            .end()
+            .build();
+        assert_eq!(
+            pict,
+            [
+                &PictBuilder::v1(FRAME).build()[..],
+                &[0, 0xA0, 0x82, 0, 0xFF]
+            ]
+            .concat()
+        );
+        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+    }
+
+    #[test]
+    fn version_1_comments_and_clips_are_skipped() {
+        let pict = PictBuilder::v1(FRAME)
+            .clip_rect(FRAME)
+            .short_comment(130)
+            .long_comment(7, &[0x92, 0x02, 0x1E])
+            .raw(
+                0x01,
+                &inversion_region([0, 0, 2, 2], &[(0, &[0, 2]), (2, &[0, 2])]),
+            )
+            .short_comment(131)
+            .end()
+            .build();
+        assert_eq!(decode_pict(&pict), Ok(transparent(5, 3)));
+    }
+
+    #[test]
+    fn other_version_1_opcodes_are_unsupported_at_their_byte() {
+        for opcode in [0x02, 0x1E, 0x11, 0x92, 0x9A, 0x9B, 0xA2, 0xFE, 0x0C] {
+            // After a NOP, so the opcode is at an odd offset.
+            let pict = PictBuilder::v1(FRAME)
+                .nop()
+                .raw(opcode, &[0; 64])
+                .end()
+                .build();
+            assert_eq!(
+                decode_pict(&pict),
+                Err(GraphicsError::UnsupportedOpcode { opcode, offset: 13 }),
+                "{opcode:#04x}"
+            );
+        }
+    }
+
+    /// The 11x9 "Up arrow", interface `PICT` 134.
+    const UP_ARROW: [&str; 9] = [
+        "..#######..",
+        ".#.......#.",
+        "#....#....#",
+        "#...###...#",
+        "#..#####..#",
+        "#.#######.#",
+        "#...###...#",
+        "#...###...#",
+        "#.........#",
+    ];
+
+    #[test]
+    fn a_version_1_bits_rect_of_an_arrow_decodes_black_on_white() {
+        // The shape of stock PICTs 134-137: a clip, comments around one
+        // BitsRect of a 2-byte-row BitMap.
+        let frame = [0, 0, 9, 11];
+        let bits = BitMap::from_art(frame, &UP_ARROW);
+        assert_eq!(bits.row_bytes, 2);
+        let pict = PictBuilder::v1(frame)
+            .clip_rect(frame)
+            .short_comment(130)
+            .short_comment(142)
+            .bits_rect(&bits)
+            .short_comment(143)
+            .short_comment(131)
+            .end()
+            .build();
+        assert_eq!(pict.len(), 83);
+        assert_eq!(art(&decode_pict(&pict).unwrap()), UP_ARROW);
+    }
+
+    /// A `width` x 3 `BitMap` of a diagonal stripe pattern.
+    fn stripes(width: i16) -> (Vec<String>, BitMap) {
+        let rows: Vec<String> = (0..3)
+            .map(|y| {
+                (0..width)
+                    .map(|x| if (x + y) % 3 == 0 { '#' } else { '.' })
+                    .collect()
+            })
+            .collect();
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        let bits = BitMap::from_art([0, 0, 3, width], &refs);
+        (rows, bits)
+    }
+
+    #[test]
+    fn version_1_packbits_rect_unpacks_wide_rows_by_their_byte_counts() {
+        // As stock 133: a 1-bit BitMap with rowBytes over 8, rows packed.
+        let (rows, mut bits) = stripes(70);
+        bits.row_bytes = 76;
+        let pict = PictBuilder::v1([0, 0, 3, 70])
+            .clip_rect([0, 0, 3, 70])
+            .packbits_rect(&bits)
+            .end()
+            .build();
+        assert!(pict.len() < 12 + 3 * 76, "rows are packed");
+        assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+    }
+
+    #[test]
+    fn narrow_packbits_rows_are_stored_raw() {
+        let (rows, bits) = stripes(20);
+        assert_eq!(bits.row_bytes, 3);
+        for pict in [
+            PictBuilder::v1([0, 0, 3, 20])
+                .packbits_rect(&bits)
+                .end()
+                .build(),
+            PictBuilder::new([0, 0, 3, 20])
+                .packbits_rect(&bits)
+                .end()
+                .build(),
+        ] {
+            assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+        }
+    }
+
+    #[test]
+    fn bits_rect_and_bits_rgn_rows_are_never_packed() {
+        let (rows, mut bits) = stripes(70);
+        bits.row_bytes = 12;
+        let region = rect_region([0, 0, 3, 70]);
+        for pict in [
+            PictBuilder::v1([0, 0, 3, 70])
+                .bits_rect(&bits)
+                .end()
+                .build(),
+            PictBuilder::v1([0, 0, 3, 70])
+                .bits_rgn(&bits, &region)
+                .end()
+                .build(),
+            PictBuilder::new([0, 0, 3, 70])
+                .bits_rect(&bits)
+                .end()
+                .build(),
+            PictBuilder::new([0, 0, 3, 70])
+                .bits_rgn(&bits, &region)
+                .end()
+                .build(),
+        ] {
+            assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+        }
+    }
+
+    #[test]
+    fn version_2_bitmaps_decode_black_on_white() {
+        let bits = BitMap::from_art([0, 0, 2, 3], &["#.#", "##."]);
+        for pict in [
+            PictBuilder::new([0, 0, 2, 3])
+                .bits_rect(&bits)
+                .end()
+                .build(),
+            PictBuilder::new([0, 0, 2, 3])
+                .packbits_rect(&bits)
+                .end()
+                .build(),
+        ] {
+            assert_eq!(art(&decode_pict(&pict).unwrap()), ["#.#", "##."]);
+        }
+    }
+
+    #[test]
+    fn indexed_pixmaps_decode_in_every_bits_opcode() {
+        let bits = IndexedBits::new([0, 0, 2, 2], 8, &sparse_ctab(), &[0, 1, 3, 255]);
+        let expected = [colour(0), colour(1), colour(3), colour(255)];
+        let region = rect_region([0, 0, 2, 2]);
+        for pict in [
+            PictBuilder::new([0, 0, 2, 2])
+                .bits_rect(&bits)
+                .end()
+                .build(),
+            PictBuilder::new([0, 0, 2, 2])
+                .bits_rgn(&bits, &region)
+                .end()
+                .build(),
+            PictBuilder::new([0, 0, 2, 2])
+                .packbits_rgn(&bits, &region)
+                .end()
+                .build(),
+        ] {
+            assert_eq!(rgba(&decode_pict(&pict).unwrap()), expected);
+        }
+    }
+
+    /// A white-and-black two-entry colour table, as stock 139 has.
+    fn black_and_white() -> Ctab {
+        Ctab {
+            device: false,
+            entries: vec![(0, [0xFFFF; 3]), (1, [0; 3])],
+        }
+    }
+
+    #[test]
+    fn packbits_rgn_of_a_1_bit_pixmap_through_a_frame_region_decodes_the_frame() {
+        // Stock 139's shape: HeaderOp, DefHilite, a wide-open Clip, then
+        // PackBitsRgn of a 1-bit PixMap with its own colour table, in
+        // ditherCopy, through a rectangular mask equal to the frame.
+        let frame = [0, 0, 3, 70];
+        let (rows, bitmap) = stripes(70);
+        let indices: Vec<u8> = bitmap.set.iter().map(|&b| u8::from(b)).collect();
+        let mut bits = IndexedBits::new(frame, 1, &black_and_white(), &indices);
+        bits.row_bytes = 74;
+        bits.mode = 64;
+        let pict = PictBuilder::new(frame)
+            .header_op()
+            .def_hilite()
+            .clip_rect([-32767, -32767, 32767, 32767])
+            .packbits_rgn(&bits, &rect_region(frame))
+            .end()
+            .build();
+        assert_eq!(art(&decode_pict(&pict).unwrap()), rows);
+    }
+
+    /// An L-shaped mask over a 4x4 frame: the top two rows, then the left
+    /// half of the bottom two.
+    fn l_region() -> Vec<u8> {
+        inversion_region([0, 0, 4, 4], &[(0, &[0, 4]), (2, &[2, 4]), (4, &[0, 2])])
+    }
+
+    #[test]
+    fn a_region_copy_leaves_pixels_outside_its_mask_as_they_were() {
+        let black = BitMap::new([0, 0, 4, 4], &[true; 16]);
+        let alone = PictBuilder::new([0, 0, 4, 4])
+            .packbits_rgn(&black, &l_region())
+            .end()
+            .build();
+        assert_eq!(
+            art(&decode_pict(&alone).unwrap()),
+            ["####", "####", "##  ", "##  "]
+        );
+
+        let white = BitMap::new([0, 0, 4, 4], &[false; 16]);
+        let over = PictBuilder::v1([0, 0, 4, 4])
+            .bits_rect(&white)
+            .bits_rgn(&black, &l_region())
+            .end()
+            .build();
+        assert_eq!(
+            art(&decode_pict(&over).unwrap()),
+            ["####", "####", "##..", "##.."]
+        );
+    }
+
+    #[test]
+    fn the_mask_is_in_destination_coordinates() {
+        // A 2x2 black source at (10, 10) copied to (1, 1) in a frame at
+        // (1, 1): only the mask's single pixel at (2, 2) is copied.
+        let mut black = BitMap::new([10, 10, 12, 12], &[true; 4]);
+        black.dst = [1, 1, 3, 3];
+        let pict = PictBuilder::new([1, 1, 3, 3])
+            .bits_rgn(&black, &rect_region([2, 2, 3, 3]))
+            .end()
+            .build();
+        assert_eq!(art(&decode_pict(&pict).unwrap()), ["  ", " #"]);
+    }
+
+    #[test]
+    fn direct_bits_rgn_copies_only_inside_its_mask() {
+        let bits = DirectBits::rgb555([0, 0, 4, 4], &[RED; 16]);
+        let pict = PictBuilder::new([0, 0, 4, 4])
+            .direct_bits_rgn(&bits, &l_region())
+            .end()
+            .build();
+        let image = decode_pict(&pict).unwrap();
+        let red = rgb555(RED);
+        let expected: Vec<[u8; 4]> = (0..16)
+            .map(|i| if i < 8 || i % 4 < 2 { red } else { CLEAR_PX })
+            .collect();
+        assert_eq!(rgba(&image), expected);
+    }
+
+    #[test]
+    fn a_malformed_mask_is_a_bad_region() {
+        let mut region = l_region();
+        // The first line's second point repeats its first: out of order.
+        let size = u16::from_be_bytes([region[0], region[1]]);
+        region[14..16].copy_from_slice(&0i16.to_be_bytes());
+        let bits = BitMap::new([0, 0, 4, 4], &[true; 16]);
+        let pict = PictBuilder::new([0, 0, 4, 4])
+            .bits_rgn(&bits, &region)
+            .end()
+            .build();
+        // Opcode at 14, BitMap 10, rectangles and mode 18.
+        assert_eq!(
+            decode_pict(&pict),
+            Err(GraphicsError::BadRegion {
+                size,
+                offset: 14 + 2 + 10 + 18
+            })
+        );
+    }
+
+    #[test]
+    fn region_copies_follow_the_copy_rules() {
+        let mut bits = BitMap::new([0, 0, 2, 2], &[true; 4]);
+        bits.mode = 1;
+        let region = rect_region([0, 0, 2, 2]);
+        let rgn = |bits: &BitMap| {
+            decode_pict(
+                &PictBuilder::new([0, 0, 2, 2])
+                    .packbits_rgn(bits, &region)
+                    .end()
+                    .build(),
+            )
+        };
+        assert_eq!(
+            rgn(&bits),
+            Err(GraphicsError::UnsupportedTransferMode { mode: 1 })
+        );
+        bits.mode = 0;
+        bits.dst = [0, 0, 2, 3];
+        let src_offset = 14 + 2 + 10;
+        assert_eq!(
+            rgn(&bits),
+            Err(GraphicsError::BadCopyRect { offset: src_offset })
+        );
+
+        let mut direct = DirectBits::rgb555([0, 0, 2, 2], &[RED; 4]);
+        direct.dst = [0, 0, 3, 2];
+        let pict = PictBuilder::new([0, 0, 2, 2])
+            .direct_bits_rgn(&direct, &region)
+            .end()
+            .build();
+        assert_eq!(
+            decode_pict(&pict),
+            Err(GraphicsError::BadCopyRect {
+                offset: FIRST_ROW - 18
+            })
+        );
+    }
+
+    #[test]
+    fn bitmap_rows_must_hold_every_bit() {
+        let mut bits = BitMap::new([0, 0, 1, 17], &[true; 17]);
+        assert_eq!(bits.row_bytes, 3);
+        bits.row_bytes = 2;
+        let pict = PictBuilder::v1([0, 0, 1, 17])
+            .bits_rect(&bits)
+            .end()
+            .build();
+        assert_eq!(
+            decode_pict(&pict),
+            Err(GraphicsError::BadRowBytes {
+                row_bytes: 2,
+                needed: 3
+            })
+        );
+    }
+
+    #[test]
+    fn corrupt_version_1_and_region_pictures_never_panic() {
+        let bits = BitMap::from_art([0, 0, 2, 3], &["#.#", ".#."]);
+        let pict = PictBuilder::v1([0, 0, 4, 4])
+            .clip_rect([0, 0, 4, 4])
+            .short_comment(130)
+            .long_comment(7, &[1, 2])
+            .bits_rect(&bits)
+            .packbits_rgn(&BitMap::new([0, 0, 4, 4], &[true; 16]), &l_region())
+            .end()
+            .build();
+        crate::sweep::assert_never_panics(&pict, decode_pict);
+        let pict = PictBuilder::new([0, 0, 4, 4])
+            .bits_rgn(&bits, &l_region())
+            .direct_bits_rgn(&DirectBits::rgb555([0, 0, 4, 4], &[RED; 16]), &l_region())
+            .end()
+            .build();
+        crate::sweep::assert_never_panics(&pict, decode_pict);
     }
 
     #[test]

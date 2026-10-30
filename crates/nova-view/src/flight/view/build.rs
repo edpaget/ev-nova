@@ -354,6 +354,33 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.double_time
     }
 
+    /// The flight with the frame-rate readout shown or not, as `shown`
+    /// says: the router keeps it across flights, as the original's
+    /// `_showFPS` is cleared only at launch (`_InitObjects` @0x1d117). The
+    /// flight counts as a game entered from the main screen
+    /// (`_EnterGameFromMainScreen` @0x1a3cc-0x1a3e1): a readout shown
+    /// says a number after 2 s, never "Calculating FPS...".
+    #[must_use]
+    pub fn with_frame_rate_shown(mut self, shown: bool) -> Self {
+        self.frame_rate = crate::flight::frame_rate::FrameRate::with_shown(shown);
+        self
+    }
+
+    /// Whether the frame-rate readout is shown, for the router to build
+    /// the next flight with ([`FlightView::with_frame_rate_shown`]).
+    #[must_use]
+    pub fn frame_rate_shown(&self) -> bool {
+        self.frame_rate.shown()
+    }
+
+    /// The frame-rate readout's meter, for the router's tests to see a
+    /// [`Screen::focus_gained`](crate::Screen::focus_gained) reach the
+    /// flight without pinning the meter's own rules.
+    #[must_use]
+    pub fn frame_rate(&self) -> &crate::flight::frame_rate::FrameRate {
+        &self.frame_rate
+    }
+
     /// Whether the player's sound is quiet enough for the Red Alert to
     /// blink its icon, as the sound preferences last said.
     #[must_use]
@@ -507,6 +534,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map: opening.map,
             map_open: false,
             map_key_held: false,
+            map_closing: false,
             map_opened: None,
             map_missions: Vec::new(),
             map_borders_save: None,
@@ -523,6 +551,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             alert_width: opening.alert_width,
             view: VIEW_SIZE,
             double_time: false,
+            frame_rate: crate::flight::frame_rate::FrameRate::with_shown(false),
             sim,
             scene: opening.scene,
             kept_frames: KeptFrames::new(),
@@ -549,6 +578,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             pending_boarding: false,
             pending_hail: None,
             pending_escort_dialog: None,
+            pending_planet_comm: None,
             pending_mission_info: None,
             pending_player_info: false,
             kept_panel: super::player::KeptPanel::Unasked,

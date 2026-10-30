@@ -547,6 +547,8 @@ impl PlayerShip {
             odds: crate::traffic::odds_cache::STALE,
             // AI type -1 (@0x6f31f).
             no_ai: true,
+            kept_escort_ai: false,
+            defends: None,
         };
         hulk.independent();
         hulk
@@ -796,6 +798,7 @@ mod tests {
         session.hold_eject(chord);
         let head = super::super::game_work::PassStart::of(session).player_head();
         session.player_display_step(
+            &crate::ai::NovaAi::default(),
             crate::combat::GamePass::Advance { double_time: false },
             Rules::default(),
             head,

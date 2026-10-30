@@ -532,6 +532,50 @@ fn an_or_sprite_ors_its_colour_into_what_is_beneath_not_adds() {
 }
 
 #[test]
+fn an_or_fill_ors_its_5_bit_colour_into_what_is_beneath_not_adds() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Hull squares at logical (4..8, 4..8), a 5-bit colour, and (14..18,
+    // 4..8), a colour that is not 5-bit, then one OR fill over x 5..27,
+    // y 4..8: across both and the black clear. Its colour's low bits are
+    // dropped: (19, 77, 167) is 5-bit (2, 9, 20).
+    let hull = w555(HULL_555);
+    let odd = [100, 37, 250, 255];
+    let fill_555 = [2, 9, 20];
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), Point::new(6.0, 6.0), tint(hull))
+        .sprite(ImageKey::sprite(2, 0), Point::new(16.0, 6.0), tint(odd))
+        .or_fill(
+            Bounds {
+                min: Point::new(5.0, 4.0),
+                max: Point::new(27.0, 8.0),
+            },
+            Color::rgba(19, 77, 167, 255),
+        );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // Over the 5-bit hull: the 5-bit OR, widened, not the sum.
+    // 16|2, 12|9, 0|20.
+    let ored = w555([18, 13, 20]);
+    assert_ne!(ored, [148, 255, 165, 255]);
+    assert_area(&pixels, (5, 4), (8, 8), ored, 0);
+    // Over the other: ORed at 8 bits against it as it is.
+    // 100|16, 37|74, 250|165 against the fill widened to (16, 74, 165).
+    assert_area(&pixels, (14, 4), (18, 8), [116, 111, 255, 255], 0);
+    // Over the clear: the fill's colour, widened.
+    assert_area(&pixels, (20, 4), (27, 8), w555(fill_555), 0);
+    // Outside the rect: as it was.
+    assert_area(&pixels, (4, 4), (5, 8), hull, 0);
+    assert_area(&pixels, (27, 4), (30, 8), BLACK, 0);
+    assert_area(&pixels, (5, 8), (27, 10), BLACK, 0);
+}
+
+#[test]
 fn a_partial_level_light_composites_like_the_originals_translucent_blit() {
     let Some(mut gpu) = gpu() else {
         return;

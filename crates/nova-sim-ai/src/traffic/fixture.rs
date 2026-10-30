@@ -1,7 +1,8 @@
 //! Test support for the ai and traffic layer's tests and the tests above
 //! it. Behind the `fixture` feature, for other crates' tests: a default
 //! NPC ([`npc`]). For this crate's tests alone: one put in a pirate's
-//! count wait (`count_waiting`), the calls among the line's work
+//! count wait (`count_waiting`), a defence ship breaking up
+//! (`breaking_up_guard`), the calls among the line's work
 //! (`calls_on_line`), and a behaviour logging the ships it decides for
 //! and the player in a condition in a world of its own (`assisting`).
 
@@ -96,6 +97,23 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         display: crate::traffic::ship_display::NpcDisplay::default(),
         odds: 0.0,
         no_ai: false,
+        kept_escort_ai: false,
+        defends: None,
+    }
+}
+
+/// `npc` made a defence ship of `spöb` 128 breaking up: one
+/// `_IsDisabled` never calls disabled (@0x2d6f, [`Npc::is_disabled`]).
+#[cfg(test)]
+#[must_use]
+pub fn breaking_up_guard(npc: Npc) -> Npc {
+    Npc {
+        defends: Some(crate::catalog::StellarId(128)),
+        condition: Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        },
+        ..npc
     }
 }
 

@@ -653,12 +653,19 @@ mod tests {
         let pass = crate::combat::GamePass::Advance { double_time: false };
         let rules = crate::combat::Rules::default();
         let chance: &mut dyn crate::chance::Chance = &mut crate::chance::NeverFires;
-        session.collision_passes(pass, rules, chance);
+        let ai = crate::ai::NovaAi::default();
+        session.collision_passes(&ai, pass, rules, chance);
         let spots = session.space.asteroid_spots();
-        session.land_phase(pass, rules, chance, |combat, fighters, arena, chance| {
-            combat.fly_shots_in(fighters, arena, &spots, chance);
-        });
-        session.beams_phase(pass, rules, chance);
+        session.land_phase(
+            &ai,
+            pass,
+            rules,
+            chance,
+            |combat, fighters, arena, chance| {
+                combat.fly_shots_in(fighters, arena, &spots, chance);
+            },
+        );
+        session.beams_phase(&ai, pass, rules, chance);
     }
 
     /// Works `catalog`'s `session` a pass at a time until its NPC's fire
@@ -721,6 +728,7 @@ mod tests {
             // `_HandlePlayer` left it, here set by hand.
             let start = super::super::game_work::PassStart::of(&session);
             session.ship_loop(
+                &crate::ai::NovaAi::default(),
                 &start,
                 super::super::ship_loop::Motion::Again,
                 crate::combat::GamePass::Advance { double_time: false },

@@ -412,6 +412,11 @@ fn plunder_npc(
     ship.former = None;
     ship.escort = None;
     ship.leader = Some(pirate);
+    // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
+    // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
+    ship.overwrite_bribe();
+    // It defends no stellar now (+0x8c = -1, @0x8c791).
+    ship.defends = None;
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
@@ -695,6 +700,24 @@ mod tests {
         ship
     }
 
+    #[test]
+    fn a_defence_ship_a_pirate_takes_into_its_fleet_defends_no_stellar() {
+        let mut taken = former();
+        taken.defends = Some(crate::catalog::StellarId(128));
+        let mut docked = pirate(1000);
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        taken.boarded = true;
+        let mut traffic = traffic_of(vec![docked, taken]);
+        tick(&mut traffic, 0);
+        assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
+        assert_eq!(ship(&traffic, VICTIM).defends, None, "@0x8c791");
+    }
+
     /// The traffic once a docked pirate has taken a former escort into
     /// its fleet, a tick on.
     fn captured() -> Traffic {
@@ -747,6 +770,20 @@ mod tests {
             &mut Draws::of(&[0; 64]),
         );
         assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 2);
+    }
+
+    #[test]
+    fn a_bribed_ship_taken_by_a_pirate_reads_as_its_escort_not_its_bribe() {
+        // `_AIPlunderShipContents` writes +0x88 = 6 (@0x8495c) over the
+        // bribe's 1, the bribe's only word (`_DoCommDialog` @0x961f8).
+        let mut bribed = victim();
+        bribed.spared = true;
+        let traffic = plundered(1000, bribed, 0);
+        let taken = ship(&traffic, VICTIM);
+        assert_eq!(taken.leader, Some(PIRATE));
+        assert!(!taken.spared, "the bribe is overwritten");
+        assert_eq!(taken.original_ai_type(), 6);
+        assert!(crate::hail::fixture::hail(taken).escort_ai());
     }
 
     #[test]

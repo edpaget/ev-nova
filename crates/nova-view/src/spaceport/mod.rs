@@ -63,6 +63,7 @@ pub mod offer;
 pub mod outfitter;
 pub mod port_map;
 pub mod quantity_ask;
+pub mod race;
 pub mod service;
 mod ship_movie;
 pub mod shipyard;

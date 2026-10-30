@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use nova_rsrc::{ResType, ResourceFile};
+use nova_rsrc::{Format, ResType, ResourceFile};
 
 /// The program edge for these tests: the only place `NOVA_DATA` and
 /// `NOVA_DATA_REZ` are read.
@@ -112,6 +112,26 @@ fn parses_all_stock_files() {
     for path in &files {
         if let Err(error) = ResourceFile::open(path) {
             panic!("{error}");
+        }
+    }
+}
+
+/// No stock file is misread as MacBinary: the `.ndat` files are forks and
+/// the Windows files `.rez`.
+#[test]
+fn stock_files_are_read_as_forks_not_macbinary() {
+    if let Some(dir) = nova_data() {
+        let files = ndat_files(&dir);
+        assert_eq!(files.len(), 21, "stock .ndat file count");
+        for path in &files {
+            let file = ResourceFile::open(path).expect("stock file parses");
+            assert_eq!(file.format(), Format::Fork, "{}", path.display());
+        }
+    }
+    if let Some(dir) = nova_data_rez() {
+        for path in rez_files(&dir) {
+            let file = ResourceFile::open(&path).expect("stock file parses");
+            assert_eq!(file.format(), Format::Rez, "{}", path.display());
         }
     }
 }

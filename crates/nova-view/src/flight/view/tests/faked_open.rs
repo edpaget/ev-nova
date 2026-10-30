@@ -198,6 +198,7 @@ fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
     let cadence = view.hud_cadence;
     view.sim.set_frame(FlightFrame {
         stellars: vec![record::stellar(StellarId(140))],
+        radar_stellars: vec![record::radar_stellar(StellarId(140), Vec2::new(5.0, 6.0))],
         ..in_system(131, 128, true)
     });
     view.sim
@@ -207,14 +208,7 @@ fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
     let shown = view.radar_shown(&view.frame_now());
     assert_eq!(shown.player, view.shown_position());
     let stellars: Vec<Point> = shown.stellars.iter().map(|s| s.position).collect();
-    let scene: Vec<Point> = view
-        .scene()
-        .expect("a scene")
-        .stellars()
-        .iter()
-        .map(|s| s.position)
-        .collect();
-    assert_eq!(stellars, scene, "Alpha Centauri's");
+    assert_eq!(stellars, [Point::new(5.0, 6.0)], "Alpha Centauri's");
 }
 
 // The keys held, and the clock.

@@ -29,6 +29,11 @@ pub(super) struct Space {
     /// closes, kept while it is not shown (see the `gate_sprites`
     /// module).
     pub(super) gate_sprites: BTreeMap<StellarId, GateSprite>,
+    /// The sprite a gate the flight first shows starts with: closed as
+    /// the launch leaves it, or as the take-off's reset leaves it once
+    /// the flight has taken off or come out of a gate (see the
+    /// `takeoff_frames` module).
+    pub(super) gate_sprite_afresh: GateSprite,
     /// The message line's countdown, `_commCount`: set by every line
     /// shown, counted down each frame (see the `comm_calls` module).
     pub(super) comm_line: CommLine,
@@ -179,8 +184,19 @@ pub(super) struct Escorts {
     /// the class takes (see [`Space::class_order`]). Not saved, as the
     /// hired escorts keep theirs on their records and mission escorts are
     /// never saved; reset with their orders on entering a system by the
-    /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders).
+    /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders),
+    /// and cleared in flight, with the orders of the class's escorts, once
+    /// no ship of the class the player leads has taken a command since it
+    /// was placed (see the `class_orders` module).
     pub(super) class_orders: [Option<crate::escort::EscortOrder>; 4],
+    /// The ships of the player's that have taken a command since they were
+    /// placed: the original's +0xc4 (set by `_IssueNewEscortCommand`
+    /// @0x66190, cleared by every placement, @0x3c6ff, @0x3d546, @0x3d9c2),
+    /// which the class orders' bookkeeping reads (see the `class_orders`
+    /// module). Kept by number: every placement, respawn and launch makes
+    /// a new NPC, so it starts unmarked, and a capture or a release keeps
+    /// the number, as the original keeps the slot's byte. Never saved.
+    pub(super) commanded: BTreeSet<NpcId>,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,
 }
@@ -191,6 +207,7 @@ impl Space {
     pub(super) fn new() -> Self {
         Self {
             gate_sprites: BTreeMap::new(),
+            gate_sprite_afresh: GateSprite::new(),
             comm_line: CommLine::default(),
             reinforcements: reinforcements::Reinforcements::default(),
             reinforcements_held: false,
@@ -230,6 +247,7 @@ impl Space {
                 fleet: Vec::new(),
                 restock: false,
                 class_orders: [None; 4],
+                commanded: BTreeSet::new(),
                 quote_clock: persons::QuoteClock::default(),
             },
             voice: crate::voice::VoiceChannel::default(),

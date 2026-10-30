@@ -610,6 +610,26 @@ fn a_stolen_cargos_line_says_its_numbers_by_the_views_millions_reading() {
     }
 }
 
+/// A bribe paid clears the player's ship by name, a station's to dock.
+#[test]
+fn a_bribe_paid_clears_the_ship_to_land_or_dock() {
+    let mut view = worded_by(RuleSource::Engine);
+    for (station, said) in [
+        (
+            false,
+            "Kestrel, you're cleared to land. Commence final approach.",
+        ),
+        (
+            true,
+            "Kestrel, you're cleared to dock. Commence final approach.",
+        ),
+    ] {
+        let cleared = SimMessage::BribeCleared { station };
+        let ticks = cleared.ticks();
+        assert_eq!(view.word(vec![cleared]), [(said.to_owned(), ticks)]);
+    }
+}
+
 /// The fee a greeting carries, said by the view's held millions reading;
 /// the flight decides whether one is due.
 #[test]

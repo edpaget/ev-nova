@@ -1,4 +1,4 @@
-//! Weighing the fight's strikes before anything answers them:
+//! Weighing the fight's strikes, each in its turn before its reaction:
 //! `_DamageShip`'s answer flag for each ([`answer_flag`]), the stray
 //! provocation each adds to its ship (+0xc910) and zeroes once answered,
 //! and that provocation's ease each tick.
@@ -21,38 +21,48 @@ impl World<'_> {
 
 impl Traffic {
     /// Weighs each of `strikes` in turn in `world`, rolling on `chance`
-    /// ([`answer_flag::verdict`]): its ship gains the stray provocation it
-    /// adds, which an answer then zeroes (@0x3bb83), and the strike is
-    /// marked [`answered`](Strike::answered) or not. Each strike reads the
-    /// NPCs' stray provocation as the strikes before it left it.
+    /// ([`Traffic::weigh`]). Each strike reads the NPCs' stray provocation
+    /// as the strikes before it left it.
     ///
-    /// Each verdict reads the targets and goals as the tick found them,
-    /// where the original runs the previous hit's reaction before it
-    /// weighs the next, as [`Traffic::answer`] now answers them in turn.
-    /// That is a divergence, filed as rdm phase
-    /// weapons-fidelity-followups/phase-1-answer-flag-reads-in-turn: a
-    /// verdict the earlier reactions would change (the entry test
-    /// @0x3bb63-0x3bb74, an NPC's stray hit @0x3b7bf-0x3b7dc, an escort
-    /// near the player @0x3b8da, the plunder read @0x3a95b) shows in the
-    /// frame drawn after the pass.
+    /// This is the batch for the strikes the traffic does not answer now
+    /// (the ship landed, or the system not yet set up): no reaction runs
+    /// between them, so reading them in turn is reading them in a batch.
+    /// The fight's strikes, which the traffic answers as they settle, are
+    /// weighed one at a time, each after the reaction of the one before it
+    /// ([`Traffic::answer_in_turn`]), as `_DamageShip` runs hit by hit:
+    /// three of the flag's reads see what a reaction writes, the entry
+    /// test (@0x3bb63-0x3bb74), an NPC's stray hit (@0x3b7bf-0x3b7dc) and
+    /// an escort near the player (@0x3b8da).
     pub fn weigh_strikes(
         &mut self,
         world: &World,
         strikes: &mut [Strike],
         chance: &mut dyn Chance,
     ) {
-        let rules = world.flag_rules();
         for strike in strikes {
-            let verdict = answer_flag::verdict(strike, &world.around(&self.npcs), rules, chance);
-            strike.answered = verdict.answers;
-            let ShipRef::Npc(id) = strike.ship else {
-                continue;
-            };
-            if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
-                npc.stray += verdict.stray;
-                if verdict.answers {
-                    npc.stray = 0.0;
-                }
+            self.weigh(world, strike, chance);
+        }
+    }
+
+    /// Weighs `strike` in `world` against the NPCs as they stand, rolling
+    /// on `chance` ([`answer_flag::verdict`]): its ship gains the stray
+    /// provocation it adds, which an answer then zeroes (@0x3bb83), and
+    /// the strike is marked [`answered`](Strike::answered) or not.
+    pub fn weigh(&mut self, world: &World, strike: &mut Strike, chance: &mut dyn Chance) {
+        let verdict = answer_flag::verdict(
+            strike,
+            &world.around(&self.npcs),
+            world.flag_rules(),
+            chance,
+        );
+        strike.answered = verdict.answers;
+        let ShipRef::Npc(id) = strike.ship else {
+            return;
+        };
+        if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
+            npc.stray += verdict.stray;
+            if verdict.answers {
+                npc.stray = 0.0;
             }
         }
     }
@@ -75,7 +85,7 @@ mod tests {
     use super::*;
     use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, govts, n, player, ship};
     use crate::combat::fixture::strike;
-    use crate::traffic::npc::{AiType, Npc};
+    use crate::traffic::npc::{AiType, Npc, NpcId};
     use nova_sim_base::fixture::Draws;
 
     /// A traffic of `npcs`.
@@ -146,6 +156,48 @@ mod tests {
         traffic.weigh_strikes(&world, &mut strikes, &mut Draws::of(&[1, 0]));
         assert_eq!(strikes.map(|strike| strike.answered), [false, true]);
         assert_eq!(strays(&traffic), [0.0]);
+    }
+
+    #[test]
+    fn a_stray_hit_on_a_ship_jumping_out_adds_nothing_and_one_on_a_jumping_leaders_escort_keeps_its_add()
+     {
+        let govts = govts(0, 0);
+        let world = World {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..World::new(&[])
+        };
+        let weigh = |lead_stage: f32| {
+            let mut jumping = ship(1, NEUTRAL, AiType::Warship, 0.0, 0.0);
+            jumping.warp.stage = 3.0;
+            jumping.stray = 30.0;
+            let mut escort = ship(2, NEUTRAL, AiType::Warship, 0.0, 0.0);
+            escort.leader = Some(NpcId(3));
+            escort.stray = 60.0;
+            let mut lead = ship(3, NEUTRAL, AiType::Warship, 0.0, 0.0);
+            lead.warp.stage = lead_stage;
+            let mut traffic = of(vec![jumping, escort, lead]);
+            let mut strikes = [stray(1, 4.0), stray(2, 4.0)];
+            // The escort's roll comes up 0: not forgiven, and from 60 the
+            // aim would answer it.
+            let mut chance = Draws::of(&[0]);
+            traffic.weigh_strikes(&world, &mut strikes, &mut chance);
+            (
+                strikes.map(|strike| strike.answered),
+                strays(&traffic),
+                chance.asked,
+            )
+        };
+        assert_eq!(
+            weigh(1.0),
+            ([false, false], vec![30.0, 67.0, 0.0], vec![4]),
+            "the jumping ship draws and adds nothing; the escort keeps 60 + 7"
+        );
+        assert_eq!(
+            weigh(0.0),
+            ([false, true], vec![30.0, 0.0, 0.0], vec![4]),
+            "its leader not jumping, the escort answers and its add is zeroed"
+        );
     }
 
     #[test]

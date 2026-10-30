@@ -84,7 +84,11 @@ use crate::trig;
 pub const SWARM_AHEAD: f32 = 15.0;
 
 /// Whether `npc` reaches `_AIDispatch`'s swarm check on a tick its AI
-/// timer is due (see the module docs).
+/// timer is due (see the module docs). Its intact test stands for
+/// `_IsDisabled` (@0x8fece) alone, which a stellar's defence ship breaking
+/// up passes (@0x2d6f), but a defence ship never flies a swarm
+/// ([`pursuit::swarms`](crate::ai::pursuit) tests +0x8c, @0x8e655), so
+/// the difference changes nothing.
 #[must_use]
 pub fn verifies(npc: &Npc) -> bool {
     !pod_flight::is_pod(npc)

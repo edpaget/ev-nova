@@ -86,6 +86,7 @@ use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch, SystemId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
+use crate::flight_frame::RaisedLine;
 use crate::hail::likes_player;
 use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_IF_MISSION,
@@ -353,7 +354,8 @@ impl Session {
     /// ([`hail_quote_text`]); with `_beepSnd[4]`
     /// ([`SimSound::HailQuote`](crate::SimSound::HailQuote), @0x44586-0x445ad),
     /// shown for [`QUOTE_SHOWN_TICKS`] (@0x4464d), in which no random
-    /// quote is said. It is quoted (+0xbc); the time of its last quote is
+    /// quote is said, raised on the line as `_DisplayComm` takes it
+    /// ([`Space::raise_line`]). It is quoted (+0xbc); the time of its last quote is
     /// its caller's to keep. An NPC gone, or flying no person, says
     /// nothing. Every hail quote, on attack, due now or at random, is said
     /// here, as every one goes through `_ShowPersonHailQuote`. Its line is
@@ -381,7 +383,6 @@ impl Session {
         };
         person.quoted = true;
         let (person, hail_quote) = (person.id, person.hail_quote);
-        self.space.comm_line.show(QUOTE_SHOWN_TICKS);
         let patch = hail_quote_patch_id(hail_quote)
             .map_or(StringPatch::Absent, |patch| catalog.plugin_string(patch));
         let line = hail_quote_text(hail_quote, patch, lines);
@@ -402,7 +403,12 @@ impl Session {
             rules: TagRules::from_rulebook(&self.setup.rules),
         };
         let text = expand_tags(&line, &tags);
-        self.out.quotes.push(PersonQuote { npc: id, text });
+        // The line's count (@0x4464d) is set as it is raised: nothing
+        // between the two sites reads it.
+        self.space.raise_line(
+            &mut self.out,
+            RaisedLine::Quote(PersonQuote { npc: id, text }),
+        );
         self.out.sounds.push(SimSound::HailQuote);
         self.run.offering_ship = None;
     }
@@ -1099,8 +1105,8 @@ mod tests {
         assert!(!session.pilot().grudge(PersonId(600)));
     }
 
-    /// Fires on Ace until its shield drops, at most 60 ticks, leaving the
-    /// strikes for the traffic to answer.
+    /// Fires on Ace until its shield drops, at most 60 ticks, the NPCs
+    /// answering each hit as it settles.
     fn hit_ace(session: &mut Session) {
         for _ in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;
@@ -1119,21 +1125,72 @@ mod tests {
         panic!("never hit: {:?}", session.npcs()[0]);
     }
 
+    /// The player's answered direct hit on Ace, as the session keeps one
+    /// for the traffic to answer later: one it made itself, or one it
+    /// kept while the traffic wasn't answering.
+    fn kept_hit_on_ace(session: &Session) -> Strike {
+        crate::combat::fixture::strike(ShipRef::Npc(session.npcs()[0].id), ShipRef::Player)
+    }
+
     #[test]
-    fn a_grudge_whose_strike_the_traffic_tick_answers_is_held_after_the_tick() {
-        // A caller that never calls `answer_strikes` leaves the strike to
-        // the next traffic tick, which answers it.
+    fn a_grudge_whose_strike_the_fight_lands_is_held_as_it_settles() {
+        // The fight's hits are answered as each phase settles, with no
+        // call to `answer_strikes`, and the grudge held with them.
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         hit_ace(&mut session);
-        work_with(
-            &mut session,
-            &catalog,
-            Controls::default(),
-            &crate::ai::NovaAi::default(),
-            Rules::default(),
-            &mut NeverFires,
+        assert!(session.space.strikes.is_empty(), "none kept");
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+    }
+
+    #[test]
+    fn a_grudge_whose_ship_a_beam_destroys_is_held_as_the_beams_phase_settles() {
+        // `_HandleBeams` runs `_DamageShip` as the beam's hit lands
+        // (@0x4453d), so the grudge is held within the beams' phase, while
+        // the dying ship is still in the system, before the fight's
+        // housekeeping takes it out.
+        let mut catalog = duel(GRUDGE | ESCAPE_POD, 0);
+        // The player's blaster a 300-pixel beam that downs Ace at once.
+        catalog.weapons = vec![WeaponRecord {
+            guidance: 0,
+            count: 3,
+            reload: 10,
+            beam_length: 300,
+            energy_dmg: 1000,
+            mass_dmg: 1000,
+            ..blaster()
+        }];
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        crate::session::answer_flag::tests::beam_alone(&mut session);
+        let ace = &session.npcs()[0];
+        assert!(
+            matches!(
+                ace.condition,
+                Condition::Dying { .. } | Condition::Destroyed
+            ),
+            "downed: {:?}",
+            ace.condition
         );
+        assert!(session.space.strikes.is_empty(), "none kept");
+        assert!(session.pilot().grudge(PersonId(600)));
+    }
+
+    #[test]
+    fn a_grudge_whose_strike_the_traffics_think_answers_is_held_after_the_think() {
+        // A strike left for the think's answer is answered at the start of
+        // the think, and its grudge held once the traffic has stepped.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let strikes = [kept_hit_on_ace(&session)];
+        session.step_traffic(|traffic, world| {
+            traffic.think_holding(
+                &crate::ai::NovaAi::default(),
+                world,
+                &strikes,
+                &mut NeverFires,
+            );
+        });
         assert!(session.pilot().grudge(PersonId(600)));
         assert!(session.npcs()[0].person.expect("Ace").grudge);
     }
@@ -1145,8 +1202,9 @@ mod tests {
         // their grudges.
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        // A pass answers its own hits; one its close leaves, a beam's or a
-        // shockwave's, waits for the caller (`Session::answer_strikes`).
+        // A pass answers the fight's hits as each phase settles; a strike
+        // kept for later is one the session made itself, or one kept
+        // while the traffic wasn't answering.
         session.space.strikes.push(crate::combat::Strike {
             ship: ShipRef::Npc(session.npcs()[0].id),
             by: Some(ShipRef::Player),
@@ -1175,12 +1233,15 @@ mod tests {
     fn a_grudge_whose_strike_populating_drops_unanswered_is_held() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        hit_ace(&mut session);
+        let kept = kept_hit_on_ace(&session);
+        session.space.strikes.push(kept);
+        assert!(!session.pilot().grudge(PersonId(600)), "unanswered");
         session.populate(&catalog, &mut NeverFires);
         assert!(session.pilot().grudge(PersonId(600)));
         let catalog = duel(0, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        hit_ace(&mut session);
+        let kept = kept_hit_on_ace(&session);
+        session.space.strikes.push(kept);
         session.populate(&catalog, &mut NeverFires);
         assert!(!session.pilot().grudge(PersonId(600)), "no 0x0001");
     }
@@ -2346,6 +2407,31 @@ mod tests {
         // Tick 1351: more.
         let (said, _) = quote_tick(&catalog, &mut session, &[0, 1]);
         assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+    }
+
+    #[test]
+    fn a_due_quote_said_after_a_fleets_arrival_quote_replaces_its_line_and_count() {
+        // `_ShowPersonHailQuote` shows its line through `_DisplayComm`,
+        // which replaces the slot and the count (@0x9024b, @0x90251).
+        let (catalog, mut session) = quoting([0, QUOTE_ON_ATTACK]);
+        session.space.say(
+            &mut session.out,
+            crate::SimMessage::FleetArrivalQuote("Hail".to_owned()),
+        );
+        session.space.traffic.npcs_mut()[1].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, _) = quote_tick(&catalog, &mut session, &[0, 77]);
+        assert_eq!(
+            said,
+            ["Bee: Prepare to die, Stock!"],
+            "Ace waits, Bee is due"
+        );
+        let mut line = crate::comm_line::CommLine::default();
+        line.show(QUOTE_SHOWN_TICKS);
+        assert_eq!(session.comm_line(), line, "the quote's 420");
+        let Some(crate::flight_frame::RaisedLine::Quote(quote)) = &session.out.last_line else {
+            panic!("the quote raised last: {:?}", session.out.last_line);
+        };
+        assert_eq!(quote.text, "Bee: Prepare to die, Stock!");
     }
 
     #[test]

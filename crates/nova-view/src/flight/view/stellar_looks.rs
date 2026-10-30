@@ -35,6 +35,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// The take-off's reset of every stellar's frames
+    /// (`_HandlePlayerDockRequest` @0x675ce-0x675fa, play-feel-4 phase
+    /// 14; `nova_sim::SessionEvent::StellarFramesReset`): those of the
+    /// scene shown
+    /// ([`SystemScene::take_off_reset`](crate::system::scene::SystemScene::take_off_reset))
+    /// and those kept
+    /// ([`KeptFrames::reset`](crate::system::kept_frames::KeptFrames::reset)).
+    /// [`FlightView::redraw_scene_then`] runs it before the scene is laid
+    /// out or drawn again, so a gate's exit keeps the old scene's frames
+    /// zeroed and the new scene resumes them zeroed, as the original
+    /// zeroes every `spöb` before its rebuild (@0x67653). The session
+    /// raises the event at the take-off or the exit, and the view settles
+    /// it in the catch-up that follows, before the first frame is drawn.
+    pub(super) fn reset_stellar_frames(&mut self) {
+        self.kept_frames.reset();
+        if let Some(scene) = &mut self.scene {
+            scene.take_off_reset();
+        }
+    }
+
     /// Moves the clock on by `dt` and steps the stellars' animations by
     /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
     /// runs every play frame, the jump's included. A random next frame
@@ -99,6 +119,7 @@ impl<C: SystemCatalog, S: FlightSim> FlightView<C, S> {
 impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::catch_up`]'s redraws, given what the events asked for
     /// (`redrawn`), in their order: the ship's sheet, the bar (`bar`), the
+    /// stellars' frames reset ([`FlightView::reset_stellar_frames`]), the
     /// layout or the ship's place, the scene read again, the stellars'
     /// looks, the status bar (`status`, on a system entered) and the stars.
     /// The kept frame was filled afresh as the events were drained
@@ -126,6 +147,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
             self.follow_ship();
         }
         bar(self);
+        if redrawn.frames_reset {
+            self.reset_stellar_frames();
+        }
         if redrawn.system {
             self.lay_out(system);
         } else if redrawn.stellar {

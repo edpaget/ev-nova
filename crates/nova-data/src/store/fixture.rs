@@ -12,7 +12,8 @@
 //!
 //! Most tests want one data file: [`one_file`] (or [`one_file_at`]) builds
 //! that tree, [`FakeTree::load`] opens it as a [`GameData`], and
-//! [`store_of`] does both for a list of resources.
+//! [`store_of`] does both for a list of resources. [`interface_of`] does
+//! the same for the interface file, as an [`InterfaceData`].
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -26,7 +27,7 @@ use nova_rsrc::{Fork, ForkReader, ResType};
 
 use super::fs::{DirLister, EntryKind, Listing};
 use super::order::finder_cmp;
-use super::{GameData, OpenError};
+use super::{GameData, InterfaceData, OpenError};
 
 /// Where [`one_file`] puts its file, and the data directory
 /// [`FakeTree::load`] opens.
@@ -67,6 +68,30 @@ pub fn store_of(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
         .build()
         .bytes;
     one_file(fork).load()
+}
+
+/// Where [`interface_of`] puts its interface file.
+pub const INTERFACE_FILE: &str = "/Nova-DF.rsrc";
+
+/// An [`InterfaceData`] holding `resources` (type, ID, data), each
+/// unnamed: their fork, at [`INTERFACE_FILE`] in [`one_file_at`]'s tree,
+/// loaded through the tree's forks. The interface file's counterpart of
+/// [`store_of`], for other crates' tests of dialogs and their pictures.
+///
+/// # Panics
+///
+/// If the interface file doesn't load.
+#[must_use]
+pub fn interface_of(resources: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+            fork.resource(*ty, *id, None, data)
+        })
+        .build()
+        .bytes;
+    let tree = one_file_at(INTERFACE_FILE, fork);
+    InterfaceData::load(tree.forks(), Path::new(INTERFACE_FILE)).expect("the interface file loads")
 }
 
 /// An in-memory directory tree, and the forks of its files.
@@ -504,6 +529,23 @@ mod tests {
             .resource(MISN, id, None, &mission_bytes())
             .build()
             .bytes
+    }
+
+    #[test]
+    fn interface_of_holds_its_resources_and_lacks_the_rest() {
+        let picture = crate::graphics::fixture::PictBuilder::new([0, 0, 3, 5])
+            .end()
+            .build();
+        let ui = interface_of(&[(crate::graphics::PICT, 134, picture)]);
+        assert_eq!(ui.path(), Path::new(INTERFACE_FILE));
+        assert_eq!(ui.ids(crate::graphics::PICT), [134]);
+        let decoded = ui
+            .picture(crate::PictId(134))
+            .expect("present")
+            .expect("decodes");
+        assert_eq!((decoded.width(), decoded.height()), (5, 3));
+        assert!(ui.picture(crate::PictId(135)).is_none());
+        assert!(interface_of(&[]).ids(crate::graphics::PICT).is_empty());
     }
 
     #[test]

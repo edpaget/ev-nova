@@ -79,11 +79,7 @@ mod tests {
 
     /// A 60-pixel square at `at`.
     fn square(at: Vec2) -> DrawnBox {
-        DrawnBox {
-            centre: at,
-            width: 60,
-            height: 60,
-        }
+        DrawnBox::at(crate::navigation::SpriteRect::centred(at, (60, 60)))
     }
 
     /// The hover at `at` with `drawn`, as the command carries it.

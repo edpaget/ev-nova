@@ -177,6 +177,8 @@
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
 //!   the comm dialog shows of a ship the player leads ([`EscortStatus`]),
 //!   a hired escort's daily pay among it.
+//! - [`gamble`]: the bar's Gamble, the Galactic Racing Network race:
+//!   what Gamble opens, the bets, the winner's draw and the result text.
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
 //!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
 //!   drawn at a tick, flickering on the [`BlinkChance`] port
@@ -420,6 +422,7 @@ pub use nova_sim_port::escort_dialog;
 pub use nova_sim_port::npc_escape;
 pub use nova_sim_state::cron;
 pub use nova_sim_state::date;
+pub use nova_sim_state::domination;
 pub use nova_sim_story::exchange_events;
 pub use nova_sim_story::exploration;
 pub use nova_sim_story::map_walk;
@@ -443,12 +446,15 @@ pub use nova_sim_ai::hover;
 pub use nova_sim_ai::hyperspace;
 pub use nova_sim_ai::jump_arrival;
 pub use nova_sim_ai::navigation;
+pub use nova_sim_ai::planet_comm;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
+pub use nova_sim_port::gamble;
 pub use nova_sim_port::grant;
+pub use nova_sim_port::has_max;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;
 pub use nova_sim_port::murk;
@@ -518,8 +524,8 @@ pub use ai::{
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use board::{
-    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, MissionBoardLine, NovaBoarding,
-    Plunder, PlunderView, Take, Taken,
+    AmmoOffer, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, MissionBoardLine,
+    NovaBoarding, Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
@@ -529,8 +535,8 @@ pub use catalog::{
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
     RankId, RankRecord, ShipDisplay, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic,
-    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
+    StartError, StellarId, StellarLife, StellarScripts, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clearance::{Approach, DockKind, DockRequest, approach, approach_clears};

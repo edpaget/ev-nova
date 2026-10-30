@@ -684,3 +684,61 @@ fn the_news_is_drawn_over_the_stock_governments_picture() {
         );
     }
 }
+
+/// The labels the stock "Outfit" dialog (`DLOG` 1002) draws for
+/// `session`'s outfitter, opened over the stock interface file `ui`.
+fn outfitter_labels(data: &Rc<GameData>, ui: &InterfaceData, session: &mut Session) -> Vec<String> {
+    use nova_view::spaceport::OutfitterScreen;
+    use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
+    use nova_view::ui::desc::DESC_DIALOG;
+    let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
+    let screen = OutfitterScreen::new(
+        Ok((
+            ui.dialog_template(OUTFIT_DIALOG).expect("Outfit"),
+            Rc::new(MonoMetrics),
+        )),
+        ui.dialog_template(QUANTITY_DIALOG),
+        ui.dialog_template(DESC_DIALOG),
+        outfitter,
+        Rc::clone(data) as Rc<dyn nova_view::spaceport::OutfitterCatalog>,
+        data.button_style(),
+    );
+    let mut list = DrawList::new();
+    screen.draw(&mut list);
+    list.iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Sirrusa (`spöb` 156 in Archenar, `sÿst` 142), of `TechLevel` 0 and no
+/// special tech, the only such outfitter, draws no Buy, as
+/// `_DrawOutfitButtons` skips it; Port Kane (137) draws it.
+#[test]
+fn sirrusas_outfitter_hides_buy() {
+    for (dir, ui) in builds() {
+        let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let mut sirrusa = SessionBuilder::flying(&data)
+            .named("Stock")
+            .landed_at(nova_sim::SystemId(142), StellarId(156))
+            .build();
+        assert!(
+            sirrusa
+                .outfitter(&mut Fires)
+                .expect("an outfitter")
+                .buy_hidden
+        );
+        let labels = outfitter_labels(&data, &ui, &mut sirrusa);
+        for shown in ["Done", "Sell"] {
+            assert!(labels.contains(&shown.to_owned()), "{shown}: {labels:?}");
+        }
+        assert!(!labels.contains(&"Buy".to_owned()), "{labels:?}");
+        let mut kane = at_port_kane(&data);
+        assert!(!kane.outfitter(&mut Fires).expect("an outfitter").buy_hidden);
+        let labels = outfitter_labels(&data, &ui, &mut kane);
+        assert!(labels.contains(&"Buy".to_owned()), "{labels:?}");
+    }
+}

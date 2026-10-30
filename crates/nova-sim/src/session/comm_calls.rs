@@ -5,20 +5,25 @@
 //!
 //! **The line.** The session keeps the one count every reader asks:
 //!
-//! - Each message it raises sets it as it is raised ([`Space::say`],
-//!   [`SimMessage::ticks`]); so do the hail quotes (420, see the
-//!   `persons` module) and the assisting ships' comm notes
-//!   ([`CommNote::ticks`](crate::hail::CommNote::ticks)). The flight
-//!   relays each for the ticks the session set, [`SimMessage::ticks`],
-//!   [`PersonQuote::ticks`](super::PersonQuote::ticks) and
-//!   [`CommNote::ticks`](crate::hail::CommNote::ticks).
+//! - Each line it raises sets it as it is raised, through one raiser
+//!   ([`Space::raise_line`]): the messages ([`Space::say`],
+//!   [`SimMessage::ticks`]), the hail quotes (420, see the `persons`
+//!   module) and the assisting ships' comm notes
+//!   ([`CommNote::ticks`](crate::hail::CommNote::ticks)). The raiser
+//!   records each as the line raised last, as `_DisplayComm` replaces its
+//!   one slot (@0x90251), and each step reports the last it raised
+//!   ([`StepRun::last_line`](crate::flight_frame::StepRun::last_line)).
+//!   The flight relays each line for the ticks the session set,
+//!   [`SimMessage::ticks`], [`PersonQuote::ticks`](super::PersonQuote::ticks)
+//!   and [`CommNote::ticks`](crate::hail::CommNote::ticks), and the
+//!   frame's last-raised line last, so the line shows what the
+//!   original's does.
 //! - The flight's own lines, the ones the view raises and words itself
 //!   (a refused jump, a boarding's line, an escort command, a line it
 //!   composes at an arrival or a take-off), set it through
 //!   [`Session::comm_shown`]. The view relays the session's own lines
 //!   without setting it again: a relay comes after the steps of a frame
-//!   have run, and in a fixed order, so setting it then would undo the
-//!   countdown and the order the session raised them in.
+//!   have run, so setting it then would undo the countdown.
 //! - Return clears the line for a tick while one shows
 //!   ([`Session::comm_acknowledged`], `_HandlePlayer` @0x6dd22-0x6dd65);
 //!   a clear by name shows an empty line for a tick
@@ -108,6 +113,7 @@ use crate::chance::Chance;
 use crate::combat::hull::Condition;
 #[cfg(any(test, doc))]
 use crate::comm_line::CommLine;
+use crate::flight_frame::RaisedLine;
 use crate::hail::{Help, QUIET, likes_player};
 use crate::legal::LegalCode;
 use crate::message::SimMessage;
@@ -297,11 +303,18 @@ impl Session {
 }
 
 impl Space {
-    /// Raises `message` on the message line, setting the line's count to
-    /// its ticks as `_DisplayComm` does (@0x9024b).
+    /// Raises `message` on the message line ([`Space::raise_line`]).
     pub(super) fn say(&mut self, out: &mut Outbox, message: SimMessage) {
-        self.comm_line.show(message.ticks());
-        out.messages.push(message);
+        self.raise_line(out, RaisedLine::Message(message));
+    }
+
+    /// Raises `line` on the message line as `_DisplayComm` does: sets the
+    /// line's count to its ticks (@0x9024b) and records it as the line
+    /// raised last ([`Outbox::raise`], @0x90251). Every line the session
+    /// raises, of every kind, comes through here.
+    pub(super) fn raise_line(&mut self, out: &mut Outbox, line: RaisedLine) {
+        self.comm_line.show(line.ticks());
+        out.raise(line);
     }
 
     /// The flight shows a line of its own for `ticks`: one the view
@@ -1476,5 +1489,40 @@ mod tests {
         let (messages, _, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
         assert_eq!(messages, help("Ship 128:  Help 1"), "berth 2's");
         assert_eq!(asked, [DISTRESS_LINE_COUNT], "berth 5's kept off");
+    }
+
+    #[test]
+    fn a_line_raised_after_another_replaces_it_and_its_count() {
+        let catalog = calling_catalog();
+        let message = SimMessage::FleetArrivalQuote("Hail".to_owned());
+        let quote = super::super::PersonQuote {
+            npc: NpcId(0),
+            text: "Halt!".to_owned(),
+        };
+        let mut session = flying(&catalog);
+        session.space.say(&mut session.out, message.clone());
+        session
+            .space
+            .raise_line(&mut session.out, RaisedLine::Quote(quote.clone()));
+        let mut line = CommLine::default();
+        line.show(quote.ticks());
+        assert_eq!(session.comm_line(), line, "the quote's count");
+        assert_eq!(
+            session.out.messages,
+            std::slice::from_ref(&message),
+            "each in its list"
+        );
+        assert_eq!(session.out.quotes, std::slice::from_ref(&quote));
+        assert_eq!(
+            session.out.last_line,
+            Some(RaisedLine::Quote(quote.clone()))
+        );
+        let mut session = flying(&catalog);
+        session
+            .space
+            .raise_line(&mut session.out, RaisedLine::Quote(quote));
+        session.space.say(&mut session.out, message.clone());
+        assert_eq!(session.comm_line(), showing(&message), "the message's");
+        assert_eq!(session.out.last_line, Some(RaisedLine::Message(message)));
     }
 }

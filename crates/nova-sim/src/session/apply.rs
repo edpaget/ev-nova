@@ -116,7 +116,8 @@ impl Session {
     ///   [`FlightCommand::ClearRoute`] ([`Session::clear_route`]),
     ///   [`FlightCommand::MarkKnown`] ([`Session::mark_known`]),
     ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]),
-    ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]), and the
+    ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]),
+    ///   [`FlightCommand::SwitchedOut`] ([`Session::switched_out`]), and the
     ///   nav's saves and restores: [`Session::save_port_nav`],
     ///   [`Session::restore_port_nav`], [`Session::restore_bar_nav`],
     ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
@@ -196,6 +197,10 @@ impl Session {
                 self.comm_shown(ticks);
                 Answer::Done
             }
+            FlightCommand::SwitchedOut => {
+                self.switched_out();
+                Answer::Done
+            }
             FlightCommand::Jump
             | FlightCommand::Land
             | FlightCommand::OpenHypergate
@@ -217,6 +222,8 @@ impl Session {
             | FlightCommand::LetGoOfBoarding
             | FlightCommand::CommandEscorts { .. }
             | FlightCommand::PressEscort(_)
+            | FlightCommand::PressPlanetComm(_)
+            | FlightCommand::HaggleBribe(_)
             | FlightCommand::CommAcknowledged
             | FlightCommand::CommTicked => self.apply_comm(command, collab),
             FlightCommand::Trade(_)
@@ -224,13 +231,14 @@ impl Session {
             | FlightCommand::OpenOutfitter
             | FlightCommand::CloseOutfitter
             | FlightCommand::Outfit { .. }
-            | FlightCommand::OutfitCounted { .. }
             | FlightCommand::OpenShipyard
             | FlightCommand::BuyShip { .. }
             | FlightCommand::DeclineShip(_)
             | FlightCommand::OpenBar
             | FlightCommand::Hire(_)
             | FlightCommand::CloseHire
+            | FlightCommand::Race { .. }
+            | FlightCommand::CollectWinnings
             | FlightCommand::Jettison { .. }
             | FlightCommand::Assign(_)
             | FlightCommand::NameCapture(_)
@@ -741,10 +749,8 @@ mod tests {
     /// The boxes of a click's ships: NPC `id` drawn in a 40-pixel square
     /// at (50, 0), and the player at the centre when `player` says.
     fn boxes(id: NpcId, player: bool) -> crate::flight_frame::DrawnBoxes {
-        let square = |centre| crate::hover::DrawnBox {
-            centre,
-            width: 40,
-            height: 40,
+        let square = |centre| {
+            crate::hover::DrawnBox::at(crate::navigation::SpriteRect::centred(centre, (40, 40)))
         };
         crate::flight_frame::DrawnBoxes {
             player: player.then(|| square(crate::geometry::Vec2::ZERO)),

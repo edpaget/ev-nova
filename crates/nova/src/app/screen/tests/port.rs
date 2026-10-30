@@ -964,6 +964,7 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     assert_eq!(screen.showing(), Showing::FlightMap, "again");
     screen.input(&key(MAP, false));
     screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
 }
 
@@ -1336,6 +1337,84 @@ fn alt_on_buy_asks_for_a_count_and_buys_the_count_typed() {
     assert!(open.quantity().is_none(), "closed");
     assert_eq!(open.outfitter().row(BOOSTER).map(|row| row.owned), Some(2));
     assert_eq!(store.writes(), writes + 1, "saved after the input");
+}
+
+/// The date after landing at the outfitter of [`outfitting_data`], the
+/// pilot starting with `seeded` boosters (granted by its `OnStart`, so
+/// before the stay), opening it, running `steps`, then leaving the
+/// outfitter and the spaceport.
+fn take_off_date_after(seeded: u16, steps: impl FnOnce(&mut AppScreen)) -> nova_sim::GameDate {
+    let store = MemoryPilots::new();
+    let on_start = vec!["G128"; usize::from(seeded)].join(" ");
+    let data = game_data_starting(true, true, false, on_start.as_bytes(), b"");
+    let mut screen = landed_outfitter_over(&store, data);
+    assert_eq!(pilot(&screen).owned(BOOSTER), seeded, "seeded");
+    click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
+    steps(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Flight, "taken off");
+    flight(&screen).session().expect("flying").date()
+}
+
+/// Clicks the dialog item at `at`.
+fn click_at(screen: &mut AppScreen, at: nova_view::Point) {
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+}
+
+/// Option-clicks the outfitter's `item` (Buy or Sell), then cancels the
+/// quantity dialog it opens, leaving the boosters owned as they were.
+fn cancel_a_count_on(screen: &mut AppScreen, item: usize) {
+    let owned = pilot(screen).owned(BOOSTER);
+    screen.input(&key(Key::Alt, true));
+    let button = spaceport(screen)
+        .open_outfitter()
+        .and_then(|open| open.dialog())
+        .and_then(|dialog| dialog.item_bounds(item))
+        .expect("the button")
+        .center();
+    click_at(screen, button);
+    screen.input(&key(Key::Alt, false));
+    let cancel = spaceport(screen)
+        .open_outfitter()
+        .and_then(|open| open.quantity())
+        .and_then(|asking| {
+            asking
+                .dialog()
+                .item_bounds(nova_view::ui::quantity::CANCEL_ITEM)
+        })
+        .expect("asking, with Cancel")
+        .center();
+    click_at(screen, cancel);
+    let open = spaceport(screen).open_outfitter().expect("outfitting");
+    assert!(open.quantity().is_none(), "cancelled");
+    assert_eq!(pilot(screen).owned(BOOSTER), owned, "nothing moved");
+}
+
+#[test]
+fn a_cancelled_quantity_after_an_allowed_buy_or_sell_passes_the_outfits_day_at_take_off() {
+    // Wiring only: the days themselves are the session's to count. A
+    // pilot with one booster can buy two; with two, sell two.
+    for (seeded, item, what) in [
+        (1, OUTFIT_BUY_ITEM, "a Buy's"),
+        (2, OUTFIT_SELL_ITEM, "a Sell's"),
+    ] {
+        let bought = take_off_date_after(seeded, |screen| {
+            screen.input(&key(Key::Char('b'), true));
+            assert_eq!(pilot(screen).owned(BOOSTER), seeded + 1);
+        });
+        let untouched = take_off_date_after(seeded, |_| {});
+        assert!(untouched < bought, "{what}: an order passes a day");
+        let cancelled = take_off_date_after(seeded, |screen| cancel_a_count_on(screen, item));
+        assert_eq!(cancelled, bought, "{what} Cancel");
+    }
 }
 
 #[test]

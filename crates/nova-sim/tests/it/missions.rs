@@ -70,6 +70,7 @@ fn planet(id: i16, x: f32) -> LandingSite {
         govt: None,
         flags2: 0,
         destroyed: false,
+        dominated_at_run_time: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,
@@ -80,6 +81,8 @@ fn planet(id: i16, x: f32) -> LandingSite {
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 
@@ -195,6 +198,10 @@ impl PilotCatalog for Courier {
         Vec::new()
     }
 
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+        Vec::new()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         Some((100, 100))
     }
@@ -251,6 +258,9 @@ impl PilotCatalog for Courier {
                 flags2: 0,
                 govt: None,
                 min_status: 0,
+                def_count: 0,
+                tech_level: 0,
+                tribute: 0,
             })
             .collect()
     }

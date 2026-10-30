@@ -166,7 +166,6 @@ fn the_step_leads_an_approach_as_the_worlds_approach_lead_says() {
         &mut LauncherRounds::default(),
         &mut fuel,
         &mut crate::chance::NeverFires,
-        &mut crate::combat::report::Reports::default(),
         RuleSource::Engine,
         &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
         None,

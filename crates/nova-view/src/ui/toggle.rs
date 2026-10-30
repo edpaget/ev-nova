@@ -106,11 +106,12 @@ impl Toggle {
         )
     }
 
-    /// Whether a click at `at` would reach it: on its rectangle, edges
-    /// included, and enabled.
+    /// Whether a click at `at` would reach it: on its rectangle as the
+    /// Dialog Manager's `PtInRect` counts it (the left and top edges in,
+    /// the right and bottom out), and enabled.
     #[must_use]
     pub fn contains(&self, at: Point) -> bool {
-        self.enabled && self.rect.contains(at)
+        self.enabled && self.rect.contains_half_open(at)
     }
 
     /// Whether a press is held on it with the pointer still on it.
@@ -269,10 +270,13 @@ mod tests {
     #[test]
     fn its_whole_rectangle_takes_clicks_unless_it_is_greyed() {
         let toggle = music(false);
-        for inside in [rect().min, rect().max, rect().center(), at(598.0, 301.0)] {
+        let last_pixel = at(rect().max.x - 1.0, rect().max.y - 1.0);
+        for inside in [rect().min, last_pixel, rect().center(), at(598.0, 301.0)] {
             assert!(toggle.contains(inside), "{inside:?}");
         }
+        // The Dialog Manager's check box is half-open, as `PtInRect` is.
         for outside in [
+            rect().max,
             at(499.0, 305.0),
             at(600.0, 305.0),
             at(550.0, 299.0),

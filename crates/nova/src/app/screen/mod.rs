@@ -120,7 +120,11 @@
 //!
 //! Caps Lock, pressed anywhere, turns double time on or off for flight
 //! (see [`FlightView::set_double_time`]); the router keeps it across
-//! screens and pilots, and saves nothing of it.
+//! screens and pilots, and saves nothing of it. F12 in flight toggles the
+//! frame-rate readout, which the router keeps for the flights it builds
+//! later in the same way ([`FlightView::with_frame_rate_shown`]), and the
+//! window coming back to the front tells every flight held
+//! ([`Screen::focus_gained`](nova_view::Screen::focus_gained)).
 //!
 //! L in flight requests clearance at a stellar, and a second L, over it,
 //! lands and shows its spaceport ([`SpaceportView`]), laid out by the
@@ -374,6 +378,7 @@ mod menu;
 mod menu_commands;
 mod overlays;
 mod pilot_panel;
+mod planet_comm;
 mod port_dialogs;
 mod quit_question;
 mod routing;
@@ -647,6 +652,9 @@ pub struct AppScreen {
     comm: Option<CommDialog>,
     /// The escort dialog, while a fleet escort hailed is talked to.
     escort_dialog: Option<nova_view::ui::escort_dialog::EscortDialog>,
+    /// The planet comm dialog, while a stellar hailed is talked to (see
+    /// the `planet_comm` module).
+    planet_comm: Option<nova_view::ui::planet_comm::PlanetCommDialog>,
     /// Whether the port's Leave waits for the report of the escorts sold
     /// and upgraded, shown over the spaceport, to close (see the
     /// `escort_dialog` module).
@@ -710,6 +718,13 @@ pub struct AppScreen {
     /// side, and every flight is told. Never saved, as the original's
     /// `_doubleTime` is not.
     double_time: bool,
+    /// Whether the frame-rate readout is shown, as the last flight to
+    /// take input left it ([`AppScreen::keep_frame_rate`]): F12 toggles
+    /// it in flight, and every flight built later starts with it
+    /// ([`FlightView::with_frame_rate_shown`]). Off at launch and never
+    /// saved, as the original's `_showFPS` is cleared only by
+    /// `_InitObjects` (@0x1d117).
+    frame_rate_shown: bool,
     /// The widened view's size, as the app last told it
     /// ([`Screen::set_widened_size`](nova_view::Screen::set_widened_size)):
     /// every flight, built or to be built, draws at it.

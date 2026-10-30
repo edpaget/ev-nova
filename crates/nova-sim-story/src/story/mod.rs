@@ -688,13 +688,16 @@
 //!    is, each named by `cron::cron_hook` and never registered, its `M`,
 //!    `N`, `Q` and `S` deferred to the next settling as any hook's are;
 //! 3. the active missions' days left (missions phase 2);
-//! 4. the dominated stellars' tribute (rdm task planet-domination);
+//! 4. the dominated stellars' tribute (rdm:phase/play-feel-4/phase-3-domination-readers;
+//!    `nova_sim`'s session `dominated_stellars` module);
 //! 5. the day's events, `öops`: today's `market::step_day`;
 //! 6. the stellars: every whole one repaired to its `Strength`
 //!    (story-runtime phase 8; see "Built by phase 8"), a destroyed one's
 //!    regeneration and `OnRegen`, each `OnRegen` run as its stellar is
-//!    reached (story-runtime phase 5; see "Built by phase 5"), and a
-//!    dominated one's defence regrowing (planet-domination);
+//!    reached (story-runtime phase 5; see "Built by phase 5"), and an
+//!    active dominated one's defence regrowing, in one pass before the
+//!    regeneration (play-feel-4 phase 3; `nova_sim`'s session
+//!    `dominated_stellars` module);
 //! 7. each visible system's reinforcement countdown, down by one
 //!    (combat-ai-fidelity phase 5; see `nova_sim::ai::reinforcements`);
 //! 8. the ranks' salaries, each active rank's in ID order, the cash
@@ -2635,12 +2638,15 @@
 //!   `NavDefs` entry, with no active or owner test, sizing the blip by
 //!   whether the `Type` master is loaded (@0x499ef-0x49a27). The land
 //!   key's and F5's nearest pick, with the gate limit and the owner drop,
-//!   are built by stellar-fidelity phase 14 (below). The slot keys, the
-//!   tutorial hints' and `_DoNewPilot`'s candidates, NPC destinations and
-//!   the radar still read only the stellars shown:
-//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
-//!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
-//!   and rdm:task/radar-blips-every-listed-stellar.
+//!   are built by stellar-fidelity phase 14 (below). NPC destinations,
+//!   and every lookup of the stellar picked, read the whole listing,
+//!   built by rdm:phase/play-feel-4/phase-9-npc-destinations-over-navdefs
+//!   (`nova_sim_ai::traffic::destination`). The slot keys, the tutorial
+//!   hints' and `_DoNewPilot`'s candidates still read only the stellars
+//!   shown: rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs.
+//!   The radar draws every listed stellar, built by
+//!   rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar (see
+//!   "Checked for play-feel-4 phase 15").
 //!
 //! ## Built by stellar-fidelity phase 8
 //!
@@ -2832,7 +2838,9 @@
 //!     is the stale frame's, its top left at the centre less 16, and a
 //!     frameless one has none. Built by stellar-fidelity phase 9 (below).
 //!   - The status radar's blip for a `Type` master that counts none (32,
-//!     the smallest): it depends on rdm:task/radar-blips-every-listed-stellar;
+//!     the smallest): built by
+//!     rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar,
+//!     which superseded
 //!     rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type.
 //!
 //! ## Built by stellar-fidelity phase 9
@@ -2848,8 +2856,9 @@
 //!   right and bottom out. `SpriteRect::centred` places a frame around a
 //!   centre with its top left at half the size, halved as integers, so an
 //!   odd size's extra pixel is on the right or the bottom. The ship click
-//!   and hover box (`hover::in_box`) is the same rule around the view's
-//!   drawn centre.
+//!   and hover box (`hover::in_box`) is the same rule over the rect the
+//!   view draws the hull in (`hover::DrawnBox`), placed at whole pixels
+//!   from the player as the stellar's slot is.
 //! - **The order**: `navigation::stellar_under` and `stellar_under_past`
 //!   give the lowest `StellarId` among the stellars whose rect holds the
 //!   click, the one selected in mode 2 passed over.
@@ -2985,7 +2994,8 @@
 //!     system-traffic-fidelity phase 7 (`nova_sim::gate_sprite`);
 //!   - the sprite-slot plumbing (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a),
 //!     the view's drawing from phases 1 and 8: `_HandleSpriteMurkiness`
-//!     (@0x2eea4) is rdm:task/murk-other-sprites, and whole-pixel
+//!     (@0x2eea4) is `nova_view::flight::murk`'s
+//!     (rdm:phase/play-feel-4/phase-17-murk-other-sprites), and whole-pixel
 //!     placement (@0x2eeab-0x2ef1a) is
 //!     rdm:phase/stellar-fidelity-followups/phase-9-whole-pixel-sprite-placement;
 //!   - the hang under 0x0001 | 0x0002 over 2 counted frames
@@ -2997,8 +3007,8 @@
 //!     next + 1 (@0x2ed2e, @0x2eddc);
 //!   - the order of `_Rand`'s draws and its generator;
 //!   - the dock request's take-off reset, outside this function
-//!     (`_HandlePlayerDockRequest` @0x675ce-0x67653):
-//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!     (`_HandlePlayerDockRequest` @0x675ce-0x67653), since built by
+//!     rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset (see "Built by play-feel-4 phase 14").
 //!
 //! ## Checked for stellar-fidelity phase 10
 //!
@@ -3052,8 +3062,9 @@
 //!   gate exit whose escort loop runs @0x674ef-0x675c8, @0x675fc-0x67646
 //!   sets the stellar at ebp−0x298's current and next frames to count − 1
 //!   and its timer to −`AnimDelay`; then `_HandleStellarSystemVisibility`
-//!   rebuilds (@0x67653). Filed as
-//!   rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset.
+//!   rebuilds (@0x67653). Built by
+//!   rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset; "Checked for play-feel-4 phase 14" names the byte and the
+//!   stellar.
 //!
 //! ## Built by stellar-fidelity phase 12
 //!
@@ -3099,8 +3110,8 @@
 //!     the array comes from an uncleared `_NewPtr` @0x1b7d4): the engine
 //!     uses 1, as the new-slot reset gives;
 //!   - the dock request's take-off reset (`_HandlePlayerDockRequest`
-//!     @0x675ce-0x67646), already
-//!     rdm:phase/stellar-fidelity-followups/phase-10-takeoff-stellar-frame-reset;
+//!     @0x675ce-0x67646), since built by
+//!     rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset (see "Built by play-feel-4 phase 14");
 //!   - the integer widths: +0x476/+0x478 are 16-bit and the timer a 32-bit
 //!     float;
 //!   - the galaxy viewer (`nova_view::system::SystemView`), which still
@@ -3280,13 +3291,14 @@
 //!   `Flags2` 0x0200. None is disable-only, planet-type or bursting; the
 //!   Enormous Ion Turret (198) is massless.
 //! - **Left out**, each with its owner:
-//!   - +0x47, the defence ship in the system (@0x9f30-0x9f5c; set
-//!     @0x44411-0x4444f, @0x3d4a8): the engine spawns no stellar defence
-//!     ships, so it is always clear and the four stock 0x0200 stellars
-//!     never fire; the gate is built and fed false. Task
-//!     `planet-domination`.
-//!   - +0x46, domination by a hail (@0x9f0c): the engine has only
-//!     `Flags2` 0x0020, which is fed. Task `planet-domination`.
+//!   - none for +0x47, the defence ship in the system (@0x9f30-0x9f5c;
+//!     set @0x44411-0x4444f, @0x3d4a8): the traffic keeps it
+//!     (`nova_sim_ai::traffic::stellar_defence`) and the session feeds it
+//!     to the gate, so the four stock 0x0200 stellars fire while one of
+//!     their defence ships is in the system.
+//!   - +0x46, domination (@0x9f0c): fed through the one rule
+//!     (`nova_sim::domination::dominated`), by `Flags2` 0x0020 or by
+//!     Demand Tribute.
 //!   - a `Weapon` past the last `wëap` (@0x777a9): a read past the table,
 //!     a memory-layout accident; the engine gives that stellar no gun.
 //!   - the frozen-flag test `*0x3b523c` (@0x2ef46): never set when the
@@ -3381,9 +3393,10 @@
 //!   2002 #84 then #86 (wormhole) or #85 (hypergate) with no name, else
 //!   #87/#88 and the name (@0x67cda-0x67dc4). Hailing
 //!   (`_HandlePlayerCommunication` @0x61fac-0x62009) has no owner test;
-//!   ours gives "No response.", unreachable in stock (wormhole 466 never
-//!   answers): rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs.
-//! - **The other readers of the selection**, audited: the hail looks it
+//!   ours gave "No response.", unreachable in stock (wormhole 466 never
+//!   answers), until
+//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs.
+//! - **The other readers of the selection**, audited: the hail looked it
 //!   up among the stellars shown (the divergence above); the person
 //!   offers and the map cycle read its ID only; the face key falls back
 //!   to the stellar's spöb place (`StellarMarks`); the dock request's
@@ -3397,12 +3410,238 @@
 //!   listed by a system that doesn't own it: Spica (144) owns it, and
 //!   K-005 (436, visible while `!b330`) lists it at (9500, 2600), its only
 //!   stellar.
-//! - **Left out**, in
-//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs:
-//!   the slot keys by `NavDefs` index (@0x69e28-0x69e46); the tutorial
-//!   hints' candidates (@0x709e8, @0x70bdc) and `_DoNewPilot`'s
-//!   (@0x1926e), which get the gate limit but still read the stellars
-//!   shown; hailing an unowned selection.
+//! - **Left out**, and built by
+//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs
+//!   (see "Built by play-feel-4 phase 13"): the slot keys by `NavDefs`
+//!   index (@0x69e28-0x69e46); the tutorial hints' candidates (@0x709e8,
+//!   @0x70bdc) and `_DoNewPilot`'s (@0x1926e), which got the gate limit
+//!   but still read the stellars shown; hailing an unowned selection.
+//!
+//! ## Built by play-feel-4 phase 13
+//!
+//! The session's readers of a system's `NavDefs` that the stellars shown
+//! stood in for (`nova_sim::Session`'s `stellar_picks` module):
+//!
+//! - **The slot keys** read `NavDefs[slot]` by index, gaps kept
+//!   (@0x69e28-0x69e46), with no +0x44, can-land or destroyed test, from
+//!   `nova_sim::PilotCatalog::nav_def_slots` (a `spöb` that didn't load
+//!   empties its slot, @0x780f8-0x7817f). F5's tail drops -1
+//!   (@0x69e65-0x69e6d) and an owner other than the player's +0x74
+//!   (@0x69e88-0x69e94), both before `PlaySound` @0x69ebc: nothing is
+//!   written and nothing plays.
+//! - **The tutorial hints** (@0x709e8, @0x70bdc) pick over the listed,
+//!   active stellars, as F5 and the land key do, owner unread; the hint
+//!   is worded by the listed record's `Flags` 0x10.
+//! - **`_DoNewPilot`'s pick** (@0x1926e) walks every stellar the start
+//!   system lists. The only writers of a spöb's +0x44 are
+//!   `_LoadObjectData`, `_HandleStellarSystemVisibility` (@0x32c42,
+//!   @0x32cdf) and `_InitObjects` (@0x1c880, at launch). `_DoNewPilot`'s
+//!   `_LoadObjectData` (@0x190f0) sets every loaded spöb active
+//!   (@0x77584) and clears one no `NavDefs` list (@0x7896a-0x789c6), and
+//!   nothing between it and the pick writes +0x44
+//!   (`_DeleteAllComputerShips` @0x19104, `_ExploreNebulaeFromSystem`
+//!   @0x19118 with every nebula inactive, `_PropagateMissionBitEffects`
+//!   @0x1925e); the rebuild (@0x1937f) comes after. With no pick it saves
+//!   the first slot that isn't -1 (@0x1927b-0x192a6), else 0
+//!   (@0x1934a-0x19358).
+//! - **The hail** (`_HandlePlayerCommunication` @0x61fac-0x62017) tests
+//!   `_StellarIsLandable`, `Flags` 0x20, `Flags2` 0x3000 and +0x44, and
+//!   no owner, then opens `_DoPlanetCommDialog` (@0x6204b), whose only
+//!   +0x74 reads are the player's system, for records: a selection
+//!   another visible system owns answers.
+//!
+//! ## Built by play-feel-4 phase 14
+//!
+//! The dock request's reset of every stellar's frames, and the exit gate
+//! opened (see "Checked for play-feel-4 phase 14"):
+//!
+//! - **The session** (`nova_sim::Session`'s `takeoff_frames` module):
+//!   the take-off (`Session::lift_off`, after the setup) and every
+//!   hypergate's or wormhole's exit (after the escorts are led out) reset
+//!   every gate sprite kept, shown or not: current and next frame 0, the
+//!   timer kept. A gate first shown after it starts at current 0, next 0,
+//!   timer 0. Out of a hypergate the exit gate then takes its counted
+//!   count - 1 as current and next, and -`AnimDelay` as its timer
+//!   (`nova_sim::gate_sprite::GateSprite::exit_gate`), so it shows its
+//!   last frame and, released, closes from its open frame - 1 after
+//!   2 × `AnimDelay` - 1 ticks. Each raises
+//!   `nova_sim::SessionEvent::StellarFramesReset`; a refused hypergate
+//!   resets nothing.
+//! - **The view** (`nova_view`'s flight view) takes the event in the
+//!   catch-up after the take-off or the exit, before the scene is laid
+//!   out or drawn again, and resets the frames of every stellar shown
+//!   (`SystemScene::take_off_reset`) and kept (`KeptFrames::reset`), so
+//!   the scene left behind is kept zeroed and the new one resumes zeroed,
+//!   frame 0 shown. A stellar first shown after it starts at current 0,
+//!   next 0, timer 0.
+//! - **Readings.** No key: the Bible says nothing, and the engine had no
+//!   other reading. No sound.
+//! - **Left out**: the 16-bit decrement of an empty slot's count (0xffff
+//!   for no frames): the gate doesn't animate then, and the engine takes
+//!   frame 0, which draws the same.
+//!
+//! ## Checked for play-feel-4 phase 14
+//!
+//! Read with `objdump --x86-asm-syntax=intel -d` on
+//! `EV Nova.app/Contents/MacOS/EV Nova`, `_HandlePlayerDockRequest`
+//! (@0x66691).
+//!
+//! - **Which entries reach the reset.** The dock branch picks a path by
+//!   the dock stellar's `Flags` (+0x34): 0x1000 calls
+//!   `_PlayerEnterHypergate` (@0x66edb), which returns the exit gate's
+//!   `spöb` index in ax; ebp-0x298 = that index and ebp-0x288 = -1
+//!   (@0x66ee0-0x66ee9), and a -1 return (no exit) jumps to @0x67eef
+//!   (@0x66ef2-0x66f08), skipping the reset. 0x2000 calls
+//!   `_PlayerEnterWormhole` (@0x66f12): ebp-0x298 = -1 and ebp-0x288 =
+//!   the wormhole exit (@0x66f17-0x66f20). Anything else calls
+//!   `_PlayerLandOnStellar` (@0x66f29), which runs the whole stay and
+//!   returns at take-off; both locals -1 (@0x66f2e-0x66f37). All three
+//!   join at @0x66f40 and run to @0x675ce with no way out of the
+//!   function, and the three callees have no other callers. So the reset
+//!   runs on every take-off, every hypergate exit and every wormhole
+//!   exit, and is skipped only by a hypergate entered with no exit.
+//! - **The locals.** ebp-0x298 is the hypergate exit stellar (a `spöb`
+//!   index, or -1), set @0x66ee9. ebp-0x2a3 is the "came out of a
+//!   hypergate" byte, (ebp-0x298 != -1), set @0x6712a (`setne`). Beside
+//!   them ebp-0x2a2 is "came out of a wormhole" (@0x67140) and ebp-0x2a1
+//!   either one (@0x6714d), which gates
+//!   `_MissionHandlePlayerEnteredNewSystem` and the escort loops
+//!   (@0x67153, @0x674e2). The escort loop @0x674ef-0x675c8 picks its exit
+//!   by ebp-0x2a3 (`cmovel` @0x67502-0x6750f), as `RuleKey::GateEscorts`
+//!   builds.
+//! - **The reset** (@0x675ce-0x675fa): for all 2048 `spöb` records
+//!   (stride 0x498, to 0x24c000) the current frame +0x476 = 0 and the
+//!   next +0x478 = 0. The timer +0x490 is not written, for any stellar,
+//!   gate or not, kept, never shown or not shown alike.
+//! - **The exit gate** (@0x675fc-0x67646), only when ebp-0x2a3 is set:
+//!   current = the counted count +0x474 - 1 (16-bit, @0x67616-0x6761e);
+//!   next = that current, read again (@0x67629-0x67630); timer =
+//!   -`AnimDelay` (+0x470, sign-extended) as a float (@0x67639-0x67646). A
+//!   wormhole's exit or a take-off sets no gate.
+//! - **Then** `_PrepareAllSprites` (@0x6764e), the rebuild
+//!   `_HandleStellarSystemVisibility` (@0x67653, which shows each slot at
+//!   its current frame modulo its count: frame 0), and `_PrepareAllSprites`
+//!   again (@0x67658).
+//! - **Never-shown records.** After a reset a stellar or gate the flight
+//!   has never shown has next 0, not the launch's 1: `_InitObjects` set
+//!   its current and timer to 0, and the new-slot reset
+//!   (@0x331da-0x331fb) is left out (see "Built by stellar-fidelity phase
+//!   12").
+//! - **Sound**: none in @0x674cc-0x67658. The callees are
+//!   `_CueNextHyperRouteDest`, `_SpawnBountyHunter`,
+//!   `_AIMakeShipEmergeFromHyperGate`, `_PrepareAllSprites` and the
+//!   rebuild; `_AdjustSoundVolume` @0x6766e sets the volume and plays
+//!   nothing.
+//! - **A divergence, filed.** `_PrepareAllSprites` calls
+//!   `_HandleStellarSprites` (@0x3a7c9), which never reads the frozen flag
+//!   `*0x3b523c` (no reference in @0x2e713-0x2ef2c) and adds `_gSpeedMult`
+//!   to the timer (@0x2e810-0x2e825). So every `_PrepareAllSprites` steps
+//!   each shown stellar's and gate's animation a tick: twice after this
+//!   reset before the first frame, and at every other entry that runs it.
+//!   weapons-fidelity phase 47 recorded it as display only, which is wrong
+//!   for the timer and the frames. The engine's
+//!   `Session::prepare_all_sprites` steps no stellar or gate. Filed as
+//!   rdm:phase/play-feel-4-followups/phase-4-prepare-all-sprites-steps-stellar-animation.
+//!
+//! ## Checked for play-feel-4 phase 16
+//!
+//! `_PlayerEnterWormhole`'s no-exit path and the tail of
+//! `_HandlePlayerDockRequest` it joins (@0x66f40-0x67682), with both exit
+//! locals -1.
+//!
+//! - **The refusal.** The link loop finds no active exit
+//!   (@0x6409a-0x6409d → 0x6461c), says #84 + #86 (`_DisplayComm`
+//!   @0x646a3, 250 ticks), plays `_beepSnd[3]`, `snd ` 153 (`PlaySound`
+//!   @0x646cb, priority 1) and returns -1 (@0x646d0 → 0x6479b), before
+//!   its starfield, course restart, cloak fade and placement (@0x646da
+//!   on). The dock request stores -1 in ebp-0x288 and ebp-0x298
+//!   (@0x66f17-0x66f20) and jumps to 0x66f40 untested.
+//! - **The tail, in the system the player stays in.** The kill flags
+//!   `_killShots`, `_killBoxes`, `_killExplods`, `_killSmoke`,
+//!   `_killAsteroids` (@0x66f40-0x66f6f); the take-off fold
+//!   (@0x66f72-0x66fc4); every `_beamData` record's +0x10 = -1
+//!   (@0x66fc4-0x66fe6); the player's bank +0xc8e4, display timers
+//!   +0xc8f0/+0xc8e8, ion charge +0x5c, glow +0xc8d4, boarded +0xb9 and
+//!   ion colour +0xb0 = 0 (@0x66fe8-0x67020); `_escortMenuOnscreen`,
+//!   `_dockPermission` = 0 and the target +0x70 = -1 (@0x6705a-0x67069);
+//!   `_antiEscortDelay` = Rand(30)+30 (@0x6706f-0x67084);
+//!   `_DeleteAllComputerShips(0, 1)` (@0x67096) and
+//!   `_ResetPlayerPrecalcedValues` (@0x6709b); the gate-exit block skipped
+//!   (ebp-0x2a3, -0x2a2, -0x2a1 all 0, @0x67122-0x67153), so no
+//!   enter-system hook, no gate loops and no `_EnterMoreShips` pass;
+//!   `_SetupShipsInSystem(+0x74, 1)` (@0x674c2) and the rebuild
+//!   (@0x674c7); +0x6c = -1 and `_CueNextHyperRouteDest`
+//!   (@0x674d2-0x674d8); the frames' reset with no exit gate
+//!   (@0x675ce-0x675fa); `_PrepareAllSprites`, the rebuild and
+//!   `_PrepareAllSprites` (@0x6764e-0x67658); `_frameCounter` = -15
+//!   (@0x67673).
+//! - **Kept.** The position, velocity and thrust (only the glow is
+//!   zeroed); the course; the system's exploration; the date. Nothing is
+//!   saved, and no arrival sound or message plays.
+//! - **The display timers.** +0xc8f0 is the shield flash and +0xc8e8 the
+//!   weapon glow, both held by the flight view, which drops them as it
+//!   lays the scene out afresh.
+//! - **Sound**: `snd ` 153 alone, `nova_sim::SimSound::Refused`.
+//! - **Left out.** `_SpawnBountyHunter` (@0x674dd), modelled at no call
+//!   site (task `planet-domination`); the screen redraws
+//!   (@0x6702a-0x6703d, @0x670c8-0x6711d, @0x6765d-0x6767d), which the
+//!   view does every frame; `_ClearStarfield` (@0x670a0-0x670c3), a no-op
+//!   in a negative-Murk system the player never left.
+//! - **Built here**: the tail (the session's `wormhole_no_exit` module),
+//!   and for every gate exit the fold, the player block and
+//!   `_killExplods`, which `Session::come_out` had left out.
+//!
+//! ## Checked for play-feel-4 phase 15
+//!
+//! `_DrawStatusRadar`'s stellar loop (@0x498a0-0x49a8e), re-read against
+//! stellar-fidelity's record (hud-fidelity phase 2, "`_DrawStatusRadar`
+//! @0x496e0, the no-IFF path").
+//!
+//! - **Listing.** `esi` runs 0..15 (@0x49888, @0x49a8a-0x49a8e). Each pass
+//!   reads `sÿst[player +0x74]` (stride 0x1fc) `+0x2a + 2·slot`, the
+//!   `NavDefs` entry, and skips -1 (@0x498ad-0x498c5). There is no +0x44
+//!   (active), +0x14 (owner), destroyed or sprite-slot test, so a stellar
+//!   another visible system owns gets a blip, drawn in slot order. The
+//!   engine reads the chart's listing, `NavDefs` order with the gaps
+//!   dropped (`nova_sim::flight_frame::FlightFrame::radar_stellars`).
+//! - **Position.** The `spöb` (stride 0x498) +0x4/+0x6, less the player's
+//!   +0x18/+0x1c, truncated, ×0.03125, plus the centre, truncated
+//!   (@0x498cb-0x49935): the radar maths already built.
+//! - **Shape.** `Flags` 0x10 or `Flags2` 0x3000 draws a square, inset -1
+//!   (@0x49939-0x49946, @0x49971-0x499b8). It never reads the master.
+//! - **Oval size.** The master table 0x3b5040 indexed by the `spöb`'s +0xe
+//!   (its `Type`), directly, with no owner test and no 0..255 range check
+//!   (@0x499e8-0x499f9). A null master (@0x499fc), or one whose +0x4c is
+//!   null (@0x49a00-0x49a05), gives inset -1; otherwise
+//!   `_GetSpriteXSize(master)` (@0x49a0a), which gives 32 when +0x50 is
+//!   null or the frame index (+0x68) is outside 0..count (+0x54)
+//!   (@0x26d4-0x26fc), and the frame's width otherwise. Above 199 → inset
+//!   -3, above 89 → -2, else -1 (@0x49a0f-0x49a47). So the blip reads the
+//!   `Type` master, not the sheet drawn, and not `_GetStellarSpriteXSize`'s
+//!   owner test (@0xacb9-0xacc1):
+//!   [`Rebuilt::type_width`](rebuild::Rebuilt::type_width), `Unloaded` the
+//!   smallest, `OutOfRange` 32, `Frame` the `Type` frame's width
+//!   (`Space::radar_type_width`). +0x4c is read as "master loaded", as
+//!   `_LoadMasterStellarSprite`'s create sets it with +0x50 (@0x1ec30,
+//!   @0x1ece3). A destroyed stellar reads its `Type` master until the next
+//!   rebuild point frees it.
+//! - **Clip.** `SectRect` against the radar rect; a blip is skipped only
+//!   when the result is empty (@0x49997-0x499af, @0x49a68-0x49a80):
+//!   already built.
+//! - **Colour.** With IFF, `_ColorCodeStellar` (@0x49955, @0x499cf);
+//!   otherwise `_radarStatusColor[0]`, `DimRadar` (@0x4995f, @0x499d9).
+//!   `_ColorCodeStellar` (@0xaa26-0xab2a) has no owner or visibility test
+//!   and reads `_playerRecord[stellar +0x14]` (@0xaad5, @0xaaed), the
+//!   record of the system that holds the stellar: for one not shown,
+//!   another system's (`Session::stellar_iff`, through `Chart::holder_of`).
+//! - **Sound**: none in the loop.
+//! - **Left out.** A `Type` outside 0..255 indexes past the master table
+//!   (@0x499f9), a read of memory the engine doesn't model; the engine
+//!   reads it as unloaded, the smallest blip.
+//! - **Built here**: the listing, the `Type` master's width (superseding
+//!   rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type)
+//!   and the holder's IFF colour. No other divergence in
+//!   @0x498a0-0x49a8e; nothing filed.
 //!
 //! ## Built by stellar-fidelity phase 15
 //!
@@ -3471,11 +3710,10 @@
 //!   shown 250 ticks (@0x64e8e). A hypergate's greeting jumps past it
 //!   (@0x64a59 → 0x64e5d), so #102 "[Hypergate fee is" (@0x64dba-0x64dc0)
 //!   is unreachable and not built; a wormhole gets #103/#104.
-//! - **Left out**: domination by Demand Tribute (+0x46 written by
-//!   `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f), which waives the
-//!   refusal, the charge and the greeting line, is
-//!   rdm:task/planet-domination's (`fee_due` is the one reader to switch);
-//!   the 32-bit cash width and signed compare are not replicated; the
+//! - Domination by Demand Tribute (+0x46 written by `_DoPlanetCommDialog`
+//!   @0x978fa, cleared @0x9740f) waives the refusal, the charge and the
+//!   greeting line too, through `fee_due` over the stamped site.
+//! - **Left out**: the 32-bit cash width and signed compare are not replicated; the
 //!   `crashlog_print` calls after the charge (@0x66dff-0x66e56) are debug
 //!   logging.
 //! - **Merge note** (cloaking-fidelity phase 8, on `main` but not on this

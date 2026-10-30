@@ -152,6 +152,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+        Vec::new()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         Some((100, 100))
     }
@@ -209,6 +213,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         govt: None,
         flags2: 0,
         destroyed: false,
+        dominated_at_run_time: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,
@@ -219,6 +224,8 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 

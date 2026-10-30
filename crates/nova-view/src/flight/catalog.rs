@@ -16,7 +16,7 @@ use crate::geometry::Bounds;
 use crate::sheet_image::SheetImage;
 
 /// One of a ship's `shän` layers drawn over its base sprite: the layer's
-/// `rlëD` and how many frames it holds.
+/// `rlëD`, how many frames it holds and their size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayerSheet {
     /// The `rlëD`'s ID.
@@ -24,9 +24,22 @@ pub struct LayerSheet {
     /// The layer's frames. The base's rotation frame `f` is drawn with the
     /// layer's frame `f % frames`.
     pub frames: NonZeroU16,
+    /// Each frame's width in pixels: the layer is placed by its own size,
+    /// not its hull's (`_HandleShipDisplay` @0x2cda2-0x2d083).
+    pub frame_width: u32,
+    /// Each frame's height in pixels.
+    pub frame_height: u32,
     /// Whether its `rlëD` holds solid runs, drawn raw over the layer (see
     /// [`solid_runs`](super::solid_runs)).
     pub solid: bool,
+}
+
+impl LayerSheet {
+    /// Its frame's size, (width, height).
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        (self.frame_width, self.frame_height)
+    }
 }
 
 /// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
@@ -71,6 +84,15 @@ pub struct ShipSheet {
     /// Whether the hull's `rlëD` holds solid runs, drawn raw over the hull
     /// (see [`solid_runs`](super::solid_runs)).
     pub solid: bool,
+}
+
+impl ShipSheet {
+    /// Its hull's frame size, (width, height): what the hull is placed by
+    /// and its click and hover box is sized by, so the two can't drift.
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        (self.frame_width, self.frame_height)
+    }
 }
 
 /// What `WeapDecay` is multiplied by for the glow's fall a tick

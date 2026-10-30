@@ -103,8 +103,6 @@
 //!   [`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet)). Here
 //!   an escort with no leader or slot brakes, and one in the regroup pause
 //!   keeping formation with no leader holds ([`Goal::flown`]).
-//! - Sub 1's settle cuts the speed (+0x48) too:
-//!   rdm:task/ai-drags-scale-the-npc-speed.
 //! - `_AIMaintainFormation`'s snap (snap 1) is passed only by
 //!   `_AICalcFormationPositions(parent, 1)` from `_SetupShipsInSystem`
 //!   and `_HyperSpawnFleet`, which the session's arrival places and the
@@ -323,7 +321,7 @@ pub(crate) fn fly(
     };
     // With no leader or slot, or in sub 1: a stop, which keeps +0x34.
     let Some((leader, place, sub)) = flying else {
-        let stop = leave_flight::stop_flight(&mut npc.state, handling, inertia);
+        let stop = leave_flight::stop_flight(npc, handling, inertia);
         let flown = stop.flown.unwrap_or(*handling);
         held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
         return;
@@ -1089,5 +1087,20 @@ mod tests {
             "{:?}",
             soft.state
         );
+    }
+
+    #[test]
+    fn an_inertialess_escort_with_no_leader_settling_has_its_speed_cut_to_0_95() {
+        // Sub 1's settle cuts +0x48 too (@0x8560d-0x8561f).
+        let raven = ShipFields {
+            flags2: INERTIALESS_HULL,
+            ..FAST
+        };
+        let mut lost = escort_of(raven, 30.0, at(0.0, 100.0, 0.0, -0.2, 0.0));
+        lost.speed = 0.2;
+        flown(&mut lost, None, Beside::default());
+        #[allow(clippy::cast_possible_truncation)]
+        let settled = (f64::from(0.2_f32) * 0.95) as f32;
+        assert_eq!(lost.speed, settled);
     }
 }
