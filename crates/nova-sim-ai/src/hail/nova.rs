@@ -36,6 +36,9 @@
 //!     ([`govt_hail_patch`](super::advice::govt_hail_patch)) when one
 //!     exists, else `STR#` 7000 + g, string r + 1 for a trader and r + 6
 //!     otherwise, g the government's index (ID - 128) and r the variant.
+//!     A trader is the original's AI type 2 or below (@0x91a0d,
+//!     [`Npc::original_ai_type`](crate::traffic::npc::Npc::original_ai_type)),
+//!     so a led trader reads as another.
 //!     An independent ship reads `'STR '` 10000 + r or 10005 + r, then
 //!     `STR#` 6999, which does not exist, so its line is blank;
 //!   - specific advice (0x4000, [`Reply::Advice`]): `STR#` 7500 +
@@ -251,7 +254,7 @@ impl Greetings {
         let npc = hail.npc;
         let (list, index, greet_if_blank, patch) = match hail.advice {
             Some(GOVT_HAIL) => {
-                let trader = npc.ai_type.trades();
+                let trader = npc.original_ai_type() <= 2;
                 let first = if trader { TRADER_HAIL } else { OTHER_HAIL };
                 let patch = govt_hail_patch(npc.govt, trader, hail.variant);
                 (govt_hails(npc.govt), variant + first, false, patch)
@@ -941,6 +944,20 @@ mod tests {
         assert_eq!(greet(&warship, 4), govt_hail(7002, 10, 10_039));
         let fed = of(AiType::Warship, Some(128), 0x8000);
         assert_eq!(greet(&fed, 0), govt_hail(7000, 6, 10_015));
+    }
+
+    #[test]
+    fn a_led_trader_greets_with_the_hail_of_others() {
+        // `_LoadAdvice` @0x91a0d reads +0x88 above 2: a led ship is 6.
+        let led = Npc {
+            leader: Some(NpcId(0)),
+            ..of(AiType::BraveTrader, Some(130), 0x8000)
+        };
+        let hail = advising(&led, 2, Some(GOVT_HAIL));
+        assert_eq!(
+            press(&Greetings::default(), &hail),
+            govt_hail(7002, 2 + OTHER_HAIL, 10_037)
+        );
     }
 
     #[test]
