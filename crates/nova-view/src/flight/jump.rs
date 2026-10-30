@@ -107,6 +107,21 @@
 //! `_PlayerEnterWormhole` paints the window white once (@0x643ea-0x64414)
 //! and never fades, whatever the preference: [`JumpEffect::flash`].
 //!
+//! # Texts under the white
+//!
+//! The world runs through the lit warp, so a text can be shown under the
+//! white: a ship goal met there shows its `ShipDoneText`
+//! (`_MissionObjectivesCheck` @0x9ed0f), and About can be picked from the
+//! menu bar. `_FadeWhiteIn` sets `_screenFaded` at once (@0x5475) and the
+//! next pass's `_FadeWhiteOut` after the arrival clears it (@0x6841f), so
+//! a text shown meanwhile ([`JumpEffect::faded`]) shows on the faded
+//! screen (see [`faded_texts`](crate::ui::faded_texts)): its dialog's
+//! `_FadeScreenIn` jumps the display to black and fades it in, so the
+//! white is gone ([`JumpEffect::faded_in`]). Once the text closes, the
+//! warp, still lit, fades to white again over [`FADE_OUT_FOR`] on its
+//! next pass (@0x683f1-0x68404, the flag clear); on the arrival's own pass
+//! the effect ends.
+//!
 //! The black fades (`_FadeScreenOut`, `_FadeScreenIn`) serve death, the
 //! intro and dialogs, never the jump. The Help Book and the Bible do not
 //! describe the effect.

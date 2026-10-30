@@ -38,8 +38,8 @@
 //!
 //! The fade-in is drawn in the dialogs' own 1024 x 768 frame, as a
 //! cinematic movie's window is: over a widened flight view its sides are
-//! left uncovered, with the movie's
-//! (rdm:phase/display-modes-fidelity/phase-3-cinematic-movie-widened).
+//! left uncovered, as the movie's are
+//! (rdm:phase/movies/phase-8-cinematic-movie-widened).
 
 use std::time::Duration;
 
