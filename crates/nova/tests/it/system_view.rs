@@ -313,6 +313,8 @@ fn losing_focus_while_holding_a_key_stops_the_camera() {
     harness.send(WindowEvent::FocusLost);
     // Right's release went to another window.
     let stopped = harness.camera();
+    // Play resumes, so the stop isn't the background's pause.
+    harness.send(WindowEvent::FocusGained);
     harness.frame_after(QUARTER);
     assert_eq!(harness.camera(), stopped);
 }
