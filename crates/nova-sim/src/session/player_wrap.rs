@@ -350,14 +350,14 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::PlayerWrap, RuleSource::Bible);
         let mut session = flying(&catalog).with_rules(rules);
         session.ship.player.position = PAST;
-        session
-            .space
-            .traffic
-            .add_npc(npc(0, ShipStats::new(FAST, &[])));
+        let near = PAST + Vec2::new(-200.0, 50.0);
+        let mut ship = npc(0, ShipStats::new(FAST, &[]));
+        ship.state.position = near;
+        session.space.traffic.add_npc(ship);
         pass(&mut session, &catalog);
+        assert_eq!(session.npcs()[0].state.position, near, "within reach");
         assert_eq!(session.player().position, PAST);
         assert_eq!(session.out.player_wrap, None);
-        assert_eq!(session.npcs()[0].state.position, Vec2::ZERO);
     }
 
     #[test]
