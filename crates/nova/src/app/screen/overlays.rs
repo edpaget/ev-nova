@@ -564,8 +564,15 @@ impl AppScreen {
     /// its hail or boarding, over flight, which pauses: the interface
     /// file's, in the variant its graphic picks
     /// ([`OfferTemplates::layout`]), or, without it or the metrics to lay
-    /// it out, the dialog's own note that Return accepts it.
+    /// it out, the dialog's own note that Return accepts it. Flight's
+    /// cursor goes first, as `_HandlePlayerCommunication` and
+    /// `_HandlePlayerBoardAttempt` hide its sprite (@0x6225a, @0x658d6);
+    /// the keys stay held, as `_SetAllKeyCmdFlags` runs only after the
+    /// offer (@0x622ac).
     pub(super) fn open_offer(&mut self, prompt: OfferPrompt) {
+        if let Some(flight) = &mut self.flight {
+            flight.cancel_pointer();
+        }
         let layout = match (&self.dialogs, self.metrics()) {
             (Some(dialogs), Some(metrics)) => OfferTemplates {
                 plain: dialogs.resources.dialog_template(OFFER_DIALOG),

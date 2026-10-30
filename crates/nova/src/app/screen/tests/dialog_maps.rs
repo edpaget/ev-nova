@@ -9,6 +9,12 @@ use nova_view::DrawLayer;
 fn offered_in_flight() -> AppScreen {
     let mut screen = with_dialogs(data());
     fly(&mut screen);
+    offer_job(&mut screen);
+    screen
+}
+
+/// Opens a person's offer of mission 130 on `screen`.
+fn offer_job(screen: &mut AppScreen) {
     screen.open_offer(nova_sim::OfferPrompt {
         mission: MissionId(130),
         text: "Job.".to_owned(),
@@ -17,7 +23,6 @@ fn offered_in_flight() -> AppScreen {
         movie: None,
     });
     assert_eq!(screen.showing(), Showing::Offer);
-    screen
 }
 
 fn map_sounds(screen: &mut AppScreen) -> Vec<Sound> {
@@ -120,6 +125,24 @@ fn a_dialogs_map_over_flight_leaves_no_world_over_the_dialog() {
         world.is_some_and(|last| last < offer),
         "the last world command, {world:?}, under the offer at {offer}"
     );
+}
+
+#[test]
+fn an_offer_over_flight_hides_flights_cursor_and_keeps_it_hidden_after_its_map() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.tick(TICK);
+    screen.input(&Input::PointerMoved(Point::new(300.0, 300.0)));
+    assert!(flight(&screen).cursor_at().is_some(), "over flight");
+    offer_job(&mut screen);
+    assert_eq!(flight(&screen).cursor_at(), None, "under the offer");
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert!(flight(&screen).map_open());
+    screen.input(&key(Key::Escape, true));
+    assert!(!flight(&screen).map_open());
+    assert_eq!(screen.showing(), Showing::Offer);
+    assert_eq!(flight(&screen).cursor_at(), None, "after its map");
 }
 
 #[test]
