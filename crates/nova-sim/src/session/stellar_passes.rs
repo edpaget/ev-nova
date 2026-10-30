@@ -40,7 +40,7 @@
 //! [`Session::enter_game`], not from the load or the new pilot's begin.
 //! Its third pass is `_PlayGame`'s (@0x45834), after the setup, whose
 //! ships can hold a gate. On a first entry the engine sets them up in the
-//! first step ([`Space::traffic_due`]), so the pass is raised for the view
+//! first step (`Space::traffic_due`), so the pass is raised for the view
 //! at entry and the gates take its step after that setup
 //! (`Session::traffic_think`, [`Session::take_entry_gate_pass`]). The
 //! warm-up frame before it is drawn under the entry's black and shows no
