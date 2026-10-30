@@ -23,8 +23,12 @@
 //! [`Session::set_sprite_load`] changes the load and refits every live
 //! copy from the raw arsenal: the player, the first class, and each NPC
 //! and spawnable kind, so a load set back restores the class's sets. Only
-//! the frames are rewritten. A ship's fold or anim set left from more sets
-//! is harmless: its display draws set 0 while its class has one.
+//! the frames are rewritten, and then each ship's fold and display state,
+//! the player's and each NPC's, are brought inside its new sets
+//! ([`ShipFrames::refit`](crate::combat::ship_frames::ShipFrames::refit)):
+//! a fold set left past them would hold the player's fire for good, as
+//! its fold-before-fire gate reads no set count and nothing steps a
+//! one-set ship's fold back.
 //!
 //! The original loads its sprites once, at launch, and its preferences
 //! never change them in play; when a change reaches the session is the
@@ -78,9 +82,13 @@ impl Session {
 
 impl PlayerShip {
     /// Gives the player's hull class `ship`'s frames as `setup` loads
-    /// them, the rest of it as it is.
+    /// them, the rest of it as it is, and brings its fold and display
+    /// state inside the new sets.
     pub(super) fn refit_frames(&mut self, statics: &Statics, setup: &Setup, ship: ShipId) {
         self.fit.hull.frames = setup.frames_of(statics, ship);
+        self.ship_display
+            .frames
+            .refit(&self.fit.hull.frames, self.fit.armament.fold_mut());
     }
 }
 
@@ -423,5 +431,43 @@ mod tests {
             assert_eq!(session.player_drawn().lights, None);
         }
         assert_eq!(session.ship.ship_display.frames.lights, before, "still");
+    }
+
+    #[test]
+    fn a_refolded_player_that_unfolds_to_fire_still_fires_once_the_animations_go_at_once() {
+        use crate::combat::armament::Trigger;
+        use crate::combat::ship_frames::UNFOLDS_TO_FIRE;
+        use crate::combat::{CombatEvent, ShipRef};
+        // The player's 128 folds through four sets and unfolds to fire.
+        let mut catalog = crate::session::tests::armed();
+        let folding = shän(128, FOLDS | UNFOLDS_TO_FIRE, 4);
+        catalog.hulls[0].display = folding.display;
+        catalog.hulls[0].exits = folding.exits;
+        let mut session = Session::start(&catalog).expect("starts");
+        for _ in 0..60 {
+            work(&mut session, &catalog, Controls::default());
+        }
+        assert_eq!(session.ship.fit.armament.fold().set, 3, "refolded");
+        // The other reading of `RuleKey::WeaponEffectsNextLaunch` sends the
+        // change to the flight at once.
+        session.set_sprite_load(STILL);
+        let _ = session.take_combat_events();
+        session.hold_trigger(Trigger {
+            primary: true,
+            ..Trigger::default()
+        });
+        let fired = (0..5).any(|_| {
+            work(&mut session, &catalog, Controls::default());
+            session.take_combat_events().iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Fired {
+                        ship: ShipRef::Player,
+                        ..
+                    }
+                )
+            })
+        });
+        assert!(fired, "{:?}", session.ship.fit.armament.fold());
     }
 }

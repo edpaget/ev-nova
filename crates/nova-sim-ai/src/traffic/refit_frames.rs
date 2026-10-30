@@ -2,13 +2,15 @@
 //! when what of each ship's sprites loads changes
 //! ([`SpriteLoad`](crate::combat::SpriteLoad)): each NPC's and each
 //! spawnable kind's [`HullSpec::frames`](crate::combat::hull::HullSpec::frames),
-//! and nothing else of its hull.
+//! and nothing else of its hull. Each NPC's fold and display state are
+//! then brought inside its new sets
+//! ([`ShipFrames::refit`](crate::combat::ship_frames::ShipFrames::refit)),
+//! so a fold or alt set left from more sets neither holds its fire nor
+//! draws a set its sprite lacks.
 //!
 //! The original loads the sprites once, at launch, so it has nothing to
 //! rewrite. The engine's caller decides when a change applies; this only
-//! carries it to the ships. A ship's fold set or anim set left from more
-//! sets is harmless: its display draws set 0 while its class has one, and
-//! the fold-before-fire gate needs more than one.
+//! carries it to the ships.
 
 use crate::catalog::ShipId;
 use crate::combat::ship_frames::FrameSpec;
@@ -34,10 +36,14 @@ impl SpawnTable {
 impl Traffic {
     /// Gives each NPC, and each kind its table can spawn, the display
     /// `frames` gives its ship type, leaving the rest of its hull as it
-    /// is.
+    /// is, and brings each NPC's fold and display state inside its new
+    /// sets.
     pub fn refit_frames(&mut self, frames: &dyn Fn(ShipId) -> FrameSpec) {
         for npc in &mut self.npcs {
             npc.hull.frames = frames(npc.ship);
+            npc.display
+                .frames
+                .refit(&npc.hull.frames, npc.armament.fold_mut());
         }
         self.table.refit_frames(frames);
     }
@@ -51,6 +57,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::PersonId;
+    use crate::combat::armament::Fold;
     use crate::combat::hull::Condition;
     use crate::combat::ship_frames::ANIMATED;
     use crate::reserves::Reserves;
@@ -137,5 +144,27 @@ mod tests {
         let mut expected = table();
         expected.refit_frames(&refit);
         assert_eq!(traffic.table, expected);
+    }
+
+    #[test]
+    fn the_traffic_brings_each_npcs_display_state_inside_its_new_sets() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = npc(1, ShipStats::new(FAST, &[]));
+        ship.ship = ShipId(2);
+        ship.hull = kind().hull;
+        *ship.armament.fold_mut() = Fold {
+            set: 5,
+            dir: 1,
+            since_fire: 0,
+        };
+        ship.display.frames.alt_set = 4;
+        traffic.npcs = vec![ship.clone()];
+        traffic.refit_frames(&refit);
+        ship.hull.frames = refit(ShipId(2));
+        ship.display
+            .frames
+            .refit(&ship.hull.frames, ship.armament.fold_mut());
+        assert_ne!(ship.armament.fold().set, 5, "a state the refit moves");
+        assert_eq!(traffic.npcs, [ship]);
     }
 }
