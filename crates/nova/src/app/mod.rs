@@ -79,7 +79,12 @@
 //!   Focus coming back is told to the screen too
 //!   ([`Screen::focus_gained`](nova_view::Screen::focus_gained)), and so
 //!   is losing it ([`Screen::focus_lost`](nova_view::Screen::focus_lost)),
-//!   whose sounds reach the audio at once.
+//!   whose sounds reach the audio at once. While the window is in the
+//!   background the app asks for no redraws, as the original sleeps
+//!   there with the game paused: losing focus asks for one, to draw what
+//!   the switch-out leaves, and focus coming back starts them again. Each
+//!   redraw ticks the screen by the time since the last, so the screen
+//!   counts the time away.
 //! - **Exit.** Before every exit, an exclusive mode is left, so the
 //!   display gets its own mode back. Nothing is saved on the way out.
 //!
@@ -340,6 +345,9 @@ pub struct App<S, C = AppScreen> {
     shape: ViewShape,
     screen: C,
     last_redraw: Duration,
+    /// Whether the window is in the background: from a focus loss to the
+    /// focus coming back. Redraws then ask for no next one.
+    background: bool,
     pointer: Option<(f64, f64)>,
     /// Whether the system's pointer is hidden over the window, as the app
     /// last told the window.
@@ -383,6 +391,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             shape,
             screen,
             last_redraw: Duration::ZERO,
+            background: false,
             pointer: None,
             pointer_hidden: false,
             cursor_synced: false,
@@ -744,18 +753,28 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// before the window was ever focused would spend the music at
     /// launch, where the original's suspend only follows a resume; winit
     /// reports none such.
+    ///
+    /// The app is then in the background: it asks for one redraw, so the
+    /// picture the switch-out leaves (the main menu's rollover on its none
+    /// frame) is drawn, and that redraw asks for no next one (see
+    /// [`App::redraw`]).
     fn focus_lost(&mut self, window: &mut impl WindowPort) {
         self.fullscreen.focus_lost(window);
         self.screen.release_keys();
         self.screen.focus_lost();
         self.feed_audio();
+        self.background = true;
+        window.request_redraw();
     }
 
     /// The window came back to the front: an exclusive mode left on
-    /// losing focus is entered again, and the screen is told.
+    /// losing focus is entered again, the screen is told, and a redraw is
+    /// asked for, which starts the redraws again.
     fn focus_gained(&mut self, window: &mut impl WindowPort) {
         self.fullscreen.focus_gained(window);
         self.screen.focus_gained();
+        self.background = false;
+        window.request_redraw();
     }
 
     /// Handles one window event as [`App::handle_routed`] does, before its
@@ -879,7 +898,17 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// A redraw at `elapsed`: ticks the screen and the overlay, then draws
-    /// the frame and asks for the next, unless the screen asked to quit.
+    /// the frame and asks for the next, unless the screen asked to quit or
+    /// the app is in the background.
+    ///
+    /// In the background the original sleeps 30 ticks in `WaitNextEvent`
+    /// (`_IterateInGameEventLoop` @0x56885, `_DoMainScreen` @0x1b1dc,
+    /// `_MyModalDialog` @0x59965, `_PlayQTMovie` @0x55e23,
+    /// `_LoopingMovieIdle` @0x55902), waking twice a second to draw
+    /// nothing new, as the game is paused there. The engine asks for no
+    /// redraws instead, until the platform asks for one or the focus comes
+    /// back. Each redraw still ticks the screen by the time since the last
+    /// one, so the screen counts the time away.
     fn redraw(
         &mut self,
         elapsed: Duration,
@@ -914,7 +943,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         // What drawing it raised (an upscaler's fallback, say), to show.
         self.warnings.extend(gpu.take_warnings());
         self.show_pointer(window);
-        window.request_redraw();
+        if !self.background {
+            window.request_redraw();
+        }
         resync
     }
 
@@ -1372,6 +1403,7 @@ mod tests {
 
     type TestApp = App<NoImages, RecordingScreen>;
 
+    mod background;
     mod display_shapes;
     mod exiting;
     mod menu;
