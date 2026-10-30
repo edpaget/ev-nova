@@ -27,7 +27,9 @@
 //! and the vendored crates) with no network, which Flathub requires;
 //! moving to Flathub swaps those two for a git source and a generated
 //! `cargo-sources.json`, and keeps the runtime, the permissions and the
-//! rest.
+//! rest. A third source, a `file`, is the FFmpeg tarball the movie decoder
+//! builds ([`ffmpeg`]), which `flatpak-builder` downloads and checks
+//! before the offline build.
 //!
 //! It ships no zenity: the runtime's `/usr/bin/zenity` (zenity 3.44,
 //! GTK3) is on the sandbox's `PATH`, which is where rfd's message boxes
@@ -37,6 +39,7 @@
 //! runs it; [`host`] reads the edge's arguments and refuses any host but
 //! x86-64 Linux. `NOVA_CHANNEL` names the branch it builds onto.
 
+pub mod ffmpeg;
 pub mod host;
 pub mod layout;
 pub mod manifest;

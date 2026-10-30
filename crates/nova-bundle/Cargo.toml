@@ -25,6 +25,9 @@ roxmltree.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The FFmpeg source record (third_party/ffmpeg-source.toml), which the
+# Flatpak manifest hands to the offline build.
+toml.workspace = true
 # The Windows installer's icon and version, as nova.exe's resources have
 # them.
 nova-winres.workspace = true

@@ -1,0 +1,10 @@
+# The FFmpeg source the movie decoder links, statically: the one record of
+# it. The vendored ffmpeg-sys-next's build script (ffmpeg-sys-next/build.rs)
+# reads it, and so does nova-bundle's Flatpak manifest, which hands the
+# same tarball to the offline build. The SHA-256 is of the tarball as
+# downloaded on 2026-10-29, whose signature (`.asc`) checked against
+# FFmpeg's release signing key, FCF986EA15E6E293A5644F10B4322F04D67658D8.
+# The version must stay in the series ffmpeg-sys-next binds (9.0).
+version = "9.0.2"
+url = "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz"
+sha256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"

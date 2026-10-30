@@ -12,6 +12,8 @@ publish.workspace = true
 # `main` opens.
 nova-audio.workspace = true
 nova-data.workspace = true
+# The movie decoder: FFmpeg, built from source and linked statically.
+nova-movie.workspace = true
 nova-render.workspace = true
 # The pilot store port the filesystem adapter implements, and the keeper
 # the router saves pilots through.

@@ -67,8 +67,15 @@ jobs:
       # nova-audio plays through cpal, which builds against ALSA on Linux.
       # desktop-file-utils and appstream are the validators the Linux
       # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
+      # libclang-dev is for bindgen, which binds the FFmpeg nova-movie
+      # builds (third_party/ffmpeg-sys-next).
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream libclang-dev
+      # FFmpeg's configure and make run in MSYS2 (preinstalled at
+      # C:\msys64), with MSVC's compiler; bindgen uses the preinstalled
+      # LLVM's libclang.
+      - if: runner.os == 'Windows'
+        run: C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false

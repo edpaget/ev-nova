@@ -3,7 +3,7 @@ amends "package://github.com/jdx/hk/releases/download/v2.4.0/hk@2.4.0#/Config.pk
 // The full gate CI runs, defined once in mise.toml's `ci` task.
 local ci = new Mapping<String, Step> {
     ["mise_ci"] {
-        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml")
+        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml", "third_party/**")
         check = "mise run ci"
         exclusive = true
     }
@@ -21,6 +21,7 @@ local crates = List(
     "nova-data",
     "nova-dump",
     "nova-metalfx",
+    "nova-movie",
     "nova-render",
     "nova-rsrc",
     "nova-sim",
@@ -64,9 +65,11 @@ local changed = new Mapping<String, Step> {
         check = "echo 'error: {{files}} is in a crate missing from the crates list in hk.pkl; add the crate there' >&2; exit 1"
         exclusive = true
     }
-    // Files that can change every crate's build or tests.
+    // Files that can change every crate's build or tests. third_party/ holds
+    // the vendored FFmpeg bindings and the FFmpeg source record, which
+    // every build reaching the movie decoder builds.
     ["workspace"] {
-        glob = List("Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml", ".cargo/**")
+        glob = List("Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml", ".cargo/**", "third_party/**")
         check = "mise run lint && mise run test"
         exclusive = true
     }

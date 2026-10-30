@@ -1,0 +1,18 @@
+[package]
+name = "nova-movie"
+description = "EV Nova's QuickTime movies: found by name, decoded with a static FFmpeg, and shown through nova-view's movie port"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# FFmpeg, statically linked and built from the source pinned in
+# third_party/ffmpeg-source.toml: the demuxer, decoders and scaler.
+ffmpeg-next.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true
