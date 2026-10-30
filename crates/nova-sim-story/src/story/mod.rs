@@ -2994,7 +2994,8 @@
 //!     system-traffic-fidelity phase 7 (`nova_sim::gate_sprite`);
 //!   - the sprite-slot plumbing (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a),
 //!     the view's drawing from phases 1 and 8: `_HandleSpriteMurkiness`
-//!     (@0x2eea4) is rdm:task/murk-other-sprites, and whole-pixel
+//!     (@0x2eea4) is `nova_view::flight::murk`'s
+//!     (rdm:phase/play-feel-4/phase-17-murk-other-sprites), and whole-pixel
 //!     placement (@0x2eeab-0x2ef1a) is
 //!     rdm:phase/stellar-fidelity-followups/phase-9-whole-pixel-sprite-placement;
 //!   - the hang under 0x0001 | 0x0002 over 2 counted frames

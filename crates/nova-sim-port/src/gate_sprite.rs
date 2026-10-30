@@ -69,10 +69,10 @@
 //! - **The sequential branch** (@0x2ec4b-0x2ee05), every other stellar's:
 //!   the view's stellar animation.
 //! - **Sprite-slot plumbing** (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a):
-//!   visibility, master loading, cloning and location, which the view's
-//!   stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is left
-//!   out, as the view murks shots alone so far
-//!   (rdm:task/murk-other-sprites).
+//!   visibility, master loading, cloning, murk and location, which the
+//!   view's stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is
+//!   `nova_view::flight::murk`'s, a gate's sprite murked as every
+//!   stellar's (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use crate::catalog::{LandingSite, SiteAnimation};
 use crate::chance::Chance;

@@ -61,7 +61,9 @@
 //! `Rand(16)` until it lands on one, which picks as evenly and can never
 //! loop. A spawn draws its type first, then its place and velocity
 //! (one axis, then the other), its frame, its spin's size and its sign.
-//! No sound plays in any of these routines.
+//! No sound plays in any of these routines. `_HandleSpriteMurkiness`
+//! (@0x36446) is the view's: `nova_view::flight::murk` darkens each
+//! asteroid (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 //!
 //! Left out:
 //!
@@ -71,8 +73,6 @@
 //!   its only read, and each −32000 written elsewhere (@0x9ad1, @0xc3d9,
 //!   @0x97c64) is to another table. A hit below 0 destroys the asteroid
 //!   at once, so the cull is moot.
-//! - `_HandleSpriteMurkiness` (@0x36446): the view murks shots alone so
-//!   far, the asteroids and cargo boxes not (rdm:task/murk-other-sprites).
 //! - The `_gameFrozen` skip (@0x36300-0x3636f) and the frozen game's call
 //!   from `_PrepareAllSprites` (@0x3a7dd): the engine has no frozen game
 //!   (see the `combat` module), and a paused session doesn't tick.

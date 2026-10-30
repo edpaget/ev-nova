@@ -51,8 +51,10 @@
 //!
 //! - The wrap shift (`_WrapPlayerPosition` @0x6811f-): the engine has no
 //!   player wrap.
-//! - The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181): the view
-//!   murks shots alone so far (rdm:task/murk-other-sprites).
+//!
+//! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
+//! `nova_view::flight::murk` darkens each box
+//! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use std::collections::BTreeMap;
 
