@@ -206,6 +206,22 @@ fn the_spaceports_movies_stay_classic_after_a_resize_in_flight() {
     assert!(!black_beyond(&screen, 1024.0), "and no wider");
 }
 
+#[test]
+fn the_spaceports_movies_stay_classic_after_a_resize_while_it_shows() {
+    let (mut screen, _) = filmed(0, "Job.", 0x0004, Prefs::default());
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    assert_eq!(screen.view_shape(), ViewShape::Classic);
+    let mut screen = widened(screen);
+    assert_eq!(screen.view_shape(), ViewShape::Classic);
+    ticked_for(&mut screen, 1500);
+    assert!(
+        !black_across(&screen, 1024.0).is_empty(),
+        "its black window over the classic screen"
+    );
+    assert!(!black_beyond(&screen, 1024.0), "and no wider");
+}
+
 /// Whether `screen`'s frame has flight's status bar, or why it has none,
 /// at the widened view's right edge.
 fn widened_bar(screen: &AppScreen) -> bool {
