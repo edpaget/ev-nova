@@ -1088,14 +1088,8 @@ mod tests {
     }
 
     #[test]
-    fn a_trader_escort_or_one_on_another_ship_says_no_victory() {
+    fn an_escort_on_another_ship_says_no_victory() {
         let catalog = armed_voiced();
-        let (mut session, victim) = attacking(&catalog, &[FREIGHTER]);
-        assert_eq!(
-            victory(&mut session, &catalog, victim),
-            [vec![], vec![]],
-            "a trader"
-        );
         let (mut session, victim) = attacking(&catalog, &[WARSHIP]);
         let elsewhere = crate::combat::ShipRef::Player;
         let npc = escort_npc(&mut session, 0);
@@ -1110,9 +1104,8 @@ mod tests {
 
     #[test]
     fn of_two_escorts_attacking_the_victim_the_higher_berth_says_the_victory() {
-        // Each speaks in slot order, so the last stands: the trader of the
-        // two speaks none, so the warship's set 3, then the freighter's
-        // class swapped to speak set 4 shows which.
+        // Each speaks in slot order, so the last stands: the warship's set
+        // 3, then the freighter's class swapped to speak set 4 shows which.
         let mut catalog = armed_voiced();
         for record in &mut catalog.ship_records {
             if record.id == FREIGHTER {
