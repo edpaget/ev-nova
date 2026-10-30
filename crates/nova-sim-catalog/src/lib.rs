@@ -64,13 +64,13 @@ pub mod warp;
 pub use catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes, DescMovie,
-    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, FrameSize,
-    GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics, TextMovies,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    DescText, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord,
+    FrameSize, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics,
+    TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
