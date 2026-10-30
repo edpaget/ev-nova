@@ -19,8 +19,7 @@ impl Session {
     ///   its refusal among them.
     /// - [`FlightCommand::Recharge`] runs [`Session::recharge`]:
     ///   [`Answer::Recharged`].
-    /// - [`FlightCommand::Outfit`] and [`FlightCommand::OutfitCounted`] run
-    ///   [`Session::outfit_order`] and [`Session::outfit_counted_run`]:
+    /// - [`FlightCommand::Outfit`] runs [`Session::outfit_order`]:
     ///   [`Answer::Outfitted`], the whole run.
     /// - [`FlightCommand::OpenShipyard`] runs [`Session::open_shipyard`]:
     ///   done, with no shipyard to open too, keeping nothing.
@@ -62,9 +61,6 @@ impl Session {
             }
             FlightCommand::Outfit { order, count } => {
                 Answer::Outfitted(self.outfit_order(order, count, chance))
-            }
-            FlightCommand::OutfitCounted { order, count } => {
-                Answer::Outfitted(self.outfit_counted_run(order, count, chance))
             }
             FlightCommand::OpenShipyard => {
                 self.open_shipyard(chance);
@@ -213,17 +209,19 @@ mod tests {
             },
             |session| Answer::Outfitted(session.outfit_order(BOOSTER, 1, &mut NeverFires)),
         );
+        // The day the buy counted is let go, so the Cancel's own shows.
+        session.port.stay.outfit_traded = false;
         runs(
             &mut session,
-            FlightCommand::OutfitCounted {
+            FlightCommand::Outfit {
                 order: BOOSTER,
                 count: 0,
             },
-            |session| Answer::Outfitted(session.outfit_counted_run(BOOSTER, 0, &mut NeverFires)),
+            |session| Answer::Outfitted(session.outfit_order(BOOSTER, 0, &mut NeverFires)),
         );
         assert!(
             session.port.stay.outfit_traded,
-            "a counted Cancel counts the outfit day"
+            "a Cancel counts the outfit day"
         );
         runs(&mut session, FlightCommand::CloseOutfitter, |session| {
             session.close_outfitter();

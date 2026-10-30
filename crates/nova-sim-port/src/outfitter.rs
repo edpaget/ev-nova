@@ -238,7 +238,7 @@
 //! [`Outfitter::count_max`] works out (none when that is 1 or less, and
 //! the click moves one), and the count is bought or sold one at a time
 //! through the order loop ([`order_loop`](crate::order_loop),
-//! `nova_sim::Session::outfit_counted`), a plain
+//! `nova_sim::Session::outfit_order`), a plain
 //! click being the loop with a count of 1, when the
 //! [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) rule asks
 //! ([`Outfitter::count_asked`]). The buy loop (@0x5c1bd-0x5c2ff) re-runs

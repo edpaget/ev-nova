@@ -229,7 +229,6 @@ impl Session {
             | FlightCommand::OpenOutfitter
             | FlightCommand::CloseOutfitter
             | FlightCommand::Outfit { .. }
-            | FlightCommand::OutfitCounted { .. }
             | FlightCommand::OpenShipyard
             | FlightCommand::BuyShip { .. }
             | FlightCommand::DeclineShip(_)

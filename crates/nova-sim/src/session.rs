@@ -4281,7 +4281,7 @@ impl Session {
     /// module). When the ship is not landed at an outfitter, or the order
     /// is refused, nothing changes and the refusal says why. It is the
     /// order loop with a count of 1, as a plain click is (@0x5c69f; see
-    /// [`outfit_counted_run`](Self::outfit_counted_run)).
+    /// [`outfit_order`](Self::outfit_order)).
     pub fn outfit(
         &mut self,
         order: OutfitOrder,
@@ -4302,8 +4302,8 @@ impl Session {
         self.outfit_order(order, count, chance).run
     }
 
-    /// Buys or sells up to `count` of an outfit as
-    /// [`outfit_counted_run`](Self::outfit_counted_run) does, and gives the whole
+    /// Buys or sells up to `count` of an outfit as the tests'
+    /// `outfit_counted` describes, and gives the whole
     /// run: the passes done, the first refusal and its pass, and the
     /// alert that refused pass shows, if any ([`Outfitter::sale_alert`],
     /// asked of the outfitter that pass was checked against, so its names
@@ -4347,8 +4347,10 @@ impl Session {
     ///
     /// A `count` of none runs no pass and moves nothing; it asks the
     /// outfitter whether its button passes, drawing any roll not drawn
-    /// yet; [`outfit_counted_run`](Self::outfit_counted_run) is the one that
-    /// counts a Cancel's outfit day.
+    /// yet. Whenever the button passed, whatever the count, the stay
+    /// counts an outfit traded, so leaving passes its day (@0x5c555,
+    /// @0x5d317): a Cancel's count of none, and a sale refused at every
+    /// pass, included.
     ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
@@ -4436,6 +4438,13 @@ impl Session {
         }
         if order.direction == Direction::Sell {
             button_passed = Self::button_passed(checked, &run);
+        }
+        // The outfit-traded flag rides on the button's check alone,
+        // whatever count follows: a Cancel's 0 and a sale refused at
+        // every pass included (`_DoOutfitDialog` @0x5c555 after the buy
+        // loop, @0x5d317 after the sell loop).
+        if button_passed {
+            self.port.stay.outfit_traded = true;
         }
         OutfitRun {
             run,
@@ -4669,25 +4678,7 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> Result<u32, OutfitRefusal> {
-        self.outfit_counted_run(order, count, chance).run.counted()
-    }
-
-    /// Buys or sells up to `count` of an outfit, the order loop the
-    /// tests' `outfit_counted` describes, and gives its whole run, as
-    /// [`outfit_order`](Self::outfit_order) gives it: a Cancel's count of
-    /// none whose button passed its own check
-    /// ([`OutfitRun::button_passed`]) counts the outfit day too.
-    pub(crate) fn outfit_counted_run(
-        &mut self,
-        order: OutfitOrder,
-        count: u32,
-        chance: &mut dyn Chance,
-    ) -> OutfitRun {
-        let run = self.outfit_order(order, count, chance);
-        if count == 0 && run.button_passed {
-            self.port.stay.outfit_traded = true;
-        }
-        run
+        self.outfit_order(order, count, chance).run.counted()
     }
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
@@ -12935,6 +12926,9 @@ pub(super) mod tests {
             // The order begins a run of docked scripts, letting go of the
             // loads before it, which the check alone doesn't.
             checked.out.begin_docked_run();
+            // The button passed, so the stay counts the outfit day
+            // (@0x5d317).
+            checked.port.stay.outfit_traded = true;
             assert!(session == checked, "{source:?}: unchanged past the check");
         }
     }
@@ -13498,7 +13492,7 @@ pub(super) mod tests {
     }
 
     /// [`over_the_mass_limit`] by `rules`.
-    fn over_the_mass_limit_by(rules: Rulebook) -> Session {
+    pub(super) fn over_the_mass_limit_by(rules: Rulebook) -> Session {
         let mut catalog = outfitting();
         catalog.outfits[0].mass = 5;
         catalog.outfits.push(OutfitRecord {

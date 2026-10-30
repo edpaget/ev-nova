@@ -1078,20 +1078,54 @@ mod tests {
 
     #[test]
     fn a_cancelled_count_of_an_allowed_order_still_adds_the_day() {
+        // The production path: the outfitter's order of none, as the
+        // quantity dialog's Cancel sends it.
         let mut session = shopping();
-        assert_eq!(
-            session.outfit_counted(buy(SPEED), 0, &mut NeverFires),
-            Ok(0)
-        );
+        let run = session.outfit_order(buy(SPEED), 0, &mut NeverFires);
+        assert_eq!(run.run.counted(), Ok(0));
+        assert!(run.button_passed);
         assert_eq!(session.pilot().owned(SPEED), 0, "nothing moved");
-        assert_eq!(days_at_take_off(&mut session), 2, "allowed");
+        assert_eq!(days_at_take_off(&mut session), 2, "an allowed buy");
 
         let mut session = shopping();
-        assert_eq!(
-            session.outfit_counted(sell(SPEED), 0, &mut NeverFires),
-            Ok(0)
-        );
-        assert_eq!(days_at_take_off(&mut session), 1, "refused");
+        session.transact(|pilot| {
+            pilot.outfits.insert(SPEED, 1);
+        });
+        let run = session.outfit_order(sell(SPEED), 0, &mut NeverFires);
+        assert_eq!(run.run.counted(), Ok(0));
+        assert_eq!(session.pilot().owned(SPEED), 1, "nothing moved");
+        assert_eq!(days_at_take_off(&mut session), 2, "an allowed sale");
+
+        let mut session = shopping();
+        let run = session.outfit_order(sell(SPEED), 0, &mut NeverFires);
+        assert!(!run.button_passed);
+        assert_eq!(days_at_take_off(&mut session), 1, "a refused sale");
+
+        // The reading key still gates the day.
+        let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
+        let mut session = shopping().with_rules(rules);
+        session.outfit_order(buy(SPEED), 0, &mut NeverFires);
+        assert_eq!(days_at_take_off(&mut session), 0, "by the other reading");
+    }
+
+    #[test]
+    fn a_refused_buy_passes_no_outfit_day_whatever_its_count() {
+        for count in [0, 1] {
+            let mut session = shopping();
+            session.transact(|pilot| pilot.cash = 0);
+            let run = session.outfit_order(buy(SPEED), count, &mut NeverFires);
+            assert!(!run.button_passed, "count {count}");
+            assert_eq!(days_at_take_off(&mut session), 1, "count {count}");
+        }
+    }
+
+    #[test]
+    fn a_sale_refused_in_its_loop_with_the_sell_flag_set_still_counts_the_day() {
+        let mut session = super::super::tests::over_the_mass_limit_by(Rulebook::default());
+        let run = session.outfit_order(sell(OutfitId(310)), 1, &mut NeverFires);
+        assert_eq!(run.run.done, 0);
+        assert!(run.button_passed);
+        assert!(session.port.stay.outfit_traded);
     }
 
     #[test]

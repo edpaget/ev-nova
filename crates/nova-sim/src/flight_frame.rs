@@ -882,16 +882,10 @@ pub enum FlightCommand {
     /// ([`Session::close_outfitter`](crate::Session::close_outfitter)).
     CloseOutfitter,
     /// An outfitter order of up to `count`, as the dialog's Buy or Sell
-    /// runs it ([`Session::outfit_order`](crate::Session::outfit_order)).
+    /// runs it ([`Session::outfit_order`](crate::Session::outfit_order)):
+    /// a count of none is the quantity dialog's Cancel, which still counts
+    /// the outfit day when the button passed.
     Outfit {
-        /// The outfit, bought or sold.
-        order: OutfitOrder,
-        /// How many to buy or sell.
-        count: u32,
-    },
-    /// An outfitter order of up to `count` that counts a Cancel's outfit
-    /// day ([`Session::outfit_counted_run`](crate::Session::outfit_counted_run)).
-    OutfitCounted {
         /// The outfit, bought or sold.
         order: OutfitOrder,
         /// How many to buy or sell.
@@ -1107,7 +1101,6 @@ impl FlightCommand {
             | Self::OpenOutfitter
             | Self::CloseOutfitter
             | Self::Outfit { .. }
-            | Self::OutfitCounted { .. }
             | Self::OpenShipyard
             | Self::BuyShip { .. }
             | Self::DeclineShip(_)
@@ -1287,8 +1280,8 @@ pub enum Answer {
     Traded(Result<u32, TradeRefusal>),
     /// What a [`FlightCommand::Recharge`] cost, or why it was refused.
     Recharged(Result<i64, RechargeRefusal>),
-    /// The run of a [`FlightCommand::Outfit`] or a
-    /// [`FlightCommand::OutfitCounted`], refused at its first pass or not.
+    /// The run of a [`FlightCommand::Outfit`], refused at its first pass
+    /// or not.
     Outfitted(OutfitRun),
     /// What a [`FlightCommand::BuyShip`] bought, or why it was refused.
     ShipBought(Result<ShipPurchase, ShipRefusal>),
@@ -2092,7 +2085,6 @@ mod tests {
             C::OpenOutfitter,
             C::CloseOutfitter,
             C::Outfit { order, count: 1 },
-            C::OutfitCounted { order, count: 1 },
             C::OpenShipyard,
             C::BuyShip {
                 ship: ShipId(129),

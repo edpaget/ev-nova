@@ -735,7 +735,6 @@ mod tests {
             FlightCommand::OpenOutfitter,
             FlightCommand::CloseOutfitter,
             FlightCommand::Outfit { order, count: 1 },
-            FlightCommand::OutfitCounted { order, count: 1 },
             FlightCommand::OpenShipyard,
             FlightCommand::BuyShip {
                 ship: ShipId(129),

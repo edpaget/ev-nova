@@ -1588,7 +1588,7 @@ rule_keys! {
     /// @0x5c0c0-0x5c1aa and @0x5c5e3-0x5c628), which opens at the most
     /// the order allows (`nova_sim::Outfitter::count_max`)
     /// and buys or sells the count confirmed
-    /// (`nova_sim::Session::outfit_counted`). By
+    /// (`nova_sim::Session::outfit_order`). By
     /// the other reading, Alt changes nothing: each click moves one. The
     /// Bible says nothing of Option at the outfitter, so the other reading
     /// is the port's earlier behaviour, not anything the Bible says (see
