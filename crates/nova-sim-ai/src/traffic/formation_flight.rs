@@ -323,7 +323,7 @@ pub(crate) fn fly(
     };
     // With no leader or slot, or in sub 1: a stop, which keeps +0x34.
     let Some((leader, place, sub)) = flying else {
-        let stop = leave_flight::stop_flight(&mut npc.state, handling, inertia);
+        let stop = leave_flight::stop_flight(npc, handling, inertia);
         let flown = stop.flown.unwrap_or(*handling);
         held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
         return;

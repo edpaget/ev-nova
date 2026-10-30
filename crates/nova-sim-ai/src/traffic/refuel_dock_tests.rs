@@ -137,7 +137,7 @@ fn inside_the_box_a_moving_refueller_stops_through_sub_1_with_goal_9s_damping() 
     // Damped, unlike a leaver braking the same way.
     let mut leaving = refueller(HELPER.0, 1, (50.0, 0.0), (0.0, 1.0), 180.0);
     let handling = leaving.stats.handling;
-    leave_flight::stop(&mut leaving.state, &handling, Inertia::Inertial, false);
+    leave_flight::stop(&mut leaving, &handling, Inertia::Inertial, false);
     assert_eq!(leaving.state.velocity, Vec2::new(0.0, 1.0));
     #[allow(clippy::cast_possible_truncation)]
     let cut = (f64::from(1.0_f32) * BRAKE_DAMPING) as f32;

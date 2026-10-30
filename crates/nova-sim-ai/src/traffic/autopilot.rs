@@ -569,20 +569,20 @@ fn fly_mobile(
         Goal::AttackStellar(_) => {
             return stellar_attack::fly(npc, sites, weapons, &handling, (flight, inertia));
         }
-        Goal::Inspect(_) => follow_or_brake(&mut npc.state, &handling, other, inertia),
+        Goal::Inspect(_) => follow_or_brake(npc, &handling, other, inertia),
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
         Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
-            follow_or_brake(&mut npc.state, &handling, other, inertia)
+            follow_or_brake(npc, &handling, other, inertia)
         }
         // Goal 0xd against a disabled ship docks with it, which the
         // traffic flies ([`plunder_dock`](crate::traffic::plunder_dock));
         // with no docking yet, its high level not having run, it brakes.
         // Searching for a target out of sight: sub 1, a stop (@0x8d814).
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } if lost_sight::searching(npc) => {
-            braking(&mut npc.state, &handling, inertia)
+            braking(npc, &handling, inertia)
         }
-        Goal::Plunder { .. } if other_disabled => braking(&mut npc.state, &handling, inertia),
+        Goal::Plunder { .. } if other_disabled => braking(npc, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
                 let flown = Flown {
@@ -596,7 +596,7 @@ fn fly_mobile(
             None if matches!(npc.goal, Goal::Snipe(_)) => {
                 snipe::fly(npc, None, &handling, snipe_lead, weapons).into()
             }
-            None => braking(&mut npc.state, &handling, inertia),
+            None => braking(npc, &handling, inertia),
         },
         Goal::Formation { .. } | Goal::Follow { .. }
             if flight.formation_flight == FormationFlight::Original =>
@@ -621,10 +621,10 @@ fn fly_mobile(
         // State 16 flies order 1, a stop, with slot 0 empty, else order
         // 0x13 or 0x14; state 17 flies order 0x15.
         Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), &handling, weapons)
-            .unwrap_or_else(|| braking(&mut npc.state, &handling, inertia)),
+            .unwrap_or_else(|| braking(npc, &handling, inertia)),
         Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, &handling),
         Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
-            braking(&mut npc.state, &handling, inertia)
+            braking(npc, &handling, inertia)
         }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
@@ -708,7 +708,7 @@ fn land(
     chance: &mut (impl Chance + ?Sized),
 ) -> Result<Flight, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == stellar) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     if reading == RuleSource::Engine {
         return Err(land_flight::fly(
@@ -750,7 +750,7 @@ fn enter_box(
     (inertia, reading): (Inertia, RuleSource),
 ) -> Result<Flight, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == gate) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     let reach = gate_entry::gate_reach(site, type_widths);
     if !gate_entry::inside(site.position, npc.state.position, reach) {
@@ -778,7 +778,7 @@ fn formation(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     let slot = place.position(leader);
     let off = slot - npc.state.position;
@@ -801,7 +801,7 @@ fn dock(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
@@ -1486,21 +1486,21 @@ fn approach_brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) 
 /// sub-goal +0xc8ca = 0 after the settle (@0x85624) isn't modelled: the
 /// high level writes sub 1 again each pass for every stop goal, as this
 /// flies it every tick, so nothing differs.
-fn braking(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Flight {
-    leave_flight::stop_flight(state, handling, inertia)
+fn braking(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
+    leave_flight::stop_flight(npc, handling, inertia)
 }
 
 /// [`follow`]s a lead at `lead`, or brakes with none there
 /// ([`braking`]).
 fn follow_or_brake(
-    state: &mut ShipState,
+    npc: &mut Npc,
     handling: &Handling,
     lead: Option<&ShipState>,
     inertia: Inertia,
 ) -> Flight {
     match lead {
-        Some(lead) => follow(state, handling, lead, inertia).into(),
-        None => braking(state, handling, inertia),
+        Some(lead) => follow(&mut npc.state, handling, lead, inertia).into(),
+        None => braking(npc, handling, inertia),
     }
 }
 
@@ -1653,7 +1653,11 @@ mod tests {
     }
 
     fn braking(state: &ShipState, handling: &Handling) -> Flight {
-        super::braking(&mut state.clone(), handling, Inertia::Inertial)
+        super::braking(
+            &mut npc(FAST, Goal::Idle, *state),
+            handling,
+            Inertia::Inertial,
+        )
     }
 
     fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Controls {
@@ -3872,10 +3876,11 @@ mod tests {
         let handling = fast();
         let a = handling.accel;
         let brake_at = |speed: f32, heading: f32| {
-            let mut state = at(0.0, 0.0, 0.0, -speed, heading);
+            let state = at(0.0, 0.0, 0.0, -speed, heading);
             let flight = braking(&state, &handling);
-            super::braking(&mut state, &handling, Inertia::Inertial);
-            (flight, state)
+            let mut braked = npc(FAST, Goal::Idle, state);
+            super::braking(&mut braked, &handling, Inertia::Inertial);
+            (flight, braked.state)
         };
         // It turns to its retro heading itself, by `_HandleShip`'s turn.
         let (turning, _) = brake_at(3.0, 0.0);
