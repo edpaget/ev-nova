@@ -957,7 +957,10 @@ pub fn gun_find(
 /// active, as every pass's preamble reads it (`_AIFireGun` @0x7ff11,
 /// `_AIFireTurret` @0x80b32, `_AIFireMissile` @0x8119a). No preamble reads
 /// `_IsDying` or an arrival: the gun and turret ask [`Sight::seen`], and
-/// the missile doesn't.
+/// the missile doesn't. A ship breaking up rarely gets this far: the high
+/// level has dropped a goal-4 target breaking up
+/// ([`attack_drop`](crate::ai::attack_drop)), so it is the regroup pause,
+/// which runs no high level, that fires at one.
 fn sight_of<'a>(
     npc: &'a Npc,
     ship: ShipRef,
@@ -2747,7 +2750,9 @@ mod tests {
     #[test]
     fn every_pass_fires_at_a_ship_breaking_up_and_none_at_one_destroyed() {
         // Each preamble reads the slot +0xb8 alone (@0x7ff11, @0x80b32,
-        // @0x8119a), never `_IsDying`.
+        // @0x8119a), never `_IsDying`. This is the passes' own rule, as the
+        // regroup pause runs them: the high level drops such a target
+        // before them on any other frame (`attack_drop`).
         let passes = [
             (gun(128, 1, 1), -100.0, 128),
             (guided(130, 4), -100.0, 130),

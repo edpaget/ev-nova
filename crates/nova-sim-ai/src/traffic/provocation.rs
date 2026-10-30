@@ -28,10 +28,12 @@
 //!     out-of-ammunition retreat with nothing to flee
 //!     ([`out_of_ammo::stops`]);
 //!   - state 4 on a ship breaking up, still in its slot (@0x8e3e6 →
-//!     @0x8e714-0x8e726), which the brave trader's and the interceptor's
-//!     thinks leave it in, having no drop of their own
-//!     ([`attack_breaking_up`]). The warship and the pirate drop such a
-//!     target themselves, writing goal 0 and target -1 but no +0x96
+//!     @0x8e714-0x8e726), which `NovaAi` runs after every type's think
+//!     ([`attack_drop`](crate::ai::attack_drop)). The brave trader's and
+//!     the interceptor's thinks leave it in that state, having no drop of
+//!     their own ([`attack_breaking_up`]), and so do an escort's on the
+//!     Attack order and a mission hunt. The warship and the pirate drop
+//!     such a target themselves, writing goal 0 and target -1 but no +0x96
 //!     (`_WarshipAI` @0x8bc67-0x8bca9, `_PirateWarshipAI`
 //!     @0x8c315-0x8c330), so theirs is kept. An attack on a ship gone
 //!     from its slot, as one that has jumped out or landed, has target -1

@@ -426,7 +426,9 @@ pub fn valid_target(
 /// of its parent (@0x83c67-0x83cd6, @0x83cbc-0x83cbe); on Attack whatever
 /// it is (@0x83d5d-0x83d6d); under any other order none, as Hold, Return
 /// and formation keep theirs their own way. It reads no arrival, sight
-/// nor type: a ship bursting out of its gate is kept.
+/// nor type: a ship bursting out of its gate is kept. One breaking up is
+/// kept too, and the high level then drops it
+/// ([`attack_drop`](crate::ai::attack_drop)).
 #[must_use]
 pub fn kept_by_order(
     order: Option<EscortOrder>,

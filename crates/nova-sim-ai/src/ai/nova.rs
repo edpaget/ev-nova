@@ -61,6 +61,7 @@
 
 use std::rc::Rc;
 
+use crate::ai::attack_drop;
 use crate::ai::death_star::{self, DeathStar};
 use crate::ai::defence_ship::DefenceShipAi;
 use crate::ai::fire::FireRules;
@@ -371,8 +372,9 @@ impl Behaviour for NovaAi {
     /// from a ship gone from its slot ends with its provocation
     /// ([`flight_ended`](crate::traffic::provocation::flight_ended),
     /// @0x8d4e4-0x8d50d → @0x8e228-0x8e23d), and its flee
-    /// drop ([`flee_drop::with_flee_drop`]) and its call for
-    /// reinforcements end the think
+    /// drop ([`flee_drop::with_flee_drop`]), its drop of an attack on a
+    /// ship breaking up ([`attack_drop::with_attack_drop`]) and its call
+    /// for reinforcements end the think
     /// ([`reinforcements::with_high_level_call`]), whatever type decided,
     /// as the handler runs after every type's think (`_AIDispatch`
     /// @0x901e5).
@@ -421,6 +423,7 @@ impl Behaviour for NovaAi {
             ..decision
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
+        let decision = attack_drop::with_attack_drop(npc, decision, around);
         reinforcements::with_high_level_call(npc, decision, around)
     }
 
@@ -435,10 +438,14 @@ impl Behaviour for NovaAi {
     }
 
     /// A mission ship of `ShipBehav` 0 targets the player, and none once
-    /// it gives up on it ([`NovaAi::mission_hunt`]).
+    /// it gives up on it ([`NovaAi::mission_hunt`]) or the attack block
+    /// drops it breaking up ([`attack_drop::drops`]).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match self.mission_hunt(npc, around) {
-            Some(true) => Some(ShipRef::Player),
+            Some(true) => {
+                let attack = Goal::Attack(ShipRef::Player);
+                (!attack_drop::drops(npc, attack, false, around)).then_some(ShipRef::Player)
+            }
             Some(false) => None,
             None => self.thinker(npc, around).target(npc, around),
         }
@@ -1780,6 +1787,112 @@ mod tests {
         assert!(mark.asked.borrow().is_empty(), "not its type's");
     }
 
+    /// `npc` with a gun ahead that destroys ([`fire::destroys`]).
+    fn gunned(mut npc: Npc) -> Npc {
+        npc.armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
+                speed: 1000,
+                count: 30,
+                mass_dmg: 5,
+                ..nova_sim_catalog::fixture::weapon(141)
+            }),
+            1,
+        )]);
+        npc
+    }
+
+    const NPC_TWO: ShipRef = ShipRef::Npc(NpcId(2));
+
+    const BREAKING_UP: Condition = Condition::Dying {
+        ticks_left: 10,
+        starting: false,
+    };
+
+    /// `npc` after `decision`, as the traffic takes it.
+    fn taking(npc: &Npc, decision: Decision) -> Npc {
+        Npc {
+            goal: decision.goal,
+            target: npc.target.filter(|_| !decision.clears_target),
+            ..npc.clone()
+        }
+    }
+
+    #[test]
+    fn an_escort_on_the_attack_order_drops_a_ship_breaking_up_and_fires_nothing_at_it() {
+        // `_EscortAI`'s Attack block keeps any target (@0x83d5d-0x83d6d),
+        // and the high level, which runs after every type's think
+        // (@0x901e5), writes goal 0, target -1 and +0x96 0 (@0x8e3ef →
+        // @0x8e714-0x8e726), so `_LowLevelAIHandler`'s passes find no
+        // target (@0x7ff11, @0x80b32, @0x8119a).
+        let ai = NovaAi::default();
+        let mut escort = gunned(of(1, AiType::Warship));
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: Some(crate::escort::EscortOrder::Attack),
+        });
+        escort.goal = Goal::Attack(NPC_TWO);
+        escort.target = Some(NPC_TWO);
+        escort.provoked = 5.0;
+        let mut wreck = of(2, AiType::Warship);
+        wreck.state.position = crate::geometry::Vec2::new(0.0, -100.0);
+        let mut npcs = [escort, wreck];
+        let standing = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &standing, &mut Draws::of(&[])),
+            Goal::Attack(NPC_TWO),
+            "standing, it is kept"
+        );
+        npcs[1].condition = BREAKING_UP;
+        let around = with_player(&npcs, Condition::Intact);
+        let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Idle, "goal 0 (@0x8e726)");
+        assert!(decision.clears_target, "target -1 (@0x8e717)");
+        assert!(decision.forgets_provocation, "+0x96 0 (@0x8e71d)");
+        assert!(decision.keeps_pursuit, "no write of the sub");
+        assert!(!decision.calls_reinforcements, "@0x8e3f6 skips @0x8e70d");
+        let dropped = taking(&npcs[0], decision);
+        assert_eq!(ai.trigger(&dropped, &around), Trigger::default());
+        assert_eq!(ai.target(&dropped, &around), None);
+    }
+
+    #[test]
+    fn a_mission_hunter_drops_a_player_breaking_up_each_think_and_fires_nothing_at_him() {
+        // `_AIMakeShipAttackPlayer` (@0x8d6b7) leaves goal 4, and the
+        // attack block drops the player breaking up in the same pass
+        // (@0x8e3ef → @0x8e714-0x8e726).
+        let ai = NovaAi::default();
+        let mut hunter = gunned(mission_ship(of(1, AiType::Warship), 0));
+        hunter.provoked = 5.0;
+        hunter.state.position = crate::geometry::Vec2::new(0.0, 100.0);
+        let npcs = [hunter];
+        let around = with_player(&npcs, BREAKING_UP);
+        let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Idle, "goal 0 (@0x8e726)");
+        assert!(decision.turns_on_player, "the call came first (@0x8d6b7)");
+        assert!(decision.clears_target, "target -1 (@0x8e717)");
+        assert!(decision.forgets_provocation, "+0x96 0 (@0x8e71d)");
+        assert!(!decision.calls_reinforcements, "@0x8e3f6 skips @0x8e70d");
+        let dropped = taking(&npcs[0], decision);
+        assert_eq!(ai.trigger(&dropped, &around), Trigger::default());
+        assert_eq!(ai.target(&dropped, &around), None, "target -1 stands");
+    }
+
+    #[test]
+    fn a_ship_whose_ai_wait_runs_keeps_its_attack_on_a_ship_breaking_up() {
+        // The whole handler is skipped while +0x4c is above 0 (@0x8d4b9
+        // -0x8d4d2), which an escort's think clears first (@0x83d62).
+        let ai = NovaAi::default();
+        let mut hunter = gunned(mission_ship(of(1, AiType::Warship), 0));
+        hunter.ai_wait = 3;
+        let npcs = [hunter];
+        let around = with_player(&npcs, BREAKING_UP);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+    }
+
     /// [`with_player`], the player cloaked.
     fn with_cloaked_player(npcs: &[Npc], condition: Condition) -> Surroundings<'_> {
         let mut around = with_player(npcs, condition);
@@ -1877,10 +1990,11 @@ mod tests {
         );
         assert_eq!(
             ai.decide(&armed[0], &dying, &mut Draws::of(&[])),
-            Goal::Attack(ShipRef::Player),
-            "with destroying weapons it goes on while the player breaks up"
+            Goal::Idle,
+            "with destroying weapons it doesn't leave, and the attack block \
+             drops the player breaking up (@0x8e3ef)"
         );
-        assert_eq!(ai.target(&armed[0], &dying), Some(ShipRef::Player));
+        assert_eq!(ai.target(&armed[0], &dying), None, "target -1 (@0x8e717)");
     }
 
     #[test]

@@ -172,7 +172,8 @@ impl Behaviour for Interceptor {
     /// high level ends with its provocation a retreat with no target
     /// ([`out_of_ammo::stops`]) and an attack on a ship breaking up
     /// ([`attack_breaking_up`]: `_InterceptorAI` has no drop of its own,
-    /// so goal 4 reaches @0x8e714).
+    /// so goal 4 reaches @0x8e714); `NovaAi` then writes that goal and
+    /// target ([`attack_drop`](crate::ai::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,

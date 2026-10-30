@@ -16,6 +16,7 @@
 //!   [`candidates`], the candidate pass its steps share; and
 //!   [`threatened`], whether a friend is threatened by a ship's enemy.
 //! - [`flee_drop`]: a fleeing ship giving up fleeing an ally it spares.
+//! - [`attack_drop`]: a ship dropping an attack on a ship breaking up.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
 //! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
 //!   weapons' longest reach, and how it flies there.
@@ -40,6 +41,7 @@
 
 pub mod afterburner;
 pub mod answer_flag;
+pub mod attack_drop;
 pub mod brave;
 pub mod call_for_help;
 pub mod candidates;

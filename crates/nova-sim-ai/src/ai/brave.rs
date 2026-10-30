@@ -96,16 +96,16 @@ impl Behaviour for BraveTrader {
     /// ship breaking up ends with its provocation and its target
     /// ([`attack_breaking_up`]): `_BraveTraderAI` has no drop of its own,
     /// so the high level ends it (@0x8e3ef → @0x8e714-0x8e726: goal 0,
-    /// target -1, +0x96 0), after the think's call. A fight on a ship gone
+    /// target -1, +0x96 0, the sub kept), after the think's call. A fight on a ship gone
     /// from its slot ends with its target, and a flight with its
     /// provocation too ([`fight_on_gone`]), after the think's calls.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
         let on_gone = fight_on_gone(thought, around);
-        let ended = on_gone.is_some()
-            || thought.attacking().is_some_and(|ship| {
-                matches!(around.condition_of(ship), Some(Condition::Dying { .. }))
-            });
+        let breaking_up = thought
+            .attacking()
+            .is_some_and(|ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. })));
+        let ended = on_gone.is_some() || breaking_up;
         Decision {
             goal: if ended { Goal::Idle } else { thought },
             comm_call: brave_call(thought, around),
@@ -113,6 +113,7 @@ impl Behaviour for BraveTrader {
             forgets_provocation: on_gone.unwrap_or(false)
                 || attack_breaking_up(npc, thought, around),
             clears_target: ended,
+            keeps_pursuit: breaking_up,
             ..Decision::default()
         }
     }
@@ -341,6 +342,7 @@ mod tests {
             assert_eq!(decision.goal, Goal::Idle, "({x}, {y})");
             assert!(decision.forgets_provocation, "({x}, {y})");
             assert!(decision.clears_target, "target -1 (@0x8e717), ({x}, {y})");
+            assert!(decision.keeps_pursuit, "no write of the sub, ({x}, {y})");
             assert!(!decision.calls_reinforcements, "({x}, {y})");
             assert_eq!(decision.comm_call, Some(CommCall::Distress), "a warship");
         }
