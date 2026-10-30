@@ -574,7 +574,7 @@ pub use hover::{DrawnBox, DrawnShips, Hover, hover_gate};
 pub use hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone,
-    next_hyper_destination,
+    next_one_jump_destination,
 };
 pub use iff::{RadarGear, ShipIff, StellarIff};
 pub use landing::{

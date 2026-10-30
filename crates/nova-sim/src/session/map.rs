@@ -815,4 +815,14 @@ mod tests {
             (false, true)
         );
     }
+
+    #[test]
+    fn the_map_reads_the_slot_hyper_select_noted_as_the_one_selected() {
+        // `hub`'s 131 fills slots 1 and 2: the third press lands on slot 2.
+        let mut session = Session::start(&crate::session::tests::hub()).expect("starts");
+        for _ in 0..3 {
+            session.select_next_system();
+        }
+        assert_eq!(session.chart.hyper_slot(&session.pilot), Some(2));
+    }
 }

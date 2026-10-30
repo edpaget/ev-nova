@@ -99,7 +99,8 @@
 //! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
 //! unless `Session::with_hyper_select` says otherwise). By the engine's
-//! reading each press moves only the selection and keeps the course; by
+//! reading each press steps to the next Con slot that holds a link, moves
+//! only the selection and keeps the course; by
 //! [`HyperSelectRule::OneJumpCourse`] it leaves a one-jump course.
 //!
 //! Each day that goes by steps the planetary events (see
@@ -28193,14 +28194,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_hyper_select_key_cycles_the_listed_systems_and_wraps() {
+    fn the_hyper_select_key_visits_each_con_slot_that_holds_a_link_and_wraps() {
         let mut session = Session::start(&hub()).expect("starts");
-        for expected in [134, 131, 135, 134] {
+        session.take_sounds();
+        for expected in [134, 131, 131, 130, 135, 134] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(
                 session.nav_mode(),
                 NavMode::Hyperspace(Some(SystemId(expected)))
             );
+            assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
             assert_eq!(session.course(), [], "no course plotted");
         }
     }
@@ -28212,7 +28215,8 @@ pub(super) mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.course(), ids(&[131, 132]));
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
-        for expected in [135, 134, 131] {
+        // The cue noted slot 1, so the presses step on from there.
+        for expected in [131, 130, 135, 134, 131] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(session.course(), ids(&[131, 132]), "after {expected}");
         }
@@ -28235,7 +28239,9 @@ pub(super) mod tests {
         let catalog = hub();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        assert_eq!(session.select_next_system(), Some(SystemId(135)));
+        for expected in [131, 130, 135] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+        }
         fly_out(&mut session, &catalog);
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(135)));
         assert_eq!(
