@@ -7,7 +7,8 @@
 //!   ([`Shot::moved_from`]), velocity kept; the shots point defence ended,
 //!   still in their slots ([`hidden`](super::hidden)), likewise.
 //! - **Beams**. All 40 slots move, with no test (@0x682b7-0x6833c): each
-//!   [`Beam::start`] and [`Beam::end`], whatever it is near.
+//!   beam's start and end, whatever it is near, floats where the original
+//!   truncates them into shorts.
 //! - **The slots' kept positions** ([`source_slot`](super::source_slot)).
 //!   Each moves by the test, an empty slot's as a live one's, as the
 //!   beams' asteroid pass reads it ([`asteroid_beam`](super::asteroid_beam)).
@@ -22,10 +23,11 @@
 //! left others. So for that pass's contact walks alone ([`WrapPass`]) an
 //! unmoved asteroid or ship is met at its position plus the delta, where
 //! its sprite stood, and a shot left behind, which stayed in the world but
-//! not on screen, meets everything a delta back. The walks' places are the
-//! only ones that shift: a blast, a fuse and a stellar read world positions
-//! in the original too (`_CheckShotProximities`, `stellar::met`), so they
-//! read them here. The pass ends the shift (`Combat::hit_pass`).
+//! not on screen, meets everything a delta back, so a hit it lands stays
+//! where the shot is. The walks' places are the only ones that shift: a
+//! blast, a fuse and a stellar read world positions in the original too
+//! (`_CheckShotProximities`, `stellar::met`), so they read them here. The
+//! pass ends the shift (`Combat::hit_pass`).
 
 use super::Combat;
 use super::ShipRef;

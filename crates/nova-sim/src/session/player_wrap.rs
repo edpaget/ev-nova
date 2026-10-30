@@ -217,10 +217,19 @@ mod tests {
     fn the_stellars_stay() {
         let catalog = catalog();
         let mut session = flying(&catalog);
-        let before: Vec<_> = session.stellars_shown().collect();
+        let places = |session: &Session| -> Vec<Vec2> {
+            session
+                .chart
+                .sites
+                .iter()
+                .map(|site| site.position)
+                .collect()
+        };
+        let before = places(&session);
+        assert!(!before.is_empty());
         session.ship.player.position = PAST;
         pass(&mut session, &catalog);
-        assert_eq!(session.stellars_shown().collect::<Vec<_>>(), before);
+        assert_eq!(places(&session), before);
     }
 
     /// Puts an asteroid a little ahead of the ship.
