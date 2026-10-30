@@ -23,7 +23,8 @@ use super::{AppScreen, ENTERED};
 impl AppScreen {
     /// Opens the planet comm dialog on `view` over flight, which pauses:
     /// the interface file's, or the built-in one without it (with a
-    /// warning when the interface file has none). With no metrics to lay
+    /// warning when the interface file has none), its buttons taking the
+    /// rulebook's `dialog_focus_ring`. With no metrics to lay
     /// it out, the dialog is closed at once, with a warning.
     pub(super) fn open_planet_comm(&mut self, view: &PlanetCommView) {
         let Some(metrics) = self.metrics() else {
@@ -59,7 +60,7 @@ impl AppScreen {
                 PlanetCommDialog::fallback(view, sprite, style, metrics)
             }
         };
-        self.planet_comm = Some(dialog);
+        self.planet_comm = Some(dialog.with_focus_ring(self.dialog_focus_ring()));
     }
 
     /// The planet comm dialog's input: each press goes through flight, and

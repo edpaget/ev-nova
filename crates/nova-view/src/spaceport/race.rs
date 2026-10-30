@@ -63,7 +63,9 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, ItemSpec, Placement, Role};
+use crate::ui::dialog::{
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, Placement, Role,
+};
 
 /// The race dialog's `DLOG` (and `DITL`) ID (`GetNewDialog` 0x3ff
 /// @0x489ef).
@@ -132,6 +134,9 @@ pub struct RaceScreen {
     /// The dialog, or why it cannot be shown.
     laid: Result<Laid, String>,
     style: ButtonStyle,
+    /// Whether its buttons take the keyboard focus, kept across each
+    /// relabel that lays it out again.
+    focus_ring: FocusRing,
     /// The asked bet's dialog, and whether Alt is held.
     quantity: QuantityAsk<u8>,
     /// The most an asked bet can stake.
@@ -167,7 +172,7 @@ impl RaceScreen {
     ) -> Self {
         let laid = layout.map(|(template, metrics)| {
             let mut template = DialogTemplate {
-                placement: Placement::Center,
+                placement: Placement::CenterWindow,
                 ..template
             };
             // Every button is enabled, and Leave and Help are labelled by
@@ -194,6 +199,7 @@ impl RaceScreen {
         Self {
             laid,
             style,
+            focus_ring: FocusRing::default(),
             quantity: QuantityAsk::new(quantity, style),
             asked_max,
             shown: None,
@@ -205,6 +211,17 @@ impl RaceScreen {
             closed: false,
             sounds: Vec::new(),
         }
+    }
+
+    /// The race with its buttons taking the keyboard focus as `ring` says
+    /// (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The dialog, if it could be laid out.
@@ -344,6 +361,7 @@ impl RaceScreen {
         let style = self.style;
         if let Ok(laid) = &mut self.laid {
             laid.dialog = laid_dialog(&laid.template, label, &laid.metrics.0, style);
+            laid.dialog.set_focus_ring(self.focus_ring);
         }
     }
 }
@@ -652,6 +670,39 @@ mod tests {
                 dialog.item_bounds(FIRST_RACER_ITEM + racer),
                 Some(at(x, 88.0, 100.0, 100.0))
             );
+        }
+    }
+
+    #[test]
+    fn it_is_placed_as_center_window_places_it() {
+        // `_DoRaceDialog` moves it with `_CenterWindow` (@0x48aaa): half
+        // the screen less half the dialog, each truncated, so an odd size
+        // sits a pixel right of and below the one-step floor.
+        let odd = DialogTemplate {
+            bounds: rect(0.0, 0.0, 471.0, 231.0),
+            ..template()
+        };
+        let screen = RaceScreen::new(
+            Ok((odd, Rc::new(MonoMetrics))),
+            None,
+            ButtonStyle::STOCK,
+            5_000,
+        );
+        assert_eq!(
+            screen.dialog().expect("laid out").bounds().min,
+            Point::new(512.0 - 235.0, 384.0 - 115.0)
+        );
+    }
+
+    #[test]
+    fn its_buttons_take_the_focus_ring_it_is_given_through_a_relabel() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = open().with_focus_ring(ring);
+            assert_eq!(screen.dialog().map(Dialog::focus_ring), Some(ring));
+            // A race run relabels Leave "Done", laying the dialog out again.
+            screen.show_result(0, 5_000);
+            assert_eq!(screen.leave_label(), DONE_LABEL);
+            assert_eq!(screen.dialog().map(Dialog::focus_ring), Some(ring));
         }
     }
 

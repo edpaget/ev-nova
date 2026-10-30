@@ -54,7 +54,8 @@ use super::comm::{
     backdrop,
 };
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, TextBacking,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, ItemSpec, ItemTemplate, Placement, Role,
+    STOCK_WORD, TextBacking,
 };
 
 /// The planet comm dialog's `DLOG` (and `DITL`) ID (@0x96b85).
@@ -131,6 +132,9 @@ pub struct PlanetCommDialog {
     view: PlanetCommView,
     sprite: Option<StellarFrame>,
     dialog: Dialog,
+    /// Whether its buttons take the keyboard focus, kept across each
+    /// [`PlanetCommDialog::set_view`] that lays it out again.
+    focus_ring: FocusRing,
     press: Option<PlanetCommItem>,
     /// Whether the pointer went down on item 3 while it is hidden.
     hidden_pressed: bool,
@@ -208,14 +212,25 @@ impl PlanetCommDialog {
             view: view.clone(),
             sprite,
             dialog,
+            focus_ring: FocusRing::default(),
             press: None,
             hidden_pressed: false,
         })
     }
 
+    /// The planet comm dialog with its buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        self.dialog.set_focus_ring(ring);
+        self
+    }
+
     /// Shows `view`: its reply, its buttons and its status line.
     pub fn set_view(&mut self, view: &PlanetCommView) {
         self.dialog = layout(&self.template, view, self.style, &self.metrics);
+        self.dialog.set_focus_ring(self.focus_ring);
         self.view = view.clone();
     }
 
@@ -367,7 +382,7 @@ fn layout(
 }
 
 /// The built-in planet comm dialog: `DLOG` 1009's items, 540 x 295,
-/// centred.
+/// placed as the loaded `DLOG` is ([`Placement::for_dlog`]).
 fn planet_comm_template() -> DialogTemplate {
     let at = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
     let user = |bounds, enabled| ItemTemplate {
@@ -377,7 +392,7 @@ fn planet_comm_template() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 540.0, 295.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(PLANET_COMM_DIALOG, Some(STOCK_WORD)),
         items: vec![
             user(at(27.0, 244.0, 146.0, 26.0), true),
             user(at(27.0, 184.0, 146.0, 26.0), true),
@@ -878,5 +893,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_built_in_planet_comm_dialog_is_placed_as_center_window_places_dlog_1009() {
+        // `_DoPlanetCommDialog` moves it with `_CenterWindow` (@0x96eaf).
+        let template = planet_comm_template();
+        assert_eq!(template.placement, Placement::CenterWindow);
+        assert_eq!(
+            template.placement,
+            Placement::for_dlog(PLANET_COMM_DIALOG, Some(STOCK_WORD)),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            Point::new(242.0, 237.0),
+            "384 less 295 / 2 truncated: a pixel below the one-step floor"
+        );
+    }
+
+    #[test]
+    fn its_buttons_take_the_focus_ring_it_is_given_through_a_new_view() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut shown = dialog(&greeting()).with_focus_ring(ring);
+            assert_eq!(shown.dialog().focus_ring(), ring);
+            shown.set_view(&greeting());
+            assert_eq!(shown.dialog().focus_ring(), ring, "laid out again");
+        }
     }
 }

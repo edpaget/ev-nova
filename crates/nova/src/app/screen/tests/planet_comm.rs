@@ -112,6 +112,34 @@ fn hailing_by(min_status: i16, chance: impl Chance + 'static) -> AppScreen {
     screen
 }
 
+/// The planet comm dialog, and the bribe haggle it opens, take the
+/// rulebook's `dialog_focus_ring`.
+#[test]
+fn the_planet_comm_dialog_and_its_haggle_open_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Last));
+        let screen = &mut with_dialogs(planet_data(1))
+            .with_rules(rules)
+            .with_chance(SharedChance::new(shared));
+        hail_alpha(screen);
+        let focus = |screen: &AppScreen| {
+            screen
+                .planet_comm()
+                .map(|dialog| dialog.dialog().focus_ring())
+        };
+        assert_eq!(focus(screen), Some(ring), "planet comm");
+        tap(screen, Key::Char('o'));
+        assert_eq!(
+            screen.haggle().map(|dialog| dialog.dialog().focus_ring()),
+            Some(ring),
+            "haggle"
+        );
+        tap(screen, Key::Char('l'));
+        assert_eq!(screen.showing(), Showing::Comm, "a lost haggle returns");
+        assert_eq!(focus(screen), Some(ring), "laid out afresh");
+    }
+}
+
 fn cash(screen: &AppScreen) -> i64 {
     flight(screen).session().expect("flying").pilot().cash
 }

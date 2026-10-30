@@ -442,7 +442,7 @@ impl BarScreen {
     }
 
     /// Opens the race over the bar, an asked bet staking at most
-    /// `asked_max`.
+    /// `asked_max`, its buttons taking the bar's focus ring.
     pub fn open_race(&mut self, asked_max: i64) {
         let Ok(laid) = &self.laid else {
             return;
@@ -452,12 +452,10 @@ impl BarScreen {
             .0
             .clone()
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
-        self.race = Some(RaceScreen::new(
-            layout,
-            self.race_templates.1.clone(),
-            self.style,
-            asked_max,
-        ));
+        self.race = Some(
+            RaceScreen::new(layout, self.race_templates.1.clone(), self.style, asked_max)
+                .with_focus_ring(self.focus_ring),
+        );
     }
 
     /// The race, while it is open.
@@ -1504,6 +1502,23 @@ mod tests {
             None,
             "the bar redrew"
         );
+    }
+
+    /// The race the bar opens takes the bar's focus ring, given before the
+    /// race is laid out.
+    #[test]
+    fn the_race_takes_the_bars_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = racing().with_focus_ring(ring);
+            screen.open_race(4_000);
+            assert_eq!(
+                screen
+                    .race_screen()
+                    .and_then(RaceScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring)
+            );
+        }
     }
 
     #[test]
