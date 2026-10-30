@@ -111,7 +111,7 @@ pub enum Placement {
 /// | 0x95ee8 | `_DoCommDialog` | 1007 |
 /// | 0x96eaf | `_DoPlanetCommDialog` | 1009 |
 /// | 0x9e243 | `_DoMissionInfoDialog` | 1012 |
-/// | 0xa23fd | `_OfferOneMission` | 1020, 1016 |
+/// | 0xa23fd | `_OfferOneMission` | 1020, 1016 (shrunk after the call, `SizeWindow` @0xa25d1, `MoveWindow` @0xa2640) |
 /// | 0xa39de | `_DoMissionDialog` | 1006 |
 ///
 /// The other `GetNewDialog` callers (`_EVNoteAlert`'s 3000,

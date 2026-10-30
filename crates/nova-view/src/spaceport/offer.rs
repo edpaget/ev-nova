@@ -11,24 +11,26 @@
 //! and 7 (the map, player info and mission info) lie outside it, and the
 //! arrows of items 9 and 10 are not drawn: Up and Down scroll the text.
 //!
-//! The original shrinks `DLOG` 1016 to its text's height, at least 48,
-//! moving the buttons up (@0xa2548-0xa2816), and widens the buttons to the
-//! wider label + 40, at least 100 (@0xa2a29-0xa2b46); this dialog keeps
-//! the template's height and widths. The shrink is the rule
-//! [`text_shrink`](crate::ui::text_shrink) ports for "Desc Dialog"
-//! (`d = boxH − max(h, 48) − 16`, `SizeWindow` @0xa25d1), but it runs
-//! after `_CenterWindow` has centred 1016 (@0xa23fd), so the window is then
-//! moved down by `trunc(0.3 × d)` (`MoveWindow` @0xa2640, the factor the
-//! double at 0xdd8d0 holds), not by half, and 1016's own items move up by
-//! `d`.
+//! The dialog shrinks 1016 to its text as the original does, after
+//! `_CenterWindow` has placed it at its stock size (@0xa23fd,
+//! @0xa2548-0xa2816): the rule [`text_shrink`](crate::ui::text_shrink)
+//! ports for "Desc Dialog" (`d = boxH − max(h, 48) − 16`, `SizeWindow`
+//! @0xa25d1), measured as the text box sets the text. Items 1, 2 and 6 and
+//! the text box's bottom come up by `d`, and the arrows of items 9 and 10
+//! stay where they are, unlike "Desc Dialog"'s, so a dialog shrunk far
+//! enough leaves them outside it. The window's top then becomes
+//! `trunc(top + 0.3 × d)` (`MoveWindow` @0xa2640), the sum truncated and
+//! not the product. All of it happens before the dialog shows
+//! (`ShowWindowNoFlash` @0xa2c81), so the player sees the final place only.
 //!
 //! An offer whose `dësc` `Graphic` is above 127 shows in the picture
 //! variant, `DLOG` 1020 ([`OfferTemplates::layout`], @0xa2344-0xa2373),
 //! chosen on the ID alone: 651 x 244, centred, the text in item 3, the
 //! buttons in items 1, 2 and 6 as in 1016, over the single frame `PICT`
 //! 8528, with the graphic stretched into item 8. The original never
-//! shrinks 1020 (`jg` past the shrink @0xa255b-0xa2564), so its template
-//! height is its own.
+//! shrinks 1020 (`jg` past the shrink @0xa255b-0xa2564, the same `Graphic`
+//! read at both places, as nothing writes `*0x3b52a0` between them), so
+//! its template height is its own.
 //!
 //! An offer whose `dësc` names a movie ([`OfferPrompt::movie`]) plays it
 //! while movies are on ([`Movies`]): before the dialog
@@ -105,7 +107,6 @@ use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::view::is_map_press;
-use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::movie::{MovieStage, Movies};
@@ -113,11 +114,12 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
+use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
+use crate::ui::text_shrink::{shrink_after_placing, wrapped_height};
 
 /// The offer dialog's `DLOG` (and `DITL`) ID.
 pub const OFFER_DIALOG: i16 = 1016;
@@ -186,6 +188,24 @@ pub const FRAME: DialogFrame = DialogFrame {
     bottom_height: 40.0,
 };
 
+/// The items that come up with `DLOG` 1016's bottom edge
+/// (@0xa2645-0xa27b1). Items 9 and 10, the scroll arrows, are not among
+/// them: `_OfferOneMission` never moves them, unlike `_ShowTextDialog`'s.
+const MOVED_ITEMS: [usize; 3] = [ACCEPT_ITEM, REFUSE_ITEM, SINGLE_ITEM];
+
+/// `template` (`DLOG` 1016) shrunk to `text`, measured as its text box
+/// sets it, by `metrics`, and moved down: see the module docs.
+fn shrunk_to_text(
+    template: &DialogTemplate,
+    text: &str,
+    metrics: &dyn TextMetrics,
+) -> DialogTemplate {
+    let height = template.items.get(TEXT_ITEM - 1).map_or(0.0, |item| {
+        wrapped_height(metrics, BODY_FONT, BODY_SIZE, text, item.bounds.width())
+    });
+    shrink_after_placing(template, TEXT_ITEM, &MOVED_ITEMS, height)
+}
+
 /// What the player chose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfferChoice {
@@ -239,7 +259,12 @@ impl OfferDialog {
         style: ButtonStyle,
     ) -> Self {
         let picture = shown_graphic(prompt.graphic);
-        let laid = layout.map(|(mut template, metrics)| {
+        let laid = layout.map(|(template, metrics)| {
+            let mut template = if picture.is_none() {
+                shrunk_to_text(&template, &prompt.text, &*metrics)
+            } else {
+                template
+            };
             let single = prompt.labels.refuse.is_none();
             let buttons: &[usize] = if single {
                 &[SINGLE_ITEM]
@@ -256,7 +281,7 @@ impl OfferDialog {
                 TEXT_ITEM,
                 Role::ScrollText {
                     text: prompt.text.clone(),
-                    font: Font::Geneva,
+                    font: BODY_FONT,
                     size: BODY_SIZE,
                     color: BODY_COLOR,
                     backing: None,
@@ -887,6 +912,7 @@ pub(crate) mod fixture {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::mission::OfferLabels;
     use nova_sim::{DescMovie, RuleSource};
@@ -936,6 +962,9 @@ mod tests {
     /// Where the dialog goes: (1024 - 441) / 2 and (768 - 317) / 2,
     /// floored.
     const ORIGIN: Point = Point::new(291.0, 225.0);
+
+    /// Where a short text's dialog goes: [`ORIGIN`], then 203 × 0.3 down.
+    const SHRUNK_ORIGIN: Point = Point::new(291.0, 285.0);
 
     fn prompt(accept: &str, refuse: Option<&str>) -> OfferPrompt {
         OfferPrompt {
@@ -1030,7 +1059,7 @@ mod tests {
         let dialog = offer();
         assert_eq!(dialog.problem(), None);
         let laid = dialog.dialog().expect("laid out");
-        assert_eq!(laid.bounds().min, ORIGIN);
+        assert_eq!(laid.bounds().min, SHRUNK_ORIGIN);
         assert_eq!(
             laid.text(TEXT_ITEM).map(|text| text.lines().join(" ")),
             Some("Ferry this to Mars.".to_owned())
@@ -1039,7 +1068,7 @@ mod tests {
         assert!(matches!(
             commands[0],
             DrawCommand::StretchedPicture { image, top_left, .. }
-                if image == FRAME.top && top_left == ORIGIN
+                if image == FRAME.top && top_left == SHRUNK_ORIGIN
         ));
         let shown = texts(&dialog);
         for label in ["I'm in", "No thanks", "Ferry this to Mars."] {
@@ -1141,6 +1170,112 @@ mod tests {
             Some(1)
         );
         assert!(!dialog.answered());
+    }
+
+    /// Where item `number` is inside `dialog`.
+    fn local(dialog: &OfferDialog, number: usize) -> Point {
+        let laid = dialog.dialog().expect("laid out");
+        let at = laid.item_bounds(number).expect("an item").min;
+        Point::new(at.x - laid.bounds().min.x, at.y - laid.bounds().min.y)
+    }
+
+    fn first_line(dialog: &OfferDialog) -> Option<usize> {
+        dialog
+            .dialog()
+            .and_then(|laid| laid.text(TEXT_ITEM))
+            .map(crate::ui::ScrollText::first)
+    }
+
+    fn long(accept: &str, refuse: Option<&str>) -> OfferPrompt {
+        OfferPrompt {
+            text: "line\r".repeat(40),
+            ..prompt(accept, refuse)
+        }
+    }
+
+    #[test]
+    fn a_short_text_shrinks_1016_and_moves_it_down() {
+        let mut dialog = offer();
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds(), Bounds::at(SHRUNK_ORIGIN, 441.0, 114.0));
+        assert_eq!(
+            laid.item_bounds(TEXT_ITEM),
+            Some(rect(303.0, 294.0, 415.0, 64.0))
+        );
+        assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 82.0));
+        assert_eq!(local(&dialog, REFUSE_ITEM).y, 82.0);
+        assert_eq!(
+            local(&dialog, 9),
+            Point::new(340.0, 287.0),
+            "item 9 stays (@0xa2645-0xa2816)"
+        );
+        assert_eq!(local(&dialog, 10), Point::new(373.0, 287.0), "and item 10");
+        click_item(&mut dialog, REFUSE_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse));
+        let mut dialog = offer();
+        click_item(&mut dialog, ACCEPT_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn a_shrunk_offer_that_cannot_be_refused_moves_its_one_button() {
+        let mut dialog = dialog_of(prompt("Okay", None));
+        assert_eq!(local(&dialog, SINGLE_ITEM).y, 82.0);
+        click_item(&mut dialog, SINGLE_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn a_text_that_fills_the_box_keeps_441_by_317_and_scrolls() {
+        let mut dialog = dialog_of(long("Yes", Some("No")));
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds(), Bounds::at(ORIGIN, 441.0, 317.0));
+        assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 285.0));
+        dialog.input(&key(Key::Down));
+        assert_eq!(first_line(&dialog), Some(1));
+    }
+
+    #[test]
+    fn a_shrunk_text_has_nothing_to_scroll() {
+        let mut dialog = offer();
+        dialog.input(&key(Key::Down));
+        assert_eq!(first_line(&dialog), Some(0));
+    }
+
+    #[test]
+    fn the_shrink_measures_the_text_in_the_body_font_wrapped_to_its_box() {
+        // 83 characters fill the 415 wide box at 5 a character.
+        let line_height = MonoMetrics.line_height(BODY_FONT, BODY_SIZE);
+        let wide = "x".repeat(83);
+        let lines = 5;
+        let text = vec![wide.as_str(); lines].join(" ");
+        let dialog = dialog_of(OfferPrompt {
+            text,
+            ..prompt("Yes", Some("No"))
+        });
+        let high = lines as f32 * line_height;
+        assert!(high > 48.0, "past the floor: {high}");
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds().height(), 317.0 - (267.0 - high - 16.0));
+    }
+
+    #[test]
+    fn a_picture_offer_never_shrinks() {
+        for graphic in [5008, 128] {
+            let dialog = OfferDialog::new(
+                Ok((picture_template(), Rc::new(MonoMetrics))),
+                pictured(graphic, Some("No")),
+                ButtonStyle::STOCK,
+            );
+            let laid = dialog.dialog().expect("laid out");
+            assert_eq!(laid.bounds(), Bounds::at(PICTURE_ORIGIN, 651.0, 244.0));
+            assert_eq!(
+                laid.item_bounds(TEXT_ITEM).map(|text| text.height()),
+                Some(200.0),
+                "{graphic}"
+            );
+            assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(221.0, 213.0));
+        }
     }
 
     #[test]
@@ -1648,7 +1783,7 @@ mod tests {
             .dialog()
             .and_then(OfferDialog::dialog)
             .expect("laid out");
-        assert_eq!(shown.bounds().min, ORIGIN);
+        assert_eq!(shown.bounds().min, SHRUNK_ORIGIN);
         assert!(matches!(
             drawn(offers.dialog().expect("open"))[0],
             DrawCommand::StretchedPicture { image, .. } if image == FRAME.top

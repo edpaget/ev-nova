@@ -44,7 +44,7 @@ use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
-use crate::text::{TextMetrics, wrap};
+use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
@@ -52,7 +52,7 @@ use super::picture_variant::VariantTemplates;
 use super::scroll_arrows::ScrollArrow;
 pub use super::scroll_text::ARROW_UNITS;
 use super::scroll_text::ScrollText;
-use super::text_shrink::shrink_to_text;
+use super::text_shrink::{shrink_to_text, wrapped_height};
 
 /// The dialog's `DLOG` (and `DITL`) ID.
 pub const DESC_DIALOG: i16 = 3003;
@@ -200,8 +200,7 @@ impl DescDialog {
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
         let text_height = template.items.get(TEXT_ITEM - 1).map_or(0.0, |item| {
-            let lines = wrap(&metrics, BODY_FONT, BODY_SIZE, text, item.bounds.width());
-            lines.len() as f32 * metrics.line_height(BODY_FONT, BODY_SIZE)
+            wrapped_height(&metrics, BODY_FONT, BODY_SIZE, text, item.bounds.width())
         });
         let template = shrink_to_text(
             template,
