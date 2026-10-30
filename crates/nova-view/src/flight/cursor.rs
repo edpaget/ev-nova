@@ -15,9 +15,12 @@
 //!   hold at [`HoverCursor::left`];
 //! - at the end of each frame (@0x38427-0x3844d) it drops a level once a
 //!   second (60 `_TickCount`s) has passed since that stamp, or on any frame
-//!   the player used a flight key (the byte at `0x3b5550`, which
-//!   `_PlayGame` clears each frame @0x45b33 and `_HandlePlayer` sets on
-//!   its key checks).
+//!   the byte at `0x3b5550` is set, `_keyPressedThisFrame`, which
+//!   `_PlayGame` clears each frame @0x45b3b and `_HandlePlayer` sets past
+//!   each key block's gates, and on its own through a jump. Those gates are
+//!   [`nova_sim::key_fade`]'s, which the view reads before a frame's steps
+//!   (`FlightView::cursor_keyed`, `FlightView::step_cursor`) and at a key's
+//!   press (`FlightView::key_fades_cursor`, [`HoverCursor::key`]).
 //!
 //! The cursor is hidden, and nothing else happens that frame, when the
 //! sprite failed to load (`0x3b5128`), when the game is switched out
@@ -68,7 +71,7 @@ pub struct HoverCursor {
     stepped_at: u64,
     /// The time now, in `_TickCount`s.
     clock: u64,
-    /// Whether a key was pressed in flight since the last step.
+    /// Whether a key that fades was pressed in flight since the last step.
     keyed: bool,
     /// Whether a mouse button is down.
     button: bool,
@@ -83,8 +86,8 @@ impl HoverCursor {
         self.moved_at = self.clock;
     }
 
-    /// A key was pressed in flight: the next step fades the cursor a
-    /// level.
+    /// A key that fades was pressed in flight: the next step fades the
+    /// cursor a level, however short the press.
     pub fn key(&mut self) {
         self.keyed = true;
     }

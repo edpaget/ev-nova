@@ -165,7 +165,8 @@
 //! class is hidden: stock `shïp` 895, the pod, costs 0, and no stock
 //! `shïp` costs -1, so a stock player sees no difference.
 //!
-//! `_keyPressedThisFrame` (@0x6f2d3) and the status-redraw flags
+//! `_keyPressedThisFrame` (@0x6f2d3) is read by the frame's
+//! [`key_fade`](crate::key_fade). The status-redraw flags
 //! (@0x6f433-0x6f442) have no counterpart.
 
 use super::hooks::ShipHook;

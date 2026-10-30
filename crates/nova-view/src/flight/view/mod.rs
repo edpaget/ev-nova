@@ -780,7 +780,12 @@ pub struct FlightOverlays {
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
 /// latch and frame (see the `slot_block` module); they fade the cursor and
 /// hold the zoom back only while `_HandlePlayer` polls them
-/// ([`FlightView::slot_key_polled`]).
+/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P, I and K act
+/// on their press and are here because they stay down: `_HandlePlayer`
+/// sets the cursor's byte on every frame one is held, and the zoom reads
+/// them held. A key that opens a dialog from its press isn't tracked, as
+/// the dialog takes its release. Being here doesn't make a key fade the
+/// cursor: [`FlightView::key_fades_cursor`] says which do.
 const FLIGHT_KEYS: [Key; 40] = [
     Key::Up,
     Key::Left,
@@ -834,7 +839,8 @@ pub const FACE_TARGET_KEY: Key = Key::Char('a');
 /// +0x30, `_loadKeys` @0xcd899-0xcd8bc). Held, it engages the afterburner
 /// ([`Controls::afterburner`](nova_sim::Controls::afterburner)); a flight
 /// key, so it fades the cursor, as its press sets *0x3b5550 whether or not
-/// the ship carries an afterburner (@0x6cb03).
+/// the ship carries an afterburner, on a ship not disabled (@0x6caf2,
+/// @0x6cb03).
 pub const AFTERBURNER_KEY: Key = Key::Char('z');
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
 /// @0xcd5f8).
@@ -852,7 +858,8 @@ pub const SELECT_KEY: Key = Key::Char('w');
 /// `_loadKeys` falls back to when the defaults hold none
 /// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
 /// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
-/// `nova_sim::Session::hold_weapon_safety`).
+/// `nova_sim::Session::hold_weapon_safety`), and fades the cursor only on
+/// those passes (@0x6ade1).
 pub const DESELECT_KEY: Key = Key::Char('s');
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.

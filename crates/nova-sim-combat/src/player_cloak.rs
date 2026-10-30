@@ -44,8 +44,7 @@
 //! ## Left out
 //!
 //! - `_keyPressedThisFrame` (`*0x3b5550`, @0x705ef-0x705f4), which a taken
-//!   press sets: it has no engine counterpart, as the `self_destruct`
-//!   module also leaves it out.
+//!   press sets: `nova_sim::key_fade` reads it, not this module.
 //! - The status-redraw flags set every 10 frames (@0x706f6-0x70721,
 //!   @0x70748-0x70783, @0x707e7-0x70812): the HUD is drawn every frame.
 //! - The frame-time factor (`*0x3b511c`, @0x706ce-0x706e0,

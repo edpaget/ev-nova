@@ -733,10 +733,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A zoom key's press: while the floating map is up and no key the
     /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`
-    /// held alone doesn't count: `_HandlePlayer` checks it only with
-    /// Command down (@0x6fdc8), so alone it never sets
-    /// `_quickKeyCheckResult`. One
+    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`,
+    /// X or K held alone doesn't count: `_HandlePlayer` checks each only
+    /// with Command down (@0x6fdc8, @0x6f2a5), so alone it never sets
+    /// `_quickKeyCheckResult`, and Command itself holds the zoom back. One
     /// that changes the scale shows the map again and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.

@@ -30,7 +30,8 @@
 //! - **A read made at every draw or every frame is a frame field**: the
 //!   floating map's places, which its draw centres on
 //!   ([`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating)),
-//!   the readouts, the HUD.
+//!   the readouts, the HUD, and what fades the cursor
+//!   ([`FlightFrame::key_fades`](nova_sim::flight_frame::FlightFrame::key_fades)).
 //! - **A question a screen asks as it opens or as its input changes is a
 //!   screen's ask** ([`ScreenAsk`], answered by the [`ScreenAnswer`] of its
 //!   kind through [`FlightSim::screen`]): the course map's galaxy, its

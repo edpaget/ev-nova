@@ -34,8 +34,8 @@
 //! which the double-time switch reads (see the `double_time` module).
 //! With an aim, the turn keys do nothing this tick.
 //!
-//! Both keys set *0x3b5550, the flight key the cursor fades on, which the
-//! view's held keys stand in for. Neither plays a sound.
+//! Both keys set *0x3b5550, the byte the cursor fades on, past their own
+//! gates (see the `key_fade` module). Neither plays a sound.
 //!
 //! A stellar record's position is its `spöb`'s `xPos` and `yPos`
 //! (record +4, @0x6af3f, @0x6afc0): the system's stellar's own, or, for
