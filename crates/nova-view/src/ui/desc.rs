@@ -346,7 +346,8 @@ impl DescDialog {
 
 impl Screen for DescDialog {
     /// A press of [`MAP_KEY`](crate::flight::view::MAP_KEY) asks for the
-    /// map when it opens one ([`DescDialog::take_map_request`]).
+    /// map when it opens one ([`DescDialog::take_map_request`]). The map
+    /// takes the pointer from then on, so that abandons any press here.
     ///
     /// Home, End, Page Up and Page Down scroll the text as
     /// `_TextDialogFilter` @0x51f77 does, through `_ScrollDialogText`
@@ -371,11 +372,19 @@ impl Screen for DescDialog {
     /// them into items 5 and 6, which `_ShowTextDialog` scrolls 10 px a
     /// press or repeat (@0x5b0af-0x5b130).
     ///
+    /// A press on an arrow scrolls the text as `_TextDialogFilter` and
+    /// `_ShowTextDialog` do (see [`Dialog::input`]). Keys and a wheel work
+    /// during a hold, where the original's held loops read no events and
+    /// a key waits for the release (@0x52242).
+    ///
     /// Every other event goes to the dialog, and activating Done closes
     /// it. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if is_map_press(input) {
             self.map_requested = self.map.is_some();
+            if self.map_requested {
+                self.dialog.cancel_pointer();
+            }
             return ScreenAction::None;
         }
         if let Input::Key {
@@ -1420,6 +1429,30 @@ mod tests {
         assert_eq!(desc.scroll_offset(), 0.0);
         desc.tick(TICK);
         assert_eq!(desc.scroll_offset(), 1.0);
+    }
+
+    /// The map opens over the dialog and takes the release, and the
+    /// original's held loop never gets as far as opening it.
+    #[test]
+    fn the_map_opening_during_a_hold_ends_it() {
+        let marks = MapMarks {
+            green: None,
+            multi_arrows: false,
+        };
+        let mut desc = long_stock_desc().with_map(Some(marks));
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(crate::flight::view::MAP_KEY));
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 1.0);
+    }
+
+    #[test]
+    fn the_map_key_that_opens_no_map_leaves_a_hold_running() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(crate::flight::view::MAP_KEY));
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 4.0);
     }
 
     #[test]

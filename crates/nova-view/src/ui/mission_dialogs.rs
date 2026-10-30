@@ -463,11 +463,16 @@ impl Screen for MissionDialogs {
         ScreenAction::None
     }
 
-    /// The movie shown moves on; the rest wait on input.
+    /// The movie shown moves on, and a press held on the text shown's
+    /// scroll arrow; the rest wait on input.
     fn tick(&mut self, dt: Duration) {
-        if let Some(Stage::Movie(movie)) = self.texts.front_mut() {
-            movie.tick(dt);
-            self.settle();
+        match self.texts.front_mut() {
+            Some(Stage::Movie(movie)) => {
+                movie.tick(dt);
+                self.settle();
+            }
+            Some(Stage::Text(text)) => text.tick(dt),
+            Some(Stage::Closed) | None => {}
         }
     }
 
@@ -523,7 +528,7 @@ mod tests {
     use crate::sound::UiSound;
     use crate::spaceport::missions::ABORT_ITEM;
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::desc::DONE_ITEM;
+    use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
     use nova_sim::DescMovie;
 
@@ -727,6 +732,43 @@ mod tests {
         assert_eq!(at(&dialogs), crate::ui::desc::ARROW_UNITS);
         dialogs.input(&key(Key::Up));
         assert_eq!(at(&dialogs), 0.0);
+    }
+
+    /// `_ShowTextDialog`'s arrows reach a mission text: a press held on one
+    /// runs in the host's ticks.
+    #[test]
+    fn a_mission_text_scrolls_under_a_held_arrow() {
+        let mut template = text_template();
+        template.items.extend(user_items(&[
+            (10.0, 400.0, 20.0, 20.0, false),
+            (110.0, 60.0, 23.0, 23.0, false),
+            (140.0, 60.0, 23.0, 23.0, false),
+        ]));
+        let mut dialogs = MissionDialogs::new(
+            texts(Ok(template)),
+            Ok(info_template()),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
+        dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
+        let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
+        let down = dialogs
+            .text()
+            .expect("open")
+            .dialog()
+            .item_bounds(SCROLL_DOWN_ITEM)
+            .expect("the arrow")
+            .center();
+        dialogs.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: down,
+        });
+        assert_eq!(at(&dialogs), 1.0);
+        dialogs.tick(Duration::from_secs(1) / 30);
+        assert_eq!(at(&dialogs), 3.0);
+        assert_eq!(dialogs.take_sounds(), [], "silent");
     }
 
     #[test]

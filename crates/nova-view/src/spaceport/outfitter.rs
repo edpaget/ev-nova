@@ -1346,6 +1346,7 @@ impl Screen for OutfitterScreen {
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
+        self.alert.tick(dt);
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -4769,6 +4770,41 @@ mod tests {
         press(&mut screen, SELL_KEY);
         assert!(screen.quantity().is_none());
         assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    /// `_ShowTextDialog` shows the alert (@0x5a8cf), so a long one scrolls
+    /// under its arrows.
+    #[test]
+    fn a_held_arrow_scrolls_the_alert_as_the_outfitter_ticks() {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut narrow = desc_template();
+        narrow.items[2].bounds = rect(10.0, 10.0, 60.0, 36.0);
+        let user = |x| ItemTemplate {
+            bounds: rect(x, 60.0, 23.0, 23.0),
+            enabled: false,
+            kind: ItemSpec::User,
+        };
+        narrow.items.extend([user(600.0), user(30.0), user(60.0)]);
+        let mut screen = OutfitterScreen::new(
+            Ok(layout()),
+            Ok(quantity()),
+            Ok(narrow),
+            loop_refusing(row, RuleSource::Engine),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        screen.alert(&rack_alert(RAISED, false));
+        let down = alert_item(&screen, crate::ui::desc::SCROLL_DOWN_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: down,
+        });
+        let at =
+            |screen: &OutfitterScreen| screen.alert_dialog().expect("an alert").scroll_offset();
+        assert_eq!(at(&screen), 1.0);
+        screen.tick(Duration::from_secs(1) / 30);
+        assert_eq!(at(&screen), 3.0);
     }
 
     #[test]
