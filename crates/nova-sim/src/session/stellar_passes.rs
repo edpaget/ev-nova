@@ -144,7 +144,8 @@ mod tests {
     use crate::session::SavedOpening;
     use crate::session::tests::{at_gate, at_wormhole, gate_site, gated, wormholes};
     use crate::testkit::{
-        FAST, FakePilotCatalog, Scripted, catalog, jump, land_now, planet, ship, work_with,
+        FAST, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, jump, land_now, planet,
+        ship, work_with,
     };
     use crate::traffic::npc::{Mode, Npc};
 
@@ -486,18 +487,28 @@ mod tests {
     }
 
     /// [`gated`] with 131 showing hypergates 310 and 311 alone, 311 of
-    /// `AnimDelay` 2 and `Frame0Bias` 3, one ship on average, and `flët`
-    /// 131 linked to its government: a fleet comes in as it is set up, out
-    /// of a gate if the pick finds one.
+    /// `AnimDelay` 2 and `Frame0Bias` 3, and a fleet as [`with_a_fleet`]
+    /// gives it.
     fn fleet_at_the_exit() -> FakePilotCatalog {
         let mut slow = gate(311, 2);
         slow.animation.frame0_bias = 3;
         let mut catalog = gated();
         catalog.sites[1].1 = vec![gate(310, 3), slow];
+        with_a_fleet(catalog, SystemId(131), 1)
+    }
+
+    /// `catalog` with one ship on average in `system`, the star map's entry
+    /// `on_map`, and every `flët` slot linked to its government: a fleet
+    /// comes in as it is set up, out of a gate if the pick finds one.
+    fn with_a_fleet(
+        mut catalog: FakePilotCatalog,
+        system: SystemId,
+        on_map: usize,
+    ) -> FakePilotCatalog {
         let mut dude_types = [(-1, 0); 8];
         dude_types[0] = (128, 100);
         catalog.traffic = vec![(
-            SystemId(131),
+            system,
             SystemTraffic {
                 dude_types,
                 avg_ships: 1,
@@ -515,17 +526,19 @@ mod tests {
             },
         )];
         catalog.ship_records = vec![ship(129, FAST)];
-        catalog.star_map[1].govt = Some(GovtId(141));
-        catalog.fleets = vec![FleetRecord {
-            id: FleetId(131),
-            lead: Some(ShipId(129)),
-            escorts: Vec::new(),
-            govt: Some(GovtId(150)),
-            link_syst: 10_000 + (141 - 128),
-            appear_on: Test::default(),
-            quote: None,
-            flags: 0,
-        }];
+        catalog.star_map[on_map].govt = Some(GovtId(141));
+        catalog.fleets = (128..384)
+            .map(|id| FleetRecord {
+                id: FleetId(id),
+                lead: Some(ShipId(129)),
+                escorts: Vec::new(),
+                govt: Some(GovtId(150)),
+                link_syst: 10_000 + (141 - 128),
+                appear_on: Test::default(),
+                quote: None,
+                flags: 0,
+            })
+            .collect();
         catalog
     }
 
@@ -550,25 +563,97 @@ mod tests {
         expected.step(&anim, false, true, &mut NeverFires);
         // Over many draws, as the ship's own come from the setup, before
         // the entry's pass, or from the exit's arrivals pass, after it.
-        let came_out: Vec<GateSprite> = (0..6_000)
+        let came_out: Vec<GateSprite> = (0..1_000)
             .filter_map(|seed| {
                 let mut session = at_gate(&catalog);
                 session.space.gate_sprites.insert(StellarId(311), left);
                 session
                     .enter_hypergate(Some(SystemId(131)), &catalog, &mut Stream(seed))
                     .expect("enters");
-                let waiting = session
-                    .npcs()
-                    .iter()
-                    .any(|npc| npc.holds_gate_open(StellarId(311)));
-                waiting.then(|| sprite(&session, 311))
+                holding(&session, 311).then(|| sprite(&session, 311))
             })
             .collect();
-        assert!(!came_out.is_empty(), "a ship came out");
+        all_held(&came_out, expected, "held by the tail's two alone");
+    }
+
+    /// Whether a ship of `session`'s is coming out of `gate`.
+    fn holding(session: &Session, gate: i16) -> bool {
+        session
+            .npcs()
+            .iter()
+            .any(|npc| npc.holds_gate_open(StellarId(gate)))
+    }
+
+    /// Asserts that `outcomes`, the gate after each run a ship held it,
+    /// are some, and each `expected`: `why` says what held it.
+    fn all_held(outcomes: &[GateSprite], expected: GateSprite, why: &str) {
+        assert!(!outcomes.is_empty(), "a ship came out");
         assert!(
-            came_out.iter().all(|&after| after == expected),
-            "held by the tail's two alone: {came_out:?}"
+            outcomes.iter().all(|&after| after == expected),
+            "{why}: {outcomes:?}"
         );
+    }
+
+    #[test]
+    fn game_entrys_third_pass_takes_its_hold_from_the_ships_the_first_step_sets_up() {
+        let catalog = with_a_fleet(showing([gate(300, 1)]), SystemId(130), 0);
+        let mut entered = Session::start(&catalog).expect("starts");
+        let (start, anim) = (sprite(&entered, 300), animation(&entered, 300));
+        entered.enter_game(&mut NeverFires);
+        let mut expected = stepped(start, &anim, 2);
+        assert_eq!(sprite(&entered, 300), expected, "released: no ship yet");
+        // The third pass, then the step's own.
+        for _ in 0..2 {
+            expected.step(&anim, false, true, &mut NeverFires);
+        }
+        assert_eq!(expected.shown(&anim, false), 2);
+        let came_out: Vec<GateSprite> = (0..1_000)
+            .filter_map(|seed| {
+                let mut session = entered.clone();
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &NovaAi::default(),
+                    Rules::default(),
+                    &mut Stream(seed),
+                );
+                holding(&session, 300).then(|| sprite(&session, 300))
+            })
+            .collect();
+        all_held(&came_out, expected, "held by the setup's ship twice");
+    }
+
+    #[test]
+    fn a_jumps_arrival_pass_takes_its_hold_from_the_ships_its_setup_brings() {
+        let catalog = fleet_at_the_exit();
+        let anim = GateAnimation {
+            delay: 2,
+            frame0_bias: 3,
+            frames: 6,
+            ..GateAnimation::default()
+        };
+        // A tick short of its delay: held it opens a frame, released it
+        // stays on frame 0.
+        let left = stepped(GateSprite::new(), &anim, 1);
+        let mut expected = left;
+        expected.step(&anim, false, true, &mut NeverFires);
+        assert_eq!(expected.shown(&anim, false), 1);
+        let mut jumping = Session::start(&catalog).expect("starts");
+        jumping.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut jumping, &catalog);
+        begin_jump_now(&mut jumping, &catalog).expect("jumps");
+        jumping.space.gate_sprites.insert(StellarId(311), left);
+        let came_out: Vec<GateSprite> = (0..1_000)
+            .filter_map(|seed| {
+                let mut session = jumping.clone();
+                session
+                    .arrive(&catalog, &mut Stream(seed))
+                    .expect("arrives");
+                holding(&session, 311).then(|| sprite(&session, 311))
+            })
+            .collect();
+        all_held(&came_out, expected, "held by the setup's ship");
     }
 
     #[test]
