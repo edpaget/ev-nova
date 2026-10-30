@@ -140,6 +140,7 @@ impl Screen for AppScreen {
                 }
             }
         }
+        self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
             overlay.tick(dt);
             // The spaceport isn't ticked under it, so says so: the
@@ -245,6 +246,7 @@ impl Screen for AppScreen {
             dialog.draw(&mut dialogs);
         }
         list.extend_translated(&dialogs, offset);
+        self.draw_white_over_texts(list);
         if let Some(fade) = &self.fade_in {
             fade.draw(list, CLASSIC_VIEW);
         }

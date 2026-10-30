@@ -1160,3 +1160,55 @@ fn far_enough_and_nothing_out_here_last_512() {
     assert_eq!(nothing.ticks(), 512);
     faked_lasts(&mut view, NOTHING_OUT_HERE, nothing.ticks());
 }
+
+// The jump's white as a faded screen (rdm:phase/movies/phase-4-desc-movies-outside-missions).
+
+#[test]
+fn the_lit_warp_leaves_the_screen_faded_until_a_text_fades_it_in_then_the_next_light_fades_again() {
+    let mut view = warping();
+    assert!(!view.screen_faded(), "unlit");
+    lit(&mut view, 0.5);
+    assert!(view.screen_faded());
+    view.advance_white(FADE_OUT_FOR / 2);
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(0.5)),
+        "the white runs on under a dialog (`CGDisplayFade`, asynchronous)"
+    );
+    view.screen_faded_in();
+    assert!(!view.screen_faded());
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::Warp),
+        "the white is gone"
+    );
+    lit(&mut view, 0.5);
+    assert_eq!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(0.0)),
+        "relit on the next pass, 1.5 s again (@0x683f1-0x68404)"
+    );
+}
+
+#[test]
+fn a_text_on_the_arrivals_tick_finds_the_white_and_its_fade_in_ends_the_effect() {
+    let mut view = warping();
+    lit(&mut view, 0.5);
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame();
+    assert!(view.screen_faded(), "until the next pass's _FadeWhiteOut");
+    view.screen_faded_in();
+    assert_eq!(view.jump_effect(), None, "nothing left to fade from white");
+
+    let mut view = warping();
+    lit(&mut view, 0.5);
+    at_the_warps_end(&mut view, Vec::new());
+    view.arrival_frame();
+    view.fade_frame(TICK);
+    assert!(!view.screen_faded(), "the next pass cleared it");
+    view.advance_white(FADE_IN_FOR);
+    assert!(
+        view.jump_effect().is_some(),
+        "the arrival's fade-in is flight's own to run"
+    );
+}

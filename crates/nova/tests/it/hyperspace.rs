@@ -210,6 +210,11 @@ fn food_surplus() -> Vec<u8> {
 /// Alpha. The status bar is `ïntf` 128, over a 194 x 16 `PICT` 700. A
 /// food surplus can break out at Beta Prime.
 fn data() -> Rc<GameData> {
+    load(data_fork())
+}
+
+/// [`data`]'s fork, before it is loaded.
+fn data_fork() -> ForkBuilder {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
@@ -247,6 +252,11 @@ fn data() -> Rc<GameData> {
             .resource(PICT, state + 100, None, &button_picture(13))
             .resource(PICT, state + 102, None, &button_picture(13));
     }
+    fork
+}
+
+/// `fork`, with the bracket art, loaded.
+fn load(fork: ForkBuilder) -> Rc<GameData> {
     Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
@@ -988,4 +998,96 @@ fn a_wormhole_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
     assert_eq!(harness.session().system(), SystemId(130), "passed through");
     assert_eq!(harness.session().loaded_after_movie(), None);
     assert!(reel.calls().is_empty());
+}
+
+// A text over the jump's white
+// (rdm:phase/movies/phase-4-desc-movies-outside-missions).
+
+/// "Desc Dialog" alone: Done (1), a parked picture (2) and the text (3).
+struct DescDialogOnly;
+
+impl nova_view::ui::DialogResources for DescDialogOnly {
+    fn dialog_template(&self, id: i16) -> Result<nova_view::ui::DialogTemplate, String> {
+        use nova_view::geometry::Bounds;
+        use nova_view::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+        if id != nova_view::ui::desc::DESC_DIALOG {
+            return Err(format!("no DLOG {id}"));
+        }
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        Ok(nova_view::ui::DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(100.0, 70.0, 99.0, 25.0, ItemSpec::User),
+                item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
+                item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
+            ],
+        })
+    }
+}
+
+/// The app over [`data`] with "Desc Dialog" and an About text, flying out
+/// towards Beta, J pressed and frames drawn until the warp has lit the
+/// screen white.
+fn lit_with_about() -> Harness {
+    let about = {
+        let mut bytes = b"About.".to_vec();
+        bytes.push(0);
+        bytes.extend([0xFF; 2]);
+        bytes.extend([0; 34]);
+        bytes
+    };
+    // The text box's frame pictures, any: they are stretched.
+    let fork = (8524..=8526).fold(
+        data_fork().resource(Desc::TYPE, 32767, None, &about),
+        |fork, id| fork.resource(PICT, id, None, &button_picture(13)),
+    );
+    let data = load(fork);
+    let screen =
+        start_screen(Rc::clone(&data)).with_dialogs(Rc::new(DescDialogOnly), Rc::new(MonoMetrics));
+    let mut harness = Harness::flying_in(data, screen);
+    harness.out_towards_beta();
+    harness.press(Key::Char('j'));
+    harness.settle_until("the white", |game| game.flight().screen_faded());
+    harness
+}
+
+/// The white's alpha over flight, if the jump's effect shows one.
+fn white(harness: &Harness) -> Option<u8> {
+    harness
+        .flight()
+        .jump_effect()
+        .map(nova_view::flight::JumpEffect::fade_alpha)
+}
+
+#[test]
+fn about_under_the_warps_white_fades_in_from_black_and_the_white_is_lit_again_after_it() {
+    let mut harness = lit_with_about();
+    harness.send(WindowEvent::Menu(nova_view::MenuCommand::About));
+    assert_eq!(harness.showing(), Showing::About);
+    assert!(
+        !harness.flight().screen_faded(),
+        "_FadeScreenIn @0x5b038 jumps the display to black and fades it in"
+    );
+    assert_eq!(white(&harness), Some(0), "the white is gone");
+    harness.press(Key::Enter);
+    assert_eq!(
+        harness.showing(),
+        Showing::About,
+        "held through its fade-in"
+    );
+    for _ in 0..61 {
+        harness.frame();
+    }
+    assert_eq!(harness.showing(), Showing::Flight, "the Return reached it");
+    let relit = white(&harness).expect("still warping");
+    assert!(
+        relit < 128,
+        "the white fades in again over 1.5 s on the next pass: {relit}"
+    );
+    assert!(harness.flight().screen_faded());
 }

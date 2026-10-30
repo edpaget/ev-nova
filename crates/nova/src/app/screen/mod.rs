@@ -363,6 +363,7 @@ mod entry;
 mod escort_dialog;
 mod flight;
 mod game;
+mod jump_white;
 mod launch;
 mod menu;
 mod menu_commands;

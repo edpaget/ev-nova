@@ -257,6 +257,36 @@ impl JumpEffect {
         }
     }
 
+    /// Whether the screen is faded (`_screenFaded`, *0x3b5198): from the
+    /// light, which `_FadeWhiteIn` sets at once (@0x5475), until the first
+    /// tick after the arrival, whose `_FadeWhiteOut` clears it
+    /// (@0x6841f). A text shown meanwhile shows on the faded screen (see
+    /// [`faded_texts`](crate::ui::faded_texts)).
+    #[must_use]
+    pub fn faded(&self) -> bool {
+        self.white.is_some() && self.arrived.is_none_or(|at| at.is_zero())
+    }
+
+    /// The effect once a text on the faded screen has faded it in from
+    /// black (`_FadeScreenIn` @0x5b038, which takes the white's
+    /// reservation, @0x53fa-0x5401, and releases it): the white is gone.
+    /// Before the arrival the warp drops back to unlit, so the next
+    /// [`light`](Self::light) fades to white over [`FADE_OUT_FOR`] again
+    /// (`_FadeWhiteIn` on the next pass with the flag clear,
+    /// @0x683f1-0x68404); on the arrival's own pass the effect ends, as the
+    /// next pass's `_FadeWhiteOut` finds the reservation released and shows
+    /// nothing. Unlit, nothing changes.
+    #[must_use]
+    pub fn faded_in(self) -> Option<Self> {
+        if self.white.is_none() {
+            return Some(self);
+        }
+        if self.arrived.is_some() {
+            return None;
+        }
+        Some(Self::warp(self.fades))
+    }
+
     /// Whether the effect is over.
     #[must_use]
     pub fn done(&self) -> bool {
@@ -441,5 +471,48 @@ mod tests {
             effect.advance(ARRIVAL_FLASH_FOR);
             assert!(effect.done());
         }
+    }
+
+    // The faded screen (`_screenFaded`, *0x3b5198).
+
+    #[test]
+    fn the_screen_is_faded_from_the_light_to_the_first_tick_after_arrival() {
+        let mut effect = JumpEffect::warp(true);
+        assert!(!effect.faded(), "unlit");
+        effect.light();
+        assert!(effect.faded(), "_FadeWhiteIn sets it at once (@0x5475)");
+        effect.advance(ms(60_000));
+        assert!(effect.faded());
+        effect.arrive();
+        assert!(effect.faded(), "on the arrival's own pass");
+        effect.advance(ms(16));
+        assert!(!effect.faded(), "the next pass's _FadeWhiteOut (@0x6841f)");
+        assert!(!JumpEffect::emerging(true).faded(), "a gate lights nothing");
+        assert!(!JumpEffect::flash().faded());
+        assert!(
+            !lit(ms(100)).given_up().expect("lit").faded(),
+            "given up, faded out"
+        );
+    }
+
+    #[test]
+    fn a_text_fading_the_screen_in_drops_the_warp_back_to_unlit_and_the_next_light_fades_again() {
+        let effect = lit(ms(60_000)).faded_in().expect("still warping");
+        assert_eq!(effect.phase(), JumpPhase::Warp, "the white is gone");
+        assert_eq!(effect.fade_alpha(), 0);
+        assert!(!effect.faded());
+        let mut relit = effect;
+        relit.light();
+        assert_eq!(relit.phase(), JumpPhase::FadeOut(0.0), "1.5 s again");
+        let mut arrived = lit(ms(60_000));
+        arrived.arrive();
+        assert_eq!(
+            arrived.faded_in(),
+            None,
+            "on the arrival's pass it ends the effect: the next _FadeWhiteOut \
+             finds its reservation released"
+        );
+        let unlit = JumpEffect::warp(false);
+        assert_eq!(unlit.faded_in(), Some(unlit), "nothing to fade in");
     }
 }

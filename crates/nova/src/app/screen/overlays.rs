@@ -99,6 +99,9 @@ impl AppScreen {
         let Some(mut queue) = self.text_dialogs() else {
             return;
         };
+        if self.white_faded() {
+            queue.set_faded();
+        }
         queue.show_descs(vec![DescShown {
             text,
             graphic: self.data.description_graphic(id),
@@ -112,12 +115,14 @@ impl AppScreen {
         below.release_keys();
         self.about = Some(queue);
         self.about_text = id;
+        self.tell_faded_in();
     }
 
     /// Drops the About text once it and its movies are done, keeping its
     /// sounds. What was pressed under its last movie is dropped with it:
     /// the side beneath let go of its keys as it opened.
     pub(super) fn drop_closed_about(&mut self) {
+        self.tell_faded_in();
         if let Some(about) = &mut self.about
             && !about.is_open()
         {
@@ -462,6 +467,7 @@ impl AppScreen {
     /// What was pressed under the last movie is dropped: flight reads its
     /// keys as held, and the router lets go of them as the dialogs open.
     pub(super) fn drop_closed_missions(&mut self) {
+        self.tell_faded_in();
         if let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) {
             for _ in 0..missions.take_texts_closed() {
                 flight.close_mission_text();

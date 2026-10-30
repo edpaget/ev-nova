@@ -575,7 +575,11 @@ impl AppScreen {
         let below = self.shown_mut();
         below.cancel_pointer();
         below.release_keys();
+        let faded = self.white_faded();
         if let Some(missions) = &mut self.missions {
+            if faded {
+                missions.set_faded();
+            }
             show(missions);
         }
         self.drop_closed_missions();
