@@ -85,14 +85,14 @@ impl<
     /// less the cursor, which the map hides, its 1024 x 768
     /// frame centred in a widened view ([`FlightView::map_offset`]); in
     /// port, where the bar opens it, the dialog alone, where the classic
-    /// spaceport has it, for the app to draw over the spaceport.
+    /// spaceport has it, for the app to draw over the spaceport. These are
+    /// [`FlightView::draw_under_dialog_map`] and
+    /// [`FlightView::draw_dialog_map`], which the app draws apart when a
+    /// mission dialog goes between them.
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
-            if !self.frame.docked() {
-                self.draw_scene(list);
-            }
-            self.draw_open_map(list);
-            self.draw_fades(list);
+            self.draw_under_dialog_map(list);
+            self.draw_dialog_map(list);
             return;
         }
         if self.draw_scene(list) {
@@ -321,5 +321,23 @@ impl<
         #[cfg(test)]
         self.check_frame_kept();
         self.draw_flight(list, || self.failure.clone().unwrap_or_default())
+    }
+
+    /// What goes under the dialogs a map opened from and under the map:
+    /// the paused scene and its HUD, or nothing in port, where the app
+    /// draws the spaceport instead. The original leaves the last frame
+    /// drawn in `_gWind` behind each dialog and behind the map.
+    pub fn draw_under_dialog_map(&self, list: &mut DrawList) {
+        if !self.frame.docked() {
+            self.draw_scene(list);
+        }
+    }
+
+    /// What goes over the dialogs a map opened from: the open map, whose
+    /// window opens in front of theirs (`_DoSystemMap` @0x125b7-0x125c9),
+    /// then the fades.
+    pub fn draw_dialog_map(&self, list: &mut DrawList) {
+        self.draw_open_map(list);
+        self.draw_fades(list);
     }
 }

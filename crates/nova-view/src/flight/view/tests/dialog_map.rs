@@ -1,3 +1,4 @@
+use super::faked_screen::fading_in;
 use super::*;
 use nova_sim::{MapMarks, SavedNav};
 
@@ -499,4 +500,53 @@ fn a_dialogs_map_closes_at_once_by_return_once_m_is_let_go() {
     view.port_map_input(&key(MAP, false));
     view.port_map_input(&key(Key::Enter, true));
     assert!(!view.map_open);
+}
+
+/// What `draw` draws of `view` into a list of its own.
+fn drawn_by(view: &Faked, draw: impl FnOnce(&Faked, &mut DrawList)) -> DrawList {
+    let mut list = DrawList::new();
+    draw(view, &mut list);
+    list
+}
+
+#[test]
+fn a_dialogs_map_splits_into_the_paused_scene_and_the_map_over_it() {
+    let mut view = faked_in_flight();
+    let shut = drawn(&view);
+    assert!(!shut.is_empty());
+    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+    let under = drawn_by(&view, Faked::draw_under_dialog_map);
+    assert_eq!(under, shut, "the scene as it was drawn shut");
+    let map = drawn_by(&view, Faked::draw_open_map);
+    assert!(!map.is_empty());
+    let mut over = map;
+    let here = Point::new(0.0, 0.0);
+    over.extend_translated(&drawn_by(&view, Faked::draw_fades), here);
+    assert_eq!(drawn_by(&view, Faked::draw_dialog_map), over);
+    let mut whole = under;
+    whole.extend_translated(&over, here);
+    assert_eq!(drawn(&view), whole, "the screen draws the two in order");
+}
+
+#[test]
+fn a_dialogs_map_in_port_has_no_scene_under_it() {
+    let docked = FlightFrame {
+        landed: Some(StellarId(128)),
+        ..in_sol()
+    };
+    let mut view = faked_dialogs(docked, MapMarks::NONE, MOON);
+    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+    assert!(drawn_by(&view, Faked::draw_under_dialog_map).is_empty());
+    assert!(!drawn_by(&view, Faked::draw_dialog_map).is_empty());
+}
+
+#[test]
+fn a_dialogs_map_draws_flights_fade_over_the_map() {
+    let mut view = fading_in();
+    queue_opening(&mut view, MapMarks::NONE, MOON, &[]);
+    view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+    let over = drawn_by(&view, Faked::draw_dialog_map);
+    let (at, _) = fade(&over).expect("the fade-in shows");
+    assert!(at > 0, "the map under it");
+    assert_eq!(at, over.len() - 1, "the last thing drawn");
 }
