@@ -29,7 +29,7 @@
 //! - The appear, the entry, the fade back from black and Quit's delay
 //!   wait too. Those are synchronous loops in the original, which run to
 //!   their end before a switch-out takes hold; that is left to
-//!   rdm:roadmap/play-feel-6-followups.
+//!   rdm:phase/play-feel-6-followups/phase-1-synchronous-loops-before-switch-out.
 //!
 //! Every tick while away counts its time. The first tick after the app
 //! comes back is still background time (the app asks for no redraws
