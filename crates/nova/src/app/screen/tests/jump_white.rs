@@ -1,0 +1,137 @@
+//! The router over a text shown over flight under the jump's white
+//! (rdm:phase/movies/phase-4-desc-movies-outside-missions): a mission
+//! text over flight while the warp has lit the screen white, such as a
+//! `ShipDoneText` (`_MissionObjectivesCheck` @0x9ed0f), is queued on the
+//! faded screen, so it fades in from black (`_FadeScreenIn` @0x5b038)
+//! and the white is gone; once it closes, the warp lights the white
+//! again on its next pass (@0x683f1-0x68404). The About text's path is
+//! pinned through the whole app in `tests/it/hyperspace.rs`.
+
+use super::*;
+use nova_view::flight::JumpEffect;
+
+/// The router with dialogs over [`game_data_fork`], where Alpha (128)
+/// links Beta (129) and ship 128 is fast (`Accel` 1500, `Speed` 1000,
+/// `Maneuver` 30) with `Fuel` 300, flying from Alpha with a course to
+/// Beta, flown out past the minimum jump distance, J pressed and ticked
+/// until the warp has lit the screen white.
+fn lit() -> AppScreen {
+    let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+    let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
+    built.put_u16(alpha + 0x04, 129);
+    let fast = built.layout.data_entry(Ship::TYPE, 128) + 4;
+    for (at, value) in [(0x04, 1500), (0x06, 1000), (0x08, 30), (0x0A, 300)] {
+        built.put_u16(fast + at, value);
+    }
+    let mut screen = with_dialogs(loaded_bytes(built.bytes));
+    fly(&mut screen);
+    plot_beta(&mut screen);
+    screen.input(&key(Key::Up, true));
+    for _ in 0..1800 {
+        if ship(&screen).position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
+            break;
+        }
+        screen.tick(TICK);
+    }
+    screen.input(&key(Key::Up, false));
+    screen.input(&key(Key::Char('j'), true));
+    screen.input(&key(Key::Char('j'), false));
+    for _ in 0..1800 {
+        if flight(&screen).screen_faded() {
+            return screen;
+        }
+        screen.tick(TICK);
+    }
+    panic!("the warp never lit the white: {:?}", ship(&screen));
+}
+
+/// Plots a course to Beta on flight's map: M, a Shift-click on Beta, M,
+/// whose close cues it.
+fn plot_beta(screen: &mut AppScreen) {
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert_eq!(screen.showing(), Showing::FlightMap);
+    let at = port::scrolled_to(screen, SystemId(129));
+    screen.input(&key(Key::Shift, true));
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        });
+    }
+    screen.input(&key(Key::Shift, false));
+    screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(
+        flight(screen).session().expect("flying").course(),
+        [nova_sim::SystemId(129)],
+        "plotted"
+    );
+}
+
+/// The white's alpha over flight, if the jump's effect shows one.
+fn white(screen: &AppScreen) -> Option<u8> {
+    flight(screen).jump_effect().map(JumpEffect::fade_alpha)
+}
+
+/// The alpha of the black drawn over the whole screen, last, if any: the
+/// text's fade-in from black.
+fn black(screen: &AppScreen) -> Option<u8> {
+    drawn(screen)
+        .iter()
+        .rev()
+        .find_map(|command| match *command {
+            DrawCommand::Line { color, width, .. }
+                if width >= 700.0 && (color.r, color.g, color.b) == (0, 0, 0) =>
+            {
+                Some(color.a)
+            }
+            _ => None,
+        })
+}
+
+#[test]
+fn a_mission_text_under_the_warps_white_fades_in_from_black_and_the_white_is_lit_again_after_it() {
+    let mut screen = lit();
+    assert!(white(&screen).is_some_and(|alpha| alpha > 0), "lit");
+    screen.show_over_flight(vec![DescShown {
+        text: "Done.".to_owned(),
+        graphic: None,
+        movie: None,
+    }]);
+    assert_eq!(screen.showing(), Showing::MissionText);
+    assert!(
+        !flight(&screen).screen_faded(),
+        "_FadeScreenIn @0x5b038 jumps the display to black and fades it in"
+    );
+    assert_eq!(white(&screen), Some(0), "the white is gone");
+    assert_eq!(black(&screen), Some(255), "from black");
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(
+        screen.showing(),
+        Showing::MissionText,
+        "held through its fade-in"
+    );
+    let frame = Duration::from_nanos(1_000_000_000 / 60);
+    // The fade-in's second, at 60 frames a second, and the frame after.
+    for _ in 0..61 {
+        screen.tick(frame);
+    }
+    assert_eq!(screen.showing(), Showing::Flight, "the Return reached it");
+    // Flight's next pass: a tick, two frames, at most.
+    for _ in 0..2 {
+        if flight(&screen).screen_faded() {
+            break;
+        }
+        screen.tick(frame);
+    }
+    assert!(flight(&screen).screen_faded(), "lit again");
+    let relit = white(&screen).expect("still warping");
+    assert!(
+        relit < 128,
+        "the white fades in again over 1.5 s on the next pass: {relit}"
+    );
+}

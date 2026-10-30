@@ -99,6 +99,7 @@ mod encounters;
 mod entry;
 mod flight;
 mod game;
+mod jump_white;
 mod launch;
 mod map_find;
 mod menu;
