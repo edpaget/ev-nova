@@ -414,7 +414,7 @@ fn plunder_npc(
     ship.leader = Some(pirate);
     // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
     // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
-    ship.spared = false;
+    ship.overwrite_bribe();
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;

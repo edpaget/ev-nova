@@ -145,7 +145,7 @@ use crate::pilot::Pilot;
 use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
-use crate::traffic::npc::{AiType, Npc, NpcId};
+use crate::traffic::npc::{Npc, NpcId};
 
 /// What the comm key hails ([`Session::hail_target`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -671,8 +671,7 @@ impl Session {
         };
         match deed {
             Deed::Spare => {
-                npc.spared = true;
-                npc.ai_type = AiType::WimpyTrader;
+                npc.take_bribe();
                 make_leave(npc);
             }
             Deed::Attack => {
@@ -840,7 +839,7 @@ pub(super) mod tests {
     use crate::landing::StellarFlags;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, govt, land_now, ship};
-    use crate::traffic::npc::Mode;
+    use crate::traffic::npc::{AiType, Mode};
 
     const FED: GovtId = GovtId(128);
     const OTHER: GovtId = GovtId(129);

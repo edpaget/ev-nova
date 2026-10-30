@@ -27,7 +27,8 @@
 //!   of its fleet ([`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet));
 //!   any other led ship leaves its fleet now ([`Npc::leave_fleet`]),
 //!   taking its class's `InherentAI` at the reset rather than at that
-//!   think, and is marked ([`Npc::kept_escort_ai`]) so that it reads as
+//!   think (a bribed one keeps the bribe's, as the original's +0x88
+//!   does), and is marked ([`Npc::kept_escort_ai`]) so that it reads as
 //!   the original's AI type 6 meanwhile ([`Npc::original_ai_type`]),
 //!   which +0x88 keeps until that think, or for its stay if it thinks as
 //!   a miner ([`Npc::settle_original_ai_type`]);
@@ -238,10 +239,12 @@ mod tests {
     fn a_disabled_bribed_led_ship_keeps_reading_one_through_the_reset() {
         let mut traffic = fleet(Condition::Disabled);
         let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
-        led.expect("there").spared = true;
+        led.expect("there").take_bribe();
         ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
         let led = of(&traffic, LED);
-        assert_eq!(led.ai_type, AiType::Warship, "its class's InherentAI");
+        assert_eq!(led.leader, None);
+        assert!(led.spared);
+        assert_eq!(led.ai_type, AiType::WimpyTrader, "not its class's 3");
         assert_eq!(led.original_ai_type(), 1, "the bribe's word is kept");
     }
 

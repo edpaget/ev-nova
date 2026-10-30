@@ -387,14 +387,14 @@ mod tests {
     #[test]
     fn a_led_ship_paid_off_then_disabled_reads_as_the_bribes_trader() {
         // The bribe writes 1 (@0x961f8), which the disabled reset leaves
-        // alone, though the engine's reset gives it its class's 3.
+        // alone, its class's 3 notwithstanding.
         let mut spared = wreck(2, 100.0);
         spared.hull.inherent_ai = 3;
         spared.leader = Some(NpcId(7));
-        spared.spared = true;
+        spared.take_bribe();
         spared.condition = Condition::Disabled;
         crate::traffic::disabled_reset::reset(&mut spared, crate::rulebook::RuleSource::Engine);
-        assert_eq!(spared.ai_type, AiType::Warship, "its class's InherentAI");
+        assert_eq!(spared.ai_type, AiType::WimpyTrader, "the bribe's word");
         assert_eq!(found(&[pirate(), spared]), Some(n(2)), "AI type 1");
     }
 

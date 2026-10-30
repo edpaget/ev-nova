@@ -1738,6 +1738,8 @@ impl Traffic {
     /// loses its lead, its carrier and its target, its provocation -1
     /// ([`gate_entry::RELEASED_PROVOCATION`]), takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
+    /// over a bribe's ([`Npc::overwrite_bribe`], as the original's write
+    /// has no AI type test, @0x8dcdf-0x8dcfd),
     /// and heads into the same gate on its own, its mode as it was. A
     /// fighter so freed decides by its own AI type, as the original's AI
     /// type 5 becomes at most 3.
@@ -1752,6 +1754,7 @@ impl Traffic {
                 follower.leader = None;
                 follower.leave_carrier();
                 follower.ai_type = gate_entry::released_ai_type(ai_type);
+                follower.overwrite_bribe();
                 follower.target = None;
                 follower.provoked = gate_entry::RELEASED_PROVOCATION;
                 follower.goal = Goal::EnterGate(gate);
@@ -4753,6 +4756,28 @@ mod tests {
                 guard: None
             }
         );
+    }
+
+    #[test]
+    fn a_bribed_follower_released_at_its_leads_gate_reads_the_leads_type_not_its_bribe() {
+        // The release copies the lead's +0x88, capped at 3
+        // (@0x8dcdf-0x8dcfd), with no AI type test, over the bribe's 1
+        // (`_DoCommDialog` @0x961f8).
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].ai_type = AiType::Interceptor;
+        traffic.npcs[0].goal = Goal::EnterGate(GATE);
+        traffic.npcs[1].leader = Some(NpcId(0));
+        traffic.npcs[1].ai_type = AiType::WimpyTrader;
+        traffic.npcs[1].spared = true;
+        assert_eq!(traffic.npcs[1].original_ai_type(), 1, "bribed");
+        traffic.tick(&Keep, &[gate_at_centre()], &mut Draws::of(&[]));
+        let released = &traffic.npcs[1];
+        assert_eq!(released.leader, None);
+        assert_eq!(
+            released.original_ai_type(),
+            gate_entry::released_ai_type(AiType::Interceptor).raw()
+        );
+        assert!(!released.spared, "the bribe's word is overwritten");
     }
 
     /// Answers every hit on itself by attacking the player.

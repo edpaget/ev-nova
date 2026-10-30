@@ -156,7 +156,11 @@ impl Npc {
     /// It leaves its fleet: no leader (+0x9a = -1), no carrier, holding its
     /// class's capacities again ([`Npc::leave_carrier`]), and its class's
     /// `InherentAI` (+0x12) as its AI type, the disabled reset's mark
-    /// ([`Npc::kept_escort_ai`]) cleared. The one writer of both: the
+    /// ([`Npc::kept_escort_ai`]) cleared. A bribed ship ([`Npc::spared`])
+    /// keeps the bribe's AI type: the original's leaves that write +0x88
+    /// run only for AI types 5 and 6, and the disabled reset writes none
+    /// (see [`original_ai_type`](super::original_ai_type)). The one writer
+    /// of both: the
     /// succession, the disabled reset
     /// ([`disabled_reset`](super::disabled_reset)), `_EscortAI`'s lost
     /// parent ([`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet))
@@ -164,7 +168,9 @@ impl Npc {
     pub fn leave_fleet(&mut self) {
         self.leave_carrier();
         self.leader = None;
-        self.ai_type = AiType::from_raw(self.hull.inherent_ai);
+        if !self.spared {
+            self.ai_type = AiType::from_raw(self.hull.inherent_ai);
+        }
         self.kept_escort_ai = false;
     }
 
@@ -384,6 +390,20 @@ mod tests {
         marked.leave_fleet();
         assert!(!marked.kept_escort_ai);
         assert_eq!(marked.original_ai_type(), 3);
+    }
+
+    #[test]
+    fn a_bribed_ship_leaving_its_fleet_keeps_the_bribes_word() {
+        // None of the original's leaves reaches +0x88 = 1 (see `leave_fleet`).
+        let mut spared = npc(1, ShipStats::new(FAST, &[]));
+        spared.leader = Some(NpcId(4));
+        spared.hull.inherent_ai = 3;
+        spared.take_bribe();
+        spared.leave_fleet();
+        assert_eq!(spared.leader, None);
+        assert!(spared.spared);
+        assert_eq!(spared.ai_type, AiType::WimpyTrader);
+        assert_eq!(spared.original_ai_type(), 1);
     }
 
     // The successor.

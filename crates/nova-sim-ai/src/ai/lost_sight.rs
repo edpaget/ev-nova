@@ -478,7 +478,7 @@ mod tests {
         // The bribe writes AI type 1 (@0x961f8), parent kept (@0x8d748).
         let mut spared = hunter(AiType::Warship, SearchTimer::Unset);
         spared.leader = Some(NpcId(3));
-        spared.spared = true;
+        spared.take_bribe();
         spared.class_fuel = 100;
         let mut chance = Draws::of(&[]);
         let decision = lost(&spared, of(Goal::Attack(n(2))), &mut chance);

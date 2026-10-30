@@ -17,12 +17,20 @@
 //!   `_AIDispatch` @0x8fc19 (a mission escort), and the captures
 //!   (`_DoShipCapture` @0x41425/@0x41480, `_HandlePlayerBoardAttempt`
 //!   @0x65bb1, `_DoPlunderDialog` @0x9461f).
-//! - 1, a bribe ([`BRIBED_AI`]): `_DoCommDialog` @0x961f8 writes +0x88
-//!   only, keeping the parent +0x9a, and nothing but a capture writes it
-//!   again until the ship leaves (the disabled reset @0x8fece-0x8ff13
-//!   leaves it alone). The player's capture makes it the player's escort,
-//!   read first; a pirate's take (`_AIPlunderShipContents` @0x8495c)
-//!   clears [`Npc::spared`], the bribe's only state.
+//! - 1, a bribe ([`BRIBED_AI`], [`Npc::take_bribe`]): `_DoCommDialog`
+//!   @0x961f8 writes +0x88 only, keeping the parent +0x9a. The engine
+//!   keeps the word in [`Npc::ai_type`] ([`AiType::WimpyTrader`]), read
+//!   ahead of the leader or carrier while [`Npc::spared`] holds, so any
+//!   later write of +0x88 wins as the original's does. The writes that
+//!   reach a bribed ship clear [`Npc::spared`]
+//!   ([`Npc::overwrite_bribe`]): the release at its lead's gate (the
+//!   lead's word capped at 3, `_HighLevelAIHandler` @0x8dcdf-0x8dcfd,
+//!   with no AI type test), a pirate's take (6,
+//!   `_AIPlunderShipContents` @0x8495c) and the player's capture (6,
+//!   `nova_sim`'s `fall_in`). No other does: the disabled reset
+//!   (@0x8fece-0x8ff13) leaves +0x88 alone, and `_AICheckParentExists`
+//!   and `_EscortAI`'s lost parent run only for AI types 5 and 6, so
+//!   [`Npc::leave_fleet`] keeps a bribed ship's word.
 //! - -1, no AI ([`NO_AI`]): the player's eject hulk (`_HandlePlayer`
 //!   @0x6f31f).
 //!
@@ -80,10 +88,9 @@ impl Npc {
     /// The original's AI type (+0x88), as its readers compare it (see the
     /// module docs): [`NO_AI`] with no AI; for the player's escort, its
     /// launched fighter [`FIGHTER_AI`] and any other [`ESCORT_AI`] (a
-    /// capture writes 6 over an earlier bribe); a bribed ship
-    /// [`BRIBED_AI`], ahead of a leader or carrier it keeps (a pirate's
-    /// take clears [`Npc::spared`] as it writes 6, @0x8495c); a carried
-    /// fighter [`FIGHTER_AI`]; a ship
+    /// capture writes 6 over an earlier bribe); a bribed ship its own
+    /// type's word, [`BRIBED_AI`] until a later write, ahead of a leader
+    /// or carrier it keeps; a carried fighter [`FIGHTER_AI`]; a ship
     /// with an NPC leader, or a former escort that keeps its word,
     /// [`ESCORT_AI`]; otherwise its own type's word.
     #[must_use]
@@ -97,7 +104,7 @@ impl Npc {
                 ESCORT_AI
             }
         } else if self.spared {
-            BRIBED_AI
+            self.ai_type.raw()
         } else if self.carrier.is_some() {
             FIGHTER_AI
         } else if self.leader.is_some() || self.kept_escort_ai {
@@ -105,6 +112,20 @@ impl Npc {
         } else {
             self.ai_type.raw()
         }
+    }
+
+    /// The bribe (`_DoCommDialog` @0x961f8): +0x88 = [`BRIBED_AI`], kept
+    /// over its leader or carrier ([`Npc::spared`]), as
+    /// [`AiType::WimpyTrader`].
+    pub fn take_bribe(&mut self) {
+        self.spared = true;
+        self.ai_type = AiType::WimpyTrader;
+    }
+
+    /// A write of +0x88 over the bribe's word, which was its only state:
+    /// [`Npc::spared`] cleared (see the module docs).
+    pub fn overwrite_bribe(&mut self) {
+        self.spared = false;
     }
 
     /// Its think's settling of [`Npc::kept_escort_ai`]: the mark cleared
@@ -240,12 +261,13 @@ mod tests {
 
     #[test]
     fn a_bribed_led_ship_reads_one_until_captured() {
-        let spared = Npc {
-            spared: true,
+        let mut spared = Npc {
             leader: Some(NpcId(0)),
             ..ship(AiType::Warship)
         };
-        assert_eq!(spared.original_ai_type(), 1);
+        spared.take_bribe();
+        assert!(spared.spared);
+        assert_eq!(spared.original_ai_type(), BRIBED_AI);
         let fighter = Npc {
             carrier: Some(carrier()),
             kept_escort_ai: true,
@@ -257,6 +279,20 @@ mod tests {
             ..spared
         };
         assert_eq!(captured.original_ai_type(), 6, "the capture writes 6");
+    }
+
+    #[test]
+    fn a_bribe_reads_its_ai_type_so_a_later_write_of_it_wins() {
+        let mut spared = Npc {
+            leader: Some(NpcId(0)),
+            ..ship(AiType::Interceptor)
+        };
+        spared.take_bribe();
+        spared.ai_type = AiType::BraveTrader;
+        assert_eq!(spared.original_ai_type(), 2, "ahead of its leader");
+        spared.overwrite_bribe();
+        assert!(!spared.spared);
+        assert_eq!(spared.original_ai_type(), 6, "its leader's");
     }
 
     #[test]

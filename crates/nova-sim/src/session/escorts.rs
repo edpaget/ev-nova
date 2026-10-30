@@ -1177,12 +1177,14 @@ pub(super) fn reset_released(npc: &mut Npc) {
 /// alike: of no government, and so of no government's factor, keeping
 /// its skill, its AI type `inherent` (its ship type's `InherentAI`) when
 /// known, no longer a former escort, of no leader but the player, keeping
-/// formation with no target of its own.
+/// formation with no target of its own. Its +0x88 = 6 overwrites a bribe
+/// ([`Npc::overwrite_bribe`]; `_DoPlunderDialog` @0x9461f).
 pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.independent();
     if let Some(ai_type) = inherent {
         npc.ai_type = ai_type;
     }
+    npc.overwrite_bribe();
     npc.former = None;
     npc.leader = None;
     npc.goal = Goal::Formation { guard: None };
@@ -1866,6 +1868,24 @@ pub(super) mod tests {
         session.enlist(id, escort(WARSHIP, worn(), None));
         let ship = session.space.npc(id).expect("there");
         assert_eq!((ship.govt, ship.skill_mult, ship.skill), (None, 1.0, 0.8));
+    }
+
+    #[test]
+    fn a_bribed_ship_enlisted_loses_its_bribe_so_its_release_takes_its_classs_ai() {
+        // The capture writes +0x88 = 6 (`_DoPlunderDialog` @0x9461f) over
+        // the bribe's 1 (`_DoCommDialog` @0x961f8).
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let id = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        let ship = session.space.npc_mut(id).expect("there");
+        ship.take_bribe();
+        ship.hull.inherent_ai = 3;
+        session.enlist(id, escort(WARSHIP, worn(), None));
+        assert!(!session.space.npc(id).expect("there").spared);
+        session.release_led(id);
+        let released = session.space.npc(id).expect("there");
+        assert_eq!(released.ai_type, AiType::Warship);
+        assert_eq!(released.original_ai_type(), 3);
     }
 
     /// Ionizes the first escort red, then checks that, once the fleet

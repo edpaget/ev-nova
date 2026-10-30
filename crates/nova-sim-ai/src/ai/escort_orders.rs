@@ -443,8 +443,7 @@ mod tests {
         let mut spared = marked;
         spared.kept_escort_ai = false;
         spared.leader = Some(NpcId(9));
-        spared.spared = true;
-        spared.ai_type = AiType::Warship;
+        spared.take_bribe();
         assert_eq!(issued(&[spared]), [2, 1, 1, 0]);
     }
 

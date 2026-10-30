@@ -356,9 +356,11 @@ pub struct Npc {
     /// scooped of another commodity is kept beside the first
     /// ([`NpcHold`]).
     pub cargo: NpcHold,
-    /// Whether the player has paid it to spare it: it never targets the
-    /// player again, unless a pirate takes it, whose take clears this as
-    /// it writes the original's +0x88 6 over the bribe's 1 (@0x8495c).
+    /// Whether the player has paid it to spare it ([`Npc::take_bribe`]):
+    /// it never targets the player again, until a later write of the
+    /// original's +0x88 over the bribe's 1 clears this
+    /// ([`Npc::overwrite_bribe`]; see
+    /// [`original_ai_type`](super::original_ai_type)).
     pub spared: bool,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
