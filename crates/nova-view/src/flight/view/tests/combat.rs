@@ -794,6 +794,40 @@ fn a_shot_is_drawn_under_the_intact_player_in_the_shot_layer() {
     );
 }
 
+#[test]
+fn a_shot_is_drawn_in_its_frames_layer_whatever_its_weapon() {
+    // A stellar's homing shot comes in the shot layer (0x3b52f0), a ship's
+    // homing shot of the same weapon in the homing layer; which layer a
+    // weapon's shot takes is nova-sim-combat's rule. The view draws by the
+    // frame's layer, so frame order alone (shots-layer first) loses.
+    use nova_sim::combat::shot_layer::ShotLayer;
+    let stellars = Vec2::new(0.0, -20.0);
+    let ships = Vec2::new(0.0, -40.0);
+    let view = world(
+        armed(0, &[BLASTER]),
+        FlightFrame {
+            shots: vec![
+                nova_sim::flight_frame::FrameShot {
+                    layer: ShotLayer::Shots,
+                    ..super::faked_world::shot_of(0, BLASTER, stellars, 0.0)
+                },
+                nova_sim::flight_frame::FrameShot {
+                    layer: ShotLayer::Homing,
+                    ..super::faked_world::shot_of(1, BLASTER, ships, 0.0)
+                },
+            ],
+            ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+        },
+    );
+    let list = world_list(&view);
+    let camera = view.camera();
+    let homing = drawn_at(&list, camera.world_to_screen(at(ships.x, ships.y)));
+    let shots = drawn_at(&list, camera.world_to_screen(at(stellars.x, stellars.y)));
+    let player = drawn_at(&list, camera.world_to_screen(view.shown_position()));
+    assert!(homing < shots, "the shot layer over the homing layer");
+    assert!(shots < player, "the shot layer under the player");
+}
+
 /// Where the beams in `color` start, on screen: the lines a pixel wide,
 /// not the HUD's bars.
 fn beam_starts(list: &DrawList, color: Color) -> Vec<Point> {
