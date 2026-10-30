@@ -10,6 +10,7 @@ use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
@@ -23,7 +24,14 @@ use super::{
 };
 
 impl<
-    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
     S: FlightSim,
 > Screen for FlightView<C, S>
 {
@@ -87,6 +95,13 @@ impl<
     /// port, where the bar opens it, the dialog alone, where the classic
     /// spaceport has it, for the app to draw over the spaceport.
     fn draw(&self, list: &mut DrawList) {
+        if self.draw_movie(list, |list| {
+            if self.draw_scene(list) {
+                self.draw_fades(list);
+            }
+        }) {
+            return;
+        }
         if self.map_open {
             if !self.frame.docked() {
                 self.draw_scene(list);
@@ -124,6 +139,9 @@ impl<
     /// the player info refused, the course map's beeps), then the fight's.
     /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
+        if self.holds_sounds() {
+            return Vec::new();
+        }
         self.drained_sounds()
     }
 
@@ -132,6 +150,9 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
+        if self.playing() {
+            return self.movie_hides_pointer();
+        }
         !self.map_open && self.failure.is_none() && self.looks.cursor_sheet().is_some()
     }
 
@@ -154,7 +175,14 @@ impl<
 }
 
 impl<
-    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
     S: FlightSim,
 > FlightView<C, S>
 {
@@ -162,6 +190,10 @@ impl<
     /// the catch-up, the steps and each command fill it where they change
     /// the flight.
     fn tick_then(&mut self, dt: Duration) {
+        if self.playing() {
+            self.movie_tick(dt);
+            return;
+        }
         self.catch_up();
         self.fade_frame(dt);
         if self.map_open {
@@ -191,6 +223,10 @@ impl<
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
+        if self.playing() {
+            self.movie_input(input);
+            return ScreenAction::None;
+        }
         self.cursor_input(input);
         let press = match *input {
             Input::Key {

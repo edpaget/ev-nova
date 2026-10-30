@@ -692,6 +692,7 @@ mod inbox;
 mod interface;
 mod messages;
 mod missions;
+mod movies;
 mod outputs;
 mod player;
 mod port_screen_map;
@@ -1337,6 +1338,15 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     board_latch: bool,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
+    /// The `dësc` movies flight plays, and whether they play (see the
+    /// `movies` module).
+    movies: crate::movie::Movies,
+    /// The movie playing in front of the frozen flight, and what follows
+    /// it (see the `movies` module).
+    movie: Option<movies::FlightMovie>,
+    /// What was pressed under the last movie, until the router takes it
+    /// ([`FlightView::take_movie_replay`]).
+    movie_replay: Vec<crate::Input>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router

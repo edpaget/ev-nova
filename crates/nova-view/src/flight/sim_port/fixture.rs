@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, MarksFrom, Names,
-    PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, Gates, MapKey, MarksFrom,
+    Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
@@ -469,6 +469,8 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::Hail,
         ScreenAsk::Boarding,
         ScreenAsk::PilotPanel,
+        ScreenAsk::GateEntryDesc(GateEntry::Hypergate(Some(SystemId(131)))),
+        ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
     ]
 }
 
@@ -1672,7 +1674,7 @@ mod tests {
 
     /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
     /// numbers are those below it.
-    const SCREEN_ASK_KINDS: usize = 22;
+    const SCREEN_ASK_KINDS: usize = 23;
 
     /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
     /// every kind, so a new one must be numbered, and then sampled
@@ -1701,6 +1703,7 @@ mod tests {
             ScreenAsk::Boarding => 19,
             ScreenAsk::PilotPanel => 20,
             ScreenAsk::CaptureNaming => 21,
+            ScreenAsk::GateEntryDesc(_) => 22,
         }
     }
 

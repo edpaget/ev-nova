@@ -87,6 +87,7 @@ mod faked_hud;
 mod faked_keys;
 mod faked_landing;
 mod faked_missions;
+mod faked_movies;
 mod faked_open;
 mod faked_player;
 mod faked_screen;
