@@ -467,6 +467,7 @@ mod tests {
 
     use super::*;
     use crate::ai::fire;
+    use crate::ai::lost_sight::{LostSight, SearchTimer};
     use crate::ai::miner::{MINER_BITS, MINES, SCOOPS};
     use crate::catalog::WeaponId;
     use crate::combat::hull::Condition;
@@ -1912,6 +1913,38 @@ mod tests {
         assert!(!decision.clears_target, "+0x70 stands");
         assert!(!decision.forgets_provocation, "+0x96 stands");
         assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_ship_that_cannot_see_a_target_breaking_up_keeps_its_search_and_its_provocation() {
+        // The lost-sight block ends the handler first (@0x8d85a, @0x8d8a6 →
+        // 0x8fb47), so the attack block never finds the ship `_IsDying`.
+        let ai = NovaAi::default();
+        let mut escort = gunned(of(1, AiType::Warship));
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: Some(crate::escort::EscortOrder::Attack),
+        });
+        escort.goal = Goal::Attack(NPC_TWO);
+        escort.target = Some(NPC_TWO);
+        escort.provoked = 5.0;
+        let mut wreck = crate::ai::fixture::cloaked(of(2, AiType::Warship));
+        wreck.state.position = crate::geometry::Vec2::new(0.0, -100.0);
+        wreck.condition = BREAKING_UP;
+        let mut npcs = [escort, wreck];
+        let around = with_player(&npcs, Condition::Intact);
+        let searching = ai.decision(&npcs[0], &around, &mut Draws::of(&[7]));
+        assert_eq!(searching.goal, Goal::Attack(NPC_TWO), "goal 4 stands");
+        assert_eq!(searching.lost_sight, Some(LostSight::Searching(107)));
+        assert!(!searching.clears_target, "+0x70 stands");
+        assert!(!searching.forgets_provocation, "+0x96 stands");
+        npcs[0].lost_sight = SearchTimer::Searching(1);
+        let around = with_player(&npcs, Condition::Intact);
+        let gave_up = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(gave_up.lost_sight, Some(LostSight::GaveUp));
+        assert_eq!(gave_up.goal, Goal::Idle, "@0x8d85a");
+        assert!(gave_up.clears_target, "@0x8d89c");
+        assert!(!gave_up.forgets_provocation, "+0x96 stands");
     }
 
     /// [`with_player`], the player cloaked.
