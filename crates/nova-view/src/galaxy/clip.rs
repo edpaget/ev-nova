@@ -23,7 +23,7 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 ///   and dropped when it misses;
 /// - each dot kept whole when inside, cut to the rect of its overlap when
 ///   partly inside, and dropped when outside;
-/// - each text, sprite and picture, blended or not, wrapped in
+/// - each text, sprite, picture (blended or not) and OR fill wrapped in
 ///   [`DrawCommand::Clipped`] with `area`, which the renderer crops;
 /// - each command already clipped re-clipped to the two clips' overlap,
 ///   and dropped when they share none.
@@ -85,7 +85,8 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::Picture { .. }
             | DrawCommand::StretchedPicture { .. }
             | DrawCommand::BlendedPicture { .. }
-            | DrawCommand::TiledPicture { .. } => {
+            | DrawCommand::TiledPicture { .. }
+            | DrawCommand::OrFill { .. } => {
                 out.clipped(area, command.clone());
             }
         }

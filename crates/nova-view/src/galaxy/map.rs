@@ -2595,6 +2595,7 @@ mod tests {
             DrawCommand::Text { .. } => "text",
             DrawCommand::Line { .. } => "line",
             DrawCommand::Dot { .. } => "dot",
+            DrawCommand::OrFill { .. } => "or-fill",
             DrawCommand::Clipped { .. } => "clipped",
         }
     }

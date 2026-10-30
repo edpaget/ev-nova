@@ -117,6 +117,19 @@ fn or_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     return vec4<f32>(vec3<f32>(d8 | t8) / 255.0, d.a);
 }
 
+// ORs an OR fill's colour, its tint's straight RGB, into the backdrop: the
+// original's `_BlitPixieTranslucentCopy` with every factor at 32, so
+// `src_c | dst_c` per 5-bit channel, with an 8-bit destination as `or_fs`
+// has. The arithmetic and why are on `Blend::Or`.
+@fragment
+fn or_fill_fs(in: SpriteOut) -> @location(0) vec4<f32> {
+    let d = textureLoad(backdrop, vec2<u32>(in.position.xy), 0);
+    let s5 = vec3<u32>(round(in.tint.rgb * 255.0)) >> vec3<u32>(3u);
+    let t8 = (s5 << vec3<u32>(3u)) | (s5 >> vec3<u32>(2u));
+    let d8 = vec3<u32>(round(d.rgb * 255.0));
+    return vec4<f32>(vec3<f32>(d8 | t8) / 255.0, d.a);
+}
+
 // Crossfades the texel with the backdrop by OR, in 5 bits: the original's
 // `((src_c * k) >> 5) | ((dst_c * (32 - k)) >> 5)`, k the tint's alpha in
 // 32nds and the tint's colour a multiplier on the source. A transparent

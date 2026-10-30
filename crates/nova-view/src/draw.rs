@@ -267,9 +267,22 @@ pub enum DrawCommand {
         /// Its colour.
         color: Color,
     },
+    /// A rectangle whose colour is OR-ed into what is beneath it, per 5-bit
+    /// channel, keeping the destination's alpha. The arithmetic is
+    /// [`Blend::Or`]'s at level 32 (`s5 = c8 >> 3`,
+    /// `out = d8 | ((s5 << 3) | (s5 >> 2))`); see it for the bit depth.
+    /// The original's `_BlitPixieTranslucentCopy` (0xc1110) with every
+    /// factor at 32, called by `_BlitPixieFloatingRect` @0xbe501-0xbe555,
+    /// combines a rect so. An area with no drawable size draws nothing.
+    OrFill {
+        /// Where it ORs.
+        area: Bounds,
+        /// The colour OR-ed in; its alpha is unused.
+        color: Color,
+    },
     /// `command` drawn only inside `clip`: a text run cut to it, a
     /// sprite's or picture's quad cropped to it with its texture
-    /// coordinates, a tiled picture's area cut to it. A line or a dot is
+    /// coordinates, a tiled picture's or OR fill's area cut to it. A line or a dot is
     /// drawn as it is, uncut. The floating map clips its names and arrows
     /// to its frame so.
     Clipped {
@@ -297,6 +310,7 @@ impl DrawCommand {
             Self::Picture { top_left, .. }
             | Self::StretchedPicture { top_left, .. }
             | Self::BlendedPicture { top_left, .. } => *top_left = moved(*top_left),
+            Self::OrFill { area, .. } => *area = moved_bounds(*area),
             Self::TiledPicture { area, origin, .. } => {
                 *area = moved_bounds(*area);
                 *origin = moved(*origin);
@@ -617,6 +631,11 @@ impl DrawList {
         })
     }
 
+    /// Appends a [`DrawCommand::OrFill`].
+    pub fn or_fill(&mut self, area: Bounds, color: Color) -> &mut Self {
+        self.push(DrawCommand::OrFill { area, color })
+    }
+
     /// Appends `command` drawn only inside `clip` ([`DrawCommand::Clipped`]).
     pub fn clipped(&mut self, clip: Bounds, command: DrawCommand) -> &mut Self {
         self.push(DrawCommand::Clipped {
@@ -722,8 +741,9 @@ pub fn translucent_tint(source: u8, destination: u8) -> Color {
     Color::rgba(n, n, n, scale(destination))
 }
 
-/// Fills `area` with `color`. There is no rectangle command: a horizontal
-/// line as thick as the area, along its middle, is one.
+/// Fills `area` with `color`. There is no painted rectangle command (an OR
+/// is [`DrawCommand::OrFill`]): a horizontal line as thick as the area,
+/// along its middle, is one.
 pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
     let middle = area.center().y;
     list.line(
@@ -1149,6 +1169,23 @@ mod tests {
         assert_eq!(list.len(), 2);
     }
 
+    #[test]
+    fn an_or_fill_keeps_its_area_and_colour() {
+        let area = Bounds {
+            min: at(25.0, 700.0),
+            max: at(805.0, 716.0),
+        };
+        let mut list = DrawList::new();
+        list.or_fill(area, Color::rgba(0, 8, 16, 255));
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            vec![DrawCommand::OrFill {
+                area,
+                color: Color::rgba(0, 8, 16, 255),
+            }]
+        );
+    }
+
     /// One of each command at `(x, y)`-based points, the clipped one
     /// clipping a tiled picture.
     fn one_of_each(x: f32, y: f32, origin: Point) -> Vec<DrawCommand> {
@@ -1204,6 +1241,10 @@ mod tests {
                 center: p(20.0, 21.0),
                 size: 3.0,
                 color: Color::WHITE,
+            },
+            DrawCommand::OrFill {
+                area: area(24.0),
+                color: Color::rgba(0, 8, 16, 255),
             },
             DrawCommand::Clipped {
                 clip: area(22.0),

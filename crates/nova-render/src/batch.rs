@@ -308,6 +308,18 @@ impl<S: ImageSource> Renderer<S> {
                 size,
                 color,
             } => push_solid(batches, square(center, size), color),
+            DrawCommand::OrFill { area, color } => {
+                let area = match clip {
+                    Some(clip) => meet(area, clip),
+                    None => Some(area),
+                };
+                if let Some(area) = area
+                    && drawable(area.width())
+                    && drawable(area.height())
+                {
+                    push_or_fill(batches, area, color);
+                }
+            }
             DrawCommand::Clipped {
                 clip: inner,
                 ref command,
@@ -721,6 +733,30 @@ fn push_quad(
         blend,
         quads: vec![quad],
     });
+}
+
+/// Appends an OR fill's quad over `area`, extending the last batch when it
+/// is an OR fill none of whose quads `area` overlaps: each reads the scene
+/// as it was before its batch.
+fn push_or_fill(batches: &mut Vec<Batch>, area: Bounds, color: Color) {
+    let quad = QuadInstance {
+        dest: Rect {
+            x: area.min.x,
+            y: area.min.y,
+            w: area.width(),
+            h: area.height(),
+        },
+        uv: Uv::default(),
+        tint: rgba(color),
+        colorize: NO_COLORIZE,
+    };
+    if let Some(Batch::OrFill(quads)) = batches.last_mut()
+        && !quads.iter().any(|q| overlaps(q.dest, quad.dest))
+    {
+        quads.push(quad);
+        return;
+    }
+    batches.push(Batch::OrFill(vec![quad]));
 }
 
 /// Appends an untextured quad, extending the last batch when it is solid.
@@ -1402,6 +1438,87 @@ mod tests {
     /// White at `n` 32nds of full alpha: an OR sprite's tint at level `n`.
     fn level_tint(n: u8) -> Color {
         Color::rgba(255, 255, 255, factor(n))
+    }
+
+    /// Every OR fill batch's quads, in draw order, one list a batch.
+    fn or_fills(frame: &Frame) -> Vec<Vec<QuadInstance>> {
+        frame
+            .batches
+            .iter()
+            .filter_map(|batch| match batch {
+                Batch::OrFill(quads) => Some(quads.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn or_fill_quad(x: f32, y: f32, w: f32, h: f32, color: Color) -> QuadInstance {
+        QuadInstance {
+            dest: Rect { x, y, w, h },
+            uv: Uv::default(),
+            tint: rgba(color),
+            colorize: NO_COLORIZE,
+        }
+    }
+
+    #[test]
+    fn an_or_fill_is_one_quad_over_its_rect_tinted_its_straight_colour() {
+        let color = Color::rgba(0, 8, 16, 255);
+        let mut list = DrawList::new();
+        list.or_fill(bounds(10.0, 20.0, 40.0, 26.0), color);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(frame.batches.len(), 1);
+        assert_eq!(
+            or_fills(&frame),
+            [vec![or_fill_quad(10.0, 20.0, 30.0, 6.0, color)]]
+        );
+    }
+
+    #[test]
+    fn a_clipped_or_fill_is_cut_to_the_clip_and_one_outside_draws_nothing() {
+        let color = Color::rgba(0, 8, 16, 255);
+        let fill = DrawCommand::OrFill {
+            area: bounds(10.0, 20.0, 40.0, 26.0),
+            color,
+        };
+        let mut list = DrawList::new();
+        list.clipped(bounds(0.0, 22.0, 30.0, 60.0), fill.clone())
+            .clipped(bounds(50.0, 0.0, 60.0, 10.0), fill);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(frame.batches.len(), 1);
+        assert_eq!(
+            or_fills(&frame),
+            [vec![or_fill_quad(10.0, 22.0, 20.0, 4.0, color)]]
+        );
+    }
+
+    #[test]
+    fn an_empty_or_fill_draws_nothing() {
+        let mut list = DrawList::new();
+        list.or_fill(bounds(10.0, 20.0, 10.0, 26.0), Color::WHITE)
+            .or_fill(bounds(10.0, 20.0, 40.0, 20.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(frame.batches, []);
+    }
+
+    #[test]
+    fn overlapping_or_fills_make_two_batches_and_apart_ones_share_one() {
+        let mut list = DrawList::new();
+        list.or_fill(bounds(10.0, 20.0, 40.0, 26.0), Color::WHITE)
+            .or_fill(bounds(30.0, 24.0, 50.0, 30.0), Color::WHITE)
+            .or_fill(bounds(60.0, 0.0, 70.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        let sizes: Vec<usize> = or_fills(&frame).iter().map(Vec::len).collect();
+        assert_eq!(sizes, [1, 2]);
+        assert_eq!(frame.batches.len(), 2);
     }
 
     #[test]
@@ -2512,6 +2629,7 @@ mod tests {
             .iter()
             .map(|batch| match batch {
                 Batch::Sprites { quads, .. } => ("sprites", quads.len()),
+                Batch::OrFill(quads) => ("or-fill", quads.len()),
                 Batch::Solid(quads) => ("solid", quads.len()),
                 Batch::Text(runs) => ("text", runs.len()),
             })
@@ -2542,6 +2660,7 @@ mod tests {
             .map(|(at, batch)| {
                 let (kind, size) = match batch {
                     Batch::Sprites { quads, .. } => ("sprites", quads.len()),
+                    Batch::OrFill(quads) => ("or-fill", quads.len()),
                     Batch::Solid(quads) => ("solid", quads.len()),
                     Batch::Text(runs) => ("text", runs.len()),
                 };

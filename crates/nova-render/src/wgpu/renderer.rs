@@ -75,6 +75,9 @@ enum Draw {
         blend: Blend,
         instances: Range<u32>,
     },
+    OrFill {
+        instances: Range<u32>,
+    },
     Solid {
         vertices: Range<u32>,
     },
@@ -121,6 +124,12 @@ pub struct WgpuRenderer {
     or_pipeline: wgpu::RenderPipeline,
     crossfade_pipeline: wgpu::RenderPipeline,
     translucent_pipeline: wgpu::RenderPipeline,
+    /// Draws an OR fill ([`Batch::OrFill`]): the sprite vertex stage and
+    /// `or_fill_fs`, with no page bound ([`Self::no_page_group`]).
+    or_fill_pipeline: wgpu::RenderPipeline,
+    /// The empty bind group an OR fill holds group 1, a page's place in the
+    /// sprite layouts, with, so its backdrop is group 2 as every OR's is.
+    no_page_group: wgpu::BindGroup,
     max_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
@@ -206,6 +215,8 @@ impl WgpuRenderer {
             "nova or sprites",
             &[&globals_layout, &page_layout, &texture_layout],
         );
+        let (or_fill_layout, no_page_group) =
+            or_fill_layout(device, &globals_layout, &texture_layout);
         let solid_layout = pipeline_layout(device, "nova solids", &[&globals_layout]);
         let sprite_attributes = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
         let solid_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
@@ -230,6 +241,7 @@ impl WgpuRenderer {
         let translucent_pipeline =
             sprite_pipeline_with(&or_layout, "translucent_fs", Blend::OrTranslucent);
         let max_pipeline = sprite_pipeline_with(&sprite_layout, "max_fs", Blend::Max);
+        let or_fill_pipeline = sprite_pipeline_with(&or_fill_layout, "or_fill_fs", Blend::Or);
         let solid_pipeline = pipeline(
             device,
             &solid_layout,
@@ -264,6 +276,8 @@ impl WgpuRenderer {
             or_pipeline,
             crossfade_pipeline: fade_pipeline,
             translucent_pipeline,
+            or_fill_pipeline,
+            no_page_group,
             max_pipeline,
             solid_pipeline,
             blit_pipeline,
@@ -569,6 +583,15 @@ impl WgpuRenderer {
                     if blend.reads_backdrop() {
                         pass.set_bind_group(2, &target.canvas.backdrop_group, &[]);
                     }
+                    pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                    pass.draw(0..6, instances.clone());
+                }
+                Draw::OrFill { instances } => {
+                    set_viewport(pass, content);
+                    pass.set_pipeline(&self.or_fill_pipeline);
+                    pass.set_bind_group(0, &self.globals_group, &[]);
+                    pass.set_bind_group(1, &self.no_page_group, &[]);
+                    pass.set_bind_group(2, &target.canvas.backdrop_group, &[]);
                     pass.set_vertex_buffer(0, instance_buffer.slice(..));
                     pass.draw(0..6, instances.clone());
                 }
@@ -962,6 +985,26 @@ fn blit(
     pass.draw(0..3, 0..1);
 }
 
+/// An OR fill's pipeline layout: the globals, an empty group 1 where a
+/// sprite's page goes, and the backdrop; with the empty group it binds.
+fn or_fill_layout(
+    device: &wgpu::Device,
+    globals: &wgpu::BindGroupLayout,
+    backdrop: &wgpu::BindGroupLayout,
+) -> (wgpu::PipelineLayout, wgpu::BindGroup) {
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("nova no page"),
+        entries: &[],
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("nova no page"),
+        layout: &layout,
+        entries: &[],
+    });
+    let pipeline = pipeline_layout(device, "nova or fills", &[globals, &layout, backdrop]);
+    (pipeline, group)
+}
+
 /// A frame's batches laid out for the GPU.
 #[derive(Default)]
 struct Layout<'a> {
@@ -1002,9 +1045,12 @@ impl<'a> Layout<'a> {
         if scissor.w == 0 || scissor.h == 0 {
             return;
         }
-        if let Batch::Sprites { blend, quads, .. } = batch
-            && blend.reads_backdrop()
-        {
+        let backdrop_quads = match batch {
+            Batch::Sprites { blend, quads, .. } if blend.reads_backdrop() => Some(quads),
+            Batch::OrFill(quads) => Some(quads),
+            _ => None,
+        };
+        if let Some(quads) = backdrop_quads {
             let Some(rect) = frame.pixels_covered(frame.layer(index), quads) else {
                 return;
             };
@@ -1021,6 +1067,14 @@ impl<'a> Layout<'a> {
                 Draw::Sprites {
                     page: *page,
                     blend: *blend,
+                    instances: start..self.instances.len() as u32,
+                }
+            }
+            Batch::OrFill(quads) => {
+                let start = self.instances.len() as u32;
+                self.instances
+                    .extend(quads.iter().map(SpriteInstance::from));
+                Draw::OrFill {
                     instances: start..self.instances.len() as u32,
                 }
             }
@@ -1669,6 +1723,24 @@ mod tests {
                 h: 2
             })
         );
+    }
+
+    #[test]
+    fn an_or_fill_opens_a_pass_whose_backdrop_is_the_pixels_it_covers() {
+        let frame = frame_of(vec![
+            Batch::Solid(vec![solid(4.0)]),
+            Batch::OrFill(vec![quad(2.0)]),
+        ]);
+        let layout = lay_out(&frame);
+        assert_eq!(layout.passes.len(), 2);
+        assert_eq!(
+            layout.passes[1].backdrop,
+            frame.pixels_covered(DrawLayer::Overlay, &[quad(2.0)])
+        );
+        assert!(layout.passes[1].backdrop.is_some());
+        assert_eq!(layout.passes[1].draws, 1..2);
+        assert_eq!(layout.draws[1], Draw::OrFill { instances: 0..1 });
+        assert_eq!(layout.instances, [SpriteInstance::from(&quad(2.0))]);
     }
 
     #[test]
