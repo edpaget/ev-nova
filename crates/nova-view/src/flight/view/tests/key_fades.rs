@@ -195,13 +195,16 @@ fn a_tick_reads_the_gates_at_the_head_of_its_pass_so_a_step_changes_the_next() {
     let mut view = in_flight();
     view.input(&Input::PointerMoved(NOWHERE));
     view.input(&key(Key::Up, true));
+    // Spends the press's latch, which would fade the next tick by itself.
+    view.tick(TICK);
+    assert_eq!(faked_cursor_alpha(&view), ONE, "the press");
     let refused = frame_of(&view, KeyFades::EVERY.refusing(FadeKey::Helm));
     view.sim
         .queue_report_showing(StepReport::default(), refused);
     view.tick(TICK);
-    assert_eq!(faked_cursor_alpha(&view), ONE, "the pass began allowed");
+    assert_eq!(faked_cursor_alpha(&view), TWO, "the pass began allowed");
     view.tick(TICK);
-    assert_eq!(faked_cursor_alpha(&view), ONE, "this one began refused");
+    assert_eq!(faked_cursor_alpha(&view), TWO, "this one began refused");
 
     let mut view = in_flight();
     changes(&mut view, |frame| {
@@ -216,6 +219,22 @@ fn a_tick_reads_the_gates_at_the_head_of_its_pass_so_a_step_changes_the_next() {
     assert_eq!(faked_cursor_alpha(&view), WHOLE, "the pass began refused");
     view.tick(TICK);
     assert_eq!(faked_cursor_alpha(&view), ONE, "this one began allowed");
+}
+
+#[test]
+fn an_arrival_frame_keeps_its_jumps_fade_with_nothing_held() {
+    let mut view = in_flight();
+    changes(&mut view, |frame| {
+        frame.key_fades = KeyFades::EVERY.with_unbidden();
+    });
+    view.input(&Input::PointerMoved(NOWHERE));
+    let arrived = frame_of(&view, KeyFades::EVERY);
+    view.sim
+        .queue_report_showing(StepReport::default(), arrived);
+    view.tick(TICK);
+    assert_eq!(faked_cursor_alpha(&view), ONE, "the pass began in the jump");
+    view.tick(TICK);
+    assert_eq!(faked_cursor_alpha(&view), ONE, "this one began out of it");
 }
 
 /// `view` with the pointer on it and the left button pressed.
