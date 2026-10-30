@@ -86,6 +86,37 @@ pub const RANDOM: u16 = 0x0002;
 /// `Flags2` 0x0080: animate only while destroyed.
 pub const ONLY_WHEN_DESTROYED: u16 = 0x0080;
 
+/// One `_HandleStellarSprites` the flight ran outside a play frame, under a
+/// `_PrepareAllSprites` or at game entry: the session steps its gates by
+/// it, and the view replays it on the stellars of the scene it shows, in
+/// the order raised, before the next frame is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StellarPass {
+    /// A full-gain pass that comes before the frames' reset: a gate
+    /// entry's (@0x63e91, @0x64743), on the exit system's stellars.
+    Entry,
+    /// A full-gain pass after any reset: an arrival's, a gate exit's, a
+    /// refused wormhole's and game entry's.
+    Ticked,
+    /// A pass at gain 0: a take-off's, as `_PlayerLandOnStellar` zeroes
+    /// `_gSpeedMult` (@0x6375e-0x63769). It adds nothing to a timer and
+    /// still tests the threshold.
+    Still,
+}
+
+impl StellarPass {
+    /// The ticks it adds to each timer: `_gSpeedMult` as the original's
+    /// pass reads it, 1 standing for the play frame's own (the fractional
+    /// values it takes as a frame's time varies aren't modelled).
+    #[must_use]
+    pub fn gain(self) -> u8 {
+        match self {
+            Self::Entry | Self::Ticked => 1,
+            Self::Still => 0,
+        }
+    }
+}
+
 /// A hypergate's animation fields, raw from its `spöb`, and the frame
 /// count of the sheet it counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -242,10 +273,26 @@ impl GateSprite {
         held_open: bool,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.step_by(1, anim, destroyed, held_open, chance);
+    }
+
+    /// One pass of `anim`'s gate at `gain` ticks, as [`GateSprite::step`]
+    /// runs one at 1: the timer takes the gain (`_gSpeedMult`,
+    /// @0x2e810-0x2e825) and the threshold is tested whatever it is, so a
+    /// gate at gain 0 with no delay, or with its timer already there, still
+    /// steps ([`StellarPass::Still`]).
+    pub fn step_by(
+        &mut self,
+        gain: u8,
+        anim: &GateAnimation,
+        destroyed: bool,
+        held_open: bool,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         if !anim.animates(destroyed) {
             return;
         }
-        self.timer += 1;
+        self.timer += i64::from(gain);
         if self.timer < anim.threshold(self.current, held_open) {
             return;
         }
@@ -895,6 +942,83 @@ mod tests {
             run(&mut sprite, &anim, 4, true, &mut NeverFires),
             [5, 5, 3, 4]
         );
+    }
+
+    #[test]
+    fn at_gain_0_the_timer_stands() {
+        let anim = gate(8, 3);
+        let mut sprite = GateSprite::new();
+        sprite.step_by(0, &anim, false, true, &mut NeverFires);
+        assert_eq!(sprite, GateSprite::new());
+    }
+
+    #[test]
+    fn at_gain_0_a_held_gate_with_no_delay_still_opens_a_frame() {
+        let anim = gate(8, 0);
+        let mut sprite = GateSprite::new();
+        sprite.step_by(0, &anim, false, true, &mut NeverFires);
+        assert_eq!(sprite.shown(&anim, false), 1);
+    }
+
+    #[test]
+    fn at_gain_0_a_released_gate_at_its_delay_zeroes_its_timer_and_stays_on_frame_0() {
+        // A timer past the delay, kept through the reset.
+        let anim = gate(8, 3);
+        for timer in [3, 4] {
+            let mut sprite = GateSprite {
+                timer,
+                ..GateSprite::after_reset()
+            };
+            sprite.step_by(0, &anim, false, false, &mut NeverFires);
+            assert_eq!(sprite, GateSprite::after_reset(), "{timer}");
+        }
+    }
+
+    #[test]
+    fn at_gain_0_a_released_gate_on_another_frame_takes_its_close_step() {
+        let anim = gate(8, 3);
+        let mut sprite = GateSprite {
+            current: 2,
+            next: 2,
+            timer: 3,
+        };
+        sprite.step_by(0, &anim, false, false, &mut NeverFires);
+        assert_eq!(
+            sprite,
+            GateSprite {
+                current: 1,
+                next: 2,
+                timer: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_gate_that_does_not_animate_ignores_a_pass_at_either_gain() {
+        let anim = gate(1, 0);
+        for gain in [0, 1] {
+            let mut sprite = GateSprite::new();
+            sprite.step_by(gain, &anim, false, true, &mut NeverFires);
+            assert_eq!(sprite, GateSprite::new(), "{gain}");
+        }
+    }
+
+    #[test]
+    fn gain_1_is_a_step() {
+        let anim = gate(6, 2);
+        let (mut by, mut plain) = (GateSprite::new(), GateSprite::new());
+        for tick in 0..12 {
+            by.step_by(1, &anim, false, tick < 8, &mut NeverFires);
+            plain.step(&anim, false, tick < 8, &mut NeverFires);
+            assert_eq!(by, plain, "{tick}");
+        }
+    }
+
+    #[test]
+    fn a_pass_says_its_gain() {
+        assert_eq!(StellarPass::Entry.gain(), 1);
+        assert_eq!(StellarPass::Ticked.gain(), 1);
+        assert_eq!(StellarPass::Still.gain(), 0);
     }
 
     #[test]
