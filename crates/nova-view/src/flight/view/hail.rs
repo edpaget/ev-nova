@@ -55,6 +55,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Whether a hail left a dialog for the router, whichever kind: the
+    /// keys were let go ([`FlightView::hail`]) and the dialog takes Y's
+    /// release, so Y mustn't be tracked as held behind it.
+    pub(super) fn hail_opened(&self) -> bool {
+        self.pending_hail.is_some()
+            || self.pending_escort_dialog.is_some()
+            || self.pending_planet_comm.is_some()
+            || self.pending_offer.is_some()
+    }
+
     /// Holds `offer`'s prompt for the router, letting go of the flight
     /// keys; a mission accepted at once shows nothing here, its texts
     /// queued in the flight, its before-movie first, for the router to

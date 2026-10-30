@@ -203,13 +203,14 @@ impl<
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
+        let keyed = self.cursor_keyed();
         self.run_steps(steps);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();
         self.update_escort_menu(steps);
         self.alpha = alpha;
-        self.step_cursor(steps);
+        self.step_cursor(steps, keyed);
         self.start_jump_effect();
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
@@ -232,7 +233,12 @@ impl<
         };
         let jumping = self.jump_under_way();
         if jumping && press == Some(PLAYER_INFO_KEY) {
-            return self.refuse_player_info();
+            let action = self.refuse_player_info();
+            if !self.map_open {
+                // Refused or not, it is down: @0x702d8 has no gate.
+                self.track_held(input);
+            }
+            return action;
         }
         if self.map_open {
             // M types into Find while it is open.
@@ -279,7 +285,7 @@ impl<
             }
             Some(HAIL_KEY) => {
                 self.hail();
-                if self.pending_hail.is_some() {
+                if self.hail_opened() {
                     return ScreenAction::None;
                 }
             }
@@ -293,9 +299,20 @@ impl<
                 self.jump_frame(true);
             }
             Some(JETTISON_KEY) => self.jettison(),
-            Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(MISSION_INFO_KEY) => {
+                self.ask_mission_info();
+                if self.pending_mission_info.is_some() {
+                    return ScreenAction::None;
+                }
+            }
             Some(FRAME_RATE_KEY) => self.toggle_frame_rate(),
-            Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
+            Some(PLAYER_INFO_KEY) => {
+                let action = self.ask_player_info();
+                if !self.pending_player_info {
+                    self.track_held(input);
+                }
+                return action;
+            }
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
                 self.zoom_floating_map(key);

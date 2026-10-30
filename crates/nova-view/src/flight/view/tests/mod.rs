@@ -100,6 +100,7 @@ mod frame_rate;
 mod frames;
 mod hyperspace;
 mod kept_frame;
+mod key_fades;
 mod landing;
 mod layers;
 mod map_borders;

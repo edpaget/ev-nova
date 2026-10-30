@@ -694,6 +694,8 @@ use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
+use crate::ui::mission_info::MISSION_INFO_KEY;
+use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
@@ -712,6 +714,7 @@ mod hail;
 mod hyperspace;
 mod inbox;
 mod interface;
+mod key_fade;
 mod messages;
 mod missions;
 mod outputs;
@@ -778,7 +781,7 @@ pub struct FlightOverlays {
 /// latch and frame (see the `slot_block` module); they fade the cursor and
 /// hold the zoom back only while `_HandlePlayer` polls them
 /// ([`FlightView::slot_key_polled`]).
-const FLIGHT_KEYS: [Key; 32] = [
+const FLIGHT_KEYS: [Key; 40] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -811,6 +814,14 @@ const FLIGHT_KEYS: [Key; 32] = [
     STELLAR_SLOT_KEYS[2][1],
     STELLAR_SLOT_KEYS[3][1],
     NEAREST_STELLAR_KEY,
+    TARGET_KEY,
+    NEAREST_KEY,
+    HAIL_KEY,
+    MENU_CLOSE_KEY,
+    MAP_KEY,
+    JETTISON_KEY,
+    PLAYER_INFO_KEY,
+    MISSION_INFO_KEY,
 ];
 
 /// The face-target key: the original's default A for its `autopilot`

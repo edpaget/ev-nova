@@ -742,8 +742,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
         let holds = self.held.iter().any(|&held| {
-            self.slot_key_polled(held, true)
-                .unwrap_or(held != SELF_DESTRUCT_KEY)
+            self.slot_key_polled(held, true).unwrap_or(!matches!(
+                held,
+                SELF_DESTRUCT_KEY | EJECT_KEY | JETTISON_KEY
+            ))
         });
         if !self.floating.is_up() || holds {
             return;

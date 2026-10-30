@@ -554,6 +554,26 @@ fn i_with_an_active_mission_asks_for_the_info_screen_once_letting_go_of_the_keys
     assert!(view.held.is_empty(), "the flight keys let go");
 }
 
+#[test]
+fn i_opening_the_info_screen_leaves_no_key_held_as_the_screen_takes_its_release() {
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(info())));
+    view.input(&key(MISSION_INFO_KEY, true));
+    assert!(!view.holds_keys());
+}
+
+#[test]
+fn i_with_no_mission_to_show_stays_held_until_its_release() {
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::NoActiveMissions));
+    view.input(&key(MISSION_INFO_KEY, true));
+    assert!(view.holds_keys());
+    view.input(&key(MISSION_INFO_KEY, false));
+    assert!(!view.holds_keys());
+}
+
 // A person's offer answered over flight.
 
 /// A person's offer of mission 130, its text "Help?".

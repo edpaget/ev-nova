@@ -1,5 +1,6 @@
 use super::*;
 use nova_sim::DrawnShips as _;
+use nova_sim::flight_frame::FadeKey;
 
 // Double time.
 
@@ -382,7 +383,8 @@ fn a_mouse_button_held_keeps_the_cursor_whole_until_its_release() {
 fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
     let mut view = super::faked_flight::at_rest(catalog());
     view.cursor_input(&Input::PointerMoved(NOWHERE));
-    super::faked_flight::hold(&mut view, Key::Char('q'), true);
+    super::faked_flight::hold(&mut view, TARGET_KEY, true);
+    super::faked_flight::hold(&mut view, TARGET_KEY, false);
     super::faked_flight::ticked(&mut view, 1);
     assert_eq!(faked_cursor_alpha(&view), Some(247), "31 of 32");
     super::faked_flight::hold(&mut view, Key::Up, true);
@@ -407,10 +409,14 @@ fn z_held_fades_the_cursor_as_a_flight_key_with_no_afterburner_carried() {
         Some(239),
         "W: every pass, @0x6ac2a"
     );
+    let mut none_selected = super::faked_flight::at_rest(catalog());
+    super::faked_hud::changes(&mut none_selected, |frame| {
+        frame.key_fades = frame.key_fades.refusing(FadeKey::WeaponSafety);
+    });
     assert_eq!(
-        faked_alpha_holding(DESELECT_KEY),
+        faked_alpha_of(none_selected, DESELECT_KEY),
         faked_alpha_holding(Key::Char('q')),
-        "S with none selected: only its press, @0x6ade1"
+        "S with none selected: nothing, @0x6ade1"
     );
 }
 
@@ -641,7 +647,7 @@ fn faked_with_npc() -> (Faked, NpcId) {
 }
 
 /// The cursor's alpha `view`'s world draws it with, if it draws it.
-fn faked_cursor_alpha(view: &Faked) -> Option<u8> {
+pub(super) fn faked_cursor_alpha(view: &Faked) -> Option<u8> {
     super::faked_world::world_list(view)
         .iter()
         .find_map(|command| match *unclipped(command) {

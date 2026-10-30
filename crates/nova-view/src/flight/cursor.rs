@@ -123,13 +123,13 @@ impl HoverCursor {
 
     /// One flight step: whether the pointer is over something targetable
     /// (`hovering`), how many frames the cursor's sheet holds (`None` when
-    /// it could not be read, and the cursor does nothing) and whether the
-    /// player holds a flight key (`held`), which fades it as a key pressed
+    /// it could not be read, and the cursor does nothing) and whether this
+    /// frame's pass set the byte (`keyed`), which fades it as a key pressed
     /// since the last step ([`HoverCursor::key`]) does. See the module
     /// docs.
-    pub fn step(&mut self, hovering: bool, frames: Option<NonZeroU16>, held: bool) {
+    pub fn step(&mut self, hovering: bool, frames: Option<NonZeroU16>, keyed: bool) {
         self.clock += SIXTIETHS_PER_STEP;
-        let keyed = std::mem::take(&mut self.keyed) || held;
+        let keyed = std::mem::take(&mut self.keyed) || keyed;
         if self.button {
             self.fade = FADE_LEVELS;
             self.moved_at = self.clock;

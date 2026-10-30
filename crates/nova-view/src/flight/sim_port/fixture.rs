@@ -87,7 +87,7 @@ pub struct FakeFlight {
     applied: Vec<FlightCommand>,
     answers: VecDeque<(Answer, Option<FlightFrame>, Vec<FlightEvent>)>,
     events: Vec<FlightEvent>,
-    reports: VecDeque<StepReport>,
+    reports: VecDeque<(StepReport, Option<FlightFrame>)>,
     stepped: Vec<(StepInput, u32)>,
     refused: Vec<PlayerCommand>,
     asks: Vec<FlightCommand>,
@@ -216,7 +216,13 @@ impl FakeFlight {
     /// Reports `report` for the next call of [`FlightSim::step`] not yet
     /// reported, whatever its step count.
     pub fn queue_report(&mut self, report: StepReport) {
-        self.reports.push_back(report);
+        self.reports.push_back((report, None));
+    }
+
+    /// Reports `report` as [`FakeFlight::queue_report`] does, and shows
+    /// `frame` from then on, as a step that changes the flight leaves it.
+    pub fn queue_report_showing(&mut self, report: StepReport, frame: FlightFrame) {
+        self.reports.push_back((report, Some(frame)));
     }
 
     /// The commands applied, in the order sent.
@@ -337,7 +343,12 @@ impl FlightSim for FakeFlight {
     fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
         self.stepped.push((*input, steps));
         match self.reports.pop_front() {
-            Some(report) => into.clone_from(&report),
+            Some((report, frame)) => {
+                into.clone_from(&report);
+                if let Some(frame) = frame {
+                    self.frame = frame;
+                }
+            }
             None => into.clear(),
         }
     }
@@ -1932,6 +1943,28 @@ mod tests {
             fake.inputs(),
             [held, StepInput::default(), StepInput::default()]
         );
+    }
+
+    #[test]
+    fn the_fake_shows_a_frame_queued_with_a_report_from_that_step_on() {
+        let mut fake = FakeFlight::new();
+        let shown = FlightFrame {
+            texts_queued: 7,
+            ..FlightFrame::default()
+        };
+        fake.queue_report_showing(StepReport::default(), shown.clone());
+        fake.queue_report(StepReport::default());
+        let filled = |fake: &FakeFlight| {
+            let mut frame = FlightFrame::default();
+            fake.frame(&mut frame);
+            frame
+        };
+        assert_eq!(filled(&fake), FlightFrame::default(), "before the step");
+        let mut report = StepReport::default();
+        fake.step(&StepInput::default(), 1, &mut report);
+        assert_eq!(filled(&fake), shown, "after it");
+        fake.step(&StepInput::default(), 1, &mut report);
+        assert_eq!(filled(&fake), shown, "a report with none keeps it");
     }
 
     #[test]
