@@ -19,7 +19,7 @@
 //! so a fight's diagnostic and a report can interleave in the app's log.
 //! Nothing the player sees depends on it.
 
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, LoadedDesc};
 use nova_sim::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
     PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
@@ -61,8 +61,8 @@ pub(super) struct Inbox {
     interface_loads: Vec<InterfaceLoad>,
     /// The nav mode as the last take-off began.
     takeoff_nav: Option<NavMode>,
-    /// The rescue's `dësc`.
-    rescue_desc: Option<i16>,
+    /// The rescue's `dësc`, as the flight loaded it.
+    rescue_desc: Option<LoadedDesc>,
     /// The message the last take-off left on.
     leave_message: Option<String>,
 }
@@ -203,8 +203,8 @@ impl Inbox {
         self.takeoff_nav.take()
     }
 
-    /// The rescue's `dësc`, once.
-    pub(super) fn take_rescue_desc(&mut self) -> Option<i16> {
+    /// The rescue's `dësc`, as the flight loaded it, once.
+    pub(super) fn take_rescue_desc(&mut self) -> Option<LoadedDesc> {
         self.rescue_desc.take()
     }
 
@@ -223,6 +223,14 @@ mod tests {
 
     use super::*;
     use crate::flight::sim_port::fixture::FakeFlight;
+
+    /// `dësc` `id` as the rescue loaded it.
+    fn rescued(id: i16) -> LoadedDesc {
+        LoadedDesc {
+            id,
+            text: Some("Rescued.".to_owned()),
+        }
+    }
 
     fn received(events: Vec<FlightEvent>) -> Inbox {
         let mut inbox = Inbox::default();
@@ -398,7 +406,7 @@ mod tests {
             }),
             FlightEvent::BoardLine(MissionBoardLine::Boarded),
             FlightEvent::TakeoffNav(NavMode::Off),
-            FlightEvent::RescueDesc(13999),
+            FlightEvent::RescueDesc(rescued(13999)),
             FlightEvent::LeaveMessage("first".to_owned()),
         ]);
         let later = Granted {
@@ -413,13 +421,13 @@ mod tests {
             FlightEvent::Grant(later),
             FlightEvent::BoardLine(refuelled.clone()),
             FlightEvent::TakeoffNav(nav),
-            FlightEvent::RescueDesc(14000),
+            FlightEvent::RescueDesc(rescued(14000)),
             FlightEvent::LeaveMessage("second".to_owned()),
         ]);
         assert_eq!(inbox.take_grant(), Some(later));
         assert_eq!(inbox.take_board_line(), Some(refuelled));
         assert_eq!(inbox.take_takeoff_nav(), Some(nav));
-        assert_eq!(inbox.take_rescue_desc(), Some(14000));
+        assert_eq!(inbox.take_rescue_desc(), Some(rescued(14000)));
         assert_eq!(inbox.take_leave_message().as_deref(), Some("second"));
         assert_eq!(inbox, Inbox::default(), "each once");
     }

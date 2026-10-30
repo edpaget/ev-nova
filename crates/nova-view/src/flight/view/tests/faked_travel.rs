@@ -899,7 +899,8 @@ fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_and_gives_its_
     });
     view.sim
         .queue_event(FlightEvent::Session(SessionEvent::SystemChanged));
-    view.sim.queue_event(FlightEvent::RescueDesc(13999));
+    view.sim
+        .queue_event(FlightEvent::RescueDesc(rescued(13999)));
     view.sim.set_frame(FlightFrame {
         system: SystemId(131),
         ships: vec![the_player_at(Vec2::new(50.0, 50.0), 90.0)],
@@ -912,7 +913,7 @@ fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_and_gives_its_
         "laid out there"
     );
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
-    assert_eq!(view.take_rescue_desc(), Some(13999));
+    assert_eq!(view.take_rescue_desc(), Some(rescued(13999)));
     assert_eq!(view.take_rescue_desc(), None, "once");
     let mut recentred = faked(FlightFrame {
         system: SystemId(131),

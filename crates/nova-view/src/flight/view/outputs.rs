@@ -88,10 +88,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The escape pod's rescue's `dësc`, once, after the rescue
-    /// ([`FlightEvent::RescueDesc`]): the router shows it over flight.
+    /// ([`FlightEvent::RescueDesc`]): as the flight loaded it, first in the
+    /// rescue (`_HandlePlayer` @0x68e90), its text taken in. The router
+    /// shows that text over flight without loading it again.
     ///
     /// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
-    pub fn take_rescue_desc(&mut self) -> Option<i16> {
+    pub fn take_rescue_desc(&mut self) -> Option<nova_sim::flight_frame::LoadedDesc> {
         self.drain().take_rescue_desc()
     }
 

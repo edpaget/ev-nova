@@ -868,3 +868,13 @@ fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> 
             _ => unreachable!(),
         })
 }
+
+/// `dësc` `id` as the rescue loaded it ([`FlightEvent::RescueDesc`]).
+///
+/// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
+fn rescued(id: i16) -> nova_sim::flight_frame::LoadedDesc {
+    nova_sim::flight_frame::LoadedDesc {
+        id,
+        text: Some("Rescued.".to_owned()),
+    }
+}

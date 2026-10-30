@@ -170,9 +170,9 @@ pub(super) struct Fate {
     /// Whether the pod countdown has run out and the rescue is due (see
     /// the `rescue` module); never saved.
     pub(super) rescue_due: bool,
-    /// Whether the rescue's dësc is still to show (see the `rescue`
+    /// The rescue's dësc, loaded and still to show (see the `rescue`
     /// module); never saved.
-    pub(super) rescue_desc_due: bool,
+    pub(super) rescue_desc: Option<crate::flight_frame::LoadedDesc>,
     /// Whether the player holds the eject chord, Command and the eject
     /// key together (see the `eject` module); never saved.
     pub(super) eject_held: bool,
@@ -270,7 +270,7 @@ impl PlayerShip {
                 player_exploded_this_tick: false,
                 pod_zeroed: false,
                 rescue_due: false,
-                rescue_desc_due: false,
+                rescue_desc: None,
                 eject_held: false,
                 self_destruct: crate::self_destruct::SelfDestruct::default(),
                 self_destruct_held: false,

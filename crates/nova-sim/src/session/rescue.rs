@@ -4,6 +4,17 @@
 //! tick, before the next frame is drawn and before its dësc shows, in the
 //! original's order:
 //!
+//! 0. **The dësc**, 13999 ([`RESCUE_DESC`]), is loaded first
+//!    (`_LoadDescription` @0x68e80-0x68e90): its conditional text and rank
+//!    tags read the state before any `OnAbort`, its movie is the last
+//!    loaded as they run (so a `STR#` text an `S` in one queues reads its
+//!    after-movie, @0xa1bb2), and the last loaded after the rescue is the
+//!    last `dësc` the abort scripts, the `OnPurchase` or the days loaded,
+//!    else 13999's. The original shows it next (`_ShowTextDialog`
+//!    @0x68eac), before the missions end, over a black screen; here the
+//!    text it loaded is due once ([`Session::take_rescue_desc`]), and the
+//!    view shows it without loading it again, before the texts the
+//!    missions' ends queued, which comes to the same frames.
 //! 1. **Missions.** Every active mission ends as `_AbortMission(slot, 1)`
 //!    ends it (@0x68efa-0x68f1f): its `OnAbort` runs and its special
 //!    ships are released, with no `CanAbort` refusal and no record
@@ -64,10 +75,6 @@
 //!     (@0x7525b-0x75291), which
 //!     rdm:phase/player-death/phase-13-resume-at-saved-stellar-system
 //!     owns.
-//! 11. **The dësc**, 13999 ([`RESCUE_DESC`]), is due once
-//!     ([`Session::take_rescue_desc`]); the original shows it before the
-//!     missions end (@0x68e80-0x68eac), over a black screen, which comes to
-//!     the same frame here.
 //!
 //! Left out, with no counterpart in the engine: the fades, paints and
 //! cursor calls (@0x68de3-0x68e7b, @0x68eb1-0x68eef, @0x691cb-0x69253),
@@ -114,6 +121,7 @@ use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::escape::{EscapeMap, RESCUE_DESC, escape_stellar, qualifies};
 use crate::flight::ShipState;
+use crate::flight_frame::LoadedDesc;
 use crate::geometry::Vec2;
 use crate::red_alert::RedAlert;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -202,6 +210,10 @@ impl Session {
             return false;
         }
         let save_due = self.out.save_due;
+        // 13999 is loaded (@0x68e80-0x68e90) and shown (@0x68eac) before
+        // anything else in the rescue: its conditional text reads the state
+        // before the `OnAbort`s, and it is the last loaded as they run.
+        let desc = self.load_rescue_desc(catalog, &mut &mut *chance);
         self.end_every_mission_for_rescue(&mut &mut *chance);
         // The escape search starts from +0x74 as the `OnAbort`s left it
         // (@0x68f24), before `_ResetPlayer` and the `OnPurchase`, whose
@@ -241,8 +253,25 @@ impl Session {
             .reset_records_for_rescue(&mut self.pilot, &self.statics);
         self.out.save_due = save_due;
         self.strict_play_save(catalog);
-        self.ship.fate.rescue_desc_due = true;
+        self.ship.fate.rescue_desc = Some(desc);
         true
+    }
+
+    /// Loads [`RESCUE_DESC`], read from `catalog`, as `_LoadDescription`
+    /// does (@0x68e90): its text taken in, none when it is missing.
+    fn load_rescue_desc(
+        &mut self,
+        catalog: &(impl PilotCatalog + ?Sized),
+        chance: &mut dyn Chance,
+    ) -> LoadedDesc {
+        let desc = catalog.desc_text(RESCUE_DESC);
+        let raw = desc.as_ref().map(|desc| desc.text.as_str());
+        let movie = desc.as_ref().and_then(|desc| desc.movie.as_ref());
+        let text = self.load_description(raw, movie, chance);
+        LoadedDesc {
+            id: RESCUE_DESC,
+            text: desc.is_some().then_some(text),
+        }
     }
 
     /// The Strict Play save that ends the rescue (@0x69292-0x692e3): with
@@ -268,8 +297,9 @@ impl Session {
         self.out.save_due = true;
     }
 
-    /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
-    pub(crate) fn take_rescue_desc(&mut self) -> Option<i16> {
+    /// The rescue's dësc, once: [`RESCUE_DESC`] as the rescue loaded it,
+    /// then none.
+    pub(crate) fn take_rescue_desc(&mut self) -> Option<LoadedDesc> {
         self.ship.take_rescue_desc()
     }
 
@@ -378,9 +408,10 @@ impl Session {
 }
 
 impl PlayerShip {
-    /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
-    fn take_rescue_desc(&mut self) -> Option<i16> {
-        std::mem::take(&mut self.fate.rescue_desc_due).then_some(RESCUE_DESC)
+    /// The rescue's dësc, once: [`RESCUE_DESC`] as the rescue loaded it,
+    /// then none.
+    fn take_rescue_desc(&mut self) -> Option<LoadedDesc> {
+        self.fate.rescue_desc.take()
     }
 
     /// The rescue's reserves: fuel and shield full, the armour as
@@ -873,7 +904,14 @@ mod tests {
         let mut session = due(&catalog);
         assert_eq!(session.take_rescue_desc(), None, "not before");
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
-        assert_eq!(session.take_rescue_desc(), Some(13999));
+        assert_eq!(
+            session.take_rescue_desc(),
+            Some(LoadedDesc {
+                id: 13999,
+                text: None,
+            }),
+            "missing from the catalog"
+        );
         assert_eq!(session.take_rescue_desc(), None, "once");
         assert!(!session.rescue_if_due(&catalog, &mut NeverFires), "once");
     }
@@ -1332,5 +1370,134 @@ mod tests {
         let resumed = Session::fly(&catalog, saved).expect("flies");
         assert_eq!(resumed.system(), SystemId(131));
         assert_eq!(crate::testkit::resumed_on(&resumed), Some(StellarId(140)));
+    }
+
+    // The rescue's dësc, loaded first (@0x68e90) and shown (@0x68eac)
+    // before the missions end (@0x68f0d).
+
+    /// [`rescuing`] with `dësc` 13999 reading `text`, its after-movie
+    /// "Rescue.mov", mission 130's `OnAbort` `on_abort`, and mission 141,
+    /// started by an `S`, briefed "Brief." with the after-movie
+    /// "Brief.mov" and carrying `tons` of food.
+    fn rescuing_with(text: Option<&str>, on_abort: &str, tons: i16) -> FakePilotCatalog {
+        use crate::catalog::{DescMovie, DescText, MissionId, MissionTexts, TextMovies};
+        let mut catalog = rescuing();
+        catalog.descs = text
+            .map(|text| {
+                (
+                    RESCUE_DESC,
+                    DescText {
+                        text: text.to_owned(),
+                        movie: DescMovie::from_desc("Rescue.mov", 0x0001),
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
+        catalog.missions[0].on_abort = Script::parse(on_abort);
+        catalog.missions.push(MissionRecord {
+            cargo_type: if tons > 0 { 0 } else { -1 },
+            cargo_qty: tons,
+            pickup_mode: 0,
+            avail_stel: -1,
+            ..mission(141)
+        });
+        catalog.mission_texts = vec![MissionTexts {
+            brief: Some("Brief.".to_owned()),
+            movies: TextMovies {
+                brief: DescMovie::from_desc("Brief.mov", 0x0001),
+                ..TextMovies::default()
+            },
+            ..MissionTexts::named(MissionId(141), "Started")
+        }];
+        catalog
+    }
+
+    /// [`due`] holding mission 130 in slot 0, the last `dësc` loaded
+    /// naming "Earlier.mov" as its after-movie.
+    fn due_holding(catalog: &FakePilotCatalog) -> Session {
+        let mut session = due(catalog);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(130, 0));
+        let earlier = crate::catalog::DescMovie::from_desc("Earlier.mov", 0x0001);
+        let _ = session.load_description(Some("Earlier."), earlier.as_ref(), &mut NeverFires);
+        session
+    }
+
+    fn film(file: &str) -> Option<crate::catalog::DescMovie> {
+        crate::catalog::DescMovie::from_desc(file, 0x0001)
+    }
+
+    #[test]
+    fn a_no_room_text_from_an_s_in_an_on_abort_reads_the_rescues_desc() {
+        let catalog = rescuing_with(Some("Rescued."), "S141", 1000);
+        let mut session = due_holding(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        let texts = session.out.take_texts_only();
+        let no_room: Vec<_> = texts
+            .iter()
+            .filter(|text| text.kind == crate::session::mission_screens::MissionTextKind::NoRoom)
+            .map(|text| text.movie.clone())
+            .collect();
+        assert_eq!(
+            no_room,
+            [film("Rescue.mov")],
+            "13999 is loaded (@0x68e90) before _AbortMission (@0x68f0d), so the \
+             STR# text's after-check reads it: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn after_a_rescue_whose_on_abort_starts_a_mission_the_last_loaded_is_its_brief() {
+        let catalog = rescuing_with(Some("Rescued."), "S141", 0);
+        let mut session = due_holding(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.run.loaded_movie, film("Brief.mov"));
+        assert_eq!(
+            session.take_rescue_desc(),
+            Some(LoadedDesc {
+                id: RESCUE_DESC,
+                text: Some("Rescued.".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_rescue_with_no_abort_text_leaves_its_own_desc_the_last_loaded() {
+        let catalog = rescuing_with(Some("Rescued."), "b22", 0);
+        let mut session = due_holding(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert!(session.control_bit(bit(22)), "the OnAbort ran");
+        assert_eq!(session.run.loaded_movie, film("Rescue.mov"));
+    }
+
+    #[test]
+    fn the_rescue_text_reads_its_conditional_text_before_the_abort_scripts() {
+        let catalog = rescuing_with(Some("{b7 \"set\" \"clear\"}"), "b7", 0);
+        let mut session = due_holding(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert!(session.control_bit(bit(7)), "the OnAbort ran");
+        assert_eq!(
+            session.take_rescue_desc().and_then(|desc| desc.text),
+            Some("clear".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_missing_rescue_desc_empties_the_movie_and_gives_no_text() {
+        let catalog = rescuing_with(None, "b22", 0);
+        let mut session = due_holding(&catalog);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.run.loaded_movie, None, "@0x71a5e");
+        assert_eq!(
+            session.take_rescue_desc(),
+            Some(LoadedDesc {
+                id: RESCUE_DESC,
+                text: None,
+            })
+        );
+        assert_eq!(*catalog.desc_reads.borrow(), [RESCUE_DESC], "read once");
     }
 }

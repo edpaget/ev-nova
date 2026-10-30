@@ -1318,7 +1318,11 @@ impl Session {
     /// the governments the last text left are kept. The `Flags` it leaves
     /// stale are never read, as every movie check tests the name first.
     /// A flight with no session loads one as [`Session::fresh_description`]
-    /// resolves it.
+    /// resolves it. Two the session loads itself, read from the catalog
+    /// at the original's point, so their texts are served without a second
+    /// load: the port's own as the landing settles, before the land checks
+    /// (see the `port_desc` module), and the rescue's first in the rescue,
+    /// before the missions end (see the `rescue` module).
     pub fn load_description(
         &mut self,
         raw: Option<&str>,

@@ -1356,6 +1356,18 @@ impl Answer {
     }
 }
 
+/// A `dësc` the session loaded itself at the original's point, as
+/// `_LoadDescription` loads one: what a screen shows of it without loading
+/// it again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedDesc {
+    /// The `dësc`'s ID.
+    pub id: i16,
+    /// Its text, taken in for the pilot as it was loaded; `None` when it
+    /// is missing or can't be read.
+    pub text: Option<String>,
+}
+
 /// Something the flight raised for the view to act on once: one of the
 /// session's one-shot outputs, drained in one stream by
 /// [`Session::drain_events`](crate::Session::drain_events), in the order
@@ -1403,8 +1415,9 @@ pub enum FlightEvent {
     InterfaceLoad(InterfaceLoad),
     /// The nav mode as the last take-off began, before its deselect.
     TakeoffNav(NavMode),
-    /// The escape pod's rescue's `dësc`.
-    RescueDesc(i16),
+    /// The escape pod's rescue's `dësc`, as the rescue loaded it first
+    /// (`_HandlePlayer` @0x68e90), before the missions ended.
+    RescueDesc(LoadedDesc),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
 }
