@@ -43,7 +43,11 @@ use crate::table::SoundTable;
 ///   ([`UiSound::IntroPicture`]) spends it, then plays like any event, and
 ///   the intro's text spends it.
 /// - Switching the app out ([`UiSound::SwitchedOut`]) fades the music and
-///   spends it, but only while it plays, whatever the sound setting.
+///   spends it, but only while it plays, whatever the sound setting. The
+///   fade takes 30 ticks a step, as the app is in the background
+///   ([`switched_out_music_fade`]); switching back in
+///   ([`UiSound::SwitchedIn`]) fades what is left of it at a tick a step
+///   ([`music_fade_left`]).
 /// - Entering play halts the main screen's four sounds
 ///   ([`UiSound::MainScreenSoundsHalted`]), whatever the sound setting.
 /// - The spaceport's ambient sound plays its cue the same way: over
@@ -78,6 +82,10 @@ pub struct AudioCore<A: Audio> {
     music: Music,
     /// Whether the engine loop has been started and not stopped since.
     loop_on: bool,
+    /// The music volume of the switched-out fade under way, from the
+    /// switch-out that started it ([`switched_out_music_fade`]) to the
+    /// switch-in that re-times its rest ([`music_fade_left`]).
+    switched_out_fade: Option<Volume>,
     /// A keyed click's second half: the `snd ` it waits on to end, then
     /// the cue it plays.
     keyed: Option<(SoundId, SoundCue)>,
@@ -101,6 +109,7 @@ impl<A: Audio> AudioCore<A> {
             thrusting: false,
             music: Music::Stopped,
             loop_on: false,
+            switched_out_fade: None,
             keyed: None,
         }
     }
@@ -266,6 +275,7 @@ impl<A: Audio> AudioCore<A> {
             }
             UiSound::MainScreenSoundsHalted => self.halt(&MAIN_SCREEN_SOUNDS),
             UiSound::SwitchedOut => self.switch_out(),
+            UiSound::SwitchedIn { away } => self.switch_in(away),
             sound => self.play_cue(sound.cue()),
         }
     }
@@ -385,11 +395,30 @@ impl<A: Audio> AudioCore<A> {
     /// The app was switched out: playing music fades and is spent, as
     /// `_SwitchedOut` pauses it only while `_introMusicMovie` is set
     /// (@0x4f390-0x4f3a0) and `_MusicThread` then stops it for good
-    /// (@0x61e4f, @0x61e5f). Music stopped, spent or not yet started is
-    /// left as it is.
+    /// (@0x61e4f, @0x61e5f), 30 times slower than another fade, as the
+    /// app is in the background ([`switched_out_music_fade`]). Music
+    /// stopped, spent or not yet started is left as it is.
     fn switch_out(&mut self) {
         if self.music == Music::Playing {
-            self.spend_music();
+            let volume = self.settings.music_volume;
+            self.audio
+                .run(AudioCommand::FadeOutMusic(switched_out_music_fade(volume)));
+            self.music = Music::Spent;
+            self.switched_out_fade = Some(volume);
+        }
+    }
+
+    /// The app came back after `away` in the background: the rest of a
+    /// switched-out fade still under way fades at a tick a step
+    /// ([`music_fade_left`]), replacing the fade's remaining duration
+    /// ([`AudioCommand::FadeOutMusic`]). With no such fade, nothing.
+    fn switch_in(&mut self, away: Duration) {
+        if let Some(rest) = self
+            .switched_out_fade
+            .take()
+            .and_then(|volume| music_fade_left(volume, away))
+        {
+            self.audio.run(AudioCommand::FadeOutMusic(rest));
         }
     }
 
@@ -550,10 +579,53 @@ fn is_overlay(showing: Showing) -> bool {
 /// How long the music at `volume` fades out over: 4 ticks for each
 /// Preferences level, at the music level nearest `volume` (32 ticks at the
 /// top level, 8). `_StopIntroMusic(1)` @0x61c82 starts at level x 32 and takes
-/// 8 off a tick until it reaches 0, so the fade lasts level x 4 ticks.
+/// 8 off a tick until it reaches 0, so the fade lasts level x 4 ticks. In
+/// the background each step takes 30 ticks ([`switched_out_music_fade`]).
 #[must_use]
 pub fn music_fade(volume: Volume) -> Duration {
     Duration::from_secs(4 * u64::from(music_volume_level(volume))) / 60
+}
+
+/// How many Mac ticks a step of the faded stop sleeps while the app is
+/// in the background: `_StopIntroMusic`'s wait (@0x61cfa-0x61d23) calls
+/// `WaitNextEvent` with an empty mask, sleeping 30 ticks when
+/// `_gameLoaded` and `_inBackground` are set, else 1.
+const BACKGROUND_STEP_TICKS: u64 = 30;
+
+/// How long the music at `volume` fades out over when the app is switched
+/// out: [`music_fade`]'s level x 4 steps, each 30 ticks long, so level x 2
+/// seconds. `_SwitchedOut` sets `_inBackground` (@0x4f388) before
+/// `_MusicThread` (@0x61e4f) runs the faded stop, so each step sleeps
+/// [`BACKGROUND_STEP_TICKS`].
+#[must_use]
+pub fn switched_out_music_fade(volume: Volume) -> Duration {
+    Duration::from_secs(fade_steps(volume) * BACKGROUND_STEP_TICKS) / 60
+}
+
+/// What is left of the switched-out fade of the music at `volume` once
+/// the app comes back after `away`, or `None` once it is over: the step
+/// under way finishes its 30-tick sleep (its empty mask lets no event
+/// wake it), and every step after takes a tick, as `_SwitchedIn` has
+/// cleared `_inBackground` (@0x513c4).
+#[must_use]
+pub fn music_fade_left(volume: Volume, away: Duration) -> Option<Duration> {
+    let step = Duration::from_secs(BACKGROUND_STEP_TICKS) / 60;
+    let done = u64::try_from(away.as_nanos() / step.as_nanos()).unwrap_or(u64::MAX);
+    let steps = fade_steps(volume);
+    if done >= steps {
+        return None;
+    }
+    let under_way =
+        Duration::from_nanos(u64::try_from(away.as_nanos() % step.as_nanos()).unwrap_or_default());
+    let finishing = step.saturating_sub(under_way);
+    Some(finishing + Duration::from_secs(steps - done - 1) / 60)
+}
+
+/// How many steps the faded stop of the music at `volume` takes: it
+/// starts at level x 32 and takes 8 off a step (`_StopIntroMusic`
+/// @0x61cb4-0x61d3a).
+fn fade_steps(volume: Volume) -> u64 {
+    4 * u64::from(music_volume_level(volume))
 }
 
 /// Whether music plays on `scene`: the main menu, and the intro's
@@ -1439,11 +1511,108 @@ mod tests {
         core.update(Some(Showing::MainMenu), &[]);
         drain(&log);
         core.update(None, &[SWITCHED_OUT]);
-        assert_eq!(drain(&log), [fade_out(MUSIC)], "faded, nothing else");
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::FadeOutMusic(switched_out_music_fade(
+                Volume::new(MUSIC)
+            ))],
+            "faded 30 times slower, nothing else"
+        );
         core.update(Some(Showing::MainMenu), &[]);
         core.set_music(false);
         core.set_music(true);
         assert_eq!(drain(&log), [], "spent for good");
+    }
+
+    fn switched_in(away: Duration) -> Sound {
+        Sound::Ui(UiSound::SwitchedIn { away })
+    }
+
+    /// `_SwitchedIn` clears `_inBackground` (@0x513c4), so the faded
+    /// stop's remaining steps wait a tick each again
+    /// (`_StopIntroMusic` @0x61cfa-0x61d23): the rest is faded over
+    /// again, once.
+    #[test]
+    fn switching_in_after_a_switch_out_fade_fades_the_rest_once() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        core.update(None, &[SWITCHED_OUT]);
+        drain(&log);
+        let away = Duration::from_secs(1);
+        core.update(None, &[switched_in(away)]);
+        let rest = music_fade_left(Volume::new(MUSIC), away).expect("16 steps, 2 done");
+        assert_eq!(drain(&log), [AudioCommand::FadeOutMusic(rest)]);
+        core.update(None, &[switched_in(away)]);
+        assert_eq!(drain(&log), [], "once");
+    }
+
+    #[test]
+    fn switching_in_with_no_switch_out_fade_sends_nothing() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(None, &[switched_in(Duration::from_secs(1))]);
+        assert_eq!(drain(&log), [], "the music plays on");
+        core.update(Some(Showing::Flight), &[]);
+        drain(&log);
+        core.update(None, &[SWITCHED_OUT, switched_in(Duration::ZERO)]);
+        assert_eq!(drain(&log), [], "spent by the entry's own fade");
+    }
+
+    #[test]
+    fn switching_in_once_the_fade_is_over_sends_nothing() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        core.update(None, &[SWITCHED_OUT]);
+        drain(&log);
+        core.update(None, &[switched_in(Duration::from_secs(8))]);
+        assert_eq!(drain(&log), [], "16 steps of half a second");
+        core.update(None, &[switched_in(Duration::ZERO)]);
+        assert_eq!(drain(&log), [], "the fade forgotten");
+    }
+
+    /// The switched-out fade takes 30 ticks a step: `_StopIntroMusic`'s
+    /// `WaitNextEvent` sleeps 30 ticks in the background (@0x61cfa).
+    #[test]
+    fn the_switched_out_fade_lasts_120_ticks_a_preferences_level() {
+        use crate::settings::music_level_volume;
+        let ticks = |n: u64| Duration::from_secs(n) / 60;
+        assert_eq!(
+            switched_out_music_fade(music_level_volume(8)),
+            ticks(32 * 30)
+        );
+        assert_eq!(
+            switched_out_music_fade(music_level_volume(1)),
+            ticks(4 * 30)
+        );
+        assert_eq!(switched_out_music_fade(Volume::SILENT), Duration::ZERO);
+    }
+
+    /// What is left of the switched-out fade after `away`: the step under
+    /// way finishes its 30-tick sleep, the rest take a tick each.
+    #[test]
+    fn the_fade_left_is_the_step_under_way_then_a_tick_a_step() {
+        use crate::settings::music_level_volume;
+        let top = music_level_volume(8);
+        let tick = |n: u64| Duration::from_secs(n) / 60;
+        assert_eq!(
+            music_fade_left(top, Duration::ZERO),
+            Some(tick(30) + tick(31)),
+            "the first step's whole sleep, then 31 steps"
+        );
+        assert_eq!(
+            music_fade_left(top, Duration::from_millis(2250)),
+            Some(Duration::from_millis(250) + tick(27)),
+            "four steps done, the fifth half way"
+        );
+        assert_eq!(
+            music_fade_left(top, Duration::from_millis(15_900)),
+            Some(Duration::from_millis(100)),
+            "the last step"
+        );
+        assert_eq!(music_fade_left(top, Duration::from_secs(16)), None);
+        assert_eq!(music_fade_left(top, Duration::from_secs(60)), None);
+        assert_eq!(music_fade_left(Volume::SILENT, Duration::ZERO), None);
     }
 
     /// The original touches the music only while `_introMusicMovie` is
@@ -1459,6 +1628,8 @@ mod tests {
         drain(&log);
         core.update(None, &[SWITCHED_OUT]);
         assert_eq!(drain(&log), [], "set off");
+        core.update(None, &[switched_in(Duration::ZERO)]);
+        assert_eq!(drain(&log), [], "nothing to fade on the switch-in");
         core.set_music(true);
         assert_eq!(drain(&log), [start_music(MUSIC)], "on again, it starts");
     }
