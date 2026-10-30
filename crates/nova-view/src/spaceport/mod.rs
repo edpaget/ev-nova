@@ -77,6 +77,6 @@ pub use offer::{OfferChoice, OfferDialog};
 pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use port_map::PortMap;
 pub use service::ServiceScreen;
-pub use shipyard::{ShipBaseImages, ShipOrder, ShipyardCatalog, ShipyardScreen};
+pub use shipyard::{ShipBaseImages, ShipMovieFiles, ShipOrder, ShipyardCatalog, ShipyardScreen};
 pub use trade::{ListColors, ListLooks, TradeScreen};
 pub use view::{PortDialog, SpaceportView};

@@ -4138,6 +4138,13 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
+    /// Ship 128 names "Ship.mov", which plays only once movies are given.
+    impl crate::spaceport::shipyard::ShipMovieFiles for FakePort {
+        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
+            vec![(ShipId(128), "Ship.mov".to_owned())]
+        }
+    }
+
     impl crate::ui::catalog::DescriptionGraphics for FakePort {
         fn description_graphic(&self, _id: i16) -> Option<i16> {
             None

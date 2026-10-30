@@ -22,7 +22,9 @@ use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
 use nova_view::spaceport::trade::{
     BACKGROUND as TRADE_BACKGROUND, BUY_ITEM, DONE_ITEM, SELL_ITEM, TRADE_DIALOG,
 };
-use nova_view::spaceport::{ListColors, ListLooks, SpaceportView, StellarId, TradeScreen};
+use nova_view::spaceport::{
+    ListColors, ListLooks, ShipMovieFiles, SpaceportView, StellarId, TradeScreen,
+};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::DialogResources;
@@ -278,6 +280,18 @@ fn the_stock_list_colours_are_colr_128s() {
     for (dir, _) in builds() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         assert_eq!(data.list_colors(), ListColors::STOCK);
+    }
+}
+
+/// No stock `shïp` names a shipyard movie: each `MovieFile` (offset
+/// 0x6AE, which `_LoadObjectData` copies into `_shipMovieFilenames`,
+/// @0x7b0ce-0x7b136) is empty, so the shipyard and the hire screen loop
+/// none (`_ShipyardFilter` @0x60858-0x60866, @0x60c77-0x60c85).
+#[test]
+fn no_stock_ship_names_a_shipyard_movie() {
+    for (dir, _) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        assert_eq!(data.ship_movie_files(), []);
     }
 }
 

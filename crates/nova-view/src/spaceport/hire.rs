@@ -632,6 +632,7 @@ mod tests {
     use crate::spaceport::grid::TEXT_COLOR;
     use crate::spaceport::shipyard::{
         INFO_BACKGROUND, PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND, ShipBaseImages,
+        ShipMovieFiles,
     };
     use crate::text::fixture::MonoMetrics;
     use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
@@ -699,6 +700,8 @@ mod tests {
     struct FakeArt {
         /// Each `dësc` with a `Graphic`, and it.
         graphics: Vec<(i16, i16)>,
+        /// Each ship naming a movie, and its file.
+        movies: Vec<(ShipId, String)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -735,6 +738,12 @@ mod tests {
         }
     }
 
+    impl ShipMovieFiles for FakeArt {
+        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
+            self.movies.clone()
+        }
+    }
+
     impl DescriptionGraphics for FakeArt {
         fn description_graphic(&self, id: i16) -> Option<i16> {
             self.asked.borrow_mut().push(format!("graphic {id}"));
@@ -758,6 +767,7 @@ mod tests {
     fn art_with(graphics: Vec<(i16, i16)>) -> Rc<FakeArt> {
         Rc::new(FakeArt {
             graphics,
+            movies: Vec::new(),
             asked: RefCell::default(),
         })
     }

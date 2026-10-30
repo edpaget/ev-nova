@@ -675,14 +675,31 @@ pub trait ShipBaseImages {
     fn ship_base_images(&self) -> Vec<(ShipId, i16)>;
 }
 
+/// What the shipyard and the hire screen read to loop a ship's movie in
+/// the picture item: each ship's `MovieFile`, as `_LoadObjectData` copies
+/// it into `_shipMovieFilenames` (@0x7b0ce-0x7b136).
+pub trait ShipMovieFiles {
+    /// Each readable `shïp` whose `MovieFile` isn't empty, with that bare
+    /// file name; an empty one names no movie (its Pascal length byte,
+    /// @0x60858-0x60866), and an unreadable one is left out. Read once,
+    /// as a screen opens.
+    fn ship_movie_files(&self) -> Vec<(ShipId, String)>;
+}
+
 /// What the shipyard reads about a ship: its description, through
 /// [`DescriptionSource`], the graphic it names, through
 /// [`DescriptionGraphics`], whether a picture exists, through
-/// [`SpaceportCatalog::picture_exists`], and the ships' base images,
-/// through [`ShipBaseImages`], and the grid's colours, through
-/// [`GridLooks`]. Anything that is all five is one.
+/// [`SpaceportCatalog::picture_exists`], the ships' base images,
+/// through [`ShipBaseImages`], their movies, through [`ShipMovieFiles`],
+/// and the grid's colours, through [`GridLooks`]. Anything that is all
+/// six is one.
 pub trait ShipyardCatalog:
-    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages + GridLooks
+    SpaceportCatalog
+    + DescriptionSource
+    + DescriptionGraphics
+    + ShipBaseImages
+    + ShipMovieFiles
+    + GridLooks
 {
 }
 
@@ -691,6 +708,7 @@ impl<
         + DescriptionSource
         + DescriptionGraphics
         + ShipBaseImages
+        + ShipMovieFiles
         + GridLooks
         + ?Sized,
 > ShipyardCatalog for T
@@ -1871,6 +1889,8 @@ mod tests {
         bases: Vec<(ShipId, i16)>,
         /// Each `dësc` with a `Graphic`, and it.
         graphics: Vec<(i16, i16)>,
+        /// Each ship naming a movie, and its file.
+        movies: Vec<(ShipId, String)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -1909,6 +1929,13 @@ mod tests {
         }
     }
 
+    impl ShipMovieFiles for FakeArt {
+        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
+            self.asked.borrow_mut().push("movies".to_owned());
+            self.movies.clone()
+        }
+    }
+
     impl DescriptionGraphics for FakeArt {
         fn description_graphic(&self, id: i16) -> Option<i16> {
             self.asked.borrow_mut().push(format!("graphic {id}"));
@@ -1939,6 +1966,7 @@ mod tests {
                 (ShipId(131), 1000),
             ],
             graphics,
+            movies: Vec::new(),
             asked: RefCell::default(),
         })
     }
@@ -2690,6 +2718,7 @@ mod tests {
             pictures: vec![5000, 5002, 5004],
             bases: vec![(ShipId(128), 1000), (ShipId(132), 1004)],
             graphics: Vec::new(),
+            movies: Vec::new(),
             asked: RefCell::default(),
         });
         let mut screen = screen_with(shipyard(), &art);
