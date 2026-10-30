@@ -382,7 +382,6 @@ impl<A: Audio> AudioCore<A> {
         }
     }
 
-    /// Spends the music for good, fading it out if it is playing.
     /// The app was switched out: playing music fades and is spent, as
     /// `_SwitchedOut` pauses it only while `_introMusicMovie` is set
     /// (@0x4f390-0x4f3a0) and `_MusicThread` then stops it for good
@@ -394,6 +393,7 @@ impl<A: Audio> AudioCore<A> {
         }
     }
 
+    /// Spends the music for good, fading it out if it is playing.
     fn spend_music(&mut self) {
         if self.music == Music::Playing {
             self.audio.run(AudioCommand::FadeOutMusic(music_fade(
