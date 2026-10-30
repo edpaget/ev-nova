@@ -36,17 +36,17 @@
 //! `_FadeScreenIn` @0x55edb, and nothing in the modal dialog fades the
 //! screen out again. It is not built.
 //!
-//! The fade-in is drawn in the dialogs' own 1024 x 768 frame, as a
-//! cinematic movie's window is: over a widened flight view its sides are
-//! left uncovered, as the movie's are
-//! (rdm:phase/movies/phase-8-cinematic-movie-widened).
+//! The fade-in is drawn from the dialogs' own 1024 x 768 frame over the
+//! whole view that frame is centred in (the [`Movies`](crate::movie::Movies)'
+//! shared view), as a cinematic movie's window is: over a widened flight
+//! view it covers the view's sides too, as `_FadeScreenIn` fades the whole
+//! display.
 
 use std::time::Duration;
 
 use crate::draw::DrawList;
-use crate::fade::{DEATH_FADE_FOR, ScreenFade};
+use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view_around_frame};
 use crate::input::Input;
-use crate::system::camera::VIEW_SIZE;
 
 /// How long a text on a faded screen takes to fade in from black: the
 /// 1.0 s of `_FadeScreenIn` (@0x542d), synchronous.
@@ -123,10 +123,12 @@ impl FadedScreen {
         std::mem::take(&mut self.faded_in)
     }
 
-    /// Draws the fade-in from black, while it runs, over the text.
-    pub(crate) fn draw(&self, list: &mut DrawList) {
+    /// Draws the fade-in from black, while it runs, over the text: over
+    /// the whole of a view `view` in size, the text's 1024 x 768 frame
+    /// centred in it, as `_FadeScreenIn` fades the whole display.
+    pub(crate) fn draw(&self, list: &mut DrawList, view: (f32, f32)) {
         if let Some(fade) = &self.fade_in {
-            fade.draw(list, VIEW_SIZE);
+            fade.draw_over(list, whole_view_around_frame(view));
         }
     }
 }
@@ -134,7 +136,11 @@ impl FadedScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::Color;
+    use crate::draw::fill_rect;
+    use crate::geometry::{Bounds, Point};
     use crate::input::Key;
+    use crate::system::camera::VIEW_SIZE;
 
     #[test]
     fn it_fades_in_only_once_faded_and_tells_it_once() {
@@ -167,8 +173,32 @@ mod tests {
         assert_eq!(screen.tick(TEXT_FADE_IN_FOR / 2), Some(vec![enter]));
         assert!(!screen.fading_in());
         let mut list = DrawList::new();
-        screen.draw(&mut list);
+        screen.draw(&mut list, VIEW_SIZE);
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn the_fade_in_covers_the_view_it_is_given() {
+        let mut screen = FadedScreen::default();
+        screen.fade();
+        screen.show_text();
+        for (view, cover) in [
+            (
+                (1365.0, 768.0),
+                Bounds::at(Point::new(-170.0, 0.0), 1365.0, 768.0),
+            ),
+            (VIEW_SIZE, Bounds::at(Point::new(0.0, 0.0), 1024.0, 768.0)),
+        ] {
+            let mut list = DrawList::new();
+            screen.draw(&mut list, view);
+            let mut expected = DrawList::new();
+            fill_rect(&mut expected, cover, Color::BLACK);
+            assert_eq!(
+                list.iter().collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>(),
+                "{view:?}"
+            );
+        }
     }
 
     #[test]

@@ -11,7 +11,10 @@
 //!   starts. As it closes, the screen fades out again (@0x55eb8), the
 //!   cursor shows (@0x55ebd), the window goes (@0x55ec5-0x55ecd) and the
 //!   screen fades in on what is beneath (@0x55edb). Each fade takes 1.0 s
-//!   and is synchronous, so the movie does not run during one.
+//!   and is synchronous, so the movie does not run during one. The window
+//!   is the main window's port rect (`_GetCWindowPortRect` @0x55b37), so
+//!   over a widened view it and its fades cover the whole view, and the
+//!   frame is fitted to that view, not to 1024 x 768.
 //! - **Plain**: no fade, and the window is the movie's own box, painted
 //!   black, centred on the main window (@0x55b43, `_CenterWindow`
 //!   @0x55ba2).
@@ -64,6 +67,7 @@ use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, MouseButton};
 use crate::system::camera::VIEW_SIZE;
+use crate::view_shape::classic_offset;
 
 /// A movie file's frames: opened, decoded and drawn (`NewMovieFromDataRef`,
 /// `MoviesTask`). It decides nothing of how the original plays a movie.
@@ -94,11 +98,17 @@ pub trait MoviePlayer {
 /// an offer's movie shown over the shipyard leaves the loop alone. A
 /// [`MoviePlayer`] plays one movie at a time, so the loop plays through a
 /// player of its own ([`Movies::looping`]), under the same preference.
+///
+/// Clones share the view a movie plays in too ([`Movies::set_view`]): the
+/// size of the view the main window shows now, which a cinematic movie's
+/// window and fades cover.
 #[derive(Clone)]
 pub struct Movies {
     player: Option<Rc<dyn MoviePlayer>>,
     looping: Option<Rc<dyn MoviePlayer>>,
     on: Rc<Cell<bool>>,
+    /// The view the main window shows, shared by every clone.
+    view: Rc<Cell<(f32, f32)>>,
 }
 
 impl std::fmt::Debug for Movies {
@@ -107,6 +117,7 @@ impl std::fmt::Debug for Movies {
             .field("player", &self.player.is_some())
             .field("looping", &self.looping.is_some())
             .field("on", &self.on.get())
+            .field("view", &self.view.get())
             .finish()
     }
 }
@@ -125,6 +136,7 @@ impl Movies {
             player: Some(player),
             looping: None,
             on: Rc::new(Cell::new(on)),
+            view: Rc::new(Cell::new(VIEW_SIZE)),
         }
     }
 
@@ -135,6 +147,7 @@ impl Movies {
             player: None,
             looping: None,
             on: Rc::new(Cell::new(false)),
+            view: Rc::new(Cell::new(VIEW_SIZE)),
         }
     }
 
@@ -178,20 +191,37 @@ impl Movies {
         self.on.get() && self.player.is_some()
     }
 
-    /// A stage playing `movie`, when movies are on.
+    /// Sets the size of the view the main window shows now, for every
+    /// clone: Nova's 1024 x 768, or flight's widened view. A holder's
+    /// 1024 x 768 frame sits centred in it,
+    /// [`classic_offset`] to the right.
+    /// The game's edge writes it as the screen it shows changes shape.
+    pub fn set_view(&self, view: (f32, f32)) {
+        self.view.set(view);
+    }
+
+    /// The size of the view the main window shows now: Nova's 1024 x 768
+    /// until [`Movies::set_view`] says otherwise.
+    #[must_use]
+    pub fn view(&self) -> (f32, f32) {
+        self.view.get()
+    }
+
+    /// A stage playing `movie`, when movies are on, in the shared view
+    /// ([`Movies::view`]) as it is when it draws.
     #[must_use]
     pub fn stage(&self, movie: &DescMovie) -> Option<MovieStage> {
         let player = self.player.as_ref().filter(|_| self.on.get())?;
-        Some(MovieStage::new(movie.clone(), Rc::clone(player)))
+        Some(MovieStage {
+            view: Rc::clone(&self.view),
+            ..MovieStage::new(movie.clone(), Rc::clone(player))
+        })
     }
 }
 
 /// How long each of a cinematic movie's fades takes: the 1.0 s of
 /// `_FadeScreenOut` and `_FadeScreenIn` (@0x5399, @0x542d).
 pub const MOVIE_FADE_FOR: Duration = DEATH_FADE_FOR;
-
-/// The main window a movie is placed in: the whole screen.
-const MAIN_WINDOW: (i32, i32) = (VIEW_SIZE.0 as i32, VIEW_SIZE.1 as i32);
 
 /// Where a movie stands.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -221,10 +251,10 @@ pub struct MovieStage {
     movie: DescMovie,
     player: Rc<dyn MoviePlayer>,
     phase: Phase,
-    /// Where the window is, black.
-    window: Bounds,
-    /// Where the frames are drawn.
-    frame: Bounds,
+    /// The movie's box, doubled if it is double size; set as it begins.
+    size: (i32, i32),
+    /// The view it plays in, shared with the [`Movies`] that made it.
+    view: Rc<Cell<(f32, f32)>>,
     /// The input that stays queued for what comes next.
     replay: Vec<Input>,
     /// Whether the player started it.
@@ -272,10 +302,19 @@ fn bounds((x, y, width, height): (i32, i32, i32, i32)) -> Bounds {
     Bounds::at(Point::new(x as f32, y as f32), width as f32, height as f32)
 }
 
-/// The full screen, which the cinematic window and its fades cover.
-fn screen() -> Bounds {
-    bounds((0, 0, MAIN_WINDOW.0, MAIN_WINDOW.1))
+/// The whole of a view `view` in size, in the coordinates of the 1024 x
+/// 768 frame centred in it: left, top, width and height. The main window a
+/// cinematic movie covers.
+#[allow(clippy::cast_possible_truncation)]
+fn cover(view: (f32, f32)) -> (i32, i32, i32, i32) {
+    let offset = classic_offset(view.0) as i32;
+    (-offset, 0, view.0 as i32, view.1 as i32)
 }
+
+/// The classic 1024 x 768 main window, which a plain movie's box is
+/// centred on.
+#[allow(clippy::cast_possible_truncation)]
+const CLASSIC: (i32, i32, i32, i32) = (0, 0, VIEW_SIZE.0 as i32, VIEW_SIZE.1 as i32);
 
 impl MovieStage {
     /// `movie`, played through `player` once it begins.
@@ -285,8 +324,8 @@ impl MovieStage {
             movie,
             player,
             phase: Phase::Waiting,
-            window: Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0),
-            frame: Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0),
+            size: (0, 0),
+            view: Rc::new(Cell::new(VIEW_SIZE)),
             replay: Vec::new(),
             started: false,
         }
@@ -338,20 +377,11 @@ impl MovieStage {
             i32::try_from(width).unwrap_or(i32::MAX / 4),
             i32::try_from(height).unwrap_or(i32::MAX / 4),
         );
-        let size = if self.movie.double_size {
+        self.size = if self.movie.double_size {
             (2 * natural.0 + 1, 2 * natural.1 + 1)
         } else {
             natural
         };
-        let main = (0, 0, MAIN_WINDOW.0, MAIN_WINDOW.1);
-        let window = if self.movie.cinematic {
-            main
-        } else {
-            centred(main, size)
-        };
-        let frame = centred(window, fitted(size, (window.2, window.3)));
-        self.window = bounds(window);
-        self.frame = bounds(frame);
         self.started = true;
         self.phase = match (self.movie.cinematic, faded) {
             (true, false) => Phase::FadingOut(ScreenFade::to_black(MOVIE_FADE_FOR)),
@@ -468,33 +498,51 @@ impl MovieStage {
         }
     }
 
+    /// Where its black window and its frame are, in the view as it is now:
+    /// a cinematic movie's window is the whole view, a plain one's its box
+    /// centred on the 1024 x 768 main frame, and the frame is the box
+    /// fitted to the window and centred in it.
+    fn placed(&self) -> (Bounds, Bounds) {
+        let window = if self.movie.cinematic {
+            cover(self.view.get())
+        } else {
+            centred(CLASSIC, self.size)
+        };
+        let frame = centred(window, fitted(self.size, (window.2, window.3)));
+        (bounds(window), bounds(frame))
+    }
+
     /// What it shows over what is beneath: the fade out over it; the
     /// black window, and the frame in it, while the movie runs or stops;
     /// the fades over them, and the last fade over what is beneath again.
-    /// All of it in Nova's 1024 x 768 main window: over a widened flight
-    /// view it is drawn centred, the view's sides uncovered (filed as
-    /// rdm:phase/display-modes-fidelity/phase-3-cinematic-movie-widened).
+    /// It draws in the coordinates of Nova's 1024 x 768 main frame. A
+    /// cinematic movie's window and its fades cover the whole view that
+    /// frame is centred in ([`Movies::view`]), as the original's window
+    /// covers its main window, widened or not (@0x55b37); a plain movie's
+    /// box is centred on the frame, which the frame's offset puts where
+    /// `_CenterWindow` puts it in a widened window.
     pub fn draw(&self, list: &mut DrawList) {
-        let window = (MAIN_WINDOW.0 as f32, MAIN_WINDOW.1 as f32);
+        let whole = bounds(cover(self.view.get()));
         match self.phase {
             Phase::Waiting | Phase::Ended => {}
-            Phase::FadingOut(fade) | Phase::ClosingIn(fade) => fade.draw(list, window),
+            Phase::FadingOut(fade) | Phase::ClosingIn(fade) => fade.draw_over(list, whole),
             Phase::FadingIn(fade) => {
-                fill_rect(list, screen(), Color::BLACK);
-                fade.draw(list, window);
+                fill_rect(list, whole, Color::BLACK);
+                fade.draw_over(list, whole);
             }
             Phase::Playing => self.draw_movie(list),
             Phase::ClosingOut(fade) => {
                 self.draw_movie(list);
-                fade.draw(list, window);
+                fade.draw_over(list, whole);
             }
         }
     }
 
     /// The black window, and the frame in it.
     fn draw_movie(&self, list: &mut DrawList) {
-        fill_rect(list, self.window, Color::BLACK);
-        self.player.draw_frame(self.frame, list);
+        let (window, frame) = self.placed();
+        fill_rect(list, window, Color::BLACK);
+        self.player.draw_frame(frame, list);
     }
 }
 
@@ -1040,7 +1088,7 @@ mod tests {
         assert!(none.stage(&movie(0)).is_none());
         assert_eq!(
             format!("{none:?}"),
-            "Movies { player: false, looping: false, on: true }"
+            "Movies { player: false, looping: false, on: true, view: (1024.0, 768.0) }"
         );
     }
 
@@ -1071,7 +1119,7 @@ mod tests {
         assert!(movies.looping().is_some());
         assert_eq!(
             format!("{movies:?}"),
-            "Movies { player: true, looping: true, on: true }"
+            "Movies { player: true, looping: true, on: true, view: (1024.0, 768.0) }"
         );
     }
 
@@ -1098,6 +1146,163 @@ mod tests {
         let late = Movies::none().with_player(Rc::clone(&other) as Rc<dyn MoviePlayer>);
         late.set_on(true);
         assert!(late.on(), "a player given to none plays");
+    }
+
+    #[test]
+    fn a_movies_view_is_classic_until_set_and_shared_by_every_clone() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true);
+        assert_eq!(movies.view(), VIEW_SIZE);
+        assert_eq!(Movies::none().view(), VIEW_SIZE);
+        assert_eq!(Movies::default().view(), VIEW_SIZE);
+        let other = movies.clone();
+        let swapped = movies
+            .clone()
+            .with_player(Rc::clone(&player) as Rc<dyn MoviePlayer>);
+        let looped = movies
+            .clone()
+            .with_looping_player(Rc::clone(&player) as Rc<dyn MoviePlayer>);
+        other.set_view((1365.0, 768.0));
+        for holder in [&movies, &other, &swapped, &looped] {
+            assert_eq!(holder.view(), (1365.0, 768.0));
+        }
+        assert_eq!(
+            format!("{movies:?}"),
+            "Movies { player: true, looping: false, on: true, view: (1365.0, 768.0) }"
+        );
+    }
+
+    /// A stage playing a movie of `flags` through `player`, made by
+    /// `Movies` whose view is `view`.
+    fn staged_in(
+        player: &Rc<MockMoviePlayer>,
+        flags: u16,
+        view: (f32, f32),
+    ) -> (Movies, MovieStage) {
+        let movies = Movies::new(Rc::clone(player) as Rc<dyn MoviePlayer>, true);
+        movies.set_view(view);
+        let stage = movies.stage(&movie(flags)).expect("on");
+        (movies, stage)
+    }
+
+    #[test]
+    fn a_cinematic_movie_in_a_widened_view_fades_and_blacks_out_the_whole_view() {
+        for (width, cover) in [
+            (1365.0, rect(-170.0, 0.0, 1365.0, 768.0)),
+            (1366.0, rect(-171.0, 0.0, 1366.0, 768.0)),
+        ] {
+            let player = MockMoviePlayer::playing((160, 120), 1);
+            let (_movies, mut stage) = staged_in(&player, 0x0004, (width, 768.0));
+            stage.begin();
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::rgba(0, 0, 0, 128))],
+                "{width}: fading out over the whole view"
+            );
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::BLACK), (cover, Color::BLACK)],
+                "{width}: the black window under the fade in"
+            );
+            run(&mut stage, MOVIE_FADE_FOR);
+            assert_eq!(fills(&stage), [(cover, Color::BLACK)], "{width}: playing");
+            assert_eq!(
+                frames(&stage),
+                [rect(432.0, 324.0, 160.0, 120.0)],
+                "{width}: the frame centred in the view, each half truncated"
+            );
+            stage.tick(TICK);
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::BLACK), (cover, Color::rgba(0, 0, 0, 128))],
+                "{width}: closing out"
+            );
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::BLACK)],
+                "{width}: closing in"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cinematic_movies_frame_is_centred_in_the_whole_view() {
+        let player = MockMoviePlayer::playing((161, 121), 1);
+        let (_movies, mut stage) = staged_in(&player, 0x0004, (1367.0, 768.0));
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(
+            frames(&stage),
+            [rect(-171.0 + (683.0 - 80.0), 384.0 - 60.0, 161.0, 121.0)],
+            "_CenterRect over the view: −offset + (W/2 − w/2), each half truncated"
+        );
+    }
+
+    #[test]
+    fn a_cinematic_movie_wider_than_1024_plays_unscaled_in_a_view_wide_enough() {
+        let player = MockMoviePlayer::playing((1200, 600), 3);
+        let (_movies, mut stage) = staged_in(&player, 0x0004, (1365.0, 768.0));
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(
+            frames(&stage),
+            [rect(-88.0, 84.0, 1200.0, 600.0)],
+            "fitted to the whole view (@0x55cb8-0x55d5d), so not scaled"
+        );
+        let player = MockMoviePlayer::playing((1200, 600), 3);
+        let (_movies, mut stage) = staged_in(&player, 0x0004, VIEW_SIZE);
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(
+            frames(&stage),
+            [rect(0.0, 128.0, 1024.0, 512.0)],
+            "shrunk to a 1024 view"
+        );
+    }
+
+    #[test]
+    fn a_plain_movie_in_a_widened_view_is_centred_on_the_classic_frame() {
+        for flags in [0, 0x0002] {
+            let classic = MockMoviePlayer::playing((160, 120), 3);
+            let mut at_1024 = staged(&classic, flags);
+            at_1024.begin();
+            let player = MockMoviePlayer::playing((160, 120), 3);
+            let (_movies, mut stage) = staged_in(&player, flags, (1365.0, 768.0));
+            stage.begin();
+            assert_eq!(fills(&stage), fills(&at_1024), "{flags:#x}");
+            assert_eq!(frames(&stage), frames(&at_1024), "{flags:#x}");
+            for (area, _) in fills(&stage) {
+                assert!(
+                    area.min.x >= 0.0 && area.max.x <= 1024.0,
+                    "{flags:#x}: inside the classic frame, which the frame's offset moves to \
+                     where _CenterWindow puts it: {area:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_resize_while_a_cinematic_movie_plays_moves_its_cover() {
+        let player = MockMoviePlayer::playing((160, 120), 30);
+        let (movies, mut stage) = staged_in(&player, 0x0004, VIEW_SIZE);
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(fills(&stage), [(screen_rect(), Color::BLACK)]);
+        movies.set_view((1365.0, 768.0));
+        assert_eq!(
+            fills(&stage),
+            [(rect(-170.0, 0.0, 1365.0, 768.0), Color::BLACK)],
+            "the next draw covers the new view"
+        );
+    }
+
+    /// The classic 1024 x 768 screen.
+    fn screen_rect() -> Bounds {
+        rect(0.0, 0.0, 1024.0, 768.0)
     }
 
     #[test]
@@ -1256,14 +1461,14 @@ mod tests {
         run(&mut stage, Duration::from_millis(500));
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::rgba(0, 0, 0, 128))],
+            [(screen_rect(), Color::rgba(0, 0, 0, 128))],
             "half way to black over what is beneath"
         );
         run(&mut stage, Duration::from_millis(500));
         assert!(stage.hides_cursor(), "_HideTheCursor @0x55a73");
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK), (screen(), Color::BLACK)],
+            [(screen_rect(), Color::BLACK), (screen_rect(), Color::BLACK)],
             "the black window, under the fade still black"
         );
         run(&mut stage, MOVIE_FADE_FOR);
@@ -1275,7 +1480,7 @@ mod tests {
         let frame = rect(432.0, 324.0, 160.0, 120.0);
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK)],
+            [(screen_rect(), Color::BLACK)],
             "the black window over the whole screen"
         );
         assert_eq!(frames(&stage), [frame], "the frame centred in it");
@@ -1307,8 +1512,8 @@ mod tests {
         assert_eq!(
             fills(&stage),
             [
-                (screen(), Color::BLACK),
-                (screen(), Color::rgba(0, 0, 0, 128))
+                (screen_rect(), Color::BLACK),
+                (screen_rect(), Color::rgba(0, 0, 0, 128))
             ],
             "fading to black"
         );
@@ -1316,7 +1521,7 @@ mod tests {
         assert!(!stage.hides_cursor(), "_ShowTheCursor @0x55ebd");
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK)],
+            [(screen_rect(), Color::BLACK)],
             "the window gone, black over what is beneath"
         );
         run(&mut stage, Duration::from_millis(900));
@@ -1437,7 +1642,7 @@ mod tests {
         );
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK), (screen(), Color::BLACK)],
+            [(screen_rect(), Color::BLACK), (screen_rect(), Color::BLACK)],
             "the black window, under the fade from black"
         );
         assert!(stage.faded_in(), "its window fades in (@0x55dce)");

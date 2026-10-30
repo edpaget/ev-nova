@@ -255,6 +255,36 @@ fn a_cinematic_movie_hides_the_pointer_once_its_fade_out_is_over() {
     assert!(view.hides_pointer());
 }
 
+#[test]
+fn a_cinematic_landing_movie_covers_the_whole_shared_view_in_a_widened_view() {
+    let cinematic = DescMovie::from_desc("Port.mov", 0x0004).expect("named");
+    let catalog = FakeCatalog {
+        desc_movies: vec![(129, cinematic)],
+        ..filmed(&[], &[129])
+    };
+    let player = MockMoviePlayer::playing((100, 80), ADVANCES);
+    let movies = Movies::new(player, true);
+    movies.set_view((1366.0, 768.0));
+    let mut view = faked_in(catalog, sol()).with_movies(movies);
+    view.set_view_size((1366.0, 768.0));
+    land_on_mars(&mut view);
+    view.tick(MOVIE_FADE_FOR);
+    view.tick(MOVIE_FADE_FOR);
+    let mut list = DrawList::new();
+    view.draw(&mut list);
+    let mut cover = DrawList::new();
+    fill_rect(
+        &mut cover,
+        Bounds::at(Point::new(0.0, 0.0), 1366.0, 768.0),
+        Color::BLACK,
+    );
+    let cover = cover.iter().next().cloned().expect("a fill");
+    assert!(
+        list.iter().any(|command| *command == cover),
+        "the black window over the whole widened view: {list:?}"
+    );
+}
+
 // The hypergate.
 
 /// [`filming`] over `catalog` with L pressed over Sol's cleared

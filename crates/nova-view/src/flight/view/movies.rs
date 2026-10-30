@@ -132,7 +132,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws what is shown while a movie plays: under the landing's,
     /// the bare play area and the status bar as the press found it; under
     /// a gate's, the flight frozen; then the movie over it, in its
-    /// 1024 x 768 frame centred in a widened view. Whether a movie plays.
+    /// 1024 x 768 frame centred in a widened view, a cinematic one's
+    /// window and fades covering the whole of the [`Movies`]' shared view
+    /// ([`Movies::view`]). In the app the router writes that view, not
+    /// [`FlightView::set_view_size`]: a held flight resized while the
+    /// spaceport shows must not widen the spaceport's movies. Whether a
+    /// movie plays.
     pub(super) fn draw_movie(&self, list: &mut DrawList, frozen: impl FnOnce(&mut DrawList)) -> bool
     where
         C: StatusBars,

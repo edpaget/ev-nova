@@ -575,7 +575,7 @@ impl Screen for MissionDialogs {
             Some(Stage::Movie(movie)) => movie.draw(list),
             Some(Stage::Closed | Stage::Empty) | None => {}
         }
-        self.screen.draw(list);
+        self.screen.draw(list, self.movies.view());
     }
 
     fn cancel_pointer(&mut self) {
@@ -608,7 +608,8 @@ mod tests {
     use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::color::Color;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::flight::MapOpener;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
@@ -1466,6 +1467,29 @@ mod tests {
         dialogs.tick(HALF);
         assert_eq!(fade_alpha(&dialogs), None, "faded in after a second");
         assert_eq!(shown(&dialogs).as_deref(), Some("Faded."));
+    }
+
+    #[test]
+    fn a_text_fading_in_on_a_faded_screen_covers_the_movies_view() {
+        let movies = Movies::none();
+        movies.set_view((1365.0, 768.0));
+        let mut dialogs = dialogs().with_movies(movies);
+        dialogs.set_faded();
+        dialogs.show_descs(vec![shown_desc("Faded.", None)]);
+        dialogs.tick(HALF);
+        let mut list = DrawList::new();
+        dialogs.draw(&mut list);
+        let mut cover = DrawList::new();
+        fill_rect(
+            &mut cover,
+            Bounds::at(Point::new(-170.0, 0.0), 1365.0, 768.0),
+            Color::rgba(0, 0, 0, 128),
+        );
+        assert_eq!(
+            list.iter().last(),
+            cover.iter().next(),
+            "the fade-in over the whole widened view, last"
+        );
     }
 
     #[test]
