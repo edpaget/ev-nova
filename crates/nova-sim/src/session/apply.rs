@@ -258,7 +258,8 @@ impl Session {
             }
             FlightCommand::SetWindowWidth(_)
             | FlightCommand::SetDoubleTimeKey(_)
-            | FlightCommand::SetSoundQuiet(_) => self.apply_setting(command),
+            | FlightCommand::SetSoundQuiet(_)
+            | FlightCommand::SetSpriteLoad(_) => self.apply_setting(command),
             FlightCommand::Hover { .. } | FlightCommand::LoadDescription { .. } => {
                 self.apply_ask(command, collab)
             }

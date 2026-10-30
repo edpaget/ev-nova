@@ -1004,6 +1004,12 @@ pub enum FlightCommand {
     /// ([`Session::set_sound_quiet`](crate::Session::set_sound_quiet)): a
     /// setting the view sends as the sound preferences change.
     SetSoundQuiet(bool),
+    /// What of each ship's sprites loads
+    /// ([`Session::set_sprite_load`](crate::Session::set_sprite_load)): a
+    /// setting the view sends as it is built, from the player's Ship
+    /// Animations and Running Lights, and again when a change of them
+    /// reaches it.
+    SetSpriteLoad(crate::combat::SpriteLoad),
     /// An ask ([`FlightCommand::is_ask`]): what the pointer at `at`, in
     /// system coordinates, is over among the things the player can
     /// target, the ships boxed as `drawn` says they are drawn
@@ -1074,7 +1080,8 @@ impl FlightCommand {
     ///   press is gated by the key, and the player info's Jettison by no
     ///   gate. So are the settings ([`FlightCommand::SetWindowWidth`],
     ///   [`FlightCommand::SetDoubleTimeKey`],
-    ///   [`FlightCommand::SetSoundQuiet`]), which no key sends.
+    ///   [`FlightCommand::SetSoundQuiet`],
+    ///   [`FlightCommand::SetSpriteLoad`]), which no key sends.
     #[must_use]
     pub fn gate(&self) -> Option<PlayerCommand> {
         match self {
@@ -1154,6 +1161,7 @@ impl FlightCommand {
             | Self::SetWindowWidth(_)
             | Self::SetDoubleTimeKey(_)
             | Self::SetSoundQuiet(_)
+            | Self::SetSpriteLoad(_)
             | Self::Hover { .. }
             | Self::LoadDescription { .. } => None,
         }
@@ -2130,6 +2138,7 @@ mod tests {
             (C::SetWindowWidth(1024), None),
             (C::SetDoubleTimeKey(true), None),
             (C::SetSoundQuiet(true), None),
+            (C::SetSpriteLoad(crate::combat::SpriteLoad::default()), None),
         ];
         for (command, gate) in gated {
             assert_eq!(command.gate(), gate, "{command:?}");

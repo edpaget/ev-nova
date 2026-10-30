@@ -381,7 +381,7 @@
 //!   change it only through `statics_mut`.
 //! - `setup: setup::Setup` (`setup` module; phase 2, done): the rule set
 //!   and the strategy ports the `with_*` builders set, written only by
-//!   those builders and `set_sound_quiet`.
+//!   those builders, `set_sound_quiet` and `set_sprite_load`.
 //! - `out: outbox::Outbox` (`outbox` module; phase 3, done): what the
 //!   session fills and the view takes with the `take_*` methods; nothing
 //!   reads it back but to undo its own writes.
@@ -623,6 +623,7 @@ mod slot_visibility;
 mod smoke_frame;
 mod space;
 mod spawn_availability;
+mod sprite_load;
 mod stale_sprites;
 mod statics;
 mod status_cargo;
@@ -1367,7 +1368,9 @@ impl Session {
         // `_LoadPilotData`'s fold (@0x76348-0x76376; see the
         // `ship_display` module).
         session.ship.last_set_fold();
-        session.space.set_first_class(&session.statics);
+        session
+            .space
+            .set_first_class(&session.statics, &session.setup);
         // `_PrepareAllSprites`' display of the player's lights before the
         // first frame (see the `ship_display` module).
         session.ship.prepare_player_lights(&session.setup);
@@ -6087,7 +6090,7 @@ impl PlayerShip {
         reserves: ReservePolicy,
     ) {
         let hold = reserves == ReservePolicy::Hold;
-        self.fit.hull = statics.arsenal.hull(pilot.ship);
+        self.fit.hull = setup.hull(statics, pilot.ship);
         // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
         // set (+0xc8fc): the new armament carries the old's (a change of
         // class resets the fold set after, in `become_class`).
@@ -6676,6 +6679,7 @@ impl Chart {
             &statics.arsenal,
             setup.npc_items(),
         );
+        setup.load_frames(statics, &mut table);
         table
     }
 
