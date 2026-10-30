@@ -957,10 +957,12 @@ pub fn gun_find(
 /// active, as every pass's preamble reads it (`_AIFireGun` @0x7ff11,
 /// `_AIFireTurret` @0x80b32, `_AIFireMissile` @0x8119a). No preamble reads
 /// `_IsDying` or an arrival: the gun and turret ask [`Sight::seen`], and
-/// the missile doesn't. A ship breaking up rarely gets this far: the high
-/// level has dropped a goal-4 target breaking up
-/// ([`attack_drop`](crate::ai::attack_drop)), so it is the regroup pause,
-/// which runs no high level, that fires at one.
+/// the missile doesn't. The high level drops a goal-4 target breaking up
+/// ([`attack_drop`](crate::ai::attack_drop)), so three kinds of ship reach
+/// the passes with one: a flight, whose goal isn't 4, and a running wait
+/// and the regroup pause, which never reach that drop. This is the AI's
+/// pick alone: combat's `ai_dispatch::standing` doesn't yet aim at such a
+/// target (rdm:phase/escort-fleet-fidelity-followups/phase-15-fire-at-a-ship-breaking-up).
 fn sight_of<'a>(
     npc: &'a Npc,
     ship: ShipRef,
