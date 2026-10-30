@@ -6284,6 +6284,27 @@ mod tests {
     }
 
     #[test]
+    fn only_the_limit_hasmaxofitem_stops_at_refuses() {
+        // Owned at its `Max` and past the gun limit: `_HasMaxOfItem`
+        // returns at the `Max` (@0x46a5-0x46c3) and never reaches the gun
+        // limit, so only that check refuses.
+        let refusing = |owned: u16| {
+            let outfitter = armed(&[gun(128)], &owning(&[(128, owned)]), hardpoints(1, 0));
+            let asked = outfitter
+                .asked_at(OutfitId(128), Pass::SINGLE)
+                .expect("listed");
+            has_max()
+                .all_refusals(&asked)
+                .iter()
+                .map(|(about, _)| about.name())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(refusing(10), ["raised max"]);
+        assert_eq!(refusing(1), ["gun limit"]);
+        assert_eq!(refusing(0), Vec::<&str>::new());
+    }
+
+    #[test]
     fn the_sell_flag_is_owned_and_sellable_then_sold_here() {
         assert_eq!(
             listed_checks(&sell_flag()),
