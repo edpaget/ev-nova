@@ -2,11 +2,12 @@
 //!
 //! It skips, passing, unless `NOVA_TARBALL` names a built `.tar.gz`, so
 //! neither `mise run ci` nor a developer's test run needs one. CI's Linux
-//! `build` leg (the `ubuntu:22.04` container) packs it and sets it.
+//! `build` leg (the `ubuntu:24.04` container) packs it and sets it.
 //!
 //! It unpacks the tarball with `tar xzf` into a directory the test owns
 //! and checks its one top-level directory: executable `nova` and
-//! `nova-dump`, `README.txt` and `LICENSE`, and the `share/` tree, each
+//! `nova-dump`, `README.txt`, `LICENSE` and the fonts' licences
+//! ([`font_licences`]), and the `share/` tree, each
 //! file as the workspace's own spec renders it for the build ID the
 //! bundler resolves (`NOVA_BUILD_ID`, which CI's `build` job sets for
 //! every step, else HEAD's committer time). Then it runs `nova` through
@@ -23,6 +24,7 @@ use std::process::{Command, Stdio};
 use nova_bundle::archive::LINUX;
 use nova_bundle::build_id::resolve;
 use nova_bundle::bundle::metadata;
+use nova_bundle::fonts::font_licences;
 use nova_bundle::linux::links::check_links;
 use nova_bundle::linux::share;
 use nova_bundle::ports::Process;
@@ -69,7 +71,8 @@ fn the_tarball_holds_the_game_and_a_binary_within_the_floor() {
             .mode();
         assert_ne!(mode & 0o111, 0, "{binary} is executable: {mode:o}");
     }
-    for file in ["README.txt", "LICENSE"] {
+    let fonts = font_licences(Path::new("")).map(|(_, name)| name);
+    for file in ["README.txt", "LICENSE"].iter().chain(&fonts) {
         assert!(root.join(file).is_file(), "{file} is in the tarball");
     }
 

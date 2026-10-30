@@ -1,5 +1,5 @@
 //! [`Session::apply`]'s spaceport arms: the exchange, the recharge, the
-//! outfitter, the shipyard, the bar and its hire screen, the jettison,
+//! outfitter, the shipyard, the bar, its hire screen and its race, the jettison,
 //! the assignment of a ship captured and the intro's mark, each matched
 //! to the session method that runs it and answered as
 //! [`Session::apply_port`] says. None of them runs in `_DoPlayGameWork`'s
@@ -28,6 +28,11 @@ impl Session {
     /// - [`FlightCommand::Hire`] runs [`Session::hire`]: [`Answer::Hired`].
     /// - [`FlightCommand::OpenBar`] runs [`Session::open_bar`]: done, or
     ///   refused with no bar to open, changing nothing.
+    /// - [`FlightCommand::Race`] runs [`Session::race`]: [`Answer::Raced`],
+    ///   or refused when no race runs, changing nothing.
+    /// - [`FlightCommand::CollectWinnings`] runs
+    ///   [`Session::collect_winnings`]: [`Answer::WinningsCollected`], or
+    ///   refused with none due.
     /// - [`FlightCommand::Assign`] runs [`Session::assign`]:
     ///   [`Answer::Assigned`], or refused with no capture awaiting its
     ///   assignment, changing nothing.
@@ -85,6 +90,14 @@ impl Session {
                 self.close_hire();
                 Answer::Done
             }
+            FlightCommand::Race { racer, bet } => self
+                .race(racer, bet, chance)
+                .map_or(Answer::Refused, Answer::Raced),
+            FlightCommand::CollectWinnings => self
+                .collect_winnings()
+                .map_or(Answer::Refused, |asked_max| Answer::WinningsCollected {
+                    asked_max,
+                }),
             FlightCommand::Jettison { all } => {
                 self.jettison_cargo(all, chance);
                 Answer::Done
@@ -110,6 +123,7 @@ mod tests {
     use crate::board::{Assigned, Assignment};
     use crate::catalog::{OutfitId, ShipId};
     use crate::chance::NeverFires;
+    use crate::gamble::Bet;
     use crate::landing::StellarFlags;
     use crate::market::{Direction, Good, Lot, Order};
     use crate::outfitter::OutfitOrder;
@@ -288,6 +302,42 @@ mod tests {
         let before = flying.clone();
         assert_eq!(apply(&mut flying, FlightCommand::OpenBar), Answer::Refused);
         assert_eq!(flying, before, "no bar: nothing changed");
+    }
+
+    #[test]
+    fn a_race_answers_its_run_and_the_collect_credits_and_no_race_is_refused() {
+        let mut session = docked(&port());
+        assert!(session.open_bar(&mut NeverFires));
+        session.pilot.cash = 5_000;
+        let race = FlightCommand::Race {
+            racer: 0,
+            bet: Bet::House,
+        };
+        runs(&mut session, race.clone(), |session| {
+            Answer::Raced(
+                session
+                    .race(0, Bet::House, &mut NeverFires)
+                    .expect("a race"),
+            )
+        });
+        runs(&mut session, FlightCommand::CollectWinnings, |session| {
+            let asked_max = session
+                .collect_winnings()
+                .expect("racer 0 won on a roll of 0");
+            Answer::WinningsCollected { asked_max }
+        });
+        let before = session.clone();
+        assert_eq!(
+            apply(&mut session, FlightCommand::CollectWinnings),
+            Answer::Refused,
+            "none due"
+        );
+        let nothing = FlightCommand::Race {
+            racer: 1,
+            bet: Bet::Asked(0),
+        };
+        assert_eq!(apply(&mut session, nothing), Answer::Refused, "no stake");
+        assert_eq!(session, before, "nothing changed");
     }
 
     #[test]

@@ -415,6 +415,8 @@ fn plunder_npc(
     // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
     // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
     ship.overwrite_bribe();
+    // It defends no stellar now (+0x8c = -1, @0x8c791).
+    ship.defends = None;
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
@@ -696,6 +698,24 @@ mod tests {
             },
         });
         ship
+    }
+
+    #[test]
+    fn a_defence_ship_a_pirate_takes_into_its_fleet_defends_no_stellar() {
+        let mut taken = former();
+        taken.defends = Some(crate::catalog::StellarId(128));
+        let mut docked = pirate(1000);
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        taken.boarded = true;
+        let mut traffic = traffic_of(vec![docked, taken]);
+        tick(&mut traffic, 0);
+        assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
+        assert_eq!(ship(&traffic, VICTIM).defends, None, "@0x8c791");
     }
 
     /// The traffic once a docked pirate has taken a former escort into

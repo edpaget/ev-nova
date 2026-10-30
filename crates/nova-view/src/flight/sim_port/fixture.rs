@@ -460,6 +460,7 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::ShipNaming(ShipId(129)),
         ScreenAsk::CaptureNaming,
         ScreenAsk::News,
+        ScreenAsk::Gamble,
         ScreenAsk::MissionInfo,
         ScreenAsk::RefusableOffer(MissionId(128)),
         ScreenAsk::OfferText {
@@ -509,6 +510,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         cargo_boxes,
         asteroids,
         stellars,
+        radar_stellars,
         effective_murk,
         system_murk,
         system_background,
@@ -594,6 +596,9 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             kind: 0,
         }),
         stellars: one_or_none(stellars, || record::stellar(StellarId(128))),
+        radar_stellars: one_or_none(radar_stellars, || {
+            record::radar_stellar(StellarId(128), Vec2::ZERO)
+        }),
         effective_murk: effective_murk.wrapping_add(1),
         system_murk: system_murk.wrapping_add(1),
         system_background: if system_background.is_some() {
@@ -706,7 +711,9 @@ fn one_or_none<T>(records: &[T], record: impl FnOnce() -> T) -> Vec<T> {
 /// stellar.
 pub mod record {
     use nova_sim::combat::projectile::ShotId;
-    use nova_sim::flight_frame::{FrameShip, FrameShot, FrameStellar, FrameTarget};
+    use nova_sim::flight_frame::{
+        FrameRadarStellar, FrameShip, FrameShot, FrameStellar, FrameTarget,
+    };
     use nova_sim::{
         DrawnSheet, NpcId, ShipId, ShipRef, StellarId, StellarIff, TargetStatus, Vec2, WeaponId,
     };
@@ -767,8 +774,7 @@ pub mod record {
         }
     }
 
-    /// Stellar `id`, shown, whole, on its `Type` sheet, no hypergate,
-    /// unlandable on the radar.
+    /// Stellar `id`, shown, whole, on its `Type` sheet, no hypergate.
     #[must_use]
     pub fn stellar(id: StellarId) -> FrameStellar {
         FrameStellar {
@@ -780,6 +786,18 @@ pub mod record {
             frozen: false,
             counts_none: false,
             gate_frame: None,
+        }
+    }
+
+    /// Stellar `id` as the radar draws it, at `at`: an oval sized by a
+    /// `Type` master 20 wide (the fake catalog's sheets), unlandable.
+    #[must_use]
+    pub fn radar_stellar(id: StellarId, at: Vec2) -> FrameRadarStellar {
+        FrameRadarStellar {
+            id,
+            position: at,
+            square: false,
+            type_width: Some(20),
             iff: Some(StellarIff::Unlandable),
         }
     }
@@ -1261,13 +1279,13 @@ fn check_hud(once: &FlightFrame) -> Result<(), String> {
         ));
     }
     if let Some(stellar) = once
-        .stellars
+        .radar_stellars
         .iter()
-        .find(|stellar| !stellar.shown && stellar.iff.is_some())
+        .find(|stellar| once.stellar(stellar.id).is_none())
     {
         return Err(format!(
-            "only a shown stellar has an IFF: {:?} isn't shown, and has {:?}",
-            stellar.id, stellar.iff
+            "the radar draws only a stellar the system lists: {:?} isn't listed",
+            stellar.id
         ));
     }
     if !once
@@ -1672,7 +1690,7 @@ mod tests {
 
     /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
     /// numbers are those below it.
-    const SCREEN_ASK_KINDS: usize = 22;
+    const SCREEN_ASK_KINDS: usize = 23;
 
     /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
     /// every kind, so a new one must be numbered, and then sampled
@@ -1700,7 +1718,8 @@ mod tests {
             ScreenAsk::Hail => 18,
             ScreenAsk::Boarding => 19,
             ScreenAsk::PilotPanel => 20,
-            ScreenAsk::CaptureNaming => 21,
+            ScreenAsk::Gamble => 21,
+            ScreenAsk::CaptureNaming => 22,
         }
     }
 
@@ -1968,8 +1987,8 @@ mod tests {
         BracketsAnother,
         /// The frame's interference is over 100.
         InterferenceOver100,
-        /// A stellar not shown has an IFF.
-        UnshownIff,
+        /// The radar draws a stellar the system doesn't list.
+        RadarUnlisted,
         /// The escort rows are out of order.
         RowsOutOfOrder,
         /// An escort flies with no row present.
@@ -2078,10 +2097,9 @@ mod tests {
                     into.hud.target_brackets = Some(brackets(8));
                 }
                 Fault::InterferenceOver100 => into.hud.interference = 101,
-                Fault::UnshownIff => into.stellars.push(nova_sim::flight_frame::FrameStellar {
-                    shown: false,
-                    ..record::stellar(StellarId(129))
-                }),
+                Fault::RadarUnlisted => into
+                    .radar_stellars
+                    .push(record::radar_stellar(StellarId(9999), Vec2::ZERO)),
                 Fault::RowsOutOfOrder => into.hud.escort_rows.swap(0, 1),
                 Fault::FliesWithNoRow => into.hud.escorts_flying = true,
                 Fault::WarpEndsUnwarped => {
@@ -2404,8 +2422,11 @@ mod tests {
     }
 
     #[test]
-    fn an_iff_on_a_stellar_not_shown_breaks_the_contract() {
-        assert!(clause(Fault::UnshownIff).starts_with("only a shown stellar has an IFF"));
+    fn a_radar_stellar_the_system_doesnt_list_breaks_the_contract() {
+        assert!(
+            clause(Fault::RadarUnlisted)
+                .starts_with("the radar draws only a stellar the system lists")
+        );
     }
 
     #[test]
@@ -2772,11 +2793,9 @@ mod tests {
     fn the_fake_answers_the_hover_as_told_and_records_each_ask() {
         let mut fake = FakeFlight::new();
         let boxes = DrawnBoxes {
-            player: Some(nova_sim::DrawnBox {
-                centre: Vec2::ZERO,
-                width: 10,
-                height: 10,
-            }),
+            player: Some(nova_sim::DrawnBox::at(
+                nova_sim::navigation::SpriteRect::centred(Vec2::ZERO, (10, 10)),
+            )),
             npcs: Vec::new(),
         };
         let first = hover_at(Vec2::new(1.0, 2.0), &boxes);
@@ -2884,6 +2903,7 @@ mod tests {
                 cargo_boxes,
                 asteroids,
                 stellars,
+                radar_stellars,
                 effective_murk,
                 system_murk,
                 system_background,
@@ -2907,6 +2927,7 @@ mod tests {
             assert_ne!(other.cargo_boxes, *cargo_boxes);
             assert_ne!(other.asteroids, *asteroids);
             assert_ne!(other.stellars, *stellars);
+            assert_ne!(other.radar_stellars, *radar_stellars);
             assert_ne!(other.effective_murk, *effective_murk);
             assert_ne!(other.system_murk, *system_murk);
             assert_ne!(other.system_background, *system_background);

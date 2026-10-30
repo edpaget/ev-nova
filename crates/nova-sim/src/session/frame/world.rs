@@ -19,8 +19,9 @@ use crate::traffic::npc::Npc;
 
 impl Session {
     /// The player's ship as the frame and a pass carry it: where and how
-    /// it is drawn, its hover box's place and frames, and its gauges. It
-    /// never shows on the radar, which draws it apart.
+    /// it is drawn, its paint (the pilot's), its hover box's place and
+    /// frames, and its gauges. It never shows on the radar, which draws it
+    /// apart.
     pub(in crate::session) fn frame_ship_player(&self) -> FrameShip {
         let player = self.player();
         let hull = self.hull();
@@ -40,6 +41,7 @@ impl Session {
             glow: self.engine_glow(),
             cloak: self.player_cloak_shown(),
             ion_tint: self.player_ion_tint(),
+            paint: self.pilot.paint(),
             gate: GateFade::None,
             hover: self.hover_place(ShipRef::Player),
             framed: self.framed_by(ShipRef::Player),
@@ -51,8 +53,9 @@ impl Session {
     }
 
     /// NPC `npc` as the frame and a pass carry it: where and how it is
-    /// drawn, in full, its gate's fade, its hover box's place and frames,
-    /// its gauges, its government and its radar facts.
+    /// drawn, in full, its gate's fade, its paint ([`Space::npc_paint`]),
+    /// its hover box's place and frames, its gauges, its government and
+    /// its radar facts.
     pub(in crate::session) fn frame_ship_npc(&self, npc: &Npc) -> FrameShip {
         let ship = ShipRef::Npc(npc.id);
         FrameShip {
@@ -71,6 +74,7 @@ impl Session {
             glow: drawn_base(npc.display.glow),
             cloak: self.cloak_shown(npc),
             ion_tint: npc.display.ion_tint,
+            paint: self.space.npc_paint(npc, &self.statics),
             gate: GateFade::of(&npc.mode),
             hover: self.hover_place(ship),
             framed: self.framed_by(ship),
@@ -113,7 +117,6 @@ impl Session {
                     frozen: self.frame_frozen(id),
                     counts_none: self.counts_no_frames(id),
                     gate_frame: self.gate_frame(id),
-                    iff: self.stellar_iff(id),
                 }),
         );
     }

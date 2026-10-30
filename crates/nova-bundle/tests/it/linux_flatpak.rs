@@ -16,7 +16,8 @@
 //! flatpak stores them: see `flatpak_metadata`), that zenity runs in
 //! its sandbox, and that it exports `applications/<id>.desktop` (passing
 //! `desktop-file-validate`, named for the app id the window sets) and the
-//! hicolor icons under the app id. Whatever happens, a guard uninstalls
+//! hicolor icons under the app id, and that `share/licenses/<id>/` holds
+//! `LICENSE` and the fonts' licences ([`font_licences`]). Whatever happens, a guard uninstalls
 //! it.
 
 use std::env;
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 use nova_bundle::bundle::metadata;
 use nova_bundle::channel;
+use nova_bundle::fonts::font_licences;
 use nova_bundle::linux::flatpak::{FINISH_ARGS, REMOTE, RUNTIME_REPO, branch};
 use nova_bundle::linux::icons::ICONS;
 use nova_bundle::ports::Process;
@@ -142,6 +144,26 @@ fn installs_with_exactly_the_recorded_permissions_zenity_and_the_exports() {
             .join("apps")
             .join(format!("{id}.png"));
         assert!(path_exists(&path), "{}", path.display());
+    }
+    assert_licences(&home, &id);
+}
+
+/// The installed app's `share/licenses/<id>/` holds `LICENSE` and both
+/// font licences.
+fn assert_licences(home: &Dirs, id: &str) {
+    let location = home.flatpak(&refs(&os(&["info", "--show-location", id])));
+    let licences = PathBuf::from(location.trim())
+        .join("files")
+        .join("share")
+        .join("licenses")
+        .join(id);
+    let fonts = font_licences(Path::new("")).map(|(_, name)| name);
+    for file in ["LICENSE"].iter().chain(&fonts) {
+        assert!(
+            licences.join(file).is_file(),
+            "{}",
+            licences.join(file).display()
+        );
     }
 }
 

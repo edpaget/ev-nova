@@ -12,8 +12,9 @@
 //! 2. **Mission hold** (@0x2d1a-0x2d69, NPCs only, +0x86 above 0): a
 //!    rescue ship not yet boarded ([`Session::mission_ship_held`]).
 //! 3. **Defence ship** (@0x2d6f-0x2d77): an NPC guarding a stellar (+0x8c
-//!    not -1) is never disabled by armour. Left out: the engine has no
-//!    defence ships; task `planet-domination` records the branch.
+//!    not -1) is never disabled by armour, which the fight's settling and
+//!    its readers of `_IsDisabled` build
+//!    (`nova_sim_combat::combat::hull::is_disabled`).
 //! 4. **Armour line** (@0x2d79-0x2e00): armour × 100 below 33 % (a tough
 //!    ship's other share) of `_ShipArmorCapacity`, the session's
 //!    [`DisableRule`](crate::DisableRule).

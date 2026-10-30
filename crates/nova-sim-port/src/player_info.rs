@@ -138,7 +138,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
+use crate::catalog::{ListedStellar, OutfitId, OutfitRecord};
 use crate::flight::Flyer;
 use crate::handling::{Handling, MANEUVER_PER_DEGREE_PER_TICK, floored_turn};
 use crate::ionization::Ionization;
@@ -913,9 +913,10 @@ pub fn income_line(day: DailyIncome) -> Option<IncomeLine> {
 
 /// What a dominated `site` pays a day (`_LoadObjectData`
 /// @0x775a3-0x775ce): its `Tribute` when above 0, else its `TechLevel` x
-/// 1000.
+/// 1000. The original keeps it in 16 bits (+0x46a), so a `TechLevel`
+/// above 32 would wrap; it is held wider here.
 #[must_use]
-pub fn tribute_of(site: &LandingSite) -> i64 {
+pub fn tribute_of(site: &ListedStellar) -> i64 {
     if site.tribute > 0 {
         i64::from(site.tribute)
     } else {
@@ -1195,7 +1196,7 @@ pub struct PlayerInfo {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use nova_sim_catalog::fixture::{outfit, planet};
+    use nova_sim_catalog::fixture::outfit;
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|&name| name.to_owned()).collect()
@@ -1879,10 +1880,16 @@ mod tests {
 
     #[test]
     fn tribute_is_the_stellars_or_a_thousand_a_tech_level() {
-        let site = |tribute, tech_level| LandingSite {
-            tech_level,
+        let site = |tribute, tech_level| ListedStellar {
+            id: crate::catalog::StellarId(128),
+            systems: Vec::new(),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+            min_status: 0,
             tribute,
-            ..planet(128, 0.0, 0.0)
+            tech_level,
+            def_count: 0,
         };
         assert_eq!(tribute_of(&site(250, 5)), 250);
         assert_eq!(tribute_of(&site(1, 5)), 1);

@@ -58,7 +58,8 @@ pub struct Displayed {
     pub ship: ShipRef,
     /// Its ship slot.
     pub slot: Slot,
-    /// Whether it was disabled or breaking up ([`ship_layer::disabled`]).
+    /// Whether it was disabled or breaking up ([`ship_layer::disabled`]),
+    /// which a stellar's defence ship never is (@0x2d6f).
     pub disabled: bool,
 }
 
@@ -114,7 +115,7 @@ impl Combat {
         self.displays.push(Displayed {
             ship: fighter.ship,
             slot: fighter.slot,
-            disabled: ship_layer::disabled(*fighter.condition),
+            disabled: ship_layer::disabled(*fighter.condition, fighter.defends.is_some()),
         });
         if self.dying_block(fighter) {
             let wreck = fighter.ship;

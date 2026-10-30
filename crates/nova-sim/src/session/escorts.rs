@@ -444,6 +444,7 @@ impl Session {
             odds: crate::traffic::odds_cache::STALE,
             no_ai: false,
             kept_escort_ai: false,
+            defends: None,
         };
         npc.independent();
         // A carried fighter holds a fighter's capacities, keeping what its

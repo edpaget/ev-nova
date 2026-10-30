@@ -1292,7 +1292,8 @@ impl Session {
     /// loss fails it ([`fails_on_disabled`]); then, while the slot still
     /// holds it, its ships disabled go up by one (`_DamageShip`
     /// @0x3ae68-0x3af8b). The original's test that the ship is no stellar's
-    /// defence ship (+0x8c of -1, @0x3ae79) holds for every mission ship.
+    /// defence ship (+0x8c of -1, @0x3ae79) holds for every mission ship,
+    /// as only the defence fleet's spawn sets it, on a ship of no mission.
     pub(super) fn count_disabled_mission_ship(&mut self, id: NpcId, chance: &mut dyn Chance) {
         let Some((slot, mission)) = self.lose_mission_ship(id, Loss::Disabled, chance) else {
             return;

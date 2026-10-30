@@ -137,12 +137,31 @@ fn inside_the_box_a_moving_refueller_stops_through_sub_1_with_goal_9s_damping() 
     // Damped, unlike a leaver braking the same way.
     let mut leaving = refueller(HELPER.0, 1, (50.0, 0.0), (0.0, 1.0), 180.0);
     let handling = leaving.stats.handling;
-    leave_flight::stop(&mut leaving.state, &handling, Inertia::Inertial, false);
+    leave_flight::stop(&mut leaving, &handling, Inertia::Inertial, false);
     assert_eq!(leaving.state.velocity, Vec2::new(0.0, 1.0));
     #[allow(clippy::cast_possible_truncation)]
     let cut = (f64::from(1.0_f32) * BRAKE_DAMPING) as f32;
     assert_eq!(flown.state.velocity, Vec2::new(0.0, cut), "cut, no thrust");
     assert_eq!(traffic.take_fuel_given(), 0.0);
+}
+
+#[test]
+fn inside_the_box_goal_9s_damping_cuts_a_moving_refuellers_speed_to_0_94_too() {
+    // An inertial ship holding a speed along its heading, as a fighter
+    // launched by an inertialess carrier does: the damping cuts +0x48
+    // with the velocity (@0x855ca-0x855dc).
+    let mut start = refueller(HELPER.0, 1, (50.0, 0.0), (0.0, 1.0), 180.0);
+    start.speed = 0.5;
+    let mut traffic = traffic_of(vec![start]);
+    tick(
+        &mut traffic,
+        &Recording::default(),
+        &world(40.0, 300.0, RuleSource::Engine),
+    );
+    let flown = ship(&traffic, HELPER);
+    #[allow(clippy::cast_possible_truncation)]
+    let cut = (f64::from(0.5_f32) * BRAKE_DAMPING) as f32;
+    assert_eq!(flown.speed, cut);
 }
 
 #[test]

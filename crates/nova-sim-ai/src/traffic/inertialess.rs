@@ -106,7 +106,10 @@ pub fn moving(velocity: Vec2) -> bool {
 
 /// Substate 1's brake for an inertialess ship at `state`: reverse, which
 /// an inertialess ship's step takes as [`BRAKE`], while it is
-/// [`moving`], nothing once it isn't; and the heading it wants (+0x68).
+/// [`moving`], nothing once it isn't (sub 1 settles it then, its speed
+/// cut with its velocity,
+/// [`leave_flight::stop_wanting`](crate::traffic::leave_flight::stop_wanting));
+/// and the heading it wants (+0x68).
 /// It writes none (@0x853d7-0x85403), so that is the low level's default,
 /// its own heading truncated (@0x8522d), which the caller turns it to as
 /// `_HandleShip` does ([`flight::turn_to`]). It hands the heading back
@@ -598,9 +601,13 @@ mod tests {
         }
         // Down from 3 to under 0.35 at 0.09 a tick.
         assert_eq!(ticks, 30);
+        // It brakes no more: sub 1's settle cuts its speed to 0.95 of
+        // itself instead (@0x8560d-0x8561f).
         let left = ship.speed;
         fly(&mut ship, &[], None);
-        assert_eq!(ship.speed, left, "it brakes no more");
+        #[allow(clippy::cast_possible_truncation)]
+        let settled = (f64::from(left) * 0.95) as f32;
+        assert_eq!(ship.speed, settled, "it brakes no more");
     }
 
     #[test]

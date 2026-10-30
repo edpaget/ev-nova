@@ -147,6 +147,7 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         govt: None,
         flags2: 0,
         destroyed: false,
+        dominated_at_run_time: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,
@@ -157,6 +158,8 @@ pub fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         gravity: 0,
         fee: 0,
         animation: crate::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 
@@ -321,8 +324,8 @@ pub fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
 /// "Govt `id`" and named so on the reinforcement line, scanning for
-/// nothing, fining nothing, requiring nothing, jamming nothing and with no
-/// `SkillMult`.
+/// nothing, fining nothing, requiring nothing, jamming nothing, with no
+/// `SkillMult` and painting nothing.
 #[must_use]
 pub fn govt(id: i16) -> GovtRecord {
     GovtRecord {
@@ -345,13 +348,14 @@ pub fn govt(id: i16) -> GovtRecord {
         require: 0,
         inh_jam: [0; 4],
         skill_mult: 0,
+        ship_color: 0,
     }
 }
 
 /// `përs` `id`, "Person `id`", flying ship `ship`: a warship of no
 /// government and `Aggress` 2 that may appear anywhere (`LinkSyst` -1),
 /// with no `Coward`, extra weapons, credits, `ShieldMod`, quotes,
-/// picture, mission, flags, `ActiveOn` or grant.
+/// picture, mission, flags, `ActiveOn`, grant or paint.
 #[must_use]
 pub fn person(id: i16, ship: i16) -> PersonRecord {
     PersonRecord {
@@ -377,6 +381,7 @@ pub fn person(id: i16, ship: i16) -> PersonRecord {
         grant_class: 0,
         grant_count: 0,
         grant_prob: 0,
+        color: 0,
         mission_ship: None,
     }
 }
@@ -441,6 +446,9 @@ pub fn listed_stellars<'a>(
                 flags2: site.flags2,
                 govt: site.govt,
                 min_status: site.min_status,
+                tribute: site.tribute,
+                tech_level: site.tech_level,
+                def_count: site.def_count,
             });
             if !stellar.systems.contains(&system) {
                 stellar.systems.push(system);
@@ -472,6 +480,9 @@ pub fn list_also(
                         flags2: 0,
                         govt: None,
                         min_status: 0,
+                        tribute: 0,
+                        def_count: 0,
+                        tech_level: 0,
                     },
                 );
                 at
@@ -585,6 +596,9 @@ mod tests {
                     flags2: 0,
                     govt: None,
                     min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
                 ListedStellar {
                     id: StellarId(129),
@@ -593,6 +607,9 @@ mod tests {
                     flags2: 0x2000,
                     govt: None,
                     min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
                 },
             ],
             "by ascending ID, each system once and in order, the first site's flags"
@@ -620,6 +637,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            tribute: 0,
+            def_count: 0,
+            tech_level: 0,
         };
         assert_eq!(
             listed,

@@ -27,6 +27,11 @@
 //! moves it back: after `_SpawnShot` put it in 0x3b53bc, so it always
 //! enters 0x3b52f0 at its tail ([`shot_slots`](super::shot_slots)). No
 //! layer choice plays a sound.
+//!
+//! `_HandleStellarWeapons` puts a stellar's shot in 0x3b52f0,
+//! [`ShotLayer::Shots`], whatever its guidance (`_PutSpriteInLayer`
+//! @0x2f456-0x2f46f; see `Combat::stellar_shot` in
+//! [`stellar_guns`](super::stellar_guns)).
 
 use super::weapon::Guidance;
 

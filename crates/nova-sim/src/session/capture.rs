@@ -54,6 +54,20 @@
 //! armour branch reads the same (@0x414c3-0x4153b): uninitialised memory,
 //! which ours can't model. Ours gives it its stock reserves, full.
 //!
+//! **The paint.** Use As My Ship paints the player in the captured ship's
+//! paint, `_GetShipPaintColor` of it (@0x41744-0x41759, see the
+//! `ship_paint` module): its person's `Color`, else its government's
+//! `ShipColor`, and an unpainted ship unpaints the player, as the copy
+//! always overwrites. The captured ship still holds its person then
+//! (@0x41180 clears only the person record's active byte), so a person's
+//! `Color` carries across. It runs after the class change (@0x416dd) and
+//! before the outfit merge (@0x41849), so after `OnRetire` and
+//! `OnCapture` by the engine's [`RuleKey::CaptureHookOrder`], which
+//! overwrites a paint either grants; by the other reading the hooks run
+//! after it and their paint stays. The old ship spawns of no person and
+//! no government (@0x411b3, @0x4121b), so it flies unpainted. Use As
+//! Escort leaves the player's paint.
+//!
 //! **A person captured** ([`RuleKey::CapturedPerson`]). Use As My Ship
 //! loses the person for good (`_DoShipCapture` @0x41180). Use As Escort
 //! (@0x9459b-0x947cf, `_AIShipCapturedByPlayer` @0x89741) clears only the
@@ -931,5 +945,183 @@ mod tests {
             assert_eq!(session.chart.nav, after, "the mode kept (@0x4172e)");
             assert_eq!(session.target(), None, "@0x41736");
         }
+    }
+
+    // The paint.
+
+    /// Government 150, whose ships are painted (31, 2, 1).
+    const PAINTING: crate::catalog::GovtId = crate::catalog::GovtId(150);
+
+    /// (31, 2, 1): government 150's `ShipColor` 0x00F81008.
+    const GOVT_PAINT: crate::Rgb15 = crate::Rgb15 { r: 31, g: 2, b: 1 };
+
+    /// (1, 1, 1): the player's paint before the capture.
+    const OLD_PAINT: crate::Rgb15 = crate::Rgb15 { r: 1, g: 1, b: 1 };
+
+    /// [`boardable`] with government 150 painting its ships (31, 2, 1),
+    /// and the trader's (129's) `OnCapture` `on_capture`, which may grant
+    /// paint 308 (`ModVal` 0x7C00, red).
+    fn painting(on_capture: &str) -> FakePilotCatalog {
+        let mut catalog = boardable();
+        catalog.govts.push(crate::catalog::GovtRecord {
+            ship_color: 0x00F8_1008,
+            ..crate::testkit::govt(PAINTING.0)
+        });
+        catalog.outfits.push(crate::testkit::outfit(
+            308,
+            &[(crate::outfit_effects::PAINT, 0x7C00)],
+        ));
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.on_capture = crate::control::Script::parse(on_capture);
+            }
+        }
+        catalog
+    }
+
+    /// `catalog`'s captured trader awaiting its assignment, flying for
+    /// `govt`, the player painted (1, 1, 1), by `order`'s reading of
+    /// [`RuleKey::CaptureHookOrder`].
+    fn captured_for(
+        catalog: &FakePilotCatalog,
+        govt: Option<crate::catalog::GovtId>,
+        order: RuleSource,
+    ) -> Session {
+        let rules =
+            crate::rulebook::Rulebook::default().with_override(RuleKey::CaptureHookOrder, order);
+        let mut session = crate::session::tests::captured(catalog).with_rules(rules);
+        session.space.npc_mut(ON_BOARD.npc).expect("aboard").govt = govt;
+        session.pilot.paint = Some(OLD_PAINT);
+        session
+    }
+
+    #[test]
+    fn use_as_my_ship_paints_the_player_in_the_captured_ships_paint() {
+        // `_DoShipCapture` @0x41728-0x4175e: the player record takes
+        // `_GetShipPaintColor(captured ship)`.
+        let catalog = painting("");
+        for order in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = captured_for(&catalog, Some(PAINTING), order);
+            assert_eq!(
+                use_as_my_ship(&mut session, "Prize", &mut Draws::default()),
+                Some(Assigned::MyShip)
+            );
+            assert_eq!(session.pilot().paint(), Some(GOVT_PAINT), "{order:?}");
+            assert!(session.take_save_due());
+            // The old ship spawns of no person or government (@0x411b3,
+            // @0x4121b): unpainted.
+            let old = session
+                .space
+                .escorts
+                .fleet
+                .last()
+                .copied()
+                .flatten()
+                .expect("the old ship placed");
+            let old = session.space.npc(old).expect("in the system");
+            assert_eq!(session.space.npc_paint(old, &session.statics), None);
+        }
+    }
+
+    #[test]
+    fn capturing_an_unpainted_ship_unpaints_the_player() {
+        // The copy always overwrites: the record takes (32, 32, 32).
+        let catalog = painting("");
+        let mut session = captured_for(&catalog, None, RuleSource::Engine);
+        use_as_my_ship(&mut session, "Prize", &mut Draws::default());
+        assert_eq!(session.pilot().paint(), None);
+    }
+
+    #[test]
+    fn a_paint_on_capture_grants_is_overwritten_by_the_engine_and_kept_otherwise() {
+        // By the engine the copy follows `OnCapture` (@0x416c9, then
+        // @0x41759); by the other reading `OnCapture` runs after the swap,
+        // so after the copy.
+        let red = crate::Rgb15 { r: 31, g: 0, b: 0 };
+        let catalog = painting("G308");
+        for (order, govt, paint) in [
+            (RuleSource::Engine, Some(PAINTING), Some(GOVT_PAINT)),
+            (RuleSource::Engine, None, None),
+            (RuleSource::Bible, Some(PAINTING), Some(red)),
+            (RuleSource::Bible, None, Some(red)),
+        ] {
+            let mut session = captured_for(&catalog, govt, order);
+            use_as_my_ship(&mut session, "Prize", &mut Draws::default());
+            assert_eq!(session.pilot().paint(), paint, "{order:?} {govt:?}");
+        }
+    }
+
+    /// `përs` 600, whom the captured trader flies as in [`as_person`].
+    const PERSON: crate::catalog::PersonId = crate::catalog::PersonId(600);
+
+    /// [`painting`] with person 600, of government 150 and `Color`
+    /// `colour`, flying the trader (129). Its `AiType` 0 keeps it out of
+    /// the system's person roll, so the traffic knows it but never spawns
+    /// it: the draws [`captured`](crate::session::tests::captured) makes
+    /// stay as they were.
+    fn painting_person(colour: u32) -> FakePilotCatalog {
+        let mut catalog = painting("");
+        catalog.persons.push(crate::catalog::PersonRecord {
+            govt: Some(PAINTING),
+            color: colour,
+            ai_type: 0,
+            ..crate::testkit::person(PERSON.0, 129)
+        });
+        catalog
+    }
+
+    /// [`captured_for`] government 150 by the engine, the captured trader
+    /// flying as person 600.
+    fn as_person(catalog: &FakePilotCatalog) -> Session {
+        let mut session = captured_for(catalog, Some(PAINTING), RuleSource::Engine);
+        let record = session
+            .space
+            .traffic
+            .person(PERSON)
+            .expect("the traffic knows the person")
+            .record
+            .clone();
+        session.space.npc_mut(ON_BOARD.npc).expect("aboard").person =
+            Some(crate::traffic::npc::NpcPerson::of(&record, false));
+        session
+    }
+
+    #[test]
+    fn use_as_my_ship_paints_the_player_in_the_captured_persons_colour() {
+        // `_GetShipPaintColor` reads the captured ship's person first
+        // (@0x7d2f), and the ship still holds it at the copy (@0x41759):
+        // @0x41180 clears only the person record's active byte.
+        let catalog = painting_person(0x0010_2030);
+        let mut session = as_person(&catalog);
+        assert_eq!(
+            use_as_my_ship(&mut session, "Prize", &mut Draws::default()),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(
+            session.pilot().paint(),
+            Some(crate::Rgb15 { r: 2, g: 4, b: 6 }),
+            "the person's Color, not the government's (31, 2, 1)"
+        );
+        assert!(session.pilot().gone(PERSON), "the person lost for good");
+    }
+
+    #[test]
+    fn capturing_a_person_of_no_colour_unpaints_the_player_though_its_government_paints() {
+        // A person's (0, 0, 0) is no fallback to its government (@0x7d60).
+        let catalog = painting_person(0);
+        let mut session = as_person(&catalog);
+        use_as_my_ship(&mut session, "Prize", &mut Draws::default());
+        assert_eq!(session.pilot().paint(), None);
+    }
+
+    #[test]
+    fn use_as_escort_leaves_the_players_paint() {
+        let catalog = painting("");
+        let mut session = captured_for(&catalog, Some(PAINTING), RuleSource::Engine);
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::default()),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(session.pilot().paint(), Some(OLD_PAINT));
     }
 }

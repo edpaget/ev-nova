@@ -195,16 +195,27 @@ fn every_stock_system_can_be_entered_from_the_map_and_left() {
             })
             .collect();
         // Drawn in ascending stellar ID, as the original's sprite slots
-        // stack them, whatever the `NavDefs` order.
+        // stack them, whatever the `NavDefs` order, each with its top left
+        // at its position less half its frame, halved as integers, so an
+        // odd side's centre is half a pixel right or below.
         let mut by_id: Vec<_> = raw[&id].nav_def.iter().flatten().collect();
         by_id.sort_by_key(|s| s.0);
         let expected: Vec<Point> = by_id
             .into_iter()
             .map(|s| {
                 let record = stellar(&data, s.0);
+                let (width, height) = view
+                    .scene()
+                    .stellars()
+                    .iter()
+                    .find(|shown| shown.id.0 == s.0)
+                    .and_then(nova_view::system::SceneStellar::shown_image)
+                    .map(|(_, size)| size)
+                    .expect("a sprite drawn");
+                let placed = |side: f32| side / 2.0 - (side / 2.0).floor();
                 Point::new(
-                    512.0 + f32::from(record.x_pos),
-                    384.0 + f32::from(record.y_pos),
+                    512.0 + f32::from(record.x_pos) + placed(width),
+                    384.0 + f32::from(record.y_pos) + placed(height),
                 )
             })
             .collect();

@@ -520,7 +520,8 @@ fn jump(hops: usize, placed: bool) -> Resets {
 /// selection is let go and the mode kept, the take-off's tail that the
 /// gates join (@0x66edb-0x66f40, @0x674d2); the hypergate then turns the
 /// nav system off itself ([`Session::enter_hypergate`]). The asteroid
-/// field is killed (@0x63f47, @0x645f6).
+/// field is killed (@0x63f47, @0x645f6), and the explosions pending with
+/// it, as the dock request's tail sets `_killExplods` (@0x66f63).
 fn gate() -> Resets {
     Resets::of(
         &[
@@ -528,6 +529,7 @@ fn gate() -> Resets {
             Reset::Explore,
             Reset::Thrust,
             Reset::Combat,
+            Reset::Explosions,
             Reset::Boxes,
             Reset::Asteroids,
             Reset::Strikes,
@@ -1053,17 +1055,22 @@ impl Session {
                         Leave::Held { from, to }
                     } else {
                         self.give_back_aux_ships(&led);
+                        self.refund_defenders(&led);
                         Leave::Dropped
                     };
                 self.space.traffic.retarget(table, &led, leave);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());
+                self.refund_defenders(&BTreeSet::new());
                 // The berths' odds, search timers and persons outlast the
                 // traffic, as the original's ship table does (see the
-                // `kept_berths` module).
+                // `kept_berths` module), and the stellars' defences, as its
+                // stellar records do (see the `stellar_defence` module).
                 let kept = self.space.traffic.kept_berths();
+                let defences = self.space.traffic.take_defences();
                 self.space.traffic = Traffic::new();
+                self.space.traffic.keep_defences(defences);
                 // A new traffic reads reused slots' picks, exit cursors and
                 // blink timers and search timers by the rulebook.
                 self.space
@@ -1317,6 +1324,7 @@ mod tests {
                     Reset::Stellar,
                     Reset::Explore,
                     Reset::Thrust,
+                    Reset::Explosions,
                     Reset::FightersOut,
                     Reset::ArrivalSound,
                 ],

@@ -35,46 +35,48 @@ on:
 
 jobs:
   # Release builds of `nova` and `nova-dump` for the rolling prerelease of
-  # `channel`. The caller runs it after its `ci` gate. ci.yml's Windows
-  # `ci` leg is continue-on-error (rdm task windows-path-portable-tests),
-  # so a red Windows test leg doesn't stop this job: the Windows archive
-  # ships as long as its own release build succeeds. Revisit once Windows
-  # CI is a hard gate.
+  # `channel`. The caller runs it after its `ci` gate, and every `ci` leg,
+  # Windows included, is a hard gate: a red test leg on any platform stops
+  # all three build legs, so nothing publishes. Gating stays on all three
+  # because `needs:` names a job, not a matrix leg, and `release` waits on
+  # every build leg anyway.
   build:
     strategy:
       # So every platform's build failure is reported in one run.
       fail-fast: false
       matrix:
         include:
-          # Built in an ubuntu:22.04 container, so the tarball's binary
-          # needs no glibc newer than 2.35, the floor packaging/README.txt
-          # records. The image outlives GitHub's
-          # ubuntu-22.04 runner. The Flatpak is built in ci.yml's `flatpak` job.
+          # Built in an ubuntu:24.04 container, so the tarball's binary
+          # needs no glibc newer than 2.39, the floor packaging/README.txt
+          # records. The pinned image keeps the floor fixed whatever runner
+          # image hosts it. Older systems use the Flatpak, built in ci.yml's
+          # `flatpak` job.
           - name: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            container: ubuntu:22.04
+            os: ubuntu-24.04
+            container: ubuntu:24.04
             target: x86_64-unknown-linux-gnu
           # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
           # on the arm64 runner and packs the bundle (crates/nova-bundle).
           # It signs with Developer ID and notarizes when the signing
           # secrets are set, ad-hoc otherwise. Intel Macs are not supported.
           - name: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-26
             target: aarch64-apple-darwin
           - name: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2025
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     # Only the Linux leg names one; empty, a leg runs on the runner itself.
     container: ${{ matrix.container }}
     # The signing secrets live in the macos-signing environment, whose
     # deployment-branch policy allows only main (infra/github/signing.tf).
-    # Only main's macOS leg enters it. Every other leg, and every other
+    # Only main's macOS leg enters it, picked by target rather than runner
+    # image so a runner bump can't silently drop signing. Every other leg, and every other
     # branch, names no environment and so still runs: a job that names an
     # environment its branch can't deploy to never starts. The expression must
     # never name anything but macos-signing, because naming an environment
     # that doesn't exist creates it, with no protection rules.
-    environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
+    environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || '' }}
     env:
       # As in ci.yml's `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
@@ -97,14 +99,15 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           apt-get update
+          # libasound2-dev keeps its name on 24.04; only the runtime package became libasound2t64.
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
       # The commit to build: the pushed one for the nightly, the nightly's
       # own commit for a promotion.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
@@ -113,7 +116,7 @@ jobs:
       # restores main's cache, but the caches it saved never reached main,
       # and their size pushed the repository past its 10 GB of Actions
       # cache, which evicts main's own. A promotion runs on main, so it saves.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -131,7 +134,9 @@ jobs:
         run: cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
       # ev-nova-aarch64-apple-darwin.dmg, holding Nova.app (with Sparkle,
       # downloaded at its pinned version and checked, in
-      # Contents/Frameworks), nova-dump, README.txt, LICENSE and an
+      # Contents/Frameworks, and the Noto fonts' licences, NotoSans-OFL.txt
+      # and NotoSerif-OFL.txt, in Contents/Resources), nova-dump,
+      # README.txt, LICENSE, the two font licences again and an
       # Applications link. The bundler stages under target/, so dist/ holds
       # only the .dmg. No game data. It signs with Developer ID, notarizes
       # and has Gatekeeper assess (spctl) the app and the .dmg when the
@@ -214,8 +219,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:NOVA_WINSPARKLE_DLL = (Resolve-Path target\installer\downloads\WinSparkle.dll).Path
           cargo test --locked -p nova-win32 --test it winsparkle -- --nocapture
-      # One top-level directory holding the two binaries, README.txt and
-      # LICENSE, and on Linux the share/ tree (the desktop file, the
+      # One top-level directory holding the two binaries, README.txt,
+      # LICENSE and the fonts' licences (NotoSans-OFL.txt and
+      # NotoSerif-OFL.txt, crates/nova-render/fonts), and on Linux the share/ tree (the desktop file, the
       # AppStream metainfo and the hicolor icons) to copy into
       # ~/.local/share. No game data. The directory's and the
       # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
@@ -243,6 +249,8 @@ jobs:
             mise run linux-desktop -- "dist/$dir"
           fi
           cp packaging/README.txt LICENSE "dist/$dir/"
+          cp crates/nova-render/fonts/OFL.txt "dist/$dir/NotoSans-OFL.txt"
+          cp crates/nova-render/fonts/NotoSerif-OFL.txt "dist/$dir/NotoSerif-OFL.txt"
           cd dist
           case "${{ matrix.os }}" in
             windows-*) 7z a "$file" "$dir" ;;
@@ -261,7 +269,7 @@ jobs:
           NOVA_TARBALL="$PWD/dist/$file" \
             cargo test --locked -p nova-bundle --test it linux_tarball -- --nocapture
       # Only a hand-off to release.yml's `publish`.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.name }}
           path: dist/*

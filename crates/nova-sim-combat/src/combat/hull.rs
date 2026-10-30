@@ -550,9 +550,13 @@ impl Condition {
         }
     }
 
-    /// Whether it is disabled as the original's `_IsDisabled` reads it:
-    /// disabled or breaking up. A pirate plunders only such a ship, and
-    /// fires disable-only at one that is not.
+    /// Whether it is disabled as the original's `_IsDisabled` reads it of
+    /// a ship that defends no stellar: disabled or breaking up. A pirate
+    /// plunders only such a ship, and fires disable-only at one that is
+    /// not. A ship that may defend one reads
+    /// [`stored_disabled`](Self::stored_disabled) instead (an NPC through
+    /// `nova_sim_ai::traffic::npc::Npc::is_disabled`), which a defence
+    /// ship breaking up is not.
     #[must_use]
     pub fn disabled(self) -> bool {
         matches!(self, Self::Disabled | Self::Dying { .. })
@@ -614,6 +618,71 @@ impl Condition {
     #[must_use]
     pub fn dying_or_destroyed(self, armor: Gauge) -> bool {
         self == Self::Destroyed || self.is_dying(armor)
+    }
+}
+
+/// `_IsDisabled` (@0x2ce6-0x2e0d) of a ship in `condition`: `held`
+/// disabled at any armour (a Derelict government's or a mission's hold,
+/// branches 1 and 2, @0x2cf1-0x2d69), or else, for a ship whose armour
+/// it reads ([`reads_armour`]), anything but intact; a stellar's defence
+/// ship is never disabled by its armour, 0 or below included, so it is
+/// not disabled while it breaks up (branch 3, @0x2d6f-0x2d77).
+///
+/// It and [`under_armour_line`] are the one home of branch 3. Every
+/// reader of `_IsDisabled` reaches it through one of them: the fight's
+/// ([`Fighter`](super::Fighter)'s readings, its settling of a condition
+/// and the spared hits' floor), the stored-condition readers
+/// ([`Condition::stored_disabled`]: the draw layer, the shockwave, and
+/// the AI's `nova_sim_ai::traffic::npc::Npc::is_disabled`).
+#[must_use]
+pub fn is_disabled(condition: Condition, held: bool, defends: bool) -> bool {
+    held || (reads_armour(defends) && condition != Condition::Intact)
+}
+
+/// `_IsDisabled`'s armour line (branch 4, @0x2d79-0x2e00) for a ship with
+/// `armor` of `hull`, as `rule` says: under it, on a ship that holds some
+/// armour ([`holds_armour`]) and whose armour is read ([`reads_armour`]).
+/// A stellar's defence ship never is (branch 3, @0x2d6f-0x2d77). The
+/// fight's settling of a condition, its reading of the ship now and the
+/// spared hits' floor (`damage::take`) ask it.
+#[must_use]
+pub fn under_armour_line(
+    armor: Gauge,
+    hull: &HullSpec,
+    rule: &dyn DisableRule,
+    defends: bool,
+) -> bool {
+    reads_armour(defends) && holds_armour(armor) && rule.disabled(armor, hull)
+}
+
+/// Whether `_IsDisabled` reads the armour of a ship that `defends` a
+/// stellar or not: branch 3 (@0x2d6f-0x2d77) returns "not disabled" for an
+/// NPC whose +0x8c is not -1 before the armour line and the armour-0
+/// test, so only for one that defends nothing.
+fn reads_armour(defends: bool) -> bool {
+    !defends
+}
+
+impl Condition {
+    /// `_IsDisabled` (@0x2ce6-0x2e0d) as a ship's stored condition answers
+    /// it, for a ship that `defends` a stellar or not: [`is_disabled`],
+    /// the hold read off the condition. For a ship that defends nothing it
+    /// is anything but intact. The fight stores a defence ship disabled
+    /// only while it is held (`Combat::settle_condition` never disables
+    /// one by its armour, [`under_armour_line`]), so a stored `Disabled`
+    /// is its hold, and a defence ship breaking up or destroyed is not
+    /// disabled.
+    ///
+    /// It is the reading of a ship whose hold is not to hand: the draw
+    /// layer's (`ship_layer::disabled`), the shockwave's before its hit
+    /// and the AI's (`nova_sim_ai::traffic::npc::Npc::is_disabled`). A
+    /// breaking-up ship held by a Derelict government that defends a
+    /// stellar reads not disabled here, where the original holds it
+    /// disabled (branch 1); no stock stellar of a Derelict government has
+    /// defence ships.
+    #[must_use]
+    pub fn stored_disabled(self, defends: bool) -> bool {
+        is_disabled(self, self == Self::Disabled, defends)
     }
 }
 
@@ -717,6 +786,79 @@ mod tests {
         ticks_left: 0,
         starting: true,
     };
+
+    const BREAKING_UP: Condition = Condition::Dying {
+        ticks_left: 3,
+        starting: false,
+    };
+    const CONDITIONS: [Condition; 4] = [
+        Condition::Intact,
+        Condition::Disabled,
+        BREAKING_UP,
+        Condition::Destroyed,
+    ];
+
+    #[test]
+    fn a_defence_ship_is_disabled_only_by_its_hold_in_any_condition() {
+        for condition in CONDITIONS {
+            assert!(
+                !is_disabled(condition, false, true),
+                "{condition:?}: branch 3 (@0x2d6f) before the armour"
+            );
+            assert!(
+                is_disabled(condition, true, true),
+                "{condition:?}: branches 1 and 2 come first"
+            );
+            assert_eq!(
+                is_disabled(condition, false, false),
+                condition != Condition::Intact,
+                "{condition:?}: any other ship by its armour"
+            );
+        }
+    }
+
+    #[test]
+    fn a_defence_ships_armour_is_never_under_the_line() {
+        let hull = HullSpec::default();
+        let low = armor(1.0, 100.0);
+        assert!(under_armour_line(low, &hull, &NovaDisable, false));
+        assert!(
+            !under_armour_line(low, &hull, &NovaDisable, true),
+            "@0x2d6f"
+        );
+        assert!(!under_armour_line(
+            armor(-5.0, 100.0),
+            &hull,
+            &NovaDisable,
+            true
+        ));
+        assert!(!under_armour_line(
+            armor(90.0, 100.0),
+            &hull,
+            &NovaDisable,
+            false
+        ));
+        assert!(
+            !under_armour_line(armor(0.0, 0.0), &hull, &NovaDisable, false),
+            "holds none"
+        );
+    }
+
+    #[test]
+    fn a_stored_disabled_is_a_defence_ships_hold_and_its_breakup_is_not_disabled() {
+        for condition in CONDITIONS {
+            assert_eq!(
+                condition.stored_disabled(false),
+                condition != Condition::Intact,
+                "{condition:?}, defending nothing"
+            );
+            assert_eq!(
+                condition.stored_disabled(true),
+                condition == Condition::Disabled,
+                "{condition:?}, a defence ship"
+            );
+        }
+    }
 
     #[test]
     fn a_standing_ship_whose_armour_is_gone_starts_breaking_up_its_timer_unset() {

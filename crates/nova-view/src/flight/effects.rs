@@ -729,9 +729,18 @@ impl Effects {
     }
 
     /// Draws the escape pods adrift, as `looks` says, where `camera` shows
-    /// them, in their place among the sprites (see [`pods`](super::pods)).
-    pub fn draw_pods(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
-        self.pods.draw(list, camera, looks);
+    /// them, in their place among the sprites, murked as seen from the
+    /// player's ship at `viewer` in a system of effective murk `murk` (see
+    /// [`pods`](super::pods)).
+    pub fn draw_pods(
+        &self,
+        list: &mut DrawList,
+        camera: &Camera,
+        looks: &Looks,
+        viewer: Vec2,
+        murk: u8,
+    ) {
+        self.pods.draw(list, camera, looks, viewer, murk);
     }
 
     /// The escape pods adrift, in slot order.
@@ -961,7 +970,13 @@ mod tests {
         effects.step(&[], &scene(), &pod_looks(), &mut Script::default());
         assert_eq!(effects.pods()[0].life, life - 1, "it steps with the rest");
         let mut list = DrawList::new();
-        effects.draw_pods(&mut list, &Camera::centred_on(PLAYER), &pod_looks());
+        effects.draw_pods(
+            &mut list,
+            &Camera::centred_on(PLAYER),
+            &pod_looks(),
+            Vec2::ZERO,
+            0,
+        );
         assert!(
             list.into_iter().any(|command| matches!(
                 command,

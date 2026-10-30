@@ -11,10 +11,11 @@ use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DisasterRecord, DudeId,
     DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
-    ListedStellar, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonRecord,
-    PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StringPatch, SystemId, SystemReinforcements,
-    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
+    ListedStellar, MissionRecord, MissionTexts, NavDefSlots, NebulaRecord, OutfitId, OutfitRecord,
+    PersonRecord, PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts, StringPatch,
+    SystemId, SystemReinforcements, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::voice::Voices;
@@ -89,6 +90,8 @@ pub struct FakePilotCatalog {
     pub lives: Vec<StellarLife>,
     /// How many times the stellars' lives were read.
     pub life_reads: RefCell<usize>,
+    /// Every stellar's `OnDominate` and `OnRelease`: none, by default.
+    pub scripts: Vec<StellarScripts>,
     /// Graphic type 0's sheet's frame size, or `None` when it does not
     /// read: 100 square, by default.
     pub fallback_frame: Option<(u32, u32)>,
@@ -138,6 +141,10 @@ pub struct FakePilotCatalog {
     pub boom_sounds: Vec<(BoomId, SoundId)>,
     /// The escorts' voices: none, by default, so no escort speaks.
     pub voices: Voices,
+    /// Each system's `NavDefs` slots, gaps kept, where a test gives them:
+    /// none, by default, so each system's slots number its
+    /// [`sites`](Self::sites) in order.
+    pub nav_defs: Vec<(SystemId, NavDefSlots)>,
 }
 
 impl FakePilotCatalog {
@@ -214,6 +221,7 @@ pub fn catalog() -> FakePilotCatalog {
         gate_listers: Vec::new(),
         lives: Vec::new(),
         life_reads: RefCell::default(),
+        scripts: Vec::new(),
         fallback_frame: Some((100, 100)),
         fallback_counts: true,
         missions: Vec::new(),
@@ -234,6 +242,7 @@ pub fn catalog() -> FakePilotCatalog {
         warp_out_sound: None,
         boom_sounds: Vec::new(),
         voices: Voices::default(),
+        nav_defs: Vec::new(),
     }
 }
 
@@ -358,6 +367,10 @@ impl PilotCatalog for FakePilotCatalog {
         self.lives.clone()
     }
 
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        self.scripts.clone()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.fallback_frame
     }
@@ -470,6 +483,25 @@ impl PilotCatalog for FakePilotCatalog {
             .into_iter()
             .filter(|(system, _)| self.systems.contains(system))
             .filter_map(|(system, stellar)| Some((system, stellar?)))
+            .collect()
+    }
+
+    /// Each existing system's [`FakePilotCatalog::nav_defs`] where given,
+    /// else its [`FakePilotCatalog::sites`] numbered in order, read
+    /// without counting as a read of the star map or the sites.
+    fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+        let mut slots = std::collections::BTreeMap::new();
+        for (system, given) in &self.nav_defs {
+            slots.entry(*system).or_insert(*given);
+        }
+        for (system, sites) in &self.sites {
+            slots.entry(*system).or_insert_with(|| {
+                crate::catalog::slots_in_order(sites.iter().map(|site| site.id))
+            });
+        }
+        slots
+            .into_iter()
+            .filter(|(system, _)| self.systems.contains(system))
             .collect()
     }
 }
@@ -624,6 +656,21 @@ mod tests {
             elsewhere.star_map, fake.star_map,
             "the rest is the catalog's"
         );
+    }
+
+    #[test]
+    fn the_fake_gives_its_stellar_scripts() {
+        let scripts = crate::catalog::StellarScripts {
+            id: StellarId(128),
+            on_dominate: crate::control::Script::parse("b100"),
+            on_release: crate::control::Script::parse("!b100"),
+        };
+        let fake = FakePilotCatalog {
+            scripts: vec![scripts.clone()],
+            ..catalog()
+        };
+        assert_eq!(fake.stellar_scripts(), [scripts]);
+        assert_eq!(catalog().stellar_scripts(), [], "none, by default");
     }
 
     #[test]
@@ -791,6 +838,34 @@ mod tests {
             ..catalog()
         };
         assert!(!uncounted.fallback_counts_frames());
+    }
+
+    #[test]
+    fn the_fake_numbers_each_systems_sites_as_its_slots_unless_given_them() {
+        use crate::catalog::NAV_DEF_SLOTS;
+        let fake = catalog();
+        let mut in_130 = [None; NAV_DEF_SLOTS];
+        in_130[0] = Some(StellarId(128));
+        in_130[1] = Some(StellarId(129));
+        let mut in_131 = [None; NAV_DEF_SLOTS];
+        in_131[0] = Some(StellarId(140));
+        assert_eq!(
+            fake.nav_def_slots(),
+            [(SystemId(130), in_130), (SystemId(131), in_131)]
+        );
+        assert_eq!(*fake.sites_asked.borrow(), [], "not a read of the sites");
+
+        let mut gapped = [None; NAV_DEF_SLOTS];
+        gapped[2] = Some(StellarId(129));
+        let given = FakePilotCatalog {
+            nav_defs: vec![(SystemId(130), gapped)],
+            ..catalog()
+        };
+        assert_eq!(
+            given.nav_def_slots(),
+            [(SystemId(130), gapped), (SystemId(131), in_131)],
+            "130's given slots; 131's numbered"
+        );
     }
 
     #[test]

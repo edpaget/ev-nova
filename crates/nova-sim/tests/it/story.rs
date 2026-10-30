@@ -173,6 +173,7 @@ impl PilotCatalog for Home {
             govt: None,
             flags2: 0,
             destroyed: false,
+            dominated_at_run_time: false,
             graphic: 0,
             dead_graphic: None,
             dead_frame_size: None,
@@ -183,6 +184,8 @@ impl PilotCatalog for Home {
             gravity: 0,
             fee: 0,
             animation: nova_sim::catalog::SiteAnimation::default(),
+            defense_dude: None,
+            def_count: 0,
         }]
     }
 
@@ -228,6 +231,10 @@ impl PilotCatalog for Home {
 
     fn stellar_lives(&self) -> Vec<StellarLife> {
         self.lives.clone()
+    }
+
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+        Vec::new()
     }
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {

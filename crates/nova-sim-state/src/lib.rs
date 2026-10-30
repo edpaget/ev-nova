@@ -21,6 +21,9 @@
 //! - [`date`]: the in-game [`GameDate`](date::GameDate), a Gregorian day
 //!   that advances a day for each day a jump takes, and
 //!   [`date::long_date_text`], how the messages show it.
+//! - [`domination`]: whether a stellar is dominated
+//!   ([`domination::dominated`]), the one rule every reader of the
+//!   original's dominated byte goes through.
 //! - [`govt`]: the [`Governments`](govt::Governments) and their
 //!   relations: allies, enemies, xenophobes and the flags that say how
 //!   their ships behave.
@@ -76,6 +79,7 @@ pub mod class_stats;
 pub mod clearance;
 pub mod cron;
 pub mod date;
+pub mod domination;
 pub mod govt;
 pub mod landing;
 pub mod legal;

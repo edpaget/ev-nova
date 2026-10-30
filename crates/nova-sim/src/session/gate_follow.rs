@@ -95,8 +95,11 @@ impl Session {
     /// the slots as a jump does, and a hyperspace arrival has no extra
     /// pass. Under either, its traffic part
     /// ([`Traffic::enter_more_ships`](crate::traffic::Traffic::enter_more_ships)):
-    /// the arrival roll and the escort-strength timer's tick, so a timer
-    /// armed at the exit fires on the n-th tick after it. Each announced
+    /// the arrival roll, the defence respawn, which sends no defender up
+    /// as the entry's rebuild point has just cleared every stellar's
+    /// under-attack mark (@0x32d5d; see the `stellar_defence` module),
+    /// and the escort-strength timer's tick, so a timer armed at the exit
+    /// fires on the n-th tick after it. Each announced
     /// fleet it brings shows its quote at once, as `_HyperSpawnFleet`
     /// does (@0x42607-0x426f4), and each person it brings has its offer
     /// resolved, as after every spawn (see the `person_offers` module).

@@ -79,6 +79,8 @@ mod tests {
         LayerSheet {
             image_id,
             frames: NonZeroU16::new(36).expect("non-zero"),
+            frame_width: crate::flight::fake_catalog::LAYER_SIDE,
+            frame_height: crate::flight::fake_catalog::LAYER_SIDE,
             solid,
         }
     }
@@ -115,7 +117,7 @@ mod tests {
             colorize: None,
             blend: crate::Blend::Normal,
         };
-        ship.draw(&mut list, AT, Some(alt));
+        ship.draw(&mut list, &|_| AT, Some(alt));
         list.iter()
             .filter_map(|command| match *command {
                 DrawCommand::Sprite { image, .. } | DrawCommand::Colorized { image, .. } => {
@@ -136,6 +138,7 @@ mod tests {
             },
             heading: 0.0,
             tint: Color::WHITE,
+            paint: None,
             cloak: None,
             hull: true,
             murk: 0,
@@ -233,7 +236,7 @@ mod tests {
             ..ship(&sheet, &spec)
         };
         let mut list = DrawList::new();
-        turned.draw(&mut list, AT, None);
+        turned.draw(&mut list, &|_| AT, None);
         let frames: Vec<(ImageKind, u16)> = list
             .iter()
             .filter_map(|command| match *command {
@@ -261,7 +264,7 @@ mod tests {
         };
         assert!(turned.frame() > 0);
         let mut list = DrawList::new();
-        turned.draw(&mut list, AT, Some(alt));
+        turned.draw(&mut list, &|_| AT, Some(alt));
         list.iter()
             .filter_map(|command| match *command {
                 DrawCommand::Sprite { image, center, .. } if image.kind == RUNS => {

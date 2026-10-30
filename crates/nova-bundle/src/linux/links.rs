@@ -14,10 +14,11 @@ use std::path::Path;
 use crate::bundle::{BundleError, run};
 use crate::ports::{Invocation, Process};
 
-/// The newest glibc the binary may need: 2.35, Ubuntu 22.04's, which
-/// covers Ubuntu 22.04 and 24.04, Debian 12 and 13, and current Fedora and
-/// openSUSE. `packaging/README.txt` records it.
-pub const GLIBC_FLOOR: [u32; 2] = [2, 35];
+/// The newest glibc the binary may need: 2.39, Ubuntu 24.04's, which
+/// covers Ubuntu 24.04, Linux Mint 22, Debian 13, Fedora 40 or newer, and
+/// `SteamOS` and Arch. Older LTS releases use the Flatpak instead.
+/// `packaging/README.txt` records it.
+pub const GLIBC_FLOOR: [u32; 2] = [2, 39];
 
 /// The libraries the binary may link: glibc's (`libc`, `libm`, the
 /// loader, and `libdl`, `libpthread` and `librt`, which glibc 2.34 folded
@@ -271,14 +272,23 @@ mod tests {
 
     #[test]
     fn the_floor_itself_passes() {
-        let links = Links::parse(&objdump_text(&NEEDED, &["GLIBC_2.35", "GLIBC_2.2.5"]));
-        assert_eq!(links.glibc, Some(version("GLIBC_2.35")));
+        let links = Links::parse(&objdump_text(&NEEDED, &["GLIBC_2.39", "GLIBC_2.2.5"]));
+        assert_eq!(links.glibc, Some(version("GLIBC_2.39")));
+        assert_eq!(links.problems(), []);
+    }
+
+    #[test]
+    fn a_glibc_a_24_04_build_needs_passes() {
+        let links = Links::parse(&objdump_text(
+            &NEEDED,
+            &["GLIBC_2.2.5", "GLIBC_2.34", "GLIBC_2.38"],
+        ));
         assert_eq!(links.problems(), []);
     }
 
     #[test]
     fn a_glibc_above_the_floor_is_refused() {
-        for above in ["GLIBC_2.36", "GLIBC_2.35.1", "GLIBC_3.0"] {
+        for above in ["GLIBC_2.40", "GLIBC_2.39.1", "GLIBC_3.0"] {
             let links = Links::parse(&objdump_text(&NEEDED, &["GLIBC_2.2.5", above]));
             assert_eq!(
                 links.problems(),
@@ -363,14 +373,14 @@ mod tests {
     #[test]
     fn the_problems_read_as_a_sentence() {
         let problems = Problems(vec![
-            Problem::AboveFloor(version("GLIBC_2.38")),
+            Problem::AboveFloor(version("GLIBC_2.40")),
             Problem::Unnumbered("GLIBC_ABI_DT_RELR".into()),
             Problem::Disallowed("libfoo.so.1".into()),
             Problem::NoNeeded,
         ]);
         assert_eq!(
             problems.to_string(),
-            "it needs GLIBC_2.38, above the floor GLIBC_2.35; \
+            "it needs GLIBC_2.40, above the floor GLIBC_2.39; \
              it needs GLIBC_ABI_DT_RELR, which the floor can't vouch for; \
              it links libfoo.so.1, which is not an allowed library; \
              it needs no library: is it a dynamically linked ELF?"
@@ -413,7 +423,7 @@ mod tests {
 
     #[test]
     fn a_binary_the_floor_refuses_names_the_command_and_what_it_found() {
-        let text = objdump_text(&["libc.so.6", "libfoo.so.1"], &["GLIBC_2.39"]);
+        let text = objdump_text(&["libc.so.6", "libfoo.so.1"], &["GLIBC_2.40"]);
         let (result, _) = check(Ok(text.into_bytes()));
         let binary = PathBuf::from("staged").join("nova");
         let command = objdump(&binary).to_string();
@@ -421,7 +431,7 @@ mod tests {
             result.expect_err("refused").to_string(),
             format!(
                 "`{command}` shows a binary that won't run on every Linux the tarball is for: \
-                 it needs GLIBC_2.39, above the floor GLIBC_2.35; \
+                 it needs GLIBC_2.40, above the floor GLIBC_2.39; \
                  it links libfoo.so.1, which is not an allowed library"
             )
         );

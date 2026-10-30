@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova_bundle::bundle::metadata;
+use nova_bundle::fonts::font_licences;
 use nova_bundle::installer::layout::InstallerLayout;
 use nova_bundle::installer::winsparkle::{DLL, LICENCES};
 use nova_bundle::installer::wxs::COMPONENT_GUIDS;
@@ -459,9 +460,12 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
         .join("Programs")
         .join(INSTALL_DIR);
     let licences = LICENCES.map(|(_, installed)| installed);
+    let fonts = font_licences(Path::new("")).map(|(_, name)| name);
     for file in EXES
         .iter()
-        .chain(&["README.txt", "LICENSE", DLL])
+        .chain(&["README.txt", "LICENSE"])
+        .chain(&fonts)
+        .chain(&[DLL])
         .chain(&licences)
     {
         assert!(folder.join(file).is_file(), "{file}");

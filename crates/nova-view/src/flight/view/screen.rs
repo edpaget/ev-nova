@@ -112,11 +112,17 @@ impl<
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
     /// and coasts. [`MAP_KEY`] counts as let go too, so a key-down the
-    /// course map doesn't take no longer closes it.
+    /// course map doesn't take no longer closes it, and a map waiting for
+    /// M's release closes ([`FlightView::close_map`]): ours can't read the
+    /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
+    /// (@0xa19b-0xa1dc), so losing them counts as the release.
     fn release_keys(&mut self) {
         self.held.clear();
         self.map.release_keys();
         self.map_key_held = false;
+        if self.map_closing {
+            self.close_map();
+        }
     }
 
     /// The frame-rate readout starts afresh, "Calculating FPS..." on the
@@ -180,8 +186,11 @@ impl<
         self.catch_up();
         self.fade_frame(dt);
         if self.map_open {
-            // The map's own frame: its borders' null events.
-            self.map.tick(dt);
+            // The map's own frame: its borders' null events, none while
+            // it waits for M's release (`_BusyIdle` runs none).
+            if !self.map_closing {
+                self.map.tick(dt);
+            }
             return;
         }
         if self.death_frame(dt) {
@@ -228,6 +237,8 @@ impl<
         if self.map_open {
             // M types into Find while it is open.
             if press == Some(MAP_KEY) && !self.map.finding() {
+                // M's own close reads M held, so it waits for the release.
+                self.map_key_held = true;
                 self.close_map();
             } else {
                 self.map_input(input);

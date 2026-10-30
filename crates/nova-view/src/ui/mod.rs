@@ -82,6 +82,7 @@ pub mod new_pilot;
 pub mod note;
 pub mod picker;
 pub mod picture_variant;
+pub mod planet_comm;
 pub mod player_info;
 pub mod plunder;
 pub mod prefs;

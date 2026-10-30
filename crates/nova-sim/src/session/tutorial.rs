@@ -68,20 +68,24 @@ impl Session {
     /// The tutorial's part of a flight tick on `frame` (see the module
     /// docs): the hint block, with the ship intact or not, its squared
     /// distance from the centre and the nearest stellar
-    /// (`_FindNearestStellar`, the one F5 selects).
+    /// (`_FindNearestStellar` over [`Chart::pick_candidates`](super::Chart::pick_candidates),
+    /// the one F5 picks). It reads no owner (+0x14), so the land hint
+    /// (@0x709e8) and the -1 step's Hyperspace hint (@0x70bdc) may name a
+    /// stellar another visible system owns, worded as a planet or station
+    /// by its own listed record.
     pub(super) fn tutorial_tick(&mut self, frame: i16) {
         if self.ship.condition == Condition::Destroyed {
             return;
         }
         let position = self.ship.player.position;
         let distance_squared = position.x * position.x + position.y * position.y;
-        let sites = &self.chart.sites;
+        let (chart, pilot, statics) = (&self.chart, &self.pilot, &self.statics);
         let gates = self.setup.rules.source_for(RuleKey::GatePickRange);
         let hints = self.tutorial.check(
             frame,
             self.ship.condition == Condition::Intact,
             distance_squared,
-            || nearest_stellar_station(position, sites, gates),
+            || nearest_stellar_station(position, &chart.pick_candidates(pilot, statics), gates),
         );
         for hint in hints {
             self.space.say(&mut self.out, SimMessage::Tutorial(hint));
@@ -91,7 +95,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::{Chance, NeverFires};
@@ -188,6 +192,77 @@ mod tests {
             });
             assert_eq!(tick(&mut session).0, vec![hint], "{rules:?}");
         }
+    }
+
+    /// A new pilot's start in 131, which lists 140 at the centre and
+    /// stellar 200 at (60, 60), nearer the new pilot's (50, 50), with
+    /// `Flags` `flags`: 130, the lower visible lister, owns 200, so 131
+    /// doesn't show it.
+    pub(in crate::session) fn owned_nearer_in_131(flags: u32) -> FakePilotCatalog {
+        let mut catalog = crate::testkit::starting([Some(131), None, None, None]);
+        let near = crate::catalog::LandingSite {
+            flags,
+            ..crate::testkit::planet(200, 60.0, 60.0)
+        };
+        for (_, sites) in &mut catalog.sites {
+            sites.push(near);
+        }
+        catalog
+    }
+
+    /// `_FindNearestStellar` reads no owner (+0x14), so the land hint
+    /// names a stellar another visible system owns (@0x709e8), worded by
+    /// its own record's `Flags` 0x10 (@0x709e8-0x70a31).
+    #[test]
+    fn the_land_hint_names_a_nearer_stellar_another_system_owns_by_its_record() {
+        use crate::landing::StellarFlags;
+        for (flags, station) in [
+            (StellarFlags::CAN_LAND, false),
+            (StellarFlags::CAN_LAND | StellarFlags::STATION, true),
+        ] {
+            let catalog = owned_nearer_in_131(flags);
+            let mut session = new_pilot(&catalog);
+            assert_eq!(session.system(), SystemId(131));
+            assert_eq!(
+                session.stellars_shown().collect::<Vec<_>>(),
+                [StellarId(140)],
+                "130 owns 200"
+            );
+            let hint = SimMessage::Tutorial(TutorialHint::Land {
+                stellar: StellarId(200),
+                station,
+            });
+            assert_eq!(tick(&mut session).0, vec![hint], "Flags {flags:#x}");
+        }
+    }
+
+    /// The land hint picks only an active stellar (+0x44): with the new
+    /// pilot's 131 hidden, its own 200 at (60, 60), nearer the pilot's
+    /// (50, 50), has no visible holder, so the hint names 140, which 131
+    /// still lists and visible 130 holds.
+    #[test]
+    fn the_land_hint_passes_over_a_nearer_stellar_whose_holder_is_hidden() {
+        let mut catalog = crate::testkit::starting([Some(131), None, None, None]);
+        catalog.sites = vec![
+            (SystemId(130), vec![crate::testkit::planet(140, 0.0, 0.0)]),
+            (
+                SystemId(131),
+                vec![
+                    crate::testkit::planet(140, 0.0, 0.0),
+                    crate::testkit::planet(200, 60.0, 60.0),
+                ],
+            ),
+        ];
+        let mut session = new_pilot(&catalog);
+        assert_eq!(session.system(), SystemId(131));
+        let mut overlay = session.chart.galaxy.overlay().clone();
+        overlay.set_visible(SystemId(131), Some(false));
+        session.chart.galaxy.set_overlay(overlay);
+        let hint = SimMessage::Tutorial(TutorialHint::Land {
+            stellar: StellarId(140),
+            station: false,
+        });
+        assert_eq!(tick(&mut session).0, vec![hint], "200 not active");
     }
 
     #[test]

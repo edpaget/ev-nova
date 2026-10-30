@@ -35,8 +35,8 @@ impl Session {
     /// They show while [`Session::nav_target`] is set: nav mode 2 with a
     /// stellar selected (@0x2fcbf-0x2fccf), so neither mode 2 with none
     /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
-    /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
-    /// `Session::iff_dominated` models.
+    /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76, @0x2fd58),
+    /// by its `Flags2` or at run time ([`crate::domination::dominated`]).
     ///
     /// For the tests: the frame fills its HUD from the sub-state's own
     /// (`Session::fill_hud`).
@@ -92,8 +92,8 @@ impl Chart {
     /// They show while [`Session::nav_target`] is set: nav mode 2 with a
     /// stellar selected (@0x2fcbf-0x2fccf), so neither mode 2 with none
     /// (after a take-off) nor any other mode shows them. A dominated stellar takes the green frames: the same
-    /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76), which
-    /// `Session::iff_dominated` models.
+    /// +0x46 byte `_ColorCodeStellar` reads (@0x2fd40-0x2fd76, @0x2fd58),
+    /// by its `Flags2` or at run time ([`crate::domination::dominated`]).
     #[must_use]
     pub(super) fn nav_brackets(&self) -> Option<NavBrackets> {
         let stellar = self.nav_target()?;
@@ -102,7 +102,7 @@ impl Chart {
             stellar,
             position: site.map_or(Vec2::ZERO, |site| site.position),
             expand: self.nav_fly_in.expand(),
-            dominated: site.is_some_and(Session::iff_dominated),
+            dominated: site.is_some_and(crate::domination::dominated),
         })
     }
 
@@ -301,6 +301,21 @@ mod tests {
         assert!(session.nav_brackets().expect("bracketed").dominated);
         session.select_stellar(StellarPick::Slot(0));
         assert!(!session.nav_brackets().expect("bracketed").dominated);
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_shows_dominated() {
+        let catalog = three_stellars();
+        let mut session = session(&catalog);
+        session.select_stellar(StellarPick::Slot(1));
+        let stellar = session.nav_target().expect("selected");
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, stellar, true);
+        assert!(
+            session.nav_brackets().expect("bracketed").dominated,
+            "@0x2fd58"
+        );
     }
 
     /// Adds an idle NPC at `at` with a 40 x 20 sprite, giving its number.

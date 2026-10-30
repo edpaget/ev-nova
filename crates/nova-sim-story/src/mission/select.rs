@@ -47,6 +47,10 @@ pub struct Stellar {
     pub govt: Option<GovtId>,
     /// Whether it is destroyed.
     pub destroyed: bool,
+    /// Whether it is dominated (+0x46), by its `Flags2` or at run time
+    /// ([`OverlaidGalaxy::dominated`]): what `AvailRecord` -32001 reads
+    /// (`_IsMissionAvailable` @0x9b578).
+    pub dominated: bool,
     /// Whether every system at its system's place, hidden or not, lists
     /// it: the co-located chain walk of `_StellarsAreDistant`
     /// (@0x9e60-0x9ee4), over the chain `_LoadObjectData` builds of every
@@ -160,6 +164,7 @@ pub fn stellars_of(
                 flags2: stellar.flags2,
                 govt: galaxy.overlay().stellar(id).govt.unwrap_or(stellar.govt),
                 destroyed: galaxy.destroyed(id),
+                dominated: galaxy.dominated(id, stellar.flags2),
                 listed_at_place: map
                     .places()
                     .at(system)
@@ -681,6 +686,7 @@ mod tests {
             flags2: 0,
             govt,
             destroyed: false,
+            dominated: false,
             listed_at_place: true,
             index_govt: None,
         }
@@ -1443,6 +1449,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let stellars = stellars_of(
             &galaxy,
@@ -1465,6 +1474,38 @@ mod tests {
     }
 
     #[test]
+    fn each_stellar_is_dominated_by_the_overlay_or_its_flags() {
+        let systems: Vec<StarSystem> = vec![star(130, (0.0, 0.0), &[])];
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_dominated(StellarId(140), true);
+        let galaxy = OverlaidGalaxy::new(systems, overlay);
+        let listed = |id, flags2| ListedStellar {
+            id: StellarId(id),
+            systems: vec![SystemId(130)],
+            flags: 0,
+            flags2,
+            govt: None,
+            min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
+        };
+        let dominated: Vec<(i16, bool)> = stellars_of(
+            &galaxy,
+            &[
+                listed(140, 0),
+                listed(141, crate::market::DOMINATED),
+                listed(142, 0),
+            ],
+            SystemId(130),
+        )
+        .iter()
+        .map(|stellar| (stellar.id.0, stellar.dominated))
+        .collect();
+        assert_eq!(dominated, [(140, true), (141, true), (142, false)]);
+    }
+
+    #[test]
     fn each_stellar_is_in_its_owner_and_an_unowned_one_is_left_out() {
         let systems: Vec<StarSystem> = vec![
             star(130, (0.0, 0.0), &[]),
@@ -1478,6 +1519,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let listed = [
             listed(140, &[130, 131]),
@@ -1536,6 +1580,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let listed = [
             landable(140, &[130, 131]),
@@ -1593,6 +1640,9 @@ mod tests {
             flags2: 0x0010,
             govt: Some(FED),
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let stellars = stellars_of(
             &galaxy,
@@ -1612,6 +1662,7 @@ mod tests {
             flags2: 0x0010,
             govt,
             destroyed,
+            dominated: false,
             listed_at_place: true,
             // Past 132, the last system: never written, index 0.
             index_govt: Some(FED),
@@ -1648,6 +1699,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         }
     }
 

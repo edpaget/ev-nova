@@ -19,6 +19,14 @@
 //!   per 5-bit channel (`_BlitPixieTranslucentCopy` @0xc1140-0xc11ca),
 //!   the colour the `sÿst` +0x1f8 RGB555 (built @0x77d85-0x77e99).
 //!
+//! Its eight callers each pass their sprite's centre in whole pixels, and
+//! the view murks all of them: the ships (`_HandleShipDisplay` @0x2be3a),
+//! the cargo boxes (`_HandleBoxes` @0x2e181), the smoke (`_HandleSmoke`
+//! @0x2e367), the stellars (`_HandleStellarSprites` @0x2eea4), the
+//! explosions (`_HandleExplods` @0x2f7ab), the shots (`_HandleShot`
+//! @0x35c61), the asteroids (`_HandleAsteroids` @0x36446) and the escape
+//! pods (`_HandleEscapePods` @0x39fbc).
+//!
 //! Left out:
 //!
 //! - **The murk colour.** The sprite tint can only multiply, so the view

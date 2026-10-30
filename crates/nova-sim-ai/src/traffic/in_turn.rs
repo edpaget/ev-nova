@@ -42,7 +42,6 @@ use super::persons::GateView;
 use super::{Traffic, World, autopilot};
 use crate::ai::{Behaviour, Reaction, Surroundings};
 use crate::chance::Chance;
-use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Mode, Npc, NpcId};
@@ -113,7 +112,7 @@ impl Traffic {
                         RuleSource::Engine => true,
                         RuleSource::Bible => npc.arrived(),
                     };
-                    (answers && npc.condition == Condition::Intact)
+                    (answers && npc.active_not_disabled())
                         .then(|| behaviour.react(npc, strike, &around))
                 })
                 .collect()
@@ -186,7 +185,8 @@ pub fn wanted_headings(npcs: &[Npc]) -> BTreeMap<NpcId, i16> {
 /// keeps its target against the player
 /// ([`react::keeps_target`](crate::ai::react::keeps_target)), as the
 /// focus test's jump (@0x3bcac) skips the grudge. By the other reading
-/// every answered hit of the player's on an NPC counts. An escort's
+/// every answered hit of the player's on an NPC counts. A hit on a
+/// stellar's defence ship gives none (@0x3be88). An escort's
 /// shot, a hit by no ship, and a blast or shockwave (never answered)
 /// give none. Whether the victim answers (its arrival, its condition)
 /// is not read, as the grudge's test reads neither.
@@ -198,6 +198,10 @@ pub fn grudge(strike: &Strike, around: &Surroundings) -> Option<NpcId> {
     let ShipRef::Npc(id) = strike.ship else {
         return None;
     };
+    // No grudge for a hit on a stellar's defence ship (@0x3be88).
+    if around.npc(id).is_some_and(|npc| npc.defends.is_some()) {
+        return None;
+    }
     let kept = around.hit_focus == RuleSource::Engine
         && around
             .npc(id)
@@ -686,6 +690,20 @@ mod tests {
                 &mut |_, _| {},
             );
             assert_eq!(traffic.take_grudges(), [NpcId(1)]);
+        }
+    }
+
+    #[test]
+    fn a_hit_on_a_stellars_defence_ship_holds_no_grudge() {
+        let mut guard = ship(1, 0.0, 0.0);
+        guard.defends = Some(crate::catalog::StellarId(128));
+        let by_player = strike(n(1), ShipRef::Player);
+        for focus in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                grudges(focus, vec![guard.clone()], &[by_player]),
+                [],
+                "{focus:?}: @0x3be88"
+            );
         }
     }
 

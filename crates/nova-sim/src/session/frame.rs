@@ -1,7 +1,8 @@
 //! [`Session::fill_frame`]: what the flight view draws, filled into a
 //! [`FlightFrame`] for the view's `FlightSim` port
 //! (see [`flight_frame`](crate::flight_frame)): the nav and course here,
-//! the world's ships, shots and stellars in the `world` module.
+//! the world's ships, shots and stellars in the `world` module, the
+//! radar's stellars in the `radar` module.
 
 use super::Session;
 use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
@@ -9,6 +10,7 @@ use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 mod facts;
 mod hud;
 mod names;
+mod radar;
 mod world;
 
 impl Session {
@@ -45,6 +47,7 @@ impl Session {
             cargo_boxes,
             asteroids,
             stellars,
+            radar_stellars,
             effective_murk,
             system_murk,
             system_background,
@@ -89,6 +92,7 @@ impl Session {
         self.space.fill_boxes(cargo_boxes);
         self.space.fill_asteroids(asteroids);
         self.fill_stellars(stellars);
+        self.fill_radar_stellars(radar_stellars);
         *effective_murk = self.effective_murk();
         *system_murk = self.system_murk();
         *system_background = self.system_background();
@@ -182,6 +186,7 @@ pub(super) mod tests {
             glow: session.engine_glow(),
             cloak: session.player_cloak_shown(),
             ion_tint: session.player_ion_tint(),
+            paint: session.pilot().paint(),
             gate: GateFade::None,
             hover: session.hover_place(ShipRef::Player),
             framed: session.framed_by(ShipRef::Player),
@@ -211,6 +216,7 @@ pub(super) mod tests {
             glow: drawn_base(npc.display.glow),
             cloak: session.cloak_shown(npc),
             ion_tint: npc.display.ion_tint,
+            paint: session.space.npc_paint(npc, &session.statics),
             gate: GateFade::of(&npc.mode),
             hover: session.hover_place(ship),
             framed: session.framed_by(ship),
@@ -237,6 +243,7 @@ pub(super) mod tests {
             on_radar: true,
             iff: ShipIff::Threat,
             mass: 999.0,
+            paint: Some(crate::outfit_effects::Rgb15 { r: 9, g: 9, b: 9 }),
             ..FrameShip::default()
         }
     }
@@ -313,6 +320,12 @@ pub(super) mod tests {
                 frozen: true,
                 counts_none: true,
                 gate_frame: Some(9),
+            }],
+            radar_stellars: vec![crate::flight_frame::FrameRadarStellar {
+                id: StellarId(999),
+                position: Vec2::new(9.0, 9.0),
+                square: true,
+                type_width: Some(999),
                 iff: Some(crate::iff::StellarIff::Dominated),
             }],
             effective_murk: 99,
@@ -390,6 +403,30 @@ pub(super) mod tests {
         let mut frame = stale();
         session.fill_frame(&mut frame);
         frame
+    }
+
+    #[test]
+    fn the_players_record_carries_the_pilots_paint() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let paint = crate::outfit_effects::Rgb15 { r: 4, g: 5, b: 6 };
+        session.pilot.paint = Some(paint);
+        assert_eq!(filled(&session).player().paint, Some(paint));
+        session.pilot.paint = None;
+        assert_eq!(filled(&session).player().paint, None, "over a stale one");
+    }
+
+    #[test]
+    fn an_npcs_record_carries_the_paint_its_person_or_government_gives() {
+        use crate::session::ship_paint::tests::{painted, populated};
+        let session = populated(&painted(0x0010_2030));
+        let frame = filled(&session);
+        let npc = frame.npcs().next().expect("the person flies");
+        let paint = crate::outfit_effects::Rgb15 { r: 2, g: 4, b: 6 };
+        assert_eq!(npc.paint, Some(paint), "its person's Color");
+        let unpainted = populated(&painted(0));
+        let frame = filled(&unpainted);
+        let npc = frame.npcs().next().expect("the person flies");
+        assert_eq!(npc.paint, None, "over a stale one");
     }
 
     #[test]
@@ -724,7 +761,6 @@ pub(super) mod tests {
             frozen: session.frame_frozen(id),
             counts_none: session.counts_no_frames(id),
             gate_frame: session.gate_frame(id),
-            iff: session.stellar_iff(id),
         }
     }
 

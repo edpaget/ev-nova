@@ -180,14 +180,16 @@ impl Session {
         let mut slots = vec![(
             ShipRef::Player,
             Slot::Player,
-            disabled(self.player_condition()),
+            // The player defends no stellar.
+            disabled(self.player_condition(), false),
             false,
         )];
         let mut npcs: Vec<_> = self
             .npcs()
             .iter()
             .map(|npc| {
-                let held = disabled(npc.condition) || self.held_disabled(npc);
+                let held =
+                    disabled(npc.condition, npc.defends.is_some()) || self.held_disabled(npc);
                 (
                     ShipRef::Npc(npc.id),
                     slot_of(npc),
@@ -449,7 +451,10 @@ mod tests {
         let layers = session.draw_layers();
         assert!(session.player_led().count() > 0);
         for npc in session.npcs() {
-            let layer = ShipLayer::of(disabled(npc.condition), npc.escorts_player());
+            let layer = ShipLayer::of(
+                disabled(npc.condition, npc.defends.is_some()),
+                npc.escorts_player(),
+            );
             assert!(
                 layers.contains(&(ShipRef::Npc(npc.id), layer)),
                 "{layers:?}"
@@ -503,6 +508,39 @@ mod tests {
             session
                 .draw_layers()
                 .contains(&(ShipRef::Npc(id), ShipLayer::Disabled))
+        );
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_is_laid_out_in_the_ships_layer() {
+        // `_IsDisabled` never calls a defence ship disabled by its armour
+        // (@0x2d6f), so `_HandleShipDisplay` keeps it in `0x3b541c`.
+        let bible = Rulebook::default().with_override(RuleKey::ShipOverlap, RuleSource::Bible);
+        for rules in [Rulebook::default(), bible] {
+            breaking_up_defence_ship_is_in_the_ships_layer(rules);
+        }
+    }
+
+    fn breaking_up_defence_ship_is_in_the_ships_layer(rules: Rulebook) {
+        let (_, mut session) = flying(rules);
+        let id = session.npcs()[0].id;
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.defends = Some(crate::catalog::StellarId(128));
+        npc.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let slot = slot_of(&session.npcs()[0]);
+        session
+            .space
+            .slot_sprites
+            .layers
+            .put(slot, ShipLayer::Disabled);
+        session.prepare_all_sprites();
+        let layers = session.draw_layers();
+        assert!(
+            layers.contains(&(ShipRef::Npc(id), ShipLayer::Ships)),
+            "{layers:?}"
         );
     }
 

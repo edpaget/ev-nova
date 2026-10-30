@@ -84,7 +84,11 @@ impl Space {
     /// NPC `ship` has been repaired by a ship docked with it (see the
     /// module docs): unboarded, then, while disabled, its armour raised
     /// as the player's is, `_IsDisabled` holding a mission's rescue ship
-    /// disabled at any armour; silently.
+    /// disabled at any armour; silently. A stellar's defence ship is stored
+    /// disabled only while it is held
+    /// ([`Condition::stored_disabled`](crate::combat::hull::Condition::stored_disabled)),
+    /// and one breaking up is not [`Condition::Disabled`], so the
+    /// defence-ship branch of `_IsDisabled` (@0x2d6f) never changes this.
     pub(super) fn npc_repaired(
         &mut self,
         pilot: &Pilot,

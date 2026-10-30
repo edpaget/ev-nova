@@ -59,12 +59,14 @@ impl Session {
     /// gives true. False, and nothing changes, when the ship has not
     /// landed at a stellar with a bar. It first saves the nav, as
     /// `_DoBarDialog` does (@0x48efe-0x48f11), for the bar's map to put
-    /// back ([`Session::restore_bar_nav`]).
+    /// back ([`Session::restore_bar_nav`]), and forgets the last race
+    /// winner (@0x48f61-0x48f6c; see the `gamble` module).
     pub fn open_bar(&mut self, chance: &mut dyn Chance) -> bool {
         let Some(site) = self.chart.bar_site(self.mode.landed()) else {
             return false;
         };
         self.chart.bar_nav = Some(self.chart.nav);
+        self.port.reset_race();
         let commercial = self
             .setup
             .pick_string(COMMERCIALS, chance)

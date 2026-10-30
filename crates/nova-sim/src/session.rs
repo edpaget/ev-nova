@@ -409,7 +409,8 @@
 //! - `port: port::Port` (`port` module; phase 7, done): the landing,
 //!   take-off and spaceport visit under way (the dock request and land
 //!   key, the take-off grace and touchdown, the stay, the bar's news, the
-//!   outfitter visit, the day's rolls and the ranks' port prices); landing
+//!   outfitter visit, the day's rolls, the ranks' port prices and the
+//!   bar's race); landing
 //!   and take-off themselves (`land`, `dock`, `take_off`) coordinate and
 //!   stay on `Session`.
 //! - `run: mission_run::MissionRun` (`mission_run` module; phase 7, done):
@@ -469,6 +470,8 @@ mod deadly_stellars;
 mod derelicts;
 mod description;
 mod display_step;
+mod dock_tail;
+mod dominated_stellars;
 mod double_time;
 #[cfg(test)]
 mod drift_blast;
@@ -507,6 +510,7 @@ mod fixture_setters;
 mod flight_events;
 mod frame;
 mod free_cargo;
+mod gamble;
 mod game_work;
 mod gate_escorts;
 mod gate_follow;
@@ -559,6 +563,8 @@ mod murk;
 mod nav;
 mod nebulae;
 mod news;
+#[cfg(test)]
+mod npc_destinations;
 mod npc_escape;
 mod npc_kinds;
 mod operator_moves;
@@ -569,6 +575,7 @@ mod person_offers;
 mod persons;
 mod pilot_panel;
 mod pirate_plunder;
+mod planet_comm;
 #[cfg(test)]
 mod planet_weapons;
 mod player_cloak;
@@ -607,6 +614,7 @@ mod setup;
 mod ship_change;
 mod ship_display;
 mod ship_loop;
+mod ship_paint;
 mod shipyard_listing;
 mod shot_slots;
 #[cfg(test)]
@@ -621,6 +629,7 @@ mod status_cargo;
 mod steering;
 #[cfg(test)]
 mod stellar_attackers;
+mod stellar_defence;
 mod stellar_guns;
 mod stellar_picks;
 mod stellars;
@@ -632,6 +641,7 @@ mod swarm_formation;
 mod switched_out;
 mod system_background;
 mod take_off_moves;
+mod takeoff_frames;
 mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
@@ -645,6 +655,7 @@ mod vacated_berths;
 mod voices;
 mod wait_for_me;
 mod warp_stage;
+mod wormhole_no_exit;
 mod y_explosion;
 
 use capture::CaptureFuel;
@@ -772,6 +783,7 @@ use crate::top_speed;
 #[cfg(test)]
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::stellar_defence::DEFENCE_RESERVE;
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
 use crate::trig::intercept_angle;
@@ -900,6 +912,7 @@ impl FightTerms {
             sprite: self.sprite,
             slot,
             resists: self.resists,
+            defends: npc.defends,
         }
     }
 }
@@ -934,8 +947,10 @@ enum Jump {
 /// space is [`Session::click_in_space`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StellarPick {
-    /// The stellar in this slot of the system's navigation defaults,
-    /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
+    /// The stellar in this slot of the system's navigation defaults
+    /// (`NavDefs`), from 0, gaps kept: the original's keys 1-4 and F1-F4
+    /// (@0x69cf6-0x69f17). An empty slot, or one naming a stellar another
+    /// system owns, selects nothing.
     Slot(usize),
     /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
     /// target ([`nearest_stellar`](crate::landing::nearest_stellar)): the original's F5, which picks
@@ -1166,11 +1181,12 @@ impl Session {
         for kept in nebula::kept(&pilot.story_fired) {
             pilot.galaxy.set_nebula_explored(kept, true);
         }
+        let listed = catalog.listed_stellars();
+        stellar_defence::keep_on_load(&mut pilot, &listed);
         // Built first, from the star map and the saved overlay alone: the
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
-        let listed = catalog.listed_stellars();
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {
@@ -1264,6 +1280,11 @@ impl Session {
                 .map(|life| life.id)
                 .collect(),
             lives,
+            stellar_scripts: catalog
+                .stellar_scripts()
+                .into_iter()
+                .map(|s| (s.id, s))
+                .collect(),
             fallback_frame: catalog.fallback_frame_size(),
             fallback_counts: catalog.fallback_counts_frames(),
             uniform_dudes: mission_ships::uniform_dudes(&missions, catalog),
@@ -1280,6 +1301,7 @@ impl Session {
             nebulae: catalog.nebulae().into(),
             place_names: catalog.place_names(),
             first_stellars: catalog.first_stellars().into_iter().collect(),
+            nav_def_slots: catalog.nav_def_slots().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             stellar_weapons: catalog.stellar_weapons().into_iter().collect(),
             boom_sounds: catalog.boom_sounds().into_iter().collect(),
@@ -1893,8 +1915,9 @@ impl Session {
     /// ([`Entry::entrance`]: a take-off, the start, the pod's rescue)
     /// re-snapped, mission escorts too, beside the player.
     ///
-    /// The ships dropped give their aux ships back, but the fleet's
-    /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
+    /// The ships dropped give their aux ships back, and their defence
+    /// ships to their stellars (see the `stellar_defence` module), but the
+    /// fleet's escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
     /// above 4 that the player leads, defending no stellar, of no
     /// mission slot and not disabled, whole (@0x3bf7e-0x3bfb6). A
     /// disabled escort has left the fleet already, and mission escorts
@@ -1919,6 +1942,7 @@ impl Session {
         let kept: BTreeSet<NpcId> = self.space.escorts.fleet.iter().copied().flatten().collect();
         let kept_escorts = self.space.fleet_kept(&self.pilot);
         self.give_back_aux_ships(&kept);
+        self.refund_defenders(&kept);
         let table = self
             .chart
             .spawn_table(&self.pilot, &self.statics, &self.setup, catalog);
@@ -1945,6 +1969,9 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            // Every stellar the system lists, shown or not, which a fleet
+            // may come out of (see the `npc_destinations` module).
+            listed: &self.chart.listed,
             // No tractor's step: the entry flies no ship. No stellar
             // shots can shoot down either: it decides for no ship.
             ..World::new(&self.chart.sites)
@@ -2060,8 +2087,10 @@ impl Session {
     /// advance pass's think and flight ([`Session::game_work`]), the gate
     /// exit's arrivals pass ([`Session::gate_exit_pass`]) and double
     /// time's second pass (see the `double_time` module) step the traffic
-    /// in it.
+    /// in it. The pilot's defence ships left are lent to the traffic for
+    /// the step (see the `stellar_defence` module).
     fn step_traffic<R>(&mut self, f: impl FnOnce(&mut Traffic, World<'_>) -> R) -> R {
+        self.lend_defence_ships();
         let system_govt = self.chart.galaxy.govt(self.pilot.system);
         let facts = control::Facts {
             pilot: &self.pilot,
@@ -2072,6 +2101,7 @@ impl Session {
         let type_widths = self.gate_type_widths();
         let world = World {
             sites: &self.chart.sites,
+            listed: &self.chart.listed,
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2098,6 +2128,7 @@ impl Session {
             targeted: &targeted,
             type_widths: &type_widths,
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            defence_reserve: self.setup.spawn_reserve(DEFENCE_RESERVE),
             arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
@@ -2135,6 +2166,7 @@ impl Session {
             destroyable: &self.statics.destroyable,
         };
         let stepped = f(&mut self.space.traffic, world);
+        self.lend_defence_ships();
         // The grudges the traffic decided as it answered strikes, in turn
         // (`Traffic::take_grudges`). The original sets each inside
         // `_DamageShip` as its hit lands; here it lands right after the
@@ -2168,6 +2200,7 @@ impl Session {
         let system_govt = self.chart.galaxy.govt(system);
         World {
             sites: &self.chart.sites,
+            listed: &self.chart.listed,
             player: Some(self.player_side()),
             govts: &self.statics.govts,
             system_govt,
@@ -2194,6 +2227,7 @@ impl Session {
             targeted: &crate::ai::NO_AIMED_DAMAGE,
             type_widths: &crate::traffic::NO_TYPE_WIDTHS,
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            defence_reserve: self.setup.spawn_reserve(DEFENCE_RESERVE),
             arrival_hits: self.setup.rules.source_for(RuleKey::ArrivalHits),
             snipe_brake_lead: self.setup.rules.source_for(RuleKey::SnipeBrakeLead),
             hit_focus: self.setup.rules.source_for(RuleKey::HitFocus),
@@ -2504,9 +2538,11 @@ impl Session {
     /// Raises [`Fate::Disabled`] for each NPC that `was` intact before the
     /// fight's tick and is no longer: disabled, or broken up at once, which
     /// the original counts as disabled too (`_DamageShip` @0x3ae5b,
-    /// @0x3af8b), as [`Session::punish`] convicts it of both. A mission's
-    /// special ship is counted disabled, drawing on `chance` (see the
-    /// `mission_ships` module).
+    /// @0x3af8b), as [`Session::punish`] convicts it of both. A stellar's
+    /// defence ship is neither, as `_IsDisabled` never holds for it
+    /// (@0x2d6f, [`Condition::stored_disabled`]). A mission's special ship
+    /// is counted disabled, drawing on `chance` (see the `mission_ships`
+    /// module).
     fn raise_disabled(&mut self, was: &[NpcBefore], chance: &mut dyn Chance) {
         let downed: Vec<NpcId> = self
             .space
@@ -2514,7 +2550,7 @@ impl Session {
             .npcs()
             .iter()
             .filter(|npc| {
-                npc.condition != Condition::Intact
+                npc.condition.stored_disabled(npc.defends.is_some())
                     && was
                         .iter()
                         .any(|before| before.id == npc.id && before.condition == Condition::Intact)
@@ -2537,7 +2573,9 @@ impl Session {
     /// breaking one up, which is disabling it too
     /// when it `was` intact before (as `_DamageShip` slaps both). Each
     /// victim's condition, government and mission mark are as it `was`
-    /// before the fight's tick. A mission's special ship, of any mark,
+    /// before the fight's tick. A stellar's defence ship is convicted of
+    /// neither, as `_DamageShip`'s target gate skips the block for it
+    /// (@0x3ad81-0x3ad89). A mission's special ship, of any mark,
     /// is convicted of neither: `_DamageShip` passes the ship's mark
     /// (@0x3adb3, @0x3ae08), and `_SlapWithPenalty` slaps only for none
     /// (@0x9c10; see the [`legal`] module's "Crimes"). Each conviction
@@ -2568,6 +2606,7 @@ impl Session {
                 condition,
                 govt,
                 marked: false,
+                defends: false,
                 ..
             }) = was.iter().find(|before| before.id == id)
             else {
@@ -3227,6 +3266,8 @@ impl Session {
         let left = self.pilot.system;
         self.chart
             .jump_refresh_move(&mut self.pilot, &self.setup, &mut self.out, left);
+        // The bribe roll forgotten (@0x6bfd3; see the `planet_comm` module).
+        self.chart.forget_bribe_roll();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.space.arm_strength_timer(chance);
@@ -3671,7 +3712,11 @@ impl Session {
     /// `Session::with_wormholes` says otherwise), read from `catalog`.
     /// Any outcome ends the entry and lets go of the nav selection, the
     /// mode kept, as the take-off's tail the original's wormhole joins
-    /// does (@0x66edb-0x66f40, @0x674d2); a refusal changes nothing else.
+    /// does (@0x66edb-0x66f40, @0x674d2). With no exit it beeps
+    /// [`SimSound::Refused`] and still runs that tail in the system the
+    /// player stays in, which is set up afresh, the take-off grace
+    /// started, the ship left where it is ([`Session::refuse_no_exit`]; see
+    /// the `wormhole_no_exit` module).
     ///
     /// Out of a hypergate or wormhole the ship comes out as the session's
     /// [`GateArrivalRule`] says (the engine's unless
@@ -3727,7 +3772,7 @@ impl Session {
         let Some(exit) =
             wormhole_exit(here, player, &sites, owner_of, self.setup.wormholes, chance)
         else {
-            self.chart.deselect();
+            self.refuse_no_exit(catalog, chance);
             return Err(GateRefusal::NoExit);
         };
         let (site, system) = (*exit.site, exit.system);
@@ -3776,13 +3821,10 @@ impl Session {
                 placed
             }
         };
-        // A gate's exit joins the take-off's path before its seed
-        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
-        // (@0x6709b; see the `precalced` module), whose `_ResetPlayer`
-        // writes -1 to +0xc908 (see the `stray_words` module).
-        self.space.arm_strength_timer(chance);
-        self.reset_precalced();
-        self.ship.fate.pod_zeroed = false;
+        // A gate's exit joins the take-off's path before its fold and
+        // seed (`_HandlePlayerDockRequest` @0x66f40, @0x66f72, @0x6706f)
+        // and runs the tail's first half (see the `dock_tail` module).
+        self.begin_dock_tail(chance);
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -3804,6 +3846,9 @@ impl Session {
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
+        // The frames' reset, the exit gate opened out of a hypergate
+        // (@0x675ce-0x67646; see the `takeoff_frames` module).
+        self.reset_stellar_frames((kind == GateKind::Hypergate).then_some(exit.id));
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
         // out, and again after the stellars' visibility (@0x67658): every
         // NPC's fade steps twice.
@@ -4067,36 +4112,21 @@ impl Session {
         // them. The take-off's restart of the auxiliary ships comes
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
-        // The dock request's tail clears the player's ionization, charge
-        // and colour, before the strength timer (@0x67008, @0x67020).
-        self.ship.ion = Ion::default();
-        // Its fold (@0x66f83-0x66ff6; see the `ship_display` module).
-        self.ship.take_off_fold();
-        self.space.arm_strength_timer(chance);
-        // The dock request's reset, after the stay's days and before the
-        // setup (@0x6709b; see the `precalced` module), whose
-        // `_ResetPlayer` writes -1 to +0xc908 (see the `stray_words`
-        // module).
-        self.reset_precalced();
-        self.ship.fate.pod_zeroed = false;
+        // The dock request's tail before the setup, after the stay's days
+        // (see the `dock_tail` module; the glow is already out).
+        self.begin_dock_tail(chance);
         self.populate(catalog, chance);
+        // The frames' reset (@0x675ce-0x675fa; see the `takeoff_frames`
+        // module).
+        self.reset_stellar_frames(None);
         self.out.sounds.push(SimSound::TookOff);
         self.out.save_due = true;
         self.run.raise(StoryEvent::TookOff { stellar });
-        // The dock request's rebuild point (@0x674c7, @0x67653).
-        self.rebuild_stellars();
-        // Its second `_PrepareAllSprites` (@0x67658), `populate`'s being
-        // the first (@0x6764e): every NPC's fade steps again.
-        self.prepare_all_sprites();
-        // Its tail: the dock request dropped (@0x6374a-0x63759; see the
-        // `clearance` module), the nav selection let go, the mode kept,
-        // then the course cued (@0x674d2-0x674d8; see the `nav` module).
-        // The original's bar is redrawn before this with the selection
+        // The rest of the tail (see the `dock_tail` module). The
+        // original's bar is redrawn before its deselect with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
         // flight view's `took_off`.
-        self.port.dock = None;
-        self.chart.deselect();
-        self.cue_course();
+        self.end_dock_tail();
         Some(stellar)
     }
 
@@ -5531,7 +5561,9 @@ impl Session {
     /// person, who lives on or is gone for good as
     /// [`RuleKey::CapturedPerson`] reads (see the `capture` module),
     /// intact, its armour at half its most, its cloak's fade and direction
-    /// zeroed (@0x946e3, @0x946f9), and then as [`Session::fleet_up`]
+    /// zeroed (@0x946e3, @0x946f9), defending no stellar (+0x8c = -1,
+    /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
+    /// and then as [`Session::fleet_up`]
     /// says: a mission's special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
     /// `captured_mission_ship` module). Its voice's variant is rolled on
@@ -5555,6 +5587,7 @@ impl Session {
         npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
         npc.condition = Condition::Intact;
         npc.cloak = crate::cloak::Cloak::default();
+        npc.defends = None;
         self.fleet_up(id, None);
         // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
         // see the `voices` module).
@@ -5691,7 +5724,8 @@ impl Session {
     /// [`Session::become_class`], with the reserves held.
     ///
     /// The player takes the captured ship's place, velocity and heading
-    /// (`_DoShipCapture` @0x416e3-0x41722) and lets go of the nav
+    /// (`_DoShipCapture` @0x416e3-0x41722) and its paint, or none
+    /// (@0x41728-0x4175e; see the `capture` module), and lets go of the nav
     /// selection, the ship target and the secondary (@0x4172e-0x4173e);
     /// "Use As Escort" leaves them as they are. Its fuel is drawn on
     /// `chance` below the old ship's capacity while the cache holds it,
@@ -5774,6 +5808,10 @@ impl Session {
             outfits,
             reserves: ReservePolicy::Hold,
         };
+        // The player takes the captured ship's paint, or none
+        // (`_DoShipCapture` @0x41728-0x4175e): after `OnRetire` and
+        // `OnCapture` by the engine, before them by the other reading.
+        self.pilot.paint = self.space.npc_paint(&npc, &self.statics);
         self.become_class(&record, takeover, |session| {
             if !hooks_first {
                 session.retire_for_capture(record.id, chance);
@@ -6455,7 +6493,8 @@ impl Space {
     /// [`rating`](crate::rating)): the player answers for the hit
     /// ([`Space::players_hit`], which reads the escorts the strikes lost,
     /// `losses`), and the victim's government, from `was`, is not
-    /// derelict. As the original's `_DamageShip` (@0x3ad4f-0x3ae53), the
+    /// derelict, and it defended no stellar (@0x3ad81-0x3ad89). As the
+    /// original's `_DamageShip` (@0x3ad4f-0x3ae53), the
     /// credit comes with the hit, before the victim is taken out.
     fn credit_kills(
         &mut self,
@@ -6471,7 +6510,7 @@ impl Space {
             };
             let Some(govt) = was
                 .iter()
-                .find(|before| before.id == id)
+                .find(|before| before.id == id && !before.defends)
                 .map(|before| before.govt)
             else {
                 continue;
@@ -6587,8 +6626,9 @@ impl Chart {
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
-    /// ships, persons and fleets, the pilot's person escorts aside, and
-    /// the `düde`s of the active missions' special ships.
+    /// ships, persons and fleets, the pilot's person escorts aside, the
+    /// `düde`s of the active missions' special ships, and the
+    /// `DefenseDude`s of the stellars it lists.
     fn spawn_table(
         &self,
         pilot: &Pilot,
@@ -6616,6 +6656,21 @@ impl Chart {
         table.add_mission_dudes(
             catalog,
             &mission_ships::mission_dudes(pilot, statics),
+            &statics.ships,
+            &statics.outfits,
+            &statics.arsenal,
+            setup.npc_items(),
+        );
+        // The `DefenseDude`s of the stellars the system lists, which its
+        // defence fleets are drawn from (see the `stellar_defence` module).
+        let defence: Vec<_> = self
+            .listed
+            .iter()
+            .filter_map(|site| site.defense_dude)
+            .collect();
+        table.add_mission_dudes(
+            catalog,
+            &defence,
             &statics.ships,
             &statics.outfits,
             &statics.arsenal,
@@ -6726,18 +6781,13 @@ impl Chart {
     /// The markup at `site`, one of the system's: by whether it has a
     /// government, the player's legal record in the system (with the
     /// system's government, 0 in an independent system), and whether it
-    /// is dominated ([`Markup::of`]).
-    ///
-    /// The port has no domination state yet (task `planet-domination`):
-    /// the only dominated stellars are those whose `Flags2` has
-    /// [`DOMINATED`](market::DOMINATED), so a stellar the player dominates
-    /// by hailing is not yet priced at 1.5. That task feeds its dominated
-    /// state in here.
+    /// is dominated ([`Markup::of`]; [`crate::domination::dominated`], by its
+    /// `Flags2` or at run time, @0x5dc3a).
     fn markup(&self, pilot: &Pilot, setup: &Setup, site: &LandingSite) -> Markup {
         Markup::of(
             site.govt.is_some(),
             self.system_record(pilot, setup),
-            site.flags2 & market::DOMINATED != 0,
+            crate::domination::dominated(site),
         )
     }
 
@@ -6932,6 +6982,10 @@ struct NpcBefore {
     govt: Option<GovtId>,
     /// Whether it carried a mission's mark, of any slot.
     marked: bool,
+    /// Whether it defended a stellar: the player's hits on it are no
+    /// crime and no kill (`_DamageShip` @0x3ad81-0x3ad89, see the
+    /// `players_hits` module).
+    defends: bool,
 }
 
 impl NpcBefore {
@@ -6941,6 +6995,7 @@ impl NpcBefore {
             condition: npc.condition,
             govt: npc.govt,
             marked: npc.mission.is_some(),
+            defends: npc.defends.is_some(),
         }
     }
 }
@@ -10484,7 +10539,7 @@ pub(super) mod tests {
     }
 
     /// An escort of ship class `ship`, out of no bay.
-    fn fleet_escort(ship: i16) -> Escort {
+    pub(super) fn fleet_escort(ship: i16) -> Escort {
         Escort {
             ship: ShipId(ship),
             reserves: Reserves::default(),
@@ -19429,6 +19484,7 @@ pub(super) mod tests {
             condition: Condition::Disabled,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         let broken_up_by = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
@@ -19496,6 +19552,7 @@ pub(super) mod tests {
             condition: Condition::Disabled,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         session.space.credit_kills(
             &mut session.pilot,
@@ -19536,6 +19593,7 @@ pub(super) mod tests {
                 condition: Condition::Disabled,
                 govt: Some(GovtId(140)),
                 marked: false,
+                defends: false,
             }];
             let own_blast = Strike {
                 ship: ShipRef::Npc(NpcId(0)),
@@ -19575,6 +19633,7 @@ pub(super) mod tests {
             condition: Condition::Intact,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         let strike = |ship, downed| Strike {
             ship,
@@ -20286,6 +20345,7 @@ pub(super) mod tests {
             condition: Condition::Intact,
             govt: Some(GovtId(140)),
             marked: false,
+            defends: false,
         }];
         let rating = session.pilot().combat_rating();
         let witness = Witness::default();
@@ -22299,22 +22359,17 @@ pub(super) mod tests {
 
     #[test]
     fn diagnostics_are_drained_once() {
+        // A weapon the fight reports: a fighter bay with no ship to carry.
         let mut catalog = armed();
-        catalog.weapons[0].flags3 = 0x0020;
+        catalog.weapons[0].guidance = 99;
+        catalog.weapons[0].ammo_type = -1;
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..5 {
             work(&mut session, &catalog, Controls::default());
         }
-        assert_eq!(
-            session.take_diagnostics(),
-            [SimDiagnostic::UnimplementedWeaponFlag {
-                weapon: WeaponId(128),
-                field: crate::combat::flags::FlagField::Flags3,
-                bit: 0x0020
-            }]
-        );
-        assert_eq!(session.take_diagnostics(), []);
+        assert_ne!(session.take_diagnostics(), [], "made while firing");
+        assert_eq!(session.take_diagnostics(), [], "drained");
     }
 
     #[test]
@@ -28738,7 +28793,11 @@ pub(super) mod tests {
             .expect("through");
         assert_eq!(
             session.take_events(),
-            [SessionEvent::SystemChanged, SessionEvent::StarfieldReset]
+            [
+                SessionEvent::SystemChanged,
+                SessionEvent::StarfieldReset,
+                SessionEvent::StellarFramesReset
+            ]
         );
         let catalog = wormholes();
         for (roll, system) in [(0, 131), (1, 130)] {
@@ -28749,7 +28808,11 @@ pub(super) mod tests {
             );
             assert_eq!(
                 session.take_events(),
-                [SessionEvent::SystemChanged, SessionEvent::StarfieldReset],
+                [
+                    SessionEvent::SystemChanged,
+                    SessionEvent::StarfieldReset,
+                    SessionEvent::StellarFramesReset
+                ],
                 "{system}"
             );
         }
@@ -30133,7 +30196,13 @@ pub(super) mod tests {
         );
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.chart.sites, [planet(141, 0.0, 0.0)]);
-        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert_eq!(
+            session.take_events(),
+            [
+                SessionEvent::SystemChanged,
+                SessionEvent::StellarFramesReset
+            ]
+        );
         assert!(on_the_map(session));
     }
 

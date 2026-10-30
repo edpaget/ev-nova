@@ -9,12 +9,12 @@
 //! - Asteroids draw in their own layer, over the stellars and under the
 //!   disabled ships and the cargo boxes (`_SetupSpriteWorld`
 //!   @0x21d0c-0x21d74).
-//!
-//! Left out: `_HandleSpriteMurkiness` (@0x36446): the view murks shots
-//! alone so far ([`murk`](super::murk)), and
-//! rdm:task/murk-other-sprites draws the asteroids murky.
+//! - An asteroid is murked at its position, seen from the player's ship
+//!   ([`murk`](super::murk); `_HandleSpriteMurkiness` @0x36422-0x36446,
+//!   rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use super::catalog::Looks;
+use super::murk::murk_tint;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
@@ -29,16 +29,19 @@ pub struct AsteroidShown {
     pub frame: u16,
     /// Its type, `spïn` 800 + `kind`.
     pub kind: u8,
+    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
+    pub murk: u8,
 }
 
-/// Draws each of `asteroids` as its type's frame; a crossed box for one
-/// whose sheet was not read.
+/// Draws each of `asteroids` as its type's frame, murked as it says; a
+/// crossed box for one whose sheet was not read.
 pub fn draw_asteroids(list: &mut DrawList, asteroids: &[AsteroidShown], looks: &Looks) {
     for shown in asteroids {
         match looks.asteroid_sheet(shown.kind) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                list.sprite(sheet.image.frame(frame), shown.at, Color::WHITE);
+                let tint = murk_tint(Color::WHITE, shown.murk);
+                list.sprite(sheet.image.frame(frame), shown.at, tint);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -85,6 +88,7 @@ mod tests {
             at: at(x, 5.0),
             frame,
             kind,
+            murk: 0,
         }
     }
 
@@ -110,6 +114,22 @@ mod tests {
         let mut expected = DrawList::new();
         expected.sprite(ImageKey::sprite(1804, 2), at(1.0, 5.0), Color::WHITE);
         assert_eq!(list, expected);
+    }
+
+    #[test]
+    fn a_murky_asteroid_is_darkened_by_its_murk() {
+        let murky = AsteroidShown {
+            murk: 16,
+            ..shown(1.0, 0, 0)
+        };
+        let mut list = DrawList::new();
+        draw_asteroids(&mut list, &[murky, shown(2.0, 0, 0)], &looks());
+        let mut expected = DrawList::new();
+        let darkened = murk_tint(Color::WHITE, 16);
+        assert_eq!(darkened, Color::rgba(127, 127, 127, 255));
+        expected.sprite(ImageKey::sprite(1800, 0), at(1.0, 5.0), darkened);
+        expected.sprite(ImageKey::sprite(1800, 0), at(2.0, 5.0), Color::WHITE);
+        assert_eq!(list, expected, "murk 0 is white");
     }
 
     #[test]

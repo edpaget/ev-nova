@@ -62,12 +62,15 @@ pub fn damage(hull: &HullSpec) -> f32 {
 }
 
 /// Takes a shockwave of `damage` off `reserves`, of a ship of `hull` that
-/// was in `condition` before it, with the floors that keep it from
-/// destroying or newly disabling the ship (see the module docs); `rule`
-/// says when a ship is disabled.
+/// was in `condition` before it and `defends` a stellar or not, with the
+/// floors that keep it from destroying or newly disabling the ship (see
+/// the module docs); `rule` says when a ship is disabled. Whether it was
+/// disabled before is its stored condition's
+/// ([`Condition::stored_disabled`]).
 pub fn hit(
     reserves: &mut Reserves,
     condition: Condition,
+    defends: bool,
     hull: &HullSpec,
     rule: &dyn DisableRule,
     damage: f32,
@@ -79,7 +82,14 @@ pub fn hit(
         cant_kill: true,
         cant_disable: true,
     };
-    damage::take(reserves, hit, hull, rule, condition != Condition::Intact);
+    damage::take(
+        reserves,
+        hit,
+        hull,
+        rule,
+        condition.stored_disabled(defends),
+        defends,
+    );
 }
 
 #[cfg(test)]
@@ -122,7 +132,7 @@ mod tests {
         hull: &HullSpec,
         damage: f32,
     ) -> (f32, f32) {
-        hit(&mut reserves, condition, hull, &NovaDisable, damage);
+        hit(&mut reserves, condition, false, hull, &NovaDisable, damage);
         (reserves.shield.now, reserves.armor.now)
     }
 
@@ -223,11 +233,46 @@ mod tests {
     }
 
     #[test]
+    fn a_shockwave_leaves_a_defence_ship_under_the_line_as_it_leaves_it() {
+        let hull = HullSpec::default();
+        let mut guard = reserves(0.0, 0.0, 40.0, 300.0);
+        hit(
+            &mut guard,
+            Condition::Intact,
+            true,
+            &hull,
+            &NovaDisable,
+            32.0,
+        );
+        assert_eq!(
+            guard.armor.now, 8.0,
+            "`_IsDisabled` never calls it disabled after it (@0x2d6f): no floor"
+        );
+        let mut held = reserves(0.0, 0.0, 40.0, 300.0);
+        hit(
+            &mut held,
+            Condition::Disabled,
+            true,
+            &hull,
+            &NovaDisable,
+            32.0,
+        );
+        assert_eq!(held.armor.now, 8.0, "held disabled before it");
+    }
+
+    #[test]
     fn a_hull_over_33333_armour_is_floored_still_disabled() {
         let hull = HullSpec::default();
         let mut big = reserves(0.0, 0.0, 13_350.0, 40_000.0);
         assert!(!NovaDisable.disabled(big.armor, &hull), "intact before");
-        hit(&mut big, Condition::Intact, &hull, &NovaDisable, 32.0);
+        hit(
+            &mut big,
+            Condition::Intact,
+            false,
+            &hull,
+            &NovaDisable,
+            32.0,
+        );
         assert_eq!(big.armor.now, 13_333.0);
         assert!(NovaDisable.disabled(big.armor, &hull), "still disabled");
     }
@@ -246,10 +291,24 @@ mod tests {
 
         let hull = HullSpec::default();
         let mut none = reserves(0.0, 0.0, 0.0, 0.0);
-        hit(&mut none, Condition::Intact, &hull, &AlwaysDisabled, 32.0);
+        hit(
+            &mut none,
+            Condition::Intact,
+            false,
+            &hull,
+            &AlwaysDisabled,
+            32.0,
+        );
         assert_eq!((none.shield.now, none.armor.now), (0.0, 0.0));
         let mut some = reserves(0.0, 0.0, 250.0, 300.0);
-        hit(&mut some, Condition::Intact, &hull, &AlwaysDisabled, 32.0);
+        hit(
+            &mut some,
+            Condition::Intact,
+            false,
+            &hull,
+            &AlwaysDisabled,
+            32.0,
+        );
         assert!(
             (some.armor.now - 100.99).abs() < 1e-4,
             "the rule decides for one that holds some: {:?}",

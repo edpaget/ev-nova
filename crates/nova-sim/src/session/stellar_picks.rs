@@ -1,7 +1,8 @@
 //! The nearest-stellar pick, `_FindNearestStellar` (@0x276c-0x2888), as
 //! the session's callers make it: the land key with no target
 //! (`Session::land`), F5 (`Session::select_stellar`), the tutorial's land
-//! hint and a new pilot's saved stellar (`Session::begin`). See the
+//! hint and a new pilot's saved stellar (`Session::begin`); and the other
+//! readers of a system's `NavDefs`, the slot keys and the hail. See the
 //! `story` module's "Built by stellar-fidelity phase 14".
 //!
 //! Each reads its gate limit from
@@ -20,9 +21,27 @@
 //! not-landable line and `snd ` 153; held, a second L is refused again.
 //! F5 drops it (@0x69e73-0x69e94): nothing is written and nothing beeps.
 //!
-//! Left to rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs:
-//! the tutorial's land hint and `_DoNewPilot`'s pick still read the
-//! stellars shown.
+//! **The tutorial hints** (@0x709e8, @0x70bdc) pick over the same
+//! candidates, so they may name a stellar another visible system owns,
+//! worded as a planet or station by its listed record.
+//!
+//! **A new pilot's saved stellar** (`_DoNewPilot` @0x1926e) is picked over
+//! every stellar the start system lists (`Chart::listed`), whoever owns
+//! it: its `_LoadObjectData` (@0x190f0) has just set every listed spöb
+//! active, and nothing writes +0x44 before the pick.
+//!
+//! **The slot keys** (`StellarPick::Slot`) read the player's system's
+//! `NavDefs` slot by index, gaps kept (@0x69e28-0x69e46; the statics'
+//! `nav_def_slots`), with no active, can-land or destroyed test, and
+//! share F5's tail: an empty slot (-1, @0x69e65-0x69e6d) or a stellar
+//! another system owns does nothing and plays nothing.
+//!
+//! **The hail** looks the selection up among the candidates
+//! (`Session::hail_target`), as `_HandlePlayerCommunication` tests +0x44
+//! but no owner (@0x61fac-0x62017): an inhabited, landable stellar another
+//! visible system owns opens its planet comm dialog.
+//!
+//! See the `story` module's "Built by play-feel-4 phase 13".
 
 use super::{Chart, Statics};
 use crate::catalog::LandingSite;
@@ -214,8 +233,7 @@ pub(super) mod tests {
     /// pending: 131 lists its own 140 at the centre and 200, which 130
     /// owns.
     fn in_131(catalog: &FakePilotCatalog, rules: Rulebook, at: Vec2) -> Session {
-        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-        crate::testkit::jump(&mut session, catalog, 131).expect("arrives");
+        let session = arrived_in_131(catalog, rules, at);
         assert_eq!(
             session
                 .chart
@@ -229,6 +247,15 @@ pub(super) mod tests {
             session.stellars_shown().collect::<Vec<_>>(),
             [StellarId(140)]
         );
+        session
+    }
+
+    /// The session flown into 131 through its own system entry by
+    /// `rules`, the ship at rest at `at`, nothing selected, no dock
+    /// request and no sound or message pending.
+    fn arrived_in_131(catalog: &FakePilotCatalog, rules: Rulebook, at: Vec2) -> Session {
+        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
+        crate::testkit::jump(&mut session, catalog, 131).expect("arrives");
         session.ship.player.position = at;
         session.ship.player.velocity = Vec2::ZERO;
         session.chart.nav = crate::navigation::NavMode::Off;
@@ -337,7 +364,164 @@ pub(super) mod tests {
         assert_eq!(session.take_sounds(), [SimSound::Refused]);
     }
 
+    // The slot keys, by `NavDefs` index.
+
+    /// A planet 131 lists after [`UNOWNED`], at (-500, 0).
+    const AFTER: i16 = 141;
+
+    /// [`twice_listed`]'s planets, 131 listing 140, [`UNOWNED`] and
+    /// [`AFTER`], in that order.
+    fn three_in_131() -> FakePilotCatalog {
+        let mut catalog = twice_listed(planet);
+        let sites = &mut catalog
+            .sites
+            .iter_mut()
+            .find(|(id, _)| id.0 == 131)
+            .expect("131")
+            .1;
+        sites.push(planet(AFTER, -500.0, 0.0));
+        catalog
+    }
+
+    /// Slot `slot`'s key pressed in 131 of `catalog` with 140 selected and
+    /// its dock request standing: what it gives, the selection, the
+    /// sounds, and whether the dock request and fly-in were kept.
+    fn slot_key_in_131(
+        catalog: &FakePilotCatalog,
+        slot: usize,
+    ) -> (Option<StellarId>, Option<StellarId>, Vec<SimSound>, bool) {
+        let mut session = arrived_in_131(catalog, engine(), Vec2::ZERO);
+        session
+            .chart
+            .set_nav(crate::navigation::NavMode::Stellar(Some(StellarId(140))));
+        let dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(140),
+            permission: 0,
+        });
+        session.port.dock = dock;
+        let picked = session.select_stellar(StellarPick::Slot(slot));
+        let kept = session.port.dock == dock
+            && session.chart.nav_fly_in == crate::brackets::FlyIn::default();
+        (picked, session.nav_target(), session.take_sounds(), kept)
+    }
+
+    #[test]
+    fn a_slot_key_on_a_stellar_another_system_owns_does_nothing_and_the_next_selects_the_next_nav_def()
+     {
+        let catalog = three_in_131();
+        assert_eq!(
+            slot_key_in_131(&catalog, 1),
+            (None, Some(StellarId(140)), vec![], true),
+            "dropped in silence, nothing written (@0x69e88-0x69e94)"
+        );
+        assert_eq!(
+            slot_key_in_131(&catalog, 2),
+            (
+                Some(StellarId(AFTER)),
+                Some(StellarId(AFTER)),
+                vec![SimSound::NavSelected],
+                false
+            ),
+            "NavDefs[2], not the third stellar shown"
+        );
+    }
+
+    #[test]
+    fn a_slot_key_on_an_empty_nav_def_slot_does_nothing() {
+        let mut catalog = crate::testkit::catalog();
+        let sites = &mut catalog
+            .sites
+            .iter_mut()
+            .find(|(id, _)| id.0 == 131)
+            .expect("131")
+            .1;
+        sites.push(planet(AFTER, -500.0, 0.0));
+        let mut slots = [None; crate::catalog::NAV_DEF_SLOTS];
+        slots[0] = Some(StellarId(140));
+        slots[2] = Some(StellarId(AFTER));
+        catalog.nav_defs = vec![(SystemId(131), slots)];
+        assert_eq!(
+            slot_key_in_131(&catalog, 1),
+            (None, Some(StellarId(140)), vec![], true),
+            "-1 dropped in silence (@0x69e65-0x69e6d)"
+        );
+        assert_eq!(
+            slot_key_in_131(&catalog, 2),
+            (
+                Some(StellarId(AFTER)),
+                Some(StellarId(AFTER)),
+                vec![SimSound::NavSelected],
+                false
+            )
+        );
+        assert_eq!(slot_key_in_131(&catalog, 16).0, None, "past the last slot");
+    }
+
+    // A new pilot's saved stellar.
+
+    /// `_DoNewPilot` reloads every spöb (@0x190f0) and nothing writes +0x44
+    /// before its pick (@0x1926e), so every stellar its start system lists
+    /// is a candidate: the nearer stellar another visible system owns is
+    /// saved, where the stellars shown would give 140.
+    #[test]
+    fn a_new_pilot_saves_the_nearest_stellar_its_system_lists_whoever_owns_it() {
+        let catalog = crate::session::tutorial::tests::owned_nearer_in_131(StellarFlags::CAN_LAND);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.begin(&catalog, &mut crate::testkit::Scripted::default());
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(
+            session.stellars_shown().collect::<Vec<_>>(),
+            [StellarId(140)],
+            "130 owns 200"
+        );
+        assert_eq!(session.pilot.stellar, Some(StellarId(UNOWNED)));
+    }
+
+    #[test]
+    fn a_new_pilot_with_nothing_to_land_on_saves_the_first_stellar_listed() {
+        let mut catalog = crate::session::tutorial::tests::owned_nearer_in_131(0);
+        let sites = &mut catalog
+            .sites
+            .iter_mut()
+            .find(|(id, _)| id.0 == 131)
+            .expect("131")
+            .1;
+        sites[0].flags = 0;
+        let mut session = Session::start(&catalog).expect("starts");
+        session.begin(&catalog, &mut crate::testkit::Scripted::default());
+        assert_eq!(
+            session.pilot.stellar,
+            Some(StellarId(140)),
+            "NavDefs' first (@0x1927b-0x192a6)"
+        );
+    }
+
     // Readers of a selection outside the stellars shown.
+
+    /// `_HandlePlayerCommunication` tests the selection's can-land,
+    /// `Flags` 0x20, `Flags2` 0x3000 and active byte, with no owner test
+    /// (@0x61fac-0x62017), and opens `_DoPlanetCommDialog` (@0x6204b): an
+    /// inhabited, landable planet another visible system owns answers.
+    #[test]
+    fn hailing_a_selected_planet_another_system_owns_opens_its_comm_dialog() {
+        let catalog = twice_listed(planet);
+        let mut session = in_131(&catalog, engine(), NEAR_200);
+        assert_eq!(session.land(), refused_200(), "selected by L");
+        assert_eq!(session.nav_target(), Some(StellarId(UNOWNED)));
+        session.take_sounds();
+        let hailed = session.hail_key(
+            &catalog,
+            &crate::hail::HailOptions::default(),
+            false,
+            &mut crate::testkit::Draws::of(&[]),
+        );
+        let Ok(crate::session::Hailed::Stellar(view)) = hailed else {
+            panic!("the planet comm dialog: {hailed:?}");
+        };
+        assert_eq!(view.stellar, StellarId(UNOWNED));
+        assert_eq!(session.take_sounds(), [SimSound::PlanetCommOpened]);
+        assert!(session.planet_comm(&catalog).is_some(), "open on it");
+    }
 
     #[test]
     fn a_wormhole_another_system_owns_is_known_as_one() {

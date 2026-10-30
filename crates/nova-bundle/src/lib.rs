@@ -19,8 +19,9 @@
 //! `nova` and `nova-dump` for Apple silicon (`aarch64-apple-darwin`; Intel
 //! Macs are not supported) in release, stages `Nova.app` (its `Info.plist`
 //! from the `nova` package's version and `[package.metadata.bundle]`
-//! table, and its icon) with `nova-dump`, `README.txt`, `LICENSE` and an
-//! `Applications` link beside it, checks with `lipo -archs` that both
+//! table, its icon and the fonts' licences, [`fonts`]) with `nova-dump`,
+//! `README.txt`, `LICENSE`, the fonts' licences and an `Applications` link
+//! beside it, checks with `lipo -archs` that both
 //! binaries are arm64 alone, puts Sparkle in the app (below), signs and
 //! verifies them all, and writes `ev-nova-aarch64-apple-darwin.dmg` to
 //! `OUT_DIR` (by default `target/bundle/out`). The layout is [`layout`]'s,
@@ -246,6 +247,7 @@ pub mod build_id;
 pub mod bundle;
 pub mod channel;
 pub mod digest;
+pub mod fonts;
 pub mod host;
 pub mod icon;
 pub mod info_plist;

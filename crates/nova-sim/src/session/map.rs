@@ -18,8 +18,9 @@
 //! as `_HandleStellarSystemVisibility` sets +0x44 from its holder's
 //! visibility after the rescue, @0x32c58-0x32cdf), with the overlay's
 //! government and destruction. Their order doesn't matter, as a bucket
-//! only asks whether it has any. Each is dominated by its always-dominated
-//! bit (`Session::iff_dominated`) and blessed by the session's blessing
+//! only asks whether it has any. Each is dominated by its `Flags2` or at
+//! run time ([`OverlaidGalaxy::dominated`](crate::story::OverlaidGalaxy::dominated),
+//! @0xd82e) and blessed by the session's blessing
 //! table ([`Session::blessing`]), as the radar's IFF reads both. Then:
 //!
 //! - **Inhabited** is [`exploration::inhabited`] as
@@ -215,7 +216,7 @@ impl Chart {
                     destroyed: self.galaxy.destroyed(stellar.id),
                     min_status: stellar.min_status,
                     standing: Standing {
-                        dominated: Session::dominated_by(stellar.flags2),
+                        dominated: self.galaxy.dominated(stellar.id, stellar.flags2),
                         blessed: coding.blessing.blesses(govt, Blessed::Landing),
                     },
                 }
@@ -584,6 +585,22 @@ mod tests {
         assert_eq!(
             session.system_color_code(SystemId(131)),
             SystemColorCode::Dominated
+        );
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_turns_its_system_green() {
+        let catalog = coloured();
+        let mut session = flown(&catalog, Rulebook::default());
+        session.pilot.explore(SystemId(131));
+        let stellar = catalog.sites[1].1[0].id;
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, stellar, true);
+        assert_eq!(
+            session.system_color_code(SystemId(131)),
+            SystemColorCode::Dominated,
+            "@0xd82e"
         );
     }
 

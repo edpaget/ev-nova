@@ -12,6 +12,7 @@ use super::*;
 use nova_sim::escort_dialog::{EscortButton, EscortDialogView, UpgradeLine};
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::mission::screens::offer_labels;
+use nova_sim::planet_comm::PlanetCommView;
 use nova_sim::{Haggle, HailView, Hailed, OfferPrompt, SimSound, VenueOffer};
 
 /// A view over a flight in Sol, the player alone.
@@ -142,20 +143,108 @@ fn a_hail_refused_says_why_in_the_originals_words_and_beeps_as_drained() {
 }
 
 #[test]
-fn a_stellar_answering_or_a_refused_hail_opens_nothing_and_says_nothing() {
-    for answer in [
-        Answer::Hailed(Hailed::Stellar(StellarId(128))),
-        Answer::Refused,
-    ] {
-        let mut view = sol();
-        view.sim.queue_answer(answer.clone());
-        hail_thrusting(&mut view);
-        assert_eq!(view.take_hail(), None, "{answer:?}");
-        assert_eq!(view.take_offer(), None, "{answer:?}");
-        assert_eq!(view.take_escort_dialog(), None, "{answer:?}");
-        assert_eq!(view.message(), None, "{answer:?}");
-        assert!(view.held.contains(&Key::Up), "{answer:?}: the keys held");
-    }
+fn a_refused_hail_opens_nothing_and_says_nothing() {
+    let mut view = sol();
+    view.sim.queue_answer(Answer::Refused);
+    hail_thrusting(&mut view);
+    assert_eq!(view.take_hail(), None);
+    assert_eq!(view.take_offer(), None);
+    assert_eq!(view.take_escort_dialog(), None);
+    assert_eq!(view.take_planet_comm(), None);
+    assert_eq!(view.message(), None);
+    assert!(view.held.contains(&Key::Up), "the keys held");
+}
+
+// The planet comm dialog.
+
+#[test]
+fn y_on_a_stellar_that_answers_holds_its_planet_comm_dialog_once_letting_go_of_the_keys() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::Hailed(Hailed::Stellar(planet_view(128))));
+    hail_thrusting(&mut view);
+    assert_eq!(view.take_planet_comm(), Some(planet_view(128)));
+    assert_eq!(view.take_planet_comm(), None, "once");
+    assert_eq!(view.take_hail(), None, "no comm dialog");
+    assert!(view.held.is_empty(), "the flight keys let go");
+}
+
+#[test]
+fn the_planet_comm_dialog_draws_the_frame_the_flight_shows_of_its_stellar() {
+    let view = sol();
+    let scene = view.scene().expect("laid out");
+    let first = scene.stellars().first().expect("a stellar").id;
+    assert_eq!(view.stellar_frame(first), scene.shown_frame(first));
+    assert!(view.stellar_frame(first).is_some(), "drawn");
+    assert_eq!(view.stellar_frame(StellarId(999)), None, "not shown");
+}
+
+#[test]
+fn the_planet_comm_dialogs_presses_and_haggle_send_their_commands() {
+    use nova_sim::planet_comm::PlanetCommItem;
+    let mut view = sol();
+    let asked = PlanetCommView {
+        asking: Some(3000),
+        ..planet_view(128)
+    };
+    view.sim
+        .queue_answer(Answer::PlanetComm(Some(asked.clone())));
+    assert_eq!(view.press_planet_comm(PlanetCommItem::Second), Some(asked));
+    view.sim
+        .queue_answer(Answer::PlanetComm(Some(planet_view(128))));
+    assert_eq!(
+        view.haggle_bribe(Haggle::LowerPrice),
+        Some(planet_view(128))
+    );
+    view.sim.queue_answer(Answer::PlanetComm(None));
+    assert_eq!(view.haggle_bribe(Haggle::Accept), None, "paid: closed");
+    assert_eq!(
+        view.press_planet_comm(PlanetCommItem::Close),
+        None,
+        "refused"
+    );
+    assert_eq!(
+        sent_but_lines(&view),
+        [
+            FlightCommand::PressPlanetComm(PlanetCommItem::Second),
+            FlightCommand::HaggleBribe(Haggle::LowerPrice),
+            FlightCommand::HaggleBribe(Haggle::Accept),
+            FlightCommand::PressPlanetComm(PlanetCommItem::Close),
+        ]
+    );
+}
+
+#[test]
+fn the_planet_comm_dialogs_close_redraws_the_radar_and_a_press_that_keeps_it_does_not() {
+    use nova_sim::planet_comm::PlanetCommItem;
+    let mut view = super::faked_hud::barred(catalog(), among(Vec::new()));
+    super::faked_hud::hud_tick(&mut view);
+    let stale = RadarScene::default();
+    view.radar_scene = Some(stale.clone());
+    view.sim
+        .queue_answer(Answer::PlanetComm(Some(planet_view(128))));
+    view.press_planet_comm(PlanetCommItem::Second);
+    view.press_planet_comm(PlanetCommItem::Close);
+    assert_eq!(*view.radar_shown(&view.frame), stale, "open, then refused");
+    view.sim.queue_answer(Answer::PlanetComm(None));
+    view.press_planet_comm(PlanetCommItem::Close);
+    assert_eq!(
+        *view.radar_shown(&view.frame),
+        view.radar_now(&view.frame),
+        "closed: as _RedrawStatus(1) @0x97b3d"
+    );
+    view.radar_scene = Some(stale.clone());
+    view.sim
+        .queue_answer(Answer::PlanetComm(Some(planet_view(128))));
+    view.haggle_bribe(Haggle::LowerPrice);
+    assert_eq!(*view.radar_shown(&view.frame), stale, "the haggle goes on");
+    view.sim.queue_answer(Answer::PlanetComm(None));
+    view.haggle_bribe(Haggle::Accept);
+    assert_eq!(
+        *view.radar_shown(&view.frame),
+        view.radar_now(&view.frame),
+        "a bribe paid closes it"
+    );
 }
 
 #[test]

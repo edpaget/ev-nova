@@ -548,6 +548,7 @@ impl PlayerShip {
             // AI type -1 (@0x6f31f).
             no_ai: true,
             kept_escort_ai: false,
+            defends: None,
         };
         hulk.independent();
         hulk

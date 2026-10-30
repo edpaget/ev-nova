@@ -321,4 +321,20 @@ impl PlayerShip {
         counted.outfits = shipyard::outfit_counts(&pilot.outfits, &self.held_stock);
         Cow::Owned(counted)
     }
+
+    /// The dock request's tail's writes to the player's ship, run by a
+    /// take-off, a gate's exit and a wormhole that leads nowhere
+    /// (`_HandlePlayerDockRequest` @0x66f72-0x67020): the take-off's fold
+    /// (@0x66f72-0x66fc4; see the `ship_display` module), which zeroes the
+    /// bank (+0xc8e4) too; the ionization's charge (+0x5c) and colour
+    /// (+0xb0); the engine glow (+0xc8d4); and the boarded flag (+0xb9).
+    /// Its two display timers, the shield flash (+0xc8f0) and the weapon
+    /// glow (+0xc8e8), are the view's, which lets go of them as it lays
+    /// the scene out afresh. The position, velocity and thrust are kept.
+    pub(super) fn dock_tail_reset(&mut self) {
+        self.take_off_fold();
+        self.ion = Ion::default();
+        self.engine_glow = 0;
+        self.fate.player_boarded = false;
+    }
 }

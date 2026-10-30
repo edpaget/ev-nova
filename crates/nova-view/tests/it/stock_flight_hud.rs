@@ -18,8 +18,6 @@ use crate::common;
 use std::rc::Rc;
 
 use nova_data::records::interface::Interface;
-use nova_data::records::stellar::Stellar;
-use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
 use nova_sim::Rulebook;
@@ -30,7 +28,6 @@ use nova_view::flight::{
     CombatLooks, FlightView, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBars, test_flight,
 };
 use nova_view::geometry::Bounds;
-use nova_view::system::catalog::{SystemCatalog, SystemId};
 use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen, SheetImage};
 
 fn open() -> Option<GameData> {
@@ -277,6 +274,8 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
         Some(LayerSheet {
             image_id: layer.image_id,
             frames: NonZeroU16::new(layer.sheet.frames().len() as u16)?,
+            frame_width: layer.sheet.frame_width(),
+            frame_height: layer.sheet.frame_height(),
             solid: layer.sheet.solid_frames().is_some(),
         })
     };
@@ -602,36 +601,6 @@ fn a_fed_destroyer_flies_under_the_federation_status_bar() {
             width: 194.0,
             height: 767.0,
         })
-    );
-}
-
-#[test]
-fn stock_stations_and_gates_are_squares_on_the_radar_and_the_rest_ovals() {
-    let Some(data) = open() else {
-        return;
-    };
-    let (mut stations, mut gates, mut ovals) = (0, 0, 0);
-    for &id in data.ids(System::TYPE) {
-        for stellar in SystemCatalog::system(&data, SystemId(id)).stellars {
-            let Some(Ok(spob)) = data.get::<Stellar>(stellar.id.0) else {
-                continue;
-            };
-            let station = spob.record.flags.bits() & 0x10 != 0;
-            let gate = spob.record.flags2.bits() & 0x3000 != 0;
-            assert_eq!(
-                stellar.radar_square,
-                station || gate,
-                "spöb {} in sÿst {id}",
-                stellar.id.0
-            );
-            stations += usize::from(station);
-            gates += usize::from(gate);
-            ovals += usize::from(!station && !gate);
-        }
-    }
-    assert!(
-        stations > 0 && gates > 0 && ovals > 0,
-        "{stations} {gates} {ovals}"
     );
 }
 

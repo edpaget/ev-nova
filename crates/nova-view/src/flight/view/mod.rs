@@ -284,7 +284,14 @@
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
 //!   router's Escape), and so do Return and, while M is held, a key-down
 //!   the original's `_MapFilter` doesn't take (@0x13cdd-0x13d07,
-//!   @0x144db-0x14587). Tab or `\` on it (repeats too) cycles the
+//!   @0x144db-0x14587). Every close made while M is held waits for its
+//!   release, as `_DoSystemMap` loops `BusyIdle(); while KeyCheck(M)`
+//!   before disposing of the dialog (@0x13a2e-0x13a46, `_BusyIdle`
+//!   @0x5981-0x5985 being empty): the map stays drawn, takes no input
+//!   and runs no null events, and the close, its beep and cue among it,
+//!   lands on the release; a close with M up doesn't wait. The maps the
+//!   bar, a port screen and a mission dialog open on M open with it
+//!   held. Tab or `\` on it (repeats too) cycles the
 //!   hyperspace selection through the current system's links
 //!   ([`Session::cycle_map_selection`]): the map draws the new selected
 //!   link and selects its system, and the nav area is redrawn at once; on
@@ -453,8 +460,10 @@
 //!   or as it warps.
 //! - Y (a press) hails the target ([`Session::hail_key`]), and with no
 //!   ship target, or Alt (Option) held, the navigation stellar: one that
-//!   answers opens nothing yet, where the original opens its comm dialog
-//!   (`_DoPlanetCommDialog`), and any other says "No response.". A person
+//!   answers opens the planet comm dialog (`_DoPlanetCommDialog`), held
+//!   for the router ([`FlightView::take_planet_comm`]), whose presses and
+//!   bribe haggle go to the flight ([`FlightView::press_planet_comm`],
+//!   [`FlightView::haggle_bribe`]), and any other says "No response.". A person
 //!   whose mission is available offers it in place of the comm dialog,
 //!   held for the router ([`FlightView::take_offer`]), which opens the
 //!   offer dialog over the paused flight and answers it through
@@ -649,7 +658,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::DrawnBox;
 #[cfg(doc)]
 use nova_sim::Session;
 use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, Names, ShipPlace, StepReport};
@@ -698,6 +706,7 @@ mod dialog_map;
 mod docked;
 mod drawing;
 mod frame_rate;
+mod gamble;
 mod gates;
 mod hail;
 mod hyperspace;
@@ -722,6 +731,7 @@ mod world;
 
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
+pub use gamble::RaceShown;
 pub use messages::*;
 pub use port_screen_map::PortScreen;
 
@@ -1376,6 +1386,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The escort dialog a fleet escort hailed just opened, for the
     /// router.
     pending_escort_dialog: Option<nova_sim::escort_dialog::EscortDialogView>,
+    /// The planet comm dialog a stellar hailed just opened, for the router.
+    pending_planet_comm: Option<nova_sim::planet_comm::PlanetCommView>,
     /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
@@ -1400,6 +1412,15 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
+    /// Whether the map has been closed while [`MAP_KEY`] was held, and
+    /// waits for its release to close: `_DoSystemMap` loops
+    /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of
+    /// the dialog (@0x13a2e-0x13a46), and `_BusyIdle` (@0x5981-0x5985) is
+    /// empty, so nothing runs meanwhile. The dialog stays as last drawn,
+    /// takes no input and runs no null events, and the whole close, its
+    /// beep, cue and restores, lands on the release
+    /// ([`FlightView::close_map`]).
+    map_closing: bool,
     /// How the map shown was opened (by M, the bar or a mission dialog,
     /// with its marks) and the nav as it opened: taken as each map opens,
     /// dropped as it closes ([`FlightView::close_map`]).
@@ -1650,6 +1671,10 @@ struct Redrawn {
     rebuilt: bool,
     /// The stars were scattered afresh.
     stars: bool,
+    /// A take-off or a gate's exit reset every stellar's frames: those
+    /// shown and those kept were zeroed before the scene was laid out or
+    /// drawn again ([`FlightView::reset_stellar_frames`]).
+    frames_reset: bool,
 }
 
 /// How the flight holds stellar `id` as `frame` records it
@@ -1801,20 +1826,11 @@ impl std::fmt::Debug for Metrics {
     }
 }
 
-/// A ship's box drawn at `at` (in system coordinates) of `size`.
-fn drawn_box(at: Point, (width, height): (u32, u32)) -> DrawnBox {
-    DrawnBox {
-        centre: Vec2::new(at.x, at.y),
-        width,
-        height,
-    }
-}
-
 /// The frame size of an NPC drawn by `sheet`, the one read for its ship
 /// type if any: its crossed box's when the sheet could not be read.
 fn drawn_size(sheet: Option<&Result<ShipSheet, String>>) -> (u32, u32) {
     match sheet {
-        Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+        Some(Ok(sheet)) => sheet.size(),
         _ => placeholder_size(),
     }
 }

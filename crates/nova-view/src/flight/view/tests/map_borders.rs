@@ -150,4 +150,15 @@ fn by_the_other_readings_the_pass_walks_a_tick_at_a_time_and_finds_centring_runs
     assert_eq!(view.map.border_passes().next(), Next::Unstarted);
 }
 
+#[test]
+fn while_the_map_waits_for_m_a_tick_runs_no_pass() {
+    // `_BusyIdle` runs no null events (@0x5981-0x5985).
+    let rules = Rulebook::default().with_override(RuleKey::MapBorderPace, RuleSource::Bible);
+    let mut view = faked_bordered_by(&rules);
+    view.input(&key(MAP, true));
+    assert!(view.map_open(), "waiting");
+    view.tick(TICK);
+    assert_eq!(view.map.border_passes().next(), Next::Unstarted);
+}
+
 // The setting and its save.

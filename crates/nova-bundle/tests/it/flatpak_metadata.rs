@@ -113,7 +113,7 @@ mod tests {
 
     use super::*;
 
-    /// What flatpak 1.16.6 (Ubuntu's, on CI's `ubuntu-latest`) listed for
+    /// What flatpak 1.16.6 (Ubuntu's, on CI's `ubuntu-24.04`) listed for
     /// the installed bundle.
     const SHOWN_BY_1_16: &str = "[Context]
 shared=ipc;

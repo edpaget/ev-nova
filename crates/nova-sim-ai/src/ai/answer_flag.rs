@@ -47,12 +47,22 @@
 //! (it spawns at none), so none of these tests catches it, whatever
 //! [`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits) says.
 //!
-//! Left out, for want of what they read:
+//! **Defence ships** (+0x8c, the stellar a ship defends,
+//! [`Npc::defends`]) take two branches of their own, each of which leaves
+//! the flag as the rows above already do, so nothing reads
+//! [`Npc::defends`] here:
 //!
-//! - **Defence ships** (+0x8c, the stellar a ship defends): a self-hit by
-//!   one (@0x3b408-0x3b4c8; either way a ship hitting itself never
-//!   answers), fleetmates (@0x3b68e-0x3b6ec). Noted on rdm task
-//!   planet-domination, with the reaction block's defence-ship branches.
+//! - a defender's self-hit (@0x3b411-0x3b4c8) clears the flag (@0x3b4b5)
+//!   and jumps to the docking test (@0x3bab7), where any other self-hit
+//!   leaves at the entry gate (@0x3b453): either way a ship hitting
+//!   itself never answers and adds no stray provocation;
+//! - a hit by a defender sharing the victim's leader (@0x3b68e-0x3b6ec)
+//!   clears the flag, as the same-leader row clears it for any ship of
+//!   that leader. A defender has no leader, as its spawn writes -1 and a
+//!   capture or a pirate's take clears its +0x8c, so it never arises.
+//!
+//! Left out:
+//!
 //! - **The nag ship**'s damage rewrite (@0x3a8bb-0x3a954) and its test in
 //!   `_IsShipMyEnemy` (@0x819a4): the engine has no nag ship. Recorded
 //!   only.
@@ -673,6 +683,30 @@ mod tests {
         let npcs = [escorting(of(1, Some(NEUTRAL))), of(2, Some(PIRATES))];
         let scene = Scene::new(&npcs, &govts);
         assert!(scene.answers(&strike(n(1), n(2))));
+    }
+
+    #[test]
+    fn a_defence_ships_own_hit_and_a_defending_fleetmates_go_unanswered() {
+        let govts = govts(0, 0);
+        let defending = |mut npc: Npc| {
+            npc.defends = Some(crate::catalog::StellarId(128));
+            npc
+        };
+        let npcs = [
+            defending(led(of(1, Some(TRADERS)), 9)),
+            defending(led(of(2, Some(PIRATES)), 9)),
+            of(9, Some(PIRATES)),
+        ];
+        let scene = Scene::new(&npcs, &govts);
+        assert_eq!(
+            scene.judge(&strike(n(1), n(1)), &[]),
+            (Verdict::default(), vec![]),
+            "the defender's self-hit (@0x3b411-0x3b4c8)"
+        );
+        assert!(
+            !scene.answers(&strike(n(1), n(2))),
+            "a defender of the same leader (@0x3b6d5)"
+        );
     }
 
     // Kin and leaders.

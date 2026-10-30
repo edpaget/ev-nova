@@ -38,7 +38,8 @@
 //!   has its armour set to what a self-repair leaves
 //!   ([`repaired_armor`], the same 0.3333, 0.1 and 1.0). `_IsDisabled`
 //!   reads armour at none or below as disabled, so a killing blow is
-//!   reset too. That clears the disabled line only while the ship holds
+//!   reset too. It never calls a stellar's defence ship disabled
+//!   (@0x2d6f, [`under_armour_line`]), so a defence ship is never reset. That clears the disabled line only while the ship holds
 //!   33,333 armour or less: a non-`TOUGH` hull that holds more is left
 //!   disabled, and counts as newly disabled. The shockwave and sabotage
 //!   bombs carry it.
@@ -49,10 +50,10 @@
 //! [`Combat`](super::Combat)'s steps 3 and 8).
 
 use super::ShipRef;
-use super::hull::{DisableRule, HullSpec};
+use super::hull::{DisableRule, HullSpec, under_armour_line};
 use super::weapon::WeaponSpec;
 use crate::geometry::Vec2;
-use crate::reserves::{Gauge, Reserves};
+use crate::reserves::Reserves;
 use crate::self_repair::repaired_armor;
 
 /// The armour a spared hit leaves a ship it would destroy (0x3f800000
@@ -142,14 +143,17 @@ pub fn apply(reserves: &mut Reserves, hit: Hit) {
 
 /// Takes `hit` off `reserves` as [`apply`] does, with each floor it
 /// carries (see the module docs' **Spared hits**): it is on the ship of
-/// `hull`, which `was_disabled` before it or not, and `rule` says when a
-/// ship is disabled.
+/// `hull`, which `was_disabled` before it or not and `defends` a stellar
+/// or not, and `rule` says when a ship is disabled. A stellar's defence
+/// ship is never disabled after the hit ([`under_armour_line`]), so it is
+/// never floored for it.
 pub fn take(
     reserves: &mut Reserves,
     hit: Hit,
     hull: &HullSpec,
     rule: &dyn DisableRule,
     was_disabled: bool,
+    defends: bool,
 ) {
     let whole = reserves.armor.now > 0.0;
     apply(reserves, hit);
@@ -157,15 +161,9 @@ pub fn take(
     if hit.cant_kill && whole && armor.now <= 0.0 {
         armor.now = SPARED_ARMOR;
     }
-    if hit.cant_disable && !was_disabled && disabled(*armor, hull, rule) {
+    if hit.cant_disable && !was_disabled && under_armour_line(*armor, hull, rule, defends) {
         armor.now = repaired_armor(armor.max, hull.tough);
     }
-}
-
-/// Whether a ship of `hull` with `armor` is disabled, as `rule` says: never
-/// one that holds no armour.
-pub(crate) fn disabled(armor: Gauge, hull: &HullSpec, rule: &dyn DisableRule) -> bool {
-    armor.max > 0.0 && rule.disabled(armor, hull)
 }
 
 /// Where a blast goes off and whose it is.
@@ -218,6 +216,7 @@ mod tests {
     use super::*;
     use crate::combat::NpcId;
     use crate::combat::hull::NovaDisable;
+    use crate::reserves::Gauge;
 
     /// What an armour-direct spared hit of `mass` leaves of 50 of 100
     /// shields and `armor` of 300 armour, on a hull `tough` or not that
@@ -245,7 +244,7 @@ mod tests {
             cant_kill: true,
             cant_disable: true,
         };
-        take(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
+        take(&mut reserves, hit, &hull, &NovaDisable, was_disabled, false);
         (reserves.shield.now, reserves.armor.now)
     }
 
@@ -336,7 +335,7 @@ mod tests {
             tough,
             ..HullSpec::default()
         };
-        take(&mut reserves, hit, &hull, &NovaDisable, was_disabled);
+        take(&mut reserves, hit, &hull, &NovaDisable, was_disabled, false);
         (reserves.shield.now, reserves.armor.now)
     }
 
@@ -386,6 +385,28 @@ mod tests {
             cant_kill: false,
             cant_disable: true,
         }
+    }
+
+    #[test]
+    fn a_cant_disable_hit_leaves_a_defence_ship_as_the_hit_leaves_it() {
+        let mut reserves = Reserves {
+            shield: Gauge::full(100.0),
+            armor: Gauge::full(300.0),
+            fuel: Gauge::full(100.0),
+        };
+        let hull = HullSpec::default();
+        take(
+            &mut reserves,
+            cant_disable(250.0),
+            &hull,
+            &NovaDisable,
+            false,
+            true,
+        );
+        assert_eq!(
+            reserves.armor.now, 50.0,
+            "`_IsDisabled` never calls it disabled after the hit (@0x2d6f)"
+        );
     }
 
     #[test]

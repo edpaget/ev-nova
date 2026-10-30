@@ -13,7 +13,7 @@ use crate::flight::target::{Tag, TargetPanel};
 use crate::spaceport::PortDialog;
 use crate::time::ticks;
 
-use super::{FlightView, radar_ships, stellar_name};
+use super::{FlightView, point, radar_ships, stellar_name};
 use crate::flight::sim_port::FlightSim;
 
 /// The HUD, the radar and the target panel, over the [`FlightSim`] port:
@@ -23,35 +23,29 @@ use crate::flight::sim_port::FlightSim;
 /// the frame they are handed ([`FlightView::draw_bar`]).
 impl<C, S: FlightSim> FlightView<C, S> {
     /// What the radar shows in `frame` ([`RadarScene`]): the player's ship
-    /// and the other ships where they are drawn, the scene's stellars in
-    /// nav order with the shape and sprite width the radar reads, and
-    /// blank while the ship is landed (`_playerIsLanded`,
+    /// and the other ships where they are drawn, every stellar the system
+    /// lists, shown or not, in its `NavDefs` order
+    /// ([`FlightFrame::radar_stellars`]), with the shape and the `Type`
+    /// master's width the session gives it, whatever sheet the scene
+    /// draws, and blank while the ship is landed (`_playerIsLanded`,
     /// [`FlightFrame::docked`]); each with its IFF code (a stellar's
-    /// [`FrameStellar::iff`](nova_sim::flight_frame::FrameStellar::iff),
+    /// [`FrameRadarStellar::iff`](nova_sim::flight_frame::FrameRadarStellar::iff),
     /// unlandable for one the frame has none for), the player's IFF and
     /// density scanner, this tick's static ([`FlightView::advance_hud`]),
     /// and whether the nav mode is hyperspace
     /// ([`FlightView::nav_mode`]). A flight that failed to start draws no
     /// bar, so what its radar would show is never seen.
     pub(super) fn radar_now(&self, frame: &FlightFrame) -> RadarScene {
-        let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
-            scene
-                .stellars()
-                .iter()
-                .map(|stellar| RadarStellar {
-                    position: stellar.position,
-                    square: stellar.radar_square,
-                    sprite_width: stellar
-                        .drawn()
-                        .and_then(|sheet| sheet.as_ref().ok())
-                        .map(|sheet| sheet.frame_width),
-                    iff: frame
-                        .stellar(stellar.id)
-                        .and_then(|record| record.iff)
-                        .unwrap_or(StellarIff::Unlandable),
-                })
-                .collect()
-        });
+        let stellars = frame
+            .radar_stellars
+            .iter()
+            .map(|stellar| RadarStellar {
+                position: point(stellar.position),
+                square: stellar.square,
+                sprite_width: stellar.type_width,
+                iff: stellar.iff.unwrap_or(StellarIff::Unlandable),
+            })
+            .collect();
         let gear = frame.hud.radar_gear;
         let target = frame.target.as_ref().map(|target| target.npc);
         RadarScene {

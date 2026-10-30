@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use crate::catalog::{
     BoomId, CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
-    NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, SoundId, StellarId,
-    StellarLife, SystemId, SystemVisibility, WeaponId,
+    NavDefSlots, NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, SoundId,
+    StellarId, StellarLife, SystemId, SystemVisibility, WeaponId,
 };
 use crate::combat::armament::Arsenal;
 use crate::geometry::Vec2;
@@ -65,6 +65,10 @@ pub(super) struct Statics {
     /// and the daily step read of a stellar's destruction and
     /// regeneration (see the `stellars` module).
     pub(super) lives: BTreeMap<StellarId, StellarLife>,
+    /// Every stellar's `OnDominate` and `OnRelease`, by ID, read when the
+    /// session starts: what the planet comm dialog runs (see the
+    /// `planet_comm` module).
+    pub(super) stellar_scripts: BTreeMap<StellarId, crate::catalog::StellarScripts>,
     /// The stellars shots can shoot down, those of [`lives`](Self::lives)
     /// of `Strength` above 0
     /// ([`wreck::destroyable`](crate::story::wreck::destroyable)), among
@@ -112,6 +116,10 @@ pub(super) struct Statics {
     /// Each system's first stellar that can be read, read when the session
     /// starts: what a landed `M` selects (see the `nav` module).
     pub(super) first_stellars: BTreeMap<SystemId, StellarId>,
+    /// Each system's `NavDefs` slots by index, gaps kept, read when the
+    /// session starts: what the slot keys select by (see the `nav`
+    /// module). `NavDefs` never change at run time.
+    pub(super) nav_def_slots: BTreeMap<SystemId, NavDefSlots>,
     /// Every stellar's place and name, read when the session starts: what
     /// a mission's stop is matched by (see the `missions` module).
     pub(super) stellar_marks: StellarMarks,
@@ -126,6 +134,14 @@ pub(super) struct Statics {
 }
 
 impl Statics {
+    /// The stellar `system`'s `NavDefs` slot `slot` names, from 0, as
+    /// `_HandlePlayer`'s slot keys read it (@0x69e28-0x69e46): `None` for
+    /// an empty slot (-1, or a `spöb` that didn't load), a slot past the
+    /// last, or a system that can't be read.
+    pub(super) fn nav_def_slot(&self, system: SystemId, slot: usize) -> Option<StellarId> {
+        *self.nav_def_slots.get(&system)?.get(slot)?
+    }
+
     /// `stellar`'s own position, its `spöb`'s raw `xPos` and `yPos`
     /// ([`StellarMarks::place`]): what `_EvalSetExp`'s `M` (@0x157a6,
     /// @0x157c4) and `Y` (@0x15a8b) read; the centre for one with no

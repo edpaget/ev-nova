@@ -21,9 +21,11 @@
 //!   [`ShipLayer::Ships`].
 //!
 //! `_IsDisabled` is true at armour 0 or less (@0x2dd2-0x2e02), so a ship
-//! breaking up is in the bottom layer too ([`disabled`]). Its defence-ship
-//! exception (+0x8c not -1) never applies, as the engine has no defence
-//! ships. None of these branches plays a sound.
+//! breaking up is in the bottom layer too ([`disabled`]), but for a
+//! stellar's defence ship, which it never calls disabled by its armour
+//! (+0x8c not -1, @0x2d6f; [`disabled`] takes whether the ship defends
+//! one). None of these
+//! branches plays a sound.
 //!
 //! **Within a layer** the order is history, not a sort. `_InitSprites`,
 //! run once at launch (`_InitEVNova` @0x47382), adds every slot's sprites
@@ -308,11 +310,13 @@ pub struct SlotSprites {
     pub shots: ShotSlots,
 }
 
-/// Whether a ship in `condition` is disabled for its layer, as
-/// `_IsDisabled` is at armour 0 or less: anything but intact.
+/// Whether a ship in `condition` that `defends` a stellar or not is
+/// disabled for its layer, as `_IsDisabled` is at armour 0 or less
+/// ([`Condition::stored_disabled`]): anything but intact, but for a
+/// stellar's defence ship, which is disabled only while it is held.
 #[must_use]
-pub fn disabled(condition: Condition) -> bool {
-    !matches!(condition, Condition::Intact)
+pub fn disabled(condition: Condition, defends: bool) -> bool {
+    condition.stored_disabled(defends)
 }
 
 #[cfg(test)]
@@ -465,12 +469,21 @@ mod tests {
 
     #[test]
     fn only_an_intact_ship_is_not_disabled() {
-        assert!(!disabled(Condition::Intact));
-        assert!(disabled(Condition::Disabled));
-        assert!(disabled(Condition::Dying {
-            ticks_left: 1,
-            starting: false
-        }));
-        assert!(disabled(Condition::Destroyed));
+        assert!(!disabled(Condition::Intact, false));
+        assert!(disabled(Condition::Disabled, false));
+        assert!(disabled(BREAKING_UP, false));
+        assert!(disabled(Condition::Destroyed, false));
+    }
+
+    const BREAKING_UP: Condition = Condition::Dying {
+        ticks_left: 1,
+        starting: false,
+    };
+
+    #[test]
+    fn a_defence_ship_breaking_up_stays_out_of_the_disabled_layer_unless_held() {
+        assert!(!disabled(BREAKING_UP, true), "@0x2d6f");
+        assert!(!disabled(Condition::Intact, true));
+        assert!(disabled(Condition::Disabled, true), "stored disabled: held");
     }
 }

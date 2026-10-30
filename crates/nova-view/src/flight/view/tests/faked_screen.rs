@@ -103,6 +103,8 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     view.input(&key(MAP, false));
     assert!(view.map_open());
     view.input(&key(MAP, true));
+    assert!(view.map_open(), "waits for M's release");
+    view.input(&key(MAP, false));
     assert!(!view.map_open());
     view.tick(TICK);
     assert_eq!(last_controls(&view), Controls::default(), "Up was let go");
@@ -736,7 +738,9 @@ fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
     view.tick(TICK);
     assert!(double_time_stepped(&view), "a jump");
     view.sim
-        .queue_answer(Answer::Hailed(nova_sim::Hailed::Stellar(StellarId(140))));
+        .queue_answer(Answer::Hailed(nova_sim::Hailed::Stellar(
+            super::planet_view(140),
+        )));
     tap(&mut view, HAIL_KEY);
     view.tick(TICK);
     assert!(double_time_stepped(&view), "a hail");

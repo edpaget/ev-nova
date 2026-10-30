@@ -14,6 +14,7 @@ use nova_sim::flight_frame::{FlightEvent, FrameStellar};
 use super::faked_world::{world, world_list};
 use super::stellars::proxima_in_sol;
 use super::*;
+use crate::system::animation::Frames;
 
 /// What a catch-up of `view` redraws, with no status bar to follow
 /// (the session's, phase 8's).
@@ -636,6 +637,72 @@ fn a_stellar_left_on_frame_2_shows_frame_2_after_another_system_and_back() {
     assert_eq!(moon_on(&view), 2, "nothing stepped while away");
     tick_stellars(&mut view);
     assert_eq!(moon_on(&view), 3, "and on from there");
+}
+
+/// The Moon's animation state in `view`'s scene.
+fn moon_frames(view: &Faked) -> Frames {
+    view.scene().expect("laid out").stellars()[1].frames
+}
+
+#[test]
+fn a_take_offs_reset_restarts_every_stellar_from_frame_0_with_next_0() {
+    let mut view = faked_from(catalog(), showing(130, sol()));
+    tick_stellars(&mut view);
+    tick_stellars(&mut view);
+    assert_eq!(moon_on(&view), 2);
+    let mut zeroed = moon_frames(&view);
+    zeroed.take_off_reset();
+    raising(&mut view, &[SessionEvent::StellarFramesReset]);
+    assert!(caught_up(&mut view).frames_reset);
+    assert_eq!(moon_on(&view), 0, "frame 0 shown");
+    assert_eq!(moon_frames(&view), zeroed, "current 0, next 0");
+    tick_stellars(&mut view);
+    assert_eq!(moon_on(&view), 0, "next 0");
+    tick_stellars(&mut view);
+    assert_eq!(moon_on(&view), 1, "then on");
+}
+
+#[test]
+fn a_gate_exits_reset_zeroes_the_stellars_left_behind_and_starts_the_new_ones_with_next_0() {
+    let mut view = faked_from(catalog(), showing(130, sol()));
+    tick_stellars(&mut view);
+    tick_stellars(&mut view);
+    assert_eq!(moon_on(&view), 2);
+    changed(&mut view, |frame| {
+        *frame = showing(131, vec![looking(140, DrawnSheet::Type, false)]);
+    });
+    raising(
+        &mut view,
+        &[
+            SessionEvent::SystemChanged,
+            SessionEvent::StarfieldReset,
+            SessionEvent::StellarFramesReset,
+        ],
+    );
+    let redrawn = caught_up(&mut view);
+    assert!(redrawn.system && redrawn.frames_reset);
+    assert_eq!(
+        view.scene().expect("laid out").stellars()[0].frames,
+        Frames::after_reset(),
+        "never shown before: next 0"
+    );
+    changed(&mut view, |frame| *frame = showing(130, sol()));
+    raising(&mut view, &[SessionEvent::SystemChanged]);
+    caught_up(&mut view);
+    assert_eq!(moon_on(&view), 0, "zeroed as it was kept");
+    tick_stellars(&mut view);
+    assert_eq!(moon_on(&view), 0, "next 0");
+}
+
+#[test]
+fn without_the_reset_a_catch_up_keeps_the_stellars_frames() {
+    let mut view = faked_from(catalog(), showing(130, sol()));
+    tick_stellars(&mut view);
+    tick_stellars(&mut view);
+    let before = moon_frames(&view);
+    raising(&mut view, &[SessionEvent::StellarsRebuilt]);
+    assert!(!caught_up(&mut view).frames_reset);
+    assert_eq!(moon_frames(&view), before);
 }
 
 #[test]

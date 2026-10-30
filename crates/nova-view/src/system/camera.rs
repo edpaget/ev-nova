@@ -29,6 +29,7 @@
 //! - a sprite placed as the original places one, at whole pixels from
 //!   the center: [`Camera::sprite_top_left`] and [`Camera::sprite_centre`]
 
+use nova_sim::navigation::SpriteRect;
 use nova_sim::{RuleSource, Vec2};
 
 use crate::Point;
@@ -194,10 +195,11 @@ impl Camera {
     /// is `nova_sim::story::sprite_pool::offset`, not forked here.
     ///
     /// `_HandleExplods` places an explosion this way (@0x2f6a1-0x2f73c),
-    /// as `_HandleStellarSprites` (@0x2eeab-0x2ef1a) and
-    /// `_HandleShipDisplay` (@0x2cd1c-0x2ce31) place stellars and ships,
-    /// which rdm:phase/play-feel-4/phase-12-whole-pixel-sprite-placement
-    /// moves onto this helper.
+    /// as `_HandleStellarSprites` (@0x2eeab-0x2ef1a) places stellars and
+    /// `_HandleShipDisplay` (@0x2cd17-0x2d083) a ship's hull and each of
+    /// its layers, by its own frame's size; the scene and flight draw
+    /// them all through this helper, and box a ship by
+    /// [`Camera::sprite_rect`].
     ///
     /// The original takes the player's position at the step; flight's
     /// camera follows the player's shown position, interpolated between
@@ -233,6 +235,47 @@ impl Camera {
             top_left.x + size.0 as f32 / 2.0,
             top_left.y + size.1 as f32 / 2.0,
         )
+    }
+
+    /// The rect, in world coordinates, a sprite whose frame is `size` is
+    /// drawn in when it stands at world point `at`: its top left the world
+    /// point of [`Camera::sprite_top_left`], its sides `size`. A ship's
+    /// click and hover box (`nova_sim::DrawnBox`) is this rect, so the box
+    /// and the drawn sprite can't disagree.
+    #[must_use]
+    pub fn sprite_rect(&self, at: Point, size: (u32, u32)) -> SpriteRect {
+        self.rect_at(self.sprite_top_left(at, size), size)
+    }
+
+    /// The rect, in world coordinates, a sprite whose frame is `size` is
+    /// placed in at `offset` from the camera's center: the offset truncated
+    /// toward zero by the same rule as [`Camera::sprite_top_left`]'s, never
+    /// rebuilt as a world point first, which could lose the whole number.
+    /// A ship boxed where its slot was last laid out reads it
+    /// (`nova_sim::HoverPlace::Stale`).
+    #[must_use]
+    pub fn sprite_rect_from(&self, offset: Vec2, size: (u32, u32)) -> SpriteRect {
+        let (dx, dy) = nova_sim::story::sprite_pool::offset(offset, Vec2::ZERO, size);
+        let anchor = self.anchor();
+        // A screen offset is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let top_left = Point::new(
+            (dx as f32).mul_add(WORLD_SCALE, anchor.x),
+            (dy as f32).mul_add(WORLD_SCALE, anchor.y),
+        );
+        self.rect_at(top_left, size)
+    }
+
+    /// The world rect of `size` whose top left is drawn at screen point
+    /// `top_left`.
+    fn rect_at(&self, top_left: Point, (width, height): (u32, u32)) -> SpriteRect {
+        let world = self.screen_to_world(top_left);
+        SpriteRect {
+            left: world.x,
+            top: world.y,
+            width,
+            height,
+        }
     }
 
     /// Moves the camera `dx`, `dy` world units (so the system moves the
@@ -492,6 +535,101 @@ mod tests {
         assert_eq!(
             camera.sprite_centre(at(89.3, 204.6), (8, 6)),
             at(405.0, 388.0)
+        );
+    }
+
+    /// A camera on a fractional point, drawing it at the play area's
+    /// centre.
+    fn on_fraction() -> Camera {
+        Camera::centred_on(at(100.25, 200.75)).with_anchor(Anchor::PlayAreaCentre)
+    }
+
+    fn top_left(rect: SpriteRect) -> Point {
+        at(rect.left, rect.top)
+    }
+
+    #[test]
+    fn a_sprites_rect_is_its_placed_top_left_in_the_world_at_its_size() {
+        let camera = on_fraction();
+        for (p, size) in [
+            (at(110.7, 195.4), (7, 6)),
+            (at(89.3, 204.6), (8, 5)),
+            (at(110.7, 204.6), (7, 6)),
+            (at(89.3, 195.4), (8, 5)),
+        ] {
+            let rect = camera.sprite_rect(p, size);
+            assert_eq!(
+                top_left(rect),
+                camera.screen_to_world(camera.sprite_top_left(p, size)),
+                "{p:?} {size:?}"
+            );
+            assert_eq!((rect.width, rect.height), size, "{p:?} {size:?}");
+            // Its centre is the world point the sprite is centred on.
+            #[allow(clippy::cast_precision_loss)]
+            let centre = at(
+                rect.left + size.0 as f32 / 2.0,
+                rect.top + size.1 as f32 / 2.0,
+            );
+            assert_eq!(
+                centre,
+                camera.screen_to_world(camera.sprite_centre(p, size)),
+                "{p:?} {size:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sprites_rect_truncates_toward_zero_with_the_odd_pixel_right_and_below() {
+        let camera = on_fraction();
+        let screen = |rect: SpriteRect| camera.world_to_screen(top_left(rect));
+        // (10.45, -5.35) truncates to (10, -5); 7 x 6 halves to (3, 3).
+        assert_eq!(
+            screen(camera.sprite_rect(at(110.7, 195.4), (7, 6))),
+            at(422.0, 376.0)
+        );
+        // (-10.95, 3.85) truncates to (-10, 3), toward zero; 8 x 5 halves
+        // to (4, 2).
+        assert_eq!(
+            screen(camera.sprite_rect(at(89.3, 204.6), (8, 5))),
+            at(401.0, 385.0)
+        );
+        // The axes are not swapped: an even × odd frame is placed apart
+        // from an odd × even one.
+        assert_ne!(
+            camera.sprite_rect(at(110.7, 195.4), (7, 6)),
+            camera.sprite_rect(at(110.7, 195.4), (6, 7))
+        );
+        assert_eq!(
+            screen(camera.sprite_rect(at(110.7, 195.4), (6, 7))),
+            at(422.0, 376.0)
+        );
+        assert_eq!(
+            screen(camera.sprite_rect(at(110.7, 195.4), (9, 4))),
+            at(421.0, 377.0)
+        );
+    }
+
+    #[test]
+    fn a_sprites_rect_from_a_whole_offset_keeps_that_offset() {
+        let camera = on_fraction();
+        let screen = |rect: SpriteRect| camera.world_to_screen(top_left(rect));
+        // 30 right of and 12 above the player: 7 x 6 halves to (3, 3).
+        let rect = camera.sprite_rect_from(Vec2::new(30.0, -12.0), (7, 6));
+        assert_eq!(screen(rect), at(442.0, 369.0));
+        assert_eq!((rect.width, rect.height), (7, 6));
+    }
+
+    #[test]
+    fn a_sprites_rect_from_a_fractional_offset_truncates_it_toward_zero() {
+        let camera = on_fraction();
+        let screen = |rect: SpriteRect| camera.world_to_screen(top_left(rect));
+        assert_eq!(
+            screen(camera.sprite_rect_from(Vec2::new(30.9, -12.9), (7, 6))),
+            at(442.0, 369.0)
+        );
+        assert_eq!(
+            screen(camera.sprite_rect_from(Vec2::new(-30.9, 12.9), (8, 5))),
+            at(381.0, 394.0)
         );
     }
 }

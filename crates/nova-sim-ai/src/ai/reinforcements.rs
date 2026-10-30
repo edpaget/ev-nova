@@ -62,7 +62,6 @@
 use crate::ai::flee_drop::{flees_a_stranger_ally, within_reach};
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::catalog::GovtId;
-use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
 /// Whether `_HighLevelAIHandler` calls for reinforcements after `npc`'s
@@ -74,7 +73,7 @@ pub fn high_level_calls(npc: &Npc, goal: Goal, around: &Surroundings) -> bool {
             within_reach(npc, from, around) && !flees_a_stranger_ally(npc, from, around)
         }
         Goal::Attack(target) | Goal::Snipe(target) => {
-            npc.condition == Condition::Intact && around.live(target)
+            npc.active_not_disabled() && around.live(target)
         }
         _ => false,
     }
@@ -300,6 +299,7 @@ mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::traffic::npc::AiType;
 
@@ -317,6 +317,22 @@ mod tests {
         let sites = sites();
         let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
         high_level_calls(&npcs[0], goal, &around)
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_calls_attacking_as_it_is_not_disabled() {
+        let [caller, other] = pair(PIRATES, 100.0, 0.0);
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let downed = Npc {
+            condition: dying,
+            ..caller.clone()
+        };
+        assert!(!calls(&[downed, other.clone()], Goal::Attack(n(2))));
+        let guard = crate::traffic::fixture::breaking_up_guard(caller);
+        assert!(calls(&[guard, other], Goal::Attack(n(2))), "@0x2d6f");
     }
 
     #[test]

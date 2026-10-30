@@ -40,6 +40,9 @@ pub struct BundleSpec {
     pub homepage: String,
     /// Who makes it: the AppStream `developer`.
     pub developer: String,
+    /// The developer's reverse-DNS id: the AppStream `developer` `id`,
+    /// e.g. `io.github.edpaget`.
+    pub developer_id: String,
     /// The update-signing public key the apps check update feeds with,
     /// from the optional `update_public_key` (standard base64). `None`
     /// while the operator hasn't committed one (it is missing or empty):
@@ -100,6 +103,7 @@ struct BundleTable {
     description: Option<String>,
     homepage: Option<String>,
     developer: Option<String>,
+    developer_id: Option<String>,
     update_public_key: Option<String>,
 }
 
@@ -133,6 +137,9 @@ impl BundleSpec {
                 .ok_or(SpecError::MissingKey("description"))?,
             homepage: table.homepage.ok_or(SpecError::MissingKey("homepage"))?,
             developer: table.developer.ok_or(SpecError::MissingKey("developer"))?,
+            developer_id: table
+                .developer_id
+                .ok_or(SpecError::MissingKey("developer_id"))?,
             update_public_key: update_public_key(table.update_public_key.as_deref())?,
         })
     }
@@ -186,6 +193,7 @@ pub(crate) mod tests {
             "description": "A space trading and combat game.",
             "homepage": "https://example.com/nova",
             "developer": "the nova authors",
+            "developer_id": "io.example",
         })
     }
 
@@ -214,6 +222,7 @@ pub(crate) mod tests {
                 description: "A space trading and combat game.".into(),
                 homepage: "https://example.com/nova".into(),
                 developer: "the nova authors".into(),
+                developer_id: "io.example".into(),
                 update_public_key: None,
             }
         );
@@ -275,6 +284,7 @@ pub(crate) mod tests {
             "description",
             "homepage",
             "developer",
+            "developer_id",
         ] {
             let mut bundle = full_bundle();
             bundle.as_object_mut().expect("object").remove(key);

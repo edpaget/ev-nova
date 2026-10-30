@@ -51,8 +51,10 @@
 //!
 //! - The wrap shift (`_WrapPlayerPosition` @0x6811f-): the engine has no
 //!   player wrap.
-//! - The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181): the view
-//!   murks shots alone so far (rdm:task/murk-other-sprites).
+//!
+//! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
+//! `nova_view::flight::murk` darkens each box
+//! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use std::collections::BTreeMap;
 
@@ -182,12 +184,15 @@ pub fn touches(ship_at: Vec2, radius: f32, box_at: Vec2, half: Vec2) -> bool {
 
 /// Whether `npc` is in the ship layer `*0x3b541c`, the one boxes collide
 /// with (`_HandleShipDisplay` @0x2bd24-0x2bd47, see
-/// [`ShipLayer::of`]): not disabled, nor breaking up
-/// ([`disabled`]), and not one of the player's escorts and fighters,
+/// [`ShipLayer::of`]): not disabled, nor breaking up but for a
+/// stellar's defence ship ([`disabled`]), and not one of the player's escorts and fighters,
 /// whose parent (+0x9a) is the player ([`Npc::escorts_player`]).
 #[must_use]
 pub fn npc_in_ship_layer(npc: &Npc) -> bool {
-    ShipLayer::of(disabled(npc.condition), npc.escorts_player()) == ShipLayer::Ships
+    ShipLayer::of(
+        disabled(npc.condition, npc.defends.is_some()),
+        npc.escorts_player(),
+    ) == ShipLayer::Ships
 }
 
 /// The NPC side of the scoop branch: a scooping NPC's disc, `radius`
@@ -339,6 +344,18 @@ mod tests {
             };
             assert!(!npc_in_ship_layer(&downed), "{condition:?}");
         }
+        let guard = Npc {
+            defends: Some(crate::catalog::StellarId(128)),
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..plain.clone()
+        };
+        assert!(
+            npc_in_ship_layer(&guard),
+            "a defence ship breaking up is not disabled (@0x2d6f)"
+        );
         let hired = Npc {
             escort: Some(duty()),
             ..plain.clone()

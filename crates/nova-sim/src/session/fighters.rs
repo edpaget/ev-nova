@@ -727,6 +727,7 @@ fn fighter(
         odds: crate::traffic::odds_cache::STALE,
         no_ai: false,
         kept_escort_ai: false,
+        defends: None,
     };
     fighter.independent();
     fighter.take_carrier(carrier, capacity);

@@ -26,12 +26,12 @@ resource "github_actions_repository_permissions" "ev_nova" {
     # Any ref: pinning refs is sha_pinning_required's job.
     patterns_allowed = [
       "Swatinem/rust-cache@*",
-      "cargo-bins/cargo-binstall@*",
       "jdx/mise-action@*",
     ]
   }
-  # Off until ci.yml pins its actions by SHA (rdm task pin-ci-actions-by-sha).
-  sha_pinning_required = false
+  # Every workflow pins its actions by full commit SHA, with the release tag
+  # in a trailing comment. A local ./ reusable workflow needs none.
+  sha_pinning_required = true
 }
 
 import {

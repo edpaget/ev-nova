@@ -57,8 +57,13 @@
 //! Recorded only: the `_statusRedraw` writes (@0x8f56e-0x8f573,
 //! @0x8f6a6-0x8f6af), as the status display reads live state; the box
 //! taken as a 16-bit word (@0x8f44d), a width; and `_AIEscortFireUnprovoked`
-//! after subs 1 and 0xb, nothing for AI type 4 or below. Sub 1's cut of
-//! +0x48 is rdm:task/ai-drags-scale-the-npc-speed's.
+//! after subs 1 and 0xb, nothing for AI type 4 or below.
+//!
+//! Sub 1's stop cuts the speed along the heading (+0x48, [`Npc::speed`])
+//! with the velocity, goal 9's damping included (@0x855ca-0x855dc,
+//! [`leave_flight`](crate::traffic::leave_flight)). That damping sits in
+//! the inertial branch, so only an inertial hull reaches it, and it is
+//! seen through the pursuit's read of a target's speed (sub 6 @0x86093).
 
 use crate::ai::Goal;
 use crate::combat::ShipRef;

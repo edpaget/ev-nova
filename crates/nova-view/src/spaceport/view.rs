@@ -148,11 +148,11 @@
 //! The outfitter and the shipyard decide that from the list their opening
 //! builds, which whoever flies the ship hands back once each opens
 //! ([`SpaceportView::take_outfitter_opened`],
-//! [`SpaceportView::take_shipyard_opened`]). The closings the original redraws at
-//! that ours can't reach:
+//! [`SpaceportView::take_shipyard_opened`]). The bar's Gamble with no cash
+//! shows `STR#` 2002 #361 there too, and its close redraws the status bar
+//! (`_ShowTextDialog` @0x4918c, then `_RefreshSAT` @0x49191; the `gamble`
+//! module). The closings the original redraws at that ours can't reach:
 //!
-//! - The bar's Gamble text (`_ShowTextDialog` @0x4918c, then
-//!   `_RefreshSAT` @0x49191): ours' Gamble isn't built and shows greyed.
 //! - Mission info's Abort with nothing selected (@0x9e51d-0x9e557): ours
 //!   greys Abort unless the selected mission can be aborted.
 //! - A screen whose dialog is missing: the original never shows the bar,
@@ -181,6 +181,8 @@ use nova_sim::{
     Reselection, RuleSource, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
     services,
 };
+
+mod gamble;
 
 use super::ambient::Ambient;
 use super::bar::{BarScreen, BarTemplates, Hiring};
@@ -546,6 +548,9 @@ pub struct SpaceportView {
     ambient: Option<Ambient>,
     /// What the ambient sound's waits are drawn on.
     chance: SharedChance,
+    /// The bar race's templates and what Gamble's texts wait on (the
+    /// `gamble` module).
+    gambling: gamble::Gambling,
 }
 
 impl SpaceportView {
@@ -646,6 +651,7 @@ impl SpaceportView {
             sounds: Vec::new(),
             ambient,
             chance: SharedChance::default(),
+            gambling: gamble::Gambling::default(),
         }
     }
 
@@ -2002,6 +2008,7 @@ impl SpaceportView {
             }
             Some(Open::Bar(screen)) => {
                 screen.news_screen().is_some()
+                    || screen.race_screen().is_some()
                     || screen
                         .hire_screen()
                         .is_some_and(|hire| hire.info_panel().is_some())
@@ -2083,7 +2090,9 @@ impl SpaceportView {
             style,
             barkeeping.room,
         );
-        bar = bar.with_news(barkeeping.news.clone()).with_focus_ring(ring);
+        bar = self
+            .gambling
+            .give_race(bar.with_news(barkeeping.news.clone()).with_focus_ring(ring));
         if let Some(missioning) = &self.missioning {
             bar = bar
                 .with_offers(missioning.offer.clone())
@@ -2204,7 +2213,95 @@ impl Screen for SpaceportView {
     /// does, the mission info and player info keys ask for their screens, a press of
     /// one of the [`PORT_KEYS`](super::layout::PORT_KEYS) presses its
     /// button, and every other input goes to the dialog. It never quits.
+    /// What waits on the texts over it is settled after it
+    /// ([`SpaceportView::settle_gamble`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        let action = self.route_input(input);
+        self.settle_gamble();
+        action
+    }
+
+    /// The mission texts' movie moves on, and the spaceport's offer's.
+    /// The screen open ticks; while a mission text, the mission info
+    /// screen or the player info screen covers it, only its offer timer
+    /// does, as covered. The ambient sound's frame passes, covered or not
+    /// ([`Ambient::tick`]). What waits on the texts is settled after it
+    /// ([`SpaceportView::settle_gamble`]).
+    fn tick(&mut self, dt: Duration) {
+        self.tick_screens(dt);
+        self.settle_gamble();
+    }
+
+    /// What is open, the spaceport's offer, the mission info screen, the
+    /// mission text shown over them, then the player info screen over
+    /// everything.
+    fn draw(&self, list: &mut DrawList) {
+        self.draw_below(list);
+        if let Some(missioning) = &self.missioning {
+            missioning.landing.draw(list);
+        }
+        if let Some(dialogs) = &self.dialogs {
+            dialogs.draw(list);
+        }
+        if let Some(screen) = &self.player_info {
+            screen.draw(list);
+        }
+    }
+
+    fn cancel_pointer(&mut self) {
+        if let Some(screen) = &mut self.player_info {
+            screen.cancel_pointer();
+            return;
+        }
+        if let Some(dialogs) = &mut self.dialogs
+            && dialogs.is_open()
+        {
+            dialogs.cancel_pointer();
+            return;
+        }
+        if self
+            .missioning
+            .as_mut()
+            .is_some_and(|missioning| missioning.landing.cancel_pointer())
+        {
+            return;
+        }
+        match (&mut self.open, &mut self.port) {
+            (Some(open), _) => open.screen_mut().cancel_pointer(),
+            (None, Ok(port)) => port.dialog.cancel_pointer(),
+            (None, Err(_)) => {}
+        }
+    }
+
+    /// Lets go of the keys the player info screen holds, or else the
+    /// screen open.
+    fn release_keys(&mut self) {
+        if let Some(screen) = &mut self.player_info {
+            screen.release_keys();
+        } else if let Some(open) = &mut self.open {
+            open.screen_mut().release_keys();
+        }
+    }
+
+    /// The open service's sounds and the ambient sound's, in order. The
+    /// spaceport's own buttons are silent under the pointer, as
+    /// `_TrackPlanetButtons` @0x2996f plays nothing.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
+
+    /// While a cinematic movie hides the cursor: a mission text's, or an
+    /// offer's.
+    fn hides_pointer(&self) -> bool {
+        self.dialogs.as_ref().is_some_and(Screen::hides_pointer)
+            || self.offer_dialog().is_some_and(Screen::hides_pointer)
+    }
+}
+
+impl SpaceportView {
+    /// [`Screen::input`]'s routing, before what waits on the texts is
+    /// settled.
+    fn route_input(&mut self, input: &Input) -> ScreenAction {
         if let Some(screen) = &mut self.player_info {
             screen.input(input);
             self.player_info_jettison |= screen.take_jettison();
@@ -2300,12 +2397,9 @@ impl Screen for SpaceportView {
         ScreenAction::None
     }
 
-    /// The mission texts' movie moves on, and the spaceport's offer's.
-    /// The screen open ticks; while a mission text, the mission info
-    /// screen or the player info screen covers it, only its offer timer
-    /// does, as covered. The ambient sound's frame passes, covered or not
-    /// ([`Ambient::tick`]).
-    fn tick(&mut self, dt: Duration) {
+    /// [`Screen::tick`]'s screens, before what waits on the texts is
+    /// settled.
+    fn tick_screens(&mut self, dt: Duration) {
         let covered = self.covered();
         if let Some(sound) = self
             .ambient
@@ -2335,73 +2429,6 @@ impl Screen for SpaceportView {
         }
     }
 
-    /// What is open, the spaceport's offer, the mission info screen, the
-    /// mission text shown over them, then the player info screen over
-    /// everything.
-    fn draw(&self, list: &mut DrawList) {
-        self.draw_below(list);
-        if let Some(missioning) = &self.missioning {
-            missioning.landing.draw(list);
-        }
-        if let Some(dialogs) = &self.dialogs {
-            dialogs.draw(list);
-        }
-        if let Some(screen) = &self.player_info {
-            screen.draw(list);
-        }
-    }
-
-    fn cancel_pointer(&mut self) {
-        if let Some(screen) = &mut self.player_info {
-            screen.cancel_pointer();
-            return;
-        }
-        if let Some(dialogs) = &mut self.dialogs
-            && dialogs.is_open()
-        {
-            dialogs.cancel_pointer();
-            return;
-        }
-        if self
-            .missioning
-            .as_mut()
-            .is_some_and(|missioning| missioning.landing.cancel_pointer())
-        {
-            return;
-        }
-        match (&mut self.open, &mut self.port) {
-            (Some(open), _) => open.screen_mut().cancel_pointer(),
-            (None, Ok(port)) => port.dialog.cancel_pointer(),
-            (None, Err(_)) => {}
-        }
-    }
-
-    /// Lets go of the keys the player info screen holds, or else the
-    /// screen open.
-    fn release_keys(&mut self) {
-        if let Some(screen) = &mut self.player_info {
-            screen.release_keys();
-        } else if let Some(open) = &mut self.open {
-            open.screen_mut().release_keys();
-        }
-    }
-
-    /// The open service's sounds and the ambient sound's, in order. The
-    /// spaceport's own buttons are silent under the pointer, as
-    /// `_TrackPlanetButtons` @0x2996f plays nothing.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
-    }
-
-    /// While a cinematic movie hides the cursor: a mission text's, or an
-    /// offer's.
-    fn hides_pointer(&self) -> bool {
-        self.dialogs.as_ref().is_some_and(Screen::hides_pointer)
-            || self.offer_dialog().is_some_and(Screen::hides_pointer)
-    }
-}
-
-impl SpaceportView {
     /// Gives what was pressed under the last mission movie to what is
     /// beneath it, as the original's queued events reach the next filter.
     fn pass_unclaimed(&mut self) {

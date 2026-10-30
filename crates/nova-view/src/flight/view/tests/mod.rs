@@ -82,6 +82,7 @@ mod faked_desk;
 mod faked_docked;
 mod faked_escorts;
 mod faked_flight;
+mod faked_gamble;
 mod faked_hail;
 mod faked_hud;
 mod faked_keys;
@@ -103,10 +104,13 @@ mod landing;
 mod layers;
 mod map_borders;
 mod map_find;
+mod map_key_wait;
 mod maps;
 mod missions;
+mod murk_sprites;
 mod nav;
 mod outputs;
+mod painted_ships;
 mod port_screen_map;
 mod ship_drawing;
 mod shots;
@@ -114,6 +118,7 @@ mod stars;
 mod stellar_looks;
 mod stellars;
 mod stepping;
+mod whole_pixels;
 mod widescreen;
 mod world_layers;
 
@@ -126,6 +131,21 @@ use frames::*;
 /// original's reading of [`RuleKey::FlightAnchor`]: the play area's
 /// centre, `_screenCenter`, (trunc((1024 − 194) / 2), 384).
 const PLAYER_AT: Point = Point::new(415.0, 384.0);
+
+/// The planet comm dialog open on stellar `id`, "Earth", greeting.
+fn planet_view(id: i16) -> nova_sim::planet_comm::PlanetCommView {
+    use nova_sim::planet_comm::{PlanetCommButton, PlanetCommView};
+    PlanetCommView {
+        stellar: nova_sim::StellarId(id),
+        name: "Earth".to_owned(),
+        type_label: "[Earth/Luna System]".to_owned(),
+        reply: "Channel open to Earth.".to_owned(),
+        second: PlanetCommButton::Greetings,
+        third: Some(PlanetCommButton::DemandTribute),
+        status: None,
+        asking: None,
+    }
+}
 
 fn held(key: Key) -> Input {
     Input::Key {
@@ -867,4 +887,14 @@ fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> 
             DrawCommand::Line { color, .. } => color.a,
             _ => unreachable!(),
         })
+}
+
+/// The world point `drawn`'s rect is centred on.
+#[allow(clippy::cast_precision_loss)]
+fn box_centre(drawn: nova_sim::DrawnBox) -> Point {
+    let rect = drawn.rect;
+    Point::new(
+        rect.left + rect.width as f32 / 2.0,
+        rect.top + rect.height as f32 / 2.0,
+    )
 }

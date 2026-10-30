@@ -29,7 +29,7 @@
 //! | Original | Engine |
 //! |---|---|
 //! | `_EnterGameFromMainScreen` @0x19ffb | [`Session::fly`], and [`Session::begin`] after the `chär`'s `OnStart` |
-//! | `_HandlePlayerDockRequest` @0x6709b | a take-off ([`Session::take_off`]) and a gate exit, before the setup |
+//! | `_HandlePlayerDockRequest` @0x6709b | the dock request's tail ([`Session::begin_dock_tail`]): a take-off ([`Session::take_off`]), a gate exit and a wormhole with no exit, before the setup |
 //! | `_HandlePlayer` @0x6c51f | a jump's arrival ([`Session::arrive`]), after the days, the enter-system hook and the setup |
 //! | `_JettisonCargo` @0x3e3b5, the jettison key's @0x6fdaf | [`Session::jettison_cargo`]; every good is gone by then, so its trim never cuts, and both `jünk` latches clear |
 //! | `_DoPlunderDialog` @0x94a0b | the plunder dialog closing, an assignment's once the ship is assigned |
@@ -448,6 +448,32 @@ pub(super) mod tests {
             exit_gate(&mut session, &catalog, kind, &mut NeverFires);
             assert_eq!(cargo(&session), trimmed, "{kind:?}: @0x6709b");
         }
+    }
+
+    #[test]
+    fn a_wormhole_with_no_exit_trims_the_cargo_past_the_holds() {
+        // `_HandlePlayerDockRequest` runs its tail on the -1 too
+        // (@0x66f17-0x66f20), reset and all (@0x6709b).
+        use crate::catalog::StellarId;
+        use crate::gate::GateRefusal;
+        use crate::session::tests::{at_wormhole, wormholes};
+        let holes = wormholes();
+        let catalog = FakePilotCatalog {
+            gates: holes
+                .gates
+                .iter()
+                .filter(|gate| gate.id == StellarId(400))
+                .copied()
+                .collect(),
+            ..holes
+        };
+        let mut session = at_wormhole(&catalog);
+        let trimmed = overloaded(&mut session);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit)
+        );
+        assert_eq!(cargo(&session), trimmed, "@0x6709b");
     }
 
     #[test]

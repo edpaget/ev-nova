@@ -104,6 +104,7 @@ mod menu_commands;
 mod missions;
 mod new_pilot;
 mod overlays;
+mod planet_comm;
 mod port;
 mod quit_question;
 mod wheel;

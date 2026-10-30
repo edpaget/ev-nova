@@ -721,6 +721,7 @@ mod tests {
                 booty: Some(0x0100),
                 planet_type: false,
                 mining: true,
+                defends: None,
             }),
         ] {
             let parent = Shot {

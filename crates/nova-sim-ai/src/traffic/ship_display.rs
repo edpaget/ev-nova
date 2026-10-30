@@ -519,7 +519,7 @@ pub fn display(
     settle_spawn(npc, derelict, first, chance);
     let spec = npc.hull.frames;
     let moment = Moment {
-        disabled: npc.condition.disabled(),
+        disabled: npc.is_disabled(),
         key_aboard: npc
             .armament
             .key_ship_aboard(npc.hull.key_carried, &npc.rounds),
@@ -1172,6 +1172,18 @@ mod tests {
             &mut Draws::of(&[]),
         );
         assert_eq!(still.display.frames.anim_timer, 0.0, "disabled, still");
+        let mut guard = crate::traffic::fixture::breaking_up_guard(folding(ANIMATED | 0x0010, 3));
+        display(
+            &mut guard,
+            false,
+            DisplayRules::ENGINE,
+            &FirstClass::default(),
+            &mut Draws::of(&[]),
+        );
+        assert_ne!(
+            guard.display.frames.anim_timer, 0.0,
+            "a defence ship breaking up is not disabled (@0x2d6f)"
+        );
     }
 
     #[test]

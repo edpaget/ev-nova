@@ -65,13 +65,18 @@
 //!   `explored` module, at the rebuild points
 //!   ([`known_from`](crate::exploration::known_from));
 //! - the dominated byte +0x46, set for an active stellar with `Flags2`
-//!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
-//!   (`landing::cleared`, `mission::dominated`, `Chart::markup`), and
-//!   the stored byte is task planet-domination's;
+//!   0x0020 (@0x32ce5-0x32ceb): [`OverlaidGalaxy::dominated`] reads the
+//!   bit with the domination the planet comm dialog writes
+//!   ([`GalaxyOverlay::set_dominated`]), and [`OverlaidGalaxy::site`]
+//!   stamps the run-time domination on each site, so every reader goes
+//!   through the one rule ([`domination`](crate::domination)); the save
+//!   keeps it, and Recharge's free fill reads it too;
 //! - +0x47, a defence ship of the stellar in the system, set and
 //!   cleared each frame (`_DoPlayGameWork` @0x443d4-0x4444f) and cleared
 //!   for every stellar here (@0x32d5d), which `_IsThreatToStellar` reads
-//!   for a `Flags2` 0x0200 stellar (@0x9f36): task planet-domination;
+//!   for a `Flags2` 0x0200 stellar (@0x9f36): the traffic's
+//!   (`nova_sim_ai::traffic::stellar_defence`), which the session clears
+//!   at each rebuild point;
 //! - unloading the master sprites no longer needed (@0x32d74-0x32e4e):
 //!   nothing observable, not modelled;
 //! - the sprite slots and their fallback frames (@0x32e54-0x33331): the
@@ -124,6 +129,10 @@ pub struct StellarOverride {
     /// Its regeneration countdown while it is destroyed; `None` while it is
     /// not.
     pub destroyed: Option<Countdown>,
+    /// Whether the player dominated it by Demand Tribute, until a Release
+    /// (+0x46, `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f), kept by
+    /// the save (`_WritePilotData` @0x72576-0x72580).
+    pub dominated: bool,
 }
 
 /// What the overlay changes of one nebula. The default changes nothing.
@@ -280,6 +289,14 @@ impl GalaxyOverlay {
     pub fn set_destroyed(&mut self, stellar: StellarId, destroyed: Option<Countdown>) -> bool {
         edit(&mut self.stellars, stellar, |change| {
             change.destroyed = destroyed;
+        })
+    }
+
+    /// Sets whether the player dominated `stellar`, and says whether that
+    /// changed anything.
+    pub fn set_dominated(&mut self, stellar: StellarId, dominated: bool) -> bool {
+        edit(&mut self.stellars, stellar, |change| {
+            change.dominated = dominated;
         })
     }
 
@@ -559,13 +576,30 @@ impl OverlaidGalaxy {
         self.overlay.stellar(stellar).destroyed.is_some()
     }
 
-    /// `site` with the overlay's government for its stellar, if any, and
-    /// destroyed exactly when the overlay holds it destroyed.
+    /// Whether `stellar`, of `Flags2` `flags2`, is dominated (+0x46), by
+    /// the one rule ([`domination::dominated_by`](crate::domination::dominated_by)):
+    /// the player dominated it, or its `Flags2` has
+    /// [`DOMINATED`](crate::market::DOMINATED), as
+    /// `_HandleStellarSystemVisibility` sets the byte for such a stellar
+    /// at every rebuild point (@0x32ce5-0x32ceb), and nothing writes it
+    /// for one there. The readers that hold only a stellar's ID and
+    /// `Flags2` (a [`ListedStellar`], a mission's stellar) read it here;
+    /// those that hold a site read its stamp ([`site`](Self::site)).
+    #[must_use]
+    pub fn dominated(&self, stellar: StellarId, flags2: u16) -> bool {
+        crate::domination::dominated_by(self.overlay.stellar(stellar).dominated, flags2)
+    }
+
+    /// `site` with the overlay's government for its stellar, if any,
+    /// destroyed exactly when the overlay holds it destroyed, and
+    /// dominated at run time exactly when the overlay holds it so.
     #[must_use]
     pub fn site(&self, site: LandingSite) -> LandingSite {
+        let change = self.overlay.stellar(site.id);
         LandingSite {
-            govt: self.overlay.stellar(site.id).govt.unwrap_or(site.govt),
+            govt: change.govt.unwrap_or(site.govt),
             destroyed: self.destroyed(site.id),
+            dominated_at_run_time: change.dominated,
             ..site
         }
     }
@@ -1119,6 +1153,7 @@ mod tests {
             StellarOverride {
                 govt: Some(Some(GovtId(141))),
                 destroyed: Some(Countdown { days_left: 0 }),
+                dominated: false,
             }
         );
         assert!(overlay.set_destroyed(p, None));
@@ -1281,6 +1316,90 @@ mod tests {
         overlay.set_destroyed(StellarId(128), None);
         galaxy.set_overlay(overlay);
         assert!(!galaxy.destroyed(StellarId(128)), "regenerated");
+    }
+
+    #[test]
+    fn a_stellar_is_dominated_once_dominated_until_released() {
+        let mut overlay = GalaxyOverlay::default();
+        let earth = planet(128, 0.0, 0.0);
+        assert!(overlay.set_dominated(earth.id, true));
+        assert!(!overlay.set_dominated(earth.id, true), "no change");
+        let mut galaxy = OverlaidGalaxy::new(systems(), overlay.clone());
+        assert!(galaxy.dominated(earth.id, earth.flags2));
+        assert!(!galaxy.dominated(StellarId(129), 0));
+        assert!(overlay.set_dominated(earth.id, false));
+        assert!(overlay.is_empty(), "released, nothing changed");
+        galaxy.set_overlay(overlay);
+        assert!(!galaxy.dominated(earth.id, earth.flags2));
+    }
+
+    #[test]
+    fn the_site_is_stamped_dominated_while_the_player_dominates_it() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_dominated(StellarId(128), true);
+        let mut galaxy = OverlaidGalaxy::new(systems(), overlay.clone());
+        let earth = planet(128, 0.0, 0.0);
+        let stamped = galaxy.site(earth);
+        assert!(stamped.dominated_at_run_time);
+        assert_eq!(
+            stamped,
+            LandingSite {
+                dominated_at_run_time: true,
+                ..earth
+            },
+            "nothing else stamped"
+        );
+        assert_eq!(
+            galaxy.site(planet(129, 0.0, 0.0)),
+            planet(129, 0.0, 0.0),
+            "an undominated one is left alone"
+        );
+        overlay.set_dominated(StellarId(128), false);
+        galaxy.set_overlay(overlay);
+        assert!(
+            !galaxy.site(stamped).dominated_at_run_time,
+            "a release clears the stamp"
+        );
+    }
+
+    #[test]
+    fn the_overlays_domination_agrees_with_the_one_predicate() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_dominated(StellarId(128), true);
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        for (id, flags2) in [
+            (128, 0),
+            (128, crate::market::DOMINATED),
+            (129, 0),
+            (129, 0x0020),
+        ] {
+            let site = galaxy.site(LandingSite {
+                flags2,
+                ..planet(id, 0.0, 0.0)
+            });
+            assert_eq!(
+                galaxy.dominated(site.id, site.flags2),
+                crate::domination::dominated(&site),
+                "{id} {flags2:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_always_dominated_stellar_is_dominated_with_nothing_written() {
+        let owned = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..planet(128, 0.0, 0.0)
+        };
+        let mut overlay = GalaxyOverlay::default();
+        let galaxy = OverlaidGalaxy::new(systems(), overlay.clone());
+        assert!(galaxy.dominated(owned.id, owned.flags2));
+        overlay.set_dominated(owned.id, false);
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        assert!(
+            galaxy.dominated(owned.id, owned.flags2),
+            "a release leaves it so"
+        );
     }
 
     #[test]
@@ -1857,6 +1976,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let listed = [
             listed(128, &[1]),
@@ -1887,6 +2009,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         }
     }
 
@@ -2043,6 +2168,9 @@ mod tests {
             flags2: 0,
             govt: None,
             min_status: 0,
+            def_count: 0,
+            tech_level: 0,
+            tribute: 0,
         };
         let listed = [listed(128, &[1]), listed(130, &[2, 3]), listed(140, &[4])];
         assert_eq!(listers_of(&listed, StellarId(130)), ids(&[2, 3]));

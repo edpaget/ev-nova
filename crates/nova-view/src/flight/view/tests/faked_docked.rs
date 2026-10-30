@@ -852,6 +852,7 @@ fn the_bars_map_closing_shows_the_maps_selection_and_puts_back_the_bars_nav() {
     let put_back = leaves(&view, |frame| frame.nav_mode = EARTH);
     view.sim.queue_answer_showing(Answer::Done, put_back);
     view.port_map_input(&key(MAP, true));
+    view.port_map_input(&key(MAP, false));
     assert!(!view.map_open(), "M closes it");
     assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
     assert_eq!(
@@ -871,6 +872,7 @@ fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
     let mut view = mapped();
     view.open_bar_map();
     view.port_map_input(&key(MAP, true));
+    view.port_map_input(&key(MAP, false));
     assert!(
         sent(&view).contains(&FlightCommand::RestoreBarNav),
         "the bar's map"
@@ -878,11 +880,47 @@ fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
     let before = sent(&view).len();
     view.open_map();
     view.port_map_input(&key(MAP, true));
+    view.port_map_input(&key(MAP, false));
     assert!(!view.map_open());
     assert!(
         !sent(&view)[before..].contains(&FlightCommand::RestoreBarNav),
         "another map in port leaves the bar's nav saved"
     );
+}
+
+#[test]
+fn the_bars_map_closed_by_return_or_done_with_m_held_waits_for_its_release() {
+    // The bar opens it on M (`_BarFilter` item 8), and `_DoSystemMap`
+    // waits for M's release before its close (@0x13a2e-0x13a46).
+    let done = {
+        let at = crate::galaxy::buttons::MapButtons::new(crate::galaxy::dialog::DIALOG_ORIGIN)
+            .rect(crate::galaxy::buttons::MapButton::Done)
+            .center();
+        move |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        }
+    };
+    let closes = [vec![key(Key::Enter, true)], vec![done(true), done(false)]];
+    for (n, close) in closes.iter().enumerate() {
+        let mut view = mapped();
+        view.open_bar_map();
+        for input in close {
+            view.port_map_input(input);
+        }
+        assert!(view.map_open(), "close {n} waits");
+        assert!(
+            !sent(&view).contains(&FlightCommand::RestoreBarNav),
+            "close {n}: the bar's nav not yet put back"
+        );
+        view.port_map_input(&key(MAP, false));
+        assert!(!view.map_open(), "close {n} on the release");
+        assert!(
+            sent(&view).contains(&FlightCommand::RestoreBarNav),
+            "close {n}"
+        );
+    }
 }
 
 #[test]
@@ -906,6 +944,7 @@ fn the_map_in_port_beeps_neither_as_it_opens_nor_as_it_closes() {
     view.open_bar_map();
     assert_eq!(view.ui_sounds, [], "the bar's map opened");
     view.port_map_input(&key(MAP, true));
+    view.port_map_input(&key(MAP, false));
     assert!(!view.map_open());
     assert_eq!(view.ui_sounds, [], "the bar's map closed");
     view.open_map();
@@ -944,6 +983,7 @@ fn in_port_a_shift_click_builds_the_course_and_the_close_cues_nothing() {
     assert!(click.shift, "the Shift-click never tests _onPlanet");
     assert!(view.course_map().clear_route_enabled());
     view.port_map_input(&key(MAP, true));
+    view.port_map_input(&key(MAP, false));
     assert!(!view.map_open());
     assert!(
         !sent(&view).contains(&FlightCommand::CueCourse),

@@ -14,10 +14,12 @@
 //! the sprite tick's gate branch (@0x2ea3d-0x2ec3f), the launch
 //! (`_InitObjects` @0x1c8c5-0x1c8d1), a newly made sprite slot
 //! (`_HandleStellarSystemVisibility` @0x331e2-0x331fb) and the take-off
-//! (`_HandlePlayerDockRequest` @0x6761e-0x67646, not built:
-//! stellar-fidelity-followups phase 10). While not shown it stands still,
+//! (`_HandlePlayerDockRequest` @0x675ce-0x67646; see the `takeoff_frames`
+//! module, rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset).
+//! While not shown it stands still,
 //! as the sprite tick walks only the slots shown (@0x2e713-0x2e73e). It
-//! starts closed only the first time a flight shows it: `Space` is not
+//! starts closed only the first time a flight shows it, with next 0 once
+//! a take-off or a gate's exit has reset the frames: `Space` is not
 //! saved, so a load, a resumed pilot and a new pilot start every gate
 //! closed (stellar-fidelity phase 12).
 
@@ -96,12 +98,17 @@ impl Session {
 
 impl Space {
     /// Gives each of `gates`, the hypergates shown, a closed sprite when
-    /// the flight has none for it yet. A gate's sprite is kept while it is
-    /// not shown, as the original keeps it on the `spöb` record (see the
-    /// module docs).
+    /// the flight has none for it yet: as the launch leaves it, or as the
+    /// take-off's reset leaves it once one has run
+    /// ([`GateSprite::after_reset`](crate::gate_sprite::GateSprite::after_reset);
+    /// see the `takeoff_frames` module). A gate's sprite is kept while it
+    /// is not shown, as the original keeps it on the `spöb` record (see
+    /// the module docs).
     pub(super) fn keep_gate_sprites(&mut self, gates: impl IntoIterator<Item = StellarId>) {
         for gate in gates {
-            self.gate_sprites.entry(gate).or_default();
+            self.gate_sprites
+                .entry(gate)
+                .or_insert(self.gate_sprite_afresh);
         }
     }
 
@@ -116,7 +123,7 @@ impl Space {
 
 impl Chart {
     /// Hypergate `gate`, when it is shown.
-    fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
+    pub(super) fn gate_site(&self, gate: StellarId) -> Option<&LandingSite> {
         self.sites
             .iter()
             .find(|site| site.id == gate && is_hypergate(site))

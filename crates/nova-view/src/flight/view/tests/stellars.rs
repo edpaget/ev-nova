@@ -1,7 +1,7 @@
 use super::*;
 use crate::flight::sim_port::FlightSim;
 use nova_sim::SessionEvent;
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, FrameRadarStellar};
 
 // Session events.
 
@@ -54,8 +54,7 @@ pub(super) fn proxima_in_sol() -> FakeCatalog {
 
 /// Sol owning a wormhole, Hole (150), 300 below the centre the ship
 /// starts at, and a hypergate, Gate (151), 300 above it, each a square
-/// on the radar as the data adapter reads them, after Earth and the
-/// Moon.
+/// on the radar as the session lists them, after Earth and the Moon.
 fn sol_with_gates() -> Faked {
     let mut catalog = catalog();
     catalog.sites.extend([
@@ -73,20 +72,21 @@ fn sol_with_gates() -> Faked {
         },
     ]);
     catalog.sol_more = vec![
-        StellarContents {
-            radar_square: true,
-            ..stellar(150, "Hole", (0, 300), 1)
-        },
-        StellarContents {
-            radar_square: true,
-            ..stellar(151, "Gate", (0, -300), 1)
-        },
+        stellar(150, "Hole", (0, 300), 1),
+        stellar(151, "Gate", (0, -300), 1),
     ];
     // Which the session shows is its own: both, in nav order.
     let mut frame = in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)]);
     frame
         .stellars
         .extend([150, 151].map(|id| record::stellar(StellarId(id))));
+    // Each a square on the radar, as the session says.
+    frame.radar_stellars.extend(
+        [(150, 300.0), (151, -300.0)].map(|(id, y)| FrameRadarStellar {
+            square: true,
+            ..record::radar_stellar(StellarId(id), Vec2::new(0.0, y))
+        }),
+    );
     let mut view = super::faked_hud::barred(catalog, frame);
     renamed(&mut view, |names| {
         names.stellars.insert(StellarId(150), "Hole".to_owned());
@@ -322,6 +322,7 @@ fn each_event_asks_for_its_own_redraw() {
         SessionEvent::StellarChanged,
         SessionEvent::StellarsRebuilt,
         SessionEvent::StarfieldReset,
+        SessionEvent::StellarFramesReset,
     ] {
         view.sim.queue_event(FlightEvent::Session(event));
     }
@@ -335,6 +336,7 @@ fn each_event_asks_for_its_own_redraw() {
             galaxy: false,
             rebuilt: true,
             stars: true,
+            frames_reset: true,
         }
     );
     assert_eq!(view.catch_up_then(|_, _| {}), Redrawn::default(), "taken");

@@ -780,7 +780,11 @@ mod tests {
             let _ = session.relocate(&catalog, SystemId(system), StellarId(stellar));
             assert_eq!(session.take_events(), told, "{system} {stellar}");
             session.take_off(&catalog, &mut NeverFires);
-            assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::StellarFramesReset],
+                "{system} {stellar}: taken off, with no move told"
+            );
         }
     }
 
@@ -806,7 +810,11 @@ mod tests {
                 .assert_docked_among_shown(session.mode.landed());
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
             session.take_off(&catalog, &mut NeverFires);
-            assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::StellarFramesReset],
+                "{system} {stellar}: taken off, with no move told"
+            );
         }
     }
 

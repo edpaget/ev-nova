@@ -348,6 +348,21 @@ fn stage(spec: &BundleSpec, layout: &Layout, host: &Host, build: &BuildId) -> Ve
             from: spec.workspace_root.join("LICENSE"),
             to: layout.staging.join("LICENSE"),
         },
+    ]);
+    // Inside the app, sealed by its signature, and beside it on the volume.
+    for (source, name) in crate::fonts::font_licences(&spec.workspace_root) {
+        steps.extend([
+            Step::Copy {
+                from: source.clone(),
+                to: layout.font_licence(name),
+            },
+            Step::Copy {
+                from: source,
+                to: layout.staging.join(name),
+            },
+        ]);
+    }
+    steps.extend([
         // Drag-install: the volume shows Applications beside the app.
         Step::Symlink {
             target: PathBuf::from("/Applications"),
@@ -722,6 +737,14 @@ mod tests {
                 staging.join("README.txt"),
             ),
             Event::Copy(root.join("LICENSE"), staging.join("LICENSE")),
+        ]);
+        for (source, name) in crate::fonts::font_licences(&root) {
+            expected.extend([
+                Event::Copy(source.clone(), contents.join("Resources").join(name)),
+                Event::Copy(source, staging.join(name)),
+            ]);
+        }
+        expected.extend([
             Event::Symlink(PathBuf::from("/Applications"), staging.join("Applications")),
             Event::Run(cmd("codesign", sign, &[&staged_b.join("Autoupdate")])),
             Event::Run(cmd("codesign", sign, &[&staged_b.join("Updater.app")])),

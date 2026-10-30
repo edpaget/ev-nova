@@ -11,12 +11,17 @@
 //!   draws it ([`ShipDraw::live_alt`]), or as it was last drawn while the
 //!   session holds it ([`held_alt`](super::held_alt)).
 //! - **The hull's translucency** ([`base_alpha`]): `BaseTransp` t
-//!   (@0x2bdb2-0x2bdce), its channel factors 0 unpainted, draws as
-//!   `(src × (32 − t)) >> 5 | (dst × t) >> 5`
+//!   (@0x2bdb2-0x2bdce), its channel factors `paint_c − 32`, 0 unpainted,
+//!   draws as `(src × (32 − t)) >> 5 | (dst × t) >> 5` unpainted
 //!   (`_BlitPixieRLETranslucent` @0xc1568, `_BlitPixieTranslucentCopy`
 //!   @0xc1110), a crossfade the view draws as a normal blend at
 //!   (32 − t)/32, as it draws an escape pod's fade. A gate's fade and a
 //!   cloak write the hull's translucency after it, and win.
+//! - **The paint** ([`paint`](super::paint)): a painted hull, and its alt
+//!   layer, draw `(src_c × (paint_c − t)) >> 5 | (dst_c × t) >> 5` in
+//!   each channel, [`Blend::OrTranslucent`] at the paint's tint, its murk
+//!   or colorize applied as to an unpainted one's. The other layers are
+//!   never painted (@0x2be41-0x2beb2, @0x2caa1-0x2cb0a).
 //! - **Murk**: an NPC's hull takes its sprite murk m
 //!   ([`sprite_murk`](super::murk::sprite_murk), @0x2be21-0x2be3a), and so
 //!   do its glow, weapon glow, alt and shield layers; its lights take
@@ -50,22 +55,28 @@
 //!
 //! Each layer is added, [`Blend::Or`](crate::draw::Blend::Or) at
 //! [`lights_tint`] of its level; the hull and the alt layer are drawn
-//! plainly. Each one whose sheet holds solid runs draws them raw right
+//! plainly, or in their paint. Each one whose sheet holds solid runs draws them raw right
 //! after itself ([`solid_runs`](super::solid_runs)), as the original's
 //! blits fill a run over every blend and colorize.
 
-use nova_sim::HashedRolls;
 use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
 use nova_sim::traffic::npc::NpcId;
+use nova_sim::{HashedRolls, Rgb15};
 
 use super::catalog::{LayerSheet, ShipSheet};
 use super::cloak_fade::CloakDraw;
 use super::held_alt::AltLayer;
 use super::murk::murk_tint;
+use super::paint::{painted_hull, translucency};
 use super::solid_runs::solid_overlay;
 use super::weapon_glow::npc_glow_level;
 use crate::draw::lights_tint;
 use crate::{Blend, Color, Colorize, DrawList, ImageKey, Point};
+
+/// Where a ship's sprite of a frame's size (width, height) is centred on
+/// screen: placed at whole pixels from the player, as the original places
+/// each of a ship's sprites (see [`ShipDraw::draw`]).
+pub type Place<'a> = &'a dyn Fn((u32, u32)) -> Point;
 
 /// The steps of a sprite's translucency: `BaseTransp` 32 or more is not
 /// seen.
@@ -117,6 +128,10 @@ pub struct ShipDraw<'a> {
     /// Its hull's tint before its murk: white, at the alpha its fade,
     /// cloak or `BaseTransp` leaves.
     pub tint: Color,
+    /// Its paint, `None` unpainted: the hull and alt layer are drawn in it
+    /// at the translucency [`tint`](Self::tint)'s alpha gives
+    /// ([`painted_hull`]), unless a cloak writes their factors.
+    pub paint: Option<Rgb15>,
     /// How its cloak changes its drawing, if it does: its hull's tint and
     /// blend, its jitter, and its layers' caps
     /// ([`CloakDraw`], see [`cloak_fade`](super::cloak_fade)).
@@ -180,57 +195,69 @@ impl ShipDraw<'_> {
     }
 
     /// The hull's tint, colorize and blend: its unmurked tint colorized by
-    /// its ion tint, or its murk, drawn plainly; or, cloaked, its cloak's
+    /// its ion tint, or its murk, drawn plainly, or, painted, in its paint
+    /// at its translucency ([`painted_hull`]); or, cloaked, its cloak's
     /// tint and blend in place of its tint and murk, as the cloak writes
     /// the channel factors after them.
     fn hull_tint(&self) -> (Color, Option<Colorize>, Blend) {
         if let Some((tint, blend)) = self.cloak.and_then(|cloak| cloak.hull) {
             return (tint, self.colorize, blend);
         }
+        let (tint, blend) = match painted_hull(self.paint, translucency(self.tint.a)) {
+            Some(painted) => (painted, Blend::OrTranslucent),
+            None => (self.tint, Blend::Normal),
+        };
         match self.colorize {
-            Some(colorize) => (self.tint, Some(colorize), Blend::Normal),
-            None => (murk_tint(self.tint, self.murk), None, Blend::Normal),
+            Some(colorize) => (tint, Some(colorize), blend),
+            None => (murk_tint(tint, self.murk), None, blend),
         }
     }
 
-    /// How far its cloak moves its hull and the layers that move with it.
-    fn offset(&self) -> Point {
-        self.cloak
-            .map_or(Point::new(0.0, 0.0), |cloak| cloak.offset)
+    /// `at` moved by its cloak's jitter, as its hull and the layers that
+    /// move with it are.
+    fn moved(&self, at: Point) -> Point {
+        let offset = self
+            .cloak
+            .map_or(Point::new(0.0, 0.0), |cloak| cloak.offset);
+        Point::new(at.x + offset.x, at.y + offset.y)
     }
 
-    /// Its alt layer as drawn at `at` this frame, when its hull is drawn
+    /// Its alt layer as drawn this frame, placed by `place` (see
+    /// [`ShipDraw::draw`]) by its own frame's size, when its hull is drawn
     /// and the session draws the layer on a set: its own set's frame, with
     /// the hull's tint and colorize.
     #[must_use]
-    pub fn live_alt(&self, at: Point) -> Option<AltLayer> {
+    pub fn live_alt(&self, place: Place<'_>) -> Option<AltLayer> {
         let (Some(layer), Alt::Drawn(set), true) = (self.sheet.alt, self.drawn.alt, self.hull)
         else {
             return None;
         };
         let frame = turning(self.spec, self.sheet).index(set, self.heading) % layer.frames.get();
         let (tint, colorize, blend) = self.hull_tint();
-        let offset = self.offset();
+        let at = self.moved(place(layer.size()));
         Some(AltLayer {
             image: ImageKey::sprite(layer.image_id, frame),
-            at: Point::new(at.x + offset.x, at.y + offset.y),
+            at,
             tint,
             colorize,
             blend,
         })
     }
 
-    /// Draws it at `at`: its hull, glow, lights, weapon glow, alt layer
-    /// `alt` (live or held, see [`ShipDraw::live_alt`]) and shield layer,
-    /// in the order `_HandleShipDisplay` puts them in their layer
-    /// (@0x2bd58-0x2bdad).
-    pub fn draw(&self, list: &mut DrawList, at: Point, alt: Option<AltLayer>) {
+    /// Draws it: its hull, glow, lights, weapon glow, alt layer `alt`
+    /// (live or held, see [`ShipDraw::live_alt`]) and shield layer, in the
+    /// order `_HandleShipDisplay` puts them in their layer
+    /// (@0x2bd58-0x2bdad). Each is centred where `place` puts a sprite of
+    /// its own frame's size, as the original places each sprite by its own
+    /// `_GetSpriteXSize`/`_GetSpriteYSize` (@0x2cd17-0x2d083); all but the
+    /// shield are then moved by the cloak's jitter, which `_OffsetRect`
+    /// applies after the placement (@0x2d31e, @0x2d46b, @0x2d4e8,
+    /// @0x2d5ae, @0x2d69e).
+    pub fn draw(&self, list: &mut DrawList, place: Place<'_>, alt: Option<AltLayer>) {
         let frame = self.frame();
         let (hull_tint, colorize, hull_blend) = self.hull_tint();
-        let shield_at = at;
-        let offset = self.offset();
-        let at = Point::new(at.x + offset.x, at.y + offset.y);
         if self.hull {
+            let at = self.moved(place(self.sheet.size()));
             let hull = ImageKey::sprite(self.sheet.image_id, frame);
             draw_layer(list, (hull, at, hull_tint, hull_blend), colorize);
             if self.sheet.solid {
@@ -274,6 +301,7 @@ impl ShipDraw<'_> {
                 if let (Some(layer), Some(level)) = (layer, level) {
                     let frame = frame % layer.frames.get();
                     let image = ImageKey::sprite(layer.image_id, frame);
+                    let at = self.moved(place(layer.size()));
                     let (tint, colorize) = match copied(murk) {
                         Some(colorize) => (lights_tint(level), Some(colorize)),
                         None => (murk_tint(lights_tint(level), murk), None),
@@ -305,7 +333,7 @@ impl ShipDraw<'_> {
             .shield
             .filter(|_| self.cloak.is_none_or(|cloak| cloak.shield));
         if let (Some(layer), Some(level)) = (self.sheet.shield, shield) {
-            let at = shield_at;
+            let at = place(layer.size());
             let frame = spec.shield_frame(self.drawn.set, self.heading, layer.frames);
             let image = ImageKey::sprite(layer.image_id, frame);
             let tint = match colorize {
@@ -346,6 +374,128 @@ mod tests {
             "2 + 2·4"
         );
         assert_ne!(of(&npc_glow_rolls(NpcId(0))), of(&HashedRolls::new(1)));
+    }
+
+    mod placement {
+        use std::num::NonZeroU16;
+
+        use nova_sim::combat::ship_frames::{Alt, Drawn, FrameSpec};
+
+        use super::super::*;
+        use crate::DrawCommand;
+        use crate::flight::cloak_fade::CloakDraw;
+
+        /// A layer `rlëD` `image_id` of `width` x `height` frames.
+        fn layer(image_id: i16, (frame_width, frame_height): (u32, u32)) -> LayerSheet {
+            LayerSheet {
+                image_id,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width,
+                frame_height,
+                solid: false,
+            }
+        }
+
+        /// A 7 x 6 hull 1000 whose glow 1100, lights 1200, weapon glow
+        /// 1300, alt 1400 and shield 1500 each have a frame of its own.
+        fn sheet() -> ShipSheet {
+            ShipSheet {
+                image_id: 1000,
+                rotations: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: 7,
+                frame_height: 6,
+                glow: Some(layer(1100, (5, 4))),
+                lights: Some(layer(1200, (6, 3))),
+                weapon: Some(layer(1300, (7, 2))),
+                weap_decay: 0,
+                alt: Some(layer(1400, (4, 5))),
+                shield: Some(layer(1500, (9, 8))),
+                base_transp: 0,
+                solid: false,
+            }
+        }
+
+        /// A placement that tells sizes apart: a sprite of `(w, h)` is
+        /// centred at (w, 100 h).
+        #[allow(clippy::cast_precision_loss)]
+        fn by_size((width, height): (u32, u32)) -> Point {
+            Point::new(width as f32, 100.0 * height as f32)
+        }
+
+        /// Where each sprite of the ship, every layer lit, is centred,
+        /// moved by `cloak`'s jitter.
+        fn centres(cloak: Option<CloakDraw>) -> Vec<(i16, Point)> {
+            let sheet = sheet();
+            let spec = FrameSpec::NONE;
+            let ship = ShipDraw {
+                sheet: &sheet,
+                spec: &spec,
+                drawn: Drawn {
+                    alt: Alt::Drawn(0),
+                    ..Drawn::default()
+                },
+                heading: 0.0,
+                tint: Color::WHITE,
+                paint: None,
+                cloak,
+                hull: true,
+                murk: 0,
+                held: false,
+                glow: Some(20),
+                lights: Some(20),
+                weapon: Some(20),
+                shield: Some(20),
+                colorize: None,
+            };
+            let mut list = DrawList::new();
+            ship.draw(&mut list, &by_size, ship.live_alt(&by_size));
+            list.iter()
+                .filter_map(|command| match *command {
+                    DrawCommand::Sprite { image, center, .. } => Some((image.id, center)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_hull_and_each_layer_are_placed_by_their_own_frames() {
+            assert_eq!(
+                centres(None),
+                [
+                    (1000, Point::new(7.0, 600.0)),
+                    (1100, Point::new(5.0, 400.0)),
+                    (1200, Point::new(6.0, 300.0)),
+                    (1300, Point::new(7.0, 200.0)),
+                    (1400, Point::new(4.0, 500.0)),
+                    (1500, Point::new(9.0, 800.0)),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_jitter_moves_the_hull_and_layers_from_their_places_but_not_the_shield() {
+            let cloak = CloakDraw {
+                hull: None,
+                offset: Point::new(2.0, -3.0),
+                layers: Some(32),
+                weapon: 32,
+                shield: true,
+            };
+            assert_eq!(
+                centres(Some(cloak))
+                    .into_iter()
+                    .map(|(id, at)| (id, at.x))
+                    .collect::<Vec<_>>(),
+                [
+                    (1000, 9.0),
+                    (1100, 7.0),
+                    (1200, 8.0),
+                    (1300, 9.0),
+                    (1400, 6.0),
+                    (1500, 9.0),
+                ]
+            );
+        }
     }
 
     #[test]

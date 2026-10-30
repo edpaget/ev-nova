@@ -263,7 +263,7 @@ pub fn fly(
     let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
             let (controls, flown, wanted) =
-                leave_flight::stop_wanting(&mut npc.state, handling, inertia, true);
+                leave_flight::stop_wanting(npc, handling, inertia, true);
             (controls, flown, wanted, DockOutcome::Flying)
         }
         DockSub::Dock => {

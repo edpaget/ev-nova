@@ -996,6 +996,11 @@ pub struct Fighter<'a> {
     /// pass through every ship ([`Ties::mining`], see
     /// [`sides`](self::sides)). Never the player.
     pub mining: bool,
+    /// The stellar it defends, the original's +0x8c ([`Ties::defends`]):
+    /// `_IsDisabled` never calls it disabled by its armour (@0x2d6f), so
+    /// its condition goes from intact to breaking up, and its shots pass
+    /// through its stellar's other defenders. Never the player.
+    pub defends: Option<StellarId>,
     /// Whether it waits in the gate it comes out of: point defence never
     /// sees it (`_ShipVisibleToShip` @0x972d). The player never does.
     pub emerging: bool,
@@ -1532,7 +1537,15 @@ impl Combat {
             let before = taken(fighter.reserves);
             let hurt = !immune(fighter.ship_type);
             if hurt {
-                shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
+                let defends = fighter.defends.is_some();
+                shockwave::hit(
+                    fighter.reserves,
+                    condition,
+                    defends,
+                    &fighter.hull,
+                    rule,
+                    damage,
+                );
             }
             if !hurt {
                 continue;
@@ -2174,7 +2187,6 @@ impl Combat {
             fighter.rounds,
             &mut fighter.reserves.fuel,
             chance,
-            &mut self.reports,
             self.ai_spend,
             &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
             // Only a ship whose target is slot 0, the player, is stretched
@@ -2394,7 +2406,6 @@ impl Combat {
             fighter.rounds,
             &mut fighter.reserves.fuel,
             chance,
-            &mut self.reports,
             room,
             &mut |spec| {
                 if let Some(missile) =
@@ -2804,7 +2815,15 @@ impl Combat {
             let before = taken(fighter.reserves);
             let was_disabled = fighter.disabled_now(rule);
             let was_dying = fighter.condition.dying_or_destroyed(fighter.reserves.armor);
-            damage::take(fighter.reserves, hit, &fighter.hull, rule, was_disabled);
+            let defends = fighter.defends.is_some();
+            damage::take(
+                fighter.reserves,
+                hit,
+                &fighter.hull,
+                rule,
+                was_disabled,
+                defends,
+            );
             // `_HandleShipHit`'s victory voice (@0x36c7f-0x36d45): a
             // shot's direct hit that starts its ship dying. A beam's hit is
             // direct too, but `_HandleBeams` speaks none; a lock takes no
@@ -2893,9 +2912,8 @@ impl Combat {
 
     /// Puts in flight the sub-munitions `parent` releases at `target`
     /// among `targets`, their weapon read from `arsenal` (none when it
-    /// cannot be read), heard from where the parent is. Released, they
-    /// report their weapon's unimplemented flags as a weapon fired does;
-    /// of a guidance not flown yet, they report it and none fly. Under the
+    /// cannot be read), heard from where the parent is. Of a guidance not
+    /// flown yet, they report it and none fly. Under the
     /// caps the release ends at the first that finds no free slot, the
     /// shots ended this tick, the parent among them, still holding theirs
     /// (`_SpawnShotSubmunitions` @0x3f32d-0x3f331): those already placed
@@ -2936,7 +2954,6 @@ impl Combat {
             });
             return;
         }
-        self.reports.fired(sub);
         self.events.push(CombatEvent::Fired {
             ship: parent.firer,
             weapon: sub.id,
@@ -3003,8 +3020,12 @@ impl Combat {
                 None
             }
             Condition::Intact | Condition::Disabled => {
-                let armor = fighter.reserves.armor;
-                let disabled = holds_armour(armor) && rule.disabled(armor, &fighter.hull);
+                let disabled = hull::under_armour_line(
+                    fighter.reserves.armor,
+                    &fighter.hull,
+                    rule,
+                    fighter.defends.is_some(),
+                );
                 let downed = (disabled && *fighter.condition == Condition::Intact).then(|| {
                     self.events.push(CombatEvent::Disabled { ship });
                     Downed::Disabled
@@ -3191,6 +3212,7 @@ impl Fighter<'_> {
             booty: self.booty,
             planet_type: self.hull.planet_type,
             mining: self.mining,
+            defends: self.defends,
         }
     }
 
@@ -3266,20 +3288,27 @@ impl Fighter<'_> {
     }
 
     /// Whether `_IsDisabled` (@0x2ce6-0x2e0d) held for the ship as the
-    /// tick began, its condition read for its armour: held disabled, or
-    /// not intact. [`Fighter::sight`] and [`Fighter::as_target`] read it,
-    /// and [`Fighter::disabled_now`] adds the armour the pass's hits left.
+    /// tick began, its condition read for its armour: held disabled, or,
+    /// for a ship that defends no stellar (@0x2d6f), not intact.
+    /// [`Fighter::sight`] and [`Fighter::as_target`] read it, and
+    /// [`Fighter::disabled_now`] adds the armour the pass's hits left.
     fn disabled_as_tick_began(&self) -> bool {
-        self.held_disabled || *self.condition != Condition::Intact
+        hull::is_disabled(*self.condition, self.held_disabled, self.defends.is_some())
     }
 
     /// Whether `_IsDisabled` holds for the ship now (@0x2ce6-0x2e0d), as
     /// `rule` says: held disabled, not intact, or its armour under the
-    /// line ([`damage::disabled`]). Unlike [`Fighter::as_target`]'s, it
-    /// reads the armour the hits landed so far have left, before its
-    /// condition settles.
+    /// line ([`hull::under_armour_line`]), a defence ship only held.
+    /// Unlike [`Fighter::as_target`]'s, it reads the armour the hits
+    /// landed so far have left, before its condition settles.
     fn disabled_now(&self, rule: &dyn DisableRule) -> bool {
-        self.disabled_as_tick_began() || damage::disabled(self.reserves.armor, &self.hull, rule)
+        self.disabled_as_tick_began()
+            || hull::under_armour_line(
+                self.reserves.armor,
+                &self.hull,
+                rule,
+                self.defends.is_some(),
+            )
     }
 
     /// The ship as shots and beams see it.
@@ -3705,6 +3734,7 @@ mod tests {
         plundering: bool,
         docked: bool,
         mining: bool,
+        defends: Option<StellarId>,
         emerging: bool,
         jumping_in: bool,
         cloak_scanner: bool,
@@ -3773,6 +3803,7 @@ mod tests {
                 plundering: false,
                 docked: false,
                 mining: false,
+                defends: None,
                 emerging: false,
                 jumping_in: false,
                 cloak_scanner: false,
@@ -3859,6 +3890,7 @@ mod tests {
                 sprite: self.sprite,
                 slot: self.slot,
                 resists: self.resists,
+                defends: self.defends,
             }
         }
     }
@@ -4895,6 +4927,48 @@ mod tests {
         phase::handle_npcs(&mut combat, &mut ships, &well);
         assert_eq!(ships[1].condition, Condition::Intact, "as the rule says");
         assert_eq!(combat.take_events(), []);
+    }
+
+    #[test]
+    fn a_defence_ship_is_never_disabled_by_its_armour_and_breaks_up_in_its_layer() {
+        let mut combat = Combat::default();
+        let mut guard = Ship::at(2, 0.0, 0.0);
+        guard.defends = Some(StellarId(128));
+        guard.reserves.armor.now = 1.0;
+        let mut ships = [guard];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            ships[0].condition,
+            Condition::Intact,
+            "below the line (@0x2d6f)"
+        );
+        assert_eq!(combat.take_events(), [], "no Disabled event");
+        assert!(
+            !ships[0].fighter().as_target().disabled,
+            "the miss rule reads it"
+        );
+        assert!(!ships[0].fighter().disabled_now(&NovaDisable));
+        ships[0].reserves.armor.now = 0.0;
+        ships[0].hull.death_delay = 5;
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        assert!(matches!(ships[0].condition, Condition::Dying { .. }));
+        assert!(
+            !ships[0].fighter().as_target().disabled,
+            "breaking up, not disabled"
+        );
+        let shown: Vec<_> = combat.take_displays();
+        assert!(
+            shown.iter().all(|shown| !shown.disabled),
+            "out of the disabled layer: {shown:?}"
+        );
+        // Held disabled, by a Derelict government or a mission, it still is.
+        let mut held = Ship::at(3, 0.0, 0.0);
+        held.defends = Some(StellarId(128));
+        held.held_disabled = true;
+        let mut ships = [held];
+        phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Disabled);
+        assert!(ships[0].fighter().as_target().disabled);
     }
 
     #[test]
@@ -6181,12 +6255,13 @@ mod tests {
 
     #[test]
     fn diagnostics_are_taken_once() {
-        let exclusive = WeaponRecord {
-            flags3: 0x0020,
+        // An undocumented guidance, reported as it fails to fire.
+        let undocumented = WeaponRecord {
+            guidance: 11,
             ..blaster()
         };
         let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(exclusive)];
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(undocumented)];
         for _ in 0..3 {
             phase::handle_npcs(&mut combat, &mut ships, &NovaDisable);
         }
@@ -8214,7 +8289,9 @@ mod tests {
     }
 
     #[test]
-    fn a_sub_munition_reports_its_unimplemented_flags_once_when_first_released() {
+    fn a_released_simultaneous_sub_munition_reports_nothing() {
+        // `Flags` 0x0040 is read only by a ship's fire, never by a release,
+        // so it is no diagnostic either.
         let (shell, arsenal) = cluster_of(WeaponRecord {
             guidance: 1,
             count: 50,
@@ -8225,19 +8302,11 @@ mod tests {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
         two_shells_a_move_apart(&mut combat, &mut ships, &arsenal);
-        assert_eq!(combat.take_diagnostics(), [], "not before it is released");
         for _ in 0..5 {
             fly_shots_with(&mut combat, &mut ships, &arsenal);
         }
         assert!(sub_shots(&combat).len() > 2, "released more than once");
-        assert_eq!(
-            combat.take_diagnostics(),
-            [SimDiagnostic::UnimplementedWeaponFlag {
-                weapon: WeaponId(148),
-                field: flags::FlagField::Flags,
-                bit: 0x0040,
-            }]
-        );
+        assert_eq!(combat.take_diagnostics(), []);
     }
 
     #[test]

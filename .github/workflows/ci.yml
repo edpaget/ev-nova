@@ -45,12 +45,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Runner images are pinned by name in every workflow, so an image
+        # change is a reviewed diff. Ubuntu stays on 24.04 until a run on
+        # ubuntu-26.04 passes.
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             task: ci
-          - os: macos-latest
+          - os: macos-26
             task: ci-platform
-          - os: windows-latest
+          - os: windows-2025
             task: ci-platform
     runs-on: ${{ matrix.os }}
     env:
@@ -60,13 +63,13 @@ jobs:
       # Report every failing test, not just the first (.config/nextest.toml).
       NEXTEST_PROFILE: ci
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # nova-audio plays through cpal, which builds against ALSA on Linux.
       # desktop-file-utils and appstream are the validators the Linux
       # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       # Only what `mise run ci` needs. nextest and cargo-deny come from
@@ -80,7 +83,7 @@ jobs:
       # current Cargo.lock. Save only from main: caches saved under a PR's
       # refs/pull/N/merge are invisible to main, but PRs can still restore
       # main's.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -99,17 +102,17 @@ jobs:
   # task itself; no state exists here, so it protects nothing. Nothing
   # `needs` this job, and the live plan/apply never runs in CI.
   infra:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
       MISE_AUTO_INSTALL: "false"
     steps:
       # Don't leave the job's token in .git/config: nothing here pushes.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install opentofu
@@ -125,19 +128,19 @@ jobs:
   build-id:
     needs: ci
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MISE_AUTO_INSTALL: "false"
     outputs:
       id: ${{ steps.build-id.outputs.id }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
       # Saved from main only, as in `ci`.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: build-id
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -171,7 +174,7 @@ jobs:
   flatpak:
     needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MISE_AUTO_INSTALL: "false"
       # As in `build`; the manifest passes it into the sandboxed build.
@@ -185,7 +188,7 @@ jobs:
       # the build main would make, and is never published.
       NOVA_CHANNEL: nightly
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # xvfb gives the installed app's zenity a display for the test.
       # ostree is for the Flatpak repo test, which publishes this bundle
       # into a repo of its own.
@@ -202,12 +205,12 @@ jobs:
       # flatpak-builder installs the runtime, SDK and Rust extension from
       # this remote (--install-deps-from=flathub --user).
       - run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
       # Saved from main only, as in `ci`.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: flatpak
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -231,7 +234,7 @@ jobs:
       # The hand-off to release.yml's `publish`, which ships this plain
       # bundle unless its `flatpak-repo` replaces it with the
       # repo-following one.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: dist/*

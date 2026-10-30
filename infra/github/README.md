@@ -92,11 +92,11 @@ change together.
 
 The environment's deployment-branch policy is custom and allows `main`
 only, with no required reviewers and no wait timer, since `main`'s nightly
-runs unattended. `ci.yml`'s `build` job names the environment only on
+runs unattended. `build.yml`'s `build` job names the environment only on
 `main`'s macOS leg:
 
 ```yaml
-environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
+environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || '' }}
 ```
 
 Every other leg and every other branch names no environment, so it still
@@ -424,8 +424,8 @@ are manual by operator choice and must never be loosened by hand.
 | Setting | Managed by | Value |
 |---|---|---|
 | Actions enabled | `github_actions_repository_permissions.enabled` | `true` |
-| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `cargo-bins/cargo-binstall@*`, `jdx/mise-action@*` |
-| SHA pinning | `github_actions_repository_permissions.sha_pinning_required` | `false` until `ci.yml` pins by SHA (rdm task `pin-ci-actions-by-sha`) |
+| Allowed actions | `github_actions_repository_permissions.allowed_actions` and `allowed_actions_config` | `selected`: GitHub-owned, no verified creators, `Swatinem/rust-cache@*`, `jdx/mise-action@*` |
+| SHA pinning | `github_actions_repository_permissions.sha_pinning_required` | `true`: every external `uses:` is a full commit SHA with the release tag in a trailing comment |
 | Default `GITHUB_TOKEN` permissions | `github_workflow_repository_permissions.default_workflow_permissions` | `read` |
 | Actions may approve PRs | `github_workflow_repository_permissions.can_approve_pull_request_reviews` | `false` |
 | Vulnerability (Dependabot) alerts | `github_repository_vulnerability_alerts.enabled` | `false` |
@@ -472,6 +472,12 @@ config doesn't manage it: GitHub gives it a default branch policy, and the
 new third-party action, add its pattern there and apply it, or the jobs that
 use it fail at startup ("... is not allowed to be used in edpaget/ev-nova").
 A composite action's own nested `uses:` count too.
+
+Actions are pinned by full commit SHA with the tag as a trailing comment
+(`@<sha> # vX.Y.Z`), since `sha_pinning_required` fails any job that uses a
+tag or branch. To bump one, resolve the new tag with `git ls-remote` (the
+peeled `^{}` commit for an annotated tag) and update the SHA and the comment
+together.
 
 ## Main branch ruleset
 

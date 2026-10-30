@@ -24,9 +24,10 @@
 //!   missing units are clamped to the cash and cost a credit each
 //!   ([`FUEL_PRICE_PER_UNIT`], @0x5fdbf-0x5fdcf), so too little cash
 //!   fills as many units as it buys and leaves the cash at 0.
-//! - At a dominated stellar the whole tank fills free. The engine knows
-//!   only the start state of +0x46, `Flags2` 0x0020 (`_ResetPlayerRecord`
-//!   @0x1dbcf-0x1dbef); domination at run time is not modelled yet.
+//! - At a dominated stellar the whole tank fills free. The caller passes
+//!   the one domination rule, which covers the start state of +0x46
+//!   (`Flags2` 0x0020, `_ResetPlayerRecord` @0x1dbcf-0x1dbef) and
+//!   Demand Tribute and Release at run time.
 //! - Above capacity, the missing units are negative and not clamped, so
 //!   the tank comes down to capacity and the excess is credited.
 //! - In debt, by the engine (`RuleKey::RechargeDebt`), the clamp makes

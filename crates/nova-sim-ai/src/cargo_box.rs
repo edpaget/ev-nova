@@ -51,10 +51,12 @@
 //! rdm:phase/asteroids/phase-2-shoot-and-break-asteroids's; their pickup
 //! is [`scoop`](crate::scoop)'s ([`CargoBoxes::take_touching`]); the
 //! miners that steer for them are
-//! [`mine_flight`](crate::traffic::mine_flight)'s. Left out: the player's
-//! wrap shift; the sprite murk, which the view draws for shots alone so
-//! far (rdm:task/murk-other-sprites); and the table's first-free slots,
-//! as the boxes are kept in spawn order (rdm:task/cargo-box-slot-order).
+//! [`mine_flight`](crate::traffic::mine_flight)'s; their sprite murk
+//! (`_HandleSpriteMurkiness` @0x2e181) is the view's
+//! (`nova_view::flight::murk`,
+//! rdm:phase/play-feel-4/phase-17-murk-other-sprites). Left out: the
+//! player's wrap shift; and the table's first-free slots, as the boxes
+//! are kept in spawn order (rdm:task/cargo-box-slot-order).
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};

@@ -721,6 +721,12 @@ pub struct Outfitter {
     pub visit: OutfitVisit,
     /// The rule set the outfitter was built by, which its questions read.
     pub rules: Rulebook,
+    /// Buy is not drawn: the stellar has no tech ([`wares::has_no_tech`]),
+    /// the flag `_DoOutfitDialog` sets at `*0xded64` (@0x5bb67-0x5bb9d)
+    /// and `_DrawOutfitButtons` reads as Buy's visibility (@0x29ecf-0x29f11).
+    /// Buy still takes a press and its key (`_TrackOutfitButtons`
+    /// @0x2a1ec-0x2a202, `_OutfitFilter` @0x5817a-0x58190).
+    pub buy_hidden: bool,
 }
 
 impl Outfitter {
@@ -2492,6 +2498,7 @@ impl Shop<'_> {
             free_cargo: self.free_cargo,
             visit: self.visit.clone(),
             rules: self.rules,
+            buy_hidden: wares::has_no_tech(self.site),
         })
     }
 
@@ -3153,6 +3160,39 @@ mod tests {
             open_teching(&below, &site, RuleSource::Engine),
             Vec::<i16>::new()
         );
+    }
+
+    /// Whether the outfitter at a site of `tech_level` and `slots` hides
+    /// Buy.
+    fn buy_hidden_at(tech_level: i16, slots: &[i16]) -> bool {
+        let mut special_tech = [0; 8];
+        special_tech[..slots.len()].copy_from_slice(slots);
+        let site = LandingSite {
+            tech_level,
+            special_tech,
+            ..port()
+        };
+        open_at(&[], &site, &pilot())
+            .expect("an outfitter")
+            .buy_hidden
+    }
+
+    #[test]
+    fn a_stellar_of_tech_0_with_no_special_tech_hides_buy() {
+        assert!(buy_hidden_at(0, &[]));
+    }
+
+    #[test]
+    fn a_special_tech_of_0_or_below_counts_as_none() {
+        assert!(buy_hidden_at(0, &[-1, 0, -7]));
+    }
+
+    #[test]
+    fn a_special_tech_above_0_or_any_other_tech_level_keeps_buy() {
+        assert!(!buy_hidden_at(0, &[0, 0, 0, 0, 0, 0, 0, 1]));
+        assert!(!buy_hidden_at(1, &[]));
+        assert!(!buy_hidden_at(-1, &[]));
+        assert!(!open(&teched(), &pilot()).buy_hidden);
     }
 
     #[test]

@@ -20,8 +20,17 @@
 //!   (@0xacb9-0xacc1), and 32 with its frame index out of range
 //!   ([`stellar_width`](crate::landing::stellar_width)).
 //! - **Outside**, |dx| > reach or |dy| > reach (@0x8dc1b-0x8dc55): it
-//!   approaches (sub-goal 2), and its wait (+0x4c) is -1.0 (@0x8dc4e): it
-//!   has no wait at all, not one counting down.
+//!   approaches (sub-goal 2 @0x8dc45, `approach`): `_LowLevelAIHandler`
+//!   flies it as a landing ship's approach
+//!   ([`approach_flight`](crate::traffic::approach_flight)), turning to the
+//!   gate's whole-degree bearing, thrusting within its turn and 5 degrees,
+//!   capped at a quarter of its top speed within 500 on both axes (so on
+//!   the whole run in, the reach being far inside 500), and never braking.
+//!   By the other reading of
+//!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) it flies the
+//!   port's earlier approach, braking by its stopping distance. Its wait
+//!   (+0x4c) is -1.0 (@0x8dc4e): it has no wait at all, not one counting
+//!   down.
 //! - **Inside**, both within reach, inclusive ([`inside`],
 //!   @0x8dc5a-0x8dc94): its velocity is 0 (the speed, +0x48, is left as
 //!   it was), its sub-goal 0x17, and its wait [`ENTRY_TICKS`] when below
@@ -61,7 +70,9 @@
 //!   answers hails.
 //!
 //! None of this calls `PlaySound` or `_beepSnd`: state 1's hand-off and
-//! state 20 call `_GetStellarSpriteXSize` and `_FloatAbs`;
+//! state 20 call `_GetStellarSpriteXSize` and `_FloatAbs`; sub 2 calls
+//! `_XYShortToFloat`, `_CalcInterceptAngle`, `_AngularDifference`,
+//! `_ShipTurnRate`, `_FloatAbs`, `_ShipAccelRate` and `_ShipMaxSpeed`;
 //! `_HandleShipDisplay`'s entering block calls only the predicate; and
 //! `_HandleShip`'s countdown calls nothing. It raises no
 //! [`SimSound`](crate::SimSound).
@@ -81,8 +92,8 @@
 //!   decides nothing, so every entry starts at 16.
 //! - **The 16-bit wraps** of dx and dy (`cwtl` @0x8dbb3, @0x8dbd5) and of
 //!   the reach (@0x8dbfa): wider numbers are kept.
-//! - **The release's +0x8c = -1** (@0x8dd08). The engine has no defence
-//!   ships (`task/planet-domination`).
+//! - **The release's +0x8c = -1** (@0x8dd08), never reached: the
+//!   ships released are led by this one, and a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
 //! - **Ships 1-63 only** (@0x8dc97-0x8dd58). The engine takes every NPC.
 //! - **The 16-bit blit** (+0xb0/+0xb4, @0x2c010-0x2c05c). It is drawn as
 //!   an alpha fade, as the emerge's is.
@@ -90,9 +101,13 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, StellarId};
+use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::handling::Handling;
 use crate::landing::{TypeWidth, stellar_width};
+use crate::traffic::approach_flight;
 use crate::traffic::emerge::FULL_LEVEL;
+use crate::traffic::held_burst::{Flight, Word};
 use crate::traffic::npc::AiType;
 
 /// The wait a ship entering a gate starts at, as it reaches the box: 16.0
@@ -118,6 +133,20 @@ pub fn gate_reach(site: &LandingSite, type_widths: &BTreeMap<StellarId, TypeWidt
     };
     let width = type_widths.get(&site.id).copied().unwrap_or(loaded);
     reach(stellar_width(site, width))
+}
+
+/// State 20's flight outside the gate's box (@0x8dc42-0x8dc55): sub 2,
+/// [`approach_flight::toward`] the gate at `gate` for a ship at `state` on
+/// `handling`, whose thrust writes +0x34 ([`Word::Writes`]) and which
+/// flies by the handling it hands back, capped near the gate as it
+/// thrusts. It never brakes: inside the box the velocity is zeroed.
+pub(crate) fn approach(state: &mut ShipState, gate: Vec2, handling: &Handling) -> Flight {
+    let (controls, flown) = approach_flight::toward(state, gate, handling);
+    Flight {
+        controls,
+        word: Word::Writes,
+        flown: Some(flown),
+    }
 }
 
 /// Whether a ship at `ship` is inside the box of the gate at `gate`, of

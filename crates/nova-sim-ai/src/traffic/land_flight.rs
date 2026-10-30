@@ -310,6 +310,23 @@ mod tests {
     }
 
     #[test]
+    fn closing_fast_outside_the_box_it_never_brakes_and_brakes_first_inside_by_sub_1() {
+        // At 8 a tick from 300 out, its stopping distance is far past what
+        // is left, but sub 2 has no brake: it keeps its heading and speed.
+        let mut npc = lander((-300.0, 0.0), (8.0, 0.0));
+        while !landing::npc_over(&site(), npc.state.position, 8.0, RuleSource::Engine) {
+            let twin = approached(&npc, &TURN_8);
+            assert_eq!(flown(&mut npc, &TURN_8), Outcome::Flying);
+            assert_eq!(npc, twin);
+            assert_eq!(npc.state.heading, 90.0, "no retro turn");
+            assert_eq!(npc.state.velocity.x, 8.0, "no brake");
+        }
+        let twin = braked(&npc, &TURN_8, Inertia::Inertial);
+        flown(&mut npc, &TURN_8);
+        assert_eq!(npc, twin, "the first brake is sub 1's, inside");
+    }
+
+    #[test]
     fn sub_2s_approach_drops_an_owed_gate_burst() {
         let mut npc = lander((-3000.0, 0.0), (0.0, 0.0));
         npc.owed_burst = Some(-30.0);

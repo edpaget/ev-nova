@@ -281,7 +281,11 @@ fn a_hidden_ship_is_hovered_by_the_box_its_berth_last_drew() {
         frame.ships[1].framed = Some(ShipId(framed));
         super::faked_hud::shows(&mut view, frame);
         let boxed = view.drawn_boxes().npc(id).expect("boxed");
-        assert_eq!((boxed.width, boxed.height), (width, width), "{framed}");
+        assert_eq!(
+            (boxed.rect.width, boxed.rect.height),
+            (width, width),
+            "{framed}"
+        );
     }
 }
 
@@ -297,7 +301,11 @@ fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
         frame.ships[0].framed = Some(ShipId(framed));
         super::faked_hud::shows(&mut view, frame);
         let boxed = view.drawn_boxes().player.expect("boxed");
-        assert_eq!((boxed.width, boxed.height), (width, width), "{framed}");
+        assert_eq!(
+            (boxed.rect.width, boxed.rect.height),
+            (width, width),
+            "{framed}"
+        );
     }
 }
 
@@ -316,9 +324,7 @@ fn an_undisplayed_ship_is_hovered_and_clicked_at_its_slots_last_place_not_its_ow
         frame.ships[1].hover = nova_sim::HoverPlace::Stale(place);
     });
     let boxed = view.drawn_boxes().npc(id).expect("boxed");
-    let boxed = view
-        .camera()
-        .world_to_screen(Point::new(boxed.centre.x, boxed.centre.y));
+    let boxed = view.camera().world_to_screen(super::box_centre(boxed));
     assert!(
         (boxed.x - was.x).abs() <= 1.0 && (boxed.y - was.y).abs() <= 1.0,
         "{boxed:?} at {was:?}"
@@ -341,11 +347,7 @@ fn by_the_other_reading_an_undisplayed_ship_is_hovered_and_clicked_where_it_is()
     });
     let now = npc_on_screen(&view, id);
     let boxed = view.drawn_boxes().npc(id).expect("boxed");
-    assert_eq!(
-        view.camera()
-            .world_to_screen(Point::new(boxed.centre.x, boxed.centre.y)),
-        now
-    );
+    assert_eq!(view.camera().world_to_screen(super::box_centre(boxed)), now);
 }
 
 #[test]

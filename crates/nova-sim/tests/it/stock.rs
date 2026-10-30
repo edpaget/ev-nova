@@ -1496,6 +1496,7 @@ impl Combatant {
                 ShipRef::Npc(id) => nova_sim::ship_layer::Slot::Berth(id.0),
             },
             resists: nova_sim::combat::stellar_hazards::HazardResistance::default(),
+            defends: None,
         }
     }
 }
@@ -2030,12 +2031,11 @@ fn every_stock_weapon_in_scope_takes_the_shields_before_the_armour() {
 }
 
 /// Every stock weapon in scope, fired again and again in one fight,
-/// reports no unimplemented flag: the Mining Blaster's and the Wraith
-/// Graviton Beams' x10 damage to asteroids (`Flags2` 0x8000) is done. A
-/// weapon reports as it fires ([`fire_player`]) and a sub-munition as
-/// `_HandleShot` releases it at its parent's end of life ([`fly_shots`]).
+/// raises no diagnostic: none is of a guidance the fight doesn't fly,
+/// either as it fires ([`fire_player`]) or as a sub-munition `_HandleShot`
+/// releases at its parent's end of life ([`fly_shots`]).
 #[test]
-fn no_stock_weapon_in_scope_reports_an_unimplemented_flag() {
+fn no_stock_weapon_in_scope_raises_a_diagnostic() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -2659,7 +2659,6 @@ fn a_stock_quad_light_blaster_turret_on_two_mounts_fires_every_two_and_a_half_ti
     let mut armament = Armament::new([(stock_weapon(&data, 133), 2)]);
     let mut rounds = LauncherRounds::default();
     let mut fuel = Gauge::full(0.0);
-    let mut reports = nova_sim::combat::report::Reports::default();
     let fired: Vec<u32> = (0..40)
         .filter(|_| {
             let fired = armament.fire_point_defence(
@@ -2668,7 +2667,6 @@ fn a_stock_quad_light_blaster_turret_on_two_mounts_fires_every_two_and_a_half_ti
                 &mut rounds,
                 &mut fuel,
                 &mut Straight,
-                &mut reports,
                 true,
                 &mut |_| {
                     Some((
@@ -3623,11 +3621,11 @@ fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
 }
 
 /// Every stock guided weapon and turret, fired again and again at a ship
-/// ahead, reports no unimplemented flag: as it fires ([`fire_player`]),
-/// or as `_HandleShot` releases its sub-munitions at its end of life
+/// ahead, raises no diagnostic: as it fires ([`fire_player`]), or as
+/// `_HandleShot` releases its sub-munitions at its end of life
 /// ([`fly_shots`]).
 #[test]
-fn every_stock_guided_weapon_and_turret_reports_no_unimplemented_flag() {
+fn every_stock_guided_weapon_and_turret_raises_no_diagnostic() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -3662,18 +3660,6 @@ fn every_stock_guided_weapon_and_turret_reports_no_unimplemented_flag() {
         diagnostics.extend(combat.take_diagnostics());
     }
     assert_eq!(combat.shots(), [], "every shot ended");
-    // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
-    // cloaked, which `Armament::has_ammo` does, so it reports nothing.
-    // The disable-only `Flags2` 0x1000 (142, 201, 233, 234) never
-    // destroys, which `damage::take` does, so it reports nothing. The Ion
-    // Cannons' `Flags3` 0x0010 (142, 201) fires from the exit point
-    // nearest the target, which `exits` does, so they report nothing.
-    // The sensor-interference `Seeker` 0x0008 (135, 137, 160, 230, 234) is
-    // ported (see `projectile`), so it reports nothing either. `Seeker`
-    // 0x0001 (148, 182, 184, 185, 199, 229, 137) passes through asteroids
-    // and `Flags2` 0x8000 (196-198, 230) mines them, both done. The last
-    // left, `Seeker` 0x0002, the asteroid lock of 134, 135, 136, 160, 230
-    // and 234, is ported too (see `asteroid_seek`).
     assert_eq!(diagnostics, []);
 }
 
@@ -3981,10 +3967,9 @@ fn every_stock_disable_only_weapon_leaves_its_victims_at_1_armour() {
 /// Every stock weapon that releases sub-munitions, fired alone at a ship
 /// ahead, with its sub-munition's weapon mounted nowhere: the
 /// sub-munitions `_HandleShot` releases at its end of life ([`fly_shots`])
-/// report no unimplemented flag, their only one, `Seeker` 0x0001, being
-/// done.
+/// are released, and raise no diagnostic about their parent.
 #[test]
-fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released() {
+fn every_stock_sub_munition_is_released_with_no_diagnostic() {
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -4024,8 +4009,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
             let sub = parent.submunitions.expect("a sub-munition").weapon;
             assert!(subs.contains(&sub), "{:?} released: {subs:?}", parent.id);
             diagnostics.retain(|diagnostic| match diagnostic {
-                SimDiagnostic::UnimplementedWeaponFlag { weapon, .. }
-                | SimDiagnostic::UnimplementedGuidance { weapon, .. } => *weapon != parent.id,
+                SimDiagnostic::UnimplementedGuidance { weapon, .. } => *weapon != parent.id,
                 SimDiagnostic::CronRunsCapped { .. } => true,
             });
             (parent.id.0, diagnostics)
@@ -6227,7 +6211,6 @@ fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
 fn stock_classes_carrying_the_hail_and_storm_chainguns_keep_separate_rounds() {
     use nova_sim::combat::armament::Shooter;
     use nova_sim::combat::projectile::ShotId;
-    use nova_sim::combat::report::Reports;
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -6267,7 +6250,6 @@ fn stock_classes_carrying_the_hail_and_storm_chainguns_keep_separate_rounds() {
                 &mut rounds,
                 &mut fuel,
                 &mut NeverFires,
-                &mut Reports::default(),
                 true,
                 &mut |_| Some((nova_sim::combat::aim::Pointing::Along(0.0), ShotId(1))),
             );

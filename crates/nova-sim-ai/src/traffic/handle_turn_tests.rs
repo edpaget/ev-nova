@@ -257,8 +257,10 @@ fn a_ship_holding_or_assisting_with_no_docking_has_its_heading_truncated() {
 }
 
 // Sub 1 (`leave_flight::stop`), which every goal the autopilot stops
-// flies, and the engine's velocity match its approach, rejoin and follow
-// fly by. Each wants a whole-degree heading and `_HandleShip` turns it.
+// flies; sub 2, which a landing ship flies outside its box by the engine's
+// reading of `npc_landing`; and the engine's velocity match its rejoin and
+// follow fly by (the inspector, below). Each wants a whole-degree heading
+// and `_HandleShip` turns it.
 
 /// A ship of `fields` idling at the centre, moving at `velocity` and
 /// facing `heading`, turning `rate` degrees a tick: its heading after a
@@ -319,7 +321,9 @@ fn a_ship_braking_from_3_comes_to_rest_on_a_whole_degree() {
 
 /// A ship of `fields` landing on a planet far off at `planet`, at rest
 /// at the centre facing `heading`, turning `rate` degrees a tick: its
-/// heading after a tick of its approach.
+/// heading after a tick of its approach, by the engine's reading of
+/// `npc_landing` sub 2's ([`approach_flight`](crate::traffic::approach_flight)),
+/// which wants the planet's whole-degree table bearing.
 fn landing(fields: ShipFields, planet_at: Vec2, heading: f32, rate: f32) -> f32 {
     let sites = [planet(140, planet_at.x, planet_at.y)];
     let start = at(0.0, 0.0, 0.0, 0.0, heading);
@@ -330,9 +334,9 @@ fn landing(fields: ShipFields, planet_at: Vec2, heading: f32, rate: f32) -> f32 
 }
 
 #[test]
-fn a_ship_matching_a_velocity_within_its_turn_of_the_changes_table_heading_is_put_on_it() {
-    // Wanting (1, 1) the table's heading is 134, the float's 135: the
-    // table heading of the change × 100, as sub 1 reads its velocity.
+fn a_landing_ship_within_its_turn_of_the_tables_bearing_is_put_on_it() {
+    // Toward (1, 1) the table's bearing is 134, the float's 135:
+    // `_CalcInterceptAngle`'s, as sub 2 reads it.
     let down_right = Vec2::new(5000.0, 5000.0);
     for fields in [FAST, RAVEN] {
         assert_eq!(landing(fields, down_right, 135.4, 3.0), 134.0);
@@ -341,7 +345,7 @@ fn a_ship_matching_a_velocity_within_its_turn_of_the_changes_table_heading_is_pu
 }
 
 #[test]
-fn a_ship_matching_a_velocity_measures_its_gap_in_whole_degrees() {
+fn a_landing_ship_measures_its_gap_to_the_bearing_in_whole_degrees() {
     // 358.1 is 1.9 off 0, within 1.95, but 358 is 2 whole degrees off.
     for fields in [FAST, RAVEN] {
         let heading = landing(fields, Vec2::new(0.0, -5000.0), 358.1, 1.95);
