@@ -141,17 +141,16 @@ impl MapPlace {
         self.scroll = (axis(start.0, from.x, to.x), axis(start.1, from.y, to.y));
     }
 
-    /// The map's transform: the scroll drawn at `centre`, at 1 / zoom
-    /// pixels a unit.
-    #[allow(clippy::cast_possible_truncation)] // A scale near 1.
+    /// The map's transform, as `_DrawMap` places each point: the scroll
+    /// drawn at `centre`, the map rect's whole centre in a port whose
+    /// top-left is at `port` on the screen, each position divided by the
+    /// zoom in double and truncated in the port
+    /// ([`Transform::divided`]).
     #[allow(clippy::cast_precision_loss)] // Galaxy units.
     #[must_use]
-    pub fn transform(&self, centre: Point) -> Transform {
-        Transform::scaled(
-            centre,
-            Point::new(self.scroll.0 as f32, self.scroll.1 as f32),
-            (1.0 / self.zoom) as f32,
-        )
+    pub fn transform(&self, port: (i32, i32), centre: (i32, i32)) -> Transform {
+        let scroll = Point::new(self.scroll.0 as f32, self.scroll.1 as f32);
+        Transform::divided(port, centre, scroll, self.zoom)
     }
 }
 
@@ -159,6 +158,7 @@ impl MapPlace {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::galaxy::view::Divide;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -292,15 +292,21 @@ mod tests {
     }
 
     #[test]
-    fn the_transform_draws_the_scroll_at_the_centre_at_1_over_the_zoom() {
+    fn the_transform_divides_by_the_zoom_with_the_scroll_at_the_centre() {
         let place = MapPlace::new((40, -20));
-        let transform = place.transform(at(450.0, 346.0));
+        let transform = place.transform((212, 128), (238, 218));
         assert_eq!(
-            transform,
-            Transform::scaled(at(450.0, 346.0), at(40.0, -20.0), 16.0 / 9.0)
+            transform.divide,
+            Some(Divide {
+                zoom: 0.5625,
+                port: (212, 128)
+            })
         );
-        assert_eq!(transform.world_to_screen(at(40.0, -20.0)), at(450.0, 346.0));
+        assert_eq!(transform.world, at(40.0, -20.0));
+        // (40 / 0.5625 + 238) − 40 / 0.5625 is a hair under 238, so the
+        // scroll lands a pixel left of item 3's centre, as in the original.
+        assert_eq!(transform.pixel(at(40.0, -20.0)), (449, 346));
         let place = place.with_zoom(2.0);
-        assert_eq!(place.transform(at(0.0, 0.0)).scale, 0.5);
+        assert_eq!(place.transform((0, 0), (0, 0)).zoom(), 2.0);
     }
 }

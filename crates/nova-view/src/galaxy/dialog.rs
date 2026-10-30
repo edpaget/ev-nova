@@ -239,10 +239,14 @@ impl MapDialog {
         }
     }
 
-    /// The map's transform: the scroll at item 3's centre.
+    /// The map's transform: the scroll at item 3's centre
+    /// ([`MAP_ITEM_CENTRE`]) in the dialog's port, at
+    /// [`DIALOG_ORIGIN`] (`_DrawMap`'s divide, [`MapPlace::transform`]).
+    #[allow(clippy::cast_possible_truncation)] // Whole screen pixels.
     #[must_use]
     pub fn transform(&self) -> Transform {
-        self.place.transform(map_centre())
+        let port = (DIALOG_ORIGIN.x as i32, DIALOG_ORIGIN.y as i32);
+        self.place.transform(port, MAP_ITEM_CENTRE)
     }
 
     /// A key press or repeat (`_MapFilter`): the arrows scroll
@@ -470,7 +474,7 @@ mod tests {
         assert!(dialog.borders_shown());
         assert_eq!(
             dialog.transform(),
-            MapPlace::new((10, -20)).transform(at(450.0, 346.0))
+            MapPlace::new((10, -20)).transform((212, 128), (238, 218))
         );
     }
 
@@ -820,7 +824,7 @@ mod tests {
         assert_eq!(map.place(), Some(&MapPlace::new((0, 0))));
         assert_eq!(
             map.transform(),
-            MapPlace::new((0, 0)).transform(at(450.0, 346.0))
+            MapPlace::new((0, 0)).transform((212, 128), (238, 218))
         );
     }
 
