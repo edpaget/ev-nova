@@ -188,6 +188,9 @@ pub struct FlightFrame {
     /// The system's `BkgndColor`, raw `00RRGGBB`
     /// ([`Session::system_background`](crate::Session::system_background)).
     pub system_background: Option<u32>,
+    /// The RGB555 colour the world's sprites murk toward
+    /// ([`Session::murk_colour`](crate::Session::murk_colour)).
+    pub murk_colour: u16,
     /// Whether double time is on
     /// ([`Session::double_time`](crate::Session::double_time)).
     pub double_time: bool,
@@ -278,6 +281,7 @@ impl Default for FlightFrame {
             effective_murk: 0,
             system_murk: 0,
             system_background: None,
+            murk_colour: 0,
             double_time: false,
             hyper_gamma: 0.0,
             traffic_ships: Vec::new(),

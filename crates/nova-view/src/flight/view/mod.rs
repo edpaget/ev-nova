@@ -1811,6 +1811,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         "system_background",
         kept.system_background == fresh.system_background,
     );
+    check("murk_colour", kept.murk_colour == fresh.murk_colour);
     check("double_time", kept.double_time == fresh.double_time);
     check(
         "hyper_gamma",

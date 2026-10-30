@@ -515,6 +515,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         effective_murk,
         system_murk,
         system_background,
+        murk_colour,
         double_time,
         hyper_gamma,
         traffic_ships,
@@ -607,6 +608,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         } else {
             Some(0)
         },
+        murk_colour: murk_colour.wrapping_add(1),
         double_time: !double_time,
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
@@ -2845,6 +2847,7 @@ mod tests {
             stellars: vec![record::stellar(StellarId(130))],
             effective_murk: u8::MAX,
             system_background: Some(0x10),
+            murk_colour: 0x0421,
             double_time: true,
             traffic_ships: vec![ShipId(130)],
             system: SystemId(i16::MAX),
@@ -2908,6 +2911,7 @@ mod tests {
                 effective_murk,
                 system_murk,
                 system_background,
+                murk_colour,
                 double_time,
                 hyper_gamma,
                 traffic_ships,
@@ -2932,6 +2936,7 @@ mod tests {
             assert_ne!(other.effective_murk, *effective_murk);
             assert_ne!(other.system_murk, *system_murk);
             assert_ne!(other.system_background, *system_background);
+            assert_ne!(other.murk_colour, *murk_colour);
             assert_ne!(other.double_time, *double_time);
             assert_ne!(other.hyper_gamma.to_bits(), hyper_gamma.to_bits());
             assert_ne!(other.traffic_ships, *traffic_ships);
