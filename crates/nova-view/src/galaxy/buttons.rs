@@ -5,9 +5,9 @@
 //! ([`MapButtons::new`]). In `_DrawMapButtons`' order (@0x2a981-0x2a9d5):
 //!
 //! - Done, item 1, `STR#` 150 `[4]` "Done" (0-based): always enabled;
-//! - zoom out, item 4, `[16]` "-", an ASCII hyphen-minus: while
-//!   `_canZoomOut`;
-//! - zoom in, item 5, `[17]` "+": while `_canZoomIn`;
+//! - zoom out, item 4, `[16]` "-", an ASCII hyphen-minus, drawn as
+//!   `_DrawButton`'s pen glyph: while `_canZoomOut`;
+//! - zoom in, item 5, `[17]` "+", the same: while `_canZoomIn`;
 //! - Clear Route, item 8, `[48]` "Clear Route": while
 //!   `showClearRouteButton`;
 //! - Borders, item 9, `[55]` "Show Borders" while the borders are off and
@@ -253,6 +253,7 @@ impl TextMetrics for Unmeasured {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::color::Color;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
     use crate::text::fixture::MonoMetrics;
@@ -421,15 +422,20 @@ mod tests {
             pictures(&list),
             [normal, disabled, disabled, disabled, normal, normal]
         );
-        let colours: Vec<_> = list
-            .iter()
-            .filter_map(|command| match command {
-                DrawCommand::Text { color, .. } => Some(*color),
-                _ => None,
-            })
-            .collect();
         let (up, grey) = (ButtonStyle::STOCK.up, ButtonStyle::STOCK.grey);
-        assert_eq!(colours, [up, grey, grey, grey, up, up]);
+        let colours = |wanted: fn(&DrawCommand) -> Option<Color>| {
+            list.iter().filter_map(wanted).collect::<Vec<_>>()
+        };
+        let text = colours(|command| match command {
+            DrawCommand::Text { color, .. } => Some(*color),
+            _ => None,
+        });
+        assert_eq!(text, [up, grey, up, up], "Done, Clear Route, Borders, Find");
+        let glyphs = colours(|command| match command {
+            DrawCommand::Line { color, .. } => Some(*color),
+            _ => None,
+        });
+        assert_eq!(glyphs, [grey, grey, grey], "- is one stroke and + two");
     }
 
     #[test]
@@ -605,6 +611,7 @@ mod tests {
         buttons.draw(&ALL, &ButtonStyle::STOCK, None, &mut list);
         let expected: Vec<(String, Point)> = ORDER
             .iter()
+            .filter(|&&which| !matches!(which, MapButton::ZoomOut | MapButton::ZoomIn))
             .map(|&which| (ALL.label(which).to_owned(), buttons.rect(which).center()))
             .collect();
         assert_eq!(labels(&list), expected);

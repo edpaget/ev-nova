@@ -10,8 +10,10 @@
 //! - [`slice`](mod@slice): three-slice geometry, shared by buttons and dialog frames.
 //! - [`button`]: buttons drawn with Nova's button graphics at any size,
 //!   and `TrackControl`-style pointer tracking.
+//! - `button_glyph`: the pen glyphs `_DrawButton` draws in place of a
+//!   label.
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
-//!   time.
+//!   time, or a pixel at a time.
 //! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
 //!   line clipped to the box. The news, exchange, flight message,
 //!   shipyard weapons, player info and shop descriptions draw through it.
@@ -68,6 +70,7 @@
 //!   `GameData`.
 
 pub mod button;
+mod button_glyph;
 pub mod catalog;
 pub mod comm;
 pub mod data;
