@@ -27,9 +27,10 @@
 //! - *mute* (no hail is answered, "No response."): `Flags` 0x0400 of its
 //!   government or of its ship type's inherent government;
 //! - *greedy* (a higher price, see [`deal`]): `Flags` 0x8000;
-//! - *bribable*: an independent ship always; a trader when its
-//!   government has `Flags` 0x2000; a warship or interceptor when it has
-//!   0x0200;
+//! - *bribable*: an independent ship always; a trader (the original's AI
+//!   type 2 or below, [`Npc::original_ai_type`], @0x95790) when its
+//!   government has `Flags` 0x2000; any other (a warship, an interceptor,
+//!   a led ship or a fighter) when it has 0x0200;
 //! - *untalkative* (Greetings alone, "No response."): `Flags2` 0x0001;
 //! - *quiet* (see [`RuleKey::QuietHails`](crate::RuleKey::QuietHails)):
 //!   `Flags2` 0x0008 of its government or its inherent government;
@@ -38,7 +39,8 @@
 //! - *battle help*: a rank of the pilot's with `Flags` 0x0400 that
 //!   reaches the ship's government (see [`favour`](crate::ai::favour),
 //!   by [`RuleKey::RankGovtReach`](crate::RuleKey::RankGovtReach));
-//! - *plunderer*: a warship or interceptor of `Flags` 0x1000;
+//! - *plunderer*: a ship of the original's AI type above 2 (@0x9585b) of
+//!   `Flags` 0x1000;
 //! - *xenophobe*: `Flags` 0x0001.
 //!
 //! The Bible agrees on each, or is read the engine's way without a stated
@@ -130,7 +132,7 @@ impl Dispositions {
         favour: Favour,
     ) -> Self {
         let govt = npc.govt;
-        let fights = !npc.ai_type.trades();
+        let fights = npc.original_ai_type() > 2;
         let bribable = match govt {
             None => true,
             Some(_) if fights => govts.flag(govt, BRIBABLE_WARSHIPS),
@@ -890,6 +892,39 @@ mod tests {
         assert!(of(AiType::Interceptor, Some(G), &govts).plunderer);
         assert!(!of(AiType::BraveTrader, Some(G), &govts).plunderer);
         assert!(!of(AiType::Warship, Some(G), &inherited()).plunderer);
+    }
+
+    #[test]
+    fn a_led_or_marked_trader_takes_bribes_and_plunders_as_a_warship_and_a_spared_one_as_a_trader()
+    {
+        // `_DoCommDialog` @0x95790 and @0x9585b read +0x88 above 2: a led
+        // ship is 6, a bribed one 1.
+        let warships = govts(BRIBABLE_WARSHIPS | PLUNDERS, 0, (0, 0));
+        let traders = govts(BRIBABLE_TRADERS, 0, (0, 0));
+        let disposed = |npc: &Npc, govts: &Governments| {
+            Dispositions::of(npc, Some(INHERENT), govts, Favour::default())
+        };
+        let mut led = ship();
+        led.ai_type = AiType::WimpyTrader;
+        led.govt = Some(G);
+        led.leader = Some(NpcId(0));
+        let marked = Npc {
+            leader: None,
+            kept_escort_ai: true,
+            ..led.clone()
+        };
+        for npc in [&led, &marked] {
+            let made = disposed(npc, &warships);
+            assert!(made.bribable && made.plunderer, "{made:?}");
+            assert!(!disposed(npc, &traders).bribable);
+        }
+        let spared = Npc {
+            spared: true,
+            ..led
+        };
+        assert!(disposed(&spared, &traders).bribable);
+        let made = disposed(&spared, &warships);
+        assert!(!made.bribable && !made.plunderer, "{made:?}");
     }
 
     #[test]
