@@ -768,6 +768,29 @@ fn gate_data_with(fork: ForkBuilder) -> Rc<GameData> {
 
 /// [`gate_data`]'s resources, before they are loaded.
 fn gate_fork() -> ForkBuilder {
+    gates_fork(
+        &hypergate(0, 0, 120, &[132]),
+        &hypergate(50, 60, 90, &[131]),
+    )
+}
+
+/// A wormhole `spöb` (a landable station, `Flags2` 0x2000) at (`x`, `y`),
+/// linked to `links`; every other slot -1.
+fn wormhole(x: i16, y: i16, links: &[i16]) -> Vec<u8> {
+    let mut bytes = hypergate(x, y, 0, links);
+    bytes[0x20..0x22].copy_from_slice(&0x2000_u16.to_be_bytes());
+    bytes
+}
+
+/// [`gate_fork`]'s galaxy with wormhole 131 at Alpha's centre, where the
+/// ship starts, linked to wormhole 132 in Gamma at (50, 60).
+fn wormhole_fork() -> ForkBuilder {
+    gates_fork(&wormhole(0, 0, &[132]), &wormhole(50, 60, &[131]))
+}
+
+/// [`data`]'s galaxy with stellar 131, `alpha_gate`, at Alpha's centre and
+/// 132, `gamma_gate`, in Gamma, before they are loaded.
+fn gates_fork(alpha_gate: &[u8], gamma_gate: &[u8]) -> ForkBuilder {
     ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
@@ -794,18 +817,8 @@ fn gate_fork() -> ForkBuilder {
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar())
         .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &stellar())
         .resource(Stellar::TYPE, 130, Some(b"Gamma Prime"), &stellar())
-        .resource(
-            Stellar::TYPE,
-            131,
-            Some(b"HG-Alpha"),
-            &hypergate(0, 0, 120, &[132]),
-        )
-        .resource(
-            Stellar::TYPE,
-            132,
-            Some(b"HG-Gamma"),
-            &hypergate(50, 60, 90, &[131]),
-        )
+        .resource(Stellar::TYPE, 131, Some(b"Alpha Gate"), alpha_gate)
+        .resource(Stellar::TYPE, 132, Some(b"Gamma Gate"), gamma_gate)
         .resource(Spin::TYPE, 1000, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 8))
         .resource(
@@ -928,4 +941,51 @@ fn a_flight_key_pressed_under_a_hypergates_movie_reaches_flight_after_the_come_o
         "the Up pressed under the movie thrusts once the gate lets go: {:?}",
         harness.ship()
     );
+}
+
+/// In flight over [`wormhole_fork`] with `dësc` 131, the wormhole's own
+/// number, naming "Gate.mov", movies played through a new
+/// [`MockMoviePlayer`] while `on`, L pressed over the wormhole, the dock
+/// approach run, and L pressed again: the wormhole entered.
+fn wormhole_entered_filmed(on: bool) -> (Harness, Rc<MockMoviePlayer>) {
+    let data = gate_data_with(wormhole_fork().resource(Desc::TYPE, 131, None, &filmed_desc()));
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let screen = start_screen(Rc::clone(&data))
+        .with_prefs(Prefs {
+            quicktime_movies: on,
+            ..Prefs::default()
+        })
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+    let mut harness = Harness::flying_in(data, screen);
+    harness.frame();
+    harness.press(Key::Char('l'));
+    harness.approach();
+    harness.press(Key::Char('l'));
+    (harness, reel)
+}
+
+#[test]
+fn a_wormhole_entry_with_movies_on_leaves_its_own_descs_movie_the_last_loaded() {
+    let (mut harness, reel) = wormhole_entered_filmed(true);
+    assert_eq!(harness.showing(), Showing::Movie);
+    assert_eq!(
+        harness.session().loaded_after_movie(),
+        DescMovie::from_desc("Gate.mov", 0x0001),
+        "dësc 131, the wormhole's own (@0x6426b-0x6427d)"
+    );
+    assert_eq!(harness.session().system(), SystemId(128), "not yet entered");
+    assert_eq!(reel.calls().first(), Some(&Call::Start("Gate.mov".into())));
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() == Showing::Flight
+    });
+    assert_eq!(harness.session().system(), SystemId(130), "passed through");
+}
+
+#[test]
+fn a_wormhole_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
+    let (harness, reel) = wormhole_entered_filmed(false);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(130), "passed through");
+    assert_eq!(harness.session().loaded_after_movie(), None);
+    assert!(reel.calls().is_empty());
 }
