@@ -30,8 +30,11 @@
 //! once, without the fade out (@0x1654e), and draws the rollover opaque
 //! (@0x17be5). The engine draws at depth 16, the depth stock asks for
 //! ("Thousands of colors", `STR#` 140 #18), and the roadmap leaves depth
-//! 32 out. In the background it shows the none frame at 32
-//! (@0x16593-0x165bc), which the roadmap leaves out too.
+//! 32 out.
+//!
+//! **In the background** (`_inBackground`, read @0x16468 before the
+//! slides' hold and the timer) it shows the none frame at 32 every idle
+//! (@0x16593-0x165bc): [`Rollover::switched_out`].
 //!
 //! **The slides' hold.** While any of the main screen's slides runs, the
 //! idle sets the alpha to 0 and returns before its timer check
@@ -95,6 +98,18 @@ impl Rollover {
     /// slides run (@0x1647f-0x164b1).
     pub fn clear(&mut self) {
         self.alpha = 0;
+        self.since = Duration::from_nanos(MAC_TICK_NANOS as u64);
+    }
+
+    /// The app is in the background: the none frame shows in full, with
+    /// a step due at once. `_MainScreenRolloverIdle` checks
+    /// `_inBackground` before the slides' hold and its timer, and sets
+    /// the none frame (`_menuRolloverSprite`'s frames less one, or 0 with
+    /// none) at alpha 0x20 every idle (@0x16468, @0x16593-0x165bc), never
+    /// touching its last step, so the first idle after steps.
+    pub fn switched_out(&mut self) {
+        self.shown = self.none_frame();
+        self.alpha = FULL;
         self.since = Duration::from_nanos(MAC_TICK_NANOS as u64);
     }
 
@@ -180,6 +195,31 @@ mod tests {
         assert_eq!(rollover.alpha(), 4, "one step at once");
         rollover.tick(Duration::from_millis(10), Some(2));
         assert_eq!(rollover.alpha(), 4, "and only one");
+    }
+
+    #[test]
+    fn switched_out_it_shows_the_none_frame_in_full_with_a_step_due() {
+        let mut rollover = Rollover {
+            shown: 2,
+            alpha: 12,
+            frames: 7,
+            since: Duration::ZERO,
+        };
+        rollover.switched_out();
+        assert_eq!((rollover.shown(), rollover.alpha()), (6, FULL));
+        rollover.tick(Duration::ZERO, Some(2));
+        assert_eq!(
+            (rollover.shown(), rollover.alpha()),
+            (6, 28),
+            "the step due comes at once"
+        );
+    }
+
+    #[test]
+    fn switched_out_with_no_frames_it_shows_frame_0() {
+        let mut rollover = Rollover::new(0);
+        rollover.switched_out();
+        assert_eq!((rollover.shown(), rollover.alpha()), (0, FULL));
     }
 
     #[test]
