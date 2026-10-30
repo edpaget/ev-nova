@@ -251,6 +251,7 @@ mod pursuit_tests;
 pub mod quote;
 #[cfg(test)]
 mod re_pick_tests;
+pub mod refit_frames;
 pub mod refuel_dock;
 #[cfg(test)]
 mod refuel_dock_tests;
