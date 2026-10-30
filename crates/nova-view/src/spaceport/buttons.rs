@@ -9,7 +9,10 @@
 //! (state -2, @0x2993b), which is [`ButtonSkin::disabled`] with the
 //! style's grey label, and `_TrackPlanetButtons` (@0x2996f) never takes a
 //! press on it (@0x29abe-0x29bca), which [`Dialog`] matches by never
-//! reporting a greyed item. Leave is always enabled (@0x297b4). Recharge
+//! reporting a greyed item. It tests the press (@0x29ac8) and the pointer
+//! while held (@0x29c08-0x29d0f) with `PtInRect`, half-open as
+//! [`Dialog`] tests them: a button's right and bottom edges are off it.
+//! Leave is always enabled (@0x297b4). Recharge
 //! is enabled where the stellar sells fuel, the cash is above 0 and the
 //! tank isn't full (@0x297a3-0x297f4); the view is told the last two
 //! (`SpaceportView::set_recharge_enabled`). Each service is enabled when

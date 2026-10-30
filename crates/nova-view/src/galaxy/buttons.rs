@@ -22,8 +22,12 @@
 //! `_TrackMapButtons` arms the enabled button under a press, shows it
 //! pressed while the pointer stays on it, and gives it only for a release
 //! over it (@0x2ada3). A press on a disabled button, or on none, arms
-//! nothing (@0x2acb5-0x2acb9), so nothing it is released over acts. It
-//! plays no sound, so the trackers' button sounds are dropped.
+//! nothing (@0x2acb5-0x2acb9), so nothing it is released over acts. The
+//! press, the pointer while held and the release are tested with
+//! `PtInRect` (@0x2ac03-0x2acac, @0x2acf0-0x2ad94), half-open as
+//! [`ButtonTracker`] tests them: a button's right and bottom edge pixels
+//! are off it. It plays no sound, so the trackers' button sounds are
+//! dropped.
 //! `_MapFilter` maps the six to items 1, 4, 5, 8, 9 and 10
 //! (@0x1457a-0x145e6). What each does is the map's
 //! ([`GalaxyMap`](super::GalaxyMap)): Clear Route, like C, asks the
