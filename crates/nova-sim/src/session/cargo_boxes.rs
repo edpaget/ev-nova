@@ -106,7 +106,11 @@ impl Session {
     /// *Ordering against the original.* The positions tested are those at
     /// this point of the pass, before this pass's player move and after
     /// the last traffic tick; a pass's difference in when an overlap is
-    /// caught crosses no boundary the player sees. The player tests before
+    /// caught crosses no boundary the player sees. On the player's wrap's
+    /// pass the test reads the moved places where the original's reads the
+    /// last pass's sprites: only a miner and a box either side of the
+    /// wrap's reach differ, 15,000 pixels off screen, and they then stand
+    /// apart in both. The player tests before
     /// the NPCs and each box is taken once, where the original's order
     /// follows `SpriteWorld`'s layer history. There is no sound and no
     /// message, and the HUD's cargo area is drawn afresh each frame, so

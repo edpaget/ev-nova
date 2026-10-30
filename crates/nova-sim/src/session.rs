@@ -1675,8 +1675,8 @@ impl Session {
         // After the ship moves, though `_HandlePlayer` runs the approach
         // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
         // the `clearance` module reads as the move, is
-        // `_WrapPlayerPosition` (filed as hud-fidelity-followups' dock
-        // approach phase).
+        // `_WrapPlayerPosition`, in the `player_wrap` module (filed as
+        // hud-fidelity-followups' dock approach phase).
         self.dock_approach();
     }
 

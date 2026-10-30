@@ -284,6 +284,9 @@
 //! - [`player_turn`]: the player's turn block: the whole-degree turn,
 //!   the auto-turn toward an aim that holds the turn keys off, and the
 //!   aims reverse and the jump's brake take.
+//! - [`player_wrap`]: the player's wrap, `_WrapPlayerPosition`: a ship
+//!   past the edge of the system carried back, and whether what stands
+//!   near it comes along.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.

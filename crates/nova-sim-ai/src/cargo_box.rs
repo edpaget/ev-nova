@@ -54,9 +54,10 @@
 //! [`mine_flight`](crate::traffic::mine_flight)'s; their sprite murk
 //! (`_HandleSpriteMurkiness` @0x2e181) is the view's
 //! (`nova_view::flight::murk`,
-//! rdm:phase/play-feel-4/phase-17-murk-other-sprites). Left out: the
-//! player's wrap shift; and the table's first-free slots, as the boxes
-//! are kept in spawn order (rdm:task/cargo-box-slot-order).
+//! rdm:phase/play-feel-4/phase-17-murk-other-sprites); the player's wrap
+//! moves them ([`CargoBoxes::carry`]). Left out: the table's first-free
+//! slots, as the boxes are kept in spawn order
+//! (rdm:task/cargo-box-slot-order).
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};

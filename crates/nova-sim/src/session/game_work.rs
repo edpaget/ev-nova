@@ -5,7 +5,8 @@
 //! **The order** (`_DoPlayGameWork` @0x43de5-0x4453d):
 //!
 //! 1. `_HandlePlayer` (@0x43e19) up to its move: the pass's head and the
-//!    player's work before the move; its self-repair (@0x68b3d), point
+//!    player's work before the move, `_WrapPlayerPosition` (@0x6864d)
+//!    among it (see the `player_wrap` module); its self-repair (@0x68b3d), point
 //!    defence (@0x68c74), sabotage (@0x692e5), trigger (@0x6ab55) and
 //!    reloads' countdown (@0x6ae25), its recoil (@0x62f35) and its bays'
 //!    fighters (@0x62c61) settled, and its regeneration (@0x6cf86), before

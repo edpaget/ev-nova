@@ -17,8 +17,8 @@
 //! `_HandlePlayer` runs on both, and whatever the ship's condition, after
 //! the ship moves. The original reaches the approach (@0x6a97a) before
 //! its position step (@0x6d4b0): @0x6864d, once read as the move, is
-//! `_WrapPlayerPosition` (rdm weapons-fidelity phase 28's findings; filed
-//! as a hud-fidelity-followups phase). It is
+//! `_WrapPlayerPosition` (see the `player_wrap` module; rdm weapons-fidelity
+//! phase 28's findings; filed as a hud-fidelity-followups phase). It is
 //! skipped while the land key is held ([`Session::set_land_key`], the
 //! original's `_dockTryFlag`, @0x6a965-0x6a97a). A request whose stellar
 //! is no longer among the system's is dropped (@0x647c5-0x647e3);

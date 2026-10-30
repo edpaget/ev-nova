@@ -47,11 +47,6 @@
 //!   [`Npc::can_scoop`], see [`miner`](crate::ai::miner)). The scoop
 //!   branch doesn't read it.
 //!
-//! **Left out.**
-//!
-//! - The wrap shift (`_WrapPlayerPosition` @0x6811f-): the engine has no
-//!   player wrap.
-//!
 //! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
 //! `nova_view::flight::murk` darkens each box
 //! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
