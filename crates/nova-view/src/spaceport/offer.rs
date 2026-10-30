@@ -23,6 +23,9 @@
 //! not the product. All of it happens before the dialog shows
 //! (`ShowWindowNoFlash` @0xa2c81), so the player sees the final place only.
 //!
+//! Then, in 1016 and 1020 alike, the buttons widen to the wider label + 40,
+//! at least 100 ([`offer_buttons`](super::offer_buttons), @0xa2a29-0xa2beb).
+//!
 //! An offer whose `dësc` `Graphic` is above 127 shows in the picture
 //! variant, `DLOG` 1020 ([`OfferTemplates::layout`], @0xa2344-0xa2373),
 //! chosen on the ID alone: 651 x 244, centred, the text in item 3, the
@@ -103,6 +106,7 @@ use std::time::Duration;
 
 use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
+use super::offer_buttons::widen_to_labels;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -251,7 +255,9 @@ impl OfferDialog {
     /// graphic picks ([`OfferTemplates::layout`]) and the metrics its text
     /// is measured by, or why there are none; its buttons drawn in
     /// `style`. A graphic above 127 draws the picture variant: the frame
-    /// [`PICTURE_FRAME`] and the graphic in item 8.
+    /// [`PICTURE_FRAME`] and the graphic in item 8. The plain variant is
+    /// shrunk to the text first, and either way the buttons are widened to
+    /// their labels, as the module docs say.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
@@ -265,6 +271,7 @@ impl OfferDialog {
             } else {
                 template
             };
+            widen_to_labels(&mut template, &prompt.labels, &*metrics);
             let single = prompt.labels.refuse.is_none();
             let buttons: &[usize] = if single {
                 &[SINGLE_ITEM]
@@ -923,6 +930,7 @@ mod tests {
     use crate::input::MouseButton;
     use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
+    use crate::spaceport::offer_buttons::{LABEL_FONT, LABEL_PADDING, LABEL_SIZE};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -1257,6 +1265,82 @@ mod tests {
         assert!(high > 48.0, "past the floor: {high}");
         let laid = dialog.dialog().expect("laid out");
         assert_eq!(laid.bounds().height(), 317.0 - (267.0 - high - 16.0));
+    }
+
+    /// A button's width for a label wider than the floor, by
+    /// [`MonoMetrics`].
+    fn button_width(label: &str) -> f32 {
+        MonoMetrics.width(LABEL_FONT, LABEL_SIZE, label) + LABEL_PADDING
+    }
+
+    /// `prompt` in `template`.
+    fn laid_in(template: DialogTemplate, prompt: OfferPrompt) -> OfferDialog {
+        OfferDialog::new(
+            Ok((template, Rc::new(MonoMetrics))),
+            prompt,
+            ButtonStyle::STOCK,
+        )
+    }
+
+    /// The widths of `dialog`'s item `number`.
+    fn width_of(dialog: &OfferDialog, number: usize) -> Option<f32> {
+        dialog
+            .dialog()
+            .and_then(|laid| laid.item_bounds(number))
+            .map(|item| item.width())
+    }
+
+    #[test]
+    fn both_variants_widen_their_buttons_to_the_wider_label() {
+        let wide = button_width("I need more time");
+        let answer = |text: &str| OfferPrompt {
+            text: text.to_owned(),
+            ..prompt("I'm in", Some("I need more time"))
+        };
+        for dialog in [
+            laid_in(template(), answer("Short.")),
+            laid_in(template(), answer(&"line\r".repeat(40))),
+            laid_in(
+                picture_template(),
+                OfferPrompt {
+                    graphic: Some(5008),
+                    ..answer("Short.")
+                },
+            ),
+        ] {
+            assert_eq!(width_of(&dialog, ACCEPT_ITEM), Some(wide));
+            assert_eq!(width_of(&dialog, REFUSE_ITEM), Some(wide));
+        }
+    }
+
+    #[test]
+    fn a_shrunk_dialog_keeps_its_widened_buttons_edges() {
+        let dialog = laid_in(template(), prompt("Yes", Some("No")));
+        assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 82.0));
+        assert_eq!(width_of(&dialog, ACCEPT_ITEM), Some(100.0));
+        assert_eq!(local(&dialog, REFUSE_ITEM), Point::new(116.0, 82.0));
+        assert_eq!(width_of(&dialog, REFUSE_ITEM), Some(100.0));
+    }
+
+    #[test]
+    fn a_one_button_offer_widens_its_button_about_its_centre() {
+        let dialog = laid_in(template(), prompt("Okay", None));
+        assert_eq!(local(&dialog, SINGLE_ITEM), Point::new(172.0, 82.0));
+        assert_eq!(width_of(&dialog, SINGLE_ITEM), Some(100.0));
+    }
+
+    #[test]
+    fn a_click_just_inside_the_widened_edge_chooses() {
+        let mut dialog = laid_in(template(), prompt("Yes", Some("No")));
+        let accept = dialog
+            .dialog()
+            .and_then(|laid| laid.item_bounds(ACCEPT_ITEM))
+            .expect("an item");
+        click_at(
+            &mut dialog,
+            Point::new(accept.min.x + 99.5, accept.center().y),
+        );
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
     }
 
     #[test]
@@ -1704,11 +1788,16 @@ mod tests {
         );
         assert_eq!(
             laid.item_bounds(ACCEPT_ITEM),
-            Some(at(221.0, 213.0, 99.0, 25.0))
+            Some(at(221.0, 213.0, button_width("No thanks"), 25.0))
         );
         assert_eq!(
             laid.item_bounds(REFUSE_ITEM),
-            Some(at(115.0, 213.0, 99.0, 25.0))
+            Some(at(
+                214.0 - button_width("No thanks"),
+                213.0,
+                button_width("No thanks"),
+                25.0
+            ))
         );
         assert!(laid.item_shown(ACCEPT_ITEM) && laid.item_shown(REFUSE_ITEM));
         let commands = drawn(&dialog);

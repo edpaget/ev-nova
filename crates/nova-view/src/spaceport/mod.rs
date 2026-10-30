@@ -58,6 +58,7 @@ pub mod missions;
 pub mod modal;
 pub mod news;
 pub mod offer;
+mod offer_buttons;
 pub mod outfitter;
 pub mod port_map;
 pub mod quantity_ask;
