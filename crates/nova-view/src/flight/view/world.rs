@@ -24,11 +24,11 @@
 //!   while switched out (`0x3b50e0`), which the engine's flight has no
 //!   state for, or while the world's byte +0xe8 is 0, `SpriteWorld`
 //!   bookkeeping the engine has no need of, drawing every frame whole;
-//! - the message rect's OR (@0x38b52-0x38b90) is drawn as the message's
-//!   text over the sprites, its box staying under them: a system
-//!   `BkgndColor` other than black, which the OR lays over the sprites in
-//!   the rect, is left out
-//!   (rdm:phase/play-feel-followups/phase-3-message-rect-background-ored-over-sprites);
+//! - the message rect's OR (@0x38b52-0x38b90) is drawn as a fill of its
+//!   `BkgndColor` OR-ed over the sprites and the message's text painted
+//!   over that, its box staying under the sprites: the text is white,
+//!   and white OR-ed with anything is white, so only the engine's
+//!   antialiased glyph edges differ from an OR of it;
 //! - the escort menu's fade on closing (level 32 − `0x3b51a0`,
 //!   @0x38c0f-0x38c5b), filed in rdm:task/escorts-follow-up;
 //! - the escort menu showing a change a frame late, as the callback blits
@@ -204,9 +204,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws `_FloaterDrawCallback`'s floaters (0x38b2d), which
     /// `_PostDrawCallback` draws after every layer and before the
-    /// particles (@0x38c8d-0x38c9a): the message line's text, as the
-    /// callback ORs the background frame's message rect over the sprites
-    /// (@0x38b52-0x38b90; its box stays under the sprites, in
+    /// particles (@0x38c8d-0x38c9a): the message line, as the callback
+    /// ORs the background frame's message rect over the sprites
+    /// (@0x38b52-0x38b90): its background OR-ed in
+    /// ([`hud::or_message_background`]) and its text over that (its box
+    /// stays under the sprites, in
     /// [`FlightView::draw_stars_and_message`]), then the floating map
     /// (@0x38b95-0x38c0a), then the escort menu with the frame's rows
     /// (@0x38c0f-0x38c5b).
@@ -221,6 +223,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     fn draw_floaters(&self, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
+            let background = message_background(self.frame.system_background);
+            hud::or_message_background(list, self.view, background);
             hud::draw_message_text(list, message, self.view, metrics);
         }
         self.draw_floating_map(list);

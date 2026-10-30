@@ -476,6 +476,20 @@ pub fn draw_message_box(list: &mut DrawList, view: (f32, f32), background: Color
     fill_rect(list, message_box(view), background);
 }
 
+/// ORs `background`, the system's `BkgndColor` at RGB555, over the
+/// sprites in [`message_box`] of a view `view` in size
+/// ([`DrawList::or_fill`]), as `_FloaterDrawCallback` ORs the background
+/// frame's message rect into the work frame while a message shows
+/// (@0x38b52-0x38b90). A black background ORs nothing, so it draws
+/// nothing. The rect's white text is drawn over it, not OR-ed: white OR-ed
+/// with anything is white, the same as painting it, but at the engine's
+/// antialiased glyph edges.
+pub fn or_message_background(list: &mut DrawList, view: (f32, f32), background: Color) {
+    if background != Color::BLACK {
+        list.or_fill(message_box(view), background);
+    }
+}
+
 /// Draws the flight message `text` in [`message_box`] of a view `view`
 /// in size, without its box ([`draw_message_box`]), as `_DisplayComm`
 /// (@0x90294-0x902f5) draws it with `TETextBox`: left-justified and
@@ -730,6 +744,22 @@ mod tests {
     use crate::DrawCommand;
     use crate::draw::fill_command;
     use crate::flight::radar::{RadarShip, RadarStellar};
+
+    #[test]
+    fn a_black_message_background_ors_nothing_and_another_ors_the_message_box() {
+        let mut list = DrawList::new();
+        or_message_background(&mut list, VIEW_SIZE, Color::BLACK);
+        assert!(list.is_empty());
+        let teal = Color::rgba(0x00, 0x08, 0x10, 255);
+        or_message_background(&mut list, VIEW_SIZE, teal);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::OrFill {
+                area: message_box(VIEW_SIZE),
+                color: teal,
+            }]
+        );
+    }
     use crate::system::camera::VIEW_SIZE;
     use crate::text::fixture::MonoMetrics;
     use nova_sim::{ShipIff, StellarIff};

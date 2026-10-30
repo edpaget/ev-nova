@@ -275,6 +275,61 @@ fn the_message_text_is_drawn_over_the_over_beams_and_under_the_floating_map() {
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
 }
 
+/// The message scene with the floating map up, in a system whose
+/// `BkgndColor` is `background`, saying [`TOO_CLOSE`] for `ticks`.
+fn saying_in(background: Option<u32>, ticks: u16) -> DrawList {
+    let mut view = firing_with_sprays();
+    view.sim.frame_mut().system_background = background;
+    view.refresh_frame();
+    saying(&mut view, TOO_CLOSE, ticks);
+    floating_up(&mut view);
+    world_list(&view)
+}
+
+fn is_or_fill(command: &DrawCommand) -> bool {
+    matches!(command, DrawCommand::OrFill { .. })
+}
+
+#[test]
+fn the_message_rects_background_is_ored_over_the_over_beams_under_the_text() {
+    // `_FloaterDrawCallback` ORs the background frame's message rect,
+    // `BkgndColor` at RGB555 (0x07 is 0, 0x0F is 0x08, 0x12 is 0x10),
+    // over the sprites (@0x38b52-0x38b90), before the floating map.
+    let list = saying_in(Some(0x0007_0F12), 250);
+    let ored = first(&list, |command| {
+        *command
+            == DrawCommand::OrFill {
+                area: hud::message_box(VIEW_SIZE),
+                color: Color::rgba(0x00, 0x08, 0x10, 255),
+            }
+    });
+    let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
+    let text = first(&list, |command| *command == message_drawn(TOO_CLOSE));
+    let floating = first(&list, floating_border_line);
+    let order = [over, ored, text, floating];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    assert_eq!(list.iter().filter(|c| is_or_fill(c)).count(), 1);
+    assert_eq!(
+        list.layered().nth(ored).map(|(layer, _)| layer),
+        Some(crate::DrawLayer::World)
+    );
+}
+
+#[test]
+fn a_black_system_ors_nothing_over_the_message_rect() {
+    for background in [Some(0), None] {
+        let list = saying_in(background, 250);
+        assert!(!list.iter().any(is_or_fill), "{background:?}");
+    }
+}
+
+#[test]
+fn no_message_showing_ors_nothing() {
+    // A message of 0 ticks is past its countdown at once.
+    let list = saying_in(Some(0x0007_0F12), 0);
+    assert!(!list.iter().any(is_or_fill));
+}
+
 #[test]
 fn the_escort_menu_is_drawn_over_the_floating_map_and_under_the_particles() {
     // The menu's rows are the frame's (`FrameHud::escort_rows`), shown
