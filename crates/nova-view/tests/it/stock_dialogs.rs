@@ -1056,6 +1056,142 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
     }
 }
 
+/// An offer of `text` labelled `accept` and `refuse`, in stock mono metrics.
+fn offer_of(
+    template: nova_view::ui::dialog::DialogTemplate,
+    text: &str,
+    graphic: Option<i16>,
+    (accept, refuse): (&str, &str),
+) -> nova_view::spaceport::offer::OfferDialog {
+    use nova_sim::mission::OfferLabels;
+    use nova_sim::{MissionId, OfferPrompt};
+    nova_view::spaceport::offer::OfferDialog::new(
+        Ok((template, mono())),
+        OfferPrompt {
+            mission: MissionId(128),
+            text: text.to_owned(),
+            graphic,
+            labels: OfferLabels {
+                accept: accept.to_owned(),
+                refuse: Some(refuse.to_owned()),
+            },
+            movie: None,
+        },
+        ButtonStyle::STOCK,
+    )
+}
+
+#[test]
+fn a_short_offer_shrinks_1016_and_leaves_its_arrows_outside() {
+    use nova_view::spaceport::offer::{OFFER_DIALOG, REFUSE_ITEM, TEXT_ITEM as OFFER_TEXT_ITEM};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(OFFER_DIALOG)
+            .expect("converts");
+        let dialog = offer_of(template, "Go.", None, ("Yes", "No"));
+        let laid = dialog.dialog().expect("laid out");
+        let origin = Point::new(292.0, 286.0);
+        assert_eq!(laid.bounds(), Bounds::at(origin, 441.0, 114.0));
+        assert_eq!(
+            laid.item_bounds(REFUSE_ITEM),
+            Some(rect(116.0, 82.0, 100.0, 25.0).offset(origin))
+        );
+        assert_eq!(
+            laid.item_bounds(OFFER_TEXT_ITEM),
+            Some(rect(12.0, 9.0, 415.0, 64.0).offset(origin))
+        );
+        assert_eq!(
+            laid.item_bounds(9),
+            Some(rect(340.0, 287.0, 23.0, 23.0).offset(origin)),
+            "the arrow stays where the template has it"
+        );
+        assert!(!laid.item_shown(9), "wholly outside");
+    }
+}
+
+#[test]
+fn the_offers_buttons_widen_to_their_labels_on_the_stock_templates() {
+    use nova_view::spaceport::offer::{
+        ACCEPT_ITEM as OFFER_ACCEPT_ITEM, OFFER_DIALOG, OfferDialog, PICTURE_OFFER_DIALOG,
+        REFUSE_ITEM, SINGLE_ITEM,
+    };
+    let item = |dialog: &OfferDialog, number| {
+        dialog
+            .dialog()
+            .and_then(|laid| {
+                let at = laid.item_bounds(number)?;
+                Some(at.offset(Point::new(-laid.bounds().min.x, -laid.bounds().min.y)))
+            })
+            .expect("an item")
+    };
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        let plain = || ui.dialog_template(OFFER_DIALOG).expect("converts");
+        let picture = || ui.dialog_template(PICTURE_OFFER_DIALOG).expect("converts");
+        let long_text = "line\r".repeat(40);
+
+        let floor = offer_of(plain(), &long_text, None, ("Yes", "No"));
+        assert_eq!(
+            item(&floor, OFFER_ACCEPT_ITEM),
+            rect(225.0, 285.0, 100.0, 25.0)
+        );
+        assert_eq!(item(&floor, REFUSE_ITEM), rect(116.0, 285.0, 100.0, 25.0));
+        assert_eq!(item(&floor, SINGLE_ITEM), rect(172.0, 285.0, 100.0, 25.0));
+        let floor = offer_of(picture(), "Go.", Some(5005), ("Yes", "No"));
+        assert_eq!(
+            item(&floor, OFFER_ACCEPT_ITEM),
+            rect(221.0, 213.0, 100.0, 25.0)
+        );
+        assert_eq!(item(&floor, REFUSE_ITEM), rect(114.0, 213.0, 100.0, 25.0));
+        assert_eq!(item(&floor, SINGLE_ITEM), rect(169.0, 213.0, 100.0, 25.0));
+
+        let longest = "I need more time";
+        let wide = mono().width(nova_view::Font::Charcoal, 12.0, longest) + 40.0;
+        for dialog in [
+            offer_of(plain(), "Go.", None, ("I'm in", longest)),
+            offer_of(picture(), "Go.", Some(5005), ("I'm in", longest)),
+        ] {
+            assert_eq!(item(&dialog, OFFER_ACCEPT_ITEM).width(), wide);
+            assert_eq!(item(&dialog, REFUSE_ITEM).width(), wide);
+        }
+    }
+}
+
+#[test]
+fn a_short_pictured_offer_keeps_1020_at_its_stock_size() {
+    use nova_view::spaceport::offer::{PICTURE_OFFER_DIALOG, TEXT_ITEM as OFFER_TEXT_ITEM};
+    use nova_view::text::wrap;
+    use nova_view::ui::catalog::DescriptionGraphics;
+    use nova_view::ui::desc::{BODY_FONT, BODY_SIZE};
+    /// `mïsn` 685's offer: a text short enough to shrink, with a picture.
+    const SHORT_PICTURED: i16 = 4557;
+    for (dir, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PICTURE_OFFER_DIALOG)
+            .expect("converts");
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let text = data.description(SHORT_PICTURED).expect("the offer's text");
+        assert_eq!(data.description_graphic(SHORT_PICTURED), Some(5005));
+        let lines = wrap(
+            &mono(),
+            BODY_FONT,
+            BODY_SIZE,
+            &text,
+            template.items[OFFER_TEXT_ITEM - 1].bounds.width(),
+        );
+        let high = lines.len() as f32 * mono().line_height(BODY_FONT, BODY_SIZE);
+        assert!(high < 200.0, "short enough to shrink: {high}");
+
+        let dialog = offer_of(template, &text, Some(5005), ("Yes", "No"));
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds(), rect(187.0, 262.0, 651.0, 244.0));
+        assert_eq!(
+            laid.item_bounds(OFFER_TEXT_ITEM).map(|item| item.height()),
+            Some(200.0)
+        );
+    }
+}
+
 #[test]
 fn the_mission_screens_pictures_decode_at_their_dialogs_sizes() {
     use nova_view::spaceport::missions::{COMPUTER_BACKGROUND, INFO_BACKGROUND};
