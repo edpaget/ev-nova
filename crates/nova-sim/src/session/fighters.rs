@@ -440,25 +440,52 @@ impl Session {
         room
     }
 
-    /// Whether a bay of the player's that carries ship type `ship` has
-    /// room for one more ([`Session::fighter_room`]), as
-    /// `_CanBuyFighter(type, -1, -1)` asks for a ship boarded
-    /// (@0x5a82-0x5cb2; see the `board_repair` module). The original
-    /// reads the first bay whose `AmmoType` names `ship` and that bay's
-    /// last fighter outfit, in outfit order, for its `Max`; this reads any
-    /// such bay with room, which is the same for every stock bay (one bay
-    /// to a type, one fighter outfit to a bay). A bay whose carried type
-    /// only shares `ship`'s sprites (`_CanBuyFighter` @0x5b0d-0x5b84) is
-    /// rdm:task/fighter-bays-follow-up's variant docking.
+    /// Whether the player's bays have room for a boarded ship of type
+    /// `ship`, as `_CanBuyFighter(type, -1, -1)` asks (@0x5a82-0x5cb2; see
+    /// the `board_repair` module): the first bay held, by weapon ID,
+    /// carrying `ship` (@0x5ad1-0x5b04, breaking @0x5b7e), else the first
+    /// whose carried ship shares `ship`'s sprite base (@0x5b0d-0x5b75),
+    /// wider than the dock's walk ([`Armament::dock_bay`](crate::Armament::dock_bay)),
+    /// and its last fighter outfit by ID (@0x5b95-0x5bd8), none of which
+    /// is no room (@0x5bda). True while the bay's [`capacity`] is above
+    /// its rounds and the fighters out of type `ship`, the type asked and
+    /// not the bay's (@0x5c67-0x5c9b).
     pub(super) fn can_take_fighter(&self, ship: ShipId) -> bool {
-        let room = self.fighter_room();
-        self.statics.ammo_outfits.iter().any(|&(ammo, outfit)| {
-            self.statics
-                .arsenal
-                .weapon(ammo)
-                .is_some_and(|spec| spec.carried == Some(ship))
-                && room.get(&outfit).is_some_and(|&left| left > 0)
-        })
+        let arsenal = &self.statics.arsenal;
+        let base = arsenal.sprite_base(ship);
+        let first_bay = |carries: &dyn Fn(ShipId) -> bool| {
+            self.ship
+                .fit
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.carried.is_some_and(carries))
+                .min_by_key(|mount| mount.spec.id)
+        };
+        let bay = first_bay(&|carried| carried == ship)
+            .or_else(|| first_bay(&|carried| arsenal.sprite_base(carried) == base));
+        let Some(bay) = bay else {
+            return false;
+        };
+        let last_outfit = self
+            .statics
+            .ammo_outfits
+            .iter()
+            .filter(|&&(ammo, _)| ammo == bay.spec.id)
+            .map(|&(_, outfit)| outfit)
+            .max();
+        let Some(outfit) = last_outfit else {
+            return false;
+        };
+        let max = self
+            .statics
+            .outfits
+            .iter()
+            .find(|record| record.id == outfit)
+            .map_or(0, |record| record.max);
+        let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, bay.spec.id)
+            .saturating_add(self.fighters_out(Some(ship)));
+        capacity(bay.spec.max_ammo, bay.count, max) > held
     }
 
     /// The player's fighters out of type `carried`: none for `None`.
@@ -1788,6 +1815,124 @@ pub(super) mod tests {
             !fleet(&bare, 0, Vec::new()).can_take_fighter(VIPER),
             "no bay"
         );
+    }
+
+    /// A variant of the Viper, drawing its sprites.
+    pub(in crate::session) const VARIANT: ShipId = ShipId(223);
+    /// Another variant of the Viper.
+    pub(in crate::session) const SIBLING: ShipId = ShipId(224);
+
+    /// [`carrying`] with the two variants of the Viper.
+    pub(in crate::session) fn variants() -> FakePilotCatalog {
+        let mut catalog = carrying();
+        for variant in [VARIANT, SIBLING] {
+            catalog.ship_records.push(ShipRecord {
+                escort_type: 0,
+                inherent_ai: 4,
+                ..ship(variant.0, VIPER_FIELDS)
+            });
+            catalog.hulls.push(HullRecord {
+                size: Some(20),
+                sprite_base: VIPER,
+                ..hull(variant.0)
+            });
+        }
+        catalog
+    }
+
+    /// [`variants`] with the player's one bay carrying [`VARIANT`], not
+    /// the Viper.
+    pub(in crate::session) fn variant_bay() -> FakePilotCatalog {
+        let mut catalog = variants();
+        catalog.weapons[0].ammo_type = VARIANT.0;
+        catalog
+    }
+
+    #[test]
+    fn a_variant_boarded_fits_a_bay_of_its_sprite_base() {
+        // `_CanBuyFighter`'s second walk (@0x5b0d-0x5b75), and the held
+        // count reads the type asked, not the bay's (@0x5c67-0x5c9b).
+        let catalog = variants();
+        let room = |vipers: u16, escorts: Vec<Escort>| {
+            fleet(&catalog, vipers, escorts).can_take_fighter(VARIANT)
+        };
+        assert!(room(3, Vec::new()), "3 of 4 aboard");
+        assert!(!room(4, Vec::new()), "full");
+        let variant_out = Escort {
+            ship: VARIANT,
+            ..out()
+        };
+        assert!(!room(3, vec![variant_out]), "one of the type asked is out");
+        assert!(room(3, vec![out()]), "a Viper out isn't of the type asked");
+    }
+
+    #[test]
+    fn a_sibling_variant_fits_a_bay_of_another_variant_of_its_base() {
+        // Bases compared, wider than the dock (@0x5b0d-0x5b75).
+        let catalog = variant_bay();
+        assert!(fleet(&catalog, 0, Vec::new()).can_take_fighter(SIBLING));
+        assert!(fleet(&catalog, 0, Vec::new()).can_take_fighter(VIPER));
+        assert!(!fleet(&catalog, 4, Vec::new()).can_take_fighter(SIBLING));
+    }
+
+    /// [`carrying`] with a second, higher bay carrying the Viper, 151,
+    /// of 2 rounds, its fighters outfit 159, the player's ship holding
+    /// both.
+    fn second_viper_bay(catalog: &mut FakePilotCatalog) {
+        catalog.weapons.push(WeaponRecord {
+            max_ammo: 2,
+            ..WeaponRecord {
+                id: WeaponId(151),
+                ..bay()
+            }
+        });
+        catalog.hulls[0].weapons.push(StockWeapon {
+            weapon: WeaponId(151),
+            count: 1,
+            ammo: 0,
+        });
+        catalog.outfits.push(outfit(160, &[(MOD_WEAPON, 151)]));
+        catalog.outfits.push(OutfitRecord {
+            mass: 0,
+            max: 9999,
+            ..outfit(159, &[(MOD_AMMO, 151)])
+        });
+    }
+
+    #[test]
+    fn the_room_for_a_fighter_boarded_reads_the_first_bay_not_any() {
+        // The first walk breaks at the first bay held (@0x5b7e): a higher
+        // bay's room doesn't count.
+        let mut catalog = carrying();
+        second_viper_bay(&mut catalog);
+        assert!(
+            !fleet(&catalog, 4, Vec::new()).can_take_fighter(VIPER),
+            "149 is full, and 151's room isn't read"
+        );
+        assert!(fleet(&catalog, 3, Vec::new()).can_take_fighter(VIPER));
+    }
+
+    #[test]
+    fn a_bay_with_no_fighter_outfit_has_no_room_for_a_fighter_boarded() {
+        // @0x5bda.
+        let mut catalog = carrying();
+        catalog.outfits.pop();
+        assert!(!fleet(&catalog, 0, Vec::new()).can_take_fighter(VIPER));
+    }
+
+    #[test]
+    fn a_bay_of_no_max_ammo_reads_the_last_fighter_outfits_max() {
+        // The last by ID (@0x5b95-0x5bd8), @0x5c1f-0x5c4f.
+        let mut catalog = carrying();
+        catalog.weapons[0].max_ammo = 0;
+        catalog.outfits[1].max = 1;
+        catalog.outfits.push(OutfitRecord {
+            mass: 0,
+            max: 3,
+            ..outfit(159, &[(MOD_AMMO, 149)])
+        });
+        assert!(fleet(&catalog, 2, Vec::new()).can_take_fighter(VIPER));
+        assert!(!fleet(&catalog, 3, Vec::new()).can_take_fighter(VIPER));
     }
 
     // Return to Hangar and docking.

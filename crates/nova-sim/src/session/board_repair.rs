@@ -30,11 +30,24 @@
 //! module's `destroy_cargo_share`) comes back. A save is due.
 //!
 //! **Fighter repaired** and **Fighter captured** (@0x65a65-0x65b80,
-//! @0x65d31-0x65e62): the ship docks at once in the player's bay that
-//! carries its type (`_AIAddFighterToParent` @0x65b80, its slot let go
-//! @0x80404), a round of that bay's fighter outfit, as a fighter docking
-//! gives ([`Session::dock_fighter`]), and leaves the system. The resets
-//! the tail writes before the dock (shield, armour, +0x6c) are never read.
+//! @0x65d31-0x65e62): the ship docks at once in the player's bay for it
+//! (`_AIAddFighterToParent` @0x65b80, its slot let go @0x80404), a round
+//! of that bay's fighter outfit, as a fighter docking gives
+//! ([`Session::dock_fighter`]), and leaves the system. The resets the tail
+//! writes before the dock (shield, armour, +0x6c) are then never read.
+//!
+//! `_CanBuyFighter`'s second walk is wider than the dock's, though: it
+//! compares sprite bases, where the dock needs a bay carrying the base
+//! itself. So a player holding only a variant bay can board a sibling that
+//! no dock walk finds a bay (stock: a captured Fed Carrier 220 or Aurora
+//! Carrier 296, @0x65b7b → @0x80384). It then stays out where it is, the
+//! player's carried fighter, by the tail's writes (+0xc8de -1, +0x88 5,
+//! +0x9a 0, +0x54 0, +0x58 `_ShipArmorCapacity`, +0x6c -1,
+//! @0x65e62-0x65ea7, @0x65b2f-0x65b78): no shield, armour full at a
+//! fighter's capacity, no round added, its message and sound as a dock's,
+//! and its condition decided again with no armour written
+//! ([`Session::decide_condition`]). A save is due, as for any change to
+//! the fleet.
 //!
 //! **Every own-ship path** ends at the board's tail (@0x65f43): the ship
 //! is marked boarded ([`Session::mark_boarded`], `_AIShipBoardedByPlayer`
@@ -52,7 +65,6 @@
 
 use super::Session;
 use crate::board_repair::{FlownBy, Recovery, recovery};
-use crate::catalog::ShipId;
 use crate::fleet::OrderWord;
 use crate::market::Good;
 use crate::person::MISSION_ON_BOARD;
@@ -81,7 +93,7 @@ impl Session {
         )?;
         match (path, npc.former) {
             (Recovery::EscortRepaired, Some(former)) => self.repair_escort(npc.id, former),
-            _ => self.dock_boarded(npc.id, npc.ship),
+            _ => self.dock_boarded(npc),
         }
         self.space.say(&mut self.out, path.message());
         self.out.sounds.push(SimSound::EscortRepaired);
@@ -111,12 +123,51 @@ impl Session {
         self.mark_boarded(id);
     }
 
-    /// NPC `id`, of ship type `ship`, boarded, docks in the player's bay
-    /// carrying its type and leaves the system (see the module docs).
-    fn dock_boarded(&mut self, id: NpcId, ship: ShipId) {
-        self.mark_boarded(id);
-        self.ship.stow_fighter(&mut self.pilot, &self.statics, ship);
-        self.leave(id);
+    /// `npc`, boarded, docks in the player's bay for it and leaves the
+    /// system, or stays out when no bay's walk finds it one (see the module
+    /// docs).
+    fn dock_boarded(&mut self, npc: &Npc) {
+        if self
+            .ship
+            .stow_fighter(&mut self.pilot, &self.statics, npc.ship)
+        {
+            self.mark_boarded(npc.id);
+            self.leave(npc.id);
+        } else {
+            self.keep_boarded_out(npc);
+        }
+    }
+
+    /// `npc`, boarded, with no bay to dock in, is the player's fighter,
+    /// out where it is (see the module docs): as the record it left with,
+    /// or a new one; +0x88 5 before `_ShipArmorCapacity` (@0x65e62-0x65ea7),
+    /// so its armour is full at a fighter's capacity; with no shield; its
+    /// condition decided again with no armour written.
+    fn keep_boarded_out(&mut self, npc: &Npc) {
+        let record = npc.former.map_or(
+            Escort {
+                ship: npc.ship,
+                reserves: npc.reserves,
+                order: None,
+                carried: true,
+                wage: None,
+                person: None,
+                mark: None,
+            },
+            |former| former.rejoined(npc.reserves),
+        );
+        self.enlist(npc.id, record);
+        let rule = std::rc::Rc::clone(&self.setup.disable_rule.0);
+        if let Some(fighter) = self.space.npc_mut(npc.id) {
+            fighter.reserves.shield.now = 0.0;
+            fighter.reserves.armor.now = fighter.reserves.armor.max;
+            let reserves = fighter.reserves;
+            if let Some(escort) = self.pilot.escorts.last_mut() {
+                escort.reserves = reserves;
+            }
+        }
+        self.decide_condition(npc.id, &*rule);
+        self.mark_boarded(npc.id);
     }
 }
 
@@ -130,7 +181,7 @@ mod tests {
 
     use super::*;
     use crate::board::{Boarding, MAX_ESCORTS, Take, Taken};
-    use crate::catalog::GovtId;
+    use crate::catalog::{GovtId, ShipId};
 
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
@@ -139,7 +190,9 @@ mod tests {
     use crate::message::SimMessage;
     use crate::reserves::Gauge;
     use crate::self_repair::repaired_armor;
-    use crate::session::fighters::tests::{VIPER, VIPERS, carrying, fleet, launch};
+    use crate::session::fighters::tests::{
+        SIBLING, VARIANT, VIPER, VIPERS, carrying, fleet, launch, variant_bay, variants,
+    };
     use crate::session::tests::{alongside, board_by, boardable, flown_by, take, trader_escort};
     use crate::traffic::npc::NpcHold;
 
@@ -402,16 +455,25 @@ mod tests {
 
     // Fighters.
 
-    /// [`carrying`] with `vipers` Vipers aboard and one launched, then
-    /// disabled: it left the fleet remembering being a fighter, the player
-    /// over it and targeting it. Its NPC.
+    /// [`disabled_fighter`] of a Viper.
     fn disabled_viper(catalog: &crate::testkit::FakePilotCatalog, vipers: u16) -> (Session, NpcId) {
+        disabled_fighter(catalog, vipers, VIPER)
+    }
+
+    /// `catalog`'s player with `vipers` fighters aboard and one, of type
+    /// `ship`, launched, then disabled: it left the fleet remembering being
+    /// a fighter, the player over it and targeting it. Its NPC.
+    fn disabled_fighter(
+        catalog: &crate::testkit::FakePilotCatalog,
+        vipers: u16,
+        ship: ShipId,
+    ) -> (Session, NpcId) {
         let mut session = fleet(catalog, vipers, Vec::new());
         launch(&mut session, catalog);
         let id = session
             .npcs()
             .iter()
-            .find(|npc| npc.ship == VIPER)
+            .find(|npc| npc.ship == ship)
             .expect("launched")
             .id;
         session.space.npc_mut(id).expect("there").reserves.armor.now = 1.0;
@@ -463,6 +525,129 @@ mod tests {
         assert!(session.space.npc(id).is_none());
         assert_eq!(session.take_messages(), [SimMessage::FighterCaptured]);
         assert_eq!(session.take_sounds(), [SimSound::EscortRepaired]);
+    }
+
+    #[test]
+    fn boarding_a_disabled_variant_captures_it_into_the_bay_of_its_sprite_base() {
+        // `_CanBuyFighter`'s second walk and `_AIAddFighterToParent`'s
+        // (@0x65d85-0x65dd7, @0x65b80).
+        let catalog = variants();
+        let (mut session, id) = disabled_viper(&catalog, 3);
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.ship = VARIANT;
+        npc.former = None;
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Recovered(Recovery::FighterCaptured))
+        );
+        assert_eq!(
+            session.pilot().owned(VIPERS),
+            3,
+            "a round of the base's bay"
+        );
+        assert!(session.space.npc(id).is_none());
+        assert_eq!(session.take_messages(), [SimMessage::FighterCaptured]);
+    }
+
+    /// `catalog`'s [`variant_bay`] player over a disabled [`SIBLING`], no
+    /// dock walk finding it a bay, remembering `former` or nothing, its
+    /// armour 1 and its shield at most: its NPC.
+    fn disabled_sibling(
+        catalog: &crate::testkit::FakePilotCatalog,
+        former: bool,
+    ) -> (Session, NpcId) {
+        let (mut session, id) = disabled_fighter(catalog, 1, VARIANT);
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.ship = SIBLING;
+        npc.reserves.shield.now = npc.reserves.shield.max;
+        npc.former = npc.former.filter(|_| former).map(|former| FormerEscort {
+            record: Escort {
+                ship: SIBLING,
+                ..former.record
+            },
+        });
+        (session, id)
+    }
+
+    /// `session`'s fighter NPC `id` is out as the player's carried fighter,
+    /// shield 0 and full at a fighter's capacity, intact, and the record
+    /// says the same; no round came back.
+    fn assert_stayed_out(session: &Session, id: NpcId) {
+        use crate::bay::fighter_capacity;
+        let npc = session.space.npc(id).expect("still in the system");
+        let armor = fighter_capacity(npc.stats.armor, crate::rulebook::RuleSource::Engine);
+        assert_eq!(
+            npc.reserves.armor,
+            Gauge {
+                now: armor,
+                max: armor
+            }
+        );
+        assert_eq!(npc.reserves.shield.now, 0.0, "no shield (@0x65e62-0x65ea7)");
+        assert_eq!(npc.condition, Condition::Intact, "decided again");
+        assert!(npc.carrier.is_some(), "a fighter");
+        assert!(npc.boarded, "marked boarded at the tail");
+        assert_eq!(npc.former, None);
+        let records = session.pilot().escorts();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].carried);
+        assert_eq!(records[0].ship, SIBLING);
+        assert_eq!(records[0].reserves, npc.reserves);
+        assert!(session.is_escort(id));
+        assert_eq!(
+            session.pilot().owned(VIPERS),
+            0,
+            "the one launched: no round added"
+        );
+    }
+
+    #[test]
+    fn a_boarded_ship_no_dock_walk_finds_stays_out_as_a_carried_fighter() {
+        // `_CanBuyFighter` compares bases, the dock needs the base's bay:
+        // @0x65b7b → @0x80384, the tail's writes read.
+        let catalog = variant_bay();
+        let (mut session, id) = disabled_sibling(&catalog, false);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Recovered(Recovery::FighterCaptured))
+        );
+        assert_stayed_out(&session, id);
+        assert_eq!(session.take_messages(), [SimMessage::FighterCaptured]);
+        assert_eq!(session.take_sounds(), [SimSound::EscortRepaired]);
+        assert!(session.take_save_due(), "the fleet changed");
+    }
+
+    #[test]
+    fn a_former_fighter_no_dock_walk_finds_stays_out_on_its_own_record() {
+        let catalog = variant_bay();
+        let (mut session, id) = disabled_sibling(&catalog, true);
+        let order = Some(EscortOrder::Defend);
+        let npc = session.space.npc_mut(id).expect("there");
+        if let Some(former) = &mut npc.former {
+            former.record.order = order;
+        }
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Recovered(Recovery::FighterRepaired))
+        );
+        assert_stayed_out(&session, id);
+        assert_eq!(session.pilot().escorts()[0].order, order, "its own record");
+        assert_eq!(session.take_messages(), [SimMessage::FighterRepaired]);
+    }
+
+    #[test]
+    fn a_ship_held_disabled_that_stays_out_is_still_disabled() {
+        // The condition is decided again with no armour written.
+        let catalog = variant_bay();
+        let (session, id) = disabled_sibling(&catalog, false);
+        let mut session = session.with_disable_rule(Rc::new(AlwaysDisabled));
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Recovered(Recovery::FighterCaptured))
+        );
+        let npc = session.space.npc(id).expect("there");
+        assert_eq!(npc.condition, Condition::Disabled);
+        assert_eq!(npc.reserves.armor.now, npc.reserves.armor.max);
     }
 
     #[test]
