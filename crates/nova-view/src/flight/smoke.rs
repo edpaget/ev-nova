@@ -52,7 +52,7 @@ use nova_sim::Vec2;
 use nova_sim::player_wrap::PlayerWrap;
 
 use super::catalog::SmokeSheet;
-use super::murk::{murk_tint, sprite_murk};
+use super::murk::{SeenMurk, murk_tint};
 use super::slot_pool::SlotPool;
 use crate::draw::lights_tint;
 use crate::system::camera::Camera;
@@ -179,13 +179,12 @@ impl SmokePuffs {
     }
 
     /// Draws each puff where `camera` shows it, at its frame, added at
-    /// full and murked as seen from the player's ship at `viewer` in a
-    /// system of effective murk `murk`.
-    pub fn draw(&self, list: &mut DrawList, camera: &Camera, viewer: Vec2, murk: u8) {
+    /// full and murked as the player sees it, `seen`.
+    pub fn draw(&self, list: &mut DrawList, camera: &Camera, seen: SeenMurk) {
         for puff in self.puffs.iter() {
             let image = ImageKey::icon(puff.sheet.icon(puff.frame()));
             let at = camera.world_to_screen(Point::new(puff.at.x, puff.at.y));
-            let level = sprite_murk(puff.at, viewer, murk);
+            let level = seen.at(puff.at).level;
             list.or_sprite(image, at, murk_tint(lights_tint(32), level));
         }
     }
@@ -328,7 +327,7 @@ mod tests {
         assert_eq!(xs(&puffs), [30.0, 20.0], "in slot order");
         let camera = Camera::centred_on(Point::default());
         let mut list = DrawList::new();
-        puffs.draw(&mut list, &camera, Vec2::ZERO, 0);
+        puffs.draw(&mut list, &camera, seen_from(Vec2::ZERO));
         let drawn: Vec<f32> = list
             .iter()
             .filter_map(|command| match *command {
@@ -347,6 +346,15 @@ mod tests {
         assert_eq!(puffs.puffs(), []);
     }
 
+    /// The murk at its worst as seen from `viewer`.
+    fn seen_from(viewer: Vec2) -> SeenMurk {
+        SeenMurk {
+            viewer,
+            murk: 100,
+            colour: 0x1081,
+        }
+    }
+
     #[test]
     fn a_puff_is_added_at_full_murked_at_its_frames_cicn_where_it_is() {
         let mut puffs = SmokePuffs::default();
@@ -357,8 +365,8 @@ mod tests {
         }
         let camera = Camera::centred_on(Point::new(0.0, 0.0));
         let mut list = DrawList::new();
-        puffs.draw(&mut list, &camera, Vec2::ZERO, 100);
-        let level = sprite_murk(Vec2::new(0.0, 160.0), Vec2::ZERO, 100);
+        puffs.draw(&mut list, &camera, seen_from(Vec2::ZERO));
+        let level = seen_from(Vec2::ZERO).at(Vec2::new(0.0, 160.0)).level;
         assert_eq!(level, 30);
         assert_eq!(
             list.iter().cloned().collect::<Vec<_>>(),
@@ -371,7 +379,7 @@ mod tests {
             "age 1.5: frame 1"
         );
         let mut clear = DrawList::new();
-        puffs.draw(&mut clear, &camera, Vec2::new(0.0, 160.0), 100);
+        puffs.draw(&mut clear, &camera, seen_from(Vec2::new(0.0, 160.0)));
         let tints: Vec<Color> = clear
             .iter()
             .filter_map(|command| match *command {

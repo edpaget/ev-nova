@@ -23,7 +23,7 @@ use crate::flight::flash::ShieldFlash;
 use crate::flight::gate_colorize::gate_colorize;
 use crate::flight::hud::STATUS_BAR_WIDTH;
 use crate::flight::ion_tint::hull_colorize;
-use crate::flight::murk::{self, sprite_murk};
+use crate::flight::murk::{SeenMurk, sprite_murk};
 use crate::flight::ship_layers::{Place, ShipDraw, base_alpha, npc_glow_rolls, turning};
 use crate::flight::sim_port::FlightSim;
 use crate::flight::weapons::{self, BeamShown, ShotShown};
@@ -556,18 +556,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// How the player sees its system's murk, as the frame holds it.
+    pub(super) fn seen_murk(&self) -> SeenMurk {
+        SeenMurk {
+            viewer: self.frame.player().position,
+            murk: self.frame.effective_murk,
+            colour: self.frame.murk_colour,
+        }
+    }
+
     /// The shots in flight in the order they are drawn
     /// ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots)),
     /// each where it is drawn: `alpha` of the way from where it was a step
     /// ago, as the ships are; each with the index its spin started on
     /// ([`SpinStarts`](crate::flight::spin::SpinStarts)) and its murk where
     /// the frame holds it, seen from the player's ship as the frame holds
-    /// it, in the player's effective murk ([`murk::sprite_murk`]), as
-    /// `_HandleShot` murks it once a pass after it moves (@0x35c48).
+    /// it ([`FlightView::seen_murk`]), as `_HandleShot` murks it once a
+    /// pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
         let behind = 1.0 - self.alpha;
-        let viewer = self.frame.player().position;
-        let murk = self.frame.effective_murk;
+        let seen = self.seen_murk();
         self.frame
             .shots
             .iter()
@@ -575,7 +583,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 id: shot.id,
                 spin_start: self.shot_looks.spin_starts.start(shot.id),
                 spin_timer: shot.spin_timer,
-                murk: murk::sprite_murk(shot.position, viewer, murk),
+                colorize: seen.at(shot.position),
                 at: camera.world_to_screen(Point::new(
                     shot.velocity.x.mul_add(-behind, shot.position.x),
                     shot.velocity.y.mul_add(-behind, shot.position.y),
@@ -590,13 +598,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The cargo boxes in space, each where it is drawn: `alpha` of the
     /// way from where it was a step ago, as the shots are; each with its
-    /// murk where the frame holds it, seen from the player's ship in the
-    /// player's effective murk ([`murk::sprite_murk`]), as `_HandleBoxes`
-    /// murks it (@0x2e15e-0x2e181).
+    /// murk where the frame holds it ([`FlightView::seen_murk`]), as
+    /// `_HandleBoxes` murks it (@0x2e15e-0x2e181).
     pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
         let behind = 1.0 - self.alpha;
-        let viewer = self.frame.player().position;
-        let murk = self.frame.effective_murk;
+        let seen = self.seen_murk();
         self.frame
             .cargo_boxes
             .iter()
@@ -607,7 +613,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 )),
                 frame: cargo_box.frame,
                 fade: cargo_box.fade,
-                murk: murk::sprite_murk(cargo_box.position, viewer, murk),
+                colorize: seen.at(cargo_box.position),
                 graphic: cargo_box.graphic,
             })
             .collect()
@@ -619,8 +625,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
         let behind = 1.0 - self.alpha;
-        let viewer = self.frame.player().position;
-        let murk = self.frame.effective_murk;
+        let seen = self.seen_murk();
         self.frame
             .asteroids
             .iter()
@@ -634,7 +639,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 frame: asteroid.frame as u16,
                 kind: asteroid.kind,
-                murk: murk::sprite_murk(asteroid.position, viewer, murk),
+                colorize: seen.at(asteroid.position),
             })
             .collect()
     }

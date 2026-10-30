@@ -35,7 +35,7 @@ use super::murk::murk_tint;
 use super::shot_fade::{ShotShade, shot_shade};
 use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, Point};
+use crate::{Color, Colorize, DrawList, Point};
 use nova_sim::combat::projectile::ShotId;
 use nova_sim::combat::spin_timer;
 use nova_sim::sprite_layer::SpriteLayer;
@@ -225,8 +225,8 @@ pub struct ShotShown {
     /// The spin timer it started on, its slot's leftover
     /// ([`Shot::spin_timer`](nova_sim::combat::projectile::Shot::spin_timer)).
     pub spin_timer: u32,
-    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
-    pub murk: u8,
+    /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
+    pub colorize: Colorize,
 }
 
 /// Draws each of `shots` in turn ([`draw_shot`]), by `fade`'s reading
@@ -261,14 +261,18 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
             let image = sheet.image.frame(frame);
             match shot_shade(look, shot.age, fade) {
                 ShotShade::Opaque => {
-                    list.sprite(image, shot.at, murk_tint(Color::WHITE, shot.murk));
+                    list.sprite(image, shot.at, murk_tint(Color::WHITE, shot.colorize.level));
                 }
                 ShotShade::Translucent(t) => {
                     let tint = see_through(t);
-                    list.crossfade_sprite(image, shot.at, murk_tint(tint, shot.murk));
+                    list.crossfade_sprite(image, shot.at, murk_tint(tint, shot.colorize.level));
                 }
                 ShotShade::Additive(n) => {
-                    list.or_sprite(image, shot.at, murk_tint(lights_tint(n), shot.murk));
+                    list.or_sprite(
+                        image,
+                        shot.at,
+                        murk_tint(lights_tint(n), shot.colorize.level),
+                    );
                 }
             }
         }
@@ -819,7 +823,7 @@ mod tests {
             id: ShotId(1),
             spin_start: 0,
             spin_timer: 0,
-            murk: 0,
+            colorize: Colorize::default(),
             at: at(x, 5.0),
             heading: 90.0,
             age: 3,
@@ -873,7 +877,10 @@ mod tests {
             layer: SpriteLayer::Shots,
             spin_start: 0,
             spin_timer: 0,
-            murk,
+            colorize: Colorize {
+                level: murk,
+                ..Colorize::default()
+            },
         };
         let mut list = DrawList::new();
         draw_shot(&mut list, &shot, &looks, rule);

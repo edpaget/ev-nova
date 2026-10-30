@@ -25,7 +25,7 @@ use super::murk::murk_tint;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, Point};
+use crate::{Color, Colorize, DrawList, Point};
 
 /// The levels of a box's fade: a level of 32 would be fully transparent.
 pub const FADE_LEVELS: u8 = 32;
@@ -39,8 +39,8 @@ pub struct BoxShown {
     pub frame: u16,
     /// How faded it is, 0 to 31.
     pub fade: u8,
-    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
-    pub murk: u8,
+    /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
+    pub colorize: Colorize,
     /// Its graphic, `spïn` 500 + graphic.
     pub graphic: u16,
 }
@@ -52,7 +52,7 @@ pub fn draw_boxes(list: &mut DrawList, boxes: &[BoxShown], looks: &Looks) {
         match looks.box_sheet(shown.graphic) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                let tint = murk_tint(fade_tint(shown.fade), shown.murk);
+                let tint = murk_tint(fade_tint(shown.fade), shown.colorize.level);
                 list.sprite(sheet.image.frame(frame), shown.at, tint);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
@@ -77,6 +77,9 @@ mod tests {
     use super::*;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
+
+    /// A stock system's murk colour.
+    const COLOUR: u16 = 0x1081;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -103,7 +106,7 @@ mod tests {
             at: at(x, 5.0),
             frame,
             fade,
-            murk: 0,
+            colorize: Colorize::default(),
             graphic: 0,
         }
     }
@@ -181,11 +184,11 @@ mod tests {
     #[test]
     fn a_murky_box_is_darkened_by_its_murk_and_keeps_its_fades_alpha() {
         let murky = BoxShown {
-            murk: 16,
+            colorize: Colorize::toward_pixel(16, COLOUR),
             ..shown(1.0, 3, 0)
         };
         let both = BoxShown {
-            murk: 16,
+            colorize: Colorize::toward_pixel(16, COLOUR),
             ..shown(2.0, 3, 8)
         };
         let mut list = DrawList::new();

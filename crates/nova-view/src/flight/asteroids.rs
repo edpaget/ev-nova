@@ -18,7 +18,7 @@ use super::murk::murk_tint;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, Point};
+use crate::{Color, Colorize, DrawList, Point};
 
 /// An asteroid to draw.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,8 +29,8 @@ pub struct AsteroidShown {
     pub frame: u16,
     /// Its type, `spïn` 800 + `kind`.
     pub kind: u8,
-    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
-    pub murk: u8,
+    /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
+    pub colorize: Colorize,
 }
 
 /// Draws each of `asteroids` as its type's frame, murked as it says; a
@@ -40,7 +40,7 @@ pub fn draw_asteroids(list: &mut DrawList, asteroids: &[AsteroidShown], looks: &
         match looks.asteroid_sheet(shown.kind) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                let tint = murk_tint(Color::WHITE, shown.murk);
+                let tint = murk_tint(Color::WHITE, shown.colorize.level);
                 list.sprite(sheet.image.frame(frame), shown.at, tint);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
@@ -56,6 +56,9 @@ mod tests {
     use super::*;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
+
+    /// A stock system's murk colour.
+    const COLOUR: u16 = 0x1081;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -88,7 +91,7 @@ mod tests {
             at: at(x, 5.0),
             frame,
             kind,
-            murk: 0,
+            colorize: Colorize::default(),
         }
     }
 
@@ -119,7 +122,7 @@ mod tests {
     #[test]
     fn a_murky_asteroid_is_darkened_by_its_murk() {
         let murky = AsteroidShown {
-            murk: 16,
+            colorize: Colorize::toward_pixel(16, COLOUR),
             ..shown(1.0, 0, 0)
         };
         let mut list = DrawList::new();

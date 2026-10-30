@@ -5,14 +5,15 @@
 //! ([`StepRolls`]). The simulation keeps none of it: it
 //! is the view's, drawn on the effects' chance, never the simulation's.
 
+use nova_sim::Chance;
 use nova_sim::flight_frame::PassReport;
 use nova_sim::player_wrap::PlayerWrap;
-use nova_sim::{Chance, Vec2};
 
 use crate::DrawList;
 use crate::flight::catalog::Looks;
 use crate::flight::effects::Effects;
 use crate::flight::lightning::StepRolls;
+use crate::flight::murk::SeenMurk;
 use crate::flight::smoke::{SmokePuffs, smoke_kind};
 use crate::flight::spin::SpinStarts;
 use crate::flight::trails::TrailTables;
@@ -83,10 +84,10 @@ impl ShotLooks {
         self.lightning
     }
 
-    /// Draws the smoke where `camera` shows it, murked as seen from the
-    /// player's ship at `viewer` in a system of effective murk `murk`.
-    pub(super) fn draw_smoke(&self, list: &mut DrawList, camera: &Camera, viewer: Vec2, murk: u8) {
-        self.smoke.draw(list, camera, viewer, murk);
+    /// Draws the smoke where `camera` shows it, murked as the player sees
+    /// it, `seen`.
+    pub(super) fn draw_smoke(&self, list: &mut DrawList, camera: &Camera, seen: SeenMurk) {
+        self.smoke.draw(list, camera, seen);
     }
 
     /// Carries the smoke by `wrap`.

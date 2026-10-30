@@ -35,7 +35,6 @@
 //!   the menu's frame before redrawing it (@0x38c60-0x38c77)
 //!   (rdm:phase/play-feel-followups/phase-1-escort-menu-redraw-a-frame-late).
 
-use nova_sim::Vec2;
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
 
 use crate::flight::alert;
@@ -133,8 +132,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             match pass {
                 WorldPass::Layer(SpriteLayer::Stars) => self.draw_stars_and_message(list, camera),
                 WorldPass::Layer(SpriteLayer::Stellars) => {
-                    let seen = (self.frame.player().position, self.frame.effective_murk);
-                    scene::draw_stellars(list, scene, camera, Some(seen));
+                    scene::draw_stellars(list, scene, camera, Some(self.seen_murk()));
                 }
                 WorldPass::BeamsUnderShips => {
                     weapons::draw_beams(list, &beams, &self.looks, true, lightning);
@@ -255,27 +253,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the smoke puffs, murked as the player sees them where the
     /// frame has its ship.
     fn draw_smoke(&self, list: &mut DrawList, camera: &Camera) {
-        let viewer = self.frame.player().position;
-        let murk = self.frame.effective_murk;
-        self.shot_looks.draw_smoke(list, camera, viewer, murk);
+        self.shot_looks.draw_smoke(list, camera, self.seen_murk());
     }
 
     /// Draws the escape pods, murked as the player sees them where the
     /// frame has its ship.
     fn draw_pods(&self, list: &mut DrawList, camera: &Camera) {
-        let viewer = self.frame.player().position;
-        let murk = self.frame.effective_murk;
         self.effects
-            .draw_pods(list, camera, &self.looks, viewer, murk);
+            .draw_pods(list, camera, &self.looks, self.seen_murk());
     }
 
     /// Draws the explosions, murked as the player sees them where the
     /// frame has its ship.
     fn draw_explosions(&self, list: &mut DrawList, camera: &Camera) {
-        let viewer: Vec2 = self.frame.player().position;
-        let murk = self.frame.effective_murk;
         self.effects
-            .draw_explosions(list, camera, &self.looks, viewer, murk);
+            .draw_explosions(list, camera, &self.looks, self.seen_murk());
     }
 }
 

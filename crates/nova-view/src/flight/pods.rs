@@ -63,7 +63,7 @@ use nova_sim::trig::intercept_angle;
 use nova_sim::{Chance, Vec2};
 
 use super::catalog::Looks;
-use super::murk::{murk_tint, sprite_murk};
+use super::murk::{SeenMurk, murk_tint};
 use super::slot_pool::SlotPool;
 use crate::system::camera::Camera;
 use crate::{Color, DrawList, Point};
@@ -191,17 +191,10 @@ impl EscapePods {
     }
 
     /// Draws each pod shown, as `looks` says, where `camera` shows it,
-    /// murked as seen from the player's ship at `viewer` in a system of
-    /// effective murk `murk` ([`sprite_murk`]), as `_HandleEscapePods`
-    /// murks it at its position (@0x39f90-0x39fbc) before its fade.
-    pub fn draw(
-        &self,
-        list: &mut DrawList,
-        camera: &Camera,
-        looks: &Looks,
-        viewer: Vec2,
-        murk: u8,
-    ) {
+    /// murked as the player sees it, `seen` ([`SeenMurk::at`]), as
+    /// `_HandleEscapePods` murks it at its position (@0x39f90-0x39fbc)
+    /// before its fade.
+    pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks, seen: SeenMurk) {
         let Some(sheet) = looks.pod_sheet() else {
             return;
         };
@@ -209,7 +202,7 @@ impl EscapePods {
             let Some(tint) = pod.tint() else {
                 continue;
             };
-            let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), viewer, murk);
+            let level = seen.at(Vec2::new(pod.at.x, pod.at.y)).level;
             let tint = murk_tint(tint, level);
             let frame = sheet.image.frame(pod.frame);
             let at = camera.world_to_screen(pod.at);
@@ -356,6 +349,22 @@ mod tests {
         assert_eq!(fading.len(), 31);
     }
 
+    /// No murk to see.
+    const CLEAR: SeenMurk = SeenMurk {
+        viewer: Vec2::ZERO,
+        murk: 0,
+        colour: 0,
+    };
+
+    /// The murk at its worst as seen from `viewer`.
+    fn seen_from(viewer: Vec2) -> SeenMurk {
+        SeenMurk {
+            viewer,
+            murk: 100,
+            colour: 0x1081,
+        }
+    }
+
     #[test]
     fn a_pod_is_drawn_on_its_frame_at_its_tint() {
         let pods = spawned(&[20, 90, 5]);
@@ -364,8 +373,7 @@ mod tests {
             &mut list,
             &Camera::centred_on(Point::default()),
             &looks(),
-            Vec2::ZERO,
-            0,
+            CLEAR,
         );
         let drawn: Vec<_> = list
             .into_iter()
@@ -380,8 +388,7 @@ mod tests {
             &mut unread,
             &Camera::centred_on(Point::default()),
             &Looks::default(),
-            Vec2::ZERO,
-            0,
+            CLEAR,
         );
         assert!(unread.into_iter().next().is_none(), "no sheet, no pod");
     }
@@ -395,8 +402,7 @@ mod tests {
                 &mut list,
                 &Camera::centred_on(Point::default()),
                 &looks(),
-                Vec2::ZERO,
-                0,
+                CLEAR,
             );
             list.into_iter()
                 .filter_map(|command| match command {
@@ -422,7 +428,7 @@ mod tests {
         let tints = |pods: &EscapePods, viewer: Vec2| -> Vec<(Color, Blend)> {
             let mut list = DrawList::new();
             let camera = Camera::centred_on(Point::default());
-            pods.draw(&mut list, &camera, &looks(), viewer, 100);
+            pods.draw(&mut list, &camera, &looks(), seen_from(viewer));
             list.into_iter()
                 .filter_map(|command| match command {
                     DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend)),
@@ -431,7 +437,9 @@ mod tests {
                 .collect()
         };
         let pod = pods.pods()[0];
-        let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), Vec2::ZERO, 100);
+        let level = seen_from(Vec2::ZERO)
+            .at(Vec2::new(pod.at.x, pod.at.y))
+            .level;
         assert!(level > 0, "murky out here: {level}");
         let opaque = murk_tint(Color::WHITE, level);
         assert_eq!(tints(&pods, Vec2::ZERO), [(opaque, Blend::Normal)]);
@@ -445,7 +453,9 @@ mod tests {
             pods.step();
         }
         let pod = pods.pods()[0];
-        let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), Vec2::ZERO, 100);
+        let level = seen_from(Vec2::ZERO)
+            .at(Vec2::new(pod.at.x, pod.at.y))
+            .level;
         let fading = murk_tint(pod.tint().expect("shown"), level);
         assert_ne!(fading, pod.tint().expect("shown"));
         assert_eq!(tints(&pods, Vec2::ZERO), [(fading, Blend::OrCrossfade)]);
@@ -519,7 +529,7 @@ mod tests {
         assert_eq!(xs(&pods), [30.0, 20.0], "in slot order");
         let camera = Camera::centred_on(Point::default());
         let mut list = DrawList::new();
-        pods.draw(&mut list, &camera, &looks(), Vec2::ZERO, 0);
+        pods.draw(&mut list, &camera, &looks(), CLEAR);
         let drawn: Vec<f32> = list
             .into_iter()
             .filter_map(|command| match command {
