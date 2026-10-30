@@ -1609,6 +1609,7 @@ pub(in crate::flight) fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::Hul
             ..nova_sim::catalog::ShipDisplay::default()
         }),
         escort_class: nova_sim::EscortClass::Freighter,
+        sprite_base: ShipId(id),
     }
 }
 

@@ -212,10 +212,11 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// holds it
     /// ([`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)),
     /// or the system's message buoy in its place ([`SimMessage::Buoy`],
-    /// its text as the flight gives it), followed by the flight's other
-    /// messages ([`FlightView::word`]), then how
-    /// many fighters were abandoned and how many hired escorts defected
-    /// unpaid, if any, the fighters first. A buoy's arrival carries no
+    /// its text as the flight gives it), followed by how many fighters
+    /// were abandoned, the line's own tail (`_HandlePlayer`
+    /// @0x6c3c4-0x6c42b), then the flight's other messages
+    /// ([`FlightView::word`]) and how many hired escorts defected unpaid,
+    /// if any. A buoy's arrival carries no
     /// fighter notes: the flight drops them, as the buoy replaces the
     /// arrival line's suffix too. The escort menu shuts at once and
     /// silently, at a jump's arrival (`_HandlePlayer` @0x6c50e) and a
@@ -242,22 +243,26 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             return;
         };
         let stellars = !scene.stellars().is_empty();
+        let chance = &mut self.words_chance;
         let mut said: Vec<(String, u16)> = messages
             .iter()
             .filter_map(|message| {
                 let text = match message {
                     SimMessage::Buoy(text) => text.clone(),
-                    _ => {
-                        arrival_message_with(arrival_lead(message)?, scene.name(), &date, stellars)
-                    }
+                    _ => arrival_message_with(
+                        arrival_lead(message, chance)?,
+                        scene.name(),
+                        &date,
+                        stellars,
+                    ),
                 };
                 Some((text, message.ticks()))
             })
             .next_back()
             .into_iter()
             .collect();
-        said.extend(worded);
         said.extend(fighters);
+        said.extend(worded);
         said.extend(pay);
         self.say_all(&said);
     }

@@ -7,6 +7,7 @@
 use super::faked_world::world;
 use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
+use crate::flight::fake_catalog::scripted;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
 use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{SessionEvent, SimSound};
@@ -644,8 +645,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
     view.say_for(NO_DESTINATION, 360);
     at_the_warps_end(&mut view, Vec::new());
     view.arrival_frame();
-    let text = arrival_message("Alpha Centauri", DATE, false);
-    faked_lasts(&mut view, &text, 240);
+    faked_lasts(&mut view, &alpha_arrival(), 240);
 }
 
 #[test]
@@ -1058,9 +1058,10 @@ fn arriving_with(events: Vec<FlightEvent>) -> Faked {
     view
 }
 
-/// The arrival line in Alpha Centauri on the flight's date.
+/// The arrival line in Alpha Centauri on the flight's date, led by what
+/// the view's chance, which rolls 0, gives.
 fn alpha_arrival() -> String {
-    arrival_message("Alpha Centauri", DATE, false)
+    arrival_message_with(ENTERING, "Alpha Centauri", DATE, false)
 }
 
 #[test]
@@ -1091,6 +1092,49 @@ fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     view.arrival_frame();
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
     assert_eq!(view.message(), Some(said.as_str()));
+}
+
+#[test]
+fn a_jumps_arrival_leads_with_what_a_roll_of_three_gives() {
+    // `Rand(3) + 43` (@0x6c27f-0x6c2ab).
+    for (draw, lead) in [
+        (0, "Entering the"),
+        (1, "Jumping into the"),
+        (2, "Arriving in the"),
+    ] {
+        let mut view = arriving_with(Vec::new());
+        let (script, chance) = scripted(&[draw]);
+        view.words_chance = chance;
+        view.arrival_frame();
+        let said = arrival_message_with(lead, "Alpha Centauri", DATE, false);
+        assert_eq!(view.message(), Some(said.as_str()));
+        assert_eq!(script.borrow().asked, [3], "one roll of three");
+    }
+}
+
+#[test]
+fn a_buoyed_arrival_rolls_no_lead() {
+    let buoy = SimMessage::Buoy(HELLO.to_owned());
+    let mut view = arriving_with(vec![FlightEvent::Message(buoy)]);
+    let (script, chance) = scripted(&[]);
+    view.words_chance = chance;
+    view.arrival_frame();
+    assert_eq!(view.message(), Some(HELLO));
+    assert_eq!(script.borrow().asked, Vec::<u32>::new());
+}
+
+#[test]
+fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
+    // The abandoned count is the arrival line's own tail (@0x6c3c4-0x6c42b).
+    let mut view = arriving_with(vec![
+        FlightEvent::Message(SimMessage::CargoJettisoned),
+        FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
+    ]);
+    view.arrival_frame();
+    let said = view.message().expect("the arrival").to_owned();
+    let tail = format!("{}  {}  ", alpha_arrival(), fighters_abandoned_message(2));
+    assert!(said.starts_with(&tail), "{said}");
+    assert!(said.len() > tail.len(), "the message follows: {said}");
 }
 
 #[test]
