@@ -3870,7 +3870,7 @@ impl Session {
         }
         // `_PlayerLandOnStellar`'s fold and reset (@0x63211; see the
         // `stock_fold` and `precalced` modules), before the port opens.
-        self.fold_stock();
+        self.ship.fold_stock();
         self.reset_precalced();
         // An inhabited stellar runs `_DoAutoRefuel` instead of the beep
         // (`_PlayerLandOnStellar` @0x632c5), before the port dialog (see
@@ -4240,7 +4240,7 @@ impl Session {
     pub(crate) fn open_outfitter(&mut self) {
         self.port.open_outfit_visit(&self.pilot);
         // `_ShipStatsToSystemInfo` @0x5bb57 (see the `stock_fold` module).
-        self.fold_stock();
+        self.ship.fold_stock();
         self.reset_precalced();
     }
 
@@ -4269,7 +4269,7 @@ impl Session {
     /// is this one, after it.
     pub(crate) fn close_hire(&mut self) {
         // `_ShipStatsToSystemInfo` @0x49235 (see the `stock_fold` module).
-        self.fold_stock();
+        self.ship.fold_stock();
         self.reset_precalced();
     }
 

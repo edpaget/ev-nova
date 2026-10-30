@@ -17,7 +17,7 @@
 //! `PlayerShip::held_stock` records the part of it a purchase's top-up
 //! still holds in the array alone ([`shipyard::Purchase::held`]), and
 //! `PlayerShip::counted` takes it out for the shipyard's readers
-//! ([`shipyard::outfit_counts`]). The fold, [`Session::fold_stock`],
+//! ([`shipyard::outfit_counts`]). The fold, `PlayerShip::fold_stock`,
 //! forgets it. By the other reading nothing is held. The held part is
 //! never saved: the original saves only at the new pilot (@0x1935f), a
 //! landing after its fold (@0x6354b) and the rescue (@0x692c4), so a load
@@ -27,7 +27,8 @@
 //! # Fold sites
 //!
 //! Every caller of `_ShipStatsToSystemInfo` a landed stay can reach
-//! between two purchases folds here, at the original's point:
+//! between two purchases calls `PlayerShip::fold_stock` at the original's
+//! point:
 //!
 //! | Site | Original | Here |
 //! |---|---|---|
@@ -60,7 +61,6 @@
 
 use std::ops::RangeInclusive;
 
-use super::Session;
 use super::outfits::OUTFIT_IDS;
 use crate::control::SetOp;
 #[cfg(doc)]
@@ -84,25 +84,16 @@ pub(super) fn folds_stock(op: &SetOp) -> bool {
     }
 }
 
-impl Session {
-    /// `_ShipStatsToSystemInfo`'s fold of a bought ship's stock top-up
-    /// into the outfit counts: nothing is held out of them afterwards (see
-    /// the module docs). Each fold site's reset stays where it is.
-    pub(super) fn fold_stock(&mut self) {
-        self.ship.fold_stock();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::*;
     use crate::catalog::{OutfitId, OutfitRecord, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::{Script, SetOp};
     use crate::outfitter::OutfitFlags;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::session::Session;
     use crate::session::tests::{
         GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted, shipbuying, stock_weapons,
     };

@@ -177,7 +177,7 @@ impl Session {
     /// Applies one set operator beyond the bit writes and `R(...)`.
     pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         if folds_stock(op) {
-            self.fold_stock();
+            self.ship.fold_stock();
         }
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit, chance),
