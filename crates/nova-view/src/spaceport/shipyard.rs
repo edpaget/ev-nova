@@ -44,7 +44,16 @@
 //! The selected ship's picture is [`ship_picture`]'s: `PICT` 5000 plus its
 //! ID less 128, or else that of the lowest-numbered ship sharing its
 //! `shän` base image, as the Bible says target pictures are shared, or
-//! "No Picture" and "Available" centred on the picture item in white. Its
+//! "No Picture" and "Available" centred on the picture item in white.
+//! When the ship's `MovieFile` names a movie and QuickTime Movies is on,
+//! the movie loops in the picture item instead, stretched to it, as
+//! `_StartLoopingMovie` plays it and `_ShipyardDialogUpdate` copies its
+//! frame there (@0x59042-0x590a3); see [`ship_movie`](super::ship_movie).
+//! It starts as another ship is selected (@0x6082e-0x608b0,
+//! @0x60c4d-0x60cd2) and stops as the selection moves on or clears or
+//! the shipyard closes (@0x5f73f-0x5f750), and holds its frame, still
+//! playing, under the Info panel, the name prompt or an offer, which it
+//! has a player of its own beside ([`Movies::looping`]). Its
 //! description is `dësc` 13000 plus its ID less 128. The
 //! info box shows, for any class but the one flown, four rows at the
 //! original's baselines (`_ShipyardDialogUpdate` @0x592e4-0x596f6): "Ship
@@ -167,6 +176,7 @@ use super::grid::{
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::offer::{OfferChoice, OfferDialog, OfferTemplates, VenueOffers};
+use super::ship_movie::ShipMovie;
 use super::shipyard_grid::{PressOutcome, ShipyardGrid};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -1016,6 +1026,8 @@ pub struct ShipyardScreen {
     closed: bool,
     /// The `dësc` shown since this was last taken, to be loaded.
     description_request: Option<i16>,
+    /// The selected ship's movie, looping in item 8.
+    movie: ShipMovie,
     sounds: Vec<Sound>,
 }
 
@@ -1069,10 +1081,10 @@ impl ShipyardScreen {
                 text_input: text_input.ok(),
             }
         });
-        let bases = if laid.is_ok() {
-            catalog.ship_base_images()
+        let (bases, movies) = if laid.is_ok() {
+            (catalog.ship_base_images(), catalog.ship_movie_files())
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let grid = ShipyardGrid::open(&shipyard.rules, shipyard.rows.len());
         let mut screen = Self {
@@ -1095,6 +1107,7 @@ impl ShipyardScreen {
             asks: InfoAsks::default(),
             closed: false,
             description_request: None,
+            movie: ShipMovie::new(movies),
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -1215,11 +1228,21 @@ impl ShipyardScreen {
         }
     }
 
-    /// Its offers play their movies as `movies` says.
+    /// Its offers play their movies as `movies` says, and so does the
+    /// selected ship's loop in item 8, through its looping player: the
+    /// ship selected now starts its own ([`ShipMovie::set_movies`]).
     pub fn set_offer_movies(&mut self, movies: Movies) {
+        self.movie.set_movies(movies.clone());
         if let Some(offering) = &mut self.offering {
             offering.set_movies(movies);
         }
+    }
+
+    /// Stops the ship's movie looping in item 8, as the dialog's close
+    /// does however it leaves (@0x5f73f-0x5f750): the spaceport's closes
+    /// call this, Done stops it itself.
+    pub(crate) fn end_movie(&mut self) {
+        self.movie.end();
     }
 
     /// Asks for the next offer after `gap`.
@@ -1231,9 +1254,11 @@ impl ShipyardScreen {
 
     /// Ticks only its offers' timer, as covered: something is open over
     /// the shipyard. The time since the last press on the grid runs on
-    /// too, as `_ShipyardFilter` measures it by the event's clock.
+    /// too, as `_ShipyardFilter` measures it by the event's clock, and so
+    /// does its ship movie's time base, unserviced.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
         self.grid.advance(dt);
+        self.movie.covered(dt);
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -1430,7 +1455,9 @@ impl ShipyardScreen {
     /// @0x2a3f7-0x2a405) or without its panel, and reads the ship's
     /// picture and description if they are not shown already. With none
     /// selected, none is shown (`_ShipyardDialogUpdate` @0x58fd0-0x58fda).
+    /// Another ship's movie starts looping in item 8 ([`ShipMovie::select`]).
     fn selected_changed(&mut self) {
+        self.movie.select(self.selected_row().map(|row| row.id));
         let buys = self
             .selected_row()
             .is_some_and(|row| self.shipyard.can(row.id).is_ok());
@@ -1506,7 +1533,10 @@ impl ShipyardScreen {
     /// nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            DONE_ITEM => self.closed = true,
+            DONE_ITEM => {
+                self.closed = true;
+                self.movie.end();
+            }
             BUY_ITEM => self.ask(false),
             INFO_ITEM => self.open_info(),
             SCROLL_UP_ITEM => self.scroll(false),
@@ -1593,13 +1623,20 @@ impl ShipyardScreen {
         );
     }
 
+    /// The selected ship's movie frame in item 8, or else its picture or
+    /// "No Picture" (`_ShipyardDialogUpdate` @0x59042-0x590a3 →
+    /// @0x59238), its description and its info box.
     fn draw_selected(&self, laid: &Laid, list: &mut DrawList) {
         let Some(row) = self.selected_row() else {
             return;
         };
-        if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
-        {
-            shown.draw(list, area, &*laid.metrics.0);
+        if let Some((_, shown)) = &laid.shown {
+            if let Some(area) = laid.dialog.item_bounds(PICTURE_ITEM)
+                && !self.movie.draw(area, list)
+            {
+                shown.draw_picture(list, area, &*laid.metrics.0);
+            }
+            shown.draw_description(list);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
@@ -1705,10 +1742,18 @@ impl Screen for ShipyardScreen {
 
     /// The time since the last press on the grid runs on, and the wait
     /// for the next offer runs down, the Info panel or the name prompt
-    /// covering the shipyard while either is open.
+    /// covering the shipyard while either is open. The ship's movie moves
+    /// on while nothing covers it, the offer included, as only
+    /// `_ShipyardFilter` services it (@0x6046e); covered, it holds its
+    /// frame while its time runs on ([`ShipMovie::covered`]).
     fn tick(&mut self, dt: Duration) {
         self.grid.advance(dt);
         let covered = self.panel.is_some() || self.naming.is_open();
+        if covered || self.offer_dialog().is_some() {
+            self.movie.covered(dt);
+        } else {
+            self.movie.idle(dt);
+        }
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
@@ -1792,6 +1837,8 @@ mod tests {
     use crate::spaceport::grid::TEXT_SIZE;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+
+    mod movie;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -1931,7 +1978,6 @@ mod tests {
 
     impl ShipMovieFiles for FakeArt {
         fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-            self.asked.borrow_mut().push("movies".to_owned());
             self.movies.clone()
         }
     }

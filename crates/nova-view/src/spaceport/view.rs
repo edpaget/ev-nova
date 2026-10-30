@@ -324,6 +324,16 @@ impl Open {
         }
     }
 
+    /// Stops the shipyard's or the bar's hire screen's looping ship movie,
+    /// as their dialog's close does however it leaves (@0x5f73f-0x5f750).
+    fn end_movie(&mut self) {
+        match self {
+            Self::Shipyard(screen) => screen.end_movie(),
+            Self::Bar(screen) => screen.end_movie(),
+            Self::Service(_) | Self::Trade(_) | Self::Outfitter(_) | Self::Computer(_) => {}
+        }
+    }
+
     /// Ticks only the open venue's offer timer, as covered.
     fn tick_covered(&mut self, dt: Duration) {
         match self {
@@ -675,8 +685,14 @@ impl SpaceportView {
 
     /// The spaceport closes, whatever closes it: its sounds not yet taken,
     /// then its ambient sound's halt, as `_DoPortDialog` halts `_planetSnd`
-    /// as the port closes (@0x601d2-0x601eb).
+    /// as the port closes (@0x601d2-0x601eb). The shipyard's or the hire
+    /// screen's looping ship movie open over it stops, as their dialog's
+    /// close does on a pending leave (`_absquatulateStr`,
+    /// @0x5f73f-0x5f750).
     pub fn close_sounds(&mut self) -> Vec<Sound> {
+        if let Some(open) = &mut self.open {
+            open.end_movie();
+        }
         let mut sounds = std::mem::take(&mut self.sounds);
         sounds.extend(
             self.ambient
@@ -962,9 +978,20 @@ impl SpaceportView {
             Some(Open::Bar(bar)) if bar.problem().is_none() => self.status_refresh = true,
             _ => {}
         }
-        if let Some(dialog) = self.open.take().and_then(|open| open.port_dialog()) {
+        if let Some(dialog) = self.take_open().and_then(|open| open.port_dialog()) {
             self.port_dialog_closed = Some(dialog);
         }
+    }
+
+    /// Takes the screen open, its looping ship movie stopped
+    /// ([`Open::end_movie`]): every way the spaceport drops a screen
+    /// comes through here.
+    fn take_open(&mut self) -> Option<Open> {
+        let mut open = self.open.take();
+        if let Some(open) = &mut open {
+            open.end_movie();
+        }
+        open
     }
 
     /// Whether the outfitter given has opened since this was last asked,
@@ -994,7 +1021,7 @@ impl SpaceportView {
         let empty = outfitter.rows.is_empty();
         self.set_outfitter(outfitter);
         if empty && matches!(self.open, Some(Open::Outfitter(_))) {
-            self.open = None;
+            self.take_open();
             self.port_dialog_opened = None;
             self.show_text(NO_ITEMS, after);
             self.empty_outfitter = true;
@@ -1134,7 +1161,7 @@ impl SpaceportView {
         let empty = shipyard.rows.is_empty();
         self.set_shipyard(shipyard);
         if empty && matches!(self.open, Some(Open::Shipyard(_))) {
-            self.open = None;
+            self.take_open();
             self.port_dialog_opened = None;
             self.show_text(NO_SHIPS, after);
         }
@@ -2106,8 +2133,8 @@ impl SpaceportView {
             bar = bar
                 .with_offers(missioning.offer.clone())
                 .with_offer_clock(self.offer_clock);
-            bar.set_offer_movies(self.movies.clone());
         }
+        bar.set_offer_movies(self.movies.clone());
         barkeeping.opened = true;
         self.open = Some(Open::Bar(Box::new(bar)));
         true
@@ -2487,6 +2514,8 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod ship_movies;
+
     use crate::ui::mission_info::MISSION_INFO_KEY;
     use std::cell::RefCell;
 
@@ -4138,10 +4167,11 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
-    /// Ship 128 names "Ship.mov", which plays only once movies are given.
+    /// Ship 129, the one [`yard`] sells, names "Ship.mov", which plays
+    /// only once movies are given.
     impl crate::spaceport::shipyard::ShipMovieFiles for FakePort {
         fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
-            vec![(ShipId(128), "Ship.mov".to_owned())]
+            vec![(ShipId(129), "Ship.mov".to_owned())]
         }
     }
 

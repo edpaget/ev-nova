@@ -45,6 +45,14 @@
 //! session hires it, and the spaceport closes the screen back to the bar
 //! (`_DoShipyardDialog` @0x5f221).
 //!
+//! The selected ship's `MovieFile` loops in the picture item as the
+//! shipyard's does ([`ship_movie`](super::ship_movie)): the movie code
+//! (`_StartLoopingMovie`, `_LoopingMovieIdle`, `_ShipyardFilter`'s stop
+//! and start, `_ShipyardDialogUpdate`'s item 8) reads no `_shipBuyMode`,
+//! so it starts as another ship is selected, holds its frame under the
+//! Info panel, and stops as the selection moves on or clears, and as the
+//! screen closes, after a hire or on Done (@0x5f73f-0x5f750).
+//!
 //! Done, Return and Escape close it. Without its dialog, the screen says
 //! why, and Return or Escape still closes it.
 
@@ -57,6 +65,7 @@ use nova_sim::{HireList, HireRow, ShipId};
 use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{self, GridColors, Shown};
 use super::layout::DONE_LABEL;
+use super::ship_movie::ShipMovie;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
     INFO_KEY, INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
@@ -68,6 +77,7 @@ use crate::color::Color;
 use crate::draw::DrawList;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
+use crate::movie::Movies;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
@@ -161,6 +171,8 @@ pub struct HireScreen {
     closed: bool,
     /// The `dësc` shown since this was last taken, to be loaded.
     description_request: Option<i16>,
+    /// The selected ship's movie, looping in item 8.
+    movie: ShipMovie,
     sounds: Vec<Sound>,
 }
 
@@ -211,14 +223,16 @@ impl HireScreen {
                 info,
             }
         });
-        let pictures = if laid.is_ok() {
+        let (pictures, movies) = if laid.is_ok() {
             let bases = catalog.ship_base_images();
-            list.rows
+            let pictures = list
+                .rows
                 .iter()
                 .map(|row| ship_picture(row.id, &bases, |id| catalog.picture_exists(id)))
-                .collect()
+                .collect();
+            (pictures, catalog.ship_movie_files())
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let grid = ShipyardGrid::open(&list.rules, list.rows.len());
         let mut screen = Self {
@@ -234,6 +248,7 @@ impl HireScreen {
             order: None,
             closed: false,
             description_request: None,
+            movie: ShipMovie::new(movies),
             sounds: Vec::new(),
         };
         screen.selected_changed();
@@ -250,6 +265,28 @@ impl HireScreen {
             laid.dialog.set_focus_ring(ring);
         }
         self
+    }
+
+    /// Its selected ship's movie loops in item 8 as `movies` says,
+    /// through their looping player: the ship selected now starts its own
+    /// ([`ShipMovie::set_movies`]).
+    pub fn set_movies(&mut self, movies: Movies) {
+        self.movie.set_movies(movies);
+    }
+
+    /// Stops the ship's movie looping in item 8, as the dialog's close
+    /// does however it leaves (@0x5f73f-0x5f750): the bar's closes call
+    /// this, Done stops it itself.
+    pub(crate) fn end_movie(&mut self) {
+        self.movie.end();
+    }
+
+    /// The time since the last press on the grid runs on, as covered:
+    /// something is open over the screen. Its ship movie's time base runs
+    /// on too, unserviced ([`ShipMovie::covered`]).
+    pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        self.grid.advance(dt);
+        self.movie.covered(dt);
     }
 
     /// The ships shown.
@@ -350,8 +387,10 @@ impl HireScreen {
     /// with none selected (`_DrawShipyardButtons` @0x2a3f7-0x2a405) or
     /// without its panel, and reads the ship's picture and description if
     /// they are not shown already. With none selected, none is shown
-    /// (`_ShipyardDialogUpdate` @0x58fd0-0x58fda).
+    /// (`_ShipyardDialogUpdate` @0x58fd0-0x58fda). Another ship's movie
+    /// starts looping in item 8 ([`ShipMovie::select`]).
     fn selected_changed(&mut self) {
+        self.movie.select(self.selected_row().map(|row| row.id));
         let hires = self.selected_row().is_some_and(|row| row.hire.is_ok());
         let picture = self
             .selected()
@@ -422,7 +461,10 @@ impl HireScreen {
     /// nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            DONE_ITEM => self.closed = true,
+            DONE_ITEM => {
+                self.closed = true;
+                self.movie.end();
+            }
             HIRE_ITEM => self.ask(),
             INFO_ITEM => self.open_info(),
             SCROLL_UP_ITEM => self.scroll(false),
@@ -494,13 +536,20 @@ impl HireScreen {
         );
     }
 
+    /// The selected ship's movie frame in item 8, or else its picture or
+    /// "No Picture" (`_ShipyardDialogUpdate` @0x59042-0x590a3 →
+    /// @0x59238), its description and its info box.
     fn draw_selected(&self, laid: &Laid, list: &mut DrawList) {
         let Some(row) = self.selected_row() else {
             return;
         };
-        if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
-        {
-            shown.draw(list, area, &*laid.metrics.0);
+        if let Some((_, shown)) = &laid.shown {
+            if let Some(area) = laid.dialog.item_bounds(PICTURE_ITEM)
+                && !self.movie.draw(area, list)
+            {
+                shown.draw_picture(list, area, &*laid.metrics.0);
+            }
+            shown.draw_description(list);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
@@ -563,9 +612,16 @@ impl Screen for HireScreen {
         ScreenAction::None
     }
 
-    /// The time since the last press on the grid runs on.
+    /// The time since the last press on the grid runs on, and the ship's
+    /// movie moves on, or, under the Info panel, holds its frame while its
+    /// time runs on ([`ShipMovie::idle`], [`ShipMovie::covered`]).
     fn tick(&mut self, dt: Duration) {
-        self.grid.advance(dt);
+        if self.panel.is_some() {
+            self.tick_covered(dt);
+        } else {
+            self.grid.advance(dt);
+            self.movie.idle(dt);
+        }
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -620,6 +676,8 @@ impl Screen for HireScreen {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
+
+    mod movie;
 
     use nova_sim::{HireRefusal, ShipFields, ShipSpecs, StockLine};
 
