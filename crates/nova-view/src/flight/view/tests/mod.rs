@@ -115,6 +115,7 @@ mod stars;
 mod stellar_looks;
 mod stellars;
 mod stepping;
+mod whole_pixels;
 mod widescreen;
 mod world_layers;
 

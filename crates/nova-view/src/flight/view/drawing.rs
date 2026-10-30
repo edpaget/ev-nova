@@ -24,7 +24,7 @@ use crate::flight::gate_colorize::gate_colorize;
 use crate::flight::hud::STATUS_BAR_WIDTH;
 use crate::flight::ion_tint::hull_colorize;
 use crate::flight::murk::{self, sprite_murk};
-use crate::flight::ship_layers::{ShipDraw, base_alpha, npc_glow_rolls, turning};
+use crate::flight::ship_layers::{Place, ShipDraw, base_alpha, npc_glow_rolls, turning};
 use crate::flight::sim_port::FlightSim;
 use crate::flight::weapons::{self, BeamShown, ShotShown};
 use crate::system::camera::{Anchor, Camera};
@@ -34,8 +34,8 @@ use crate::{Color, DrawList, Input, Point};
 
 use super::sprites::{Sprite, sprite_stack};
 use super::{
-    DESELECT_KEY, FlightView, MESSAGE_GAP, OVERLAY_SIZE, drawn_box, drawn_size, npc_tint,
-    placeholder_size, shown_heading, shown_position,
+    DESELECT_KEY, FlightView, MESSAGE_GAP, OVERLAY_SIZE, drawn_size, npc_tint, placeholder_size,
+    shown_heading, shown_position,
 };
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -226,7 +226,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// space. Every NPC is drawn, by its sheet or as its crossed box, so
     /// each has a box, even one its cloak hides from the player: the hover
     /// asks the cloak itself (`nova_sim::Session::hover`). Each box is the
-    /// size of a frame of the sheet its slot's sprite holds
+    /// rect its hull is drawn in, placed at whole pixels from the player
+    /// by the camera ([`Camera::sprite_rect`], or
+    /// [`Camera::sprite_rect_from`] from a slot's last offset), the same
+    /// placement the hull is drawn by, at the size of a frame of the sheet
+    /// its slot's sprite holds
     /// ([`FrameShip::framed`], `nova_sim::Session::framed_by`): a shown
     /// ship's own type's. A hidden ship (`nova_sim::Session::is_hidden`:
     /// its type's `Cost` is -1) is boxed where it would be drawn, as the
@@ -260,16 +264,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The box NPC `npc` is drawn in, or none when its slot never laid out
     /// (see [`FlightView::drawn_boxes`]).
     fn npc_box(&self, npc: &FrameShip) -> Option<nova_sim::DrawnBox> {
-        let at = match npc.hover {
-            nova_sim::HoverPlace::Own => self.shown_npc(npc).0,
-            nova_sim::HoverPlace::Stale(offset) => {
-                let player = self.shown_position();
-                Point::new(player.x + offset.x, player.y + offset.y)
-            }
+        let size = drawn_size(self.npc_sheets.get(&npc.framed?));
+        let camera = self.camera();
+        let rect = match npc.hover {
+            nova_sim::HoverPlace::Own => camera.sprite_rect(self.shown_npc(npc).0, size),
+            nova_sim::HoverPlace::Stale(offset) => camera.sprite_rect_from(offset, size),
             nova_sim::HoverPlace::Unplaced => return None,
         };
-        let sheet = self.npc_sheets.get(&npc.framed?);
-        Some(drawn_box(at, drawn_size(sheet)))
+        Some(nova_sim::DrawnBox::at(rect))
     }
 
     /// The box the player's ship is drawn in: a frame of its own sheet
@@ -278,14 +280,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     fn player_box(&self) -> nova_sim::DrawnBox {
         let player = self.frame.player();
         let size = if player.framed == Some(player.class) {
-            match &self.sheet {
-                Ok(sheet) => (sheet.frame_width, sheet.frame_height),
-                Err(_) => placeholder_size(),
-            }
+            drawn_size(Some(&self.sheet))
         } else {
             drawn_size(player.framed.and_then(|ship| self.npc_sheets.get(&ship)))
         };
-        drawn_box(self.shown_position(), size)
+        nova_sim::DrawnBox::at(self.camera().sprite_rect(self.shown_position(), size))
     }
 
     /// A click at screen point `at`, as the original's in space
@@ -337,18 +336,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
         npcs: &[(&FrameShip, Point, f32)],
         layer: SpriteLayer,
     ) {
-        let player = camera.world_to_screen(self.shown_position());
+        let player = self.shown_position();
         let sprites = stacked.iter().filter(|(on, _)| *on == layer);
         for (_, sprite) in sprites {
             match sprite {
                 Sprite::Ship(ShipRef::Player) => {
-                    self.draw_ship(list, player, self.frame.player().shown);
+                    let place = |size| camera.sprite_centre(player, size);
+                    self.draw_ship(list, &place, self.frame.player().shown);
                 }
                 Sprite::Ship(ship @ ShipRef::Npc(_)) => {
                     if let Some(&(npc, at, heading)) =
                         npcs.iter().find(|(npc, ..)| npc.ship == *ship)
                     {
-                        self.draw_npc(list, npc, camera.world_to_screen(at), heading);
+                        let place = |size| camera.sprite_centre(at, size);
+                        self.draw_npc(list, npc, &place, heading);
                     }
                 }
                 Sprite::Shot(shot) => {
@@ -358,7 +359,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Draws NPC `npc` at `at` facing `heading` with its own ship's sheet,
+    /// Draws NPC `npc` where `place` puts each of its sprites (see
+    /// [`ShipDraw::draw`]) facing `heading` with its own ship's sheet,
     /// or a crossed box when its sheet cannot be read, as its cloak leaves
     /// it ([`CloakDraw`], see [`cloak_fade`](crate::flight::cloak_fade)):
     /// jittered and faint while fading, faint or, but for a lit weapon
@@ -376,7 +378,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the level its display drew them, its weapon glow while lit
     /// ([`weapon_glow`](crate::flight::weapon_glow)), its alt layer, and
     /// its shield layer while it flashes.
-    pub(super) fn draw_npc(&self, list: &mut DrawList, npc: &FrameShip, at: Point, heading: f32) {
+    pub(super) fn draw_npc(
+        &self,
+        list: &mut DrawList,
+        npc: &FrameShip,
+        place: Place<'_>,
+        heading: f32,
+    ) {
         let ShipRef::Npc(id) = npc.ship else {
             return;
         };
@@ -394,7 +402,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     hull: false,
                     ..ship
                 }
-                .draw(list, at, None);
+                .draw(list, place, None);
             }
             return;
         };
@@ -406,14 +414,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     base_alpha(sheet.base_transp)
                 };
                 let ship = self.npc_ship(npc, sheet, heading, (Color { a: alpha, ..tint }, cloak));
-                let live = ship.live_alt(at);
+                let live = ship.live_alt(place);
                 let alt =
                     self.held_alts
                         .borrow_mut()
                         .shown(npc.ship, ship.drawn.alt, live, ship.hull);
-                ship.draw(list, at, alt);
+                ship.draw(list, place, alt);
             }
-            _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
+            _ => crossed_box(
+                list,
+                place(placeholder_size()),
+                PLACEHOLDER_SIZE,
+                PLACEHOLDER,
+            ),
         }
     }
 
@@ -468,7 +481,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.flashes.get(&ship).and_then(ShieldFlash::drawn)
     }
 
-    /// Draws the player's ship at `at`, as much of it as `drawn` says
+    /// Draws the player's ship where `place` puts each of its sprites (see
+    /// [`ShipDraw::draw`]), as much of it as `drawn` says
     /// (see [`nova_sim::player_fate`]): its hull, as translucent as its
     /// `BaseTransp` and in its paint ([`FrameShip::paint`], see
     /// [`paint`](crate::flight::paint)), its engine glow, running lights at the level its
@@ -479,7 +493,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// frame's record of it says; or, when its sheet cannot be read, a
     /// crossed box and the reason. The box stands in for the sprite and a
     /// missing sheet has no layers, so only a ship drawn in full has one.
-    pub(super) fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
+    pub(super) fn draw_ship(&self, list: &mut DrawList, place: Place<'_>, drawn: ShipDrawn) {
         if drawn == ShipDrawn::Hidden {
             self.held_alts.borrow_mut().forget(ShipRef::Player);
             return;
@@ -513,17 +527,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     shield: self.shield_drawn(ShipRef::Player),
                     colorize: hull_colorize(0, player.ion_tint, self.presentation.ion_tint_murk),
                 };
-                let live = ship.live_alt(at);
+                let live = ship.live_alt(place);
                 let alt = self.held_alts.borrow_mut().shown(
                     ShipRef::Player,
                     ship.drawn.alt,
                     live,
                     ship.hull,
                 );
-                ship.draw(list, at, alt);
+                ship.draw(list, place, alt);
             }
             Err(_) if drawn != ShipDrawn::Full => {}
             Err(reason) => {
+                let at = place(placeholder_size());
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
                     at.x - PLACEHOLDER_SIZE / 2.0,

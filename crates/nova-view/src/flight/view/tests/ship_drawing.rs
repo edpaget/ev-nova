@@ -478,7 +478,7 @@ fn an_npc_whose_alt_shows_none_draws_no_alt_layer() {
 /// drawn.
 fn npc_hull(view: &Faked, npc: &FrameShip) -> Option<Color> {
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, npc, &|_| VIEW_CENTER, npc.heading);
     list.iter().find_map(|command| match *command {
         DrawCommand::Sprite { image, tint, .. } | DrawCommand::Colorized { image, tint, .. }
             if image.id == 2001 =>
@@ -541,7 +541,7 @@ fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothin
     let mut npc = npc_record(&view, NPC_0);
     npc.cloak = CloakShown::Fading(25.0);
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     let hull = list.iter().find_map(|command| match *command {
         DrawCommand::Sprite {
             image,
@@ -560,7 +560,7 @@ fn a_fading_npc_is_jittered_within_its_reach_and_a_hidden_unlit_one_draws_nothin
     // A hidden full fade draws no hull, glow or lights.
     npc.cloak = CloakShown::Hidden;
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     assert_eq!(list.iter().count(), 0, "no weapon glow lit");
 }
 
@@ -582,7 +582,7 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
     let level = view.glows.drawn(npc.ship).expect("lit");
     npc.cloak = CloakShown::Hidden;
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     let drawn: Vec<_> = list
         .iter()
         .map(|command| match *command {
@@ -610,7 +610,7 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
     npc.gate = GateFade::Emerging { ticks_left: 100 };
     assert_eq!(npc_tint(npc.gate), None);
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     assert_eq!(list.iter().count(), 0, "hidden at its gate");
 }
 
@@ -646,7 +646,7 @@ fn npc_drawn_ionized(
     npc.ion_tint = tint;
     let murk = sprite_murk(npc.position, player, view.frame.effective_murk);
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, &npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
     (list, murk)
 }
 

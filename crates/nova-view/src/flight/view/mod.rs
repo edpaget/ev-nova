@@ -639,7 +639,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::DrawnBox;
 #[cfg(doc)]
 use nova_sim::Session;
 use nova_sim::flight_frame::{FlightFrame, FrameShip, GateFade, Names, ShipPlace, StepReport};
@@ -1784,19 +1783,11 @@ impl std::fmt::Debug for Metrics {
     }
 }
 
-/// A ship's box drawn at `at` (in system coordinates) of `size`.
-fn drawn_box(at: Point, size: (u32, u32)) -> DrawnBox {
-    DrawnBox::at(nova_sim::navigation::SpriteRect::centred(
-        Vec2::new(at.x, at.y),
-        size,
-    ))
-}
-
 /// The frame size of an NPC drawn by `sheet`, the one read for its ship
 /// type if any: its crossed box's when the sheet could not be read.
 fn drawn_size(sheet: Option<&Result<ShipSheet, String>>) -> (u32, u32) {
     match sheet {
-        Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+        Some(Ok(sheet)) => sheet.size(),
         _ => placeholder_size(),
     }
 }

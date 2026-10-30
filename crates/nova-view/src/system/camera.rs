@@ -195,10 +195,11 @@ impl Camera {
     /// is `nova_sim::story::sprite_pool::offset`, not forked here.
     ///
     /// `_HandleExplods` places an explosion this way (@0x2f6a1-0x2f73c),
-    /// as `_HandleStellarSprites` (@0x2eeab-0x2ef1a) and
-    /// `_HandleShipDisplay` (@0x2cd1c-0x2ce31) place stellars and ships,
-    /// which rdm:phase/play-feel-4/phase-12-whole-pixel-sprite-placement
-    /// moves onto this helper.
+    /// as `_HandleStellarSprites` (@0x2eeab-0x2ef1a) places stellars and
+    /// `_HandleShipDisplay` (@0x2cd17-0x2d083) a ship's hull and each of
+    /// its layers, by its own frame's size; the scene and flight draw
+    /// them all through this helper, and box a ship by
+    /// [`Camera::sprite_rect`].
     ///
     /// The original takes the player's position at the step; flight's
     /// camera follows the player's shown position, interpolated between

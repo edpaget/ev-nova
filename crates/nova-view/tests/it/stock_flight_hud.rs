@@ -277,6 +277,8 @@ fn decoded_ship_sheet(data: &GameData, id: ShipId) -> Result<ShipSheet, String> 
         Some(LayerSheet {
             image_id: layer.image_id,
             frames: NonZeroU16::new(layer.sheet.frames().len() as u16)?,
+            frame_width: layer.sheet.frame_width(),
+            frame_height: layer.sheet.frame_height(),
             solid: layer.sheet.solid_frames().is_some(),
         })
     };

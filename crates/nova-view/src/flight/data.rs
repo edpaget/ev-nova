@@ -75,7 +75,8 @@ impl ShipSprites for GameData {
     }
 }
 
-/// A resolved layer's ID, frame count and whether it holds solid runs;
+/// A resolved layer's ID, frame count, frame size and whether it holds
+/// solid runs;
 /// `None` for one that failed.
 fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<LayerSheet> {
     let layer = layer.ok()?;
@@ -86,6 +87,8 @@ fn layer_sheet(layer: Result<LayerSprite<'_, SheetScan>, LayerError>) -> Option<
     Some(LayerSheet {
         image_id: layer.image_id,
         frames,
+        frame_width: layer.sheet.info.frame_width,
+        frame_height: layer.sheet.info.frame_height,
         solid: layer.sheet.info.has_runs,
     })
 }
@@ -423,10 +426,13 @@ mod tests {
             .build()
     }
 
+    /// A layer of `frames` 3 x 2 frames, as [`sheet`] builds them.
     fn layer(image_id: i16, frames: u16) -> LayerSheet {
         LayerSheet {
             image_id,
             frames: NonZeroU16::new(frames).expect("non-zero"),
+            frame_width: 3,
+            frame_height: 2,
             solid: false,
         }
     }
@@ -577,6 +583,48 @@ mod tests {
         assert_eq!(found.image_id, 1000);
         assert_eq!(found.glow, Some(layer(1100, 16)));
         assert_eq!(found.lights, Some(layer(1200, 8)));
+    }
+
+    /// An `rlëD` of `frames` frames of `width` x `height`.
+    fn sized_sheet(width: u16, height: u16, frames: u16) -> Vec<u8> {
+        let row = vec![0x7C00; usize::from(width)];
+        (0..frames)
+            .fold(RledBuilder::new(width, height), |b, _| {
+                b.frame(|f| (0..height).fold(f, |f, _| f.line().pixels(&row)))
+            })
+            .build()
+    }
+
+    #[test]
+    fn each_layer_carries_its_own_frame_size() {
+        // A 3 x 2 hull whose glow is 5 x 4, lights 6 x 3, weapon glow 7 x 2,
+        // alt 4 x 5 and shield 9 x 8: `_HandleShipDisplay` places each by
+        // its own (@0x2cda2-0x2d083).
+        let mut shan = layered(1000, 1, 8, 1100, 1200);
+        put_i16(&mut shan, 0x26, 1300);
+        put_i16(&mut shan, 0x0C, 1400);
+        put_i16(&mut shan, 0x10, 1);
+        put_i16(&mut shan, 0x2E, 0x10);
+        put_i16(&mut shan, 0x40, 1500);
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, sheet(8)),
+            (RLED, 1100, sized_sheet(5, 4, 8)),
+            (RLED, 1200, sized_sheet(6, 3, 8)),
+            (RLED, 1300, sized_sheet(7, 2, 8)),
+            (RLED, 1400, sized_sheet(4, 5, 8)),
+            (RLED, 1500, sized_sheet(9, 8, 8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        let size =
+            |layer: Option<LayerSheet>| layer.map(|layer| (layer.frame_width, layer.frame_height));
+        assert_eq!((found.frame_width, found.frame_height), (3, 2));
+        assert_eq!(size(found.glow), Some((5, 4)));
+        assert_eq!(size(found.lights), Some((6, 3)));
+        assert_eq!(size(found.weapon), Some((7, 2)));
+        assert_eq!(size(found.alt), Some((4, 5)));
+        assert_eq!(size(found.shield), Some((9, 8)));
     }
 
     #[test]

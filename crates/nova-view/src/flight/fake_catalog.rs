@@ -1902,13 +1902,21 @@ pub(in crate::flight) fn at(x: f32, y: f32) -> Point {
     Point::new(x, y)
 }
 
+/// A layer `rlëD` `image_id` of `frames` frames, each [`LAYER_SIDE`]
+/// square.
 pub(in crate::flight) fn layer(image_id: i16, frames: u16) -> LayerSheet {
     LayerSheet {
         image_id,
         frames: NonZeroU16::new(frames).expect("non-zero"),
+        frame_width: LAYER_SIDE,
+        frame_height: LAYER_SIDE,
         solid: false,
     }
 }
+
+/// The side of a [`layer`]'s frames: even, so a layer stood at a whole
+/// pixel is centred on it.
+pub(in crate::flight) const LAYER_SIDE: u32 = 40;
 
 /// A look named `name` sounding `snd ` `sound`, its shots on `rlëD`
 /// `image` of 36 frames, if any.

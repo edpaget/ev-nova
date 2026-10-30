@@ -110,7 +110,7 @@ fn npc_painted(paint: Option<Rgb15>) -> (Faked, FrameShip) {
 /// `npc`'s hull as `view` draws it: its tint and blend.
 fn npc_hull(view: &Faked, npc: &FrameShip) -> Option<(Color, Blend)> {
     let mut list = DrawList::new();
-    view.draw_npc(&mut list, npc, VIEW_CENTER, npc.heading);
+    view.draw_npc(&mut list, npc, &|_| VIEW_CENTER, npc.heading);
     hulls_of(&list, 2001).first().copied()
 }
 

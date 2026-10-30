@@ -375,6 +375,8 @@ mod tests {
             LayerSheet {
                 image_id,
                 frames: NonZeroU16::new(36).expect("non-zero"),
+                frame_width: crate::flight::fake_catalog::LAYER_SIDE,
+                frame_height: crate::flight::fake_catalog::LAYER_SIDE,
                 solid: false,
             }
         }
@@ -424,7 +426,7 @@ mod tests {
                 colorize: None,
             };
             let mut list = DrawList::new();
-            ship.draw(&mut list, AT, ship.live_alt(AT));
+            ship.draw(&mut list, &|_| AT, ship.live_alt(&|_| AT));
             list.iter()
                 .filter_map(|command| match *command {
                     DrawCommand::Sprite {
