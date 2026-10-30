@@ -357,7 +357,8 @@ pub struct Npc {
     /// ([`NpcHold`]).
     pub cargo: NpcHold,
     /// Whether the player has paid it to spare it: it never targets the
-    /// player again.
+    /// player again, unless a pirate takes it, whose take clears this as
+    /// it writes the original's +0x88 6 over the bribe's 1 (@0x8495c).
     pub spared: bool,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other

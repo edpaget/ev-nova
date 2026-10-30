@@ -412,6 +412,9 @@ fn plunder_npc(
     ship.former = None;
     ship.escort = None;
     ship.leader = Some(pirate);
+    // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
+    // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
+    ship.spared = false;
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
@@ -747,6 +750,20 @@ mod tests {
             &mut Draws::of(&[0; 64]),
         );
         assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 2);
+    }
+
+    #[test]
+    fn a_bribed_ship_taken_by_a_pirate_reads_as_its_escort_not_its_bribe() {
+        // `_AIPlunderShipContents` writes +0x88 = 6 (@0x8495c) over the
+        // bribe's 1, the bribe's only word (`_DoCommDialog` @0x961f8).
+        let mut bribed = victim();
+        bribed.spared = true;
+        let traffic = plundered(1000, bribed, 0);
+        let taken = ship(&traffic, VICTIM);
+        assert_eq!(taken.leader, Some(PIRATE));
+        assert!(!taken.spared, "the bribe is overwritten");
+        assert_eq!(taken.original_ai_type(), 6);
+        assert!(crate::hail::fixture::hail(taken).escort_ai());
     }
 
     #[test]

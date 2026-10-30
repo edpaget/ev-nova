@@ -18,8 +18,11 @@
 //!   (`_DoShipCapture` @0x41425/@0x41480, `_HandlePlayerBoardAttempt`
 //!   @0x65bb1, `_DoPlunderDialog` @0x9461f).
 //! - 1, a bribe ([`BRIBED_AI`]): `_DoCommDialog` @0x961f8 writes +0x88
-//!   only, keeping the parent +0x9a, and nothing writes it again until
-//!   the ship leaves (the disabled reset @0x8fece-0x8ff13 leaves it alone).
+//!   only, keeping the parent +0x9a, and nothing but a capture writes it
+//!   again until the ship leaves (the disabled reset @0x8fece-0x8ff13
+//!   leaves it alone). The player's capture makes it the player's escort,
+//!   read first; a pirate's take (`_AIPlunderShipContents` @0x8495c)
+//!   clears [`Npc::spared`], the bribe's only state.
 //! - -1, no AI ([`NO_AI`]): the player's eject hulk (`_HandlePlayer`
 //!   @0x6f31f).
 //!
@@ -78,7 +81,9 @@ impl Npc {
     /// module docs): [`NO_AI`] with no AI; for the player's escort, its
     /// launched fighter [`FIGHTER_AI`] and any other [`ESCORT_AI`] (a
     /// capture writes 6 over an earlier bribe); a bribed ship
-    /// [`BRIBED_AI`], parent kept; a carried fighter [`FIGHTER_AI`]; a ship
+    /// [`BRIBED_AI`], ahead of a leader or carrier it keeps (a pirate's
+    /// take clears [`Npc::spared`] as it writes 6, @0x8495c); a carried
+    /// fighter [`FIGHTER_AI`]; a ship
     /// with an NPC leader, or a former escort that keeps its word,
     /// [`ESCORT_AI`]; otherwise its own type's word.
     #[must_use]
