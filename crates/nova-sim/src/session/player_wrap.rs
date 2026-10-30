@@ -75,10 +75,11 @@ impl Session {
 mod tests {
     use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::asteroid::Asteroid;
-    use crate::catalog::SystemId;
+    use crate::catalog::{AsteroidTypeRecord, SystemId};
     use crate::chance::{Chance, NeverFires};
-    use crate::combat::Rules;
     use crate::combat::hull::Condition;
+    use crate::combat::projectile::Shot;
+    use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
@@ -358,6 +359,83 @@ mod tests {
         assert_eq!(session.npcs()[0].state.position, near, "within reach");
         assert_eq!(session.player().position, PAST);
         assert_eq!(session.out.player_wrap, None);
+    }
+
+    /// How far from a shot a ship or an asteroid stands for it to touch.
+    const TOUCHING: Vec2 = Vec2::new(4.0, 0.0);
+
+    /// `catalog`'s session with the player's one shot in flight east from
+    /// (-1000, 0), and that shot.
+    fn with_a_shot_in_flight(catalog: &FakePilotCatalog) -> (Session, Shot) {
+        let mut session = facing_an_npc(catalog, 90);
+        pass(&mut session, catalog);
+        session.ship.player.position = Vec2::new(-1000.0, 0.0);
+        session.ship.player.heading = 90.0;
+        session.hold_trigger(FIRE);
+        pass(&mut session, catalog);
+        session.hold_fire(false, false);
+        pass(&mut session, catalog);
+        let shot = session.shots()[0];
+        assert!(shot.moved_from.is_some(), "it has moved");
+        (session, shot)
+    }
+
+    /// Stands the player past the west edge, so that what stands at `at`
+    /// is just beyond the wrap's reach and a shot [`TOUCHING`] short of it
+    /// just within: their sprites touch, either side of it.
+    fn just_beyond_the_reach_of_the_player(session: &mut Session, at: Vec2) {
+        session.ship.player.position = at - Vec2::new(WRAP_EDGE + 1.0, 0.0);
+        assert!(session.ship.player.position.x < -WRAP_EDGE, "past the edge");
+    }
+
+    #[test]
+    fn a_shot_carried_strikes_a_ship_left_behind_where_their_sprites_touched() {
+        let catalog = armed();
+        let (mut session, shot) = with_a_shot_in_flight(&catalog);
+        let at = shot.position + TOUCHING;
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.state.position = at;
+        npc.state.velocity = Vec2::ZERO;
+        let id = ShipRef::Npc(npc.id);
+        just_beyond_the_reach_of_the_player(&mut session, at);
+        session.take_combat_events();
+        pass(&mut session, &catalog);
+        assert_eq!(session.npcs()[0].state.position, at, "left behind");
+        let struck = session
+            .take_combat_events()
+            .iter()
+            .any(|event| matches!(event, CombatEvent::Hit { ship, .. } if *ship == id));
+        assert!(struck, "on the wrap's pass");
+    }
+
+    #[test]
+    fn a_shot_carried_is_spent_on_an_asteroid_where_its_sprite_stood() {
+        let catalog = FakePilotCatalog {
+            asteroid_types: vec![AsteroidTypeRecord {
+                kind: 0,
+                strength: 100,
+                mass: 20,
+                frames: 36,
+                frame_size: Some((40, 40)),
+                ..AsteroidTypeRecord::default()
+            }],
+            asteroid_fields: Vec::new(),
+            ..armed()
+        };
+        let (mut session, shot) = with_a_shot_in_flight(&catalog);
+        let at = shot.position + TOUCHING;
+        let rock = Asteroid {
+            position: at,
+            velocity: Vec2::ZERO,
+            frame: 0.0,
+            spin: 0.0,
+            strength: 100,
+            kind: 0,
+        };
+        session.space.asteroids.place(rock).expect("a free slot");
+        just_beyond_the_reach_of_the_player(&mut session, at);
+        pass(&mut session, &catalog);
+        assert_eq!(session.shots(), [], "spent on the wrap's pass");
     }
 
     #[test]
