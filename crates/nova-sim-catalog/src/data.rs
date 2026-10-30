@@ -1132,17 +1132,26 @@ impl CombatCatalog for GameData {
     }
 
     fn hulls(&self) -> Vec<HullRecord> {
+        // The first ship of each `BaseImage`, filled in ascending ID as
+        // `_LoadExtendedShipSprites` is called (@0x23eeb).
+        let mut first_of_image = BTreeMap::new();
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let (size, height, exits, display) = match self.get::<ShipAnim>(id) {
-                    Some(Ok(anim)) => (
+                let shan = self.get::<ShipAnim>(id).and_then(Result::ok);
+                let sprite_base = shan.as_ref().map_or(ShipId(id), |anim| {
+                    *first_of_image
+                        .entry(anim.record.base_image_id)
+                        .or_insert(ShipId(id))
+                });
+                let (size, height, exits, display) = match shan {
+                    Some(anim) => (
                         Some(anim.record.base_x_size),
                         Some(anim.record.base_y_size),
                         Some(ship_exits(anim.record)),
                         Some(ship_display(anim.record)),
                     ),
-                    _ => (None, None, None, None),
+                    None => (None, None, None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
@@ -1168,6 +1177,7 @@ impl CombatCatalog for GameData {
                         record.inherent_ai,
                         record.mass,
                     ),
+                    sprite_base,
                 })
             })
             .collect()
@@ -4344,6 +4354,7 @@ mod tests {
             exits,
             display: exits.map(|_| ShipDisplay::default()),
             escort_class: EscortClass::Fighter,
+            sprite_base: ShipId(id),
         };
         assert_eq!(
             data.hulls(),
@@ -4355,6 +4366,45 @@ mod tests {
             "by ID, the undecodable shïp left out; without a shän that can be read, no size"
         );
         assert_eq!(store(&[]).hulls(), []);
+    }
+
+    #[test]
+    fn a_hull_draws_the_sprites_of_the_first_ship_sharing_its_base_image() {
+        let sharing = |base_image: i16| {
+            let mut bytes = anim(24, 24);
+            put_i16s(&mut bytes, 0, &[base_image]);
+            bytes
+        };
+        let data = store(&[
+            (Ship::TYPE, 128, armed()),
+            (Ship::TYPE, 129, armed()),
+            (Ship::TYPE, 130, armed()),
+            (Ship::TYPE, 131, armed()),
+            (Ship::TYPE, 132, armed()),
+            (Ship::TYPE, 133, armed()),
+            (ShipAnim::TYPE, 128, sharing(1000)),
+            (ShipAnim::TYPE, 129, sharing(1001)),
+            (ShipAnim::TYPE, 130, sharing(1000)),
+            (ShipAnim::TYPE, 131, sharing(1001)),
+            (ShipAnim::TYPE, 132, sharing(1000)),
+        ]);
+        let bases: Vec<(i16, i16)> = data
+            .hulls()
+            .iter()
+            .map(|hull| (hull.id.0, hull.sprite_base.0))
+            .collect();
+        assert_eq!(
+            bases,
+            [
+                (128, 128),
+                (129, 129),
+                (130, 128),
+                (131, 129),
+                (132, 128),
+                (133, 133),
+            ],
+            "the lowest ID of each BaseImage, and a ship with no shän its own"
+        );
     }
 
     #[test]

@@ -1692,6 +1692,12 @@ pub struct HullRecord {
     /// ([`EscortClass::of`]), which sets which turret shots miss it (see
     /// `nova_sim::combat::hull::HullSpec::miss_class`).
     pub escort_class: EscortClass,
+    /// The ship whose sprites it draws, ship class +0xa08: the first ship
+    /// by ID whose `shän` has the same `BaseImage`, or itself with none
+    /// earlier or no `shän` that can be read (`_LoadExtendedShipSprites`
+    /// @0x227c9-0x227f0, @0x22849; `_InitObjects` @0x1c653-0x1c65a). A
+    /// fighter docks into a bay of it (see `nova_sim::bay`).
+    pub sprite_base: ShipId,
 }
 
 /// A government's penalties for crimes against its ships, raw from its

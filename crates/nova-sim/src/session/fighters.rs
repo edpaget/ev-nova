@@ -292,8 +292,9 @@ impl Session {
                 }
             }
             ShipRef::Npc(carrier) => {
+                let base = self.statics.arsenal.sprite_base(ship);
                 if let Some(carrier) = self.space.npc_mut(carrier) {
-                    carrier.armament.stow(ship, &mut carrier.rounds);
+                    carrier.armament.stow(ship, base, &mut carrier.rounds);
                 }
             }
         }
@@ -532,7 +533,8 @@ impl PlayerShip {
             owned: &mut pilot.outfits,
             sources: &statics.ammo_outfits,
         };
-        self.fit.armament.stow(ship, &mut rounds)
+        let base = statics.arsenal.sprite_base(ship);
+        self.fit.armament.stow(ship, base, &mut rounds)
     }
 
     /// For every outfit whose first mod is `ModType` 3

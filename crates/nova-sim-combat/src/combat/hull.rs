@@ -291,6 +291,10 @@ pub struct HullSpec {
     /// outfits' weapons, its point defence and its bays never count. An
     /// [`Arsenal`](super::armament::Arsenal) sets it.
     pub stock_reach: Option<f32>,
+    /// The ship whose sprites it draws, ship class +0xa08
+    /// ([`HullRecord::sprite_base`]); none for the placeholder hull, which
+    /// has no class.
+    pub sprite_base: Option<ShipId>,
     /// Whether it is hidden: its `Cost` is -1, and `_HandleShipDisplay`
     /// hides a ship of such a type and leaves its slot's layer as it was
     /// (@0x2b7f3 → @0x2cc6b; see
@@ -389,6 +393,7 @@ impl Default for HullSpec {
             key_carried: None,
             class_speed: 0.0,
             stock_reach: None,
+            sprite_base: None,
             hidden: false,
             exits: None,
             frames: FrameSpec::NONE,
@@ -442,6 +447,7 @@ impl HullSpec {
             key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
             class_speed: f32::from(record.speed.max(0)) / SPEED_PER_PIXEL_PER_TICK,
             stock_reach: None,
+            sprite_base: Some(record.sprite_base),
             hidden: record.cost == HIDDEN_COST,
             exits: record
                 .exits
