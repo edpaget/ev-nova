@@ -722,9 +722,12 @@ impl Dialog {
     /// and pointer events outside it do nothing.
     ///
     /// - A click (press and release, tracked as a button tracks it) on an
-    ///   enabled, shown item activates it.
-    /// - A press on a [`Role::ScrollArrow`] scrolls its text, and goes on
-    ///   doing so in [`Self::tick`] until let go.
+    ///   enabled, shown item activates it, except a scroll arrow.
+    /// - A left press on a [`Role::ScrollArrow`] whose flag is set scrolls
+    ///   its text, and goes on doing so in [`Self::tick`] until let go. Any
+    ///   other press on one is tracked as a button's is, and its click is
+    ///   one step of [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS), while
+    ///   its flag is set. An arrow reports no item.
     /// - Return activates the default item, and Escape the cancel item.
     /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
     ///   next enabled button, and Space activates the focused one. Under
