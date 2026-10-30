@@ -192,10 +192,11 @@ pub fn frame(view: (f32, f32)) -> Bounds {
 }
 
 /// Whether `at` is in `area`, half-open as `PtInRect` tests it: the left
-/// and top edges in, the right and bottom out.
+/// and top edges in, the right and bottom out
+/// ([`Bounds::contains_half_open`]).
 #[must_use]
 pub fn contains(area: Bounds, at: Point) -> bool {
-    (area.min.x..area.max.x).contains(&at.x) && (area.min.y..area.max.y).contains(&at.y)
+    area.contains_half_open(at)
 }
 
 /// The frame's centre, in whole units as the original takes it:

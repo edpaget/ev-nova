@@ -102,11 +102,11 @@ pub const MAP_ITEM_CENTRE: (i32, i32) = (
 );
 
 /// Whether `at` is in item 3, as `PtInRect` tests it: its left and top
-/// edges in, its right and bottom edges out.
+/// edges in, its right and bottom edges out
+/// ([`Bounds::contains_half_open`]).
 #[must_use]
 pub fn in_map_item(at: Point) -> bool {
-    let area = map_area();
-    (area.min.x..area.max.x).contains(&at.x) && (area.min.y..area.max.y).contains(&at.y)
+    map_area().contains_half_open(at)
 }
 
 /// Draws the frame under the map (see the module docs): the dialog

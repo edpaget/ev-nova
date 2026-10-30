@@ -12,7 +12,7 @@
 use super::catalog::SystemId;
 use super::model::GalaxyModel;
 use super::view::Transform;
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 
 /// How far each side of a system's point its hit box reaches: the point
 /// rect inset by −10 (`InsetRect` @0x12f3e), a 20 × 20 box.
@@ -31,10 +31,24 @@ pub fn hits(model: &GalaxyModel, at: Point, transform: &Transform) -> Vec<System
         .iter()
         .filter(|system| {
             let (h, v) = transform.pixel(system.position());
-            (h - HIT_HALF..h + HIT_HALF).contains(&x) && (v - HIT_HALF..v + HIT_HALF).contains(&y)
+            hit_box(h, v).contains_half_open(pixel(x, y))
         })
         .map(|system| system.entry.id)
         .collect()
+}
+
+/// The 20 × 20 hit box round the whole-pixel point (h, v), tested half-open
+/// as `PtInRect` tests it ([`Bounds::contains_half_open`]).
+#[allow(clippy::cast_precision_loss)] // Screen pixels.
+fn hit_box(h: i32, v: i32) -> Bounds {
+    let side = (2 * HIT_HALF) as f32;
+    Bounds::at(pixel(h - HIT_HALF, v - HIT_HALF), side, side)
+}
+
+/// The whole pixel (x, y) as a point.
+#[allow(clippy::cast_precision_loss)] // Screen pixels.
+fn pixel(x: i32, y: i32) -> Point {
+    Point::new(x as f32, y as f32)
 }
 
 /// `at` truncated toward zero, as the event's point is whole pixels.
