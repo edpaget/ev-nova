@@ -634,10 +634,23 @@ impl AppScreen {
     }
 
     /// The router playing the mission texts' and offers' movies through
-    /// `player`, while the preferences have them on.
+    /// `player`, while the preferences have them on. A looping player
+    /// given before ([`AppScreen::with_looping_movie_player`]) is kept.
     #[must_use]
     pub fn with_movie_player(self, player: Rc<dyn MoviePlayer>) -> Self {
-        let movies = Movies::new(player, self.prefs.quicktime_movies);
+        let movies = self.movies.clone().with_player(player);
+        movies.set_on(self.prefs.quicktime_movies);
+        Self { movies, ..self }
+    }
+
+    /// The router playing the shipyard's and the hire screen's looping
+    /// ship movies through `player`, beside the texts' player, as the
+    /// original's `_loopingMovie` is a QuickTime movie of its own
+    /// (0xdec98), while the preferences have movies on. The texts'
+    /// player, given before or after, is kept.
+    #[must_use]
+    pub fn with_looping_movie_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        let movies = self.movies.clone().with_looping_player(player);
         Self { movies, ..self }
     }
 

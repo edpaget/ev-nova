@@ -52,7 +52,9 @@
 //! name in the Plug-Ins folder (`~/Library/Application Support/EV
 //! Nova/Plug-Ins` on macOS, `Plug-ins` beside `Nova Files` elsewhere),
 //! then in `Nova Files`, and decoded with the FFmpeg linked in
-//! ([`nova::movie`]). A movie found in neither doesn't play.
+//! ([`nova::movie`]). A movie found in neither doesn't play. A ship's
+//! `MovieFile` loops in the shipyard's and the hire screen's picture
+//! item, found the same way, on a player of its own.
 //!
 //! Sound effects come from the game data's `snd ` resources and the music
 //! from `Nova Music.mp3` in `Nova Files`, played on the default audio
@@ -331,10 +333,13 @@ fn main() -> ExitCode {
     // The effects' own: drawing on it never changes the simulation's draws.
     let effects: Rc<RefCell<dyn Chance>> =
         Rc::new(RefCell::new(SplitMix::new(seed.wrapping_add(1))));
+    let movie_folders = movie_folders(Os::current(), env, &dir);
     let mut screen = start_screen(Rc::clone(&data))
         .with_prefs(settings.prefs())
         // After the preferences, whose QuickTime Movies setting it reads.
-        .with_movie_player(movie_player(movie_folders(Os::current(), env, &dir)))
+        .with_movie_player(movie_player(movie_folders.clone()))
+        // The shipyard's looping ship movie plays on a player of its own.
+        .with_looping_movie_player(movie_player(movie_folders))
         .with_map_borders(settings.map_borders)
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))

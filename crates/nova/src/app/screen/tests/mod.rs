@@ -110,6 +110,7 @@ mod new_pilot;
 mod overlays;
 mod port;
 mod quit_question;
+mod ship_movies;
 mod shop_text_movies;
 mod stellar_movies;
 mod wheel;
