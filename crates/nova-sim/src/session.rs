@@ -502,6 +502,7 @@ mod fight_order;
 mod fight_phase_order;
 #[cfg(test)]
 mod fighter_capacity;
+mod fighter_homes;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;

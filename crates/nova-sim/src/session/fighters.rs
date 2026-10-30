@@ -2093,7 +2093,11 @@ pub(super) mod tests {
 
     /// Ticks of the player at rest and Nova's traffic until no fighter is
     /// out, at most `limit`; how many it took.
-    fn until_docked(session: &mut Session, catalog: &FakePilotCatalog, limit: u32) -> Option<u32> {
+    pub(in crate::session) fn until_docked(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        limit: u32,
+    ) -> Option<u32> {
         let ai = NovaAi::default();
         (1..=limit).find(|_| {
             work_with(
@@ -2274,10 +2278,11 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fighter_no_bay_launches_is_lost_when_it_docks() {
+    fn by_the_other_reading_a_fighter_no_bay_launches_is_lost_when_it_docks() {
         let mut catalog = carrying();
         catalog.hulls[0].weapons.clear();
-        let mut session = fleet(&catalog, 0, vec![out()]);
+        let rules = kept_orders().with_override(RuleKey::FighterNoBay, RuleSource::Bible);
+        let mut session = flying_by(&catalog, pilot(&catalog, 0, vec![out()]), rules);
         session.take_save_due();
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         assert!(until_docked(&mut session, &catalog, 600).is_some());

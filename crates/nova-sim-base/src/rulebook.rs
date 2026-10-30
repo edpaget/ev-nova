@@ -26,6 +26,7 @@
 //! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`) | the orders are kept\* |
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command (`nova_sim::Session`) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed (`nova_sim::Session`) | every fighter out goes back into its bay on arrival and on landing\* |
+//! | [`FighterNoBay`](RuleKey::FighterNoBay) | `fighter_no_bay` | a fighter whose carrier has no bay for it stays out at its carrier, steering and thrusting at it, and docks the first tick a bay is there (`_AIAddFighterToParent` @0x80384; `nova_sim::Session`) | it docks and is lost, with a save due\* |
 //! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 (`nova_sim::Session`) | an unmet `Require` makes a listed ship greyed and refused\* |
 //! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage (`nova_sim::Session`) | wages are paid only for a jump's days; the days a stay passes pay none\* |
 //! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; `nova_sim::Session`) | a stay passes no days: only a jump's and a gate's like a jump pass\*\*\*\*\*\* |
@@ -312,7 +313,7 @@
 //! | [`NewPilotVisibility`](RuleKey::NewPilotVisibility) | `new_pilot_visibility` | a new pilot's neighbour pass reads the visible flags the run's last galaxy refresh left: a pilot loaded, made or flown earlier in the run, or at launch with no pilot the refresh of clear bits, as `_DoNewPilot` tests +0x1eb (@0x18fc5) before its own refresh (@0x1925e; launch @0x4740c; see `nova_sim::Session::begin`) | it reads the new pilot's own refresh\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
-//! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
+//! `fighter_launch`, `fighter_recall`, `fighter_no_bay`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
@@ -850,6 +851,16 @@ rule_keys! {
     /// says (see
     /// `nova_sim::Session::with_rules`).
     FighterRecall => "fighter_recall",
+    /// What becomes of a fighter that reaches its carrier with no bay for
+    /// it: by the engine, it stays out, steering and thrusting at its
+    /// carrier, for as long as the order stands, and docks the first tick
+    /// a bay is there (`_AIAddFighterToParent` @0x80384); otherwise it
+    /// docks and is lost, which makes a save due, so that a fighter with
+    /// no home doesn't hover for good. The Bible is silent here, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see
+    /// `nova_sim::Session::with_rules`).
+    FighterNoBay => "fighter_no_bay",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
     /// it), and an unmet `Require` only hides the ship when its `Flags3`
@@ -6728,6 +6739,7 @@ mod tests {
                 RuleKey::EscortOrders,
                 RuleKey::FighterLaunch,
                 RuleKey::FighterRecall,
+                RuleKey::FighterNoBay,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
@@ -7030,6 +7042,7 @@ mod tests {
         assert_eq!(RuleKey::EscortWage.key(), "escort_wage");
         assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");
         assert_eq!(RuleKey::FighterRecall.key(), "fighter_recall");
+        assert_eq!(RuleKey::FighterNoBay.key(), "fighter_no_bay");
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");
         assert_eq!(RuleKey::EmptyBooty.key(), "empty_booty");
         assert_eq!(RuleKey::CrewlessCapture.key(), "crewless_capture");
