@@ -401,9 +401,7 @@ impl<A: Audio> AudioCore<A> {
     fn switch_out(&mut self) {
         if self.music == Music::Playing {
             let volume = self.settings.music_volume;
-            self.audio
-                .run(AudioCommand::FadeOutMusic(switched_out_music_fade(volume)));
-            self.music = Music::Spent;
+            self.spend_music_over(switched_out_music_fade(volume));
             self.switched_out_fade = Some(volume);
         }
     }
@@ -424,10 +422,14 @@ impl<A: Audio> AudioCore<A> {
 
     /// Spends the music for good, fading it out if it is playing.
     fn spend_music(&mut self) {
+        self.spend_music_over(music_fade(self.settings.music_volume));
+    }
+
+    /// Spends the music for good, fading it out over `fade` if it is
+    /// playing.
+    fn spend_music_over(&mut self, fade: Duration) {
         if self.music == Music::Playing {
-            self.audio.run(AudioCommand::FadeOutMusic(music_fade(
-                self.settings.music_volume,
-            )));
+            self.audio.run(AudioCommand::FadeOutMusic(fade));
         }
         self.music = Music::Spent;
     }
@@ -583,7 +585,7 @@ fn is_overlay(showing: Showing) -> bool {
 /// the background each step takes 30 ticks ([`switched_out_music_fade`]).
 #[must_use]
 pub fn music_fade(volume: Volume) -> Duration {
-    Duration::from_secs(4 * u64::from(music_volume_level(volume))) / 60
+    Duration::from_secs(fade_steps(volume)) / 60
 }
 
 /// How many Mac ticks a step of the faded stop sleeps while the app is
