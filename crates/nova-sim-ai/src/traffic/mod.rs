@@ -212,6 +212,8 @@ mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 pub mod ionization;
+#[cfg(test)]
+mod jump_out_hit_tests;
 pub mod jump_with_leader;
 pub mod kept_berths;
 pub mod land_flight;
