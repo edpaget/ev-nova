@@ -663,7 +663,19 @@ pub fn spares_ally(npc: &Npc, other: &Npc, around: &Surroundings, led_ally: Rule
 /// docs).
 #[must_use]
 pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
-    if !around.standing(target) {
+    around.breaking_up(target) || let_go(npc, target, around, rules)
+}
+
+/// [`dropped`] with no `_IsDying` test, as an interceptor's think lets a
+/// target go: `_InterceptorAI` reads a target's slot (@0x8ccb0) and whether
+/// it is disabled with no destroying weapons (@0x8d319-0x8d32f), and calls
+/// `_IsDying` only on the player's slot, at its head, before any target is
+/// read (@0x8c906). So its goal 4 on a ship breaking up reaches the high
+/// level
+/// ([`attack_drop`](crate::ai::attack_drop)).
+#[must_use]
+pub fn let_go(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
+    if !around.active(target) {
         return true;
     }
     if around.condition_of(target) == Some(Condition::Disabled) && !fire::destroys(npc) {

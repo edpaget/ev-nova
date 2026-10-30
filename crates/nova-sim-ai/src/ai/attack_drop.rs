@@ -8,10 +8,11 @@
 //! Its target's slot still active (+0xb8 @0x8e3df) and `_IsDying` true
 //! (@0x8e3ef), it writes target -1 (@0x8e717), +0x96 0 (@0x8e71d) and goal
 //! 0 (@0x8e726), and no substate, so a kept rush or break-off carries over
-//! ([`Decision::keeps_pursuit`]). It skips the fighter launch (@0x8e6fa)
-//! and the call for reinforcements (@0x8e70d), and
-//! `_LowLevelAIHandler`'s passes then find no target. So nothing fires at
-//! a ship breaking up but a ship that doesn't reach the block:
+//! ([`Decision::keeps_pursuit`]). Its +0x96 0 comes after the think, so it
+//! stands over a word's 1 (@0x8cb9d) on a player breaking up. It skips the
+//! fighter launch (@0x8e6fa) and the call for reinforcements (@0x8e70d),
+//! and `_LowLevelAIHandler`'s passes then find no target. So nothing fires
+//! at a ship breaking up but a ship that doesn't reach the block:
 //!
 //! - One whose AI wait runs (+0x4c above 0, [`Npc::wait_running`], which
 //!   also reads the wait the engine keeps in a gate mode's count): the
@@ -50,8 +51,7 @@ use crate::traffic::npc::Npc;
 
 /// Whether the block drops an attack `goal` of `npc` among `around` (see
 /// the module docs); `ends_wait` as [`Decision::ends_wait`].
-#[must_use]
-pub fn drops(npc: &Npc, goal: Goal, ends_wait: bool, around: &Surroundings) -> bool {
+fn drops(npc: &Npc, goal: Goal, ends_wait: bool, around: &Surroundings) -> bool {
     (!npc.wait_running() || ends_wait)
         && goal
             .attacking()
@@ -66,6 +66,7 @@ pub fn with_attack_drop(npc: &Npc, decision: Decision, around: &Surroundings) ->
     }
     Decision {
         goal: Goal::Idle,
+        provokes: false,
         clears_target: true,
         forgets_provocation: true,
         keeps_pursuit: true,
@@ -137,10 +138,22 @@ mod tests {
         let dropped = after(0, thought, DYING);
         assert_eq!(dropped.goal, Goal::Idle);
         assert_eq!(
-            (dropped.turns_on_player, dropped.provokes, dropped.comm_call),
-            (true, true, Some(CommCall::Distress))
+            (dropped.turns_on_player, dropped.comm_call),
+            (true, Some(CommCall::Distress))
         );
         assert!(dropped.calls_reinforcements, "the think's own call");
+    }
+
+    #[test]
+    fn its_zero_stands_over_a_word_s_1() {
+        // The word's +0x96 1 (@0x8cb9d) is written in the think, and the
+        // block's 0 (@0x8e71d) after it.
+        let worded = Decision {
+            provokes: true,
+            ..of(Goal::Attack(n(2)))
+        };
+        assert!(!after(0, worded, DYING).provokes, "@0x8e71d");
+        assert!(after(3, worded, DYING).provokes, "the block never ran");
     }
 
     #[test]

@@ -143,7 +143,7 @@ use crate::ai::odds::{cached_odds, state4_attack};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
-use crate::ai::target::{Pick, TargetRules, dropped, pick_target};
+use crate::ai::target::{Pick, TargetRules, dropped, let_go, pick_target};
 use crate::ai::{
     Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, out_of_ammo,
     react, wait,
@@ -188,6 +188,19 @@ pub struct Retreat {
     /// (`_InterceptorAI` @0x8cc6d-0x8cc7d). One that doesn't still answers
     /// its attacker, as a held ship does.
     pub searches_waiting: bool,
+    /// What its think does with a target breaking up.
+    pub breaking_up: BreakingUp,
+}
+
+/// What a hunter's think does with a target breaking up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BreakingUp {
+    /// It drops it: a warship (`_IsDying` @0x8bc73, [`dropped`]).
+    Drops,
+    /// It has no such test and leaves its goal 4 for the high level
+    /// ([`attack_drop`](crate::ai::attack_drop)): an interceptor
+    /// ([`let_go`]).
+    LeavesToHighLevel,
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
@@ -235,7 +248,10 @@ pub fn hunt(
         dropped_target,
         provokes: word_provokes,
     };
-    let keep = |ship: ShipRef| !dropped(npc, ship, around, rules);
+    let keep = |ship: ShipRef| match retreat.breaking_up {
+        BreakingUp::Drops => !dropped(npc, ship, around, rules),
+        BreakingUp::LeavesToHighLevel => !let_go(npc, ship, around, rules),
+    };
     // A fresh pick the think drops at once (@0x8bc4e-0x8bca9, @0x8e3ef)
     // leaves the ship with no target: no other candidate is tried.
     let picked = |pick: Option<Pick>| match pick {
@@ -245,7 +261,7 @@ pub fn hunt(
     };
     let (target, turns_on_player) = match word {
         Some(Word::TakePlayer) => {
-            if dropped(npc, ShipRef::Player, around, rules) {
+            if !keep(ShipRef::Player) {
                 return nothing(true);
             }
             (ShipRef::Player, true)
@@ -503,6 +519,7 @@ pub const WARSHIP_RETREAT: Retreat = Retreat {
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
     searches_waiting: true,
+    breaking_up: BreakingUp::Drops,
 };
 
 impl Behaviour for Warship {

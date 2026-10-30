@@ -14,7 +14,10 @@
 //!   player through `_AIMakeShipAttackPlayer`, the word's (@0x8cb8f) or
 //!   its pick's ([`Decision::turns_on_player`]), holds through the
 //!   inspection, hold or patrol it goes on to when the hunt gives it
-//!   nothing to fight.
+//!   nothing to fight. Unlike a warship's, its think doesn't let go of a
+//!   ship breaking up ([`let_go`]): goal 4 goes on to the high level, which
+//!   ends it ([`attack_drop`](crate::ai::attack_drop)), unless the wait
+//!   runs or it can't see the ship.
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
 //!   ship picked at random among the others in the system (the player
 //!   first, then the NPCs in order), but not the one it last inspected
@@ -86,8 +89,8 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::state4_attack;
-use crate::ai::target::{TargetRules, dropped, re_pick_target};
-use crate::ai::warship::{Retreat, hunt};
+use crate::ai::target::{TargetRules, let_go, re_pick_target};
+use crate::ai::warship::{BreakingUp, Retreat, hunt};
 use crate::ai::{
     Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
     lost_sight, out_of_ammo, react,
@@ -99,7 +102,6 @@ use crate::geometry::Vec2;
 use crate::govt::INTERCEPTORS_RETREAT;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
-use crate::traffic::provocation::let_go_breaking_up;
 
 /// How near, in pixels on either axis, an interceptor comes to the ship
 /// it inspects (100.0 @0xdd060).
@@ -138,6 +140,7 @@ pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
     searches_waiting: false,
+    breaking_up: BreakingUp::LeavesToHighLevel,
 };
 
 /// Nova's interceptor (see the module docs).
@@ -171,9 +174,8 @@ impl Behaviour for Interceptor {
     /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee). The
     /// high level ends with its provocation a retreat with no target
     /// ([`out_of_ammo::stops`]) and an attack on a ship breaking up:
-    /// `_InterceptorAI` has no drop of its own, so goal 4 reaches @0x8e714,
-    /// where this hunt has let the ship go ([`let_go_breaking_up`]). An
-    /// attack it still holds `NovaAi` ends
+    /// `_InterceptorAI` has no drop of its own ([`let_go`]), so goal 4
+    /// reaches @0x8e714, which `NovaAi` runs
     /// ([`attack_drop`](crate::ai::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
@@ -206,7 +208,7 @@ impl Behaviour for Interceptor {
         );
         let decision = re_pick(npc, decision, around, self.target, chance);
         Decision {
-            forgets_provocation: stops || let_go_breaking_up(npc, decision.goal, around),
+            forgets_provocation: stops,
             ..decision
         }
     }
@@ -270,9 +272,11 @@ impl Interceptor {
 /// drawing on `chance`). With none the inspection stands (@0x8d42d). A
 /// pick that writes state 4 ([`Pick::attacks`](crate::ai::target::Pick::attacks)) attacks, as
 /// `_HighLevelAIHandler`'s state-4 block takes it that frame: dropped at
-/// once when the drop would take it (@0x8e3ef, [`dropped`]), sniped at in
-/// a hopeless chase unless the hull stands off (@0x8e48e), the call on the
-/// player kept. Any other pick is inspected instead of the ship it was
+/// once when it lets the ship go ([`let_go`]), sniped at in a hopeless
+/// chase unless the hull stands off (@0x8e48e), the call on the player
+/// kept; one breaking up the block itself ends (@0x8e3ef,
+/// [`attack_drop`](crate::ai::attack_drop)). Any other pick is inspected
+/// instead of the ship it was
 /// inspecting. The retreats came before (@0x8d161-0x8d2e4) and need state
 /// 4, so a fresh attack isn't judged for one in the same think.
 fn re_pick(
@@ -294,7 +298,7 @@ fn re_pick(
     let turns_on_player = decision.turns_on_player || pick.turns_on_player;
     let (goal, clears_target) = if !pick.attacks {
         (Goal::Inspect(pick.ship), false)
-    } else if dropped(npc, pick.ship, around, rules) {
+    } else if let_go(npc, pick.ship, around, rules) {
         (Goal::Idle, true)
     } else {
         (state4_attack(npc, pick.ship, around), false)
@@ -346,12 +350,13 @@ mod tests {
         NEUTRAL, PIRATES, POLICE, TRADERS, around, cloaked, govts, n, scanning, ship,
         short_of_ammo, sites,
     };
+    use crate::ai::lost_sight::{LostSight, SEARCH_TICKS};
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
-    use crate::govt::{Governments, WARSHIPS_RETREAT};
+    use crate::govt::{ALWAYS_ATTACKS_PLAYER, Governments, WARSHIPS_RETREAT};
     use crate::traffic::npc::{AiType, Mode};
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
@@ -548,6 +553,168 @@ mod tests {
             };
         }));
         assert!(!at(&|other| other.condition = Condition::Destroyed));
+    }
+
+    /// An interceptor provoked into attacking NPC 2, as `npc` changes it.
+    fn on_the_wreck(npc: impl Fn(&mut Npc)) -> Npc {
+        let mut cop = police();
+        cop.goal = Goal::Attack(n(2));
+        cop.target = Some(n(2));
+        cop.provoked = 5.0;
+        npc(&mut cop);
+        cop
+    }
+
+    /// NPC 2, a pirate 100 off, breaking up.
+    fn wreck() -> Npc {
+        let mut wreck = ship(2, PIRATES, AiType::Warship, 100.0, 0.0);
+        wreck.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        wreck
+    }
+
+    /// `npcs[0]`'s decision by Nova's AI, the high level after its think,
+    /// the player far off and as `condition` says, the police's `flags`
+    /// as given.
+    fn high_level(flags: u16, npcs: &[Npc], condition: Option<Condition>) -> Decision {
+        let (sites, govts) = (sites(), govts(0, flags));
+        let mut around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        if let (Some(player), Some(condition)) = (around.player.as_mut(), condition) {
+            player.condition = condition;
+        }
+        crate::ai::NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 16]))
+    }
+
+    #[test]
+    fn its_think_has_no_drop_of_a_ship_breaking_up_and_the_block_ends_it() {
+        // `_InterceptorAI` calls `_IsDying` on the player's slot alone
+        // (@0x8c906), so goal 4 reaches the block (@0x8e3ef → @0x8e714).
+        let npcs = [on_the_wreck(|_| {}), wreck()];
+        let (sites, govts) = (sites(), govts(0, 0));
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        let mut chance = Draws::of(&[0; 16]);
+        assert_eq!(
+            Interceptor::default().decision(&npcs[0], &around, &mut chance),
+            Decision {
+                goal: Goal::Attack(n(2)),
+                ..Decision::default()
+            },
+            "the think keeps goal 4"
+        );
+        assert_eq!(
+            high_level(0, &npcs, None),
+            Decision {
+                goal: Goal::Idle,
+                clears_target: true,
+                forgets_provocation: true,
+                keeps_pursuit: true,
+                lost_sight: Some(LostSight::Seen),
+                ..Decision::default()
+            },
+            "@0x8e717-0x8e726, no substate written"
+        );
+    }
+
+    #[test]
+    fn its_fresh_pick_of_a_ship_breaking_up_ends_in_the_block_with_no_inspection() {
+        // The pick writes goal 4 (@0x8cd02) and the block drops it the same
+        // frame, so no inspection is picked. Only a ship with destroying
+        // weapons has it for a candidate.
+        let trader_cop = Npc {
+            govt: Some(TRADERS),
+            armament: Armament::new([(
+                WeaponSpec::new(&WeaponRecord {
+                    mass_dmg: 1,
+                    ..weapon(128)
+                }),
+                1,
+            )]),
+            ..police()
+        };
+        let decision = high_level(0, &[trader_cop, wreck()], None);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target, "@0x8e717");
+    }
+
+    #[test]
+    fn an_interceptor_whose_wait_runs_keeps_its_attack_on_a_ship_breaking_up() {
+        // The handler jumps out at its head while +0x4c runs (@0x8d4b9
+        // -0x8d4d2 → 0x8fb47), the think having run first (@0x901e5).
+        let waiting = on_the_wreck(|cop| cop.ai_wait = 3);
+        let held = on_the_wreck(|cop| cop.mode = Mode::HeldAtGate { ticks_left: 20 });
+        for npc in [waiting, held] {
+            let decision = high_level(0, &[npc, wreck()], None);
+            assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");
+            assert!(!decision.forgets_provocation, "+0x96 stands");
+            assert!(!decision.clears_target, "+0x70 stands");
+            assert!(!decision.keeps_pursuit, "the block never ran");
+        }
+    }
+
+    #[test]
+    fn an_interceptor_that_cannot_see_a_ship_breaking_up_keeps_its_provocation_and_searches() {
+        // The lost-sight block ends the handler first (@0x8d85a, @0x8d8a6),
+        // so the state-4 block never runs.
+        let decision = high_level(0, &[on_the_wreck(|_| {}), cloaked(wreck())], None);
+        assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");
+        assert_eq!(
+            decision.lost_sight,
+            Some(LostSight::Searching(SEARCH_TICKS)),
+            "@0x8d83b-0x8d852"
+        );
+        assert!(!decision.forgets_provocation, "+0x96 stands");
+        assert!(!decision.clears_target, "+0x70 stands");
+    }
+
+    #[test]
+    fn its_flight_from_a_ship_breaking_up_keeps_its_provocation() {
+        // State 3 isn't the block's: only @0x8e3ef's state 4 ends a fight
+        // with +0x96.
+        let flees = on_the_wreck(|cop| cop.goal = Goal::Flee(n(2)));
+        let decision = high_level(0, &[flees, wreck()], None);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.forgets_provocation);
+    }
+
+    #[test]
+    fn its_word_on_a_player_breaking_up_ends_in_the_block_with_no_provocation() {
+        // The word writes target 0 and +0x96 1 (@0x8cb97, @0x8cb9d), and the
+        // block then writes its 0 over them (@0x8e71d): it has no drop of
+        // its own, as `_WarshipAI` has (@0x8bc58-0x8bca9).
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let decision = high_level(ALWAYS_ATTACKS_PLAYER, &[police()], Some(dying));
+        assert_eq!(decision.goal, Goal::Idle, "@0x8e726");
+        assert!(decision.turns_on_player, "the call came first (@0x8cb8f)");
+        assert!(decision.clears_target, "@0x8e717");
+        assert!(decision.forgets_provocation, "@0x8e71d");
+        assert!(!decision.provokes, "the block's 0 came after the word's 1");
+    }
+
+    #[test]
+    fn its_re_pick_of_a_ship_breaking_up_ends_in_the_block() {
+        // The re-pick is last in the think (@0x8d41e), and the block takes
+        // its goal 4 that frame (@0x8e3ef). The help pick writes state 4.
+        let (mut cop, trader) = trader_cop_inspecting();
+        cop.govt = Some(POLICE);
+        let mut fleeing = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 200.0);
+        fleeing.goal = Goal::Flee(n(4));
+        let wrecked = Npc {
+            id: crate::traffic::npc::NpcId(4),
+            ..wreck()
+        };
+        let others = [trader, fleeing, wrecked];
+        let (think, _) = re_picked(cop.clone(), &others, 0, None, &[]);
+        assert_eq!(think.goal, Goal::Attack(n(4)), "goal 4 for the block");
+        assert!(think.re_picked);
+        let npcs: Vec<Npc> = std::iter::once(cop).chain(others).collect();
+        let dropped = high_level(0, &npcs, None);
+        assert_eq!(dropped.goal, Goal::Idle, "@0x8e726");
+        assert!(dropped.forgets_provocation, "@0x8e71d");
     }
 
     #[test]
