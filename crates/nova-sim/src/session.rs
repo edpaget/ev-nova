@@ -5725,7 +5725,9 @@ impl Session {
     /// `OnCapture` run on `chance`, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
     /// swap (see the `hooks` module). The change of class is applied by
-    /// [`Session::become_class`], with the reserves held.
+    /// [`Session::become_class`], with the reserves held. The player's
+    /// fighters out stay out, and the ships the captured ship leads are
+    /// released (see the `fighter_homes` module).
     ///
     /// The player takes the captured ship's place, velocity and heading
     /// (`_DoShipCapture` @0x416e3-0x41722) and its paint, or none
@@ -5831,11 +5833,7 @@ impl Session {
         self.chart.deselect();
         self.chart.target = None;
         self.ship.secondary = None;
-        for other in self.space.traffic.npcs_mut() {
-            if other.leader == Some(npc.id) {
-                other.leader = None;
-            }
-        }
+        self.space.release_led(npc.id);
         // Use As My Ship loses the person for good (@0x41180), whatever
         // `captured_person` says.
         self.space.lose_captured(&mut self.pilot, npc.id, true);

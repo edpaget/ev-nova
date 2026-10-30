@@ -26,8 +26,9 @@
 //!   ([`Npc::overwrite_bribe`]): the release at its lead's gate (the
 //!   lead's word capped at 3, `_HighLevelAIHandler` @0x8dcdf-0x8dcfd,
 //!   with no AI type test), a pirate's take (6,
-//!   `_AIPlunderShipContents` @0x8495c) and the player's capture (6,
-//!   `nova_sim`'s `fall_in`). No other does: the disabled reset
+//!   `_AIPlunderShipContents` @0x8495c), the player's capture (6,
+//!   `nova_sim`'s `fall_in`) and the release of the ships a ship taken as
+//!   the player's own leads (`_DoShipCapture` @0x41398). No other does: the disabled reset
 //!   (@0x8fece-0x8ff13) leaves +0x88 alone, and `_AICheckParentExists`
 //!   and `_EscortAI`'s lost parent run only for AI types 5 and 6, so
 //!   [`Npc::leave_fleet`] keeps a bribed ship's word.
