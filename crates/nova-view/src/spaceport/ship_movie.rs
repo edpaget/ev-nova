@@ -46,7 +46,8 @@
 //!
 //! The movie code reads no `_shipBuyMode`, so the hire screen loops its
 //! ships' movies exactly as the shipyard does. None of these routines
-//! plays a sound.
+//! plays a sound; a movie's own sound track is
+//! rdm:phase/movies-fidelity/phase-9-movie-sound-track's.
 //!
 //! Left out:
 //!
@@ -63,7 +64,8 @@
 //! - `loopTimeBase` wraps the time past the end into the next pass
 //!   (@0x603e6-0x603ff); the port starts the file again from its start,
 //!   which differs only after a cover longer than the rest of the movie
-//!   (rdm:phase/movies-fidelity follow-up).
+//!   (rdm:phase/movies-fidelity/phase-8-looping-movie-wrap, which also
+//!   owes the loop the time an overlay the router opens covers it).
 
 use std::rc::Rc;
 use std::time::Duration;
