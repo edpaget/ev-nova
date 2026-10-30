@@ -1369,6 +1369,29 @@ impl Armament {
         self.bay_of(ship).or_else(|| self.bay_of(base))
     }
 
+    /// The bay `_CanBuyFighter(type, -1, -1)` reads for a boarded ship of
+    /// type `ship`: the lowest launching `ship` (@0x5ad1-0x5b04, breaking
+    /// @0x5b7e), else the lowest whose carried ship shares `ship`'s sprite
+    /// base by `base_of` (@0x5b0d-0x5b75), wider than [`Armament::dock_bay`],
+    /// which needs a bay carrying the base itself.
+    #[must_use]
+    pub fn room_bay(
+        &self,
+        ship: ShipId,
+        base_of: impl Fn(ShipId) -> ShipId,
+    ) -> Option<&WeaponSpec> {
+        let base = base_of(ship);
+        let shares_base = |mount: &&Mount| mount.spec.carried.is_some_and(|c| base_of(c) == base);
+        let bay = self.bay_of(ship).or_else(|| {
+            let sharing = self.mounts.iter().filter(shares_base);
+            sharing.map(|mount| mount.spec.id).min()
+        })?;
+        self.mounts
+            .iter()
+            .map(|mount| &mount.spec)
+            .find(|spec| spec.id == bay)
+    }
+
     /// Takes a fighter of ship type `ship`, drawing the sprites of `base`,
     /// aboard, a round of its [`Armament::dock_bay`], into `rounds` (see
     /// the module docs), and says whether one did; with none, nothing
@@ -5588,6 +5611,25 @@ mod tests {
         assert_eq!(dock(224, 144), Some(WeaponId(152)), "the base's, lowest");
         assert_eq!(dock(144, 144), Some(WeaponId(152)));
         assert_eq!(dock(225, 145), None, "a bay of neither type");
+    }
+
+    #[test]
+    fn a_boarded_ship_reads_its_exact_bay_else_the_lowest_sharing_its_sprite_base() {
+        let armament = Armament::new([
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+            (WeaponSpec::new(&bay(153, 224, 80)), 1),
+            (WeaponSpec::new(&bay(152, 223, 70)), 1),
+            (WeaponSpec::new(&bay(151, 225, 60)), 1),
+        ]);
+        let base = |ship: ShipId| match ship.0 {
+            223 | 224 => ShipId(144),
+            225 => ShipId(145),
+            other => ShipId(other),
+        };
+        let read = |ship| armament.room_bay(ShipId(ship), base).map(|bay| bay.id.0);
+        assert_eq!(read(224), Some(153), "exact, though 152 shares its base");
+        assert_eq!(read(144), Some(152), "the lowest of its base");
+        assert_eq!(read(146), None, "neither");
     }
 
     #[test]

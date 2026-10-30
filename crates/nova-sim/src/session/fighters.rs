@@ -422,77 +422,58 @@ impl Session {
             else {
                 continue;
             };
-            let bays: u32 = self
-                .ship
-                .fit
-                .armament
-                .mounts()
-                .iter()
-                .filter(|mount| mount.spec.id == ammo)
-                .map(|mount| mount.count)
-                .sum();
-            let max = self
-                .statics
-                .outfits
-                .iter()
-                .find(|record| record.id == outfit)
-                .map_or(0, |record| record.max);
-            let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, ammo)
-                .saturating_add(self.fighters_out(bay.carried));
-            room.insert(
-                outfit,
-                capacity(bay.max_ammo, bays, max).saturating_sub(held),
-            );
+            room.insert(outfit, self.bay_room(bay, outfit, bay.carried));
         }
         room
     }
 
-    /// Whether the player's bays have room for a boarded ship of type
-    /// `ship`, as `_CanBuyFighter(type, -1, -1)` asks (@0x5a82-0x5cb2; see
-    /// the `board_repair` module): the first bay held, by weapon ID,
-    /// carrying `ship` (@0x5ad1-0x5b04, breaking @0x5b7e), else the first
-    /// whose carried ship shares `ship`'s sprite base (@0x5b0d-0x5b75),
-    /// wider than the dock's walk ([`Armament::dock_bay`](crate::Armament::dock_bay)),
-    /// and its last fighter outfit by ID (@0x5b95-0x5bd8), none of which
-    /// is no room (@0x5bda). True while the bay's [`capacity`] is above
-    /// its rounds and the fighters out of type `ship`, the type asked and
-    /// not the bay's (@0x5c67-0x5c9b).
-    pub(super) fn can_take_fighter(&self, ship: ShipId) -> bool {
-        let arsenal = &self.statics.arsenal;
-        let base = arsenal.sprite_base(ship);
-        let first_bay = |carries: &dyn Fn(ShipId) -> bool| {
-            self.ship
-                .fit
-                .armament
-                .mounts()
-                .iter()
-                .filter(|mount| mount.spec.carried.is_some_and(carries))
-                .min_by_key(|mount| mount.spec.id)
-        };
-        let bay = first_bay(&|carried| carried == ship)
-            .or_else(|| first_bay(&|carried| arsenal.sprite_base(carried) == base));
-        let Some(bay) = bay else {
-            return false;
-        };
-        let last_outfit = self
-            .statics
-            .ammo_outfits
+    /// The fighters `bay` can still take by fighter outfit `outfit`, with
+    /// those out of type `carried` counted ([`capacity`], `_CanBuyFighter`
+    /// @0x5c1f-0x5c9d): the most its bays hold, less the fighters aboard
+    /// and out. The one reckoning of the buy path (`carried` the bay's own)
+    /// and of a ship boarded (`carried` the type asked, not the bay's,
+    /// @0x5c67-0x5c9b).
+    fn bay_room(&self, bay: &WeaponSpec, outfit: OutfitId, carried: Option<ShipId>) -> u32 {
+        let bays: u32 = self
+            .ship
+            .fit
+            .armament
+            .mounts()
             .iter()
-            .filter(|&&(ammo, _)| ammo == bay.spec.id)
-            .map(|&(_, outfit)| outfit)
-            .max();
-        let Some(outfit) = last_outfit else {
-            return false;
-        };
+            .filter(|mount| mount.spec.id == bay.id)
+            .map(|mount| mount.count)
+            .sum();
         let max = self
             .statics
             .outfits
             .iter()
             .find(|record| record.id == outfit)
             .map_or(0, |record| record.max);
-        let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, bay.spec.id)
-            .saturating_add(self.fighters_out(Some(ship)));
-        capacity(bay.spec.max_ammo, bay.count, max) > held
+        let held = outfit_rounds(&self.pilot.outfits, &self.statics.ammo_outfits, bay.id)
+            .saturating_add(self.fighters_out(carried));
+        capacity(bay.max_ammo, bays, max).saturating_sub(held)
+    }
+
+    /// Whether the player's bays have room for a boarded ship of type
+    /// `ship`, as `_CanBuyFighter(type, -1, -1)` asks (@0x5a82-0x5cb2; see
+    /// the `board_repair` module): the bay it reads
+    /// ([`Armament::room_bay`](crate::combat::armament::Armament::room_bay))
+    /// and that bay's last fighter outfit by ID (@0x5b95-0x5bd8), none of
+    /// which is no room (@0x5bda).
+    pub(super) fn can_take_fighter(&self, ship: ShipId) -> bool {
+        let arsenal = &self.statics.arsenal;
+        let armament = &self.ship.fit.armament;
+        let Some(bay) = armament.room_bay(ship, |carried| arsenal.sprite_base(carried)) else {
+            return false;
+        };
+        let last_outfit = self
+            .statics
+            .ammo_outfits
+            .iter()
+            .filter(|&&(ammo, _)| ammo == bay.id)
+            .map(|&(_, outfit)| outfit)
+            .max();
+        last_outfit.is_some_and(|outfit| self.bay_room(bay, outfit, Some(ship)) > 0)
     }
 
     /// The player's fighters out of type `carried`: none for `None`.
