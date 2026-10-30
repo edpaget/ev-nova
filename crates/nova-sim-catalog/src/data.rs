@@ -41,12 +41,13 @@ use crate::catalog::{
     DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
     Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord,
-    ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StellarScripts, StockWeapon, StringPatch,
-    SystemId, SystemReinforcements, SystemTraffic, SystemVisibility, TextGraphics, TextMovies,
-    TrafficCatalog, WeaponId, WeaponRecord, explosion_sound, loaded_mod_val,
+    MissionRecord, MissionShip, MissionTexts, NavDefSlots, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts,
+    StockWeapon, StringPatch, SystemId, SystemReinforcements, SystemTraffic, SystemVisibility,
+    TextGraphics, TextMovies, TrafficCatalog, WeaponId, WeaponRecord, explosion_sound,
+    loaded_mod_val,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -502,6 +503,20 @@ impl PilotCatalog for GameData {
                     .flatten()
                     .find(|stellar| matches!(self.get::<Stellar>(stellar.0), Some(Ok(_))))?;
                 Some((SystemId(id), first))
+            })
+            .collect()
+    }
+
+    /// One pass over every system's `nav_def`, each slot kept at its
+    /// index and emptied when its `spöb` doesn't load, as
+    /// [`GameData::landing_sites`] passes over it.
+    fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let slots = system.ok()?.record.nav_def.map(|slot| {
+                    slot.filter(|stellar| matches!(self.get::<Stellar>(stellar.0), Some(Ok(_))))
+                });
+                Some((SystemId(id), slots))
             })
             .collect()
     }
@@ -2602,6 +2617,29 @@ mod tests {
             .collect();
         assert_eq!(first, landing, "as the landing sites give it");
         assert_eq!(store(&[]).first_stellars(), []);
+    }
+
+    #[test]
+    fn each_systems_slots_keep_their_nav_def_index_with_gaps() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[999, -1, 129, 128])),
+            (System::TYPE, 131, system_with(&[])),
+            (System::TYPE, 133, short(system_with(&[128]))),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let mut slots = [None; crate::catalog::NAV_DEF_SLOTS];
+        slots[3] = Some(StellarId(128));
+        assert_eq!(
+            data.nav_def_slots(),
+            [
+                (SystemId(130), slots),
+                (SystemId(131), [None; crate::catalog::NAV_DEF_SLOTS])
+            ],
+            "missing 999, -1 and undecodable 129 empty, 128 kept at index 3; \
+             undecodable 133 left out"
+        );
+        assert_eq!(store(&[]).nav_def_slots(), []);
     }
 
     #[test]

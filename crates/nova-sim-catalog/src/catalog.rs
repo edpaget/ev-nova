@@ -2027,6 +2027,27 @@ fn slots(systems: &[Option<SystemId>; 4]) -> String {
         .join(", ")
 }
 
+/// How many `NavDefs` slots a `sÿst` has.
+pub const NAV_DEF_SLOTS: usize = 16;
+
+/// A system's `NavDefs` slots, by index, gaps kept: each the stellar it
+/// names, or `None` for -1 or a `spöb` that didn't load, as the original's
+/// loader clears that slot (@0x780f8-0x7817f). What the slot keys read
+/// (see [`PilotCatalog::nav_def_slots`]).
+pub type NavDefSlots = [Option<StellarId>; NAV_DEF_SLOTS];
+
+/// `stellars` in slots from the first, in order, every slot after them
+/// empty, and any past the last slot left out: the slots of a system
+/// whose `NavDefs` have no gaps.
+#[must_use]
+pub fn slots_in_order(stellars: impl IntoIterator<Item = StellarId>) -> NavDefSlots {
+    let mut slots = [None; NAV_DEF_SLOTS];
+    for (slot, stellar) in slots.iter_mut().zip(stellars) {
+        *slot = Some(stellar);
+    }
+    slots
+}
+
 /// The game data a flight session starts from.
 pub trait PilotCatalog {
     /// The first `chär` by ascending ID: its ship and starting systems.
@@ -2182,6 +2203,24 @@ pub trait PilotCatalog {
             .filter_map(|system| Some((system.id, self.landing_sites(system.id).first()?.id)))
             .collect()
     }
+    /// Each system's `NavDefs` slots by index, gaps kept
+    /// ([`NavDefSlots`]), by ascending system ID, for every system that
+    /// can be read: what the slot keys select by (see the `nav` module of
+    /// `nova_sim::Session`), as `_HandlePlayer` reads `NavDefs[slot]`
+    /// (@0x69e28-0x69e46). By default each system that exists numbers its
+    /// [`PilotCatalog::landing_sites`] in order, with no gaps
+    /// ([`slots_in_order`]); a catalog that reads the `NavDefs` gives
+    /// their gaps.
+    fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+        self.star_map()
+            .into_iter()
+            .filter(|system| self.system_exists(system.id))
+            .map(|system| {
+                let sites = self.landing_sites(system.id);
+                (system.id, slots_in_order(sites.iter().map(|site| site.id)))
+            })
+            .collect()
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -2332,6 +2371,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
         (**self).first_stellars()
+    }
+
+    fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+        (**self).nav_def_slots()
     }
 }
 
@@ -2484,6 +2527,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn first_stellars(&self) -> Vec<(SystemId, StellarId)> {
         (**self).first_stellars()
+    }
+
+    fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+        (**self).nav_def_slots()
     }
 }
 
@@ -3015,6 +3062,14 @@ mod tests {
             vec![(SystemId(130), StellarId(129))]
         }
 
+        /// System 130's second slot holds 129 after an empty first, unlike
+        /// the default's numbering of its landing sites.
+        fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
+            let mut slots = [None; NAV_DEF_SLOTS];
+            slots[1] = Some(StellarId(129));
+            vec![(SystemId(130), slots)]
+        }
+
         /// Half a second at 44100 Hz.
         fn warp_sound_double_time(&self) -> Option<SoundLength> {
             Some(SoundLength {
@@ -3106,6 +3161,7 @@ mod tests {
             format!("{:?}", catalog.voices()),
             format!("{:?}", catalog.stellar_weapons()),
             format!("{:?}", catalog.stellar_scripts()),
+            format!("{:?}", catalog.nav_def_slots()),
         ]
     }
 
@@ -3253,6 +3309,21 @@ mod tests {
     }
 
     #[test]
+    fn by_default_each_existing_systems_slots_number_its_landing_sites_in_order() {
+        let mut first = [None; NAV_DEF_SLOTS];
+        first[0] = Some(StellarId(128));
+        first[1] = Some(StellarId(129));
+        assert_eq!(
+            Mapped.nav_def_slots(),
+            [
+                (SystemId(130), first),
+                (SystemId(131), [None; NAV_DEF_SLOTS])
+            ],
+            "131 lists none; 132 doesn't exist and isn't asked"
+        );
+    }
+
+    #[test]
     fn borrowed_and_shared_catalogs_are_catalogs() {
         let direct = reads(One);
         assert!(direct[1].contains("speed: 300"), "{direct:?}");
@@ -3331,6 +3402,10 @@ mod tests {
         assert!(
             direct[39].contains("StellarScripts { id: StellarId(128)"),
             "forwarded, not a default: {direct:?}"
+        );
+        assert!(
+            direct[40].starts_with("[(SystemId(130), [None, Some(StellarId(129)), None"),
+            "forwarded, not the default's numbering: {direct:?}"
         );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
