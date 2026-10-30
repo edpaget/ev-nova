@@ -15,16 +15,24 @@
 //! `_DoNewPilotNameDialog` flips it (@0x16a1c-0x16a8f), the gender control
 //! (item 11) switches between Male and Female at each click, OK (item 1,
 //! and Return) creates the pilot with the name and nickname as typed (the
-//! caller keeps them as the original does), and Cancel (item 2, and
-//! Escape) goes back. The pictures are inert. Without the interface file,
+//! caller keeps them as the original does), and Cancel (item 2) goes back.
+//! Escape does nothing: `_DoNewPilotNameDialog` sets OK as the default
+//! item (`SetDialogDefaultItem(1)` @0x166d2) but no cancel item, and its
+//! `ModalDialog` (@0x16956) has no filter proc. The other reading of
+//! `new_pilot_escape` makes it cancel ([`NewPilotDialog::with_rules`]).
+//! The pictures are inert. Without the interface file,
 //! [`NewPilotDialog::fallback`] lays out the name, the nickname, the
 //! gender, OK and Cancel itself; it has no Strict Play box, so its pilots
 //! do not play Strict Play.
 //!
-//! Each field holds [`NAME_LENGTH`] characters, and OK does nothing while
-//! the name is blank: the engine's own checks. `_DoNewPilotNameDialog`'s
-//! (beeping at a name or nickname over 24 characters, @0x16a00) are not
-//! ported yet.
+//! Each field takes text of any length, as the original's edit text has
+//! no limit of its own. OK checks them (@0x1695b-0x16a15): the name, then
+//! the nickname, against [`NAME_LIMIT`] characters (`cmpw $0x18`
+//! @0x16a00). The first over it beeps (`SysBeep(0)` @0x1696f, the system
+//! alert, [`UiSound::Alert`]), takes the focus with its first
+//! [`REFUSED_SELECTION`] characters selected (@0x16979), and the dialog
+//! stays open. The dialog refuses no empty or blank name: what to do with
+//! one is the caller's (`nova::app`'s menu, by `new_pilot_empty_name`).
 //!
 //! The stock gender control is `CNTL` 500, a pop-up menu titled "Gender:"
 //! (a 95-unit title) over `MENU` 500, whose items are "Male" and
@@ -39,7 +47,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::Gender;
+use nova_sim::{Gender, RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -47,6 +55,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -83,8 +92,12 @@ const GENDER_TITLE_WIDTH: f32 = 95.0;
 const GENDER_INSET: f32 = 4.0;
 /// The gender control's text size, in Geneva.
 const GENDER_SIZE: f32 = 12.0;
-/// The longest name or nickname, in characters: the original's `Str31`.
-pub const NAME_LENGTH: usize = 31;
+/// The longest name or nickname OK takes, in characters: a longer one
+/// beeps (`cmpw $0x18` @0x16a00 in `_DoNewPilotNameDialog`).
+pub const NAME_LIMIT: usize = 24;
+/// How many characters of a refused field OK selects
+/// (`SelectDialogItemText(item, 0, 0x17)` @0x16979).
+pub const REFUSED_SELECTION: usize = 23;
 /// What the dialog says when a pilot by the name typed is already saved:
 /// the first sentence of `STR#` 140 #9.
 pub const NAME_TAKEN: &str = "A pilot file by that name already exists.";
@@ -98,7 +111,7 @@ const REFUSAL_SIZE: f32 = 10.0;
 pub enum NewPilotOutcome {
     /// Create a pilot.
     Create {
-        /// The name, as typed and not blank.
+        /// The name, as typed: 24 characters or fewer, and possibly blank.
         name: String,
         /// The nickname, as typed; empty without the field.
         nickname: String,
@@ -184,6 +197,8 @@ pub struct NewPilotDialog {
     outcome: Option<NewPilotOutcome>,
     /// Why the last name was refused, until the name changes.
     refusal: Option<String>,
+    /// The sounds made since they were last taken: OK's beep.
+    sounds: Vec<Sound>,
 }
 
 impl std::fmt::Debug for NewPilotDialog {
@@ -218,8 +233,7 @@ impl NewPilotDialog {
         }
         let dialog = Dialog::new(template, &[], Rc::clone(&metrics))
             .with_buttons(ButtonSkin::NOVA, style)
-            .with_default(Some(OK_ITEM))
-            .with_cancel(Some(CANCEL_ITEM));
+            .with_default(Some(OK_ITEM));
         let field_rect = dialog.item_bounds(NAME_ITEM).expect("checked above");
         let strict_play = dialog
             .item_shown(STRICT_PLAY_ITEM)
@@ -239,7 +253,7 @@ impl NewPilotDialog {
                 _ => None,
             })
             .flatten()
-            .map(|rect| TextField::new(rect, NAME_LENGTH));
+            .map(|rect| TextField::new(rect, usize::MAX));
         let gender_control = dialog
             .item_shown(GENDER_ITEM)
             .then(|| dialog.item_bounds(GENDER_ITEM))
@@ -247,7 +261,7 @@ impl NewPilotDialog {
             .map(GenderControl::new);
         Ok(Self {
             dialog,
-            field: TextField::new(field_rect, NAME_LENGTH),
+            field: TextField::new(field_rect, usize::MAX),
             nickname,
             focus: Focus::Name,
             strict_play,
@@ -256,7 +270,23 @@ impl NewPilotDialog {
             metrics,
             outcome: None,
             refusal: None,
+            sounds: Vec::new(),
         })
+    }
+
+    /// The dialog following `rules`: by the other reading of
+    /// [`RuleKey::NewPilotEscape`], Escape cancels as the Cancel button
+    /// does; by the engine's, the dialog has no cancel item, as
+    /// `_DoNewPilotNameDialog` sets none (@0x166d2), and Escape does
+    /// nothing.
+    #[must_use]
+    pub fn with_rules(mut self, rules: &Rulebook) -> Self {
+        let cancel = match rules.source_for(RuleKey::NewPilotEscape) {
+            RuleSource::Engine => None,
+            RuleSource::Bible => Some(CANCEL_ITEM),
+        };
+        self.dialog = self.dialog.with_cancel(cancel);
+        self
     }
 
     /// The dialog with its fields holding `name` and `nickname`: the
@@ -323,6 +353,38 @@ impl NewPilotDialog {
             field.deselect_to_end();
         }
         self.focus = focus;
+    }
+
+    /// OK, as `_DoNewPilotNameDialog` checks it (@0x1695b-0x16a15): the
+    /// name, then the nickname (when its field exists), each counted in
+    /// characters. The first over [`NAME_LIMIT`] beeps (`SysBeep(0)`
+    /// @0x1696f, the alert: no `snd `), takes the focus with its first
+    /// [`REFUSED_SELECTION`] characters selected (@0x16990), and the dialog
+    /// stays open; the nickname isn't read while the name fails. With both
+    /// within it, the pilot is created, whatever the name: the dialog
+    /// refuses no empty or blank one.
+    fn ok(&mut self) {
+        for focus in [Focus::Name, Focus::Nickname] {
+            let field = match focus {
+                Focus::Name => &mut self.field,
+                Focus::Nickname => match &mut self.nickname {
+                    Some(field) => field,
+                    None => continue,
+                },
+            };
+            if field.text().chars().count() > NAME_LIMIT {
+                field.select_first(REFUSED_SELECTION);
+                self.focus = focus;
+                self.sounds.push(Sound::Ui(UiSound::Alert));
+                return;
+            }
+        }
+        self.outcome = Some(NewPilotOutcome::Create {
+            name: self.field.text().to_owned(),
+            nickname: self.nickname().to_owned(),
+            gender: self.gender,
+            strict_play: self.strict_play(),
+        });
     }
 
     /// The gender chosen so far: Male until a click switches it.
@@ -433,9 +495,10 @@ impl Screen for NewPilotDialog {
     /// (its repeats too) focuses the other field, its text selected whole.
     /// Everything else goes to the dialog: a click in a field focuses it, a
     /// click on Strict Play ticks or clears it, a click on the gender
-    /// control switches the gender, OK (or Return) creates the pilot when
-    /// the name is not blank, and Cancel (or Escape) cancels. It never
-    /// quits.
+    /// control switches the gender, OK (or Return) creates the pilot unless
+    /// a field is over [`NAME_LIMIT`] (see [`NewPilotDialog::ok`]), and
+    /// Cancel cancels. Escape does nothing unless the rules make it cancel
+    /// ([`NewPilotDialog::with_rules`]). It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: Key::Tab,
@@ -472,17 +535,7 @@ impl Screen for NewPilotDialog {
             return ScreenAction::None;
         }
         match self.dialog.input(input) {
-            Some(DialogEvent::Item(OK_ITEM)) => {
-                let name = self.field.text();
-                if !name.trim().is_empty() {
-                    self.outcome = Some(NewPilotOutcome::Create {
-                        name: name.to_owned(),
-                        nickname: self.nickname().to_owned(),
-                        gender: self.gender,
-                        strict_play: self.strict_play(),
-                    });
-                }
-            }
+            Some(DialogEvent::Item(OK_ITEM)) => self.ok(),
             Some(DialogEvent::Item(NAME_ITEM)) => self.focus_on(Focus::Name, false),
             Some(DialogEvent::Item(NICKNAME_ITEM)) => self.focus_on(Focus::Nickname, false),
             Some(DialogEvent::Item(STRICT_PLAY_ITEM)) => {
@@ -546,6 +599,11 @@ impl Screen for NewPilotDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
+
+    /// OK's beeps, in order.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
 }
 
 #[cfg(test)]
@@ -554,7 +612,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::Point;
     use crate::input::MouseButton;
-    use crate::sound::Sound;
+    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -689,7 +747,7 @@ mod tests {
         assert_eq!(dialog.field().rect(), rect(149.0, 36.0, 170.0, 16.0));
         assert_eq!(NEW_PILOT_DIALOG, 3102);
         assert_eq!((OK_ITEM, CANCEL_ITEM, NAME_ITEM), (1, 2, 8));
-        assert_eq!(NAME_LENGTH, 31);
+        assert_eq!((NAME_LIMIT, REFUSED_SELECTION), (24, 23));
     }
 
     #[test]
@@ -703,10 +761,106 @@ mod tests {
     }
 
     #[test]
-    fn a_name_holds_31_characters() {
+    fn a_field_takes_more_than_31_characters() {
         let mut dialog = dialog();
         typed(&mut dialog, &"x".repeat(40));
-        assert_eq!(dialog.name().chars().count(), 31);
+        assert_eq!(dialog.name().chars().count(), 40);
+        dialog.input(&key(Key::Tab));
+        typed(&mut dialog, &"y".repeat(40));
+        assert_eq!(dialog.nickname().chars().count(), 40);
+    }
+
+    /// The dialog over `template` holding `name` and `nickname` typed, with
+    /// the Name field focused.
+    fn filled(template: &DialogTemplate, name: &str, nickname: &str) -> NewPilotDialog {
+        let mut dialog = NewPilotDialog::new(template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
+            .with_defaults(name, nickname);
+        dialog.focus_on(Focus::Name, false);
+        dialog
+    }
+
+    #[test]
+    fn ok_over_24_in_the_name_beeps_selects_its_first_23_and_stays_open() {
+        let long = "x".repeat(25);
+        for by_click in [true, false] {
+            let mut dialog = filled(&stock(), &long, "Ace");
+            if by_click {
+                let ok = center(&dialog, OK_ITEM);
+                assert_eq!(click(&mut dialog, ok), [Sound::Ui(UiSound::Alert)]);
+            } else {
+                dialog.input(&key(Key::Enter));
+                assert_eq!(dialog.take_sounds(), [Sound::Ui(UiSound::Alert)]);
+            }
+            assert_eq!(dialog.take_outcome(), None, "{by_click}");
+            assert_eq!(dialog.focus(), Focus::Name);
+            assert_eq!(dialog.field().selection(), 23);
+            assert_eq!(dialog.name(), long, "kept");
+        }
+    }
+
+    #[test]
+    fn ok_over_24_in_the_nickname_moves_the_focus_to_it() {
+        let mut dialog = filled(&stock(), "Ada", &"y".repeat(25));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_sounds(), [Sound::Ui(UiSound::Alert)]);
+        assert_eq!(dialog.take_outcome(), None);
+        assert_eq!(dialog.focus(), Focus::Nickname);
+        assert_eq!(dialog.nickname_field().expect("a field").selection(), 23);
+        assert!(!dialog.field().selected(), "the name's selection untouched");
+    }
+
+    #[test]
+    fn the_nickname_is_not_checked_while_the_name_fails() {
+        let mut dialog = filled(&stock(), &"x".repeat(25), &"y".repeat(25));
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_sounds(),
+            [Sound::Ui(UiSound::Alert)],
+            "one beep"
+        );
+        assert_eq!(dialog.focus(), Focus::Name);
+        assert_eq!(dialog.field().selection(), 23);
+    }
+
+    #[test]
+    fn twenty_four_characters_each_create_the_pilot() {
+        for template in [stock(), fallback_template()] {
+            let (name, nickname) = ("x".repeat(24), "y".repeat(24));
+            let mut dialog = filled(&template, &name, &nickname);
+            dialog.input(&key(Key::Enter));
+            assert_eq!(dialog.take_sounds(), []);
+            assert_eq!(
+                dialog.take_outcome(),
+                Some(NewPilotOutcome::Create {
+                    name,
+                    nickname,
+                    gender: Gender::Male,
+                    strict_play: false,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn the_fallback_beeps_at_25_too() {
+        let mut dialog = filled(&fallback_template(), "Ada", &"y".repeat(25));
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_sounds(), [Sound::Ui(UiSound::Alert)]);
+        assert_eq!(dialog.take_outcome(), None);
+        assert_eq!(dialog.focus(), Focus::Nickname);
+    }
+
+    #[test]
+    fn typing_after_a_refusal_replaces_the_first_23() {
+        let mut dialog = filled(&stock(), &format!("{}ab", "x".repeat(23)), "");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), None);
+        typed(&mut dialog, "X");
+        assert_eq!(dialog.name(), "Xab");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_outcome(), Some(created("Xab", Gender::Male)));
     }
 
     #[test]
@@ -725,31 +879,55 @@ mod tests {
     }
 
     #[test]
-    fn ok_with_a_blank_name_does_nothing() {
+    fn ok_with_an_empty_or_blank_name_creates() {
         let mut dialog = dialog();
         dialog.input(&key(Key::Enter));
-        assert_eq!(dialog.take_outcome(), None);
+        assert_eq!(dialog.take_outcome(), Some(created("", Gender::Male)));
         typed(&mut dialog, "   ");
         let ok = center(&dialog, OK_ITEM);
         click(&mut dialog, ok);
-        assert_eq!(dialog.take_outcome(), None);
+        assert_eq!(dialog.take_outcome(), Some(created("   ", Gender::Male)));
+    }
+
+    /// The rulebook with `new_pilot_escape` read as `source`.
+    fn escape_rules(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::NewPilotEscape, source)
     }
 
     #[test]
-    fn escape_or_cancel_cancels() {
-        let mut dialog = dialog();
+    fn cancel_cancels_and_escape_does_nothing() {
+        for dialog in [
+            self::dialog(),
+            self::dialog().with_rules(&escape_rules(RuleSource::Engine)),
+        ] {
+            let mut dialog = dialog;
+            typed(&mut dialog, "Ada");
+            dialog.input(&key(Key::Escape));
+            assert_eq!(dialog.take_outcome(), None);
+            assert_eq!(dialog.take_sounds(), []);
+            let cancel = center(&dialog, CANCEL_ITEM);
+            click(&mut dialog, cancel);
+            assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_escape_cancels() {
+        let mut dialog = dialog().with_rules(&escape_rules(RuleSource::Bible));
         typed(&mut dialog, "Ada");
         dialog.input(&key(Key::Escape));
         assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
-        let mut dialog = self::dialog();
-        let cancel = center(&dialog, CANCEL_ITEM);
-        click(&mut dialog, cancel);
+        assert_eq!(dialog.take_sounds(), []);
+        let mut dialog = NewPilotDialog::fallback(ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .with_rules(&escape_rules(RuleSource::Bible));
+        dialog.input(&key(Key::Escape));
         assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
     }
 
-    /// Return and Escape play nothing in the original:
-    /// `_DoNewPilotNameDialog` runs `ModalDialog` (@0x16956) with the
-    /// standard filter, which only flashes the button.
+    /// Return plays nothing in the original: `_DoNewPilotNameDialog` runs
+    /// `ModalDialog` (@0x16956) with the standard filter, which only
+    /// flashes the button; Escape, which it doesn't map, plays nothing
+    /// either.
     #[test]
     fn keyboard_activation_is_silent_as_the_original() {
         let mut dialog = dialog();
@@ -759,7 +937,7 @@ mod tests {
         assert_eq!(dialog.take_outcome(), Some(created("Ada", Gender::Male)));
         assert_eq!(dialog.take_sounds(), [], "Return");
         dialog.input(&key(Key::Escape));
-        assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
+        assert_eq!(dialog.take_outcome(), None);
         assert_eq!(dialog.take_sounds(), [], "Escape");
     }
 
@@ -969,14 +1147,6 @@ mod tests {
                 strict_play: false,
             })
         );
-    }
-
-    #[test]
-    fn a_nickname_holds_31_characters() {
-        let mut dialog = dialog();
-        dialog.input(&key(Key::Tab));
-        typed(&mut dialog, &"x".repeat(40));
-        assert_eq!(dialog.nickname().chars().count(), 31);
     }
 
     #[test]
@@ -1206,6 +1376,9 @@ mod tests {
             "where stock has it"
         );
         dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_outcome(), None, "Escape does nothing");
+        let cancel = center(&dialog, CANCEL_ITEM);
+        click(&mut dialog, cancel);
         assert_eq!(dialog.take_outcome(), Some(NewPilotOutcome::Cancel));
         let field = dialog.field().rect();
         let bounds = dialog.dialog().bounds();

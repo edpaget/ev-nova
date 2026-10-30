@@ -1115,10 +1115,34 @@ fn cancelling_new_pilot_goes_back_to_the_menu() {
     let mut screen = menu(&store);
     choose(&mut screen, MenuChoice::NewPilot);
     type_text(&mut screen, "Ada");
-    assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+    let cancel = screen
+        .new_pilot()
+        .expect("open")
+        .dialog()
+        .item_bounds(nova_view::ui::new_pilot::CANCEL_ITEM)
+        .expect("Cancel")
+        .center();
+    click_at(&mut screen, cancel);
     assert_eq!(screen.showing(), Showing::MainMenu);
     assert!(screen.new_pilot().is_none());
     assert_eq!(store.writes(), 0);
+}
+
+/// The New Pilot dialog opens with the router's rules: Escape cancels it
+/// only by the other reading of `new_pilot_escape`.
+#[test]
+fn escape_in_new_pilot_follows_the_rulebook() {
+    for (source, shown) in [
+        (RuleSource::Engine, Showing::NewPilot),
+        (RuleSource::Bible, Showing::MainMenu),
+    ] {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store)
+            .with_rules(Rulebook::default().with_override(RuleKey::NewPilotEscape, source));
+        choose(&mut screen, MenuChoice::NewPilot);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), shown, "{source:?}");
+    }
 }
 
 #[test]

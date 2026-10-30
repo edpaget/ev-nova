@@ -237,7 +237,11 @@ impl AppScreen {
         };
         // Chosen by a click let go of on its button, the menu below holds
         // no press and no keys to let go of.
-        self.new_pilot = Some(dialog.with_defaults(&defaults.name, &defaults.nickname));
+        self.new_pilot = Some(
+            dialog
+                .with_rules(&self.rules)
+                .with_defaults(&defaults.name, &defaults.nickname),
+        );
     }
 
     /// Opens the saved pilots' list; when they cannot be listed, it shows
