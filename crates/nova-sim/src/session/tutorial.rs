@@ -95,7 +95,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::{Chance, NeverFires};

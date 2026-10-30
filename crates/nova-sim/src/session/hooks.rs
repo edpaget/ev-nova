@@ -234,12 +234,19 @@ impl Session {
         // (`Session::enter_game`; see the `last_refresh` module).
         self.refresh_galaxy(catalog);
         self.chart.last_refresh = before_on_start;
-        // The stellar `_DoNewPilot` saves as last landed on (@0x1926e,
-        // @0x1927b-0x192a6), into the file only (@0x1935f); the engine's
-        // pilot is what it saves.
+        // The stellar `_DoNewPilot` saves as last landed on (@0x1926e),
+        // into the file only (@0x1935f); the engine's pilot is what it
+        // saves. Its `_LoadObjectData` (@0x190f0) set every listed spöb
+        // active (+0x44, @0x77584) and nothing writes +0x44 before the
+        // pick, so it walks every stellar the system lists, whoever owns
+        // it, not the active ones nor those shown. With none it saves the
+        // first `NavDefs` slot that isn't -1 (@0x1927b-0x192a6), the first
+        // listed, as the loader clears a slot whose spöb didn't load; with
+        // no slot, 0 (@0x1934a-0x19358), here none. See the
+        // `stellar_picks` module.
         self.pilot.stellar = nearest_stellar(
             self.ship.player.position,
-            &self.chart.sites,
+            &self.chart.listed,
             self.setup.rules.source_for(crate::RuleKey::GatePickRange),
         )
         .or_else(|| self.chart.listed.first().map(|site| site.id));

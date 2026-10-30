@@ -438,6 +438,45 @@ pub(super) mod tests {
         assert_eq!(slot_key_in_131(&catalog, 16).0, None, "past the last slot");
     }
 
+    // A new pilot's saved stellar.
+
+    /// `_DoNewPilot` reloads every spöb (@0x190f0) and nothing writes +0x44
+    /// before its pick (@0x1926e), so every stellar its start system lists
+    /// is a candidate: the nearer stellar another visible system owns is
+    /// saved, where the stellars shown would give 140.
+    #[test]
+    fn a_new_pilot_saves_the_nearest_stellar_its_system_lists_whoever_owns_it() {
+        let catalog = crate::session::tutorial::tests::owned_nearer_in_131(StellarFlags::CAN_LAND);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.begin(&catalog, &mut crate::testkit::Scripted::default());
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(
+            session.stellars_shown().collect::<Vec<_>>(),
+            [StellarId(140)],
+            "130 owns 200"
+        );
+        assert_eq!(session.pilot.stellar, Some(StellarId(UNOWNED)));
+    }
+
+    #[test]
+    fn a_new_pilot_with_nothing_to_land_on_saves_the_first_stellar_listed() {
+        let mut catalog = crate::session::tutorial::tests::owned_nearer_in_131(0);
+        let sites = &mut catalog
+            .sites
+            .iter_mut()
+            .find(|(id, _)| id.0 == 131)
+            .expect("131")
+            .1;
+        sites[0].flags = 0;
+        let mut session = Session::start(&catalog).expect("starts");
+        session.begin(&catalog, &mut crate::testkit::Scripted::default());
+        assert_eq!(
+            session.pilot.stellar,
+            Some(StellarId(140)),
+            "NavDefs' first (@0x1927b-0x192a6)"
+        );
+    }
+
     // Readers of a selection outside the stellars shown.
 
     #[test]
