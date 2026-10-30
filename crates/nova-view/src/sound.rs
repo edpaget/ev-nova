@@ -185,6 +185,13 @@ pub enum UiSound {
     /// @0x16cae (called @0x19e91) halts and frees snd 600-603, cutting
     /// off Enter Ship's own button-up click. Whatever the sound setting.
     MainScreenSoundsHalted,
+    /// The app was switched out: the intro music, if it is playing, fades
+    /// out and is spent for good. `_SwitchedOut` sets `_introMusicPaused`
+    /// while `_introMusicMovie` is set (@0x4f390-0x4f3a0), and
+    /// `_MusicThread`'s loop (@0x61e4f) then leaves for
+    /// `_StopIntroMusic(1)` (@0x61e5f), the faded stop, ending the thread.
+    /// Whatever the sound setting.
+    SwitchedOut,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

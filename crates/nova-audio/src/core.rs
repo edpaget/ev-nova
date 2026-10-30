@@ -42,6 +42,8 @@ use crate::table::SoundTable;
 /// - The intro screen's pictures keep the music; a picture's own `snd `
 ///   ([`UiSound::IntroPicture`]) spends it, then plays like any event, and
 ///   the intro's text spends it.
+/// - Switching the app out ([`UiSound::SwitchedOut`]) fades the music and
+///   spends it, but only while it plays, whatever the sound setting.
 /// - Entering play halts the main screen's four sounds
 ///   ([`UiSound::MainScreenSoundsHalted`]), whatever the sound setting.
 /// - The spaceport's ambient sound plays its cue the same way: over
@@ -263,6 +265,7 @@ impl<A: Audio> AudioCore<A> {
                 self.play_cue(sound.cue());
             }
             UiSound::MainScreenSoundsHalted => self.halt(&MAIN_SCREEN_SOUNDS),
+            UiSound::SwitchedOut => self.switch_out(),
             sound => self.play_cue(sound.cue()),
         }
     }
@@ -380,6 +383,17 @@ impl<A: Audio> AudioCore<A> {
     }
 
     /// Spends the music for good, fading it out if it is playing.
+    /// The app was switched out: playing music fades and is spent, as
+    /// `_SwitchedOut` pauses it only while `_introMusicMovie` is set
+    /// (@0x4f390-0x4f3a0) and `_MusicThread` then stops it for good
+    /// (@0x61e4f, @0x61e5f). Music stopped, spent or not yet started is
+    /// left as it is.
+    fn switch_out(&mut self) {
+        if self.music == Music::Playing {
+            self.spend_music();
+        }
+    }
+
     fn spend_music(&mut self) {
         if self.music == Music::Playing {
             self.audio.run(AudioCommand::FadeOutMusic(music_fade(
@@ -1412,6 +1426,50 @@ mod tests {
         assert_eq!(drain(&log), [fade_out(MUSIC)]);
         core.update(Some(Showing::MainMenu), &[]);
         assert_eq!(drain(&log), [], "spent");
+    }
+
+    const SWITCHED_OUT: Sound = Sound::Ui(UiSound::SwitchedOut);
+
+    /// `_SwitchedOut` sets `_introMusicPaused` while the music plays
+    /// (@0x4f390-0x4f3a0), and `_MusicThread` (@0x61e4f) leaves for
+    /// `_StopIntroMusic(1)` (@0x61e5f): faded, and spent for good.
+    #[test]
+    fn switching_out_fades_the_playing_music_and_spends_it() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::MainMenu), &[]);
+        drain(&log);
+        core.update(None, &[SWITCHED_OUT]);
+        assert_eq!(drain(&log), [fade_out(MUSIC)], "faded, nothing else");
+        core.update(Some(Showing::MainMenu), &[]);
+        core.set_music(false);
+        core.set_music(true);
+        assert_eq!(drain(&log), [], "spent for good");
+    }
+
+    /// The original touches the music only while `_introMusicMovie` is
+    /// set (@0x4f390-0x4f3a0): stopped music stays free to start.
+    #[test]
+    fn switching_out_leaves_stopped_music_free() {
+        let (mut core, log) = original();
+        core.update(None, &[SWITCHED_OUT]);
+        assert_eq!(drain(&log), [], "before the main menu");
+        core.update(Some(Showing::MainMenu), &[]);
+        assert_eq!(drain(&log), [start_music(MUSIC)], "it starts");
+        core.set_music(false);
+        drain(&log);
+        core.update(None, &[SWITCHED_OUT]);
+        assert_eq!(drain(&log), [], "set off");
+        core.set_music(true);
+        assert_eq!(drain(&log), [start_music(MUSIC)], "on again, it starts");
+    }
+
+    #[test]
+    fn switching_out_with_the_music_spent_sends_nothing() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::Flight), &[]);
+        drain(&log);
+        core.update(None, &[SWITCHED_OUT]);
+        assert_eq!(drain(&log), []);
     }
 
     #[test]

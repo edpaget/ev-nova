@@ -126,6 +126,13 @@ impl<
         self.switched_in();
     }
 
+    /// The flight halts both warp-ups, as `_SwitchedOut` does
+    /// (@0x4f3a3-0x4f3e0; `FlightCommand::SwitchedOut`). A flight that
+    /// failed to start refuses it, as any command.
+    fn focus_lost(&mut self) {
+        self.send(nova_sim::flight_frame::FlightCommand::SwitchedOut);
+    }
+
     /// The session's sounds (thrust, landing, taking off and jumping),
     /// then the interface's (the escort menu's, the floating map's zooms,
     /// the player info refused, the course map's beeps), then the fight's.

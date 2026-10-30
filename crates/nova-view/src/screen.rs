@@ -145,6 +145,11 @@ pub trait Screen {
     /// on the screen shown, and on any screen held under it that keeps
     /// time across the switch. Does nothing by default.
     fn focus_gained(&mut self) {}
+    /// The window has gone to the background: the original's suspend
+    /// event, which runs `_SwitchedOut` (@0x4f381). Called on the screen
+    /// shown, and on any screen held under it that keeps sounds of its
+    /// own. Does nothing by default.
+    fn focus_lost(&mut self) {}
     /// The audio side is not waiting on a keyed click: its button-down
     /// sound has ended and its button-up sound has started, or there was
     /// nothing to wait for (sound off, no button-down sound, no audio).

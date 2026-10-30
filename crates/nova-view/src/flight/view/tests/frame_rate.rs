@@ -242,3 +242,15 @@ fn coming_back_to_the_front_says_calculating_again() {
     view.tick(sixtieth());
     assert_eq!(view.message(), Some(CALCULATING_FPS));
 }
+
+#[test]
+fn going_to_the_background_sends_the_switch_out() {
+    let mut view = faked(in_sol());
+    let from = sent_count(&view);
+    view.focus_lost();
+    assert_eq!(
+        view.sim.applied()[from..],
+        [FlightCommand::SwitchedOut],
+        "_SwitchedOut's warp-up halts, @0x4f3a3-0x4f3e0"
+    );
+}
