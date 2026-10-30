@@ -285,6 +285,58 @@ fn a_cinematic_landing_movie_covers_the_whole_shared_view_in_a_widened_view() {
     );
 }
 
+/// A land check's `CompText`, queued with the landing.
+fn comp_text() -> nova_sim::MissionText {
+    nova_sim::MissionText {
+        kind: nova_sim::MissionTextKind::Comp,
+        mission: nova_sim::MissionId(140),
+        text: "Done.".to_owned(),
+        graphic: None,
+        movie: None,
+        map: None,
+    }
+}
+
+/// Lands on Mars ([`land_on_mars`]), a land check's [`comp_text`] queued
+/// as the landing settled.
+fn land_on_mars_with_a_text(view: &mut Faked) {
+    view.sim.queue_event(FlightEvent::MissionShown {
+        shown: nova_sim::MissionShown::Text(comp_text()),
+        bar: None,
+    });
+    land_on_mars(view);
+}
+
+#[test]
+fn a_landing_movie_holds_the_land_checks_texts_until_it_ends() {
+    let (mut view, _player) = filming(filmed(&[129], &[]), true);
+    land_on_mars_with_a_text(&mut view);
+    assert!(view.playing());
+    assert_eq!(
+        view.take_mission_texts(),
+        [],
+        "the movie first (@0x632a7), the land checks after the port opens (@0x5fbeb)"
+    );
+    assert_eq!(view.reserves_scene, None, "the bar as the press found it");
+    run_out(&mut view);
+    assert_eq!(view.take_landing(), Some(StellarId(129)));
+    assert_eq!(
+        view.take_mission_texts(),
+        [nova_sim::MissionShown::Text(comp_text())]
+    );
+}
+
+#[test]
+fn with_movies_off_a_landings_texts_come_out_with_it() {
+    let (mut view, _player) = filming(filmed(&[129], &[]), false);
+    land_on_mars_with_a_text(&mut view);
+    assert_eq!(view.take_landing(), Some(StellarId(129)));
+    assert_eq!(
+        view.take_mission_texts(),
+        [nova_sim::MissionShown::Text(comp_text())]
+    );
+}
+
 // The hypergate.
 
 /// [`filming`] over `catalog` with L pressed over Sol's cleared

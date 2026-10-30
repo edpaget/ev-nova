@@ -28,7 +28,12 @@
 //!   `_KillVoiceSound` @0x66daf, and the thrust's stop among them), so
 //!   they come out on the press's frame. Nothing else the docking changed
 //!   is seen before the movie ends, so no boundary the player sees is
-//!   crossed early.
+//!   crossed early. The land checks' texts wait too: the original shows
+//!   none between the movie and the port's own loop but those
+//!   `_DoPortDialog` (@0x5f911) shows after it has drawn the spaceport
+//!   (`_ShowWindowNoFlash` @0x5faff, then `_MissionLandCheck` @0x5fbeb),
+//!   so they come out ([`FlightView::take_mission_texts`]) once the movie
+//!   ends, for the router to show over the spaceport it opens.
 //!   Under the movie is what `_PlayerLandOnStellar` leaves on screen
 //!   (@0x63221-0x63280): every sprite hidden, the stars among them, so the
 //!   play area is bare, and the status bar. This movie's load is the
@@ -117,9 +122,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         std::mem::take(&mut self.movie_replay)
     }
 
-    /// Whether the landing's movie plays, holding back the press's
-    /// sounds that follow it (see the module docs).
-    pub(super) fn holds_sounds(&self) -> bool {
+    /// Whether the landing's movie plays, holding back what follows it
+    /// (see the module docs): the press's sounds that follow it and the
+    /// land checks' texts.
+    pub(super) fn holds_landing(&self) -> bool {
         matches!(
             self.movie,
             Some(FlightMovie {
