@@ -151,7 +151,13 @@ mod tests {
         was: &[NpcBefore],
     ) -> (Vec<(Crime, Option<GovtId>)>, i64) {
         let witness = Witness::default();
-        session.settle_strikes((strikes, losses), was, &witness, &mut NeverFires);
+        session.settle_strikes(
+            &crate::ai::NovaAi::default(),
+            (strikes, losses),
+            was,
+            &witness,
+            &mut NeverFires,
+        );
         (witness.seen.take(), session.pilot().combat_rating())
     }
 

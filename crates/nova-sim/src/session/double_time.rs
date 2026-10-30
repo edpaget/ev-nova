@@ -105,10 +105,11 @@
 //!   provocation, the gate's wait cut @0x3be6e-0x3be7c,
 //!   `_AIMakeShipAttackPlayer` @0x3be66 and its quote,
 //!   `_ShowPersonHailQuote` @0x89ce1) runs there as on the advance pass.
-//!   The pass answers the collision passes' and the shots' hits as they
-//!   land, and its caller answers what its close struck after it
-//!   ([`Session::answer_strikes`]) and says the attack quotes
-//!   ([`Session::tick_quotes_again`]), before the frame is drawn. The
+//!   The pass answers every hit it lands as its phase settles, the
+//!   beams' and shockwaves' included, and its caller answers what the
+//!   session left after it ([`Session::answer_strikes`]) and says the
+//!   attack quotes ([`Session::tick_quotes_again`]), before the frame is
+//!   drawn. The
 //!   block plays no sound and tells no comm.
 //! - `_HandleShip`'s hail-quote block (@0x33f0f-0x33fba) has no pass
 //!   test, so each eligible person draws `Rand(140)` on both passes
@@ -187,7 +188,7 @@ impl Session {
     /// The escape pod's countdown running out on it stops it, the rescue
     /// then due ([`Session::rescue_if_due`], which its caller asks after
     /// this pass as after the advance pass). Its caller then answers
-    /// what the pass's close struck ([`Session::answer_strikes`]) and runs
+    /// what the session left ([`Session::answer_strikes`]) and runs
     /// the second-pass quote roll, the attack quotes the answers raise
     /// first ([`Session::tick_quotes_again`]).
     pub fn tick_again(

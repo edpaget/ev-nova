@@ -29,11 +29,12 @@
 //! 1. each ship's state is recorded, which the view draws from;
 //! 2. the advance pass (`_DoPlayGameWork(1)` @0x43de5-0x4453d,
 //!    [`Session::game_work`]), then its comm notes are taken;
-//! 3. the NPCs answer what the pass's close struck
-//!    ([`Session::answer_strikes`]): the pass answers its collision
-//!    passes' and shots' hits as they land, as `_HandleShot` does
-//!    (@0x44385), and the beams' and shockwaves' here, before the frame is
-//!    drawn. Then the attack quotes the answers raise are said
+//! 3. the NPCs answer what the session left them
+//!    ([`Session::answer_strikes`]): the pass answers every hit it lands
+//!    as its phase settles, the beams' and shockwaves' included, as
+//!    `_DamageShip` does (@0x44385, @0x4453d), so only the session's own
+//!    calls are left here, before the frame is drawn. Then the attack
+//!    quotes the answers raise are said
 //!    (`_ShowPersonHailQuote` @0x89ce1) and `_HandleShip`'s quote roll runs
 //!    (@0x33f0f-0x33fba; [`Session::tick_quotes`]), and the pass's quotes,
 //!    fight events and ships are reported ([`PassReport`]);

@@ -41,6 +41,7 @@
 
 use super::Session;
 use super::game_work::PlayerHead;
+use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{Combat, GamePass, Rules};
@@ -53,6 +54,7 @@ impl Session {
     /// `chance` (see the module docs).
     pub(super) fn player_display_step(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         pass: GamePass,
         rules: Rules,
         head: PlayerHead,
@@ -79,9 +81,15 @@ impl Session {
         self.player_cloak_tick(head.disabled);
         self.ship.step_cloak_fade(&self.pilot, &self.statics);
         let was_destroyed = self.ship.condition == Condition::Destroyed;
-        self.land_phase(pass, rules, chance, |combat, fighters, arena, _| {
-            Combat::display_player(combat, fighters, arena);
-        });
+        self.land_phase(
+            behaviour,
+            pass,
+            rules,
+            chance,
+            |combat, fighters, arena, _| {
+                Combat::display_player(combat, fighters, arena);
+            },
+        );
         self.lay_out_displayed();
         if !was_destroyed && self.ship.condition == Condition::Destroyed {
             self.settle_player_explosion();

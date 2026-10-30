@@ -1105,8 +1105,8 @@ mod tests {
         assert!(!session.pilot().grudge(PersonId(600)));
     }
 
-    /// Fires on Ace until its shield drops, at most 60 ticks, leaving the
-    /// strikes for the traffic to answer.
+    /// Fires on Ace until its shield drops, at most 60 ticks, the NPCs
+    /// answering each hit as it settles.
     fn hit_ace(session: &mut Session) {
         for _ in 0..60 {
             let shield = session.npcs()[0].reserves.shield.now;
@@ -1125,21 +1125,40 @@ mod tests {
         panic!("never hit: {:?}", session.npcs()[0]);
     }
 
+    /// The player's answered direct hit on Ace, as the session keeps one
+    /// for the traffic to answer later: one it made itself, or one it
+    /// kept while the traffic wasn't answering.
+    fn kept_hit_on_ace(session: &Session) -> Strike {
+        crate::combat::fixture::strike(ShipRef::Npc(session.npcs()[0].id), ShipRef::Player)
+    }
+
     #[test]
-    fn a_grudge_whose_strike_the_traffic_tick_answers_is_held_after_the_tick() {
-        // A caller that never calls `answer_strikes` leaves the strike to
-        // the next traffic tick, which answers it.
+    fn a_grudge_whose_strike_the_fight_lands_is_held_as_it_settles() {
+        // The fight's hits are answered as each phase settles, with no
+        // call to `answer_strikes`, and the grudge held with them.
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
         hit_ace(&mut session);
-        work_with(
-            &mut session,
-            &catalog,
-            Controls::default(),
-            &crate::ai::NovaAi::default(),
-            Rules::default(),
-            &mut NeverFires,
-        );
+        assert!(session.space.strikes.is_empty(), "none kept");
+        assert!(session.pilot().grudge(PersonId(600)));
+        assert!(session.npcs()[0].person.expect("Ace").grudge);
+    }
+
+    #[test]
+    fn a_grudge_whose_strike_the_traffics_think_answers_is_held_after_the_think() {
+        // A strike left for the think's answer is answered at the start of
+        // the think, and its grudge held once the traffic has stepped.
+        let catalog = duel(GRUDGE, 0);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let strikes = [kept_hit_on_ace(&session)];
+        session.step_traffic(|traffic, world| {
+            traffic.think_holding(
+                &crate::ai::NovaAi::default(),
+                world,
+                &strikes,
+                &mut NeverFires,
+            );
+        });
         assert!(session.pilot().grudge(PersonId(600)));
         assert!(session.npcs()[0].person.expect("Ace").grudge);
     }
@@ -1181,12 +1200,15 @@ mod tests {
     fn a_grudge_whose_strike_populating_drops_unanswered_is_held() {
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        hit_ace(&mut session);
+        let kept = kept_hit_on_ace(&session);
+        session.space.strikes.push(kept);
+        assert!(!session.pilot().grudge(PersonId(600)), "unanswered");
         session.populate(&catalog, &mut NeverFires);
         assert!(session.pilot().grudge(PersonId(600)));
         let catalog = duel(0, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        hit_ace(&mut session);
+        let kept = kept_hit_on_ace(&session);
+        session.space.strikes.push(kept);
         session.populate(&catalog, &mut NeverFires);
         assert!(!session.pilot().grudge(PersonId(600)), "no 0x0001");
     }

@@ -2026,22 +2026,23 @@ impl Session {
         self.let_go_of_gone_target();
     }
 
-    /// The NPCs answer the fight's strikes since the last traffic tick
-    /// now, as `behaviour` says ([`Traffic::answer`]): a ship the player
-    /// hit in its gate is held there and seen, and a person turned on the
-    /// player queues its quote. The original answers a hit inside
-    /// `_DamageShip` as it lands, in the collision passes and `_HandleShot`
-    /// (@0x44385), before `_AIDispatch`, `_HandleShip`'s quotes and the
-    /// display pass, so the frame drawn after the pass shows the answer.
-    /// [`Session::game_work`] and [`Session::tick_again`] call this after
-    /// each of those phases; a flight calls it after each pass for what
-    /// the pass's close struck (the beams, the shockwaves). Whatever is
-    /// left unanswered, the next pass's think answers (as for a caller
-    /// that never calls this). While the ship is landed, or before
-    /// the system is set up, nothing is answered; the world runs through a
-    /// jump, so a hit in it is answered.
+    /// The NPCs answer the strikes kept since the last traffic tick now,
+    /// as `behaviour` says ([`Traffic::answer`]): the session's own calls
+    /// (the Good Samaritan call) and the fight's strikes kept while the
+    /// traffic wasn't answering. A ship the player hit in its gate is held
+    /// there and seen, and a person turned on the player queues its quote.
+    /// The fight's own strikes are answered as each phase settles, each in
+    /// its turn (`Session::answer_landed`), as the original answers a hit
+    /// inside `_DamageShip` as it lands. [`Session::game_work`] and
+    /// [`Session::tick_again`] call this after the collision passes and
+    /// after `_HandleShot` (@0x44385), before `_AIDispatch`,
+    /// `_HandleShip`'s quotes and the display pass. Whatever is left
+    /// unanswered, the next pass's think answers (as for a caller that
+    /// never calls this). While the ship is landed, or before the system
+    /// is set up, nothing is answered ([`Session::answers_now`]); the
+    /// world runs through a jump, so a hit in it is answered.
     pub(crate) fn answer_strikes(&mut self, behaviour: &(impl Behaviour + ?Sized)) {
-        if self.mode.landed().is_some() || self.space.traffic_due {
+        if !self.answers_now() {
             return;
         }
         let strikes = std::mem::take(&mut self.space.strikes);
@@ -2134,9 +2135,10 @@ impl Session {
         // The grudges the traffic decided as it answered strikes, in turn
         // (`Traffic::take_grudges`). The original sets each inside
         // `_DamageShip` as its hit lands; here it lands right after the
-        // traffic answers, which is after each phase that lands hits
-        // (`Session::answer_strikes`) or at the next traffic tick for the
-        // strikes a caller leaves, and so before any frame is drawn,
+        // traffic answers, which is as each phase that lands hits settles
+        // (`Session::answer_landed`), after the session's own calls are
+        // answered (`Session::answer_strikes`) or at the next traffic tick
+        // for the strikes a caller leaves, and so before any frame is drawn,
         // dialog opened, landing or jump completed or pilot saved.
         let grudges = self.space.traffic.take_grudges();
         self.space.hold_grudges(&mut self.pilot, &grudges);
@@ -2436,32 +2438,39 @@ impl Session {
         }
     }
 
-    /// Answers the fight's `strikes` this tick, against what each NPC `was`
-    /// before it: weighing whether each is answered, rolling on `chance`
-    /// (see the `answer_flag` module), refilling the invincible, convicting
-    /// the player by `law` and crediting it with kills, for its own hits
-    /// and those of the ships it leads, as the fleet stood before each of
-    /// the escort `losses` the strikes made ([`Space::players_hit`]), and
-    /// letting each hit NPC's cloak take its hit; then keeps them for the
-    /// traffic to answer and the app. The persons' grudges are held as the
-    /// traffic answers them, in turn (`Session::step_traffic`).
+    /// Settles the fight's `strikes` this tick, against what each NPC
+    /// `was` before it: refilling the invincible, convicting the player by
+    /// `law` and crediting it with kills, for its own hits and those of
+    /// the ships it leads, as the fleet stood before each of the escort
+    /// `losses` the strikes made ([`Space::players_hit`]); then weighing
+    /// and answering each in turn as it landed, rolling on `chance`, each
+    /// hit NPC's cloak taking its hit between its flag and its reaction,
+    /// the NPCs answering as `behaviour` says (`Session::answer_landed`,
+    /// see the `answer_flag` module); then the player's cloak taking its
+    /// hits. The strikes are kept for the traffic to answer later only
+    /// when it doesn't answer now. Neither the crimes nor the kills read
+    /// the answer flag or anything a reaction writes, so they settle
+    /// first; the refill comes before the answers, which read the ship
+    /// intact. The persons' grudges are held as the traffic answers them,
+    /// in turn (`Session::step_traffic`).
     fn settle_strikes(
         &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
         (mut strikes, losses): (Vec<Strike>, Vec<EscortLoss>),
         was: &[NpcBefore],
         law: &dyn LegalCode,
         chance: &mut dyn Chance,
     ) {
-        self.weigh_strikes(&mut strikes, chance);
         self.space.refill_invincible(&mut strikes);
         self.punish(&strikes, &losses, was, law);
         self.space
             .credit_kills(&mut self.pilot, &self.statics, &strikes, &losses, was);
-        let reserves = self.setup.rules.source_for(RuleKey::CloakReserves);
-        self.space.cloak_hits(&self.statics, reserves, &strikes);
+        let answered = self.answer_landed(behaviour, &mut strikes, chance);
         self.ship
             .cloak_hits(&self.pilot, &self.statics, &strikes, &mut self.out);
-        self.space.strikes.extend(strikes);
+        if !answered {
+            self.space.strikes.extend(strikes);
+        }
     }
 
     /// Takes each NPC destroyed out of the system, raising

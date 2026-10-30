@@ -1133,6 +1133,7 @@ pub(super) mod tests {
         // The ship loop's displays (@0x444ad).
         let start = super::super::game_work::PassStart::of(&session);
         session.ship_loop(
+            &crate::ai::NovaAi::default(),
             &start,
             super::super::ship_loop::Motion::Again,
             pass,

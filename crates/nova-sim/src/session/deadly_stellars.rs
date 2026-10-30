@@ -760,21 +760,22 @@ pub(super) mod tests {
                 let mut session = among(&catalog, listed, listed.len(), rules);
                 session.hold_trigger(crate::session::tests::FIRE);
                 let legal = session.pilot.legal.clone();
+                let shield = session.npcs()[0].reserves.shield.now;
                 fight(&mut session);
-                let strikes: Vec<_> = session
-                    .space
-                    .strikes
+                // The beams' strikes are answered as they settle, so none
+                // is kept: what the beam struck shows in the NPC's shield.
+                let hit = session
+                    .npcs()
                     .iter()
-                    .filter(|strike| strike.ship == ShipRef::Npc(NpcId(0)))
-                    .copied()
-                    .collect();
-                (strikes, session.pilot.legal == legal, session.npcs().len())
+                    .find(|npc| npc.id == NpcId(0))
+                    .is_some_and(|npc| npc.reserves.shield.now < shield);
+                (hit, session.pilot.legal == legal, session.npcs().len())
             };
-            let (strikes, _, npcs) = struck(&[planet(140, 0.0, -150.0)]);
-            assert_eq!(strikes.len(), 1, "the beam hits it with no deadly stellar");
+            let (hit, _, npcs) = struck(&[planet(140, 0.0, -150.0)]);
+            assert!(hit, "the beam hits it with no deadly stellar");
             assert_eq!(npcs, 1);
-            let (strikes, lawful, npcs) = struck(&[on_the_npc()]);
-            assert_eq!(strikes, [], "killed before the beams");
+            let (hit, lawful, npcs) = struck(&[on_the_npc()]);
+            assert!(!hit, "killed before the beams");
             assert!(lawful, "no crime");
             assert_eq!(npcs, 0);
         }

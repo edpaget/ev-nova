@@ -797,6 +797,7 @@ mod tests {
         session.hold_eject(chord);
         let head = super::super::game_work::PassStart::of(session).player_head();
         session.player_display_step(
+            &crate::ai::NovaAi::default(),
             crate::combat::GamePass::Advance { double_time: false },
             Rules::default(),
             head,
