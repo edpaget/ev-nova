@@ -581,6 +581,7 @@ mod player_ship;
 mod players_hits;
 mod plunder_loop;
 mod port;
+mod port_desc;
 mod precalced;
 mod radar;
 mod ranks;
@@ -3851,6 +3852,10 @@ impl Session {
         self.port.forget_shipyard_listing();
         self.port.open_outfit_visit(&self.pilot);
         self.port.stay = Stay::default();
+        // `_DoPortDialog` loads the port's own `dësc` (@0x5f96b) before the
+        // land checks (@0x5fbeb): due until the spaceport asks for it or the
+        // landing settles (see the `port_desc` module).
+        self.port.due_own_desc(stellar);
         self.out.save_due = true;
         self.ship.stop_thrust(&mut self.out);
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).

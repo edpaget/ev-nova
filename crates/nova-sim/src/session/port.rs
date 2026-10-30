@@ -1,13 +1,13 @@
 //! The landing, the take-off and the spaceport visit under way: the dock
 //! request and the land key, the take-off grace and where the ship
 //! touched down, the stay, the bar's news, the outfitter visit, the day's
-//! hire, outfit and ship rolls, and what the ranks' port prices are taken
-//! from. Landing and taking off themselves (`land`, `dock`, `take_off`)
+//! hire, outfit and ship rolls, what the ranks' port prices are taken
+//! from, and the port's own `dësc` (see the `port_desc` module). Landing and taking off themselves (`land`, `dock`, `take_off`)
 //! coordinate the rest and stay on `Session`.
 
 use std::collections::BTreeSet;
 
-use crate::catalog::{OutfitId, ShipId};
+use crate::catalog::{OutfitId, ShipId, StellarId};
 use crate::geometry::Vec2;
 use crate::news::News;
 use crate::outfitter::OutfitVisit;
@@ -97,6 +97,30 @@ pub(super) struct Port {
     /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
     /// saved, as `_priceFluxMult` lives in memory only.
     pub(super) port_ranks: ranks::PortRanks,
+    /// The port's own `dësc`, which `_DoPortDialog` loads as the spaceport
+    /// opens (@0x5f96b), before the land checks (see the `port_desc`
+    /// module). It is not saved: the load itself lands nothing a save
+    /// keeps.
+    pub(super) own_desc: OwnDesc,
+}
+
+/// Where the port's own `dësc` stands (see the `port_desc` module).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum OwnDesc {
+    /// No landing has made it due since the session started or loaded.
+    #[default]
+    None,
+    /// A landing at this stellar has made it due, and it is not loaded
+    /// yet.
+    Due(StellarId),
+    /// Loaded for this stellar: its text taken in.
+    Loaded {
+        /// The stellar landed on.
+        stellar: StellarId,
+        /// The text loaded, empty for a missing `dësc`, as
+        /// `_LoadDescription` empties the buffer (@0x71a5e).
+        text: String,
+    },
 }
 
 impl Port {
@@ -121,6 +145,38 @@ impl Port {
             hold_position: false,
             touchdown,
             port_ranks: ranks::PortRanks::default(),
+            own_desc: OwnDesc::None,
         }
+    }
+
+    /// A landing at `stellar` makes its own `dësc` due.
+    pub(super) fn due_own_desc(&mut self, stellar: StellarId) {
+        self.own_desc = OwnDesc::Due(stellar);
+    }
+
+    /// The stellar whose own `dësc` a landing has made due and is not
+    /// loaded yet.
+    pub(super) fn own_desc_due(&self) -> Option<StellarId> {
+        match self.own_desc {
+            OwnDesc::Due(stellar) => Some(stellar),
+            OwnDesc::None | OwnDesc::Loaded { .. } => None,
+        }
+    }
+
+    /// `stellar`'s own `dësc` as it was loaded, empty for a missing one:
+    /// `None` while it is not loaded for `stellar`.
+    pub(super) fn own_desc_text(&self, stellar: StellarId) -> Option<&str> {
+        match &self.own_desc {
+            OwnDesc::Loaded {
+                stellar: loaded,
+                text,
+            } if *loaded == stellar => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Notes `stellar`'s own `dësc` loaded as `text`.
+    pub(super) fn own_desc_loaded(&mut self, stellar: StellarId, text: String) {
+        self.own_desc = OwnDesc::Loaded { stellar, text };
     }
 }

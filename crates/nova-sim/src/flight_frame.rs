@@ -1005,6 +1005,18 @@ pub enum FlightCommand {
         /// The movie it names.
         movie: Option<DescMovie>,
     },
+    /// An ask ([`FlightCommand::is_ask`]): the port's own `dësc` as the
+    /// spaceport shows it, landed
+    /// ([`Session::port_description`](crate::Session::port_description)),
+    /// answered [`Answer::Description`], empty for a missing one. The
+    /// session loads it itself, read from the catalog the view shared, the
+    /// first time this or the landing's settle comes (`_DoPortDialog`
+    /// @0x5f96b, before the land checks @0x5fbeb), and serves the text it
+    /// loaded after that without loading it again. Refused in flight or
+    /// with no catalog shared. Like a description's load, it can write the
+    /// run's rank governments and its last movie and draw on the chance,
+    /// none of which a frame shows.
+    LoadPortDescription,
 }
 
 impl FlightCommand {
@@ -1127,23 +1139,28 @@ impl FlightCommand {
             | Self::SetDoubleTimeKey(_)
             | Self::SetSoundQuiet(_)
             | Self::Hover { .. }
-            | Self::LoadDescription { .. } => None,
+            | Self::LoadDescription { .. }
+            | Self::LoadPortDescription => None,
         }
     }
 
-    /// Whether the command only asks: [`FlightCommand::Hover`] and
-    /// [`FlightCommand::LoadDescription`]. An ask changes nothing a frame
+    /// Whether the command only asks: [`FlightCommand::Hover`],
+    /// [`FlightCommand::LoadDescription`] and
+    /// [`FlightCommand::LoadPortDescription`]. An ask changes nothing a frame
     /// shows (`Session::fill_frame` fills the same frame after it, pinned
     /// in `session/apply/asks.rs`), so the view doesn't refill the frame
     /// it keeps after one (`nova_view`'s `FlightView::send`). The hover is
     /// asked after each tick's steps with the boxes the view draws, a
-    /// per-frame question, and a description's load writes the run's
-    /// rank governments and its last movie and draws on the chance, so
-    /// neither is a screen's ask ([`ScreenAsk`]); a question a screen asks
+    /// per-frame question, and a description's load (the port's own too)
+    /// writes the run's rank governments and its last movie and draws on
+    /// the chance, so none is a screen's ask ([`ScreenAsk`]); a question a screen asks
     /// as it opens is.
     #[must_use]
     pub fn is_ask(&self) -> bool {
-        matches!(self, Self::Hover { .. } | Self::LoadDescription { .. })
+        matches!(
+            self,
+            Self::Hover { .. } | Self::LoadDescription { .. } | Self::LoadPortDescription
+        )
     }
 }
 
@@ -1325,8 +1342,9 @@ pub enum Answer {
     /// What a [`FlightCommand::Hover`] found under the pointer, `None` for
     /// nothing.
     Hovered(Option<Hover>),
-    /// The text a [`FlightCommand::LoadDescription`] loaded, empty for a
-    /// missing `dësc`.
+    /// The text a [`FlightCommand::LoadDescription`] or a
+    /// [`FlightCommand::LoadPortDescription`] loaded, empty for a missing
+    /// `dësc`.
     Description(String),
 }
 
