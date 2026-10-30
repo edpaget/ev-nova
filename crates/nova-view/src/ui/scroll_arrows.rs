@@ -496,6 +496,23 @@ mod tests {
         assert!(dialog.scroll_text().expect("the text").can_scroll_down());
     }
 
+    /// A frame long enough to reach the end and try past it takes each
+    /// step alone, as the loop does, so the failed one clears the flag in
+    /// that same frame.
+    #[test]
+    fn a_frame_that_overruns_the_end_clears_down_with_its_failed_step() {
+        let mut dialog = at_offset(END - 2.0);
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        assert_eq!(offset(&dialog), END - 1.0);
+        dialog.tick(TICK * 5);
+        assert_eq!(offset(&dialog), END);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(false, true)].concat()
+        );
+    }
+
     #[test]
     fn held_past_the_top_it_runs_on_and_keeps_up_disabled() {
         let mut dialog = at_offset(2.0);
