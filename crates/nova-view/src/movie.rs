@@ -32,6 +32,13 @@
 //!   goes down or up, so one held from before skips the movie as it is let
 //!   go: later than the original by however long it is still held.
 //!
+//! On a screen already faded (`_screenFaded` *0x3b5198 set, as under the
+//! jump's white or the intro's black), a cinematic movie's first fade does
+//! nothing (`_FadeScreenOut` @0x5316-0x531f), so it fades in on its black
+//! window at once, and its close leaves the screen faded in
+//! ([`MovieStage::begin_faded`], [`MovieStage::faded_in`]). A plain movie
+//! fades nothing, so it plays under the fade and leaves it there.
+//!
 //! It plays no sound. Its early returns (the preference, a file that is
 //! not found or does not open, @0x5597c-0x55a5f) come before any fade, so
 //! a movie that cannot start ends at once with nothing drawn.
@@ -181,6 +188,8 @@ pub struct MovieStage {
     frame: Bounds,
     /// The input that stays queued for what comes next.
     replay: Vec<Input>,
+    /// Whether the player started it.
+    started: bool,
 }
 
 impl std::fmt::Debug for MovieStage {
@@ -240,6 +249,7 @@ impl MovieStage {
             window: Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0),
             frame: Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0),
             replay: Vec::new(),
+            started: false,
         }
     }
 
@@ -252,6 +262,30 @@ impl MovieStage {
     /// Starts the movie, once: one the player cannot start ends at once,
     /// with nothing drawn; a cinematic one fades the screen out first.
     pub fn begin(&mut self) {
+        self.begin_on(false);
+    }
+
+    /// Starts the movie, once, on a screen already faded (`_screenFaded`
+    /// set): as [`MovieStage::begin`], but a cinematic one's first fade
+    /// does nothing, as `_FadeScreenOut` returns at once on a faded screen
+    /// (@0x5316-0x531f), so it hides the cursor and fades in on its black
+    /// window at once. A plain one plays under whatever faded the screen,
+    /// which stays faded ([`MovieStage::faded_in`]).
+    pub fn begin_faded(&mut self) {
+        self.begin_on(true);
+    }
+
+    /// Whether its close faded the screen back in, clearing `_screenFaded`:
+    /// a cinematic movie that started, once it has ended (`_FadeScreenIn`
+    /// @0x55edb). A plain one, or one that could not start (its early
+    /// returns come before any fade), leaves the screen as it found it.
+    #[must_use]
+    pub fn faded_in(&self) -> bool {
+        self.ended() && self.started && self.movie.cinematic
+    }
+
+    /// [`MovieStage::begin`], on a screen `faded` or not.
+    fn begin_on(&mut self, faded: bool) {
         if self.phase != Phase::Waiting {
             return;
         }
@@ -277,10 +311,11 @@ impl MovieStage {
         let frame = centred(window, fitted(size, (window.2, window.3)));
         self.window = bounds(window);
         self.frame = bounds(frame);
-        self.phase = if self.movie.cinematic {
-            Phase::FadingOut(ScreenFade::to_black(MOVIE_FADE_FOR))
-        } else {
-            Phase::Playing
+        self.started = true;
+        self.phase = match (self.movie.cinematic, faded) {
+            (true, false) => Phase::FadingOut(ScreenFade::to_black(MOVIE_FADE_FOR)),
+            (true, true) => Phase::FadingIn(ScreenFade::from_black(MOVIE_FADE_FOR)),
+            (false, _) => Phase::Playing,
         };
     }
 
@@ -1267,6 +1302,48 @@ mod tests {
         assert!(!stage.ended());
         assert!(matches!(stage.phase, Phase::FadingOut(_)));
         assert_eq!(stage.take_replay(), [press(Key::Space)]);
+    }
+
+    #[test]
+    fn a_cinematic_movie_begun_faded_skips_its_first_fade_and_fades_in_on_its_window() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut stage = staged(&player, 0x0004);
+        stage.begin_faded();
+        assert!(
+            stage.hides_cursor(),
+            "_FadeScreenOut @0x5316-0x531f does nothing, so the cursor hides at once"
+        );
+        assert_eq!(
+            fills(&stage),
+            [(screen(), Color::BLACK), (screen(), Color::BLACK)],
+            "the black window, under the fade from black"
+        );
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(frames(&stage).len(), 1, "playing after one fade");
+        assert!(!stage.faded_in(), "not before it closes");
+        stage.tick(TICK);
+        run(&mut stage, MOVIE_FADE_FOR * 2);
+        assert!(stage.ended());
+        assert!(stage.faded_in(), "its close fades in (@0x55edb)");
+    }
+
+    #[test]
+    fn only_a_cinematic_movie_that_started_fades_the_screen_back_in() {
+        for (player, flags, faded_in) in [
+            (MockMoviePlayer::playing((160, 120), 1), 0x0004, true),
+            (MockMoviePlayer::playing((160, 120), 1), 0, false),
+            (MockMoviePlayer::refusing(), 0x0004, false),
+        ] {
+            let mut stage = staged(&player, flags);
+            stage.begin_faded();
+            run(&mut stage, MOVIE_FADE_FOR * 4);
+            assert!(stage.ended(), "{flags:#x}");
+            assert_eq!(stage.faded_in(), faded_in, "{flags:#x}");
+        }
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut stage = staged(&player, 0);
+        stage.begin_faded();
+        assert_eq!(frames(&stage).len(), 1, "a plain one plays at once");
     }
 
     #[test]
