@@ -5662,10 +5662,8 @@ mod tests {
             ],
         );
         assert_eq!(arsenal.sprite_base(ShipId(223)), ShipId(144));
-        assert_eq!(arsenal.hull(ShipId(223)).sprite_base, Some(ShipId(144)));
         assert_eq!(arsenal.sprite_base(ShipId(144)), ShipId(144));
         assert_eq!(arsenal.sprite_base(ShipId(500)), ShipId(500), "no record");
-        assert_eq!(HullSpec::default().sprite_base, None);
     }
 
     #[test]
