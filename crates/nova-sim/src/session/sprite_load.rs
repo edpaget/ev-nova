@@ -336,6 +336,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_mission_düde_added_after_the_load_takes_it() {
+        use crate::catalog::MissionShip;
+        use crate::session::mission_ships::tests::{
+            accepted, aux_catalog, aux_ships, take_off, ticks,
+        };
+        // Mission 140's three auxiliary ships of düde 151 fly ship 201,
+        // a class no table of the system holds until they come.
+        let mut catalog =
+            crate::testkit::far_129_reachable(aux_catalog(MissionShip::NONE, aux_ships(3, -1), 0));
+        catalog.hulls.push(shän(201, ANIMATED, 6));
+        let mut session = accepted(&catalog);
+        session.set_sprite_load(STILL);
+        take_off(&mut session, &catalog);
+        assert!(
+            !session
+                .space
+                .traffic
+                .table()
+                .ships
+                .contains_key(&ShipId(201)),
+            "not in the table before they come"
+        );
+        ticks(&mut session, &catalog, 140);
+        let loaded = raw(&session, 201).loaded(STILL);
+        assert_ne!(loaded, raw(&session, 201), "the load changes the class");
+        assert_eq!(
+            session.space.traffic.table().ships[&ShipId(201)]
+                .hull
+                .frames,
+            loaded,
+            "the kind the düde added"
+        );
+        let frames: Vec<FrameSpec> = session
+            .space
+            .traffic
+            .npcs()
+            .iter()
+            .filter(|npc| npc.aux.is_some())
+            .map(|npc| npc.hull.frames)
+            .collect();
+        assert_eq!(frames, vec![loaded; 3], "the ships it brought in");
+    }
+
     /// The right turn key held, thrusting.
     fn thrust_right() -> Controls {
         Controls {
