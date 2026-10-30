@@ -159,24 +159,6 @@ pub struct ShipDraw<'a> {
     pub colorize: Option<Colorize>,
 }
 
-/// Draws `image` at `at` at `tint`, combined by `blend`, colorized by
-/// `colorize` when it mixes.
-fn draw_layer(
-    list: &mut DrawList,
-    (image, at, tint, blend): (ImageKey, Point, Color, Blend),
-    colorize: Option<Colorize>,
-) {
-    match colorize.filter(|colorize| colorize.mixes()) {
-        Some(colorize) => list.colorized_sprite(image, at, tint, blend, colorize),
-        None => list.push(crate::DrawCommand::Sprite {
-            image,
-            center: at,
-            tint,
-            blend,
-        }),
-    };
-}
-
 /// Class `spec`'s display turning by `sheet`'s rotations, its `shän`'s
 /// `FramesPer` as its sheet is laid out.
 #[must_use]
@@ -259,7 +241,7 @@ impl ShipDraw<'_> {
         if self.hull {
             let at = self.moved(place(self.sheet.size()));
             let hull = ImageKey::sprite(self.sheet.image_id, frame);
-            draw_layer(list, (hull, at, hull_tint, hull_blend), colorize);
+            list.mixed_sprite(hull, at, hull_tint, hull_blend, colorize);
             if self.sheet.solid {
                 solid_overlay(list, self.sheet.image_id, frame, at);
             }
@@ -306,7 +288,7 @@ impl ShipDraw<'_> {
                         Some(colorize) => (lights_tint(level), Some(colorize)),
                         None => (murk_tint(lights_tint(level), murk), None),
                     };
-                    draw_layer(list, (image, at, tint, Blend::Or), colorize);
+                    list.mixed_sprite(image, at, tint, Blend::Or, colorize);
                     if layer.solid && level > 0 {
                         solid_overlay(list, layer.image_id, frame, at);
                     }
@@ -323,7 +305,7 @@ impl ShipDraw<'_> {
         add(list, self.sheet.weapon, weapon, murk, frame);
         let spec = turning(self.spec, self.sheet);
         if let Some(alt) = alt {
-            draw_layer(list, (alt.image, alt.at, alt.tint, alt.blend), alt.colorize);
+            list.mixed_sprite(alt.image, alt.at, alt.tint, alt.blend, alt.colorize);
             let alt_sheet = self.sheet.alt;
             if alt_sheet.is_some_and(|layer| layer.solid && layer.image_id == alt.image.id) {
                 solid_overlay(list, alt.image.id, alt.image.frame, alt.at);
@@ -340,7 +322,7 @@ impl ShipDraw<'_> {
                 Some(_) => lights_tint(level),
                 None => murk_tint(lights_tint(level), self.murk),
             };
-            draw_layer(list, (image, at, tint, Blend::Or), colorize);
+            list.mixed_sprite(image, at, tint, Blend::Or, colorize);
             if layer.solid && level > 0 {
                 solid_overlay(list, layer.image_id, frame, at);
             }

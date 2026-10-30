@@ -43,7 +43,7 @@
 
 use nova_sim::Vec2;
 
-use crate::Color;
+use crate::{Color, Colorize};
 
 /// What the squared distance times the murk is multiplied by (the double
 /// @0xdd560).
@@ -54,6 +54,28 @@ pub const MAX_SPRITE_MURK: u8 = 31;
 
 /// The steps of the murk's mix: a level of 32 would be all colour.
 const MURK_STEPS: u16 = 32;
+
+/// How the player sees a system's murk: from its ship at `viewer`, at
+/// its effective murk `murk`, toward its colour `colour`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeenMurk {
+    /// Where the player's ship is.
+    pub viewer: Vec2,
+    /// The player's effective murk, 0..=100.
+    pub murk: u8,
+    /// The RGB555 colour sprites murk toward
+    /// (`nova_sim::Session::murk_colour`).
+    pub colour: u16,
+}
+
+impl SeenMurk {
+    /// The colorize of a sprite at `sprite`: its [`sprite_murk`] toward
+    /// the colour.
+    #[must_use]
+    pub fn at(self, sprite: Vec2) -> Colorize {
+        Colorize::toward_pixel(sprite_murk(sprite, self.viewer, self.murk), self.colour)
+    }
+}
 
 /// How murky a sprite at `at` is, seen from the player's ship at
 /// `viewer`, in a system of effective murk `murk` (0..=100): 0 to
@@ -143,6 +165,23 @@ mod tests {
     #[test]
     fn no_murk_murks_nothing() {
         assert_eq!(sprite_murk(Vec2::new(5000.0, 5000.0), Vec2::ZERO, 0), 0);
+    }
+
+    #[test]
+    fn seen_murk_mixes_a_sprite_at_its_level_toward_the_colour() {
+        let seen = SeenMurk {
+            viewer: Vec2::ZERO,
+            murk: 50,
+            colour: 0x1081,
+        };
+        assert_eq!(
+            seen.at(Vec2::new(200.0, 0.0)),
+            Colorize {
+                level: 24,
+                rgb5: [4, 4, 1],
+            }
+        );
+        assert_eq!(seen.at(Vec2::ZERO).level, 0, "at the viewer");
     }
 
     #[test]

@@ -519,6 +519,29 @@ impl DrawList {
         })
     }
 
+    /// Appends `image` at `center` at `tint`, combined by `blend`: a
+    /// [`DrawCommand::Colorized`] when `colorize` mixes, otherwise a plain
+    /// [`DrawCommand::Sprite`], as most of a murky system's sprites by the
+    /// player are.
+    pub fn mixed_sprite(
+        &mut self,
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Option<Colorize>,
+    ) -> &mut Self {
+        match colorize.filter(|colorize| colorize.mixes()) {
+            Some(colorize) => self.colorized_sprite(image, center, tint, blend, colorize),
+            None => self.push(DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            }),
+        }
+    }
+
     /// Appends a [`DrawCommand::Picture`].
     pub fn picture(&mut self, image: ImageKey, top_left: Point) -> &mut Self {
         self.push(DrawCommand::Picture { image, top_left })
@@ -1037,6 +1060,46 @@ mod tests {
                 tint,
                 blend: Blend::Or,
             }]
+        );
+    }
+
+    #[test]
+    fn a_mixed_sprite_is_colorized_only_when_it_mixes() {
+        let tint = lights_tint(10);
+        let image = ImageKey::sprite(202, 5);
+        let plain = DrawCommand::Sprite {
+            image,
+            center: at(50.0, 60.0),
+            tint,
+            blend: Blend::Or,
+        };
+        let murk = Colorize {
+            level: 16,
+            rgb5: [4, 4, 1],
+        };
+        let mut list = DrawList::new();
+        list.mixed_sprite(image, at(50.0, 60.0), tint, Blend::Or, None)
+            .mixed_sprite(
+                image,
+                at(50.0, 60.0),
+                tint,
+                Blend::Or,
+                Some(Colorize { level: 0, ..murk }),
+            )
+            .mixed_sprite(image, at(50.0, 60.0), tint, Blend::Or, Some(murk));
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                plain.clone(),
+                plain,
+                DrawCommand::Colorized {
+                    image,
+                    center: at(50.0, 60.0),
+                    tint,
+                    blend: Blend::Or,
+                    colorize: murk,
+                },
+            ]
         );
     }
 
