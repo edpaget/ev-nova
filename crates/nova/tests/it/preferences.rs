@@ -222,6 +222,9 @@ fn seeded() -> MemorySettings {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            ship_animations: true,
+            engine_glows: true,
+            running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
@@ -508,9 +511,10 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    // Past Weapon Effects, Smoke Trails, Parallax Starfield, the display
-    // picker and the Scaling list to the music volume.
-    for _ in 0..11 {
+    // Past Ship Animations, Engine Glows, Running Lights, Weapon Effects,
+    // Smoke Trails, Parallax Starfield, the display picker and the Scaling
+    // list to the music volume.
+    for _ in 0..14 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -908,7 +912,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..8 {
+        for _ in 0..11 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -1042,7 +1046,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..9 {
+        for _ in 0..12 {
             self.press(Key::Tab);
         }
         for _ in 0..times {

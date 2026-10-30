@@ -144,7 +144,10 @@ impl AppScreen {
             })
             .map(|dialog| {
                 if self.weapon_effects_wait() {
-                    dialog.with_launch_weapon_effects(self.launch_weapon_effects)
+                    dialog.with_launch(nova_view::LaunchPrefs {
+                        weapon_effects: self.launch_weapon_effects,
+                        ..nova_view::LaunchPrefs::of(&self.prefs)
+                    })
                 } else {
                     dialog
                 }
