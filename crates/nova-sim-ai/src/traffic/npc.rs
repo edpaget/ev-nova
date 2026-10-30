@@ -94,7 +94,8 @@ pub enum Mode {
     /// an escort or fighter given a target (see the traffic's tick).
     ///
     /// It answers a hit as a flying ship does: its hyperspace state +0x50,
-    /// which `_DamageShip` reads to skip a reaction (@0x3b4b0-0x3b4c2),
+    /// which `_DamageShip` reads to skip a reaction (the gate @0x3b46a,
+    /// built in [`answer_flag`](crate::ai::answer_flag)),
     /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
     /// its target and the damage as provocation, and its wait is cut to
     /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both

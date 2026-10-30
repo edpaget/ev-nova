@@ -18,7 +18,8 @@
 //!
 //! | Branch | Addresses | What it does |
 //! |---|---|---|
-//! | Entry gate | @0x3b408-0x3b46e | only a direct hit ([`Strike::direct`]) on an NPC, not by itself, is weighed, and not on a ship with no AI ([`Npc::no_ai`], +0x88 at or below 0 @0x3b459: the player's eject hulk); anything else gives no answer and no provocation |
+//! | Entry gate | @0x3b408-0x3b461 | only a direct hit ([`Strike::direct`]) on an NPC, not by itself, is weighed, and not on a ship with no AI ([`Npc::no_ai`], +0x88 at or below 0 @0x3b459: the player's eject hulk); anything else gives no answer and no provocation |
+//! | Jump-out gate | @0x3b467-0x3b46e | a victim whose +0x50 is above 0 ([`Warp::under_way`](crate::traffic::warp_out::Warp::under_way)), jumping out, gives no answer and no provocation |
 //! | Kin | @0x3b4cd-0x3b4fc | set when a ship of another government hit it, the governments compared as raw words, so two independents are kin ([`RuleKey::IndependentKin`](crate::RuleKey::IndependentKin)); clear for no ship |
 //! | Leaders | @0x3b503-0x3b571 | for a led ship (leader L, the player included): set when `si` isn't L, or a ship whose own leader isn't L hit it |
 //! | The record | @0x3b577-0x3b67e | a governed ship, in a governed system, not the player's target, cleared for the player or a ship it leads while the player's record there is at least twice its government's `CrimeTol` ([`Surroundings::record`]); then cleared for a ship of its own government. An independent ship: set for the player or a ship it leads |
@@ -29,22 +30,26 @@
 //! | Same leader | @0x3b94e-0x3b978 | cleared for a ship of the same leader |
 //! | Blessing | @0x3b9a9-0x3ba08 | for a stray hit still set: cleared for a governed ship allied with the player (`_AlliedWithPlayer` @0x6985: led by it, or by a ship it leads) whose government blesses it with peace ([`Surroundings::blessed`]) |
 //! | Grand fleet | @0x3ba14-0x3baa1 | cleared when the ship's leader's leader is an NPC attacker's leader's leader, the player included |
-//! | Docking | @0x3bab7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
+//! | Jumping leader | @0x3bab7-0x3bae4 | a victim whose NPC leader (slot 1-63, not the player) is jumping out is not answered; the stray add before it stands |
+//! | Docking | @0x3baf7-0x3bb1a | an NPC's hit on a ship docking (`_AIShipIsDocking` @0x83f95, substate 0xf), here a pirate docking with or docked to a ship it plunders, or one docking with or docked to the player it repairs ([`Goal::Assist`] with [`Help::Repair`]), its [`Npc::docking`] in [`DockSub::Dock`], is not answered |
 //! | Entry test | @0x3bb20-0x3bb74 | a fighter-class attacker (ship class +0xe, [`EscortClass::Fighter`]), the player's ship included, on a ship that isn't one, has a target and attacks (`_IsShipAttacking` @0x82f6a, goal 4: [`Goal::attacking`]), is not answered |
 //!
-//! Left out, for want of what they read (weapons-fidelity phase 37
-//! records each; the plunder docking of the table above, once among
-//! them, is built):
+//! Two more reads of the victim's +0x50 come after the jump-out gate:
+//! the "arriving" test (@0x3b97e-0x3b995, a `cmova` clearing the flag)
+//! and the shared tail @0x3b4b0-0x3b4c2 (entered at @0x3b4bc from the
+//! grand fleet's end and @0x3baad, and at @0x3b4b0 from the defence-ship
+//! path), which jumps to 0x3bef9. Nothing between the gate and them writes
+//! +0x50, so they always find it at 0 or below and never fire: dead code,
+//! recorded and not built. An arrival never writes the engine's stage
+//! (it spawns at none), so none of these tests catches it, whatever
+//! [`RuleKey::ArrivalHits`](crate::RuleKey::ArrivalHits) says.
+//!
+//! Left out, for want of what they read:
 //!
 //! - **Defence ships** (+0x8c, the stellar a ship defends): a self-hit by
 //!   one (@0x3b408-0x3b4c8; either way a ship hitting itself never
 //!   answers), fleetmates (@0x3b68e-0x3b6ec). Noted on rdm task
 //!   planet-domination, with the reaction block's defence-ship branches.
-//! - **The jump-out stage** (+0x50 above 0): the entry gate's test
-//!   (@0x3b46a), arriving (@0x3b97e, dead code after the gate) and a
-//!   victim whose leader jumps out (@0x3bab7-0x3bae4). They read the
-//!   jump-out stage of roadmap ship-handling-fidelity's phase 8, and are
-//!   rdm phase weapons-fidelity-cross-roadmap/phase-1-damage-ship-jump-out-stage.
 //! - **The nag ship**'s damage rewrite (@0x3a8bb-0x3a954) and its test in
 //!   `_IsShipMyEnemy` (@0x819a4): the engine has no nag ship. Recorded
 //!   only.

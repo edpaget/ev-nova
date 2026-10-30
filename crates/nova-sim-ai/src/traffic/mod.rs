@@ -2001,7 +2001,10 @@ impl Traffic {
     /// death shockwave's hit, no direct hit, never sets, @0x3b44d; a clear
     /// flag skips the whole reaction block, @0x3baea), as `behaviour`
     /// says; by the other reading of [`World::arrival_hits`] only those
-    /// that have arrived ([`Npc::arrived`]) do.
+    /// that have arrived ([`Npc::arrived`]) do. A ship jumping out, or one
+    /// whose NPC leader is, never reaches here: its strike isn't
+    /// [`answered`](Strike::answered) (`_DamageShip` @0x3b46a,
+    /// @0x3bab7-0x3bae4).
     ///
     /// The strikes are answered one at a time, in the order the session
     /// holds them (the order they landed), as `_DamageShip` runs hit by
@@ -5405,7 +5408,7 @@ mod tests {
     #[test]
     fn every_intact_npc_answers_a_strike_by_the_engine() {
         // `_DamageShip` drops a reaction only while +0x50 is above 0, a
-        // ship jumping out (@0x3b4b0-0x3b4c2).
+        // ship jumping out (@0x3b46a, weighed by the answer flag).
         assert_eq!(World::new(&[]).arrival_hits, RuleSource::Engine);
         assert_eq!(
             reacting(RuleSource::Engine),

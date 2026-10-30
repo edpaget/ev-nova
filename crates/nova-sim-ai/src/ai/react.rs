@@ -39,9 +39,12 @@
 //!   alone. A ship still
 //!   coming into the system answers so too, gliding in, waiting in its
 //!   gate or bursting out of it: `_DamageShip` drops the reaction only
-//!   while the victim's (or the lead's) hyperspace state +0x50 is above
-//!   0 (@0x3b4b0-0x3b4c2, @0x3b97e-0x3b995, @0x3bab7-0x3bae4), which is a
-//!   ship jumping out, and an arrival's never is: -1.0 waiting in a gate
+//!   while the victim's (or its NPC leader's) hyperspace state +0x50 is
+//!   above 0, which is a ship jumping out: the gate @0x3b46a and the
+//!   leader's test @0x3bab7-0x3bae4, both built in
+//!   [`answer_flag`](crate::ai::answer_flag) (its re-reads
+//!   @0x3b4b0-0x3b4c2 and @0x3b97e-0x3b995 are dead after the gate). An
+//!   arrival's never is: -1.0 waiting in a gate
 //!   (@0x89555), -999.0 gliding in or bursting out (@0x82ece,
 //!   @0x8f3c8-0x8f3d9), until `_AIMakeShipStopJumping` zeroes it
 //!   (@0x82eb0). (Phase 6 read +0x50 as running through an arrival; it
@@ -99,7 +102,7 @@
 //! fleet comes by its own call (`_AICallForReinforcements`, see
 //! [`reinforcements`](super::reinforcements)), not by a hit.
 //!
-//! Left out of the reaction block (weapons-fidelity phase 37 records each):
+//! Left out of the reaction block:
 //!
 //! - The defence-ship branches, for a ship defending a stellar (+0x8c),
 //!   which the engine doesn't have: the victim's (@0x3bbe2 → 0x3bd8c: it
@@ -107,10 +110,6 @@
 //!   attacker, @0x3be17, and adds 30 × each nominal arg, @0x3be2b-0x3be56)
 //!   and the lead's and the grudge's +0x8c tests (@0x3bd1b, @0x3be88).
 //!   They belong to rdm task planet-domination.
-//! - The jump-out stage (+0x50 above 0): the entry gate (@0x3b46a), the
-//!   arriving test (@0x3b97e) and a victim whose leader jumps out
-//!   (@0x3bab7-0x3bae4), for rdm phase
-//!   weapons-fidelity-cross-roadmap/phase-1-damage-ship-jump-out-stage.
 //! - The test of the victim's slot +0x86 (@0x3bcb2), which a player victim
 //!   would fail but never reaches: the player is AI type -1 (@0x3b459).
 //! - `_AIMakeShipStopRefuelling` and target 0 for a player's hit
@@ -284,8 +283,10 @@ fn hits(npc: &Npc, strike: &Strike, around: &Surroundings) -> bool {
 /// ([`RuleKey::HitFocus`](crate::RuleKey::HitFocus)). Kin is not read:
 /// the answer flag held it back already
 /// ([`answer_flag`](crate::ai::answer_flag)). Its mode is not read:
-/// `_DamageShip` skips a reaction only while +0x50 is above 0
-/// (@0x3b4b0-0x3b4c2), a ship jumping out, never one coming in.
+/// `_DamageShip` skips a reaction only while +0x50 is above 0, a ship
+/// jumping out, never one coming in: the gate @0x3b46a, built in the
+/// answer flag ([`answer_flag`](crate::ai::answer_flag)), so such a hit
+/// never reaches here.
 ///
 /// - By the engine (`_DamageShip` @0x3bbf3-0x3bcac), `hit` is tested,
 ///   whichever ship answers: it keeps its target when it is attacking
@@ -789,8 +790,9 @@ mod tests {
     #[test]
     fn a_ship_gliding_in_waiting_in_its_gate_or_bursting_out_answers_a_hit_as_a_flying_one() {
         // `_DamageShip` drops a reaction only while +0x50 is above 0, a
-        // ship jumping out (@0x3b4b0-0x3b4c2, @0x3b97e-0x3b995,
-        // @0x3bab7-0x3bae4); an arrival's +0x50 is -1.0 in its gate
+        // ship jumping out (the gate @0x3b46a and the leader's test
+        // @0x3bab7-0x3bae4, weighed by the answer flag); an arrival's
+        // +0x50 is -1.0 in its gate
         // (@0x89555) and -999.0 gliding or bursting (@0x82ece, @0x8f3c8).
         let govts = relations(0, 0);
         for mode in [
