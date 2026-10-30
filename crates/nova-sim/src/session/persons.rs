@@ -1170,8 +1170,9 @@ mod tests {
         // their grudges.
         let catalog = duel(GRUDGE, 0);
         let mut session = facing_ace(&catalog, ada(&catalog));
-        // A pass answers its own hits; one its close leaves, a beam's or a
-        // shockwave's, waits for the caller (`Session::answer_strikes`).
+        // A pass answers the fight's hits as each phase settles; a strike
+        // kept for later is one the session made itself, or one kept
+        // while the traffic wasn't answering.
         session.space.strikes.push(crate::combat::Strike {
             ship: ShipRef::Npc(session.npcs()[0].id),
             by: Some(ShipRef::Player),
