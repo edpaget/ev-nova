@@ -85,12 +85,19 @@ pub trait MoviePlayer {
 
 /// The player movies are played through, and whether they play at all:
 /// the "QuickTime Movies" preference, a set `*0x3b501c + 7` turning them
-/// off (`_PlayQTMovie` @0x5597c, and each call site). Clones share the
-/// preference, so turning it on or off reaches every screen holding one.
-/// [`Movies::none`] plays nothing.
+/// off (`_PlayQTMovie` @0x5597c, `_StartLoopingMovie` @0x60282-0x6028b,
+/// and each call site). Clones share the preference, so turning it on or
+/// off reaches every screen holding one. [`Movies::none`] plays nothing.
+///
+/// The shipyard's looping ship movie is a second QuickTime movie beside
+/// the one `_PlayQTMovie` plays (`_loopingMovie` 0xdec98), so a text's or
+/// an offer's movie shown over the shipyard leaves the loop alone. A
+/// [`MoviePlayer`] plays one movie at a time, so the loop plays through a
+/// player of its own ([`Movies::looping`]), under the same preference.
 #[derive(Clone)]
 pub struct Movies {
     player: Option<Rc<dyn MoviePlayer>>,
+    looping: Option<Rc<dyn MoviePlayer>>,
     on: Rc<Cell<bool>>,
 }
 
@@ -98,6 +105,7 @@ impl std::fmt::Debug for Movies {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Movies")
             .field("player", &self.player.is_some())
+            .field("looping", &self.looping.is_some())
             .field("on", &self.on.get())
             .finish()
     }
@@ -115,6 +123,7 @@ impl Movies {
     pub fn new(player: Rc<dyn MoviePlayer>, on: bool) -> Self {
         Self {
             player: Some(player),
+            looping: None,
             on: Rc::new(Cell::new(on)),
         }
     }
@@ -124,8 +133,38 @@ impl Movies {
     pub fn none() -> Self {
         Self {
             player: None,
+            looping: None,
             on: Rc::new(Cell::new(false)),
         }
+    }
+
+    /// These movies played through `player`, keeping the looping player
+    /// and the preference, shared with every clone.
+    #[must_use]
+    pub fn with_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        Self {
+            player: Some(player),
+            ..self
+        }
+    }
+
+    /// These movies with the looping movies played through `player`,
+    /// keeping the main player and the preference, shared with every
+    /// clone.
+    #[must_use]
+    pub fn with_looping_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        Self {
+            looping: Some(player),
+            ..self
+        }
+    }
+
+    /// The player a looping movie plays through, while movies are on and
+    /// there is one: `_StartLoopingMovie` reads the preference only as a
+    /// loop starts (@0x60282-0x6028b).
+    #[must_use]
+    pub fn looping(&self) -> Option<Rc<dyn MoviePlayer>> {
+        self.looping.clone().filter(|_| self.on.get())
     }
 
     /// Turns movies on or off, for every clone.
@@ -514,6 +553,8 @@ pub mod fixture {
         advanced: RefCell<u32>,
         screen: RefCell<MovieScreen>,
         pub log: RefCell<Vec<Call>>,
+        /// How far each advance went, in order.
+        steps: RefCell<Vec<Duration>>,
     }
 
     impl MockMoviePlayer {
@@ -527,6 +568,7 @@ pub mod fixture {
                 advanced: RefCell::new(0),
                 screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
+                steps: RefCell::new(Vec::new()),
             })
         }
 
@@ -539,6 +581,7 @@ pub mod fixture {
                 advanced: RefCell::new(0),
                 screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
+                steps: RefCell::new(Vec::new()),
             })
         }
 
@@ -551,6 +594,12 @@ pub mod fixture {
                 .filter(|call| !matches!(call, Call::Draw(_)))
                 .cloned()
                 .collect()
+        }
+
+        /// How far each advance went, in order.
+        #[must_use]
+        pub fn advanced_by(&self) -> Vec<Duration> {
+            self.steps.borrow().clone()
         }
 
         /// The rects of the frames drawn.
@@ -585,8 +634,9 @@ pub mod fixture {
             self.size
         }
 
-        fn advance(&self, _dt: Duration) -> bool {
+        fn advance(&self, dt: Duration) -> bool {
             self.log.borrow_mut().push(Call::Advance);
+            self.steps.borrow_mut().push(dt);
             if self.size.is_some() {
                 self.show_next();
             }
@@ -739,6 +789,17 @@ pub mod fixture {
             let [(stopped, _)] = frames(&player, rect).try_into().expect("one frame");
             assert_eq!(stopped, second, "the stopped movie's last frame stays");
             assert_eq!(player.drawn(), [rect; 4], "every draw logged, drawn or not");
+        }
+
+        #[test]
+        fn the_mock_logs_how_far_each_advance_went() {
+            let player = MockMoviePlayer::playing((640, 480), 5);
+            assert_eq!(player.advanced_by(), []);
+            player.start("Race.mov");
+            player.advance(STEP);
+            player.advance(Duration::from_millis(250));
+            assert_eq!(player.advanced_by(), [STEP, Duration::from_millis(250)]);
+            assert_eq!(player.calls().len(), 3, "the calls log is unchanged");
         }
 
         #[test]
@@ -977,7 +1038,66 @@ mod tests {
         none.set_on(true);
         assert!(!none.on(), "no player");
         assert!(none.stage(&movie(0)).is_none());
-        assert_eq!(format!("{none:?}"), "Movies { player: false, on: true }");
+        assert_eq!(
+            format!("{none:?}"),
+            "Movies { player: false, looping: false, on: true }"
+        );
+    }
+
+    #[test]
+    fn looping_is_none_without_a_looping_player() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true);
+        assert!(movies.looping().is_none());
+        let none = Movies::none();
+        none.set_on(true);
+        assert!(none.looping().is_none());
+    }
+
+    #[test]
+    fn looping_follows_the_shared_preference() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let reel = MockMoviePlayer::playing((32, 32), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true)
+            .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+        let looping = movies.looping().expect("on, with a looping player");
+        assert_eq!(looping.start("Ship.mov"), Some((32, 32)));
+        assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
+        assert!(player.calls().is_empty(), "the loop has its own player");
+        movies.clone().set_on(false);
+        assert!(movies.looping().is_none(), "shared");
+        assert!(movies.stage(&movie(0)).is_none());
+        movies.set_on(true);
+        assert!(movies.looping().is_some());
+        assert_eq!(
+            format!("{movies:?}"),
+            "Movies { player: true, looping: true, on: true }"
+        );
+    }
+
+    #[test]
+    fn with_looping_player_keeps_the_main_player_and_with_player_keeps_the_loop() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let reel = MockMoviePlayer::playing((32, 32), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true)
+            .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+        let mut stage = movies.stage(&movie(0)).expect("on");
+        stage.begin();
+        assert_eq!(player.calls(), [Call::Start("Race.mov".to_owned())]);
+        let other = MockMoviePlayer::playing((8, 8), 3);
+        let swapped = movies
+            .clone()
+            .with_player(Rc::clone(&other) as Rc<dyn MoviePlayer>);
+        let mut stage = swapped.stage(&movie(0)).expect("on");
+        stage.begin();
+        assert_eq!(other.calls(), [Call::Start("Race.mov".to_owned())]);
+        swapped.looping().expect("kept").start("Ship.mov");
+        assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
+        movies.set_on(false);
+        assert!(!swapped.on(), "the preference kept, shared");
+        let late = Movies::none().with_player(Rc::clone(&other) as Rc<dyn MoviePlayer>);
+        late.set_on(true);
+        assert!(late.on(), "a player given to none plays");
     }
 
     #[test]
