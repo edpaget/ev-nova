@@ -175,6 +175,10 @@ mod tests {
             Goal::Flee(n(2)),
             Goal::Inspect(n(2)),
             Goal::Assist(Help::Refuel),
+            Goal::Plunder {
+                ship: n(2),
+                hopeless: false,
+            },
         ] {
             assert_eq!(after(0, of(goal), DYING), of(goal), "{goal:?}");
         }
