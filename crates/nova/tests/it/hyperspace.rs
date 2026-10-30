@@ -1135,3 +1135,28 @@ fn abouts_plain_movie_plays_under_the_white_which_runs_on_over_it() {
         "the white over the movie"
     );
 }
+
+#[test]
+fn with_no_text_up_the_white_runs_at_flights_own_pace_and_is_drawn_once() {
+    use nova_view::Screen;
+    let mut harness = lit_with_about();
+    let start = white(&harness).expect("lit");
+    for _ in 0..45 {
+        harness.frame();
+    }
+    let half = white(&harness).expect("lit");
+    assert!(
+        half > start && half < 200,
+        "half way through its 1.5 s, not further: {start} then {half}"
+    );
+    let mut list = nova_view::DrawList::new();
+    harness.app.screen().draw(&mut list);
+    let whites = list
+        .iter()
+        .filter(|command| {
+            matches!(command, nova_view::DrawCommand::Line { color, .. }
+                if (color.r, color.g, color.b, color.a) == (255, 255, 255, half))
+        })
+        .count();
+    assert_eq!(whites, 1, "flight's own, not again over it");
+}

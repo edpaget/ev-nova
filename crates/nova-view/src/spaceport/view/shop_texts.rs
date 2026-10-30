@@ -242,7 +242,10 @@ mod tests {
             "the movie first (@0x5da33)"
         );
         assert!(!view.take_outfitter_closed());
-        play_out(&mut view);
+        view.tick(ms(100));
+        assert!(view.open_outfitter().is_some(), "while it plays");
+        assert!(!view.take_outfitter_closed());
+        view.tick(ms(100));
         assert!(view.open_outfitter().is_none(), "closed as the movie ends");
         assert!(view.take_outfitter_closed());
         let (mut view, _) = alerted(true, None);
