@@ -143,11 +143,8 @@ impl AppScreen {
                     .with_focus_ring(prefs_focus_ring(access))
             })
             .map(|dialog| {
-                if self.weapon_effects_wait() {
-                    dialog.with_launch(nova_view::LaunchPrefs {
-                        weapon_effects: self.launch_weapon_effects,
-                        ..nova_view::LaunchPrefs::of(&self.prefs)
-                    })
+                if self.launch_prefs_wait() {
+                    dialog.with_launch(self.launch)
                 } else {
                     dialog
                 }
@@ -234,12 +231,14 @@ impl AppScreen {
             self.prefs = prefs;
             self.prefs_change = Some(prefs);
             self.movies.set_on(prefs.quicktime_movies);
-            let weapon_effects = self.flight_weapon_effects();
+            let launch = self.flight_launch_prefs();
             for flight in self.flights_mut() {
                 flight.set_hyperspace_effects(prefs.hyperspace_effects);
                 flight.set_smoke_trails(prefs.smoke_trails);
                 flight.set_parallax_starfield(prefs.parallax_starfield);
-                flight.set_weapon_effects(weapon_effects);
+                flight.set_weapon_effects(launch.weapon_effects);
+                flight.set_engine_glows(launch.engine_glows);
+                flight.set_sprite_load(launch.sprite_load());
                 flight.set_sound_prefs(prefs.sound);
             }
         }

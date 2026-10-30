@@ -268,7 +268,7 @@
 //! | [`FaceNavSlot`](RuleKey::FaceNavSlot) | `face_nav_slot` | in nav mode 3 the face-target key faces stellar record [the selected system's link slot], `spöb` 128 + slot, as it reads +0x6c as a stellar index whatever the mode (@0x6af2a-0x6af65, @0x6afa4-0x6afea; see the session's `steering` module) | mode 3 has no stellar to face\* |
 //! | [`InertialDampener`](RuleKey::InertialDampener) | `inertial_dampener` | an `oütf` of `ModType` 38 makes only the player's ship inertialess; an NPC is inertialess only by its hull's `Flags2` 0x0040 (`_ShipIsInertialess` @0x7a10-0x7a26; see [`inertialess`](crate::inertialess)) | any ship carrying one is inertialess, an NPC's default items included ("makes ship inertialess") |
 //! | [`EscapeShipCut`](RuleKey::EscapeShipCut) | `escape_ship_cut` | the shield roll and velocity halving of a dying NPC's last launch land on the ship in slot 1, or on the player when no fighter launched (`_HandleShip` @0x354ea-0x35553; see `nova_sim::npc_escape`) | on the fighter launched; nothing when none is\* |
-//! | [`WeaponEffectsNextLaunch`](RuleKey::WeaponEffectsNextLaunch) | `weapon_effects_next_launch` | a change of the Weapon Effects preference takes effect at the next launch, the Preferences dialog drawing "(Changes will take effect the next time you run Nova)" while the box differs from the launch value (`_LoadPrefs` @0xceeda-0xcef11, `_LoadExtendedShipSprites` @0x2343c-0x2344b, `settingsChange:` @0xd0b01; see `nova::app::screen`) | at once, with no notice\* |
+//! | [`WeaponEffectsNextLaunch`](RuleKey::WeaponEffectsNextLaunch) | `weapon_effects_next_launch` | a change of the Weapon Effects, Engine Glows, Ship Animations or Running Lights preference takes effect at the next launch, the Preferences dialog drawing "(Changes will take effect the next time you run Nova)" while any of their boxes differs from its launch value (`_LoadPrefs` @0xcee57-0xcef50, `_LoadExtendedShipSprites` @0x22ac3-0x2344b, `settingsChange:` @0xd0b01-0xd0c40; see `nova::app::screen` and `nova_view::ui::prefs`) | at once, with no notice\* |
 //! | [`ReusedShotSlotSpin`](RuleKey::ReusedShotSlotSpin) | `reused_shot_slot_spin` | a new shot starts on the spin timer its shot slot's last spinning shot left, as `_SpawnShot` never writes +0x1c (@0x3e550-0x3f143), so its first frame step can come early (`_HandleShot` @0x35884-0x358c4; see `nova_sim::combat::spin_timer`) | every shot starts its spin timer on 0\* |
 //! | [`HitFocus`](RuleKey::HitFocus) | `hit_focus` | a ship attacking (goal 4) its target (+0x70, as the pass's earlier hits left it) within 44° of the heading it last wanted as the pass began keeps its target when hit, unless the attacker is nearer than half its target's distance (dist² not above 0.25 × its target's); its lead's answer, the turn on the player, the wait cut and the grudge go with it (`_DamageShip` @0x3bbf3-0x3bcac; see `nova_sim::ai::react`) | it keeps its target only when that target is nearer than half the attacker's distance and ahead, by its float heading against the bearing; the lead of an escort hit tests its own target; every answered player hit holds the grudge\* |
 //! | [`UndisplayedShips`](RuleKey::UndisplayedShips) | `undisplayed_ships` | a ship its slot has not displayed since it came (a fighter the player launches, the eject's hulk, a ship spawned below its spawner's slot) is neither walked by the collision passes nor drawn until its slot's display step, as an inactive slot's display hides its sprites (@0x2b555-0x2b60a) and the walk skips a hidden sprite (@0xacba3); it is hovered and clicked where its slot's last ship was last laid out, in that ship's frames, as only a display places the slot's rect (@0x2cd9d, `_HandleMouse` @0x38177; see `nova_sim::Session::hover_place`); `_PrepareAllSprites` (@0x3a75a) displays every slot at each entry into flight (see `nova_sim::Session::prepare_all_sprites`) | walked, drawn and boxed where it is from the moment it is in the system\* |
@@ -3543,18 +3543,26 @@ rule_keys! {
     /// ship's escape ship, so the other reading is the intended behaviour,
     /// not anything the Bible says.
     EscapeShipCut => "escape_ship_cut",
-    /// When a change of the Weapon Effects preference reaches the flight
-    /// (see `nova::app::screen` and `nova_view::ui::prefs`). By the
-    /// engine, as the original reads `WeaponEffects` only at launch
-    /// (`_LoadPrefs` @0xceeda-0xcef11, which only `_InitEVNova` calls,
-    /// @0x4677b, @0x467d2) and loads the ships' weapon sprites only there
-    /// (`_LoadExtendedShipSprites` @0x2343c-0x2344b): at the next launch,
-    /// the change saved at once and the Preferences dialog drawing "(Changes
-    /// will take effect the next time you run Nova)" while the box differs
-    /// from the value the game launched with (`settingsChange:` @0xd0b01,
-    /// @0xd0bf8-0xd0c40). By the other reading, at once, with no notice.
-    /// The Bible says nothing of it, so the other reading is the intended
-    /// behaviour, not anything the Bible says.
+    /// When a change of the Weapon Effects, Engine Glows, Ship Animations
+    /// or Running Lights preference reaches the flight (see
+    /// `nova::app::screen`, `nova_view::ui::prefs` and
+    /// `nova_view::LaunchPrefs`). By the engine, as the original reads the
+    /// four only at launch (`_LoadPrefs`: `WeaponEffects` +0x10
+    /// @0xceeda-0xcef11, `ShipAnimations` +0xe @0xcee57-0xcee93,
+    /// `EngineGlows` +0xf @0xcee96-0xceed2, `RunningLights` +0x11
+    /// @0xcef14-0xcef50; only `_InitEVNova` calls it, @0x4677b, @0x467d2)
+    /// and loads the ships' sprites by them only there
+    /// (`_LoadExtendedShipSprites` @0x47371: the weapon sprites
+    /// @0x2343c-0x2344b, the sets @0x22ac3-0x22b1e, the glow
+    /// @0x22e07-0x22e25, the lights @0x230d7-0x230f5): at the next launch,
+    /// the change saved at once and the Preferences dialog drawing
+    /// "(Changes will take effect the next time you run Nova)" while any
+    /// of the four boxes differs from the value the game launched with
+    /// (`settingsChange:` @0xd0b01, @0xd0b90-0xd0c40). By the other
+    /// reading, at once, with no notice. The key keeps Weapon Effects'
+    /// name, which the first of the four gave it, so overrides already
+    /// saved still load. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
     WeaponEffectsNextLaunch => "weapon_effects_next_launch",
     /// Which spin timer a new shot starts on (see
     /// `nova_sim::combat::spin_timer` and `nova_sim::combat::shot_slots`).

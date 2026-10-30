@@ -790,6 +790,55 @@ fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_
     assert!(!flight(&again).smoke_trails());
 }
 
+#[test]
+fn the_ship_drawing_boxes_clicked_off_in_flight_are_saved_and_wait_for_a_restart() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('f'));
+    harness.settle();
+    let launched = flight(&harness).sprite_load();
+    assert!(launched.ship_animations && launched.running_lights);
+    assert!(flight(&harness).engine_glows());
+    harness.command_comma();
+    for (key, point) in [
+        (
+            "ship_animations",
+            harness.dialog().ship_animations().rect().center(),
+        ),
+        (
+            "engine_glows",
+            harness.dialog().engine_glows().rect().center(),
+        ),
+        (
+            "running_lights",
+            harness.dialog().running_lights().rect().center(),
+        ),
+    ] {
+        harness.click(point);
+        assert_eq!(saved(&store)[key], false, "{key}");
+        assert!(harness.dialog().relaunch_notice_shown(), "{key}");
+    }
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(
+        flight(&harness).sprite_load(),
+        launched,
+        "the running game keeps its sprites until the next launch"
+    );
+    assert!(flight(&harness).engine_glows());
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('f'));
+    again.settle();
+    let load = flight(&again).sprite_load();
+    assert!(
+        !load.ship_animations && !load.running_lights,
+        "off after a restart"
+    );
+    assert!(!flight(&again).engine_glows());
+}
+
 /// Where flight draws its hover cursor.
 fn cursor(harness: &Harness) -> Option<Point> {
     harness

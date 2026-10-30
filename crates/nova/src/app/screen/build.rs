@@ -37,7 +37,7 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DescriptionSource, DialogResources, DialogTemplate,
     HaggleDialog, PlunderDialog, PrefsDialog, YesNoDialog,
 };
-use nova_view::{Input, Key, Navigator, Prefs, Screen, ScreenAction, Showing};
+use nova_view::{Input, Key, LaunchPrefs, Navigator, Prefs, Screen, ScreenAction, Showing};
 
 use super::port_dialogs::refresh_spaceport;
 use super::{
@@ -69,7 +69,7 @@ impl AppScreen {
             spaceport: None,
             sounds: Vec::new(),
             prefs: Prefs::default(),
-            launch_weapon_effects: Prefs::default().weapon_effects,
+            launch: LaunchPrefs::of(&Prefs::default()),
             preferences: None,
             prefs_change: None,
             display_choice: None,
@@ -405,6 +405,7 @@ impl AppScreen {
         start: FlightStart,
         last_refresh: Option<LastRefresh>,
     ) -> FlightView<Rc<GameData>> {
+        let launch = self.flight_launch_prefs();
         let flight = open_flight(
             Rc::clone(&self.data),
             start,
@@ -416,7 +417,9 @@ impl AppScreen {
         .with_hyperspace_effects(self.prefs.hyperspace_effects)
         .with_smoke_trails(self.prefs.smoke_trails)
         .with_parallax_starfield(self.prefs.parallax_starfield)
-        .with_weapon_effects(self.flight_weapon_effects())
+        .with_weapon_effects(launch.weapon_effects)
+        .with_engine_glows(launch.engine_glows)
+        .with_sprite_load(launch.sprite_load())
         .with_sound_prefs(self.prefs.sound)
         .with_double_time(self.double_time)
         .with_frame_rate_shown(self.frame_rate_shown)
@@ -611,32 +614,35 @@ impl AppScreen {
 
     /// The router with the player's preferences, `prefs`, which the
     /// Preferences dialog opens on: the game's preferences at launch,
-    /// whose Weapon Effects every flight then takes while a change waits
-    /// for the next launch (`nova_sim::RuleKey::WeaponEffectsNextLaunch`).
+    /// whose Weapon Effects, Engine Glows, Ship Animations and Running
+    /// Lights ([`LaunchPrefs`]) every flight then takes while a change
+    /// waits for the next launch
+    /// (`nova_sim::RuleKey::WeaponEffectsNextLaunch`).
     #[must_use]
     pub fn with_prefs(self, prefs: Prefs) -> Self {
         self.movies.set_on(prefs.quicktime_movies);
         Self {
             prefs,
-            launch_weapon_effects: prefs.weapon_effects,
+            launch: LaunchPrefs::of(&prefs),
             ..self
         }
     }
 
-    /// Whether a change of Weapon Effects waits for the next launch, as
-    /// the original's does: `nova_sim::RuleKey::WeaponEffectsNextLaunch`'s
-    /// engine reading.
-    pub(super) fn weapon_effects_wait(&self) -> bool {
+    /// Whether a change of a preference read only at launch waits for the
+    /// next launch, as the original's does:
+    /// `nova_sim::RuleKey::WeaponEffectsNextLaunch`'s engine reading.
+    pub(super) fn launch_prefs_wait(&self) -> bool {
         self.rules.source_for(RuleKey::WeaponEffectsNextLaunch) == RuleSource::Engine
     }
 
-    /// The Weapon Effects a flight takes: the launch value while a change
-    /// waits for the next launch, else the one last chosen.
-    pub(super) fn flight_weapon_effects(&self) -> bool {
-        if self.weapon_effects_wait() {
-            self.launch_weapon_effects
+    /// The preferences read only at launch that a flight takes: the
+    /// launch values while a change waits for the next launch, else the
+    /// ones last chosen.
+    pub(super) fn flight_launch_prefs(&self) -> LaunchPrefs {
+        if self.launch_prefs_wait() {
+            self.launch
         } else {
-            self.prefs.weapon_effects
+            LaunchPrefs::of(&self.prefs)
         }
     }
 
