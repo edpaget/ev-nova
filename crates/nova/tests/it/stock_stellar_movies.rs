@@ -72,6 +72,30 @@ fn listers(data: &GameData) -> Vec<(i16, SystemId)> {
         .collect()
 }
 
+/// The session's own read of a `dësc` (rdm:phase/movies/phase-5-desc-load-order:
+/// the port's own as the landing settles, the rescue's 13999 first in the
+/// rescue) reads the stock `dësc`s as the view's reads do, so the two
+/// adapters can't drift apart.
+#[test]
+fn the_sessions_desc_read_matches_the_views_over_the_stock_data() {
+    use nova_view::ui::catalog::DescriptionSource;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for id in [AURORA, nova_sim::escape::RESCUE_DESC] {
+        let read = PilotCatalog::desc_text(&data, id).expect("read");
+        assert_eq!(Ok(read.text), data.description(id), "{id}");
+        assert_eq!(read.movie, data.description_movie(id), "{id}");
+    }
+    let aurora = PilotCatalog::desc_text(&data, AURORA).and_then(|desc| desc.movie);
+    assert_eq!(
+        aurora.map(|movie| (movie.file, movie.after, movie.double_size, movie.cinematic)),
+        Some(("flyby.qt".to_owned(), false, false, false)),
+        "Flags 0"
+    );
+}
+
 #[test]
 fn only_auroras_stellar_desc_names_a_movie_and_no_hypergate_leads_to_one() {
     let Some(dir) = common::nova_data() else {
