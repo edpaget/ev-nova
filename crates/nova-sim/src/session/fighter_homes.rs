@@ -135,8 +135,8 @@ mod tests {
     use crate::session::Assigned;
     use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::session::fighters::tests::{
-        VIPER, VIPER_FIELDS, VIPERS, bay, carrying, fleet, flying_by, out, pilot, raided,
-        until_docked, variant_bay, variants,
+        VARIANT, VIPER, VIPER_FIELDS, VIPERS, aboard, bay, carrying, fleet, flying_by, out, pilot,
+        raided, until_docked, variant_bay, variants,
     };
     use crate::session::tests::{captured, kitted};
     use crate::stats::ShipStats;
@@ -211,13 +211,18 @@ mod tests {
         assert!(!session.take_save_due(), "nothing lost");
     }
 
-    /// `session`'s `fighter` Viper of `raider`, 10 off it within its reach,
-    /// ordered home: its NPC.
+    /// [`docking_fighter`] of a Viper.
     fn docking_viper(session: &mut Session, raider: NpcId, reach: f32) -> NpcId {
+        docking_fighter(session, raider, VIPER, reach)
+    }
+
+    /// A fighter of type `ship` of `raider`, 10 off it within its reach,
+    /// ordered home: its NPC.
+    fn docking_fighter(session: &mut Session, raider: NpcId, ship: ShipId, reach: f32) -> NpcId {
         let at = session.space.npc(raider).expect("there").state.position;
         let mut fighter =
             crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
-        fighter.ship = VIPER;
+        fighter.ship = ship;
         fighter.state.position = at + Vec2::new(10.0, 0.0);
         fighter.goal = Goal::Dock(ShipRef::Npc(raider));
         fighter.carrier = Some(Carrier {
@@ -271,6 +276,18 @@ mod tests {
             session.space.npc(raider).map(|npc| npc.rounds.clone()),
             bays_held
         );
+    }
+
+    #[test]
+    fn an_npc_carriers_variant_docks_into_its_bay_of_the_sprite_base() {
+        let catalog = variants();
+        let (mut session, raider, _) = raided(&catalog);
+        let before = aboard(&session, raider);
+        let fighter = docking_fighter(&mut session, raider, VARIANT, 60.0);
+        assert_eq!(session.fighters_staying_out(), BTreeSet::new(), "a bay");
+        work(&mut session, &catalog, Controls::default());
+        assert!(session.space.npc(fighter).is_none(), "aboard");
+        assert_eq!(aboard(&session, raider), before + 1, "a round of the bay");
     }
 
     #[test]
@@ -399,6 +416,24 @@ mod tests {
             "70 off, within the new width and beyond the old"
         );
         assert_eq!(session.pilot().owned(VIPERS), 1, "into its bay");
+    }
+
+    #[test]
+    fn a_change_of_class_leaves_an_npc_carriers_fighters_reach_alone() {
+        let catalog = prize_catalog();
+        let mut session = captured(&catalog);
+        let theirs = Carrier {
+            ship: ShipRef::Npc(NpcId(1)),
+            window: 100.0,
+            reach: 60.0,
+        };
+        let fighter = led_by_prize(&mut session, |npc| {
+            npc.leader = Some(NpcId(1));
+            npc.carrier = Some(theirs);
+        });
+        take_over(&mut session, false);
+        let npc = session.space.npc(fighter).expect("there");
+        assert_eq!(npc.carrier, Some(theirs), "not the player's sprite");
     }
 
     #[test]
