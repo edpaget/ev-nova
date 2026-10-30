@@ -35,9 +35,9 @@ const NAME_GAP: f32 = 4.0;
 const NAME_SIZE: f32 = 14.0;
 /// How far below a placeholder's name the reason goes.
 const MESSAGE_GAP: f32 = 18.0;
-/// Half the side `_GetSpriteXSize` and `_GetSpriteYSize` give a slot
-/// whose frames count none (@0x26e5-0x26ef, @0x2714-0x271e).
-const FROZEN_HALF_SIDE: f32 = 16.0;
+/// The side `_GetSpriteXSize` and `_GetSpriteYSize` give a slot whose
+/// frames count none (@0x26e5-0x26ef, @0x2714-0x271e).
+const FROZEN_SIDE: u32 = 32;
 
 /// One stellar, placed in the scene.
 #[derive(Clone, Debug, PartialEq)]
@@ -211,21 +211,23 @@ impl SceneStellar {
         }
     }
 
-    /// Where its sprite of `size` is centred when the stellar's centre is
-    /// at `at` on screen: there, or, for a frozen frame, where the
-    /// original places a 32-pixel slot (its top left at the centre less
-    /// 16 on each axis, `_GetSpriteXSize` @0x26d4-0x2701 and
+    /// Where its sprite of `size` is centred as `camera` draws it: placed
+    /// as the original places the slot, at whole pixels from the camera's
+    /// centre ([`Camera::sprite_top_left`], `_HandleStellarSprites`
+    /// @0x2eeab-0x2ef1a), by the frame's size, or, for a frozen frame, as
+    /// a 32-pixel slot (`_GetSpriteXSize` @0x26d4-0x2701 and
     /// `_SWSetSpriteLocation` moving the rect without resizing it,
-    /// @0xab66d-0xab6a0).
-    fn sprite_centre(&self, at: Point, (width, height): (f32, f32)) -> Point {
-        if self.frozen {
-            Point::new(
-                at.x + width / 2.0 - FROZEN_HALF_SIDE,
-                at.y + height / 2.0 - FROZEN_HALF_SIDE,
-            )
+    /// @0xab66d-0xab6a0). The frame keeps its own size from that top left.
+    fn sprite_centre(&self, camera: &Camera, (width, height): (f32, f32)) -> Point {
+        // A frame's size is a whole number of pixels.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let placed_as = if self.frozen {
+            (FROZEN_SIDE, FROZEN_SIDE)
         } else {
-            at
-        }
+            (width as u32, height as u32)
+        };
+        let top_left = camera.sprite_top_left(self.position, placed_as);
+        Point::new(top_left.x + width / 2.0, top_left.y + height / 2.0)
     }
 }
 
@@ -476,15 +478,18 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
     by_id.sort_by_key(|stellar| stellar.id);
     let mut labels = Vec::new();
     for stellar in by_id {
-        let centre = camera.world_to_screen(stellar.position);
         let (at, (width, height)) = match (stellar.drawn(), stellar.shown_image()) {
-            (None | Some(Ok(_)), None) => (centre, (0.0, 0.0)),
+            (None | Some(Ok(_)), None) => (camera.world_to_screen(stellar.position), (0.0, 0.0)),
             (_, Some((image, size))) => {
-                let at = stellar.sprite_centre(centre, size);
+                let at = stellar.sprite_centre(camera, size);
                 list.sprite(image, at, Color::WHITE);
                 (at, size)
             }
             (Some(Err(message)), None) => {
+                // Placed as a sprite of its side.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let side = PLACEHOLDER_SIZE as u32;
+                let centre = camera.sprite_centre(stellar.position, (side, side));
                 crossed_box(list, centre, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
                     centre.x - PLACEHOLDER_SIZE / 2.0,
@@ -1526,6 +1531,156 @@ mod tests {
             ..WHOLE
         });
         assert!(scene.stellars().iter().all(|s| s.frozen && s.counts_none));
+    }
+
+    /// A camera on a fractional point, as flight's follows the ship.
+    fn off_pixel() -> Camera {
+        Camera::centred_on(Point::new(0.4, -0.6))
+    }
+
+    /// What `draw_stellars` draws of `scene` with `camera`.
+    fn list_with(scene: &SystemScene, camera: &Camera) -> DrawList {
+        let mut list = DrawList::new();
+        draw_stellars(&mut list, scene, camera);
+        list
+    }
+
+    /// The top left of the sprite of `image` drawn in `list`, `size` in
+    /// size.
+    fn top_left_in(list: &DrawList, image: ImageKey, (width, height): (f32, f32)) -> Point {
+        list.iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Sprite {
+                    image: drawn,
+                    center,
+                    ..
+                } if *drawn == image => {
+                    Some(Point::new(center.x - width / 2.0, center.y - height / 2.0))
+                }
+                _ => None,
+            })
+            .expect("the sprite is drawn")
+    }
+
+    /// System 136: stellars of 7 x 6 and 6 x 7 frames on each side of the
+    /// centre.
+    fn odd_sized() -> SystemScene {
+        let sized = |image_id, (frame_width, frame_height)| StellarSheet {
+            frame_width,
+            frame_height,
+            ..sheet(image_id, 1)
+        };
+        let stellars = vec![
+            stellar(160, 10, 20, Ok(sized(1160, (7, 6)))),
+            stellar(161, -10, -20, Ok(sized(1161, (7, 6)))),
+            stellar(162, 10, -20, Ok(sized(1162, (6, 7)))),
+            stellar(163, -10, 20, Ok(sized(1163, (6, 7)))),
+        ];
+        SystemScene::load(
+            &FakeCatalog::new(vec![system(136, stellars)]),
+            SystemId(136),
+        )
+    }
+
+    #[test]
+    fn a_stellar_is_drawn_at_whole_pixels_from_the_camera_its_odd_pixel_right_and_below() {
+        let scene = odd_sized();
+        let camera = off_pixel();
+        let list = list_with(&scene, &camera);
+        for (image, (x, y), size) in [
+            (1160, (10.0, 20.0), (7, 6)),
+            (1161, (-10.0, -20.0), (7, 6)),
+            (1162, (10.0, -20.0), (6, 7)),
+            (1163, (-10.0, 20.0), (6, 7)),
+        ] {
+            #[allow(clippy::cast_precision_loss)]
+            let drawn = top_left_in(
+                &list,
+                ImageKey::sprite(image, 0),
+                (size.0 as f32, size.1 as f32),
+            );
+            assert_eq!(
+                drawn,
+                camera.sprite_top_left(Point::new(x, y), size),
+                "{image}"
+            );
+        }
+        // (9.6, 20.6) truncates to (9, 20) and 7 x 6 halves to (3, 3);
+        // (-10.4, -19.4) to (-10, -19) and 6 x 7 to (3, 3), toward zero.
+        let anchor = camera.anchor();
+        assert_eq!(
+            top_left_in(&list, ImageKey::sprite(1160, 0), (7.0, 6.0)),
+            Point::new(anchor.x + 6.0, anchor.y + 17.0)
+        );
+        assert_eq!(
+            top_left_in(&list, ImageKey::sprite(1163, 0), (6.0, 7.0)),
+            Point::new(anchor.x - 13.0, anchor.y + 17.0)
+        );
+    }
+
+    #[test]
+    fn a_stellars_name_sits_under_its_placed_sprite() {
+        let scene = odd_sized();
+        let camera = off_pixel();
+        let list = list_with(&scene, &camera);
+        let top_left = top_left_in(&list, ImageKey::sprite(1160, 0), (7.0, 6.0));
+        let name = list
+            .iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Text { text, origin, .. } if text == "Stellar 160" => {
+                    Some(*origin)
+                }
+                _ => None,
+            })
+            .expect("named");
+        assert_eq!(name, Point::new(top_left.x, top_left.y + 6.0 + NAME_GAP));
+    }
+
+    #[test]
+    fn a_frozen_stellar_sits_as_a_32_pixel_slot_at_whole_pixels() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.set_destroyed(|id: StellarId| StellarLook {
+            frozen: id == StellarId(153),
+            ..WHOLE
+        });
+        let camera = off_pixel();
+        let list = list_with(&scene, &camera);
+        // Its 8-pixel frame's top left is the 32-pixel slot's.
+        assert_eq!(
+            top_left_in(&list, ImageKey::sprite(1003, 0), (8.0, 8.0)),
+            camera.sprite_top_left(Point::new(300.0, 0.0), (32, 32))
+        );
+    }
+
+    #[test]
+    fn a_stellars_placeholder_sits_as_a_sprite_of_its_size() {
+        let scene = SystemScene::load(&catalog(), SystemId(130));
+        let camera = off_pixel();
+        let list = list_with(&scene, &camera);
+        let side = PLACEHOLDER_SIZE;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let top_left =
+            camera.sprite_top_left(Point::new(-1700.0, 900.0), (side as u32, side as u32));
+        let corner = list.iter().find_map(|command| match command {
+            crate::DrawCommand::Line { from, .. } if *from == top_left => Some(*from),
+            _ => None,
+        });
+        assert_eq!(corner, Some(top_left), "its box's top left");
+        let reason = list
+            .iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Text { text, origin, .. }
+                    if text.starts_with("Sprite unavailable") =>
+                {
+                    Some(*origin)
+                }
+                _ => None,
+            })
+            .expect("why");
+        assert_eq!(
+            reason,
+            Point::new(top_left.x, top_left.y + side + NAME_GAP + MESSAGE_GAP)
+        );
     }
 
     #[test]
