@@ -261,6 +261,7 @@ impl AppScreen {
     /// tick made, the Board key held, opens as a press's does
     /// ([`AppScreen::open_frame_boarding`]).
     pub(super) fn after_flight_tick(&mut self) {
+        self.settle_flight_movie();
         self.open_frame_boarding();
         if self
             .flight
@@ -279,6 +280,25 @@ impl AppScreen {
                 self.end_flight(self.return_to);
                 self.fade_in = Some(ScreenFade::from_black(DEATH_FADE_FOR));
             }
+        }
+    }
+
+    /// Takes what a stellar's movie in front of flight left once it has
+    /// ended ([`FlightView::playing`]): the landing it held back shows the
+    /// spaceport, and what was pressed under it goes to what is shown
+    /// next, the spaceport or flight
+    /// ([`FlightView::take_movie_replay`]), as the original's queued
+    /// events reach the next event loop. Nothing while it plays.
+    pub(super) fn settle_flight_movie(&mut self) {
+        let Some(flight) = self.flight.as_mut().filter(|flight| !flight.playing()) else {
+            return;
+        };
+        let replay = flight.take_movie_replay();
+        if let Some(stellar) = flight.take_landing() {
+            self.show_spaceport(stellar);
+        }
+        for input in replay {
+            let _ = self.routed_input(&input);
         }
     }
 

@@ -310,6 +310,12 @@ impl AppScreen {
     /// target). When it lands, the
     /// spaceport shows.
     pub(super) fn flight_input(&mut self, input: &Input) -> ScreenAction {
+        let flight = self.flight.as_mut().expect(ENTERED);
+        if flight.playing() {
+            flight.input(input);
+            self.settle_flight_movie();
+            return ScreenAction::None;
+        }
         if let Input::Key {
             key: Key::Escape,
             pressed,

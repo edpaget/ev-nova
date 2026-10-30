@@ -377,14 +377,18 @@ impl AppScreen {
     /// every input, the Preferences keys and the side's own keys
     /// included, as `_DoSystemSearch`'s `ModalDialog` takes every event
     /// (@0x11dd1): flight's course map, the bar's map over the spaceport,
-    /// or the galaxy viewer.
+    /// or the galaxy viewer. A stellar's movie in front of flight takes
+    /// every input too, as `_PlayQTMovie`'s loop is modal (@0x55de0),
+    /// and goes to flight, which plays it
+    /// ([`FlightView::playing`]).
     fn map_takes_every_key(&self) -> bool {
         match self.side {
             // In port, flight's map is open only as the bar's or a mission
             // dialog's.
-            Side::Flight | Side::Spaceport => {
-                self.flight.as_ref().is_some_and(FlightView::map_finding)
-            }
+            Side::Flight | Side::Spaceport => self
+                .flight
+                .as_ref()
+                .is_some_and(|flight| FlightView::map_finding(flight) || flight.playing()),
             Side::Galaxy => self.galaxy.system().is_none() && self.galaxy.map().finding(),
             Side::MainMenu | Side::Ships => false,
         }

@@ -396,15 +396,23 @@ fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
         .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
+    assert_eq!(
+        screen.showing(),
+        Showing::Movie,
+        "the landing plays the stellar's movie (@0x632a7)"
+    );
+    ticked(&mut screen, 2);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    let landing = [Call::Start("Port.mov".into()), Call::Stop];
     click_port_item(&mut screen, 10);
     assert!(
         spaceport(&screen).mission_text().is_some(),
         "nothing available here"
     );
-    assert!(reeled(&reel).is_empty());
+    assert_eq!(reeled(&reel), landing);
     screen.input(&key(Key::Enter, true));
     assert_eq!(
-        reeled(&reel),
+        reeled(&reel)[landing.len()..],
         [Call::Start("Port.mov".into())],
         "the stellar's dësc was the last loaded (@0x5f96b), and the refusal's \
          after-check reads it (@0xa3956, @0x5b40b)"

@@ -446,9 +446,10 @@ impl Screen for AppScreen {
             return hides;
         }
         match self.showing() {
-            Showing::Movie => match &self.missions {
-                Some(missions) => missions.hides_pointer(),
-                None => self.offer.as_ref().is_some_and(Screen::hides_pointer),
+            Showing::Movie => match (&self.missions, &self.offer) {
+                (Some(missions), _) => missions.hides_pointer(),
+                (None, Some(offer)) => offer.hides_pointer(),
+                (None, None) => self.shown().hides_pointer(),
             },
             Showing::Flight | Showing::Spaceport => self.shown().hides_pointer(),
             _ => false,

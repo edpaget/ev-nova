@@ -28,12 +28,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::common::{EntryHarness, Frames};
-use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
 use nova_audio::{Audio, AudioCommand, AudioCore};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::desc::Desc;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
@@ -48,6 +49,7 @@ use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
+use nova_sim::DescMovie;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
 use nova_sim::hyperspace::{HyperlinkRule, MIN_JUMP_DISTANCE};
@@ -56,9 +58,11 @@ use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
 use nova_view::galaxy::dialog::map_area;
 use nova_view::menu::MenuChoice;
+use nova_view::movie::MoviePlayer;
+use nova_view::movie::fixture::{Call, MockMoviePlayer};
 use nova_view::sound::SimSound;
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::{Key, MouseButton, Point};
+use nova_view::{Key, MouseButton, Point, Prefs};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -270,6 +274,12 @@ impl Harness {
     /// from the ship browser with F.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
         let screen = start_screen(Rc::clone(&data)).with_chance(chance);
+        Self::flying_in(data, screen)
+    }
+
+    /// The app over `data`, showing `screen`, in flight, entered from the
+    /// ship browser with F.
+    fn flying_in(data: Rc<GameData>, screen: AppScreen) -> Self {
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -748,7 +758,17 @@ fn hypergate(x: i16, y: i16, angle: i16, links: &[i16]) -> Vec<u8> {
 /// starts, linked to hypergate 132 in Gamma at (50, 60), which heads ships
 /// out on 90°.
 fn gate_data() -> Rc<GameData> {
-    let fork = ForkBuilder::new()
+    gate_data_with(gate_fork())
+}
+
+/// `fork` loaded, with the bracket art.
+fn gate_data_with(fork: ForkBuilder) -> Rc<GameData> {
+    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
+}
+
+/// [`gate_data`]'s resources, before they are loaded.
+fn gate_fork() -> ForkBuilder {
+    ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim())
@@ -794,15 +814,19 @@ fn gate_data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
-    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
 }
 
 impl Harness {
     /// In flight over [`gate_data`], L pressed twice over HG-Alpha: the
     /// hypergate map is open, and Gamma clicked on it.
     fn gamma_picked() -> Self {
-        let mut harness = Self::flying_over(gate_data(), SharedChance::default());
+        Self::gamma_picked_in(gate_data(), start_screen(gate_data()))
+    }
+
+    /// [`Harness::gamma_picked`] over `data`, showing `screen`.
+    fn gamma_picked_in(data: Rc<GameData>, screen: AppScreen) -> Self {
+        let mut harness = Self::flying_in(data, screen);
         harness.frame();
         harness.press(Key::Char('l'));
         harness.approach();
@@ -825,3 +849,62 @@ fn a_hypergate_picked_on_the_map_brings_the_ship_into_its_system() {
 }
 
 crate::common::entry_harness!(Harness, click, frame);
+
+/// A `dësc` of "Gate." naming the movie "Gate.mov", played after the
+/// dialog (`Flags` 0x0001), so the `STR#` texts read it as the last
+/// loaded.
+fn filmed_desc() -> Vec<u8> {
+    let text = b"Gate.";
+    let mut bytes = text.to_vec();
+    bytes.push(0);
+    bytes.extend((-1_i16).to_be_bytes());
+    bytes.extend([0; 34]);
+    let at = text.len() + 3;
+    bytes[at..at + 8].copy_from_slice(b"Gate.mov");
+    bytes[at + 32..at + 34].copy_from_slice(&0x0001_u16.to_be_bytes());
+    bytes
+}
+
+/// [`Harness::gamma_picked`] over [`gate_data`] with `dësc` 130, Gamma's
+/// number, naming "Gate.mov", movies played through a new
+/// [`MockMoviePlayer`] while `on`.
+fn gamma_picked_filmed(on: bool) -> (Harness, Rc<MockMoviePlayer>) {
+    let data = gate_data_with(gate_fork().resource(Desc::TYPE, 130, None, &filmed_desc()));
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let screen = start_screen(Rc::clone(&data))
+        .with_prefs(Prefs {
+            quicktime_movies: on,
+            ..Prefs::default()
+        })
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+    (Harness::gamma_picked_in(data, screen), reel)
+}
+
+#[test]
+fn a_hypergate_entry_with_movies_on_leaves_its_descs_movie_the_last_loaded() {
+    let (mut harness, reel) = gamma_picked_filmed(true);
+    assert_eq!(harness.session().loaded_after_movie(), None);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Movie);
+    assert_eq!(
+        harness.session().loaded_after_movie(),
+        DescMovie::from_desc("Gate.mov", 0x0001),
+        "dësc 130, Gamma's number, by the engine (@0x639cc)"
+    );
+    assert_eq!(harness.session().system(), SystemId(128), "not yet entered");
+    assert_eq!(reel.calls().first(), Some(&Call::Start("Gate.mov".into())));
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() == Showing::Flight
+    });
+    assert_eq!(harness.session().system(), SystemId(130));
+}
+
+#[test]
+fn a_hypergate_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
+    let (mut harness, reel) = gamma_picked_filmed(false);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(130));
+    assert_eq!(harness.session().loaded_after_movie(), None);
+    assert!(reel.calls().is_empty());
+}

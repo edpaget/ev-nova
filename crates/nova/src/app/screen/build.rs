@@ -406,6 +406,7 @@ impl AppScreen {
         .with_effects_chance(self.effects_chance.clone())
         .with_overlays(self.flight_overlays)
         .with_hyperspace_effects(self.prefs.hyperspace_effects)
+        .with_movies(self.movies.clone())
         .with_smoke_trails(self.prefs.smoke_trails)
         .with_parallax_starfield(self.prefs.parallax_starfield)
         .with_weapon_effects(self.flight_weapon_effects())
@@ -749,6 +750,7 @@ impl AppScreen {
             Side::Flight if self.flight.as_ref().is_some_and(FlightView::map_open) => {
                 Showing::FlightMap
             }
+            Side::Flight if self.flight.as_ref().is_some_and(FlightView::playing) => Showing::Movie,
             Side::Flight => Showing::Flight,
             Side::Spaceport if self.port_map_open() => Showing::FlightMap,
             Side::Spaceport => Showing::Spaceport,
