@@ -236,6 +236,35 @@ pub(super) mod tests {
         }
     }
 
+    /// The land hint picks only an active stellar (+0x44): with the new
+    /// pilot's 131 hidden, its own 200 at (60, 60), nearer the pilot's
+    /// (50, 50), has no visible holder, so the hint names 140, which 131
+    /// still lists and visible 130 holds.
+    #[test]
+    fn the_land_hint_passes_over_a_nearer_stellar_whose_holder_is_hidden() {
+        let mut catalog = crate::testkit::starting([Some(131), None, None, None]);
+        catalog.sites = vec![
+            (SystemId(130), vec![crate::testkit::planet(140, 0.0, 0.0)]),
+            (
+                SystemId(131),
+                vec![
+                    crate::testkit::planet(140, 0.0, 0.0),
+                    crate::testkit::planet(200, 60.0, 60.0),
+                ],
+            ),
+        ];
+        let mut session = new_pilot(&catalog);
+        assert_eq!(session.system(), SystemId(131));
+        let mut overlay = session.chart.galaxy.overlay().clone();
+        overlay.set_visible(SystemId(131), Some(false));
+        session.chart.galaxy.set_overlay(overlay);
+        let hint = SimMessage::Tutorial(TutorialHint::Land {
+            stellar: StellarId(140),
+            station: false,
+        });
+        assert_eq!(tick(&mut session).0, vec![hint], "200 not active");
+    }
+
     #[test]
     fn far_enough_out_a_new_pilot_is_told_so() {
         let catalog = catalog();

@@ -1314,9 +1314,10 @@ pub(super) mod tests {
         let catalog = hailable();
         let land = StellarFlags::CAN_LAND;
         let mut hidden = Box::new(at_stellar(&catalog, land, 0));
-        // Listed no more, so no candidate: not active.
-        hidden.chart.sites.retain(|site| site.id != StellarId(128));
-        hidden.chart.listed.retain(|site| site.id != StellarId(128));
+        // Still shown and listed, but its holder hidden: not active.
+        let mut overlay = hidden.chart.galaxy.overlay().clone();
+        overlay.set_visible(hidden.pilot.system, Some(false));
+        hidden.chart.galaxy.set_overlay(overlay);
         for (mut session, why) in [
             (
                 Box::new(at_stellar(&catalog, land | StellarFlags::UNINHABITED, 0)),
