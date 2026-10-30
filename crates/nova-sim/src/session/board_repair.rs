@@ -8,8 +8,8 @@
 //! plundered. The path is
 //! [`recovery`](crate::board_repair::recovery)'s, from who flies the
 //! ship, what it remembers being ([`Npc::former`]), whether the fleet has
-//! room ([`Session::can_hire_escorts`]) and whether a bay carrying its
-//! type has room ([`Session::can_take_fighter`]). An own-ship path takes
+//! room ([`Session::can_hire_escorts`]) and whether a bay has room for
+//! it ([`Session::can_take_fighter`]). An own-ship path takes
 //! the place of the plunder: no Good Samaritan, no airlock, no plunder
 //! and no grant.
 //!

@@ -52,7 +52,7 @@
 //! width on both axes ([`Carrier::reach`], which the original reads live,
 //! @0x87f0b-0x87f21) it docks (`_AIAddFighterToParent` @0x802a5): a round
 //! goes to the carrier's first bay launching its type, else its first bay
-//! launching its sprite base ([`Armament::dock_bay`](crate::Armament::dock_bay),
+//! launching its sprite base ([`Armament::dock_bay`](crate::combat::armament::Armament::dock_bay),
 //! ship class +0xa08, the lowest-ID ship of its `shän`'s `BaseImage`), with
 //! no cap (the dock's `_CanBuyFighter` test @0x87fbb-0x87fe3 is for slot 0,
 //! where no fighter sits), an empty bay restarting its reload; the
