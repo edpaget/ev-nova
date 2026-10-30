@@ -1,13 +1,16 @@
 //! The ports the bundler's core reaches the outside world through: running
-//! a program, the files of the staging tree, and the environment the
-//! signing inputs come from.
+//! a program, the files of the staging tree, the environment the signing
+//! inputs come from, reading files back, and signing the update files.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::Path;
 
-/// A program to run, with every argument the core chose for it.
+use crate::appcast::key::PublicKey;
+
+/// A program to run, with every argument and environment variable the
+/// core chose for it.
 ///
 /// An argument added with [`Invocation::secret`] (a password) is passed to
 /// the program but shown as `***` by `Display` and `Debug`, so error
@@ -23,6 +26,10 @@ pub struct Invocation {
     pub capture: bool,
     /// The indexes in `args` of the secret arguments.
     pub secret: Vec<usize>,
+    /// Variables set for the program on top of the bundler's own
+    /// environment, in order. `Display` leaves them out: it is the command
+    /// line.
+    pub env: Vec<(OsString, OsString)>,
 }
 
 impl Invocation {
@@ -33,7 +40,15 @@ impl Invocation {
             args: Vec::new(),
             capture: false,
             secret: Vec::new(),
+            env: Vec::new(),
         }
+    }
+
+    /// Sets one environment variable for the program.
+    #[must_use]
+    pub fn env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((name.into(), value.into()));
+        self
     }
 
     /// Adds one argument.
@@ -101,6 +116,7 @@ impl fmt::Debug for Invocation {
             .field("args", &self.shown_args().collect::<Vec<_>>())
             .field("capture", &self.capture)
             .field("secret", &self.secret)
+            .field("env", &self.env)
             .finish()
     }
 }
@@ -164,6 +180,27 @@ pub trait Env {
     fn var(&self, name: &str) -> Option<OsString>;
 }
 
+/// Port: reads files back, as `nova-appcast` reads the installers, the
+/// release's asset list and the published feeds.
+pub trait ReadFiles {
+    /// The file's bytes.
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+
+    /// The names of the files (not the directories) in the directory,
+    /// sorted.
+    fn file_names(&self, dir: &Path) -> io::Result<Vec<String>>;
+}
+
+/// Port: signs with the update-signing key. Its `Debug`, where it has one,
+/// never shows the key.
+pub trait Signer {
+    /// The Ed25519 signature of `message`.
+    fn sign(&self, message: &[u8]) -> [u8; 64];
+
+    /// The public key the signatures verify under.
+    fn public_key(&self) -> PublicKey;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +225,18 @@ mod tests {
         let secret = Invocation::new("security").secret("pw");
         assert_ne!(plain, secret);
         assert_eq!(secret, Invocation::new("security").secret("pw"));
+    }
+
+    #[test]
+    fn an_environment_variable_is_compared_but_not_shown() {
+        let plain = Invocation::new("cargo").arg("build");
+        let with = plain.clone().env("A", "b");
+        assert_eq!(with.env, [(OsString::from("A"), OsString::from("b"))]);
+        assert_ne!(plain, with);
+        assert_eq!(with, plain.clone().env("A", "b"));
+        assert_ne!(with, plain.clone().env("A", "c"));
+        assert_eq!(with.to_string(), "cargo build");
+        let debug = format!("{with:?}");
+        assert!(debug.contains("env"), "{debug}");
     }
 }

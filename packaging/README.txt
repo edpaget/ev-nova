@@ -1,14 +1,18 @@
-ev-nova nightly build
-=====================
+ev-nova tester build
+====================
 
-A tester build of the latest `main` of https://github.com/edpaget/ev-nova.
-Each download holds:
+A tester build of https://github.com/edpaget/ev-nova: a nightly, built
+from the latest `main`, or a beta, a nightly promoted by hand once it has
+been tried. Each download holds:
 
   nova        the game: opens the game data in a window
               (Nova.app on macOS, nova.exe on Windows)
   nova-dump   writes the game data out as JSON, PNG and WAV files
   README.txt  this file
   LICENSE     GPL-3.0-or-later; covers the code, not the game data
+  NotoSans-OFL.txt, NotoSerif-OFL.txt
+              the licences of the two fonts built into nova (see
+              "Licences" below)
   share/      Linux only: the desktop entry, AppStream metadata and icons
 
 The downloads are:
@@ -17,11 +21,23 @@ The downloads are:
   ev-nova-x86_64-pc-windows-msvc.msi    Windows, an installer
   ev-nova-x86_64-pc-windows-msvc.zip    Windows, a portable copy
   ev-nova-x86_64-unknown-linux-gnu.tar.gz   Linux, a folder to copy
-  ev-nova-x86_64-unknown-linux-gnu.AppImage Linux, one file to run
   ev-nova-x86_64-unknown-linux-gnu.flatpak  Linux, a Flatpak to install
 
 EV Nova's data files are copyrighted and are not included. Supply your own
 copy of the game's `Nova Files` directory.
+
+Nightly and beta
+----------------
+
+The nightly is on the `nightly` release, and the beta on the `beta`
+release; the download page links both. A beta is the same code and build
+ID as the nightly it was promoted from.
+
+Each installed build follows its own channel: a nightly updates to newer
+nightlies, and a beta to newer betas (on macOS and Windows through the
+updater, on Linux through `flatpak update` from the channel's
+.flatpakref). To switch channels, uninstall the game and install the other
+channel's download; your settings and pilots stay where they are.
 
 Running
 -------
@@ -39,8 +55,8 @@ macOS
 -----
 
 The macOS download is a disk image (.dmg) holding Nova.app, nova-dump,
-README.txt and LICENSE. It is for Apple silicon Macs and needs macOS 13
-(Ventura) or later.
+README.txt, LICENSE and the two font licences. It is for Apple silicon
+Macs and needs macOS 13 (Ventura) or later.
 
 Open the .dmg and drag Nova.app onto the Applications folder beside it.
 It is named Nova.app, not EV Nova.app, so it never replaces the original
@@ -53,6 +69,13 @@ folder, and remembers your pick. It logs its startup to
 Nova.app and nova-dump are signed with a Developer ID and notarized by
 Apple, so Nova.app opens with a double-click, and nova-dump copied out of
 the .dmg runs from a terminal as it is.
+
+Nova.app updates itself with Sparkle: once a day it checks for a newer
+build of its channel, and EV Nova > Check for Updates... checks at once. Installing an
+update quits the game, saving the pilot you are flying, and opens the new
+build. A build without an update feed (a local `mise run bundle`) greys
+the item. Sparkle's licence is in Nova.app, as
+Contents/Resources/Sparkle-LICENSE.txt.
 
 A build made without the signing keys (a local `mise run bundle`) is
 ad-hoc signed instead: macOS blocks a downloaded copy of it until you
@@ -67,11 +90,18 @@ administrator rights, into %LOCALAPPDATA%\Programs\Nova. It adds a "Nova"
 entry to the Start menu and an "EV Nova" entry to Settings > Apps >
 Installed apps (Apps & features), where you uninstall it. Uninstalling
 removes the program but keeps your settings and pilots in
-%APPDATA%\nova. Installing a newer nightly over an older one replaces it
+%APPDATA%\nova. Installing a newer build over an older one replaces it
 in place.
 
+The installed game updates itself with WinSparkle: once a day it checks
+for a newer build of its channel and offers it. Installing an update quits the game,
+saving the pilot you are flying, installs the new build and opens it.
+WinSparkle's licences are installed beside nova.exe, as
+WinSparkle-LICENSE.txt and WinSparkle-expat-LICENSE.txt.
+
 The zip is a portable copy: unzip it anywhere and run nova.exe. Nothing
-is installed, and deleting the folder removes it.
+is installed, deleting the folder removes it, and it doesn't update
+itself.
 
 Either way the game finds your EV Nova's `Nova Files` itself, or asks you
 for your EV Nova folder and remembers your pick.
@@ -84,18 +114,19 @@ Linux
 -----
 
 Every Linux download is for x86-64 (64-bit Intel or AMD). There are
-three: the tarball, the AppImage and the Flatpak.
+two: the Flatpak and the tarball.
 
-The tarball and the AppImage need glibc 2.35 or newer: Ubuntu 22.04 or
-later, Debian 12 or later, or a current Fedora or openSUSE. They are
-built on Ubuntu 22.04, and the build checks that the game needs no newer
-glibc. They play sound through your system's ALSA, which PipeWire or
-PulseAudio serves on current desktops, and share one set of settings and
-pilots. The Flatpak brings its own runtime, so any distribution with
-Flatpak runs it, and keeps its own settings and pilots (see below).
+The tarball needs glibc 2.39 or newer: Ubuntu 24.04, Linux Mint 22,
+Debian 13, Fedora 40 or newer, or SteamOS and Arch. It is built on Ubuntu
+24.04, and the build checks that the game needs no newer glibc. On older
+releases (Ubuntu 22.04, Linux Mint 21, Debian 12), install the Flatpak
+instead. It plays sound through your system's ALSA, which PipeWire or
+PulseAudio serves on current desktops. The Flatpak brings its own
+runtime, so any distribution with Flatpak runs it, and keeps its own
+settings and pilots (see below).
 
 The tarball (.tar.gz) holds one folder with nova, nova-dump, README.txt,
-LICENSE and a share/ folder:
+LICENSE, the two font licences and a share/ folder:
 
   share/applications/io.github.edpaget.ev-nova.desktop
       the menu entry: what launchers, docks and app grids show
@@ -138,24 +169,6 @@ and logs its startup to ~/.local/state/nova/nova.log
 file, and says so in its startup log. A pilot whose name is already taken
 in the new folder is left where it was, with a warning.
 
-The AppImage
-------------
-
-The AppImage is the game in one file, with nothing to install:
-
-  chmod +x ev-nova-x86_64-unknown-linux-gnu.AppImage
-  ./ev-nova-x86_64-unknown-linux-gnu.AppImage
-
-It needs FUSE to run (fusermount3, which most desktops have; it doesn't
-need the older libfuse2). Without it, run it with
---appimage-extract-and-run. It installs nothing itself: to add it to your
-applications, use an AppImage integration tool such as Gear Lever or
-AppImageLauncher, which installs its desktop entry and icon. Without
-one, some docks (GNOME on Wayland among them) show a generic icon for its
-window. It finds the `Nova Files` and keeps its settings, pilots and log
-in the same places as the tarball above, and shares them with it.
-nova-dump is in the tarball only.
-
 The Flatpak
 -----------
 
@@ -169,6 +182,11 @@ start "EV Nova" from your applications, or run
 `flatpak run io.github.edpaget.ev-nova`. Uninstall it with
 `flatpak uninstall --user io.github.edpaget.ev-nova`.
 
+Installed from the download page's ev-nova-nightly.flatpakref instead
+(`flatpak install --user --from <it>`, or open it in Discover or GNOME
+Software), it updates to each new nightly with `flatpak update`; from
+ev-nova-beta.flatpakref, to each new beta.
+
 The sandbox lets it show its window (Wayland, or X11 where there is no
 Wayland) and use your GPU and sound. It can read, and not change, three
 folders where the game data may be: ~/.wine, ~/Games/ev-nova (Lutris)
@@ -181,8 +199,8 @@ warning boxes use the runtime's zenity.
 
 The Flatpak keeps everything in ~/.var/app/io.github.edpaget.ev-nova/:
 settings in config/nova, pilots in data/nova/Pilots and the startup log
-in .local/state/nova/nova.log. These are separate from the tarball's and
-the AppImage's: pilots are neither shared nor moved between them. To use
+in .local/state/nova/nova.log. These are separate from the tarball's:
+pilots are neither shared nor moved between them. To use
 the same pilots, copy their files from one Pilots folder to the other.
 
 Checking the icon (by hand)
@@ -193,6 +211,29 @@ start "EV Nova" from the applications list, and check that the dock (or
 the top bar's app menu) and the Alt+Tab switcher show the game's icon, a
 gold star in a ring on dark blue, and the name "EV Nova", not a generic
 icon or "nova".
+
+Licences
+--------
+
+ev-nova is free software under the GNU General Public License, version 3
+or later (GPL-3.0-or-later); LICENSE holds its text. It covers the code,
+not EV Nova's game data.
+
+nova has two fonts built in, unmodified, each under the SIL Open Font
+License, version 1.1 (OFL-1.1):
+
+  Noto Sans Regular    Copyright 2012 Google Inc.
+                       stands in for Geneva, and for Charcoal when your
+                       game data has none; licence in NotoSans-OFL.txt
+  Noto Serif Regular   Copyright 2022 The Noto Project Authors
+                       (https://github.com/notofonts/latin-greek-cyrillic)
+                       stands in for Times; licence in NotoSerif-OFL.txt
+
+Both licence files sit beside LICENSE in every download. Nova.app also
+carries them as Contents/Resources/NotoSans-OFL.txt and
+NotoSerif-OFL.txt; the Windows installer installs them beside nova.exe;
+the Flatpak keeps them, with LICENSE, in
+/app/share/licenses/io.github.edpaget.ev-nova/.
 
 More detail: the "Using your own data" section of the README,
 https://github.com/edpaget/ev-nova#using-your-own-data

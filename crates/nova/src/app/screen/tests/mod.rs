@@ -89,6 +89,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 mod appear;
+mod capture_naming;
 mod christening;
 mod death;
 mod dialog_maps;
@@ -2155,4 +2156,18 @@ impl DialogResources for InfoOverEveryOpener {
             _ => VenueDialogs.dialog_template(id),
         }
     }
+}
+
+/// The two readings of `dialog_focus_ring` the focus-ring tests open each
+/// dialog under, with the ring each gives: the default rulebook's
+/// [`FocusRing::Tab`](nova_view::ui::FocusRing::Tab), and the original's
+/// [`FocusRing::Off`](nova_view::ui::FocusRing::Off) by an engine override.
+fn focus_ring_readings() -> [(Rulebook, nova_view::ui::FocusRing); 2] {
+    [
+        (Rulebook::default(), nova_view::ui::FocusRing::Tab),
+        (
+            Rulebook::default().with_override(RuleKey::DialogFocusRing, RuleSource::Engine),
+            nova_view::ui::FocusRing::Off,
+        ),
+    ]
 }

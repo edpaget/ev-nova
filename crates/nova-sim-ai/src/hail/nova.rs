@@ -1,17 +1,26 @@
 //! Nova's hail options, the defaults: [`Greetings`],
 //! [`RequestAssistance`], [`BegForMercy`], [`Release`] and [`JoinFleet`].
-//! The first three are for any ship but the player's escort, Release for
-//! the escort alone, and Use As Escort for a person who may join.
 //!
 //! The comm dialog's buttons stand in a column (`_DrawCommDialogButtons`
-//! @0x28c43 in the `EV Nova` executable): Greetings, then the middle
-//! button, then Close Channel. The middle button reads "Beg For Mercy"
-//! for a hostile ship and "Request Assistance" otherwise, and is hidden
-//! for an untalkative one; so each option's `applies` lets only one of
-//! the two show. The labels are `STR#` 150's #22, #23 and #25; "Offer
-//! Bribe" (#24) is never shown for a ship, as Beg For Mercy is the bribe.
-//! Each option follows the rulebook's
+//! @0x28c43 in the `EV Nova` executable): Greetings, always shown, then
+//! the middle button, then Close Channel. The middle button is hidden for
+//! an untalkative ship (the government's `Flags2` 0x0001, @0x28c6e-0x28c91,
+//! the two-button layout @0x28e79-0x28eef), and otherwise reads "Beg For
+//! Mercy" for a hostile ship, "Release" for a releasable one
+//! ([`Hail::releasable`], @0x28cee-0x28d26, @0x28d6b-0x28d90) and
+//! "Request Assistance" otherwise; so each option's `applies` lets only
+//! one of the three show. The labels are `STR#` 150's #22, #23, #25 and
+//! #32; "Offer Bribe" (#24) is never shown for a ship, as Beg For Mercy is
+//! the bribe. Each option follows the rulebook's
 //! [`RuleKey::QuietHails`](crate::RuleKey::QuietHails) entry.
+//!
+//! So the player's launched fighter (AI type 5) lists Greetings and
+//! Request Assistance, as does a mission's `ShipBehav` 1 escort; a mission
+//! ship captured for an escort of any other `ShipBehav`, or of an inactive
+//! slot, lists Greetings and Release, or Greetings and Beg For Mercy while
+//! it threatens the player. A fleet escort gets the escort dialog in place
+//! of this one (`nova_sim::Session::hail_key`), so its Greetings and
+//! Release show only when the comm dialog is opened for it directly.
 //!
 //! **Greetings** (item 3 @0x9666a, key G), always listed. In order:
 //!
@@ -49,19 +58,23 @@
 //!   `'STR '` leaves "Greetings.".
 //!
 //! **Request Assistance** (item 2, @0x9625d-0x96643, key R), listed for a
-//! talkative ship that is not hostile. In order:
+//! talkative ship that is neither hostile nor releasable. In order:
 //!
 //! 1. A quiet ship, by the engine: nothing happens, and the reply stays.
 //! 2. An unfriendly ship, a plunderer or a xenophobe: "In your dreams,
 //!    pal."
-//! 3. A busy one (`_AIIsShipBusy` @0x82fac): "Okay, I'm on my way." when
-//!    it is already assisting the player, its target the player and not
-//!    disabled (`_IsRefuellingPlayer` @0x820fd, `_IsRepairingPlayer`
-//!    @0x8213a, so not one a hit turned on an NPC); "Sorry sir, I'm just an
+//! 3. A busy one (`_AIIsShipBusy` @0x82fac, [`Hail::busy`]), or under
+//!    [`RuleKey::HailBusyUnderAttack`](crate::RuleKey::HailBusyUnderAttack)'s
+//!    other reading one another NPC attacks ([`Hail::attacked`]; by the
+//!    engine `_IsShipThreatened` @0x96295 never holds): "Okay, I'm on my
+//!    way." when it is already assisting the player, its target the player
+//!    and not disabled (`_IsRefuellingPlayer` @0x820fd,
+//!    `_IsRepairingPlayer` @0x8213a, so not one a hit turned on an NPC);
+//!    "Sorry sir, I'm just an
 //!    escort." for a ship of the original's AI type above 4
 //!    ([`Hail::escort_ai`]: a mission escort, an NPC fleet escort or an
 //!    NPC's carried fighter, @0x962ee-0x96304), which is busy whenever it
-//!    keeps formation or fights; else "I'm busy.".
+//!    keeps formation, follows its lead or fights; else "I'm busy.".
 //! 4. While any NPC threatens the player (`_IsPlayerThreatened`
 //!    @0x96310), as the [`battle`](super::battle) module answers:
 //!    - unless an NPC of a government that is an enemy of the ship's
@@ -106,31 +119,37 @@
 //!    What a comedian."; short, "Yeah, come back when you actually have
 //!    some money.".
 //!
-//! Request Assistance plays no sound (@0x9625d-0x96665), nor do
+//! Every press of item 2 or of Greetings beeps `_beepSnd[1]` first
+//! (@0x9601f, @0x96698), which the session plays
+//! (`nova_sim::SimSound::CommPressed`); past it, Request Assistance plays
+//! no sound (@0x9625d-0x96665), nor do
 //! `_DoShipCommPayment` (@0x920f3), `_DoHaggleDialog`,
 //! `_AIFightEnemyThreatToPlayer` (@0x82c80) or `_AIFightThreatToPlayer`
 //! (@0x8183c).
 //!
-//! **Release** (`STR#` 150 #32, key R, the escort dialog's), listed for
-//! the player's escort alone (`_DoCommDialog` @0x95721): it says "Goodbye,
-//! captain." (group 38) and releases the escort ([`Deed::Release`]) once
-//! the channel closes (`_releaseCommEscort` @0x96848). The escort's hail
-//! opens "What can I do for you?" (group 4). The original gives a hired
-//! or captured escort its own dialog (`DLOG` 1022), with Upgrade and
-//! Sell; that waits for hiring. A carried fighter out of the player's bay
-//! ([`Hail::carried`]) is hailed as an escort is, but never released
-//! (Release is for AI type 6 alone, @0x9604c): it lists no option.
+//! **Release** (`STR#` 150 #32, key R), listed for a releasable ship
+//! that is talkative and not hostile ([`Hail::releasable`]): it says
+//! "Goodbye, captain." (group 38) and sets the release flag
+//! ([`Deed::Release`], `_releaseCommEscort` @0x9606a), before the quiet and
+//! threat tests (@0x9603c-0x96063). The ship is released as the dialog
+//! closes (@0x96848; see `nova_sim::Session::hang_up`).
 //!
 //! **Beg For Mercy** (item 2, @0x96107-0x96258, key R), the engine's
 //! bribe, listed for a talkative hostile ship. In order:
 //!
-//! 1. A quiet ship, by the engine: nothing happens.
-//! 2. A mission ship of `ShipBehav` 0, attacking the player, its slot
+//! 1. A releasable ship ([`Hail::releasable`]) is released, as Release
+//!    is: item 2 tests it first (@0x9603c-0x9606a).
+//! 2. A quiet ship, by the engine: nothing happens.
+//! 3. A mission ship of `ShipBehav` 0, attacking the player, its slot
 //!    active ([`Hail::mission`], @0x9610f-0x96142): "In your dreams,
 //!    pal." (@0x9664c), and it keeps attacking, bribable or not.
-//! 3. A ship that takes no bribes: "In your dreams, pal.", and it keeps
+//! 4. A ship the bounty hunter flies (`përs` 1150,
+//!    [`BOUNTY_HUNTER`](crate::catalog::BOUNTY_HUNTER), +0xc8d0 0x3fe
+//!    @0x96156): "In your dreams, pal.", bribable or not. The defence
+//!    ship's refusal before it (@0x96148) waits on defence fleets.
+//! 5. A ship that takes no bribes: "In your dreams, pal.", and it keeps
 //!    attacking.
-//! 4. It says its mood (as above, or "You'll have to pay me first.") and
+//! 6. It says its mood (as above, or "You'll have to pay me first.") and
 //!    asks its price: paid, "A pleasure doing business with you." and it
 //!    spares the player; declined, "What? How dare you! Prepare to die!"
 //!    and it attacks; short, "Yeah, come back when you actually have some
@@ -157,7 +176,7 @@ use super::reply::{
     PLEASURE, RELEASED, WASTING_TIME,
 };
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply, battle};
-use crate::catalog::GovtId;
+use crate::catalog::{BOUNTY_HUNTER, GovtId};
 use crate::chance::Chance;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::ShipBehav;
@@ -272,8 +291,8 @@ impl HailOption for Greetings {
         Some(GREETINGS_KEY)
     }
 
-    fn applies(&self, hail: &Hail) -> bool {
-        !hail.escort()
+    fn applies(&self, _hail: &Hail) -> bool {
+        true
     }
 
     fn press(&self, hail: &Hail, _chance: &mut dyn Chance) -> Answer {
@@ -307,13 +326,17 @@ pub struct RequestAssistance {
     pub brave_trader_help: RuleSource,
     /// Whether a helper's pick counts the vacated berths' last ships.
     pub battle_help_gone: RuleSource,
+    /// Whether a ship another NPC attacks ([`Hail::attacked`]) answers
+    /// busy: never by the engine, as `_IsShipThreatened` never holds.
+    pub busy_under_attack: RuleSource,
 }
 
 impl RequestAssistance {
     /// Request Assistance as `rulebook` chooses: its
     /// [`RuleKey::QuietHails`], [`RuleKey::BattleHelpTarget`],
-    /// [`RuleKey::BraveTraderBattleHelp`] and
-    /// [`RuleKey::BattleHelpGoneSlots`] entries.
+    /// [`RuleKey::BraveTraderBattleHelp`],
+    /// [`RuleKey::BattleHelpGoneSlots`] and
+    /// [`RuleKey::HailBusyUnderAttack`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -321,6 +344,7 @@ impl RequestAssistance {
             battle_help_target: rulebook.source_for(RuleKey::BattleHelpTarget),
             brave_trader_help: rulebook.source_for(RuleKey::BraveTraderBattleHelp),
             battle_help_gone: rulebook.source_for(RuleKey::BattleHelpGoneSlots),
+            busy_under_attack: rulebook.source_for(RuleKey::HailBusyUnderAttack),
         }
     }
 }
@@ -335,7 +359,7 @@ impl HailOption for RequestAssistance {
     }
 
     fn applies(&self, hail: &Hail) -> bool {
-        hail.attitude != Attitude::Hostile && !hail.dispositions.untalkative && !hail.escort()
+        hail.attitude != Attitude::Hostile && !hail.dispositions.untalkative && !hail.releasable()
     }
 
     fn press(&self, hail: &Hail, chance: &mut dyn Chance) -> Answer {
@@ -346,7 +370,7 @@ impl HailOption for RequestAssistance {
         if hail.attitude != Attitude::Friendly || dispositions.plunderer || dispositions.xenophobe {
             return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
         }
-        if hail.busy {
+        if hail.busy || (self.busy_under_attack == RuleSource::Bible && hail.attacked) {
             let group = if hail.assisting_player {
                 ON_MY_WAY
             } else if hail.escort_ai() {
@@ -419,17 +443,29 @@ impl HailOption for BegForMercy {
     }
 
     fn applies(&self, hail: &Hail) -> bool {
-        hail.attitude == Attitude::Hostile && !hail.dispositions.untalkative && !hail.escort()
+        hail.attitude == Attitude::Hostile && !hail.dispositions.untalkative
     }
 
-    fn press(&self, hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+    fn press(&self, hail: &Hail, chance: &mut dyn Chance) -> Answer {
+        // Item 2 releases before it reads the quiet bit or the threat
+        // (@0x9603c-0x9606a).
+        if hail.releasable() {
+            return Release.press(hail, chance);
+        }
         if ignores_middle(hail, self.quiet_hails) {
             return Answer::default();
         }
         let attacks_player = hail
             .mission
             .is_some_and(|mission| mission.behav == ShipBehav::AttackPlayer);
-        if attacks_player || !hail.dispositions.bribable {
+        // The defence ship's refusal sits between these two (+0x8c != -1,
+        // @0x96148-0x96150), filed as
+        // rdm:phase/play-feel-cross-roadmap/phase-5-defence-ship-refuses-beg-for-mercy.
+        let bounty_hunter = hail
+            .npc
+            .person
+            .is_some_and(|person| person.id == BOUNTY_HUNTER);
+        if attacks_player || bounty_hunter || !hail.dispositions.bribable {
             return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
         }
         Answer {
@@ -462,7 +498,7 @@ impl HailOption for Release {
     }
 
     fn applies(&self, hail: &Hail) -> bool {
-        hail.escort() && !hail.carried()
+        hail.attitude != Attitude::Hostile && !hail.dispositions.untalkative && hail.releasable()
     }
 
     fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
@@ -625,45 +661,190 @@ mod tests {
         npc
     }
 
-    #[test]
-    fn release_applies_only_to_an_escort_and_the_others_never_to_one() {
-        let stranger = ship();
-        let escort = escorting(ship());
-        let [greetings, request, beg] = engine();
-        for attitude in [Attitude::Friendly, Attitude::Unfriendly, Attitude::Hostile] {
-            for dispositions in [Dispositions::default(), untalkative()] {
-                let of = |npc| Hail {
-                    attitude,
-                    dispositions,
-                    ..hail(npc)
-                };
-                assert!(Release.applies(&of(&escort)), "{attitude:?}");
-                assert!(!Release.applies(&of(&stranger)), "{attitude:?}");
-                for option in [&greetings, &request, &beg] {
-                    assert!(!option.applies(&of(&escort)), "{}", option.label());
-                }
-            }
-        }
-        assert!(hail(&escort).escort());
-        assert!(!hail(&stranger).escort());
-    }
-
-    #[test]
-    fn a_carried_fighter_is_hailed_as_an_escort_but_never_released() {
-        let mut fighter = escorting(ship());
-        fighter.carrier = Some(crate::bay::Carrier {
+    /// `npc` launched from the player's bay.
+    fn carried(mut npc: Npc) -> Npc {
+        npc.carrier = Some(crate::bay::Carrier {
             ship: crate::combat::ShipRef::Player,
             window: 100.0,
             reach: 40.0,
         });
+        npc
+    }
+
+    /// A mission ship of `behav` captured for an escort: marked, in the
+    /// player's formation, with no fleet duty.
+    fn captured(behav: ShipBehav) -> Npc {
+        let mut npc = ship();
+        npc.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav,
+            formation: Some(crate::escort::FormationSlot::default()),
+            order: None,
+        });
+        npc
+    }
+
+    /// The hail of `npc`, a mission ship whose mark reads `behav`, as the
+    /// session reads it (an inactive slot's mark reads [`ShipBehav::Own`]).
+    fn marked(npc: &Npc, behav: ShipBehav) -> Hail<'_> {
+        Hail {
+            mission: Some(MissionHail {
+                goal: ShipGoal::Destroy,
+                behav,
+            }),
+            ..hail(npc)
+        }
+    }
+
+    /// The labels Nova's options list for `hail`, by the engine.
+    fn listed(hail: &Hail) -> Vec<String> {
+        super::super::HailOptions::nova(&Rulebook::default())
+            .listed(hail)
+            .iter()
+            .map(|option| option.label())
+            .collect()
+    }
+
+    const ATTITUDES: [Attitude; 3] = [Attitude::Friendly, Attitude::Unfriendly, Attitude::Hostile];
+
+    #[test]
+    fn greetings_is_listed_for_every_ship_the_escort_and_fighter_included() {
+        let ships = [
+            ship(),
+            escorting(ship()),
+            carried(escorting(ship())),
+            captured(ShipBehav::Own),
+            captured(ShipBehav::EscortPlayer),
+        ];
+        for npc in &ships {
+            for attitude in ATTITUDES {
+                for dispositions in [Dispositions::default(), untalkative()] {
+                    let hail = Hail {
+                        attitude,
+                        dispositions,
+                        ..hail(npc)
+                    };
+                    assert!(Greetings::default().applies(&hail), "{npc:?}");
+                    assert_eq!(listed(&hail)[0], "Greetings", "{attitude:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_players_fighter_lists_greetings_and_request_assistance() {
+        let fighter = carried(escorting(ship()));
         let hailed = hail(&fighter);
         assert!(hailed.escort() && hailed.carried());
-        assert!(!Release.applies(&hailed));
-        for option in engine() {
-            assert!(!option.applies(&hailed), "{}", option.label());
-        }
+        assert!(!hailed.releasable(), "AI type 5 (@0x28d6b)");
+        assert_eq!(listed(&hailed), ["Greetings", "Request Assistance"]);
+        let hostile = Hail {
+            attitude: Attitude::Hostile,
+            ..hailed
+        };
+        assert_eq!(listed(&hostile), ["Greetings", "Beg For Mercy"]);
         assert!(!hail(&escorting(ship())).carried());
         assert!(!hail(&ship()).carried());
+    }
+
+    #[test]
+    fn a_releasable_ship_lists_release_in_the_middle_and_beg_for_mercy_while_hostile() {
+        let escort = escorting(ship());
+        let own = captured(ShipBehav::Own);
+        let hunter = captured(ShipBehav::AttackPlayer);
+        let raider = captured(ShipBehav::AttackStellars);
+        let releasable = [
+            hail(&escort),
+            marked(&own, ShipBehav::Own),
+            marked(&hunter, ShipBehav::AttackPlayer),
+            marked(&raider, ShipBehav::AttackStellars),
+        ];
+        for released in releasable {
+            assert!(released.releasable(), "{:?}", released.npc);
+            for attitude in [Attitude::Friendly, Attitude::Unfriendly] {
+                let hail = Hail {
+                    attitude,
+                    ..released
+                };
+                assert_eq!(listed(&hail), ["Greetings", "Release"], "{attitude:?}");
+            }
+            let hostile = Hail {
+                attitude: Attitude::Hostile,
+                ..released
+            };
+            assert_eq!(listed(&hostile), ["Greetings", "Beg For Mercy"]);
+        }
+        assert!(!hail(&ship()).releasable(), "a stranger");
+        assert!(
+            !marked(&ship(), ShipBehav::Own).releasable(),
+            "a mission ship not in the formation"
+        );
+    }
+
+    #[test]
+    fn a_shipbehav_1_mission_escort_lists_request_assistance_not_release() {
+        let npc = captured(ShipBehav::EscortPlayer);
+        let escort = marked(&npc, ShipBehav::EscortPlayer);
+        assert!(!escort.releasable(), "@0x28d72-0x28d90");
+        assert_eq!(listed(&escort), ["Greetings", "Request Assistance"]);
+        let inactive = marked(&npc, ShipBehav::Own);
+        assert!(inactive.releasable(), "its slot inactive");
+        assert_eq!(listed(&inactive), ["Greetings", "Release"]);
+    }
+
+    #[test]
+    fn an_untalkative_ship_lists_greetings_alone() {
+        let escort = escorting(ship());
+        let fighter = carried(escorting(ship()));
+        let own = captured(ShipBehav::Own);
+        let stranger = ship();
+        for hailed in [
+            hail(&escort),
+            hail(&fighter),
+            marked(&own, ShipBehav::Own),
+            hail(&stranger),
+        ] {
+            for attitude in ATTITUDES {
+                let hail = Hail {
+                    attitude,
+                    dispositions: untalkative(),
+                    ..hailed
+                };
+                assert_eq!(listed(&hail), ["Greetings"], "{attitude:?}");
+                assert!(!Release.applies(&hail));
+            }
+        }
+    }
+
+    #[test]
+    fn beg_for_mercy_to_a_releasable_ship_releases_it() {
+        let released = Answer {
+            deed: Some(Deed::Release),
+            ..says(RELEASED)
+        };
+        let escort = escorting(ship());
+        let hunter = captured(ShipBehav::AttackPlayer);
+        for hailed in [hail(&escort), marked(&hunter, ShipBehav::AttackPlayer)] {
+            for bribable in [false, true] {
+                let begged = Hail {
+                    dispositions: Dispositions {
+                        quiet: true,
+                        bribable,
+                        ..Dispositions::default()
+                    },
+                    ..begging(hailed.npc, bribable)
+                };
+                let begged = Hail {
+                    mission: hailed.mission,
+                    ..begged
+                };
+                assert_eq!(
+                    press(&BegForMercy::default(), &begged),
+                    released,
+                    "before the quiet and threat tests (@0x9603c-0x96063)"
+                );
+            }
+        }
     }
 
     #[test]
@@ -976,6 +1157,41 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_another_attacks_is_not_busy_for_it_by_the_engine_and_is_by_the_other_reading() {
+        let npc = ship();
+        let attacked = Hail {
+            attacked: true,
+            ..needy(&npc)
+        };
+        let engine = RequestAssistance::default();
+        assert_ne!(
+            press(&engine, &attacked),
+            says(BUSY),
+            "`_IsShipThreatened` never holds, @0x8209e-0x820a9"
+        );
+        assert_eq!(press(&engine, &attacked), press(&engine, &needy(&npc)));
+        let bible = RequestAssistance {
+            busy_under_attack: RuleSource::Bible,
+            ..engine
+        };
+        assert_eq!(press(&bible, &attacked), says(BUSY));
+        assert_eq!(press(&bible, &needy(&npc)), press(&engine, &needy(&npc)));
+    }
+
+    #[test]
+    fn request_assistance_reads_the_hail_busy_under_attack_key_from_the_rulebook() {
+        assert_eq!(
+            RequestAssistance::from_rulebook(&Rulebook::default()).busy_under_attack,
+            RuleSource::Engine
+        );
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::HailBusyUnderAttack, RuleSource::Bible);
+        let request = RequestAssistance::from_rulebook(&rulebook);
+        assert_eq!(request.busy_under_attack, RuleSource::Bible);
+        assert_eq!(request.quiet_hails, RuleSource::Engine);
+    }
+
+    #[test]
     fn a_busy_mission_escort_is_just_an_escort_unless_it_is_already_on_its_way() {
         let mut npc = ship();
         npc.mission = Some(crate::traffic::npc::MissionMark {
@@ -987,6 +1203,10 @@ mod tests {
         let request = RequestAssistance::default();
         let busy = Hail {
             busy: true,
+            mission: Some(MissionHail {
+                goal: ShipGoal::Escort,
+                behav: ShipBehav::EscortPlayer,
+            }),
             ..needy(&npc)
         };
         assert!(busy.escort_ai());
@@ -1450,6 +1670,33 @@ mod tests {
             ),
             says(IN_YOUR_DREAMS),
             "no price asked, nothing done"
+        );
+    }
+
+    #[test]
+    fn beg_for_mercy_to_the_bounty_hunter_is_in_your_dreams_bribable_or_not() {
+        let flown_by = |id: i16| {
+            let mut npc = ship();
+            npc.person = Some(crate::traffic::npc::NpcPerson::of(
+                &nova_sim_catalog::fixture::person(id, 128),
+                false,
+            ));
+            npc
+        };
+        let hunter = flown_by(crate::catalog::BOUNTY_HUNTER.0);
+        for bribable in [false, true] {
+            assert_eq!(
+                press(&BegForMercy::default(), &begging(&hunter, bribable)),
+                says(IN_YOUR_DREAMS),
+                "no price asked, nothing done (@0x96156)"
+            );
+        }
+        let other = flown_by(1149);
+        assert!(
+            press(&BegForMercy::default(), &begging(&other, true))
+                .ask
+                .is_some(),
+            "another person is asked its price"
         );
     }
 

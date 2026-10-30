@@ -112,7 +112,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
@@ -262,6 +262,8 @@ pub struct BarScreen {
     laid: Result<Laid, String>,
     hiring: Hiring,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     /// Whether the fleet has room for another escort.
     room: bool,
     /// The hire screen, while it is open.
@@ -356,6 +358,7 @@ impl BarScreen {
             laid,
             hiring,
             style,
+            focus_ring: FocusRing::default(),
             room,
             desc,
             description_request,
@@ -521,13 +524,28 @@ impl BarScreen {
         }
     }
 
+    /// The bar with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self.offering = self.offering.map(|offering| offering.with_focus_ring(ring));
+        self
+    }
+
     /// The bar with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first [`FIRST_OFFER_DELAY`] after it opens.
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::waiting(templates, FIRST_OFFER_DELAY)),
+            offering: Some(
+                VenueOffers::waiting(templates, FIRST_OFFER_DELAY).with_focus_ring(self.focus_ring),
+            ),
             ..self
         }
     }
@@ -733,13 +751,16 @@ impl BarScreen {
         if let Some(offering) = &mut self.offering {
             offering.restart();
         }
-        self.hire = Some(HireScreen::new(
-            layout,
-            self.hiring.info.clone(),
-            list,
-            Rc::clone(&self.hiring.catalog),
-            self.style,
-        ));
+        self.hire = Some(
+            HireScreen::new(
+                layout,
+                self.hiring.info.clone(),
+                list,
+                Rc::clone(&self.hiring.catalog),
+                self.style,
+            )
+            .with_focus_ring(self.focus_ring),
+        );
     }
 
     /// The ship the hire screen asked for since it was last taken, once.
@@ -2692,6 +2713,43 @@ mod tests {
                 repeat: false,
             });
             assert_eq!(screen.take_sounds(), [], "{k:?}");
+        }
+    }
+
+    /// The bar's buttons take Tab then Space only with the focus ring, and
+    /// the hire screen it opens inherits the ring.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = bar();
+        ringed.input(&key(Key::Tab, false));
+        ringed.input(&key(Key::Space, false));
+        assert!(ringed.closed(), "by default");
+        let mut off = bar().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab, false));
+        off.input(&key(Key::Space, false));
+        assert!(!off.closed());
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = laid_hire_bar().with_focus_ring(ring);
+            screen.open_hire(list(2));
+            assert_eq!(
+                screen
+                    .hire_screen()
+                    .and_then(HireScreen::dialog)
+                    .map(Dialog::focus_ring),
+                Some(ring)
+            );
+            screen.input(&key(Key::Tab, false));
+            let focus = screen
+                .hire_screen()
+                .and_then(HireScreen::dialog)
+                .and_then(Dialog::focus);
+            assert_eq!(focus.is_some(), ring == FocusRing::Tab, "{ring:?}");
+            if ring == FocusRing::Off {
+                screen.input(&key(Key::Space, false));
+                assert!(screen.hire_screen().is_some(), "Space presses nothing");
+                assert_eq!(screen.take_hire(), None);
+            }
         }
     }
 }

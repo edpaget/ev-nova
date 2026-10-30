@@ -851,9 +851,14 @@ fn orders_in_the_trade_center_outfitter_and_shipyard_across_a_jump_are_restored_
     assert!(game.shipyard().naming().is_some(), "the name prompt");
     game.order(&store, |game| game.press(KeyCode::Enter));
     assert_eq!(game.pilot().ship(), NEW);
+    assert!(
+        game.spaceport().open_shipyard().is_none(),
+        "the purchase closes the shipyard"
+    );
 
     // Leave, and close the window, which saves.
-    game.leave();
+    game.press(KeyCode::Escape);
+    assert_eq!(game.showing(), Showing::Flight);
     let flown = game.pilot();
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
     assert_eq!(saved(&store, "Ada"), flown);

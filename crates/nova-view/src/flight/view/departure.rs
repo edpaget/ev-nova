@@ -74,6 +74,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// what settling it did; gives the stellar left.
     fn departed(&mut self, departure: Departure) -> StellarId {
         let Departure { stellar, settled } = departure;
+        // The take-off shuts the escort menu (`_HandlePlayerDockRequest`
+        // @0x6705a).
+        self.shut_escort_menu();
         let mut said = self.leave_said();
         let (line, rest, system) = self.took_off();
         said.extend(line);

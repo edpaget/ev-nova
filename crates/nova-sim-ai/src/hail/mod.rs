@@ -5,9 +5,9 @@
 //! the ship answers with a ship comm string ([`reply`]) chosen by its
 //! [`Attitude`] ([`like`]), and a [`Conversation`] rolls its variant,
 //! mood, price and advice once ([`deal`]). The dialog lists the
-//! [`HailOption`]s that apply, Nova's four by default ([`nova`]:
-//! Greetings, Request Assistance and Beg For Mercy, and Release for the
-//! player's escort). Each option sees the
+//! [`HailOption`]s that apply, Nova's by default ([`nova`]: Greetings,
+//! then one of Request Assistance, Beg For Mercy and Release, the last
+//! for a ship [`Hail::releasable`] says the player may release). Each option sees the
 //! conversation as a read-only [`Hail`] and answers a press with an
 //! [`Answer`]: the [`Reply`] the ship says, a [`Deed`] it does, and a
 //! price it asks ([`Ask`]), which the player may haggle over. The session
@@ -48,6 +48,7 @@
 pub mod advice;
 pub mod assist;
 pub mod battle;
+mod busy;
 pub mod deal;
 pub mod like;
 pub mod nova;
@@ -69,7 +70,7 @@ pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
 pub use like::{Attitude, attitude, likes_player};
 pub use nova::{BegForMercy, Greetings, JoinFleet, Release, RequestAssistance};
-pub use reply::{MissionHail, Reply};
+pub use reply::{Led, MissionHail, Reply};
 
 /// `Flags`: its ships answer no hail.
 pub const MUTE: u16 = 0x0400;
@@ -168,10 +169,18 @@ pub struct Hail<'a> {
     pub mood: f32,
     /// What its government and type make of hails.
     pub dispositions: Dispositions,
-    /// Whether it is busy: fighting, assisting, keeping formation, holding
-    /// ([`Goal::Hold`], goal 10 to `_AIIsShipBusy` @0x82fac-0x82fe4),
-    /// waiting ([`Goal::Wait`], goal 6), or under attack.
+    /// Whether it is busy, as `_AIIsShipBusy` (@0x82fac-0x82fe4) finds it:
+    /// in every goal but the original's 0, 1, 2, 7 and 0x14 (see
+    /// [`busy`]'s table). Being attacked is not part of it
+    /// ([`Hail::attacked`]).
     pub busy: bool,
+    /// Whether another NPC attacks or snipes at it: what
+    /// `_IsShipThreatened` (@0x82068-0x820fc) evidently meant, which never
+    /// holds as the original wrote it (see [`busy`]). Request Assistance
+    /// reads it as busy only under
+    /// [`RuleKey::HailBusyUnderAttack`](crate::RuleKey::HailBusyUnderAttack)'s
+    /// other reading.
+    pub attacked: bool,
     /// Whether it is already assisting the player: refuelling or repairing
     /// it ([`Goal::Assist`]) with the player as its target, and not
     /// disabled (`_IsRefuellingPlayer` @0x820fd, `_IsRepairingPlayer`
@@ -255,6 +264,26 @@ impl Hail<'_> {
     pub fn carried(&self) -> bool {
         self.npc.carrier.is_some()
     }
+
+    /// Whether the ship hailed is one the comm dialog's Release releases:
+    /// led by the player (+0x9a 0), of AI type 6 and not a `ShipBehav` 1
+    /// escort of an active slot (`-0x16a`), as `_DrawCommDialogButtons`
+    /// lists it (@0x28cee-0x28d26, @0x28d6b-0x28d90) and item 2 answers it
+    /// (`_DoCommDialog` @0x9603c-0x96063). So a ship that
+    /// [escorts the player](Npc::escorts_player), not the player's
+    /// launched fighter (AI type 5) and not a mission's `ShipBehav` 1
+    /// escort: a fleet escort, or a mission ship captured for an escort
+    /// whatever its other `ShipBehav`. [`Hail::mission`] reads an inactive
+    /// slot's mark as [`ShipBehav::Own`](crate::traffic::ShipBehav::Own),
+    /// so a `ShipBehav` 1 escort whose mission has gone is releasable too.
+    #[must_use]
+    pub fn releasable(&self) -> bool {
+        self.npc.escorts_player()
+            && !self.carried()
+            && !self
+                .mission
+                .is_some_and(|mission| mission.behav == crate::traffic::ShipBehav::EscortPlayer)
+    }
 }
 
 impl<'a> Hail<'a> {
@@ -294,14 +323,11 @@ impl<'a> Hail<'a> {
 impl<'a> Hail<'a> {
     /// The hail of `npc` among `around`, of `dispositions`, in
     /// conversation `talk`, the player needing `need`, of `mission` when
-    /// it is a mission ship ([`Hail::mission`]). It is busy while
-    /// it attacks, snipes at, flees from, plunders or assists a ship, keeps
-    /// formation (goals 10 and 12), stops and waits (goal 6, which
-    /// `_AIIsShipBusy` @0x82fac-0x82fe4 finds busy as it finds every goal
-    /// but 0, 1, 2, 7 and 0x14), waits or drifts as a pirate (goals 0x16
-    /// and 0xe), attacks a stellar (goal 0x12), or an
-    /// NPC attacks or snipes at it
-    /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
+    /// it is a mission ship ([`Hail::mission`]). It is busy as
+    /// `_AIIsShipBusy` (@0x82fac-0x82fe4) finds it, in every goal but the
+    /// original's 0, 1, 2, 7 and 0x14 (see [`busy`]'s table), and
+    /// [`Hail::attacked`] while another NPC attacks or snipes at it (the
+    /// engine's earlier reading of `_IsShipThreatened` @0x82068); the
     /// player is threatened while any NPC threatens it.
     ///
     /// It is threatened by the ship's enemy
@@ -327,7 +353,6 @@ impl<'a> Hail<'a> {
         need: Option<Help>,
         mission: Option<MissionHail>,
     ) -> Self {
-        let me = ShipRef::Npc(npc.id);
         // `_IsRefuellingPlayer` @0x820fd and `_IsRepairingPlayer`
         // @0x8213a: active, not `_IsDisabled`, target 0, goal 9 or 0xf. A
         // hailed ship is active. A stellar's defence ship never assists, so
@@ -335,10 +360,6 @@ impl<'a> Hail<'a> {
         let assisting_player = matches!(npc.goal, Goal::Assist(_))
             && npc.target == Some(ShipRef::Player)
             && !npc.condition.disabled();
-        let attacked = around
-            .npcs
-            .iter()
-            .any(|other| other.id != npc.id && other.goal.attacking() == Some(me));
         Self {
             npc,
             attitude: attitude(npc, around, mission),
@@ -346,18 +367,8 @@ impl<'a> Hail<'a> {
             advice: talk.advice,
             mood: talk.mood,
             dispositions,
-            busy: npc.goal.fights()
-                || matches!(npc.goal, Goal::Assist(_))
-                || matches!(
-                    npc.goal,
-                    Goal::Formation { .. }
-                        | Goal::Hold
-                        | Goal::Wait
-                        | Goal::CountWait
-                        | Goal::Drift
-                        | Goal::AttackStellar(_)
-                )
-                || attacked,
+            busy: busy::ai_is_ship_busy(npc),
+            attacked: busy::attacked(npc, around.npcs),
             assisting_player,
             player_threatened: around
                 .npcs
@@ -385,8 +396,8 @@ pub enum Deed {
     Attack,
     /// It flies over to help the player.
     Help(Help),
-    /// The player's escort leaves the fleet, and the system, once the
-    /// channel closes.
+    /// The ship the player leads is released, leaving it and the system,
+    /// once the channel closes (see [`Hail::releasable`]).
     Release,
     /// The person hailed joins the player's fleet, as itself, at once.
     Join,
@@ -651,8 +662,9 @@ impl HailOptions {
     /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails), Greetings'
     /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice), Request
     /// Assistance's [`RuleKey::BattleHelpTarget`](crate::RuleKey::BattleHelpTarget),
-    /// [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp)
-    /// and [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots),
+    /// [`RuleKey::BraveTraderBattleHelp`](crate::RuleKey::BraveTraderBattleHelp),
+    /// [`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots)
+    /// and [`RuleKey::HailBusyUnderAttack`](crate::RuleKey::HailBusyUnderAttack),
     /// and Use As Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
     /// entries. Release is for the player's escorts and Use As Escort for
     /// the rest, so the two are never listed together.
@@ -716,6 +728,7 @@ pub(crate) mod fixture {
             mood: 1.0,
             dispositions: Dispositions::default(),
             busy: false,
+            attacked: false,
             assisting_player: false,
             player_threatened: false,
             threatened_by_enemy: false,
@@ -1082,7 +1095,31 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_fighting_assisting_or_attacked_is_busy() {
+    fn a_docking_following_or_mining_ship_is_busy() {
+        // Goals 5, 0xa with a leader and 0x10 are none of `_AIIsShipBusy`'s
+        // 0, 1, 2, 7 and 0x14 (@0x82fac-0x82fe4).
+        let plain = plain();
+        let mut follower = flying(
+            1,
+            Goal::Follow {
+                lead: NpcId(9),
+                guard: None,
+            },
+        );
+        follower.leader = Some(NpcId(9));
+        for npc in [
+            flying(1, Goal::Dock(ShipRef::Npc(NpcId(9)))),
+            follower,
+            flying(1, Goal::Mine),
+        ] {
+            let goal = npc.goal;
+            let npcs = [npc];
+            assert!(hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_ship_fighting_or_assisting_is_busy_and_one_attacked_is_not() {
         let plain = plain();
         for goal in [
             Goal::Attack(ShipRef::Npc(NpcId(5))),
@@ -1116,17 +1153,18 @@ mod tests {
             Goal::Snipe(ShipRef::Npc(NpcId(1))),
         ] {
             let npcs = [flying(1, Goal::Idle), flying(2, goal)];
-            assert!(
-                hailing(&npcs, &plain, 0, &talk()).busy,
-                "attacked: {goal:?}"
-            );
+            let hail = hailing(&npcs, &plain, 0, &talk());
+            assert!(hail.attacked, "attacked: {goal:?}");
+            assert!(!hail.busy, "never for it: {goal:?}, @0x8209e-0x820a9");
         }
         for goal in [
             Goal::Flee(ShipRef::Npc(NpcId(1))),
             Goal::Attack(ShipRef::Npc(NpcId(3))),
         ] {
             let npcs = [flying(1, Goal::Idle), flying(2, goal)];
-            assert!(!hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");
+            let hail = hailing(&npcs, &plain, 0, &talk());
+            assert!(!hail.attacked, "{goal:?}");
+            assert!(!hail.busy, "{goal:?}");
         }
     }
 
@@ -1443,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn nova_lists_greetings_then_the_middle_option_that_applies_and_release_for_an_escort() {
+    fn nova_lists_greetings_then_the_middle_option_that_applies_release_for_an_escort() {
         let options = HailOptions::nova(&Rulebook::default());
         let npc = ship();
         let friendly = hail(&npc);
@@ -1475,10 +1513,13 @@ mod tests {
         });
         assert_eq!(
             labels(&options, &hail(&escort)),
-            ["Release"],
-            "the escort's"
+            ["Greetings", "Release"],
+            "the escort's (@0x28c43-0x28d90)"
         );
-        assert_eq!(labels(&HailOptions::default(), &hail(&escort)), ["Release"]);
+        assert_eq!(
+            labels(&HailOptions::default(), &hail(&escort)),
+            ["Greetings", "Release"]
+        );
     }
 
     #[test]

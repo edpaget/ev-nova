@@ -67,12 +67,12 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
         let dialog = view.dialog().expect("laid out");
         assert_eq!(
             dialog.bounds(),
-            Bounds::at(Point::new(203.0, 125.0), 618.0, 517.0)
+            Bounds::at(Point::new(203.0, 126.0), 618.0, 517.0)
         );
         assert_eq!(
             dialog.item_bounds(LEAVE_ITEM),
             Some(Bounds::at(
-                Point::new(203.0 + 471.0, 125.0 + 456.0),
+                Point::new(203.0 + 471.0, 126.0 + 456.0),
                 145.0,
                 25.0
             ))
@@ -88,7 +88,7 @@ fn port_kanes_spaceport_shows_its_landscape_description_and_services() {
             list.iter().next(),
             Some(&DrawCommand::Picture {
                 image: BACKGROUND,
-                top_left: Point::new(203.0, 125.0),
+                top_left: Point::new(203.0, 126.0),
             })
         );
         assert!(
@@ -337,7 +337,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         let dialog = screen.dialog().expect("laid out");
         assert_eq!(
             dialog.bounds(),
-            Bounds::at(Point::new(129.0, 222.0), 765.0, 323.0)
+            Bounds::at(Point::new(130.0, 223.0), 765.0, 323.0)
         );
         for (item, x, w) in [
             (INFO_ITEM, 253.0, 89.0),
@@ -346,7 +346,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         ] {
             assert_eq!(
                 dialog.item_bounds(item),
-                Some(Bounds::at(Point::new(129.0 + x, 222.0 + 289.0), w, 25.0)),
+                Some(Bounds::at(Point::new(130.0 + x, 223.0 + 289.0), w, 25.0)),
                 "{item}"
             );
         }
@@ -374,7 +374,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             list.iter().next(),
             Some(&DrawCommand::Picture {
                 image: SHIPYARD_BACKGROUND,
-                top_left: Point::new(129.0, 222.0),
+                top_left: Point::new(130.0, 223.0),
             })
         );
         let texts: Vec<String> = list
@@ -431,16 +431,16 @@ fn the_shuttles_info_is_the_picture_panel(screen: &mut nova_view::spaceport::Shi
     let panel = screen.info_panel().expect("the info panel");
     assert_eq!(
         panel.bounds(),
-        Bounds::at(Point::new(205.0, 115.0), 614.0, 537.0)
+        Bounds::at(Point::new(205.0, 116.0), 614.0, 537.0)
     );
     let graphic = panel.item_bounds(PANEL_GRAPHIC_ITEM).expect("item 7");
-    assert_eq!(graphic, Bounds::at(Point::new(212.0, 121.0), 600.0, 400.0));
+    assert_eq!(graphic, Bounds::at(Point::new(212.0, 122.0), 600.0, 400.0));
     let mut list = DrawList::new();
     screen.draw(&mut list);
     assert!(list.iter().any(|c| *c
         == DrawCommand::Picture {
             image: PICTURE_INFO_BACKGROUND,
-            top_left: Point::new(205.0, 115.0),
+            top_left: Point::new(205.0, 116.0),
         }));
     assert!(list.iter().any(|c| *c
         == DrawCommand::StretchedPicture {

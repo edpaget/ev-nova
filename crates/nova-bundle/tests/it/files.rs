@@ -1,10 +1,10 @@
-//! `StdFiles` against the real filesystem, in a temporary directory each
-//! test owns.
+//! `StdFiles` against the real filesystem, writing and reading back, in a
+//! temporary directory each test owns.
 
 use std::fs;
 use std::io;
 
-use nova_bundle::ports::Files;
+use nova_bundle::ports::{Files, ReadFiles};
 use nova_bundle::system::StdFiles;
 
 #[test]
@@ -70,6 +70,29 @@ fn makes_a_symbolic_link() {
     );
 }
 
+/// Sparkle's trim removes `Sparkle.framework/XPCServices`, a link left
+/// dangling once `Versions/B/XPCServices` is gone, with `remove_dir_all`.
+#[cfg(unix)]
+#[test]
+fn removing_a_link_removes_the_link_and_not_its_target() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("target");
+    fs::create_dir_all(&target).expect("seed");
+    fs::write(target.join("kept"), b"x").expect("seed");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&target, &link).expect("seed");
+    StdFiles.remove_dir_all(&link).expect("remove the link");
+    assert!(fs::symlink_metadata(&link).is_err(), "the link is gone");
+    assert!(target.join("kept").is_file(), "its target is kept");
+
+    let dangling = dir.path().join("dangling");
+    std::os::unix::fs::symlink(dir.path().join("gone"), &dangling).expect("seed");
+    StdFiles
+        .remove_dir_all(&dangling)
+        .expect("remove the dangling link");
+    assert!(fs::symlink_metadata(&dangling).is_err(), "the link is gone");
+}
+
 #[cfg(not(unix))]
 #[test]
 fn a_symbolic_link_is_unsupported_off_unix() {
@@ -109,4 +132,39 @@ fn a_file_is_a_file_and_a_directory_or_missing_path_is_not() {
     assert!(StdFiles.is_file(&file));
     assert!(!StdFiles.is_file(dir.path()));
     assert!(!StdFiles.is_file(&dir.path().join("missing.exe")));
+}
+
+#[test]
+fn reads_a_files_bytes() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("ev-nova.dmg");
+    fs::write(&file, b"\x00dmg\xff").expect("seed");
+    assert_eq!(
+        ReadFiles::read(&StdFiles, &file).expect("read"),
+        b"\x00dmg\xff"
+    );
+    let error = ReadFiles::read(&StdFiles, &dir.path().join("missing")).expect_err("missing");
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+}
+
+#[test]
+fn lists_a_directorys_file_names_sorted_without_subdirectories() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    for name in ["b.msi", "a.dmg", "c.xml"] {
+        fs::write(dir.path().join(name), b"x").expect("seed");
+    }
+    fs::create_dir(dir.path().join("a-directory")).expect("seed");
+    assert_eq!(
+        StdFiles.file_names(dir.path()).expect("listed"),
+        ["a.dmg", "b.msi", "c.xml"]
+    );
+}
+
+#[test]
+fn listing_a_missing_directory_is_an_error() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let error = StdFiles
+        .file_names(&dir.path().join("missing"))
+        .expect_err("missing");
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }

@@ -61,21 +61,36 @@ pub fn the_installed_bar_is_the_applications_and_sends_the_games_commands() {
     let (prefs_at, prefs) = item(app_menu, "Preferences…");
     assert_eq!(prefs.keyEquivalent().to_string(), ",");
     let (about_at, _) = item(app_menu, "About EV Nova");
+    let (updates_at, updates) = item(app_menu, "Check for Updates…");
+    assert_eq!(updates_at, prefs_at + 2, "after Preferences…'s separator");
+    assert_eq!(updates.action(), Some(sel!(menuCommand:)));
+    assert_eq!(updates.keyEquivalent().to_string(), "");
     assert!(!app_menu.autoenablesItems());
 
     // Each pick reaches the closure as its command.
     app_menu.performActionForItemAtIndex(quit_at);
     app_menu.performActionForItemAtIndex(prefs_at);
     app_menu.performActionForItemAtIndex(about_at);
+    app_menu.performActionForItemAtIndex(updates_at);
     assert_eq!(
         *picked.borrow(),
-        [Command::Quit, Command::Preferences, Command::About]
+        [
+            Command::Quit,
+            Command::Preferences,
+            Command::About,
+            Command::CheckForUpdates
+        ]
     );
 
     assert_eq!(
         format!("{bar:?}"),
-        "MenuBar { commands: [About, Preferences, Quit], .. }"
+        "MenuBar { commands: [About, Preferences, CheckForUpdates, Quit], .. }"
     );
+    bar.set_enabled(Command::CheckForUpdates, false);
+    assert!(!updates.isEnabled(), "a build with no updater greys it");
+    assert!(prefs.isEnabled(), "the others left alone");
+    bar.set_enabled(Command::CheckForUpdates, true);
+    assert!(updates.isEnabled());
 
     // The game greys and offers its commands.
     bar.set_enabled(Command::Preferences, false);
@@ -118,5 +133,5 @@ pub fn the_installed_bar_is_the_applications_and_sends_the_games_commands() {
     drop(bar);
     assert!(quit.target().is_none());
     app_menu.performActionForItemAtIndex(quit_at);
-    assert_eq!(picked.borrow().len(), 3, "nothing more");
+    assert_eq!(picked.borrow().len(), 4, "nothing more");
 }

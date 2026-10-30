@@ -310,12 +310,8 @@ impl Session {
     /// and the flight is told how many; a save is due when any was.
     fn abandon_fighters(&mut self) {
         let reading = self.setup.rules.source_for(RuleKey::NpcJumpFuel);
-        let fuelled = |session: &Self, escort: &Escort, npc: Option<&Npc>| match npc {
-            Some(npc) => leave::can_jump(npc, reading),
-            None => session
-                .statics
-                .ship_record(escort.ship)
-                .is_some_and(|record| f32::from(record.fields.fuel) >= JUMP_FUEL),
+        let fuelled = |session: &Self, escort: &Escort, npc: Option<&Npc>| {
+            fighter_can_jump(&session.statics, reading, escort.ship, npc)
         };
         let abandoned = self.drop_fighters(fuelled);
         let count = u32::try_from(abandoned.len()).unwrap_or(u32::MAX);
@@ -324,7 +320,30 @@ impl Session {
             self.out.save_due = true;
         }
     }
+}
 
+/// Whether the player's fighter out, of ship type `ship`, can follow a
+/// jump, its NPC `npc` when it is in the system (`_HandlePlayer`'s
+/// `_AIShipHasFuelForJump` @0x6c0ed): one in the system by
+/// [`leave::can_jump`] by `reading` of
+/// [`RuleKey::NpcJumpFuel`], one not there by its ship type's `Fuel`
+/// alone. [`Session::abandon_fighters`] drops the rest, and a jump's days
+/// count only these (see the `trip_days` module).
+pub(super) fn fighter_can_jump(
+    statics: &Statics,
+    reading: RuleSource,
+    ship: ShipId,
+    npc: Option<&Npc>,
+) -> bool {
+    match npc {
+        Some(npc) => leave::can_jump(npc, reading),
+        None => statics
+            .ship_record(ship)
+            .is_some_and(|record| f32::from(record.fields.fuel) >= JUMP_FUEL),
+    }
+}
+
+impl Session {
     /// Every fighter out goes back aboard at once, a round to the bay
     /// launching its type, as docking gives (`_InstantFighterRecall`
     /// @0x5df3); one no bay launches is lost, which makes a save due.

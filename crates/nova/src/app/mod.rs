@@ -130,6 +130,18 @@
 //! the writer it was given; it takes them where it takes the sounds, after
 //! every input and frame. Without a writer, they are let go.
 //!
+//! # Updates
+//!
+//! An app built [`App::with_updater`] holds the platform's [`Updater`],
+//! started as the app takes it; without one it holds [`NoUpdater`]. The
+//! menu bar's Check for Updates… ([`WindowEvent::CheckForUpdates`]) asks
+//! it to check now and never reaches the screen, and the menu bar offers
+//! the item only when the updater can check ([`App::menu_enabled`]).
+//! [`choose`] picks the updater at launch from what the platform offers
+//! ([`UpdaterSource`]). When the updater's installer needs the game gone,
+//! its request arrives as [`LoopEvent::UpdaterQuit`], which is the Quit
+//! command.
+//!
 //! # Quitting
 //!
 //! Whichever way the app quits (the window closed, or the screen asking
@@ -149,13 +161,19 @@ use nova_view::{
 };
 
 mod fullscreen;
+pub mod keyboard_access;
+mod loop_event;
 mod menu;
 mod scaling;
 pub mod screen;
+mod updates;
 mod wheel;
 
-pub use menu::{MenuPort, MenuSync};
+pub use keyboard_access::{KeyboardAccess, NoKeyboardAccessSetting};
+pub use loop_event::LoopEvent;
+pub use menu::{MenuPick, MenuPort, MenuSync};
 pub use screen::{AppScreen, Showing, start_screen};
+pub use updates::{Chosen, NoUpdater, Updater, UpdaterSource, choose};
 pub use wheel::WheelDelta;
 
 use crate::config::Os;
@@ -280,6 +298,9 @@ pub enum WindowEvent {
     CloseRequested,
     /// An item of the platform's menu bar was picked (see `menu`).
     Menu(MenuCommand),
+    /// The menu bar's Check for Updates… was picked: the updater checks
+    /// now (see `updates`).
+    CheckForUpdates,
 }
 
 /// Whether the app goes on after an event.
@@ -328,6 +349,9 @@ pub struct App<S, C = AppScreen> {
     settings: Option<GameKeeper>,
     warnings: Vec<String>,
     diagnostics: Option<Box<dyn Write>>,
+    /// The platform's updater ([`App::with_updater`]); [`NoUpdater`] until
+    /// one is given.
+    updater: Box<dyn Updater>,
     fullscreen: Fullscreen,
     /// A fullscreen kind the Preferences dialog chose, to apply once the
     /// event that reported it is handled.
@@ -364,6 +388,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             settings: None,
             warnings: Vec::new(),
             diagnostics: None,
+            updater: Box::new(NoUpdater),
             fullscreen: Fullscreen::new(Os::current(), window.size_px()),
             chosen_fullscreen: None,
             display_offered: false,
@@ -489,6 +514,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     pub fn with_settings(mut self, keeper: GameKeeper) -> Self {
         self.fullscreen.set_kind(keeper.settings().fullscreen_kind);
         self.settings = Some(keeper);
+        self
+    }
+
+    /// The app with the platform's updater, which starts its background
+    /// checks as the app takes it. Check for Updates… then asks it to check
+    /// now, and is offered when it can check.
+    #[must_use]
+    pub fn with_updater(mut self, updater: Box<dyn Updater>) -> Self {
+        self.updater = updater;
+        self.updater.start();
         self
     }
 
@@ -814,6 +849,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             }
             WindowEvent::Redraw { elapsed } => game(self.redraw(elapsed, window, gpu)),
             WindowEvent::Menu(command) => game(self.route_menu(command)),
+            WindowEvent::CheckForUpdates => game(self.check_for_updates()),
         }
     }
 
@@ -1302,6 +1338,7 @@ mod tests {
     mod exiting;
     mod menu;
     mod pointer_release;
+    mod updates;
     mod wheel;
 
     /// Bytes written, kept where the test can read them.

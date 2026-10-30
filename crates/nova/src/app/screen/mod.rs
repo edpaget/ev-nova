@@ -197,6 +197,12 @@
 //! pauses under it; with no mission shown there, flight says "You have
 //! no active missions." on its message line, as it says "Time limit
 //! exceeded - mission failed." when a deadline runs out in flight.
+//! I on a person's offer over flight opens it over the offer, as
+//! `_OfferOneMission`'s item 7 does whoever offers (@0xa32b6): with no
+//! map (`_DoMissionInfoDialog` @0x9e3c6), the keys let go first
+//! (@0xa32f4-0xa3344), and the offer's `dësc` loaded again as it closes
+//! (@0xa335c). With no mission shown (the count @0xa32c1-0xa32ee) it
+//! does nothing, and says nothing.
 //!
 //! Missions are offered at five venues as the original's
 //! `_OfferMissionFromPort` offers them: the spaceport asks once, as it
@@ -264,9 +270,13 @@
 //! no metrics to lay it out the boarding is let go, with a warning. Each
 //! take goes through flight, which says what it took, and the dialog
 //! shows what is still on board, or closes once the boarding is over. A
-//! capture that awaits its assignment opens the assignment dialog the
-//! same way, and the choice goes through flight; the pilot is saved after
-//! the input that captured or assigned, as after a change in the
+//! capture that awaits its assignment opens the assignment dialog over
+//! the plunder dialog, which stays drawn under it, and the choice goes
+//! through flight. Use As My Ship then opens the rename, the Text Input
+//! dialog asking the ship's new name, whose OK or Cancel goes through
+//! flight (see the `capture_naming` module); Use As Escort, or the
+//! rename answered, closes the plunder dialog. The pilot is saved after
+//! the input that captured, assigned or named, as after a change in the
 //! spaceport.
 //!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
@@ -337,6 +347,7 @@ use nova_view::ui::mission_dialogs::MissionDialogs;
 use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
+use nova_view::ui::text_input::TextInputDialog;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
     PrefsDialog, YesNoDialog,
@@ -346,6 +357,7 @@ use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
 mod build;
+mod capture_naming;
 mod christening;
 mod entry;
 mod escort_dialog;
@@ -361,6 +373,7 @@ mod port_dialogs;
 mod quit_question;
 mod routing;
 mod screen_impl;
+mod ship_name_dialog;
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free. The hint offers I
@@ -523,6 +536,13 @@ pub struct AppScreen {
     /// held ([`AppScreen::run_refresh`]); `None` at launch, when the
     /// launch's own refresh is read.
     last_refresh: Option<LastRefresh>,
+    /// The comm dialog's release flag the last flight put away left,
+    /// which each new flight starts from: the original's
+    /// `_releaseCommEscort` (the byte at 0x31b250, behind 0xdef2c) is an
+    /// app-wide global no pilot load touches (see
+    /// [`nova_sim::CarryOver::release_comm_escort`]). Clear at launch, as
+    /// its BSS reads 0; it is never saved, so a quit drops it.
+    release_comm_escort: bool,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.
@@ -600,6 +620,9 @@ pub struct AppScreen {
     plunder: Option<PlunderDialog>,
     /// The captured-ship assignment dialog, while a capture awaits it.
     assignment: Option<AssignmentDialog>,
+    /// Use As My Ship's rename, the Text Input dialog over the plunder
+    /// dialog, while the ship captured awaits its name.
+    capture_naming: Option<TextInputDialog>,
     /// The options each flight's comm dialog lists.
     hail_options: HailOptions,
     /// How each disputed rule reads in each flight.
@@ -641,6 +664,11 @@ pub struct AppScreen {
     /// another is given ([`AppScreen::with_movie_player`]), on as the
     /// preferences say.
     movies: Movies,
+    /// Whether the player has asked the system for keyboard access to
+    /// every control, asked each time Preferences opens:
+    /// [`NoKeyboardAccessSetting`](crate::app::NoKeyboardAccessSetting)'s
+    /// unless another is given ([`AppScreen::with_keyboard_access`]).
+    keyboard_access: Rc<dyn crate::app::KeyboardAccess>,
     /// The fade back from black over the developer's side shown after a
     /// death without a main menu, while it plays.
     fade_in: Option<ScreenFade>,

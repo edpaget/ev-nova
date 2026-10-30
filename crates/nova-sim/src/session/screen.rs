@@ -47,6 +47,7 @@ impl Session {
     /// - To [`ScreenAsk::Outfitter`], [`Session::outfitter`] alone.
     /// - To [`ScreenAsk::HireList`], [`Session::escorts_for_hire`].
     /// - To [`ScreenAsk::ShipNaming`], [`Session::ship_naming`].
+    /// - To [`ScreenAsk::CaptureNaming`], [`Session::capture_naming`].
     /// - To [`ScreenAsk::News`], [`Session::news`] over
     ///   [`Session::news_picture`].
     /// - To [`ScreenAsk::Gamble`], [`Session::gamble_opening`].
@@ -60,7 +61,8 @@ impl Session {
     /// - To [`ScreenAsk::PilotPanel`], [`Session::pilot_panel`].
     ///
     /// The map's redraw and panels, the hypergate cycle, the coming
-    /// traffic, a ship's name prompt, the hail and the pilot panel read
+    /// traffic, a ship's name prompt, a captured ship's, the hail and the
+    /// pilot panel read
     /// `collab`'s catalog, and answer [`ScreenAnswer::Nothing`] without
     /// one; so does an ask with nothing to show (no outfitter, no bar, no
     /// bar visit, no offer, no hail, no boarding). It takes `&mut self`
@@ -135,6 +137,7 @@ impl Session {
             ScreenAsk::Outfitter => self.outfitter_screen(collab.chance),
             ScreenAsk::HireList => self.hire_list_screen(collab.chance),
             ScreenAsk::ShipNaming(ship) => self.ship_naming_screen(ship, catalog, collab.chance),
+            ScreenAsk::CaptureNaming => self.capture_naming_screen(catalog, collab.chance),
             ScreenAsk::News => self.news_screen(),
             ScreenAsk::Gamble => self.gamble_screen(),
             ScreenAsk::MissionInfo => self.mission_info_screen(),
@@ -543,6 +546,7 @@ mod tests {
             ScreenAsk::HypergateCycle,
             ScreenAsk::ComingTraffic,
             ScreenAsk::ShipNaming(ShipId(128)),
+            ScreenAsk::CaptureNaming,
             ScreenAsk::Hail,
             ScreenAsk::PilotPanel,
         ] {

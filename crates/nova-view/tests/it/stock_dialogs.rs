@@ -121,7 +121,7 @@ fn desc_dialog_is_centred_with_its_button_and_text_box_where_recorded() {
             (template.bounds.width(), template.bounds.height()),
             (441.0, 313.0)
         );
-        assert_eq!(template.placement, Placement::Center);
+        assert_eq!(template.placement, Placement::CenterWindow);
         assert_eq!(template.items[0].bounds, rect(173.0, 281.0, 99.0, 25.0));
         assert_eq!(template.items[2].bounds, rect(11.0, 10.0, 417.0, 262.0));
     }
@@ -199,8 +199,8 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
         let text = data.description(ABOUT).expect("the About text");
         let mut desc = DescDialog::new(&template, &text, data.button_style(), Rc::new(MonoMetrics));
 
-        // The dialog is centred: (1024 - 441) / 2, (768 - 313) / 2, floored.
-        let origin = Point::new(291.0, 227.0);
+        // `_CenterWindow` centres it: 512 - trunc(441 / 2), 384 - trunc(313 / 2).
+        let origin = Point::new(292.0, 228.0);
         let dialog = desc.dialog();
         assert_eq!(dialog.bounds(), Bounds::at(origin, 441.0, 313.0));
         let done = rect(173.0, 281.0, 99.0, 25.0).offset(origin);
@@ -649,7 +649,7 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             .dialog_template(NEW_PILOT_DIALOG)
             .expect("converts");
         let name = path.display();
-        assert_eq!(template.placement, Placement::Center, "{name}");
+        assert_eq!(template.placement, Placement::CenterWindow, "{name}");
         assert_eq!(
             template.items[NAME_ITEM - 1].kind,
             ItemSpec::EditText("Edit Text".to_owned()),
@@ -822,7 +822,7 @@ fn the_mission_computer_lays_out_with_its_items_where_recorded() {
             (computer.bounds.width(), computer.bounds.height()),
             (510.0, 201.0)
         );
-        assert_eq!(computer.placement, Placement::Center);
+        assert_eq!(computer.placement, Placement::CenterWindow);
         for (item, bounds) in [
             (ACCEPT_ITEM, rect(266.0, 170.0, 99.0, 25.0)),
             (LIST_ITEM, rect(10.0, 30.0, 195.0, 144.0)),
@@ -1049,7 +1049,7 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                 size,
                 "DLOG {id}"
             );
-            assert_eq!(template.placement, Placement::Center, "DLOG {id}");
+            assert_eq!(template.placement, Placement::CenterWindow, "DLOG {id}");
             for (item, bounds) in items {
                 assert_eq!(
                     template.items[item - 1].bounds,
@@ -1125,7 +1125,7 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
             (template.bounds.width(), template.bounds.height()),
             (413.0, 227.0)
         );
-        assert_eq!(template.placement, Placement::Center);
+        assert_eq!(template.placement, Placement::CenterWindow);
         assert_eq!(template.items.len(), 7);
         for (item, bounds) in [
             (1, ltrb(293.0, 195.0, 392.0, 220.0)),
@@ -1152,12 +1152,12 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
         assert_eq!(screen.problem(), None);
         assert_eq!(screen.tab(), Tab::General);
         let bounds = screen.bounds().expect("laid out");
-        assert_eq!(bounds.min, Point::new(305.0, 270.0), "centred");
+        assert_eq!(bounds.min, Point::new(306.0, 271.0), "centred");
         assert_eq!(
             screen.button_bounds(PlayerInfoButton::Done),
-            Some(ltrb(598.0, 465.0, 697.0, 490.0))
+            Some(ltrb(599.0, 466.0, 698.0, 491.0))
         );
-        let window = ltrb(305.0, 270.0, 718.0, 497.0);
+        let window = ltrb(306.0, 271.0, 719.0, 498.0);
         let clipped = |command| DrawCommand::Clipped {
             clip: window,
             command: Box::new(command),
@@ -1187,10 +1187,10 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
             [
                 clipped(DrawCommand::Picture {
                     image: BACKGROUND[1],
-                    top_left: Point::new(305.0, 310.0),
+                    top_left: Point::new(306.0, 311.0),
                 }),
-                stretched(8518, Point::new(305.0, 270.0), 40.0),
-                stretched(8520, Point::new(305.0, 457.0), 40.0),
+                stretched(8518, Point::new(306.0, 271.0), 40.0),
+                stretched(8520, Point::new(306.0, 458.0), 40.0),
             ],
             "the stock span of 147 crops the 215-high middle under the lower cap"
         );
@@ -1230,11 +1230,20 @@ fn the_maps_find_dialog_lays_out_from_dlog_3005_as_recorded() {
         let template = interface(&path)
             .dialog_template(FIND_DIALOG)
             .expect("converts");
-        assert_eq!(template.placement, Placement::Center, "{}", path.display());
+        assert_eq!(
+            template.placement,
+            Placement::CenterWindow,
+            "{}",
+            path.display()
+        );
         let dialog = FindDialog::new(&template, ButtonStyle::STOCK, mono()).expect("builds");
         let bounds = dialog.dialog().bounds();
         assert_eq!((bounds.width(), bounds.height()), (284.0, 105.0));
-        assert_eq!(bounds.min, Point::new(370.0, 331.0), "centred");
+        assert_eq!(
+            bounds.min,
+            Point::new(370.0, 332.0),
+            "as _CenterWindow centres it"
+        );
         let at = |x, y, w, h| Some(rect(x, y, w, h).offset(bounds.min));
         let item = |n| dialog.dialog().item_bounds(n);
         assert_eq!(item(FIND_ITEM), at(165.0, 72.0, 70.0, 20.0), "Find");
@@ -1303,28 +1312,35 @@ fn the_maps_dlog_2000_is_601_by_513_with_its_items_where_the_map_puts_them() {
 }
 
 /// Every dialog that opens over flight centres on the screen, so in a
-/// widened flight view each lands where the original's `_CenterWindow`
-/// puts it once its 1024x768 frame is centred: none keeps its `DLOG`
-/// bounds. Comm 1007, haggle 1008, plunder 1011, mission info 1012, the
-/// offers 1016 and 1020, player info 1017, assignment 1018, the escort
-/// dialog 1022, the map 2000,
-/// yes/no 3002, the texts 3003 and 3004, Find 3005 and the preferences
-/// 4003.
+/// widened flight view each lands centred once its 1024x768 frame is
+/// centred: none keeps its `DLOG` bounds. `_CenterWindow` moves comm
+/// 1007, haggle 1008, plunder 1011, mission info 1012, the offers 1016
+/// and 1020, player info 1017, assignment 1018, the escort dialog 1022,
+/// the map 2000, the texts 3003 and 3004 and Find 3005. No caller moves
+/// yes/no 3002 or the preferences 4003, so the Window Manager centres
+/// them from their word.
 #[test]
 fn every_dialog_opened_over_flight_is_centred() {
     for (_, path) in builds() {
         let ui = interface(&path);
-        for id in [
-            1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 1022, 2000, 3002, 3003, 3004, 3005,
-            4003,
+        for (ids, placement) in [
+            (
+                &[
+                    1007, 1008, 1011, 1012, 1016, 1017, 1018, 1020, 1022, 2000, 3003, 3004, 3005,
+                ][..],
+                Placement::CenterWindow,
+            ),
+            (&[3002, 4003][..], Placement::Center),
         ] {
-            let template = ui.dialog_template(id).expect("converts");
-            assert_eq!(
-                template.placement,
-                Placement::Center,
-                "{} DLOG {id}",
-                path.display()
-            );
+            for &id in ids {
+                let template = ui.dialog_template(id).expect("converts");
+                assert_eq!(
+                    template.placement,
+                    placement,
+                    "{} DLOG {id}",
+                    path.display()
+                );
+            }
         }
     }
 }
@@ -1416,4 +1432,33 @@ fn str_150_holds_the_bars_gamble_and_the_races_labels() {
     assert_eq!(list.strings[33].as_str(), CANCEL_LABEL, "#34");
     assert_eq!(list.strings[4].as_str(), DONE_LABEL, "#5");
     assert_eq!(list.strings[57].as_str(), HELP_LABEL, "#58");
+}
+
+/// The `DLOG`s `_CenterWindow` moves are placed as it places them: the
+/// port dialog (1000, 618 x 517) at (512 - 309, 384 - 258), a pixel
+/// lower than a one-step floor would put it, and every listed `DLOG` the
+/// build has as [`Placement::CenterWindow`].
+#[test]
+fn dialogs_center_window_moves_are_placed_as_it_places_them() {
+    use nova_view::ui::CENTER_WINDOW_DLOGS;
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        let port = ui.dialog_template(1000).expect("converts");
+        assert_eq!((port.bounds.width(), port.bounds.height()), (618.0, 517.0));
+        assert_eq!(port.placement, Placement::CenterWindow);
+        assert_eq!(port.placement.origin(port.bounds), Point::new(203.0, 126.0));
+        let mut present = 0;
+        for id in CENTER_WINDOW_DLOGS {
+            if let Ok(template) = ui.dialog_template(id) {
+                present += 1;
+                assert_eq!(
+                    template.placement,
+                    Placement::CenterWindow,
+                    "{} DLOG {id}",
+                    path.display()
+                );
+            }
+        }
+        assert!(present > 20, "{}: {present} listed DLOGs", path.display());
+    }
 }

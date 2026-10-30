@@ -28,6 +28,36 @@
 //! (@0x95b83), and each Greetings press says the line kept (see the
 //! `hail_advice` module).
 //!
+//! **The opening line** ([`reply::opening`]): a ship the player leads,
+//! unmarked, opens by what it is, "What can I do for you, sir?" from its
+//! launched fighter (AI type 5) and "What can I do for you?" from an
+//! escort (AI type 6) (@0x95d0b-0x95d49), unless it is untalkative or
+//! hostile.
+//!
+//! **The beeps** (`_DoCommDialog`, each at priority 1): the dialog
+//! opening beeps [`SimSound::CommDialogOpened`] (`_beepSnd[4]`
+//! @0x95b34), a refusal only [`SimSound::Refused`]; each press of a
+//! listed option beeps [`SimSound::CommPressed`] (`_beepSnd[1]`
+//! @0x9601f, @0x96698) before any sound its deed makes, and a press
+//! while a price is asked, of no such option or with the ship gone is
+//! silent, as is the haggle; and hanging up beeps
+//! [`SimSound::CommDialogClosed`] (`_beepSnd[2]` @0x96843). A person's
+//! offer and the escort dialog make their own (see the `person_offers`
+//! and `escort_dialog` modules).
+//!
+//! **The release flag.** Release sets the original's app-wide
+//! `_releaseCommEscort` (0xdef2c, @0x9606a), the session's
+//! [`Escorts::release_comm_escort`](super::space::Escorts::release_comm_escort); only a comm
+//! dialog opening clears it (@0x9576a), not a refusal, a person's offer or
+//! the escort dialog. It shows in the dialog's status line, which goes
+//! once it is set (`_CommDialogUpdate` @0x90694). Hanging up releases the
+//! ship hailed while it is set and leaves it set, so the next escort
+//! dialog's close releases its escort too (see the `escort_dialog`
+//! module). The run carries the flag to the next flight
+//! ([`CarryOver::release_comm_escort`](super::CarryOver::release_comm_escort)),
+//! as the original's outlives a pilot load; it is never saved. Hanging up also marks a person hailed quoted (+0xbc,
+//! @0x9691d).
+//!
 //! The deeds:
 //!
 //! - **Spare** (a bribe paid): the ship is [`spared`](Npc::spared) and
@@ -40,15 +70,17 @@
 //!   it attacks the player, a person of `Flags` 0x0010 not already
 //!   threatening it saying its hail quote at once
 //!   ([`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)).
-//! - **Release**: the player's escort leaves the fleet once the channel
+//! - **Release**: the ship released leaves the player once the channel
 //!   closes ([`Session::hang_up`]), as the original's dialog does when it
 //!   closes (@0x96852), having taken its share of the fleet's cargo and
 //!   reset as it went (see the `escorts` module): its AI type its
 //!   `InherentAI`, of no government
 //!   still, it leaves the system (`_AIMakeShipLeave`), jumping out with a
-//!   jump's fuel, or else deciding as its idle block does. A save is due.
-//!   The player's escort is hailed whatever its ship type's government
-//!   says, and opens "What can I do for you?".
+//!   jump's fuel, or else deciding as its idle block does. A fleet escort
+//!   leaves the fleet, and a save is due; a mission ship captured for an
+//!   escort leaves the formation keeping its mark, and none is (see the
+//!   `captured_mission_ship` module). The player's escort is hailed
+//!   whatever its ship type's government says.
 //! - **Join** (Use As Escort, under
 //!   [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)'s other reading):
 //!   the person hailed joins the fleet at once as itself
@@ -102,7 +134,7 @@ use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
 use crate::hail::advice::AdviceWords;
 use crate::hail::{
     Ask, Attitude, CommNote, Conversation, Deed, Dispositions, EscortStatus, Haggle, Hail,
-    HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, advice,
+    HailButton, HailOptions, HailRefusal, HailView, Help, Led, MissionHail, Reply, Settled, advice,
     assist, attitude, reply,
 };
 use crate::landing;
@@ -142,9 +174,6 @@ pub(super) struct Talk {
     /// module); none when it rolled none.
     rolled: Option<String>,
     ask: Option<Ask>,
-    /// Whether the escort hailed is to be released once the channel
-    /// closes.
-    release: bool,
 }
 
 #[cfg(test)]
@@ -161,7 +190,6 @@ impl Talk {
             said: None,
             rolled: None,
             ask: None,
-            release: false,
         }
     }
 }
@@ -193,9 +221,10 @@ impl Session {
         self.space.escorts.dialog = None;
         self.out
             .beep_unanswered(self.answering().map(|npc| npc.id))?;
+        // The non-escort path clears `_releaseCommEscort` (@0x9576a).
+        self.space.escorts.release_comm_escort = false;
         let npc = self.answering()?;
         let dispositions = self.dispositions(npc);
-        let escort = npc.escort.is_some();
         let mut conversation =
             Conversation::open(self.pilot.cash, dispositions.greedy, npc.info_types, chance);
         conversation.advice = advice::kind(conversation.advice, npc.person.as_ref());
@@ -210,19 +239,24 @@ impl Session {
             },
             chance,
         );
-        let opening = if escort {
-            Reply::Comm(reply::ESCORT_OPENING)
-        } else {
-            reply::opening(
-                !dispositions.untalkative,
-                attitude(
-                    npc,
-                    &self.world().around(self.npcs()),
-                    self.mission_hail(npc),
-                ),
+        // An unmarked ship the player leads: AI type 5 for its launched
+        // fighter, 6 for an escort (@0x95d0b-0x95d49).
+        let led =
+            (npc.mission.is_none() && npc.escort.is_some()).then_some(if npc.carrier.is_some() {
+                Led::Fighter
+            } else {
+                Led::Escort
+            });
+        let opening = reply::opening(
+            !dispositions.untalkative,
+            attitude(
+                npc,
+                &self.world().around(self.npcs()),
                 self.mission_hail(npc),
-            )
-        };
+            ),
+            self.mission_hail(npc),
+            led,
+        );
         let opening = match Self::quote_of(npc) {
             Some(index) if self.setup.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
                 Reply::Quote {
@@ -240,8 +274,8 @@ impl Session {
             said: None,
             rolled,
             ask: None,
-            release: false,
         });
+        self.out.sounds.push(SimSound::CommDialogOpened);
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
     }
 
@@ -468,7 +502,7 @@ impl Session {
             options: buttons,
             asking: talk.conversation.asking(),
             pay_me: true,
-            escort: self.escort_status(npc, talk.release),
+            escort: self.escort_status(npc, self.space.escorts.release_comm_escort),
             portrait: npc.person.and_then(|person| person.portrait),
         })
     }
@@ -495,6 +529,9 @@ impl Session {
             let hail = self.hail_of(npc, &talk.conversation);
             options.listed(&hail).get(pick)?.press(&hail, chance)
         };
+        // Item 2 and Greetings beep before anything else (@0x9601f,
+        // @0x96698); the press itself makes no sound.
+        self.out.sounds.push(SimSound::CommPressed);
         talk.first = answer.first;
         if let Some(said) = answer.reply {
             let variant = talk.conversation.variant;
@@ -584,22 +621,34 @@ impl Session {
         }))
     }
 
-    /// Ends the hail under way, if any; an escort Release was pressed
-    /// for is released now.
+    /// Ends the hail under way, if any, as the comm dialog closes
+    /// (@0x967e2-0x96948): it beeps [`SimSound::CommDialogClosed`]
+    /// (@0x96843); then, while the release flag is set (see the module
+    /// docs), the ship hailed is released ([`Session::release`],
+    /// @0x96852-0x968c1), the flag staying set; then a person hailed is
+    /// quoted (+0xbc 1, @0x9691d): it never says its hail quote again this
+    /// stay where "once" holds it back.
     pub fn hang_up(&mut self) {
-        if let Some(talk) = self.space.escorts.talk.take()
-            && talk.release
-        {
+        let Some(talk) = self.space.escorts.talk.take() else {
+            return;
+        };
+        self.out.sounds.push(SimSound::CommDialogClosed);
+        if self.space.escorts.release_comm_escort {
             self.release(talk.npc);
+        }
+        if let Some(person) = self
+            .space
+            .npc_mut(talk.npc)
+            .and_then(|npc| npc.person.as_mut())
+        {
+            person.quoted = true;
         }
     }
 
     /// NPC `id` does `deed` (see the module docs).
     fn act(&mut self, id: NpcId, deed: Deed) {
         if deed == Deed::Release {
-            if let Some(talk) = &mut self.space.escorts.talk {
-                talk.release = true;
-            }
+            self.space.escorts.release_comm_escort = true;
             return;
         }
         if deed == Deed::Join {
@@ -804,11 +853,12 @@ pub(super) mod tests {
 
     /// The first variant's words of the groups the tests read; every
     /// other ship comm string is "c<n>".
-    const SAID: [(u16, &str); 18] = [
+    const SAID: [(u16, &str); 19] = [
         (1, "Channel open."),
         (11, "What is it you want?"),
         (21, "What can I do for you?"),
         (22, "What can I help you with?"),
+        (26, "What can I do for you, sir?"),
         (46, "Nice to meet you."),
         (61, "Yeah, come back when you actually have some money."),
         (66, "Stop wasting my time."),
@@ -936,7 +986,7 @@ pub(super) mod tests {
     }
 
     /// The draws placing the ship at (`x`, `y`), facing up.
-    fn placed(x: i32, y: i32) -> Draws {
+    pub(in crate::session) fn placed(x: i32, y: i32) -> Draws {
         Draws::of(&[6, 6, 0, 0, (x + 750) as u32, (y + 750) as u32, 0, 0])
     }
 
@@ -1436,7 +1486,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_answered_hail_makes_no_sound() {
+    fn an_answered_hail_beeps_its_opening() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
         session.take_sounds();
@@ -1445,7 +1495,106 @@ pub(super) mod tests {
             matches!(hailed, Ok(super::super::Hailed::Comm(_))),
             "{hailed:?}"
         );
-        assert_eq!(session.take_sounds(), []);
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::CommDialogOpened],
+            "_beepSnd[4] @0x95b34"
+        );
+        hail(&mut session, &catalog);
+        assert_eq!(session.take_sounds(), [SimSound::CommDialogOpened]);
+    }
+
+    // The comm dialog's beeps.
+
+    #[test]
+    fn each_press_of_a_listed_option_beeps_once_before_its_deed() {
+        let mut catalog = hailable();
+        catalog.govts[1].flags2 = crate::hail::QUIET;
+        let mut session = targeting(&catalog);
+        hail(&mut session, &catalog);
+        session.take_sounds();
+        press(&mut session, &catalog, 0, 0);
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::CommPressed],
+            "Greetings, _beepSnd[1] @0x96698"
+        );
+        npc(&mut session).govt = Some(OTHER);
+        hail(&mut session, &catalog);
+        session.take_sounds();
+        let before = press(&mut session, &catalog, 0, 0).reply;
+        let view = press(&mut session, &catalog, 1, 0);
+        assert_eq!(view.reply, before, "a quiet ship ignores the request");
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::CommPressed, SimSound::CommPressed],
+            "item 2 beeps first all the same (@0x9601f)"
+        );
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 36);
+        npc(&mut session).person = Some(crate::traffic::npc::NpcPerson {
+            flags: crate::person::QUOTE_ON_ATTACK,
+            hail_quote: 1,
+            ..crate::traffic::npc::NpcPerson::of(&crate::testkit::person(151, 129), false)
+        });
+        npc(&mut session).goal = Goal::Idle;
+        npc(&mut session).target = None;
+        haggle(&mut session, &catalog, Haggle::LowerPrice);
+        session.tick_quotes(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.take_sounds(),
+            [
+                SimSound::CommDialogOpened,
+                SimSound::CommPressed,
+                SimSound::HailQuote
+            ],
+            "the press, then the quote its declined bribe brings"
+        );
+    }
+
+    #[test]
+    fn a_press_while_a_price_is_asked_or_of_no_option_is_silent() {
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        hail(&mut session, &catalog);
+        assert!(press(&mut session, &catalog, 1, 36).asking.is_some());
+        session.take_sounds();
+        press(&mut session, &catalog, 0, 0);
+        assert_eq!(session.take_sounds(), [], "a price is asked");
+        haggle(&mut session, &catalog, Haggle::LowerPrice);
+        assert_eq!(session.take_sounds(), [], "the haggle is silent");
+        let mut chance = Draws::of(&[]);
+        assert!(
+            session
+                .answer(2, &catalog, &HailOptions::default(), &mut chance)
+                .is_none()
+        );
+        assert_eq!(session.take_sounds(), [], "no such option");
+        session.space.traffic.remove(NpcId(0));
+        assert!(
+            session
+                .answer(0, &catalog, &HailOptions::default(), &mut chance)
+                .is_none()
+        );
+        assert_eq!(session.take_sounds(), [], "its ship gone");
+    }
+
+    #[test]
+    fn hanging_up_beeps_the_close_and_hanging_up_nothing_is_silent() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        hail(&mut session, &catalog);
+        session.take_sounds();
+        session.hang_up();
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::CommDialogClosed],
+            "_beepSnd[2] @0x96843"
+        );
+        session.hang_up();
+        assert_eq!(session.take_sounds(), [], "nothing to hang up");
     }
 
     #[test]
@@ -2612,6 +2761,73 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_fleet_escort_following_its_lead_is_just_an_escort() {
+        // Goal 0xa with a leader, busy to `_AIIsShipBusy` (@0x82fac-0x82fe4).
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        in_a_fleet(&mut session);
+        npc(&mut session).goal = Goal::Follow {
+            lead: NpcId(9),
+            guard: None,
+        };
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn a_mining_ship_is_busy() {
+        // Goal 0x10, busy to `_AIIsShipBusy` (@0x82fac-0x82fe4).
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).goal = Goal::Mine;
+        hail(&mut session, &catalog);
+        assert_eq!(press(&mut session, &catalog, 1, 99).reply, "I'm busy.");
+    }
+
+    /// Request Assistance pressed on NPC 0 of `targeting`'s session, idle,
+    /// while another NPC attacks it, with Nova's options as `rules`
+    /// chooses.
+    fn asked_while_attacked(rules: &Rulebook) -> HailView {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let hailed = session.npcs()[0].id;
+        let attacker = Npc {
+            goal: Goal::Attack(ShipRef::Npc(hailed)),
+            ..session.npcs()[0].clone()
+        };
+        session.space.traffic.add_npc(attacker);
+        hail(&mut session, &catalog);
+        session
+            .answer(
+                1,
+                &catalog,
+                &HailOptions::nova(rules),
+                &mut Draws::of(&[99]),
+            )
+            .expect("open")
+    }
+
+    #[test]
+    fn a_ship_another_attacks_is_not_busy_by_the_engine_and_is_by_the_other_reading() {
+        // `_IsShipThreatened` compares the hailed ship's own +0x70 with
+        // its own slot (@0x8209e-0x820a9), so never holds.
+        assert_eq!(
+            asked_while_attacked(&Rulebook::default()).reply,
+            "You're not in any trouble."
+        );
+        assert_eq!(
+            asked_while_attacked(
+                &Rulebook::default().with_override(RuleKey::HailBusyUnderAttack, RuleSource::Bible)
+            )
+            .reply,
+            "I'm busy."
+        );
+    }
+
+    #[test]
     fn a_fleet_escort_asked_for_fuel_cannot_do_that() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
@@ -2920,13 +3136,24 @@ pub(super) mod tests {
         session
     }
 
+    /// Greetings and Release, as a releasable ship lists them.
+    const RELEASABLE: [(&str, Option<char>); 2] =
+        [("Greetings", Some('G')), ("Release", Some('R'))];
+
+    /// Presses Release, the middle option of a releasable ship.
+    fn press_release(session: &mut Session, catalog: &FakePilotCatalog) -> HailView {
+        session
+            .answer(1, catalog, &HailOptions::default(), &mut Draws::of(&[]))
+            .expect("answered")
+    }
+
     #[test]
-    fn an_escort_answers_what_can_i_do_for_you_with_release_alone() {
+    fn an_escort_answers_what_can_i_do_for_you_with_greetings_and_release() {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         let view = hail(&mut session, &catalog);
         assert_eq!(view.reply, "What can I do for you?");
-        assert_eq!(labels(&view), [("Release", Some('R'))]);
+        assert_eq!(labels(&view), RELEASABLE);
         assert!(!view.hostile);
         assert_eq!(view.govt_name, None, "of no government");
         let (view, _) = hail_with(&mut session, &catalog, &opening(1));
@@ -2940,7 +3167,7 @@ pub(super) mod tests {
         session.pilot.escorts[0].wage = Some(100);
         let view = hail(&mut session, &catalog);
         assert_eq!(view.escort, Some(crate::hail::EscortStatus { hired: true }));
-        assert_eq!(labels(&view), [("Release", Some('R'))]);
+        assert_eq!(labels(&view), RELEASABLE);
     }
 
     #[test]
@@ -2952,7 +3179,7 @@ pub(super) mod tests {
             view.escort,
             Some(crate::hail::EscortStatus { hired: false })
         );
-        assert_eq!(labels(&view), [("Release", Some('R'))]);
+        assert_eq!(labels(&view), RELEASABLE);
     }
 
     #[test]
@@ -3001,14 +3228,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn once_release_is_pressed_the_escort_shows_no_status() {
+    fn the_status_line_goes_once_release_is_pressed() {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         hail(&mut session, &catalog);
-        let view = session
-            .answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]))
-            .expect("answered");
-        assert_eq!(view.escort, None, "release pending (0xdef2c)");
+        let view = press_release(&mut session, &catalog);
+        assert_eq!(view.escort, None, "release pending (0xdef2c, @0x90694)");
         assert!(!view.hostile);
         assert!(session.is_escort(NpcId(0)), "not yet released");
         let view = hail(&mut session, &catalog);
@@ -3020,9 +3245,29 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_carried_fighter_answers_as_an_escort_with_no_release() {
+    fn the_players_launched_fighter_opens_what_can_i_do_for_you_sir() {
         let catalog = hailable();
-        let mut session = escorting(&catalog);
+        let mut session = launched_fighter(&catalog);
+        let view = hail(&mut session, &catalog);
+        assert_eq!(
+            view.reply, "What can I do for you, sir?",
+            "group 5 (@0x95d22)"
+        );
+        assert_eq!(
+            labels(&view),
+            [("Greetings", Some('G')), ("Request Assistance", Some('R'))],
+            "AI type 5 is never released (@0x28d6b)"
+        );
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { hired: false })
+        );
+    }
+
+    /// [`escorting`]'s ship made the player's launched fighter (AI type 5):
+    /// a carried escort whose carrier is the player.
+    fn launched_fighter(catalog: &FakePilotCatalog) -> Session {
+        let mut session = escorting(catalog);
         session.pilot.escorts[0].carried = true;
         if let Some(npc) = session.space.npc_mut(NpcId(0)) {
             npc.carrier = Some(crate::bay::Carrier {
@@ -3031,12 +3276,43 @@ pub(super) mod tests {
                 reach: 40.0,
             });
         }
-        let view = hail(&mut session, &catalog);
-        assert_eq!(view.reply, "What can I do for you?");
-        assert_eq!(labels(&view), []);
+        session
+    }
+
+    #[test]
+    fn the_players_launched_fighter_busy_in_formation_is_just_an_escort() {
+        // Group 22 for a busy ship of AI type above 4 (`_DoCommDialog`'s
+        // Request Assistance), busy in formation to `_AIIsShipBusy`
+        // (@0x82fac).
+        let catalog = hailable();
+        let mut session = launched_fighter(&catalog);
+        npc(&mut session).goal = Goal::Formation { guard: None };
+        hail(&mut session, &catalog);
         assert_eq!(
-            view.escort,
-            Some(crate::hail::EscortStatus { hired: false })
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn the_players_launched_fighter_idle_answers_as_a_non_busy_escort() {
+        let catalog = hailable();
+        let mut session = launched_fighter(&catalog);
+        npc(&mut session).goal = Goal::Idle;
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            "You're not in any trouble.",
+            "no need"
+        );
+        let mut session = launched_fighter(&catalog);
+        npc(&mut session).goal = Goal::Idle;
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        assert_eq!(
+            press(&mut session, &catalog, 1, 99).reply,
+            said(reply::CANT_DO_THAT),
+            "an escort AI can't give fuel"
         );
     }
 
@@ -3053,9 +3329,7 @@ pub(super) mod tests {
         let catalog = hailable();
         let mut session = escorting(&catalog);
         hail(&mut session, &catalog);
-        let view = session
-            .answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]))
-            .expect("answered");
+        let view = press_release(&mut session, &catalog);
         assert_eq!(view.reply, "Goodbye, captain.");
         assert!(session.is_escort(NpcId(0)), "not yet");
         assert_eq!(session.pilot().escorts().len(), 1);
@@ -3088,7 +3362,7 @@ pub(super) mod tests {
             .put(0, crate::testkit::carrying(140, 8));
         crate::session::precalced::tests::convicted(&mut session);
         hail(&mut session, catalog);
-        session.answer(0, catalog, &HailOptions::default(), &mut Draws::of(&[]));
+        press_release(&mut session, catalog);
         session.hang_up();
         session
     }
@@ -3155,7 +3429,7 @@ pub(super) mod tests {
         let mut session = escorting(&catalog);
         npc(&mut session).reserves.fuel.now = 0.0;
         hail(&mut session, &catalog);
-        session.answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]));
+        press_release(&mut session, &catalog);
         session.hang_up();
         assert_eq!(npc(&mut session).goal, Goal::JumpOut);
     }
@@ -3172,6 +3446,52 @@ pub(super) mod tests {
         assert!(!session.take_save_due());
         session.hang_up();
         assert!(session.is_escort(NpcId(0)), "nothing to hang up");
+    }
+
+    // The release flag, `_releaseCommEscort`.
+
+    #[test]
+    fn release_sets_the_flag_and_it_outlives_the_close() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        hail(&mut session, &catalog);
+        assert!(!session.space.escorts.release_comm_escort);
+        press(&mut session, &catalog, 0, 0);
+        assert!(!session.space.escorts.release_comm_escort, "Greetings");
+        press_release(&mut session, &catalog);
+        assert!(session.space.escorts.release_comm_escort, "@0x9606a");
+        session.take_sounds();
+        session.hang_up();
+        assert_eq!(session.take_sounds(), [SimSound::CommDialogClosed]);
+        assert!(!session.is_escort(NpcId(0)), "released (@0x96852)");
+        assert!(
+            session.space.escorts.release_comm_escort,
+            "not cleared as the dialog closes"
+        );
+    }
+
+    #[test]
+    fn opening_a_comm_dialog_clears_the_flag_and_the_escort_dialog_or_a_refusal_do_not() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        session.space.escorts.release_comm_escort = true;
+        let hailed = session.hail_key(&catalog, &HailOptions::default(), false, &mut NeverFires);
+        assert!(
+            matches!(hailed, Ok(super::super::Hailed::Escort(_))),
+            "{hailed:?}"
+        );
+        assert!(
+            session.space.escorts.release_comm_escort,
+            "the escort path (@0x95721-0x95747)"
+        );
+        session.space.escorts.dialog = None;
+        session.chart.target = None;
+        assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_err());
+        assert!(session.space.escorts.release_comm_escort, "a refusal");
+        let mut session = targeting(&catalog);
+        session.space.escorts.release_comm_escort = true;
+        hail(&mut session, &catalog);
+        assert!(!session.space.escorts.release_comm_escort, "@0x9576a");
     }
 
     #[test]
@@ -3450,7 +3770,7 @@ pub(super) mod tests {
                 .iter()
                 .map(|button| button.label.as_str())
                 .collect::<Vec<_>>(),
-            ["Release"],
+            ["Greetings", "Release"],
             "the hail stays open, with the escort's options"
         );
         assert_eq!(

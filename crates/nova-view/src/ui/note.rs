@@ -21,7 +21,8 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE, outline,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
+    outline,
 };
 use super::prefs::{BACKDROP, BORDER};
 
@@ -108,6 +109,14 @@ impl NoteDialog {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The note with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -346,5 +355,20 @@ mod tests {
     #[test]
     fn the_note_is_dlog_3000() {
         assert_eq!(NOTE_DIALOG, 3000);
+    }
+
+    /// The Toolbox's standard filter `_EVNoteAlert` @0x55710 runs maps no
+    /// Tab or Space to a button.
+    #[test]
+    fn tab_then_space_closes_it_only_with_the_focus_ring() {
+        let mut ringed = note(&template());
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.closed(), "by default");
+        let mut off = note(&template()).with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert!(!off.closed());
+        assert_eq!(off.dialog().focus(), None);
     }
 }

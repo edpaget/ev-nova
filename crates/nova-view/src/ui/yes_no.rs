@@ -21,7 +21,7 @@ use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
 use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
+    Dialog, DialogEvent, DialogTemplate, FocusRing, Role, STATIC_TEXT_COLOR, STATIC_TEXT_SIZE,
 };
 
 /// The Yes/No dialog's `DLOG` (and `DITL`) ID.
@@ -100,6 +100,14 @@ impl YesNoDialog {
     #[must_use]
     pub fn question(&self) -> &str {
         &self.question
+    }
+
+    /// The question with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.dialog.set_focus_ring(ring);
+        self
     }
 
     /// The dialog itself, for its layout.
@@ -274,5 +282,20 @@ mod tests {
         assert_eq!(labels, ["OK", QUIT_QUESTION, "Cancel"]);
         click(&mut dialog, NO_ITEM);
         assert_eq!(dialog.take_sounds(), []);
+    }
+
+    /// `_EVYesNoDialog` @0x5558c runs the Toolbox's standard filter, which
+    /// maps no Tab or Space to a button.
+    #[test]
+    fn tab_then_space_answers_only_with_the_focus_ring() {
+        let mut ringed = asking();
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert_eq!(ringed.take_answer(), Some(true), "by default");
+        let mut off = asking().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(off.take_answer(), None);
+        assert_eq!(off.dialog().focus(), None);
     }
 }

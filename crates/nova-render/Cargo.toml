@@ -13,8 +13,10 @@ glyphon.workspace = true
 nova-data.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
+skrifa.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
+zeno.workspace = true
 
 # The MetalFX world upscaler's FFI, macOS only: no other build links it.
 [target.'cfg(target_os = "macos")'.dependencies]

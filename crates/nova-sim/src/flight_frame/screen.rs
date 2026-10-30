@@ -24,6 +24,7 @@
 //! asked again they answer from the rolls kept.
 
 use super::port_screens::{BarNews, PortShops};
+use crate::capture_naming::CaptureNaming;
 use crate::catalog::{ShipId, SystemId};
 use crate::galaxy_map::{GalaxyShown, MapDrawing, MapMarks};
 use crate::gamble::GambleOpening;
@@ -125,6 +126,12 @@ pub enum ScreenAsk {
     /// ([`ScreenAsk::draws_afresh`]). Answered nothing without a catalog,
     /// whose strings word it.
     ShipNaming(ShipId),
+    /// The prompt for renaming the ship captured, asked as Use As My
+    /// Ship's rename opens ([`ScreenAnswer::CaptureNaming`]): its default
+    /// name's digits are drawn afresh at each ask
+    /// ([`ScreenAsk::draws_afresh`]). Answered nothing without a catalog,
+    /// whose strings word it.
+    CaptureNaming,
     /// The bar's news and its picture, asked as News is pressed
     /// ([`ScreenAnswer::News`]). Answered nothing with no bar visit under
     /// way.
@@ -165,13 +172,14 @@ pub enum ScreenAsk {
 impl ScreenAsk {
     /// Whether the ask draws afresh at each ask, so two asks in a row may
     /// answer differently: only a ship's name prompt
-    /// ([`ScreenAsk::ShipNaming`]), whose default name's digits are drawn
-    /// each time it opens and kept nowhere, as the original draws them as
-    /// its prompt opens. Every other ask is a read, and the shops' rolls
-    /// it draws are kept.
+    /// ([`ScreenAsk::ShipNaming`]) and a captured ship's
+    /// ([`ScreenAsk::CaptureNaming`]), whose default name's digits are
+    /// drawn each time it opens and kept nowhere, as the original draws
+    /// them as its prompt opens. Every other ask is a read, and the shops'
+    /// rolls it draws are kept.
     #[must_use]
     pub fn draws_afresh(&self) -> bool {
-        matches!(self, Self::ShipNaming(_))
+        matches!(self, Self::ShipNaming(_) | Self::CaptureNaming)
     }
 }
 
@@ -295,6 +303,9 @@ pub enum ScreenAnswer {
     /// [`ScreenAsk::ShipNaming`]'s: the prompt, or why the class can't be
     /// bought.
     ShipNaming(Result<ShipNaming, ShipRefusal>),
+    /// [`ScreenAsk::CaptureNaming`]'s: the prompt, or none when no name
+    /// is awaited.
+    CaptureNaming(Option<CaptureNaming>),
     /// [`ScreenAsk::News`]'s.
     News(BarNews),
     /// [`ScreenAsk::Gamble`]'s.
@@ -336,6 +347,7 @@ impl ScreenAnswer {
             ScreenAsk::Outfitter => matches!(self, Self::Outfitter(_)),
             ScreenAsk::HireList => matches!(self, Self::HireList(_)),
             ScreenAsk::ShipNaming(_) => matches!(self, Self::ShipNaming(_)),
+            ScreenAsk::CaptureNaming => matches!(self, Self::CaptureNaming(_)),
             ScreenAsk::News => matches!(self, Self::News(_)),
             ScreenAsk::Gamble => matches!(self, Self::Gamble(_)),
             ScreenAsk::MissionInfo => matches!(self, Self::MissionInfo(_)),
@@ -379,6 +391,7 @@ mod tests {
             ScreenAsk::Outfitter,
             ScreenAsk::HireList,
             ScreenAsk::ShipNaming(ShipId(129)),
+            ScreenAsk::CaptureNaming,
             ScreenAsk::News,
             ScreenAsk::Gamble,
             ScreenAsk::MissionInfo,
@@ -455,6 +468,7 @@ mod tests {
                 rules: crate::rulebook::Rulebook::default(),
             })),
             ScreenAnswer::ShipNaming(Err(ShipRefusal::NoShipyard)),
+            ScreenAnswer::CaptureNaming(None),
             ScreenAnswer::News(BarNews::default()),
             ScreenAnswer::Gamble(GambleOpening::NoCash),
             ScreenAnswer::MissionInfo(MissionInfo::default()),
@@ -496,11 +510,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_ship_naming_draws_afresh() {
+    fn only_a_ship_naming_or_a_capture_naming_draws_afresh() {
         for ask in asks() {
             assert_eq!(
                 ask.draws_afresh(),
-                matches!(ask, ScreenAsk::ShipNaming(_)),
+                matches!(ask, ScreenAsk::ShipNaming(_) | ScreenAsk::CaptureNaming),
                 "{ask:?}"
             );
         }

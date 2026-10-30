@@ -8,16 +8,20 @@
 //! chance, only the day's rolls not drawn yet, and keep them in the port
 //! (`Port::outfit_rolls`, `ship_rolls`, `hire_rolls`), as the original
 //! keeps each day's (`_IncrementGameTime` @0xb7c4-0xb833 draws them all):
-//! asked again, each answers from the rolls kept. The shops' shipyard is
-//! built afresh, applying the redraws of the classes bought or declined
-//! since its last build, at the points it was built before. A ship's name
-//! prompt ([`ScreenAsk::ShipNaming`]) draws its default's digits afresh
-//! at each ask and keeps nothing ([`ScreenAsk::draws_afresh`]).
+//! asked again, each answers from the rolls kept. The shops' shipyard
+//! relists the classes its last opening listed while they are kept, and is
+//! otherwise built afresh; the redraws of the classes bought or declined
+//! wait for the next opening or landing (`Session::open_shipyard`; see the
+//! `shipyard_listing` module). A ship's name
+//! prompt ([`ScreenAsk::ShipNaming`]) and a captured ship's rename
+//! ([`ScreenAsk::CaptureNaming`]) draw their default's digits afresh at
+//! each ask and keep nothing ([`ScreenAsk::draws_afresh`]).
 //!
 //! [`ScreenAsk::Shops`]: crate::flight_frame::ScreenAsk::Shops
 //! [`ScreenAsk::Outfitter`]: crate::flight_frame::ScreenAsk::Outfitter
 //! [`ScreenAsk::HireList`]: crate::flight_frame::ScreenAsk::HireList
 //! [`ScreenAsk::ShipNaming`]: crate::flight_frame::ScreenAsk::ShipNaming
+//! [`ScreenAsk::CaptureNaming`]: crate::flight_frame::ScreenAsk::CaptureNaming
 //! [`ScreenAsk::draws_afresh`]: crate::flight_frame::ScreenAsk::draws_afresh
 
 use super::super::Session;
@@ -72,6 +76,19 @@ impl Session {
     ) -> ScreenAnswer {
         catalog.map_or(ScreenAnswer::Nothing, |catalog| {
             ScreenAnswer::ShipNaming(self.ship_naming(ship, catalog, chance))
+        })
+    }
+
+    /// The rename prompt for the ship captured
+    /// ([`Session::capture_naming`]), worded from `catalog` and drawn on
+    /// `chance`; nothing without a catalog.
+    pub(super) fn capture_naming_screen(
+        &self,
+        catalog: Option<&dyn SimCatalog>,
+        chance: &mut dyn Chance,
+    ) -> ScreenAnswer {
+        catalog.map_or(ScreenAnswer::Nothing, |catalog| {
+            ScreenAnswer::CaptureNaming(self.capture_naming(catalog, chance))
         })
     }
 
@@ -422,6 +439,38 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
+    fn a_capture_naming_is_the_sessions_prompt_drawn_afresh() {
+        let catalog = boardable();
+        let mut session = crate::session::capture_naming::tests::naming(&catalog);
+        let by_hand = session.clone();
+        let mut chance = FirstFires::default();
+        let expected = by_hand.capture_naming(&catalog, &mut chance);
+        assert!(expected.is_some(), "precondition: a name awaited");
+        let mut own = FirstFires::default();
+        assert_eq!(
+            asked(
+                &mut session,
+                Some(&catalog),
+                &mut own,
+                ScreenAsk::CaptureNaming
+            ),
+            ScreenAnswer::CaptureNaming(expected)
+        );
+        assert_eq!((own, &session), (chance, &by_hand));
+        let mut aboard = aboard(&catalog);
+        assert_eq!(
+            asked(
+                &mut aboard,
+                Some(&catalog),
+                &mut NeverFires,
+                ScreenAsk::CaptureNaming
+            ),
+            ScreenAnswer::CaptureNaming(None),
+            "no name awaited"
+        );
+    }
+
+    #[test]
     fn the_news_is_the_visits_drawn_news_over_the_docked_stellars_picture() {
         let catalog = port();
         let mut session = docked(&catalog);
@@ -653,17 +702,20 @@ pub(in crate::session) mod tests {
         let _ = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
         session.decline_ship(ROLLED);
         let drawn = chance.draws;
-        let first = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
-        assert!(chance.draws > drawn, "precondition: the decline's redraw");
+        let _ = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
+        assert_eq!(chance.draws, drawn, "the decline's redraw waits");
+        let _ = session.open_shipyard(&mut chance);
+        assert!(chance.draws > drawn, "precondition: the opening's redraw");
         // `FirstFires` decides every draw after its first the same way, so
         // a second redraw would answer the same: count the draws instead.
         let redrawn = chance.draws;
+        let first = asked(&mut session, None, &mut chance, ScreenAsk::Shops);
         assert_eq!(
             asked(&mut session, None, &mut chance, ScreenAsk::Shops),
             first,
             "the redraw applied once"
         );
-        assert_eq!(chance.draws, redrawn, "the third ask drew nothing");
+        assert_eq!(chance.draws, redrawn, "the asks after drew nothing");
     }
 
     #[test]

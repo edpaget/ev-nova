@@ -1,0 +1,150 @@
+name: Promote to beta
+
+# Promotes a nightly build to the beta channel by hand:
+#
+#   gh workflow run promote-beta.yml --ref main -f build-id=<YYYYMMDDHHMMSS>
+#
+# A beta is the nightly's commit rebuilt with the same build ID and
+# NOVA_CHANNEL=beta, so the Info.plist and nova.exe name the beta feeds;
+# the Flatpak is the exception, and is not rebuilt: the nightly branch's
+# commit is copied onto the beta branch. In order (all or nothing, as the
+# nightly):
+#
+# 1. `check` refuses a run off main, a malformed build ID, a build the
+#    nightly release no longer holds (both update files), or one not newer
+#    than the current beta; then it reads the commit the nightly recorded
+#    building (its ev-nova-<id>-commit.txt asset), refusing a build with
+#    none or a malformed one, and checks that commit is on main with the
+#    build ID as its committer time (nova-appcast check-promotion,
+#    crates/nova-bundle/src/appcast/promote.rs);
+# 2. `build` runs the nightly's build legs (build.yml) on that commit, with
+#    the macOS leg entering macos-signing and notarizing;
+# 3. `release` (release.yml) copies the Flatpak commit onto beta, checks the
+#    build against the beta feeds again, then moves the `beta` tag to the
+#    commit, uploads the installers, their build-ID copies, the build's
+#    commit file and the signed beta feeds to the rolling `beta`
+#    prerelease, and deploys Pages.
+#
+# The beta tag moves only in release.yml's `publish`, after every refusal
+# and every build leg, so a refused check or a failed leg leaves beta
+# untouched. The nightly release, its feeds and the nightly Flatpak branch
+# are never written. A promotion that failed after `check` is finished with
+# "Re-run failed jobs", which keeps `check`'s success; `publish`'s exit 3
+# covers feeds that already went up.
+#
+# It creates no environment of its own: the macos-signing and
+# update-signing gates are build.yml's and release.yml's, each allowing
+# only main. The workflow input reaches `check` only as an environment
+# variable, never interpolated into a script, and every later job uses
+# `check`'s validated outputs.
+on:
+  workflow_dispatch:
+    inputs:
+      build-id:
+        description: The nightly build to promote, YYYYMMDDHHMMSS (one the nightly release still holds).
+        required: true
+        type: string
+
+jobs:
+  # No secrets and no environment: the release data it reads is public.
+  check:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      commit: ${{ steps.check.outputs.commit }}
+    env:
+      MISE_AUTO_INSTALL: "false"
+    steps:
+      # main's whole history, to check the nightly's recorded commit is on
+      # main with the build ID as its committer time.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install: false
+      - run: mise install rust
+        shell: bash
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: promote-beta
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The nightly's asset list and commit files, and the beta's asset
+      # list and current feeds when the beta release exists (an empty list
+      # before the first promotion). Every commit file is downloaded (the
+      # nightly keeps a few), so the unvalidated input never reaches a
+      # pattern; check-promotion picks the build's.
+      - name: Fetch the releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view nightly --json assets --jq '.assets[].name' > "$RUNNER_TEMP/nightly-assets.txt"
+          mkdir -p "$RUNNER_TEMP/nightly-commits" "$RUNNER_TEMP/beta-current"
+          if grep -qx 'ev-nova-.*-commit\.txt' "$RUNNER_TEMP/nightly-assets.txt"; then
+            gh release download nightly --pattern 'ev-nova-*-commit.txt' --dir "$RUNNER_TEMP/nightly-commits"
+          fi
+          : > "$RUNNER_TEMP/beta-assets.txt"
+          if gh release view beta >/dev/null 2>&1; then
+            gh release view beta --json assets --jq '.assets[].name' > "$RUNNER_TEMP/beta-assets.txt"
+            if grep -qx 'appcast-.*\.xml' "$RUNNER_TEMP/beta-assets.txt"; then
+              gh release download beta --pattern 'appcast-*.xml' --dir "$RUNNER_TEMP/beta-current"
+            fi
+          fi
+      # Refuses (exit 1, naming the IDs) or prints build= and commit=.
+      - name: Check the build
+        id: check
+        shell: bash
+        env:
+          BUILD_ID: ${{ inputs.build-id }}
+        run: |
+          set -euo pipefail
+          mise run appcast -- check-promotion --build "$BUILD_ID" --repo . \
+            --nightly-assets "$RUNNER_TEMP/nightly-assets.txt" \
+            --nightly-commits "$RUNNER_TEMP/nightly-commits" \
+            --beta-assets "$RUNNER_TEMP/beta-assets.txt" \
+            --beta-current "$RUNNER_TEMP/beta-current" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    uses: ./.github/workflows/build.yml
+    with:
+      build-id: ${{ needs.check.outputs.build }}
+      channel: beta
+      ref: ${{ needs.check.outputs.commit }}
+    secrets: inherit
+
+  # Only this job is serialized with the nightly: it shares the
+  # `release-main` group with ci.yml's `release`, never cancelled in
+  # progress, because both read the live Flatpak repo from Pages and then
+  # replace the whole site, so they publish one at a time. `check` and
+  # `build` write nothing shared and run outside it, so a promotion never
+  # waits on or cancels a push's tests or builds; at most a running one
+  # delays a nightly's release, and the push run queued behind that on main
+  # (ci.yml's workflow-level group). GitHub keeps one pending job per group,
+  # so a promotion can displace only another pending release (a nightly's,
+  # which the next push publishes, or another promotion's), and a nightly's
+  # pending release can displace this one, which then shows as cancelled:
+  # dispatch the promotion again. Off main `check` refuses, so this job
+  # never runs there; the per-ref group only keeps such a run out of main's.
+  # deployments: read is for release.yml's wait on the last Pages deploy.
+  release:
+    needs: [check, build]
+    concurrency:
+      group: ${{ github.ref == 'refs/heads/main' && 'release-main' || format('promote-beta-{0}', github.ref) }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+      deployments: read
+    uses: ./.github/workflows/release.yml
+    with:
+      channel: beta
+      build-id: ${{ needs.check.outputs.build }}
+      sha: ${{ needs.check.outputs.commit }}
+    secrets: inherit

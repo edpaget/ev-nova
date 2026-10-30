@@ -119,3 +119,6 @@ summary = "Play EV Nova from your own copy of its data"
 description = "A new engine for the space trading and combat game EV Nova. It plays the game from your own copy of its data files, which are not included."
 homepage = "https://github.com/edpaget/ev-nova"
 developer = "ev-nova contributors"
+# The AppStream developer id (reverse DNS).
+developer_id = "io.github.edpaget"
+update_public_key = "TGg6/LdNG0Z0jRp+lif1okIbpGrcSdQ7vH1bnmBxko0="

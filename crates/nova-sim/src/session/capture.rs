@@ -279,6 +279,7 @@ mod tests {
     use crate::flight::Controls;
     use crate::legal::NovaLaw;
     use crate::reserves::Reserves;
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::session::tests::{ON_BOARD, aboard, alongside, board_by, boardable, take};
     use crate::testkit::{Draws, FakePilotCatalog};
     use crate::testkit::{work, work_with};
@@ -643,7 +644,7 @@ mod tests {
                 session.ship.fuel_cap_cached = cached;
                 let mut chance = Draws::default().keyed(bound, 7);
                 assert_eq!(
-                    session.assign(Assignment::MyShip, &mut chance),
+                    use_as_my_ship(&mut session, "Prize", &mut chance),
                     Some(Assigned::MyShip)
                 );
                 assert_eq!(chance.times_asked(bound), 1, "{why}, {order:?}");
@@ -669,7 +670,7 @@ mod tests {
             Taken::Captured
         );
         let mut chance = Draws::default().keyed(350, 7);
-        session.assign(Assignment::MyShip, &mut chance);
+        use_as_my_ship(&mut session, "Prize", &mut chance);
         assert_eq!(
             chance.times_asked(350),
             1,
@@ -750,7 +751,7 @@ mod tests {
         let catalog = boardable();
         let mut session = swapping(&catalog, RuleSource::Engine);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0])),
             Some(Assigned::MyShip)
         );
         assert_eq!(
@@ -772,14 +773,14 @@ mod tests {
         );
         let mut session = swapping(&catalog, RuleSource::Engine);
         session.pilot.cargo.insert(Good::Commodity(6), 3);
-        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
         assert_eq!(
             session.pilot().held(Good::Commodity(6)),
             3,
             "past the six words the ships hold, a good stays with the player"
         );
         let mut session = swapping(&catalog, RuleSource::Bible);
-        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
         assert_eq!(
             session.pilot().cargo().collect::<Vec<_>>(),
             [(Good::Commodity(0), 4), (Good::Commodity(3), 6), (JUNK, 5)],
@@ -843,7 +844,7 @@ mod tests {
         );
         let mut chance = Draws::of(&[0]).keyed(75, 74);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut chance),
+            use_as_my_ship(&mut session, "Prize", &mut chance),
             Some(Assigned::MyShip)
         );
         assert_eq!(chance.times_asked(75), 1);
@@ -878,7 +879,7 @@ mod tests {
         session.space.traffic.npcs_mut()[0].state.position = Vec2::new(100.0, 40.0);
         let left = session.ship.player;
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0])),
             Some(Assigned::MyShip)
         );
         let id = session.space.escorts.fleet[0].expect("placed");
@@ -940,7 +941,7 @@ mod tests {
         ] {
             let mut session = crate::session::tests::captured(&catalog);
             session.chart.set_nav(nav);
-            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
             assert_eq!(session.chart.nav, after, "the mode kept (@0x4172e)");
             assert_eq!(session.target(), None, "@0x41736");
         }
@@ -1002,7 +1003,7 @@ mod tests {
         for order in [RuleSource::Engine, RuleSource::Bible] {
             let mut session = captured_for(&catalog, Some(PAINTING), order);
             assert_eq!(
-                session.assign(Assignment::MyShip, &mut Draws::default()),
+                use_as_my_ship(&mut session, "Prize", &mut Draws::default()),
                 Some(Assigned::MyShip)
             );
             assert_eq!(session.pilot().paint(), Some(GOVT_PAINT), "{order:?}");
@@ -1027,7 +1028,7 @@ mod tests {
         // The copy always overwrites: the record takes (32, 32, 32).
         let catalog = painting("");
         let mut session = captured_for(&catalog, None, RuleSource::Engine);
-        session.assign(Assignment::MyShip, &mut Draws::default());
+        use_as_my_ship(&mut session, "Prize", &mut Draws::default());
         assert_eq!(session.pilot().paint(), None);
     }
 
@@ -1045,7 +1046,7 @@ mod tests {
             (RuleSource::Bible, None, Some(red)),
         ] {
             let mut session = captured_for(&catalog, govt, order);
-            session.assign(Assignment::MyShip, &mut Draws::default());
+            use_as_my_ship(&mut session, "Prize", &mut Draws::default());
             assert_eq!(session.pilot().paint(), paint, "{order:?} {govt:?}");
         }
     }
@@ -1093,7 +1094,7 @@ mod tests {
         let catalog = painting_person(0x0010_2030);
         let mut session = as_person(&catalog);
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::default()),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::default()),
             Some(Assigned::MyShip)
         );
         assert_eq!(
@@ -1109,7 +1110,7 @@ mod tests {
         // A person's (0, 0, 0) is no fallback to its government (@0x7d60).
         let catalog = painting_person(0);
         let mut session = as_person(&catalog);
-        session.assign(Assignment::MyShip, &mut Draws::default());
+        use_as_my_ship(&mut session, "Prize", &mut Draws::default());
         assert_eq!(session.pilot().paint(), None);
     }
 

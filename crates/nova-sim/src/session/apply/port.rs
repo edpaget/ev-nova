@@ -22,6 +22,8 @@ impl Session {
     /// - [`FlightCommand::Outfit`] and [`FlightCommand::OutfitCounted`] run
     ///   [`Session::outfit_order`] and [`Session::outfit_counted_run`]:
     ///   [`Answer::Outfitted`], the whole run.
+    /// - [`FlightCommand::OpenShipyard`] runs [`Session::open_shipyard`]:
+    ///   done, with no shipyard to open too, keeping nothing.
     /// - [`FlightCommand::BuyShip`] runs [`Session::buy_ship`]:
     ///   [`Answer::ShipBought`].
     /// - [`FlightCommand::Hire`] runs [`Session::hire`]: [`Answer::Hired`].
@@ -35,6 +37,9 @@ impl Session {
     /// - [`FlightCommand::Assign`] runs [`Session::assign`]:
     ///   [`Answer::Assigned`], or refused with no capture awaiting its
     ///   assignment, changing nothing.
+    /// - [`FlightCommand::NameCapture`] runs [`Session::name_capture`]:
+    ///   [`Answer::Assigned`], or refused with no name awaited, changing
+    ///   nothing.
     /// - [`FlightCommand::OpenOutfitter`], [`FlightCommand::CloseOutfitter`],
     ///   [`FlightCommand::CloseHire`], [`FlightCommand::DeclineShip`],
     ///   [`FlightCommand::Jettison`] and [`FlightCommand::MarkIntroSeen`] run
@@ -65,6 +70,10 @@ impl Session {
             }
             FlightCommand::OutfitCounted { order, count } => {
                 Answer::Outfitted(self.outfit_counted_run(order, count, chance))
+            }
+            FlightCommand::OpenShipyard => {
+                self.open_shipyard(chance);
+                Answer::Done
             }
             FlightCommand::BuyShip { ship, name } => {
                 Answer::ShipBought(self.buy_ship(ship, &name, chance))
@@ -100,6 +109,9 @@ impl Session {
             FlightCommand::Assign(choice) => self
                 .assign(choice, chance)
                 .map_or(Answer::Refused, Answer::Assigned),
+            FlightCommand::NameCapture(typed) => self
+                .name_capture(typed.as_deref(), chance)
+                .map_or(Answer::Refused, Answer::Assigned),
             FlightCommand::MarkIntroSeen => {
                 self.mark_intro_seen();
                 Answer::Done
@@ -112,7 +124,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::Assignment;
+    use crate::board::{Assigned, Assignment};
     use crate::catalog::{OutfitId, ShipId};
     use crate::chance::NeverFires;
     use crate::gamble::Bet;
@@ -231,6 +243,22 @@ mod tests {
             session.close_outfitter();
             Answer::Done
         });
+    }
+
+    #[test]
+    fn the_shipyards_opening_runs_open_shipyard() {
+        let mut session = docked(&port());
+        runs(&mut session, FlightCommand::OpenShipyard, |session| {
+            assert!(session.open_shipyard(&mut NeverFires).is_some());
+            Answer::Done
+        });
+        assert!(session.port.shipyard_listing().is_some(), "kept");
+        let mut flying = Session::start(&port()).expect("starts");
+        assert_eq!(
+            apply(&mut flying, FlightCommand::OpenShipyard),
+            Answer::Done
+        );
+        assert_eq!(flying.port.shipyard_listing(), None);
     }
 
     #[test]
@@ -363,5 +391,61 @@ mod tests {
             "nothing awaits"
         );
         assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_rename_answers_what_it_did_and_with_none_awaited_is_refused() {
+        let catalog = boardable();
+        for (typed, assigned) in [
+            (Some("The Prize"), Assigned::MyShip),
+            (None, Assigned::Declined),
+        ] {
+            let mut session = captured(&catalog);
+            assert_eq!(
+                apply(&mut session, FlightCommand::Assign(Assignment::MyShip)),
+                Answer::Assigned(Assigned::Naming)
+            );
+            runs(
+                &mut session,
+                FlightCommand::NameCapture(typed.map(str::to_owned)),
+                |session| {
+                    Answer::Assigned(
+                        session
+                            .name_capture(typed, &mut NeverFires)
+                            .expect("awaits"),
+                    )
+                },
+            );
+            assert_eq!(session.pilot().ship_name() == typed, typed.is_some());
+            let before = session.clone();
+            assert_eq!(
+                apply(&mut session, FlightCommand::NameCapture(None)),
+                Answer::Refused,
+                "nothing awaits: {assigned:?}"
+            );
+            assert_eq!(session, before);
+        }
+    }
+
+    #[test]
+    fn a_rename_with_the_captured_ship_gone_is_refused_and_writes_no_name() {
+        let catalog = boardable();
+        let mut session = captured(&catalog);
+        assert_eq!(
+            apply(&mut session, FlightCommand::Assign(Assignment::MyShip)),
+            Answer::Assigned(Assigned::Naming)
+        );
+        let npc = session.space.escorts.aboard.expect("a capture").npc;
+        session.space.traffic.remove(npc);
+        let name = session.pilot().ship_name().map(str::to_owned);
+        assert_eq!(
+            apply(
+                &mut session,
+                FlightCommand::NameCapture(Some("X".to_owned()))
+            ),
+            Answer::Refused
+        );
+        assert_eq!(session.pilot().ship_name(), name.as_deref());
+        assert_eq!(session.space.escorts.aboard, None);
     }
 }

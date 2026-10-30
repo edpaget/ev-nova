@@ -1,24 +1,33 @@
 //! The real adapters: [`StdProcess`] runs programs with
-//! `std::process::Command`, [`StdFiles`] works on the real filesystem, and
-//! [`StdEnv`] reads the process's environment.
+//! `std::process::Command`, [`StdFiles`] works on the real filesystem,
+//! [`StdEnv`] reads the process's environment, and [`Ed25519Signer`] signs
+//! with ed25519-dalek.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::ports::{Env, Files, Invocation, Process, RunError};
+use ed25519_dalek::{Signer as _, SigningKey};
 
-/// Runs programs as child processes. A captured run's standard error
-/// still goes to the bundler's.
+use crate::appcast::key::{KeyError, PublicKey, decode_32};
+use crate::ports::{Env, Files, Invocation, Process, ReadFiles, RunError, Signer};
+
+/// Runs programs as child processes, with the bundler's environment plus
+/// the invocation's variables. A captured run's standard error still goes
+/// to the bundler's.
 #[derive(Debug, Default)]
 pub struct StdProcess;
 
 impl Process for StdProcess {
     fn run(&mut self, invocation: &Invocation) -> Result<Vec<u8>, RunError> {
         let mut command = Command::new(&invocation.program);
-        command.args(&invocation.args).stdin(Stdio::null());
+        command
+            .args(&invocation.args)
+            .envs(invocation.env.iter().map(|(name, value)| (name, value)))
+            .stdin(Stdio::null());
         let (status, stdout) = if invocation.capture {
             let output = command
                 .stderr(Stdio::inherit())
@@ -97,5 +106,58 @@ impl Files for StdFiles {
                 "the bundle's symbolic links need a Unix host",
             ))
         }
+    }
+}
+
+impl ReadFiles for StdFiles {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        fs::read(path)
+    }
+
+    fn file_names(&self, dir: &Path) -> io::Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+}
+
+/// Signs with an Ed25519 key made from its 32-byte seed. Its `Debug`
+/// shows only the public key.
+pub struct Ed25519Signer(SigningKey);
+
+impl Ed25519Signer {
+    /// The signer of the seed `text` holds as standard base64 (32 bytes,
+    /// as `openssl rand -base64 32` prints), surrounding whitespace aside.
+    ///
+    /// # Errors
+    ///
+    /// Text that isn't base64 of 32 bytes. The error never holds the text.
+    pub fn from_base64_seed(text: &str) -> Result<Self, KeyError> {
+        decode_32(text).map(|seed| Self(SigningKey::from_bytes(&seed)))
+    }
+}
+
+impl Signer for Ed25519Signer {
+    fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.0.sign(message).to_bytes()
+    }
+
+    fn public_key(&self) -> PublicKey {
+        PublicKey(self.0.verifying_key().to_bytes())
+    }
+}
+
+/// The public key alone: never the seed.
+impl fmt::Debug for Ed25519Signer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Ed25519Signer")
+            .field("public_key", &self.public_key().to_base64())
+            .finish_non_exhaustive()
     }
 }

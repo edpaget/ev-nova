@@ -102,8 +102,8 @@ pub use catalog::{DescriptionSource, DialogResources, PictureSizes};
 pub use comm::{CommDialog, CommPress, HaggleDialog};
 pub use desc::DescDialog;
 pub use dialog::{
-    Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
-    TextBacking,
+    CENTER_WINDOW_DLOGS, Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, ItemSpec,
+    ItemTemplate, Placement, Role, TextBacking,
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};

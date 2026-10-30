@@ -826,6 +826,7 @@ impl Session {
         }
         if resets.has(Reset::ShopRolls) {
             self.port.land_day_rolls(&self.setup);
+            self.port.forget_shipyard_listing();
             self.port.open_outfit_visit(&self.pilot);
         }
         if resets.has(Reset::SaveDue) {

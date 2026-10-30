@@ -8,7 +8,10 @@
 //! prompt "Enter the name of a system to find:" (item 4) and the field
 //! (item 5). The original centres it over the map dialog
 //! (`_CenterWindow` @0x11cf1), itself centred on the game window
-//! (@0x12534), so this dialog takes its own centred placement.
+//! (@0x12534), whose centre is the screen's (212 + 300, 128 + 256), so
+//! this dialog takes
+//! [`Placement::CenterWindow`](crate::ui::Placement::CenterWindow) on the
+//! screen: (370, 332).
 //!
 //! The field starts empty (@0x11d72-0x11d92), and the events pending as
 //! it opens are flushed (`FlushEvents` @0x11da6), so the key that opened
@@ -31,7 +34,7 @@ use std::rc::Rc;
 use crate::geometry::{Bounds, Point};
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
-use crate::ui::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
+use crate::ui::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement, STOCK_WORD};
 use crate::ui::edit_dialog::{Confirm, EditDialog, EditItems};
 use crate::ui::text_field::TextField;
 
@@ -141,7 +144,7 @@ pub fn fallback() -> DialogTemplate {
     };
     DialogTemplate {
         bounds: at(0.0, 0.0, 284.0, 105.0),
-        placement: Placement::Center,
+        placement: Placement::for_dlog(FIND_DIALOG, Some(STOCK_WORD)),
         items: vec![
             item(
                 at(165.0, 72.0, 70.0, 20.0),
@@ -331,8 +334,8 @@ mod tests {
         assert_eq!((bounds.width(), bounds.height()), (284.0, 105.0));
         assert_eq!(
             bounds.min,
-            Point::new(370.0, 331.0),
-            "centred on the screen"
+            Point::new(370.0, 332.0),
+            "as _CenterWindow centres it"
         );
         let origin = bounds.min;
         assert_eq!(
@@ -372,6 +375,27 @@ mod tests {
         assert_eq!(
             format!("{dialog:?}"),
             "FindDialog { text: \"sol\", outcome: None, .. }"
+        );
+    }
+
+    #[test]
+    fn the_built_in_find_dialog_is_placed_as_center_window_places_dlog_3005() {
+        let template = fallback();
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::CenterWindow
+        );
+        assert_eq!(
+            template.placement,
+            crate::ui::dialog::Placement::for_dlog(
+                FIND_DIALOG,
+                Some(crate::ui::dialog::STOCK_WORD)
+            ),
+            "as the loaded DLOG is placed"
+        );
+        assert_eq!(
+            template.placement.origin(template.bounds),
+            crate::geometry::Point::new(370.0, 332.0)
         );
     }
 }

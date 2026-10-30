@@ -1,22 +1,52 @@
-//! How long the first flight steps and take-offs of a run take over the
-//! stock data: the entry's slowest frame (the handover's warm-up, which
-//! reads the first system's traffic ships' sheets and target cards under
-//! black), flight's first stepped frame, and each of three take-offs'
-//! Leave click plus its next six frames.
+//! How long the first frames, flight steps and take-offs of a run take
+//! over the stock data: each main-menu frame's submit, the entry's frames
+//! (from the Open Pilot click to flight), the entry's slowest frame (the
+//! handover's warm-up, which reads the first system's traffic ships'
+//! sheets and target cards under black), flight's first stepped frame,
+//! and each of three take-offs' Leave click plus its next six frames.
 //!
 //! The tests here are `#[ignore]`d, so CI never runs them; they only read
 //! the clock and print, asserting the flow but no timing. Run them by
 //! hand, in debug and in release:
 //!
 //! ```text
-//! NOVA_DATA=".../Nova Files" cargo nextest run -p nova --test it --run-ignored only --no-capture stock_take_off_cost::
-//! NOVA_DATA=".../Nova Files" cargo nextest run --release -p nova --test it --run-ignored only --no-capture stock_take_off_cost::
+//! NOVA_DATA=".../Nova Files" cargo nextest run -p nova --test it --run-ignored only --no-capture --test-threads 1 stock_take_off_cost::
+//! NOVA_DATA=".../Nova Files" CARGO_TARGET_DIR=<a directory outside the worktree> cargo nextest run --release --build-jobs 2 -p nova --test it --run-ignored only --no-capture --test-threads 1 stock_take_off_cost::
 //! ```
 //!
-//! They skip, passing, without `NOVA_DATA`; the `OffscreenGpu` one also
-//! skips without a GPU adapter.
+//! They skip, passing, without `NOVA_DATA`; the `OffscreenGpu` ones also
+//! skip without a GPU adapter, and the MetalFX one without MetalFX.
+//!
+//! # What they print
+//!
+//! - `GPU set-up`: how long `OffscreenGpu::new` took. It builds every
+//!   render pipeline, so it says whether macOS's Metal shader cache was
+//!   cold: a cold debug set-up takes hundreds of milliseconds (about
+//!   385 ms on an M-series Mac), a warm one tens (about 26 ms debug,
+//!   11-24 ms release). Read every number after it as cold or warm by it.
+//!   The cache can't be controlled from a test; a binary at a fresh path
+//!   sometimes comes up cold.
+//! - `menu frame N submit`: each of the main menu's five opening frames'
+//!   `Gpu::submit`.
+//! - `entry`: how many frames the entry drew, its slowest submit and that
+//!   frame's index, and its first three submits.
+//! - Then each flight and take-off span: its time, the images decoded,
+//!   the atlas pages and uploads, and the submits' time.
+//!
+//! # Running them safely
+//!
+//! A real-GPU run alongside heavy builds once coincided with macOS
+//! restarting its window server, from an APFS lock pile-up over a
+//! bloated `target/debug/deps`. So:
+//!
+//! - run them with no other cargo, nextest, rustc or mise process on the
+//!   machine, and one test thread;
+//! - `cargo clean` first if `target/debug/deps` holds over 50,000 files;
+//! - run debug first, then release only after it finishes, in a target
+//!   directory of its own outside the worktree, with `--build-jobs 2`,
+//!   never at the same time as another build.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -26,7 +56,9 @@ use nova_data::graphics::Image;
 use nova_render::recording::RecordingGpu;
 use nova_render::upscale::{Upscaler, WorldResolution};
 use nova_render::wgpu::{GlyphonMetrics, InitError, OffscreenGpu};
-use nova_render::{FontFaces, Frame, Gpu, ImageError, ImageSource, PageId, PixelRect};
+use nova_render::{
+    FontFaces, Frame, Gpu, ImageError, ImageSource, PageId, PixelRect, UpscalerProbe,
+};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Pilot, PilotCatalog, PilotKeeper, PilotStore, is_landable};
 use nova_view::menu::MenuChoice;
@@ -77,10 +109,41 @@ impl ImageSource for TimedImages {
     }
 }
 
+/// Where the run is, for the submits it times.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Span {
+    /// The main menu's opening frames.
+    Menu,
+    /// From the Open Pilot click to flight.
+    Entry,
+    /// Flight and the take-offs.
+    Flight,
+}
+
+/// Each submit's time, with the span it was made in.
+#[derive(Default)]
+struct Submits {
+    log: Vec<(Span, Duration)>,
+}
+
+impl Submits {
+    /// The submits made in `span`, in order.
+    fn of(&self, span: Span) -> Vec<Duration> {
+        self.log
+            .iter()
+            .filter(|(at, _)| *at == span)
+            .map(|(_, took)| *took)
+            .collect()
+    }
+}
+
 /// A GPU, timed.
 struct TimedGpu<G> {
     inner: G,
     stats: Rc<RefCell<Stats>>,
+    /// The span the driver is in.
+    span: Rc<Cell<Span>>,
+    submits: Rc<RefCell<Submits>>,
 }
 
 impl<G: Gpu> Gpu for TimedGpu<G> {
@@ -107,7 +170,9 @@ impl<G: Gpu> Gpu for TimedGpu<G> {
     fn submit(&mut self, frame: &Frame) {
         let start = Instant::now();
         self.inner.submit(frame);
-        self.stats.borrow_mut().submit_time += start.elapsed();
+        let took = start.elapsed();
+        self.stats.borrow_mut().submit_time += took;
+        self.submits.borrow_mut().log.push((self.span.get(), took));
     }
 
     fn world_resolution(&self) -> WorldResolution {
@@ -129,6 +194,9 @@ struct Driver<G> {
     gpu: TimedGpu<G>,
     clock: Duration,
     stats: Rc<RefCell<Stats>>,
+    /// The span the GPU times its submits against.
+    span: Rc<Cell<Span>>,
+    submits: Rc<RefCell<Submits>>,
     /// The slowest frame since it was last cleared.
     slowest: Duration,
 }
@@ -171,6 +239,43 @@ impl<G: Gpu> Driver<G> {
 
     fn showing(&self) -> Showing {
         self.app.screen().showing()
+    }
+
+    /// Times the submits from here on against `span`.
+    fn enter(&self, span: Span) {
+        self.span.set(span);
+    }
+
+    /// Prints each main-menu frame's submit, then the entry's frame
+    /// count, its slowest submit and that frame's index, and its first
+    /// three submits.
+    fn report_opening(&self) {
+        let submits = self.submits.borrow();
+        for (i, took) in submits.of(Span::Menu).iter().enumerate() {
+            println!(
+                "{:<32} {:>8.1} ms",
+                format!("menu frame {i} submit"),
+                ms(*took)
+            );
+        }
+        let entry = submits.of(Span::Entry);
+        let (slowest_at, slowest) = entry
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, took)| **took)
+            .map_or((0, Duration::ZERO), |(i, took)| (i, *took));
+        let first: Vec<String> = entry
+            .iter()
+            .take(3)
+            .map(|took| format!("{:.1}", ms(*took)))
+            .collect();
+        println!(
+            "entry: {} frames; slowest submit {:.1} ms (frame {slowest_at}); first three \
+             submits {} ms",
+            entry.len(),
+            ms(slowest),
+            first.join(", "),
+        );
     }
 
     fn reset(&self) {
@@ -316,6 +421,8 @@ fn run(gpu: impl Gpu, name: &str) {
         .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
         .with_pilots(Some(keeper), metrics);
     let stats = Rc::new(RefCell::new(Stats::default()));
+    let span = Rc::new(Cell::new(Span::Menu));
+    let submits = Rc::new(RefCell::new(Submits::default()));
     let images = TimedImages {
         data: Rc::clone(&data),
         stats: Rc::clone(&stats),
@@ -325,12 +432,17 @@ fn run(gpu: impl Gpu, name: &str) {
         gpu: TimedGpu {
             inner: gpu,
             stats: Rc::clone(&stats),
+            span: Rc::clone(&span),
+            submits: Rc::clone(&submits),
         },
         clock: Duration::ZERO,
         stats,
+        span,
+        submits,
         slowest: Duration::ZERO,
     };
     driver.frames(5);
+    driver.enter(Span::Entry);
     let open = driver
         .app
         .screen()
@@ -342,6 +454,8 @@ fn run(gpu: impl Gpu, name: &str) {
     driver.slowest = Duration::ZERO;
     driver.enter_ship();
     assert_eq!(driver.showing(), Showing::Flight, "entered play");
+    driver.enter(Span::Flight);
+    driver.report_opening();
     let entry = driver.slowest;
     println!("{:<32} {:>8.1} ms", "entry: slowest frame", ms(entry));
     // Flight's first frames hold the pilot still; the first that steps
@@ -379,19 +493,54 @@ fn take_offs_cost_with_a_recording_gpu() {
     run(RecordingGpu::new(), "recording");
 }
 
+/// A 1024 x 768 offscreen GPU, printing how long it took to set up;
+/// `None` without `NOVA_DATA` or a GPU adapter.
+fn offscreen_gpu() -> Option<OffscreenGpu> {
+    common::nova_data()?;
+    let start = Instant::now();
+    let made = OffscreenGpu::new(1024, 768, &FontFaces::bundled());
+    let took = start.elapsed();
+    match made {
+        Ok(gpu) => {
+            println!("{:<32} {:>8.1} ms", "GPU set-up", ms(took));
+            Some(gpu)
+        }
+        Err(error @ (InitError::NoAdapter(_) | InitError::NoDevice(_))) => {
+            eprintln!("skipping: no GPU adapter ({error})");
+            None
+        }
+        Err(error) => panic!("offscreen GPU: {error}"),
+    }
+}
+
 #[test]
 #[ignore = "reads the clock; run by hand (see the module doc)"]
 fn take_offs_cost_with_an_offscreen_gpu() {
-    if common::nova_data().is_none() {
+    if let Some(gpu) = offscreen_gpu() {
+        run(gpu, "wgpu");
+    }
+}
+
+#[test]
+#[ignore = "reads the clock; run by hand (see the module doc)"]
+fn take_offs_cost_with_a_sharp_bilinear_gpu() {
+    if let Some(mut gpu) = offscreen_gpu() {
+        // The harness never restores the pilot's scaling, so this holds.
+        gpu.set_upscaler(Upscaler::SharpBilinear);
+        run(gpu, "wgpu sharp-bilinear");
+    }
+}
+
+#[test]
+#[ignore = "reads the clock; run by hand (see the module doc)"]
+fn take_offs_cost_with_a_metal_fx_gpu() {
+    let Some(mut gpu) = offscreen_gpu() else {
+        return;
+    };
+    if !gpu.upscalers().contains(&Upscaler::MetalFxSpatial) {
+        eprintln!("skipping: no MetalFX");
         return;
     }
-    let gpu = match OffscreenGpu::new(1024, 768, &FontFaces::bundled()) {
-        Ok(gpu) => gpu,
-        Err(error @ (InitError::NoAdapter(_) | InitError::NoDevice(_))) => {
-            eprintln!("skipping: no GPU adapter ({error})");
-            return;
-        }
-        Err(error) => panic!("offscreen GPU: {error}"),
-    };
-    run(gpu, "wgpu");
+    gpu.set_upscaler(Upscaler::MetalFxSpatial);
+    run(gpu, "wgpu MetalFX");
 }

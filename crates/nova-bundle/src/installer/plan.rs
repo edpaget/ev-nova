@@ -1,5 +1,6 @@
 //! The installer's sequence: read the spec, check the executables are
-//! there, stage the icon and the WiX source, and run `wix build`.
+//! there, download and check WinSparkle ([`winsparkle::stage`]), stage the
+//! icon and the WiX source, and run `wix build`.
 //!
 //! [`plan`] is the sequence as data; [`pack`] runs it through the ports,
 //! stopping at the first failure. Neither builds anything: the
@@ -13,8 +14,10 @@ use nova_winres::ico_from_icns;
 use super::host::InstallerHost;
 use super::layout::InstallerLayout;
 use super::wxs::wxs;
-use super::{EXES, InstallerError};
+use super::{EXES, InstallerError, winsparkle};
+use crate::appcast::Platform;
 use crate::bundle::{self, BundleError, Step, execute, metadata};
+use crate::channel::{FeedStatus, feed_status};
 use crate::icon::ICON;
 use crate::ports::{Files, Invocation, Process};
 use crate::spec::BundleSpec;
@@ -39,10 +42,13 @@ pub fn plan(
     let source = wxs(spec, layout)?;
     // The same icon nova.exe embeds, made from the same `.icns`.
     let icon = ico_from_icns(ICON)?;
-    Ok(vec![
+    let mut steps = vec![
         Step::RemoveDir(layout.staging.clone()),
         Step::CreateDir(layout.staging.clone()),
         Step::CreateDir(layout.out.clone()),
+    ];
+    steps.extend(winsparkle::stage(layout));
+    steps.extend([
         Step::Write {
             path: layout.icon(),
             bytes: icon,
@@ -52,17 +58,29 @@ pub fn plan(
             bytes: source.into_bytes(),
         },
         Step::Run(wix_build(wix, layout)),
-    ])
+    ]);
+    Ok(steps)
 }
 
-/// Packs the installer, returning the `.msi`'s path. Fails before
-/// staging anything when an executable is missing from the executables
-/// directory.
+/// A packed installer: the `.msi`, and the update feed the build names,
+/// or why it names none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Packed {
+    /// The `.msi`.
+    pub msi: PathBuf,
+    /// What nova's build script compiled into `nova.exe` from the same
+    /// channel and key (`nova_winres::windows_update_feed`, pinned to
+    /// [`feed_status`] by a test).
+    pub feed: FeedStatus,
+}
+
+/// Packs the installer. Fails before staging anything when an executable
+/// is missing from the executables directory.
 pub fn pack(
     process: &mut impl Process,
     files: &mut impl Files,
     host: &InstallerHost,
-) -> Result<PathBuf, InstallerError> {
+) -> Result<Packed, InstallerError> {
     let json = bundle::run(process, &metadata(&host.cargo))?;
     let spec = BundleSpec::from_metadata(&json).map_err(BundleError::from)?;
     let layout = InstallerLayout::new(&spec.target_dir, host.out.clone(), host.exes.clone())?;
@@ -76,7 +94,10 @@ pub fn pack(
     for step in plan(&spec, &layout, &host.wix)? {
         execute(&step, process, files)?;
     }
-    Ok(layout.msi())
+    Ok(Packed {
+        msi: layout.msi(),
+        feed: feed_status(&spec, host.channel, Platform::Windows),
+    })
 }
 
 #[cfg(test)]
@@ -86,6 +107,10 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::appcast::Channel;
+    use crate::appcast::key::PublicKey;
+    use crate::channel::{UpdateFeed, feed_url};
+    use crate::digest::DigestTool;
     use crate::ports::RunError;
     use crate::spec::tests::sample_metadata;
     use crate::test_support::{Event, FakeFiles, Log, Recorder, failing, is};
@@ -100,15 +125,16 @@ mod tests {
             wix: "wix".into(),
             exes: None,
             out: None,
+            channel: None,
         }
     }
 
-    struct Packed {
-        result: Result<PathBuf, InstallerError>,
+    struct PackRun {
+        result: Result<Packed, InstallerError>,
         events: Vec<Event>,
     }
 
-    impl Packed {
+    impl PackRun {
         fn runs(&self) -> Vec<Invocation> {
             self.events
                 .iter()
@@ -124,7 +150,7 @@ mod tests {
         host: &InstallerHost,
         respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
         absent: impl Fn(&Path) -> bool + 'static,
-    ) -> Packed {
+    ) -> PackRun {
         let log = Log::default();
         let mut process = Recorder {
             log: Rc::clone(&log),
@@ -138,7 +164,17 @@ mod tests {
         };
         let result = pack(&mut process, &mut files, host);
         let events = log.borrow().clone();
-        Packed { result, events }
+        PackRun { result, events }
+    }
+
+    /// Answers `certutil` with another digest for the file named `name`.
+    fn another_digest_for(
+        name: &'static str,
+    ) -> impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static {
+        move |i| {
+            (i.program == "certutil" && i.args.get(1).is_some_and(|p| Path::new(p).ends_with(name)))
+                .then(|| Ok(format!("hash:\r\n{}\r\nok\r\n", "0".repeat(64)).into_bytes()))
+        }
     }
 
     #[test]
@@ -148,12 +184,17 @@ mod tests {
         let steps = plan(&spec, &layout, OsStr::new("wix")).expect("plan");
         let staging = spec.target_dir.join("installer").join("staging");
         let out = spec.target_dir.join("installer").join("out");
+        let mut expected = vec![
+            Step::RemoveDir(staging.clone()),
+            Step::CreateDir(staging.clone()),
+            Step::CreateDir(out.clone()),
+        ];
+        // WinSparkle, downloaded and checked before anything names it.
+        expected.extend(winsparkle::stage(&layout));
+        assert_eq!(steps[..expected.len()], expected);
         assert_eq!(
-            steps,
+            steps[expected.len()..],
             vec![
-                Step::RemoveDir(staging.clone()),
-                Step::CreateDir(staging.clone()),
-                Step::CreateDir(out.clone()),
                 Step::Write {
                     path: staging.join("nova.ico"),
                     bytes: ico_from_icns(ICON).expect("ico"),
@@ -199,15 +240,40 @@ mod tests {
         let packed = pack_with(&host(), |_| None, |_| false);
         let spec = spec();
         let layout = InstallerLayout::new(&spec.target_dir, None, None).expect("layout");
-        assert_eq!(packed.result.as_ref().expect("packed"), &layout.msi());
-        let runs = packed.runs();
         assert_eq!(
-            runs,
-            vec![
-                metadata(&OsString::from("C:/rust/cargo.exe")),
-                wix_build(OsStr::new("wix"), &layout),
+            packed.result.as_ref().expect("packed"),
+            &Packed {
+                msi: layout.msi(),
+                feed: FeedStatus::Development,
+            }
+        );
+        let runs = packed.runs();
+        let programs: Vec<_> = runs
+            .iter()
+            .map(|i| i.program.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            programs,
+            [
+                "C:/rust/cargo.exe",
+                "curl",
+                "certutil",
+                "tar",
+                "tar",
+                "certutil",
+                "wix"
             ]
         );
+        assert_eq!(runs[0], metadata(&OsString::from("C:/rust/cargo.exe")));
+        assert_eq!(
+            runs[2],
+            DigestTool::Certutil.invocation(&layout.winsparkle_archive())
+        );
+        assert_eq!(
+            runs[5],
+            DigestTool::Certutil.invocation(&layout.winsparkle_dll())
+        );
+        assert_eq!(runs[6], wix_build(OsStr::new("wix"), &layout));
         assert!(
             !runs
                 .iter()
@@ -245,8 +311,8 @@ mod tests {
             },
         );
         assert_eq!(
-            packed.result.as_ref().expect("packed"),
-            &out.join("ev-nova-x86_64-pc-windows-msvc.msi")
+            packed.result.as_ref().expect("packed").msi,
+            out.join("ev-nova-x86_64-pc-windows-msvc.msi")
         );
         assert_eq!(
             *checked.borrow(),
@@ -361,5 +427,135 @@ mod tests {
         let packed = pack_with(&host, |_| None, |_| false);
         assert!(matches!(packed.result, Err(InstallerError::Layout(_))));
         assert_eq!(packed.events.len(), 1);
+    }
+
+    /// The pin a run stopped at, if it stopped at a digest check.
+    fn checksum_pin(run: &PackRun) -> Option<&'static str> {
+        match &run.result {
+            Err(InstallerError::Step(BundleError::Checksum { pinned, .. })) => Some(pinned),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn an_archive_with_another_digest_stops_before_unpacking_or_wix() {
+        let packed = pack_with(&host(), another_digest_for(winsparkle::ARCHIVE), |_| false);
+        assert_eq!(checksum_pin(&packed), Some(winsparkle::ARCHIVE_PIN.what));
+        let ran = |program: &str| packed.runs().iter().any(|i| i.program == program);
+        assert!(ran("curl") && ran("certutil"));
+        assert!(!ran("tar") && !ran("wix"), "{:?}", packed.runs());
+    }
+
+    #[test]
+    fn a_dll_with_another_digest_stops_before_wix() {
+        let packed = pack_with(&host(), another_digest_for(winsparkle::DLL), |_| false);
+        assert_eq!(checksum_pin(&packed), Some(winsparkle::DLL_PIN.what));
+        let runs = packed.runs();
+        assert_eq!(runs.iter().filter(|i| i.program == "tar").count(), 2);
+        assert!(!runs.iter().any(|i| i.program == "wix"), "{runs:?}");
+        assert!(
+            !packed.events.iter().any(|e| matches!(e, Event::Write(..))),
+            "no source written"
+        );
+    }
+
+    #[test]
+    fn a_failing_download_stops_before_the_digest_check() {
+        let packed = pack_with(&host(), failing(|i| i.program == "curl"), |_| false);
+        let Err(InstallerError::Step(BundleError::Run { command, .. })) = &packed.result else {
+            panic!("{:?}", packed.result);
+        };
+        assert!(command.starts_with("curl "), "{command}");
+        assert!(
+            !packed.runs().iter().any(|i| i.program == "certutil"),
+            "{:?}",
+            packed.runs()
+        );
+    }
+
+    #[test]
+    fn the_channel_is_carried_through() {
+        let nightly = InstallerHost {
+            channel: Some(Channel::Nightly),
+            ..host()
+        };
+        for (host, feed) in [
+            (host(), FeedStatus::Development),
+            (nightly, FeedStatus::NoKey(Channel::Nightly)),
+        ] {
+            let packed = pack_with(&host, |_| None, |_| false);
+            assert_eq!(packed.result.expect("packed").feed, feed);
+        }
+    }
+
+    #[test]
+    fn a_nightly_pack_without_a_key_says_it_has_no_feed() {
+        let host = InstallerHost {
+            channel: Some(Channel::Nightly),
+            ..host()
+        };
+        let packed = pack_with(&host, |_| None, |_| false);
+        assert_eq!(
+            packed.result.expect("packed").feed.describe(),
+            "no update feed: NOVA_CHANNEL is nightly but the nova package commits no \
+             update_public_key"
+        );
+    }
+
+    #[test]
+    fn a_beta_pack_without_a_key_says_it_has_no_feed() {
+        let host = InstallerHost {
+            channel: Some(Channel::Beta),
+            ..host()
+        };
+        let packed = pack_with(&host, |_| None, |_| false);
+        assert_eq!(
+            packed.result.expect("packed").feed.describe(),
+            "no update feed: NOVA_CHANNEL is beta but the nova package commits no \
+             update_public_key"
+        );
+    }
+
+    #[test]
+    fn a_pack_with_a_key_names_its_channel_s_windows_feed() {
+        for channel in Channel::ALL {
+            let key = PublicKey([5; 32]);
+            let json = metadata_with_key(key);
+            let host = InstallerHost {
+                channel: Some(channel),
+                ..host()
+            };
+            let packed = pack_with(
+                &host,
+                move |i| starts_metadata(i).then(|| Ok(json.clone())),
+                |_| false,
+            );
+            assert_eq!(
+                packed.result.expect("packed").feed,
+                FeedStatus::Feed(UpdateFeed {
+                    url: feed_url(Platform::Windows, channel),
+                    public_key: key,
+                }),
+                "{channel:?}"
+            );
+        }
+        assert_eq!(
+            feed_url(Platform::Windows, Channel::Beta),
+            "https://github.com/edpaget/ev-nova/releases/download/beta/appcast-windows-beta.xml"
+        );
+    }
+
+    /// `cargo metadata` whose game package commits `key`.
+    fn metadata_with_key(key: PublicKey) -> Vec<u8> {
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&sample_metadata()).expect("json");
+        let game = metadata["packages"]
+            .as_array_mut()
+            .expect("packages")
+            .iter_mut()
+            .find(|p| p["name"] == "nova")
+            .expect("the game");
+        game["metadata"]["bundle"]["update_public_key"] = key.to_base64().into();
+        serde_json::to_vec(&metadata).expect("json")
     }
 }

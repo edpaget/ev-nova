@@ -298,6 +298,20 @@ fn command_q_quits_at_once_silently_wherever_it_is_pressed() {
     );
 }
 
+/// The updater's quit on Windows is the Quit command
+/// (`LoopEvent::UpdaterQuit`): on the main menu, where a close asks, it
+/// quits at once, so a player can't decline it and leave the game running
+/// while the installer replaces it.
+#[test]
+fn the_quit_command_on_the_main_menu_quits_at_once_where_a_close_asks() {
+    let store = MemoryPilots::new();
+    let mut screen = asking_menu(&store);
+    screen.take_sounds();
+    assert_eq!(screen.menu_command(MenuCommand::Quit), ScreenAction::Quit);
+    assert!(screen.question().is_none(), "nothing asked");
+    assert_eq!(screen.take_sounds(), [], "no click");
+}
+
 #[test]
 fn the_question_stops_the_menu_moving_as_any_overlay_does() {
     let store = MemoryPilots::new();
@@ -309,4 +323,24 @@ fn the_question_stops_the_menu_moving_as_any_overlay_does() {
         Some(0),
         "frozen"
     );
+}
+
+/// The quit question takes the rulebook's `dialog_focus_ring` as it
+/// opens.
+#[test]
+fn the_quit_question_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let store = MemoryPilots::new();
+        let mut screen = with_dialogs(data())
+            .with_rules(rules)
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .appeared();
+        assert!(!screen.close_requested());
+        assert_eq!(
+            screen
+                .question()
+                .map(|question| question.dialog().focus_ring()),
+            Some(ring)
+        );
+    }
 }

@@ -28,7 +28,7 @@ fn landed(stellar: i16) -> Answer {
 }
 
 /// The answer to a press over the cleared gate 300 of `kind`.
-fn at_gate(kind: GateKind) -> Answer {
+pub(super) fn at_gate(kind: GateKind) -> Answer {
     Answer::LandPress(LandPress::AtGate {
         stellar: StellarId(300),
         kind,

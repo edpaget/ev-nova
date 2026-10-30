@@ -116,7 +116,10 @@ pub const MIN_JUMP_DISTANCE: f32 = 1000.0;
 /// day, 100-199 take two and 200 or more take three. The original's
 /// `_ShipHyperTransitTime` (@0x43d0) reads the same bands from the
 /// ship type's `Mass` and no outfit mass, and gives a `Mass` of 0 or less
-/// one day too.
+/// one day too. For a ship above slot 0, one the player leads, the band is
+/// the whole of its trip: only the player's outfits add days (@0x4413),
+/// and the slowest of the player and the ships that follow it sets the
+/// jump's days (`nova_sim`'s `trip_days` module).
 #[must_use]
 pub fn base_jump_days(mass: i16) -> u32 {
     match mass {

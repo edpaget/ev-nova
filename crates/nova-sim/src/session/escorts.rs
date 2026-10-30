@@ -12,12 +12,21 @@
 //! the mission escorts, then on a jump's arrival pushed back to glide in,
 //! and after a take-off or a pilot flown moved onto its final slot (see
 //! [`escort_arrival`](super::escort_arrival)). It is of no
-//! government, its AI type its `InherentAI`, carrying its class's stock
-//! weapons and rounds, with its record's shield, armour and fuel and its
-//! standing order. Its record follows its reserves as it fights. Every
+//! government, its AI type its `InherentAI`, with its record's shield,
+//! armour and fuel and its standing order. It carries the weapons and
+//! rounds its NPC held, each weapon's reload too, through a jump's
+//! arrival and a gate's exit; a take-off and a pilot flown give it its
+//! class's stock weapons and rounds, each weapon's reload still its NPC's
+//! (`_RespawnEscort`'s restock @0x3d5a7-0x3d600, see
+//! [`Session::enter_escorts`]); one with no NPC takes its class's stock.
+//! A mission escort is never respawned so (it is marked, `_SetupShipsInSystem`
+//! @0x42c30), and keeps the mission path's spawn (see
+//! [`mission_escorts`](super::mission_escorts)). Its record follows its reserves as it fights. Every
 //! escort follows the player through a jump with no check of its own
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
-//! and armour as they were; taking off, and flying a pilot, restock them
+//! and armour as they were, the slowest of them setting the jump's days
+//! and wages if it is slower than the player (see
+//! [`trip_days`](super::trip_days)); taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
 //! recorded. Each enters with no ionization: `_RespawnEscort` clears its
 //! charge (+0x5c @0x3d543) and leaves its colour (+0xb0), but
@@ -135,8 +144,8 @@ use crate::catalog::ShipId;
 use crate::chance::Chance;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
-use crate::combat::armament::Fold;
 use crate::combat::armament::Trigger;
+use crate::combat::armament::{Armament, Fold, LauncherRounds, NEVER_FIRED};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
 use crate::combat::ship_frames::ShipFrames;
@@ -158,7 +167,7 @@ use crate::traffic::table::ShipKind;
 
 /// What an escort keeps from its old NPC when the fleet enters a system
 /// ([`Space::fleet_kept`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct KeptEscort {
     /// Its aux mark ([`Npc::aux`]).
     pub(super) aux: Option<u8>,
@@ -184,6 +193,12 @@ pub(super) struct KeptEscort {
     /// is unset, and it rolls one at its first think (see the `voices`
     /// module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
+    /// Its weapons and rounds, each weapon entry's count, rounds and reload
+    /// as its slot held them: kept whole with no restock, and only the
+    /// reloads with one (`_RespawnEscort` @0x3d5a7-0x3d600; see
+    /// [`Armament::respawned`] and [`Armament::restocked_from`]); none
+    /// with no NPC, and it takes its class's stock.
+    pub(super) arms: Option<(Armament, LauncherRounds)>,
 }
 
 impl Session {
@@ -193,9 +208,15 @@ impl Session {
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
     /// mark, its skill, its afterburner, its voice, its cloak, and its
-    /// display and fold, with no ionization, or a loaded pilot's fold set
-    /// with none kept
+    /// display and fold, the fold timed as never fired (`_RespawnEscort`
+    /// zeroes the stamp +0xa8, @0x3d50e), with no ionization, or a loaded
+    /// pilot's fold set with none kept
     /// ([`PlayerShip::loaded_escort_set`](super::PlayerShip::loaded_escort_set)).
+    /// Its weapons and rounds are its slot's unless the entry restocks
+    /// ([`Escorts::restock`](super::space::Escorts), a take-off or a pilot
+    /// flown), which gives it its class's stock, each weapon's reload
+    /// still the slot's (`_RespawnEscort` @0x3d5a7-0x3d600, see
+    /// [`KeptEscort::arms`]).
     /// One that kept no skill rolls one on `chance`, and one that kept no afterburner, having no NPC (a
     /// loaded pilot's), rolls it on `chance`, as `_LoadPilotData`'s
     /// `_SpawnEscort` does (@0x75a25; see the `afterburner_roll` module).
@@ -216,9 +237,10 @@ impl Session {
             }
             self.space.escorts.class_orders = [None; 4];
         }
+        let restock = self.space.escorts.restock;
         self.space.escorts.fleet = (0..self.pilot.escorts.len())
             .map(|index| {
-                let kept = kept.get(index).copied().unwrap_or_default();
+                let kept = kept.get(index).cloned().unwrap_or_default();
                 let id = self.place_escort_at(
                     index,
                     berths.get(index).copied(),
@@ -236,11 +258,25 @@ impl Session {
                     npc.cloak = kept.cloak;
                     // `_RespawnEscort` clears its glow (@0x3d505).
                     npc.display.glow = 0;
+                    match kept.arms {
+                        Some((armament, _)) if restock => {
+                            npc.armament = armament.restocked_from(npc.armament.clone());
+                        }
+                        Some((armament, rounds)) => {
+                            npc.armament = armament.respawned();
+                            npc.rounds = rounds;
+                        }
+                        None => {}
+                    }
                     match kept.display {
                         Some((frames, fold, anim)) => {
                             npc.display.frames = frames;
                             npc.display.rolls.anim = anim;
-                            *npc.armament.fold_mut() = fold;
+                            // Its stamp zeroed (+0xa8 = 0, @0x3d50e).
+                            *npc.armament.fold_mut() = Fold {
+                                since_fire: NEVER_FIRED,
+                                ..fold
+                            };
                         }
                         None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
                     }
@@ -257,7 +293,7 @@ impl Session {
             })
             .collect();
         self.space.traffic.reserve(BTreeSet::new());
-        self.space.escorts.restock_persons = false;
+        self.space.escorts.restock = false;
     }
 
     /// Escort `index` as an NPC in the system at the first free berth, its
@@ -295,7 +331,7 @@ impl Session {
             Some((kind, person)) => (kind, Some(person)),
             None => (self.setup.ship_kind(&self.statics, record), None),
         };
-        if self.space.escorts.restock_persons && person.is_some() {
+        if self.space.escorts.restock && person.is_some() {
             restock(&mut escort.reserves, &kind);
             self.pilot.escorts[index].reserves = escort.reserves;
         }
@@ -690,7 +726,16 @@ impl Session {
     /// sub 0 and its goal targets +0x90 and +0x92 (-2) give way to the
     /// leave's goal and its target cleared, which follow at once; the
     /// engine has no field for its +0xc906 or +0xc92e.
+    ///
+    /// A mission escort, which only the comm dialog's Release reaches (a
+    /// mission ship captured for an escort, see the
+    /// `captured_mission_ship` module), is released by
+    /// [`Session::release_mission_escort`].
     pub(super) fn release(&mut self, id: NpcId) {
+        if self.space.npc(id).is_some_and(Npc::mission_escort) {
+            self.release_mission_escort(id);
+            return;
+        }
         if !self.is_escort(id) {
             return;
         }
@@ -702,10 +747,7 @@ impl Session {
         }
         self.dismiss(id);
         if let Some(npc) = self.space.npc_mut(id) {
-            npc.boarded = true;
-            npc.former = None;
-            npc.order_word = crate::fleet::OrderWord::NONE;
-            super::hail::make_leave(npc);
+            reset_released(npc);
         }
     }
 
@@ -833,6 +875,19 @@ impl Statics {
             .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
             .map(|record| record.fields.holds)
     }
+
+    /// The `Holds` a ship of class `ship` takes its share of the cargo by
+    /// as it is released (`_DestroyPartialFleetCargo(+0x86)`, the ship's
+    /// class, @0x96864, @0x9549d, @0x9561d), as
+    /// [`RuleKey::ReleaseCargoShare`] reads in `setup`: none when the
+    /// class has no record, or by the other reading when it is not a
+    /// trader.
+    pub(super) fn released_holds(&self, setup: &Setup, ship: ShipId) -> Option<i16> {
+        match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
+            RuleSource::Engine => self.ship_record(ship).map(|record| record.fields.holds),
+            RuleSource::Bible => self.trader_holds(ship),
+        }
+    }
 }
 
 impl Space {
@@ -912,6 +967,7 @@ impl Space {
                     afterburner: Some(npc.afterburner),
                     voice: npc.voice,
                     cloak: npc.cloak,
+                    arms: Some((npc.armament.clone(), npc.rounds.clone())),
                 })
             })
             .collect()
@@ -930,7 +986,9 @@ impl Space {
     /// Each escort's shield, armour and fuel, full as its class holds
     /// them, the fuel as recorded no more than it holds.
     /// A person escort, whose fitted ship only the system's traffic knows,
-    /// is restocked to it as it is placed next.
+    /// is restocked to it as it is placed next, and every escort placed
+    /// next takes its class's stock weapons and rounds
+    /// ([`Session::enter_escorts`]).
     pub(super) fn restock_fleet(&mut self, pilot: &mut Pilot, statics: &Statics, setup: &Setup) {
         for index in 0..pilot.escorts.len() {
             let ship = pilot.escorts[index].ship;
@@ -940,7 +998,7 @@ impl Space {
             let kind = setup.ship_kind(statics, record);
             restock(&mut pilot.escorts[index].reserves, &kind);
         }
-        self.escorts.restock_persons = true;
+        self.escorts.restock = true;
     }
 
     /// Each escort's record takes its NPC's shield, armour and fuel.
@@ -956,9 +1014,8 @@ impl Space {
     }
 
     /// The `Holds` escort NPC `id` takes its share of the cargo by as it
-    /// is released, as [`RuleKey::ReleaseCargoShare`] reads: none when
-    /// its ship class has no record, or by the other reading when it is
-    /// not a trader.
+    /// is released, by its escort record's ship class
+    /// ([`Statics::released_holds`]); none when it is not in the fleet.
     fn released_holds(
         &self,
         pilot: &Pilot,
@@ -968,10 +1025,7 @@ impl Space {
     ) -> Option<i16> {
         let index = self.fleet_index(id)?;
         let ship = pilot.escorts.get(index)?.ship;
-        match setup.rules.source_for(RuleKey::ReleaseCargoShare) {
-            RuleSource::Engine => statics.ship_record(ship).map(|record| record.fields.holds),
-            RuleSource::Bible => statics.trader_holds(ship),
-        }
+        statics.released_holds(setup, ship)
     }
 
     /// Whether NPC `id` is one of the player's escorts.
@@ -1021,15 +1075,15 @@ impl Space {
         EscortClass::ALL.map(|class| self.class_row(pilot, statics, class))
     }
 
-    /// Whether the player has an escort flying, for the escort menu to
-    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any of `pilot`'s
-    /// hired escorts, or a mission escort neither disabled nor breaking up
-    /// (@0x6df73).
-    pub(super) fn escorts_flying(&self, pilot: &Pilot) -> bool {
-        !pilot.escorts.is_empty()
-            || self
-                .player_led()
-                .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
+    /// Whether the player has an escort flying, which the escort menu
+    /// counts each frame it shows (`_HandlePlayer` @0x6df59-0x6dfa7): a
+    /// ship the player leads ([`Space::player_led`]) that is neither
+    /// disabled nor breaking up. A hired or captured escort, a mission
+    /// escort and a launched fighter all count; a hired escort disabled or
+    /// breaking up does not.
+    pub(super) fn escorts_flying(&self) -> bool {
+        self.player_led()
+            .any(|npc| npc.condition == Condition::Intact)
     }
 
     /// `class`'s row in the escort menu: whether the player leads a ship
@@ -1071,6 +1125,18 @@ impl Space {
         let row = self.class_row(pilot, statics, class);
         if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
     }
+}
+
+/// The resets a ship released by hail takes as it goes (`_DoCommDialog`
+/// @0x96896-0x968b7, `_DoEscortDialog` @0x954bb-0x954f2): it can never be
+/// boarded (+0xb9 1), it is no former escort (+0xc8de -1), `_AISetup`
+/// clears its order word (+0xc90a), and it leaves the system
+/// (`_AIMakeShipLeave`, [`super::hail::make_leave`]).
+pub(super) fn reset_released(npc: &mut Npc) {
+    npc.boarded = true;
+    npc.former = None;
+    npc.order_word = crate::fleet::OrderWord::NONE;
+    super::hail::make_leave(npc);
 }
 
 /// `npc` falls in with the player, as a hired escort joining
@@ -3487,10 +3553,7 @@ pub(super) mod tests {
             60.0,
             "restocked before it is placed"
         );
-        assert!(
-            !session.space.escorts.restock_persons,
-            "the restock consumed"
-        );
+        assert!(!session.space.escorts.restock, "the restock consumed");
     }
 
     #[test]

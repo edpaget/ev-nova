@@ -62,6 +62,9 @@ pub enum Showing {
     Plunder,
     /// The captured-ship assignment dialog, over flight, which it pauses.
     Assignment,
+    /// Use As My Ship's rename, the Text Input dialog over the plunder
+    /// dialog, over flight, which it pauses.
+    CaptureNaming,
     /// The comm dialog, over flight, which it pauses.
     Comm,
     /// The escort dialog, over flight, which it pauses.

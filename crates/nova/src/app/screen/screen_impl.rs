@@ -216,6 +216,9 @@ impl Screen for AppScreen {
                 .map(|(_, question)| question as &dyn Screen),
             self.plunder.as_ref().map(|dialog| dialog as &dyn Screen),
             self.assignment.as_ref().map(|dialog| dialog as &dyn Screen),
+            self.capture_naming
+                .as_ref()
+                .map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
             self.escort_dialog
                 .as_ref()
@@ -369,6 +372,9 @@ impl Screen for AppScreen {
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.assignment
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.capture_naming
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),

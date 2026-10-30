@@ -46,9 +46,9 @@ run "actions_permissions_are_declared" {
   assert {
     condition = (
       github_actions_repository_permissions.ev_nova.enabled &&
-      !github_actions_repository_permissions.ev_nova.sha_pinning_required
+      github_actions_repository_permissions.ev_nova.sha_pinning_required
     )
-    error_message = "Actions must stay enabled, with SHA pinning off (task pin-ci-actions-by-sha)."
+    error_message = "Actions must stay enabled, with SHA pinning required: every workflow pins its actions by commit SHA."
   }
 
   assert {
@@ -67,9 +67,9 @@ run "actions_permissions_are_declared" {
   assert {
     condition = (
       toset(github_actions_repository_permissions.ev_nova.allowed_actions_config[0].patterns_allowed) ==
-      toset(["Swatinem/rust-cache@*", "cargo-bins/cargo-binstall@*", "jdx/mise-action@*"])
+      toset(["Swatinem/rust-cache@*", "jdx/mise-action@*"])
     )
-    error_message = "patterns_allowed must be exactly the three third-party actions ci.yml uses."
+    error_message = "patterns_allowed must be exactly the two third-party actions the workflows use."
   }
 }
 

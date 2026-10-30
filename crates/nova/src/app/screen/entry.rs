@@ -349,8 +349,9 @@ impl AppScreen {
     fn intro_text_dialog(&mut self, id: i16) -> Option<DescDialog> {
         self.dialogs.as_ref()?;
         let words = self.main_screen_words(id).unwrap_or_default();
+        let ring = self.dialog_focus_ring();
         let dialogs = self.dialogs.as_ref()?;
-        match desc_dialog(dialogs, &self.data, &words) {
+        match desc_dialog(dialogs, &self.data, &words, ring) {
             Ok(dialog) => Some(dialog),
             Err(reason) => {
                 eprintln!("nova: cannot show the intro's dësc {id}: {reason}");

@@ -111,7 +111,7 @@
 //! `AmmoType` of `wëap` i when that is at most 0xff (unsigned
 //! `cmpw $0xff` @0x15573) and i itself otherwise, never reading the
 //! guidance. So owning one of a stock weapon and adding a class that
-//! stocks two leaves three, where a purchase or a capture tops up to two;
+//! stocks two leaves three, where a purchase tops up to two;
 //! two launchers sharing an ammunition add both their loads, where a
 //! purchase takes the larger; and a fighter bay, whose raw `AmmoType` is
 //! its fighter's `shïp` ID, loads `wëap` 128 + that ID when the ID is 128

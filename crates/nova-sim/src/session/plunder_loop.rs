@@ -273,7 +273,11 @@ mod tests {
             session.space.traffic.add_npc(filler);
         }
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            crate::session::capture_naming::tests::use_as_my_ship(
+                &mut session,
+                "Prize",
+                &mut Draws::of(&[])
+            ),
             Some(Assigned::Abandoned)
         );
         assert_eq!(sounds(&mut session), [SimSound::CaptureAssigned]);

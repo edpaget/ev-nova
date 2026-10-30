@@ -1,5 +1,5 @@
-//! The glibc floor and the allowed libraries, checked on the built
-//! binary from what `objdump -p` shows of it, as macOS's
+//! The glibc floor and the allowed libraries, checked on the Linux
+//! release binary the tarball ships from what `objdump -p` shows of it, as macOS's
 //! [`check_archs`](crate::bundle::check_archs) checks `lipo -archs`.
 //!
 //! [`Links::parse`] reads the two things that matter from `objdump -p`'s
@@ -11,9 +11,29 @@
 use std::fmt;
 use std::path::Path;
 
-use super::{ALLOWED_LIBRARIES, GLIBC_FLOOR};
 use crate::bundle::{BundleError, run};
 use crate::ports::{Invocation, Process};
+
+/// The newest glibc the binary may need: 2.39, Ubuntu 24.04's, which
+/// covers Ubuntu 24.04, Linux Mint 22, Debian 13, Fedora 40 or newer, and
+/// `SteamOS` and Arch. Older LTS releases use the Flatpak instead.
+/// `packaging/README.txt` records it.
+pub const GLIBC_FLOOR: [u32; 2] = [2, 39];
+
+/// The libraries the binary may link: glibc's (`libc`, `libm`, the
+/// loader, and `libdl`, `libpthread` and `librt`, which glibc 2.34 folded
+/// into `libc` but a build may still name), GCC's unwinder, and ALSA,
+/// which must be the host's. Any other is a portability regression.
+pub const ALLOWED_LIBRARIES: [&str; 8] = [
+    "libc.so.6",
+    "libm.so.6",
+    "ld-linux-x86-64.so.2",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libgcc_s.so.1",
+    "libasound.so.2",
+];
 
 /// A glibc symbol version, `GLIBC_<major>.<minor>[.<patch>]`, compared
 /// part by part.
@@ -176,7 +196,7 @@ pub fn check_links(process: &mut impl Process, binary: &Path) -> Result<(), Bund
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use std::cell::RefCell;
     use std::fmt::Write as _;
     use std::path::PathBuf;
@@ -252,14 +272,23 @@ pub(crate) mod tests {
 
     #[test]
     fn the_floor_itself_passes() {
-        let links = Links::parse(&objdump_text(&NEEDED, &["GLIBC_2.35", "GLIBC_2.2.5"]));
-        assert_eq!(links.glibc, Some(version("GLIBC_2.35")));
+        let links = Links::parse(&objdump_text(&NEEDED, &["GLIBC_2.39", "GLIBC_2.2.5"]));
+        assert_eq!(links.glibc, Some(version("GLIBC_2.39")));
+        assert_eq!(links.problems(), []);
+    }
+
+    #[test]
+    fn a_glibc_a_24_04_build_needs_passes() {
+        let links = Links::parse(&objdump_text(
+            &NEEDED,
+            &["GLIBC_2.2.5", "GLIBC_2.34", "GLIBC_2.38"],
+        ));
         assert_eq!(links.problems(), []);
     }
 
     #[test]
     fn a_glibc_above_the_floor_is_refused() {
-        for above in ["GLIBC_2.36", "GLIBC_2.35.1", "GLIBC_3.0"] {
+        for above in ["GLIBC_2.40", "GLIBC_2.39.1", "GLIBC_3.0"] {
             let links = Links::parse(&objdump_text(&NEEDED, &["GLIBC_2.2.5", above]));
             assert_eq!(
                 links.problems(),
@@ -344,14 +373,14 @@ pub(crate) mod tests {
     #[test]
     fn the_problems_read_as_a_sentence() {
         let problems = Problems(vec![
-            Problem::AboveFloor(version("GLIBC_2.38")),
+            Problem::AboveFloor(version("GLIBC_2.40")),
             Problem::Unnumbered("GLIBC_ABI_DT_RELR".into()),
             Problem::Disallowed("libfoo.so.1".into()),
             Problem::NoNeeded,
         ]);
         assert_eq!(
             problems.to_string(),
-            "it needs GLIBC_2.38, above the floor GLIBC_2.35; \
+            "it needs GLIBC_2.40, above the floor GLIBC_2.39; \
              it needs GLIBC_ABI_DT_RELR, which the floor can't vouch for; \
              it links libfoo.so.1, which is not an allowed library; \
              it needs no library: is it a dynamically linked ELF?"
@@ -394,15 +423,15 @@ pub(crate) mod tests {
 
     #[test]
     fn a_binary_the_floor_refuses_names_the_command_and_what_it_found() {
-        let text = objdump_text(&["libc.so.6", "libfoo.so.1"], &["GLIBC_2.39"]);
+        let text = objdump_text(&["libc.so.6", "libfoo.so.1"], &["GLIBC_2.40"]);
         let (result, _) = check(Ok(text.into_bytes()));
         let binary = PathBuf::from("staged").join("nova");
         let command = objdump(&binary).to_string();
         assert_eq!(
             result.expect_err("refused").to_string(),
             format!(
-                "`{command}` shows a binary that won't run on every Linux the AppImage is for: \
-                 it needs GLIBC_2.39, above the floor GLIBC_2.35; \
+                "`{command}` shows a binary that won't run on every Linux the tarball is for: \
+                 it needs GLIBC_2.40, above the floor GLIBC_2.39; \
                  it links libfoo.so.1, which is not an allowed library"
             )
         );

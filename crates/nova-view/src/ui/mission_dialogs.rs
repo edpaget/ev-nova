@@ -45,7 +45,7 @@ use crate::spaceport::missions::MissionInfoScreen;
 use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::desc::{DescDialog, DescTemplates};
-use crate::ui::dialog::DialogTemplate;
+use crate::ui::dialog::{DialogTemplate, FocusRing};
 
 /// A `dësc`'s text shown with no mission behind it: its text, its
 /// `Graphic` and its movie.
@@ -82,6 +82,9 @@ pub struct MissionDialogs {
     info_template: Result<DialogTemplate, String>,
     metrics: Rc<dyn TextMetrics>,
     style: ButtonStyle,
+    /// Whether the texts' and the info screen's buttons take the keyboard
+    /// focus.
+    focus_ring: FocusRing,
     /// The texts and movies to show, the front one shown.
     texts: VecDeque<Stage>,
     /// The movies, and whether they play.
@@ -129,6 +132,7 @@ impl MissionDialogs {
             info_template: info,
             metrics,
             style,
+            focus_ring: FocusRing::default(),
             texts: VecDeque::new(),
             movies: Movies::none(),
             info: None,
@@ -137,6 +141,16 @@ impl MissionDialogs {
             info_closed_laid_out: false,
             unclaimed: Vec::new(),
             texts_closed: 0,
+        }
+    }
+
+    /// These dialogs with their buttons taking the keyboard focus as
+    /// `ring` says (the `dialog_focus_ring` rule), for each opened after it.
+    #[must_use]
+    pub fn with_focus_ring(self, ring: FocusRing) -> Self {
+        Self {
+            focus_ring: ring,
+            ..self
         }
     }
 
@@ -229,7 +243,9 @@ impl MissionDialogs {
             self.style,
             Rc::clone(&self.metrics),
         ) {
-            self.texts.push_back(Stage::Text(dialog.with_map(map)));
+            self.texts.push_back(Stage::Text(
+                dialog.with_map(map).with_focus_ring(self.focus_ring),
+            ));
         }
         if let Some(after) = movie(true) {
             self.queue_movie(after);
@@ -320,8 +336,9 @@ impl MissionDialogs {
             .info_template
             .clone()
             .map(|template| (template, Rc::clone(&self.metrics)));
-        let mut screen =
-            MissionInfoScreen::new(layout, info, self.style).with_map_allowed(map_allowed);
+        let mut screen = MissionInfoScreen::new(layout, info, self.style)
+            .with_map_allowed(map_allowed)
+            .with_focus_ring(self.focus_ring);
         self.sounds.extend(screen.take_sounds());
         self.info = Some(screen);
     }
@@ -1321,5 +1338,22 @@ mod tests {
         assert!(!dialogs.hides_pointer(), "not during the fade out");
         dialogs.tick(MOVIE_FADE_FOR);
         assert!(dialogs.hides_pointer());
+    }
+
+    /// A mission text is `_ShowTextDialog`'s, whose `_TextDialogFilter`
+    /// @0x51f77 maps no Tab or Space.
+    #[test]
+    fn a_mission_text_takes_tab_then_space_only_with_the_focus_ring() {
+        let mut ringed = dialogs();
+        ringed.show_texts(vec![brief(128, "First.")]);
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(!ringed.is_open(), "by default");
+        let mut off = dialogs().with_focus_ring(FocusRing::Off);
+        off.show_texts(vec![brief(128, "First.")]);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert_eq!(shown(&off).as_deref(), Some("First."));
+        assert_eq!(off.text().and_then(|text| text.dialog().focus()), None);
     }
 }

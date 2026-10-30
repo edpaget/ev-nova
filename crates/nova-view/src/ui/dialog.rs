@@ -6,8 +6,24 @@
 //! buttons and static text work as they are, and the caller gives each
 //! application-drawn (user) item its meaning with a [`Role`]. Items are
 //! numbered from 1, as the Dialog Manager numbers them.
+//!
+//! # Keyboard focus
+//!
+//! The original's in-game dialogs have no keyboard focus: `_MyModalDialog`
+//! (@0x59954) draws none, and each dialog's filter maps only its own keys
+//! (`_TextDialogFilter` @0x51f77 Return, Enter and Escape to item 1;
+//! `_CommFilter` @0x908ed, `_PlanetCommFilter` @0x911a9, `_HaggleFilter`
+//! @0x91d9d, `_PlunderFilter` @0x92f20, `_CapturedAssignmentFilter`
+//! @0x51782 and `_EscortFilter` @0x950e9 their letters), none of them Tab
+//! or Space. A [`Dialog`] keeps a focus ring anyway by default
+//! ([`FocusRing::Tab`]): Tab moves an outlined focus through the enabled
+//! buttons and Space presses the focused one, kept for accessibility by
+//! the user's decision of 2026-10-28. The `dialog_focus_ring` rule's engine
+//! reading ([`FocusRing::Off`]) gives the original's dialogs.
 
 use std::rc::Rc;
+
+use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -30,11 +46,24 @@ pub const STATIC_TEXT_SIZE: f32 = 12.0;
 /// Static text items' colour.
 pub const STATIC_TEXT_COLOR: Color = Color::WHITE;
 
-/// Where a dialog goes on the screen, from its `DLOG`'s positioning word.
+/// Where a dialog goes on the screen: moved by `_CenterWindow` for the
+/// `DLOG`s in [`CENTER_WINDOW_DLOGS`], else as its `DLOG`'s positioning
+/// word asks the Window Manager to place it ([`Placement::for_dlog`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placement {
-    /// Centred on the screen.
+    /// Centred on the screen by the Window Manager, from a `DLOG`
+    /// positioning word (`0x280A`, `0x680A`, `0xA80A`) on a dialog no
+    /// `_CenterWindow` call moves: the spare space halved and floored in
+    /// one step. Over a widened view this is floored in the 1024 x 768
+    /// frame, which is then centred; a single floor over the whole width
+    /// would differ by a pixel when both widths are odd. That rule is the
+    /// system's, not `EV Nova.app`'s, so it can't be read from the binary.
     Center,
+    /// Centred on `_gWind` by `_CenterWindow`, as [`center_window`]
+    /// places it: half the window less half the dialog, each truncated.
+    /// For an odd size it sits a pixel right of or below
+    /// [`Placement::Center`].
+    CenterWindow,
     /// Centred across, with a third of the spare height above it: the
     /// Window Manager's alert position.
     Alert,
@@ -42,7 +71,68 @@ pub enum Placement {
     Fixed,
 }
 
+/// The `DLOG`s the original moves with `_CenterWindow` (@0x220e-0x2360)
+/// onto `_gWind` after its `GetNewDialog` and before `ShowWindow`. Its
+/// 24 callers, by the `_CenterWindow` call:
+///
+/// | call | function | `DLOG`(s) |
+/// |---|---|---|
+/// | 0x11cf1 | `_DoSystemSearch` | 3005 |
+/// | 0x12534 | `_DoSystemMap` | 2000 |
+/// | 0x166ed | `_DoNewPilotNameDialog` | 3101, 3102 |
+/// | 0x47ff3 | `_DoNewsDialog` | 1014 |
+/// | 0x48aaa | `_DoRaceDialog` | 1023 |
+/// | 0x49064 | `_DoBarDialog` | 1021, 1013 |
+/// | 0x55ba2 | `_PlayQTMovie` | none: its `NewCWindow` movie window |
+/// | 0x56dbe | `_DoQuantityDialog` | 1003 |
+/// | 0x5a50c | `_DoPlayerInfoDialog` | 1017, after growing it (`SizeWindow` @0x5a313) |
+/// | 0x5ae16 | `_ShowTextDialog` | 3004, 3003 (after shrinking 3003, `SizeWindow` @0x5ab4c) |
+/// | 0x5b5a1 | `_DoCapturedShipAssignmentDialog` | 1018 |
+/// | 0x5b7ab | `_DoShipyardDescription` | 1019, 1005 |
+/// | 0x5bcba | `_DoOutfitDialog` | 1002 |
+/// | 0x5df10 | `_DoTradeDialog` | 1001 |
+/// | 0x5e7d9 | `_DoShipyardDialog` | 1004 |
+/// | 0x5faaa | `_DoPortDialog` | 1000 |
+/// | 0x91f05 | `_DoHaggleDialog` | 1008 |
+/// | 0x934a4 | `_DoPlunderDialog` | 1011 |
+/// | 0x952df | `_DoEscortDialog` | 1022 |
+/// | 0x95ee8 | `_DoCommDialog` | 1007 |
+/// | 0x96eaf | `_DoPlanetCommDialog` | 1009 |
+/// | 0x9e243 | `_DoMissionInfoDialog` | 1012 |
+/// | 0xa23fd | `_OfferOneMission` | 1020, 1016 |
+/// | 0xa39de | `_DoMissionDialog` | 1006 |
+///
+/// The other `GetNewDialog` callers (`_EVNoteAlert`'s 3000,
+/// `_EVTextInputDialog`'s 3001, `_EVYesNoDialog`'s 3002) only
+/// `ShowWindow` what they load, so the Window Manager places those from
+/// their word. Our Preferences dialog (4003) is Cocoa in this build and
+/// keeps its word's placement too.
+pub const CENTER_WINDOW_DLOGS: [i16; 28] = [
+    1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1011, 1012, 1013, 1014, 1016, 1017,
+    1018, 1019, 1020, 1021, 1022, 1023, 2000, 3003, 3004, 3005, 3101, 3102,
+];
+
+/// The positioning word every stock `DLOG` carries (0xA80A, centred on
+/// the main screen). A built-in template, used when the interface file
+/// has no usable `DLOG`, is placed with [`Placement::for_dlog`] from its
+/// `DLOG`'s id and this word, so it lands where the loaded one would.
+pub const STOCK_WORD: u16 = 0xA80A;
+
 impl Placement {
+    /// Where `DLOG` `id` with positioning `word` goes:
+    /// [`Placement::CenterWindow`] for a `DLOG` in
+    /// [`CENTER_WINDOW_DLOGS`], whatever its word, since `_CenterWindow`
+    /// moves the window after it is placed; else as
+    /// [`Placement::from_word`] reads the word.
+    #[must_use]
+    pub fn for_dlog(id: i16, word: Option<u16>) -> Self {
+        if CENTER_WINDOW_DLOGS.contains(&id) {
+            Self::CenterWindow
+        } else {
+            Self::from_word(word)
+        }
+    }
+
     /// The placement a `DLOG` positioning word asks for: `0x280A`,
     /// `0x680A` and `0xA80A` centre the dialog; `0x300A`, `0x700A` and
     /// `0xB00A` put it in the alert position; no word, or 0, keeps its
@@ -57,12 +147,13 @@ impl Placement {
     }
 
     /// Where the top-left corner of a dialog with these `bounds` goes on
-    /// [`SCREEN`], floored to whole units.
+    /// [`SCREEN`], in whole units.
     #[must_use]
     pub fn origin(self, bounds: Bounds) -> Point {
         let spare = (SCREEN.0 - bounds.width(), SCREEN.1 - bounds.height());
         match self {
             Self::Center => Point::new((spare.0 / 2.0).floor(), (spare.1 / 2.0).floor()),
+            Self::CenterWindow => center_window(SCREEN, (bounds.width(), bounds.height())),
             Self::Alert => Point::new((spare.0 / 2.0).floor(), (spare.1 / 3.0).floor()),
             Self::Fixed => bounds.min,
         }
@@ -74,9 +165,12 @@ impl Placement {
 /// window's centre less half the dialog, each half truncated toward zero
 /// as the original's integer halving is. For an odd size it sits a pixel
 /// right of or below [`Placement::Center`], which floors the spare space
-/// in one step. The galaxy map's dialog (`DLOG` 2000) is placed so; the
-/// other dialogs `_CenterWindow` moves still centre as
-/// [`Placement::Center`] does.
+/// in one step. Every `DLOG` in [`CENTER_WINDOW_DLOGS`] is placed so,
+/// through [`Placement::CenterWindow`]; the galaxy map's dialog (`DLOG`
+/// 2000) calls it directly. Placing in the 1024 x 768 frame and then
+/// centring that frame in a widened view is exact: trunc(W / 2) −
+/// trunc(w / 2) = (512 − trunc(w / 2)) + floor((W − 1024) / 2) for every
+/// W ≥ 1024.
 #[must_use]
 pub fn center_window(window: (f32, f32), size: (f32, f32)) -> Point {
     let half = |length: f32| (length / 2.0).trunc();
@@ -243,6 +337,39 @@ impl Item {
     }
 }
 
+/// Whether a dialog's buttons take a keyboard focus: the `dialog_focus_ring`
+/// rule's two readings ([`RuleKey::DialogFocusRing`]).
+///
+/// The original has none in any in-game dialog: `_MyModalDialog`
+/// (@0x59954) draws no focus, and no filter (`_TextDialogFilter` @0x51f77,
+/// `_CommFilter` @0x908ed, `_PlanetCommFilter` @0x911a9, `_HaggleFilter`
+/// @0x91d9d, `_PlunderFilter` @0x92f20, `_CapturedAssignmentFilter`
+/// @0x51782, `_EscortFilter` @0x950e9, nor the Toolbox's standard filter)
+/// maps Tab or Space to a button. The focus ring is kept on by default
+/// for accessibility, by the user's decision of 2026-10-28.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FocusRing {
+    /// Tab moves an outlined focus through the enabled buttons, and Space
+    /// activates the focused one: the default.
+    #[default]
+    Tab,
+    /// No focus: Tab and Space do nothing unless the dialog's own filter
+    /// maps them, as the original's dialogs have it.
+    Off,
+}
+
+impl FocusRing {
+    /// The reading `rules` gives `dialog_focus_ring`: the other reading's
+    /// [`FocusRing::Tab`] (the default), or the engine's [`FocusRing::Off`].
+    #[must_use]
+    pub fn from_rulebook(rules: &Rulebook) -> Self {
+        match rules.source_for(RuleKey::DialogFocusRing) {
+            RuleSource::Bible => Self::Tab,
+            RuleSource::Engine => Self::Off,
+        }
+    }
+}
+
 /// A modal dialog: placed on the screen, drawn over whatever is below, and
 /// taking every input event while it is open.
 #[derive(Clone)]
@@ -257,6 +384,8 @@ pub struct Dialog {
     cancel_item: Option<usize>,
     /// The focused button's index in `items`.
     focus: Option<usize>,
+    /// Whether Tab and Space move and press a focus.
+    focus_ring: FocusRing,
     /// The item a press is held on, by index, and its tracking.
     tracked: Option<usize>,
     tracker: ButtonTracker,
@@ -334,6 +463,7 @@ impl Dialog {
             default_item: Some(1),
             cancel_item: None,
             focus: None,
+            focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
             held: None,
@@ -365,6 +495,29 @@ impl Dialog {
             cancel_item: item,
             ..self
         }
+    }
+
+    /// The dialog with its buttons taking the keyboard focus as `ring`
+    /// says.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.set_focus_ring(ring);
+        self
+    }
+
+    /// Makes the buttons take the keyboard focus as `ring` says. Turning
+    /// the ring off drops any focus.
+    pub fn set_focus_ring(&mut self, ring: FocusRing) {
+        self.focus_ring = ring;
+        if ring == FocusRing::Off {
+            self.focus = None;
+        }
+    }
+
+    /// Whether the buttons take the keyboard focus.
+    #[must_use]
+    pub fn focus_ring(&self) -> FocusRing {
+        self.focus_ring
     }
 
     /// The dialog with buttons drawn in `skin` and labelled in `style`.
@@ -486,8 +639,9 @@ impl Dialog {
     /// - A click (press and release, tracked as a button tracks it) on an
     ///   enabled, shown item activates it.
     /// - Return activates the default item, and Escape the cancel item.
-    /// - Tab moves the focus to the next enabled button, and Space
-    ///   activates the focused one.
+    /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
+    ///   next enabled button, and Space activates the focused one. Under
+    ///   [`FocusRing::Off`], the original's reading, they do nothing.
     /// - Up and Down, repeats included, scroll the first scrolling text.
     /// - A wheel or trackpad scroll inside the dialog scrolls the scrolling
     ///   text under the pointer, if any; static text ignores it, and a
@@ -545,10 +699,12 @@ impl Dialog {
             _ if repeat => None,
             Key::Enter => self.activate(self.default_item),
             Key::Escape => self.activate(self.cancel_item),
-            Key::Tab => {
+            Key::Tab if self.focus_ring == FocusRing::Tab => {
                 self.focus_next();
                 None
             }
+            // Under `FocusRing::Off` nothing is ever focused, so Space
+            // activates nothing.
             Key::Space => self.activate(self.focus.map(|index| index + 1)),
             _ => None,
         }
@@ -844,6 +1000,86 @@ mod tests {
             center_window((100.0, 100.0), (201.0, 101.0)),
             at(-50.0, 0.0)
         );
+    }
+
+    #[test]
+    fn center_window_dlogs_place_as_center_window_does() {
+        // The port dialog, DLOG 1000, 618 x 517: an odd height.
+        let port = Placement::for_dlog(1000, Some(0xA80A));
+        assert_eq!(port, Placement::CenterWindow);
+        let bounds = rect(0.0, 0.0, 618.0, 517.0);
+        assert_eq!(port.origin(bounds), at(203.0, 126.0));
+        assert_eq!(Placement::Center.origin(bounds), at(203.0, 125.0));
+        // The mission offer, DLOG 1020, 651 x 244: an odd width.
+        let offer = Placement::for_dlog(1020, Some(0xA80A));
+        assert_eq!(offer, Placement::CenterWindow);
+        let bounds = rect(0.0, 0.0, 651.0, 244.0);
+        assert_eq!(offer.origin(bounds), at(187.0, 262.0));
+        assert_eq!(Placement::Center.origin(bounds), at(186.0, 262.0));
+    }
+
+    #[test]
+    fn center_window_moves_a_listed_dlog_whatever_its_word() {
+        for word in [None, Some(0), Some(0x300A), Some(0xA80A)] {
+            assert_eq!(
+                Placement::for_dlog(1000, word),
+                Placement::CenterWindow,
+                "{word:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dlog_no_caller_moves_keeps_the_window_managers_centring() {
+        let yes_no = Placement::for_dlog(3002, Some(0xA80A));
+        assert_eq!(yes_no, Placement::Center);
+        assert_eq!(
+            yes_no.origin(rect(0.0, 0.0, 355.0, 109.0)),
+            at(334.0, 329.0)
+        );
+        assert_eq!(
+            center_window(SCREEN, (355.0, 109.0)),
+            at(335.0, 330.0),
+            "_CenterWindow would put it a pixel lower and right"
+        );
+        let note = Placement::for_dlog(3000, Some(0xA80A));
+        assert_eq!(note.origin(rect(0.0, 0.0, 357.0, 150.0)), at(333.0, 309.0));
+        assert_eq!(Placement::for_dlog(128, None), Placement::Fixed);
+        assert_eq!(Placement::for_dlog(128, Some(0x300A)), Placement::Alert);
+    }
+
+    #[test]
+    fn every_listed_dlog_and_none_other_is_moved_by_center_window() {
+        for id in CENTER_WINDOW_DLOGS {
+            assert_eq!(
+                Placement::for_dlog(id, Some(0xA80A)),
+                Placement::CenterWindow,
+                "DLOG {id}"
+            );
+        }
+        for id in [3000, 3001, 3002, 4003, 1010, 1015, 1024, 3006, 3100] {
+            assert_eq!(
+                Placement::for_dlog(id, Some(0xA80A)),
+                Placement::Center,
+                "DLOG {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_center_window_dialog_places_its_items_from_center_windows_corner() {
+        let template = DialogTemplate {
+            bounds: rect(30.0, 40.0, 618.0, 517.0),
+            placement: Placement::CenterWindow,
+            items: vec![item(
+                rect(10.0, 20.0, 70.0, 20.0),
+                true,
+                ItemSpec::Button("OK".into()),
+            )],
+        };
+        let dialog = dialog(&template, &[]);
+        assert_eq!(dialog.bounds(), rect(203.0, 126.0, 618.0, 517.0));
+        assert_eq!(dialog.item_bounds(1), Some(rect(213.0, 146.0, 70.0, 20.0)));
     }
 
     /// Stock `YesNo` (`DLOG` 3002): 355 x 109, centred, with OK (1), a
@@ -1854,6 +2090,62 @@ mod tests {
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
         assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
         assert_eq!(dialog.input(&key(Key::Tab)), None);
+        assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
+    }
+
+    #[test]
+    fn the_focus_ring_is_tab_by_default_and_follows_the_rulebook() {
+        assert_eq!(FocusRing::default(), FocusRing::Tab);
+        assert_eq!(
+            FocusRing::from_rulebook(&Rulebook::default()),
+            FocusRing::Tab
+        );
+        assert_eq!(
+            FocusRing::from_rulebook(&Rulebook::new(RuleSource::Bible)),
+            FocusRing::Tab
+        );
+        assert_eq!(
+            FocusRing::from_rulebook(&Rulebook::new(RuleSource::Engine)),
+            FocusRing::Off
+        );
+        assert_eq!(
+            FocusRing::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::DialogFocusRing, RuleSource::Engine)
+            ),
+            FocusRing::Off
+        );
+        assert_eq!(dialog(&yes_no(), &[]).focus_ring(), FocusRing::Tab);
+    }
+
+    /// The original's reading: `_MyModalDialog` @0x59954 draws no focus,
+    /// and no in-game filter maps Tab or Space.
+    #[test]
+    fn with_the_focus_ring_off_tab_and_space_do_nothing() {
+        let mut dialog = dialog(&yes_no(), &[])
+            .with_cancel(Some(5))
+            .with_focus_ring(FocusRing::Off);
+        assert_eq!(dialog.focus_ring(), FocusRing::Off);
+        let before = drawn(&dialog);
+        for _ in 0..3 {
+            assert_eq!(dialog.input(&key(Key::Tab)), None);
+            assert_eq!(dialog.focus(), None);
+            assert_eq!(dialog.input(&key(Key::Space)), None);
+        }
+        assert_eq!(drawn(&dialog), before, "nothing is outlined");
+        assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(1)));
+        assert_eq!(dialog.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+    }
+
+    #[test]
+    fn turning_the_focus_ring_off_drops_the_focus_and_back_on_tabs_again() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(1));
+        dialog.set_focus_ring(FocusRing::Off);
+        assert_eq!(dialog.focus(), None);
+        assert_eq!(dialog.input(&key(Key::Space)), None);
+        dialog.set_focus_ring(FocusRing::Tab);
+        dialog.input(&key(Key::Tab));
         assert_eq!(dialog.input(&key(Key::Space)), Some(DialogEvent::Item(1)));
     }
 }

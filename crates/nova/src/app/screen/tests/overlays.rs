@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::KeyboardAccess;
+use nova_view::ui::FocusRing;
 
 // The About dialog.
 
@@ -1157,4 +1159,116 @@ fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
 fn the_flight_help_offers_p_and_command_comma() {
     assert!(nova_view::flight::view::HELP.contains("P: player info"));
     assert!(nova_view::flight::view::HELP.contains("Cmd-,: preferences"));
+}
+
+/// A [`KeyboardAccess`] answering what it holds, counting its asks.
+#[derive(Debug)]
+struct FakeKeyboardAccess {
+    answer: std::cell::Cell<Option<bool>>,
+    asks: std::cell::Cell<usize>,
+}
+
+impl FakeKeyboardAccess {
+    fn answering(answer: Option<bool>) -> Rc<Self> {
+        Rc::new(Self {
+            answer: std::cell::Cell::new(answer),
+            asks: std::cell::Cell::new(0),
+        })
+    }
+}
+
+impl KeyboardAccess for FakeKeyboardAccess {
+    fn full_keyboard_access(&self) -> Option<bool> {
+        self.asks.set(self.asks.get() + 1);
+        self.answer.get()
+    }
+}
+
+/// Tab then Space in the open Preferences: whether they flipped the
+/// music toggle, the first in its focus ring.
+fn tab_space_flips_music(screen: &mut AppScreen) -> bool {
+    let before = prefs_dialog(screen).prefs().sound.music;
+    screen.input(&key(Key::Tab, true));
+    screen.input(&key(Key::Tab, false));
+    screen.input(&key(Key::Space, true));
+    screen.input(&key(Key::Space, false));
+    prefs_dialog(screen).prefs().sound.music != before
+}
+
+#[test]
+fn the_preferences_focus_ring_follows_full_keyboard_access() {
+    for (answer, ring) in [
+        (Some(true), FocusRing::Tab),
+        (None, FocusRing::Tab),
+        (Some(false), FocusRing::Off),
+    ] {
+        let access = FakeKeyboardAccess::answering(answer);
+        let mut screen = with_dialogs(data()).with_keyboard_access(access.clone());
+        open_prefs(&mut screen);
+        assert_eq!(access.asks.get(), 1, "{answer:?}");
+        assert_eq!(prefs_dialog(&screen).focus_ring(), ring, "{answer:?}");
+        assert_eq!(
+            tab_space_flips_music(&mut screen),
+            ring == FocusRing::Tab,
+            "{answer:?}"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_ne!(screen.showing(), Showing::Preferences, "Escape closes it");
+    }
+    let mut screen = with_dialogs(data());
+    open_prefs(&mut screen);
+    assert_eq!(
+        prefs_dialog(&screen).focus_ring(),
+        FocusRing::Tab,
+        "no port"
+    );
+    assert!(tab_space_flips_music(&mut screen));
+}
+
+#[test]
+fn full_keyboard_access_is_read_each_time_the_preferences_open() {
+    let access = FakeKeyboardAccess::answering(Some(true));
+    let mut screen = with_dialogs(data()).with_keyboard_access(access.clone());
+    open_prefs(&mut screen);
+    assert_eq!(prefs_dialog(&screen).focus_ring(), FocusRing::Tab);
+    screen.input(&key(Key::Escape, true));
+    access.answer.set(Some(false));
+    open_prefs(&mut screen);
+    assert_eq!(access.asks.get(), 2);
+    assert_eq!(prefs_dialog(&screen).focus_ring(), FocusRing::Off);
+    assert!(!tab_space_flips_music(&mut screen));
+    screen.input(&key(Key::Enter, true));
+    assert_ne!(screen.showing(), Showing::Preferences, "Return closes it");
+}
+
+/// Player info over flight takes the rulebook's `dialog_focus_ring`, down
+/// to its Jettison question.
+#[test]
+fn the_flight_player_infos_question_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(trading_data())
+            .with_rules(rules)
+            .with_dialogs(Rc::new(TradeDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+            .appeared();
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        past_the_takeoff_grace(&mut screen);
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        click_player_info(&mut screen, PlayerInfoButton::Jettison);
+        assert_eq!(
+            screen
+                .flight_player_info()
+                .and_then(PlayerInfoScreen::confirm)
+                .map(nova_view::ui::Dialog::focus_ring),
+            Some(ring)
+        );
+    }
 }

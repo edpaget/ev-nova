@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 
 use super::layout::FlatpakLayout;
 use super::{FINISH_ARGS, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN, RUST_EXTENSION, SDK};
+use crate::build_id::{self, BuildId};
+use crate::fonts::{FONT_DIR, FONT_LICENCES};
 use crate::linux::EXECUTABLE;
 use crate::spec::{BundleSpec, GAME_PACKAGE};
 
@@ -36,15 +38,28 @@ pub fn cargo_config() -> String {
 }
 
 /// The commands that build `nova` offline and install it, with the share
-/// tree, into `/app`.
+/// tree, into `/app`, and `LICENSE` and the fonts' licences
+/// ([`crate::fonts`]) into `/app/share/licenses/<app id>/`, Flathub's
+/// place for them. The sources are relative to the module's build
+/// directory, spelled with `/`: they are shell text run in the Linux
+/// sandbox, not host paths.
 #[must_use]
-pub fn build_commands() -> Vec<String> {
-    vec![
+pub fn build_commands(app_id: &str) -> Vec<String> {
+    let licenses = format!("/app/share/licenses/{app_id}");
+    let font_dir = FONT_DIR.join("/");
+    let mut commands = vec![
         format!("cargo --offline build --release --locked -p {GAME_PACKAGE}"),
         format!("install -Dm755 target/release/{EXECUTABLE} /app/bin/{EXECUTABLE}"),
         "mkdir -p /app/share".to_owned(),
         format!("cp -r {SHARE_DEST}/. /app/share/"),
-    ]
+        format!("install -Dm644 LICENSE {licenses}/LICENSE"),
+    ];
+    commands.extend(
+        FONT_LICENCES
+            .iter()
+            .map(|(source, name)| format!("install -Dm644 {font_dir}/{source} {licenses}/{name}")),
+    );
+    commands
 }
 
 /// The workspace source's skips: [`SKIP`], and Cargo's target directory
@@ -78,9 +93,11 @@ fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// The manifest for `spec` under `layout`.
+/// The manifest for `spec`'s build `build` under `layout`. The sandboxed
+/// build sees none of the host's environment, so the module's build
+/// options pass it `NOVA_BUILD_ID`, which `nova` compiles in.
 #[must_use]
-pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout) -> Value {
+pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> Value {
     json!({
         "id": spec.identifier,
         "runtime": RUNTIME,
@@ -94,9 +111,12 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout) -> Value {
             "buildsystem": "simple",
             "build-options": {
                 "append-path": RUST_BIN,
-                "env": { "CARGO_HOME": format!("/run/build/{MODULE}/cargo") },
+                "env": {
+                    "CARGO_HOME": format!("/run/build/{MODULE}/cargo"),
+                    build_id::VAR: build.as_str(),
+                },
             },
-            "build-commands": build_commands(),
+            "build-commands": build_commands(&spec.identifier),
             "sources": [
                 {
                     "type": "dir",
@@ -126,8 +146,8 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout) -> Value {
 
 /// [`manifest`] as the JSON file's text.
 #[must_use]
-pub fn render(spec: &BundleSpec, layout: &FlatpakLayout) -> String {
-    let mut text = serde_json::to_string_pretty(&manifest(spec, layout))
+pub fn render(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> String {
+    let mut text = serde_json::to_string_pretty(&manifest(spec, layout, build))
         .unwrap_or_else(|e| unreachable!("a JSON value always renders: {e}"));
     text.push('\n');
     text
@@ -139,6 +159,7 @@ mod tests {
 
     use super::*;
     use crate::spec::tests::sample_metadata;
+    use crate::test_support::{BUILD, build};
 
     fn spec() -> BundleSpec {
         BundleSpec::from_metadata(&sample_metadata()).expect("spec")
@@ -150,7 +171,7 @@ mod tests {
 
     /// The rendered manifest, read back.
     fn read() -> Value {
-        serde_json::from_str(&render(&spec(), &layout())).expect("JSON")
+        serde_json::from_str(&render(&spec(), &layout(), &build())).expect("JSON")
     }
 
     fn strings(value: &Value) -> Vec<&str> {
@@ -260,8 +281,18 @@ mod tests {
                 "install -Dm755 target/release/nova /app/bin/nova",
                 "mkdir -p /app/share",
                 "cp -r linux-share/. /app/share/",
+                "install -Dm644 LICENSE /app/share/licenses/io.example.nova/LICENSE",
+                "install -Dm644 crates/nova-render/fonts/OFL.txt /app/share/licenses/io.example.nova/NotoSans-OFL.txt",
+                "install -Dm644 crates/nova-render/fonts/NotoSerif-OFL.txt /app/share/licenses/io.example.nova/NotoSerif-OFL.txt",
             ]
         );
+    }
+
+    #[test]
+    fn the_build_gets_the_build_id() {
+        let env = &module()["build-options"]["env"];
+        assert_eq!(env["NOVA_BUILD_ID"], BUILD);
+        assert_eq!(env.as_object().expect("an object").len(), 2, "{env}");
     }
 
     #[test]
@@ -329,6 +360,6 @@ mod tests {
 
     #[test]
     fn the_file_ends_with_a_newline() {
-        assert!(render(&spec(), &layout()).ends_with("}\n"));
+        assert!(render(&spec(), &layout(), &build()).ends_with("}\n"));
     }
 }

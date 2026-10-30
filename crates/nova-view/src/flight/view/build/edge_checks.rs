@@ -177,6 +177,7 @@ fn history() -> CarryOver {
         stellar_sprite_pool: Some(pool),
         kept_berths: Some(traffic.kept_berths()),
         last_refresh: Some(nova_sim::LastRefresh::hiding([SystemId(131)])),
+        release_comm_escort: Some(true),
     }
 }
 
@@ -200,6 +201,7 @@ fn the_runs_history_reaches_the_session_and_comes_back() {
         ghost
     );
     assert_eq!(back.kept_berths, carried.kept_berths);
+    assert_eq!(back.release_comm_escort, Some(true));
     begin_game(&mut view);
     assert!(
         !view

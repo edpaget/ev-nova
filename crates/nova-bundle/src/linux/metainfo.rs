@@ -3,6 +3,7 @@
 
 use super::EXECUTABLE;
 use super::desktop::desktop_file_name;
+use crate::build_id::BuildId;
 use crate::spec::BundleSpec;
 use crate::xml::escape;
 
@@ -18,14 +19,16 @@ pub fn metainfo_file_name(spec: &BundleSpec) -> String {
 
 /// Renders the metainfo XML: a desktop application with the spec's
 /// identifier, licence, name, summary, description (one paragraph),
-/// developer and homepage, launched by the desktop file, providing the
-/// [`EXECUTABLE`] binary.
+/// developer (its `name`, and its reverse-DNS `id` attribute) and
+/// homepage, launched by the desktop file, providing the
+/// [`EXECUTABLE`] binary, with one `<release>` for `build`.
 ///
 /// Its OARS rating is mild fantasy violence: ships fight and explode in
-/// space. It has no `<releases>`: the renderer reads no clock, and the
-/// validators pass without one.
+/// space. The release's `version` is the build ID itself, as macOS's
+/// `CFBundleVersion` is, and its `date` the ID's day: the 14 digits sort
+/// in time order under AppStream's version compare.
 #[must_use]
-pub fn metainfo(spec: &BundleSpec) -> String {
+pub fn metainfo(spec: &BundleSpec, build: &BuildId) -> String {
     let id = escape(&spec.identifier);
     let license = escape(&spec.license);
     let name = escape(&spec.name);
@@ -33,8 +36,11 @@ pub fn metainfo(spec: &BundleSpec) -> String {
     let description = escape(&spec.description);
     let launchable = escape(&desktop_file_name(spec));
     let developer = escape(&spec.developer);
+    let developer_id = escape(&spec.developer_id);
     let homepage = escape(&spec.homepage);
     let binary = escape(EXECUTABLE);
+    let version = build.as_str();
+    let date = build.date();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
@@ -47,7 +53,7 @@ pub fn metainfo(spec: &BundleSpec) -> String {
     <p>{description}</p>
   </description>
   <launchable type="desktop-id">{launchable}</launchable>
-  <developer>
+  <developer id="{developer_id}">
     <name>{developer}</name>
   </developer>
   <url type="homepage">{homepage}</url>
@@ -57,6 +63,9 @@ pub fn metainfo(spec: &BundleSpec) -> String {
   <provides>
     <binary>{binary}</binary>
   </provides>
+  <releases>
+    <release version="{version}" date="{date}"/>
+  </releases>
 </component>
 "#
     )
@@ -68,6 +77,7 @@ mod tests {
 
     use super::*;
     use crate::spec::tests::sample_metadata;
+    use crate::test_support::build;
 
     fn spec() -> BundleSpec {
         BundleSpec::from_metadata(&sample_metadata()).expect("spec")
@@ -90,7 +100,7 @@ mod tests {
 
     #[test]
     fn describes_a_desktop_application_from_the_spec() {
-        let xml = metainfo(&spec());
+        let xml = metainfo(&spec(), &build());
         let doc = Document::parse(&xml).expect("xml");
         let component = doc.root_element();
         assert_eq!(component.tag_name().name(), "component");
@@ -117,12 +127,29 @@ mod tests {
             text(child(component, "developer"), "name"),
             "the nova authors"
         );
+        assert_eq!(
+            child(component, "developer").attribute("id"),
+            Some("io.example")
+        );
         assert_eq!(text(child(component, "provides"), "binary"), "nova");
     }
 
     #[test]
+    fn has_one_release_for_the_build() {
+        let build = crate::build_id::BuildId::parse("20261028123456").expect("an ID");
+        let xml = metainfo(&spec(), &build);
+        let doc = Document::parse(&xml).expect("xml");
+        let releases = child(doc.root_element(), "releases");
+        let release: Vec<_> = releases.children().filter(Node::is_element).collect();
+        assert_eq!(release.len(), 1, "{xml}");
+        assert_eq!(release[0].tag_name().name(), "release");
+        assert_eq!(release[0].attribute("version"), Some("20261028123456"));
+        assert_eq!(release[0].attribute("date"), Some("2026-10-28"));
+    }
+
+    #[test]
     fn rates_the_content_with_oars() {
-        let xml = metainfo(&spec());
+        let xml = metainfo(&spec(), &build());
         let doc = Document::parse(&xml).expect("xml");
         let rating = child(doc.root_element(), "content_rating");
         assert_eq!(rating.attribute("type"), Some("oars-1.1"));
@@ -146,7 +173,7 @@ mod tests {
         spec.summary = "\"Fly\" & 'trade'".into();
         spec.description = "<p>not a paragraph</p>".into();
         spec.developer = "A & B".into();
-        let xml = metainfo(&spec);
+        let xml = metainfo(&spec, &build());
         let doc = Document::parse(&xml).expect("xml");
         let component = doc.root_element();
         assert_eq!(text(component, "name"), "EV <Nova> & co");
@@ -159,7 +186,21 @@ mod tests {
     }
 
     #[test]
+    fn escapes_markup_in_the_developer_id() {
+        let mut spec = spec();
+        spec.developer_id = "a\"b<c&d".into();
+        let xml = metainfo(&spec, &build());
+        let doc = Document::parse(&xml).expect("xml");
+        assert_eq!(
+            child(doc.root_element(), "developer").attribute("id"),
+            Some("a\"b<c&d")
+        );
+    }
+
+    #[test]
     fn says_it_is_utf_8() {
-        assert!(metainfo(&spec()).starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"));
+        assert!(
+            metainfo(&spec(), &build()).starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        );
     }
 }

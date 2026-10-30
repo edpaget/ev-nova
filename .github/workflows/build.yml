@@ -1,0 +1,277 @@
+name: Build
+
+# The release build legs: `nova` and `nova-dump` for each platform,
+# packed (the .dmg, the .msi and the portable archives) and tested, each
+# leg's dist/ uploaded as dist-<name> for release.yml's `publish`. A
+# reusable workflow, so the nightly (ci.yml) and a promotion
+# (promote-beta.yml) run the very same legs, with only their inputs
+# different.
+#
+# Its steps come from the caller's ref (main, for both callers that
+# publish), and they build `ref`'s checkout. A promotion builds a nightly
+# from up to KEEP_BUILDS (three) builds ago with today's steps, so a change
+# here that needs a task, flag or file the older commit lacks breaks
+# promoting those builds until they age out. That failure is loud and comes
+# before anything is published.
+#
+# A called workflow sees the caller's github context, so `github.ref` below
+# is the caller's ref: only a run on main (the nightly's push, or a
+# promotion dispatched on main) enters macos-signing.
+on:
+  workflow_call:
+    inputs:
+      build-id:
+        description: The build ID every leg compiles in and stamps (NOVA_BUILD_ID).
+        required: true
+        type: string
+      channel:
+        description: The channel the builds name (NOVA_CHANNEL), nightly or beta.
+        required: true
+        type: string
+      ref:
+        description: The commit to check out and build.
+        required: true
+        type: string
+
+jobs:
+  # Release builds of `nova` and `nova-dump` for the rolling prerelease of
+  # `channel`. The caller runs it after its `ci` gate, and every `ci` leg,
+  # Windows included, is a hard gate: a red test leg on any platform stops
+  # all three build legs, so nothing publishes. Gating stays on all three
+  # because `needs:` names a job, not a matrix leg, and `release` waits on
+  # every build leg anyway.
+  build:
+    strategy:
+      # So every platform's build failure is reported in one run.
+      fail-fast: false
+      matrix:
+        include:
+          # Built in an ubuntu:24.04 container, so the tarball's binary
+          # needs no glibc newer than 2.39, the floor packaging/README.txt
+          # records. The pinned image keeps the floor fixed whatever runner
+          # image hosts it. Older systems use the Flatpak, built in ci.yml's
+          # `flatpak` job.
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            container: ubuntu:24.04
+            target: x86_64-unknown-linux-gnu
+          # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
+          # on the arm64 runner and packs the bundle (crates/nova-bundle).
+          # It signs with Developer ID and notarizes when the signing
+          # secrets are set, ad-hoc otherwise. Intel Macs are not supported.
+          - name: aarch64-apple-darwin
+            os: macos-26
+            target: aarch64-apple-darwin
+          - name: x86_64-pc-windows-msvc
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    # Only the Linux leg names one; empty, a leg runs on the runner itself.
+    container: ${{ matrix.container }}
+    # The signing secrets live in the macos-signing environment, whose
+    # deployment-branch policy allows only main (infra/github/signing.tf).
+    # Only main's macOS leg enters it, picked by target rather than runner
+    # image so a runner bump can't silently drop signing. Every other leg, and every other
+    # branch, names no environment and so still runs: a job that names an
+    # environment its branch can't deploy to never starts. The expression must
+    # never name anything but macos-signing, because naming an environment
+    # that doesn't exist creates it, with no protection rules.
+    environment: ${{ github.ref == 'refs/heads/main' && matrix.name == 'aarch64-apple-darwin' && 'macos-signing' || '' }}
+    env:
+      # As in ci.yml's `ci`: install only the Rust toolchain.
+      MISE_AUTO_INSTALL: "false"
+      # The run's one build ID, for every step: `cargo build` compiles it
+      # into nova, and the bundlers stamp it on Info.plist and the
+      # metainfo. A promotion passes its nightly's ID, so the beta build
+      # carries the same one.
+      NOVA_BUILD_ID: ${{ inputs.build-id }}
+      # The channel the bundlers bake in (crates/nova-bundle/src/channel.rs):
+      # Nova.app's Info.plist and nova.exe name its feed once the nova
+      # package commits update_public_key. ci.yml passes nightly (or a
+      # dispatch's channel input); promote-beta.yml passes beta.
+      NOVA_CHANNEL: ${{ inputs.channel }}
+    steps:
+      # The container starts bare and as root (no sudo): a compiler for
+      # rustup's toolchain and the C build scripts, git and curl for
+      # checkout and mise, ALSA's headers (nova-audio plays through cpal,
+      # which builds against ALSA on Linux), objdump (binutils) for the
+      # tarball's glibc check.
+      - if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          # libasound2-dev keeps its name on 24.04; only the runtime package became libasound2t64.
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
+      # The commit to build: the pushed one for the nightly, the nightly's
+      # own commit for a promotion.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install: false
+      - run: mise install rust
+        shell: bash
+      # Save only from main, as in ci.yml's `ci`. A branch dispatch still
+      # restores main's cache, but the caches it saved never reached main,
+      # and their size pushed the repository past its 10 GB of Actions
+      # cache, which evicts main's own. A promotion runs on main, so it saves.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Default features only: never --features dev-tools or --all-features,
+      # so egui stays out of published builds. The release build must stay on
+      # the same default feature set that `mise run deny` checks in `ci`.
+      # The macOS leg's bundler builds its target itself, with the same
+      # flags. On Windows, nova's build script compiles NOVA_CHANNEL's
+      # update feed into nova.exe (nova::winsparkle::FEED) once the nova
+      # package commits update_public_key; until then it compiles in none,
+      # and the game runs no updater.
+      - name: Build
+        if: runner.os != 'macOS'
+        shell: bash
+        run: cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
+      # ev-nova-aarch64-apple-darwin.dmg, holding Nova.app (with Sparkle,
+      # downloaded at its pinned version and checked, in
+      # Contents/Frameworks, and the Noto fonts' licences, NotoSans-OFL.txt
+      # and NotoSerif-OFL.txt, in Contents/Resources), nova-dump,
+      # README.txt, LICENSE, the two font licences again and an
+      # Applications link. The bundler stages under target/, so dist/ holds
+      # only the .dmg. No game data. It signs with Developer ID, notarizes
+      # and has Gatekeeper assess (spctl) the app and the .dmg when the
+      # signing secrets are set, which is on main alone, and signs ad-hoc
+      # otherwise; the secrets reach this step alone, as the
+      # variables the bundler reads. On main they come from the
+      # macos-signing environment, whose secrets override repository secrets
+      # of the same name. Elsewhere they come from the repository-level
+      # copies until the cut-over deletes them, and then they are empty.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: mise run bundle -- dist
+      # The .dmg as built, mounted (crates/nova-bundle/tests/it/macos_dmg.rs:
+      # the trimmed arm64 Sparkle, the signature, the channel's Info.plist),
+      # and the staged Sparkle.framework loaded for real
+      # (crates/nova-appkit/tests/it/updater.rs). Each skips without its
+      # variable.
+      - name: Test the dmg (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOVA_DMG="$PWD/dist/ev-nova-aarch64-apple-darwin.dmg" \
+            cargo test --locked -p nova-bundle --test it macos_dmg -- --nocapture
+          NOVA_SPARKLE_FRAMEWORKS="$PWD/target/bundle/staging/Nova.app/Contents/Frameworks" \
+            cargo test --locked -p nova-appkit --test it updater
+      # The signing seam (rdm phase
+      # windows-platform-cross-roadmap/phase-2-sign-windows-builds-in-ci):
+      # sign target/x86_64-pc-windows-msvc/release's nova.exe and
+      # nova-dump.exe here, between the Build above and the packing below,
+      # which takes the executables as they are and never rebuilds them.
+      # WiX v5, pinned: v6 and later need an Open Source Maintenance Fee
+      # EULA flag.
+      - name: Install WiX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
+      # the zip in dist/; it stages under target/. A second pack of the same
+      # executables (the same version, a new ProductCode) is the "older"
+      # build the installer test upgrades from. Each pack downloads
+      # WinSparkle 0.9.4 into target/installer/downloads, checks the
+      # archive's and then the DLL's SHA-256 with certutil, and lists
+      # WinSparkle.dll and its two licences beside nova.exe
+      # (crates/nova-bundle/src/installer/winsparkle.rs). It logs which
+      # update feed the build names, from the same NOVA_CHANNEL and key the
+      # Build's nova.exe compiled in.
+      - name: Package (Windows installer)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
+          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
+      # The same phase signs dist/'s .msi here, before it is tested and
+      # uploaded, and the staged target\installer\downloads\WinSparkle.dll
+      # between its pin check and wix build (inside the packing above).
+      # Installs, upgrades and uninstalls the .msi for real
+      # (crates/nova-bundle/tests/it/windows_installer.rs), checking the
+      # installed WinSparkle.dll is the staged one; then loads that DLL for
+      # real (crates/nova-win32/tests/it/winsparkle.rs). Without NOVA_MSI or
+      # NOVA_WINSPARKLE_DLL each test skips.
+      - name: Test the Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:NOVA_MSI = (Resolve-Path dist\ev-nova-x86_64-pc-windows-msvc.msi).Path
+          $env:NOVA_MSI_PREVIOUS = (Resolve-Path target\installer\previous\ev-nova-x86_64-pc-windows-msvc.msi).Path
+          cargo test --locked -p nova-bundle --test it windows_installer -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:NOVA_WINSPARKLE_DLL = (Resolve-Path target\installer\downloads\WinSparkle.dll).Path
+          cargo test --locked -p nova-win32 --test it winsparkle -- --nocapture
+      # One top-level directory holding the two binaries, README.txt,
+      # LICENSE and the fonts' licences (NotoSans-OFL.txt and
+      # NotoSerif-OFL.txt, crates/nova-render/fonts), and on Linux the share/ tree (the desktop file, the
+      # AppStream metainfo and the hicolor icons) to copy into
+      # ~/.local/share. No game data. The directory's and the
+      # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
+      # the same constants the download page links; cargo is run directly,
+      # not through mise, so stdout carries the name alone. The Windows zip
+      # carries no WinSparkle.dll, so the portable copy doesn't update.
+      - name: Package
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive-dir "${{ matrix.target }}")
+          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
+          release="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$dir"
+          case "${{ matrix.os }}" in
+            windows-*)
+              cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$dir/"
+              ;;
+            *)
+              cp "$release/nova" "$release/nova-dump" "dist/$dir/"
+              ;;
+          esac
+          if [ "${{ runner.os }}" = Linux ]; then
+            mise run linux-desktop -- "dist/$dir"
+          fi
+          cp packaging/README.txt LICENSE "dist/$dir/"
+          cp crates/nova-render/fonts/OFL.txt "dist/$dir/NotoSans-OFL.txt"
+          cp crates/nova-render/fonts/NotoSerif-OFL.txt "dist/$dir/NotoSerif-OFL.txt"
+          cd dist
+          case "${{ matrix.os }}" in
+            windows-*) 7z a "$file" "$dir" ;;
+            *) tar czf "$file" "$dir" ;;
+          esac
+          rm -rf "$dir"
+      # Unpacks the tarball and checks its files and its binary's glibc
+      # floor and libraries (crates/nova-bundle/tests/it/linux_tarball.rs);
+      # without NOVA_TARBALL that test skips.
+      - name: Test the tarball
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
+          NOVA_TARBALL="$PWD/dist/$file" \
+            cargo test --locked -p nova-bundle --test it linux_tarball -- --nocapture
+      # Only a hand-off to release.yml's `publish`.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1

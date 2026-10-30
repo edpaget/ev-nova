@@ -3,3 +3,5 @@
 
 #[cfg(windows)]
 mod console;
+#[cfg(windows)]
+mod winsparkle;

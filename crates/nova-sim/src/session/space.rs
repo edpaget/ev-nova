@@ -151,13 +151,28 @@ pub(super) struct Escorts {
     pub(super) talk: Option<hail::Talk>,
     /// The escort dialog open, if any (see the `escort_dialog` module).
     pub(super) dialog: Option<super::escort_dialog::EscortDialog>,
+    /// Whether the comm dialog's Release was pressed: the original's
+    /// app-wide `_releaseCommEscort` (the byte behind 0xdef2c). Release
+    /// sets it (`_DoCommDialog` @0x9606a) and only a comm dialog opening
+    /// clears it (@0x9576a), so, as the original's does, it outlives the
+    /// dialog: the comm dialog's close releases its ship while it is set
+    /// (@0x96848), and so does every escort dialog's close until the next
+    /// comm dialog opens (`_DoEscortDialog` @0x95601; see the `hail` and
+    /// `escort_dialog` modules). It outlives a landing and a jump too,
+    /// and the session: the run carries it to the next flight
+    /// (`CarryOver::release_comm_escort`), as the original's outlives a
+    /// pilot load; it is never saved.
+    pub(super) release_comm_escort: bool,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     pub(super) fleet: Vec<Option<NpcId>>,
-    /// Whether the person escorts are restocked full to their fitted
-    /// ships as they are placed next: after a take-off, and when a pilot
-    /// is flown.
-    pub(super) restock_persons: bool,
+    /// Whether the escorts placed next are restocked, `_RespawnEscort`'s
+    /// argument (@0x3d4b8): after a take-off, and when a pilot is flown
+    /// (restock 1 @0x674c2, @0x1937a, @0x1a8c5, @0x1afeb), not at a jump's
+    /// arrival or a gate's exit (0 @0x6c1f9, @0x672e0). Restocked, each
+    /// takes its class's stock weapons and rounds, and a person escort its
+    /// fitted ship's reserves full (see `Session::enter_escorts`).
+    pub(super) restock: bool,
     /// The last order the player gave each escort class, in
     /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
     /// original's one order per class (0x3b5394), which a ship joining
@@ -211,8 +226,9 @@ impl Space {
                 aboard: None,
                 talk: None,
                 dialog: None,
+                release_comm_escort: false,
                 fleet: Vec::new(),
-                restock_persons: false,
+                restock: false,
                 class_orders: [None; 4],
                 quote_clock: persons::QuoteClock::default(),
             },

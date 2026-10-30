@@ -14,9 +14,15 @@
 //! the constants below; the engine never loads group 27 ("Okay, I'll
 //! leave you alone."), so nothing here does.
 //!
-//! **The opening line** ([`opening`], @0x95b83-0x95d49): "What is it you
-//! want?" ([`WHAT_IS_IT`]) from a talkative ship that is hostile or does
-//! not like the player, and "Channel open." ([`CHANNEL_OPEN`]) otherwise.
+//! **The opening line** ([`opening`], @0x95b83-0x95d49). An untalkative
+//! or disabled ship opens "Channel open." ([`CHANNEL_OPEN`]), and a hostile
+//! one, a threat to the player, "What is it you want?" ([`WHAT_IS_IT`])
+//! (@0x95cb5-0x95d0b). A ship the player leads ([`Led`]) then opens by
+//! what it is: "What can I do for you, sir?" ([`FIGHTER_OPENING`]) from
+//! the player's launched fighter, the original's AI type 5, and "What can
+//! I do for you?" ([`ESCORT_OPENING`]) from an escort, AI type 6
+//! (@0x95d0b-0x95d49). Any other ship says "Channel open." when it likes
+//! the player and "What is it you want?" when it does not.
 //!
 //! A talkative mission ship ([`MissionHail`], its mark's slot active)
 //! opens by its mission instead, whatever its attitude (@0x95b9c-0x95cb3),
@@ -138,6 +144,9 @@ pub const COMEDIAN: u8 = 31;
 /// Group 4: "What can I do for you?": the opening line to the player's
 /// escort.
 pub const ESCORT_OPENING: u8 = 4;
+/// Group 5: "What can I do for you, sir?": the opening line to the
+/// player's launched fighter (`_DoCommDialog` @0x95d22-0x95d33).
+pub const FIGHTER_OPENING: u8 = 5;
 /// Group 22: "Sorry sir, I'm just an escort.": Request Assistance to a
 /// busy ship of the original's AI type above 4 (a mission escort, an NPC
 /// fleet escort or an NPC's carried fighter, `Hail::escort_ai`,
@@ -334,15 +343,35 @@ pub struct MissionHail {
     pub behav: ShipBehav,
 }
 
+/// What an unmarked ship the player leads is, as its opening line reads
+/// it: the original's AI type 5 or 6 (`_DoCommDialog` @0x95d0b-0x95d49).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Led {
+    /// The player's launched fighter, AI type 5 (`_LaunchFighter`
+    /// @0x3d771).
+    Fighter,
+    /// The player's escort, AI type 6.
+    Escort,
+}
+
 /// What a ship opens with when hailed: by its `mission`, when it is a
-/// talkative mission ship, and otherwise by its attitude (see the module
-/// docs).
+/// talkative mission ship; then by its attitude and, for a ship the player
+/// leads, by what it is (`led`) (see the module docs).
 #[must_use]
-pub fn opening(talkative: bool, attitude: Attitude, mission: Option<MissionHail>) -> Reply {
-    match mission {
-        Some(mission) if talkative => mission_opening(mission),
-        _ if talkative && attitude != Attitude::Friendly => Reply::Comm(WHAT_IS_IT),
-        _ => Reply::Comm(CHANNEL_OPEN),
+pub fn opening(
+    talkative: bool,
+    attitude: Attitude,
+    mission: Option<MissionHail>,
+    led: Option<Led>,
+) -> Reply {
+    match (mission, led) {
+        (Some(mission), _) if talkative => mission_opening(mission),
+        _ if !talkative => Reply::Comm(CHANNEL_OPEN),
+        _ if attitude == Attitude::Hostile => Reply::Comm(WHAT_IS_IT),
+        (_, Some(Led::Fighter)) => Reply::Comm(FIGHTER_OPENING),
+        (_, Some(Led::Escort)) => Reply::Comm(ESCORT_OPENING),
+        _ if attitude == Attitude::Friendly => Reply::Comm(CHANNEL_OPEN),
+        _ => Reply::Comm(WHAT_IS_IT),
     }
 }
 
@@ -684,7 +713,7 @@ mod tests {
 
     #[test]
     fn a_talkative_ship_that_is_not_friendly_asks_what_the_player_wants() {
-        let opening = |talkative, attitude| opening(talkative, attitude, None);
+        let opening = |talkative, attitude| opening(talkative, attitude, None, None);
         assert_eq!(opening(true, Attitude::Hostile), Reply::Comm(WHAT_IS_IT));
         assert_eq!(opening(true, Attitude::Unfriendly), Reply::Comm(WHAT_IS_IT));
         assert_eq!(opening(true, Attitude::Friendly), Reply::Comm(CHANNEL_OPEN));
@@ -693,6 +722,36 @@ mod tests {
             opening(false, Attitude::Unfriendly),
             Reply::Comm(CHANNEL_OPEN)
         );
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_opens_by_what_it_is_unless_untalkative_or_hostile() {
+        for attitude in [Attitude::Friendly, Attitude::Unfriendly] {
+            assert_eq!(
+                opening(true, attitude, None, Some(Led::Fighter)),
+                Reply::Comm(FIGHTER_OPENING),
+                "{attitude:?}"
+            );
+            assert_eq!(
+                opening(true, attitude, None, Some(Led::Escort)),
+                Reply::Comm(ESCORT_OPENING),
+                "{attitude:?}"
+            );
+        }
+        for led in [Led::Fighter, Led::Escort] {
+            for attitude in ATTITUDES {
+                assert_eq!(
+                    opening(false, attitude, None, Some(led)),
+                    Reply::Comm(CHANNEL_OPEN),
+                    "untalkative {led:?} {attitude:?}"
+                );
+            }
+            assert_eq!(
+                opening(true, Attitude::Hostile, None, Some(led)),
+                Reply::Comm(WHAT_IS_IT),
+                "hostile {led:?}"
+            );
+        }
     }
 
     const ATTITUDES: [Attitude; 3] = [Attitude::Friendly, Attitude::Unfriendly, Attitude::Hostile];
@@ -718,9 +777,12 @@ mod tests {
     /// same whatever its attitude.
     fn mission_opening(goal: ShipGoal, behav: ShipBehav) -> Reply {
         let mission = Some(MissionHail { goal, behav });
-        let said = opening(true, Attitude::Friendly, mission);
+        let said = opening(true, Attitude::Friendly, mission, None);
         for attitude in ATTITUDES {
-            assert_eq!(opening(true, attitude, mission), said, "{attitude:?}");
+            assert_eq!(opening(true, attitude, mission, None), said, "{attitude:?}");
+            for led in [Led::Fighter, Led::Escort] {
+                assert_eq!(opening(true, attitude, mission, Some(led)), said, "{led:?}");
+            }
         }
         said
     }
@@ -770,7 +832,8 @@ mod tests {
                 Some(MissionHail {
                     goal: ShipGoal::Escort,
                     behav: ShipBehav::EscortPlayer
-                })
+                }),
+                None
             ),
             Reply::Comm(CHANNEL_OPEN),
             "untalkative"
@@ -799,7 +862,7 @@ mod tests {
             for behav in BEHAVS {
                 for attitude in ATTITUDES {
                     assert_eq!(
-                        opening(false, attitude, Some(MissionHail { goal, behav })),
+                        opening(false, attitude, Some(MissionHail { goal, behav }), None),
                         Reply::Comm(CHANNEL_OPEN),
                         "{goal:?} {behav:?} {attitude:?}"
                     );

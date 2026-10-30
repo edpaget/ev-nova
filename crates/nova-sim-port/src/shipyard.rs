@@ -48,10 +48,11 @@
 //! the build loop draws, and no rule does. The original builds the list once each time the
 //! shipyard opens (`_SetupPortAvailableShipTypes`, called only @0x5e68f),
 //! so a roll drawn again after a purchase or a decline is drawn the next
-//! time the list is built, or after a landing with no day passing, and
-//! until then the class can be bought as listed
-//! (`nova_sim::Session::shipyard`); a day's draw
-//! settles it as it draws every class. A roll is
+//! time the shipyard opens (`nova_sim::Session::open_shipyard`), or after
+//! a landing with no day passing, and until then the class can be bought
+//! as listed; a day's draw settles it as it draws every class. While it
+//! stays open, the shipyard relists the classes its opening listed
+//! ([`Yard::relisted`]), every other value read afresh. A roll is
 //! never saved, as the original rolls again on load. A
 //! class off today is not listed and takes no higher one off sale.
 //!
@@ -227,7 +228,7 @@
 //! confirmed is kept on the pilot through `_CullNameString`, which drops a
 //! leading "the " and nothing else ([`cull_name`], @0x5ed5a-0x5ed74).
 //! Cancelling buys nothing, but still draws the class's roll again
-//! (@0x5ebc2 to @0x5f0d5-0x5f0f8), when the list is next built. The prompt refuses a name longer than
+//! (@0x5ebc2 to @0x5f0d5-0x5f0f8), shown when the shipyard next opens. The prompt refuses a name longer than
 //! [`SHIP_NAME_CHARS`] (@0x554a9-0x554e7), and accepts an empty one.
 //!
 //! # Stock weapons
@@ -292,6 +293,8 @@ use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::stats::ShipStats;
 use crate::string_entry::entry;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll, ShownTons};
+
+mod relist;
 
 /// The `shïp` `Flags3` bits the shipyard reads (the Bible): not the same
 /// values as the `oütf` flags of the same meaning.
@@ -364,6 +367,10 @@ pub struct ShipFacts {
     /// Whether it can be bought here at all: for sale here today (its
     /// tech level, the day's roll and `HideHigher` as listed), its
     /// `Require` met and its `Availability` holding (see the module docs).
+    /// A relisting ([`Yard::relisted`]) takes the class's tech, roll and
+    /// `HideHigher` as the opening listed them and reads `Require` and
+    /// `Availability` now, as `_CalcShipCanBuy` does at each draw
+    /// (`_ShipyardFilter` @0x6047b, @0x60829, @0x60c48).
     pub buyable: bool,
 }
 
@@ -1037,17 +1044,7 @@ impl Yard<'_> {
         rolls: &mut DayRolls<ShipId>,
         chance: &mut dyn Chance,
     ) -> Option<Shipyard> {
-        if self.site.flags & StellarFlags::SHIPYARD == 0 {
-            return None;
-        }
-        let by = wares::Contributors {
-            ship: self.fields.contribute,
-            outfits: self.outfits,
-            crons: self.crons,
-            ranks: self.ranks,
-        };
-        let contributed = wares::contributed(&by, pilot);
-        let trade_in = trade_in_flux().of(&Flown { yard: self, pilot });
+        let contributed = self.contributed(pilot)?;
         let mut sorted: Vec<&ShipRecord> = self.ships.iter().collect();
         sorted.sort_by_key(|ship| ship.id);
         let mut sweep = HideHigher::default();
@@ -1075,26 +1072,53 @@ impl Yard<'_> {
             if !listed {
                 continue;
             }
-            rows.push((
-                ship.disp_weight,
-                ShipRow {
-                    id: ship.id,
-                    name: ship.name.clone(),
-                    short_name: ship.short_name.clone(),
-                    price: price().of(&offer),
-                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits, &self.rules),
-                    facts: ShipFacts { buyable },
-                },
-            ));
+            rows.push((ship.disp_weight, offer.row(buyable)));
         }
         wares::in_display_order(&mut rows, |(weight, row)| (*weight, row.id.0));
-        Some(Shipyard {
-            rows: rows.into_iter().map(|(_, row)| row).collect(),
-            trade_in,
+        Some(self.listing(pilot, rows.into_iter().map(|(_, row)| row).collect()))
+    }
+
+    /// The `Contribute` bits of the ship flown and every outfit `pilot`
+    /// owns, which `Require` reads; `None` when the stellar has no
+    /// shipyard.
+    fn contributed(&self, pilot: &Pilot) -> Option<u64> {
+        if self.site.flags & StellarFlags::SHIPYARD == 0 {
+            return None;
+        }
+        let by = wares::Contributors {
+            ship: self.fields.contribute,
+            outfits: self.outfits,
+            crons: self.crons,
+            ranks: self.ranks,
+        };
+        Some(wares::contributed(&by, pilot))
+    }
+
+    /// The shipyard listing `rows`, with `pilot`'s trade-in, cash and class
+    /// flown as they are now.
+    fn listing(&self, pilot: &Pilot, rows: Vec<ShipRow>) -> Shipyard {
+        Shipyard {
+            rows,
+            trade_in: trade_in_flux().of(&Flown { yard: self, pilot }),
             cash: pilot.cash,
             current: pilot.ship,
             rules: self.rules,
-        })
+        }
+    }
+}
+
+impl ShipOffer<'_> {
+    /// The class's row, `buyable` or not, its price read now.
+    fn row(&self, buyable: bool) -> ShipRow {
+        let ship = self.ship;
+        ShipRow {
+            id: ship.id,
+            name: ship.name.clone(),
+            short_name: ship.short_name.clone(),
+            price: price().of(self),
+            specs: ShipSpecs::of(ship, self.yard.arsenal, self.yard.outfits, &self.yard.rules),
+            facts: ShipFacts { buyable },
+        }
     }
 }
 
@@ -1838,7 +1862,7 @@ mod tests {
     }
 
     /// A shipyard of tech level 4 with special tech 6 and 55.
-    fn port() -> LandingSite {
+    pub(super) fn port() -> LandingSite {
         let mut special_tech = [0; 8];
         special_tech[..2].copy_from_slice(&[6, 55]);
         LandingSite {
@@ -1853,7 +1877,7 @@ mod tests {
     /// A new pilot with 10,000 credits and nothing owned, in ship 128, the
     /// FAST ship (mass 40, 30 tons free, 20 tons of cargo space,
     /// contributing bit 0x1).
-    fn pilot() -> Pilot {
+    pub(super) fn pilot() -> Pilot {
         let mut pilot = Pilot::new(&catalog(), "").expect("starts");
         pilot.cash = 10_000;
         pilot
@@ -1874,7 +1898,7 @@ mod tests {
 
     /// The shipyard of `ships` at `site`, reading `BuyRandom` by the
     /// engine.
-    fn yard<'a>(
+    pub(super) fn yard<'a>(
         ships: &'a [ShipRecord],
         outfits: &'a [OutfitRecord],
         site: &'a LandingSite,
@@ -1916,7 +1940,7 @@ mod tests {
     }
 
     /// Ship `id` at 1000 credits, of `buy_random`.
-    fn buying(id: i16, buy_random: i16) -> ShipRecord {
+    pub(super) fn buying(id: i16, buy_random: i16) -> ShipRecord {
         ShipRecord {
             buy_random,
             ..cheap(id)
@@ -1931,16 +1955,16 @@ mod tests {
         open_at(ships, outfits, &port(), pilot).expect("a shipyard")
     }
 
-    fn listed(shipyard: &Shipyard) -> Vec<i16> {
+    pub(super) fn listed(shipyard: &Shipyard) -> Vec<i16> {
         shipyard.rows.iter().map(|row| row.id.0).collect()
     }
 
-    fn row(shipyard: &Shipyard, id: i16) -> &ShipRow {
+    pub(super) fn row(shipyard: &Shipyard, id: i16) -> &ShipRow {
         shipyard.row(ShipId(id)).expect("listed")
     }
 
     /// Ship `id` at 1000 credits, `fields` FAST's.
-    fn cheap(id: i16) -> ShipRecord {
+    pub(super) fn cheap(id: i16) -> ShipRecord {
         ShipRecord {
             cost: 1000,
             ..ship(id, FAST)
@@ -2332,7 +2356,7 @@ mod tests {
 
     // Require, Availability and the flags that hide.
 
-    fn requiring(id: i16, require: u64, flags3: u16) -> ShipRecord {
+    pub(super) fn requiring(id: i16, require: u64, flags3: u16) -> ShipRecord {
         ShipRecord {
             require,
             flags3,
@@ -2376,7 +2400,7 @@ mod tests {
         );
     }
 
-    fn gated(id: i16, flags3: u16, availability: &str) -> ShipRecord {
+    pub(super) fn gated(id: i16, flags3: u16, availability: &str) -> ShipRecord {
         ShipRecord {
             flags3,
             availability: Test::parse(availability),
@@ -2567,7 +2591,7 @@ mod tests {
     // Price and trade-in.
 
     /// Ship `id` of `cost` and tech level `tech_level`.
-    fn costing(id: i16, cost: i32, tech_level: i16) -> ShipRecord {
+    pub(super) fn costing(id: i16, cost: i32, tech_level: i16) -> ShipRecord {
         ShipRecord {
             cost,
             tech_level,

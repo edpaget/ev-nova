@@ -166,6 +166,7 @@ mod tests {
             world_space: WorldSpace::Target,
             batches: Vec::new(),
             world: Vec::new(),
+            world_clip: None,
         }
     }
 

@@ -33,11 +33,7 @@
 //!   @0x38c0f-0x38c5b), filed in rdm:task/escorts-follow-up;
 //! - the escort menu showing a change a frame late, as the callback blits
 //!   the menu's frame before redrawing it (@0x38c60-0x38c77)
-//!   (rdm:phase/play-feel-followups/phase-1-escort-menu-redraw-a-frame-late);
-//! - every world sprite but the cursor drawing past the play area into
-//!   the status bar's column, where the sprite world ends 194 short of
-//!   the window (@0x21b54-0x21ba4)
-//!   (rdm:phase/play-feel-followups/phase-2-flight-world-clipped-to-play-area).
+//!   (rdm:phase/play-feel-followups/phase-1-escort-menu-redraw-a-frame-late).
 
 use nova_sim::Vec2;
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
@@ -65,7 +61,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return false;
         };
         let camera = self.camera();
-        list.world(|list| self.draw_world(list, scene, &camera));
+        list.world_in(self.play_rect(), |list| {
+            self.draw_world(list, scene, &camera);
+        });
         if self.overlays.title {
             list.text(
                 format!("{} (sÿst {})", scene.name(), scene.id().0),
@@ -194,7 +192,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The play area on screen: the view less the status bar's
     /// [`STATUS_BAR_WIDTH`] at the right, where `_SetupSpriteWorld`'s
     /// sprite world ends (`subw $0xc2` @0x21b66, passed as the world's and
-    /// the offscreen rect @0x21b7c-0x21ba4).
+    /// the offscreen rect @0x21b7c-0x21ba4). The whole world is clipped
+    /// to it ([`DrawList::world_in`]), as the sprite world's frame ends
+    /// there: no sprite, line or dot of the world draws into the column.
     pub(super) fn play_rect(&self) -> Bounds {
         Bounds {
             min: Point::new(0.0, 0.0),

@@ -8,6 +8,14 @@
 //! the same version, another `ProductCode`), it installs that one first and
 //! checks the current one replaces it in place.
 //!
+//! Both packs carry WinSparkle: the test checks the installed
+//! `WinSparkle.dll` is the one the last pack staged in
+//! `target\installer\downloads` (the file `wix build` packed, which the
+//! signing phase will sign there), that both packs hold it in the same
+//! component, which after the upgrade only the new product holds, and the
+//! relaunch custom action's rows. It doesn't run the relaunch: that would
+//! start the game on the runner.
+//!
 //! The Windows Installer's state is read through its COM object
 //! (`WindowsInstaller.Installer`) and the shortcut through
 //! `WScript.Shell`, each in a small PowerShell script printing one value
@@ -21,8 +29,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova_bundle::bundle::metadata;
+use nova_bundle::fonts::font_licences;
+use nova_bundle::installer::layout::InstallerLayout;
+use nova_bundle::installer::winsparkle::{DLL, LICENCES};
+use nova_bundle::installer::wxs::COMPONENT_GUIDS;
 use nova_bundle::installer::{
-    DUMP_EXE, EXES, GAME_EXE, INSTALL_DIR, SHORTCUT, UPGRADE_CODE, msi_version,
+    DUMP_EXE, EXES, GAME_EXE, INSTALL_DIR, RELAUNCH_ACTION, RELAUNCH_PROPERTY, SHORTCUT,
+    UPGRADE_CODE, msi_version,
 };
 use nova_bundle::ports::{Invocation, Process};
 use nova_bundle::spec::BundleSpec;
@@ -88,6 +101,99 @@ if ($null -eq $record) {{ '{NONE}' }} else {{ Get-Prop $record 'StringData' @(1)
     )))
 }
 
+/// The first row `query` selects from the package's tables, the text of
+/// each of its `columns` columns in order, or `None` when it selects none.
+fn msi_row(msi: &Path, query: &str, columns: usize) -> Option<Vec<String>> {
+    // Each field by a literal index: a pipeline's `$_` reaches COM wrapped,
+    // which `InvokeMember` refuses as a type mismatch.
+    let fields: Vec<String> = (1..=columns)
+        .map(|i| format!("  'field=' + (Get-Prop $record 'StringData' @({i}))"))
+        .collect();
+    let lines = powershell(&format!(
+        "$db = Invoke-Com $installer 'OpenDatabase' @({msi}, 0)
+$view = Invoke-Com $db 'OpenView' @({query})
+Invoke-Com $view 'Execute' $null | Out-Null
+$record = Invoke-Com $view 'Fetch' $null
+if ($null -eq $record) {{ '{NONE}' }} else {{
+{fields}
+}}",
+        msi = quote_path(msi),
+        query = quote(query),
+        fields = fields.join("\n"),
+    ));
+    if lines == [NONE] {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .map(|line| {
+                line.strip_prefix("field=")
+                    .unwrap_or_else(|| panic!("{query}: {lines:?}"))
+                    .to_owned()
+            })
+            .collect(),
+    )
+}
+
+/// `msidbCustomActionTypeExe` with `msidbCustomActionTypeSourceFile`
+/// (0x12, 18: an executable the package installs), run asynchronously
+/// without waiting (`msidbCustomActionTypeAsync |
+/// msidbCustomActionTypeContinue`, 0xC0): WiX's `FileRef`, `ExeCommand`
+/// and `Return="asyncNoWait"`.
+const EXE_IN_FILE_NO_WAIT: u32 = 0x12 | 0xC0;
+
+/// The relaunch after an update, as the built package holds it: a custom
+/// action that starts the installed `nova.exe` without arguments, without
+/// waiting, after `InstallFinalize`, when the feed's arguments set
+/// [`RELAUNCH_PROPERTY`] and the run isn't an uninstall.
+fn check_relaunch(msi: &Path) {
+    let action = msi_row(
+        msi,
+        &format!(
+            "SELECT `Type`, `Source`, `Target` FROM `CustomAction` WHERE `Action` = \
+             '{RELAUNCH_ACTION}'"
+        ),
+        3,
+    )
+    .expect("the relaunch action");
+    assert_eq!(
+        action,
+        [
+            EXE_IN_FILE_NO_WAIT.to_string(),
+            GAME_EXE.to_owned(),
+            String::new()
+        ]
+    );
+    let sequence = |action: &str| {
+        msi_row(
+            msi,
+            &format!(
+                "SELECT `Sequence`, `Condition` FROM `InstallExecuteSequence` WHERE `Action` = \
+                 '{action}'"
+            ),
+            2,
+        )
+        .unwrap_or_else(|| panic!("{action} is sequenced"))
+    };
+    let relaunch = sequence(RELAUNCH_ACTION);
+    let finalize = sequence("InstallFinalize");
+    let number = |row: &[String]| row[0].parse::<u32>().expect("a sequence number");
+    assert!(
+        number(&relaunch) > number(&finalize),
+        "{relaunch:?} {finalize:?}"
+    );
+    assert_eq!(
+        relaunch[1],
+        format!("{RELAUNCH_PROPERTY} = \"1\" AND NOT REMOVE")
+    );
+    let secure = msi_property(msi, "SecureCustomProperties");
+    assert!(
+        secure.split(';').any(|p| p == RELAUNCH_PROPERTY),
+        "{RELAUNCH_PROPERTY} reaches the server side: {secure}"
+    );
+}
+
 fn word_count(msi: &Path) -> u32 {
     one(powershell(&format!(
         "$info = Get-Prop $installer 'SummaryInformation' @({msi}, 0)
@@ -120,6 +226,41 @@ fn product_icon(code: &str) -> PathBuf {
         "[Environment]::ExpandEnvironmentVariables((Get-Prop $installer 'ProductInfo' @({}, 'ProductIcon')))",
         quote(code)
     ))))
+}
+
+/// The products Windows Installer has the component `guid` installed for.
+fn component_clients(guid: &str) -> Vec<String> {
+    powershell(&format!(
+        "Get-Prop $installer 'ComponentClients' @({}) | ForEach-Object {{ [string]$_ }}",
+        quote(guid)
+    ))
+}
+
+/// The `ComponentId` of the component the package installs `WinSparkle.dll`
+/// with, checking the `File` row names it. WiX gives the file and its
+/// component the file's name as their ids.
+fn dll_component(msi: &Path) -> String {
+    let row = msi_row(
+        msi,
+        &format!(
+            "SELECT `Component`.`ComponentId`, `File`.`FileName` FROM `File`, `Component` \
+             WHERE `File`.`Component_` = `Component`.`Component` AND `File`.`File` = '{DLL}'"
+        ),
+        2,
+    )
+    .unwrap_or_else(|| panic!("{} packs no {DLL}", msi.display()));
+    // `short|long`, or the long name alone when it is already 8.3.
+    assert_eq!(row[1].rsplit('|').next(), Some(DLL), "{row:?}");
+    row[0].clone()
+}
+
+/// [`DLL`]'s component's GUID, as the `Component` table holds it.
+fn dll_guid() -> String {
+    let (_, guid) = COMPONENT_GUIDS
+        .iter()
+        .find(|(id, _)| *id == DLL)
+        .expect("the DLL's component");
+    format!("{{{guid}}}")
 }
 
 fn related_products() -> Vec<String> {
@@ -231,13 +372,25 @@ fn var_path(name: &str) -> Option<PathBuf> {
         .map(|v| std::path::absolute(PathBuf::from(v)).expect("an absolute path"))
 }
 
-/// The installer's version, read through the spec from `cargo metadata`.
-fn expected_version() -> String {
+/// The spec, read from `cargo metadata` as the packer reads it.
+fn spec() -> BundleSpec {
     let json = StdProcess
         .run(&metadata(&OsString::from(env!("CARGO"))))
         .expect("cargo metadata");
-    let spec = BundleSpec::from_metadata(&json).expect("spec");
-    msi_version(&spec.version).expect("version")
+    BundleSpec::from_metadata(&json).expect("spec")
+}
+
+/// The installer's version, read through the spec.
+fn expected_version() -> String {
+    msi_version(&spec().version).expect("version")
+}
+
+/// The `WinSparkle.dll` the last pack staged and `wix build` packed: the
+/// pinned DLL, or, once the signing phase signs it there, that signed DLL.
+fn staged_dll() -> PathBuf {
+    InstallerLayout::new(&spec().target_dir, None, None)
+        .expect("layout")
+        .winsparkle_dll()
 }
 
 #[test]
@@ -251,6 +404,12 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
     // No admin needed: per-user, with no ALLUSERS to make it per-machine.
     assert_ne!(word_count(&msi) & NO_ELEVATION, 0, "elevation not required");
     assert_eq!(msi_property(&msi, "ALLUSERS"), NONE);
+    check_relaunch(&msi);
+    assert_eq!(dll_component(&msi), dll_guid());
+    // The upgrade replaces the DLL with the DLL, in the same component.
+    if let Some(previous) = &previous {
+        assert_eq!(dll_component(previous), dll_guid(), "the previous pack");
+    }
     let code = msi_property(&msi, "ProductCode");
     let previous_code = previous.as_ref().map(|p| msi_property(p, "ProductCode"));
     if let Some(previous_code) = &previous_code {
@@ -300,9 +459,29 @@ fn installs_for_the_user_alone_upgrades_in_place_and_uninstalls_keeping_settings
         .expect("LOCALAPPDATA")
         .join("Programs")
         .join(INSTALL_DIR);
-    for file in EXES.iter().chain(&["README.txt", "LICENSE"]) {
+    let licences = LICENCES.map(|(_, installed)| installed);
+    let fonts = font_licences(Path::new("")).map(|(_, name)| name);
+    for file in EXES
+        .iter()
+        .chain(&["README.txt", "LICENSE"])
+        .chain(&fonts)
+        .chain(&[DLL])
+        .chain(&licences)
+    {
         assert!(folder.join(file).is_file(), "{file}");
     }
+    // The DLL wix packed, byte for byte, its component the new product's
+    // alone after the upgrade.
+    assert_eq!(
+        fs::read(folder.join(DLL)).expect("the installed DLL"),
+        fs::read(staged_dll()).expect("the staged DLL"),
+        "the installed {DLL} is the one packed"
+    );
+    assert_eq!(
+        component_clients(&dll_guid()),
+        std::slice::from_ref(&code),
+        "{DLL}'s component is installed for the new product alone"
+    );
     StdProcess
         .run(
             &Invocation::new(folder.join(DUMP_EXE))

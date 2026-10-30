@@ -896,3 +896,26 @@ fn the_intro_pictures_sound_reaches_the_sounds_only_when_the_data_has_it() {
         assert_eq!(raised, want, "sound {sound}");
     }
 }
+
+/// The intro's text takes the rulebook's `dialog_focus_ring` as it opens.
+#[test]
+fn the_intro_text_opens_with_the_rulebooks_focus_ring() {
+    for (rules, ring) in focus_ring_readings() {
+        let store = MemoryPilots::new();
+        let mut screen = opening_with(&store, intro_data(), rules);
+        create_held(&mut screen, "Ada");
+        choose(&mut screen, MenuChoice::EnterShip);
+        faded_out(&mut screen);
+        picture_in(&mut screen);
+        screen.tick(Duration::from_secs(2));
+        screen.tick(SECOND);
+        picture_in(&mut screen);
+        screen.tick(Duration::from_secs(3));
+        screen.tick(SECOND);
+        assert_eq!(screen.showing(), Showing::IntroText);
+        assert_eq!(
+            screen.intro_text().map(|text| text.dialog().focus_ring()),
+            Some(ring)
+        );
+    }
+}

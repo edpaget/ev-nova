@@ -187,6 +187,10 @@ impl SimSound {
             Self::PlanetCommOpened => SoundCue::new(BEEP[4], 1),
             Self::PlanetCommPressed | Self::PlanetCommHaggled => SoundCue::new(BEEP[1], 1),
             Self::PlanetCommClosed => SoundCue::new(BEEP[2], 1),
+            // `_DoCommDialog` @0x95b34, @0x9601f and @0x96698, @0x96843, at 1.
+            Self::CommDialogOpened => SoundCue::new(BEEP[4], 1),
+            Self::CommPressed => SoundCue::new(BEEP[1], 1),
+            Self::CommDialogClosed => SoundCue::new(BEEP[2], 1),
             // `_ShowPersonHailQuote` @0x44586-0x445ad, at 1.
             Self::HailQuote => SoundCue::new(BEEP[4], 1),
             // `_AIPlunderShipContents`' cargo line (@0x84758) and
@@ -475,6 +479,21 @@ mod tests {
                 SimSound::PlanetCommClosed,
                 Some(cue(152, 1)),
                 "_beepSnd[2] @0x97aa4",
+            ),
+            (
+                SimSound::CommDialogOpened,
+                Some(cue(154, 1)),
+                "_beepSnd[4] @0x95b34",
+            ),
+            (
+                SimSound::CommPressed,
+                Some(cue(151, 1)),
+                "_beepSnd[1] @0x9601f, @0x96698",
+            ),
+            (
+                SimSound::CommDialogClosed,
+                Some(cue(152, 1)),
+                "_beepSnd[2] @0x96843",
             ),
             (
                 SimSound::HailQuote,

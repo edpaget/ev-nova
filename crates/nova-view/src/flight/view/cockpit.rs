@@ -111,7 +111,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// - Jettison, Command-K and Command-Option-K ([`JETTISON_KEY`],
     ///   @0x6fd54-0x6fdaf);
     /// - the escort menu's keys: E, Return, F, D, V and C, and 1-5 while the
-    ///   menu is open (@0x6dd00-0x6e452);
+    ///   menu shows, fading out too (@0x6dd00-0x6e452);
     /// - the floating map's zoom keys, `-`, `=` and the keypad's `+`
     ///   ([`ZOOM_OUT_KEY`], [`ZOOM_IN_KEY`], [`ZOOM_IN_KEYPAD_KEY`],
     ///   @0x70f4e-0x71110).
@@ -126,7 +126,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::refuse_player_info`]); the flight keys are tracked
     /// as held whatever this says, so H, \` and `\` dropped here act after
     /// the jump as their latches let them, and J, whose latch the jump
-    /// sets, does not ([`FlightView::held_keys_frame`]).
+    /// sets, does not ([`FlightView::held_keys_frame`]). A click on the
+    /// escort menu is no key press, so this filter never sees it: the menu
+    /// takes it during a jump too, as its branch reads no +0x50
+    /// (@0x6a000-0x6a12b, [`FlightView::click_escort_menu`]).
     pub(super) fn taken_during_jump(key: Key, option: bool, menu_open: bool) -> bool {
         match key {
             TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY | JETTISON_KEY
@@ -196,13 +199,27 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Return (`ackComm`, `_keyPrefs` +0xc): clears the message line,
-    /// whatever it shows, closes the escort menu (`_HandlePlayer`
-    /// @0x6dd00-0x6dd6a) and hides the floating map (@0x6dd6a-0x6dd75),
-    /// during a jump too.
+    /// whatever it shows, closes the escort menu at once, fading too
+    /// (`_HandlePlayer` @0x6dd00-0x6dd8a), and hides the floating map
+    /// (@0x6dd6a-0x6dd75), during a jump too. The menu's close beeps only
+    /// while E is held ([`FlightView::shut_escort_menu_by_key`]).
     fn acknowledge(&mut self) {
         self.acknowledge_message();
-        self.escort_menu.close();
+        if self.escort_menu.is_open() {
+            self.escort_menu.close();
+            self.shut_escort_menu_by_key();
+        }
         self.floating.hide();
+    }
+
+    /// The beep of the escort menu's close by Return or by its fade's end:
+    /// [`UiSound::EscortMenuToggled`] if E ([`MENU_KEY`]) is held, as the
+    /// close block reads the key live (@0x6e01e-0x6e04d), and none
+    /// otherwise.
+    fn shut_escort_menu_by_key(&mut self) {
+        if self.held.contains(&MENU_KEY) {
+            self.ui_sounds.push(UiSound::EscortMenuToggled);
+        }
     }
 
     /// Gives the escorts `command`, as the menu says which
@@ -221,18 +238,27 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
-    /// Closes the escort menu once it has timed out, the fleet is empty
-    /// or no escort is flying ([`EscortMenu::update`]), every frame, the
-    /// warp's included, as the original checks it on every frame of a
-    /// jump (@0x6df59), as the kept frame shows the fleet
-    /// ([`FrameHud::escort_rows`](nova_sim::flight_frame::FrameHud::escort_rows),
-    /// [`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)):
+    /// Runs the escort menu's frame for the `steps` flight steps the tick
+    /// ran ([`EscortMenu::update`]): one level of its fade for each, as
+    /// `_HandlePlayer` drops one a frame, every frame, the warp's
+    /// included, as the original runs it on every frame of a jump
+    /// (@0x6df4a), with the escorts flying as the kept frame shows them
+    /// ([`FrameHud::escorts_flying`](nova_sim::flight_frame::FrameHud::escorts_flying)):
     /// `Screen::tick` calls it right after the frame's steps, which fill
-    /// the kept frame afresh.
-    pub(super) fn update_escort_menu(&mut self) {
-        let rows = self.escort_rows();
+    /// the kept frame afresh. The fade's end beeps as Return's close does
+    /// ([`FlightView::shut_escort_menu_by_key`]).
+    pub(super) fn update_escort_menu(&mut self, steps: u32) {
         let flying = self.frame.hud.escorts_flying;
-        self.escort_menu.update(self.elapsed, &rows, flying);
+        if self.escort_menu.update(self.elapsed, steps, flying) {
+            self.shut_escort_menu_by_key();
+        }
+    }
+
+    /// A left click at screen point `at` on the escort menu
+    /// ([`EscortMenu::click`]): whether the menu took it, so it goes no
+    /// further, to the floating map or to space.
+    pub(super) fn click_escort_menu(&mut self, at: Point) -> bool {
+        self.escort_menu.click(at, self.elapsed)
     }
 
     /// The escort menu, shut or open.
@@ -241,8 +267,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         &self.escort_menu
     }
 
-    /// Shuts the escort menu, as play is entered from the main screen
-    /// (`escortMenuOnscreen` = 0, `_EnterGameFromMainScreen` @0x1a39e).
+    /// Shuts the escort menu at once and silently, as play is entered
+    /// from the main screen (`escortMenuOnscreen` = 0,
+    /// `_EnterGameFromMainScreen` @0x1a39e), and as the view catches up
+    /// with a take-off, a gate's exit (`_HandlePlayerDockRequest`
+    /// @0x6705a) or a jump's arrival (`_HandlePlayer` @0x6c50e).
     pub fn shut_escort_menu(&mut self) {
         self.escort_menu.close();
     }

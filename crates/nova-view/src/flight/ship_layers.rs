@@ -260,8 +260,15 @@ impl ShipDraw<'_> {
         };
         let weapon_cap = self.cloak.map_or(u8::MAX, |cloak| cloak.weapon);
         // The level an NPC's layers are held below and colorized at: the
-        // hull's ion tint's, or its murk.
-        let murk = colorize.map_or(self.murk, |colorize| colorize.level);
+        // hull's ion tint's, or its murk. The player's layers take only its
+        // murk (0), never its ion level, as the original draws the player's
+        // glow, lights and weapon glow at level 0 (@0x2c209, @0x2c5d1,
+        // @0x2c715).
+        let murk = if self.held {
+            colorize.map_or(self.murk, |colorize| colorize.level)
+        } else {
+            self.murk
+        };
         let held = |level: u8, murk: u8| {
             if self.held {
                 npc_glow_level(level, murk)

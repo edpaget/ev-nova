@@ -4,16 +4,37 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Runs ci and the build legs (not publish) on any branch, e.g. to try a
-  # release build from a phase branch: gh workflow run ci.yml --ref <branch>
-  # Only main reaches the macos-signing environment, so once the
-  # repository-level signing secrets are deleted (infra/github/README.md,
-  # cut-over) a branch dispatch signs ad-hoc.
+  # Runs ci and the build legs (never the release) on any branch, e.g. to
+  # try a release build from a phase branch: gh workflow run ci.yml --ref
+  # <branch>. Add -f channel=beta to build and test the beta packaging (the
+  # build legs with NOVA_CHANNEL=beta; the Flatpak stays the nightly's,
+  # since a beta Flatpak is never built, only promoted). Only main reaches
+  # the macos-signing environment, so once the repository-level signing
+  # secrets are deleted (infra/github/README.md, cut-over) a branch dispatch
+  # signs ad-hoc.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: The channel the build legs package for (NOVA_CHANNEL). A dispatch never publishes.
+        type: choice
+        options: [nightly, beta]
+        default: nightly
 
+# Each ref's runs share a group of this workflow alone. GitHub keeps at most
+# one pending run per group and cancels an older pending one when a newer
+# one queues, so a newer push always supersedes an older push's pending
+# run. Pull requests and other branches also cancel the older run in
+# progress. On main a running run is never cancelled, because its `release`
+# job may be publishing and must never be cut off: a burst of pushes queues
+# one run behind the running one rather than many, and main's newest commit
+# always gets its tests and its nightly. promote-beta.yml is never in this
+# group, so a promotion can never cancel a push's tests or builds; the two
+# meet only in `release`'s job-level group, below, where a running
+# promotion can at most delay a nightly's release (and the next push's
+# run, queued behind it).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   ci:
@@ -24,12 +45,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Runner images are pinned by name in every workflow, so an image
+        # change is a reviewed diff. Ubuntu stays on 24.04 until a run on
+        # ubuntu-26.04 passes.
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             task: ci
-          - os: macos-latest
+          - os: macos-26
             task: ci-platform
-          - os: windows-latest
+          - os: windows-2025
             task: ci-platform
     runs-on: ${{ matrix.os }}
     env:
@@ -39,13 +63,13 @@ jobs:
       # Report every failing test, not just the first (.config/nextest.toml).
       NEXTEST_PROFILE: ci
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # nova-audio plays through cpal, which builds against ALSA on Linux.
       # desktop-file-utils and appstream are the validators the Linux
       # desktop file and metainfo test runs (NOVA_LINUX_VALIDATORS below).
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config desktop-file-utils appstream
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       # Only what `mise run ci` needs. nextest and cargo-deny come from
@@ -59,7 +83,7 @@ jobs:
       # current Cargo.lock. Save only from main: caches saved under a PR's
       # refs/pull/N/merge are invisible to main, but PRs can still restore
       # main's.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -78,237 +102,68 @@ jobs:
   # task itself; no state exists here, so it protects nothing. Nothing
   # `needs` this job, and the live plan/apply never runs in CI.
   infra:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
       MISE_AUTO_INSTALL: "false"
     steps:
       # Don't leave the job's token in .git/config: nothing here pushes.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install opentofu
       - run: mise run infra-check
 
-  # Release builds of `nova` and `nova-dump` for the rolling `nightly`
-  # prerelease, on pushes to main and on manual dispatches (which `publish`
-  # skips), after the `ci` gate. The `ci` Windows
-  # leg is continue-on-error (rdm task windows-path-portable-tests), so a red
-  # Windows test leg doesn't stop this job: the Windows archive ships as long
-  # as its own release build succeeds. Revisit once Windows CI is a hard gate.
-  build:
+  # The run's build ID, HEAD's committer time in UTC as YYYYMMDDHHMMSS
+  # (crates/nova-bundle/src/build_id.rs), computed once here and handed to
+  # `build` and `flatpak` as NOVA_BUILD_ID, so every leg names the same
+  # build. Reading it per leg would rely on each leg's checkout (in a
+  # container, with git's safe.directory quirks) giving the same time.
+  # `release` reads the same output. A promotion (promote-beta.yml) finds a
+  # nightly's commit again by this time.
+  build-id:
     needs: ci
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    strategy:
-      # So every platform's build failure is reported in one run.
-      fail-fast: false
-      matrix:
-        include:
-          # Built in an ubuntu:22.04 container, so the tarball's and the
-          # AppImage's binary need no glibc newer than 2.35, the floor
-          # packaging/README.txt records. The image outlives GitHub's
-          # ubuntu-22.04 runner. The Flatpak is built in its own job below.
-          - name: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            container: ubuntu:22.04
-            target: x86_64-unknown-linux-gnu
-          # Nova.app for Apple silicon, in a .dmg: `mise run bundle` builds
-          # on the arm64 runner and packs the bundle (crates/nova-bundle).
-          # It signs with Developer ID and notarizes when the signing
-          # secrets are set, ad-hoc otherwise. Intel Macs are not supported.
-          - name: aarch64-apple-darwin
-            os: macos-latest
-            target: aarch64-apple-darwin
-          - name: x86_64-pc-windows-msvc
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
-    # Only the Linux leg names one; empty, a leg runs on the runner itself.
-    container: ${{ matrix.container }}
-    # The signing secrets live in the macos-signing environment, whose
-    # deployment-branch policy allows only main (infra/github/signing.tf).
-    # Only main's macOS leg enters it. Every other leg, and every other
-    # branch, names no environment and so still runs: a job that names an
-    # environment its branch can't deploy to never starts. The expression must
-    # never name anything but macos-signing, because naming an environment
-    # that doesn't exist creates it, with no protection rules.
-    environment: ${{ github.ref == 'refs/heads/main' && matrix.os == 'macos-latest' && 'macos-signing' || '' }}
+    runs-on: ubuntu-24.04
     env:
-      # As in `ci`: install only the Rust toolchain.
       MISE_AUTO_INSTALL: "false"
+    outputs:
+      id: ${{ steps.build-id.outputs.id }}
     steps:
-      # The container starts bare and as root (no sudo): a compiler for
-      # rustup's toolchain and the C build scripts, git and curl for
-      # checkout and mise, ALSA's headers (nova-audio plays through cpal,
-      # which builds against ALSA on Linux), objdump (binutils) for the
-      # AppImage's glibc check, and file for appimagetool.
-      - if: runner.os == 'Linux'
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev binutils git curl ca-certificates file xz-utils
-      - uses: actions/checkout@v5
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
-        shell: bash
-      # Save only from main, as in `ci`. A branch dispatch still restores
-      # main's cache, but the caches it saved never reached main, and their
-      # size pushed the repository past its 10 GB of Actions cache, which
-      # evicts main's own.
-      - uses: Swatinem/rust-cache@v2
+      # Saved from main only, as in `ci`.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: ${{ matrix.target }}
+          key: build-id
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Default features only: never --features dev-tools or --all-features,
-      # so egui stays out of published builds. The release build must stay on
-      # the same default feature set that `mise run deny` checks in `ci`.
-      # The macOS leg's bundler builds its target itself, with the same
-      # flags.
-      - name: Build
-        if: runner.os != 'macOS'
-        shell: bash
-        run: cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
-      # ev-nova-aarch64-apple-darwin.dmg, holding Nova.app, nova-dump,
-      # README.txt, LICENSE and an Applications link. The bundler stages
-      # under target/, so dist/ holds only the .dmg. No game data. It signs
-      # with Developer ID and notarizes when the signing secrets are set,
-      # ad-hoc otherwise; the secrets reach this step alone, as the
-      # variables the bundler reads. On main they come from the
-      # macos-signing environment, whose secrets override repository secrets
-      # of the same name. Elsewhere they come from the repository-level
-      # copies until the cut-over deletes them, and then they are empty.
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: mise run bundle -- dist
-      # The signing seam (rdm phase
-      # windows-platform-cross-roadmap/phase-2-sign-windows-builds-in-ci):
-      # sign target/x86_64-pc-windows-msvc/release's nova.exe and
-      # nova-dump.exe here, between the Build above and the packing below,
-      # which takes the executables as they are and never rebuilds them.
-      # WiX v5, pinned: v6 and later need an Open Source Maintenance Fee
-      # EULA flag.
-      - name: Install WiX (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 5.0.2
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      # ev-nova-x86_64-pc-windows-msvc.msi, the per-user installer, beside
-      # the zip in dist/; it stages under target/. A second pack of the same
-      # executables (the same version, a new ProductCode) is the "older"
-      # build the installer test upgrades from.
-      - name: Package (Windows installer)
-        if: runner.os == 'Windows'
-        shell: bash
+      - id: build-id
         run: |
           set -euo pipefail
-          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release dist
-          mise run pack-installer -- --exes target/x86_64-pc-windows-msvc/release target/installer/previous
-      # The same phase signs dist/'s .msi here, before it is tested and
-      # uploaded.
-      # Installs, upgrades and uninstalls the .msi for real
-      # (crates/nova-bundle/tests/it/windows_installer.rs); without NOVA_MSI
-      # that test skips.
-      - name: Test the Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:NOVA_MSI = (Resolve-Path dist\ev-nova-x86_64-pc-windows-msvc.msi).Path
-          $env:NOVA_MSI_PREVIOUS = (Resolve-Path target\installer\previous\ev-nova-x86_64-pc-windows-msvc.msi).Path
-          cargo test --locked -p nova-bundle --test it windows_installer -- --nocapture
-      # One top-level directory holding the two binaries, README.txt and
-      # LICENSE, and on Linux the share/ tree (the desktop file, the
-      # AppStream metainfo and the hicolor icons) to copy into
-      # ~/.local/share. No game data. The Linux leg's AppImage is packed
-      # after it, beside the tarball in dist/. The directory's and the
-      # archive's names come from nova-bundle (crates/nova-bundle/src/archive.rs),
-      # the same constants the download page links; cargo is run directly,
-      # not through mise, so stdout carries the name alone.
-      - name: Package
-        if: runner.os != 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          dir=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive-dir "${{ matrix.target }}")
-          file=$(cargo run --quiet --locked -p nova-bundle --bin nova-site -- --archive "${{ matrix.target }}")
-          release="target/${{ matrix.target }}/release"
-          mkdir -p "dist/$dir"
-          case "${{ matrix.os }}" in
-            windows-*)
-              cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$dir/"
-              ;;
-            *)
-              cp "$release/nova" "$release/nova-dump" "dist/$dir/"
-              ;;
-          esac
-          if [ "${{ runner.os }}" = Linux ]; then
-            mise run linux-desktop -- "dist/$dir"
-          fi
-          cp packaging/README.txt LICENSE "dist/$dir/"
-          cd dist
-          case "${{ matrix.os }}" in
-            windows-*) 7z a "$file" "$dir" ;;
-            *) tar czf "$file" "$dir" ;;
-          esac
-          rm -rf "$dir"
-      # ev-nova-x86_64-unknown-linux-gnu.AppImage, beside the tarball in
-      # dist/; it stages under target/ (crates/nova-bundle/src/linux/appimage).
-      # appimagetool and the type2 runtime it embeds are pinned and checked
-      # (rdm phase linux-platform/phase-3-appimage-and-flatpak, Findings
-      # e). The container has no FUSE, so appimagetool, itself an
-      # AppImage, extracts itself to run. The bundler's own cargo build is
-      # a no-op after the Build step above.
-      - name: Package (AppImage)
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: "1"
-          ARCH: x86_64
-        run: |
-          set -euo pipefail
-          tools="$RUNNER_TEMP/appimage"
-          mkdir -p "$tools"
-          curl -fsSL -o "$tools/appimagetool" \
-            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          curl -fsSL -o "$tools/runtime-x86_64" \
-            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
-          sha256sum -c - <<EOF
-          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool
-          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime-x86_64
-          EOF
-          chmod +x "$tools/appimagetool"
-          NOVA_APPIMAGETOOL="$tools/appimagetool" NOVA_APPIMAGE_RUNTIME="$tools/runtime-x86_64" \
-            mise run appimage -- dist
-      # Extracts the AppImage and checks its AppDir and its binary's glibc
-      # and libraries (crates/nova-bundle/tests/it/linux_appimage.rs);
-      # without NOVA_APPIMAGE that test skips.
-      - name: Test the AppImage
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          NOVA_APPIMAGE="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.AppImage" \
-            cargo test --locked -p nova-bundle --test it linux_appimage -- --nocapture
-      # Only a hand-off to `publish`.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-${{ matrix.name }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 1
+          id=$(mise run build-id)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  # The release build legs (build.yml), for the rolling `nightly`
+  # prerelease, on pushes to main and on manual dispatches (which
+  # `release` skips), after the `ci` gate. A dispatch's channel input picks
+  # the channel they package for; a push builds the nightly. Every leg,
+  # its macos-signing gate and its hand-off are in build.yml.
+  build:
+    needs: [ci, build-id]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    uses: ./.github/workflows/build.yml
+    with:
+      build-id: ${{ needs.build-id.outputs.id }}
+      channel: ${{ inputs.channel || 'nightly' }}
+      ref: ${{ github.sha }}
+    secrets: inherit
 
   # ev-nova-x86_64-unknown-linux-gnu.flatpak, built from vendored sources
   # on the freedesktop runtime by `mise run flatpak`
@@ -317,17 +172,29 @@ jobs:
   # an unprivileged Docker container doesn't allow. Its binary is built in
   # the runtime's SDK, so the container's glibc floor doesn't apply.
   flatpak:
-    needs: ci
+    needs: [ci, build-id]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       MISE_AUTO_INSTALL: "false"
+      # As in `build`; the manifest passes it into the sandboxed build.
+      NOVA_BUILD_ID: ${{ needs.build-id.outputs.id }}
+      # The channel whose branch flatpak-builder exports onto
+      # (crates/nova-bundle/src/linux/flatpak), and which the bundle and the
+      # tests name: always the nightly, whatever a dispatch's channel input
+      # says. A beta Flatpak is never built: a promotion copies the
+      # nightly's commit onto the beta branch (release.yml's flatpak-repo),
+      # which the repo test below does for real. A dispatched branch build is
+      # the build main would make, and is never published.
+      NOVA_CHANNEL: nightly
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # xvfb gives the installed app's zenity a display for the test.
+      # ostree is for the Flatpak repo test, which publishes this bundle
+      # into a repo of its own.
       - run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb
+          sudo apt-get install -y flatpak flatpak-builder desktop-file-utils xvfb ostree
       # Ubuntu 24.04 restricts unprivileged user namespaces through
       # AppArmor, which bubblewrap needs for every build and run sandbox.
       - name: Allow bubblewrap's user namespaces
@@ -338,174 +205,75 @@ jobs:
       # flatpak-builder installs the runtime, SDK and Rust extension from
       # this remote (--install-deps-from=flathub --user).
       - run: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: false
       - run: mise install rust
-      # Saved from main only, as in `build`.
-      - uses: Swatinem/rust-cache@v2
+      # Saved from main only, as in `ci`.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: flatpak
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Package (Flatpak)
         run: mise run flatpak -- dist
       # Installs the bundle with --user into a home the test owns, checks
-      # its permissions, zenity and exports
-      # (crates/nova-bundle/tests/it/linux_flatpak.rs); without NOVA_FLATPAK
-      # that test skips.
+      # its branch, permissions, zenity and exports
+      # (crates/nova-bundle/tests/it/linux_flatpak.rs). The repo test
+      # (linux_flatpak_repo.rs) publishes it with nova-flatpak-repo's stage
+      # and sign into a repo the test owns, signed with a throwaway key and
+      # served from 127.0.0.1, then installs, updates and prunes it, and
+      # installs the bundle sign builds; then it promotes nightly builds onto
+      # beta, installs the beta .flatpakref and follows a second promotion,
+      # and checks a later nightly keeps the beta branch. gpg_repo_key.rs
+      # checks the key checks against the real gpg. Without NOVA_FLATPAK and
+      # NOVA_GPG those tests skip.
       - name: Test the Flatpak
         run: |
-          NOVA_FLATPAK="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.flatpak" \
-            xvfb-run -a cargo test --locked -p nova-bundle --test it linux_flatpak -- --nocapture
-      # Only a hand-off to `publish`.
-      - uses: actions/upload-artifact@v4
+          NOVA_FLATPAK="$PWD/dist/ev-nova-x86_64-unknown-linux-gnu.flatpak" NOVA_GPG=1 \
+            xvfb-run -a cargo test --locked -p nova-bundle --test it -- --nocapture linux_flatpak gpg_repo_key
+      # The hand-off to release.yml's `publish`, which ships this plain
+      # bundle unless its `flatpak-repo` replaces it with the
+      # repo-following one.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-x86_64-unknown-linux-gnu-flatpak
           path: dist/*
           if-no-files-found: error
           retention-days: 1
 
-  # Moves the `nightly` tag to this commit and replaces the prerelease's
-  # assets. All or nothing: it needs every `build` leg and the Flatpak, so
-  # a failed leg on any platform skips publishing and leaves the previous
-  # nightly untouched.
-  publish:
-    needs: [build, flatpak]
+  # Publishes the nightly (release.yml): the Flatpak repo's nightly branch,
+  # the `nightly` tag moved to this commit, the prerelease's assets and
+  # signed update feeds, then the Pages site. On pushes to main only, after
+  # every build leg and the Flatpak, so a failed leg on any platform
+  # publishes nothing. The job grants the most any release job needs; each
+  # job there narrows it, and its gates (update-signing, github-pages) are
+  # in release.yml.
+  #
+  # Only this job is serialized with promotions: it shares the
+  # `release-main` group with promote-beta.yml's `release`, never cancelled
+  # in progress, because both read the live Flatpak repo from Pages and then
+  # replace the whole site, so two releases at once would let the later
+  # deploy drop the other's new commit, or the whole beta branch. The group
+  # holds for the whole of release.yml. A pending release here and a pending
+  # promotion's release can displace each other (one pending job per group):
+  # a displaced nightly is published by the next push, and a displaced
+  # promotion is dispatched again. Neither ever touches the other's tests
+  # or builds, which run outside the group. deployments: read is for
+  # release.yml's wait on the last Pages deploy.
+  release:
+    needs: [ci, build-id, build, flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
     permissions:
       contents: write
-    # On top of the workflow-level group, so two quick pushes can't race on
-    # the tag or the assets. A cancelled older run is harmless: the newer run
-    # re-uploads every asset.
-    concurrency:
-      group: nightly-release
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: dist-*
-          merge-multiple: true
-          path: dist
-      # Every build leg's dist/ is merged into dist/ above, so dist/ holds
-      # every asset this run made. --clobber replaces each one in place;
-      # then any asset not in dist/ (a renamed or dropped one, such as the
-      # macOS tarball the .dmg replaced) is deleted. Uploading first means
-      # the release is never without an asset this run makes.
-      - name: Publish the nightly prerelease
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git tag -f nightly "$GITHUB_SHA"
-          git push -f origin nightly
-          commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
-          notes="Tester build of \`main\` at $GITHUB_SHA ($commit_url).
-
-          No EV Nova game data is included: supply your own \`Nova Files\` directory. See README.txt in each download for how to run the game."
-          gh release view nightly >/dev/null 2>&1 ||
-            gh release create nightly --prerelease --title "Nightly build" --notes "$notes"
-          gh release edit nightly --prerelease --notes "$notes"
-          gh release upload nightly dist/* --clobber
-          gh release view nightly --json assets --jq '.assets[].name' |
-            while IFS= read -r asset; do
-              if [ ! -e "dist/$asset" ]; then
-                gh release delete-asset nightly "$asset" --yes
-              fi
-            done
-
-  # Deploys the GitHub Pages site. A repository has one Pages deployment,
-  # and each deploy replaces the whole site.
-  #
-  # The root is the download page rendered by `mise run site`
-  # (crates/nova-bundle/src/site), whose links name each nightly asset as
-  # its packer does. It needs `publish` as well as `ci`, both of which run
-  # on exactly the pushes to main this job does, so the page deploys only
-  # after the nightly assets it links have been uploaded. If `publish`
-  # fails or is skipped, so is this job, and the previous site stays up.
-  #
-  # Another job adds a subtree by uploading an artifact named `pages-<path>`
-  # whose root is the tree served at `/<path>/` (`pages-flatpak` becomes
-  # `/flatpak/`), and adding itself to this job's `needs`. `<path>` must not
-  # be empty or clash with a root file (index.html included); the assembly
-  # step refuses both. If a needed producer fails, this job is skipped and
-  # the previous site stays up.
-  #
-  # Because a deploy replaces everything, a producer uploads its full tree on
-  # every main run. One that rebuilds incrementally fetches its previous tree
-  # from the live site first (rdm:phase/auto-updates/phase-6-flatpak-repo-on-pages
-  # does). A subtree no artifact provides on a run disappears from the site.
-  #
-  # This is the only job granted the pages and id-token write scopes, which
-  # deploy-pages needs. contents: read is for checkout, since a job-level
-  # permissions block sets every scope it doesn't list to none.
-  pages:
-    needs: [ci, publish]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    # A newer push to main can still cancel this deploy half way: the
-    # workflow-level group cancels the whole older run, this job included.
-    # That's accepted, because deploy-pages cancels its deployment cleanly, so
-    # the previous site stays up, and the newer run redeploys everything. A
-    # producer must not assume a started deploy always finishes. This
-    # job-level group, which deploy-pages recommends, only keeps two deploys
-    # from running at once; it never protects one from that cancel.
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    env:
-      # As in `ci`: install only the Rust toolchain.
-      MISE_AUTO_INSTALL: "false"
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      # Rust for `mise run site`; nova-bundle needs no system libraries.
-      - uses: jdx/mise-action@v5
-        with:
-          install: false
-      - run: mise install rust
-        shell: bash
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: pages
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Without merge-multiple, each matching artifact lands in its own
-      # `<path>/<artifact name>/`. With no match it downloads nothing and
-      # succeeds, and the assembly step deploys the root page alone.
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: pages-*
-          path: ${{ runner.temp }}/pages
-      - name: Assemble _site
-        shell: bash
-        run: |
-          set -euo pipefail
-          mise run site -- _site
-          if [ -d "$RUNNER_TEMP/pages" ]; then
-            for dir in "$RUNNER_TEMP/pages"/pages-*/; do
-              [ -d "$dir" ] || continue
-              name=$(basename "$dir")
-              sub=${name#pages-}
-              # Refuse an empty or clashing path rather than overwrite the root.
-              if [ -z "$sub" ] || [ -e "_site/$sub" ]; then
-                echo "pages artifact $name has an empty or clashing path" >&2
-                exit 1
-              fi
-              mv "$dir" "_site/$sub"
-            done
-          fi
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: _site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      deployments: read
+    uses: ./.github/workflows/release.yml
+    with:
+      channel: nightly
+      build-id: ${{ needs.build-id.outputs.id }}
+      sha: ${{ github.sha }}
+    secrets: inherit

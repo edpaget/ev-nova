@@ -117,13 +117,16 @@ pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
 }
 
 /// How long the message for `assigned` stays: [`MESSAGE_TICKS`] for a
-/// capture made an escort (`_DoPlunderDialog` @0x9482a), and
-/// [`OLD_SHIP_TICKS`] for the old ship after "Use As My Ship".
+/// capture made an escort (`_DoPlunderDialog` @0x9482a) or a rename
+/// cancelled (@0x94554-0x9458f), and [`OLD_SHIP_TICKS`] for the old ship
+/// after "Use As My Ship". A capture awaiting its name says nothing, so
+/// its time is none.
 #[must_use]
 pub fn assigned_ticks(assigned: Assigned) -> u16 {
     match assigned {
-        Assigned::Escort => MESSAGE_TICKS,
+        Assigned::Escort | Assigned::Declined => MESSAGE_TICKS,
         Assigned::MyShip | Assigned::Abandoned => OLD_SHIP_TICKS,
+        Assigned::Naming => 0,
     }
 }
 
@@ -1260,6 +1263,9 @@ pub const ASSIGNED_ESCORT: &str = "You assigned this ship to your fleet of escor
 pub const RETAINED_OLD_SHIP: &str = "You retained your old ship as an escort.";
 /// `STR#` 2002 #305: no slot was free for the old ship.
 pub const LOST_OLD_SHIP: &str = "You were unable to retain your old ship as an escort.";
+/// `STR#` 2002 #122: Use As My Ship's rename was cancelled
+/// (`_DoPlunderDialog` @0x9453c-0x9454f).
+pub const CAPTURE_DECLINED: &str = "You decided not to capture this ship after all.";
 
 /// The credits take's line: `STR#` 2002 #116 ("You stole all the"), a
 /// space, `*0x3b557c` (#33, "credits", the plural whatever the amount), a
@@ -1371,13 +1377,16 @@ pub(super) fn names(
     )
 }
 
-/// What the player is told of an assignment that did `assigned`.
+/// What the player is told of an assignment, or a rename, that did
+/// `assigned`: nothing (empty) while the capture awaits its name.
 #[must_use]
 pub fn assigned_message(assigned: Assigned) -> &'static str {
     match assigned {
         Assigned::Escort => ASSIGNED_ESCORT,
         Assigned::MyShip => RETAINED_OLD_SHIP,
         Assigned::Abandoned => LOST_OLD_SHIP,
+        Assigned::Declined => CAPTURE_DECLINED,
+        Assigned::Naming => "",
     }
 }
 

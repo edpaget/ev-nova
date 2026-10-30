@@ -155,8 +155,8 @@ fn offer_bribe_opens_the_haggle_dialog_and_accepting_pays_closing_both() {
     tap(screen, Key::Char('o'));
     assert_eq!(screen.showing(), Showing::Haggle);
     assert_eq!(
-        screen.haggle().expect("open").lines(),
-        ["Pay us 3,000 credits."],
+        screen.haggle().expect("open").asking(),
+        "Pay us 3,000 credits.",
         "of a planet"
     );
     tap(screen, Key::Enter);
@@ -187,14 +187,14 @@ fn a_won_lower_price_keeps_the_haggle_dialog_open_on_the_lowered_price() {
     let screen = &mut hailing_by(1, Haggles);
     tap(screen, Key::Char('o'));
     assert_eq!(
-        screen.haggle().expect("open").lines(),
-        ["Pay us 3,000 credits."]
+        screen.haggle().expect("open").asking(),
+        "Pay us 3,000 credits."
     );
     tap(screen, Key::Char('l'));
     assert_eq!(screen.showing(), Showing::Haggle, "the haggle goes on");
     assert_eq!(
-        screen.haggle().expect("still open").lines(),
-        ["Pay us 2,200 credits."],
+        screen.haggle().expect("still open").asking(),
+        "Pay us 2,200 credits.",
         "3,000 * 0.75 rounded down to 100"
     );
     assert!(screen.planet_comm().is_some());

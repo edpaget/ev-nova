@@ -1,6 +1,6 @@
 # Windows pitfalls
 
-CI runs every test on `windows-latest` as well as macOS and Linux. These are
+CI runs every test on `windows-2025` as well as macOS and Linux. These are
 the mistakes that have broken the Windows leg before.
 
 ## File and directory names

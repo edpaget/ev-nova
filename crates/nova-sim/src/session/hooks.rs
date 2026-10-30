@@ -23,7 +23,7 @@
 //! | `shïp` `OnRetire` | [`Session::buy_ship`], the ship traded in (`_DoShipyardDialog` @0x5ecff) | first, the old class still flown and its outfits still owned |
 //! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place, the reserves not yet filled. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it. Either way the shield, armour and fuel are then filled, to the class and outfits it leaves (@0x5f051-0x5f07b) |
 //! | `shïp` `OnCapture` | [`Session::plunder`]'s capture taken as an escort straight away, and [`Session::assign`]'s Use As Escort (`_DoPlunderDialog` @0x9460e) | before the ship joins the fleet |
-//! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, which strips a non-persistent outfit either grants, before the player takes the captured ship's paint, which overwrites a paint either grants (@0x41759), and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap and the paint (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
+//! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, `_DoShipCapture`'s weapons merge, which strips a non-persistent outfit either grants (a weapon outfit's count kept where a persistent outfit names its weapon), before the player takes the captured ship's paint, which overwrites a paint either grants (@0x41759), and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap and the paint (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
 //!
 //! A refused order, purchase or capture runs nothing; a ship class with
 //! no record runs nothing.
@@ -57,8 +57,13 @@ pub struct HookRules {
     /// `OnPurchase` or before it ([`RuleKey::PurchasePaintOrder`]).
     pub purchase_paint_order: RuleSource,
     /// Whether Use As My Ship runs `OnRetire` and `OnCapture` before the
-    /// outfit swap and the paint copy or after them
-    /// ([`RuleKey::CaptureHookOrder`]).
+    /// outfit swap, `_DoShipCapture`'s weapons merge (@0x41849-0x41a3e,
+    /// [`captured_outfits`](crate::captured_loadout::captured_outfits)),
+    /// and the paint copy (@0x41759), or after them
+    /// ([`RuleKey::CaptureHookOrder`]). Before them, a non-persistent
+    /// outfit a hook grants is stripped, a weapon outfit's count kept only
+    /// where a persistent outfit names its weapon, and a paint a hook
+    /// grants is overwritten.
     pub capture_hook_order: RuleSource,
     /// Whether a new pilot's starting ship runs its `OnPurchase`
     /// ([`RuleKey::StartShipPurchase`]).
@@ -274,6 +279,7 @@ mod tests {
     use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
     use crate::pilot::Pilot;
     use crate::reserves::Reserves;
+    use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::session::control::SetOpObserver;
     use crate::session::tests::{
         BLASTER, NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting,
@@ -1044,7 +1050,7 @@ mod tests {
     fn use_as_my_ship_retires_the_old_class_then_captures_the_new_before_the_swap() {
         let (mut session, probe) = captured_kitted("S222", "S223", Rulebook::default());
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[])),
             Some(Assigned::MyShip)
         );
         assert_eq!(tags(&probe), [222, 223]);
@@ -1067,7 +1073,7 @@ mod tests {
     fn by_the_other_reading_use_as_my_ship_runs_its_hooks_after_the_swap() {
         let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
         let (mut session, probe) = captured_kitted("S222", "S223", rules);
-        session.assign(Assignment::MyShip, &mut Draws::of(&[]));
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[]));
         assert_eq!(tags(&probe), [222, 223]);
         for snap in probe.0.borrow().iter() {
             assert_eq!(snap.ship, ShipId(128), "the class not yet changed");
@@ -1087,12 +1093,46 @@ mod tests {
             let (mut session, _) = captured_kitted("", "G401 G400", rules);
             session.pilot.outfits.remove(&OutfitId(401));
             session.pilot.outfits.remove(&OutfitId(400));
-            session.assign(Assignment::MyShip, &mut Draws::of(&[]));
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[]));
             assert_eq!(session.pilot().owned(OutfitId(401)), kept, "{source:?}");
             assert_eq!(
                 session.pilot().owned(OutfitId(400)),
                 1,
                 "persistent: {source:?}"
+            );
+        }
+    }
+
+    /// `OnCapture` grants a blaster (250, not persistent). By the engine
+    /// the merge strips the outfit, but its count stays in the weapon
+    /// array where a persistent outfit (here 405, not owned, in its
+    /// second mod) names the blaster, and the fold lands it back on 250
+    /// (`_DoShipCapture` @0x41849-0x419fd); the unarmed trader has none to
+    /// give otherwise. By the other reading the hook runs after the swap
+    /// and the blaster stays either way.
+    #[test]
+    fn a_weapon_on_capture_grants_is_kept_by_the_merge_only_where_a_persistent_outfit_names_it() {
+        use crate::combat::armament::MOD_WEAPON;
+        for (source, protected, kept) in [
+            (RuleSource::Engine, false, 0),
+            (RuleSource::Engine, true, 1),
+            (RuleSource::Bible, false, 1),
+            (RuleSource::Bible, true, 1),
+        ] {
+            let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, source);
+            let (mut session, _) = captured_kitted("", "G250", rules);
+            if protected {
+                session.statics_mut().outfits.push(OutfitRecord {
+                    flags: OutfitFlags::PERSISTENT,
+                    ..outfit(405, &[(17, 5), (MOD_WEAPON, 128)])
+                });
+            }
+            session.pilot.outfits.clear();
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[]));
+            assert_eq!(
+                session.pilot().owned(OutfitId(250)),
+                kept,
+                "{source:?}, protected: {protected}"
             );
         }
     }
@@ -1105,7 +1145,7 @@ mod tests {
             .ships
             .retain(|record| record.id != ShipId(129));
         assert_eq!(
-            session.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[])),
             Some(Assigned::Abandoned)
         );
         assert!(tags(&probe).is_empty());
@@ -1115,7 +1155,7 @@ mod tests {
     fn on_capture_draws_before_the_fuel() {
         let (mut session, _) = captured_kitted("", "R(b1 b2)", Rulebook::default());
         let mut chance = Draws::default().keyed(2, 1).keyed(300, 7);
-        session.assign(Assignment::MyShip, &mut chance);
+        use_as_my_ship(&mut session, "Prize", &mut chance);
         assert_roll_then_fuel(&session, &chance);
     }
 
@@ -1124,7 +1164,7 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
         let (mut session, _) = captured_kitted("", "R(b1 b2)", rules);
         let mut chance = Draws::default().keyed(2, 1).keyed(300, 7);
-        session.assign(Assignment::MyShip, &mut chance);
+        use_as_my_ship(&mut session, "Prize", &mut chance);
         assert_roll_then_fuel(&session, &chance);
     }
 

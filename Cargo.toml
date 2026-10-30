@@ -37,6 +37,9 @@ tempfile = "3"
 # Compiles nova.exe's resource script (its icon, version information and
 # manifest) on Windows; for any other target it does nothing.
 embed-resource = "3.0.12"
+# nova-win32 loads WinSparkle.dll at run time; the version wgpu-hal
+# already locks.
+libloading = "0.8"
 # Reads the PE nova.exe's tests check, as structures.
 object = { version = "0.37.3", default-features = false, features = ["read_core", "pe", "std"] }
 # Reads the Windows manifest back as XML in nova-winres's and nova's tests,
@@ -45,6 +48,9 @@ roxmltree = "0.20.0"
 # nova-bundle decodes the Developer ID certificate and the notary API key
 # from base64 signing variables; the version plist already locks.
 base64 = "0.23"
+# nova-bundle signs the update feeds' installers with Ed25519, as Sparkle's
+# and WinSparkle's `sparkle:edSignature` expects.
+ed25519-dalek = "2.2"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 # nova's build script reads its own Cargo.toml (nova-winres).
@@ -55,9 +61,17 @@ thiserror = "2"
 # version glyphon's font stack already locks.
 ttf-parser = "0.25.1"
 # Rendering and windowing. glyphon 0.12 is built on wgpu 30, so the two move
-# together.
-wgpu = "30.0.1"
+# together. `counters` keeps wgpu's live resource counts, which
+# nova-render's tests read to pin that no frame builds a render pipeline;
+# it is on for every build, not just nova-render's tests, so the
+# wgpu-dependent crates build once rather than twice. It costs an atomic
+# add on each resource made or dropped, not on each draw.
+wgpu = { version = "30.0.1", features = ["counters"] }
 glyphon = "0.12.0"
+# nova-render's own glyph rasteriser, which hints Charcoal in both
+# directions: the versions swash 0.2.10 (under glyphon) already locks.
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+zeno = { version = "0.3.3", default-features = false, features = ["eval", "std"] }
 winit = "0.30.13"
 pollster = "1.0.1"
 # The open panel that asks for the Nova Files and the startup alerts

@@ -108,7 +108,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
 use crate::ui::player_info::is_player_info_press;
@@ -287,6 +287,16 @@ impl OfferDialog {
             picture,
             before: None,
         }
+    }
+
+    /// This dialog with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(dialog) = &mut self.laid {
+            dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// This dialog with its offer's movie, as `movies` plays it: one that
@@ -552,6 +562,8 @@ pub(crate) struct VenueOffers {
     sounds: Vec<Sound>,
     /// How the timer runs ([`RuleKey::OfferClock`](nova_sim::RuleKey::OfferClock)).
     clock: RuleSource,
+    /// Whether the offer dialog's buttons take the keyboard focus.
+    focus_ring: FocusRing,
     /// The time since the venue last asked (or, before it first asks,
     /// since it opened), which the engine's gap runs from.
     since_ask: Duration,
@@ -574,6 +586,7 @@ impl VenueOffers {
             movies: Movies::none(),
             sounds: Vec::new(),
             clock: RuleSource::Engine,
+            focus_ring: FocusRing::default(),
             since_ask: Duration::ZERO,
             restarted: false,
         }
@@ -584,6 +597,16 @@ impl VenueOffers {
     #[must_use]
     pub(crate) fn with_clock(self, clock: RuleSource) -> Self {
         Self { clock, ..self }
+    }
+
+    /// These offers' dialogs with their buttons taking the keyboard focus
+    /// as `ring` says, for each opened after it.
+    #[must_use]
+    pub(crate) fn with_focus_ring(self, ring: FocusRing) -> Self {
+        Self {
+            focus_ring: ring,
+            ..self
+        }
     }
 
     /// These offers playing their movies as `movies` says.
@@ -627,7 +650,11 @@ impl VenueOffers {
             .templates
             .layout(prompt.graphic)
             .map(|template| (template, metrics));
-        self.dialog = Some(OfferDialog::new(layout, prompt, style).with_movies(&self.movies));
+        self.dialog = Some(
+            OfferDialog::new(layout, prompt, style)
+                .with_focus_ring(self.focus_ring)
+                .with_movies(&self.movies),
+        );
     }
 
     /// The offer dialog, while it is open.
@@ -1980,5 +2007,21 @@ mod tests {
             }
             assert_eq!(dialog.take_sounds(), [], "{k:?}");
         }
+    }
+
+    #[test]
+    fn an_offer_takes_tab_then_space_only_with_the_focus_ring() {
+        let mut ringed = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut ringed);
+        ringed.input(&key(Key::Tab), &mut Vec::new());
+        ringed.input(&key(Key::Space), &mut Vec::new());
+        assert!(ringed.take_choice().is_some(), "by default");
+        let mut off =
+            VenueOffers::asking(plain_only(Ok(template()))).with_focus_ring(FocusRing::Off);
+        opened(&mut off);
+        off.input(&key(Key::Tab), &mut Vec::new());
+        off.input(&key(Key::Space), &mut Vec::new());
+        assert_eq!(off.take_choice(), None);
+        assert!(off.dialog().is_some(), "still open");
     }
 }

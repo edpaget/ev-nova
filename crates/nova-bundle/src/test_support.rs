@@ -1,15 +1,23 @@
-//! Test doubles shared by the `bundle`, `signing` and `notary` tests: a
-//! recording [`Process`] and fake [`Files`] writing to one event log, so a
-//! test sees every run and file step in the order the core asked for them.
+//! Test doubles shared by the `bundle`, `signing`, `notary`, `build_id`
+//! and `appcast` tests: a recording [`Process`] and fake [`Files`] writing
+//! to one event log, so a test sees every run and file step in the order
+//! the core asked for them, a [`FakeEnv`] of canned variables, and a
+//! [`FakeRead`] of canned files.
 
 use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::build_id::{BuildId, VAR};
 use crate::bundle::{BundleError, Host, bundle};
-use crate::ports::{Files, Invocation, Process, RunError};
+use crate::channel::FeedStatus;
+use crate::installer::winsparkle;
+use crate::ports::{Env, Files, Invocation, Process, ReadFiles, RunError};
 use crate::signing::{Credentials, Signing};
+use crate::sparkle;
 use crate::spec::BundleSpec;
 use crate::spec::tests::sample_metadata;
 
@@ -42,7 +50,9 @@ pub(crate) const KEYCHAIN_PATHS: [&str; 2] = [
 
 /// Records each run. Answers with `respond`'s outcome when it gives one,
 /// else with canned output: the spec for `cargo metadata`, `archs` for
-/// `lipo -archs`, [`KEYCHAINS`] for `security list-keychains -d user`,
+/// `lipo -archs`, the pinned Sparkle digest for `shasum -a 256`, the
+/// pinned WinSparkle digests for `certutil -hashfile`,
+/// [`KEYCHAINS`] for `security list-keychains -d user`,
 /// `{"id":"abc"}` for `notarytool submit` and `{"status":"Accepted"}` for
 /// `notarytool info`.
 pub(crate) struct Recorder {
@@ -66,12 +76,79 @@ impl Process for Recorder {
         Ok(match args.as_slice() {
             ["metadata", ..] => sample_metadata(),
             ["-archs", ..] => self.archs.clone(),
+            ["-a", "256", path] => format!("{}  {path}\n", sparkle::SHA256).into_bytes(),
+            ["-hashfile", path, "SHA256"] => certutil_output(path),
             ["list-keychains", "-d", "user"] => KEYCHAINS.to_vec(),
             ["notarytool", "submit", ..] => br#"{"id":"abc","message":"ok"}"#.to_vec(),
             ["notarytool", "info", ..] => br#"{"id":"abc","status":"Accepted"}"#.to_vec(),
             _ => Vec::new(),
         })
     }
+}
+
+/// What `certutil -hashfile <path> SHA256` prints for the WinSparkle
+/// file at `path`: the pinned archive's digest or the pinned DLL's, by
+/// name, with `certutil`'s CRLF lines around it.
+fn certutil_output(path: &str) -> Vec<u8> {
+    let digest = if Path::new(path).ends_with(winsparkle::DLL) {
+        winsparkle::DLL_SHA256
+    } else {
+        winsparkle::ARCHIVE_SHA256
+    };
+    format!(
+        "SHA256 hash of {path}:\r\n{digest}\r\nCertUtil: -hashfile command completed \
+         successfully.\r\n"
+    )
+    .into_bytes()
+}
+
+/// The environment as a map.
+#[derive(Default)]
+pub(crate) struct FakeEnv(pub HashMap<&'static str, OsString>);
+
+impl Env for FakeEnv {
+    fn var(&self, name: &str) -> Option<OsString> {
+        self.0.get(name).cloned()
+    }
+}
+
+/// Files to read back, by path. A missing file is `NotFound`, and a
+/// directory lists the files directly in it (none is no error).
+#[derive(Default)]
+pub(crate) struct FakeRead(pub BTreeMap<PathBuf, Vec<u8>>);
+
+impl ReadFiles for FakeRead {
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.0
+            .get(path)
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
+    }
+
+    fn file_names(&self, dir: &Path) -> io::Result<Vec<String>> {
+        let mut names: Vec<String> = self
+            .0
+            .keys()
+            .filter(|path| path.parent() == Some(dir))
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+}
+
+/// The build ID [`build_env`] sets.
+pub(crate) const BUILD: &str = "20261028123456";
+
+/// [`BUILD`] as a build ID.
+pub(crate) fn build() -> BuildId {
+    BuildId::parse(BUILD).expect("an ID")
+}
+
+/// An environment setting `NOVA_BUILD_ID` to [`BUILD`] and nothing else.
+pub(crate) fn build_env() -> FakeEnv {
+    FakeEnv(HashMap::from([(VAR, BUILD.into())]))
 }
 
 /// Records each file operation; fails the ones `fails` picks. Every
@@ -120,7 +197,10 @@ impl Files for FakeFiles {
 
 /// A finished `bundle` run.
 pub(crate) struct Run {
+    /// The `.dmg`, or why there is none.
     pub result: Result<PathBuf, BundleError>,
+    /// What the bundle said of its update feed, when it was built.
+    pub feed: Option<FeedStatus>,
     pub events: Vec<Event>,
 }
 
@@ -154,8 +234,19 @@ pub(crate) fn starts(invocation: &Invocation, program: &str, leading: &[&str]) -
         && invocation.args.iter().zip(leading).all(|(a, l)| a == l)
 }
 
-/// Runs `bundle` over the doubles.
+/// Runs `bundle` over the doubles, with [`build_env`].
 pub(crate) fn run(
+    host: &Host,
+    archs: &[u8],
+    respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
+    file_fails: impl Fn(&Event) -> bool + 'static,
+) -> Run {
+    run_in(&build_env(), host, archs, respond, file_fails)
+}
+
+/// Runs `bundle` over the doubles, with `env`.
+pub(crate) fn run_in(
+    env: &FakeEnv,
     host: &Host,
     archs: &[u8],
     respond: impl Fn(&Invocation) -> Option<Result<Vec<u8>, RunError>> + 'static,
@@ -172,9 +263,14 @@ pub(crate) fn run(
         fails: Box::new(file_fails),
         absent: Box::new(|_| false),
     };
-    let result = bundle(&mut process, &mut files, host);
+    let bundled = bundle(&mut process, &mut files, env, host);
     let events = log.borrow().clone();
-    Run { result, events }
+    let feed = bundled.as_ref().ok().map(|bundled| bundled.feed.clone());
+    Run {
+        result: bundled.map(|bundled| bundled.dmg),
+        feed,
+        events,
+    }
 }
 
 /// A [`Respond`] failing, with exit code 1, the runs `fails` picks.
@@ -220,6 +316,7 @@ pub(crate) fn developer_id_host() -> Host {
         min_system: "13.0".into(),
         out: None,
         signing: Signing::DeveloperId(credentials()),
+        channel: None,
     }
 }
 
@@ -234,6 +331,7 @@ pub(crate) fn ad_hoc_host() -> Host {
 /// The paths a run of [`developer_id_host`] uses, under `/work/ev-nova`.
 pub(crate) struct Paths {
     pub app: PathBuf,
+    pub framework: PathBuf,
     pub dump: PathBuf,
     pub dmg: PathBuf,
     pub out: PathBuf,
@@ -256,6 +354,11 @@ pub(crate) fn paths() -> Paths {
     let out = bundle.join("out");
     Paths {
         app: staging.join("Nova.app"),
+        framework: staging
+            .join("Nova.app")
+            .join("Contents")
+            .join("Frameworks")
+            .join("Sparkle.framework"),
         dump: staging.join("nova-dump"),
         dmg: out.join("ev-nova-aarch64-apple-darwin.dmg"),
         out,

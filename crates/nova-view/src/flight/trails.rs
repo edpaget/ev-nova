@@ -200,6 +200,7 @@ mod tests {
                 image: crate::SheetImage::Rled(3500),
                 frames: NonZeroU16::MIN,
                 frame_width: width,
+                frame_height: width,
             })),
             particles: 2,
             part_vel: 300,

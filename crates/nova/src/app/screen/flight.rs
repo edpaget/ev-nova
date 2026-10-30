@@ -29,7 +29,7 @@ use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{DescriptionSource, DialogResources};
 
-use super::port_dialogs::close_mission_texts;
+use super::port_dialogs::{close_mission_texts, close_port_dialogs};
 use super::{AppScreen, NO_INTERFACE, Side};
 
 impl AppScreen {
@@ -124,6 +124,7 @@ impl AppScreen {
                 BackgroundSizes::read(&self.data),
             )
             .with_offer_clock(self.rules.source_for(RuleKey::OfferClock))
+            .with_focus_ring(self.dialog_focus_ring())
             .with_movies(self.movies.clone())
             .with_chance(self.chance.clone());
         // Recharge is enabled by the cash and the tank, which only flight
@@ -164,6 +165,7 @@ impl AppScreen {
         self.drop_spaceport();
         self.plunder = None;
         self.assignment = None;
+        self.capture_naming = None;
         self.comm = None;
         self.escort_dialog = None;
         self.planet_comm = None;
@@ -296,7 +298,8 @@ impl AppScreen {
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
     /// its stellar sprite pool, what its berths keep, what its last galaxy
-    /// refresh left hidden, its course map's zoom and whether the map
+    /// refresh left hidden, its comm dialog's release flag, its course
+    /// map's zoom and whether the map
     /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(carry) = flight.sim().carry_over() {
@@ -311,6 +314,9 @@ impl AppScreen {
             }
             if let Some(kept_berths) = carry.kept_berths {
                 self.kept_berths = kept_berths;
+            }
+            if let Some(release) = carry.release_comm_escort {
+                self.release_comm_escort = release;
             }
         }
         if let Some(zoom) = flight.course_map_zoom() {
@@ -503,6 +509,10 @@ impl AppScreen {
             close_mission_texts(spaceport, flight);
             spaceport.show_mission_texts(flight.take_mission_texts());
             close_mission_texts(spaceport, flight);
+            // A shipyard whose purchase's texts have all closed closes
+            // here (`SpaceportView::show_mission_texts`), and is told at
+            // once, before the next frame.
+            close_port_dialogs(spaceport, flight);
             return;
         }
         if self.side != Side::Flight {

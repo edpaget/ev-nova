@@ -1,7 +1,8 @@
 //! The macOS menu bar's adapter: `nova_appkit`'s commands as the game's
-//! [`MenuCommand`]s, and its `MenuBar` as the core's [`MenuPort`]. The
-//! Apple events `nova_appkit` handles send the same commands, mapped the
-//! same way: the quit event is the menu's Quit.
+//! [`MenuPick`]s (its [`MenuCommand`]s, and Check for Updates…), and its
+//! `MenuBar` as the core's [`MenuPort`]. The Apple events `nova_appkit`
+//! handles send the same commands, mapped the same way: the quit event is
+//! the menu's Quit.
 //!
 //! The menu bar takes its key equivalents before the window sees their
 //! press, so each one must be the chord of the command it sends, or a
@@ -23,29 +24,31 @@
 use nova_appkit::{Command, MenuBar};
 use nova_view::MenuCommand;
 
-use crate::app::MenuPort;
+use crate::app::{MenuPick, MenuPort};
 
-/// The game's command for the menu bar's `command`.
-pub(super) fn menu_command(command: Command) -> MenuCommand {
+/// The game's pick for the menu bar's `command`.
+pub(super) fn pick(command: Command) -> MenuPick {
     match command {
-        Command::About => MenuCommand::About,
-        Command::Preferences => MenuCommand::Preferences,
-        Command::Quit => MenuCommand::Quit,
+        Command::About => MenuPick::Command(MenuCommand::About),
+        Command::Preferences => MenuPick::Command(MenuCommand::Preferences),
+        Command::Quit => MenuPick::Command(MenuCommand::Quit),
+        Command::CheckForUpdates => MenuPick::CheckForUpdates,
     }
 }
 
-/// The menu bar's command for the game's `command`.
-fn appkit_command(command: MenuCommand) -> Command {
-    match command {
-        MenuCommand::About => Command::About,
-        MenuCommand::Preferences => Command::Preferences,
-        MenuCommand::Quit => Command::Quit,
+/// The menu bar's command for the game's `pick`.
+fn appkit_command(pick: MenuPick) -> Command {
+    match pick {
+        MenuPick::Command(MenuCommand::About) => Command::About,
+        MenuPick::Command(MenuCommand::Preferences) => Command::Preferences,
+        MenuPick::Command(MenuCommand::Quit) => Command::Quit,
+        MenuPick::CheckForUpdates => Command::CheckForUpdates,
     }
 }
 
 impl MenuPort for MenuBar {
-    fn set_enabled(&mut self, command: MenuCommand, enabled: bool) {
-        MenuBar::set_enabled(self, appkit_command(command), enabled);
+    fn set_enabled(&mut self, pick: MenuPick, enabled: bool) {
+        MenuBar::set_enabled(self, appkit_command(pick), enabled);
     }
 }
 
@@ -59,29 +62,47 @@ mod tests {
     use crate::app::screen::menu_chord;
 
     #[test]
-    fn each_command_maps_to_the_games_and_back() {
+    fn each_game_command_is_its_pick_and_back() {
         for command in Command::ALL {
-            assert_eq!(appkit_command(menu_command(command)), command);
+            assert_eq!(appkit_command(pick(command)), command);
         }
+        for game in MenuPick::ALL {
+            assert_eq!(pick(appkit_command(game)), game);
+        }
+        assert_eq!(pick(Command::Quit), MenuPick::Command(MenuCommand::Quit));
+        assert_eq!(
+            pick(Command::Preferences),
+            MenuPick::Command(MenuCommand::Preferences)
+        );
+        assert_eq!(pick(Command::About), MenuPick::Command(MenuCommand::About));
+    }
+
+    #[test]
+    fn check_for_updates_is_a_pick_of_its_own_and_no_game_command() {
+        assert_eq!(pick(Command::CheckForUpdates), MenuPick::CheckForUpdates);
+        assert_eq!(
+            appkit_command(MenuPick::CheckForUpdates),
+            Command::CheckForUpdates
+        );
         for command in MenuCommand::ALL {
-            assert_eq!(menu_command(appkit_command(command)), command);
+            assert_ne!(
+                appkit_command(MenuPick::Command(command)),
+                Command::CheckForUpdates
+            );
         }
-        assert_eq!(menu_command(Command::Quit), MenuCommand::Quit);
-        assert_eq!(menu_command(Command::Preferences), MenuCommand::Preferences);
-        assert_eq!(menu_command(Command::About), MenuCommand::About);
     }
 
     #[test]
     fn the_quit_apple_event_is_the_menus_quit_and_pref_its_preferences() {
         let sent: Vec<_> = nova_appkit::APPLE_EVENTS
             .iter()
-            .map(|event| (event.id, menu_command(event.command)))
+            .map(|event| (event.id, pick(event.command)))
             .collect();
         assert_eq!(
             sent,
             [
-                (*b"quit", MenuCommand::Quit),
-                (*b"pref", MenuCommand::Preferences)
+                (*b"quit", MenuPick::Command(MenuCommand::Quit)),
+                (*b"pref", MenuPick::Command(MenuCommand::Preferences))
             ]
         );
     }
@@ -127,8 +148,8 @@ mod tests {
             });
             match game {
                 Some((_, _, sends)) => assert_eq!(
-                    command.map(menu_command),
-                    *sends,
+                    command.map(pick),
+                    sends.map(MenuPick::Command),
                     "{shortcut:?} takes a game chord for another command"
                 ),
                 None => assert_eq!(command, None, "{shortcut:?} sends a command with no chord"),

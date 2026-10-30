@@ -192,7 +192,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::desc::DescDialog;
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::quantity::QuantityDialog;
 
@@ -517,6 +517,8 @@ pub struct OutfitterScreen {
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
     style: ButtonStyle,
+    /// Whether its dialogs' buttons take the keyboard focus.
+    focus_ring: FocusRing,
     closed: bool,
     /// What its keys asked for, until each is taken.
     asks: KeyAsks,
@@ -603,6 +605,7 @@ impl OutfitterScreen {
             alert_template: alert.ok(),
             offering: None,
             style,
+            focus_ring: FocusRing::default(),
             closed: false,
             asks: KeyAsks::default(),
             unhighlighted_outfit: None,
@@ -620,6 +623,19 @@ impl OutfitterScreen {
         screen
     }
 
+    /// The outfitter with its dialogs' buttons taking the keyboard focus
+    /// as `ring` says (the `dialog_focus_ring` rule), its own and each it
+    /// opens after it.
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        self.focus_ring = ring;
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self.offering = self.offering.map(|offering| offering.with_focus_ring(ring));
+        self
+    }
+
     /// The outfitter with mission offers, each shown in the offer dialog of
     /// its variant laid out by `templates` (or saying why there is none): it asks for the
     /// first as it opens, and again once rearmed ([`OutfitterScreen::rearm`]), as
@@ -627,7 +643,7 @@ impl OutfitterScreen {
     #[must_use]
     pub fn with_offers(self, templates: OfferTemplates) -> Self {
         Self {
-            offering: Some(VenueOffers::asking(templates)),
+            offering: Some(VenueOffers::asking(templates).with_focus_ring(self.focus_ring)),
             ..self
         }
     }
@@ -873,7 +889,8 @@ impl OutfitterScreen {
             &sale_alert_text(alert),
             self.style,
             Rc::clone(&laid.metrics.0),
-        );
+        )
+        .with_focus_ring(self.focus_ring);
         self.alert.open((), dialog);
     }
 
@@ -4910,6 +4927,54 @@ mod tests {
                 });
             }
             assert_eq!(screen.take_sounds(), [], "{k:?} makes no click");
+        }
+    }
+
+    /// The outfitter's buttons take Tab then Space only with the focus
+    /// ring, and its sale alert inherits the ring.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = screen();
+        press(&mut ringed, Key::Tab);
+        press(&mut ringed, Key::Space);
+        assert!(ringed.closed(), "by default");
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        press(&mut off, Key::Tab);
+        press(&mut off, Key::Space);
+        assert!(!off.closed());
+        assert_eq!(off.take_order(), None);
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let [(row, _), ..] = refused_in_the_loop();
+            let mut screen =
+                screen_of(loop_refusing(row, RuleSource::Engine)).with_focus_ring(ring);
+            screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.alert_dialog().is_none(),
+                ring == FocusRing::Tab,
+                "the alert's Done, {ring:?}"
+            );
+        }
+    }
+
+    /// The outfitter's mission offers take its focus ring, given before the
+    /// offers as the spaceport gives it.
+    #[test]
+    fn its_offer_takes_tab_then_space_only_with_the_focus_ring() {
+        for ring in [FocusRing::Tab, FocusRing::Off] {
+            let mut screen = counting_screen()
+                .with_focus_ring(ring)
+                .with_offers(offer_templates());
+            screen.open_offer(crate::spaceport::offer::fixture::prompt());
+            press(&mut screen, Key::Tab);
+            press(&mut screen, Key::Space);
+            assert_eq!(
+                screen.take_offer_choice().is_some(),
+                ring == FocusRing::Tab,
+                "{ring:?}"
+            );
         }
     }
 }

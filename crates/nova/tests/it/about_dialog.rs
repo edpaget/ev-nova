@@ -22,6 +22,7 @@ use nova_render::{Batch, FontFaces, Frame, Rect, TextRun};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_view::geometry::{Bounds, Point};
+use nova_view::text::LINE_HEIGHT;
 use nova_view::ui::desc::{DONE_ITEM, TEXT_ITEM};
 use nova_view::{Key, MouseButton};
 
@@ -258,7 +259,7 @@ fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
             assert!(x >= text_box.x && x < text_box.x + text_box.w, "{run:?}");
             assert!(y >= text_box.y, "{run:?}");
             assert!(
-                y + run.line_height_px <= text_box.y + text_box.h + 0.01,
+                y + LINE_HEIGHT * run.size * run.scale <= text_box.y + text_box.h + 0.01,
                 "{run:?}"
             );
         }

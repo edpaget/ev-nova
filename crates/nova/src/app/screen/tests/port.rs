@@ -379,8 +379,10 @@ fn an_empty_outfitter_draws_the_nav_a_shipyard_left_marked_and_an_empty_shipyard
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
     assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(129)));
-    screen.input(&key(Key::Escape, true));
-    assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
+    assert!(
+        spaceport(&screen).open_shipyard().is_none(),
+        "the purchase closes it"
+    );
     assert_eq!(nav_named(&screen), ["Beta Prime"], "the move held");
 
     click_port_item(&mut screen, 9);
@@ -497,6 +499,36 @@ fn landed_shipyard_by(store: &MemoryPilots, rulebook: &Rulebook) -> AppScreen {
     land_twice(&mut screen);
     assert_eq!(screen.showing(), Showing::Spaceport);
     screen
+}
+
+/// The rulebook's `dialog_focus_ring` reaches the spaceport and the
+/// shops opened over it.
+#[test]
+fn the_dialog_focus_ring_reaches_the_spaceport_and_its_shipyard() {
+    use nova_view::ui::{Dialog, FocusRing};
+    for (rulebook, ring) in [
+        (Rulebook::default(), FocusRing::Tab),
+        (
+            Rulebook::default().with_override(RuleKey::DialogFocusRing, RuleSource::Engine),
+            FocusRing::Off,
+        ),
+    ] {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_by(&store, &rulebook);
+        assert_eq!(
+            spaceport(&screen).dialog().map(Dialog::focus_ring),
+            Some(ring)
+        );
+        click_port_item(&mut screen, 9);
+        assert_eq!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(|open| open.dialog())
+                .map(Dialog::focus_ring),
+            Some(ring),
+            "{ring:?}"
+        );
+    }
 }
 
 #[test]
@@ -1057,25 +1089,22 @@ fn the_outfitters_map_puts_back_the_nav_the_outfitter_opened_with() {
 
 #[test]
 fn the_map_key_opens_the_map_over_the_shipyards_info_panel_which_stays_open() {
-    // A purchase's landed `M` writes the nav after the shipyard's save,
-    // so the nav as each map opens isn't the save.
-    let mut screen = landed_planning(b"", b"M129");
+    // A purchase closes the shipyard, so its landed `M` can no longer
+    // write the nav after the shipyard's save: the nav as each map opens
+    // is the save the shipyard took as it opened.
+    let mut screen = landed_planning(b"", b"");
     click_port_item(&mut screen, 9);
     select_first_ship(&mut screen);
-    press_b(&mut screen);
-    screen.input(&key(Key::Enter, true));
-    screen.input(&key(Key::Enter, false));
-    assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
     let bought = port_nav_mode(&screen);
-    assert_ne!(bought, Some(LANDED_NAV), "the purchase's M writes the nav");
+    assert_eq!(bought, Some(LANDED_NAV));
     assert_eq!(
-        plot_on_a_port_screens_map(&mut screen, SystemId(128), "the shipyard"),
+        plot_on_a_port_screens_map(&mut screen, SystemId(129), "the shipyard"),
         bought,
         "the shipyard: the nav as the map opened"
     );
     screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
     assert_eq!(
-        plot_on_a_port_screens_map(&mut screen, SystemId(128), "its Info panel"),
+        plot_on_a_port_screens_map(&mut screen, SystemId(129), "its Info panel"),
         bought,
         "the Info panel: the nav as the map opened"
     );
@@ -1085,6 +1114,24 @@ fn the_map_key_opens_the_map_over_the_shipyards_info_panel_which_stays_open() {
             .and_then(ShipyardScreen::info_panel)
             .is_some(),
         "the panel still open"
+    );
+}
+
+#[test]
+fn a_purchase_closes_the_shipyard_restoring_its_nav_in_the_input_that_bought() {
+    // The purchase's landed `M` writes the nav after the shipyard's save;
+    // the close that follows restores the save before the next frame.
+    let mut screen = landed_planning(b"", b"M129");
+    click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
+    press_b(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+    assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
+    assert_eq!(
+        port_nav_mode(&screen),
+        Some(LANDED_NAV),
+        "the shipyard's close restored its save"
     );
 }
 
@@ -1498,6 +1545,11 @@ fn a_ship_order_changes_the_pilots_ship_refreshes_the_shops_and_saves() {
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "its default booster");
     assert_eq!(store.writes(), writes + 1, "saved after the input");
     assert_eq!(saved(&store, "Ada").ship(), ShipId(129));
+    assert!(
+        spaceport(&screen).open_shipyard().is_none(),
+        "the purchase closes it"
+    );
+    click_port_item(&mut screen, 9);
     let open = spaceport(&screen).open_shipyard().expect("shipbuying");
     assert_eq!(open.shipyard().current, ShipId(129));
     assert_eq!(open.shipyard().cash, 200);
@@ -1534,6 +1586,8 @@ fn a_refused_ship_order_changes_nothing_and_saves_nothing() {
     let writes = store.writes();
     let before = pilot(&screen).clone();
     // Ship 130: 200 and a 400 trade-in do not cover 5,000.
+    click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
     screen.input(&key(Key::Right, true));
     let open = spaceport(&screen).open_shipyard().expect("shipbuying");
     assert_eq!(
@@ -1592,7 +1646,10 @@ fn buying_a_ship_asks_its_name_and_keeps_the_name_confirmed() {
         message,
         "no message follows"
     );
-    assert!(spaceport(&screen).open_shipyard().is_some());
+    assert!(
+        spaceport(&screen).open_shipyard().is_none(),
+        "the purchase closes it"
+    );
 }
 
 #[test]
@@ -1729,28 +1786,57 @@ fn a_ship_declined_is_named_again_on_the_list_built_at_opening() {
 }
 
 #[test]
-fn a_ship_declined_draws_its_roll_again_when_the_list_is_next_built() {
+fn a_ship_declined_stays_listed_while_open_and_draws_its_roll_again_at_the_next_opening() {
     let store = MemoryPilots::new();
     let (mut screen, rolls) = rolling_shipyard(&store, &[true, false]);
     click_port_item(&mut screen, 9);
     select_first_ship(&mut screen);
     press_b(&mut screen);
     click_cancel(&mut screen);
-    assert!(lists_second(&screen), "the list is kept for the visit");
+    assert!(lists_second(&screen), "the list is kept while open");
     assert_eq!(rolls.borrow().asked, 1);
-    // An order builds the list again.
+    // Player info over the shipyard hands the shops back: the list
+    // built as it opened is relisted, and nothing is drawn.
+    screen.input(&key(Key::Char('p'), true));
+    screen.input(&key(Key::Char('p'), false));
+    assert!(spaceport(&screen).player_info().is_some(), "player info");
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert!(spaceport(&screen).player_info().is_none());
+    assert!(lists_second(&screen), "still listed");
+    assert_eq!(rolls.borrow().asked, 1, "nothing drawn while open");
+    // An order elsewhere draws nothing either.
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 8);
     select_first_outfit(&mut screen);
     screen.input(&key(Key::Char('b'), true));
     assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the outfit was bought");
-    assert_eq!(rolls.borrow().asked, 2, "drawn again");
+    assert_eq!(rolls.borrow().asked, 1, "not drawn by the outfitter");
     screen.input(&key(Key::Escape, true));
     click_port_item(&mut screen, 9);
+    assert_eq!(rolls.borrow().asked, 2, "drawn again as it opens");
     assert!(
         spaceport(&screen).open_shipyard().is_none(),
         "the new roll missed: nothing listed, it never opens"
     );
+}
+
+#[test]
+fn a_purchase_closes_the_shipyard_and_the_next_opening_lists_by_the_new_rolls() {
+    let store = MemoryPilots::new();
+    let (mut screen, rolls) = rolling_shipyard(&store, &[true, true]);
+    click_port_item(&mut screen, 9);
+    select_first_ship(&mut screen);
+    press_b(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+    assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
+    assert_eq!(rolls.borrow().asked, 1, "not drawn again yet");
+    click_port_item(&mut screen, 9);
+    assert_eq!(rolls.borrow().asked, 2, "drawn again as it opens");
+    let open = spaceport(&screen).open_shipyard().expect("listed again");
+    assert!(lists_second(&screen), "the new roll holds");
+    assert_eq!(open.shipyard().current, ShipId(129), "marked (current)");
 }
 
 #[test]
@@ -2018,7 +2104,7 @@ fn a_ship_bought_carrying_iff_turns_the_bars_radar_black_at_once() {
     screen.input(&key(Key::Enter, true));
     assert_eq!(pilot(&screen).ship(), ShipId(129));
     assert_eq!(pilot(&screen).owned(IFF), 1, "its default IFF");
-    assert!(spaceport(&screen).open_shipyard().is_some(), "still open");
+    assert!(spaceport(&screen).open_shipyard().is_none(), "closed");
     let list = drawn(&screen);
     assert!(radar_black(&list));
     assert!(player_cyan(&list));

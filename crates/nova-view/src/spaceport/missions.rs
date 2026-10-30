@@ -66,7 +66,7 @@ use crate::sound::{Sound, UiSound};
 use crate::text::{TextMetrics, truncate_end};
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
-use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, TextBacking};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
@@ -242,6 +242,16 @@ impl MissionComputerScreen {
         };
         screen.set_computer(computer);
         screen
+    }
+
+    /// The mission computer with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The dialog, if it could be laid out.
@@ -577,6 +587,16 @@ impl MissionInfoScreen {
         };
         screen.set_info(info);
         screen
+    }
+
+    /// The mission info screen with its buttons taking the keyboard focus as `ring`
+    /// says (the `dialog_focus_ring` rule).
+    #[must_use]
+    pub fn with_focus_ring(mut self, ring: FocusRing) -> Self {
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_focus_ring(ring);
+        }
+        self
     }
 
     /// The dialog, if it could be laid out.
@@ -2016,5 +2036,33 @@ mod tests {
             }
             assert_eq!(screen.take_sounds(), [CLOSED], "{k:?}");
         }
+    }
+
+    /// The computer's and the info screen's buttons take Tab then Space
+    /// only with the focus ring; by the original's reading they press
+    /// nothing.
+    #[test]
+    fn tab_then_space_presses_the_focused_button_only_with_the_focus_ring() {
+        let mut ringed = screen();
+        ringed.input(&key(Key::Tab));
+        assert_eq!(ringed.dialog().and_then(Dialog::focus), Some(ACCEPT_ITEM));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.take_accept().is_some(), "Accept, by default");
+        let mut off = screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert!(!off.closed(), "the computer");
+        assert_eq!(off.take_accept(), None);
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
+        let mut ringed = info_screen();
+        ringed.input(&key(Key::Tab));
+        ringed.input(&key(Key::Space));
+        assert!(ringed.closed(), "the info screen, by default");
+        let mut off = info_screen().with_focus_ring(FocusRing::Off);
+        off.input(&key(Key::Tab));
+        off.input(&key(Key::Space));
+        assert!(!off.closed(), "the info screen");
+        assert_eq!(off.take_abort(), None);
+        assert_eq!(off.dialog().and_then(Dialog::focus), None);
     }
 }

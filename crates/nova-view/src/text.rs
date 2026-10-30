@@ -2,9 +2,13 @@
 //! and word wrap.
 //!
 //! Everything is in logical units. The port has no scale: the renderer
-//! multiplies a text run's size, origin and wrap width by the UI scale
-//! when it draws, so widths and line heights that are proportional to the
-//! size are all that "text scales with the rest of the UI" needs.
+//! shapes each text run at its logical size and draws it at the UI scale,
+//! multiplying its origin and glyph positions by the scale, so text
+//! scales with the rest of the UI. Widths may be whole units, as the
+//! glyphon adapter's (`nova_render::wgpu::GlyphonMetrics`) are, like
+//! QuickDraw's with fractional widths off: each character rounds on its
+//! own, so a width is proportional to the size only within one unit per
+//! character.
 //!
 //! The `fixture` feature (and this crate's tests) exposes `fixture`: a
 //! monospaced mock and the port's contract, which every adapter must meet.
@@ -23,7 +27,9 @@ pub const LINE_HEIGHT: f32 = 1.2;
 /// Measures text as the renderer will draw it.
 pub trait TextMetrics {
     /// The advance width of `text` set on one line (no wrapping) in `font`
-    /// at `size`, in logical units. The empty string is 0 wide.
+    /// at `size`, in logical units. The empty string is 0 wide. An adapter
+    /// may give whole units, as QuickDraw's widths are with fractional
+    /// widths off.
     fn width(&self, font: Font, size: f32, text: &str) -> f32;
     /// The distance between the tops of successive lines in `font` at
     /// `size`, in logical units: [`LINE_HEIGHT`] times `size`.

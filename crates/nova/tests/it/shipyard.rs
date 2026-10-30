@@ -609,10 +609,19 @@ fn a_ship_bought_and_named_in_the_shipyard_is_saved_flown_and_restored_after_a_r
     assert!(game.shipyard().naming().is_some(), "the name prompt");
     assert_eq!(store.writes(), writes);
 
-    // The name typed and Return buy it, and the pilot is saved.
+    // The name typed and Return buy it, closing the shipyard, and the
+    // pilot is saved.
     game.type_name("Kestrel");
     game.press(KeyCode::Enter);
-    assert!(game.shipyard().naming().is_none(), "closed");
+    assert!(
+        game.app
+            .screen()
+            .spaceport_view()
+            .expect("landed")
+            .open_shipyard()
+            .is_none(),
+        "the purchase closes the shipyard"
+    );
     assert_eq!(game.pilot().ship(), HEAVY);
     assert_eq!(store.writes(), writes + 1);
     let named = saved(&store, "Ada");
@@ -625,8 +634,7 @@ fn a_ship_bought_and_named_in_the_shipyard_is_saved_flown_and_restored_after_a_r
         named.ship_name()
     );
 
-    // Done, then Leave: the new ship takes off.
-    game.press(KeyCode::Escape);
+    // Leave: the new ship takes off.
     game.press(KeyCode::Escape);
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.pilot().ship(), HEAVY);

@@ -20,9 +20,7 @@ use std::rc::Rc;
 
 use nova_sim::Pilot;
 use nova_sim::christening::{christen, christening};
-use nova_sim::shipyard::SHIP_NAME_CHARS;
-use nova_view::ui::text_input::{TEXT_INPUT_DIALOG, TextInputDialog, TextInputOutcome};
-use nova_view::ui::{DescriptionSource, DialogResources};
+use nova_view::ui::text_input::{TextInputDialog, TextInputOutcome};
 use nova_view::{Input, Screen, ScreenAction};
 
 use super::{AppScreen, MENU};
@@ -60,43 +58,9 @@ impl AppScreen {
             pilot.ship(),
             &mut self.chance,
         );
-        let style = self.data.button_style();
-        let built = self.dialogs.as_ref().map(|dialogs| {
-            dialogs
-                .resources
-                .dialog_template(TEXT_INPUT_DIALOG)
-                .and_then(|template| {
-                    TextInputDialog::new(
-                        &template,
-                        &asked.prompt,
-                        &asked.default,
-                        SHIP_NAME_CHARS,
-                        style,
-                        Rc::clone(&dialogs.metrics),
-                    )
-                })
+        let dialog = self.ship_name_dialog(&asked.prompt, &asked.default, by_key, |screen| {
+            Rc::clone(&screen.menu.as_ref().expect(MENU).metrics)
         });
-        let mut dialog = match built {
-            Some(Ok(dialog)) => dialog,
-            other => {
-                if let Some(Err(reason)) = other {
-                    self.warnings.push(format!(
-                        "nova: using the built-in Text Input dialog: {reason}"
-                    ));
-                }
-                let metrics = Rc::clone(&self.menu.as_ref().expect(MENU).metrics);
-                TextInputDialog::fallback(
-                    &asked.prompt,
-                    &asked.default,
-                    SHIP_NAME_CHARS,
-                    style,
-                    metrics,
-                )
-            }
-        };
-        if by_key {
-            dialog.flush_typed_key();
-        }
         self.christening = Some(Christening {
             dialog,
             pilot,

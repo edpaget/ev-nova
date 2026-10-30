@@ -328,11 +328,13 @@ pub(in crate::flight) fn catalog() -> FakeCatalog {
         codes: Vec::new(),
         box_sheet: Ok(EffectSheet {
             frame_width: 0,
+            frame_height: 0,
             image: crate::SheetImage::Rled(500),
             frames: NonZeroU16::new(36).expect("non-zero"),
         }),
         cursor_sheet: Ok(EffectSheet {
             frame_width: 0,
+            frame_height: 0,
             image: crate::SheetImage::Rled(651),
             frames: NonZeroU16::new(8).expect("non-zero"),
         }),
@@ -994,6 +996,7 @@ impl CombatLooks for FakeCatalog {
             0 => self.box_sheet.clone(),
             1..=4 => Ok(EffectSheet {
                 frame_width: 0,
+                frame_height: 0,
                 image: crate::SheetImage::Rled(500 + graphic.cast_signed()),
                 frames: NonZeroU16::new(36).expect("non-zero"),
             }),
@@ -1005,6 +1008,7 @@ impl CombatLooks for FakeCatalog {
     fn asteroid_sheet(&self, kind: u8) -> Result<EffectSheet, String> {
         Ok(EffectSheet {
             frame_width: 0,
+            frame_height: 0,
             image: crate::SheetImage::Rled(1800 + i16::from(kind)),
             frames: NonZeroU16::new(36).expect("non-zero"),
         })
@@ -1020,6 +1024,7 @@ impl CombatLooks for FakeCatalog {
             image: crate::SheetImage::Rled(1095),
             frames: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 0,
+            frame_height: 0,
         })
     }
 
@@ -1931,6 +1936,7 @@ pub(in crate::flight) const OVER: WeaponId = WeaponId(147);
 pub(in crate::flight) fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
     EffectSheet {
         frame_width: 0,
+        frame_height: 0,
         image: crate::SheetImage::Rled(image_id),
         frames: Frames::new(frames).expect("non-zero"),
     }

@@ -8,9 +8,20 @@
 //! (QuickDraw font 20), which EV Nova.app does not ship. A face that does
 //! not load is never drawn in: [`face_for`] picks among the faces that
 //! did.
+//!
+//! Every glyph advances a whole unit, as QuickDraw's do with fractional
+//! widths off: [`whole_advance`] gives a glyph its face's device width
+//! ([`device_width`], from the face's `hdmx`) when there is one, else its
+//! linear advance rounded.
+//!
+//! Glyphs are rasterised with full hints, in both directions, by
+//! [`glyph_raster`](crate::glyph_raster): Charcoal through its own
+//! TrueType instructions, as the system's scaler drew it for QuickDraw, so
+//! its stems fill whole pixel columns.
 
 use std::sync::Arc;
 
+use nova_data::fonts::DeviceWidths;
 use nova_view::Font;
 
 /// The bundled substitute for Geneva (and for a missing Charcoal): Noto Sans
@@ -123,9 +134,30 @@ pub fn face_for(font: Font, loaded: Loaded) -> Option<Face> {
     }
 }
 
+/// A glyph's whole advance, in logical units: its `device` width when its
+/// face has one at the size, else its `linear` (unhinted) advance
+/// rounded, as QuickDraw advances a glyph with fractional widths off.
+#[must_use]
+pub fn whole_advance(linear: f32, device: Option<u8>) -> f32 {
+    device.map_or_else(|| linear.round(), f32::from)
+}
+
+/// Glyph `glyph`'s device width in `widths` at `size` points: only at a
+/// whole ppem (a size of 1 to 255 with no fraction, ppem being the point
+/// size at 72 dpi) that the face's `hdmx` has a record for.
+#[must_use]
+pub fn device_width(widths: &DeviceWidths, size: f32, glyph: u16) -> Option<u8> {
+    let whole = size.fract() == 0.0 && (1.0..=255.0).contains(&size);
+    // In range and whole, so the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let ppem = whole.then_some(size as u8)?;
+    widths.width(ppem, glyph)
+}
+
 #[cfg(test)]
 mod tests {
     use nova_data::fonts::check_sfnt;
+    use nova_data::fonts::fixture::{block_sfnt, hdmx};
 
     use super::*;
 
@@ -229,6 +261,62 @@ mod tests {
     fn the_bundled_fallback_is_a_usable_outline_font() {
         assert_eq!(check_sfnt(FALLBACK_FONT), Ok(()));
         assert_eq!(FALLBACK_FONT.len(), 556_216);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_device_width_wins_over_the_linear_advance() {
+        assert_eq!(whole_advance(5.46, Some(7)), 7.0);
+        assert_eq!(whole_advance(6.04, Some(5)), 5.0);
+        assert_eq!(whole_advance(6.04, Some(0)), 0.0);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn with_no_device_width_the_linear_advance_rounds() {
+        assert_eq!(whole_advance(5.46, None), 5.0);
+        assert_eq!(whole_advance(5.5, None), 6.0);
+        assert_eq!(whole_advance(6.04, None), 6.0);
+        assert_eq!(whole_advance(0.0, None), 0.0);
+        assert_eq!(whole_advance(0.49, None), 0.0);
+    }
+
+    /// The block font's device widths: glyph 1 is 13 wide at 10 ppem and
+    /// 1 wide at 255.
+    fn widths() -> DeviceWidths {
+        let bytes = block_sfnt("Charcoal")
+            .table(b"hdmx", hdmx(2, &[(10, &[0, 13]), (255, &[0, 1])]))
+            .build();
+        DeviceWidths::read(&bytes)
+    }
+
+    #[test]
+    fn a_device_width_is_found_at_a_whole_ppem_with_a_record() {
+        let widths = widths();
+        assert_eq!(device_width(&widths, 10.0, 1), Some(13));
+        assert_eq!(device_width(&widths, 255.0, 1), Some(1));
+        assert_eq!(device_width(&widths, 10.0, 0), Some(0));
+        assert_eq!(device_width(&widths, 10.0, 2), None, "no such glyph");
+        assert_eq!(device_width(&widths, 12.0, 1), None, "no record");
+    }
+
+    #[test]
+    fn a_size_that_is_not_a_whole_ppem_has_no_device_width() {
+        let widths = widths();
+        for size in [
+            10.5,
+            9.999,
+            10.001,
+            0.0,
+            -10.0,
+            255.5,
+            256.0,
+            266.0,
+            f32::NAN,
+            f32::INFINITY,
+        ] {
+            assert_eq!(device_width(&widths, size, 1), None, "{size}");
+        }
     }
 
     #[test]
