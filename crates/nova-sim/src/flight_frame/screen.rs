@@ -163,6 +163,23 @@ pub enum ScreenAsk {
     /// the game held once it changes ([`ScreenAnswer::PilotPanel`]).
     /// Answered nothing without a catalog.
     PilotPanel,
+    /// Which `dësc` the gate entry `entry` loads for its movie, asked
+    /// before the entry with movies on, as `_PlayerEnterHypergate` and
+    /// `_PlayerEnterWormhole` call `_PlayQTMovieFromDesc` past their
+    /// refusals and before the come-out (@0x639d8, @0x6427d)
+    /// ([`ScreenAnswer::GateEntryDesc`]). Answered nothing without a
+    /// catalog, as the gate sites are the catalog's.
+    GateEntryDesc(GateEntry),
+}
+
+/// A gate entry the view is about to send ([`ScreenAsk::GateEntryDesc`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateEntry {
+    /// The hypergate whose entry is pending, for the system picked on its
+    /// map (`None` for no pick).
+    Hypergate(Option<SystemId>),
+    /// The wormhole whose entry is pending.
+    Wormhole,
 }
 
 impl ScreenAsk {
@@ -316,6 +333,9 @@ pub enum ScreenAnswer {
     Boarding(PlunderView),
     /// [`ScreenAsk::PilotPanel`]'s.
     PilotPanel(Box<PilotPanel>),
+    /// [`ScreenAsk::GateEntryDesc`]'s: the `dësc` ID, or `None` when the
+    /// entry would be refused and so plays no movie.
+    GateEntryDesc(Option<i16>),
 }
 
 impl ScreenAnswer {
@@ -349,6 +369,7 @@ impl ScreenAnswer {
             ScreenAsk::Hail => matches!(self, Self::Hail(_)),
             ScreenAsk::Boarding => matches!(self, Self::Boarding(_)),
             ScreenAsk::PilotPanel => matches!(self, Self::PilotPanel(_)),
+            ScreenAsk::GateEntryDesc(_) => matches!(self, Self::GateEntryDesc(_)),
         }
     }
 }
@@ -395,6 +416,7 @@ mod tests {
             ScreenAsk::Hail,
             ScreenAsk::Boarding,
             ScreenAsk::PilotPanel,
+            ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
         ]
     }
 
@@ -497,6 +519,7 @@ mod tests {
                 combat_rating: String::new(),
                 date: String::new(),
             })),
+            ScreenAnswer::GateEntryDesc(None),
         ]
     }
 

@@ -507,6 +507,7 @@ mod flight_events;
 mod frame;
 mod free_cargo;
 mod game_work;
+mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;

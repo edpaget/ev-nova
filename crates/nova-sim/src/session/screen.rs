@@ -58,10 +58,11 @@ impl Session {
     ///   options.
     /// - To [`ScreenAsk::Boarding`], [`Session::boarding`].
     /// - To [`ScreenAsk::PilotPanel`], [`Session::pilot_panel`].
+    /// - To [`ScreenAsk::GateEntryDesc`], [`Session::gate_entry_desc`].
     ///
     /// The map's redraw and panels, the hypergate cycle, the coming
-    /// traffic, a ship's name prompt, a captured ship's, the hail and the
-    /// pilot panel read
+    /// traffic, a ship's name prompt, a captured ship's, the hail, the
+    /// pilot panel and the gate entry's `dësc` read
     /// `collab`'s catalog, and answer [`ScreenAnswer::Nothing`] without
     /// one; so does an ask with nothing to show (no outfitter, no bar, no
     /// bar visit, no offer, no hail, no boarding). It takes `&mut self`
@@ -144,6 +145,9 @@ impl Session {
             ScreenAsk::Hail => self.hail_screen(catalog, collab.hail_options),
             ScreenAsk::Boarding => self.boarding_screen(),
             ScreenAsk::PilotPanel => self.pilot_panel_screen(catalog),
+            ScreenAsk::GateEntryDesc(entry) => catalog.map_or(ScreenAnswer::Nothing, |catalog| {
+                ScreenAnswer::GateEntryDesc(self.gate_entry_desc(entry, catalog))
+            }),
         }
     }
 
@@ -165,7 +169,7 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtId, MissionId, ShipId, StarSystem, SystemId};
     use crate::chance::NeverFires;
-    use crate::flight_frame::FlightFrame;
+    use crate::flight_frame::{FlightFrame, GateEntry};
     use crate::hail::HailOptions;
     use crate::landing::StellarFlags;
     use crate::map_search::SearchOutcome;
@@ -424,6 +428,31 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_entrys_desc_is_the_sessions_over_the_catalog() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        for entry in [
+            GateEntry::Hypergate(Some(SystemId(131))),
+            GateEntry::Hypergate(None),
+        ] {
+            assert_eq!(
+                screen(
+                    &mut session,
+                    Some(&catalog),
+                    ScreenAsk::GateEntryDesc(entry)
+                ),
+                ScreenAnswer::GateEntryDesc(session.gate_entry_desc(entry, &catalog)),
+                "{entry:?}"
+            );
+        }
+        assert_eq!(
+            session.gate_entry_desc(GateEntry::Hypergate(Some(SystemId(131))), &catalog),
+            Some(131),
+            "precondition: a dësc"
+        );
+    }
+
+    #[test]
     fn find_finds_what_the_session_finds() {
         let mut session = Session::start(&catalog()).expect("starts");
         for query in ["", "Sol", "nowhere"] {
@@ -523,6 +552,7 @@ mod tests {
             ScreenAsk::FloatingMap,
             ScreenAsk::ComingTraffic,
             ScreenAsk::PlainText("Hello, <PSN>.".to_owned()),
+            ScreenAsk::GateEntryDesc(GateEntry::Hypergate(Some(SystemId(131)))),
         ]
     }
 
@@ -547,6 +577,7 @@ mod tests {
             ScreenAsk::CaptureNaming,
             ScreenAsk::Hail,
             ScreenAsk::PilotPanel,
+            ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
         ] {
             let sent = format!("{ask:?}");
             assert_eq!(
