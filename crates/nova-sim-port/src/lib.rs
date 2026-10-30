@@ -139,6 +139,7 @@ pub mod escape;
 pub mod escort_dialog;
 pub mod gate_sprite;
 pub mod grant;
+pub mod has_max;
 pub mod hire;
 pub mod iff;
 pub mod murk;

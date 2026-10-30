@@ -346,9 +346,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::catalog::{
-    CronRecord, GovtId, LandingSite, OutfitId, OutfitRecord, RankRecord, WeaponId,
-};
+use crate::catalog::{CronRecord, GovtId, LandingSite, OutfitId, OutfitRecord, RankRecord};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::MOD_AMMO;
 use crate::control::Gate;
@@ -2253,7 +2251,7 @@ pub struct Armed {
 
 impl Armed {
     /// The guns and turrets of a ship of `hardpoints` owning `owned`.
-    fn of(
+    pub(crate) fn of(
         hardpoints: Hardpoints,
         owned: &BTreeMap<OutfitId, u16>,
         records: &[OutfitRecord],
@@ -2265,78 +2263,6 @@ impl Armed {
             turret_limit: raised(hardpoints.turrets, MORE_TURRETS, owned, records),
         }
     }
-}
-
-/// What `_HasMaxOfItem` reads, beyond the outfits owned, for an outfit's
-/// limit ([`item_limit`]).
-#[derive(Clone, Copy)]
-pub(crate) struct ItemRoom<'a> {
-    /// The ship class's `MaxGun` and `MaxTur`.
-    pub(crate) hardpoints: Hardpoints,
-    /// How many of each weapon the ship carries, as its weapon array
-    /// holds them.
-    pub(crate) launchers: &'a BTreeMap<WeaponId, u32>,
-    /// Each weapon's `MaxAmmo`; none for no limit of its own.
-    pub(crate) max_ammo: &'a dyn Fn(WeaponId) -> u32,
-    /// How the [`RAISES_MAX`] outfits raise a `Max`
-    /// ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)).
-    pub(crate) raised_max: RuleSource,
-}
-
-/// The limit `_HasMaxOfItem` (@0x4512-0x4894) gives `record` through its
-/// second argument, `owned` of `records` being owned and `room` the rest
-/// it reads, by the first of these that holds:
-///
-/// 1. Ammunition, an outfit whose first mod is [`MOD_AMMO`] naming a
-///    weapon of `MaxAmmo` above none (@0x457e-0x45e4): when the count
-///    owned is at least that `MaxAmmo` times the weapon's launchers, that
-///    cap, the `Max` never read.
-/// 2. When the count owned is at least its `Max` as [`raised_max`] reads
-///    it (@0x45e9-0x46c3), that `Max`.
-/// 3. A gun ([`OutfitFlags::GUN`], @0x46c8-0x47b7): none when its limit
-///    (`MaxGun`, as [`MORE_GUNS`] changes it) is none or less, and the
-///    whole limit when the guns owned are at it or above.
-/// 4. A turret ([`OutfitFlags::TURRET`], @0x47bd-0x4866), the same with
-///    `MaxTur` and [`MORE_TURRETS`].
-/// 5. Otherwise the count owned.
-///
-/// The original's sums and products are 16-bit and wrap; here they are
-/// wide and saturate.
-pub(crate) fn item_limit(
-    record: &OutfitRecord,
-    owned: &BTreeMap<OutfitId, u16>,
-    records: &[OutfitRecord],
-    room: &ItemRoom,
-) -> i64 {
-    let count = i64::from(owned.get(&record.id).copied().unwrap_or_default());
-    if let (MOD_AMMO, weapon) = record.mods[0] {
-        let weapon = WeaponId(weapon);
-        let max_ammo = (room.max_ammo)(weapon);
-        if max_ammo > 0 {
-            let launchers = room.launchers.get(&weapon).copied().unwrap_or_default();
-            let cap = i64::from(max_ammo).saturating_mul(i64::from(launchers));
-            if count >= cap {
-                return cap;
-            }
-        }
-    }
-    let max = raised_max(record, owned, records, room.raised_max);
-    if count >= max {
-        return max;
-    }
-    let slots = |flag: u16, base: i16, mod_type: i16| {
-        if record.flags & flag == 0 {
-            return None;
-        }
-        let limit = i64::from(raised(base, mod_type, owned, records));
-        if limit <= 0 {
-            return Some(0);
-        }
-        (i64::from(flagged(flag, owned, records)) >= limit).then_some(limit)
-    };
-    slots(OutfitFlags::GUN, room.hardpoints.guns, MORE_GUNS)
-        .or_else(|| slots(OutfitFlags::TURRET, room.hardpoints.turrets, MORE_TURRETS))
-        .unwrap_or(count)
 }
 
 /// `record`'s lower-case names.
