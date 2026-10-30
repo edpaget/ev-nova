@@ -2766,6 +2766,23 @@ mod tests {
     }
 
     #[test]
+    fn a_flight_fires_its_turret_at_a_ship_breaking_up_and_none_at_one_destroyed() {
+        // `attack_drop` drops goal 4 alone, so a flight from a ship breaking
+        // up keeps its goal, and its turret pass reads the slot alone.
+        let from = ShipRef::Npc(NpcId(2));
+        let npc = shooter(&[guided(130, 4)], Goal::Flee(from));
+        let fired_at = |target: fn(&mut Npc)| {
+            let mut other = crate::traffic::fixture::npc(2, ShipStats::new(FAST, &[]));
+            other.state.position = SHOOTER + Vec2::new(0.0, 100.0);
+            target(&mut other);
+            let npcs = [npc.clone(), other];
+            trigger(&npc, &Surroundings::new(&[], &npcs), FireRules::default()).only
+        };
+        assert_eq!(fired_at(breaking_up), id(130));
+        assert_eq!(fired_at(destroyed), None);
+    }
+
+    #[test]
     fn a_kept_pick_fires_in_place_of_the_homing_gun_retry() {
         // No forward gun: the gun pass retries with homing allowed, unless
         // a pick is kept.
