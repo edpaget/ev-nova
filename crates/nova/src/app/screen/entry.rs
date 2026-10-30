@@ -41,11 +41,13 @@
 //! ([`FlightView::warm_up_traffic`]), so the first step, which fills the
 //! system, doesn't stall on reading them. The load or New Pilot already ran the rebuilds the original
 //! makes at entry (`_PropagateMissionBitEffects`,
-//! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`,
-//! `_HandleStellarSprites`), and nothing changes the game on the main
-//! screen between that rebuild and entry, so a re-entry after Escape's
-//! return, under the engine's reading of `escape_to_main_screen`, runs
-//! no fresh one.
+//! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`), and
+//! nothing changes the game on the main screen between that rebuild and
+//! entry, so a re-entry after Escape's return, under the engine's reading
+//! of `escape_to_main_screen`, runs no fresh one. Its
+//! `_HandleStellarSprites` passes do run, at every entry: the edge's
+//! [`enter_game`] raises them, and that tick of no time steps the scene
+//! by them.
 //!
 //! **What the entry held** (Command chords, the window's close) is
 //! replayed into the router at the handover, where

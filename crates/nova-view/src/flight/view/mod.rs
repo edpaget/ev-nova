@@ -1672,8 +1672,9 @@ struct Redrawn {
     /// The stars were scattered afresh.
     stars: bool,
     /// A take-off or a gate's exit reset every stellar's frames: those
-    /// shown and those kept were zeroed before the scene was laid out or
-    /// drawn again ([`FlightView::reset_stellar_frames`]).
+    /// shown and those kept were zeroed once the scene was laid out, among
+    /// the stellar passes ([`FlightView::reset_stellar_frames`],
+    /// [`FlightView::replay_stellar_passes`]).
     frames_reset: bool,
 }
 

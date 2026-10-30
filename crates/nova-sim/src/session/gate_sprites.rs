@@ -6,7 +6,9 @@
 //! (@0x444d2), so each gate steps after the ships have moved, reading them
 //! as this frame left them: at the end of the pass's ship loop
 //! ([`Session::ship_loop`]), before the frame is drawn. It steps whenever the ship is not docked, while a
-//! jump plays too, as the original's stellars animate then.
+//! jump plays too, as the original's stellars animate then. Outside the
+//! play frame each `_PrepareAllSprites`, and game entry, runs the same walk
+//! at its own gain and holds (see the `stellar_passes` module).
 //!
 //! The gates are those of the stellars shown. A gate keeps its sprite
 //! across systems, as the original keeps a gate's frame, next frame and
@@ -17,7 +19,8 @@
 //! (`_HandlePlayerDockRequest` @0x675ce-0x67646; see the `takeoff_frames`
 //! module, rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset).
 //! While not shown it stands still,
-//! as the sprite tick walks only the slots shown (@0x2e713-0x2e73e). It
+//! as the sprite tick and every pass walk only the slots shown
+//! (@0x2e713-0x2e73e). It
 //! starts closed only the first time a flight shows it, with next 0 once
 //! a take-off or a gate's exit has reset the frames: `Space` is not
 //! saved, so a load, a resumed pilot and a new pilot start every gate

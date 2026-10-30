@@ -3532,16 +3532,22 @@
 //!   `_AIMakeShipEmergeFromHyperGate`, `_PrepareAllSprites` and the
 //!   rebuild; `_AdjustSoundVolume` @0x6766e sets the volume and plays
 //!   nothing.
-//! - **A divergence, filed.** `_PrepareAllSprites` calls
+//! - **The stellar pass.** `_PrepareAllSprites` calls
 //!   `_HandleStellarSprites` (@0x3a7c9), which never reads the frozen flag
 //!   `*0x3b523c` (no reference in @0x2e713-0x2ef2c) and adds `_gSpeedMult`
-//!   to the timer (@0x2e810-0x2e825). So every `_PrepareAllSprites` steps
-//!   each shown stellar's and gate's animation a tick: twice after this
-//!   reset before the first frame, and at every other entry that runs it.
-//!   weapons-fidelity phase 47 recorded it as display only, which is wrong
-//!   for the timer and the frames. The engine's
-//!   `Session::prepare_all_sprites` steps no stellar or gate. Filed as
-//!   rdm:phase/play-feel-4-followups/phase-4-prepare-all-sprites-steps-stellar-animation.
+//!   to the timer (@0x2e810-0x2e825). weapons-fidelity phase 47 recorded
+//!   it as display only, which is wrong for the timer and the frames.
+//!   Built by play-feel-7 phase 3, below.
+//!
+//! ## Built by play-feel-7 phase 3
+//!
+//! Each `_PrepareAllSprites` runs a `_HandleStellarSprites` pass on the
+//! gates and the view's stellars: at gain 0 after a landing, which zeroes
+//! `_gSpeedMult` (@0x6375e-0x63769), and at full gain elsewhere, a gate's
+//! entry adding one on the exit system's stellars before this reset. See
+//! `nova_sim::Session::enter_game` and the session's `stellar_passes`
+//! module, and rdm:phase/play-feel-7/phase-3-prepare-all-sprites-steps-stellar-animation
+//! for each caller.
 //!
 //! ## Checked for play-feel-4 phase 16
 //!

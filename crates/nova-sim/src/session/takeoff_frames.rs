@@ -19,7 +19,10 @@
 //! other stellar's frames, kept or shown. The view settles it in the
 //! catch-up that follows the take-off or the exit, before the first frame
 //! is drawn, so the original's order (the reset before the rebuild) needs
-//! nothing more. The reset plays no sound.
+//! nothing more. A gate entry's stellar pass comes before the reset and
+//! the tail's two after it (see the `stellar_passes` module): the reset
+//! keeps each timer, so the passes around it add up, and the exit gate
+//! opened here takes the tail's two. The reset plays no sound.
 
 use super::{Session, SessionEvent, Space};
 use crate::catalog::StellarId;

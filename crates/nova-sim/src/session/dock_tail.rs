@@ -14,9 +14,11 @@
 //!   the `precalced` module), whose `_ResetPlayer` writes -1 to +0xc908
 //!   (see the `stray_words` module). All three callers run it.
 //! - [`Session::end_dock_tail`], after the setup and the frames' reset:
-//!   the rebuild (@0x674c7, @0x67653), the second `_PrepareAllSprites`
-//!   (@0x67658, `populate`'s the first), the dock request dropped
-//!   (@0x6705f, @0x6374a-0x63759; see the `clearance` module), the nav
+//!   the rebuild (@0x674c7, @0x67653), the dock request dropped
+//!   (@0x6705f, @0x6374a-0x63759; see the `clearance` module), both
+//!   `_PrepareAllSprites`' stellar passes (@0x6764e, @0x67658; see the
+//!   `stellar_passes` module) and the second's ship part, `populate`'s
+//!   the first, the nav
 //!   selection let go with the mode kept, and the course cued
 //!   (@0x674d2-0x674d8; see the `nav` module). The take-off and the
 //!   wormhole with no exit run it; a gate's exit runs its own loops and

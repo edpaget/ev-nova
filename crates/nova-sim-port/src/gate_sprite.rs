@@ -51,7 +51,9 @@
 //! and opens the hypergate the player came out of at its last frame, its
 //! timer at -`AnimDelay` ([`GateSprite::exit_gate`];
 //! `_HandlePlayerDockRequest` @0x675ce-0x67646). The timer is signed for
-//! it.
+//! it. Each `_PrepareAllSprites` and game entry run the same code outside
+//! the play frame, at a gain [`StellarPass`] says
+//! ([`GateSprite::step_by`]).
 //!
 //! The engine differs where the original would hang: a random pick with
 //! no frame left to pick (frames - `o` is 1, say) spins forever in the

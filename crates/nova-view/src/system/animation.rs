@@ -1,6 +1,9 @@
 //! A stellar's animation: which frame of its sheet shows, stepped tick by
 //! tick, as the original's sprite tick steps it every play frame
-//! (`_HandleStellarSprites` @0x2e77b-0x2ee35, stellar-fidelity phase 1).
+//! (`_HandleStellarSprites` @0x2e77b-0x2ee35, stellar-fidelity phase 1),
+//! and at each pass outside one, under a `_PrepareAllSprites` or at game
+//! entry ([`Frames::step_by`], at the gain the pass says:
+//! `nova_sim::gate_sprite::StellarPass`).
 //!
 //! A stellar animates when the frame count it animates over (its
 //! counted sheet's) is above 1, it is not a hypergate, and its destroyed

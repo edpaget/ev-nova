@@ -36,7 +36,8 @@
 //! only through this carry, so `begin` keeps the snapshot it had before
 //! the `OnStart` (`_DoNewPilot`'s own @0x1925e, which [`Session::fly`]
 //! stands for), and [`Session::enter_game`], the entry into play from
-//! the main screen, takes it afresh.
+//! the main screen, takes it afresh. That entry also runs the routine's
+//! stellar passes (see the `stellar_passes` module).
 //!
 //! **What a new pilot reads** ([`Session::with_last_refresh`]): the
 //! carried snapshot, or, with none, the launch's (`Chart::launch_refresh`).
@@ -101,7 +102,8 @@ impl Session {
     }
 
     /// Enters play from the main screen (`_EnterGameFromMainScreen`
-    /// @0x19f81): its refresh leaves the galaxy as the session already
+    /// @0x19f81), at every way in but the developer's flight, a re-entry
+    /// included: its refresh leaves the galaxy as the session already
     /// has it, so only the snapshot a later new pilot reads is taken
     /// afresh (see the module docs' "Ordering against the original"), and
     /// the routine's stellar passes run, their random picks drawn on
