@@ -230,12 +230,12 @@ fn finding() -> AppScreen {
 }
 
 /// The main menu, with dialogs, appearing at start-up.
-fn starting_up() -> AppScreen {
+pub(super) fn starting_up() -> AppScreen {
     with_dialogs(data()).with_pilots(Some(keeper(&MemoryPilots::new())), Rc::new(MonoMetrics))
 }
 
 /// The main menu appearing on a return from play.
-fn returning() -> AppScreen {
+pub(super) fn returning() -> AppScreen {
     let mut screen = flying();
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
@@ -249,7 +249,7 @@ fn appear_ends(screen: &mut AppScreen) {
 }
 
 /// Play being entered with a pilot that has seen the intro.
-fn entering() -> AppScreen {
+pub(super) fn entering() -> AppScreen {
     let mut screen = main_menu();
     create(&mut screen, "Ada");
     escape_to_menu(&mut screen);
@@ -319,7 +319,7 @@ fn click_ends(screen: &mut AppScreen) {
 }
 
 /// Quit chosen on the main menu, its delay running.
-fn quitting() -> AppScreen {
+pub(super) fn quitting() -> AppScreen {
     let mut screen = main_menu();
     choose(&mut screen, MenuChoice::Quit);
     assert!(screen.quit_in.is_some());

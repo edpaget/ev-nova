@@ -6,8 +6,10 @@ use super::*;
 
 use nova_sim::Rulebook;
 use nova_sim::mission::screens::mac_ticks;
+use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 
 use super::menu::menu_with_dialogs;
+use super::menu_commands::{entering, quitting, returning, starting_up};
 use super::missions::filmed;
 use super::wheel::{offering, text, wheel_over_text};
 
@@ -232,6 +234,57 @@ fn away_the_main_menu_under_an_entry_doesnt_idle() {
     screen.tick(mac_ticks(20));
     assert_eq!(rollover(&screen), shown, "as it stood");
     assert_eq!(drawn(&screen), picture, "its slides too");
+}
+
+/// The fade back from black after a death with no main menu.
+fn fading_in() -> AppScreen {
+    let mut screen = with_dialogs(data());
+    screen.fade_in = Some(ScreenFade::from_black(DEATH_FADE_FOR));
+    screen
+}
+
+/// How far a fade or an entry has come, by what it draws.
+fn picture(screen: &AppScreen) -> String {
+    format!("{:?}", drawn(screen))
+}
+
+/// How far Quit's delay has come. The menu under it idles away, so its
+/// picture changes.
+fn quit_left(screen: &AppScreen) -> String {
+    format!("{:?}", screen.quit_in)
+}
+
+/// The appear, the entry, the fade back from black and Quit's delay are
+/// synchronous loops in the original, and the engine's tick-driven forms
+/// of them wait while away (see `background`): well past their ends they
+/// haven't moved, through the switch-in's tick too, and go on after it.
+#[test]
+fn away_the_fades_the_entry_and_quits_delay_wait_for_the_return() {
+    type Row = (&'static str, fn() -> AppScreen, fn(&AppScreen) -> String);
+    let rows: [Row; 5] = [
+        ("the fade back from black", fading_in, picture),
+        ("the entry", entering, picture),
+        ("the start-up appear", starting_up, picture),
+        ("the return's appear", returning, picture),
+        ("Quit's delay", quitting, quit_left),
+    ];
+    for (name, make, progress) in rows {
+        let mut screen = make();
+        let before = progress(&screen);
+        switch_out(&mut screen);
+        for _ in 0..8 {
+            screen.tick(DEATH_FADE_FOR);
+        }
+        assert_eq!(progress(&screen), before, "{name}: away");
+        assert!(!screen.take_quit(), "{name}: away");
+        screen.focus_gained();
+        screen.tick(DEATH_FADE_FOR);
+        assert_eq!(progress(&screen), before, "{name}: the switch-in's tick");
+        assert!(!screen.take_quit(), "{name}: the switch-in's tick");
+        screen.tick(DEATH_FADE_FOR);
+        assert_ne!(progress(&screen), before, "{name}: back");
+        assert_eq!(screen.take_quit(), name == "Quit's delay", "{name}: back");
+    }
 }
 
 #[test]
