@@ -97,6 +97,7 @@ pub struct FakeFlight {
     weapons: Vec<WeaponId>,
     opening_names: Names,
     descriptions: VecDeque<String>,
+    port_description: Option<String>,
     failure: Option<String>,
     desk: FakeDesk,
     edits: Vec<PilotEdit>,
@@ -177,6 +178,14 @@ impl FakeFlight {
     /// ([`FlightCommand::LoadDescription`]) as `text`.
     pub fn queue_description(&mut self, text: &str) {
         self.descriptions.push_back(text.to_owned());
+    }
+
+    /// Answers every ask for the port's own description
+    /// ([`FlightCommand::LoadPortDescription`]) with `text` from now on,
+    /// as a session landed with a catalog shared loads it; with none, as
+    /// by default, it is refused, as a flight with no catalog refuses it.
+    pub fn set_port_description(&mut self, text: Option<&str>) {
+        self.port_description = text.map(str::to_owned);
     }
 
     /// Answers the next command not yet answered with `answer`: the
@@ -316,6 +325,10 @@ impl FakeFlight {
             ),
             _ if self.failure.is_some() => Answer::Refused,
             FlightCommand::Hover { .. } => Answer::Hovered(self.hover),
+            FlightCommand::LoadPortDescription => self
+                .port_description
+                .clone()
+                .map_or(Answer::Refused, Answer::Description),
             _ => Answer::Refused,
         };
         self.asks.push(ask);
@@ -1002,6 +1015,13 @@ fn check_failed(
             "{clause}: failed ({reason}), a description's load was answered {answer:?}"
         ));
     }
+    let answer = sim.apply(FlightCommand::LoadPortDescription);
+    if !answer.is_refused() {
+        return Err(format!(
+            "{clause}: failed ({reason}), the port's description was answered {answer:?}, \
+             not refused, so the view loads it itself"
+        ));
+    }
     for ask in sample_screen_asks() {
         let sent = format!("{ask:?}");
         let answer = sim.screen(ask);
@@ -1042,6 +1062,7 @@ fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
             raw: Some("A dësc.".to_owned()),
             movie: None,
         },
+        FlightCommand::LoadPortDescription,
     ];
     for ask in asks {
         let sent = format!("{ask:?}");
@@ -1530,6 +1551,49 @@ mod tests {
             Ok(()),
             "a plain text's fill is a screen's ask, answered nothing"
         );
+    }
+
+    #[test]
+    fn a_failed_flight_that_answers_the_ports_description_breaks_the_contract() {
+        let clause = check_contract(&mut LoadsThePort, &FlightOpening::failed("no chär"))
+            .expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("the port's description was answered Description"),
+            "{clause}"
+        );
+    }
+
+    /// A flight that failed and loads a description, the port's own too,
+    /// but refuses every other command and answers every screen nothing.
+    struct LoadsThePort;
+
+    impl FlightSim for LoadsThePort {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, command: FlightCommand) -> Answer {
+            match command {
+                FlightCommand::LoadDescription { .. } | FlightCommand::LoadPortDescription => {
+                    Answer::Description(String::new())
+                }
+                _ => Answer::Refused,
+            }
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, _ask: ScreenAsk) -> ScreenAnswer {
+            ScreenAnswer::Nothing
+        }
     }
 
     /// A flight that failed and loads a description, but refuses every

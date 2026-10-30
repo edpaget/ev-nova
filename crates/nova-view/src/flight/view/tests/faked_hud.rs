@@ -87,6 +87,56 @@ fn a_description_is_read_from_the_catalog_and_loaded_through_the_flight() {
     );
 }
 
+#[test]
+fn the_ports_description_is_the_text_the_flight_loaded_for_it() {
+    let catalog = FakeCatalog {
+        descriptions: vec![(128, "raw".to_owned())],
+        ..catalog()
+    };
+    let mut view = faked_in(catalog, in_sol());
+    view.sim.set_port_description(Some("loaded by the flight"));
+    view.sim.queue_description("loaded here");
+    assert_eq!(
+        view.load_port_description(StellarId(128)).as_deref(),
+        Ok("loaded by the flight")
+    );
+    assert_eq!(
+        view.sim.asks(),
+        [FlightCommand::LoadPortDescription],
+        "asked, never read and loaded here"
+    );
+}
+
+#[test]
+fn a_flight_that_refuses_the_ports_description_has_it_loaded_here() {
+    let catalog = FakeCatalog {
+        descriptions: vec![(128, "raw".to_owned())],
+        ..catalog()
+    };
+    let mut view = faked_in(catalog, in_sol());
+    view.sim.queue_description("loaded here");
+    assert_eq!(
+        view.load_port_description(StellarId(128)).as_deref(),
+        Ok("loaded here"),
+        "a failed flight, or no catalog shared"
+    );
+    assert_eq!(
+        view.load_port_description(StellarId(129)),
+        Err("no dësc 129".to_owned()),
+        "a missing one"
+    );
+    assert_eq!(
+        view.sim.asks()[..2],
+        [
+            FlightCommand::LoadPortDescription,
+            FlightCommand::LoadDescription {
+                raw: Some("raw".to_owned()),
+                movie: None,
+            },
+        ]
+    );
+}
+
 // The radar.
 
 #[test]

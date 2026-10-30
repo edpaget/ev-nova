@@ -94,6 +94,7 @@ mod appear;
 mod capture_naming;
 mod christening;
 mod death;
+mod desc_load_order;
 mod dialog_maps;
 mod encounters;
 mod entry;

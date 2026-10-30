@@ -197,14 +197,26 @@ impl AppScreen {
     /// The `dësc`s the spaceport's screens have shown, each loaded
     /// through flight as `_LoadDescription` loads one
     /// ([`FlightView::load_description`](nova_view::flight::FlightView::load_description)) and shown in its place, in the
-    /// input that showed it, so no frame draws the raw read. One that
-    /// cannot be read keeps the raw read's blank.
+    /// input that showed it, so no frame draws the raw read. The port's own
+    /// (the request whose ID is the stellar's, as
+    /// [`SpaceportView::show_description`](nova_view::spaceport::SpaceportView::show_description) routes it) is the text the
+    /// session loaded before the land checks
+    /// ([`FlightView::load_port_description`](nova_view::flight::FlightView::load_port_description);
+    /// `_DoPortDialog` @0x5f96b), never loaded a second time, as the
+    /// spaceport opening after the landing's movie would. One that cannot
+    /// be read keeps the raw read's blank.
     pub(super) fn serve_descriptions(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
         };
         while let Some(id) = spaceport.take_description_request() {
-            if let Ok(text) = flight.load_description(id) {
+            let stellar = spaceport.stellar();
+            let loaded = if id == stellar.0 {
+                flight.load_port_description(stellar)
+            } else {
+                flight.load_description(id)
+            };
+            if let Ok(text) = loaded {
                 spaceport.show_description(id, &text);
             }
         }

@@ -31,9 +31,13 @@
 //!   crossed early.
 //!   Under the movie is what `_PlayerLandOnStellar` leaves on screen
 //!   (@0x63221-0x63280): every sprite hidden, the stars among them, so the
-//!   play area is bare, and the status bar. The landing's load comes after
-//!   the land checks, not before them as the original's does: that is
-//!   rdm:phase/movies/phase-5-desc-load-order.
+//!   play area is bare, and the status bar. This movie's load is the
+//!   original's @0x632a7 one, sent with the press. The port's own `dësc`
+//!   (`_DoPortDialog` @0x5f96b) and the land checks (@0x5fbeb) follow it
+//!   in the original's order: the flight loads the port's as the landing
+//!   settles, before the land checks, and the spaceport opening after
+//!   the movie is served that text, never loading it a second time
+//!   ([`FlightView::load_port_description`]).
 //! - **Gates.** The movie plays past the entry's refusals and before the
 //!   come-out, so the view asks which `dësc` the entry loads
 //!   ([`ScreenAsk::GateEntryDesc`]), `None` for an entry that would be
