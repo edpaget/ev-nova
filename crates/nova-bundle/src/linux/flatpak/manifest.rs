@@ -7,7 +7,10 @@ use serde_json::{Value, json};
 
 use super::ffmpeg::FfmpegSource;
 use super::layout::FlatpakLayout;
-use super::{FINISH_ARGS, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN, RUST_EXTENSION, SDK};
+use super::{
+    FINISH_ARGS, LIBCLANG_DIR, LLVM_EXTENSION, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN,
+    RUST_EXTENSION, SDK,
+};
 use crate::build_id::{self, BuildId};
 use crate::fonts::{FONT_DIR, FONT_LICENCES};
 use crate::linux::EXECUTABLE;
@@ -105,7 +108,8 @@ fn text(path: &Path) -> String {
 /// network either: the FFmpeg tarball the movie decoder builds
 /// ([`FfmpegSource::record`]) is a `file` source, which `flatpak-builder`
 /// downloads and checks before the build, and the build options name it
-/// in `NOVA_FFMPEG_TARBALL`.
+/// in `NOVA_FFMPEG_TARBALL`. bindgen binds it with the LLVM extension's
+/// libclang (`LIBCLANG_PATH`).
 #[must_use]
 pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> Value {
     let ffmpeg = FfmpegSource::record();
@@ -114,7 +118,7 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> V
         "runtime": RUNTIME,
         "runtime-version": RUNTIME_VERSION,
         "sdk": SDK,
-        "sdk-extensions": [RUST_EXTENSION],
+        "sdk-extensions": [RUST_EXTENSION, LLVM_EXTENSION],
         "command": EXECUTABLE,
         "finish-args": FINISH_ARGS,
         "modules": [{
@@ -125,6 +129,7 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> V
                 "env": {
                     "CARGO_HOME": format!("/run/build/{MODULE}/cargo"),
                     build_id::VAR: build.as_str(),
+                    "LIBCLANG_PATH": LIBCLANG_DIR,
                     FFMPEG_TARBALL_VAR: format!(
                         "/run/build/{MODULE}/{FFMPEG_DEST}/{}",
                         ffmpeg.file_name()
@@ -227,7 +232,10 @@ mod tests {
         assert_eq!(manifest["sdk"], "org.freedesktop.Sdk");
         assert_eq!(
             strings(&manifest["sdk-extensions"]),
-            ["org.freedesktop.Sdk.Extension.rust-stable"]
+            [
+                "org.freedesktop.Sdk.Extension.rust-stable",
+                "org.freedesktop.Sdk.Extension.llvm22"
+            ]
         );
         assert_eq!(
             module()["build-options"]["append-path"],
@@ -317,7 +325,13 @@ mod tests {
             env["NOVA_FFMPEG_TARBALL"],
             "/run/build/nova/ffmpeg/ffmpeg-9.0.2.tar.xz"
         );
-        assert_eq!(env.as_object().expect("an object").len(), 3, "{env}");
+        assert_eq!(env.as_object().expect("an object").len(), 4, "{env}");
+    }
+
+    #[test]
+    fn bindgen_finds_libclang_in_the_llvm_extension() {
+        let env = &module()["build-options"]["env"];
+        assert_eq!(env["LIBCLANG_PATH"], "/usr/lib/sdk/llvm22/lib");
     }
 
     #[test]

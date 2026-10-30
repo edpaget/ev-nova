@@ -64,6 +64,12 @@ pub const RUNTIME_VERSION: &str = "26.08";
 pub const RUST_EXTENSION: &str = "org.freedesktop.Sdk.Extension.rust-stable";
 /// Where the extension puts `cargo`.
 pub const RUST_BIN: &str = "/usr/lib/sdk/rust-stable/bin";
+/// The SDK extension giving libclang, which bindgen needs to bind the
+/// FFmpeg the movie decoder builds: the SDK itself has none. LLVM 22 is
+/// the extension's version on the 26.08 branch.
+pub const LLVM_EXTENSION: &str = "org.freedesktop.Sdk.Extension.llvm22";
+/// Where that extension puts `libclang.so`, as bindgen's `LIBCLANG_PATH`.
+pub const LIBCLANG_DIR: &str = "/usr/lib/sdk/llvm22/lib";
 /// The module's name, and so its build directory's in the sandbox
 /// (`/run/build/<name>`).
 pub const MODULE: &str = "nova";
