@@ -19,13 +19,15 @@
 //!   `stellar_picks` module);
 //! - the NPCs' gate entry box (`Session::gate_type_widths`), which takes
 //!   a quarter of the same 150 (`_HighLevelAIHandler` state 20
-//!   @0x8dbdf).
+//!   @0x8dbdf), for every gate the system lists, shown or not, as an NPC
+//!   may head for one it lists but another visible system owns (see the
+//!   `npc_destinations` module).
 //!
 //! A stellar the player's system shows is always held there
 //! ([`OverlaidGalaxy::shows`](crate::story::OverlaidGalaxy::shows)), so
 //! the test bites on a stellar the system lists but another visible
 //! system owns, which the land key and F5 pick among
-//! ([`Chart::pick_candidates`]), and on a stellar still among the sites
+//! ([`Chart::pick_candidates`]) and the NPCs head for, and on a stellar still among the sites
 //! after the player's system has changed without a rebuild point.
 
 use super::{Chart, Statics};

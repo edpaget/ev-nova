@@ -2638,12 +2638,14 @@
 //!   `NavDefs` entry, with no active or owner test, sizing the blip by
 //!   whether the `Type` master is loaded (@0x499ef-0x49a27). The land
 //!   key's and F5's nearest pick, with the gate limit and the owner drop,
-//!   are built by stellar-fidelity phase 14 (below). The slot keys, the
-//!   tutorial hints' and `_DoNewPilot`'s candidates, NPC destinations and
-//!   the radar still read only the stellars shown:
-//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
-//!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
-//!   and rdm:task/radar-blips-every-listed-stellar.
+//!   are built by stellar-fidelity phase 14 (below). NPC destinations,
+//!   and every lookup of the stellar picked, read the whole listing,
+//!   built by rdm:phase/play-feel-4/phase-9-npc-destinations-over-navdefs
+//!   (`nova_sim_ai::traffic::destination`). The slot keys, the tutorial
+//!   hints' and `_DoNewPilot`'s candidates and the radar still read only
+//!   the stellars shown:
+//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs
+//!   and rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar.
 //!
 //! ## Built by stellar-fidelity phase 8
 //!

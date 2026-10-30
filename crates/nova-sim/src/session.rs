@@ -555,6 +555,8 @@ mod murk;
 mod nav;
 mod nebulae;
 mod news;
+#[cfg(test)]
+mod npc_destinations;
 mod npc_escape;
 mod npc_kinds;
 mod operator_moves;
@@ -1942,6 +1944,9 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             spawn_reserve: self.setup.spawn_reserve(SPAWN_RESERVE),
+            // Every stellar the system lists, shown or not, which a fleet
+            // may come out of (see the `npc_destinations` module).
+            listed: &self.chart.listed,
             // No tractor's step: the entry flies no ship. No stellar
             // shots can shoot down either: it decides for no ship.
             ..World::new(&self.chart.sites)

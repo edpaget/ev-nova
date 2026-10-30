@@ -4,7 +4,9 @@
 //! `!b330`), and Spica, the lower visible lister, owns it. In K-005 an
 //! untargeted L within 500 pixels of its spot there selects it and is
 //! refused as not landable, F5 does nothing, and from further off L
-//! passes it over. Skips, passing, when `NOVA_DATA` is unset.
+//! passes it over. The NPCs' destination pick reads K-005's listing, the
+//! wormhole in it, but the wormhole sits past the pick's 999 cap, so no
+//! NPC heads for it. Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -111,4 +113,46 @@ fn in_k005_within_500_of_the_wormhole_l_selects_it_and_is_refused_and_f5_does_no
         "selected all the same"
     );
     assert_eq!(sounds(&mut session), [SimSound::Refused]);
+}
+
+/// K-005 lists only the wormhole, which it doesn't show. The NPCs' pick
+/// walks K-005's `NavDefs` owner-blind (`_SelectRandomStellarDest`,
+/// play-feel-4 phase 9), so the wormhole is in the listing the pick
+/// reads, but at (9500, 2600) it is past the 999 cap on each axis
+/// (@0x80781-0x8078f): not even a ship of a government that prefers
+/// wormholes takes it, nor comes out of it. Moved within the cap, it
+/// would be that ship's one candidate.
+#[test]
+fn in_k005_spicas_wormhole_is_listed_for_the_npcs_but_past_the_cap() {
+    use nova_sim::traffic::destination::{Admit, candidates};
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let records = nova_sim::CombatCatalog::governments(&data);
+    let preferring = records
+        .iter()
+        .find(|govt| govt.flags2 & nova_sim::govt::PREFERS_WORMHOLES != 0)
+        .map(|govt| govt.id)
+        .expect("a stock government prefers wormholes");
+    let govts = nova_sim::Governments::new(records);
+    let session = in_k005(&data, Rulebook::default());
+    assert_eq!(session.stellars_shown().count(), 0, "none shown");
+    let listed = data.landing_sites(K005);
+    assert_eq!(
+        listed.iter().map(|site| site.id).collect::<Vec<_>>(),
+        [WORMHOLE]
+    );
+    assert_eq!(listed[0].position, Vec2::new(9500.0, 2600.0));
+    let ids = |sites: &[nova_sim::LandingSite]| -> Vec<StellarId> {
+        candidates(Some(preferring), sites, &govts, Admit::All)
+            .iter()
+            .map(|site| site.id)
+            .collect()
+    };
+    assert_eq!(ids(&listed), [], "past the cap");
+    let within = [nova_sim::LandingSite {
+        position: Vec2::new(999.0, 999.0),
+        ..listed[0]
+    }];
+    assert_eq!(ids(&within), [WORMHOLE], "govt {preferring:?}");
 }

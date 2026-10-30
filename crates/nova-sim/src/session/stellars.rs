@@ -306,14 +306,16 @@ impl Session {
         self.place_stellar_sprites();
     }
 
-    /// The width each hypergate and wormhole shown takes its entry box
-    /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
-    /// (see [`gate_entry`](crate::traffic::gate_entry)). A gate the
-    /// player's system does not hold ([`Chart::held_here`]) reads the
-    /// unloaded width, 150, as the owner test comes first (@0xacb9-0xacc1).
+    /// The width each hypergate and wormhole the system lists, shown or
+    /// not, takes its entry box by: the one `_GetStellarSpriteXSize` reads
+    /// of its `Type` master (see [`gate_entry`](crate::traffic::gate_entry)).
+    /// A gate the player's system does not hold ([`Chart::held_here`]),
+    /// such as one it lists but another visible system owns, which an NPC
+    /// may enter (see the `npc_destinations` module), reads the unloaded
+    /// width, 150, as the owner test comes first (@0xacb9-0xacc1).
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
         self.chart
-            .sites
+            .listed
             .iter()
             .filter(|site| GateKind::of(site.flags2).is_some())
             .map(|site| {
