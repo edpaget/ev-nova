@@ -182,17 +182,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What `input` tells the cursor: a pointer move or button press shows
-    /// it where the pointer is, and the pointer leaving the window hides
-    /// it; a key pressed fades it at the next flight step (none runs while
-    /// the map is open, and the M that opened it has faded it already).
+    /// it where the pointer is, a button holds it whole until its release,
+    /// and the pointer leaving the window hides it; a key pressed fades it
+    /// at the next flight step (none runs while the map is open, and the M
+    /// that opened it has faded it already).
     pub(super) fn cursor_input(&mut self, input: &Input) {
         match *input {
-            Input::PointerMoved(at)
-            | Input::PointerButton {
+            Input::PointerMoved(at) => self.cursor.pointer(at),
+            Input::PointerButton {
                 pressed: true, at, ..
             } => {
                 self.cursor.pointer(at);
+                self.cursor.button(true);
             }
+            Input::PointerButton { pressed: false, .. } => self.cursor.button(false),
             Input::PointerLeft => self.cursor.left(),
             Input::Key { pressed: true, .. } => self.cursor.key(),
             _ => {}

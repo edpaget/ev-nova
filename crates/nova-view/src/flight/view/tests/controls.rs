@@ -359,6 +359,26 @@ fn the_cursor_is_hidden_once_the_pointer_leaves_the_window() {
 }
 
 #[test]
+fn a_mouse_button_held_keeps_the_cursor_whole_until_its_release() {
+    let mut view = super::faked_flight::at_rest(catalog());
+    view.cursor_input(&Input::PointerMoved(NOWHERE));
+    let button = |pressed| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at: NOWHERE,
+    };
+    view.cursor_input(&button(true));
+    super::faked_flight::ticked(&mut view, 40);
+    assert_eq!(faked_cursor_alpha(&view), Some(255), "held: restamped");
+    view.cursor_input(&button(false));
+    super::faked_flight::ticked(&mut view, 40);
+    assert!(
+        faked_cursor_alpha(&view).is_some_and(|alpha| alpha < 255),
+        "released: idle again"
+    );
+}
+
+#[test]
 fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
     let mut view = super::faked_flight::at_rest(catalog());
     view.cursor_input(&Input::PointerMoved(NOWHERE));
