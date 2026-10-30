@@ -426,10 +426,11 @@ mod tests {
 
     #[test]
     fn a_spared_fleet_escort_reads_as_the_wimpy_trader_the_bribe_made_it() {
-        // The bribe writes AI type 1 (@0x961f8).
+        // The bribe writes AI type 1 (@0x961f8). A mission escort's
+        // dispatch writes 6 again at every think (@0x8fc19).
         let govts = rivals();
         let npcs = [pirate()];
-        for mut npc in escorts() {
+        for mut npc in escorts().into_iter().filter(|npc| !npc.mission_escort()) {
             npc.spared = true;
             npc.ai_type = AiType::WimpyTrader;
             let (answer, _) = pressed(engine(), &threatened(&npc, &npcs, &govts), &[0]);

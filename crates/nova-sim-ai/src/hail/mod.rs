@@ -242,22 +242,16 @@ impl Hail<'_> {
     /// Request Assistance answers as an escort: "just an escort" when busy
     /// (`_DoCommDialog` @0x962ee-0x96304), free help at any threat
     /// (@0x964f8-0x9650f), and no refuel or repair (@0x96564-0x9656c).
-    /// The writers of +0x88 above 4 are a carried fighter's launch (5,
-    /// `_LaunchFighter` @0x3d771) and an escort's (6): a fleet's escorts
-    /// (`_HyperSpawnFleet` @0x421dc, `_SetupShipsInSystem` @0x430b6,
-    /// `_AICheckParentExists` @0x89491), a pirate's taken ship
-    /// (`_AIPlunderShipContents` @0x8495c), a mission escort (`_AIDispatch`
-    /// @0x8fc19) and the player's own (`_SpawnEscort` @0x3fed1, captures).
-    /// So: a ship that [escorts the player](Npc::escorts_player), escorts
-    /// a fleet lead ([`Npc::leader`]), or was launched from a carrier
-    /// ([`Npc::carrier`]); not one the player has paid off, which the
-    /// bribe made a wimpy trader (@0x961f8). AI types above 4 from data
-    /// are folded into the wimpy trader at the spawn
+    /// It reads [`Npc::original_ai_type`], whose module docs list the
+    /// writers of 5 and 6: a ship that escorts the player, a fleet lead or
+    /// a carrier, or a former escort the disabled reset marked; not an
+    /// NPC's escort the player has paid off, which the bribe made a wimpy
+    /// trader (@0x961f8). AI types above 4 from data are folded into the
+    /// wimpy trader at the spawn
     /// ([`AiType::from_raw`](crate::traffic::npc::AiType::from_raw)).
     #[must_use]
     pub fn escort_ai(&self) -> bool {
-        let npc = self.npc;
-        !npc.spared && (npc.escorts_player() || npc.leader.is_some() || npc.carrier.is_some())
+        self.npc.original_ai_type() > 4
     }
 
     /// Whether the ship hailed is a fighter out of a bay (see

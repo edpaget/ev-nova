@@ -1507,7 +1507,9 @@ mod tests {
             };
             assert!(busy.escort_ai(), "{npc:?}");
             assert_eq!(press(&request, &busy), says(JUST_AN_ESCORT));
-            let mut spared = npc.clone();
+        }
+        // An NPC's fleet escort or fighter paid off is a wimpy trader.
+        for mut spared in above_four().into_iter().skip(1) {
             spared.spared = true;
             let busy = Hail {
                 busy: true,
@@ -1515,6 +1517,27 @@ mod tests {
             };
             assert!(!busy.escort_ai(), "paid off, it is a wimpy trader");
             assert_eq!(press(&request, &busy), says(BUSY));
+        }
+    }
+
+    #[test]
+    fn an_escort_of_the_players_paid_off_before_or_a_marked_former_escort_is_an_escort() {
+        // A capture writes 6 over the bribe's 1 (`_DoShipCapture`
+        // @0x41425), as a mission escort's dispatch does at every think
+        // (@0x8fc19); the disabled reset leaves 6 until the ship's first
+        // think once whole.
+        let mut captured = ship();
+        captured.spared = true;
+        captured.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let mut mission = mission_escort();
+        mission.spared = true;
+        let mut marked = ship();
+        marked.kept_escort_ai = true;
+        for npc in [captured, mission, marked] {
+            assert!(hail(&npc).escort_ai(), "{npc:?}");
         }
     }
 
