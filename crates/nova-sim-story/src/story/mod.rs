@@ -3468,12 +3468,13 @@
 //!   `nova_sim::SessionEvent::StellarFramesReset`; a refused hypergate
 //!   resets nothing.
 //! - **The view** (`nova_view`'s flight view) takes the event in the
-//!   catch-up after the take-off or the exit, before the scene is laid
-//!   out or drawn again, and resets the frames of every stellar shown
-//!   (`SystemScene::take_off_reset`) and kept (`KeptFrames::reset`), so
-//!   the scene left behind is kept zeroed and the new one resumes zeroed,
-//!   frame 0 shown. A stellar first shown after it starts at current 0,
-//!   next 0, timer 0.
+//!   catch-up after the take-off or the exit, once the scene is laid out,
+//!   between the entry's stellar pass and the rest, and resets the frames
+//!   of every stellar shown (`SystemScene::take_off_reset`) and kept
+//!   (`KeptFrames::reset`), the scene just left among them, as the
+//!   original zeroes every `spöb` whether a slot shows it or not, frame 0
+//!   shown. A stellar first shown after it starts at current 0, next 0,
+//!   timer 0.
 //! - **Readings.** No key: the Bible says nothing, and the engine had no
 //!   other reading. No sound.
 //! - **Left out**: the 16-bit decrement of an empty slot's count (0xffff
