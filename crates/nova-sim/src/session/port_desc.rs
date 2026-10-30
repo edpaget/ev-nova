@@ -304,6 +304,22 @@ mod tests {
     }
 
     #[test]
+    fn a_text_loaded_for_another_stellar_is_never_served() {
+        let catalog = port_catalog(desc("Docked.", "Port.mov"), "");
+        let mut session = over_129(&catalog, false);
+        assert_eq!(land_now(&mut session), Ok(StellarId(129)));
+        session
+            .port
+            .own_desc_loaded(StellarId(128), "Earth's port.".to_owned());
+        assert_eq!(
+            ask(&mut session, &catalog),
+            Some("Docked.".to_owned()),
+            "129's own, loaded now"
+        );
+        assert_eq!(*catalog.desc_reads.borrow(), [129]);
+    }
+
+    #[test]
     fn a_due_load_the_ship_took_off_from_is_not_run() {
         let catalog = port_catalog(desc("Docked.", "Port.mov"), "");
         let mut session = over_129(&catalog, false);
