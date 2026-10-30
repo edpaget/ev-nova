@@ -42,9 +42,8 @@
 //! [`MovieScreen`](crate::MovieScreen) it owns and draws the current one through
 //! [`DrawCommand::MovieFrame`](crate::DrawCommand::MovieFrame), whose
 //! pixels the renderer uploads again only when the frame changes
-//! ([`movie_frame`](crate::movie_frame)). The real player is
-//! rdm:phase/movies/phase-2-ffmpeg-decoder's `nova-movie`; until it lands
-//! the engine wires a player that plays nothing.
+//! ([`movie_frame`](crate::movie_frame)). The real player is `nova-movie`'s
+//! FFmpeg decoder, which the game wires at its edge.
 
 use std::cell::Cell;
 use std::rc::Rc;

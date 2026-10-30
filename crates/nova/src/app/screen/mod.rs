@@ -657,8 +657,8 @@ pub struct AppScreen {
     missions: Option<MissionDialogs>,
     /// The movies the mission texts and offers play, and whether they
     /// play: [`NoMoviePlayer`](crate::movie::NoMoviePlayer)'s unless
-    /// another is given ([`AppScreen::with_movie_player`]), on as the
-    /// preferences say.
+    /// another is given ([`AppScreen::with_movie_player`], which `main`
+    /// does with the FFmpeg decoder), on as the preferences say.
     movies: Movies,
     /// Whether the player has asked the system for keyboard access to
     /// every control, asked each time Preferences opens:

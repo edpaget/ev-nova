@@ -32,6 +32,17 @@ mise run test   # nextest and doctests only
 Plain `cargo build` and `cargo test` also work in a shell where mise is
 activated, or with the toolchain pinned in `mise.toml` installed.
 
+The movie decoder (`crates/nova-movie`) builds FFmpeg from source and links
+it statically, so a build also needs a C compiler, `make`, `curl`, `tar` and
+libclang (for bindgen): Xcode's command line tools on macOS, and
+`build-essential` and `libclang-dev` on Debian and Ubuntu. On Windows it
+builds with MSVC inside [MSYS2](https://www.msys2.org) (install it at
+`C:\msys64`, or set `MSYS2_ROOT`, and run `pacman -S make diffutils` there)
+and needs [LLVM](https://llvm.org)'s libclang. The first build downloads the
+12 MB FFmpeg source named in `third_party/ffmpeg-source.toml` once per
+machine and checks its SHA-256; set `NOVA_FFMPEG_TARBALL` to a local copy
+to build offline.
+
 ## Nightly builds
 
 The [`nightly` prerelease](https://github.com/edpaget/ev-nova/releases/tag/nightly)

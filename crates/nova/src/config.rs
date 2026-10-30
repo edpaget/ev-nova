@@ -1,10 +1,10 @@
 //! Where the player's settings and pilots are saved (and where earlier
 //! versions saved the pilots), and where the startup log is written: pure
 //! functions of the target operating system and the environment, which
-//! the caller reads.
+//! the caller reads; and the Plug-Ins folder movies are found in.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The operating systems whose settings go in different places.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +115,32 @@ pub fn log_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBu
     path.extend(parts);
     path.push(LOG_FILE);
     Some(path)
+}
+
+/// The Plug-Ins folder on `os`, where movies are looked for before the
+/// `Nova Files` at `nova_files`, or `None` when the variables it needs
+/// are unset (or empty):
+///
+/// - macOS: the original's `$HOME/Library/Application Support/EV
+///   Nova/Plug-Ins` (*0x3b55a8, made @0x715c4-0x71605 in the `EV Nova`
+///   executable).
+/// - Elsewhere: `Plug-ins` beside `nova_files`, where the Windows release
+///   installs it. The plug-in loader, when there is one, reads the same
+///   folder.
+pub fn plug_ins_dir(
+    os: Os,
+    env: impl Fn(&str) -> Option<OsString>,
+    nova_files: &Path,
+) -> Option<PathBuf> {
+    match os {
+        Os::MacOs => {
+            let home = env("HOME").filter(|value| !value.is_empty())?;
+            let mut dir = PathBuf::from(home);
+            dir.extend(["Library", "Application Support", "EV Nova", "Plug-Ins"]);
+            Some(dir)
+        }
+        Os::Windows | Os::Other => Some(nova_files.parent()?.join("Plug-ins")),
+    }
 }
 
 /// The XDG base directory `name` names (`XDG_DATA_HOME`, say), or
@@ -421,5 +447,36 @@ mod tests {
         };
         assert_eq!(Os::current(), expected);
         assert_eq!(SETTINGS_FILE, "settings.json");
+    }
+
+    #[test]
+    fn macos_plug_ins_are_the_original_s_folder_under_application_support() {
+        let nova_files = Path::new("/Applications/EV Nova.app").join("Nova Files");
+        let vars = env(&[("HOME", "/Users/p")]);
+        let mut expected = Path::new("/Users/p").to_path_buf();
+        expected.extend(["Library", "Application Support", "EV Nova", "Plug-Ins"]);
+        assert_eq!(plug_ins_dir(Os::MacOs, vars, &nova_files), Some(expected));
+        assert_eq!(plug_ins_dir(Os::MacOs, env(&[]), &nova_files), None);
+        let empty = env(&[("HOME", "")]);
+        assert_eq!(plug_ins_dir(Os::MacOs, empty, &nova_files), None);
+    }
+
+    #[test]
+    fn elsewhere_plug_ins_are_beside_the_nova_files() {
+        let install = Path::new("/games").join("EV Nova");
+        let nova_files = install.join("Nova Files");
+        for os in [Os::Windows, Os::Other] {
+            assert_eq!(
+                plug_ins_dir(os, env(&[("HOME", "/home/p")]), &nova_files),
+                Some(install.join("Plug-ins")),
+                "{os:?}"
+            );
+            assert_eq!(
+                plug_ins_dir(os, env(&[]), &nova_files),
+                Some(install.join("Plug-ins")),
+                "{os:?} needs no variable"
+            );
+            assert_eq!(plug_ins_dir(os, env(&[]), Path::new("/")), None, "{os:?}");
+        }
     }
 }
