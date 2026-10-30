@@ -151,11 +151,14 @@ fn earths_demand_fought_sends_up_its_wave_of_six() {
     let mut session = Session::fly(&data, there).expect("flies");
     // The first pass fills the system.
     crate::passes::work(&mut session, &data, nova_sim::Controls::default());
-    let slot = session
-        .stellars_shown()
-        .position(|id| id == earth)
-        .expect("Earth shown");
-    session.select_stellar(StellarPick::Slot(slot));
+    // Earth's own `NavDefs` slot, as the slot keys read it.
+    let slot = data
+        .nav_def_slots()
+        .into_iter()
+        .find(|(system, _)| *system == sol)
+        .and_then(|(_, slots)| slots.iter().position(|&slot| slot == Some(earth)))
+        .expect("Sol lists Earth");
+    assert_eq!(session.select_stellar(StellarPick::Slot(slot)), Some(earth));
     let answer = apply(&mut session, &data, FlightCommand::Hail { option: true });
     assert!(
         matches!(&answer, Answer::Hailed(Hailed::Stellar(view)) if view.stellar == earth),
