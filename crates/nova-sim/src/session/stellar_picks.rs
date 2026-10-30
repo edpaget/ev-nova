@@ -1,7 +1,8 @@
 //! The nearest-stellar pick, `_FindNearestStellar` (@0x276c-0x2888), as
 //! the session's callers make it: the land key with no target
 //! (`Session::land`), F5 (`Session::select_stellar`), the tutorial's land
-//! hint and a new pilot's saved stellar (`Session::begin`). See the
+//! hint and a new pilot's saved stellar (`Session::begin`); and the other
+//! readers of a system's `NavDefs`, the slot keys and the hail. See the
 //! `story` module's "Built by stellar-fidelity phase 14".
 //!
 //! Each reads its gate limit from
@@ -20,9 +21,27 @@
 //! not-landable line and `snd ` 153; held, a second L is refused again.
 //! F5 drops it (@0x69e73-0x69e94): nothing is written and nothing beeps.
 //!
-//! Left to rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs:
-//! the tutorial's land hint and `_DoNewPilot`'s pick still read the
-//! stellars shown.
+//! **The tutorial hints** (@0x709e8, @0x70bdc) pick over the same
+//! candidates, so they may name a stellar another visible system owns,
+//! worded as a planet or station by its listed record.
+//!
+//! **A new pilot's saved stellar** (`_DoNewPilot` @0x1926e) is picked over
+//! every stellar the start system lists (`Chart::listed`), whoever owns
+//! it: its `_LoadObjectData` (@0x190f0) has just set every listed spöb
+//! active, and nothing writes +0x44 before the pick.
+//!
+//! **The slot keys** (`StellarPick::Slot`) read the player's system's
+//! `NavDefs` slot by index, gaps kept (@0x69e28-0x69e46; the statics'
+//! `nav_def_slots`), with no active, can-land or destroyed test, and
+//! share F5's tail: an empty slot (-1, @0x69e65-0x69e6d) or a stellar
+//! another system owns does nothing and plays nothing.
+//!
+//! **The hail** looks the selection up among the candidates
+//! (`Session::hail_target`), as `_HandlePlayerCommunication` tests +0x44
+//! but no owner (@0x61fac-0x62017): an inhabited, landable stellar another
+//! visible system owns opens its planet comm dialog.
+//!
+//! See the `story` module's "Built by play-feel-4 phase 13".
 
 use super::{Chart, Statics};
 use crate::catalog::LandingSite;

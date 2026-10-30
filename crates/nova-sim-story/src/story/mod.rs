@@ -3388,9 +3388,10 @@
 //!   2002 #84 then #86 (wormhole) or #85 (hypergate) with no name, else
 //!   #87/#88 and the name (@0x67cda-0x67dc4). Hailing
 //!   (`_HandlePlayerCommunication` @0x61fac-0x62009) has no owner test;
-//!   ours gives "No response.", unreachable in stock (wormhole 466 never
-//!   answers): rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs.
-//! - **The other readers of the selection**, audited: the hail looks it
+//!   ours gave "No response.", unreachable in stock (wormhole 466 never
+//!   answers), until
+//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs.
+//! - **The other readers of the selection**, audited: the hail looked it
 //!   up among the stellars shown (the divergence above); the person
 //!   offers and the map cycle read its ID only; the face key falls back
 //!   to the stellar's spöb place (`StellarMarks`); the dock request's
@@ -3404,12 +3405,45 @@
 //!   listed by a system that doesn't own it: Spica (144) owns it, and
 //!   K-005 (436, visible while `!b330`) lists it at (9500, 2600), its only
 //!   stellar.
-//! - **Left out**, in
-//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs:
-//!   the slot keys by `NavDefs` index (@0x69e28-0x69e46); the tutorial
-//!   hints' candidates (@0x709e8, @0x70bdc) and `_DoNewPilot`'s
-//!   (@0x1926e), which get the gate limit but still read the stellars
-//!   shown; hailing an unowned selection.
+//! - **Left out**, and built by
+//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs
+//!   (see "Built by play-feel-4 phase 13"): the slot keys by `NavDefs`
+//!   index (@0x69e28-0x69e46); the tutorial hints' candidates (@0x709e8,
+//!   @0x70bdc) and `_DoNewPilot`'s (@0x1926e), which got the gate limit
+//!   but still read the stellars shown; hailing an unowned selection.
+//!
+//! ## Built by play-feel-4 phase 13
+//!
+//! The session's readers of a system's `NavDefs` that the stellars shown
+//! stood in for (`nova_sim::Session`'s `stellar_picks` module):
+//!
+//! - **The slot keys** read `NavDefs[slot]` by index, gaps kept
+//!   (@0x69e28-0x69e46), with no +0x44, can-land or destroyed test, from
+//!   `nova_sim::PilotCatalog::nav_def_slots` (a `spöb` that didn't load
+//!   empties its slot, @0x780f8-0x7817f). F5's tail drops -1
+//!   (@0x69e65-0x69e6d) and an owner other than the player's +0x74
+//!   (@0x69e88-0x69e94), both before `PlaySound` @0x69ebc: nothing is
+//!   written and nothing plays.
+//! - **The tutorial hints** (@0x709e8, @0x70bdc) pick over the listed,
+//!   active stellars, as F5 and the land key do, owner unread; the hint
+//!   is worded by the listed record's `Flags` 0x10.
+//! - **`_DoNewPilot`'s pick** (@0x1926e) walks every stellar the start
+//!   system lists. The only writers of a spöb's +0x44 are
+//!   `_LoadObjectData`, `_HandleStellarSystemVisibility` (@0x32c42,
+//!   @0x32cdf) and `_InitObjects` (@0x1c880, at launch). `_DoNewPilot`'s
+//!   `_LoadObjectData` (@0x190f0) sets every loaded spöb active
+//!   (@0x77584) and clears one no `NavDefs` list (@0x7896a-0x789c6), and
+//!   nothing between it and the pick writes +0x44
+//!   (`_DeleteAllComputerShips` @0x19104, `_ExploreNebulaeFromSystem`
+//!   @0x19118 with every nebula inactive, `_PropagateMissionBitEffects`
+//!   @0x1925e); the rebuild (@0x1937f) comes after. With no pick it saves
+//!   the first slot that isn't -1 (@0x1927b-0x192a6), else 0
+//!   (@0x1934a-0x19358).
+//! - **The hail** (`_HandlePlayerCommunication` @0x61fac-0x62017) tests
+//!   `_StellarIsLandable`, `Flags` 0x20, `Flags2` 0x3000 and +0x44, and
+//!   no owner, then opens `_DoPlanetCommDialog` (@0x6204b), whose only
+//!   +0x74 reads are the player's system, for records: a selection
+//!   another visible system owns answers.
 //!
 //! ## Built by stellar-fidelity phase 15
 //!
