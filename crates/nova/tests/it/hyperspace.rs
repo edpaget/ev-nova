@@ -1034,11 +1034,22 @@ impl nova_view::ui::DialogResources for DescDialogOnly {
 /// towards Beta, J pressed and frames drawn until the warp has lit the
 /// screen white.
 fn lit_with_about() -> Harness {
+    lit_with_about_filmed(None).0
+}
+
+/// [`lit_with_about`], its About text naming `movie` with `Flags` 0 when
+/// given, movies played through a new [`MockMoviePlayer`] whose movies
+/// last 30 advances.
+fn lit_with_about_filmed(movie: Option<&str>) -> (Harness, Rc<MockMoviePlayer>) {
     let about = {
         let mut bytes = b"About.".to_vec();
         bytes.push(0);
         bytes.extend([0xFF; 2]);
-        bytes.extend([0; 34]);
+        let mut film = [0; 34];
+        if let Some(file) = movie {
+            film[..file.len()].copy_from_slice(file.as_bytes());
+        }
+        bytes.extend(film);
         bytes
     };
     // The text box's frame pictures, any: they are stretched.
@@ -1047,13 +1058,15 @@ fn lit_with_about() -> Harness {
         |fork, id| fork.resource(PICT, id, None, &button_picture(13)),
     );
     let data = load(fork);
-    let screen =
-        start_screen(Rc::clone(&data)).with_dialogs(Rc::new(DescDialogOnly), Rc::new(MonoMetrics));
+    let reel = MockMoviePlayer::playing((160, 120), 30);
+    let screen = start_screen(Rc::clone(&data))
+        .with_dialogs(Rc::new(DescDialogOnly), Rc::new(MonoMetrics))
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut harness = Harness::flying_in(data, screen);
     harness.out_towards_beta();
     harness.press(Key::Char('j'));
     harness.settle_until("the white", |game| game.flight().screen_faded());
-    harness
+    (harness, reel)
 }
 
 /// The white's alpha over flight, if the jump's effect shows one.
@@ -1090,4 +1103,35 @@ fn about_under_the_warps_white_fades_in_from_black_and_the_white_is_lit_again_af
         "the white fades in again over 1.5 s on the next pass: {relit}"
     );
     assert!(harness.flight().screen_faded());
+}
+
+#[test]
+fn abouts_plain_movie_plays_under_the_white_which_runs_on_over_it() {
+    use nova_view::Screen;
+    let (mut harness, reel) = lit_with_about_filmed(Some("about.mov"));
+    harness.send(WindowEvent::Menu(nova_view::MenuCommand::About));
+    assert_eq!(reel.calls().first(), Some(&Call::Start("about.mov".into())));
+    assert!(
+        harness.flight().screen_faded(),
+        "a plain movie fades nothing (@0x55a6e is the cinematic's)"
+    );
+    let before = white(&harness).expect("lit");
+    for _ in 0..3 {
+        harness.frame();
+    }
+    let after = white(&harness).expect("lit");
+    assert!(
+        after > before || after == u8::MAX,
+        "the white runs on under it, asynchronous: {before} then {after}"
+    );
+    let mut list = nova_view::DrawList::new();
+    harness.app.screen().draw(&mut list);
+    assert!(
+        matches!(
+            list.iter().last(),
+            Some(nova_view::DrawCommand::Line { color, .. })
+                if (color.r, color.g, color.b) == (255, 255, 255)
+        ),
+        "the white over the movie"
+    );
 }
