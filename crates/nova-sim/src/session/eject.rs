@@ -547,6 +547,7 @@ impl PlayerShip {
             odds: crate::traffic::odds_cache::STALE,
             // AI type -1 (@0x6f31f).
             no_ai: true,
+            kept_escort_ai: false,
         };
         hulk.independent();
         hulk

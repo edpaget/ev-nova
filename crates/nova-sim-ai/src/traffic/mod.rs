@@ -234,6 +234,7 @@ mod odds_cache_ai_tests;
 #[cfg(test)]
 mod odds_cache_tests;
 pub mod on_line;
+pub mod original_ai_type;
 pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
@@ -2859,6 +2860,7 @@ impl Traffic {
                 display,
                 odds: odds_cache::STALE,
                 no_ai: false,
+                kept_escort_ai: false,
             };
             npc.join_govt(ship.govt, govts);
             self.write_berth_person(berth, name);

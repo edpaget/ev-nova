@@ -518,9 +518,15 @@ pub struct Npc {
     /// @0x4427e), reads odds 0 (the odds pass @0x44307-0x4431f), answers
     /// no hit (`_DamageShip` @0x3b459), and reads as no AI type to the
     /// readers that test another ship's (`_InterceptorAI` @0x8cd4e,
-    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad).
-    /// Never saved.
+    /// `_BraveTraderAI` @0x8b707, `_AIFindShipToPlunder` @0x7fdad), as
+    /// [`Npc::original_ai_type`] reads it. Never saved.
     pub no_ai: bool,
+    /// Whether it keeps the original's AI type 6 after the disabled reset
+    /// took it out of its fleet (`_AIDispatch` @0x8feda leaves +0x88 alone)
+    /// until its first think once whole (`_EscortAI` @0x8394b-0x8397b,
+    /// @0x83c4a), or for its whole stay if it thinks as a miner
+    /// (@0x8ff76-0x8ff8d). See [`Npc::original_ai_type`]. Never saved.
+    pub kept_escort_ai: bool,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
