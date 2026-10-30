@@ -75,6 +75,7 @@ pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
 pub mod escort_dialog;
+pub mod faded_texts;
 pub mod mission_dialogs;
 pub mod mission_info;
 pub mod mode_picker;

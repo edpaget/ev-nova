@@ -275,13 +275,15 @@ impl MovieStage {
         self.begin_on(true);
     }
 
-    /// Whether its close faded the screen back in, clearing `_screenFaded`:
-    /// a cinematic movie that started, once it has ended (`_FadeScreenIn`
-    /// @0x55edb). A plain one, or one that could not start (its early
-    /// returns come before any fade), leaves the screen as it found it.
+    /// Whether it has faded the screen in, clearing `_screenFaded`: a
+    /// cinematic movie that started, from its start, as its window fades
+    /// in from black (`_FadeScreenIn` @0x55dce) and its close fades in on
+    /// what is beneath (@0x55edb). A plain one, or one that could not
+    /// start (its early returns come before any fade), leaves the screen
+    /// as it found it.
     #[must_use]
     pub fn faded_in(&self) -> bool {
-        self.ended() && self.started && self.movie.cinematic
+        self.started && self.movie.cinematic
     }
 
     /// [`MovieStage::begin`], on a screen `faded` or not.
@@ -1318,13 +1320,13 @@ mod tests {
             [(screen(), Color::BLACK), (screen(), Color::BLACK)],
             "the black window, under the fade from black"
         );
+        assert!(stage.faded_in(), "its window fades in (@0x55dce)");
         run(&mut stage, MOVIE_FADE_FOR);
         assert_eq!(frames(&stage).len(), 1, "playing after one fade");
-        assert!(!stage.faded_in(), "not before it closes");
         stage.tick(TICK);
         run(&mut stage, MOVIE_FADE_FOR * 2);
         assert!(stage.ended());
-        assert!(stage.faded_in(), "its close fades in (@0x55edb)");
+        assert!(stage.faded_in(), "and its close (@0x55edb)");
     }
 
     #[test]
@@ -1335,6 +1337,7 @@ mod tests {
             (MockMoviePlayer::refusing(), 0x0004, false),
         ] {
             let mut stage = staged(&player, flags);
+            assert!(!stage.faded_in(), "{flags:#x}: not before it begins");
             stage.begin_faded();
             run(&mut stage, MOVIE_FADE_FOR * 4);
             assert!(stage.ended(), "{flags:#x}");
