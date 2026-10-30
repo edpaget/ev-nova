@@ -537,6 +537,7 @@ mod landed_work;
 mod landing_fee;
 mod last_refresh;
 mod launch_frame;
+mod load_reset;
 mod lost_lead;
 mod lost_target;
 mod map;
@@ -1128,6 +1129,10 @@ impl Session {
     /// reads: by the engine with none, by the other reading with the
     /// saved course and start.
     ///
+    /// A pilot saved with a system last jumped from flies as
+    /// [`RuleKey::LoadedJumpedFrom`] reads: by the engine with none, by the
+    /// other reading with the saved one.
+    ///
     /// A pilot never landed, its stellar `None`, is not repaired: the
     /// original's stellar -1 fallback (@0x751e9-0x75255) is left out, as
     /// the engine's `None` stellar doesn't mean missing data.
@@ -1152,6 +1157,9 @@ impl Session {
         pilot.galaxy.forget_explored_nebulae();
         // The course, cleared by `_ResetPlayer` too (see `course_on_load`).
         course::course_on_load(&mut pilot, rules);
+        // The system last jumped from, set to -1 by `_ResetPlayer` too
+        // (@0x1d5b1; see `load_reset`).
+        load_reset::jumped_from_on_load(&mut pilot, rules);
         for kept in nebula::kept(&pilot.story_fired) {
             pilot.galaxy.set_nebula_explored(kept, true);
         }

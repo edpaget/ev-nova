@@ -214,7 +214,9 @@ pub struct Pilot {
     /// The system the player last jumped from (the original's player
     /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
     /// from. None until the pilot's first jump, and kept as a raw ID, so
-    /// one with no record still loads.
+    /// one with no record still loads. Saved with the pilot; whether a
+    /// load keeps it is the `loaded_jumped_from` rule's (read by
+    /// `nova_sim::Session::load`).
     pub jumped_from: Option<SystemId>,
     /// The ship's paint; `None` when unpainted.
     pub paint: Option<Rgb15>,

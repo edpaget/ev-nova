@@ -13,6 +13,11 @@
 //! engine's reading `Session::load` drops them, as the original's open
 //! clears `_hyperRoute`.
 //!
+//! The system last jumped from is always saved too. Whether a load keeps
+//! it is [`RuleKey::LoadedJumpedFrom`](crate::RuleKey::LoadedJumpedFrom)'s:
+//! by the engine's reading `Session::load` forgets it, as the original's
+//! open sets player +0x94 to -1.
+//!
 //! - Version 1: the name, ship, system, the stellar last landed on, date,
 //!   cash, reserves and course.
 //! - Version 2: adds the explored systems and the legal records, none in

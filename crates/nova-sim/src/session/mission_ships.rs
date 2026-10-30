@@ -2192,17 +2192,18 @@ pub(super) mod tests {
         }
     }
 
-    /// `session`'s pilot saved and loaded into a new session, its
-    /// `jumped_from` first set by `edit`.
+    /// `session`'s pilot saved and loaded into a new session by `rules`,
+    /// its `jumped_from` first set by `edit`.
     fn saved_and_loaded(
         session: &Session,
         catalog: &FakePilotCatalog,
+        rules: &crate::Rulebook,
         edit: impl FnOnce(&mut crate::pilot::Pilot),
     ) -> Session {
         let mut pilot = session.pilot().clone();
         edit(&mut pilot);
         let pilot = crate::save::decode(&crate::save::encode(&pilot)).expect("loads");
-        Session::fly(catalog, pilot)
+        Session::load(catalog, pilot, rules)
             .expect("flies")
             .with_strings(Rc::new(Names))
     }
@@ -2216,29 +2217,63 @@ pub(super) mod tests {
         ticks(session, catalog, usize::try_from(appear).expect("positive"));
     }
 
-    #[test]
-    fn ships_coming_in_after_a_load_enter_from_the_system_jumped_from_before_the_save() {
+    fn loaded_jumped_from(source: crate::RuleSource) -> crate::Rulebook {
+        crate::Rulebook::default().with_override(RuleKey::LoadedJumpedFrom, source)
+    }
+
+    /// The loaded pilot's `jumped_from` and the mission ships' positions
+    /// once they appear, in a session loaded by `source` from a save made
+    /// at 131 after a jump from 130, its `jumped_from` first set by `edit`.
+    fn loaded_arrivals(
+        source: crate::RuleSource,
+        edit: impl FnOnce(&mut crate::pilot::Pilot),
+    ) -> (Option<SystemId>, Vec<(f32, f32)>) {
         let catalog = ships_catalog(shipping(131, 1));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         jump_to(&mut session, &catalog, 131);
-        let mut session = saved_and_loaded(&session, &catalog, |_| {});
+        let mut session = saved_and_loaded(&session, &catalog, &loaded_jumped_from(source), edit);
+        let jumped_from = session.pilot().jumped_from;
         until_they_appear(&mut session, &catalog);
-        assert_eq!(marked(&session), [0, 0]);
-        for npc in session.npcs().iter().filter(|npc| npc.mission.is_some()) {
-            assert!(npc.state.position.x < -1500.0, "{:?}", npc.state.position);
+        assert_eq!(marked(&session), [0, 0], "{source:?}: they arrive");
+        let positions = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission.is_some())
+            .map(|npc| (npc.state.position.x, npc.state.position.y))
+            .collect();
+        (jumped_from, positions)
+    }
+
+    #[test]
+    fn ships_coming_in_after_a_load_enter_from_the_system_jumped_from_only_by_the_other_reading() {
+        let (jumped_from, positions) = loaded_arrivals(crate::RuleSource::Bible, |_| {});
+        assert_eq!(jumped_from, Some(SystemId(130)), "kept");
+        assert!(!positions.is_empty());
+        // 130 is at (0, 0) and 131 at (600, 0): they come from the left.
+        for (x, y) in positions {
+            assert!(x < -1500.0, "{:?}", (x, y));
         }
+        // By the engine the saved system is forgotten, so they enter as
+        // from a save with none.
+        let (jumped_from, positions) = loaded_arrivals(crate::RuleSource::Engine, |_| {});
+        assert_eq!(jumped_from, None, "forgotten");
+        let (_, from_none) = loaded_arrivals(crate::RuleSource::Engine, |pilot| {
+            pilot.jumped_from = None;
+        });
+        assert!(!positions.is_empty());
+        assert_eq!(positions, from_none);
     }
 
     #[test]
     fn ships_coming_in_after_loading_a_save_with_no_jumped_from_still_arrive() {
-        let catalog = ships_catalog(shipping(131, 1));
-        let mut session = accepted(&catalog);
-        take_off(&mut session, &catalog);
-        jump_to(&mut session, &catalog, 131);
-        let mut session = saved_and_loaded(&session, &catalog, |pilot| pilot.jumped_from = None);
-        until_they_appear(&mut session, &catalog);
-        assert_eq!(marked(&session), [0, 0]);
+        for source in crate::RuleSource::ALL {
+            let (jumped_from, positions) = loaded_arrivals(source, |pilot| {
+                pilot.jumped_from = None;
+            });
+            assert_eq!(jumped_from, None, "{source:?}");
+            assert!(!positions.is_empty(), "{source:?}");
+        }
     }
 
     // The enter-system hook.
@@ -4005,7 +4040,7 @@ pub(super) mod tests {
         assert_eq!(ship_dones(&mut session), 1);
         jump_refuelled(&mut session, &catalog, 131);
         assert!(!goals_met(&session));
-        let mut session = saved_and_loaded(&session, &catalog, |_| {}).with_rules(bible);
+        let mut session = saved_and_loaded(&session, &catalog, &bible, |_| {}).with_rules(bible);
         assert!(ships_of(&session).ship_done, "kept");
         jump_refuelled(&mut session, &catalog, 130);
         settle(&mut session, &catalog);
