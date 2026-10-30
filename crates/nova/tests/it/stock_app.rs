@@ -357,6 +357,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
 /// the real glyphon metrics; its frame, button and text reach the Gpu
 /// with every picture resolved, Down scrolls it and Return closes it.
 #[test]
+#[allow(clippy::float_cmp)] // One step of exact pixels.
 fn i_shows_the_stock_about_text() {
     let Some(dir) = common::nova_data() else {
         return;
@@ -397,7 +398,10 @@ fn i_shows_the_stock_about_text() {
     assert!(about.lines().len() > 20, "{} lines", about.lines().len());
     assert_no_tag_or_brace(about.lines());
     send(&mut app, key(Key::Down));
-    assert_eq!(app.screen().about().expect("open").first_line(), 1);
+    assert_eq!(
+        app.screen().about().expect("open").scroll_offset(),
+        nova_view::ui::desc::ARROW_UNITS
+    );
     send(&mut app, key(Key::Enter));
     assert_eq!(app.screen().showing(), Showing::ShipBrowser);
 

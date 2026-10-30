@@ -234,6 +234,7 @@ fn physical(bounds: Bounds, scale: f32) -> Rect {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // Whole physical pixels.
 fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
     for scale in [1.0, 2.0] {
         let mut harness = Harness::new(scale, true);
@@ -247,7 +248,8 @@ fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
             ((1024.0 * scale) as u32, (768.0 * scale) as u32)
         );
 
-        // The About text's lines, in physical pixels, inside its text box.
+        // The About text's lines, in physical pixels, inside its text box,
+        // the partial last one clipped to it.
         let text_box = physical(harness.item_bounds(TEXT_ITEM), scale);
         let lines: Vec<TextRun> = texts(&frame)
             .into_iter()
@@ -258,10 +260,15 @@ fn i_opens_about_and_its_text_reaches_the_gpu_in_window_pixels() {
             let (x, y) = run.origin_px;
             assert!(x >= text_box.x && x < text_box.x + text_box.w, "{run:?}");
             assert!(y >= text_box.y, "{run:?}");
-            assert!(
-                y + LINE_HEIGHT * run.size * run.scale <= text_box.y + text_box.h + 0.01,
-                "{run:?}"
-            );
+            let bottom = text_box.y + text_box.h;
+            assert!(y < bottom, "{run:?}");
+            if y + LINE_HEIGHT * run.size * run.scale > bottom + 0.01 {
+                assert_eq!(
+                    (run.clip.y as f32, (run.clip.y + run.clip.h) as f32),
+                    (text_box.y, bottom),
+                    "{run:?}"
+                );
+            }
         }
     }
 }

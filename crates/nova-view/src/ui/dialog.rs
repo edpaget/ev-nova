@@ -559,6 +559,16 @@ impl Dialog {
         }
     }
 
+    /// The dialog with its first scrolling text scrolled by pixels
+    /// ([`ScrollText::pixel_scrolled`]).
+    #[must_use]
+    pub fn with_pixel_scroll(mut self) -> Self {
+        if let Some(text) = self.scroll_text_mut() {
+            *text = text.clone().pixel_scrolled();
+        }
+        self
+    }
+
     /// Greys item `item` (from 1), as [`Role::Greyed`] does, or ungreys it
     /// back to what its template says. No such item, nothing changes.
     pub fn set_greyed(&mut self, item: usize, greyed: bool) {
@@ -701,7 +711,9 @@ impl Dialog {
     /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
     ///   next enabled button, and Space activates the focused one. Under
     ///   [`FocusRing::Off`], the original's reading, they do nothing.
-    /// - Up and Down, repeats included, scroll the first scrolling text.
+    /// - Up and Down, repeats included, scroll the first scrolling text: a
+    ///   line, or [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS) when it
+    ///   is pixel-scrolled.
     /// - A wheel or trackpad scroll inside the dialog scrolls the scrolling
     ///   text under the pointer, if any; static text ignores it, and a
     ///   click in progress stays armed.
@@ -971,6 +983,7 @@ mod tests {
     use crate::draw::{DrawCommand, fill_command};
     use crate::input::{MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::scroll_text::ARROW_UNITS;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -1889,6 +1902,32 @@ mod tests {
         };
         dialog.input(&release);
         assert_eq!(dialog.scroll_text().expect("text").first(), 1);
+    }
+
+    #[test]
+    fn with_pixel_scroll_the_scrolling_text_moves_by_pixels_and_without_by_lines() {
+        let text = |dialog: &Dialog| dialog.scroll_text().expect("text").offset();
+        let mut pixels =
+            dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4")).with_pixel_scroll();
+        pixels.input(&key(Key::Down));
+        assert_eq!(text(&pixels), ARROW_UNITS);
+        let mut lines = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        lines.input(&key(Key::Down));
+        assert_eq!(text(&lines), 12.0);
+    }
+
+    #[test]
+    fn with_pixel_scroll_a_dialog_with_no_scrolling_text_is_unchanged() {
+        let dialog = dialog(&yes_no(), &[]).with_pixel_scroll();
+        assert!(dialog.scroll_text().is_none());
+    }
+
+    #[test]
+    fn set_text_keeps_a_dialogs_pixel_scroll() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0")).with_pixel_scroll();
+        dialog.set_text(3, "l0\rl1\rl2\rl3\rl4");
+        dialog.input(&key(Key::Down));
+        assert_eq!(dialog.scroll_text().expect("text").offset(), ARROW_UNITS);
     }
 
     fn wheel(at: Point) -> Input {

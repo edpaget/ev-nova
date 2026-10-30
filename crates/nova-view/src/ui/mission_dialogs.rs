@@ -509,6 +509,7 @@ impl Screen for MissionDialogs {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
 
@@ -700,21 +701,32 @@ mod tests {
         let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
         let mut dialogs = dialogs();
         dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
-        let first = |dialogs: &MissionDialogs| dialogs.text().expect("open").first_line();
+        let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
         let text = dialogs.text().expect("open");
-        let visible = text.dialog().scroll_text().expect("scrolls").visible();
-        let last = text.lines().len() - visible;
-        assert!(last > 0, "the text overflows its box");
+        let end = text.dialog().scroll_text().expect("scrolls").max_offset();
+        assert!(end > 0.0, "the text overflows its box");
         dialogs.input(&key(Key::End));
-        assert_eq!(first(&dialogs), last);
+        assert_eq!(at(&dialogs), end);
         dialogs.input(&key(Key::Home));
-        assert_eq!(first(&dialogs), 0);
+        assert_eq!(at(&dialogs), 0.0);
         dialogs.input(&key(Key::PageDown));
-        let paged = first(&dialogs);
-        assert!(paged > 0);
+        assert_eq!(at(&dialogs), crate::ui::desc::PAGE_UNITS.min(end));
         dialogs.input(&key(Key::PageUp));
-        assert!(first(&dialogs) < paged);
+        assert_eq!(at(&dialogs), 0.0);
         assert!(dialogs.text().is_some(), "still open");
+    }
+
+    /// `_ShowTextDialog`'s Up and Down reach a mission text (@0x5b0af-0x5b130).
+    #[test]
+    fn a_mission_text_scrolls_ten_pixels_with_up_and_down() {
+        let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
+        let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
+        dialogs.input(&key(Key::Down));
+        assert_eq!(at(&dialogs), crate::ui::desc::ARROW_UNITS);
+        dialogs.input(&key(Key::Up));
+        assert_eq!(at(&dialogs), 0.0);
     }
 
     #[test]

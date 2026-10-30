@@ -203,6 +203,7 @@ fn i_does_nothing_in_flight() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // Whole steps of exact pixels.
 fn while_open_input_reaches_only_the_dialog() {
     let mut screen = with_dialogs(data());
     open_about(&mut screen);
@@ -219,7 +220,10 @@ fn while_open_input_reaches_only_the_dialog() {
     assert!(screen.flight_view().is_none());
     screen.input(&key(Key::Down, true));
     screen.input(&held(Key::Down));
-    assert_eq!(about(&screen).first_line(), 2);
+    assert_eq!(
+        about(&screen).scroll_offset(),
+        2.0 * nova_view::ui::desc::ARROW_UNITS
+    );
 }
 
 #[test]

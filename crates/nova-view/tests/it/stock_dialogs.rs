@@ -17,7 +17,7 @@ use nova_data::{GameData, InterfaceData, Record};
 use nova_view::Prefs;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
+use nova_view::ui::desc::{ARROW_UNITS, DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
     CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NICKNAME_ITEM, NewPilotDialog,
     NewPilotOutcome, OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
@@ -232,13 +232,22 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
         assert!(lines.iter().all(|at| text_box.contains(*at)), "{lines:?}");
 
         assert_eq!(desc.input(&key(Key::Down)), nova_view::ScreenAction::None);
-        assert_eq!(desc.first_line(), 1);
+        assert_eq!(desc.scroll_offset(), ARROW_UNITS);
+        // The line Down took part of off the top is cut at the box.
+        assert!(
+            drawn(&desc).iter().any(|command| matches!(
+                command,
+                DrawCommand::Clipped { clip, .. } if *clip == text_box
+            )),
+            "a partial line, clipped to item 3"
+        );
         // `_TextDialogFilter`'s End and Home reach either end of it.
         desc.input(&key(Key::End));
-        let last = desc.lines().len() - desc.dialog().scroll_text().expect("text").visible();
-        assert_eq!(desc.first_line(), last);
+        let scroll = desc.dialog().scroll_text().expect("text");
+        assert_eq!(desc.scroll_offset(), scroll.max_offset());
+        assert!(desc.scroll_offset() > 0.0);
         desc.input(&key(Key::Home));
-        assert_eq!(desc.first_line(), 0);
+        assert_eq!(desc.scroll_offset(), 0.0);
         desc.input(&key(Key::Enter));
         assert!(desc.closed());
     }
