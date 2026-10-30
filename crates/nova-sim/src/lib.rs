@@ -450,6 +450,7 @@ pub use nova_sim_ai::planet_comm;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;
+pub use nova_sim_base::player_wrap;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::gamble;
