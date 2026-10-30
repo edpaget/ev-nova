@@ -83,24 +83,21 @@ fn offer_text<'a>(mut commands: impl Iterator<Item = &'a DrawCommand>) -> Option
 #[test]
 fn a_dialogs_map_over_flight_draws_the_scene_then_the_dialog_then_the_map() {
     let mut screen = offered_in_flight();
-    // Flight alone, shut then open: the scene, and the scene with the map.
-    let mut shut = DrawList::new();
-    flight(&screen).draw(&mut shut);
     screen.input(&key(MAP, true));
-    let mut open = DrawList::new();
-    flight(&screen).draw(&mut open);
-    let scene: Vec<&DrawCommand> = shut.iter().collect();
-    let open: Vec<&DrawCommand> = open.iter().collect();
+    let mut under = DrawList::new();
+    flight(&screen).draw_under_dialog_map(&mut under);
+    let mut over = DrawList::new();
+    flight(&screen).draw_dialog_map(&mut over);
+    let scene: Vec<&DrawCommand> = under.iter().collect();
+    let map: Vec<&DrawCommand> = over.iter().collect();
     assert!(!scene.is_empty());
-    assert!(open.starts_with(&scene), "the map draws over the scene");
-    let map = &open[scene.len()..];
     assert!(!map.is_empty());
 
     let mut drawn = DrawList::new();
     screen.draw(&mut drawn);
     let drawn: Vec<&DrawCommand> = drawn.iter().collect();
     assert!(drawn.starts_with(&scene), "the paused scene first");
-    assert!(drawn.ends_with(map), "the map last");
+    assert!(drawn.ends_with(&map), "the map last");
     let offer = offer_text(drawn.iter().copied()).expect("the offer's drawn");
     assert!(
         (scene.len()..drawn.len() - map.len()).contains(&offer),
