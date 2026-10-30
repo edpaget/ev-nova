@@ -90,7 +90,8 @@
 //!   `Probability`; its AI is the `düde`'s `AIType` when above 0, or else
 //!   its ship's `InherentAI`, and its government the `düde`'s.
 //! - **By hyperspace** ([`hyperspace_entry`]) a ship starts at angle
-//!   `Rand(360)`, [`jump_in_distance`] from the centre, heading in at
+//!   `Rand(360)`, [`jump_in_distance`] from the centre, facing the centre
+//!   in whole degrees as `_CalcInterceptAngle` gives it, heading in at
 //!   [`JUMP_IN_SPEED`]. A ship with no fuel capacity is not brought in,
 //!   by hyperspace or gate; nor is a fleet whose lead has none.
 //! - **By hypergate or wormhole** (see [`emerge`](crate::traffic::emerge)):
@@ -257,7 +258,7 @@ use super::persons::{PersonRoll, PersonRules, PersonWorld, aggression_of};
 use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::control::Gate;
-use crate::flight::{ShipState, facing, heading_of};
+use crate::flight::{ShipState, facing};
 use crate::gate::exit_heading;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
@@ -272,6 +273,7 @@ use crate::traffic::table::{
     ShipKind, SpawnDude, SpawnPerson, SpawnTable, appearing_ship_types, dude_ship_type, pick,
 };
 use crate::traffic::{ShipBehav, ShipStart};
+use crate::trig;
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
 /// (see `nova_sim::person`).
@@ -1019,13 +1021,13 @@ pub fn arriving_mission_ships(
 }
 
 /// `ship` moved to `entry` plus `Rand(512) - 256` each way, x drawn
-/// first, facing the centre and gliding in from hyperspace at
-/// [`JUMP_IN_SPEED`] (@0x43992-0x43a10, @0x43617-0x4372a).
+/// first, facing the centre ([`inward_heading`]) and gliding in from
+/// hyperspace at [`JUMP_IN_SPEED`] (@0x43992-0x43a10, @0x43617-0x4372a).
 fn glide_in(ship: NewShip, entry: Vec2, chance: &mut (impl Chance + ?Sized)) -> NewShip {
     let x = spread(MISSION_ARRIVAL_SPREAD, chance);
     let y = spread(MISSION_ARRIVAL_SPREAD, chance);
     let position = entry + Vec2::new(x, y);
-    let heading = heading_of(Vec2::ZERO - position);
+    let heading = inward_heading(position);
     NewShip {
         state: ShipState {
             position,
@@ -1374,16 +1376,26 @@ fn person_setup_speed(person: &SpawnPerson, by_pass: bool, rules: &dyn PersonRul
 }
 
 /// Where a ship jumping in starts: [`jump_in_distance`] from the centre
-/// at an angle drawn, facing the centre and moving in at
-/// [`JUMP_IN_SPEED`].
+/// at an angle drawn, facing the centre ([`inward_heading`]) and moving
+/// in at [`JUMP_IN_SPEED`] along that heading.
 pub fn hyperspace_entry(chance: &mut (impl Chance + ?Sized)) -> ShipState {
-    let out = facing(chance.below(DEGREES) as f32);
-    let heading = heading_of(Vec2::ZERO - out);
+    let position = facing(chance.below(DEGREES) as f32) * jump_in_distance();
+    let heading = inward_heading(position);
     ShipState {
-        position: out * jump_in_distance(),
+        position,
         velocity: facing(heading) * JUMP_IN_SPEED,
         heading,
     }
+}
+
+/// The heading of a ship arriving by hyperspace at `position`: toward the
+/// centre in whole degrees, `_CalcInterceptAngle(position, (0, 0))` stored
+/// as +0x44 (`_HyperShipSpawn` @0x42a74-0x42a7e, `_HyperSpawnFleet`
+/// @0x42028-0x42032, `_EnterMoreShips` @0x436a9-0x436b3 and
+/// @0x43a24-0x43a2e). Its table arctangent truncates, so a diagonal falls
+/// a degree short ([`trig::table_arctan`]).
+fn inward_heading(position: Vec2) -> f32 {
+    f32::from(trig::intercept_angle(position, Vec2::ZERO))
 }
 
 /// Where and how a ship of `govt` arriving alone comes in, its jump-in
@@ -2967,6 +2979,21 @@ mod tests {
         assert_eq!(at_speed(placed(37.0), 0.0).velocity, Vec2::ZERO);
     }
 
+    /// The heading `_CalcInterceptAngle` gives from `position` toward the
+    /// centre, a whole degree.
+    fn calc_intercept_heading(position: Vec2) -> f32 {
+        f32::from(crate::trig::intercept_angle(position, Vec2::ZERO))
+    }
+
+    #[test]
+    fn a_ship_jumping_in_faces_the_centre_on_calc_intercept_angles_whole_degree() {
+        // A diagonal, where the table's arctangent falls a degree short.
+        let state = hyperspace_entry(&mut Draws::of(&[135]));
+        let heading = calc_intercept_heading(state.position);
+        assert_eq!(state.heading, heading);
+        assert!(near(state.velocity, facing(heading) * JUMP_IN_SPEED));
+    }
+
     #[test]
     fn a_ship_jumping_in_starts_about_2098_out_heading_in_at_50() {
         for angle in [0, 90, 135, 359] {
@@ -2977,11 +3004,12 @@ mod tests {
                 "{angle}: {state:?}"
             );
             assert!(
-                near(state.velocity, out * -JUMP_IN_SPEED),
+                near(state.velocity, facing(state.heading) * JUMP_IN_SPEED),
                 "{angle}: {state:?}"
             );
+            // Inward to within the degree the table's arctangent may be off.
             assert!(
-                near(facing(state.heading), out * -1.0),
+                (facing(state.heading) - out * -1.0).length() < 1.5f32.to_radians(),
                 "{angle}: {state:?}"
             );
             assert!((0.0..360.0).contains(&state.heading));
@@ -4116,12 +4144,9 @@ mod tests {
         assert_eq!((ships[0].ship, ships[1].ship), (ShipId(202), ShipId(203)));
         for ship in &ships {
             assert_eq!(ship.entry, Entry::JumpingIn);
-            let inward = Vec2::ZERO - ship.state.position;
-            assert!(near(
-                ship.state.velocity,
-                inward * (JUMP_IN_SPEED / inward.length())
-            ));
-            assert_eq!(ship.state.heading, heading_of(inward));
+            let heading = calc_intercept_heading(ship.state.position);
+            assert_eq!(ship.state.heading, heading);
+            assert!(near(ship.state.velocity, facing(heading) * JUMP_IN_SPEED));
             assert!(!ship.cloaked);
         }
     }
@@ -4204,12 +4229,9 @@ mod tests {
         assert_eq!((ships[0].ship, ships[1].ship), (ShipId(202), ShipId(203)));
         for ship in &ships {
             assert_eq!(ship.entry, Entry::JumpingIn);
-            let inward = Vec2::ZERO - ship.state.position;
-            assert!(near(
-                ship.state.velocity,
-                inward * (JUMP_IN_SPEED / inward.length())
-            ));
-            assert_eq!(ship.state.heading, heading_of(inward));
+            let heading = calc_intercept_heading(ship.state.position);
+            assert_eq!(ship.state.heading, heading);
+            assert!(near(ship.state.velocity, facing(heading) * JUMP_IN_SPEED));
             assert_eq!(ship.mission, None, "ordinary traffic");
             assert_eq!(ship.aux, Some(4));
             assert_eq!(

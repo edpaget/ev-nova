@@ -16,9 +16,9 @@
 //! truncated, the low level's default (@0x8522d,
 //! [`flight::turn_to_own`]). Each reads its thrust on the heading before
 //! the turn, as the low level runs before `_HandleShip`. The glide in and
-//! the burst out of a gate, below, aren't turned yet, where the original
-//! truncates their heading through sub 0xa:
-//! rdm:phase/play-feel-2-followups/phase-10-glide-burst-heading-truncates.
+//! the burst out of a gate, below, want none either: sub 0xa
+//! (@0x88114-0x8813d) writes no +0x68, so an intact one has its heading
+//! truncated each tick before it moves.
 //!
 //! - [`Goal::Land`]: by the engine's reading of
 //!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)
@@ -1041,6 +1041,11 @@ fn glide(
 /// [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on `chance`;
 /// a hold at its gate that runs out owes its burst as `held_burst` reads
 /// ([`Npc::end_wait`]).
+/// An intact glide or burst has its heading truncated
+/// ([`flight::turn_to_own`]) before it moves, as sub 0xa leaves the low
+/// level's `cvttss2si(+0x44)` aim (@0x85228-0x8522d) and `_HandleShip`
+/// turns onto it ahead of the move (@0x34424 → @0x34bc0); a disabled one,
+/// which skips that turn, and every wait keep theirs.
 /// What became of it, if it did. A disabled or breaking-up ship's speed
 /// along its heading slows with its velocity, inertialess or not
 /// (@0x3398f-0x339a1).
@@ -1078,8 +1083,14 @@ fn unsteered(
             // No thrust: it writes neither word.
             plain_step(npc, handling, Controls::default(), flight, inertia);
         }
-        (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, flown, chance),
-        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, flown, chance),
+        (Mode::JumpingIn { tick }, true) => {
+            flight::turn_to_own(&mut npc.state);
+            glide(npc, tick, speeds, flown, chance);
+        }
+        (Mode::LeavingGate { tick }, true) => {
+            flight::turn_to_own(&mut npc.state);
+            leave_gate(npc, tick, speeds, flown, chance);
+        }
         (Mode::Coasting { ticks_left }, true) => coast(npc, ticks_left, flown),
         (Mode::Flying | Mode::Adrift { .. }, true) => return None,
     }
@@ -3061,6 +3072,78 @@ mod tests {
         }
     }
 
+    /// Speeds that end neither a glide in nor a burst out on its first
+    /// tick.
+    const GOING_ON: TopSpeeds = TopSpeeds {
+        own: 6.0,
+        lead: Some(9.0),
+    };
+
+    /// `start` with its heading truncated as [`flight::turn_to_own`]
+    /// truncates it.
+    fn turned_own(start: ShipState) -> ShipState {
+        let mut turned = start;
+        flight::turn_to_own(&mut turned);
+        turned
+    }
+
+    #[test]
+    fn an_intact_ship_gliding_in_moves_along_its_truncated_heading() {
+        let mut ship = jumping_in(AVERAGE);
+        ship.state.heading = 180.6;
+        let start = ship.state;
+        fly_at(&mut ship, &[], None, GOING_ON);
+        let heading = turned_own(start).heading;
+        assert_eq!(ship.state.heading, heading);
+        let velocity = flight::facing(heading) * glide_speed(0);
+        assert!((ship.state.velocity - velocity).length() < 1e-4);
+        assert!((ship.state.position - (start.position + velocity)).length() < 1e-3);
+    }
+
+    #[test]
+    fn an_intact_ship_bursting_out_of_a_gate_moves_along_its_truncated_heading() {
+        let sites = [planet(140, 0.0, 0.0)];
+        let mut ship = emerging(AVERAGE, 1);
+        ship.mode = Mode::LeavingGate { tick: 0 };
+        ship.state.heading = 90.6;
+        let start = ship.state;
+        fly_at(&mut ship, &sites, None, GOING_ON);
+        let heading = turned_own(start).heading;
+        assert_eq!(ship.state.heading, heading);
+        let velocity = flight::facing(heading) * exit_speed(ship.led_out, 0);
+        assert!((ship.state.velocity - velocity).length() < 1e-4);
+        assert!((ship.state.position - (start.position + velocity)).length() < 1e-3);
+    }
+
+    #[test]
+    fn a_disabled_ship_gliding_in_keeps_its_heading() {
+        let mut ship = jumping_in(AVERAGE);
+        ship.condition = Condition::Disabled;
+        ship.state.heading = 180.6;
+        fly_at(&mut ship, &[], None, GOING_ON);
+        assert_eq!(ship.state.heading, 180.6);
+    }
+
+    #[test]
+    fn an_intact_ship_waiting_in_or_at_its_gate_or_coasting_keeps_its_heading() {
+        let sites = [planet(140, 0.0, 0.0)];
+        for mode in [
+            Mode::Emerging { ticks_left: 3 },
+            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::EnteringGate {
+                gate: StellarId(140),
+                ticks_left: 3,
+            },
+            Mode::Coasting { ticks_left: 3 },
+        ] {
+            let mut ship = emerging(AVERAGE, 3);
+            ship.mode = mode;
+            ship.state.heading = 90.6;
+            fly_at(&mut ship, &sites, None, GOING_ON);
+            assert_eq!(ship.state.heading, 90.6, "{mode:?}");
+        }
+    }
+
     /// The leaderless ship of `fields`, bent on landing on planet 140 at
     /// the centre, out of a gate at (100, -200) heading 90° once its burst
     /// is over, drawing `draws`: its burst's last tick done.
@@ -3518,20 +3601,25 @@ mod tests {
             lead: Some(9.0),
         };
         let sites = [planet(140, 0.0, 0.0)];
-        let mut last = start.position.length();
+        // Inward, on the whole degree it arrives on.
+        let inward = flight::facing(start.heading);
         for tick in 0..=37 {
             assert_eq!(ship.mode, Mode::JumpingIn { tick });
+            let before = ship.state.position;
             assert_eq!(fly_at(&mut ship, &sites, None, speeds), Outcome::Flying);
-            let now = ship.state.position.length();
-            assert!((last - now - glide_speed(tick)).abs() < 1e-2, "{tick}");
+            let step = ship.state.position - before;
+            assert!(
+                (step - inward * glide_speed(tick)).length() < 1e-2,
+                "{tick}"
+            );
             assert_eq!(ship.state.heading, start.heading, "no steering");
-            last = now;
         }
         assert_eq!(ship.mode, Mode::Flying);
-        // Five ticks short of the 43 that would bring it 1000 out.
+        // Five ticks short of the 43 that would bring it 1000 out, give or
+        // take the under a degree it faces off the centre.
         let short: f32 = (38..43).map(glide_speed).sum();
-        assert!((last - (1000.0 + short)).abs() < 0.1, "{last}");
-        let inward = start.position * (-1.0 / jump_in_distance());
+        let last = ship.state.position.length();
+        assert!((last - (1000.0 + short)).abs() < 1.0, "{last}");
         assert!(
             (ship.state.velocity - inward * glide_speed(37)).length() < 1e-3,
             "{:?}",
