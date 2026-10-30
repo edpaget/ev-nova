@@ -45,6 +45,7 @@ use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
+use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::{CommNote, Haggle, HailRefusal, HailView};
@@ -1430,6 +1431,9 @@ pub enum FlightEvent {
     RescueDesc(i16),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
+    /// A stellar pass run outside a play frame, for the view to replay on
+    /// its scene before the next frame is drawn.
+    StellarPass(StellarPass),
 }
 
 /// What a frame's fixed steps are given

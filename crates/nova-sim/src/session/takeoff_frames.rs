@@ -135,10 +135,13 @@ mod tests {
         );
         let exit = StellarId(310);
         let site = *session.chart.gate_site(exit).expect("shown");
-        assert_eq!(
-            session.space.gate_sprites.get(&exit),
-            Some(&GateSprite::exit_gate(&GateAnimation::of(&site)))
-        );
+        // Then the tail's two stellar passes (see the `stellar_passes`
+        // module).
+        let anim = GateAnimation::of(&site);
+        let mut opened = GateSprite::exit_gate(&anim);
+        opened.step(&anim, false, false, &mut NeverFires);
+        opened.step(&anim, false, false, &mut NeverFires);
+        assert_eq!(session.space.gate_sprites.get(&exit), Some(&opened));
         assert_eq!(session.gate_frame(exit), Some(5), "frames - 1");
         assert_eq!(session.space.gate_sprites[&KEPT], reset(stepped()));
         assert_eq!(resets_told(&mut session), 1);

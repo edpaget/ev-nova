@@ -45,6 +45,7 @@ use std::collections::BTreeSet;
 
 use super::{Chart, Session, Setup, Statics};
 use crate::catalog::SystemId;
+use crate::chance::Chance;
 use crate::control::{FreshPilot, Gate};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::GalaxyOverlay;
@@ -102,9 +103,12 @@ impl Session {
     /// Enters play from the main screen (`_EnterGameFromMainScreen`
     /// @0x19f81): its refresh leaves the galaxy as the session already
     /// has it, so only the snapshot a later new pilot reads is taken
-    /// afresh (see the module docs' "Ordering against the original").
-    pub fn enter_game(&mut self) {
+    /// afresh (see the module docs' "Ordering against the original"), and
+    /// the routine's stellar passes run, their random picks drawn on
+    /// `chance` (see the `stellar_passes` module).
+    pub fn enter_game(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.chart.snapshot_refresh();
+        self.enter_game_passes(chance);
     }
 }
 
@@ -239,7 +243,7 @@ mod tests {
             LastRefresh::hiding([SystemId(132)]),
             "@0x1925e, before the OnStart"
         );
-        session.enter_game();
+        session.enter_game(&mut NeverFires);
         assert_eq!(session.last_refresh(), LastRefresh::default(), "@0x19f81");
     }
 

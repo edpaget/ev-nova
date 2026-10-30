@@ -430,6 +430,7 @@ impl Session {
             // No system is set up while the jump is under way.
             if self.jumping().is_none() {
                 self.populate(catalog, chance);
+                self.take_entry_gate_pass(chance);
             }
             return None;
         }

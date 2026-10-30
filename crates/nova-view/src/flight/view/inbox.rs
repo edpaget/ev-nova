@@ -97,6 +97,7 @@ impl Inbox {
                 FlightEvent::TakeoffNav(nav) => self.takeoff_nav = Some(nav),
                 FlightEvent::RescueDesc(desc) => self.rescue_desc = Some(desc),
                 FlightEvent::LeaveMessage(text) => self.leave_message = Some(text),
+                FlightEvent::StellarPass(_) => {}
             }
         }
     }

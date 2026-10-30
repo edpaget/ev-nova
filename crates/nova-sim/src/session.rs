@@ -631,6 +631,7 @@ mod steering;
 mod stellar_attackers;
 mod stellar_defence;
 mod stellar_guns;
+mod stellar_passes;
 mod stellar_picks;
 mod stellars;
 mod step;
@@ -702,6 +703,7 @@ use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::space::Space;
 use self::statics::Statics;
+use self::stellar_passes::GateHolds;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
@@ -740,6 +742,7 @@ use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
 };
+use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
@@ -3316,6 +3319,7 @@ impl Session {
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         Some(self.pilot.system)
     }
 
@@ -3696,7 +3700,7 @@ impl Session {
             Err(GateRefusal::NoLinks)
         };
         let entered = exit.map(|(system, exit)| {
-            self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
+            self.come_out(here, system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
             self.space
                 .say(&mut self.out, SimMessage::ExitedHypergate(system));
@@ -3776,15 +3780,18 @@ impl Session {
             return Err(GateRefusal::NoExit);
         };
         let (site, system) = (*exit.site, exit.system);
-        self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
+        self.come_out(here, system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.space
             .say(&mut self.out, SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
-    /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
-    /// [`Session::enter_wormhole`]. Before it enters, the exit decides
+    /// Brings the ship out of `exit`, a gate of `kind`, in `system`, having
+    /// gone in at `entered`: see [`Session::enter_wormhole`]. Each
+    /// `_PrepareAllSprites` runs a stellar pass, the entry's on the exit
+    /// system's stellars, before the frames' reset (see the
+    /// `stellar_passes` module). Before it enters, the exit decides
     /// what becomes of the special ships following the player
     /// ([`Session::exit_gate_slots`]); once it has, the exit's arrivals
     /// pass runs ([`Session::gate_exit_pass`]), those that follow come
@@ -3794,6 +3801,7 @@ impl Session {
     /// @0x674ef).
     fn come_out(
         &mut self,
+        entered: StellarId,
         system: SystemId,
         exit: &GateSite,
         kind: GateKind,
@@ -3808,6 +3816,13 @@ impl Session {
         self.ship.step_cloak_fade(&self.pilot, &self.statics);
         self.space
             .step_fades_at_gate_entry(system, self.pilot.system);
+        // Its stellar pass reads the old ships and the request where the
+        // exit is in the system gone in; otherwise it follows the system's
+        // entry, below, and they reach none of its gates.
+        let exit_elsewhere = system != self.pilot.system;
+        if !exit_elsewhere {
+            self.stellar_pass(StellarPass::Entry, GateHolds::Entered(entered), chance);
+        }
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
@@ -3843,6 +3858,9 @@ impl Session {
             catalog,
             chance,
         );
+        if exit_elsewhere {
+            self.stellar_pass(StellarPass::Entry, GateHolds::Nobody, chance);
+        }
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
@@ -3851,9 +3869,11 @@ impl Session {
         self.reset_stellar_frames((kind == GateKind::Hypergate).then_some(exit.id));
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
         // out, and again after the stellars' visibility (@0x67658): every
-        // NPC's fade steps twice.
+        // NPC's fade steps twice, and every gate.
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -4125,8 +4145,9 @@ impl Session {
         // The rest of the tail (see the `dock_tail` module). The
         // original's bar is redrawn before its deselect with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
-        // flight view's `took_off`.
-        self.end_dock_tail();
+        // flight view's `took_off`. A landing left `_gSpeedMult` 0
+        // (@0x6375e-0x63769), so its passes add nothing.
+        self.end_dock_tail(StellarPass::Still, chance);
         Some(stellar)
     }
 

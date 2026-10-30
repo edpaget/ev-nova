@@ -24,6 +24,7 @@ use super::{Aboard, hail, persons, reinforcements};
 /// What is in the system around the player, in `Session`'s former field
 /// order, then its part.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, each set and read on its own
 pub(super) struct Space {
     /// The sprite of each hypergate the flight has shown, as it opens and
     /// closes, kept while it is not shown (see the `gate_sprites`
@@ -60,6 +61,10 @@ pub(super) struct Space {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     pub(super) traffic_due: bool,
+    /// Whether the gates' step of game entry's third stellar pass is owed
+    /// to the setup `traffic_due` waits for (see the `stellar_passes`
+    /// module); never saved.
+    pub(super) entry_gate_pass_owed: bool,
     /// The heading each ship in the fight was drawn at after the last
     /// pass ([`Session::game_work`](super::Session::game_work)): its heading as that pass ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -219,6 +224,7 @@ impl Space {
             #[cfg(test)]
             queued_in_frame: Vec::new(),
             traffic_due: true,
+            entry_gate_pass_owed: false,
             drawn: BTreeMap::new(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),

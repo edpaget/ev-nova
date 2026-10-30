@@ -23,10 +23,12 @@
 //! saved, so a load, a resumed pilot and a new pilot start every gate
 //! closed (stellar-fidelity phase 12).
 
+use super::stellar_passes::GateHolds;
 use super::stellars::NO_SPRITE_SIDE;
 use super::{Chart, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
+use crate::clearance::{CLEARED, DockRequest};
 use crate::gate::HYPERGATE;
 use crate::gate_sprite::{GateAnimation, approach_reach, held_open};
 
@@ -80,8 +82,30 @@ impl Session {
     /// frame), grown by
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.step_gates_by(1, GateHolds::AsTheyStand, chance);
+    }
+
+    /// One pass of every hypergate shown at `gain` ticks, held as `holds`
+    /// says: the walk the play frame and each stellar pass share (see
+    /// [`Session::step_gate_sprites`] and the `stellar_passes` module).
+    pub(super) fn step_gates_by(
+        &mut self,
+        gain: u8,
+        holds: GateHolds,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         self.keep_gate_sprites();
-        let dock = self.port.dock;
+        let (dock, npcs) = match holds {
+            GateHolds::AsTheyStand => (self.port.dock, self.space.traffic.npcs()),
+            GateHolds::Entered(stellar) => (
+                Some(DockRequest {
+                    stellar,
+                    permission: CLEARED,
+                }),
+                self.space.traffic.npcs(),
+            ),
+            GateHolds::Nobody => (None, [].as_slice()),
+        };
         for site in self.chart.sites.iter().filter(|site| is_hypergate(site)) {
             let width = self
                 .space
@@ -89,8 +113,8 @@ impl Session {
             let anim = GateAnimation::of(site);
             if let Some(sprite) = self.space.gate_sprites.get_mut(&site.id) {
                 let reach = approach_reach(width, sprite.is_open(&anim));
-                let held = held_open(site, reach, dock, self.space.traffic.npcs());
-                sprite.step(&anim, site.destroyed, held, chance);
+                let held = held_open(site, reach, dock, npcs);
+                sprite.step_by(gain, &anim, site.destroyed, held, chance);
             }
         }
     }

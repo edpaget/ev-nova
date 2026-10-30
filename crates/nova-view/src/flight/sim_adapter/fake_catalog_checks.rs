@@ -702,6 +702,19 @@ fn opening_a_saved_pilot_from_open_pilot_forwards_on_the_flights_chance() {
     opens_saved_on_the_flights_chance(SavedOpening::OpenPilot);
 }
 
+#[test]
+fn entering_play_forwards_on_the_flights_chance() {
+    let (catalog, session) = aux_errand();
+    let (_, chance) = scripted(&[]);
+    let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
+    assert!(flight.enter_game());
+    let mut by_hand = session.clone();
+    let (_, mut own_chance) = scripted(&[]);
+    by_hand.enter_game(&mut own_chance);
+    assert_ne!(by_hand, session, "entering play raises its passes");
+    assert_eq!(flight.session(), Ok(&by_hand));
+}
+
 // The pilot, its load and its transactions.
 
 #[test]

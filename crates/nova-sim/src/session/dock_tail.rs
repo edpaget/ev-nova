@@ -35,7 +35,9 @@
 //! before the next frame is drawn.
 
 use super::Session;
+use super::stellar_passes::GateHolds;
 use crate::chance::Chance;
+use crate::gate_sprite::StellarPass;
 
 impl Session {
     /// The dock request's tail before the system is set up (see the
@@ -54,18 +56,27 @@ impl Session {
     }
 
     /// The dock request's tail once the system is set up and its frames
-    /// reset (see the module docs): the stellars rebuilt, every sprite
-    /// prepared again, the dock request dropped, the nav selection let
-    /// go and the course cued.
-    pub(super) fn end_dock_tail(&mut self) {
+    /// reset (see the module docs): the stellars rebuilt, the dock request
+    /// dropped, both `_PrepareAllSprites`' stellar passes run as `pass`,
+    /// their random picks drawn on `chance`, every sprite prepared again,
+    /// the nav selection let go and the course cued.
+    pub(super) fn end_dock_tail(&mut self, pass: StellarPass, chance: &mut (impl Chance + ?Sized)) {
         // The rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
+        // `_dockPermission` = 0 (@0x67064), before either pass reads it.
+        self.port.dock = None;
+        // @0x6764e's stellar pass: after the frames' reset, and after a
+        // rebuild, so here, though its ship part was `populate`'s. It
+        // follows @0x674c7's rebuild in the original and the only one
+        // after the reset in the engine: the session's sites are as the
+        // rebuild left them either way.
+        self.stellar_pass(pass, GateHolds::AsTheyStand, chance);
         // The second `_PrepareAllSprites` (@0x67658), `populate`'s being
         // the first (@0x6764e): every NPC's fade steps again.
         self.prepare_all_sprites();
-        // `_dockPermission` = 0, then the selection let go, the mode kept,
-        // then the course cued (@0x674d2-0x674d8).
-        self.port.dock = None;
+        self.stellar_pass(pass, GateHolds::AsTheyStand, chance);
+        // The selection let go, the mode kept, then the course cued
+        // (@0x674d2-0x674d8).
         self.chart.deselect();
         self.cue_course();
     }
