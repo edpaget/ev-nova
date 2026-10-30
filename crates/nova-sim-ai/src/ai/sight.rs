@@ -188,7 +188,7 @@ pub fn sees_player(observer: &Npc, player: &PlayerSide) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, ship, sites};
+    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, scanning, ship, sites};
     use crate::combat::ShipRef;
     use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
@@ -240,6 +240,37 @@ mod tests {
         let mut emerging = other(50.0, 0.0);
         emerging.mode = Mode::Emerging { ticks_left: 5 };
         assert!(!sees(&warship(), emerging));
+    }
+
+    #[test]
+    fn only_goal_0x15_hides_an_arriving_ship() {
+        for (mode, seen) in [
+            (Mode::Emerging { ticks_left: 5 }, false),
+            (Mode::LeavingGate { tick: 0 }, false),
+            (Mode::LeavingGate { tick: 1 }, true),
+            (Mode::JumpingIn { tick: 1 }, true),
+            (Mode::HeldAtGate { ticks_left: 5 }, true),
+            (Mode::Coasting { ticks_left: 5 }, true),
+            (
+                Mode::EnteringGate {
+                    gate: crate::catalog::StellarId(128),
+                    ticks_left: 5,
+                },
+                true,
+            ),
+        ] {
+            let mut target = other(50.0, 0.0);
+            target.mode = mode;
+            assert_eq!(sees(&warship(), target), seen, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_scanner_on_screen_does_not_see_a_ship_on_the_last_frame_of_its_wait() {
+        // The goal test comes before the cloak's (@0x972d).
+        let mut target = other(50.0, 0.0);
+        target.mode = Mode::LeavingGate { tick: 0 };
+        assert!(!sees(&scanning(warship()), target));
     }
 
     #[test]
@@ -337,7 +368,7 @@ mod tests {
 
     #[test]
     fn the_player_is_seen_by_its_cloak_and_a_ship_not_in_the_system_reads_seen() {
-        use crate::ai::fixture::{cloaked_player, player, scanning};
+        use crate::ai::fixture::{cloaked_player, player};
         use crate::escort::{EscortDuty, FormationSlot};
         let (sites, govts) = (sites(), govts(0, 0));
         let sees_player = |observer: Npc, at: (f32, f32), cloak: bool| {

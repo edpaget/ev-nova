@@ -2514,12 +2514,15 @@ mod tests {
         }
         fly(&mut ship, &sites, None);
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
-        assert!(!ship.emerging());
+        assert!(ship.emerging(), "its goal is still 0x15");
         assert_eq!(
             ship.state,
             at(100.0, -200.0, 0.0, 0.0, 90.0),
             "not yet moving"
         );
+        fly(&mut ship, &sites, None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 1 });
+        assert!(!ship.emerging(), "goal 8");
     }
 
     /// The last tick of a burst out of a gate, flown at `speeds`.

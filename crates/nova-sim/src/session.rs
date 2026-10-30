@@ -20934,6 +20934,16 @@ pub(super) mod tests {
             Rules::default(),
             &mut NeverFires,
         );
+        assert!(session.npcs()[0].emerging(), "its wait just out");
+        assert_eq!(fates(&session), [], "not seen with its goal still 0x15");
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
         assert!(!session.npcs()[0].emerging(), "bursting out");
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
         assert!(session.run.story.watched.is_empty(), "forgotten once seen");

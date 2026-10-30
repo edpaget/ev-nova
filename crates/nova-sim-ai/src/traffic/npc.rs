@@ -1320,13 +1320,18 @@ impl Npc {
         }
     }
 
-    /// Whether it is waiting at the gate it comes out of
-    /// ([`Mode::Emerging`]): `_AIShipIsEmergingFromHypergate` (@0x7e2e8),
-    /// which holds it invisible to every ship (`_ShipVisibleToShip`
-    /// @0x972d). Bursting out of the gate, it is no longer.
+    /// Whether it has goal 0x15, `_AIShipIsEmergingFromHypergate`
+    /// (@0x7e2e8), which holds it invisible to every ship
+    /// (`_ShipVisibleToShip` @0x972d): waiting at the gate it comes out of
+    /// ([`Mode::Emerging`]), or its wait just out ([`Mode::LeavingGate`] at
+    /// tick 0). From its first burst tick it has goal 8 (@0x8dd8a) and is
+    /// no longer. A ship held at its gate has goal 4.
     #[must_use]
     pub fn emerging(&self) -> bool {
-        matches!(self.mode, Mode::Emerging { .. })
+        matches!(
+            self.mode,
+            Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 }
+        )
     }
 
     /// Makes it come out of `gate`, waiting there `ticks_left` ticks
@@ -1411,12 +1416,7 @@ impl Npc {
     /// and +0x6c = -1 (@0x8dd8a-0x8dd93), so it lets go.
     #[must_use]
     pub fn holds_gate_open(&self, gate: StellarId) -> bool {
-        self.emerges_from == Some(gate)
-            && matches!(
-                self.mode,
-                Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 }
-            )
-            && self.condition == Condition::Intact
+        self.emerges_from == Some(gate) && self.emerging() && self.condition == Condition::Intact
     }
 
     /// Holds it where it waits in its gate, attacking the player
@@ -2158,6 +2158,12 @@ mod tests {
         npc.mode = Mode::Emerging { ticks_left: 2 };
         assert!(npc.emerging());
         assert!(!npc.threatens_player(), "while it emerges");
+        npc.mode = Mode::LeavingGate { tick: 0 };
+        assert!(npc.emerging(), "its wait just out, its goal still 0x15");
+        npc.mode = Mode::LeavingGate { tick: 1 };
+        assert!(!npc.emerging(), "goal 8");
+        npc.mode = Mode::HeldAtGate { ticks_left: 2 };
+        assert!(!npc.emerging(), "goal 4");
     }
 
     #[test]
