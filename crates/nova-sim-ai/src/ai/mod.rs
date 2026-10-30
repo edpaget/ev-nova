@@ -637,8 +637,16 @@ pub static NO_AIMED_DAMAGE: BTreeMap<ShipRef, i32> = BTreeMap::new();
 /// What an NPC deciding can see.
 #[derive(Clone, Copy, Debug)]
 pub struct Surroundings<'a> {
-    /// The system's stellars.
+    /// The system's stellars, those the player's system shows.
     pub sites: &'a [LandingSite],
+    /// Every stellar the NPC's system's `NavDefs` list, shown or not (the
+    /// original's system +0x2a), in order, a stellar listed twice twice:
+    /// what the destination pick walks and the stellar it picked is looked
+    /// up in ([`idle`], [`idle_block`], [`miner`], [`react`]), owner- and
+    /// active-blind as `_SelectRandomStellarDest` is (see
+    /// [`destination`](crate::traffic::destination)).
+    /// [`Surroundings::new`] gives `sites`.
+    pub listed: &'a [LandingSite],
     /// Every NPC in the system, the one deciding among them.
     pub npcs: &'a [Npc],
     /// The player's ship, while it flies in the system.
@@ -746,7 +754,7 @@ pub static NO_DESTROYABLE: BTreeSet<StellarId> = BTreeSet::new();
 pub static NO_WEAPONS: Arsenal = Arsenal::EMPTY;
 
 impl<'a> Surroundings<'a> {
-    /// `npcs` among `sites`, with no player, no governments, no record, no
+    /// `npcs` among `sites`, every one listed, with no player, no governments, no record, no
     /// damage aimed, no asteroid in slot 0, no cargo boxes, the original's
     /// flight rules, no reinforcements coming, no
     /// cloak scanner, no government marked by an IFF scrambler, room for
@@ -759,6 +767,7 @@ impl<'a> Surroundings<'a> {
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
             sites,
+            listed: sites,
             npcs,
             player: None,
             govts: &NO_GOVERNMENTS,
@@ -1210,9 +1219,11 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         .unwrap_or_else(|| idle_block::leave_or_wait(npc, around))
 }
 
-/// A stellar picked at random for `npc` among `around`'s, admitting
-/// `admit`, as `_SelectRandomStellarDest` picks (@0x805de; see
-/// [`idle`]): one `below(candidates)` draw, a hypergate or
+/// A stellar picked at random for `npc` among those `around` lists, shown
+/// or not ([`Surroundings::listed`]), admitting `admit`, as
+/// `_SelectRandomStellarDest` picks over the system's `NavDefs`
+/// (@0x805de, @0x806bd-0x8072e; see [`idle`]): one `below(candidates)`
+/// draw, a hypergate or
 /// wormhole entered ([`Goal::EnterGate`]), any other landed on. `None`,
 /// drawing nothing, when there is no candidate.
 pub(crate) fn random_stellar(
@@ -1221,7 +1232,7 @@ pub(crate) fn random_stellar(
     chance: &mut dyn Chance,
     admit: Admit,
 ) -> Option<Goal> {
-    let candidates = destination::candidates(npc.govt, around.sites, around.govts, admit);
+    let candidates = destination::candidates(npc.govt, around.listed, around.govts, admit);
     if candidates.is_empty() {
         return None;
     }
@@ -1259,8 +1270,10 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         .filter(|&attacker| npc.provoked > 0.0 && around.live(attacker))
 }
 
-/// Whether `npc` can still fly its goal among `around`: a stellar still
-/// there and landable, a gate still there (state 20 tests no landability
+/// Whether `npc` can still fly its goal among `around`: a stellar the
+/// system still lists, shown or not ([`Surroundings::listed`], as the
+/// high level reads the stellar's record by its +0x6c, state 1 @0x8d8d7,
+/// state 20 @0x8db8a), and landable, a gate still listed (state 20 tests no landability
 /// again), a jump out (state 2 tests no fuel), a hold, or a drift (goal
 /// 0xe, which its high level ends: the trader AIs' idle blocks run only on
 /// goal 0, `_WimpyTraderAI` @0x8b06c, `_BraveTraderAI` @0x8b4d6). Idling,
@@ -1269,10 +1282,10 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
         Goal::Land(stellar) => around
-            .sites
+            .listed
             .iter()
             .any(|site| site.id == stellar && landable(site)),
-        Goal::EnterGate(gate) => around.sites.iter().any(|site| site.id == gate),
+        Goal::EnterGate(gate) => around.listed.iter().any(|site| site.id == gate),
         Goal::JumpOut | Goal::Hold | Goal::Wait | Goal::Drift => true,
         _ => false,
     }

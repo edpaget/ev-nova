@@ -284,13 +284,15 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
 
 /// How `npc`, a defence ship of `stellar`, answers `strike` on itself
 /// among `around` (see the module docs): only a ship's hit from nearer
-/// than [`DEFENCE_SHARE`] of its stellar's distance, squared. A stellar
-/// not among `around`'s sites draws nothing.
+/// than [`DEFENCE_SHARE`] of its stellar's distance, squared. Its stellar
+/// is read among those the system lists, shown or not
+/// ([`Surroundings::listed`]), as `_DamageShip` reads the stellar's record
+/// (@0x3bd99-0x3bdb7); one not listed draws nothing.
 fn defender(npc: &Npc, stellar: StellarId, strike: &Strike, around: &Surroundings) -> Reaction {
     let Some(by) = strike.by else {
         return Reaction::default();
     };
-    let home = around.sites.iter().find(|site| site.id == stellar);
+    let home = around.listed.iter().find(|site| site.id == stellar);
     let (Some((attacker, _)), Some(home)) = (squared(npc, by, around), home) else {
         return Reaction::default();
     };
@@ -747,6 +749,23 @@ mod tests {
             Reaction::default(),
             "no ship (`si` above 63, @0x3bd90): not even provoked"
         );
+    }
+
+    #[test]
+    fn a_defender_of_a_stellar_listed_but_not_shown_finds_its_home() {
+        let govts = relations(0, 0);
+        let mut guard = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        guard.defends = Some(StellarId(128));
+        let npcs = [guard, ship(2, Some(PIRATES), AiType::Warship, 700.0)];
+        let listed = [nova_sim_catalog::fixture::planet(128, 1000.0, 0.0)];
+        let around = Surroundings {
+            govts: &govts,
+            listed: &listed,
+            player: Some(crate::ai::fixture::player(700.0, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let answered = victim(&npcs[0], &strike(n(1), n(2)), &around);
+        assert_eq!(answered.target, Some(n(2)), "its record, not a sprite");
     }
 
     #[test]

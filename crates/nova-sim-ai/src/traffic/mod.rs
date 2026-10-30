@@ -847,6 +847,7 @@ impl<'a> World<'a> {
     pub fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
         Surroundings {
             sites: self.sites,
+            listed: self.listed,
             npcs,
             player: self.player,
             govts: self.govts,

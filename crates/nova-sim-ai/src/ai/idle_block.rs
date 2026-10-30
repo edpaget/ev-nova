@@ -81,14 +81,15 @@ use crate::chance::Chance;
 use crate::traffic::npc::Npc;
 
 /// Whether `npc` has visited a stellar of the system among `around`, so the
-/// idle block skips its pick: the system has no nav stellar at all, or one
-/// of them is [`Npc::visited`] (@0x8b0a3-0x8b0c8).
+/// idle block skips its pick: the system lists no nav stellar at all
+/// (@0x8b08b-0x8b0a1), or one of those it lists, shown or not
+/// ([`Surroundings::listed`]), is [`Npc::visited`] (@0x8b0a3-0x8b0c8).
 #[must_use]
 pub fn visited_here(npc: &Npc, around: &Surroundings) -> bool {
-    around.sites.is_empty()
+    around.listed.is_empty()
         || npc
             .visited
-            .is_some_and(|visited| around.sites.iter().any(|site| site.id == visited))
+            .is_some_and(|visited| around.listed.iter().any(|site| site.id == visited))
 }
 
 /// The idle block's fuel test: [`Goal::JumpOut`] when `npc` can jump
@@ -138,10 +139,11 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
     random_stellar(npc, around, chance, Admit::All).unwrap_or_else(|| leave_or_wait(npc, around))
 }
 
-/// Whether `stellar` among `around` is destroyed (`_StellarIsDestroyed`).
+/// Whether `stellar` among those `around` lists is destroyed
+/// (`_StellarIsDestroyed`, which reads the stellar's record).
 fn destroyed(stellar: StellarId, around: &Surroundings) -> bool {
     around
-        .sites
+        .listed
         .iter()
         .any(|site| site.id == stellar && site.destroyed)
 }
@@ -462,5 +464,98 @@ mod tests {
             Goal::JumpOut,
             "its lead gone"
         );
+    }
+
+    /// `npcs` among the stellars shown `shown`, the system listing
+    /// `listed`: a system that lists a stellar another system owns.
+    fn listing<'a>(shown: &'a [LandingSite], listed: &'a [LandingSite]) -> Surroundings<'a> {
+        Surroundings {
+            listed,
+            ..Surroundings::new(shown, &[])
+        }
+    }
+
+    #[test]
+    fn the_pick_is_among_every_stellar_the_system_lists_shown_or_not() {
+        let listed = [planet(128, 0.0, 0.0), planet(140, 0.0, 0.0)];
+        let shown = [listed[0]];
+        let around = listing(&shown, &listed);
+        for (draw, stellar) in [(0, 128), (1, 140)] {
+            let mut chance = Draws::of(&[draw]);
+            assert_eq!(
+                idle(&ship(), &around, &mut chance),
+                Goal::Land(StellarId(stellar))
+            );
+            assert_eq!(chance.asked, [2], "both candidates");
+        }
+        let only = listing(&[], &listed[1..]);
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship(), &only, &mut chance),
+            Goal::Land(StellarId(140)),
+            "the one listed, none shown"
+        );
+        let unlandable = [LandingSite {
+            flags: 0,
+            ..planet(140, 0.0, 0.0)
+        }];
+        let none = listing(&shown[..0], &unlandable);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&ship(), &none, &mut chance), Goal::JumpOut);
+        assert_eq!(idle(&stranded(ship()), &none, &mut chance), Goal::Wait);
+        assert!(chance.asked.is_empty(), "no candidate: no pick");
+    }
+
+    #[test]
+    fn a_goal_at_a_stellar_listed_but_not_shown_is_kept() {
+        let gate = LandingSite {
+            flags2: HYPERGATE,
+            ..planet(141, 0.0, 0.0)
+        };
+        let listed = [planet(128, 0.0, 0.0), planet(140, 0.0, 0.0), gate];
+        let around = listing(&listed[..1], &listed);
+        for goal in [Goal::Land(StellarId(140)), Goal::EnterGate(StellarId(141))] {
+            let kept = Npc { goal, ..ship() };
+            let mut chance = Draws::of(&[]);
+            assert_eq!(idle(&kept, &around, &mut chance), goal);
+            assert_eq!(patrol(&kept, &around, &mut chance, true), goal);
+            assert!(chance.asked.is_empty(), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_visit_to_a_stellar_listed_but_not_shown_counts_and_so_does_its_listing() {
+        let listed = [planet(128, 0.0, 0.0), planet(140, 0.0, 0.0)];
+        let around = listing(&listed[..1], &listed);
+        assert!(visited_here(&visited(140), &around));
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&visited(140), &around, &mut chance), Goal::JumpOut);
+        let unshown = listing(&[], &listed[1..]);
+        assert!(
+            !visited_here(&ship(), &unshown),
+            "a nav stellar, though none is shown"
+        );
+    }
+
+    #[test]
+    fn a_patrol_picks_among_the_listing_and_finds_an_unshown_pick_destroyed() {
+        let listed = [planet(128, 0.0, 0.0), planet(140, 0.0, 0.0)];
+        let around = listing(&listed[..1], &listed);
+        let mut chance = Draws::of(&[1]);
+        assert_eq!(
+            patrol(&ship(), &around, &mut chance, true),
+            Goal::Land(StellarId(140))
+        );
+        assert_eq!(chance.asked, [2]);
+        let ruin = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED,
+            destroyed: true,
+            ..planet(140, 0.0, 0.0)
+        };
+        let ruined = [listed[0], ruin];
+        let around = listing(&ruined[..1], &ruined);
+        let mut chance = Draws::of(&[1]);
+        assert_eq!(patrol(&ship(), &around, &mut chance, true), Goal::Wait);
+        assert_eq!(chance.asked, [2], "picked, then found destroyed");
     }
 }
