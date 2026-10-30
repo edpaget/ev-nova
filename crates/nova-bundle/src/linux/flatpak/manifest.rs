@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::ffmpeg::FfmpegSource;
 use super::layout::FlatpakLayout;
 use super::{
-    FINISH_ARGS, LIBCLANG_DIR, LLVM_EXTENSION, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN,
+    CLANG, FINISH_ARGS, LIBCLANG_DIR, LLVM_EXTENSION, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN,
     RUST_EXTENSION, SDK,
 };
 use crate::build_id::{self, BuildId};
@@ -109,7 +109,7 @@ fn text(path: &Path) -> String {
 /// ([`FfmpegSource::record`]) is a `file` source, which `flatpak-builder`
 /// downloads and checks before the build, and the build options name it
 /// in `NOVA_FFMPEG_TARBALL`. bindgen binds it with the LLVM extension's
-/// libclang (`LIBCLANG_PATH`).
+/// libclang and clang (`LIBCLANG_PATH`, `CLANG_PATH`).
 #[must_use]
 pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> Value {
     let ffmpeg = FfmpegSource::record();
@@ -130,6 +130,7 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> V
                     "CARGO_HOME": format!("/run/build/{MODULE}/cargo"),
                     build_id::VAR: build.as_str(),
                     "LIBCLANG_PATH": LIBCLANG_DIR,
+                    "CLANG_PATH": CLANG,
                     FFMPEG_TARBALL_VAR: format!(
                         "/run/build/{MODULE}/{FFMPEG_DEST}/{}",
                         ffmpeg.file_name()
@@ -325,13 +326,14 @@ mod tests {
             env["NOVA_FFMPEG_TARBALL"],
             "/run/build/nova/ffmpeg/ffmpeg-9.0.2.tar.xz"
         );
-        assert_eq!(env.as_object().expect("an object").len(), 4, "{env}");
+        assert_eq!(env.as_object().expect("an object").len(), 5, "{env}");
     }
 
     #[test]
-    fn bindgen_finds_libclang_in_the_llvm_extension() {
+    fn bindgen_finds_libclang_and_clang_in_the_llvm_extension() {
         let env = &module()["build-options"]["env"];
         assert_eq!(env["LIBCLANG_PATH"], "/usr/lib/sdk/llvm22/lib");
+        assert_eq!(env["CLANG_PATH"], "/usr/lib/sdk/llvm22/bin/clang");
     }
 
     #[test]

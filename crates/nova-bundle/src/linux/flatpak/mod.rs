@@ -70,6 +70,10 @@ pub const RUST_BIN: &str = "/usr/lib/sdk/rust-stable/bin";
 pub const LLVM_EXTENSION: &str = "org.freedesktop.Sdk.Extension.llvm22";
 /// Where that extension puts `libclang.so`, as bindgen's `LIBCLANG_PATH`.
 pub const LIBCLANG_DIR: &str = "/usr/lib/sdk/llvm22/lib";
+/// Its `clang`, as bindgen's `CLANG_PATH`: bindgen asks it for the
+/// include directories (clang's own `limits.h` among them), which
+/// libclang alone doesn't find.
+pub const CLANG: &str = "/usr/lib/sdk/llvm22/bin/clang";
 /// The module's name, and so its build directory's in the sandbox
 /// (`/run/build/<name>`).
 pub const MODULE: &str = "nova";
