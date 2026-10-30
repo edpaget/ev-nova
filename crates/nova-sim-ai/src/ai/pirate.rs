@@ -102,9 +102,9 @@
 //! **Left out**, owned elsewhere (see the phase bodies of
 //! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board,
 //! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols and
-//! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): the
-//! plunder's +0x8c write (-1, @0x8c791) is the defence ships', which
-//! rdm:task/planet-domination owns.
+//! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): none. The
+//! plunder's +0x8c write (-1, @0x8c791), the ship it takes into its fleet
+//! defending no stellar, is the take's ([`plunder`](crate::traffic::plunder)).
 
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::{hopeless_chase, state4_attack};
@@ -369,7 +369,10 @@ fn classify(target: ShipRef, around: &Surroundings) -> Class {
 /// The disabled-warship drop's test (@0x8c7b4-0x8c837): `target` is a
 /// disabled NPC among `around` of a class whose `InherentAI` is above 2,
 /// not a former escort, and `npc` holds no destroying weapon or is fully
-/// dry.
+/// dry. Its [`Condition::disabled`] read never meets a stellar's defence
+/// ship breaking up, which `_IsDisabled` would not call disabled
+/// (@0x2d6f): the think's head drops a dying target first (`_IsDying`
+/// @0x8c315).
 fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
     let ShipRef::Npc(id) = target else {
         return false;

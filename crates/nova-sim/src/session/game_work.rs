@@ -49,7 +49,10 @@
 //!    later slots before they move; an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
-//!    settled ([`Session::ship_loop`]); then the stellar guns
+//!    settled ([`Session::ship_loop`]); then the +0x47 pass, each nav
+//!    stellar with a defence ship in the system marked under attack
+//!    (@0x443d4-0x4444f, see the `stellar_defence` module); then the
+//!    stellar guns
 //!    (`_HandleStellarWeapons` @0x444d7, after `_HandleStellarSprites`
 //!    @0x444d2), each armed stellar firing at its target (see the
 //!    `stellar_guns` module).
@@ -342,6 +345,10 @@ impl Session {
             None => Motion::Again,
         };
         self.ship_loop(start, motion, pass, rules, chance);
+        // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
+        // ship loop and before the guns read it (see the
+        // `stellar_defence` module).
+        self.mark_defended_stellars();
         // `_HandleStellarSprites` (@0x444d2), then `_HandleStellarWeapons`
         // (@0x444d7).
         self.stellar_guns(pass, rules, chance);
@@ -510,6 +517,7 @@ impl Session {
             resists: player_terms.resists,
             sprite: player_terms.sprite,
             slot: crate::ship_layer::Slot::Player,
+            defends: None,
         }];
         let npcs = self.space.traffic.npcs_mut().iter_mut().zip(terms);
         fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
@@ -1176,6 +1184,40 @@ mod tests {
         assert_eq!(fates(&session), [disabled]);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(fates(&session), [disabled], "once");
+    }
+
+    #[test]
+    fn a_defence_ship_broken_up_by_a_hit_raises_no_disabled_fate() {
+        // `_DamageShip`'s `_IsDisabled` after the hit (@0x3ae5b, @0x3af8b)
+        // never holds for a defence ship (@0x2d6f).
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.defends = Some(crate::catalog::StellarId(128));
+        npc.reserves.shield.now = 0.0;
+        npc.reserves.armor.now = 1.0;
+        npc.hull.death_delay = 30;
+        session.hold_trigger(FIRE);
+        let mut ticks = 0;
+        while session.npcs()[0].condition == Condition::Intact {
+            work(&mut session, &catalog, Controls::default());
+            session.hold_trigger(Trigger::default());
+            ticks += 1;
+            assert!(ticks < 20, "never hit");
+        }
+        assert!(matches!(
+            session.npcs()[0].condition,
+            Condition::Dying { .. }
+        ));
+        let disabled = StoryEvent::ShipFate {
+            ship: NpcId(0),
+            fate: Fate::Disabled,
+        };
+        assert!(
+            !fates(&session).contains(&disabled),
+            "{:?}",
+            fates(&session)
+        );
     }
 
     /// Every NPC keeps its goal.

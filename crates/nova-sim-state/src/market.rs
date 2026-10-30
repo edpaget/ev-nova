@@ -31,9 +31,9 @@
 //! the stellar has a government and the player's legal record in its
 //! system is below 0, when it is 1.1 ([`Markup::Outlaw`]: 110 is 99 low,
 //! 121 high), or the stellar is dominated, when it is 1.5
-//! ([`Markup::Dominated`]) whatever the record. Until the port models
-//! domination, a dominated stellar is one with the `Flags2` bit
-//! [`DOMINATED`]. By 1.25 low is 80 % and high 125 %, and the community's
+//! ([`Markup::Dominated`]) whatever the record: by its `Flags2` bit
+//! [`DOMINATED`] or by Demand Tribute
+//! ([`domination::dominated`](crate::domination::dominated)). By 1.25 low is 80 % and high 125 %, and the community's
 //! table of stock prices (Food 60/75/93, Medical 600/750/937, and so on)
 //! matches these exactly. The price is then held in 16 bits, as the
 //! engine stores it (@0x5dcc5), so a high price above 32767 wraps
@@ -264,11 +264,10 @@ use crate::trade_dialog::{
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
 
-/// The `spöb` `Flags2` bit of a stellar that is always dominated by the
-/// player: `_ResetPlayerRecord` sets each stellar's dominated byte (+0x46)
-/// from it (@0x1dbdb-0x1dbdf), and the exchange prices such a stellar at
-/// [`Markup::Dominated`].
-pub const DOMINATED: u16 = 0x0020;
+/// The always-dominated `Flags2` bit, owned by the [`domination`](crate::domination)
+/// module and re-exported here, where the exchange's readers have long
+/// found it.
+pub use crate::domination::DOMINATED;
 
 /// What a stellar's low and high prices are marked down and up by
 /// (`_DoTradeDialog` @0x5dc0c-0x5dc48): low is the base price divided by
@@ -2854,6 +2853,9 @@ mod tests {
         }
         fn stellar_lives(&self) -> Vec<crate::catalog::StellarLife> {
             unreachable!("Goods::read reads no stellar's life")
+        }
+        fn stellar_scripts(&self) -> Vec<crate::catalog::StellarScripts> {
+            unreachable!("Goods::read reads no stellar's scripts")
         }
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             unreachable!("Goods::read reads no graphic")

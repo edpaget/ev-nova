@@ -155,7 +155,10 @@ impl Traffic {
                 npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
                 // `_AIDispatch` runs no high level for a disabled ship, nor
-                // the high level past its AI wait (`jump_with_leader`).
+                // the high level past its AI wait (`jump_with_leader`). A
+                // stellar's defence ship breaking up is not disabled
+                // (@0x2d6f), but it holds no warp and no carrier, so neither
+                // step below changes it.
                 if npc.condition == Condition::Intact && !npc.high_level_waits() {
                     warp_out::hold_stage(npc);
                     jump_with_leader::turn_back(npc, world.npc_jump_fuel);
@@ -480,7 +483,11 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
 /// disabled as `other_disabled` says, with `beside` what it reads beside
 /// it (its swarm lead, a formation escort's guard and sight), at
 /// `speeds`, a dock it starts or a repair it completes noted in the
-/// half's docks, rolling on `chance`.
+/// half's docks, rolling on `chance`. Its goal's stellar is looked up
+/// among every stellar the system lists, shown or not ([`World::listed`]),
+/// as `_HighLevelAIHandler` reads the stellar's record (state 1 @0x8d8d7,
+/// state 20 @0x8db8a): every such goal names a stellar the traffic picked
+/// from the listing, which holds every stellar shown.
 fn fly_steered(
     npc: &mut Npc,
     pass: &mut FlyPass,
@@ -519,7 +526,7 @@ fn fly_steered(
     }
     let outcome = autopilot::fly(
         npc,
-        world.sites,
+        world.listed,
         world.type_widths,
         other.as_ref(),
         other_disabled,

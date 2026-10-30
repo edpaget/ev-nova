@@ -108,6 +108,8 @@ pub struct StarSystem {
 
 /// A stellar the player might land on, raw from its `spöb`; the
 /// `nova_sim::landing` rules decide what the values mean.
+// Each flag is its own `spöb` field or runtime byte, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LandingSite {
     /// The `spöb`'s ID.
@@ -141,6 +143,12 @@ pub struct LandingSite {
     /// the galaxy overlay stamps it
     /// (`nova_sim::story::OverlaidGalaxy::site`).
     pub destroyed: bool,
+    /// Whether the player dominated it at run time (the planet comm
+    /// dialog's Demand Tribute, until a Release): never in the catalog,
+    /// which gives `false`; the galaxy overlay stamps it
+    /// (`nova_sim::story::OverlaidGalaxy::site`). Whether it is dominated
+    /// reads this with its `Flags2` (`nova_sim::domination::dominated`).
+    pub dominated_at_run_time: bool,
     /// Its `Type`, raw: the graphic type whose master the original's
     /// landing distance reads (see `nova_sim::landing`).
     pub graphic: i16,
@@ -183,6 +191,15 @@ pub struct LandingSite {
     /// Its animation fields and frame counts, which a hypergate's sprite
     /// reads (`nova_sim::gate_sprite`).
     pub animation: SiteAnimation,
+    /// Its `DefenseDude`: the `düde` its defence ships are drawn from, or
+    /// `None` for an ID below 128, as `_LoadObjectData` keeps runtime
+    /// +0x464 at -1 then (@0x77603, @0x7770c-0x77725). See
+    /// `nova_sim_ai::traffic::stellar_defence`.
+    pub defense_dude: Option<DudeId>,
+    /// Its `DefCount`, raw (record +0x1e into runtime +0x468, @0x775eb):
+    /// the wave size and the count of defence ships it starts with, as
+    /// `nova_sim_ai::traffic::stellar_defence` decodes them.
+    pub def_count: i16,
 }
 
 /// A stellar's animation fields, raw from its `spöb`, and the frame counts
@@ -251,6 +268,17 @@ pub struct ListedStellar {
     /// player's record against (see `nova_sim::iff`'s "Systems on the
     /// galaxy map").
     pub min_status: i16,
+    /// Its `Tribute`, raw, and its `TechLevel`: what it pays a day while
+    /// dominated (`nova_sim::player_info::tribute_of` reads them, as
+    /// `_LoadObjectData` decodes +0x46a, @0x775a3-0x775ce), which the
+    /// daily step and the player info's tribute row add up.
+    pub tribute: i16,
+    /// Its `TechLevel` (see [`tribute`](Self::tribute)).
+    pub tech_level: i16,
+    /// Its `DefCount`, raw (+0x468): its defence ships' decode, which a
+    /// load and the daily regrowth read
+    /// (`nova_sim_ai::traffic::stellar_defence`).
+    pub def_count: i16,
 }
 
 /// A system's `Visibility`, raw from its `sÿst`: the galaxy refresh
@@ -361,6 +389,19 @@ pub struct StellarLife {
     pub on_destroy: Script,
     /// Its `OnRegen`, run as it regenerates on its own.
     pub on_regen: Script,
+}
+
+/// What the planet comm dialog runs of a stellar's `spöb` as Demand
+/// Tribute dominates it and Release releases it (`_DoPlanetCommDialog`
+/// @0x97966, @0x97527 in the `EV Nova` executable).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StellarScripts {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Its `OnDominate` (stellar +0x68).
+    pub on_dominate: Script,
+    /// Its `OnRelease` (stellar +0x167).
+    pub on_release: Script,
 }
 
 /// An outfit, raw from its `oütf`: the `nova_sim::outfitter`
@@ -880,6 +921,10 @@ pub struct PersonRecord {
     pub grant_count: i16,
     /// Its `GrantProb`, raw: the percent chance of a grant.
     pub grant_prob: i16,
+    /// Its `Color` (`përs` +0x17A), raw `00RRGGBB`: its ship's paint,
+    /// which `_LoadObjectData` unpacks to 5-bit channels
+    /// (@0x7c2a4-0x7c2e4; see `nova_sim::Rgb15::of_rgb`).
+    pub color: u32,
     /// Its `LinkMission`'s special ships: none without a `LinkMission`,
     /// or when the mission cannot be read.
     pub mission_ship: Option<MissionShip>,
@@ -1727,6 +1772,10 @@ pub struct GovtRecord {
     /// +0x64, `_LoadObjectData` @0x7bb69-0x7bb9b; see
     /// `nova_sim::skill`).
     pub skill_mult: i16,
+    /// Its `ShipColor` (`gövt` +0xA8), raw `00RRGGBB`: the paint of its
+    /// ships that carry no person, which `_LoadObjectData` unpacks to
+    /// 5-bit channels (@0x7bcf9-0x7bd33; see `nova_sim::Rgb15::of_rgb`).
+    pub ship_color: u32,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each
@@ -2032,6 +2081,10 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
+    /// Every `spöb` that can be read, by ascending ID, with the scripts the
+    /// planet comm dialog runs as it dominates and releases it (see the
+    /// `nova_sim::planet_comm` module).
+    fn stellar_scripts(&self) -> Vec<StellarScripts>;
     /// The frame width and height of graphic type 0's sheet (`spïn`
     /// 1000), or `None` when it cannot be read: the frames the original's
     /// rebuild gives a sprite slot it left empty.
@@ -2205,6 +2258,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).stellar_lives()
     }
 
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        (**self).stellar_scripts()
+    }
+
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
     }
@@ -2351,6 +2408,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn stellar_lives(&self) -> Vec<StellarLife> {
         (**self).stellar_lives()
+    }
+
+    fn stellar_scripts(&self) -> Vec<StellarScripts> {
+        (**self).stellar_scripts()
     }
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
@@ -2730,6 +2791,7 @@ mod tests {
                 govt: None,
                 flags2: 0,
                 destroyed: false,
+                dominated_at_run_time: false,
                 graphic: 4,
                 dead_graphic: Some(5),
                 dead_frame_size: Some((60, 60)),
@@ -2740,6 +2802,8 @@ mod tests {
                 gravity: 0,
                 fee: 0,
                 animation: crate::catalog::SiteAnimation::default(),
+                defense_dude: None,
+                def_count: 0,
             }]
         }
 
@@ -2851,6 +2915,16 @@ mod tests {
             }]
         }
 
+        /// Stellar 128 sets bit 100 as it is dominated and clears it as it
+        /// is released.
+        fn stellar_scripts(&self) -> Vec<StellarScripts> {
+            vec![StellarScripts {
+                id: StellarId(128),
+                on_dominate: Script::parse("b100"),
+                on_release: Script::parse("!b100"),
+            }]
+        }
+
         /// `spïn` 1000's frames are 7 by 9.
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             Some((7, 9))
@@ -2875,6 +2949,9 @@ mod tests {
                 flags2: 0,
                 govt: None,
                 min_status: 0,
+                tribute: 0,
+                def_count: 0,
+                tech_level: 0,
             }]
         }
 
@@ -3028,6 +3105,7 @@ mod tests {
             format!("{:?}", catalog.boom_sounds()),
             format!("{:?}", catalog.voices()),
             format!("{:?}", catalog.stellar_weapons()),
+            format!("{:?}", catalog.stellar_scripts()),
         ]
     }
 
@@ -3117,6 +3195,10 @@ mod tests {
         }
 
         fn stellar_lives(&self) -> Vec<StellarLife> {
+            Vec::new()
+        }
+
+        fn stellar_scripts(&self) -> Vec<StellarScripts> {
             Vec::new()
         }
 
@@ -3246,6 +3328,10 @@ mod tests {
             "forwarded, not a default: {direct:?}"
         );
         assert_eq!(direct[38], "[(StellarId(128), WeaponId(196))]");
+        assert!(
+            direct[39].contains("StellarScripts { id: StellarId(128)"),
+            "forwarded, not a default: {direct:?}"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

@@ -4,7 +4,10 @@
 //! ([`stellar_attack`](crate::traffic::stellar_attack)), and as a landing
 //! ship outside its box flies its approach (`_HighLevelAIHandler` state 1
 //! sets sub 2 there, @0x8d9b2-0x8da07; see
-//! [`land_flight`](crate::traffic::land_flight)).
+//! [`land_flight`](crate::traffic::land_flight)), and as a ship entering
+//! a hypergate or wormhole outside the gate's box flies its approach
+//! (state 20 sets sub 2 and a wait of -1.0 there, @0x8dc42-0x8dc55; see
+//! [`gate_entry`](crate::traffic::gate_entry)).
 //!
 //! - It wants `_CalcInterceptAngle(ship, stellar)`, the whole-degree
 //!   bearing of the stellar ([`trig::intercept_angle`]), and `_HandleShip`
@@ -15,7 +18,15 @@
 //!   strictly, capped at [`NEAR_CAP`] of its `_ShipMaxSpeed` (+0x34);
 //!   beyond, at its top speed (+0x34 = 0). A position that is not a number
 //!   reads as far.
-//! - Otherwise it does not thrust.
+//! - Otherwise it does not thrust, and flies by its whole top speed: the
+//!   low level's preamble resets +0x34 to `_ShipMaxSpeed` each frame
+//!   while it is not negative (@0x851ec-0x8520d), and sub 2 writes it only
+//!   as it thrusts. `_HandleShip` reads +0x34 only on a tick whose thrust
+//!   word +0x30 is not 0 (@0x34a7b-0x34a84), so by the per-axis cap an
+//!   NPC's top binds on a thrust tick alone and this changes nothing;
+//!   under [`SpeedCap::Circle`](nova_sim_base::speed_cap::SpeedCap::Circle), which
+//!   rescales every tick, a ship near the stellar off its window keeps its
+//!   whole top speed until it thrusts.
 //!
 //! It writes +0x34 with +0x30, so its thrust drops a gate burst it owes
 //! ([`held_burst`](crate::traffic::held_burst)'s `Word::Writes`). The
@@ -40,7 +51,7 @@ pub const NEAR_CAP: f32 = 0.25;
 
 /// Substate 2's controls for a ship at `state` on `handling` closing in on
 /// a stellar at `stellar`, and the handling they fly by: its top speed
-/// capped near the stellar (see the module docs). `state` is turned as
+/// capped near the stellar as it thrusts (see the module docs). `state` is turned as
 /// `_HandleShip` turns it ([`flight::turn_to`]).
 #[must_use]
 pub fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling) {
@@ -53,7 +64,7 @@ pub fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Con
         ..Controls::default()
     };
     let off = state.position - stellar;
-    let flown = if off.x.abs() < NEAR && off.y.abs() < NEAR {
+    let flown = if thrust && off.x.abs() < NEAR && off.y.abs() < NEAR {
         Handling {
             max_speed: handling.max_speed * NEAR_CAP,
             ..*handling
@@ -120,11 +131,24 @@ mod tests {
         assert_eq!(flown(500.0, 0.0), HANDLING, "strictly");
         assert_eq!(flown(0.0, -500.0), HANDLING);
         assert_eq!(flown(600.0, 10.0), HANDLING);
-        assert_eq!(
-            toward(&mut at(f32::NAN, 0.0, 0.0), Vec2::ZERO, &HANDLING).1,
-            HANDLING,
-            "not a number reads as far"
-        );
+        // Facing its bearing it thrusts, and the other axis is near, so
+        // only the NaN comparison decides the cap (`jae`/`jp` @0x8574f-0x85751).
+        for (x, y) in [(f32::NAN, 0.0), (0.0, f32::NAN)] {
+            let (controls, nan) = toward(&mut at(x, y, bearing(x, y)), Vec2::ZERO, &HANDLING);
+            assert!(controls.thrust, "({x}, {y}) faces its bearing");
+            assert_eq!(nan, HANDLING, "({x}, {y}): not a number reads as far");
+        }
         assert_eq!((TURN_SLACK, NEAR, NEAR_CAP), (5.0, 500.0, 0.25));
+    }
+
+    #[test]
+    fn off_its_window_within_500_it_flies_by_its_whole_top_speed() {
+        // The preamble resets +0x34 to `_ShipMaxSpeed` (@0x851ec-0x8520d)
+        // and only a thrusting tick caps it.
+        let (x, y) = (300.0, 0.0);
+        let off = bearing(x, y) + HANDLING.turn_rate + TURN_SLACK;
+        let (controls, flown) = toward(&mut at(x, y, off), Vec2::ZERO, &HANDLING);
+        assert!(!controls.thrust);
+        assert_eq!(flown, HANDLING);
     }
 }

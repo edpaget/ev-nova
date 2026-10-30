@@ -69,8 +69,8 @@ pub use catalog::{
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
     RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics, TextMovies,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    StellarLife, StellarScripts, StockWeapon, StringPatch, SystemId, SystemTraffic, TextGraphics,
+    TextMovies, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,

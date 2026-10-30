@@ -11,7 +11,6 @@ use crate::chance::NeverFires;
 use crate::combat::ai_fire::PlayerRating;
 use crate::combat::aim::Aim;
 use crate::combat::hull::Condition;
-use crate::combat::report::Reports;
 use crate::combat::weapon::{EXCLUSIVE, EXCLUSIVE_HOLD, SIMULTANEOUS, WeaponSpec};
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
@@ -45,7 +44,6 @@ fn fire(armament: &mut Armament, pick: i16, at_player: Option<PlayerRating>) -> 
             &mut LauncherRounds::default(),
             &mut Gauge::default(),
             &mut NeverFires,
-            &mut Reports::default(),
             RuleSource::Engine,
             &mut |_spec: &WeaponSpec| Some(Aim::along(0.0, None)),
             at_player,

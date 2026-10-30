@@ -96,14 +96,23 @@
 //! fleet comes by its own call (`_AICallForReinforcements`, see
 //! [`reinforcements`](super::reinforcements)), not by a hit.
 //!
+//! - **A stellar's defence ship** struck ([`Npc::defends`], +0x8c, the
+//!   victim branch @0x3bbe2 → @0x3bd8c-0x3be61) runs no focus test: a hit
+//!   by no ship, or by one gone (`si` above 63, @0x3bd90), draws nothing
+//!   at all, no provocation and no wait cut; otherwise it answers only
+//!   while the attacker is nearer than [`DEFENCE_SHARE`] of its stellar's
+//!   distance, squared (dist²(attacker) < 0.5 × dist²(its stellar's
+//!   centre), @0x3bda4-0x3be17, `jbe` so a tie or no number draws
+//!   nothing), adding [`DEFENCE_PROVOCATION`] × each nominal arg above
+//!   none (@0x3be2b-0x3be56) and taking the attacker as its target
+//!   (@0x3be5d), the player's hit turning it on the player as any
+//!   victim's (@0x3be66). A defender far from home lets a hit go. A
+//!   defender as the lead of an escort hit takes nothing (the lead's
+//!   +0x8c test, @0x3bd1b), and no person's grudge is held for a hit on a
+//!   defender (@0x3be88, [`in_turn::grudge`](crate::traffic::in_turn::grudge)).
+//!
 //! Left out of the reaction block (weapons-fidelity phase 37 records each):
 //!
-//! - The defence-ship branches, for a ship defending a stellar (+0x8c),
-//!   which the engine doesn't have: the victim's (@0x3bbe2 → 0x3bd8c: it
-//!   reacts only when 0.5 × dist² to its stellar exceeds dist² to the
-//!   attacker, @0x3be17, and adds 30 × each nominal arg, @0x3be2b-0x3be56)
-//!   and the lead's and the grudge's +0x8c tests (@0x3bd1b, @0x3be88).
-//!   They belong to rdm task planet-domination.
 //! - The jump-out stage (+0x50 above 0): the entry gate (@0x3b46a), the
 //!   arriving test (@0x3b97e) and a victim whose leader jumps out
 //!   (@0x3bab7-0x3bae4), for rdm phase
@@ -122,7 +131,10 @@
 //!   (@0x82b82, @0x82b97), but `_AIDispatch`'s disabled reset
 //!   (@0x8fece-0x8ff13) wipes both at its next think, nearly always in the
 //!   same frame. The engine has no such reset yet, so a disabled NPC asks
-//!   for nothing here (`Traffic::react` takes intact NPCs alone): writing
+//!   for nothing here (`Traffic::react` takes only NPCs that are active and
+//!   not disabled, [`Npc::active_not_disabled`](crate::traffic::npc::Npc::active_not_disabled),
+//!   a stellar's defence ship breaking up included, as the reset never
+//!   wipes one, @0x2d6f): writing
 //!   the goal now would carry it through self-repair. rdm phase
 //!   weapons-fidelity-cross-roadmap/phase-2-disabled-ships-take-a-good-samaritans-write
 //!   owns it, behind escort-fleet-fidelity's disabled reset.
@@ -133,6 +145,7 @@
 //!   @0x3d7a3, @0x3dbf7). Record only: the engine keeps no free slots.
 
 use crate::ai::{Goal, Reaction, Surroundings};
+use crate::catalog::StellarId;
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
@@ -151,6 +164,14 @@ pub const FOCUS_ANGLE: f32 = 44.0;
 /// the one it last wanted for it to keep its target (0x2c, `jg`
 /// @0x3bc3f).
 pub const FOCUS_DEGREES: i16 = 44;
+
+/// The share of its distance from its stellar, squared, within which a
+/// defence ship answers a hit (0.5 @0xdd694, read @0x3be08).
+pub const DEFENCE_SHARE: f32 = 0.5;
+
+/// What each of a hit's nominal args above none is multiplied by on a
+/// defence ship's provocation (`imulw $0x1e` @0x3be35, @0x3be4e).
+pub const DEFENCE_PROVOCATION: f32 = 30.0;
 
 /// How `npc` answers `strike` among `around`, the Good Samaritans being
 /// those `piracy_police` says (see the module docs): as the
@@ -224,6 +245,16 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
     if !strike.direct || !hits(npc, strike, around) {
         return Reaction::default();
     }
+    let on_itself = strike.ship == ShipRef::Npc(npc.id);
+    if let Some(stellar) = npc.defends {
+        // A defender struck answers as a defender (@0x3bd8c), and as the
+        // lead of an escort struck takes nothing (@0x3bd1b).
+        return if on_itself {
+            defender(npc, stellar, strike, around)
+        } else {
+            Reaction::default()
+        };
+    }
     let provoked = provocation(strike);
     // A hit by no ship is never tested for focus (`si` >= 0,
     // @0x3bbf8-0x3bc03) and draws no target (`si` <= 63, @0x3bcf0,
@@ -244,11 +275,41 @@ pub fn victim(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
     if keeps_target(npc, hit, by, around) {
         return Reaction::default();
     }
-    let on_itself = strike.ship == ShipRef::Npc(npc.id);
     Reaction {
         target: Some(by),
         provoked,
         goal: (on_itself && by == ShipRef::Player).then_some(Goal::Attack(ShipRef::Player)),
+    }
+}
+
+/// How `npc`, a defence ship of `stellar`, answers `strike` on itself
+/// among `around` (see the module docs): only a ship's hit from nearer
+/// than [`DEFENCE_SHARE`] of its stellar's distance, squared. Its stellar
+/// is read among those the system lists, shown or not
+/// ([`Surroundings::listed`]), as `_DamageShip` reads the stellar's record
+/// (@0x3bd99-0x3bdb7); one not listed draws nothing.
+fn defender(npc: &Npc, stellar: StellarId, strike: &Strike, around: &Surroundings) -> Reaction {
+    let Some(by) = strike.by else {
+        return Reaction::default();
+    };
+    let home = around.listed.iter().find(|site| site.id == stellar);
+    let (Some((attacker, _)), Some(home)) = (squared(npc, by, around), home) else {
+        return Reaction::default();
+    };
+    let off = home.position - npc.state.position;
+    let from_home = off.x * off.x + off.y * off.y;
+    // `jbe` (@0x3be17): nothing unless the share is strictly above.
+    if !matches!(
+        (DEFENCE_SHARE * from_home).partial_cmp(&attacker),
+        Some(std::cmp::Ordering::Greater)
+    ) {
+        return Reaction::default();
+    }
+    let positive = |damage: f32| DEFENCE_PROVOCATION * damage.max(0.0);
+    Reaction {
+        target: Some(by),
+        provoked: positive(strike.nominal.mass) + positive(strike.nominal.energy),
+        goal: (by == ShipRef::Player).then_some(Goal::Attack(ShipRef::Player)),
     }
 }
 
@@ -397,7 +458,7 @@ fn good_samaritan(npc: &Npc, victim: ShipRef, around: &Surroundings) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{GovtId, GovtRecord};
+    use crate::catalog::{GovtId, GovtRecord, StellarId};
     use crate::geometry::Vec2;
     use crate::govt::{DERELICT, Governments, IGNORED_WHEN_ATTACKED, NOSY, XENOPHOBIC};
     use crate::rulebook::RuleSource;
@@ -633,6 +694,133 @@ mod tests {
             victim(&npcs[2], &by_player, &around),
             Reaction::default(),
             "none by `victim`"
+        );
+    }
+
+    /// A defence ship of stellar 128 at the centre, 128 at (`home`, 0),
+    /// and an attacker NPC 2 at (`by`, 0): what the defender makes of
+    /// `hit`, by NPC 2 unless it says otherwise.
+    fn defending(home: f32, by: f32, hit: impl FnOnce(Strike) -> Strike) -> Reaction {
+        let govts = relations(0, 0);
+        let mut guard = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        guard.defends = Some(StellarId(128));
+        let npcs = [guard, ship(2, Some(PIRATES), AiType::Warship, by)];
+        let sites = [nova_sim_catalog::fixture::planet(128, home, 0.0)];
+        let around = Surroundings {
+            govts: &govts,
+            player: Some(crate::ai::fixture::player(by, 0.0)),
+            ..Surroundings::new(&sites, &npcs)
+        };
+        victim(&npcs[0], &hit(strike(n(1), n(2))), &around)
+    }
+
+    #[test]
+    fn a_defender_answers_only_an_attacker_nearer_than_half_its_stellars_distance_squared() {
+        // 0.5 × 1000² = 500,000 against 700² = 490,000: it answers, 30 × each
+        // nominal arg (@0x3be2b-0x3be56).
+        assert_eq!(
+            defending(1000.0, 700.0, |hit| hit),
+            Reaction {
+                target: Some(n(2)),
+                provoked: 720.0,
+                goal: None,
+            }
+        );
+        assert_eq!(
+            defending(1000.0, 710.0, |hit| hit),
+            Reaction::default(),
+            "710² = 504,100: let go (@0x3be17)"
+        );
+        let player = defending(1000.0, 100.0, |hit| Strike {
+            by: Some(ShipRef::Player),
+            ..hit
+        });
+        assert_eq!(player.goal, Some(Goal::Attack(ShipRef::Player)));
+        let negative = defending(1000.0, 100.0, |hit| Strike {
+            nominal: Nominal {
+                mass: -5.0,
+                energy: 2.0,
+            },
+            ..hit
+        });
+        assert_eq!(negative.provoked, 60.0, "only args above none");
+        assert_eq!(
+            defending(1000.0, 100.0, |hit| Strike { by: None, ..hit }),
+            Reaction::default(),
+            "no ship (`si` above 63, @0x3bd90): not even provoked"
+        );
+    }
+
+    #[test]
+    fn a_defender_of_a_stellar_listed_but_not_shown_finds_its_home() {
+        let govts = relations(0, 0);
+        let mut guard = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        guard.defends = Some(StellarId(128));
+        let npcs = [guard, ship(2, Some(PIRATES), AiType::Warship, 700.0)];
+        let listed = [nova_sim_catalog::fixture::planet(128, 1000.0, 0.0)];
+        let around = Surroundings {
+            govts: &govts,
+            listed: &listed,
+            player: Some(crate::ai::fixture::player(700.0, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let answered = victim(&npcs[0], &strike(n(1), n(2)), &around);
+        assert_eq!(answered.target, Some(n(2)), "its record, not a sprite");
+    }
+
+    #[test]
+    fn a_defender_measures_from_where_it_is_on_both_axes() {
+        // The defender at (300, 400), its stellar at (900, 1200): 1000 off,
+        // half of 1000² 500,000. The attacker at (300 + 420, 400 + 560),
+        // 700 off (490,000): answered; at 710 off (504,100): let go.
+        let at = |dx: f32, dy: f32| {
+            let govts = relations(0, 0);
+            let mut guard = ship(1, Some(POLICE), AiType::Warship, 300.0);
+            guard.state.position.y = 400.0;
+            guard.defends = Some(StellarId(128));
+            let mut attacker = ship(2, Some(PIRATES), AiType::Warship, 300.0 + dx);
+            attacker.state.position.y = 400.0 + dy;
+            let npcs = [guard, attacker];
+            let sites = [nova_sim_catalog::fixture::planet(128, 900.0, 1200.0)];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(&sites, &npcs)
+            };
+            victim(&npcs[0], &strike(n(1), n(2)), &around).target
+        };
+        assert_eq!(at(420.0, 560.0), Some(n(2)));
+        assert_eq!(at(426.0, 568.0), None);
+    }
+
+    #[test]
+    fn a_defender_runs_no_focus_test_and_as_a_lead_takes_nothing() {
+        let govts = relations(0, 0);
+        let mut guard = ship(1, Some(POLICE), AiType::Warship, 0.0);
+        guard.defends = Some(StellarId(128));
+        // Attacking another ship: a defender runs no focus test.
+        guard.goal = Goal::Attack(n(3));
+        guard.target = Some(n(3));
+        let mut escort = ship(4, Some(POLICE), AiType::Warship, 10.0);
+        escort.leader = Some(NpcId(1));
+        let npcs = [
+            guard,
+            ship(2, Some(PIRATES), AiType::Warship, 200.0),
+            ship(3, Some(PIRATES), AiType::Warship, 0.0),
+            escort,
+        ];
+        let sites = [nova_sim_catalog::fixture::planet(128, 5000.0, 0.0)];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        assert_eq!(
+            victim(&npcs[0], &strike(n(1), n(2)), &around).target,
+            Some(n(2))
+        );
+        assert_eq!(
+            victim(&npcs[0], &strike(n(4), n(2)), &around),
+            Reaction::default(),
+            "the lead's +0x8c test (@0x3bd1b)"
         );
     }
 

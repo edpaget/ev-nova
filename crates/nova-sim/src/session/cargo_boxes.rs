@@ -115,7 +115,8 @@ impl Session {
         if !self.space.boxes.any_scoopable() {
             return;
         }
-        if !disabled(self.ship.condition) {
+        // The player defends no stellar.
+        if !disabled(self.ship.condition, false) {
             while self.player_scoops() {
                 let Some(taken) = self.space.boxes.take_touching(
                     self.ship.player.position,

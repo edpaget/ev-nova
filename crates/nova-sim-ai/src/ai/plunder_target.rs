@@ -78,7 +78,7 @@ fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> b
     other.leader_ref() != Some(ShipRef::Npc(npc.id))
         && other.condition.active()
         && !other.boarded
-        && other.condition.disabled()
+        && other.is_disabled()
         && other.mission.is_none()
         && takes_on
         && other.hull.crew > 0
@@ -168,6 +168,12 @@ mod tests {
             Some(n(2))
         );
         assert_eq!(found(&[pirate()]), None, "nothing to plunder");
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_is_not_plundered_as_it_is_not_disabled() {
+        let guard = crate::traffic::fixture::breaking_up_guard(wreck(2, 200.0));
+        assert_eq!(found(&[pirate(), guard]), None, "@0x2d6f");
     }
 
     #[test]

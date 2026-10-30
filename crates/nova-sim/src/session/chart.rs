@@ -107,6 +107,15 @@ pub(super) struct Chart {
     /// as the original's globals are (see the `map_walk` module); not
     /// saved.
     pub(super) walk: MapWalk,
+    /// The planet comm dialog open, if any: what lasts for it (see the
+    /// `planet_comm` module). Not saved.
+    pub(super) planet_comm: Option<crate::planet_comm::PlanetComm>,
+    /// The system's bribe roll, `None` for the original's -1 (drawn at the
+    /// next planet hail), kept from one planet hail to the next until an
+    /// arrival, a new pilot, a load or the escape pod's rescue
+    /// (`_bribeRandom`; see the `planet_comm` module). Not saved, as the
+    /// original's load resets it.
+    pub(super) bribe_roll: Option<u8>,
 }
 
 impl Chart {
@@ -136,6 +145,8 @@ impl Chart {
             pending_move: None,
             move_dispatching: false,
             walk: MapWalk::default(),
+            planet_comm: None,
+            bribe_roll: None,
         }
     }
 }

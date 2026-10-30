@@ -39,10 +39,13 @@
 //!
 //! It keeps its ship's paint, which a paint outfit (`ModType` 43) gives
 //! (see [`outfit_effects`](crate::outfit_effects)): a new pilot's ship is
-//! unpainted (the original's (32, 32, 32), `_ResetPlayer` @0x1db4e), and
-//! buying a ship unpaints it again (`_DoShipyardDialog` @0x5f022). The
-//! paint is saved, as the original's pilot file keeps it
-//! (`_WritePilotData` @0x727f2); drawing it is not done yet.
+//! unpainted (the original's (32, 32, 32), `_ResetPlayer` @0x1db4e),
+//! buying a ship unpaints it again (`_DoShipyardDialog` @0x5f022), and
+//! capturing a ship takes the captured ship's paint, or none
+//! (`_DoShipCapture` @0x41728-0x4175e; see `nova_sim::Session::assign`).
+//! The paint is saved, as the original's pilot file keeps it
+//! (`_WritePilotData` @0x727f2), and the flight view draws the ship's hull
+//! in it (`_HandleShipDisplay` @0x2be41-0x2beb2).
 //!
 //! It keeps its nickname, the original's `_playerNickname` (0x3b5290),
 //! which the New Pilot dialog sets (`_DoNewPilot` @0x191ca-0x191dc) and the
@@ -107,6 +110,7 @@ use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::story::{GalaxyOverlay, SubscriptionId};
 use crate::trade_dialog::MissionLoad;
+use crate::traffic::stellar_defence::DefenceShips;
 
 /// How far a system is explored: the original's `sÿst` +0x90, which
 /// takes 0, 1 or 2 and is only ever raised.
@@ -235,6 +239,15 @@ pub struct Pilot {
     /// Whether the pilot has seen the intro screen (the original's
     /// `seenIntroScreen`): false for a new pilot.
     pub seen_intro: bool,
+    /// Each stellar's defence ships left (+0x466) once one is spent, given
+    /// back, regrown or set; any other has its decode
+    /// ([`DefenceShips`]). The pilot holds them, as the original's pilot
+    /// file keeps them (`_WritePilotData` @0x7282d, @0x7285e), and lends
+    /// them to the traffic for a step (see
+    /// [`stellar_defence`](crate::traffic::stellar_defence)). A new pilot
+    /// starts from the decoded counts, as `_DoNewPilot` reloads the
+    /// records (@0x190f0).
+    pub defence_ships: DefenceShips,
 }
 
 impl Pilot {
@@ -300,6 +313,7 @@ impl Pilot {
             crons: BTreeMap::new(),
             ranks: BTreeSet::new(),
             seen_intro: false,
+            defence_ships: DefenceShips::default(),
         })
     }
 

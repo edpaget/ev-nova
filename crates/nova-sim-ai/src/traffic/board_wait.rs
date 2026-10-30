@@ -62,7 +62,6 @@ use crate::ai::fire::Manoeuvre;
 use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal};
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
 /// The ticks a pirate waits while another ship boards its victim (+0x4c
@@ -123,7 +122,7 @@ fn decided(npc: &Npc, decision: Option<Decision>) -> (Goal, Option<ShipRef>) {
 fn boards(other: &Npc, goal: Goal, target: Option<ShipRef>, victim: ShipRef) -> bool {
     ShipRef::Npc(other.id) != victim
         && other.leader_ref() != Some(ShipRef::Player)
-        && other.condition == Condition::Intact
+        && other.active_not_disabled()
         && target == Some(victim)
         && (goal.plundering().is_some() || sniping(other, goal))
 }
@@ -171,6 +170,7 @@ mod tests {
     use crate::ai::{Behaviour, Surroundings};
     use crate::chance::Chance;
     use crate::combat::NpcId;
+    use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
     use crate::traffic::fixture::{count_waiting, npc};
@@ -226,6 +226,20 @@ mod tests {
             .into_iter()
             .map(|decision| decision.map(|decision| decision.goal))
             .collect()
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_boards_as_it_is_not_disabled() {
+        // The wait loop's `_IsDisabled` (@0x8c6c5) never holds for it
+        // (@0x2d6f).
+        let victim = ShipRef::Npc(crate::traffic::npc::NpcId(9));
+        let guard = crate::traffic::fixture::breaking_up_guard(npc(2, ShipStats::default()));
+        assert!(boards(&guard, Goal::Snipe(victim), Some(victim), victim));
+        let downed = Npc {
+            defends: None,
+            ..guard
+        };
+        assert!(!boards(&downed, Goal::Snipe(victim), Some(victim), victim));
     }
 
     #[test]

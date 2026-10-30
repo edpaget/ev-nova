@@ -33,7 +33,6 @@ use std::collections::BTreeSet;
 use super::npc::{Mode, Npc};
 use super::{MAX_SHIPS_IN_SYSTEM, Traffic};
 use crate::combat::armament::Trigger;
-use crate::combat::hull::Condition;
 
 /// The berths left this tick for the fighters the NPCs launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,8 +85,10 @@ impl LaunchRoom {
 }
 
 /// How many fighters `npc`, holding `trigger`, launches in this tick's
-/// fight, room allowing. A launch needs the ship intact (the high level's
-/// `_IsDisabled` gate, @0x8e6eb-0x8e6f2), not waiting at its gate
+/// fight, room allowing. A launch needs the ship not disabled (the high
+/// level's `_IsDisabled` gate, @0x8e6eb-0x8e6f2,
+/// [`Npc::active_not_disabled`]: intact, or a stellar's defence ship
+/// breaking up, @0x2d6f), not waiting at its gate
 /// ([`waits_at_gate`], whose gate wait replaces its trigger with one that
 /// launches nothing), and a bay ready
 /// ([`Armament::bay_to_launch`](crate::combat::armament::Armament::bay_to_launch)):
@@ -100,7 +101,7 @@ impl LaunchRoom {
 ///   plunderer's, or a goal-4 launch the snipe's call alone makes), when
 ///   those hold.
 fn launches_now(npc: &Npc, trigger: Trigger) -> u32 {
-    let ready = npc.condition == Condition::Intact
+    let ready = npc.active_not_disabled()
         && !waits_at_gate(npc.mode)
         && npc.armament.bay_to_launch(&npc.rounds).is_some();
     let first = trigger.bays && ready;
@@ -165,6 +166,7 @@ mod tests {
     use crate::chance::Chance;
     use crate::combat::NpcId;
     use crate::combat::armament::{Armament, LauncherRounds};
+    use crate::combat::hull::Condition;
     use crate::combat::weapon::WeaponSpec;
     use crate::stats::ShipStats;
     use crate::traffic::fixture;
@@ -351,6 +353,14 @@ mod tests {
         };
         room.settle(&coasting, sniping(true));
         assert!(!room.any(), "its trigger launches through the wait gate");
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_still_launches_as_it_is_not_disabled() {
+        let guard = fixture::breaking_up_guard(carrier());
+        let mut room = LaunchRoom::new(1);
+        room.settle(&guard, sniping(true));
+        assert!(!room.any(), "@0x2d6f: its launch took the berth");
     }
 
     #[test]

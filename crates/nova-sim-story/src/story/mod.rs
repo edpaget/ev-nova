@@ -688,13 +688,16 @@
 //!    is, each named by `cron::cron_hook` and never registered, its `M`,
 //!    `N`, `Q` and `S` deferred to the next settling as any hook's are;
 //! 3. the active missions' days left (missions phase 2);
-//! 4. the dominated stellars' tribute (rdm task planet-domination);
+//! 4. the dominated stellars' tribute (rdm:phase/play-feel-4/phase-3-domination-readers;
+//!    `nova_sim`'s session `dominated_stellars` module);
 //! 5. the day's events, `öops`: today's `market::step_day`;
 //! 6. the stellars: every whole one repaired to its `Strength`
 //!    (story-runtime phase 8; see "Built by phase 8"), a destroyed one's
 //!    regeneration and `OnRegen`, each `OnRegen` run as its stellar is
-//!    reached (story-runtime phase 5; see "Built by phase 5"), and a
-//!    dominated one's defence regrowing (planet-domination);
+//!    reached (story-runtime phase 5; see "Built by phase 5"), and an
+//!    active dominated one's defence regrowing, in one pass before the
+//!    regeneration (play-feel-4 phase 3; `nova_sim`'s session
+//!    `dominated_stellars` module);
 //! 7. each visible system's reinforcement countdown, down by one
 //!    (combat-ai-fidelity phase 5; see `nova_sim::ai::reinforcements`);
 //! 8. the ranks' salaries, each active rank's in ID order, the cash
@@ -2635,12 +2638,14 @@
 //!   `NavDefs` entry, with no active or owner test, sizing the blip by
 //!   whether the `Type` master is loaded (@0x499ef-0x49a27). The land
 //!   key's and F5's nearest pick, with the gate limit and the owner drop,
-//!   are built by stellar-fidelity phase 14 (below). The slot keys, the
-//!   tutorial hints' and `_DoNewPilot`'s candidates, NPC destinations and
-//!   the radar still read only the stellars shown:
-//!   rdm:phase/stellar-fidelity-followups/phase-5-nearest-and-slot-picks-over-navdefs,
-//!   rdm:phase/stellar-fidelity-followups/phase-6-npc-destinations-over-navdefs
-//!   and rdm:task/radar-blips-every-listed-stellar.
+//!   are built by stellar-fidelity phase 14 (below). NPC destinations,
+//!   and every lookup of the stellar picked, read the whole listing,
+//!   built by rdm:phase/play-feel-4/phase-9-npc-destinations-over-navdefs
+//!   (`nova_sim_ai::traffic::destination`). The slot keys, the tutorial
+//!   hints' and `_DoNewPilot`'s candidates and the radar still read only
+//!   the stellars shown:
+//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs
+//!   and rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar.
 //!
 //! ## Built by stellar-fidelity phase 8
 //!
@@ -3280,13 +3285,14 @@
 //!   `Flags2` 0x0200. None is disable-only, planet-type or bursting; the
 //!   Enormous Ion Turret (198) is massless.
 //! - **Left out**, each with its owner:
-//!   - +0x47, the defence ship in the system (@0x9f30-0x9f5c; set
-//!     @0x44411-0x4444f, @0x3d4a8): the engine spawns no stellar defence
-//!     ships, so it is always clear and the four stock 0x0200 stellars
-//!     never fire; the gate is built and fed false. Task
-//!     `planet-domination`.
-//!   - +0x46, domination by a hail (@0x9f0c): the engine has only
-//!     `Flags2` 0x0020, which is fed. Task `planet-domination`.
+//!   - none for +0x47, the defence ship in the system (@0x9f30-0x9f5c;
+//!     set @0x44411-0x4444f, @0x3d4a8): the traffic keeps it
+//!     (`nova_sim_ai::traffic::stellar_defence`) and the session feeds it
+//!     to the gate, so the four stock 0x0200 stellars fire while one of
+//!     their defence ships is in the system.
+//!   - +0x46, domination (@0x9f0c): fed through the one rule
+//!     (`nova_sim::domination::dominated`), by `Flags2` 0x0020 or by
+//!     Demand Tribute.
 //!   - a `Weapon` past the last `wëap` (@0x777a9): a read past the table,
 //!     a memory-layout accident; the engine gives that stellar no gun.
 //!   - the frozen-flag test `*0x3b523c` (@0x2ef46): never set when the
@@ -3471,11 +3477,10 @@
 //!   shown 250 ticks (@0x64e8e). A hypergate's greeting jumps past it
 //!   (@0x64a59 → 0x64e5d), so #102 "[Hypergate fee is" (@0x64dba-0x64dc0)
 //!   is unreachable and not built; a wormhole gets #103/#104.
-//! - **Left out**: domination by Demand Tribute (+0x46 written by
-//!   `_DoPlanetCommDialog` @0x978fa, cleared @0x9740f), which waives the
-//!   refusal, the charge and the greeting line, is
-//!   rdm:task/planet-domination's (`fee_due` is the one reader to switch);
-//!   the 32-bit cash width and signed compare are not replicated; the
+//! - Domination by Demand Tribute (+0x46 written by `_DoPlanetCommDialog`
+//!   @0x978fa, cleared @0x9740f) waives the refusal, the charge and the
+//!   greeting line too, through `fee_due` over the stamped site.
+//! - **Left out**: the 32-bit cash width and signed compare are not replicated; the
 //!   `crashlog_print` calls after the charge (@0x66dff-0x66e56) are debug
 //!   logging.
 //! - **Merge note** (cloaking-fidelity phase 8, on `main` but not on this

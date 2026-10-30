@@ -16,9 +16,9 @@
 //! truncated, the low level's default (@0x8522d,
 //! [`flight::turn_to_own`]). Each reads its thrust on the heading before
 //! the turn, as the low level runs before `_HandleShip`. The glide in and
-//! the burst out of a gate, below, aren't turned yet, where the original
-//! truncates their heading through sub 0xa:
-//! rdm:phase/play-feel-2-followups/phase-10-glide-burst-heading-truncates.
+//! the burst out of a gate, below, want none either: sub 0xa
+//! (@0x88114-0x8813d) writes no +0x68, so an intact one has its heading
+//! truncated each tick before it moves.
 //!
 //! - [`Goal::Land`]: by the engine's reading of
 //!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)
@@ -45,7 +45,12 @@
 //!   not in the system brakes it.
 //! - [`Goal::EnterGate`]: outside the gate's box
 //!   ([`gate_entry::inside`], a quarter of its `Type` width on each axis,
-//!   inclusive) it heads for the gate as for a landing, with no wait.
+//!   inclusive) it flies sub 2 by the engine's reading of
+//!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding), as state 20 sets
+//!   it (@0x8dc42-0x8dc55, `gate_entry::approach`,
+//!   [`approach_flight`](crate::traffic::approach_flight)): it never
+//!   brakes. By the other reading it heads for the gate as the port's
+//!   earlier landing does, braking by its stopping distance. It has no wait.
 //!   Inside it stops dead and starts entering the gate
 //!   ([`Mode::EnteringGate`], its wait at [`ENTRY_TICKS`], counted down
 //!   that tick); a gate not shown, it brakes (see
@@ -257,7 +262,9 @@
 //!   at most [`HIT_WAIT`] ticks.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
-//!   never lands or jumps. A disabled or breaking-up one also slows by
+//!   never lands or jumps. A stellar's defence ship breaking up is not
+//!   disabled (@0x2d6f), and `_HandleShip`'s drift reads `_IsDisabled`
+//!   (@0x33846, @0x34424), so it steers on. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
 
 use crate::ai::lost_sight;
@@ -346,7 +353,10 @@ pub struct Readings {
     /// How a landing ship lands: in `_HighLevelAIHandler` state 1's box by
     /// the engine ([`land_flight`]), within
     /// [`landing_radius`](landing::landing_radius) by the other reading
-    /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)).
+    /// ([`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)); and how a
+    /// ship entering a gate approaches it: by sub 2 by the engine
+    /// (`gate_entry::approach`), braking by its stopping distance by the
+    /// other.
     pub npc_landing: RuleSource,
 }
 
@@ -549,7 +559,8 @@ fn fly_mobile(
             }
         }
         Goal::EnterGate(gate) => {
-            match enter_box(npc, sites, type_widths, gate, &handling, inertia) {
+            let by = (inertia, readings.npc_landing);
+            match enter_box(npc, sites, type_widths, gate, &handling, by) {
                 Ok(controls) => controls,
                 Err(outcome) => return outcome,
             }
@@ -558,20 +569,20 @@ fn fly_mobile(
         Goal::AttackStellar(_) => {
             return stellar_attack::fly(npc, sites, weapons, &handling, (flight, inertia));
         }
-        Goal::Inspect(_) => follow_or_brake(&mut npc.state, &handling, other, inertia),
+        Goal::Inspect(_) => follow_or_brake(npc, &handling, other, inertia),
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
         Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
-            follow_or_brake(&mut npc.state, &handling, other, inertia)
+            follow_or_brake(npc, &handling, other, inertia)
         }
         // Goal 0xd against a disabled ship docks with it, which the
         // traffic flies ([`plunder_dock`](crate::traffic::plunder_dock));
         // with no docking yet, its high level not having run, it brakes.
         // Searching for a target out of sight: sub 1, a stop (@0x8d814).
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } if lost_sight::searching(npc) => {
-            braking(&mut npc.state, &handling, inertia)
+            braking(npc, &handling, inertia)
         }
-        Goal::Plunder { .. } if other_disabled => braking(&mut npc.state, &handling, inertia),
+        Goal::Plunder { .. } if other_disabled => braking(npc, &handling, inertia),
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Flee(_) | Goal::Plunder { .. } => match other {
             Some(target) => {
                 let flown = Flown {
@@ -585,7 +596,7 @@ fn fly_mobile(
             None if matches!(npc.goal, Goal::Snipe(_)) => {
                 snipe::fly(npc, None, &handling, snipe_lead, weapons).into()
             }
-            None => braking(&mut npc.state, &handling, inertia),
+            None => braking(npc, &handling, inertia),
         },
         Goal::Formation { .. } | Goal::Follow { .. }
             if flight.formation_flight == FormationFlight::Original =>
@@ -610,10 +621,10 @@ fn fly_mobile(
         // State 16 flies order 1, a stop, with slot 0 empty, else order
         // 0x13 or 0x14; state 17 flies order 0x15.
         Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), &handling, weapons)
-            .unwrap_or_else(|| braking(&mut npc.state, &handling, inertia)),
+            .unwrap_or_else(|| braking(npc, &handling, inertia)),
         Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, &handling),
         Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
-            braking(&mut npc.state, &handling, inertia)
+            braking(npc, &handling, inertia)
         }
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
@@ -697,7 +708,7 @@ fn land(
     chance: &mut (impl Chance + ?Sized),
 ) -> Result<Flight, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == stellar) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     if reading == RuleSource::Engine {
         return Err(land_flight::fly(
@@ -724,23 +735,29 @@ fn hand_off(npc: &mut Npc, sites: &[LandingSite]) {
 }
 
 /// How `npc` flies into `gate` among `sites`, of the widths
-/// `type_widths` gives (see the module docs): outside its box, the
-/// controls of the approach, or braking with no gate there; inside it,
-/// stopped and entering it.
+/// `type_widths` gives, as its inertia says, by a reading of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (`by`; see the
+/// module docs): outside its box, sub 2 by the engine's
+/// ([`gate_entry::approach`]) or the port's earlier [`approach`] by the
+/// other, or braking with no gate there; inside it, stopped and entering
+/// it.
 fn enter_box(
     npc: &mut Npc,
     sites: &[LandingSite],
     type_widths: &BTreeMap<StellarId, TypeWidth>,
     gate: StellarId,
     handling: &Handling,
-    inertia: Inertia,
+    (inertia, reading): (Inertia, RuleSource),
 ) -> Result<Flight, Outcome> {
     let Some(site) = sites.iter().find(|site| site.id == gate) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     let reach = gate_entry::gate_reach(site, type_widths);
     if !gate_entry::inside(site.position, npc.state.position, reach) {
-        return Ok(approach(&mut npc.state, handling, site.position, inertia).into());
+        return Ok(match reading {
+            RuleSource::Engine => gate_entry::approach(&mut npc.state, site.position, handling),
+            RuleSource::Bible => approach(&mut npc.state, handling, site.position, inertia).into(),
+        });
     }
     npc.state.velocity = Vec2::ZERO;
     npc.mode = Mode::EnteringGate {
@@ -761,7 +778,7 @@ fn formation(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let (Some(leader), Some(place)) = (leader, npc.formation_slot()) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     let slot = place.position(leader);
     let off = slot - npc.state.position;
@@ -784,7 +801,7 @@ fn dock(
     inertia: Inertia,
 ) -> Result<Flight, Outcome> {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
-        return Ok(braking(&mut npc.state, handling, inertia));
+        return Ok(braking(npc, handling, inertia));
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
@@ -1014,13 +1031,21 @@ fn glide(
 }
 
 /// Flies `npc` one tick when it has no say in its flight: entering a
-/// gate or waiting at one, drifting while not intact, gliding in from
+/// gate or waiting at one, drifting while `_IsDisabled` holds or it is
+/// destroyed (`_HandleShip` reads `_IsDisabled` once, @0x33846, for its
+/// drag @0x33950 and its drift @0x34424, so a stellar's defence ship
+/// breaking up still steers, [`Npc::active_not_disabled`]), gliding in from
 /// hyperspace (intact or disabled), bursting out of a gate, or holding
 /// its course after either (see the module docs), on `handling` under
 /// `flight`, as `inertia` says, its burst ending at `speeds`'
 /// [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on `chance`;
 /// a hold at its gate that runs out owes its burst as `held_burst` reads
 /// ([`Npc::end_wait`]).
+/// An intact glide or burst has its heading truncated
+/// ([`flight::turn_to_own`]) before it moves, as sub 0xa leaves the low
+/// level's `cvttss2si(+0x44)` aim (@0x85228-0x8522d) and `_HandleShip`
+/// turns onto it ahead of the move (@0x34424 → @0x34bc0); a disabled one,
+/// which skips that turn, and every wait keep theirs.
 /// What became of it, if it did. A disabled or breaking-up ship's speed
 /// along its heading slows with its velocity, inertialess or not
 /// (@0x3398f-0x339a1).
@@ -1032,7 +1057,7 @@ fn unsteered(
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
     let flown = Flown { handling, inertia };
-    match (npc.mode, npc.condition == Condition::Intact) {
+    match (npc.mode, npc.active_not_disabled()) {
         (Mode::EnteringGate { gate, ticks_left }, _) => {
             return Some(enter_gate(npc, gate, ticks_left, flown));
         }
@@ -1058,8 +1083,14 @@ fn unsteered(
             // No thrust: it writes neither word.
             plain_step(npc, handling, Controls::default(), flight, inertia);
         }
-        (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, flown, chance),
-        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, flown, chance),
+        (Mode::JumpingIn { tick }, true) => {
+            flight::turn_to_own(&mut npc.state);
+            glide(npc, tick, speeds, flown, chance);
+        }
+        (Mode::LeavingGate { tick }, true) => {
+            flight::turn_to_own(&mut npc.state);
+            leave_gate(npc, tick, speeds, flown, chance);
+        }
         (Mode::Coasting { ticks_left }, true) => coast(npc, ticks_left, flown),
         (Mode::Flying | Mode::Adrift { .. }, true) => return None,
     }
@@ -1088,9 +1119,10 @@ fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> 
 /// A disabled or breaking-up `npc`'s drag before it moves: its velocity,
 /// and its speed along its heading with it, inertialess or not, slowed by
 /// [`flight::DISABLED_DRAG`] (@0x33950-0x339a1, @0x3398f-0x339a1). Any
-/// other is left.
+/// other is left, a stellar's defence ship breaking up included, as
+/// `_IsDisabled` never calls it disabled ([`Npc::is_disabled`], @0x2d6f).
 fn disabled_drag(npc: &mut Npc) {
-    if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
+    if npc.is_disabled() {
         flight::drag(&mut npc.state);
         npc.speed *= flight::DISABLED_DRAG;
     }
@@ -1415,9 +1447,10 @@ fn stopping_distance(state: &ShipState, handling: &Handling, inertia: Inertia) -
 }
 
 /// The approach's brake ([`approach`]), the engine's own planner for the
-/// landing (`_HighLevelAIHandler` state 1's, which
-/// stellar-fidelity phase-5-npc-landing-reach ports with its own × 0.98)
-/// and the gate approach, not sub 1: it turns to face against the ship at
+/// landing and the gate approach by the other reading of
+/// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (the engine's
+/// flies sub 2, which never brakes, and brakes inside the landing box by
+/// sub 1 × 0.98, [`land_flight`]), not sub 1: it turns to face against the ship at
 /// `state`'s motion and thrusts once it does, until thrust would only push
 /// it the other way; nothing at or below [`AT_REST_SPEED`] (see
 /// [`stopping_distance`]). Between the two it creeps, which is harmless
@@ -1456,29 +1489,28 @@ fn approach_brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) 
 /// keeping an owed burst: every goal the autopilot stops flies it. Moving
 /// ([`inertialess::moving`], 0.35 or more on an axis) it brakes, with no
 /// cutoff short of that; otherwise it settles, its velocity × 0.95 a tick,
-/// so it comes to rest from any speed. The settle's +0x48 × 0.95
-/// (@0x8560d-0x8561f) is left to
-/// ship-handling-fidelity-followups phase-2-ai-drags-scale-the-npc-speed:
-/// until then an inertialess ship stops at not moving and keeps its speed,
-/// `adjust_velocity` pulling its cut velocity back to heading × speed. The
+/// so it comes to rest from any speed. The settle cuts the speed along
+/// the heading (+0x48) × 0.95 with it (@0x8560d-0x8561f), so an
+/// inertialess ship, whose velocity follows heading × speed, comes to
+/// rest too. The
 /// sub-goal +0xc8ca = 0 after the settle (@0x85624) isn't modelled: the
 /// high level writes sub 1 again each pass for every stop goal, as this
 /// flies it every tick, so nothing differs.
-fn braking(state: &mut ShipState, handling: &Handling, inertia: Inertia) -> Flight {
-    leave_flight::stop_flight(state, handling, inertia)
+fn braking(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
+    leave_flight::stop_flight(npc, handling, inertia)
 }
 
 /// [`follow`]s a lead at `lead`, or brakes with none there
 /// ([`braking`]).
 fn follow_or_brake(
-    state: &mut ShipState,
+    npc: &mut Npc,
     handling: &Handling,
     lead: Option<&ShipState>,
     inertia: Inertia,
 ) -> Flight {
     match lead {
-        Some(lead) => follow(state, handling, lead, inertia).into(),
-        None => braking(state, handling, inertia),
+        Some(lead) => follow(&mut npc.state, handling, lead, inertia).into(),
+        None => braking(npc, handling, inertia),
     }
 }
 
@@ -1631,7 +1663,11 @@ mod tests {
     }
 
     fn braking(state: &ShipState, handling: &Handling) -> Flight {
-        super::braking(&mut state.clone(), handling, Inertia::Inertial)
+        super::braking(
+            &mut npc(FAST, Goal::Idle, *state),
+            handling,
+            Inertia::Inertial,
+        )
     }
 
     fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Controls {
@@ -2373,6 +2409,22 @@ mod tests {
     }
 
     #[test]
+    fn a_defence_ship_breaking_up_is_not_dragged() {
+        let mut guard = crate::traffic::fixture::breaking_up_guard(crate::traffic::fixture::npc(
+            1,
+            ShipStats::default(),
+        ));
+        guard.state.velocity = Vec2::new(1.0, -2.0);
+        guard.speed = 3.0;
+        disabled_drag(&mut guard);
+        assert_eq!(
+            (guard.state.velocity, guard.speed),
+            (Vec2::new(1.0, -2.0), 3.0),
+            "@0x2d6f"
+        );
+    }
+
+    #[test]
     fn a_disabled_or_breaking_up_ship_slows_by_0_995_a_tick_before_it_moves() {
         for condition in [
             Condition::Disabled,
@@ -2394,6 +2446,30 @@ mod tests {
             }
             assert_eq!(ship.state.velocity, expected, "{condition:?}");
         }
+    }
+
+    #[test]
+    fn a_defence_ship_breaking_up_steers_on_as_it_is_not_disabled() {
+        let dying = Condition::Dying {
+            ticks_left: 4,
+            starting: false,
+        };
+        let mut guard = crate::traffic::fixture::breaking_up_guard(npc(
+            AVERAGE,
+            Goal::JumpOut,
+            at(0.0, -2000.0, 1.0, -2.0, 90.0),
+        ));
+        fly(&mut guard, &[], None);
+        assert_ne!(guard.state, drifted(dying), "not dragged (@0x33950)");
+        assert_ne!(
+            guard.state,
+            drifted(Condition::Destroyed),
+            "not drifting (@0x34424, @0x2d6f)"
+        );
+        let mut downed = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+        downed.condition = dying;
+        fly(&mut downed, &[], None);
+        assert_eq!(downed.state, drifted(dying));
     }
 
     #[test]
@@ -2996,6 +3072,78 @@ mod tests {
         }
     }
 
+    /// Speeds that end neither a glide in nor a burst out on its first
+    /// tick.
+    const GOING_ON: TopSpeeds = TopSpeeds {
+        own: 6.0,
+        lead: Some(9.0),
+    };
+
+    /// `start` with its heading truncated as [`flight::turn_to_own`]
+    /// truncates it.
+    fn turned_own(start: ShipState) -> ShipState {
+        let mut turned = start;
+        flight::turn_to_own(&mut turned);
+        turned
+    }
+
+    #[test]
+    fn an_intact_ship_gliding_in_moves_along_its_truncated_heading() {
+        let mut ship = jumping_in(AVERAGE);
+        ship.state.heading = 180.6;
+        let start = ship.state;
+        fly_at(&mut ship, &[], None, GOING_ON);
+        let heading = turned_own(start).heading;
+        assert_eq!(ship.state.heading, heading);
+        let velocity = flight::facing(heading) * glide_speed(0);
+        assert!((ship.state.velocity - velocity).length() < 1e-4);
+        assert!((ship.state.position - (start.position + velocity)).length() < 1e-3);
+    }
+
+    #[test]
+    fn an_intact_ship_bursting_out_of_a_gate_moves_along_its_truncated_heading() {
+        let sites = [planet(140, 0.0, 0.0)];
+        let mut ship = emerging(AVERAGE, 1);
+        ship.mode = Mode::LeavingGate { tick: 0 };
+        ship.state.heading = 90.6;
+        let start = ship.state;
+        fly_at(&mut ship, &sites, None, GOING_ON);
+        let heading = turned_own(start).heading;
+        assert_eq!(ship.state.heading, heading);
+        let velocity = flight::facing(heading) * exit_speed(ship.led_out, 0);
+        assert!((ship.state.velocity - velocity).length() < 1e-4);
+        assert!((ship.state.position - (start.position + velocity)).length() < 1e-3);
+    }
+
+    #[test]
+    fn a_disabled_ship_gliding_in_keeps_its_heading() {
+        let mut ship = jumping_in(AVERAGE);
+        ship.condition = Condition::Disabled;
+        ship.state.heading = 180.6;
+        fly_at(&mut ship, &[], None, GOING_ON);
+        assert_eq!(ship.state.heading, 180.6);
+    }
+
+    #[test]
+    fn an_intact_ship_waiting_in_or_at_its_gate_or_coasting_keeps_its_heading() {
+        let sites = [planet(140, 0.0, 0.0)];
+        for mode in [
+            Mode::Emerging { ticks_left: 3 },
+            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::EnteringGate {
+                gate: StellarId(140),
+                ticks_left: 3,
+            },
+            Mode::Coasting { ticks_left: 3 },
+        ] {
+            let mut ship = emerging(AVERAGE, 3);
+            ship.mode = mode;
+            ship.state.heading = 90.6;
+            fly_at(&mut ship, &sites, None, GOING_ON);
+            assert_eq!(ship.state.heading, 90.6, "{mode:?}");
+        }
+    }
+
     /// The leaderless ship of `fields`, bent on landing on planet 140 at
     /// the centre, out of a gate at (100, -200) heading 90° once its burst
     /// is over, drawing `draws`: its burst's last tick done.
@@ -3453,20 +3601,25 @@ mod tests {
             lead: Some(9.0),
         };
         let sites = [planet(140, 0.0, 0.0)];
-        let mut last = start.position.length();
+        // Inward, on the whole degree it arrives on.
+        let inward = flight::facing(start.heading);
         for tick in 0..=37 {
             assert_eq!(ship.mode, Mode::JumpingIn { tick });
+            let before = ship.state.position;
             assert_eq!(fly_at(&mut ship, &sites, None, speeds), Outcome::Flying);
-            let now = ship.state.position.length();
-            assert!((last - now - glide_speed(tick)).abs() < 1e-2, "{tick}");
+            let step = ship.state.position - before;
+            assert!(
+                (step - inward * glide_speed(tick)).length() < 1e-2,
+                "{tick}"
+            );
             assert_eq!(ship.state.heading, start.heading, "no steering");
-            last = now;
         }
         assert_eq!(ship.mode, Mode::Flying);
-        // Five ticks short of the 43 that would bring it 1000 out.
+        // Five ticks short of the 43 that would bring it 1000 out, give or
+        // take the under a degree it faces off the centre.
         let short: f32 = (38..43).map(glide_speed).sum();
-        assert!((last - (1000.0 + short)).abs() < 0.1, "{last}");
-        let inward = start.position * (-1.0 / jump_in_distance());
+        let last = ship.state.position.length();
+        assert!((last - (1000.0 + short)).abs() < 1.0, "{last}");
         assert!(
             (ship.state.velocity - inward * glide_speed(37)).length() < 1e-3,
             "{:?}",
@@ -3810,10 +3963,11 @@ mod tests {
         let handling = fast();
         let a = handling.accel;
         let brake_at = |speed: f32, heading: f32| {
-            let mut state = at(0.0, 0.0, 0.0, -speed, heading);
+            let state = at(0.0, 0.0, 0.0, -speed, heading);
             let flight = braking(&state, &handling);
-            super::braking(&mut state, &handling, Inertia::Inertial);
-            (flight, state)
+            let mut braked = npc(FAST, Goal::Idle, state);
+            super::braking(&mut braked, &handling, Inertia::Inertial);
+            (flight, braked.state)
         };
         // It turns to its retro heading itself, by `_HandleShip`'s turn.
         let (turning, _) = brake_at(3.0, 0.0);
@@ -4048,7 +4202,6 @@ mod tests {
             &mut LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
             None,
@@ -4321,7 +4474,6 @@ mod tests {
             &mut crate::combat::armament::LauncherRounds::default(),
             &mut fuel,
             &mut crate::chance::NeverFires,
-            &mut crate::combat::report::Reports::default(),
             RuleSource::Engine,
             &mut |_| Some(crate::combat::aim::Aim::along(0.0, None)),
             None,

@@ -2,7 +2,8 @@
 //! [`ModalHost`] over a [`QuantityDialog`], plus the rules the two share.
 //!
 //! [`QuantityAsk`] opens the dialog (`DLOG` 1003, or its fallback) at the
-//! most a trade allows, OK titled Buy or Sell and asking [`PROMPT`], and
+//! most a trade allows, OK titled Buy or Sell and asking [`PROMPT`] (or,
+//! for the bar race's bet, titled Bet and asking the amount to bet), and
 //! drops the typed key when B or S opened it. It follows Alt
 //! ([`MAX_LOT_KEY`]), which is held to ask for a count, both while the
 //! dialog is open and, through [`QuantityAsk::follow_alt`], while it is
@@ -12,7 +13,7 @@
 
 use std::rc::Rc;
 
-use nova_sim::Direction;
+use nova_sim::{Direction, gamble};
 
 use super::modal::ModalHost;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
@@ -23,6 +24,50 @@ use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::dialog::DialogTemplate;
 use crate::ui::quantity::{PROMPT, QuantityDialog};
+
+/// What the quantity dialog asks for: `_DoQuantityDialog`'s second
+/// argument, which titles its OK and words its prompt (@0x56e7c-0x56e9f).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    /// A buy: OK titled [`BUY_LABEL`], asking [`PROMPT`].
+    Buy,
+    /// A sale: OK titled [`SELL_LABEL`], asking [`PROMPT`].
+    Sell,
+    /// The bar race's bet (mode 2): OK titled `STR#` 150 #59
+    /// ([`gamble::BET`]), asking `STR#` 2002 #372
+    /// ([`gamble::AMOUNT_TO_BET`]).
+    Bet,
+}
+
+impl Purpose {
+    /// Its OK button's title.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Buy => BUY_LABEL,
+            Self::Sell => SELL_LABEL,
+            Self::Bet => gamble::BET,
+        }
+    }
+
+    /// Its prompt.
+    #[must_use]
+    pub fn prompt(self) -> &'static str {
+        match self {
+            Self::Buy | Self::Sell => PROMPT,
+            Self::Bet => gamble::AMOUNT_TO_BET,
+        }
+    }
+}
+
+impl From<Direction> for Purpose {
+    fn from(direction: Direction) -> Self {
+        match direction {
+            Direction::Buy => Self::Buy,
+            Direction::Sell => Self::Sell,
+        }
+    }
+}
 
 /// The quantity dialog over a screen, what it counts (`T`), and whether
 /// Alt is held.
@@ -68,37 +113,35 @@ impl<T> QuantityAsk<T> {
         self.alt
     }
 
-    /// Opens the dialog over the screen for `payload`: OK titled
-    /// [`BUY_LABEL`] or [`SELL_LABEL`] by `direction`, asking [`PROMPT`],
-    /// the field at `max`. It is laid out by the template, or by
+    /// Opens the dialog over the screen for `payload`: OK titled and the
+    /// prompt worded by `purpose` (a [`Direction`] for a trade), the field
+    /// at `max`. It is laid out by the template, or by
     /// [`QuantityDialog::fallback`] when there is none or it is unusable,
     /// its text measured by `metrics`. `by_key` says B or S opened it,
     /// whose character it then drops.
     pub fn open(
         &mut self,
         payload: T,
-        direction: Direction,
+        purpose: impl Into<Purpose>,
         max: i64,
         by_key: bool,
         metrics: Rc<dyn TextMetrics>,
     ) {
-        let title = match direction {
-            Direction::Buy => BUY_LABEL,
-            Direction::Sell => SELL_LABEL,
-        };
+        let purpose = purpose.into();
+        let (title, prompt) = (purpose.title(), purpose.prompt());
         let built = self.template.as_ref().and_then(|template| {
             QuantityDialog::new(
                 template,
                 max,
                 title,
-                PROMPT,
+                prompt,
                 self.style,
                 Rc::clone(&metrics),
             )
             .ok()
         });
         let mut dialog = built
-            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
+            .unwrap_or_else(|| QuantityDialog::fallback(max, title, prompt, self.style, metrics));
         if by_key {
             dialog.flush_typed_key();
         }
@@ -266,6 +309,23 @@ mod tests {
         );
         let ask = opened(Direction::Sell);
         assert_eq!(texts(&ask), ["Sell", "Enter quantity:", "Cancel", "7"]);
+    }
+
+    #[test]
+    fn a_bet_titles_ok_bet_and_asks_the_amount_to_bet() {
+        let mut ask = ask();
+        ask.open("racer", Purpose::Bet, 900, false, Rc::new(MonoMetrics));
+        assert_eq!(texts(&ask), ["Bet", "Amount to bet:", "Cancel", "900"]);
+        assert_eq!(
+            [Purpose::Buy, Purpose::Sell, Purpose::Bet]
+                .map(|purpose| (purpose.title(), purpose.prompt())),
+            [
+                ("Buy", "Enter quantity:"),
+                ("Sell", "Enter quantity:"),
+                ("Bet", "Amount to bet:")
+            ]
+        );
+        assert_eq!(Purpose::from(Direction::Sell), Purpose::Sell);
     }
 
     #[test]

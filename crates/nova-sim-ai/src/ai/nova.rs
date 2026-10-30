@@ -25,6 +25,12 @@
 //! a mission escort attacks stellars too; its gate wait and answer to hits
 //! stay its own behaviour's, and in goal 0x12 it fires its planet gun
 //! ([`death_star::trigger`]) whatever its type.
+//! A stellar's defence ship ([`Npc::defends`], +0x8c), whatever its AI
+//! type, decides and targets as [`DefenceShipAi`] (`_DefenseShipAI`,
+//! `_AIDispatch` @0x8ff4d-0x8ff5a), after the stellar attackers and
+//! before the miners, as the dispatch tests it there; it fires, waits in
+//! its gate and answers hits as its type does, a warship's as it spawns,
+//! as `_AIDispatch` replaces only the type's call.
 //! A leaderless miner (`shïp` `Flags3` & 3 with leader +0x9a -1,
 //! `_AIDispatch` @0x8ff64-0x8ff96), whatever its AI type, decides and
 //! targets as [`MinerAi`] instead of its type's think, but fires, waits in
@@ -56,6 +62,7 @@
 use std::rc::Rc;
 
 use crate::ai::death_star::{self, DeathStar};
+use crate::ai::defence_ship::DefenceShipAi;
 use crate::ai::fire::FireRules;
 use crate::ai::flee_drop;
 use crate::ai::lost_sight;
@@ -86,6 +93,7 @@ pub struct NovaAi {
     miner: Rc<dyn Behaviour>,
     pirate: Rc<dyn Behaviour>,
     death_star: Rc<dyn Behaviour>,
+    defence: Rc<dyn Behaviour>,
     /// The source of [`RuleKey::HunterBribe`]: whether a paid-off
     /// `ShipBehav` 0 hunter attacks the player again.
     hunter_bribe: RuleSource,
@@ -152,6 +160,7 @@ impl NovaAi {
             death_star: Rc::new(DeathStar {
                 warship: warship.clone(),
             }),
+            defence: Rc::new(DefenceShipAi),
             warship,
             interceptor: Rc::new(Interceptor {
                 piracy_police,
@@ -226,6 +235,14 @@ impl NovaAi {
         self
     }
 
+    /// This AI with `behaviour` for the stellars' defence ships' thinks
+    /// ([`Npc::defends`]).
+    #[must_use]
+    pub fn with_defence(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.defence = behaviour;
+        self
+    }
+
     /// This AI with `behaviour` for NPCs of `ai_type`.
     #[must_use]
     pub fn with(mut self, ai_type: AiType, behaviour: Rc<dyn Behaviour>) -> Self {
@@ -280,13 +297,17 @@ impl NovaAi {
     /// stellar attackers' for a ship of a `ShipBehav` 2 mission
     /// ([`Npc::attacks_stellars`], `_DeathStarAI`), whatever its type, an
     /// escort's included, as its branch (@0x8ff3a-0x8ff43) comes before
-    /// the miner's (@0x8ff64) and `_EscortAI` (@0x90016); the miners' for
+    /// the miner's (@0x8ff64) and `_EscortAI` (@0x90016); the defence
+    /// ships' for a ship that defends a stellar ([`Npc::defends`],
+    /// `_DefenseShipAI` @0x8ff4d-0x8ff5a); the miners' for
     /// a leaderless miner ([`miner::thinks_for`]); otherwise its own
     /// ([`NovaAi::of`]). Their fire, gate wait and answer to hits stay
     /// their own: `_AIDispatch` replaces only the type's think.
     fn thinker(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
         if npc.attacks_stellars() {
             &*self.death_star
+        } else if npc.defends.is_some() {
+            &*self.defence
         } else if miner::thinks_for(npc) {
             &*self.miner
         } else {
@@ -1070,6 +1091,46 @@ mod tests {
             }
         }
         assert_eq!(miners.asked.borrow().len(), 24);
+    }
+
+    #[test]
+    fn a_defence_ship_decides_as_the_defence_ai_and_fires_and_answers_as_its_type() {
+        let (ai, marks, [_, _, miners]) = marked();
+        let defence = Marked::new(7);
+        let ai = ai.with_defence(defence.clone());
+        let mut guard = mining(of(1, AiType::Warship), MINER_BITS);
+        guard.defends = Some(crate::catalog::StellarId(128));
+        let npcs = [guard];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            routed(&ai, &npcs[0], &around),
+            (Goal::Attack(defence.ship()), Some(defence.ship()), [3.0; 3]),
+            "the warship's fire, gate wait and answer (`_AIDispatch` @0x8ff4d)"
+        );
+        assert!(miners.asked.borrow().is_empty(), "before the miners");
+        assert_eq!(marks[2].asked.borrow().len(), 3, "the warship's three");
+        // A stellar attacker that defends goes to the death star first.
+        let stars = Marked::new(6);
+        let ai = ai.with_death_star(stars.clone());
+        let attacker = [Npc {
+            defends: Some(crate::catalog::StellarId(128)),
+            ..mission_ship(of(2, AiType::Warship), 2)
+        }];
+        let around = Surroundings::new(&[], &attacker);
+        assert_eq!(
+            ai.decide(&attacker[0], &around, &mut Draws::of(&[0])),
+            Goal::Attack(stars.ship())
+        );
+        // The real defence AI turns on a player it sees.
+        let npcs = [Npc {
+            defends: Some(crate::catalog::StellarId(128)),
+            ..of(1, AiType::Warship)
+        }];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            Goal::Attack(ShipRef::Player)
+        );
     }
 
     #[test]

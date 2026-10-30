@@ -1,8 +1,8 @@
 //! The landing, the take-off and the spaceport visit under way: the dock
 //! request and the land key, the take-off grace and where the ship
 //! touched down, the stay, the bar's news, the outfitter visit, the day's
-//! hire, outfit and ship rolls, and what the ranks' port prices are taken
-//! from. Landing and taking off themselves (`land`, `dock`, `take_off`)
+//! hire, outfit and ship rolls, what the ranks' port prices are taken
+//! from, and the bar's race (its last winner and the winnings due). Landing and taking off themselves (`land`, `dock`, `take_off`)
 //! coordinate the rest and stay on `Session`.
 
 use std::collections::BTreeSet;
@@ -97,6 +97,16 @@ pub(super) struct Port {
     /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
     /// saved, as `_priceFluxMult` lives in memory only.
     pub(super) port_ranks: ranks::PortRanks,
+    /// The last race winner of the bar visit under way (see the `gamble`
+    /// module): reset as the bar opens and kept across its Gamble
+    /// openings. Not saved, as the original keeps it in a global
+    /// (`*0x3102c8`, reset @0x48f61-0x48f6c).
+    pub(super) last_race_winner: Option<u8>,
+    /// The race winnings not yet credited: a win's, held until its result
+    /// text closes (see the `gamble` module), as the original credits
+    /// them only then (@0x48e03-0x48e30). Not saved, as the original
+    /// keeps them on `_DoRaceDialog`'s stack.
+    pub(super) winnings_due: i64,
 }
 
 impl Port {
@@ -121,6 +131,8 @@ impl Port {
             hold_position: false,
             touchdown,
             port_ranks: ranks::PortRanks::default(),
+            last_race_winner: None,
+            winnings_due: 0,
         }
     }
 }

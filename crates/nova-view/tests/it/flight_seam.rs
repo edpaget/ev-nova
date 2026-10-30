@@ -138,6 +138,7 @@ impl PilotCatalog for OneStellar {
             govt: None,
             flags2: 0,
             destroyed: false,
+            dominated_at_run_time: false,
             graphic: 0,
             dead_graphic: None,
             dead_frame_size: None,
@@ -148,6 +149,8 @@ impl PilotCatalog for OneStellar {
             gravity: 0,
             fee: 0,
             animation: nova_sim::catalog::SiteAnimation::default(),
+            defense_dude: None,
+            def_count: 0,
         }]
     }
 
@@ -192,6 +195,10 @@ impl PilotCatalog for OneStellar {
     }
 
     fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+        Vec::new()
+    }
+
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
         Vec::new()
     }
 
@@ -499,6 +506,27 @@ fn a_slot_key_reaches_the_session_on_the_next_frame() {
     assert_eq!(nav_mode(&view), NavMode::Off, "the press waits for a frame");
     view.tick(TICK);
     assert_eq!(nav_mode(&view), NavMode::Stellar(Some(StellarId(128))));
+}
+
+/// The router's planet comm handoff: Y on a navigation stellar that
+/// answers opens the planet comm dialog over a real session, held for the
+/// router, and Close Channel closes it.
+#[test]
+fn a_hailed_stellar_opens_the_planet_comm_dialog_and_close_channel_closes_it() {
+    use nova_sim::planet_comm::PlanetCommItem;
+    let mut view = view();
+    tap(&mut view, Key::Char('1'));
+    view.tick(TICK);
+    tap(&mut view, Key::Char('y'));
+    let opened = view.take_planet_comm().expect("the planet comm dialog");
+    assert_eq!(opened.stellar, StellarId(128));
+    assert_eq!(opened.name, "Alpha Prime");
+    assert_eq!(view.press_planet_comm(PlanetCommItem::Close), None);
+    assert_eq!(
+        view.press_planet_comm(PlanetCommItem::Second),
+        None,
+        "closed: nothing to press"
+    );
 }
 
 /// `FlightSim::screen`, a dialog's map: a mission dialog's map writes the

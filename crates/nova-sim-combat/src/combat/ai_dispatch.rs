@@ -107,13 +107,12 @@ impl Combat {
     fn launch_bay(&mut self, fighter: &mut Fighter, targets: &[Target], chance: &mut dyn Chance) {
         let target = standing(fighter.target, targets);
         let (state, hull) = (fighter.state, fighter.hull);
-        let launch = fighter.armament.launch_bay(
-            *fighter.condition,
-            fighter.rounds,
-            chance,
-            &mut self.reports,
-            &mut |spec| aim::aim(spec, &state, &hull, target, RuleSource::Bible),
-        );
+        let launch =
+            fighter
+                .armament
+                .launch_bay(*fighter.condition, fighter.rounds, chance, &mut |spec| {
+                    aim::aim(spec, &state, &hull, target, RuleSource::Bible)
+                });
         let Some(launch) = launch else {
             return;
         };

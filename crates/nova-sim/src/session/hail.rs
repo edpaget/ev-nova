@@ -4,8 +4,8 @@
 //! [`Session::open_hail`], Option not held). With no ship target, or
 //! with Option held, it hails the navigation stellar: one that answers
 //! ([`landing::answers_hail`]) gives
-//! [`Hailed::Stellar`](super::Hailed::Stellar), where the original opens
-//! its comm dialog (`_DoPlanetCommDialog` @0x6204b, not built), and any
+//! [`Hailed::Stellar`](super::Hailed::Stellar), the planet comm dialog
+//! (`_DoPlanetCommDialog` @0x6204b; see the `planet_comm` module), and any
 //! other says "No response."; with none there is nothing to hail. Else
 //! it hails the ship target: a person whose `LinkMission` is available
 //! offers it in place of the comm dialog, and no conversation opens (see
@@ -335,8 +335,10 @@ impl Session {
         // The escape pod's class is mute whoever leads it: the class test
         // (@0x62145) follows the escort shortcut (@0x620a2-0x620bb).
         let mute = self.dispositions(npc).mute;
+        // `_IsDisabled` (@0x62157), which a stellar's defence ship
+        // breaking up is not (@0x2d6f).
         if npc.ship == ESCAPE_POD_SHIP
-            || npc.condition != Condition::Intact
+            || !npc.active_not_disabled()
             || (mute && npc.escort.is_none())
         {
             return Err(HailRefusal::NoResponse);
@@ -1101,6 +1103,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_defence_ship_breaking_up_still_answers_as_it_is_not_disabled() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let target = npc(&mut session);
+        target.defends = Some(crate::catalog::StellarId(128));
+        target.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_ok());
+        npc(&mut session).defends = None;
+        assert_eq!(
+            hail_with(&mut session, &catalog, &opening(0)).0,
+            Err(HailRefusal::NoResponse)
+        );
+    }
+
+    #[test]
     fn a_target_emerging_from_a_gate_cannot_be_hailed_and_is_let_go() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
@@ -1247,19 +1267,37 @@ pub(super) mod tests {
         session
     }
 
+    /// Presses the comm key with Option held as `option`, drawing each
+    /// draw's last outcome: the stellar it opened the planet comm dialog
+    /// on, if it did, the draws asked and the sounds.
+    fn stellar_key(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        option: bool,
+    ) -> (Option<StellarId>, Vec<u32>, Vec<crate::SimSound>) {
+        session.take_sounds();
+        let mut chance = Draws::of(&[]);
+        let hailed = session.hail_key(catalog, &HailOptions::default(), option, &mut chance);
+        let stellar = match hailed {
+            Ok(super::super::Hailed::Stellar(view)) => Some(view.stellar),
+            _ => None,
+        };
+        (stellar, chance.asked, session.take_sounds())
+    }
+
     #[test]
-    fn with_no_ship_target_a_dockable_inhabited_nav_stellar_answers_silently() {
+    fn with_no_ship_target_a_dockable_inhabited_nav_stellar_opens_the_planet_comm_dialog() {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
         session.space.escorts.talk = Some(Talk::opened(NpcId(0)));
-        let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
+        let (hailed, asked, sounds) = stellar_key(&mut session, &catalog, false);
         assert_eq!(
             hailed,
-            Ok(super::super::Hailed::Stellar(StellarId(128))),
-            "_DoPlanetCommDialog's seam (@0x6204b)"
+            Some(StellarId(128)),
+            "_DoPlanetCommDialog (@0x6204b)"
         );
-        assert!(asked.is_empty(), "{asked:?}");
-        assert_eq!(sounds, [], "the dialog path plays nothing");
+        assert_eq!(asked, [5, 1, 100], "the planet comm dialog's own draws");
+        assert_eq!(sounds, [crate::SimSound::PlanetCommOpened]);
         assert!(
             session.hailing(&catalog, &HailOptions::default()).is_none(),
             "the hail under way ends, and none opens"
@@ -1309,10 +1347,10 @@ pub(super) mod tests {
         let catalog = hailable();
         let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
         session.chart.target = Some(NpcId(0));
-        let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
-        assert_eq!(hailed, Ok(super::super::Hailed::Stellar(StellarId(128))));
-        assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
-        assert_eq!(sounds, []);
+        let (hailed, asked, sounds) = stellar_key(&mut session, &catalog, true);
+        assert_eq!(hailed, Some(StellarId(128)));
+        assert_eq!(asked, [5, 1, 100], "the ship is not hailed");
+        assert_eq!(sounds, [crate::SimSound::PlanetCommOpened]);
         assert!(session.hailing(&catalog, &HailOptions::default()).is_none());
     }
 

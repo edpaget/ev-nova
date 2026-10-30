@@ -53,6 +53,11 @@
 //! - [`npc_escape`]: what a dying NPC leaves behind: when its crew's
 //!   escape pods and its person's pod come out, and when it rolls for an
 //!   escape ship.
+//! - [`gamble`]: the bar's Gamble, the Galactic Racing Network race:
+//!   what Gamble opens ([`opening`](gamble::opening)), the house and
+//!   asked bets ([`Bet`](gamble::Bet)), the winner's draw
+//!   ([`draw_winner`](gamble::draw_winner)), the payout and the result
+//!   text ([`result_text`](gamble::result_text)).
 //! - [`gate_sprite`]: which frame a hypergate's sprite shows, opening
 //!   while a ship comes out of it and closing once none does.
 //! - [`grant`]: boarding grants: what a person's record grants
@@ -137,6 +142,7 @@ pub mod captured_loadout;
 pub mod christening;
 pub mod escape;
 pub mod escort_dialog;
+pub mod gamble;
 pub mod gate_sprite;
 pub mod grant;
 pub mod hire;

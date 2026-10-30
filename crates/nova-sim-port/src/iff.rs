@@ -50,8 +50,9 @@
 //! (an escort's fighter, which `Space::join_carrier` leads by the
 //! escort and gives no escort duty).
 //!
-//! Left out: the escort test's defender case (@0x4b52-0x4b7c), a ship
-//! led by the player that defends a stellar. Ours has no such ship.
+//! Never reached: the escort test's defender case (@0x4b52-0x4b7c), a
+//! ship led by the player that defends a stellar, as a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar (see
+//! `nova_sim_ai::traffic::stellar_defence`).
 //!
 //! # Stellars ([`stellar_iff`], `_ColorCodeStellar` @0xaa26)
 //!
@@ -72,8 +73,9 @@
 //!    `MinStatus` ≤ −32767, red below 0 and orange from 0.
 //!
 //! The [`Standing`] the caller passes carries both. The session fills
-//! the blessing from its rank blessing table (`Session::blessing`);
-//! domination by tribute has no state yet (rdm:task/planet-domination).
+//! the blessing from its rank blessing table (`Session::blessing`), and
+//! the domination from the one rule (`nova_sim::domination::dominated`),
+//! by `Flags2` 0x0020 or by Demand Tribute.
 //!
 //! # Systems on the galaxy map ([`system_color_code`], `_ColorCodeSystem` @0xd672-0xd941)
 //!

@@ -43,6 +43,7 @@ use crate::combat::{CombatEvent, ShipRef};
 use crate::escort::{ClassRow, Commanded, EscortClass, EscortCommand, EscortGroup};
 use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
+use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
 use crate::geometry::Vec2;
 use crate::grant::Granted;
@@ -55,6 +56,8 @@ use crate::landing::LandingRefusal;
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::navigation::NavMode;
+use crate::outfit_effects::Rgb15;
+use crate::planet_comm::{PlanetCommItem, PlanetCommView};
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::player_info::PlayerInfo;
 use crate::red_alert::AlertIcon;
@@ -865,6 +868,12 @@ pub enum FlightCommand {
     /// A press in the escort dialog
     /// ([`Session::press_escort`](crate::Session::press_escort)).
     PressEscort(EscortButton),
+    /// A press in the planet comm dialog
+    /// ([`Session::press_planet_comm`](crate::Session::press_planet_comm)).
+    PressPlanetComm(PlanetCommItem),
+    /// A choice in the planet comm dialog's bribe haggle
+    /// ([`Session::haggle_bribe`](crate::Session::haggle_bribe)).
+    HaggleBribe(Haggle),
     /// An order in the exchange
     /// ([`Session::trade`](crate::Session::trade)).
     Trade(Order),
@@ -916,6 +925,17 @@ pub enum FlightCommand {
     /// The bar's hire screen closes
     /// ([`Session::close_hire`](crate::Session::close_hire)).
     CloseHire,
+    /// Bet `bet` on the bar race's `racer`, 0 to 3, drawing its winner
+    /// ([`Session::race`](crate::Session::race)).
+    Race {
+        /// The racer bet on.
+        racer: u8,
+        /// The stake.
+        bet: Bet,
+    },
+    /// The race's result text has closed: credit the winnings due
+    /// ([`Session::collect_winnings`](crate::Session::collect_winnings)).
+    CollectWinnings,
     /// The mission computer opens
     /// ([`Session::open_mission_computer`](crate::Session::open_mission_computer)).
     OpenMissionComputer,
@@ -1097,6 +1117,8 @@ impl FlightCommand {
             | Self::Plunder(_)
             | Self::LetGoOfBoarding
             | Self::PressEscort(_)
+            | Self::PressPlanetComm(_)
+            | Self::HaggleBribe(_)
             | Self::Trade(_)
             | Self::Recharge
             | Self::OpenOutfitter
@@ -1109,6 +1131,8 @@ impl FlightCommand {
             | Self::OpenBar
             | Self::Hire(_)
             | Self::CloseHire
+            | Self::Race { .. }
+            | Self::CollectWinnings
             | Self::OpenMissionComputer
             | Self::ShowComputerRow(_)
             | Self::ShowInfoRow(_)
@@ -1278,6 +1302,11 @@ pub enum Answer {
     /// What the escort dialog shows after a [`FlightCommand::PressEscort`]:
     /// `None` once it closes, or when it was not open.
     EscortDialog(Option<EscortDialogView>),
+    /// What the planet comm dialog shows after a
+    /// [`FlightCommand::PressPlanetComm`] or a [`FlightCommand::HaggleBribe`]:
+    /// `None` once it closes (Close Channel, or a bribe paid), or when it
+    /// was not open.
+    PlanetComm(Option<PlanetCommView>),
     /// What a [`FlightCommand::Trade`] traded, or why it was refused.
     Traded(Result<u32, TradeRefusal>),
     /// What a [`FlightCommand::Recharge`] cost, or why it was refused.
@@ -1289,6 +1318,14 @@ pub enum Answer {
     ShipBought(Result<ShipPurchase, ShipRefusal>),
     /// What a [`FlightCommand::Hire`] hired, or why it was refused.
     Hired(Result<Hired, HireRefusal>),
+    /// The race a [`FlightCommand::Race`] ran.
+    Raced(RaceRun),
+    /// The winnings a [`FlightCommand::CollectWinnings`] credited: the
+    /// most the next asked bet can stake of the cash credited.
+    WinningsCollected {
+        /// [`asked_max`](crate::gamble::asked_max) of the cash credited.
+        asked_max: i64,
+    },
     /// The mission computer a [`FlightCommand::OpenMissionComputer`]
     /// opened, or why it has nothing.
     MissionComputer(Result<MissionComputer, ComputerRefusal>),
@@ -1543,6 +1580,12 @@ pub struct FrameShip {
     pub cloak: CloakShown,
     /// Its ion tint as its last display left it, if it glows.
     pub ion_tint: Option<IonTint>,
+    /// Its paint, `_GetShipPaintColor`'s (@0x7d0c-0x7dc0) result: the
+    /// pilot's for the player, an NPC's person's `Color`, or else its
+    /// government's `ShipColor`; `None` unpainted (see the
+    /// `session::ship_paint` module). The view draws its hull and alt
+    /// layer in it.
+    pub paint: Option<Rgb15>,
     /// Its fade at a gate it comes out of or enters ([`GateFade`]).
     pub gate: GateFade,
     /// Where its hover and click box is
@@ -1586,6 +1629,7 @@ impl Default for FrameShip {
             glow: 0,
             cloak: CloakShown::Opaque,
             ion_tint: None,
+            paint: None,
             gate: GateFade::None,
             hover: HoverPlace::Own,
             framed: None,
@@ -2017,6 +2061,8 @@ mod tests {
                 C::PressEscort(crate::escort_dialog::EscortButton::Close),
                 None,
             ),
+            (C::PressPlanetComm(PlanetCommItem::Close), None),
+            (C::HaggleBribe(Haggle::Accept), None),
             (C::CommAcknowledged, None),
             (C::CommTicked, None),
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),

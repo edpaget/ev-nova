@@ -54,9 +54,11 @@
 //! clears the next request at another stellar
 //! ([`Standing::granted`](crate::Standing::granted)).
 //!
-//! Left out: the bribe's counter and the domination writes
-//! (`_DoPlanetCommDialog` @0x97112-0x97125, @0x973e1-0x973fe,
-//! @0x978be-0x978d3), rdm:task/planet-domination's.
+//! The planet comm dialog writes the request too (see the `planet_comm`
+//! module): a bribe paid grants it at
+//! [`BRIBE_PERMISSION`](crate::planet_comm::BRIBE_PERMISSION) for the
+//! stellar (`_DoPlanetCommDialog` @0x97112-0x97125), and a Release or a
+//! domination drops it (@0x973e1-0x973fe, @0x978be-0x978d3).
 //!
 //! [`gate_sprite::held_open`](crate::gate_sprite::held_open) reads the
 //! counter for the player's dock hypergate (@0x2e867-0x2e87e).
@@ -451,6 +453,30 @@ mod tests {
         assert_eq!(session.dock_request(), None);
         assert_eq!(session.land(), denied, "asked again");
         assert_eq!(session.take_sounds(), [SimSound::TrafficControl]);
+    }
+
+    #[test]
+    fn a_stellar_dominated_at_run_time_clears_whatever_the_record_and_greets_with_no_fee() {
+        let mut catalog = strict();
+        catalog.sites[0].1[0].fee = 100;
+        catalog.sites[0].1[0].govt = Some(crate::catalog::GovtId(128));
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        session.pilot.cash = 1000;
+        assert!(
+            matches!(session.land(), Err(LandingRefusal::Denied { .. })),
+            "undominated"
+        );
+        quiet_in_place(&mut session);
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, StellarId(128), true);
+        assert_eq!(session.land(), requested(128), "cleared (@0x6792d)");
+        tick(&mut session);
+        assert_eq!(
+            session.take_messages(),
+            [cleared_at(128, DockKind::Planet)],
+            "the approach clears (@0x64845) and states no fee (@0x64d92)"
+        );
     }
 
     // The approach.

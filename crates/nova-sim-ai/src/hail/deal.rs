@@ -160,12 +160,59 @@ pub struct Conversation {
     pub price: i64,
     /// The `InfoTypes` bit Greetings' advice follows, if any.
     pub advice: Option<u16>,
-    /// The price asked while haggling, if the ship has asked one.
+    /// The haggling over the price, once the ship has asked it.
+    haggling: Haggling,
+}
+
+/// A haggle over a price asked (`_DoHaggleDialog` @0x91e67): the price
+/// asked, its roll and whether the roll has lowered it. A ship's hail
+/// keeps one ([`Conversation`]), and so does a planet's bribe (see
+/// [`planet_comm`](crate::planet_comm)), which haggle alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Haggling {
+    /// The price asked, if one is.
     asking: Option<i64>,
     /// The haggle roll drawn when the price was asked.
     roll: u32,
     /// Whether the haggle roll has lowered the price already.
     used: bool,
+}
+
+impl Haggling {
+    /// `price` is asked: the haggle roll is drawn on `chance`, once, and
+    /// the haggling starts afresh.
+    pub fn ask(&mut self, price: i64, chance: &mut dyn Chance) {
+        self.roll = chance.below(HAGGLE_ROLL);
+        self.used = false;
+        self.asking = Some(price);
+    }
+
+    /// The price asked, if any.
+    #[must_use]
+    pub fn asking(&self) -> Option<i64> {
+        self.asking
+    }
+
+    /// Makes `choice` in the haggle dialog, with the player's `cash`, and
+    /// gives what it came to (see the module docs), the price raised by
+    /// none: [`Settled::Declined`] leaves raising it to the caller. `None`,
+    /// and nothing changes, when no price is asked.
+    pub fn haggle(&mut self, choice: Haggle, cash: i64) -> Option<Settled> {
+        let asking = self.asking?;
+        if choice == Haggle::LowerPrice && self.roll <= HAGGLE_WINS_AT_MOST && !self.used {
+            self.used = true;
+            self.asking = Some(lowered(asking));
+            return Some(Settled::Lowered);
+        }
+        self.asking = None;
+        if cash < asking {
+            return Some(Settled::Short);
+        }
+        Some(match choice {
+            Haggle::Accept => Settled::Paid(asking),
+            Haggle::LowerPrice => Settled::Declined,
+        })
+    }
 }
 
 impl Conversation {
@@ -182,47 +229,32 @@ impl Conversation {
             mood,
             price,
             advice,
-            asking: None,
-            roll: 0,
-            used: false,
+            haggling: Haggling::default(),
         }
     }
 
     /// The ship asks its price: the haggle roll is drawn on `chance`, once,
     /// and the haggling starts afresh at the conversation's price.
     pub fn ask(&mut self, chance: &mut dyn Chance) {
-        self.roll = chance.below(HAGGLE_ROLL);
-        self.used = false;
-        self.asking = Some(self.price);
+        self.haggling.ask(self.price, chance);
     }
 
     /// The price asked while haggling, if any.
     #[must_use]
     pub fn asking(&self) -> Option<i64> {
-        self.asking
+        self.haggling.asking()
     }
 
     /// Makes `choice` in the haggle dialog, with the player's `cash`, and
     /// gives what it came to (see the module docs); `None`, and nothing
-    /// changes, when no price is asked.
+    /// changes, when no price is asked. A decline raises the price by
+    /// [`DECLINE_RAISE`].
     pub fn haggle(&mut self, choice: Haggle, cash: i64) -> Option<Settled> {
-        let asking = self.asking?;
-        if choice == Haggle::LowerPrice && self.roll <= HAGGLE_WINS_AT_MOST && !self.used {
-            self.used = true;
-            self.asking = Some(lowered(asking));
-            return Some(Settled::Lowered);
+        let settled = self.haggling.haggle(choice, cash)?;
+        if settled == Settled::Declined {
+            self.price += DECLINE_RAISE;
         }
-        self.asking = None;
-        if cash < asking {
-            return Some(Settled::Short);
-        }
-        Some(match choice {
-            Haggle::Accept => Settled::Paid(asking),
-            Haggle::LowerPrice => {
-                self.price += DECLINE_RAISE;
-                Settled::Declined
-            }
-        })
+        Some(settled)
     }
 }
 

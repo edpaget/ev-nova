@@ -57,8 +57,10 @@
 //!    low (@0x9b5b4-0x9b5c8); -32000 needs the docked stellar dominated
 //!    (its dominated byte +0x46, @0x9b539-0x9b560), -32001 any stellar of
 //!    a visible system dominated, destroyed or not (+0x44 and +0x46 over
-//!    every slot, @0x9b562-0x9b58b), both read through the
-//!    always-dominated bit until rdm task planet-domination builds more;
+//!    every slot, @0x9b562-0x9b58b), both read through the one rule
+//!    ([`domination::dominated`](crate::domination::dominated), over the
+//!    docked site's stamp and each stellar's
+//!    [`dominated`](select::Stellar::dominated));
 //!    any value below them refuses (@0x9b567). The record is the one in
 //!    the player's system, as the original reads `_playerRecord`; by the
 //!    Bible's reading of [`RuleKey::LegalRecords`](crate::RuleKey::LegalRecords),
@@ -784,29 +786,19 @@ fn avail_record(facts: &AvailFacts) -> Result<(), Refusal> {
         DOMINATED_HERE => facts
             .visit
             .docked
-            .is_some_and(|site| dominated(site.flags2)),
+            .as_ref()
+            .is_some_and(crate::domination::dominated),
         DOMINATED_ANY => facts
             .visit
             .world
             .stellars
             .iter()
-            .any(|stellar| dominated(stellar.flags2)),
+            .any(|stellar| stellar.dominated),
         // Below -32001 at a stellar: never (@0x9b567).
         ..DOMINATED_ANY => false,
         _ => record <= wanted,
     };
     pass(takes, Refusal::AvailRecord)
-}
-
-/// Whether a stellar of `flags2` is dominated: its always-dominated bit
-/// ([`DOMINATED`](crate::market::DOMINATED)), from which the original
-/// sets the stellar's dominated byte (+0x46) at `_ResetPlayerRecord`
-/// (@0x1dbdb-0x1dbdf) and `_HandleStellarSystemVisibility`
-/// (@0x32ce5-0x32ceb). That bit is the engine's whole domination state
-/// until rdm task planet-domination feeds the state it builds through
-/// here.
-fn dominated(flags2: u16) -> bool {
-    flags2 & crate::market::DOMINATED != 0
 }
 
 fn avail_rating(facts: &AvailFacts) -> Result<(), Refusal> {

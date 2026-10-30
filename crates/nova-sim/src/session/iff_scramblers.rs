@@ -21,9 +21,11 @@
 //! stellar guns read them too: a marked government's stellar, or a
 //! stellar of no government in a marked government's system, spares the
 //! player and its escorts (`_IsThreatToStellar` @0xa062, see the
-//! [`stellar_guns`](super::stellar_guns) module). The other readers
-//! (`_AIDoesShipLikePlayer` @0x82424, `_DoPlanetCommDialog` @0x96c4d) are
-//! rdm:task/iff-scrambler-other-readers's.
+//! [`stellar_guns`](super::stellar_guns) module). So does the planet comm
+//! dialog: a marked government's stellar does not refuse the player
+//! landing (`_DoPlanetCommDialog` @0x96c4d, see the `planet_comm`
+//! module). The hail's liking reads it as `_AIDoesShipLikePlayer` does
+//! (@0x82424).
 //!
 //! **The player's ship.** [`Session::player_side`] gives the AI its ship
 //! type, so a xenophobe passes over the escape pod (class 0x2ff), and the

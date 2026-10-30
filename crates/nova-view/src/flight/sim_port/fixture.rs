@@ -460,6 +460,7 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::ShipNaming(ShipId(129)),
         ScreenAsk::CaptureNaming,
         ScreenAsk::News,
+        ScreenAsk::Gamble,
         ScreenAsk::MissionInfo,
         ScreenAsk::RefusableOffer(MissionId(128)),
         ScreenAsk::OfferText {
@@ -1672,7 +1673,7 @@ mod tests {
 
     /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
     /// numbers are those below it.
-    const SCREEN_ASK_KINDS: usize = 22;
+    const SCREEN_ASK_KINDS: usize = 23;
 
     /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
     /// every kind, so a new one must be numbered, and then sampled
@@ -1700,7 +1701,8 @@ mod tests {
             ScreenAsk::Hail => 18,
             ScreenAsk::Boarding => 19,
             ScreenAsk::PilotPanel => 20,
-            ScreenAsk::CaptureNaming => 21,
+            ScreenAsk::Gamble => 21,
+            ScreenAsk::CaptureNaming => 22,
         }
     }
 

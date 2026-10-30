@@ -350,8 +350,8 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
                 );
                 session.pilot.events = events;
             }
-            // The destroyed stellars' regeneration; the dominated ones'
-            // defence regrowing joins it with rdm task planet-domination.
+            // The dominated stellars' defence regrowing and the destroyed
+            // ones' regeneration.
             Participant::Stellars => session.stellars_day(&mut *self.chance),
             Participant::DayRolls => {
                 session
@@ -369,8 +369,13 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // Each visible system's reinforcement countdown (see the
             // `reinforcements` module).
             Participant::Reinforcements => session.chart.reinforcements_day(&mut session.pilot),
-            // Filled by its own phase: rdm task planet-domination.
-            Participant::Tribute => {}
+            // The dominated stellars' tribute (see the
+            // `dominated_stellars` module).
+            Participant::Tribute => {
+                session
+                    .chart
+                    .tribute_day(&mut session.pilot, &session.statics);
+            }
         }
     }
 }
@@ -845,10 +850,11 @@ impl Chart {
     /// Stamps the stellars shown, those their system lists, and those
     /// waiting for the take-off afresh
     /// through the galaxy ([`OverlaidGalaxy::site`]): only whether each is
-    /// destroyed can have changed, which the overlay alone gives, so
-    /// nothing is read again. Which stellars are shown is
-    /// [`Session::set_player_system`]'s alone; this only stamps them.
-    fn stamp_sites(&mut self) {
+    /// destroyed or dominated at run time can have changed, which the
+    /// overlay alone gives, so nothing is read again. Which stellars are
+    /// shown is [`Session::set_player_system`]'s alone; this only stamps
+    /// them.
+    pub(super) fn stamp_sites(&mut self) {
         let galaxy = &self.galaxy;
         for site in self
             .sites

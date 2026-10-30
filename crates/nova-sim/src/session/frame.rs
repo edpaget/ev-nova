@@ -182,6 +182,7 @@ pub(super) mod tests {
             glow: session.engine_glow(),
             cloak: session.player_cloak_shown(),
             ion_tint: session.player_ion_tint(),
+            paint: session.pilot().paint(),
             gate: GateFade::None,
             hover: session.hover_place(ShipRef::Player),
             framed: session.framed_by(ShipRef::Player),
@@ -211,6 +212,7 @@ pub(super) mod tests {
             glow: drawn_base(npc.display.glow),
             cloak: session.cloak_shown(npc),
             ion_tint: npc.display.ion_tint,
+            paint: session.space.npc_paint(npc, &session.statics),
             gate: GateFade::of(&npc.mode),
             hover: session.hover_place(ship),
             framed: session.framed_by(ship),
@@ -237,6 +239,7 @@ pub(super) mod tests {
             on_radar: true,
             iff: ShipIff::Threat,
             mass: 999.0,
+            paint: Some(crate::outfit_effects::Rgb15 { r: 9, g: 9, b: 9 }),
             ..FrameShip::default()
         }
     }
@@ -390,6 +393,30 @@ pub(super) mod tests {
         let mut frame = stale();
         session.fill_frame(&mut frame);
         frame
+    }
+
+    #[test]
+    fn the_players_record_carries_the_pilots_paint() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let paint = crate::outfit_effects::Rgb15 { r: 4, g: 5, b: 6 };
+        session.pilot.paint = Some(paint);
+        assert_eq!(filled(&session).player().paint, Some(paint));
+        session.pilot.paint = None;
+        assert_eq!(filled(&session).player().paint, None, "over a stale one");
+    }
+
+    #[test]
+    fn an_npcs_record_carries_the_paint_its_person_or_government_gives() {
+        use crate::session::ship_paint::tests::{painted, populated};
+        let session = populated(&painted(0x0010_2030));
+        let frame = filled(&session);
+        let npc = frame.npcs().next().expect("the person flies");
+        let paint = crate::outfit_effects::Rgb15 { r: 2, g: 4, b: 6 };
+        assert_eq!(npc.paint, Some(paint), "its person's Color");
+        let unpainted = populated(&painted(0));
+        let frame = filled(&unpainted);
+        let npc = frame.npcs().next().expect("the person flies");
+        assert_eq!(npc.paint, None, "over a stale one");
     }
 
     #[test]

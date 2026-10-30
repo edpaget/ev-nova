@@ -546,6 +546,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             pending_boarding: false,
             pending_hail: None,
             pending_escort_dialog: None,
+            pending_planet_comm: None,
             pending_mission_info: None,
             pending_player_info: false,
             kept_panel: super::player::KeptPanel::Unasked,

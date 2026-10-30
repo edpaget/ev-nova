@@ -247,16 +247,37 @@ mod tests {
 
     #[test]
     fn an_inertialess_ship_in_band_has_its_speed_dragged_too() {
-        let mut npc = attacker(state(880.0, 0.0, (0.0, 0.1), 0.0));
-        npc.speed = 0.1;
+        // Facing the stellar, aiming: dragged alone.
+        let mut aiming = attacker(state(880.0, 0.0, (0.0, 0.1), 90.0));
+        aiming.speed = 0.1;
+        let mut braking = aiming.clone();
         fly(
-            &mut npc,
+            &mut aiming,
             &sites(),
             &weapons(),
             &HANDLING,
             (FlightRules::default(), Inertia::Inertialess { speed: 0.1 }),
         );
-        assert_eq!(npc.speed, (f64::from(0.1_f32) * IN_BAND_DRAG) as f32);
+        let dragged = (f64::from(0.1_f32) * IN_BAND_DRAG) as f32;
+        assert_eq!(aiming.speed, dragged);
+        // Braking just above 0.35, the drag takes it below, and sub 1's
+        // settle cuts its speed with its velocity the same tick, both in
+        // doubles (@0x8faaf-0x8faeb, @0x8560d-0x8561f).
+        braking.state.velocity = Vec2::new(0.351, 0.0);
+        braking.speed = 0.351;
+        fly(
+            &mut braking,
+            &sites(),
+            &weapons(),
+            &HANDLING,
+            (
+                FlightRules::default(),
+                Inertia::Inertialess { speed: 0.351 },
+            ),
+        );
+        let dragged = (f64::from(0.351_f32) * IN_BAND_DRAG) as f32;
+        let settled = (f64::from(dragged) * leave_flight::SETTLE) as f32;
+        assert_eq!(braking.speed, settled);
     }
 
     #[test]

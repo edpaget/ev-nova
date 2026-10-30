@@ -389,6 +389,8 @@ pub struct Dialog {
     /// The item a press is held on, by index, and its tracking.
     tracked: Option<usize>,
     tracker: ButtonTracker,
+    /// The button held drawn pressed, by index ([`Dialog::hold_pressed`]).
+    held: Option<usize>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -464,6 +466,7 @@ impl Dialog {
             focus_ring: FocusRing::default(),
             tracked: None,
             tracker: ButtonTracker::default(),
+            held: None,
         }
     }
 
@@ -754,6 +757,29 @@ impl Dialog {
         }
     }
 
+    /// The item (numbered from 1) a press is held on while the pointer is
+    /// on it, which draws pressed; none otherwise.
+    #[must_use]
+    pub fn pressed_item(&self) -> Option<usize> {
+        self.tracked
+            .filter(|_| self.tracker.pressed())
+            .map(|index| index + 1)
+    }
+
+    /// Holds button `item` (numbered from 1) drawn pressed, whatever the
+    /// pointer does, until let go with `None`: a button the original
+    /// leaves drawn pressed after its click, as no redraw follows the
+    /// release (`_TrackBarButtons` @0x26fd5).
+    pub fn hold_pressed(&mut self, item: Option<usize>) {
+        self.held = item.map(|item| item - 1);
+    }
+
+    /// The button held drawn pressed ([`Dialog::hold_pressed`]), if any.
+    #[must_use]
+    pub fn held_pressed(&self) -> Option<usize> {
+        self.held.map(|index| index + 1)
+    }
+
     /// Abandons any click in progress without activating anything.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
@@ -785,7 +811,8 @@ impl Dialog {
             }
             match &item.widget {
                 Widget::Button(button) => {
-                    let pressed = self.tracked == Some(index) && self.tracker.pressed();
+                    let pressed = (self.tracked == Some(index) && self.tracker.pressed())
+                        || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
                     if self.focus == Some(index) {
                         outline(list, item.bounds, self.style.up);
@@ -1389,6 +1416,36 @@ mod tests {
         dialog.cancel_pointer();
         assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
         assert_eq!(dialog.input(&release(ok)), None);
+    }
+
+    #[test]
+    fn the_item_pressed_is_the_one_held_while_the_pointer_is_on_it() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        assert_eq!(dialog.pressed_item(), None);
+        dialog.input(&press(ok));
+        assert_eq!(dialog.pressed_item(), Some(1));
+        dialog.input(&Input::PointerMoved(at(0.0, 0.0)));
+        assert_eq!(dialog.pressed_item(), None, "off it");
+        dialog.input(&Input::PointerMoved(ok));
+        assert_eq!(dialog.pressed_item(), Some(1));
+        dialog.input(&release(ok));
+        assert_eq!(dialog.pressed_item(), None, "released");
+    }
+
+    #[test]
+    fn a_button_held_pressed_draws_pressed_until_let_go() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let first_picture = |dialog: &Dialog| match drawn(dialog)[0] {
+            DrawCommand::StretchedPicture { image, .. } => image,
+            ref other => panic!("{other:?}"),
+        };
+        dialog.hold_pressed(Some(1));
+        assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.pressed.left);
+        assert_eq!(dialog.held_pressed(), Some(1));
+        dialog.hold_pressed(None);
+        assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
+        assert_eq!(dialog.held_pressed(), None);
     }
 
     #[test]

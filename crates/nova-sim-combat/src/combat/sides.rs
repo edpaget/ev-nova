@@ -32,7 +32,10 @@
 //!    `_CalculateTargetedDamage` (@0x3a1bd) are those callers' own, made in
 //!    their own code, not here;
 //! 4. as a shot no ship fired ([`Source::Other`]), any ship but the one it
-//!    is aimed at, when it is aimed at one (@0x44a71-0x44a88); of the
+//!    is aimed at and the defenders of the stellar whose index (its ID
+//!    less 128) is that ship's slot, when it is aimed at one
+//!    (@0x44a71-0x44a88, branch 7): a stellar's gun aimed at the player,
+//!    slot 0, also hits `spöb` 128's defenders; of the
 //!    rules below only rule 8 applies to it, as the branch jumps there,
 //!    and rules 9 and 10 pass for a firer of -1. Besides a shot turned on
 //!    its firer and a sub-munition of one, a stellar's gun launches such
@@ -50,6 +53,8 @@
 //! - with the same leader as its firer (6a, @0x44846-0x44873);
 //! - of its firer's government (6b, @0x44879-0x4488d), an independent's
 //!   and the player's excepted;
+//! - defending the stellar its firer defends (6c, @0x44893-0x448a7,
+//!   [`Ties::defends`]);
 //! - that is of a turret miss class below the shot's miss roll and not
 //!   disabled as `_IsDisabled` reads it now (6d, @0x448ad-0x448d5;
 //!   [`Target::disabled`]): `_SpawnShot` rolls a ship's turret (4) and
@@ -127,10 +132,8 @@
 //! whether the ship is destroyed, which no hit in the pass changes.
 //!
 //! Left out, each with its owner: the nag ship (@0x44803), as there is
-//! none; two defence ships of one stellar (6c, @0x44893) and a non-ship
-//! shot's +0x8c clause (@0x44a81), task `planet-domination`; the beam's
-//! system test (@0x30dc1), as only the player's system is simulated. None
-//! of these functions draws or plays a sound.
+//! none; the beam's system test (@0x30dc1), as only the player's system is
+//! simulated. None of these functions draws or plays a sound.
 
 use super::ShipRef;
 use super::beam::Beam;
@@ -140,7 +143,7 @@ use super::hull::ESCAPE_POD_SHIP;
 use super::planet_type::{self, BeamPlanetFlag};
 use super::projectile::{Jam, Shot, Source, Target};
 use super::weapon::Guidance;
-use crate::catalog::GovtId;
+use crate::catalog::{GovtId, StellarId};
 use crate::govt::{Governments, NEVER_ATTACKS_PLAYER, PLAYER_SHOTS_PASS};
 use crate::rulebook::RuleSource;
 
@@ -171,6 +174,12 @@ pub struct Ties {
     /// 16 (`_AIShipIsAttackingAsteroid` @0x8982b): its shots and beams
     /// pass through every ship. Never the player.
     pub mining: bool,
+    /// The stellar it defends, the original's +0x8c (see
+    /// `nova_sim_ai::traffic::stellar_defence`): its shots pass through
+    /// the stellar's other defenders (6c), and a stellar's shot aimed at
+    /// the slot the stellar's index names hits it (branch 7). None for
+    /// every other ship and the player.
+    pub defends: Option<StellarId>,
 }
 
 impl Ties {
@@ -240,7 +249,10 @@ impl Sides<'_> {
         let kept = match shot.source {
             Source::Ship(kept) => kept,
             Source::Other => {
-                return matched && shot.aimed_at.is_none_or(|aimed| aimed == target.ship);
+                return matched
+                    && shot.aimed_at.is_none_or(|aimed| {
+                        aimed == target.ship || self.guards_slot_of(aimed, target)
+                    });
             }
         };
         if !matched {
@@ -255,6 +267,7 @@ impl Sides<'_> {
         if target.ship == firer
             || (ties.leader.is_some() && ties.leader == theirs.leader)
             || (ties.govt.is_some() && ties.govt == theirs.govt)
+            || (ties.defends.is_some() && ties.defends == theirs.defends)
         {
             return false;
         }
@@ -359,6 +372,26 @@ impl Sides<'_> {
                 .and_then(|leader| self.find(leader))
                 .is_some_and(|leader| leader.ties.untouchable()),
         }
+    }
+
+    /// Whether `target` defends the stellar whose index (its ID less 128)
+    /// is the ship-table slot of `aimed`, the ship a non-ship shot is
+    /// aimed at (branch 7, `cmpw 0x8c(%ebx)` @0x44a81): the player's slot
+    /// 0 names `spöb` 128, an NPC's its berth; an NPC gone from the fight
+    /// names none. A stellar's gun aimed at the player so hits Earth's
+    /// defenders, as the original's does.
+    fn guards_slot_of(&self, aimed: ShipRef, target: &Target) -> bool {
+        let Some(stellar) = target.ties.defends else {
+            return false;
+        };
+        let slot = match aimed {
+            ShipRef::Player => Some(0),
+            ShipRef::Npc(_) => self.find(aimed).map(|aimed| match aimed.slot {
+                crate::ship_layer::Slot::Player => 0,
+                crate::ship_layer::Slot::Berth(berth) => i64::from(berth),
+            }),
+        };
+        slot.is_some_and(|slot| i64::from(stellar.0) - 128 == slot)
     }
 
     /// The fight's ship `ship`, if it is in the fight.
@@ -782,5 +815,87 @@ mod tests {
         assert!(of(Some(0x0141)).untouchable());
         assert!(!of(Some(0x0041)).untouchable());
         assert!(!of(None).untouchable());
+    }
+
+    /// `ship` defending stellar `stellar`, in ship-table slot `slot`.
+    fn defending(ship: ShipRef, stellar: Option<i16>, slot: u32) -> Target {
+        let mut target = super::tests::ship(ship, None);
+        target.ties.defends = stellar.map(StellarId);
+        target.slot = if slot == 0 {
+            crate::ship_layer::Slot::Player
+        } else {
+            crate::ship_layer::Slot::Berth(slot)
+        };
+        target
+    }
+
+    #[test]
+    fn a_defenders_shot_passes_through_its_own_stellars_defenders_only() {
+        let targets = [
+            defending(npc(1), Some(128), 1),
+            defending(npc(2), Some(128), 2),
+            defending(npc(3), Some(129), 3),
+            defending(npc(4), None, 4),
+        ];
+        let sides = among(&targets);
+        let shot = Shot::launch(
+            WeaponSpec::new(&weapon(128)),
+            npc(1),
+            npc(1),
+            &ShipState::default(),
+            0.0,
+        );
+        assert!(!sides.shot_can_hit(&shot, &targets[1]), "6c (@0x44893)");
+        assert!(sides.shot_can_hit(&shot, &targets[2]), "another stellar's");
+        assert!(sides.shot_can_hit(&shot, &targets[3]));
+        // Two ships defending nothing are no pair.
+        let shot = Shot::launch(
+            WeaponSpec::new(&weapon(128)),
+            npc(4),
+            npc(4),
+            &ShipState::default(),
+            0.0,
+        );
+        let plain = [defending(npc(4), None, 4), defending(npc(5), None, 5)];
+        assert!(among(&plain).shot_can_hit(&shot, &plain[1]));
+    }
+
+    #[test]
+    fn a_stellars_shot_hits_its_mark_and_the_defenders_of_the_stellar_its_slot_names() {
+        let targets = [
+            defending(ShipRef::Player, None, 0),
+            defending(npc(3), None, 3),
+            defending(npc(5), Some(128), 5),
+            defending(npc(6), Some(129), 6),
+            defending(npc(7), Some(131), 7),
+        ];
+        let sides = among(&targets);
+        let aimed = |at: ShipRef| Shot {
+            source: Source::Other,
+            aimed_at: Some(at),
+            ..rolled(None)
+        };
+        let at_player = aimed(ShipRef::Player);
+        let hits = |shot: &Shot| -> Vec<bool> {
+            targets
+                .iter()
+                .map(|target| sides.shot_can_hit(shot, target))
+                .collect()
+        };
+        assert_eq!(
+            hits(&at_player),
+            [true, false, true, false, false],
+            "slot 0 names `spöb` 128 (@0x44a81)"
+        );
+        assert_eq!(
+            hits(&aimed(npc(3))),
+            [false, true, false, false, true],
+            "slot 3 names 131"
+        );
+        assert_eq!(
+            hits(&aimed(npc(9))),
+            [false, false, false, false, false],
+            "a mark gone from the fight names no slot"
+        );
     }
 }

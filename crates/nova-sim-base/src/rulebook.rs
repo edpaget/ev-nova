@@ -39,7 +39,7 @@
 //! | [`TypeSheetFallback`](RuleKey::TypeSheetFallback) | `type_sheet_fallback` | from the first rebuild point that shows it, a whole stellar whose `Type` has no readable sheet draws, is clicked by and is shot by what its sprite slot holds: graphic type 0, `spïn` 1000, the sheet the rebuild means an empty slot to get (its fill @0x33231-0x332d0; its own code faults first, @0x33096), or a `DeadType` sheet a flight frame cloned in since (`_HandleStellarSprites` @0x2e7c7-0x2e7e5; see `nova_sim::story`) | the engine's placeholder box and the reason, which shows the broken data\* |
 //! | [`EightBitSheet`](RuleKey::EightBitSheet) | `eight_bit_sheet` | an 8-bit `rlëD` draws as its bytes fall into the 16-bit world: each pair of bytes one little-endian RGB555 pixel, filling the left half of the frame (`_SWCreateSpriteFromRLEResource` @0xa9990, `_BlitPixieRLESwap` @0xbe3f0-0xbe3f7, `_BlitPixieRLE` @0xbddd0; see `nova_render::GameImages` and `nova_sim::story`) | each byte a colour of the Mac's standard 256-colour table, at full width\* |
 //! | [`UncountedSheet`](RuleKey::UncountedSheet) | `uncounted_sheet` | a sprite slot cloning a graphic whose `spïn`'s `xTiles` × `yTiles` is 0 or less keeps the frame it showed: none from a rebuild point (nothing drawn, the landing reach 75), and between rebuild points the frame it had, frozen and placed as a 32-pixel sprite; the stellar does not animate until the next rebuild point (`_SWCloneFramesFromMaster` @0xac4ec, `_SWSetCurrentFrameIndex` @0xa90e7-0xa90ee, `_HandleStellarSystemVisibility` @0x32e7a, @0x331c6; `_HandleStellarSprites` @0x2e7e5, @0x2ee20-0x2ef1a; see `nova_sim::story`) | the sheet's own decoded frames, drawn and animated\* |
-//! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach\* |
+//! | [`NpcLanding`](RuleKey::NpcLanding) | `npc_landing` | an NPC lands when its whole-pixel offset from the stellar's centre is at most 40 on each axis (trunc((9 − turn) × 8 + 32) below a turn rate of 8) and it moves below 0.35 a tick on each axis; inside the box but faster it brakes by sub 1, its velocity and speed × 0.98 a tick; outside it flies sub 2's approach, and a folding ship unfolds inside the box (`_HighLevelAIHandler` @0x8d903-0x8db5a; see `nova_sim_ai::traffic::land_flight`); and state 20's approach to a hypergate or wormhole outside its box flies sub 2 too, never braking (@0x8dc42-0x8dc55; see `nova_sim_ai::traffic::gate_entry`) | within `landing_radius` (half the larger side of the `Type` frame, or 32 with no sprite), as a circle, at or below 1.0 a tick, flying the port's earlier approach, which brakes by its stopping distance, for the gate approach too\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction (`nova_sim::NovaHire`) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now, and its pay line shows a hundredth of that `Cost` unclamped, "credit" only at exactly 1.0 (`_EscortDialogUpdate` @0x94f9c-0x9500d; `nova_sim::Session`) | the wage kept on its record when hired, shown as itself\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear (`nova_sim::NovaPersons`) | 5 %, one of those who may appear picked evenly |
@@ -58,7 +58,7 @@
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing (`nova_sim::OutfitRules`) | it pays what selling the outfit would\* |
 //! | [`RefitReserves`](RuleKey::RefitReserves) | `refit_reserves` | a refit by `G`, `D` or boarding keeps a shield or armour above the new most until damage, the outfitter or a reload takes it (`nova_sim::OutfitRules`) | each is held to its most\* |
 //! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost (`nova_sim::HookRules`) | the paint is cleared before the hook, so a paint it grants stays\* |
-//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, `_DoShipCapture`'s weapons merge (@0x41849-0x41a3e), which strips a non-persistent outfit either grants, a weapon's count kept only where a persistent outfit names the weapon (`nova_sim::HookRules`, `nova_sim::captured_loadout`) | they run after the swap, so it stays\* |
+//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, `_DoShipCapture`'s weapons merge (@0x41849-0x41a3e), which strips a non-persistent outfit either grants, a weapon's count kept only where a persistent outfit names the weapon, and before the player takes the captured ship's paint, which overwrites a paint either grants (`nova_sim::HookRules`, `nova_sim::captured_loadout`) | they run after the swap and the paint, so both stay\* |
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` (`nova_sim::HookRules`) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 (`nova_sim::ShipChangeRules`) | only one flagged 0x0020 |
 //! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items (`nova_sim::ShipChangeRules`) | nothing is held: every outfit is kept |
@@ -201,7 +201,7 @@
 //! | [`PatrolUninhabited`](RuleKey::PatrolUninhabited) | `patrol_uninhabited` | an interceptor's patrol, picking plain stellars only, can pick an uninhabited one: the count that lets it pick needs an inhabited one, but the pick does not test for one (`_SelectRandomStellarDest` @0x808b6, @0x80911-0x80940; see `nova_sim::traffic::destination`) | it leaves uninhabited stellars out too\* |
 //! | [`GateExitCounts`](RuleKey::GateExitCounts) | `gate_exit_counts` | a mission ship that leaves through a hypergate or wormhole counts nothing, and comes back at the next setup: `_HandleShipDisplay` frees its slot (@0x2c078) without the end of a warp out's count (`_LowLevelAIHandler` @0x85960-0x859aa; see `nova_sim::traffic::gate_entry`) | it is counted as one that jumped out\* |
 //! | [`MoveLeftBehind`](RuleKey::MoveLeftBehind) | `move_left_behind` | the ships an in-flight `M` or `N` leaves behind stay in the ship table until that frame's display pass frees them (`_EvalSetExp` @0x15807, @0x1590b; `_HandleShipDisplay` @0x2ded6-0x2dee7): through the next traffic tick they hold their berths and persons, a move back brings them back as they were, and no aux ship of theirs is given back (`nova_sim::Traffic::retarget`) | they are dropped at the move, their aux ships given back as a setup gives them back (`_DeleteAllComputerShips` @0x3bfce-0x3c028)\* |
-//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x41136; `nova_sim::Traffic::free_berth`) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
+//! | [`SpawnReserve`](RuleKey::SpawnReserve) | `spawn_reserve` | a spawn searches only the slots below its reserve: the system's traffic, the fighters, the mission ships and the hired escorts stop at 55 NPCs, a stellar's defence ships at 61, the old ship of a capture at 62 (`_GenericRandomShipSpawn` @0x3c8b1-0x3c8f0, @0x41ce9, @0x3d648, @0x3cd50, @0x3fe73, @0x3d309, @0x41136; `nova_sim::Traffic::free_berth`) | no slot is held back: each may take any of slots 1-63, as "Max Ships In System" is 64 |
 //! | [`ArrivalHits`](RuleKey::ArrivalHits) | `arrival_hits` | a ship gliding in, waiting in a gate or bursting out of one answers a hit as a flying ship does: it takes the attacker as its target and the damage as provocation, a wait in a gate is cut to 20, and the player's hit on a ship waiting in a gate holds it there, seen, attacking the player (`_DamageShip` @0x3b4b0-0x3b4c2, @0x3be66-0x3be7c; `_AIMakeShipAttackPlayer` @0x89d3e-0x89d4d; see `nova_sim::Traffic::tick_in`) | it ignores every hit until it has arrived\* |
 //! | [`HireNoSlot`](RuleKey::HireNoSlot) | `hire_no_slot` | a hire that finds no ship-table slot below the spawn reserve still takes the fee and draws the class's roll again, and no escort joins, as `_DoShipyardDialog` ignores `_SpawnEscort`'s -1 (@0x5f1f1-0x5f221; `nova_sim::Session::hire`) | the hire is refused and nothing changes\* |
 //! | [`AsteroidEntryField`](RuleKey::AsteroidEntryField) | `asteroid_entry_field` | every way into a system kills the asteroid field, a jump's arrival as well, as each caller of `_CreateAsteroids` sets `_killAsteroids` first (@0x6c4fc, @0x3fa05): the field fills one asteroid a tick from the edges (see `nova_sim::asteroid`) | a jump's arrival, and a session starting or loading in flight, keeps the field `_CreateAsteroids` places\* |
@@ -1019,10 +1019,14 @@ rule_keys! {
     /// (`landing::npc_box`), and it moves below 0.35 a tick on each axis;
     /// inside the box but faster it brakes by sub 1, its velocity and
     /// speed × 0.98 a tick; outside it flies sub 2's approach, and a
-    /// folding ship unfolds inside the box. By the other reading, the
-    /// port's earlier landing: within `landing_radius` (half the larger
-    /// side of the `Type` frame, or 32 with no sprite), as a circle, at or
-    /// below 1.0 a tick, flying the port's earlier approach. The Bible
+    /// folding ship unfolds inside the box. State 20's approach to a
+    /// hypergate or wormhole outside its box flies sub 2 too, never braking
+    /// (@0x8dc42-0x8dc55, `nova_sim_ai::traffic::gate_entry`). By the
+    /// other reading, the port's earlier landing: within `landing_radius`
+    /// (half the larger side of the `Type` frame, or 32 with no sprite), as
+    /// a circle, at or below 1.0 a tick, flying the port's earlier
+    /// approach, which brakes by its stopping distance, for the gate
+    /// approach too. The Bible
     /// says nothing of how an NPC lands, so the other reading is the
     /// intended alternative, not anything the Bible says (see
     /// `nova_sim_ai::traffic::land_flight` and the `nova_sim::story`
@@ -1203,10 +1207,12 @@ rule_keys! {
     /// @0x41849-0x41a3e), so a non-persistent outfit either grants is
     /// stripped (@0x419dd), though a weapon outfit's count stays in the
     /// weapon array where a persistent outfit names its weapon and the
-    /// fold lands it back (`nova_sim::captured_loadout`); otherwise after
-    /// it, so the outfit stays. The Bible is silent here, so the other
-    /// reading is the obvious alternative, not anything the Bible says
-    /// (see `nova_sim::HookRules`).
+    /// fold lands it back (`nova_sim::captured_loadout`), and before the
+    /// player takes the captured ship's paint (@0x41759), so a paint
+    /// either grants is overwritten; otherwise after both, so the outfit
+    /// and the paint stay. The Bible is silent here, so the other reading
+    /// is the obvious alternative, not anything the Bible says (see
+    /// `nova_sim::HookRules`).
     CaptureHookOrder => "capture_hook_order",
     /// Whether a new pilot's starting ship runs its `OnPurchase`: by the
     /// engine, it does not (`_DoNewPilot` runs only the `chär`'s
@@ -2802,9 +2808,11 @@ rule_keys! {
     /// fighters launched, the mission ships (`_MissionDudeSpawn`) and the
     /// hired escorts (`_SpawnEscort`) leave 8 free, so they stop at 55
     /// NPCs (@0x41ce9, @0x421a5, @0x43297, @0x42990, @0x435a8, @0x40cba,
-    /// @0x3d648, @0x3cd50, @0x3fe73), and the old ship of a "Use As My Ship" capture leaves 1
-    /// (@0x41136). By the Bible, which gives "Max Ships In System" as 64
-    /// and holds none back, each may take any of slots 1-63.
+    /// @0x3d648, @0x3cd50, @0x3fe73), a stellar's defence ships leave 2,
+    /// so they stop at 61 (`_SpawnStellarDefenseShip` @0x3d309), and the
+    /// old ship of a "Use As My Ship" capture leaves 1 (@0x41136). By the
+    /// Bible, which gives "Max Ships In System" as 64 and holds none back,
+    /// each may take any of slots 1-63.
     SpawnReserve => "spawn_reserve",
     /// Whether a ship still coming into the system answers a hit (see
     /// `nova_sim::Traffic::tick_in`). By the engine, as

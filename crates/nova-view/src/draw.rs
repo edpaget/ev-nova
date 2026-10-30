@@ -706,9 +706,23 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 /// level (see [`cloak_fade`](crate::flight::cloak_fade)).
 #[must_use]
 pub fn lights_tint(level: u8) -> Color {
-    let full = u16::from(FULL);
-    let level = u16::from(level).min(full);
-    Color::rgba(255, 255, 255, ((level * 255 + full / 2) / full) as u8)
+    Color::rgba(255, 255, 255, thirty_seconds(level))
+}
+
+/// The tint of a [`Blend::Or`] layer at a level of its own in each
+/// channel, red, green and blue in 32nds and each held to 32, as a
+/// painted hull's channel factors set them (see
+/// [`cloak_fade`](crate::flight::cloak_fade)): [`lights_tint`] when the
+/// three are alike, otherwise each level in its colour channel at full
+/// alpha. Both give `Blend::Or` the same `n_c` (see its "The level").
+#[must_use]
+pub fn lights_tint_by_channel(levels: [u8; 3]) -> Color {
+    let [r, g, b] = levels;
+    if r == g && g == b {
+        return lights_tint(r);
+    }
+    let [r, g, b] = levels.map(thirty_seconds);
+    Color::rgba(r, g, b, 255)
 }
 
 /// The tint of a [`Blend::OrTranslucent`] sprite whose source factor is
@@ -716,10 +730,28 @@ pub fn lights_tint(level: u8) -> Color {
 /// to 32: white at `source` 32nds, at `destination` 32nds of full alpha.
 #[must_use]
 pub fn translucent_tint(source: u8, destination: u8) -> Color {
+    translucent_tint_by_channel([source; 3], destination)
+}
+
+/// The tint of a [`Blend::OrTranslucent`] sprite whose source factor in
+/// each channel, red, green and blue, is `source`'s and whose destination
+/// factor is `destination`, each in 32nds and held to 32: each source
+/// factor in its colour channel, at `destination` 32nds of full alpha. A
+/// painted hull's factors differ by channel (see
+/// [`paint`](crate::flight::paint)).
+#[must_use]
+pub fn translucent_tint_by_channel(source: [u8; 3], destination: u8) -> Color {
+    let [r, g, b] = source.map(thirty_seconds);
+    Color::rgba(r, g, b, thirty_seconds(destination))
+}
+
+/// The 8-bit value of `n` 32nds of full, `n` held to 32, rounded half up.
+fn thirty_seconds(n: u8) -> u8 {
     let full = u16::from(FULL);
-    let scale = |n: u8| ((u16::from(n).min(full) * 255 + full / 2) / full) as u8;
-    let n = scale(source);
-    Color::rgba(n, n, n, scale(destination))
+    // At most 255.
+    #[allow(clippy::cast_possible_truncation)]
+    let value = ((u16::from(n).min(full) * 255 + full / 2) / full) as u8;
+    value
 }
 
 /// Fills `area` with `color`. There is no rectangle command: a horizontal
@@ -843,6 +875,60 @@ mod tests {
         list.translucent_sprite(ImageKey::sprite(1, 0), at(1.0, 2.0), tint)
             .translucent_sprite(ImageKey::sprite(2, 0), at(3.0, 4.0), tint);
         assert_eq!(list.iter().count(), 2, "chained onto the list");
+    }
+
+    #[test]
+    fn a_translucent_tint_by_channel_carries_each_channels_source_factor() {
+        assert_eq!(
+            translucent_tint_by_channel([31, 16, 0], 10),
+            Color::rgba(247, 128, 0, 80)
+        );
+        assert_eq!(
+            translucent_tint_by_channel([4; 3], 30),
+            translucent_tint(4, 30)
+        );
+        assert_eq!(
+            translucent_tint_by_channel([40, 33, 32], 40),
+            Color::WHITE,
+            "each held to 32"
+        );
+        // `Blend::OrTranslucent`'s reading of the tint gives each factor
+        // back: n_c = round(c × 32 / 255), m = round(a × 32 / 255).
+        let back = |value: u8| ((u16::from(value) * 32 + 127) / 255) as u8;
+        for n in 0..=32 {
+            let tint = translucent_tint_by_channel([n, 32 - n, n / 2], 32 - n);
+            assert_eq!(
+                [tint.r, tint.g, tint.b, tint.a].map(back),
+                [n, 32 - n, n / 2, 32 - n]
+            );
+        }
+    }
+
+    #[test]
+    fn a_lights_tint_by_channel_is_each_level_in_colour_or_the_lights_tint_when_alike() {
+        assert_eq!(lights_tint_by_channel([10; 3]), lights_tint(10));
+        assert_eq!(
+            lights_tint_by_channel([31, 16, 0]),
+            Color::rgba(247, 128, 0, 255)
+        );
+        assert_eq!(
+            lights_tint_by_channel([40, 32, 2]),
+            Color::rgba(255, 255, 16, 255),
+            "past full is full"
+        );
+        // `Blend::Or`'s reading of the tint, n_c = round(c × a × 32 /
+        // 255²), gives each level back.
+        let level = |c: u8, a: u8| {
+            let product = u32::from(c) * u32::from(a) * 32;
+            ((product + 65_025 / 2) / 65_025) as u8
+        };
+        for n in 0..=32 {
+            let tint = lights_tint_by_channel([n, 32 - n, 7]);
+            assert_eq!(
+                [tint.r, tint.g, tint.b].map(|c| level(c, tint.a)),
+                [n, 32 - n, 7]
+            );
+        }
     }
 
     #[test]

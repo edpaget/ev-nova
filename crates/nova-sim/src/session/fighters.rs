@@ -729,6 +729,7 @@ fn fighter(
         // The spawn marks it stale (see `nova_sim_ai::traffic::odds_cache`).
         odds: crate::traffic::odds_cache::STALE,
         no_ai: false,
+        defends: None,
     };
     fighter.independent();
     fighter.take_carrier(carrier, capacity);

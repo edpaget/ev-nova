@@ -15,6 +15,7 @@ use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG};
 use nova_view::spaceport::news::NEWS_DIALOG;
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferTemplates, PICTURE_OFFER_DIALOG};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
+use nova_view::spaceport::race::RACE_DIALOG;
 use nova_view::spaceport::shipyard::{
     InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
 };
@@ -102,6 +103,7 @@ impl AppScreen {
                     // `_CanHireEscorts`, as the hire itself reads it.
                     shops.can_hire_escorts,
                 )
+                .with_race(template_of(RACE_DIALOG), template_of(QUANTITY_DIALOG).ok())
                 .with_missions(
                     template_of(COMPUTER_DIALOG),
                     template_of(INFO_DIALOG),
@@ -166,6 +168,7 @@ impl AppScreen {
         self.capture_naming = None;
         self.comm = None;
         self.escort_dialog = None;
+        self.planet_comm = None;
         self.haggle = None;
         self.offer = None;
         self.missions = None;

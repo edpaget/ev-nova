@@ -151,6 +151,7 @@ impl Screen for AppScreen {
         } else if !self.appear_holds_menu() && !self.entry_holds() {
             self.tell_menu_pointer();
             self.shown_mut().tick(dt);
+            self.collect_race_winnings();
         }
         self.settle_offer();
         self.drop_closed_missions();
@@ -220,6 +221,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &dyn Screen),
             self.comm.as_ref().map(|dialog| dialog as &dyn Screen),
             self.escort_dialog
+                .as_ref()
+                .map(|dialog| dialog as &dyn Screen),
+            self.planet_comm
                 .as_ref()
                 .map(|dialog| dialog as &dyn Screen),
             self.offer.as_ref().map(|dialog| dialog as &dyn Screen),
@@ -375,6 +379,9 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.escort_dialog
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.planet_comm
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),

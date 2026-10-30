@@ -182,6 +182,11 @@ impl SimSound {
             // `_DoEscortDialog` @0x95228-0x9524b and @0x955d9-0x955fc, at 1.
             Self::EscortDialogOpened => SoundCue::new(BEEP[4], 1),
             Self::EscortDialogClosed => SoundCue::new(BEEP[2], 1),
+            // `_DoPlanetCommDialog` @0x96b5f, @0x97021, @0x970e9 and
+            // @0x97aa4, at 1.
+            Self::PlanetCommOpened => SoundCue::new(BEEP[4], 1),
+            Self::PlanetCommPressed | Self::PlanetCommHaggled => SoundCue::new(BEEP[1], 1),
+            Self::PlanetCommClosed => SoundCue::new(BEEP[2], 1),
             // `_DoCommDialog` @0x95b34, @0x9601f and @0x96698, @0x96843, at 1.
             Self::CommDialogOpened => SoundCue::new(BEEP[4], 1),
             Self::CommPressed => SoundCue::new(BEEP[1], 1),
@@ -454,6 +459,26 @@ mod tests {
                 SimSound::EscortDialogClosed,
                 Some(cue(152, 1)),
                 "_beepSnd[2] @0x955fc",
+            ),
+            (
+                SimSound::PlanetCommOpened,
+                Some(cue(154, 1)),
+                "_beepSnd[4] @0x96b5f",
+            ),
+            (
+                SimSound::PlanetCommPressed,
+                Some(cue(151, 1)),
+                "_beepSnd[1] @0x97021",
+            ),
+            (
+                SimSound::PlanetCommHaggled,
+                Some(cue(151, 1)),
+                "_beepSnd[1] @0x970e9",
+            ),
+            (
+                SimSound::PlanetCommClosed,
+                Some(cue(152, 1)),
+                "_beepSnd[2] @0x97aa4",
             ),
             (
                 SimSound::CommDialogOpened,

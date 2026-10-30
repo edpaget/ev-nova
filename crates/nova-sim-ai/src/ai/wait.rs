@@ -12,8 +12,9 @@
 //! ([`warship_waits`]).
 //!
 //! The engine's fighters of AI type 5 led by this ship are those it
-//! launched ([`Npc::carrier`]). It has no stellar defenders
-//! (rdm:task/planet-domination), so +0x8c is always -1. No sound plays.
+//! launched ([`Npc::carrier`]). A stellar's defence ship is never one of
+//! them, as it has no leader, so the +0x8c test always holds. No sound
+//! plays.
 
 use crate::ai::{Goal, Surroundings};
 use crate::combat::ShipRef;

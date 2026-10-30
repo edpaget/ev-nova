@@ -45,6 +45,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.scene.as_ref()
     }
 
+    /// The frame the flight shows of `stellar` and its size, while the
+    /// system laid out shows it: what the planet comm dialog draws of it
+    /// (`_PlanetCommDialogUpdate` @0x90cc6-0x90e26).
+    #[must_use]
+    pub fn stellar_frame(
+        &self,
+        stellar: nova_sim::StellarId,
+    ) -> Option<crate::ui::planet_comm::StellarFrame> {
+        self.scene.as_ref()?.shown_frame(stellar)
+    }
+
     /// How far the display is between the last two steps, in `[0, 1)`.
     #[must_use]
     pub fn alpha(&self) -> f32 {
@@ -355,7 +366,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// waiting at the gate it comes out of is hidden, then fades in over
     /// its last ticks there ([`npc_tint`]), washed white by the gate, as
     /// one entering a gate is ([`gate_colorize`]); with neither, its hull is as
-    /// translucent as its `BaseTransp` ([`base_alpha`]). Its hull and
+    /// translucent as its `BaseTransp` ([`base_alpha`]). Its hull and alt
+    /// layer are drawn in its paint ([`FrameShip::paint`], see
+    /// [`paint`](crate::flight::paint)), whose channels its cloak's
+    /// factors follow too. Its hull and
     /// layers are drawn on the frames its display picked and murked (see
     /// the [`ship_layers`](crate::flight::ship_layers) module): its engine
     /// glow from its glow base, rolled on its own, its running lights at
@@ -367,7 +381,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return;
         };
         let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-        let cloak = CloakDraw::of(npc.cloak, tick, &cloak_rolls(id));
+        let cloak = CloakDraw::of(npc.cloak, npc.paint, tick, &cloak_rolls(id));
         let hull = cloak.is_none_or(|cloak| cloak.hull.is_some());
         // Fully faded, a cloak's or a gate's: its held alt is forgotten.
         let Some(tint) = npc_tint(npc.gate).filter(|_| hull) else {
@@ -435,6 +449,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             drawn: npc.drawn,
             heading,
             tint,
+            paint: npc.paint,
             cloak,
             hull: true,
             murk,
@@ -455,7 +470,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws the player's ship at `at`, as much of it as `drawn` says
     /// (see [`nova_sim::player_fate`]): its hull, as translucent as its
-    /// `BaseTransp`, its engine glow, running lights at the level its
+    /// `BaseTransp` and in its paint ([`FrameShip::paint`], see
+    /// [`paint`](crate::flight::paint)), its engine glow, running lights at the level its
     /// display drew them (`nova_sim::combat::ship_lights`), weapon glow
     /// ([`weapon_glow`](crate::flight::weapon_glow)), alt layer and shield
     /// flash, never murked, on the frames its display picked (see the
@@ -481,9 +497,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         a: base_alpha(sheet.base_transp),
                         ..Color::WHITE
                     },
+                    paint: player.paint,
                     // Its cloak drawn as an NPC's, its full fade always
                     // faint (see `Session::player_cloak_shown`).
-                    cloak: CloakDraw::of(player.cloak, tick, &player_cloak_rolls()),
+                    cloak: CloakDraw::of(player.cloak, player.paint, tick, &player_cloak_rolls()),
                     hull: drawn == ShipDrawn::Full,
                     murk: 0,
                     held: false,

@@ -32,6 +32,7 @@ mod economy;
 mod entering;
 mod flight;
 mod galaxy_map;
+mod gamble;
 mod hire;
 mod hyperspace;
 mod land_key;

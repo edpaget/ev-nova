@@ -37,7 +37,9 @@
 //! - **Odds against** a ship ([`odds_against`]): its enemies' strength
 //!   over its friends' (no less than 1), in raw strength. Its friends are
 //!   itself and every other intact ship allied with it; its enemies every
-//!   other intact ship, not allied, of a government at war with its own
+//!   other ship active and not disabled (`_IsDisabled` @0x84b2a,
+//!   [`Npc::active_not_disabled`]: intact, or a stellar's defence ship
+//!   breaking up, @0x2d6f), not allied, of a government at war with its own
 //!   or attacking it, and the player, while intact, when the ship
 //!   threatens the player or a ship the player leads
 //!   ([`Npc::threatens_player_among`]: `_ExtendedIsThreatToShip` @0x81a63,
@@ -257,7 +259,7 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     for other in around
         .npcs
         .iter()
-        .filter(|other| other.id != npc.id && other.condition == Condition::Intact)
+        .filter(|other| other.id != npc.id && other.active_not_disabled())
     {
         if around.govts.allies(npc.govt, other.govt) {
             friends += other.hull.strength;
@@ -755,6 +757,20 @@ mod tests {
             (300.0 + 60.0 + 30.0 + 500.0) / friends,
             "the player, while it is threatened"
         );
+    }
+
+    #[test]
+    fn the_odds_against_count_a_defence_ship_breaking_up() {
+        // `_AICalculateOddsAgainst` asks `_IsDisabled` of each ship
+        // (@0x84b2a), which a defence ship breaking up is not (@0x2d6f).
+        let govts = govts();
+        let guard = crate::traffic::fixture::breaking_up_guard(ship(2, 142, 3.0));
+        let npcs = [ship(1, 140, 0.0), guard];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(odds_against(&npcs[0], &around), 3.0);
     }
 
     #[test]

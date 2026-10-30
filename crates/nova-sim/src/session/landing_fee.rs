@@ -125,6 +125,20 @@ mod tests {
     }
 
     #[test]
+    fn a_stellar_dominated_at_run_time_charges_nothing() {
+        let catalog = charging(catalog(), FEE);
+        let mut session = over(&catalog, 500);
+        session
+            .chart
+            .set_dominated(&mut session.pilot, &mut session.out, StellarId(128), true);
+        assert_eq!(
+            session.land(),
+            Ok(LandPress::Outcome(LandOutcome::Landed(StellarId(128))))
+        );
+        assert_eq!(session.pilot.cash, 500, "@0x66dd5");
+    }
+
+    #[test]
     fn entering_a_hypergate_charges_its_fee_and_a_cancelled_map_keeps_it() {
         let catalog = charging(gated(), FEE);
         let mut session = over(&catalog, 500);

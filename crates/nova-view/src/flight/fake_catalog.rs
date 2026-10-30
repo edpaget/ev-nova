@@ -418,6 +418,7 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
         govt: None,
         flags2: 0,
         destroyed: false,
+        dominated_at_run_time: false,
         graphic: 0,
         dead_graphic: None,
         dead_frame_size: None,
@@ -428,6 +429,8 @@ pub(in crate::flight) fn site(id: i16, (x, y): (f32, f32), flags: u32) -> Landin
         gravity: 0,
         fee: 0,
         animation: nova_sim::catalog::SiteAnimation::default(),
+        defense_dude: None,
+        def_count: 0,
     }
 }
 
@@ -604,6 +607,10 @@ impl PilotCatalog for FakeCatalog {
 
     fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
         self.lives.clone()
+    }
+
+    fn stellar_scripts(&self) -> Vec<nova_sim::StellarScripts> {
+        Vec::new()
     }
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
@@ -1885,6 +1892,7 @@ pub(in crate::flight) fn damaging() -> FakeCatalog {
             require: 0,
             inh_jam: [0; 4],
             skill_mult: 0,
+            ship_color: 0,
         }],
         ..catalog
     }

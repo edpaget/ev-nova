@@ -40,6 +40,11 @@ impl Session {
     /// - [`FlightCommand::PressEscort`] runs [`Session::press_escort`]:
     ///   [`Answer::EscortDialog`], what the dialog shows after, `None` once
     ///   it closes or when it was not open.
+    /// - [`FlightCommand::PressPlanetComm`] and [`FlightCommand::HaggleBribe`]
+    ///   run [`Session::press_planet_comm`] by the collaborators' law and
+    ///   [`Session::haggle_bribe`]: [`Answer::PlanetComm`], what the planet
+    ///   comm dialog shows after, `None` once it closes or when it was not
+    ///   open.
     /// - [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`]
     ///   run [`Session::comm_acknowledged`] and [`Session::comm_ticked`]:
     ///   done.
@@ -109,6 +114,12 @@ impl Session {
                     FlightCommand::Haggle(choice) => {
                         Answer::Hail(self.haggle(choice, catalog, options))
                     }
+                    FlightCommand::PressPlanetComm(item) => Answer::PlanetComm(
+                        self.press_planet_comm(item, catalog, collab.law, chance),
+                    ),
+                    FlightCommand::HaggleBribe(choice) => {
+                        Answer::PlanetComm(self.haggle_bribe(choice, catalog))
+                    }
                     _ => Answer::Refused,
                 }
             }
@@ -129,6 +140,7 @@ mod tests {
     use crate::session::Hailed;
     use crate::session::escort_dialog::tests::{dialog_open, escorting, upgradable};
     use crate::session::hail::tests::{hailable, opening, targeting};
+    use crate::session::planet_comm::tests::{at_earth, planet_catalog};
     use crate::session::tests::{BOARD_DRAWS, ON_BOARD, Witness, aboard, alongside, boardable};
     use crate::sound::SimSound;
     use crate::testkit::{Draws, FakePilotCatalog};
@@ -510,6 +522,58 @@ mod tests {
             Answer::Refused
         );
         assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_planet_comm_press_and_bribe_haggle_answer_what_the_dialog_shows_after() {
+        use crate::planet_comm::PlanetCommItem;
+        let catalog = planet_catalog();
+        let mut session = at_earth(&catalog, 1_000_000, 1);
+        let answer = apply_on(
+            &mut session,
+            Some(&catalog),
+            FlightCommand::Hail { option: false },
+            &[0, 0, 31],
+        );
+        assert!(
+            matches!(answer, Answer::Hailed(Hailed::Stellar(_))),
+            "{answer:?}"
+        );
+        let press = |item| FlightCommand::PressPlanetComm(item);
+        let answer = apply_on(
+            &mut session,
+            Some(&catalog),
+            press(PlanetCommItem::Second),
+            &[99],
+        );
+        let Answer::PlanetComm(Some(view)) = answer else {
+            panic!("still open: {answer:?}");
+        };
+        assert_eq!(view.asking, Some(3000), "the bribe asked");
+        assert_eq!(
+            apply_on(&mut session, None, press(PlanetCommItem::Close), &[]),
+            Answer::Refused,
+            "no catalog"
+        );
+        let answer = apply_on(
+            &mut session,
+            Some(&catalog),
+            FlightCommand::HaggleBribe(Haggle::LowerPrice),
+            &[],
+        );
+        let Answer::PlanetComm(Some(view)) = answer else {
+            panic!("still open: {answer:?}");
+        };
+        assert_eq!(view.asking, None, "a lost haggle declines");
+        assert_eq!(
+            apply_on(
+                &mut session,
+                Some(&catalog),
+                press(PlanetCommItem::Close),
+                &[]
+            ),
+            Answer::PlanetComm(None)
+        );
     }
 
     #[test]

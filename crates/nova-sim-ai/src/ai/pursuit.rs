@@ -334,11 +334,11 @@ pub fn high_level(
 }
 
 /// Whether `npc` swarms on `swarm` outside the dogfight box
-/// (@0x8e63c-0x8e679): its class swarms and its swarm leader is not its
-/// own leader. The original also needs +0x8c of -1, a ship that is no
-/// stellar's defender, which every ship here is.
+/// (@0x8e63c-0x8e679): its class swarms, it defends no stellar (+0x8c
+/// -1, @0x8e655, [`Npc::defends`]) and its swarm leader is not its own
+/// leader.
 fn swarms(npc: &Npc, swarm: Option<SwarmLead>) -> bool {
-    npc.hull.swarms && swarm.is_some_and(|lead| !lead.leads_it)
+    npc.hull.swarms && npc.defends.is_none() && swarm.is_some_and(|lead| !lead.leads_it)
 }
 
 /// Where a frame starts (see [`high_level`]).
@@ -1693,6 +1693,19 @@ mod tests {
         assert_eq!(
             swarm_start(&npc, FAR, aiming(AT)),
             Some(Start::Sub(Manoeuvre::Approach))
+        );
+    }
+
+    #[test]
+    fn a_stellars_defence_ship_never_swarms() {
+        let npc = Npc {
+            defends: Some(crate::catalog::StellarId(128)),
+            ..swarmer()
+        };
+        assert_eq!(
+            swarm_start(&npc, FAR, aiming(AT)),
+            Some(Start::Sub(Manoeuvre::Approach)),
+            "+0x8c -1 is the swarm's (@0x8e655)"
         );
     }
 

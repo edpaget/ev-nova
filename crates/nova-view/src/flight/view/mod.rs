@@ -453,8 +453,10 @@
 //!   or as it warps.
 //! - Y (a press) hails the target ([`Session::hail_key`]), and with no
 //!   ship target, or Alt (Option) held, the navigation stellar: one that
-//!   answers opens nothing yet, where the original opens its comm dialog
-//!   (`_DoPlanetCommDialog`), and any other says "No response.". A person
+//!   answers opens the planet comm dialog (`_DoPlanetCommDialog`), held
+//!   for the router ([`FlightView::take_planet_comm`]), whose presses and
+//!   bribe haggle go to the flight ([`FlightView::press_planet_comm`],
+//!   [`FlightView::haggle_bribe`]), and any other says "No response.". A person
 //!   whose mission is available offers it in place of the comm dialog,
 //!   held for the router ([`FlightView::take_offer`]), which opens the
 //!   offer dialog over the paused flight and answers it through
@@ -685,6 +687,7 @@ mod departure;
 mod dialog_map;
 mod docked;
 mod drawing;
+mod gamble;
 mod gates;
 mod hail;
 mod hyperspace;
@@ -709,6 +712,7 @@ mod world;
 
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
+pub use gamble::RaceShown;
 pub use messages::*;
 pub use port_screen_map::PortScreen;
 
@@ -1356,6 +1360,8 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The escort dialog a fleet escort hailed just opened, for the
     /// router.
     pending_escort_dialog: Option<nova_sim::escort_dialog::EscortDialogView>,
+    /// The planet comm dialog a stellar hailed just opened, for the router.
+    pending_planet_comm: Option<nova_sim::planet_comm::PlanetCommView>,
     /// The mission info [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY) asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,

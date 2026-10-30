@@ -141,7 +141,6 @@ mod tests {
         use crate::combat::aim::Aim;
         use crate::combat::armament::{LauncherRounds, Shooter};
         use crate::combat::hull::Condition;
-        use crate::combat::report::Reports;
         use crate::reserves::Gauge;
         let fired = |at_player| {
             let mut armament = Armament::new([(spec(146, 15, 0, 0), 1)]);
@@ -155,7 +154,6 @@ mod tests {
                 &mut LauncherRounds::default(),
                 &mut Gauge::default(),
                 &mut NeverFires,
-                &mut Reports::default(),
                 RuleSource::Engine,
                 &mut |_spec: &WeaponSpec| Some(Aim::along(0.0, None)),
                 at_player,
