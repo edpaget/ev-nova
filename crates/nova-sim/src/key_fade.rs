@@ -132,8 +132,8 @@ impl KeyFades {
         }
         let keys = FadeKey::ALL
             .into_iter()
-            .filter(|&key| facts.passes(key))
-            .fold(Self::NONE, |fades, key| Self(fades.0 | Self::bit(key)));
+            .filter(|&key| !facts.passes(key))
+            .fold(Self::EVERY, Self::refusing);
         if facts.jump_under_way || facts.auto_eject {
             keys.with_unbidden()
         } else {
@@ -328,5 +328,6 @@ mod tests {
         let fades = KeyFades::NONE.with_unbidden();
         assert!(fades.unbidden());
         assert_eq!(fading(fades), []);
+        assert!(fades.with_unbidden().unbidden(), "twice is once");
     }
 }
