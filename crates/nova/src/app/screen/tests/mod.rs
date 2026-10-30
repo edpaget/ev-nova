@@ -106,6 +106,7 @@ mod new_pilot;
 mod overlays;
 mod port;
 mod quit_question;
+mod shop_text_movies;
 mod stellar_movies;
 mod wheel;
 mod widescreen;

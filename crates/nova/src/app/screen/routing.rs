@@ -107,14 +107,17 @@ impl AppScreen {
             // the buy's reset and either's status draw. A sale
             // refused in the sell loop shows its words over the
             // outfitter, at whatever pass it is refused; the sales before
-            // it stand. Any other refusal changes nothing. Then the
+            // it stand. It plays the last `dësc` loaded's after-movie as it
+            // closes, read before the descriptions this input asks for are
+            // served (`_DoOutfitDialog` loads the selection's after the
+            // alert, @0x5d3b4/@0x5d737). Any other refusal changes nothing. Then the
             // outfitter follows what the order left its selection at: an
             // order that changed the listing resets it, or closes the
             // outfitter when nothing is listed.
             if let Some((order, count)) = outfit {
                 let run = flight.outfit_order(order, count);
                 if let Some(alert) = &run.alert {
-                    spaceport.alert_outfit(alert);
+                    spaceport.alert_outfit(alert, flight.sim().loaded_after_movie());
                 }
                 spaceport.outfit_ordered(run.after);
             }
