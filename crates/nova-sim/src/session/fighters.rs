@@ -1939,6 +1939,27 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_room_for_a_fighter_boarded_reads_its_exact_bay_before_a_bay_of_its_base() {
+        // The first walk breaks on the exact bay (@0x5ad1-0x5b04,
+        // @0x5b7e), though the base's bay has a lower ID and matches the
+        // second walk too.
+        let mut catalog = variants();
+        second_viper_bay(&mut catalog);
+        catalog.weapons[2].ammo_type = VARIANT.0;
+        let second_bay_rounds = OutfitId(159);
+        assert!(
+            fleet(&catalog, 4, Vec::new()).can_take_fighter(VARIANT),
+            "the Viper bay is full, the exact bay has room"
+        );
+        let mut full = fleet(&catalog, 0, Vec::new());
+        full.pilot.outfits.insert(second_bay_rounds, 2);
+        assert!(
+            !full.can_take_fighter(VARIANT),
+            "the exact bay is full, and the Viper bay's room isn't read"
+        );
+    }
+
+    #[test]
     fn a_bay_with_no_fighter_outfit_has_no_room_for_a_fighter_boarded() {
         // @0x5bda.
         let mut catalog = carrying();
