@@ -3,7 +3,7 @@ use super::*;
 // The main menu and pilots.
 
 /// The router with the main menu over `store`, and dialogs.
-fn menu_with_dialogs(store: &MemoryPilots) -> AppScreen {
+pub(super) fn menu_with_dialogs(store: &MemoryPilots) -> AppScreen {
     with_dialogs(data())
         .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
         .appeared()

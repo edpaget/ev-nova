@@ -126,6 +126,11 @@
 //! window coming back to the front tells every flight held
 //! ([`Screen::focus_gained`](nova_view::Screen::focus_gained)).
 //!
+//! While the app is in the background, the game pauses, as the
+//! original's `_inBackground` makes it (see `background`): flight and the
+//! dialogs don't tick, input is dropped but for the pointer's last move,
+//! and the main menu idles there, its rollover on its none frame.
+//!
 //! L in flight requests clearance at a stellar, and a second L, over it,
 //! lands and shows its spaceport ([`SpaceportView`]), laid out by the
 //! interface file's "Spaceport" dialog when the router has dialogs;
@@ -363,6 +368,7 @@ use nova_view::{Color, Input, Key, LaunchPrefs, MenuCommand, Navigator, Point, P
 use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
+mod background;
 mod build;
 mod capture_naming;
 mod christening;
@@ -730,6 +736,9 @@ pub struct AppScreen {
     /// The main menu is told it before each of its ticks, wherever the
     /// moves went meanwhile ([`AppScreen::tell_menu_pointer`]).
     pointer: Option<Point>,
+    /// The app in the background, the original's `_inBackground`, or
+    /// back from it until its first tick (see `background`).
+    away: Option<background::Away>,
 }
 
 /// Nova's own 1024 x 768, which every screen but flight draws in.

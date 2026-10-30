@@ -126,6 +126,7 @@ impl AppScreen {
             frame_rate_shown: false,
             widened: CLASSIC_VIEW,
             pointer: None,
+            away: None,
         }
     }
 

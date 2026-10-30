@@ -96,7 +96,14 @@ impl Screen for AppScreen {
     /// name is saved when flight says a save is due: on landing, on taking
     /// off, after a change in the spaceport (`AppScreen::transact`) and
     /// after a move by set operator.
+    ///
+    /// While the app is in the background, every input stops at the
+    /// router: the pointer's last move or leave is kept for the app's
+    /// return, and the rest is dropped (see `background`).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.away_takes_input(input) {
+            return ScreenAction::None;
+        }
         // The original is inside Quit's `Delay`, then exits.
         if self.quit_in.is_some() || self.quit_due {
             return ScreenAction::None;
@@ -130,7 +137,15 @@ impl Screen for AppScreen {
     /// the hold's expiry, and the return to the main menu once the death's
     /// fade is over. What the set expressions queued is settled, and a
     /// save that is due is made.
+    ///
+    /// While the app is in the background, and on the first tick after it
+    /// comes back, none of that runs: the time is counted, and the main
+    /// menu idles in the background where a tick would idle it (see
+    /// `background`).
     fn tick(&mut self, dt: Duration) {
+        if self.tick_away(dt) {
+            return;
+        }
         if let Some(left) = self.quit_in {
             match left.checked_sub(dt) {
                 Some(left) if !left.is_zero() => self.quit_in = Some(left),
@@ -315,22 +330,29 @@ impl Screen for AppScreen {
     /// `_IterateInGameEventLoop` and `_MyModalDialog`). The audio stops
     /// the music if it plays (@0x4f390-0x4f3a0), and every flight held,
     /// shown or not, halts its warp-ups (@0x4f3a3-0x4f3e0). No other
-    /// screen keeps a sound the switch-out stops.
+    /// screen keeps a sound the switch-out stops. Then the router is away,
+    /// as `_SwitchedOut` sets `_inBackground` (@0x4f388): the game pauses
+    /// (see `background`).
     fn focus_lost(&mut self) {
         self.sounds.push(Sound::Ui(UiSound::SwitchedOut));
         for flight in self.flights_mut() {
             flight.focus_lost();
         }
+        self.go_away();
     }
 
     /// Tells every flight held, shown or not, that the window came back
     /// to the front: the original's `_SwitchedIn` (@0x513cc-0x513dc)
     /// zeroes the frame-rate readout's counters wherever the game is.
-    /// No other screen keeps time across the switch.
+    /// No other screen keeps time across the switch. Then the router comes
+    /// back, as `_SwitchedIn` clears `_inBackground` (@0x513c4): the
+    /// pointer's last move while away goes to the screen, and the game
+    /// goes on after the next tick (see `background`).
     fn focus_gained(&mut self) {
         for flight in self.flights_mut() {
             flight.focus_gained();
         }
+        self.come_back();
     }
 
     /// Runs the main-menu action held for its keyed click, if any (E's
