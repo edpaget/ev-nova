@@ -2774,11 +2774,9 @@ mod tests {
     fn the_fake_answers_the_hover_as_told_and_records_each_ask() {
         let mut fake = FakeFlight::new();
         let boxes = DrawnBoxes {
-            player: Some(nova_sim::DrawnBox {
-                centre: Vec2::ZERO,
-                width: 10,
-                height: 10,
-            }),
+            player: Some(nova_sim::DrawnBox::at(
+                nova_sim::navigation::SpriteRect::centred(Vec2::ZERO, (10, 10)),
+            )),
             npcs: Vec::new(),
         };
         let first = hover_at(Vec2::new(1.0, 2.0), &boxes);

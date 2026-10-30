@@ -2235,10 +2235,11 @@ mod tests {
 
     #[test]
     fn drawn_boxes_give_each_ships_box_and_none_for_a_ship_without() {
-        let square = |x| DrawnBox {
-            centre: Vec2::new(x, 0.0),
-            width: 10,
-            height: 10,
+        let square = |x| {
+            DrawnBox::at(crate::navigation::SpriteRect::centred(
+                Vec2::new(x, 0.0),
+                (10, 10),
+            ))
         };
         let boxes = DrawnBoxes {
             player: Some(square(0.0)),

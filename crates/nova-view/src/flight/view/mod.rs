@@ -1785,12 +1785,11 @@ impl std::fmt::Debug for Metrics {
 }
 
 /// A ship's box drawn at `at` (in system coordinates) of `size`.
-fn drawn_box(at: Point, (width, height): (u32, u32)) -> DrawnBox {
-    DrawnBox {
-        centre: Vec2::new(at.x, at.y),
-        width,
-        height,
-    }
+fn drawn_box(at: Point, size: (u32, u32)) -> DrawnBox {
+    DrawnBox::at(nova_sim::navigation::SpriteRect::centred(
+        Vec2::new(at.x, at.y),
+        size,
+    ))
 }
 
 /// The frame size of an NPC drawn by `sheet`, the one read for its ship

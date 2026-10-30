@@ -745,10 +745,8 @@ mod tests {
     /// The boxes of a click's ships: NPC `id` drawn in a 40-pixel square
     /// at (50, 0), and the player at the centre when `player` says.
     fn boxes(id: NpcId, player: bool) -> crate::flight_frame::DrawnBoxes {
-        let square = |centre| crate::hover::DrawnBox {
-            centre,
-            width: 40,
-            height: 40,
+        let square = |centre| {
+            crate::hover::DrawnBox::at(crate::navigation::SpriteRect::centred(centre, (40, 40)))
         };
         crate::flight_frame::DrawnBoxes {
             player: player.then(|| square(crate::geometry::Vec2::ZERO)),

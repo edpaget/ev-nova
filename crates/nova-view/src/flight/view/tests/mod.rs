@@ -884,3 +884,13 @@ fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> 
             _ => unreachable!(),
         })
 }
+
+/// The world point `drawn`'s rect is centred on.
+#[allow(clippy::cast_precision_loss)]
+fn box_centre(drawn: nova_sim::DrawnBox) -> Point {
+    let rect = drawn.rect;
+    Point::new(
+        rect.left + rect.width as f32 / 2.0,
+        rect.top + rect.height as f32 / 2.0,
+    )
+}

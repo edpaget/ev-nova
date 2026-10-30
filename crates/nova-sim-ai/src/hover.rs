@@ -31,8 +31,9 @@
 //! (@0x38183-0x381a8), and tested by `_PtInRect` (@0x381ba), which leaves
 //! the right and bottom edges out: the rule a click on a stellar uses
 //! ([`SpriteRect`](crate::navigation::SpriteRect)). The original places the
-//! rect at whole pixels from the player; the box here is around the
-//! view's drawn centre, as the view draws the ship. The player's own
+//! rect at whole pixels from the player; the view hands over the rect it
+//! draws the hull in ([`DrawnBox`]), placed the same way, so the box is
+//! where the sprite is drawn. The player's own
 //! ship counts only while it has a target (+0x70 not -1,
 //! @0x381c3-0x381d5). The other-system check (@0x38145) has no engine
 //! counterpart: every NPC is in the player's system.
@@ -50,16 +51,21 @@ use crate::navigation::SpriteRect;
 use crate::targeting::type_targetable;
 use crate::traffic::npc::{Npc, NpcId};
 
-/// A ship's sprite as it is drawn: its centre, in system coordinates, and
-/// its frame's size in pixels.
+/// A ship's sprite as it is drawn: the rect the view draws its hull in, in
+/// system coordinates, placed at whole pixels from the player as the
+/// original places the slot (`_HandleShipDisplay` @0x2cd17-0x2cd9d).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawnBox {
-    /// Where the sprite is centred.
-    pub centre: Vec2,
-    /// The frame's width.
-    pub width: u32,
-    /// The frame's height.
-    pub height: u32,
+    /// The rect the hull is drawn in.
+    pub rect: SpriteRect,
+}
+
+impl DrawnBox {
+    /// The box of a sprite drawn in `rect`.
+    #[must_use]
+    pub fn at(rect: SpriteRect) -> Self {
+        Self { rect }
+    }
 }
 
 /// Where the view draws the ships: the port the hover test reads.
@@ -96,11 +102,11 @@ pub fn hover_gate(npc: &Npc, scanner: Scanner) -> bool {
 }
 
 /// Whether `at` is in `drawn`'s hit box: the stellars' rule
-/// ([`SpriteRect::holds`]) over the frame placed around its centre
-/// ([`SpriteRect::centred`]), see the module docs.
+/// ([`SpriteRect::holds`]) over the rect the sprite is drawn in, see the
+/// module docs.
 #[must_use]
 pub fn in_box(at: Vec2, drawn: DrawnBox) -> bool {
-    SpriteRect::centred(drawn.centre, (drawn.width, drawn.height)).holds(at)
+    drawn.rect.holds(at)
 }
 
 /// The ship under `at` among the player's (only when `targeting`, the
@@ -152,13 +158,9 @@ mod tests {
 
     const BLIND: Scanner = Scanner::NONE;
 
-    /// A 60-pixel-square box (too tall for the margin) at (`x`, `y`).
+    /// A 60-pixel-square box (too tall for the margin) about (`x`, `y`).
     fn square(x: f32, y: f32) -> DrawnBox {
-        DrawnBox {
-            centre: Vec2::new(x, y),
-            width: 60,
-            height: 60,
-        }
+        DrawnBox::at(SpriteRect::centred(Vec2::new(x, y), (60, 60)))
     }
 
     /// An intact NPC `id`.
@@ -280,13 +282,12 @@ mod tests {
         assert_eq!(ship_under(&npcs, BLIND, false, Vec2::ZERO, &drawn), None);
     }
 
-    /// A box of `width` × `height` centred at (100, 100).
+    /// A box of `width` × `height` about (100, 100).
     fn sized(width: u32, height: u32) -> DrawnBox {
-        DrawnBox {
-            centre: Vec2::new(100.0, 100.0),
-            width,
-            height,
-        }
+        DrawnBox::at(SpriteRect::centred(
+            Vec2::new(100.0, 100.0),
+            (width, height),
+        ))
     }
 
     #[test]
@@ -320,6 +321,41 @@ mod tests {
         assert!(in_box(Vec2::new(129.5, 129.5), ship));
         assert!(!in_box(Vec2::new(130.0, 100.0), ship), "right");
         assert!(!in_box(Vec2::new(100.0, 130.0), ship), "bottom");
+    }
+
+    #[test]
+    fn a_box_is_the_rect_the_view_hands_over_unshifted() {
+        // 61 x 63 with its top left at whole pixels (10, 20): no half
+        // pixel either way, whatever the odd sides.
+        let drawn = DrawnBox::at(SpriteRect {
+            left: 10.0,
+            top: 20.0,
+            width: 61,
+            height: 63,
+        });
+        assert!(in_box(Vec2::new(10.0, 20.0), drawn), "left and top in");
+        assert!(in_box(Vec2::new(70.9, 82.9), drawn));
+        assert!(!in_box(Vec2::new(71.0, 50.0), drawn), "right out");
+        assert!(!in_box(Vec2::new(40.0, 83.0), drawn), "bottom out");
+        assert!(!in_box(Vec2::new(9.9, 50.0), drawn));
+        assert!(!in_box(Vec2::new(40.0, 19.9), drawn));
+    }
+
+    #[test]
+    fn a_narrow_box_handed_over_gets_the_margin() {
+        let drawn = DrawnBox::at(SpriteRect {
+            left: 10.0,
+            top: 20.0,
+            width: 47,
+            height: 63,
+        });
+        assert!(in_box(Vec2::new(-6.0, 4.0), drawn), "16 out, up and left");
+        assert!(
+            in_box(Vec2::new(72.9, 98.9), drawn),
+            "16 out, down and right"
+        );
+        assert!(!in_box(Vec2::new(73.0, 50.0), drawn));
+        assert!(!in_box(Vec2::new(-6.1, 50.0), drawn));
     }
 
     #[test]

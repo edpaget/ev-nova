@@ -2853,8 +2853,9 @@
 //!   right and bottom out. `SpriteRect::centred` places a frame around a
 //!   centre with its top left at half the size, halved as integers, so an
 //!   odd size's extra pixel is on the right or the bottom. The ship click
-//!   and hover box (`hover::in_box`) is the same rule around the view's
-//!   drawn centre.
+//!   and hover box (`hover::in_box`) is the same rule over the rect the
+//!   view draws the hull in (`hover::DrawnBox`), placed at whole pixels
+//!   from the player as the stellar's slot is.
 //! - **The order**: `navigation::stellar_under` and `stellar_under_past`
 //!   give the lowest `StellarId` among the stellars whose rect holds the
 //!   click, the one selected in mode 2 passed over.
