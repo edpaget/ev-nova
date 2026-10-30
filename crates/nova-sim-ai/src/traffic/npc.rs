@@ -264,7 +264,9 @@ pub struct Npc {
     /// drops it by the engine's reading of
     /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
     /// ([`disabled_reset`](crate::traffic::disabled_reset)); and
-    /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`.
+    /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`. With
+    /// one, it reads as the original's AI type 6
+    /// ([`Npc::original_ai_type`]).
     pub leader: Option<NpcId>,
     /// Its ship type's class as an escort, which the escorts' threat
     /// scores weigh (see [`escort`](crate::escort)).
