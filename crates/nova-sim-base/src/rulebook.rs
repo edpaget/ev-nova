@@ -165,6 +165,7 @@
 //! | [`BattleHelpGoneSlots`](RuleKey::BattleHelpGoneSlots) | `battle_help_gone_slots` | a helper sent to fight a threat to the player, by rank battle help or for a price, also counts and picks a vacated berth's last ship that threatens the player, as `_AIFightEnemyThreatToPlayer` (@0x82c80-0x82dba) never tests the active flag and a person swapped for its mission ship on the hail clears only that flag (@0x62520; see `nova_sim_ai::traffic::vacated`) | only ships still in the system\* |
 //! | [`FlightAnchor`](RuleKey::FlightAnchor) | `flight_anchor` | flight draws the player's ship, and the world, the play area, the brackets, clicks in space and the starfield about it, at the play area's centre left of the status bar, (trunc((W − 194) / 2), trunc(H / 2)), (415, 384) at 1024 x 768: `_screenCenter` as `_SetupWind` sets it (@0x1b720-0x1b78a; see `nova_view`'s `Camera`) | the view's centre, (floor(W / 2), H / 2): the port's earlier reading\* |
 //! | [`FlightStarfield`](RuleKey::FlightStarfield) | `flight_starfield` | flight draws the original's sprite starfield: min(trunc(play height / 600 × 20), 20) stars of `spïn` 700 (`_RandomizeStars` @0x0b145-0x0b324), wrapped at twice their size outside the play area and dimmed by the system's murk (`_HandleStars` @0x2f87d-0x2fcae), moved by their parallax factor of the ship's last move (`_ScrollStarfield` @0x8171-0x81d5), none in a system of negative `Murk`; scattered afresh at a jump's arrival, a gate's exit and the rescue (see `nova_view`'s `flight::stars`) | three layers of procedural dots at fixed parallax covering the view: the port's earlier reading\* |
+//! | [`PlayerWrap`](RuleKey::PlayerWrap) | `player_wrap` | past 15,000 pixels from the system's centre on an axis, the ship is carried back 25,000 on it with what stands within 15,000 of it (`_WrapPlayerPosition` @0x67efa-0x6838f, see [`player_wrap`](crate::player_wrap)) | no wrap: the ship flies on for ever, the port's earlier reading\* |
 //! | [`EmptySecondary`](RuleKey::EmptySecondary) | `empty_secondary` | a selected secondary of `Flags` 0x0800 (more persistent smoke) that `_WeaponHasAmmo` fails is let go, silently, on every `_HandlePlayer` pass, fire key held or not, disabled or in a jump too (@0x6abcc-0x6ac08; see `nova_sim::session`'s `secondary_select`) | one of `Flags2` 0x0800, hidden when empty, as the select key tests (@0x6ad72)\* |
 //! | [`NewPilotNameTaken`](RuleKey::NewPilotNameTaken) | `new_pilot_name_taken` | a New Pilot named as a saved pilot (ignoring case, as `_DoesPilotExist` @0x72def-0x72e6a matches) asks `STR#` 140 #9 in the Yes/No dialog: Yes goes on to the christening and replaces the saved pilot when the new one is first saved, No returns to the main menu with nothing changed (`_DoNewPilot` @0x18c08-0x18c63; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open\* |
 //! | [`NewPilotEmptyName`](RuleKey::NewPilotEmptyName) | `new_pilot_empty_name` | a New Pilot whose name is empty once culled and trimmed goes on to the christening with no replace question, and plays but is never saved, silently: `_DoNewPilotNameDialog` refuses no name (@0x1695b-0x16a15), and `FSMakeFSRefUnicode` fails on a 0-length name in `_DoesPilotExist` (@0x72e54) and `_SavePilotFile` (@0x768f5), whose failure `_DoNewPilot` ignores (@0x1935f; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open: **the default — a deliberate departure from the original**†††††††††††††††††† |
@@ -377,7 +378,8 @@
 //! `escort_order_reach`, `npc_formation`, `successor_repairer`,
 //! `held_gate_burst`, `new_pilot_visibility`, `recharge_debt`,
 //! `battle_help_gone_slots`, `flight_anchor`, `flight_starfield`,
-//! `empty_secondary`, `escort_arrival`, `dialog_text_wheel`,
+//! `player_wrap`, `empty_secondary`, `escort_arrival`,
+//! `dialog_text_wheel`,
 //! `loaded_course`, `loaded_jumped_from`, `hail_busy_under_attack`,
 //! `purchase_stock_fold`, `new_pilot_escape` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
@@ -861,6 +863,15 @@ rule_keys! {
     /// says (see
     /// `nova_sim::Session::with_rules`).
     FighterNoBay => "fighter_no_bay",
+    /// Whether a ship past 15,000 pixels from the system's centre on an
+    /// axis wraps. By the engine, `_WrapPlayerPosition` (@0x67efa-0x6838f,
+    /// from `_HandlePlayer` @0x6864d, unless the jump's +0x50 is above 0)
+    /// carries it back 25,000 on that axis, with the ships, shots, boxes,
+    /// beams and effects near it (see [`player_wrap`](crate::player_wrap)).
+    /// The 16-bit beam store it evidently exists to serve is gone, so by
+    /// the other reading nothing wraps and the ship flies on for ever, the
+    /// port's earlier behaviour. The Bible says nothing of it.
+    PlayerWrap => "player_wrap",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
     /// it), and an unmet `Require` only hides the ship when its `Flags3`
@@ -6740,6 +6751,7 @@ mod tests {
                 RuleKey::FighterLaunch,
                 RuleKey::FighterRecall,
                 RuleKey::FighterNoBay,
+                RuleKey::PlayerWrap,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
@@ -8301,6 +8313,21 @@ mod tests {
         let rule = RuleKey::FlightAnchor;
         assert_eq!(rule.key(), "flight_anchor");
         assert_eq!(RuleKey::from_key("flight_anchor"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
+    fn the_player_wrap_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::PlayerWrap;
+        assert_eq!(rule.key(), "player_wrap");
+        assert_eq!(RuleKey::from_key("player_wrap"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
         assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         assert_eq!(
             Rulebook::default()
