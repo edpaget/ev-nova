@@ -2207,17 +2207,23 @@ pub trait PilotCatalog {
     /// ([`NavDefSlots`]), by ascending system ID, for every system that
     /// can be read: what the slot keys select by (see the `nav` module of
     /// `nova_sim::Session`), as `_HandlePlayer` reads `NavDefs[slot]`
-    /// (@0x69e28-0x69e46). By default each system that exists numbers its
-    /// [`PilotCatalog::landing_sites`] in order, with no gaps
+    /// (@0x69e28-0x69e46). A system left out has every slot empty, so one
+    /// that lists no stellar that can be read may be. By default each
+    /// system some stellar lists ([`PilotCatalog::listed_stellars`])
+    /// numbers its [`PilotCatalog::landing_sites`] in order, with no gaps
     /// ([`slots_in_order`]); a catalog that reads the `NavDefs` gives
     /// their gaps.
     fn nav_def_slots(&self) -> Vec<(SystemId, NavDefSlots)> {
-        self.star_map()
+        let systems: std::collections::BTreeSet<SystemId> = self
+            .listed_stellars()
             .into_iter()
-            .filter(|system| self.system_exists(system.id))
+            .flat_map(|listed| listed.systems)
+            .collect();
+        systems
+            .into_iter()
             .map(|system| {
-                let sites = self.landing_sites(system.id);
-                (system.id, slots_in_order(sites.iter().map(|site| site.id)))
+                let sites = self.landing_sites(system);
+                (system, slots_in_order(sites.iter().map(|site| site.id)))
             })
             .collect()
     }
@@ -3167,7 +3173,8 @@ mod tests {
 
     /// A star map of 130, which holds stellars 128 and 129, 131, which
     /// exists with none, and 132, which doesn't exist; nothing else, and
-    /// [`PilotCatalog::first_stellars`] left to its default.
+    /// [`PilotCatalog::first_stellars`] and
+    /// [`PilotCatalog::nav_def_slots`] left to their defaults.
     struct Mapped;
 
     impl PilotCatalog for Mapped {
@@ -3270,8 +3277,21 @@ mod tests {
             Vec::new()
         }
 
+        /// 128 and 129, listed by 130 alone.
         fn listed_stellars(&self) -> Vec<ListedStellar> {
-            Vec::new()
+            [128, 129]
+                .map(|id| ListedStellar {
+                    id: StellarId(id),
+                    systems: vec![SystemId(130)],
+                    flags: 1,
+                    flags2: 0,
+                    govt: None,
+                    min_status: 0,
+                    tribute: 0,
+                    def_count: 0,
+                    tech_level: 0,
+                })
+                .into()
         }
 
         fn system_visibility(&self) -> Vec<SystemVisibility> {
@@ -3309,17 +3329,15 @@ mod tests {
     }
 
     #[test]
-    fn by_default_each_existing_systems_slots_number_its_landing_sites_in_order() {
+    fn by_default_each_listing_systems_slots_number_its_landing_sites_in_order() {
         let mut first = [None; NAV_DEF_SLOTS];
         first[0] = Some(StellarId(128));
         first[1] = Some(StellarId(129));
         assert_eq!(
             Mapped.nav_def_slots(),
-            [
-                (SystemId(130), first),
-                (SystemId(131), [None; NAV_DEF_SLOTS])
-            ],
-            "131 lists none; 132 doesn't exist and isn't asked"
+            [(SystemId(130), first)],
+            "131 lists none and 132 doesn't exist: neither is asked, as the \
+             star map isn't read"
         );
     }
 
