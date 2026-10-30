@@ -26,10 +26,9 @@
 //! **The table** ([`orders`]), set to -1 first and then wholly written by
 //! every path, so it never issues -1:
 //!
-//! - **A trader leader**, AI type 2 or less (@0x89888; here a trader
-//!   [`AiType`](crate::traffic::npc::AiType) that neither follows a leader
-//!   nor escorts the player, as a led ship is the original's AI type 5 or
-//!   6): fighters Attack while its shield is at least [`HIGH_SHIELD`] of
+//! - **A trader leader**, the original's AI type 2 or less (@0x89888,
+//!   [`Npc::original_ai_type`](crate::traffic::npc::Npc::original_ai_type)):
+//!   fighters Attack while its shield is at least [`HIGH_SHIELD`] of
 //!   its capacity (`setbe` @0x898bb), else Defend; medium ships and
 //!   warships Defend; freighters formation (0). It reads no target.
 //! - **Any other leader** reads its target t (+0x70, @0x898c8):
@@ -164,13 +163,11 @@ pub fn for_class(table: [OrderWord; 4], class: EscortClass) -> OrderWord {
     table[index]
 }
 
-/// Whether `leader` is the original's AI type 2 or less: a trader that
-/// neither follows a leader nor escorts the player (AI types 5 and 6).
+/// Whether `leader` is the original's AI type 2 or less (@0x89888,
+/// [`Npc::original_ai_type`]): a trader that neither follows a leader nor
+/// escorts the player (AI types 5 and 6), or one the player has paid off.
 fn trader_leader(leader: &Npc) -> bool {
-    leader.ai_type.trades()
-        && leader.leader.is_none()
-        && leader.carrier.is_none()
-        && !leader.escorts_player()
+    leader.original_ai_type() <= 2
 }
 
 /// Whether `leader`'s shield is below `fraction` of its capacity, in
@@ -434,6 +431,21 @@ mod tests {
             order: None,
         });
         assert_eq!(issued(&[escort]), [2, 2, 0, 0]);
+    }
+
+    #[test]
+    fn a_marked_former_escort_reads_the_other_table_and_a_spared_led_trader_the_traders() {
+        // The disabled reset leaves 6; the bribe writes 1, parent kept.
+        let mut marked = leader(Goal::Attack(n(2)), 100.0);
+        marked.ai_type = AiType::WimpyTrader;
+        marked.kept_escort_ai = true;
+        assert_eq!(issued(&[marked.clone()]), [2, 2, 0, 0], "stale odds");
+        let mut spared = marked;
+        spared.kept_escort_ai = false;
+        spared.leader = Some(NpcId(9));
+        spared.spared = true;
+        spared.ai_type = AiType::Warship;
+        assert_eq!(issued(&[spared]), [2, 1, 1, 0]);
     }
 
     #[test]
