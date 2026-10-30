@@ -506,6 +506,76 @@ mod tests {
         assert_eq!(drawn(&buttons), with_find(pressed), "back on it");
     }
 
+    /// `_TrackMapButtons` tests the press, the pointer while held and the
+    /// release with `PtInRect` (@0x2ac03-0x2acac, @0x2acf0-0x2ad94): the
+    /// left and top edges are on a button.
+    #[test]
+    fn a_press_and_release_on_a_buttons_left_or_top_edge_pixel_acts() {
+        let mut buttons = MapButtons::new(ORIGIN);
+        for which in ORDER {
+            let r = buttons.rect(which);
+            let c = r.center();
+            for at in [Point::new(r.min.x, c.y), Point::new(c.x, r.min.y)] {
+                assert_eq!(
+                    click(&mut buttons, ALL, at, at),
+                    Some(which),
+                    "{which:?} at {at:?}"
+                );
+            }
+        }
+    }
+
+    /// ... and the right and bottom edges are off it. None of the six
+    /// share an edge.
+    #[test]
+    fn a_press_and_release_on_a_buttons_right_or_bottom_edge_pixel_does_not_act() {
+        let mut buttons = MapButtons::new(ORIGIN);
+        for which in ORDER {
+            let r = buttons.rect(which);
+            let c = r.center();
+            for at in [Point::new(r.max.x, c.y), Point::new(c.x, r.max.y)] {
+                assert_eq!(
+                    click(&mut buttons, ALL, at, at),
+                    None,
+                    "{which:?} at {at:?}"
+                );
+            }
+            for at in [
+                Point::new(r.max.x - 1.0, c.y),
+                Point::new(c.x, r.max.y - 1.0),
+            ] {
+                assert_eq!(
+                    click(&mut buttons, ALL, at, at),
+                    Some(which),
+                    "{which:?} a pixel inside, at {at:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dragging_onto_a_buttons_right_or_bottom_edge_is_off_it() {
+        let mut buttons = MapButtons::new(ORIGIN);
+        let r = buttons.rect(MapButton::Find);
+        let c = r.center();
+        let drawn = |buttons: &MapButtons| {
+            let mut list = DrawList::new();
+            buttons.draw(&ALL, &ButtonStyle::STOCK, Some(&MonoMetrics), &mut list);
+            pictures(&list)
+        };
+        let normal = ids(&ButtonSkin::NOVA.normal);
+        for edge in [Point::new(r.max.x, c.y), Point::new(c.x, r.max.y)] {
+            buttons.input(&button(true, c), &ALL);
+            buttons.input(&Input::PointerMoved(edge), &ALL);
+            assert_eq!(drawn(&buttons), vec![normal; 6], "on {edge:?}");
+            assert_eq!(
+                buttons.input(&button(false, edge), &ALL),
+                None,
+                "released on {edge:?}"
+            );
+        }
+    }
+
     #[test]
     fn they_draw_each_button_as_the_buttons_own_draw_does() {
         let buttons = MapButtons::new(ORIGIN);

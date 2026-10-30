@@ -122,10 +122,11 @@ impl Button {
         }
     }
 
-    /// Whether `point` is on the button, edges included.
+    /// Whether `point` is on the button, as `PtInRect` counts it: the
+    /// left and top edges in, the right and bottom edges out.
     #[must_use]
     pub fn contains(&self, point: Point) -> bool {
-        self.rect.contains(point)
+        self.rect.contains_half_open(point)
     }
 
     /// Draws the button into `list`: its three pictures for its state
@@ -165,6 +166,11 @@ impl Button {
 /// pressing the primary button on an enabled button arms it; it shows
 /// pressed only while the pointer stays on it; releasing on it activates
 /// it, and releasing anywhere else does not.
+///
+/// The press, the pointer while held and the release are hit-tested as
+/// QuickDraw's `PtInRect` does, as every `_Track*Buttons` routine of the
+/// original does: the left and top edges are on the button, the right and
+/// bottom edges are off it ([`Bounds::contains_half_open`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ButtonTracker {
     armed: bool,
@@ -187,7 +193,7 @@ impl ButtonTracker {
                 pressed: true,
                 at,
             } => {
-                self.armed = enabled && area.contains(at);
+                self.armed = enabled && area.contains_half_open(at);
                 self.inside = self.armed;
                 if self.armed {
                     self.sound = Some(UiSound::ButtonDown);
@@ -196,7 +202,7 @@ impl ButtonTracker {
             }
             // Only matters while armed: a press sets it afresh.
             Input::PointerMoved(at) => {
-                self.inside = area.contains(at);
+                self.inside = area.contains_half_open(at);
                 false
             }
             Input::PointerButton {
@@ -206,7 +212,7 @@ impl ButtonTracker {
             } if self.armed => {
                 self.cancel_pointer();
                 self.sound = Some(UiSound::ButtonUp);
-                area.contains(at)
+                area.contains_half_open(at)
             }
             _ => false,
         }
@@ -435,20 +441,64 @@ mod tests {
         );
     }
 
+    /// As `PtInRect` counts it (`_TrackPlayerInfoButtons` @0x27cea).
     #[test]
-    fn contains_includes_the_edges() {
+    fn contains_takes_the_left_and_top_edges_but_not_the_right_and_bottom() {
         let button = done();
-        for inside in [
-            at(173.0, 281.0),
-            at(272.0, 306.0),
-            at(200.0, 290.0),
-            at(173.0, 306.0),
-        ] {
+        for inside in [at(173.0, 281.0), at(271.9, 305.9), at(200.0, 290.0)] {
             assert!(button.contains(inside), "{inside:?}");
         }
-        for outside in [at(172.9, 290.0), at(272.1, 290.0), at(200.0, 306.1)] {
+        for outside in [
+            at(172.9, 290.0),
+            at(272.0, 290.0),
+            at(200.0, 306.0),
+            at(173.0, 306.0),
+            at(272.1, 290.0),
+            at(200.0, 306.1),
+        ] {
             assert!(!button.contains(outside), "{outside:?}");
         }
+    }
+
+    #[test]
+    fn a_press_on_the_right_or_bottom_edge_does_not_arm() {
+        let button = done();
+        for edge in [at(272.0, 290.0), at(200.0, 306.0)] {
+            let mut tracker = ButtonTracker::default();
+            tracker.input(&button, &press(edge));
+            assert!(!tracker.armed(), "{edge:?}");
+            assert!(!tracker.input(&button, &release(edge)), "{edge:?}");
+        }
+        for near in [at(271.0, 290.0), at(200.0, 305.0)] {
+            let mut tracker = ButtonTracker::default();
+            tracker.input(&button, &press(near));
+            assert!(tracker.armed(), "{near:?}");
+            assert!(tracker.input(&button, &release(near)), "{near:?}");
+        }
+    }
+
+    #[test]
+    fn a_press_on_the_left_or_top_edge_arms() {
+        let button = done();
+        for edge in [at(173.0, 290.0), at(200.0, 281.0)] {
+            let mut tracker = ButtonTracker::default();
+            tracker.input(&button, &press(edge));
+            assert!(tracker.armed(), "{edge:?}");
+            assert!(tracker.input(&button, &release(edge)), "{edge:?}");
+        }
+    }
+
+    #[test]
+    fn a_move_onto_the_right_or_bottom_edge_is_off_the_button() {
+        let (button, mut tracker) = (done(), ButtonTracker::default());
+        tracker.input(&button, &press(INSIDE));
+        tracker.input(&button, &Input::PointerMoved(at(272.0, 290.0)));
+        assert!(!tracker.pressed(), "on the right edge");
+        tracker.input(&button, &Input::PointerMoved(at(271.0, 290.0)));
+        assert!(tracker.pressed(), "a pixel inside");
+        tracker.input(&button, &Input::PointerMoved(at(200.0, 306.0)));
+        assert!(!tracker.pressed(), "on the bottom edge");
+        assert!(!tracker.input(&button, &release(at(200.0, 306.0))));
     }
 
     fn press(at: Point) -> Input {

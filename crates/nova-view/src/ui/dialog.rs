@@ -744,6 +744,11 @@ impl Dialog {
             .find(|&index| self.items[index].active() && self.items[index].is_button());
     }
 
+    /// Picks the item under a press and tracks it. The pick and the
+    /// tracker are half-open, as `PtInRect` is in every in-game dialog's
+    /// tracker (`_TrackTextButtons` @0x26c4c and its kin) and in the
+    /// Dialog Manager: a press on an edge two items share goes to the
+    /// right or lower one.
     fn pointer(&mut self, input: &Input) -> Option<DialogEvent> {
         if let Input::PointerButton {
             pressed: true, at, ..
@@ -753,7 +758,7 @@ impl Dialog {
             self.tracked = self
                 .items
                 .iter()
-                .position(|item| item.active() && self.hit_area(item).contains(at));
+                .position(|item| item.active() && self.hit_area(item).contains_half_open(at));
         }
         let index = self.tracked?;
         let item = &self.items[index];
@@ -1506,6 +1511,71 @@ mod tests {
         dialog.cancel_pointer();
         assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.normal.left);
         assert_eq!(dialog.input(&release(ok)), None);
+    }
+
+    /// Every dialog's tracker hit-tests with `PtInRect` (`_TrackTextButtons`
+    /// @0x26c4c and its kin): the left and top edges in, the right and
+    /// bottom out.
+    #[test]
+    fn a_press_on_an_items_right_or_bottom_edge_reports_nothing() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let r = dialog.item_bounds(1).expect("OK");
+        let c = r.center();
+        for edge in [at(r.max.x, c.y), at(c.x, r.max.y)] {
+            assert_eq!(click(&mut dialog, edge), None, "{edge:?}");
+        }
+        for on in [
+            at(r.max.x - 1.0, c.y),
+            at(c.x, r.max.y - 1.0),
+            at(r.min.x, c.y),
+            at(c.x, r.min.y),
+        ] {
+            assert_eq!(click(&mut dialog, on), Some(DialogEvent::Item(1)), "{on:?}");
+        }
+    }
+
+    #[test]
+    fn a_press_on_an_edge_two_items_share_goes_to_the_right_or_lower_one() {
+        let template = DialogTemplate {
+            bounds: rect(0.0, 0.0, 100.0, 50.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(0.0, 0.0, 10.0, 10.0), true, ItemSpec::User),
+                item(rect(10.0, 0.0, 10.0, 10.0), true, ItemSpec::User),
+                item(rect(0.0, 10.0, 10.0, 10.0), true, ItemSpec::User),
+            ],
+        };
+        let mut dialog = dialog(&template, &[]);
+        assert_eq!(
+            click(&mut dialog, at(10.0, 5.0)),
+            Some(DialogEvent::Item(2))
+        );
+        assert_eq!(
+            click(&mut dialog, at(5.0, 10.0)),
+            Some(DialogEvent::Item(3))
+        );
+    }
+
+    #[test]
+    fn a_held_button_shows_off_it_on_its_right_or_bottom_edge() {
+        let mut dialog = dialog(&yes_no(), &[]);
+        let r = dialog.item_bounds(1).expect("OK");
+        let c = r.center();
+        let first_picture = |dialog: &Dialog| match drawn(dialog)[0] {
+            DrawCommand::StretchedPicture { image, .. } => image,
+            ref other => panic!("{other:?}"),
+        };
+        dialog.input(&press(c));
+        for edge in [at(r.max.x, c.y), at(c.x, r.max.y)] {
+            dialog.input(&Input::PointerMoved(edge));
+            assert_eq!(
+                first_picture(&dialog),
+                ButtonSkin::NOVA.normal.left,
+                "{edge:?}"
+            );
+        }
+        dialog.input(&Input::PointerMoved(at(r.max.x - 1.0, c.y)));
+        assert_eq!(first_picture(&dialog), ButtonSkin::NOVA.pressed.left);
     }
 
     #[test]

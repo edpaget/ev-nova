@@ -292,4 +292,91 @@ mod view_tests {
         press(&mut view, false, trade);
         assert!(view.open_service().is_some(), "back on the trade center");
     }
+
+    fn click(view: &mut SpaceportView, at: Point) {
+        press(view, true, at);
+        press(view, false, at);
+    }
+
+    /// The points on button `number`'s right and bottom edges, through its
+    /// centre, and the points a pixel inside them.
+    fn edges(view: &SpaceportView, number: usize) -> ([Point; 2], [Point; 2]) {
+        let r = item(view, number);
+        let c = r.center();
+        (
+            [Point::new(r.max.x, c.y), Point::new(c.x, r.max.y)],
+            [
+                Point::new(r.max.x - 1.0, c.y),
+                Point::new(c.x, r.max.y - 1.0),
+            ],
+        )
+    }
+
+    /// `_TrackPlanetButtons` tests the press with `PtInRect` (@0x29ac8): a
+    /// button's right and bottom edges are off it.
+    #[test]
+    fn a_press_on_a_buttons_right_or_bottom_edge_presses_nothing() {
+        let fresh = || view_of(&flagged(LAND | StellarFlags::TRADE_CENTER));
+        let view = fresh();
+        for number in [12, 7] {
+            let (on_edge, _) = edges(&view, number);
+            for at in on_edge {
+                for (other, _) in roles() {
+                    assert!(
+                        !item(&view, other).contains_half_open(at),
+                        "{number}'s edge {at:?} is on item {other}"
+                    );
+                }
+            }
+        }
+        let (on_edge, inside) = edges(&view, 12);
+        for at in on_edge {
+            let mut view = fresh();
+            click(&mut view, at);
+            assert!(!view.left(), "Leave's edge {at:?}");
+        }
+        for at in inside {
+            let mut view = fresh();
+            click(&mut view, at);
+            assert!(view.left(), "a pixel inside Leave, {at:?}");
+        }
+        let (on_edge, inside) = edges(&view, 7);
+        for at in on_edge {
+            let mut view = fresh();
+            click(&mut view, at);
+            assert!(
+                view.open_service().is_none(),
+                "the trade center's edge {at:?}"
+            );
+        }
+        for at in inside {
+            let mut view = fresh();
+            click(&mut view, at);
+            assert!(
+                view.open_service().is_some(),
+                "a pixel inside the trade center, {at:?}"
+            );
+        }
+    }
+
+    /// ... and so is the pointer while held (@0x29c08-0x29d0f).
+    #[test]
+    fn dragging_onto_a_buttons_right_or_bottom_edge_counts_as_off_it() {
+        let fresh = || view_of(&flagged(LAND | StellarFlags::TRADE_CENTER));
+        let view = fresh();
+        let centre = item(&view, 7).center();
+        let (on_edge, inside) = edges(&view, 7);
+        for (edge, near) in on_edge.into_iter().zip(inside) {
+            let mut view = fresh();
+            press(&mut view, true, centre);
+            view.input(&Input::PointerMoved(edge));
+            press(&mut view, false, edge);
+            assert!(view.open_service().is_none(), "released on {edge:?}");
+            let mut view = fresh();
+            press(&mut view, true, centre);
+            view.input(&Input::PointerMoved(near));
+            press(&mut view, false, near);
+            assert!(view.open_service().is_some(), "released on {near:?}");
+        }
+    }
 }
