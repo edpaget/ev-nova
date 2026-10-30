@@ -55,7 +55,8 @@
 //! Readers outside the shipyard (the hire screen's `Require`, an `o`
 //! test, `_ShipFreeMass`, a pirate's plunder, `_ScanPlayer` and the
 //! `_Ship*` stat readers past a held outfit's first mod) still read the
-//! counts with the top-up: rdm:phase/play-feel-5-followups records them.
+//! counts with the top-up: they are
+//! rdm:phase/play-feel-5-followups/phase-17-held-stock-outside-shipyard.
 
 use std::ops::RangeInclusive;
 
