@@ -11,8 +11,16 @@ publish.workspace = true
 # FFmpeg, statically linked and built from the source pinned in
 # third_party/ffmpeg-source.toml: the demuxer, decoders and scaler.
 ffmpeg-next.workspace = true
+# The movie player port it implements, and the screen and draw command its
+# frames are shown through.
+nova-view.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
+# The movie player port's contract check (`movie::fixture`).
+nova-view = { workspace = true, features = ["fixture"] }
+# Real folders for the lookup adapter's and the decoder's tests.
+tempfile.workspace = true
 
 [lints]
 workspace = true

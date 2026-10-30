@@ -63,7 +63,7 @@ deny = [
     # its own entry and is added to the `wrappers` of every crate it uses.
     { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim", "nova-sim-catalog", "nova-view"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
     { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim", "nova-sim-catalog", "nova-sim-state", "nova-view"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
-    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
+    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-movie", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
     { crate = "nova-audio", wrappers = ["nova", "nova-audio"], reason = "only the game plays sound through the audio crate" },
     { crate = "nova-movie", wrappers = ["nova"], reason = "only the game plays movies through the decoder" },
