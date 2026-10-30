@@ -23,7 +23,7 @@
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in
-//!   a scrolling box with a Done button.
+//!   a scrolling box with a Done button and scroll arrows.
 //! - [`note`]: the note alert ([`NoteDialog`], `DLOG` 3000): a line of
 //!   text and an OK button.
 //! - [`yes_no`]: the Yes/No dialog ([`YesNoDialog`], `DLOG` 3002): a

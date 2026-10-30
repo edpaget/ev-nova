@@ -423,7 +423,10 @@ fn i_shows_the_stock_about_text() {
             _ => Vec::new(),
         })
         .collect();
-    assert!(texts.contains(&"Done".to_owned()), "{texts:?}");
+    assert!(
+        texts.contains(&nova_view::ui::desc::OKAY_LABEL.to_owned()),
+        "{texts:?}"
+    );
 }
 
 /// The app driven as the window drives it: each event through the

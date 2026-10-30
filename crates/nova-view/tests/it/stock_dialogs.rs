@@ -17,7 +17,9 @@ use nova_data::{GameData, InterfaceData, Record};
 use nova_view::Prefs;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::desc::{ARROW_UNITS, DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
+use nova_view::ui::desc::{
+    ARROW_UNITS, DESC_DIALOG, DONE_ITEM, FRAME, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM, TEXT_ITEM,
+};
 use nova_view::ui::new_pilot::{
     CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NICKNAME_ITEM, NewPilotDialog,
     NewPilotOutcome, OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
@@ -248,6 +250,21 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
         assert!(desc.scroll_offset() > 0.0);
         desc.input(&key(Key::Home));
         assert_eq!(desc.scroll_offset(), 0.0);
+        // Items 5 and 6: up disabled at the start, down normal.
+        let dialog = desc.dialog();
+        let up = dialog.item_bounds(SCROLL_UP_ITEM).expect("up");
+        let down = dialog.item_bounds(SCROLL_DOWN_ITEM).expect("down");
+        assert_eq!(up, rect(330.0, 282.0, 23.0, 23.0).offset(origin));
+        assert_eq!(down, rect(363.0, 282.0, 23.0, 23.0).offset(origin));
+        let commands = drawn(&desc);
+        let cap = |image, at: Bounds, height| DrawCommand::StretchedPicture {
+            image,
+            top_left: at.min,
+            width: 13.0,
+            height,
+        };
+        assert!(commands.contains(&cap(ButtonSkin::NOVA.disabled.left, up, 23.0)));
+        assert!(commands.contains(&cap(normal.left, down, 23.0)));
         desc.input(&key(Key::Enter));
         assert!(desc.closed());
     }
@@ -1478,6 +1495,8 @@ fn str_150_holds_the_bars_gamble_and_the_races_labels() {
     use nova_view::spaceport::bar::GAMBLE_LABEL;
     use nova_view::spaceport::layout::DONE_LABEL;
     use nova_view::spaceport::race::{CANCEL_LABEL, HELP_LABEL};
+    use nova_view::ui::desc::OKAY_LABEL;
+    use nova_view::ui::scroll_arrows::ScrollArrow;
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -1492,6 +1511,9 @@ fn str_150_holds_the_bars_gamble_and_the_races_labels() {
     assert_eq!(list.strings[33].as_str(), CANCEL_LABEL, "#34");
     assert_eq!(list.strings[4].as_str(), DONE_LABEL, "#5");
     assert_eq!(list.strings[57].as_str(), HELP_LABEL, "#58");
+    assert_eq!(list.strings[18].as_str(), ScrollArrow::Up.label(), "#19");
+    assert_eq!(list.strings[19].as_str(), ScrollArrow::Down.label(), "#20");
+    assert_eq!(list.strings[26].as_str(), OKAY_LABEL, "#27");
 }
 
 /// The `DLOG`s `_CenterWindow` moves are placed as it places them: the

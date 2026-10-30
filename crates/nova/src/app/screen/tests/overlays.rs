@@ -128,6 +128,7 @@ fn the_x_text_follows_the_apps_rulebook() {
 
 #[test]
 fn the_about_dialog_uses_the_game_s_button_style() {
+    use nova_view::ui::desc::OKAY_LABEL;
     let mut screen = with_dialogs(data());
     open_about(&mut screen);
     let list = drawn(about(&screen));
@@ -136,10 +137,10 @@ fn the_about_dialog_uses_the_game_s_button_style() {
         .find_map(|command| match command {
             DrawCommand::Text {
                 text, font, size, ..
-            } if text == "Done" => Some((*font, *size)),
+            } if text == OKAY_LABEL => Some((*font, *size)),
             _ => None,
         })
-        .expect("the Done label");
+        .expect("the Okay label");
     assert_eq!(done, (Font::Charcoal, 12.0), "stock, as there is no cölr");
 }
 

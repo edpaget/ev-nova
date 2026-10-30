@@ -1,5 +1,6 @@
 //! The "Desc Dialog" (`DLOG` 3003): a long description in a scrolling box
-//! with a Done button, over the game's text-and-briefing frame.
+//! with a Done button (it reads "Okay") and two scroll arrows, over the
+//! game's text-and-briefing frame.
 //!
 //! A `dësc` whose `Graphic` is above [`LAST_UNSHOWN_GRAPHIC`] shows in
 //! its picture variant, `DLOG` 3004 ([`DescTemplates::open`]), as
@@ -89,8 +90,10 @@ pub const BODY_SIZE: f32 = 10.0;
 /// The description's colour.
 pub const BODY_COLOR: Color = Color::WHITE;
 
-/// The Done button's label.
-pub const DONE_LABEL: &str = "Done";
+/// Item 1's label: `_DrawTextButtons` passes `_DrawButton` `_buttonLabel`
+/// 0x1a, `STR#` 150 #27 (@0x26a78-0x26a83), so a text dialog's button reads
+/// "Okay", not "Done".
+pub const OKAY_LABEL: &str = "Okay";
 
 /// The game's "Generic text/briefing" frame (`PICT`s 8524 to 8526, 441
 /// wide), which "Desc Dialog" is drawn over.
@@ -160,8 +163,9 @@ impl DescTemplates {
     }
 }
 
-/// "Desc Dialog": `text` scrolling in item 3, and item 1 a Done button
-/// that Return, Escape or a click activates, which closes it.
+/// "Desc Dialog": `text` scrolling in item 3, and item 1 a button, the
+/// code's Done though it reads [`OKAY_LABEL`], that Return, Escape or a
+/// click activates, which closes it.
 #[derive(Clone, Debug)]
 pub struct DescDialog {
     dialog: Dialog,
@@ -235,7 +239,7 @@ impl DescDialog {
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
         let roles = [
-            (DONE_ITEM, Role::Button(DONE_LABEL.to_owned())),
+            (DONE_ITEM, Role::Button(OKAY_LABEL.to_owned())),
             (
                 TEXT_ITEM,
                 Role::ScrollText {
@@ -562,7 +566,7 @@ mod tests {
                 picture(normal.middle, 113.0, 90.0, 73.0, 25.0),
                 picture(normal.right, 186.0, 90.0, 13.0, 25.0),
                 DrawCommand::Text {
-                    text: DONE_LABEL.to_owned(),
+                    text: OKAY_LABEL.to_owned(),
                     font: Font::Charcoal,
                     origin: Point::new(149.5 - done_width / 2.0, 102.5 - 14.4 / 2.0),
                     size: 12.0,

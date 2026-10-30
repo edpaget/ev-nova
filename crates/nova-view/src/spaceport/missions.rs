@@ -59,7 +59,7 @@ use nova_sim::mission::screens::{
 };
 use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
-use super::layout::LEAVE_LABEL;
+use super::layout::{DONE_LABEL, LEAVE_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -73,7 +73,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::{TextMetrics, truncate_end};
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
+use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;

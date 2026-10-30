@@ -35,7 +35,8 @@ pub enum ScrollArrow {
 impl ScrollArrow {
     /// Its `_DrawButton` label, `STR#` 150 #19 or #20, a pen glyph
     /// (`_textButtonTable`, @0x26a78-0x26a83).
-    const fn label(self) -> &'static str {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Up => "^",
             Self::Down => "&",
