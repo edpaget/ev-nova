@@ -37,7 +37,7 @@ use std::time::Duration;
 use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -296,13 +296,16 @@ impl TextBacking {
     };
 }
 
-/// A dialog's frame: three pictures stacked top to bottom over its bounds,
-/// the middle one stretched.
+/// A dialog's frame: three pictures stacked top to bottom over its bounds.
+/// The middle one keeps its size and is cut to the band between the caps,
+/// as `_SingleMissionDialogUpdate` (@0x989bf-0x98a89, @0x98b44-0x98b94) and
+/// `_TextDialogUpdate` (@0x51ba7-0x51d61) draw it at its natural size and
+/// then the caps over it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DialogFrame {
     /// The top cap.
     pub top: ImageKey,
-    /// The middle, stretched to fill the height.
+    /// The middle, at its own size, cut to the band between the caps.
     pub middle: ImageKey,
     /// The bottom cap.
     pub bottom: ImageKey,
@@ -970,8 +973,15 @@ impl Dialog {
             for (piece, at) in pieces {
                 let image = match piece {
                     super::slice::Piece::Start => frame.top,
-                    super::slice::Piece::Middle => frame.middle,
                     super::slice::Piece::End => frame.bottom,
+                    super::slice::Piece::Middle => {
+                        let middle = DrawCommand::Picture {
+                            image: frame.middle,
+                            top_left: at.min,
+                        };
+                        list.clipped(at, middle);
+                        continue;
+                    }
                 };
                 list.stretched_picture(image, at.min, at.width(), at.height());
             }
@@ -1092,7 +1102,7 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::draw::{DrawCommand, fill_command};
+    use crate::draw::fill_command;
     use crate::input::{MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::scroll_text::ARROW_UNITS;
@@ -2455,7 +2465,13 @@ mod tests {
             commands[..3],
             [
                 piece(frame.top, 329.0, 9.0),
-                piece(frame.middle, 338.0, 60.0),
+                DrawCommand::Clipped {
+                    clip: Bounds::at(at(334.0, 338.0), 355.0, 60.0),
+                    command: Box::new(DrawCommand::Picture {
+                        image: frame.middle,
+                        top_left: at(334.0, 338.0),
+                    }),
+                },
                 piece(frame.bottom, 398.0, 40.0),
             ]
         );

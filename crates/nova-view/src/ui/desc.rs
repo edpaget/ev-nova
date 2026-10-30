@@ -559,7 +559,13 @@ mod tests {
             commands,
             [
                 picture(FRAME.top, 0.0, 0.0, 200.0, 9.0),
-                picture(FRAME.middle, 0.0, 9.0, 200.0, 71.0),
+                DrawCommand::Clipped {
+                    clip: Bounds::at(Point::new(0.0, 9.0), 200.0, 71.0),
+                    command: Box::new(DrawCommand::Picture {
+                        image: FRAME.middle,
+                        top_left: Point::new(0.0, 9.0),
+                    }),
+                },
                 picture(FRAME.bottom, 0.0, 80.0, 200.0, 40.0),
                 picture(normal.left, 100.0, 90.0, 13.0, 25.0),
                 picture(normal.middle, 113.0, 90.0, 73.0, 25.0),
