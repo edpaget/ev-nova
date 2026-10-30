@@ -3,10 +3,13 @@
 //! its class and outfits give it ([`Fit`]), rewritten only by
 //! `become_class` and `refit`; the latches each reset arms ([`Latches`]);
 //! its death, the pod and self-destruct ([`Fate`]); and its warp and
-//! double time ([`Warp`]). The pod's countdown, the jump under way and
+//! double time ([`Warp`]); and the part of a bought ship's stock still held
+//! in its weapon array alone (`held_stock`, see the `stock_fold` module).
+//! The pod's countdown, the jump under way and
 //! the game's end (`pod`, the `mode` and `player_end`) stay on `Session`
 //! as mode fields.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::afterburner::MaxVel;
@@ -17,6 +20,8 @@ use crate::combat::impact::TractorLock;
 use crate::combat::ion::Ion;
 use crate::flight::ShipState;
 use crate::handling::ShipFields;
+use crate::pilot::Pilot;
+use crate::shipyard;
 use crate::stats::ShipStats;
 use crate::warp;
 
@@ -89,6 +94,14 @@ pub(super) struct PlayerShip {
     /// The player's cloak, its key and its latch (see the `player_cloak`
     /// module). Unsaved.
     pub(super) cloak: super::player_cloak::PlayerCloak,
+    /// The part of the outfits owned that a purchase's stock top-up still
+    /// holds in the weapon array alone, by the engine reading of
+    /// [`RuleKey::PurchaseStockFold`](crate::rulebook::RuleKey::PurchaseStockFold),
+    /// until the next fold (see the `stock_fold` module). Never saved: the
+    /// original never saves between a purchase and its fold
+    /// (`_SavePilotFile` @0x1935f, @0x6354b, @0x692c4), so a load treats the
+    /// top-up as owned, as a landing's fold would.
+    pub(super) held_stock: BTreeMap<OutfitId, u16>,
 }
 
 /// What the player's ship's class and outfits give it, rewritten only by
@@ -286,6 +299,26 @@ impl PlayerShip {
                 jump_accepted: false,
             },
             cloak: super::player_cloak::PlayerCloak::default(),
+            held_stock: BTreeMap::new(),
         }
+    }
+
+    /// `_ShipStatsToSystemInfo`'s fold: the stock top-up held in the
+    /// weapon array becomes owned outfits, so nothing is held any more.
+    pub(super) fn fold_stock(&mut self) {
+        self.held_stock.clear();
+    }
+
+    /// `pilot` with the outfit counts the original reads while the stock
+    /// top-up is held: its outfits less [`held_stock`](Self::held_stock)
+    /// ([`shipyard::outfit_counts`]), borrowed as it is when nothing is
+    /// held.
+    pub(super) fn counted<'p>(&self, pilot: &'p Pilot) -> Cow<'p, Pilot> {
+        if self.held_stock.is_empty() {
+            return Cow::Borrowed(pilot);
+        }
+        let mut counted = pilot.clone();
+        counted.outfits = shipyard::outfit_counts(&pilot.outfits, &self.held_stock);
+        Cow::Owned(counted)
     }
 }

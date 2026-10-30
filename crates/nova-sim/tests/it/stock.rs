@@ -856,6 +856,13 @@ fn stock_ships_are_named_without_their_designer_notes() {
 /// 25,000 + 4,700 - 17,500 = 12,200 credits, 15 tons of cargo
 /// space and 12 free, the Heavy Shuttle's own Light Blaster (`oütf` 128,
 /// 3 tons) owned and its mass on top of its `FreeMass`.
+///
+/// By the engine reading of `purchase_stock_fold` that Light Blaster sits
+/// in the weapon array alone until the outfitter opens, so the shipyard's
+/// trade-in leaves it out: a quarter of the Heavy Shuttle's 17,500, 4,375,
+/// through the flux at its tech 4 (no discount at Viking's tech 4) to
+/// 4,370. Once the outfitter has opened and closed it counts, half its
+/// `Cost` of 5,000 on top: 6,875 through the flux to 6,870.
 #[test]
 fn a_heavy_shuttle_trades_in_the_shuttle() {
     let Some(dir) = common::nova_data() else {
@@ -877,6 +884,29 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
         session.pilot().outfits().collect::<Vec<_>>(),
         [(OutfitId(128), 1)]
     );
+    let trade_in =
+        |session: &mut Session| session.shipyard(&mut Fires).expect("a shipyard").trade_in;
+    assert_eq!(
+        trade_in(&mut session),
+        4370,
+        "the Light Blaster held in the array"
+    );
+    for command in [
+        nova_sim::flight_frame::FlightCommand::OpenOutfitter,
+        nova_sim::flight_frame::FlightCommand::CloseOutfitter,
+    ] {
+        session.apply(
+            command,
+            &mut nova_sim::ApplyCollaborators {
+                catalog: None,
+                chance: &mut Fires,
+                law: &nova_sim::NovaLaw::default(),
+                boarding_rule: &nova_sim::NovaBoarding::default(),
+                hail_options: &nova_sim::HailOptions::default(),
+            },
+        );
+    }
+    assert_eq!(trade_in(&mut session), 6870, "folded by the outfitter");
 }
 
 /// A new stock pilot owns its Shuttle's stock weapon, a Light Blaster

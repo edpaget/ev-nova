@@ -109,6 +109,8 @@ impl Session {
         if self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
             return None;
         }
+        // `_ShipStatsToSystemInfo` @0x5a06a (see the `stock_fold` module).
+        self.fold_stock();
         self.reset_precalced();
         Some(self.player_info(catalog))
     }

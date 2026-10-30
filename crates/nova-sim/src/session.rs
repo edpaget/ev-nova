@@ -625,6 +625,7 @@ mod stellar_guns;
 mod stellar_picks;
 mod stellars;
 mod step;
+mod stock_fold;
 mod story;
 mod stray_words;
 mod swarm_formation;
@@ -3867,8 +3868,9 @@ impl Session {
         if beeps {
             self.out.sounds.push(SimSound::Landed);
         }
-        // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
-        // module), before the port opens.
+        // `_PlayerLandOnStellar`'s fold and reset (@0x63211; see the
+        // `stock_fold` and `precalced` modules), before the port opens.
+        self.fold_stock();
         self.reset_precalced();
         // An inhabited stellar runs `_DoAutoRefuel` instead of the beep
         // (`_PlayerLandOnStellar` @0x632c5), before the port dialog (see
@@ -4237,6 +4239,8 @@ impl Session {
     /// the outfitter's list is built.
     pub(crate) fn open_outfitter(&mut self) {
         self.port.open_outfit_visit(&self.pilot);
+        // `_ShipStatsToSystemInfo` @0x5bb57 (see the `stock_fold` module).
+        self.fold_stock();
         self.reset_precalced();
     }
 
@@ -4264,6 +4268,8 @@ impl Session {
     /// ([`Session::hire`]) resets nothing of its own, so a hire's reset
     /// is this one, after it.
     pub(crate) fn close_hire(&mut self) {
+        // `_ShipStatsToSystemInfo` @0x49235 (see the `stock_fold` module).
+        self.fold_stock();
         self.reset_precalced();
     }
 
@@ -4712,9 +4718,13 @@ impl Session {
             rules: self.setup.rules,
             gate: self.gate(),
         };
+        // The outfit counts without the stock a purchase still holds in the
+        // weapon array (see the `stock_fold` module): the trade-in, the buy
+        // check's quote and `Require` read them.
+        let counted = self.ship.counted(&self.pilot);
         let shipyard = match self.port.shipyard_listing() {
-            Some(listing) => yard.relisted(&self.pilot, listing),
-            None => yard.shipyard(&self.pilot, &mut rolls, chance),
+            Some(listing) => yard.relisted(&counted, listing),
+            None => yard.shipyard(&counted, &mut rolls, chance),
         };
         self.port.ship_rolls = rolls;
         shipyard
@@ -4779,7 +4789,13 @@ impl Session {
     /// and then the shield, armour and fuel are filled to the most of the
     /// class and outfits `OnPurchase` leaves (`_DoShipyardDialog`
     /// @0x5f051-0x5f07b, after @0x5f00d). No secondary is selected after
-    /// `OnPurchase` (@0x5f01c), even one the new ship carries.
+    /// `OnPurchase` (@0x5f01c), even one the new ship carries. The stock
+    /// weapons and `AmmoLoad` the purchase tops up are held in the weapon
+    /// array alone until the next fold by the engine reading of
+    /// [`RuleKey::PurchaseStockFold`]: the shipyard's trade-in, carry and
+    /// `Require` leave them out until then, and a second purchase drops
+    /// them (see the `stock_fold` module). The trade-in and carry read the
+    /// outfit counts so, the held part left out.
     /// When the ship is not landed at a shipyard, or the purchase is
     /// refused, nothing changes and the refusal says why. The rolls not
     /// drawn yet are drawn on
@@ -4807,13 +4823,19 @@ impl Session {
         self.drop_fighters(|_, _, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
         let fits = self.statics.arsenal.stock_fits(ship, &self.statics.outfits);
+        // The carry reads the outfit counts as `OnRetire` leaves them, the
+        // stock still held in the weapon array left out, so a persistent
+        // outfit held there is cleared with the array (@0x5edba-0x5ee19;
+        // see the `stock_fold` module).
+        let counted = self.ship.counted(&self.pilot);
         let Purchase {
             outfits,
+            held,
             settlement,
             report,
         } = shipyard::purchase(
             &Sale {
-                pilot: &self.pilot,
+                pilot: &counted,
                 old_mass,
                 new: &record,
                 name,
@@ -4835,6 +4857,10 @@ impl Session {
         // module): their trims are the purchase rule's, already made.
         self.reset_precalced_for(precalced::ResetCause::Purchase);
         self.port.ship_redraws.insert(ship);
+        // The top-up sits in the weapon array alone until the next fold,
+        // by the engine reading of `purchase_stock_fold`; an `OnPurchase`
+        // set operator folds it, as it runs after the top-up (@0x5f00d).
+        self.ship.held_stock = held;
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         // No secondary is selected on the new ship (`_DoShipyardDialog`
         // @0x5f01c), once its `OnPurchase` has run (@0x5f00d) and before
@@ -12203,7 +12229,7 @@ pub(super) mod tests {
     const SPEED: OutfitId = OutfitId(300);
     const CARGO: OutfitId = OutfitId(301);
     const SHIELD: OutfitId = OutfitId(302);
-    const TANK: OutfitId = OutfitId(303);
+    pub(super) const TANK: OutfitId = OutfitId(303);
     const SCOOP: OutfitId = OutfitId(304);
 
     /// Planet 128 at the centre, which the ship starts over: an outfitter
@@ -15477,15 +15503,15 @@ pub(super) mod tests {
     // Stock weapons.
 
     /// A 5-ton gun (weapon 150), 1000 credits.
-    const GUN: OutfitId = OutfitId(305);
+    pub(super) const GUN: OutfitId = OutfitId(305);
     /// A rocket launcher (weapon 138), 2000 credits.
-    const LAUNCHER: OutfitId = OutfitId(306);
+    pub(super) const LAUNCHER: OutfitId = OutfitId(306);
     /// A rocket (weapon 138's rounds), 20 credits and massless.
-    const ROCKETS: OutfitId = OutfitId(307);
+    pub(super) const ROCKETS: OutfitId = OutfitId(307);
 
     /// `catalog` with ship 128 stocking two guns, and ship 129 a gun and
     /// a rocket launcher with 20 rockets, each held by its outfit.
-    fn stock_weapons(catalog: FakePilotCatalog) -> FakePilotCatalog {
+    pub(super) fn stock_weapons(catalog: FakePilotCatalog) -> FakePilotCatalog {
         let stock = |id, count, ammo| StockWeapon {
             weapon: WeaponId(id),
             count,
@@ -15572,7 +15598,7 @@ pub(super) mod tests {
     }
 
     /// Each weapon `session` mounts, with how many.
-    fn mounted(session: &Session) -> Vec<(i16, u32)> {
+    pub(super) fn mounted(session: &Session) -> Vec<(i16, u32)> {
         session
             .ship
             .fit
@@ -15645,23 +15671,6 @@ pub(super) mod tests {
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
         assert_eq!(session.pilot().paint(), None);
-    }
-
-    #[test]
-    fn the_trade_in_counts_stock_weapons_and_rounds_as_the_original_does() {
-        let catalog = stock_weapons(shipbuying());
-        let mut session = outfitted(&catalog);
-        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
-        assert_eq!(shipyard.trade_in, 2500 + 2 * 500, "two guns");
-        session
-            .buy_ship(NEW, "Kestrel", &mut NeverFires)
-            .expect("bought");
-        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
-        assert_eq!(
-            shipyard.trade_in, 6570,
-            "a quarter of the hull, and half its tank, gun, launcher and rockets, \
-             4375 + 500 + 500 + 1000 + 200 = 6575, rounded down to ten by the flux"
-        );
     }
 
     #[test]

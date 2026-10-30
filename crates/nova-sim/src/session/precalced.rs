@@ -56,6 +56,12 @@
 //! | `_ShipCollisionHandler` @0x371ac | a player's scoop of an asteroid box (`Session::scoop_boxes`), after the hold changes, an empty box's included; the hold had room, so its trim never cuts |
 //! | `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea | the end of every set expression whose text is not empty, one of only spaces or one that did not parse included (`Session::run_ops`): a hook, a mission's script, a crön, an `OnExplore`, a story subscription's |
 //!
+//! The `_ShipStatsToSystemInfo` sites a landed stay reaches (the landing,
+//! the player info, the outfitter opening and the hire screen closing),
+//! and `G`, `D`, `C`, `E` and `H`, also fold a bought ship's stock top-up
+//! into the outfit counts, clearing `PlayerShip::held_stock`, just before
+//! their reset (see the [`stock_fold`](super::stock_fold) module).
+//!
 //! *Ordering against the original.* The original runs a take-off's, a
 //! gate exit's and an arrival's story work (the days, the explorations,
 //! the take-off's subscriptions) before its reset; the engine runs it
