@@ -14,9 +14,13 @@
 //!    ([`Intro`](super::intro::Intro), `_ShowIntroScreen` @0x16cf1),
 //!    begun with the skip key's state as the fade ends. Its text, when it
 //!    is due ([`Entry::take_text_due`]), shows in "Desc Dialog" over
-//!    black, which the router opens; it fades in from black over a second
-//!    (@0x5b038), and once it closes the screen fades to black over a
-//!    second. The fade after the pictures alone is instant, as
+//!    black, which the router opens on the faded screen with its own
+//!    `dësc`'s movie and graphic (`_ShowTextDialog(0, 0, 1)` @0x17112, as
+//!    the [`faded_texts`](crate::ui::faded_texts) module says): it fades
+//!    in from black over a second (@0x5b038), or shows at once after a
+//!    cinematic before-movie, and an empty one fades in with no dialog.
+//!    Once it and its after-movie are done the screen fades to black over
+//!    a second. The fade after the pictures alone is instant, as
 //!    `_FadeScreenOut` does nothing on a screen already black
 //!    (`_screenFaded` @0x5316-0x531f). The pilot is marked seen once the
 //!    intro is over, an empty one included ([`Entry::take_mark_seen`];
@@ -55,8 +59,9 @@
 //!   everything held (`FlushEvents(0xff7f)` @0x5ae67), and a close is
 //!   dropped once the intro has run, as its flush after the text
 //!   (`FlushEvents` 3, 5, 1 and 2 @0x1711a-0x17165) drops pointer events.
-//! - The text takes every input once its fade-in ends; what arrives
-//!   during the fade-in reaches it then ([`Entry::take_for_text`]).
+//! - The text takes every input once it opens, and holds what arrives
+//!   during its fade-in until the fade ends; what arrives while it is due
+//!   reaches it as it opens ([`Entry::take_for_text`]).
 //! - Command chords and the close that arrive during flight's fade-in
 //!   are held until it ends.
 //! - The window losing focus, or the pointer's cancel, lets go of the
@@ -111,9 +116,10 @@ enum Stage {
     Intro,
     /// The intro's text, `dësc` `id`, waits for the router to open it.
     TextDue(i16),
-    /// The intro's text shows, fading in from black while the fade is
-    /// there.
-    Text(Option<ScreenFade>),
+    /// The intro's text shows, with its movies: the text fades itself in
+    /// from black, on the faded screen
+    /// ([`faded_texts`](crate::ui::faded_texts)).
+    Text,
     /// The screen fades to black after the text.
     FadingToBlack(ScreenFade),
     /// Flight is due to take over.
@@ -154,10 +160,7 @@ impl Entry {
     /// `dt` passes: the fade or the intro moves on.
     pub fn tick(&mut self, dt: Duration) {
         let faded = match &mut self.stage {
-            Stage::FadingOut(fade)
-            | Stage::Text(Some(fade))
-            | Stage::FadingToBlack(fade)
-            | Stage::FadingIn(fade) => {
+            Stage::FadingOut(fade) | Stage::FadingToBlack(fade) | Stage::FadingIn(fade) => {
                 fade.advance(dt);
                 fade.done()
             }
@@ -168,7 +171,7 @@ impl Entry {
                 self.poll_intro();
                 return;
             }
-            Stage::TextDue(_) | Stage::Text(None) | Stage::HandoverDue | Stage::Done => return,
+            Stage::TextDue(_) | Stage::Text | Stage::HandoverDue | Stage::Done => return,
         };
         if !faded {
             return;
@@ -183,7 +186,6 @@ impl Entry {
                 }
                 None => Stage::HandoverDue,
             },
-            Stage::Text(_) => Stage::Text(None),
             Stage::FadingToBlack(_) => Stage::HandoverDue,
             _ => Stage::Done,
         };
@@ -221,15 +223,16 @@ impl Entry {
     }
 
     /// The router opened the intro's text (`opened`), or couldn't, as
-    /// without dialogs. Opened, it drops everything held, and fades in
-    /// from black; not, the text is passed over, to the handover at once.
+    /// without dialogs. Opened, it drops everything held, and shows on
+    /// the faded screen, fading itself in; not, the text is passed over,
+    /// to the handover at once.
     pub fn text_opened(&mut self, opened: bool) {
         if !matches!(self.stage, Stage::TextDue(_)) {
             return;
         }
         if opened {
             self.held.clear();
-            self.stage = Stage::Text(Some(fade_in()));
+            self.stage = Stage::Text;
         } else {
             self.intro_over();
             self.stage = Stage::HandoverDue;
@@ -239,15 +242,16 @@ impl Entry {
     /// The intro's text closed: the intro is over, and the screen fades
     /// to black.
     pub fn text_closed(&mut self) {
-        if matches!(self.stage, Stage::Text(_)) {
+        if self.stage == Stage::Text {
             self.intro_over();
             self.stage = Stage::FadingToBlack(fade_out());
         }
     }
 
-    /// The inputs held for the intro's text, once its fade-in has ended.
+    /// The inputs held for the intro's text while it was due, once it has
+    /// opened: it holds them itself through its fade-in.
     pub fn take_for_text(&mut self) -> Vec<Input> {
-        if self.stage == Stage::Text(None) {
+        if self.stage == Stage::Text {
             std::mem::take(&mut self.for_text)
         } else {
             Vec::new()
@@ -307,7 +311,7 @@ impl Entry {
         match self.stage {
             Stage::FadingOut(_) => Showing::MainMenu,
             Stage::Intro => Showing::Intro,
-            Stage::TextDue(_) | Stage::Text(_) | Stage::FadingToBlack(_) => Showing::IntroText,
+            Stage::TextDue(_) | Stage::Text | Stage::FadingToBlack(_) => Showing::IntroText,
             Stage::HandoverDue | Stage::FadingIn(_) | Stage::Done => Showing::Flight,
         }
     }
@@ -317,7 +321,7 @@ impl Entry {
     /// The text, due or showing, takes it instead.
     #[must_use]
     pub fn holds_commands(&self) -> bool {
-        !matches!(self.stage, Stage::TextDue(_) | Stage::Text(_) | Stage::Done)
+        !matches!(self.stage, Stage::TextDue(_) | Stage::Text | Stage::Done)
     }
 
     /// Whether the main screen is drawn under the entry: through its fade
@@ -349,11 +353,11 @@ impl Entry {
                 }
                 self.poll_intro();
             }
-            Stage::TextDue(_) | Stage::Text(Some(_)) => {
+            Stage::TextDue(_) => {
                 self.for_text.push(*input);
                 return Verdict::HeldForText;
             }
-            Stage::Text(None) => return Verdict::Text,
+            Stage::Text => return Verdict::Text,
             Stage::Done => return Verdict::Drop,
             Stage::FadingOut(_)
             | Stage::FadingToBlack(_)
@@ -377,7 +381,7 @@ impl Entry {
     /// intro's text shows, whose own flush after it would drop it.
     pub fn close(&mut self) -> Verdict {
         match self.stage {
-            Stage::TextDue(_) | Stage::Text(_) | Stage::Done => Verdict::Drop,
+            Stage::TextDue(_) | Stage::Text | Stage::Done => Verdict::Drop,
             _ => {
                 self.held.push(Deferred::Close);
                 Verdict::Held
@@ -418,7 +422,7 @@ impl Entry {
                     intro.draw(list, view);
                 }
             }
-            Stage::TextDue(_) | Stage::Text(_) | Stage::FadingToBlack(_) | Stage::HandoverDue => {
+            Stage::TextDue(_) | Stage::Text | Stage::FadingToBlack(_) | Stage::HandoverDue => {
                 fill_rect(list, whole_view(view), Color::BLACK);
             }
             Stage::FadingOut(_) | Stage::FadingIn(_) | Stage::Done => {}
@@ -429,10 +433,9 @@ impl Entry {
     /// view `view` in size.
     pub fn draw_over(&self, list: &mut DrawList, view: (f32, f32)) {
         match self.stage {
-            Stage::FadingOut(fade)
-            | Stage::Text(Some(fade))
-            | Stage::FadingToBlack(fade)
-            | Stage::FadingIn(fade) => fade.draw(list, view),
+            Stage::FadingOut(fade) | Stage::FadingToBlack(fade) | Stage::FadingIn(fade) => {
+                fade.draw(list, view);
+            }
             _ => {}
         }
     }
@@ -624,11 +627,11 @@ mod tests {
         entry.text_opened(true);
         assert_eq!(entry.take_text_due(), None);
         assert_eq!(blacks(&entry, false), [255], "black under the text");
-        assert_eq!(blacks(&entry, true), [255], "fading in from black");
-        entry.tick(ms(500));
-        assert_eq!(blacks(&entry, true), [128]);
-        entry.tick(ms(500));
-        assert_eq!(blacks(&entry, true), [] as [u8; 0]);
+        assert_eq!(
+            blacks(&entry, true),
+            [] as [u8; 0],
+            "the text fades itself in (`ui::faded_texts`)"
+        );
         entry.tick(Duration::from_secs(60));
         assert!(!entry.handover_due(), "the text waits");
         entry.text_closed();
@@ -864,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn inputs_during_the_texts_fade_in_wait_for_it() {
+    fn inputs_before_the_text_opens_wait_for_it() {
         let mut entry = unseen(&CharacterIntro {
             text: Some(5),
             ..CharacterIntro::EMPTY
@@ -874,15 +877,16 @@ mod tests {
             entry.input(&key(Key::Enter, true), false),
             Verdict::HeldForText
         );
+        assert_eq!(entry.take_for_text(), [], "not before it opens");
         entry.text_opened(true);
-        let typed = key(Key::Enter, false);
-        assert_eq!(entry.input(&typed, false), Verdict::HeldForText);
-        assert_eq!(entry.take_for_text(), [], "not before the fade ends");
-        entry.tick(ms(999));
-        assert_eq!(entry.take_for_text(), []);
-        entry.tick(ms(1));
-        assert_eq!(entry.take_for_text(), [key(Key::Enter, true), typed]);
+        assert_eq!(
+            entry.take_for_text(),
+            [key(Key::Enter, true)],
+            "for the text, which holds them through its fade-in"
+        );
         assert_eq!(entry.take_for_text(), [], "once");
+        let typed = key(Key::Enter, false);
+        assert_eq!(entry.input(&typed, false), Verdict::Text);
         assert_eq!(entry.input(&key(Key::Char('q'), true), true), Verdict::Text);
     }
 

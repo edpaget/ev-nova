@@ -434,7 +434,7 @@ impl AppScreen {
     /// Text dialogs, nothing open, built from the interface file's "Desc
     /// Dialog", both variants, and mission info screen, playing movies as
     /// the preference says; none without dialogs.
-    fn text_dialogs(&self) -> Option<MissionDialogs> {
+    pub(super) fn text_dialogs(&self) -> Option<MissionDialogs> {
         let dialogs = self.dialogs.as_ref()?;
         Some(
             MissionDialogs::new(
