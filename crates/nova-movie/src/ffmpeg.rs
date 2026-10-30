@@ -71,7 +71,6 @@ pub struct MovieFile {
     size: (u32, u32),
     decoder: codec::decoder::Video,
     scaler: Option<scaling::Context>,
-    eof_sent: bool,
 }
 
 impl MovieFile {
@@ -103,7 +102,6 @@ impl MovieFile {
             size,
             decoder,
             scaler: None,
-            eof_sent: false,
         })
     }
 
@@ -124,7 +122,6 @@ impl MovieFile {
                 }
                 Ok(()) => {}
                 Err(Error::Eof) => {
-                    self.eof_sent = true;
                     return self.decoder.send_eof();
                 }
                 Err(e) => return Err(e),
@@ -187,10 +184,13 @@ impl FrameSource for MovieFile {
             let mut decoded = frame::Video::empty();
             match self.decoder.receive_frame(&mut decoded) {
                 Ok(()) => return self.convert(&decoded).map(Some).map_err(fail),
-                Err(Error::Other { errno: EAGAIN }) if !self.eof_sent => {
+                // The decoder wants input. Once the end of the stream is
+                // sent, it never does: it hands out what it holds, then
+                // `Eof`.
+                Err(Error::Other { errno: EAGAIN }) => {
                     self.feed().map_err(fail)?;
                 }
-                Err(Error::Eof | Error::Other { errno: EAGAIN }) => return Ok(None),
+                Err(Error::Eof) => return Ok(None),
                 Err(e) => return Err(fail(e)),
             }
         }
