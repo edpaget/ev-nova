@@ -1,4 +1,5 @@
 use super::*;
+use nova_view::DrawLayer;
 
 // A mission dialog's map over flight, through the router: the offer from
 // a ship, here opened as its hail would.
@@ -66,25 +67,58 @@ fn a_dialogs_map_over_flight_takes_the_input_before_the_dialog() {
     assert_eq!(screen.showing(), Showing::Offer, "the offer unanswered");
 }
 
+/// Where `commands` hold the offer's text. The test's dialogs have no
+/// `DLOG` 1016: the offer says so.
+fn offer_text<'a>(mut commands: impl Iterator<Item = &'a DrawCommand>) -> Option<usize> {
+    commands.position(|command| {
+        matches!(command, DrawCommand::Text { text, .. } if text.starts_with("Cannot show the mission offer"))
+    })
+}
+
 #[test]
-fn a_dialogs_map_over_flight_is_drawn_over_the_dialog() {
+fn a_dialogs_map_over_flight_draws_the_scene_then_the_dialog_then_the_map() {
+    let mut screen = offered_in_flight();
+    // Flight alone, shut then open: the scene, and the scene with the map.
+    let mut shut = DrawList::new();
+    flight(&screen).draw(&mut shut);
+    screen.input(&key(MAP, true));
+    let mut open = DrawList::new();
+    flight(&screen).draw(&mut open);
+    let scene: Vec<&DrawCommand> = shut.iter().collect();
+    let open: Vec<&DrawCommand> = open.iter().collect();
+    assert!(!scene.is_empty());
+    assert!(open.starts_with(&scene), "the map draws over the scene");
+    let map = &open[scene.len()..];
+    assert!(!map.is_empty());
+
+    let mut drawn = DrawList::new();
+    screen.draw(&mut drawn);
+    let drawn: Vec<&DrawCommand> = drawn.iter().collect();
+    assert!(drawn.starts_with(&scene), "the paused scene first");
+    assert!(drawn.ends_with(map), "the map last");
+    let offer = offer_text(drawn.iter().copied()).expect("the offer's drawn");
+    assert!(
+        (scene.len()..drawn.len() - map.len()).contains(&offer),
+        "the offer between them"
+    );
+}
+
+#[test]
+fn a_dialogs_map_over_flight_leaves_no_world_over_the_dialog() {
     let mut screen = offered_in_flight();
     screen.input(&key(MAP, true));
     let mut drawn = DrawList::new();
     screen.draw(&mut drawn);
-    let mut map = DrawList::new();
-    flight(&screen).draw(&mut map);
-    let drawn: Vec<&DrawCommand> = drawn.iter().collect();
-    let map: Vec<&DrawCommand> = map.iter().collect();
-    assert!(!map.is_empty());
-    assert!(drawn.ends_with(&map), "the map last");
-    // The test's dialogs have no `DLOG` 1016: the offer says so.
-    let offer_text = drawn.iter().position(|command| {
-        matches!(command, DrawCommand::Text { text, .. } if text.starts_with("Cannot show the mission offer"))
-    });
+    let offer = offer_text(drawn.iter()).expect("the offer's drawn");
+    let world = drawn
+        .layered()
+        .enumerate()
+        .filter(|(_, (layer, _))| *layer == DrawLayer::World)
+        .last()
+        .map(|(at, _)| at);
     assert!(
-        offer_text.is_some_and(|at| at < drawn.len() - map.len()),
-        "the offer under it"
+        world.is_some_and(|last| last < offer),
+        "the last world command, {world:?}, under the offer at {offer}"
     );
 }
 
