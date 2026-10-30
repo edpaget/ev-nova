@@ -537,7 +537,7 @@ mod tests {
         let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
         let wrap = PlayerWrap::of(player).expect("past the edge");
         let mut pods = EscapePods::default();
-        for x in [player.x - 100.0, player.x - WRAP_EDGE - 5.0] {
+        for x in [player.x - 100.0, player.x - WRAP_EDGE * 2.0] {
             let at = Point::new(x, 40.0);
             pods.spawn(
                 at,

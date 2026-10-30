@@ -218,7 +218,7 @@ mod tests {
         let mut puffs = SmokePuffs::default();
         let (near, far) = (
             player - Vec2::new(100.0, 0.0),
-            player - Vec2::new(WRAP_EDGE, 0.0),
+            player - Vec2::new(WRAP_EDGE * 2.0, 0.0),
         );
         puffs.spawn(near, 0, Some(SET_0), false);
         puffs.spawn(far, 0, Some(SET_0), false);

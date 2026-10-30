@@ -12,6 +12,9 @@ const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 0.0);
 
 const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
 
+/// Well beyond the wrap's reach of [`STOOD`], on the way back.
+const FAR: f32 = -WRAP_EDGE * 2.0;
+
 /// What the wrap at [`STOOD`] reaches, and what it leaves: `x` from the
 /// player, on the way.
 const fn off(x: f32) -> Vec2 {
@@ -65,22 +68,22 @@ fn a_shot_that_has_not_moved_moves_with_nothing_to_carry_of_its_move() {
 #[test]
 fn a_shot_beyond_reach_stays() {
     let mut combat = Combat::default();
-    shot_to(&mut combat, off(-WRAP_EDGE));
+    shot_to(&mut combat, off(FAR));
     combat.carry(&wrap(), none_left());
     let shot = &combat.shots[0];
-    assert_eq!(shot.position, off(-WRAP_EDGE));
-    assert_eq!(shot.moved_from, Some(off(-WRAP_EDGE - 10.0)));
+    assert_eq!(shot.position, off(FAR));
+    assert_eq!(shot.moved_from, Some(off(FAR - 10.0)));
 }
 
 #[test]
 fn a_shot_point_defence_ended_moves_by_the_same_test() {
     let mut combat = Combat::default();
     shot_to(&mut combat, off(-100.0));
-    shot_to(&mut combat, off(-WRAP_EDGE));
+    shot_to(&mut combat, off(FAR));
     combat.hidden = std::mem::take(&mut combat.shots);
     combat.carry(&wrap(), none_left());
     assert_eq!(combat.hidden[0].position, off(-100.0) + SHIFT);
-    assert_eq!(combat.hidden[1].position, off(-WRAP_EDGE));
+    assert_eq!(combat.hidden[1].position, off(FAR));
 }
 
 /// The beam of a ship at `x` on the axis, fired in `combat`.
@@ -102,7 +105,7 @@ fn beam_fired_at(combat: &mut Combat, x: f32) {
 fn every_beam_moves_with_no_test() {
     let mut combat = Combat::default();
     beam_fired_at(&mut combat, off(-100.0).x);
-    beam_fired_at(&mut combat, off(-20000.0).x);
+    beam_fired_at(&mut combat, off(FAR).x);
     let before: Vec<(Vec2, Vec2)> = combat.beams.iter().map(|b| (b.start, b.end)).collect();
     assert_eq!(before.len(), 2);
     combat.carry(&wrap(), none_left());
@@ -115,11 +118,11 @@ fn every_beam_moves_with_no_test() {
 #[test]
 fn where_the_player_stood_moves_whatever_it_is_near() {
     let mut combat = Combat {
-        player_stood: Some(off(-WRAP_EDGE)),
+        player_stood: Some(off(FAR)),
         ..Combat::default()
     };
     combat.carry(&wrap(), none_left());
-    assert_eq!(combat.player_stood, Some(off(-WRAP_EDGE) + SHIFT));
+    assert_eq!(combat.player_stood, Some(off(FAR) + SHIFT));
     let mut combat = Combat::default();
     combat.carry(&wrap(), none_left());
     assert_eq!(combat.player_stood, None, "not in the last tick's fight");
@@ -130,13 +133,13 @@ fn a_slots_kept_position_moves_by_the_test_empty_or_not() {
     let mut combat = Combat::default();
     let mut left = [
         Ship::at(1, off(-100.0).x, 0.0),
-        Ship::at(2, off(-WRAP_EDGE).x, 0.0),
+        Ship::at(2, off(FAR).x, 0.0),
     ];
     combat.note_slots(&left.iter_mut().map(Ship::fighter).collect::<Vec<_>>());
     combat.carry(&wrap(), none_left());
     let kept = |berth| combat.slot_ships[&Slot::Berth(berth)].position;
     assert_eq!(kept(1), off(-100.0) + SHIFT);
-    assert_eq!(kept(2), off(-WRAP_EDGE));
+    assert_eq!(kept(2), off(FAR));
 }
 
 // The wrap's pass: the contact walks.
@@ -167,7 +170,7 @@ fn a_shot_carried_meets_a_ship_left_behind_where_its_sprite_stood() {
 
 #[test]
 fn a_shot_left_behind_meets_a_ship_left_behind_where_it_is() {
-    let at = off(-WRAP_EDGE - 100.0);
+    let at = off(FAR);
     assert!(struck_on_the_wraps_pass(at, at, true));
 }
 
@@ -214,7 +217,7 @@ fn a_shot_carried_is_not_spent_on_an_asteroid_it_lands_on_in_the_world() {
 
 #[test]
 fn a_shot_left_behind_meets_an_asteroid_where_it_is() {
-    let at = off(-WRAP_EDGE - 100.0);
+    let at = off(FAR);
     assert!(rock_struck_on_the_wraps_pass(at, at));
 }
 

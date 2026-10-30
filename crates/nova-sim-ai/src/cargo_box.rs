@@ -395,7 +395,7 @@ mod tests {
         let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
         let wrap = PlayerWrap::of(player).expect("past the edge");
         let near = player + Vec2::new(-100.0, 40.0);
-        let far = player + Vec2::new(-WRAP_EDGE, 0.0);
+        let far = player + Vec2::new(-WRAP_EDGE * 2.0, 0.0);
         let at = |position| CargoBox {
             position,
             velocity: Vec2::new(0.5, -1.5),

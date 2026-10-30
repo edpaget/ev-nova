@@ -50,6 +50,9 @@ mod tests {
 
     const PLAYER: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 0.0);
 
+    /// Well beyond the wrap's reach of [`PLAYER`].
+    const FAR: Vec2 = Vec2::new(PLAYER.x - WRAP_EDGE * 2.0, 0.0);
+
     fn wrap() -> PlayerWrap {
         PlayerWrap::of(PLAYER).expect("past the edge")
     }
@@ -84,10 +87,10 @@ mod tests {
 
     #[test]
     fn a_ship_beyond_reach_stays_and_is_named_as_left_behind() {
-        let (near, far) = (PLAYER, PLAYER + Vec2::new(-WRAP_EDGE, 0.0));
-        let mut traffic = traffic_of(&[near, far, near]);
+        let near = PLAYER;
+        let mut traffic = traffic_of(&[near, FAR, near]);
         let left = traffic.carry(&wrap());
-        assert_eq!(position(&traffic, 1), far);
+        assert_eq!(position(&traffic, 1), FAR);
         assert_eq!(left, [traffic.npcs()[1].id]);
     }
 
@@ -110,15 +113,14 @@ mod tests {
     fn a_ship_an_in_flight_move_left_behind_comes_back_moved() {
         let (old, new) = (SystemId(130), SystemId(131));
         let near = PLAYER + Vec2::new(-100.0, 40.0);
-        let far = PLAYER + Vec2::new(-WRAP_EDGE, 0.0);
         let table = SpawnTable::default();
-        let mut traffic = traffic_of(&[near, far]);
+        let mut traffic = traffic_of(&[near, FAR]);
         let away = Leave::Held { from: old, to: new };
         traffic.retarget(table.clone(), &BTreeSet::new(), away);
         assert_eq!(traffic.carry(&wrap()), [], "not in the system");
         let back = Leave::Held { from: new, to: old };
         traffic.retarget(table, &BTreeSet::new(), back);
         assert_eq!(position(&traffic, 0), near + Vec2::new(-WRAP_SHIFT, 0.0));
-        assert_eq!(position(&traffic, 1), far);
+        assert_eq!(position(&traffic, 1), FAR);
     }
 }

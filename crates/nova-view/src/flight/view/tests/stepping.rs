@@ -897,7 +897,7 @@ fn across_a_wrap_the_ships_and_the_camera_are_drawn_within_a_passs_move_of_the_f
 #[test]
 fn an_npc_the_wrap_left_is_drawn_where_the_frame_has_it() {
     let mut view = stepping(catalog());
-    let far = STOOD - Vec2::new(WRAP_EDGE, 0.0);
+    let far = STOOD - Vec2::new(WRAP_EDGE * 2.0, 0.0);
     after_a_wrap(&mut view, far, far);
     let npc = view.frame.ships[1];
     for alpha in [0.0, 0.5, 1.0] {
@@ -1053,7 +1053,7 @@ fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_
     let mut view = stepping(catalog);
     let (near, far) = (
         STOOD + Vec2::new(-100.0, 0.0),
-        STOOD - Vec2::new(WRAP_EDGE, 0.0),
+        STOOD - Vec2::new(WRAP_EDGE * 2.0, 0.0),
     );
     effects_about(&mut view, near, far);
     let (booms, pods, puffs, particle) = places(&view);

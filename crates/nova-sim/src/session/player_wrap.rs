@@ -140,13 +140,13 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_on_the_edge_stays() {
+    fn a_ship_inside_the_edge_stays() {
         let catalog = catalog();
         let mut session = flying(&catalog);
-        let edge = Vec2::new(WRAP_EDGE, -WRAP_EDGE);
-        session.ship.player.position = edge;
+        let inside = Vec2::new(WRAP_EDGE - 100.0, 100.0 - WRAP_EDGE);
+        session.ship.player.position = inside;
         pass(&mut session, &catalog);
-        assert_eq!(session.player().position, edge);
+        assert_eq!(session.player().position, inside);
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
         session.ship.player.position = PAST;
         let (near, far) = (
             PAST + Vec2::new(-200.0, 50.0),
-            PAST + Vec2::new(-WRAP_EDGE, 0.0),
+            PAST + Vec2::new(-WRAP_EDGE * 2.0, 0.0),
         );
         for at in [near, far] {
             let mut ship = npc(0, ShipStats::new(FAST, &[]));
@@ -180,7 +180,7 @@ mod tests {
         session.ship.player.position = PAST;
         let (near, far) = (
             PAST + Vec2::new(-200.0, 50.0),
-            PAST + Vec2::new(-WRAP_EDGE, 0.0),
+            PAST + Vec2::new(-WRAP_EDGE * 2.0, 0.0),
         );
         for at in [near, far] {
             let boxes = &mut session.space.boxes;

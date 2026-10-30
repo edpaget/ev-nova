@@ -457,6 +457,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::num::NonZeroU16;
 
+    use nova_sim::player_wrap::WRAP_SHIFT;
+
     use super::*;
     use crate::{Blend, DrawCommand};
 
@@ -908,7 +910,7 @@ mod tests {
         field.snapshot();
         let was = surroundings();
         let moved = Surroundings {
-            ship: was.ship + Vec2::new(-25_000.0, 0.0),
+            ship: was.ship + Vec2::new(-WRAP_SHIFT, 0.0),
             ..was
         };
         field.handle(&moved, &mut Scripted::default());
@@ -932,7 +934,7 @@ mod tests {
         let mut field = one_star(ship.ship.x, ship.ship.y, 0.0, (0, 0));
         field.handle(&ship, &mut Scripted::default());
         let moved = Surroundings {
-            ship: ship.ship + Vec2::new(-25_000.0, 0.0),
+            ship: ship.ship + Vec2::new(-WRAP_SHIFT, 0.0),
             ..ship
         };
         let (width, size) = (830_i32, 5);
@@ -945,7 +947,9 @@ mod tests {
             assert!(passes < 100, "it comes back");
         }
         let step = width + 2 * size;
-        assert_eq!(passes, (25_000 + step - 1) / step, "rounded up");
+        #[allow(clippy::cast_possible_truncation)]
+        let shift = WRAP_SHIFT as i32;
+        assert_eq!(passes, (shift + step - 1) / step, "rounded up");
     }
 
     #[test]
