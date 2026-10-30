@@ -406,8 +406,11 @@ impl Screen for DescDialog {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// Only a press held on an arrow moves anything: one pixel a Mac tick,
+    /// as `_TextDialogFilter`'s loops do (@0x52172-0x5237f).
+    fn tick(&mut self, dt: Duration) {
+        self.dialog.tick(dt);
+    }
 
     /// The plain dialog draws its frame under its items. The picture
     /// variant draws [`PICTURE_FRAME`] stretched over the dialog, as
@@ -1329,6 +1332,102 @@ mod tests {
         let at = desc.dialog().item_bounds(SCROLL_UP_ITEM).expect("up");
         let bounds = desc.dialog().bounds();
         assert_eq!(at.min.y - bounds.min.y, 215.0);
+    }
+
+    /// A press of the left button on `item`.
+    fn press_on(desc: &mut DescDialog, item: usize) {
+        let at = desc.dialog().item_bounds(item).expect("the item").center();
+        desc.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        });
+    }
+
+    fn release_on(desc: &mut DescDialog, item: usize) {
+        let at = desc.dialog().item_bounds(item).expect("the item").center();
+        desc.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at,
+        });
+    }
+
+    /// Thirty lines in stock 3003's 262 high box: 98 is as far as they go.
+    fn long_stock_desc() -> DescDialog {
+        stock_desc(&("line\r".repeat(29) + "line"))
+    }
+
+    const TICK: Duration = Duration::from_nanos(16_666_666);
+
+    #[test]
+    fn a_held_arrow_scrolls_as_the_dialog_ticks_and_stops_at_the_release() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert_eq!(desc.scroll_offset(), 1.0);
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 4.0);
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 4.0);
+    }
+
+    #[test]
+    fn cancelling_the_pointer_ends_a_hold() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.cancel_pointer();
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 1.0);
+    }
+
+    /// No `PlaySound` in `_TrackTextButtons`, `_ScrollDialogText` or the
+    /// filter's scroll and mouse arms.
+    #[test]
+    fn every_arrow_path_is_silent() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.tick(TICK * 3);
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(Key::Home));
+        press_on(&mut desc, SCROLL_UP_ITEM);
+        desc.tick(TICK * 3);
+        release_on(&mut desc, SCROLL_UP_ITEM);
+        assert_eq!(desc.take_sounds(), []);
+    }
+
+    #[test]
+    fn done_still_tracks_and_closes_with_the_arrows_there() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, DONE_ITEM);
+        assert!(!desc.closed());
+        release_on(&mut desc, DONE_ITEM);
+        assert!(desc.closed());
+        assert_eq!(desc.take_sounds(), []);
+    }
+
+    /// `_TextDialogFilter`'s held loops read no events, so the original's
+    /// key waits for the release (@0x52242). Here it acts at once.
+    #[test]
+    fn a_key_pressed_during_a_hold_acts_at_once_and_the_hold_carries_on() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(Key::Down));
+        assert_eq!(desc.scroll_offset(), 1.0 + ARROW_UNITS);
+        desc.tick(TICK);
+        assert_eq!(desc.scroll_offset(), 2.0 + ARROW_UNITS);
+        desc.input(&key(Key::Home));
+        assert_eq!(desc.scroll_offset(), 0.0);
+        desc.tick(TICK);
+        assert_eq!(desc.scroll_offset(), 1.0);
+    }
+
+    #[test]
+    fn a_key_that_closes_the_dialog_closes_it_during_a_hold() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(Key::Enter));
+        assert!(desc.closed());
     }
 
     /// `_TextDialogFilter` @0x51f77 maps no Tab or Space.

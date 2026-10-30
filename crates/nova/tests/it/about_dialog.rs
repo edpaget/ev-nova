@@ -23,7 +23,7 @@ use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::text::LINE_HEIGHT;
-use nova_view::ui::desc::{DONE_ITEM, TEXT_ITEM};
+use nova_view::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM, TEXT_ITEM};
 use nova_view::{Key, MouseButton};
 
 /// A 1024 x 768 window at `scale`.
@@ -183,6 +183,23 @@ impl Harness {
         }
     }
 
+    /// Moves to the logical point `at` and presses there.
+    fn press_at(&mut self, at: Point) {
+        let scale = f64::from(self.scale());
+        self.send(WindowEvent::PointerMoved {
+            px: (f64::from(at.x) * scale, f64::from(at.y) * scale),
+        });
+        self.send(WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        });
+    }
+
+    /// How far the open About text is scrolled.
+    fn scroll_offset(&self) -> f32 {
+        self.app.screen().about().expect("open").scroll_offset()
+    }
+
     fn scale(&self) -> f32 {
         self.window.scale as f32
     }
@@ -282,6 +299,34 @@ fn a_click_on_done_in_window_pixels_closes_it() {
         harness.click(done.center());
         assert_eq!(harness.showing(), Showing::ShipBrowser, "at {scale}");
     }
+}
+
+/// A release off the window never reaches the screen as a release, so the
+/// app ends the hold through `cancel_pointer`, where the original's loop
+/// ends on `StillDown` wherever the pointer is.
+#[test]
+#[allow(clippy::float_cmp)] // Whole pixels, unmoved.
+fn a_held_arrow_let_go_of_off_the_window_stops_scrolling() {
+    let mut harness = Harness::new(1.0, true);
+    harness.press(Key::Char('i'));
+    let arrow = harness.item_bounds(SCROLL_DOWN_ITEM).center();
+    harness.frame();
+    harness.press_at(arrow);
+    harness.frame();
+    harness.frame();
+    harness.frame();
+    assert!(harness.scroll_offset() > 1.0, "it scrolls under the frames");
+    harness.send(WindowEvent::PointerLeft);
+    harness.frame();
+    assert!(harness.scroll_offset() > 2.0, "leaving doesn't stop it");
+    harness.send(WindowEvent::PointerButton {
+        button: MouseButton::Left,
+        pressed: false,
+    });
+    let held = harness.scroll_offset();
+    harness.frame();
+    harness.frame();
+    assert_eq!(harness.scroll_offset(), held);
 }
 
 #[test]

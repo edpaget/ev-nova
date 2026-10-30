@@ -32,6 +32,7 @@
 //! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)).
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use nova_sim::{RuleKey, RuleSource, Rulebook};
 
@@ -40,11 +41,11 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, MouseButton};
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
-use super::scroll_arrows::ScrollArrow;
+use super::scroll_arrows::{ArrowHold, ScrollArrow};
 use super::scroll_text::ScrollText;
 use super::slice::{Axis, three_slice};
 
@@ -421,6 +422,8 @@ pub struct Dialog {
     tracker: ButtonTracker,
     /// The button held drawn pressed, by index ([`Dialog::hold_pressed`]).
     held: Option<usize>,
+    /// The press held on a scroll arrow, if any.
+    hold: Option<ArrowHold>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -508,6 +511,7 @@ impl Dialog {
             tracked: None,
             tracker: ButtonTracker::default(),
             held: None,
+            hold: None,
         }
     }
 
@@ -719,6 +723,8 @@ impl Dialog {
     ///
     /// - A click (press and release, tracked as a button tracks it) on an
     ///   enabled, shown item activates it.
+    /// - A press on a [`Role::ScrollArrow`] scrolls its text, and goes on
+    ///   doing so in [`Self::tick`] until let go.
     /// - Return activates the default item, and Escape the cancel item.
     /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
     ///   next enabled button, and Space activates the focused one. Under
@@ -802,12 +808,49 @@ impl Dialog {
     /// tracker (`_TrackTextButtons` @0x26c4c and its kin) and in the
     /// Dialog Manager: a press on an edge two items share goes to the
     /// right or lower one.
+    ///
+    /// A scroll arrow goes as `_TextDialogFilter` takes it. A left press
+    /// on one whose flag is set starts a hold and takes its first step at
+    /// once (@0x52172-0x5237f). That hold reads only the button, so moves
+    /// do nothing and only a left release ends it, or a left press, which
+    /// makes up for a release that never came. Any other press on an arrow
+    /// is tracked like a button's, and its click is one gated step
+    /// (@0x5b0af-0x5b130), which reports no item.
     fn pointer(&mut self, input: &Input) -> Option<DialogEvent> {
+        if self.hold.is_some() {
+            match *input {
+                Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: true,
+                    ..
+                } => {}
+                Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                } => {
+                    self.hold = None;
+                    return None;
+                }
+                _ => return None,
+            }
+        }
         if let Input::PointerButton {
-            pressed: true, at, ..
+            button,
+            pressed: true,
+            at,
         } = *input
         {
             self.cancel_pointer();
+            if button == MouseButton::Left
+                && let Some(arrow) = self.arrow_to_hold(at)
+            {
+                self.hold = Some(ArrowHold::new(arrow));
+                if let Some(text) = self.scroll_text_mut() {
+                    text.scroll_units(arrow.step());
+                }
+                return None;
+            }
             self.tracked = self
                 .items
                 .iter()
@@ -826,7 +869,32 @@ impl Dialog {
         if !self.tracker.armed() {
             self.tracked = None;
         }
-        activated.then_some(DialogEvent::Item(index + 1))
+        if !activated {
+            return None;
+        }
+        if let Widget::ScrollArrow(arrow) = self.items[index].widget {
+            if let Some(text) = self.scroll_text_mut() {
+                text.scroll_arrow(arrow);
+            }
+            return None;
+        }
+        Some(DialogEvent::Item(index + 1))
+    }
+
+    /// The scroll arrow a left press at `at` holds: the one there whose
+    /// flag is set, item 5 before item 6, as the filter tests them.
+    fn arrow_to_hold(&self, at: Point) -> Option<ScrollArrow> {
+        let text = self.scroll_text()?;
+        self.items.iter().find_map(|item| match item.widget {
+            Widget::ScrollArrow(arrow)
+                if item.active()
+                    && arrow.can_scroll(text)
+                    && self.hit_area(item).contains_half_open(at) =>
+            {
+                Some(arrow)
+            }
+            _ => None,
+        })
     }
 
     /// Where `item` takes clicks: the part of it inside the dialog, since
@@ -862,10 +930,28 @@ impl Dialog {
         self.held.map(|index| index + 1)
     }
 
-    /// Abandons any click in progress without activating anything.
+    /// Advances a press held on a scroll arrow: one step for each Mac tick,
+    /// each taken alone, so the text's sticky flag goes as the original's
+    /// loop leaves it (@0x52172-0x5237f). It runs on past the ends, as
+    /// that loop does.
+    pub fn tick(&mut self, dt: Duration) {
+        let Some(hold) = &mut self.hold else {
+            return;
+        };
+        let (arrow, steps) = (hold.arrow(), hold.advance(dt));
+        if let Some(text) = self.scroll_text_mut() {
+            for _ in 0..steps {
+                text.scroll_units(arrow.step());
+            }
+        }
+    }
+
+    /// Abandons any click in progress without activating anything, and any
+    /// press held on a scroll arrow.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
         self.tracked = None;
+        self.hold = None;
     }
 
     /// Draws the frame, if there is one, then each shown and drawn item in
@@ -891,10 +977,10 @@ impl Dialog {
             if !(item.shown && item.drawn) {
                 continue;
             }
+            let tracked = self.tracked == Some(index) && self.tracker.pressed();
             match &item.widget {
                 Widget::Button(button) => {
-                    let pressed = (self.tracked == Some(index) && self.tracker.pressed())
-                        || self.held == Some(index);
+                    let pressed = tracked || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
                     if self.focus == Some(index) {
                         outline(list, item.bounds, self.style.up);
@@ -914,8 +1000,10 @@ impl Dialog {
                     let button = self
                         .scroll_text()
                         .and_then(|text| arrow.button(item.bounds, text));
+                    let held = self.hold.is_some_and(|hold| hold.arrow() == *arrow);
                     if let Some(button) = button {
-                        button.draw(false, &self.skin, &self.style, &self.metrics, list);
+                        let pressed = tracked || held;
+                        button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
                     }
                 }
                 Widget::Blank => {}

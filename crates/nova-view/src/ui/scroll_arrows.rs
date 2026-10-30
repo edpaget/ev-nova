@@ -8,8 +8,17 @@
 //! original's arrows are up to date one event pass after any key:
 //! `_ShowTextDialog`'s loop invalidates an arrow whose flag changed
 //! (@0x5b273-0x5b31f). Reading the flags at each draw matches that.
+//!
+//! A press on an arrow is [`Dialog`](super::Dialog)'s: an [`ArrowHold`]
+//! while its flag is set, and otherwise tracked as `_TrackTextButtons`
+//! @0x26bb0 tracks it. Nothing here plays a sound, as `_DrawButton`,
+//! `_DrawTextButtons`, `_TrackTextButtons`, `_ScrollDialogText` and the
+//! filter's arms play none.
+
+use std::time::Duration;
 
 use crate::geometry::Bounds;
+use crate::time::sixtieths;
 
 use super::button::Button;
 use super::scroll_text::ScrollText;
@@ -33,17 +42,61 @@ impl ScrollArrow {
         }
     }
 
+    /// Whether this arrow's flag is set for `text`.
+    pub(super) fn can_scroll(self, text: &ScrollText) -> bool {
+        match self {
+            Self::Up => text.can_scroll_up(),
+            Self::Down => text.can_scroll_down(),
+        }
+    }
+
     /// The button this arrow draws at `rect` while `text` is as it is, or
     /// none with both of its flags clear.
     pub(super) fn button(self, rect: Bounds, text: &ScrollText) -> Option<Button> {
-        let (up, down) = (text.can_scroll_up(), text.can_scroll_down());
-        (up || down).then(|| Button {
-            enabled: match self {
-                Self::Up => up,
-                Self::Down => down,
-            },
+        (text.can_scroll_up() || text.can_scroll_down()).then(|| Button {
+            enabled: self.can_scroll(text),
             ..Button::new(rect, self.label())
         })
+    }
+
+    /// One step of a held press, in units toward the text's end:
+    /// `_ScrollDialogText(±1, immediate)` (@0x52172-0x5237f).
+    pub(super) const fn step(self) -> f32 {
+        match self {
+            Self::Up => -1.0,
+            Self::Down => 1.0,
+        }
+    }
+}
+
+/// A press held on a scroll arrow, as `_TextDialogFilter`'s loops hold one
+/// (@0x52172-0x5237f): a step at once, then one each Mac tick, 60 px/s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ArrowHold {
+    arrow: ScrollArrow,
+    elapsed: Duration,
+}
+
+impl ArrowHold {
+    /// A press just made on `arrow`, whose first step is the caller's.
+    pub(super) const fn new(arrow: ScrollArrow) -> Self {
+        Self {
+            arrow,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    /// The arrow held.
+    pub(super) const fn arrow(self) -> ScrollArrow {
+        self.arrow
+    }
+
+    /// How many steps fall due after `dt` more: one for each whole Mac tick
+    /// the hold has passed.
+    pub(super) fn advance(&mut self, dt: Duration) -> u128 {
+        let before = sixtieths(self.elapsed);
+        self.elapsed += dt;
+        sixtieths(self.elapsed) - before
     }
 }
 
@@ -57,10 +110,13 @@ mod tests {
     use crate::draw::{DrawCommand, DrawList};
     use crate::font::Font;
     use crate::geometry::{Bounds, Point};
-    use crate::input::{Input, Key};
+    use crate::input::{Input, Key, MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::button::{Button, ButtonSkin, ButtonStyle};
-    use crate::ui::dialog::{Dialog, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role};
+    use crate::ui::dialog::{
+        Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
+    };
+    use crate::ui::scroll_text::ARROW_UNITS;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -259,5 +315,320 @@ mod tests {
             });
             assert_eq!(event, None, "a disabled item of another kind");
         }
+    }
+
+    // The held press, `_TextDialogFilter` @0x52172-0x5237f.
+
+    fn left(pressed: bool, at: Point) -> Input {
+        Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        }
+    }
+
+    fn right(pressed: bool, at: Point) -> Input {
+        Input::PointerButton {
+            button: MouseButton::Right,
+            pressed,
+            at,
+        }
+    }
+
+    fn up_at(dialog: &Dialog) -> Point {
+        dialog.item_bounds(UP_ITEM).expect("up").center()
+    }
+
+    fn down_at(dialog: &Dialog) -> Point {
+        dialog.item_bounds(DOWN_ITEM).expect("down").center()
+    }
+
+    fn offset(dialog: &Dialog) -> f32 {
+        dialog.scroll_text().expect("the text").offset()
+    }
+
+    /// One Mac tick.
+    const TICK: Duration = Duration::from_nanos(16_666_666);
+
+    /// Five hundred pixels of lines, for holds that don't reach an end.
+    fn tall() -> Dialog {
+        let lines: Vec<String> = (0..50).map(|n| format!("l{n}")).collect();
+        dialog(&lines.join("\r"))
+    }
+
+    #[test]
+    fn a_press_on_the_down_arrow_moves_a_pixel_at_once_and_draws_it_pressed() {
+        let mut dialog = long();
+        let at = down_at(&dialog);
+        assert_eq!(dialog.input(&left(true, at)), None);
+        assert_eq!(offset(&dialog), 1.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(true, true)].concat()
+        );
+    }
+
+    #[test]
+    fn a_press_on_the_up_arrow_moves_a_pixel_back_at_once_and_draws_it_pressed() {
+        let mut dialog = at_offset(10.0);
+        let at = up_at(&dialog);
+        assert_eq!(dialog.input(&left(true, at)), None);
+        assert_eq!(offset(&dialog), 9.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, true), down(true, false)].concat()
+        );
+    }
+
+    #[test]
+    fn a_press_on_an_arrows_left_and_top_edges_holds_and_on_its_right_and_bottom_doesnt() {
+        for (dx, dy, held) in [
+            (0.0, 0.0, true),
+            (22.0, 22.0, true),
+            (23.0, 10.0, false),
+            (10.0, 23.0, false),
+        ] {
+            let mut dialog = long();
+            let corner = dialog.item_bounds(DOWN_ITEM).expect("down").min;
+            let at = Point::new(corner.x + dx, corner.y + dy);
+            dialog.input(&left(true, at));
+            assert_eq!(offset(&dialog) > 0.0, held, "{dx} {dy}");
+        }
+    }
+
+    #[test]
+    fn a_second_button_on_an_arrow_holds_nothing() {
+        let mut dialog = long();
+        let at = down_at(&dialog);
+        dialog.input(&right(true, at));
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 0.0);
+    }
+
+    #[test]
+    fn each_mac_tick_of_a_hold_moves_a_pixel_and_a_frame_of_a_thirtieth_two() {
+        let mut dialog = tall();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 2.0);
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 3.0);
+        dialog.tick(Duration::from_secs(1) / 30);
+        assert_eq!(offset(&dialog), 5.0);
+    }
+
+    #[test]
+    fn frames_shorter_than_a_tick_add_up_to_one() {
+        let mut dialog = tall();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        for expected in [1.0, 2.0, 2.0, 3.0] {
+            dialog.tick(TICK / 2 + Duration::from_nanos(1));
+            assert_eq!(offset(&dialog), expected);
+        }
+    }
+
+    #[test]
+    fn with_no_hold_a_tick_moves_nothing() {
+        let mut dialog = tall();
+        dialog.tick(TICK * 10);
+        assert_eq!(offset(&dialog), 0.0);
+    }
+
+    /// The loop tests only `StillDown`.
+    #[test]
+    fn dragging_off_the_arrow_keeps_it_scrolling_and_drawn_pressed() {
+        let mut dialog = tall();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.input(&Input::PointerMoved(Point::new(0.0, 0.0)));
+        dialog.input(&Input::PointerLeft);
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 2.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(true, true)].concat()
+        );
+    }
+
+    #[test]
+    fn the_release_stops_the_hold_on_the_arrow_or_off_it_and_it_draws_up_again() {
+        for at in [None, Some(Point::new(0.0, 0.0))] {
+            let mut dialog = tall();
+            let arrow = down_at(&dialog);
+            dialog.input(&left(true, arrow));
+            assert_eq!(dialog.input(&left(false, at.unwrap_or(arrow))), None);
+            dialog.tick(TICK * 5);
+            assert_eq!(offset(&dialog), 1.0, "{at:?}");
+            assert_eq!(
+                after_the_text(&dialog),
+                [up(true, false), down(true, false)].concat()
+            );
+        }
+    }
+
+    #[test]
+    fn held_to_the_end_it_turns_disabled_after_the_failed_step_and_runs_on() {
+        let mut dialog = long();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.tick(TICK * 23);
+        assert_eq!(offset(&dialog), END);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(true, true)].concat(),
+            "it moved on the way there"
+        );
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), END);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(false, true)].concat(),
+            "the failed step clears it"
+        );
+        dialog.tick(TICK * 5);
+        dialog.input(&left(false, at));
+        let up_arrow = up_at(&dialog);
+        dialog.input(&left(true, up_arrow));
+        assert_eq!(offset(&dialog), END - 1.0, "scrolling back is free");
+        assert!(dialog.scroll_text().expect("the text").can_scroll_down());
+    }
+
+    #[test]
+    fn held_past_the_top_it_runs_on_and_keeps_up_disabled() {
+        let mut dialog = at_offset(2.0);
+        let at = up_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 0.0);
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 0.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(false, true), down(true, false)].concat()
+        );
+    }
+
+    #[test]
+    fn cancelling_the_pointer_ends_the_hold() {
+        let mut dialog = tall();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.cancel_pointer();
+        dialog.tick(TICK * 5);
+        assert_eq!(offset(&dialog), 1.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(true, false), down(true, false)].concat()
+        );
+    }
+
+    /// A press during a hold recovers a release that never came.
+    #[test]
+    fn a_left_press_during_a_hold_ends_it_and_acts_as_any_press() {
+        let mut dialog = tall();
+        let arrow = down_at(&dialog);
+        let done = dialog.item_bounds(1).expect("Okay").center();
+        dialog.input(&left(true, arrow));
+        assert_eq!(dialog.input(&left(true, done)), None);
+        dialog.tick(TICK * 5);
+        assert_eq!(offset(&dialog), 1.0, "the hold is over");
+        assert_eq!(dialog.pressed_item(), Some(1));
+        assert_eq!(dialog.input(&left(false, done)), Some(DialogEvent::Item(1)));
+    }
+
+    #[test]
+    fn a_left_press_on_the_other_arrow_during_a_hold_holds_that_one() {
+        let mut dialog = tall();
+        let down_arrow = down_at(&dialog);
+        let up_arrow = up_at(&dialog);
+        dialog.input(&left(true, down_arrow));
+        dialog.tick(TICK * 4);
+        dialog.input(&left(true, up_arrow));
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 3.0, "5, then two back");
+    }
+
+    #[test]
+    fn a_second_buttons_press_and_release_leave_a_hold_alone() {
+        let mut dialog = tall();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.input(&right(true, at));
+        dialog.input(&right(false, at));
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 2.0);
+    }
+
+    /// `_TrackTextButtons` takes a press on an arrow whose flag is clear
+    /// (@0x5238c-0x523f7), and `_ShowTextDialog` tests the flag again
+    /// (@0x5b0b5-0x5b0bd, @0x5b0f7-0x5b0ff).
+    #[test]
+    fn a_press_on_an_arrow_with_its_flag_clear_scrolls_nothing_and_activates_nothing() {
+        let mut dialog = long();
+        let at = up_at(&dialog);
+        assert_eq!(dialog.input(&left(true, at)), None);
+        assert_eq!(offset(&dialog), 0.0);
+        dialog.tick(TICK * 5);
+        assert_eq!(offset(&dialog), 0.0);
+        assert_eq!(dialog.input(&left(false, at)), None);
+        assert_eq!(offset(&dialog), 0.0);
+        assert_eq!(
+            after_the_text(&dialog),
+            [up(false, false), down(true, false)].concat()
+        );
+    }
+
+    /// Only the engine's wheel can set a flag between the press and the
+    /// release.
+    #[test]
+    fn a_click_on_an_arrow_whose_flag_a_wheel_set_steps_ten_pixels_on_the_release() {
+        let mut dialog = long();
+        let at = up_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.input(&Input::Scroll {
+            delta: ScrollDelta::Units(20.0),
+            at: dialog.item_bounds(3).expect("the text").center(),
+        });
+        assert_eq!(offset(&dialog), 20.0);
+        assert_eq!(dialog.input(&left(false, at)), None);
+        assert_eq!(offset(&dialog), 20.0 - ARROW_UNITS);
+    }
+
+    #[test]
+    fn a_click_on_the_down_arrow_whose_flag_a_wheel_set_steps_ten_pixels_too() {
+        let mut dialog = long();
+        dialog
+            .scroll_text_mut()
+            .expect("the text")
+            .clear_can_scroll_down();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        assert_eq!(offset(&dialog), 0.0, "tracked, not held");
+        dialog.input(&Input::Scroll {
+            delta: ScrollDelta::Units(5.0),
+            at: dialog.item_bounds(3).expect("the text").center(),
+        });
+        assert_eq!(dialog.input(&left(false, at)), None);
+        assert_eq!(offset(&dialog), 5.0 + ARROW_UNITS);
+    }
+
+    #[test]
+    fn a_tracked_arrow_released_off_it_does_nothing() {
+        let mut dialog = at_offset(5.0);
+        let at = up_at(&dialog);
+        dialog
+            .scroll_text_mut()
+            .expect("the text")
+            .clear_can_scroll_down();
+        let down_arrow = down_at(&dialog);
+        dialog.input(&left(true, down_arrow));
+        dialog.input(&Input::Scroll {
+            delta: ScrollDelta::Units(1.0),
+            at: dialog.item_bounds(3).expect("the text").center(),
+        });
+        assert_eq!(dialog.input(&left(false, at)), None);
+        assert_eq!(offset(&dialog), 6.0);
     }
 }
