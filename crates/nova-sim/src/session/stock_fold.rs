@@ -93,10 +93,11 @@ mod tests {
     use crate::control::{Script, SetOp};
     use crate::outfitter::OutfitFlags;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::session::Session;
+    use crate::session::ship_change::ClassChange;
     use crate::session::tests::{
         GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted, shipbuying, stock_weapons,
     };
+    use crate::session::{ReservePolicy, Session};
     use crate::shipyard::ShipRefusal;
     use crate::testkit::{FAST, FakePilotCatalog, land_now, outfit, ship};
 
@@ -269,6 +270,29 @@ mod tests {
         catalog.ship_records[1].on_purchase = Script::parse("G340");
         let mut session = bought(&catalog, Rulebook::default());
         assert_eq!(session.pilot().owned(LICENCE), 1, "granted");
+        assert_eq!(trade_in(&mut session), WITH_STOCK);
+    }
+
+    /// A change of class by a path with no fold of its own (Use As My
+    /// Ship, the eject, the pod's ship) still folds: `become_class` does.
+    /// It is called directly, landed, since those paths run only in
+    /// flight and every landing folds as well.
+    #[test]
+    fn a_change_of_class_folds_the_stock() {
+        let catalog = stocked();
+        let mut session = bought(&catalog, Rulebook::default());
+        let record = catalog
+            .ship_records
+            .iter()
+            .find(|record| record.id == NEW)
+            .cloned()
+            .expect("ship 129");
+        let change = ClassChange {
+            outfits: session.pilot.outfits.clone(),
+            reserves: ReservePolicy::Hold,
+        };
+        session.become_class(&record, change, |_| {});
+        assert_eq!(session.ship.held_stock, BTreeMap::new());
         assert_eq!(trade_in(&mut session), WITH_STOCK);
     }
 
