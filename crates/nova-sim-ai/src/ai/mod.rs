@@ -942,6 +942,13 @@ impl<'a> Surroundings<'a> {
         self.condition_of(ship).is_some_and(Condition::standing)
     }
 
+    /// Whether `ship` is breaking up, still in its slot: `_IsDying`, as the
+    /// attack block reads its target (@0x8e3ef).
+    #[must_use]
+    pub fn breaking_up(&self, ship: ShipRef) -> bool {
+        matches!(self.condition_of(ship), Some(Condition::Dying { .. }))
+    }
+
     /// Whether `ship` is [`standing`](Self::standing) and done arriving
     /// ([`Npc::arrived`]). None of the original's routines reads this: the
     /// only arrival they test of another ship is goal 0x15, through

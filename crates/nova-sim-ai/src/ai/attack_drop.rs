@@ -42,7 +42,6 @@
 //! sound and no draw.
 
 use crate::ai::{Decision, Goal, Surroundings};
-use crate::combat::hull::Condition;
 use crate::traffic::npc::Npc;
 
 /// Whether the block drops an attack `goal` of `npc` among `around` (see
@@ -52,7 +51,7 @@ pub fn drops(npc: &Npc, goal: Goal, ends_wait: bool, around: &Surroundings) -> b
     (!npc.wait_running() || ends_wait)
         && goal
             .attacking()
-            .is_some_and(|ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. })))
+            .is_some_and(|ship| around.breaking_up(ship))
 }
 
 /// `decision` with the block's drop applied (see the module docs).
@@ -76,6 +75,7 @@ mod tests {
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
     use crate::ai::{CommCall, Help};
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::traffic::npc::{AiType, Mode};
 
     const DYING: Condition = Condition::Dying {

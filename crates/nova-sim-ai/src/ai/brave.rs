@@ -24,12 +24,11 @@ use crate::ai::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
-use crate::traffic::provocation::{attack_breaking_up, fight_on_gone};
+use crate::traffic::provocation::fight_on_gone;
 
 /// How near, in pixels on either axis, a brave trader's attacker must be
 /// for it to fight back (`cmpw $0x4e2`).
@@ -92,28 +91,26 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 impl Behaviour for BraveTrader {
     /// Its think's goal ([`think`]), with a distress call
     /// fleeing or fighting a warship or interceptor ([`brave_call`]), and a
-    /// call for reinforcements fleeing (state 3, @0x8b6dc). An attack on a
-    /// ship breaking up ends with its provocation and its target
-    /// ([`attack_breaking_up`]): `_BraveTraderAI` has no drop of its own,
-    /// so the high level ends it (@0x8e3ef → @0x8e714-0x8e726: goal 0,
-    /// target -1, +0x96 0, the sub kept), after the think's call. A fight on a ship gone
-    /// from its slot ends with its target, and a flight with its
-    /// provocation too ([`fight_on_gone`]), after the think's calls.
+    /// call for reinforcements fleeing (state 3, @0x8b6dc). `_BraveTraderAI`
+    /// has no drop of its own, so an attack on a ship breaking up stands
+    /// here, and the high level ends it after the think's call
+    /// ([`attack_drop`](crate::ai::attack_drop), which `NovaAi` runs). A
+    /// fight on a ship gone from its slot ends with its target, and a
+    /// flight with its provocation too ([`fight_on_gone`]), after the
+    /// think's calls.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
         let on_gone = fight_on_gone(thought, around);
-        let breaking_up = thought
-            .attacking()
-            .is_some_and(|ship| matches!(around.condition_of(ship), Some(Condition::Dying { .. })));
-        let ended = on_gone.is_some() || breaking_up;
         Decision {
-            goal: if ended { Goal::Idle } else { thought },
+            goal: if on_gone.is_some() {
+                Goal::Idle
+            } else {
+                thought
+            },
             comm_call: brave_call(thought, around),
             calls_reinforcements: matches!(thought, Goal::Flee(_)),
-            forgets_provocation: on_gone.unwrap_or(false)
-                || attack_breaking_up(npc, thought, around),
-            clears_target: ended,
-            keeps_pursuit: breaking_up,
+            forgets_provocation: on_gone.unwrap_or(false),
+            clears_target: on_gone.is_some(),
             ..Decision::default()
         }
     }
@@ -140,8 +137,8 @@ impl Behaviour for BraveTrader {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::ai::CommCall;
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
+    use crate::ai::{CommCall, NovaAi};
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
@@ -319,7 +316,8 @@ mod tests {
         );
     }
 
-    /// The brave trader's decision among `npcs`, its attacker breaking up.
+    /// The brave trader's whole decision among `npcs`, its think and the
+    /// high level after it, its attacker breaking up.
     fn decided_on_dying(mut npcs: [Npc; 2]) -> Decision {
         npcs[1].condition = crate::combat::hull::Condition::Dying {
             ticks_left: 10,
@@ -328,7 +326,56 @@ mod tests {
         let govts = govts(0, 0);
         let sites = sites();
         let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
-        BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+        NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn the_think_leaves_an_attack_on_a_ship_breaking_up_for_the_high_level_to_end() {
+        let mut npcs = provoked(100.0, 0.0);
+        npcs[1].condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        let thought = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(
+            thought,
+            Decision {
+                goal: Goal::Attack(n(2)),
+                comm_call: Some(CommCall::Distress),
+                ..Decision::default()
+            }
+        );
+        let dropped = Npc {
+            goal: NovaAi::default()
+                .decision(&npcs[0], &around, &mut Draws::of(&[0]))
+                .goal,
+            ..npcs[0].clone()
+        };
+        assert_eq!(
+            NovaAi::default().target(&dropped, &around),
+            None,
+            "target -1 (@0x8e717)"
+        );
+    }
+
+    #[test]
+    fn a_brave_trader_whose_wait_runs_keeps_its_attack_on_an_attacker_breaking_up() {
+        // The handler jumps out at its head while +0x4c runs (@0x8d4b9
+        // -0x8d4d2 → 0x8fb47), the think having run first (@0x901e5).
+        let mut waiting = provoked(100.0, 0.0);
+        waiting[0].ai_wait = 3;
+        let mut held = provoked(100.0, 0.0);
+        held[0].mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 };
+        for npcs in [waiting, held] {
+            let decision = decided_on_dying(npcs);
+            assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");
+            assert!(!decision.forgets_provocation, "+0x96 stands");
+            assert!(!decision.clears_target, "+0x70 stands");
+            assert_eq!(decision.comm_call, Some(CommCall::Distress), "the think's");
+        }
     }
 
     #[test]
