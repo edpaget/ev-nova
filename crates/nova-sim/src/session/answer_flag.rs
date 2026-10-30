@@ -70,7 +70,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::ai::Goal;
     use crate::ai::NovaAi;
     use crate::catalog::{EscortClass, GovtId, GovtRecord, ShipId, StellarId, SystemId};
@@ -284,6 +284,35 @@ mod tests {
         settle(&mut session, vec![players_hit()]);
         assert_eq!(session.npcs()[0].target, Some(ShipRef::Player));
         assert_eq!(session.npcs()[0].goal, Goal::Attack(ShipRef::Player));
+        assert!(session.space.strikes.is_empty(), "none kept");
+    }
+
+    /// The player fires its beam (`player_fires`), then the stellars' and
+    /// the beams' phase runs alone (`beams_phase`), with no
+    /// `answer_strikes` and no fight housekeeping after it.
+    pub(in crate::session) fn beam_alone(session: &mut Session) {
+        let pass = crate::combat::GamePass::Advance { double_time: false };
+        let rules = crate::combat::Rules::default();
+        let chance: &mut dyn crate::chance::Chance = &mut crate::chance::NeverFires;
+        session.hold_trigger(FIRE);
+        session.player_fires(pass, rules, chance);
+        session.beams_phase(&NovaAi::default(), pass, rules, chance);
+    }
+
+    #[test]
+    fn a_beams_hit_is_answered_as_the_beams_phase_settles() {
+        // `_HandleBeams` runs `_DamageShip` as each beam hit lands
+        // (@0x4453d), so the NPC turns on the player within the phase,
+        // before the stellars' strikes and the fight's housekeeping.
+        let catalog = super::super::deadly_stellars::tests::beaming();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.chart.target = Some(NpcId(0));
+        let shield = session.npcs()[0].reserves.shield.now;
+        beam_alone(&mut session);
+        let npc = &session.npcs()[0];
+        assert!(npc.reserves.shield.now < shield, "the beam hit");
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
         assert!(session.space.strikes.is_empty(), "none kept");
     }
 

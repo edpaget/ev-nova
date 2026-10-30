@@ -1145,6 +1145,38 @@ mod tests {
     }
 
     #[test]
+    fn a_grudge_whose_ship_a_beam_destroys_is_held_as_the_beams_phase_settles() {
+        // `_HandleBeams` runs `_DamageShip` as the beam's hit lands
+        // (@0x4453d), so the grudge is held within the beams' phase, while
+        // the dying ship is still in the system, before the fight's
+        // housekeeping takes it out.
+        let mut catalog = duel(GRUDGE | ESCAPE_POD, 0);
+        // The player's blaster a 300-pixel beam that downs Ace at once.
+        catalog.weapons = vec![WeaponRecord {
+            guidance: 0,
+            count: 3,
+            reload: 10,
+            beam_length: 300,
+            energy_dmg: 1000,
+            mass_dmg: 1000,
+            ..blaster()
+        }];
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        crate::session::answer_flag::tests::beam_alone(&mut session);
+        let ace = &session.npcs()[0];
+        assert!(
+            matches!(
+                ace.condition,
+                Condition::Dying { .. } | Condition::Destroyed
+            ),
+            "downed: {:?}",
+            ace.condition
+        );
+        assert!(session.space.strikes.is_empty(), "none kept");
+        assert!(session.pilot().grudge(PersonId(600)));
+    }
+
+    #[test]
     fn a_grudge_whose_strike_the_traffics_think_answers_is_held_after_the_think() {
         // A strike left for the think's answer is answered at the start of
         // the think, and its grudge held once the traffic has stepped.

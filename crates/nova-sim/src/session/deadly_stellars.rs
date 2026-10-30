@@ -739,7 +739,7 @@ pub(super) mod tests {
 
     /// `armed`'s catalog with the player's gun a 300-pixel beam lasting 3
     /// ticks, doing 5 energy damage.
-    fn beaming() -> FakePilotCatalog {
+    pub(in crate::session) fn beaming() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.weapons = vec![crate::catalog::WeaponRecord {
             guidance: 0,
