@@ -214,8 +214,7 @@ pub(super) mod tests {
     /// pending: 131 lists its own 140 at the centre and 200, which 130
     /// owns.
     fn in_131(catalog: &FakePilotCatalog, rules: Rulebook, at: Vec2) -> Session {
-        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
-        crate::testkit::jump(&mut session, catalog, 131).expect("arrives");
+        let session = arrived_in_131(catalog, rules, at);
         assert_eq!(
             session
                 .chart
@@ -229,6 +228,15 @@ pub(super) mod tests {
             session.stellars_shown().collect::<Vec<_>>(),
             [StellarId(140)]
         );
+        session
+    }
+
+    /// The session flown into 131 through its own system entry by
+    /// `rules`, the ship at rest at `at`, nothing selected, no dock
+    /// request and no sound or message pending.
+    fn arrived_in_131(catalog: &FakePilotCatalog, rules: Rulebook, at: Vec2) -> Session {
+        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
+        crate::testkit::jump(&mut session, catalog, 131).expect("arrives");
         session.ship.player.position = at;
         session.ship.player.velocity = Vec2::ZERO;
         session.chart.nav = crate::navigation::NavMode::Off;
@@ -335,6 +343,99 @@ pub(super) mod tests {
         assert_eq!(session.land(), refused_200());
         assert_eq!(session.nav_target(), Some(StellarId(UNOWNED)));
         assert_eq!(session.take_sounds(), [SimSound::Refused]);
+    }
+
+    // The slot keys, by `NavDefs` index.
+
+    /// A planet 131 lists after [`UNOWNED`], at (-500, 0).
+    const AFTER: i16 = 141;
+
+    /// [`twice_listed`]'s planets, 131 listing 140, [`UNOWNED`] and
+    /// [`AFTER`], in that order.
+    fn three_in_131() -> FakePilotCatalog {
+        let mut catalog = twice_listed(planet);
+        let sites = &mut catalog
+            .sites
+            .iter_mut()
+            .find(|(id, _)| id.0 == 131)
+            .expect("131")
+            .1;
+        sites.push(planet(AFTER, -500.0, 0.0));
+        catalog
+    }
+
+    /// Slot `slot`'s key pressed in 131 of `catalog` with 140 selected and
+    /// its dock request standing: what it gives, the selection, the
+    /// sounds, and whether the dock request and fly-in were kept.
+    fn slot_key_in_131(
+        catalog: &FakePilotCatalog,
+        slot: usize,
+    ) -> (Option<StellarId>, Option<StellarId>, Vec<SimSound>, bool) {
+        let mut session = arrived_in_131(catalog, engine(), Vec2::ZERO);
+        session
+            .chart
+            .set_nav(crate::navigation::NavMode::Stellar(Some(StellarId(140))));
+        let dock = Some(crate::clearance::DockRequest {
+            stellar: StellarId(140),
+            permission: 0,
+        });
+        session.port.dock = dock;
+        let picked = session.select_stellar(StellarPick::Slot(slot));
+        let kept = session.port.dock == dock
+            && session.chart.nav_fly_in == crate::brackets::FlyIn::default();
+        (picked, session.nav_target(), session.take_sounds(), kept)
+    }
+
+    #[test]
+    fn a_slot_key_on_a_stellar_another_system_owns_does_nothing_and_the_next_selects_the_next_nav_def()
+     {
+        let catalog = three_in_131();
+        assert_eq!(
+            slot_key_in_131(&catalog, 1),
+            (None, Some(StellarId(140)), vec![], true),
+            "dropped in silence, nothing written (@0x69e88-0x69e94)"
+        );
+        assert_eq!(
+            slot_key_in_131(&catalog, 2),
+            (
+                Some(StellarId(AFTER)),
+                Some(StellarId(AFTER)),
+                vec![SimSound::NavSelected],
+                false
+            ),
+            "NavDefs[2], not the third stellar shown"
+        );
+    }
+
+    #[test]
+    fn a_slot_key_on_an_empty_nav_def_slot_does_nothing() {
+        let mut catalog = crate::testkit::catalog();
+        let sites = &mut catalog
+            .sites
+            .iter_mut()
+            .find(|(id, _)| id.0 == 131)
+            .expect("131")
+            .1;
+        sites.push(planet(AFTER, -500.0, 0.0));
+        let mut slots = [None; crate::catalog::NAV_DEF_SLOTS];
+        slots[0] = Some(StellarId(140));
+        slots[2] = Some(StellarId(AFTER));
+        catalog.nav_defs = vec![(SystemId(131), slots)];
+        assert_eq!(
+            slot_key_in_131(&catalog, 1),
+            (None, Some(StellarId(140)), vec![], true),
+            "-1 dropped in silence (@0x69e65-0x69e6d)"
+        );
+        assert_eq!(
+            slot_key_in_131(&catalog, 2),
+            (
+                Some(StellarId(AFTER)),
+                Some(StellarId(AFTER)),
+                vec![SimSound::NavSelected],
+                false
+            )
+        );
+        assert_eq!(slot_key_in_131(&catalog, 16).0, None, "past the last slot");
     }
 
     // Readers of a selection outside the stellars shown.

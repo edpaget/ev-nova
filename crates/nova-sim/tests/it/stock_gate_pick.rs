@@ -24,17 +24,26 @@ const K005: SystemId = SystemId(436);
 /// The wormhole Spica owns and K-005 lists.
 const WORMHOLE: StellarId = StellarId(466);
 
-/// A new stock pilot flying in K-005 by `rules`, at its centre: the
+/// Spica, which owns the wormhole.
+const SPICA: SystemId = SystemId(144);
+
+/// A new stock pilot flying in `system` by `rules`, at its centre: the
 /// pilot's stellar is `None`, so the flight starts there.
-fn in_k005(data: &GameData, rules: Rulebook) -> Session {
+fn flying_in(data: &GameData, system: SystemId, rules: Rulebook) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::Value::Null;
-    save["system"] = serde_json::json!(K005.0);
+    save["system"] = serde_json::json!(system.0);
     let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let session = Session::fly(data, there).expect("flies").with_rules(rules);
-    assert_eq!(session.system(), K005);
+    assert_eq!(session.system(), system);
+    session
+}
+
+/// A new stock pilot flying in K-005 by `rules`, at its centre.
+fn in_k005(data: &GameData, rules: Rulebook) -> Session {
+    let session = flying_in(data, K005, rules);
     assert_eq!(session.player().position, Vec2::ZERO, "at the centre");
     assert_eq!(session.stellars_shown().count(), 0, "466 is Spica's");
     session
@@ -155,4 +164,35 @@ fn in_k005_spicas_wormhole_is_listed_for_the_npcs_but_past_the_cap() {
         ..listed[0]
     }];
     assert_eq!(ids(&within), [WORMHOLE], "govt {preferring:?}");
+}
+
+/// Every stock wormhole sits in the last `NavDefs` slot after empty ones:
+/// key 2 in Spica finds slot 1 empty and does nothing, as the slot
+/// block's tail drops a -1 (`_HandlePlayer` @0x69e65-0x69e6d), where
+/// taking the stellars shown by position would select the wormhole.
+#[test]
+fn in_spica_key_2_finds_an_empty_slot_and_does_nothing() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let slots = data
+        .nav_def_slots()
+        .into_iter()
+        .find(|(system, _)| *system == SPICA)
+        .expect("Spica reads")
+        .1;
+    assert_eq!(slots[1], None, "{slots:?}");
+    assert_eq!(slots[15], Some(WORMHOLE), "{slots:?}");
+    let mut session = flying_in(&data, SPICA, Rulebook::default());
+    assert_eq!(session.stellars_shown().nth(1), Some(WORMHOLE));
+    common::drained(&mut session);
+    assert_eq!(session.select_stellar(StellarPick::Slot(1)), None);
+    assert_eq!(session.nav_target(), None);
+    assert_eq!(sounds(&mut session), [], "silent");
+    assert_eq!(
+        session.select_stellar(StellarPick::Slot(15)),
+        Some(WORMHOLE),
+        "the wormhole by its own index"
+    );
+    assert_eq!(sounds(&mut session), [SimSound::NavSelected]);
 }

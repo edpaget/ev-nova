@@ -939,8 +939,10 @@ enum Jump {
 /// space is [`Session::click_in_space`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StellarPick {
-    /// The stellar in this slot of the system's navigation defaults,
-    /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
+    /// The stellar in this slot of the system's navigation defaults
+    /// (`NavDefs`), from 0, gaps kept: the original's keys 1-4 and F1-F4
+    /// (@0x69cf6-0x69f17). An empty slot, or one naming a stellar another
+    /// system owns, selects nothing.
     Slot(usize),
     /// The nearest stellar with the can-land flag, destroyed or not, the one the land key selects with no
     /// target ([`nearest_stellar`](crate::landing::nearest_stellar)): the original's F5, which picks
@@ -1284,6 +1286,7 @@ impl Session {
             nebulae: catalog.nebulae().into(),
             place_names: catalog.place_names(),
             first_stellars: catalog.first_stellars().into_iter().collect(),
+            nav_def_slots: catalog.nav_def_slots().into_iter().collect(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             stellar_weapons: catalog.stellar_weapons().into_iter().collect(),
             boom_sounds: catalog.boom_sounds().into_iter().collect(),

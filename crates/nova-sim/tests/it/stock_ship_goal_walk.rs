@@ -728,6 +728,10 @@ impl PilotCatalog for Probed<'_> {
         self.data.first_stellars()
     }
 
+    fn nav_def_slots(&self) -> Vec<(SystemId, cat::NavDefSlots)> {
+        self.data.nav_def_slots()
+    }
+
     fn nebulae(&self) -> Vec<cat::NebulaRecord> {
         self.data.nebulae()
     }
