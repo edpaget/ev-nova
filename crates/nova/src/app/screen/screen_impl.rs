@@ -535,15 +535,13 @@ impl AppScreen {
     }
 
     /// How far right the dialogs over the side shown are drawn, their
-    /// pointer moved back by as much: their 1024 x 768 frame centred over
-    /// a widened flight, and nothing elsewhere.
+    /// pointer moved back by as much: their 1024 x 768 frame centred in
+    /// the view the side fills ([`AppScreen::movie_view`]), so over a
+    /// widened flight, and nothing elsewhere. Derived from that view, so
+    /// the dialogs' frame and a cinematic movie's cover, which the stage
+    /// moves left by the same offset, always agree.
     pub(super) fn overlay_offset(&self) -> Point {
-        let x = if self.view_shape() == ViewShape::Widened {
-            classic_offset(self.widened.0)
-        } else {
-            0.0
-        };
-        Point::new(x, 0.0)
+        Point::new(classic_offset(self.movie_view().0), 0.0)
     }
 
     /// The size of the view the side shown fills, which a cinematic

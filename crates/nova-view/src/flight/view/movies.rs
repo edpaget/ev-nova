@@ -136,8 +136,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// window and fades covering the whole of the [`Movies`]' shared view
     /// ([`Movies::view`]). In the app the router writes that view, not
     /// [`FlightView::set_view_size`]: a held flight resized while the
-    /// spaceport shows must not widen the spaceport's movies. Whether a
-    /// movie plays.
+    /// spaceport shows must not widen the spaceport's movies. The frame's
+    /// offset here comes from this flight's own view, the cover's from the
+    /// shared one, so the two must agree whenever flight shows a movie:
+    /// the router keeps the shared view this flight's size while flight
+    /// shows (`nova`'s `AppScreen::movie_view`), and a caller that sets one
+    /// sets the other. Whether a movie plays.
     pub(super) fn draw_movie(&self, list: &mut DrawList, frozen: impl FnOnce(&mut DrawList)) -> bool
     where
         C: StatusBars,
