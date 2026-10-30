@@ -105,6 +105,7 @@ mod map_borders;
 mod map_find;
 mod maps;
 mod missions;
+mod murk_sprites;
 mod nav;
 mod outputs;
 mod painted_ships;

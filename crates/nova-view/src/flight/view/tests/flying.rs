@@ -312,7 +312,9 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         for star in faked_stars(&view) {
             expected.push(star);
         }
-        scene::draw_stellars(expected, view.scene().expect("a scene"), &view.camera());
+        let seen = (view.frame.player().position, view.frame.effective_murk);
+        let scene = view.scene().expect("a scene");
+        scene::draw_stellars(expected, scene, &view.camera(), Some(seen));
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
     });
     let bar = view.status_bar.as_ref().expect("a status bar");

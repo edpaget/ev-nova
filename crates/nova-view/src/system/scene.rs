@@ -16,12 +16,13 @@ use std::num::NonZeroU16;
 use super::animation::Frames;
 use super::camera::{CAMERA_MARGIN, Camera};
 use super::kept_frames::KeptFrames;
-use nova_sim::{Chance, DrawnSheet};
+use nova_sim::{Chance, DrawnSheet, Vec2};
 
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
 };
 use crate::draw::crossed_box;
+use crate::flight::murk::{murk_tint, sprite_murk};
 use crate::geometry::Bounds;
 use crate::image::ImageKey;
 use crate::{Color, DrawList, Point};
@@ -479,7 +480,18 @@ impl SystemScene {
 /// new slot to the layer's tail (@0xac624) and `_SWAnimateSpriteWorld`
 /// walks each layer from its head (@0xb9727). The scene itself stays in
 /// navigation order.
-pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+///
+/// With `seen` (the player's ship's position and the player's effective
+/// murk), each sprite is murked as `_HandleStellarSprites` murks it at its
+/// stellar's position (@0x2ee57-0x2eea4, [`sprite_murk`]); the placeholder
+/// and the names are not, as they are not the original's. The system view
+/// passes none.
+pub fn draw_stellars(
+    list: &mut DrawList,
+    scene: &SystemScene,
+    camera: &Camera,
+    seen: Option<(Vec2, u8)>,
+) {
     let mut by_id: Vec<&SceneStellar> = scene.stellars().iter().collect();
     by_id.sort_by_key(|stellar| stellar.id);
     let mut labels = Vec::new();
@@ -488,7 +500,11 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) 
             (None | Some(Ok(_)), None) => (camera.world_to_screen(stellar.position), (0.0, 0.0)),
             (_, Some((image, size))) => {
                 let at = stellar.sprite_centre(camera, size);
-                list.sprite(image, at, Color::WHITE);
+                let level = seen.map_or(0, |(viewer, murk)| {
+                    let position = Vec2::new(stellar.position.x, stellar.position.y);
+                    sprite_murk(position, viewer, murk)
+                });
+                list.sprite(image, at, murk_tint(Color::WHITE, level));
                 (at, size)
             }
             (Some(Err(message)), None) => {
@@ -528,6 +544,7 @@ mod tests {
 
     use super::*;
     use crate::ImageKey;
+    use crate::flight::murk::murk_tint;
     use crate::system::catalog::SystemContents;
 
     /// Canned systems; records every system asked for.
@@ -889,7 +906,12 @@ mod tests {
     /// Each stellar's sprite drawn, in order.
     fn drawn(scene: &SystemScene) -> Vec<ImageKey> {
         let mut list = DrawList::new();
-        draw_stellars(&mut list, scene, &Camera::centred_on(Point::default()));
+        draw_stellars(
+            &mut list,
+            scene,
+            &Camera::centred_on(Point::default()),
+            None,
+        );
         list.iter()
             .filter_map(|command| match command {
                 crate::DrawCommand::Sprite { image, .. } => Some(*image),
@@ -902,7 +924,7 @@ mod tests {
     fn name_at(scene: &SystemScene, name: &str) -> Point {
         let mut list = DrawList::new();
         let camera = Camera::centred_on(Point::default());
-        draw_stellars(&mut list, scene, &camera);
+        draw_stellars(&mut list, scene, &camera, None);
         list.iter()
             .find_map(|command| match command {
                 crate::DrawCommand::Text { text, origin, .. } if text == name => Some(*origin),
@@ -915,7 +937,7 @@ mod tests {
     fn names_drawn(scene: &SystemScene) -> Vec<String> {
         let mut list = DrawList::new();
         let camera = Camera::centred_on(Point::default());
-        draw_stellars(&mut list, scene, &camera);
+        draw_stellars(&mut list, scene, &camera, None);
         list.iter()
             .filter_map(|command| match command {
                 crate::DrawCommand::Text { text, .. } => Some(text.clone()),
@@ -934,6 +956,45 @@ mod tests {
             &FakeCatalog::new(vec![system(135, stellars)]),
             SystemId(135),
         )
+    }
+
+    #[test]
+    fn a_stellar_sprite_is_murked_seen_from_the_viewer_and_its_placeholder_and_name_are_not() {
+        let scene = SystemScene::load(
+            &FakeCatalog::new(vec![system(
+                135,
+                vec![
+                    stellar(200, 200, 0, Ok(sheet(1200, 1))),
+                    stellar(300, 200, 0, Err("no spïn".to_owned())),
+                ],
+            )]),
+            SystemId(135),
+        );
+        let tints = |seen| {
+            let mut list = DrawList::new();
+            draw_stellars(
+                &mut list,
+                &scene,
+                &Camera::centred_on(Point::default()),
+                seen,
+            );
+            list.iter()
+                .filter_map(|command| match command {
+                    crate::DrawCommand::Sprite { tint, .. } => Some(*tint),
+                    crate::DrawCommand::Text { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let level = sprite_murk(Vec2::new(200.0, 0.0), Vec2::ZERO, 50);
+        assert_eq!(level, 24, "200 off in murk 50");
+        let murked = tints(Some((Vec2::ZERO, 50)));
+        assert_eq!(murked[0], murk_tint(Color::WHITE, 24));
+        let plain = tints(None);
+        assert_eq!(plain[0], Color::WHITE, "no murk is white");
+        assert_eq!(murked[1..], plain[1..], "the placeholder and the names");
+        let beside = tints(Some((Vec2::new(200.0, 0.0), 100)));
+        assert_eq!(beside, plain, "nothing at the viewer");
     }
 
     #[test]
@@ -1440,7 +1501,12 @@ mod tests {
             Point::new(at.x, at.y + NAME_GAP)
         );
         let mut list = DrawList::new();
-        draw_stellars(&mut list, &scene, &Camera::centred_on(Point::default()));
+        draw_stellars(
+            &mut list,
+            &scene,
+            &Camera::centred_on(Point::default()),
+            None,
+        );
         assert!(
             !list
                 .iter()
@@ -1466,7 +1532,12 @@ mod tests {
     /// Where the sprite of `image` is centred.
     fn sprite_at(scene: &SystemScene, image: ImageKey) -> Point {
         let mut list = DrawList::new();
-        draw_stellars(&mut list, scene, &Camera::centred_on(Point::default()));
+        draw_stellars(
+            &mut list,
+            scene,
+            &Camera::centred_on(Point::default()),
+            None,
+        );
         list.iter()
             .find_map(|command| match command {
                 crate::DrawCommand::Sprite {
@@ -1574,7 +1645,7 @@ mod tests {
     /// What `draw_stellars` draws of `scene` with `camera`.
     fn list_with(scene: &SystemScene, camera: &Camera) -> DrawList {
         let mut list = DrawList::new();
-        draw_stellars(&mut list, scene, camera);
+        draw_stellars(&mut list, scene, camera, None);
         list
     }
 

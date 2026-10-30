@@ -183,7 +183,7 @@ impl Screen for SystemView {
 
     fn draw(&self, list: &mut DrawList) {
         starfield::draw(list, &self.camera);
-        scene::draw_stellars(list, &self.scene, &self.camera);
+        scene::draw_stellars(list, &self.scene, &self.camera, None);
         self.draw_overlay(list);
     }
 

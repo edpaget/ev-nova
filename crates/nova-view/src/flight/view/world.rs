@@ -133,7 +133,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             match pass {
                 WorldPass::Layer(SpriteLayer::Stars) => self.draw_stars_and_message(list, camera),
                 WorldPass::Layer(SpriteLayer::Stellars) => {
-                    scene::draw_stellars(list, scene, camera);
+                    let seen = (self.frame.player().position, self.frame.effective_murk);
+                    scene::draw_stellars(list, scene, camera, Some(seen));
                 }
                 WorldPass::BeamsUnderShips => {
                     weapons::draw_beams(list, &beams, &self.looks, true, lightning);
@@ -143,7 +144,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 }
                 WorldPass::Layer(SpriteLayer::Boxes) => {
                     boxes::draw_boxes(list, &self.shown_boxes(camera), &self.looks);
-                    self.effects.draw_pods(list, camera, &self.looks);
+                    self.draw_pods(list, camera);
                 }
                 WorldPass::Layer(SpriteLayer::Smoke) => self.draw_smoke(list, camera),
                 WorldPass::Layer(SpriteLayer::Explosions) => self.draw_explosions(list, camera),
@@ -253,6 +254,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let viewer = self.frame.player().position;
         let murk = self.frame.effective_murk;
         self.shot_looks.draw_smoke(list, camera, viewer, murk);
+    }
+
+    /// Draws the escape pods, murked as the player sees them where the
+    /// frame has its ship.
+    fn draw_pods(&self, list: &mut DrawList, camera: &Camera) {
+        let viewer = self.frame.player().position;
+        let murk = self.frame.effective_murk;
+        self.effects
+            .draw_pods(list, camera, &self.looks, viewer, murk);
     }
 
     /// Draws the explosions, murked as the player sees them where the

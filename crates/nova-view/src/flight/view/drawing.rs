@@ -588,9 +588,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The cargo boxes in space, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the shots are.
+    /// way from where it was a step ago, as the shots are; each with its
+    /// murk where the frame holds it, seen from the player's ship in the
+    /// player's effective murk ([`murk::sprite_murk`]), as `_HandleBoxes`
+    /// murks it (@0x2e15e-0x2e181).
     pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
         let behind = 1.0 - self.alpha;
+        let viewer = self.frame.player().position;
+        let murk = self.frame.effective_murk;
         self.frame
             .cargo_boxes
             .iter()
@@ -601,6 +606,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 )),
                 frame: cargo_box.frame,
                 fade: cargo_box.fade,
+                murk: murk::sprite_murk(cargo_box.position, viewer, murk),
                 graphic: cargo_box.graphic,
             })
             .collect()
@@ -608,9 +614,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// The asteroids in the field, each where it is drawn: `alpha` of the
     /// way from where it was a step ago, as the cargo boxes are, at its
-    /// whole frame.
+    /// whole frame, murked as the cargo boxes are (`_HandleAsteroids`
+    /// @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
         let behind = 1.0 - self.alpha;
+        let viewer = self.frame.player().position;
+        let murk = self.frame.effective_murk;
         self.frame
             .asteroids
             .iter()
@@ -624,6 +633,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 frame: asteroid.frame as u16,
                 kind: asteroid.kind,
+                murk: murk::sprite_murk(asteroid.position, viewer, murk),
             })
             .collect()
     }

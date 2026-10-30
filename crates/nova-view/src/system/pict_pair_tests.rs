@@ -93,7 +93,12 @@ fn sol() -> GameData {
 /// The sprites drawn, and whether any placeholder text is.
 fn drawn(scene: &SystemScene) -> (Vec<ImageKey>, bool) {
     let mut list = DrawList::new();
-    draw_stellars(&mut list, scene, &Camera::centred_on(Point::default()));
+    draw_stellars(
+        &mut list,
+        scene,
+        &Camera::centred_on(Point::default()),
+        None,
+    );
     let sprites = list
         .iter()
         .filter_map(|command| match command {
