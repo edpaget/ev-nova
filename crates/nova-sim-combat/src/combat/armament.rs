@@ -70,7 +70,9 @@
 //!   is a fighter, launched as a [`Launch`] the fight turns into a sortie. A fighter docking
 //!   goes back aboard ([`Armament::stow`], `_AIAddFighterToParent`
 //!   @0x802a5): a round to the bay of lowest weapon ID launching its type,
-//!   with no cap; a bay whose slot held exactly none restarts its reload.
+//!   else its sprite base ([`Armament::dock_bay`]), with no cap; a bay
+//!   whose slot held exactly none restarts its reload. With neither,
+//!   nothing changes.
 //! - Point defence ([`Armament::fire_point_defence`]) fires, each tick,
 //!   only the ready point-defence weapon the ship can pay for with the
 //!   lowest weapon ID, and only at a missile it picks, as
