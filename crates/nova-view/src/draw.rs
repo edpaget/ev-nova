@@ -89,10 +89,12 @@ pub enum Blend {
     ///
     /// # The tint
     ///
-    /// The tint's colour multiplies the source (white, or a murk's
-    /// darkening), and its alpha is the opacity: `k = round(a × 32 / 255)`,
-    /// exact for [`lights_tint`]`(k)` and every alpha a fade gives, as the
-    /// renderer stores it in 32nds.
+    /// The tint's colour multiplies the source (a shot's plain fade and a
+    /// pod's tint), and its alpha is the opacity: `k = round(a × 32 /
+    /// 255)`, exact for [`lights_tint`]`(k)` and every alpha a fade gives,
+    /// as the renderer stores it in 32nds. A [`DrawCommand::Colorized`]
+    /// mixes the texel `t` first, as `_BlitPixieRLETranslucent` does in
+    /// every path (@0xc1140-0xc11ca, then @0xc11cc-0xc1275).
     ///
     /// # The bit depth
     ///
@@ -128,6 +130,8 @@ pub enum Blend {
     /// Its colour channels are the source factors and its alpha the
     /// destination factor, each in 32nds: `n_c = round(c × 32 / 255)`,
     /// `m = round(a × 32 / 255)`, exact for [`translucent_tint`].
+    /// A [`DrawCommand::Colorized`] mixes the texel first, as with
+    /// [`Blend::OrCrossfade`].
     ///
     /// # The bit depth
     ///

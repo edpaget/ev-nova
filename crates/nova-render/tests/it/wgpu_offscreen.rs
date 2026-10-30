@@ -747,6 +747,74 @@ fn a_colorized_sprite_mixes_each_5_bit_channel_like_the_originals_blit() {
 }
 
 #[test]
+fn a_murked_sprite_mixes_toward_its_colour_before_every_blend() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // The solid sheet, mixed at level 16 toward a stock murk colour: over
+    // the black clear at (6, 6), then over hull squares OR-ed in at
+    // (16, 6), crossfaded at (26, 6) and translucent at (6, 16), and
+    // crossfaded at level 0, which doesn't mix, at (16, 16). The original
+    // mixes first and applies the sprite's factors to the mixed texel
+    // (`_BlitPixieTranslucentCopy` @0xc1140-0xc11ca, then @0xc11cc-0xc1275).
+    let solid = ImageKey::sprite(9, 0);
+    let murk = Colorize {
+        level: 16,
+        rgb5: [4, 4, 1],
+    };
+    let mixed = murk.mix(LIT_555);
+    assert_eq!(mixed, [10, 7, 2]);
+    let hull = w555(HULL_555);
+    let at_16 = Color::rgba(255, 255, 255, 128);
+    let or_spot = Point::new(16.0, 6.0);
+    let crossfade_spot = Point::new(26.0, 6.0);
+    let translucent_spot = Point::new(6.0, 16.0);
+    let unmixed_spot = Point::new(16.0, 16.0);
+    let mut list = DrawList::new();
+    for spot in [or_spot, crossfade_spot, translucent_spot, unmixed_spot] {
+        list.sprite(ImageKey::sprite(2, 0), spot, tint(hull));
+    }
+    list.colorized_sprite(
+        solid,
+        Point::new(6.0, 6.0),
+        Color::WHITE,
+        Blend::Normal,
+        murk,
+    )
+    .colorized_sprite(solid, or_spot, Color::WHITE, Blend::Or, murk)
+    .colorized_sprite(solid, crossfade_spot, at_16, Blend::OrCrossfade, murk)
+    .colorized_sprite(
+        solid,
+        translucent_spot,
+        nova_view::draw::translucent_tint(16, 8),
+        Blend::OrTranslucent,
+        murk,
+    )
+    .colorized_sprite(
+        solid,
+        unmixed_spot,
+        at_16,
+        Blend::OrCrossfade,
+        Colorize { level: 0, ..murk },
+    );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    assert_area(&pixels, (4, 4), (8, 8), w555(mixed), 0);
+    let ored = w555(original_lights_555(mixed, HULL_555, 32));
+    assert_area(&pixels, (14, 4), (18, 8), ored, 0);
+    let faded = w555(original_crossfade_555(mixed, HULL_555, 16));
+    assert_area(&pixels, (24, 4), (28, 8), faded, 0);
+    let see_through = w555(original_translucent_555(mixed, HULL_555, 16, 8));
+    assert_area(&pixels, (4, 14), (8, 18), see_through, 0);
+    let unmixed = w555(original_crossfade_555(LIT_555, HULL_555, 16));
+    assert_area(&pixels, (14, 14), (18, 18), unmixed, 0);
+}
+
+#[test]
 fn a_colorized_or_layer_mixes_its_lit_texels_and_leaves_its_transparent_ones() {
     let Some(mut gpu) = gpu() else {
         return;
