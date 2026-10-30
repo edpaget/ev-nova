@@ -986,17 +986,53 @@ impl Chart {
     /// does every deselect.
     fn cycle_from(&self, pilot: &Pilot, setup: &Setup) -> i32 {
         match self.nav {
-            NavMode::Hyperspace(Some(selected)) => self
-                .selected_slot(pilot, selected)
-                .and_then(|slot| i32::try_from(slot).ok())
-                .unwrap_or(-1),
             NavMode::Stellar(Some(stellar))
                 if setup.rules.source_for(RuleKey::MapCycleStart) == RuleSource::Engine =>
             {
                 i32::from(stellar.0) - 128
             }
-            _ => -1,
+            _ => self.mode_3_slot(pilot),
         }
+    }
+
+    /// The slot +0x6c holds in mode 3, the one the selection stands in, or
+    /// −1 with nothing selected there, or in any other mode.
+    fn mode_3_slot(&self, pilot: &Pilot) -> i32 {
+        let NavMode::Hyperspace(Some(selected)) = self.nav else {
+            return -1;
+        };
+        self.selected_slot(pilot, selected)
+            .and_then(|slot| i32::try_from(slot).ok())
+            .unwrap_or(-1)
+    }
+
+    /// The next of the current system's Con slots that holds a link
+    /// ([`Chart::flags`]) from +0x6c holding `from`, with its raw system:
+    /// past the last slot to the first and below the first to the last, so
+    /// a start past the slots begins the walk at the first, and the slot it
+    /// started from is the last one tried (`_MapFilter` @0x13f77-0x13f9b).
+    fn next_link_slot(&self, pilot: &Pilot, from: i32) -> Option<(usize, SystemId)> {
+        let start = usize::try_from(from + 1).unwrap_or(CON_SLOTS - 1);
+        let slots = self.galaxy.con_slots(pilot.system);
+        let slots = &slots[..slots.len().min(CON_SLOTS)];
+        (start..slots.len()).chain(0..start).find_map(|at| {
+            slots
+                .get(at)
+                .copied()
+                .filter(|&slot| self.flags(slot))
+                .map(|slot| (at, slot))
+        })
+    }
+
+    /// Writes mode 3 with the raw `selected` and notes the Con slot it came
+    /// from ([`NavSlot`]).
+    fn select_slot(&mut self, pilot: &Pilot, slot: usize, selected: SystemId) {
+        self.set_nav(NavMode::Hyperspace(Some(selected)));
+        self.nav_slot = Some(NavSlot {
+            system: pilot.system,
+            slot,
+            selected,
+        });
     }
 
     /// The galaxy map's Tab or `\`, as `_MapFilter` cycles the hyperspace
@@ -1034,25 +1070,10 @@ impl Chart {
         if landed.is_some() {
             return false;
         }
-        // The step goes on from +0x6c, past the last slot to the first and
-        // below the first to the last (@0x13f77-0x13f9b): a start past the
-        // slots begins the walk at the first.
-        let start = usize::try_from(self.cycle_from(pilot, setup) + 1).unwrap_or(CON_SLOTS - 1);
-        let slots = self.galaxy.con_slots(pilot.system);
-        let slots = &slots[..slots.len().min(CON_SLOTS)];
-        let next = (start..slots.len()).chain(0..start).find_map(|at| {
-            slots
-                .get(at)
-                .copied()
-                .filter(|&slot| self.flags(slot))
-                .map(|slot| (at, slot))
-        });
-        self.set_nav(NavMode::Hyperspace(next.map(|(_, selected)| selected)));
-        self.nav_slot = next.map(|(slot, selected)| NavSlot {
-            system: pilot.system,
-            slot,
-            selected,
-        });
+        match self.next_link_slot(pilot, self.cycle_from(pilot, setup)) {
+            Some((slot, selected)) => self.select_slot(pilot, slot, selected),
+            None => self.set_nav(NavMode::Hyperspace(None)),
+        }
         true
     }
 
