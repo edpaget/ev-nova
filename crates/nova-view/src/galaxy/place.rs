@@ -147,11 +147,11 @@ impl MapPlace {
     #[allow(clippy::cast_precision_loss)] // Galaxy units.
     #[must_use]
     pub fn transform(&self, centre: Point) -> Transform {
-        Transform {
-            screen: centre,
-            world: Point::new(self.scroll.0 as f32, self.scroll.1 as f32),
-            scale: (1.0 / self.zoom) as f32,
-        }
+        Transform::scaled(
+            centre,
+            Point::new(self.scroll.0 as f32, self.scroll.1 as f32),
+            (1.0 / self.zoom) as f32,
+        )
     }
 }
 
@@ -297,11 +297,7 @@ mod tests {
         let transform = place.transform(at(450.0, 346.0));
         assert_eq!(
             transform,
-            Transform {
-                screen: at(450.0, 346.0),
-                world: at(40.0, -20.0),
-                scale: 16.0 / 9.0,
-            }
+            Transform::scaled(at(450.0, 346.0), at(40.0, -20.0), 16.0 / 9.0)
         );
         assert_eq!(transform.world_to_screen(at(40.0, -20.0)), at(450.0, 346.0));
         let place = place.with_zoom(2.0);

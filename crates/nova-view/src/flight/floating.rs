@@ -211,11 +211,7 @@ pub fn centre(frame: Bounds) -> Point {
 /// current system's position, at the frame's [`centre`].
 #[must_use]
 pub fn transform(frame: Bounds, current: Point, zoom: usize) -> Transform {
-    Transform {
-        screen: centre(frame),
-        world: current,
-        scale: SCALES[zoom],
-    }
+    Transform::scaled(centre(frame), current, SCALES[zoom])
 }
 
 /// The floating map's state: up or not, when it was last shown, and its

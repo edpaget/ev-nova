@@ -3886,11 +3886,7 @@ mod tests {
             ..drawing()
         });
         let picture = map.picture().expect("shown").clone();
-        let transform = Transform {
-            screen: at(686.0, 278.0),
-            world: at(0.0, 0.0),
-            scale: 16.0 / 9.0,
-        };
+        let transform = Transform::scaled(at(686.0, 278.0), at(0.0, 0.0), 16.0 / 9.0);
         let marks = MapMarks {
             picture: &picture,
             selected: Some(SystemId(128)),
