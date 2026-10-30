@@ -98,7 +98,7 @@
 //! always copies the target afresh; on arrival an order given during the
 //! jump is reset or kept as any other is. The escort menu's rows ([`Space::escort_rows`], the frame's
 //! [`FrameHud::escort_rows`](crate::flight_frame::FrameHud::escort_rows)) give each
-//! class's presence and its first escort's order. A carried fighter is
+//! class's presence and the order kept for it. A carried fighter is
 //! placed as any escort is, its carrier the player (see
 //! [`fighters`](super::fighters)).
 //!
@@ -305,6 +305,7 @@ impl Session {
             })
             .collect();
         if !reset {
+            self.space.keep_record_orders(&self.pilot, &self.statics);
             self.space.mark_kept_orders();
         }
         self.space.traffic.reserve(BTreeSet::new());
@@ -1104,8 +1105,8 @@ impl Space {
 
     /// The escort menu's class rows, in its order ([`EscortClass::ALL`]):
     /// each class's row ([`Space::class_row`]).
-    pub(super) fn escort_rows(&self, pilot: &Pilot, statics: &Statics) -> [ClassRow; 4] {
-        EscortClass::ALL.map(|class| self.class_row(pilot, statics, class))
+    pub(super) fn escort_rows(&self) -> [ClassRow; 4] {
+        EscortClass::ALL.map(|class| self.class_row(class))
     }
 
     /// Whether the player has an escort flying, which the escort menu
@@ -1119,45 +1120,29 @@ impl Space {
             .any(|npc| npc.condition == Condition::Intact)
     }
 
-    /// `class`'s row in the escort menu: whether the player leads a ship
-    /// of it, hired or a mission escort, and the standing order of its
-    /// first hired escort, else of its first mission escort.
-    fn class_row(&self, pilot: &Pilot, statics: &Statics, class: EscortClass) -> ClassRow {
-        let hired = (0..pilot.escorts.len())
-            .find(|&index| self.escort_class(pilot, statics, index) == class)
-            .map(|index| pilot.escorts[index].order);
-        let first = hired.or_else(|| {
-            self.player_led()
-                .find(|npc| npc.mission_escort() && npc.class == class)
-                .map(Npc::escort_order)
-        });
+    /// `class`'s row in the escort menu (`_DrawEscortMenuInFrame`
+    /// @0x5637f-0x565ac): whether a ship of it the player leads is here,
+    /// disabled or dying too, and the order kept for it
+    /// ([`Space::standing_class_order`]).
+    fn class_row(&self, class: EscortClass) -> ClassRow {
         ClassRow {
             class,
-            present: first.is_some(),
-            order: first.flatten(),
+            present: self.player_led().any(|npc| npc.class == class),
+            order: self.standing_class_order(class),
         }
     }
 
     /// The standing order of `class` that a ship joining it takes, as
-    /// the original's one order per class does (`_EscortAI`
-    /// @0x83ad8-0x83b2b): its first escort's (`class_row`),
-    /// else the last order given the class (kept across a jump or a
-    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it, and
-    /// in flight while a ship of the class that took a command is out; see
-    /// the `class_orders` module), Return to Hangar excepted. A fighter the player launches and a
-    /// mission escort joining both take it.
-    pub(super) fn class_order(
-        &self,
-        pilot: &Pilot,
-        statics: &Statics,
-        class: EscortClass,
-    ) -> Option<EscortOrder> {
-        let kept = EscortClass::ALL
-            .iter()
-            .position(|&each| each == class)
-            .and_then(|index| self.escorts.class_orders[index]);
-        let row = self.class_row(pilot, statics, class);
-        if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
+    /// `_EscortAI` reads the table (@0x83afb-0x83b2b): the last order given
+    /// the class (kept across a jump or a landing unless the engine's
+    /// [`RuleKey::EscortOrders`] reset it, and in flight while a ship of the
+    /// class that took a command is out; see the `class_orders` module),
+    /// Return to Hangar excepted. A fighter the player launches and a
+    /// mission escort joining both take it. It reads the table raw, as a
+    /// launch in the same pass as a command comes before the bookkeeping.
+    pub(super) fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
+        self.kept_for(class)
+            .filter(|&order| order != EscortOrder::Dock)
     }
 }
 
@@ -3285,11 +3270,11 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_menu_rows_give_each_class_and_its_first_escorts_order() {
+    fn the_menu_rows_give_each_class_and_the_order_kept_for_it() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Bible);
         assert_eq!(
-            session.space.escort_rows(&session.pilot, &session.statics),
+            session.space.escort_rows(),
             [
                 ClassRow {
                     class: EscortClass::Fighter,
@@ -3319,17 +3304,14 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         assert_eq!(
-            session.space.escort_rows(&session.pilot, &session.statics)[3].order,
+            session.space.escort_rows()[3].order,
             Some(EscortOrder::Hold)
         );
         let landed = Session::fly(&catalog, escorted(&catalog)).expect("flies");
         assert_eq!(
-            landed
-                .space
-                .escort_rows(&landed.pilot, &landed.statics)
-                .map(|row| row.present),
-            [false, false, true, true],
-            "by their records before they are placed"
+            landed.space.escort_rows().map(|row| row.present),
+            [false; 4],
+            "none placed yet"
         );
     }
 

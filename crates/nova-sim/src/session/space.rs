@@ -181,9 +181,12 @@ pub(super) struct Escorts {
     /// The last order the player gave each escort class, in
     /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
     /// original's one order per class (0x3b5394), which a ship joining
-    /// the class takes (see [`Space::class_order`]). Not saved, as the
-    /// hired escorts keep theirs on their records and mission escorts are
-    /// never saved; reset with their orders on entering a system by the
+    /// the class takes (see [`Space::class_order`]) and which the escort
+    /// menu's rows show. Not saved, as the hired escorts keep theirs on
+    /// their records, which seed it on an entry that keeps the orders (a
+    /// pilot loaded by the other reading,
+    /// [`Space::keep_record_orders`]), and mission escorts are never
+    /// saved; reset with their orders on entering a system by the
     /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders),
     /// and cleared in flight, with the orders of the class's escorts, once
     /// no ship of the class the player leads has taken a command since it

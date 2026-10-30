@@ -40,7 +40,8 @@
 //! stamp. A fade that reached 0 earlier in the same `_HandlePlayer` has
 //! shut the menu already (`jle` @0x6e386, @0x6e444). The step reports each
 //! clear ([`StepRun::class_orders_cleared`](crate::flight_frame::StepRun::class_orders_cleared))
-//! for the view to show the menu again.
+//! for the view to show the menu again. Its rows show each class's kept
+//! order as the bookkeeping leaves it ([`Space::standing_class_order`]).
 //!
 //! **Ordering.** A command arrives between steps
 //! (`Session::command_escorts`), where the original gives it in the same
@@ -48,15 +49,12 @@
 //! cleared on the frame of its command (Return to Hangar given to the
 //! warships, say) is cleared on the next step's pass. The frame filled
 //! after the command shows the row in formation already, as the row reads
-//! the escort's own order, which the command set to formation, so nothing
-//! crosses a drawn frame.
+//! the kept order as the bookkeeping will leave it, so nothing crosses a
+//! drawn frame.
 //!
 //! **Filed.**
 //! - A ship `_GenericRandomShipSpawn` places keeps its berth's last mark
 //!   (rdm:phase/play-feel-5-followups/phase-5-berth-keeps-command-mark).
-//! - The menu's rows show the class's first escort's order where
-//!   `_DrawEscortMenuInFrame` shows the class's kept order
-//!   (rdm:phase/play-feel-5-followups/phase-6-menu-rows-show-class-orders).
 //! - A jump's arrival frame skips the bookkeeping, and the menu fades on
 //!   both of double time's passes
 //!   (rdm:phase/play-feel-5-followups/phase-7-handle-player-double-fade-and-arrival-orders).
@@ -105,15 +103,11 @@ impl Space {
     pub(super) fn settle_class_orders(&mut self, pilot: &mut Pilot, statics: &Statics) -> bool {
         let mut cleared = Vec::new();
         for (index, class) in EscortClass::ALL.into_iter().enumerate() {
-            let kept = self.escorts.class_orders[index];
-            // Loop 1: a kept Return stands only while a marked carried
-            // fighter of the class is out (@0x6e31c-0x6e3b5).
-            let returns = kept == Some(EscortOrder::Dock)
-                && !self.holds_class(class, |npc| npc.carrier.is_some());
-            // Loop 2: any other kept order stands only while a marked ship
-            // of the class is out (@0x6e3bb-0x6e452).
-            let lapses = kept.is_some() && !self.holds_class(class, |_| true);
-            if returns || lapses {
+            // Both loops' test, @0x6e31c-0x6e3b5 and @0x6e3bb-0x6e452: a kept
+            // Return with no marked ship has no marked carried fighter.
+            let lapsed =
+                self.escorts.class_orders[index].is_some_and(|order| self.lapses(class, order));
+            if lapsed {
                 self.escorts.class_orders[index] = None;
                 cleared.push(class);
             }
@@ -122,6 +116,50 @@ impl Space {
             self.send_class_to_formation(pilot, statics, class);
         }
         !cleared.is_empty()
+    }
+
+    /// Whether `class`'s kept `order` falls to the bookkeeping: Return to
+    /// Hangar with no marked carried fighter of the class out
+    /// (@0x6e31c-0x6e3b5), any other order with no marked ship of it
+    /// (@0x6e3bb-0x6e452).
+    fn lapses(&self, class: EscortClass, order: EscortOrder) -> bool {
+        !self.holds_class(class, |npc| {
+            order != EscortOrder::Dock || npc.carrier.is_some()
+        })
+    }
+
+    /// The order kept for `class`, read raw.
+    pub(super) fn kept_for(&self, class: EscortClass) -> Option<EscortOrder> {
+        EscortClass::ALL
+            .iter()
+            .position(|&each| each == class)
+            .and_then(|index| self.escorts.class_orders[index])
+    }
+
+    /// The order `_DrawEscortMenuInFrame` shows for `class` (@0x56534): the
+    /// one kept for it as the bookkeeping leaves it (see the module docs).
+    /// None for a class no ship of which is out, as a kept order needs a
+    /// marked ship.
+    pub(super) fn standing_class_order(&self, class: EscortClass) -> Option<EscortOrder> {
+        self.kept_for(class)
+            .filter(|&order| !self.lapses(class, order))
+    }
+
+    /// A class keeping no order takes its first hired escort's: by the
+    /// other reading of `RuleKey::EscortOrders`, the orders come back on
+    /// the records of a pilot loaded, as `class_orders` isn't saved, where
+    /// the original reloads its table (`_LoadPilotData` @0x760c2-0x760ea).
+    /// A class with no ship placed takes none: no ship of it could hold the
+    /// order, and the bookkeeping's clear would wipe its escorts' records.
+    pub(super) fn keep_record_orders(&mut self, pilot: &Pilot, statics: &Statics) {
+        for (index, class) in EscortClass::ALL.into_iter().enumerate() {
+            let placed = self.player_led().any(|npc| npc.class == class);
+            if placed && self.escorts.class_orders[index].is_none() {
+                self.escorts.class_orders[index] = (0..pilot.escorts.len())
+                    .find(|&escort| self.escort_class(pilot, statics, escort) == class)
+                    .and_then(|escort| pilot.escorts[escort].order);
+            }
+        }
     }
 
     /// Whether a ship of `class` the player leads, marked as having taken a
@@ -221,6 +259,7 @@ mod tests {
             vec![warship(Some(EscortOrder::Hold))],
             RuleSource::Bible,
         );
+        session.space.escorts.commanded.clear();
         command(&mut session, EscortGroup::All, EscortCommand::Hold);
         assert_eq!(marked(&session), BTreeSet::new());
     }
@@ -242,6 +281,7 @@ mod tests {
             ..out()
         };
         let mut session = flying(&catalog, vec![returning], RuleSource::Bible);
+        session.space.escorts.commanded.clear();
         command(&mut session, EscortGroup::All, EscortCommand::Dock);
         assert_eq!(marked(&session), BTreeSet::new());
         command(&mut session, EscortGroup::All, EscortCommand::Hold);
@@ -450,7 +490,8 @@ mod tests {
         };
         let mut session = flying(&catalog, vec![warship(None), uncarried], RuleSource::Bible);
         command(&mut session, WARSHIPS, EscortCommand::Hold);
-        session.space.escorts.commanded.clear();
+        let warship = fleet_ids(&session)[0];
+        session.space.escorts.commanded.remove(&warship);
         assert!(settle(&mut session));
         let orders: Vec<_> = session.pilot().escorts().iter().map(|e| e.order).collect();
         assert_eq!(orders, [None, Some(EscortOrder::Hold)]);
@@ -489,6 +530,124 @@ mod tests {
             kept(&session, EscortClass::Warship),
             Some(EscortOrder::Hold)
         );
+    }
+
+    // The menu's rows (`_DrawEscortMenuInFrame` @0x5637f-0x565ac).
+
+    /// The menu row of `class`.
+    fn row(session: &Session, class: EscortClass) -> crate::escort::ClassRow {
+        session
+            .space
+            .escort_rows()
+            .into_iter()
+            .find(|row| row.class == class)
+            .expect("every class has a row")
+    }
+
+    /// A fighter that is no carried one.
+    fn uncarried() -> Escort {
+        Escort {
+            carried: false,
+            ..out()
+        }
+    }
+
+    #[test]
+    fn a_mixed_class_reads_return_to_hangar_while_its_marked_carried_fighter_is_out() {
+        let catalog = carrying();
+        let escorts = vec![uncarried(), out()];
+        let mut session = flying(&catalog, escorts, RuleSource::Engine);
+        command(&mut session, FIGHTERS, EscortCommand::Dock);
+        let fighters = row(&session, EscortClass::Fighter);
+        assert_eq!(fighters.order, Some(EscortOrder::Dock));
+        assert_eq!(session.pilot().escorts()[0].order, None, "in formation");
+        session.drop_fleet_escort(1);
+        settle(&mut session);
+        assert_eq!(row(&session, EscortClass::Fighter).order, None);
+        assert_eq!(kept(&session, EscortClass::Fighter), None);
+    }
+
+    #[test]
+    fn a_carried_fighter_that_is_unmarked_holds_no_row_order() {
+        let catalog = carrying();
+        let escorts = vec![uncarried(), out()];
+        let mut session = flying(&catalog, escorts, RuleSource::Engine);
+        command(&mut session, FIGHTERS, EscortCommand::Dock);
+        session.space.escorts.commanded.clear();
+        assert_eq!(row(&session, EscortClass::Fighter).order, None);
+    }
+
+    #[test]
+    fn a_disabled_marked_carried_fighter_keeps_its_row_order() {
+        let catalog = carrying();
+        let escorts = vec![uncarried(), out()];
+        let mut session = flying(&catalog, escorts, RuleSource::Engine);
+        command(&mut session, FIGHTERS, EscortCommand::Dock);
+        let id = fleet_ids(&session)[1];
+        session.space.npc_mut(id).expect("there").condition =
+            crate::combat::hull::Condition::Disabled;
+        assert_eq!(
+            row(&session, EscortClass::Fighter).order,
+            Some(EscortOrder::Dock)
+        );
+    }
+
+    #[test]
+    fn a_row_never_shows_an_order_the_same_pass_clears() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+        command(&mut session, WARSHIPS, EscortCommand::Dock);
+        assert_eq!(
+            kept(&session, EscortClass::Warship),
+            Some(EscortOrder::Dock)
+        );
+        assert_eq!(row(&session, EscortClass::Warship).order, None);
+        command(&mut session, EscortGroup::All, EscortCommand::Hold);
+        assert_eq!(kept_orders(&session), [Some(EscortOrder::Hold); 4]);
+        for class in EscortClass::ALL {
+            let expected = (class == EscortClass::Warship).then_some(EscortOrder::Hold);
+            assert_eq!(row(&session, class).order, expected, "{class:?}");
+        }
+    }
+
+    #[test]
+    fn a_record_with_no_ship_placed_shows_no_row() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, Vec::new(), RuleSource::Engine);
+        session.pilot.escorts.push(warship(None));
+        for class in EscortClass::ALL {
+            assert!(!row(&session, class).present, "{class:?}");
+        }
+    }
+
+    #[test]
+    fn a_dying_escort_keeps_its_row() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+        let id = fleet_ids(&session)[0];
+        session.space.npc_mut(id).expect("there").condition =
+            crate::combat::hull::Condition::Dying {
+                ticks_left: 10,
+                starting: false,
+            };
+        assert!(row(&session, EscortClass::Warship).present);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_record_seeds_its_classs_kept_order() {
+        let catalog = carrying();
+        let hold = Some(EscortOrder::Hold);
+        let escorts = vec![warship(hold), warship(Some(EscortOrder::Attack))];
+        let session = flying(&catalog, escorts.clone(), RuleSource::Bible);
+        assert_eq!(kept(&session, EscortClass::Warship), hold);
+        assert_eq!(row(&session, EscortClass::Warship).order, hold);
+        assert_eq!(marked(&session), BTreeSet::from_iter(fleet_ids(&session)));
+        let mut seeded = session;
+        assert!(!settle(&mut seeded));
+        let orders: Vec<_> = seeded.pilot().escorts().iter().map(|e| e.order).collect();
+        assert_eq!(orders, [hold, Some(EscortOrder::Attack)]);
+        let session = flying(&catalog, escorts, RuleSource::Engine);
+        assert_eq!(kept(&session, EscortClass::Warship), None);
     }
 
     // On each pass (`_DoPlayGameWork` @0x43e19).
