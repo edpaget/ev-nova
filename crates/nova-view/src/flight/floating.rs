@@ -208,10 +208,18 @@ pub fn centre(frame: Bounds) -> Point {
 }
 
 /// Where the map at zoom index `zoom` draws a world point: `current`, the
-/// current system's position, at the frame's [`centre`].
+/// current system's position, at the frame's [`centre`], each position
+/// divided by the original's zoom as `_DrawMap` divides
+/// ([`Transform::divided`]): `_DrawMapInFloatingFrame` runs `_DrawMap`
+/// with the frame's rect in the sprite world's port (@0x113b6), so the
+/// port is the frame's whole top-left.
 #[must_use]
+#[allow(clippy::cast_possible_truncation)] // Screen pixels.
 pub fn transform(frame: Bounds, current: Point, zoom: usize) -> Transform {
-    Transform::scaled(centre(frame), current, SCALES[zoom])
+    let port = (frame.min.x as i32, frame.min.y as i32);
+    let at = centre(frame);
+    let centre = (at.x as i32 - port.0, at.y as i32 - port.1);
+    Transform::divided(port, centre, current, ZOOMS[zoom])
 }
 
 /// The floating map's state: up or not, when it was last shown, and its
@@ -741,6 +749,7 @@ fn cut(have: (f32, f32), gone: (f32, f32)) -> Vec<(f32, f32)> {
 mod tests {
     use super::*;
     use crate::ImageKey;
+    use crate::galaxy::view::Divide;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -884,6 +893,23 @@ mod tests {
         let transform = transform(stock(), at(40.0, -10.0), 2);
         assert_eq!(transform.world_to_screen(at(40.0, -10.0)), at(686.0, 278.0));
         assert_eq!(transform.world_to_screen(at(80.0, -10.0)), at(716.0, 278.0));
+    }
+
+    #[test]
+    fn the_map_divides_by_its_zoom_as_draw_map_does() {
+        // The frame (558, 150)-(814, 406) is `_DrawMap`'s rect, its centre
+        // (128, 128) in the port. (37 / 0.421875 + 128) − 37 / 0.421875
+        // is a hair under 128: the current system lands a pixel up and
+        // left of the frame's centre.
+        let transform = transform(stock(), at(37.0, 37.0), 6);
+        assert_eq!(
+            transform.divide,
+            Some(Divide {
+                zoom: 0.421_875,
+                port: (558, 150)
+            })
+        );
+        assert_eq!(transform.pixel(at(37.0, 37.0)), (685, 277));
     }
 
     // The click.
