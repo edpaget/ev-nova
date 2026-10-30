@@ -8,8 +8,10 @@
 //! It is flight's course map, over the spaceport docked and over flight
 //! undocked, and everything the course map does applies unchanged: Find,
 //! Space, B, Tab, zoom and scroll, clicks and Clear Route, and the close
-//! by Done, Return, Enter, Escape or M ([`FlightView::port_map_input`]).
-//! What sets it apart:
+//! by Done, Return, Enter, Escape or M ([`FlightView::port_map_input`]),
+//! each waiting while M is held, as it is from the press that opened the
+//! map, for its release (`_DoSystemMap` @0x13a2e-0x13a46;
+//! [`FlightView::close_map`]). What sets it apart:
 //!
 //! - **Its marks**: the green mission system and the arrow flag its
 //!   opener gives it (`nova_sim::Session::offer_map_marks` and its kin;
@@ -193,7 +195,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`MapOpener::marks_from`]), silently. Its close is
     /// [`FlightView::close_map`]'s, then the opener's restore (see the
     /// module docs).
+    ///
+    /// Each dialog opens it only on the map key ([`is_map_press`]), so it
+    /// opens with [`MAP_KEY`] held, and a close before its release waits
+    /// for it ([`FlightView::close_map`]).
     pub fn open_dialog_map(&mut self, opener: MapOpener) {
         self.open_map_as(MapOpening::Dialog(opener));
+        self.map_key_held = true;
     }
 }

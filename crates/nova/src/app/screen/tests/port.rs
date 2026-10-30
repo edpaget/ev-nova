@@ -964,6 +964,7 @@ fn the_bars_map_opens_over_the_spaceport_and_its_close_puts_back_the_nav() {
     assert_eq!(screen.showing(), Showing::FlightMap, "again");
     screen.input(&key(MAP, false));
     screen.input(&key(MAP, true));
+    screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::Spaceport, "M closes it too");
 }
 

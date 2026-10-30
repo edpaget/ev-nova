@@ -552,6 +552,7 @@ fn a_mission_dialogs_map_puts_back_the_nav_it_opened_with_as_it_closes() {
     });
     assert_ne!(nav_mode(&view), opened, "the click wrote the nav");
     view.port_map_input(&key(Key::Char('m'), true));
+    view.port_map_input(&key(Key::Char('m'), false));
     assert!(!view.map_open());
     assert_eq!(nav_mode(&view), opened, "put back as the map closed");
 }

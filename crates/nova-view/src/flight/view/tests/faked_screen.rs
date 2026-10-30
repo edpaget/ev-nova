@@ -103,6 +103,8 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     view.input(&key(MAP, false));
     assert!(view.map_open());
     view.input(&key(MAP, true));
+    assert!(view.map_open(), "waits for M's release");
+    view.input(&key(MAP, false));
     assert!(!view.map_open());
     view.tick(TICK);
     assert_eq!(last_controls(&view), Controls::default(), "Up was let go");

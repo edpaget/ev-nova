@@ -297,6 +297,13 @@ impl Screen for AppScreen {
         }
         self.command_held = false;
         self.keys_held = MenuKeys::default();
+        // A mission dialog's map over flight sits among the overlays, in
+        // front of the dialog it opened from, so flight lets go too: its
+        // map waiting for M's release closes
+        // ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)).
+        if self.flight_dialog_map_open() {
+            self.flight.as_mut().expect(ENTERED).release_keys();
+        }
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),

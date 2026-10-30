@@ -272,6 +272,12 @@ fn m_closes_the_flight_map_too() {
     open_flight_map(&mut screen);
     screen.input(&key(MAP, false));
     screen.input(&key(MAP, true));
+    assert_eq!(
+        screen.showing(),
+        Showing::FlightMap,
+        "waits for M's release"
+    );
+    screen.input(&key(MAP, false));
     assert_eq!(screen.showing(), Showing::Flight);
 }
 

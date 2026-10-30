@@ -284,7 +284,14 @@
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
 //!   router's Escape), and so do Return and, while M is held, a key-down
 //!   the original's `_MapFilter` doesn't take (@0x13cdd-0x13d07,
-//!   @0x144db-0x14587). Tab or `\` on it (repeats too) cycles the
+//!   @0x144db-0x14587). Every close made while M is held waits for its
+//!   release, as `_DoSystemMap` loops `BusyIdle(); while KeyCheck(M)`
+//!   before disposing of the dialog (@0x13a2e-0x13a46, `_BusyIdle`
+//!   @0x5981-0x5985 being empty): the map stays drawn, takes no input
+//!   and runs no null events, and the close, its beep and cue among it,
+//!   lands on the release; a close with M up doesn't wait. The maps the
+//!   bar, a port screen and a mission dialog open on M open with it
+//!   held. Tab or `\` on it (repeats too) cycles the
 //!   hyperspace selection through the current system's links
 //!   ([`Session::cycle_map_selection`]): the map draws the new selected
 //!   link and selects its system, and the nav area is redrawn at once; on
@@ -1385,6 +1392,15 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// (`_MapFilter` @0x144db-0x14587): from the press that opened it to
     /// its release, and again from any later press of it on the map.
     map_key_held: bool,
+    /// Whether the map has been closed while [`MAP_KEY`] was held, and
+    /// waits for its release to close: `_DoSystemMap` loops
+    /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of
+    /// the dialog (@0x13a2e-0x13a46), and `_BusyIdle` (@0x5981-0x5985) is
+    /// empty, so nothing runs meanwhile. The dialog stays as last drawn,
+    /// takes no input and runs no null events, and the whole close, its
+    /// beep, cue and restores, lands on the release
+    /// ([`FlightView::close_map`]).
+    map_closing: bool,
     /// How the map shown was opened (by M, the bar or a mission dialog,
     /// with its marks) and the nav as it opened: taken as each map opens,
     /// dropped as it closes ([`FlightView::close_map`]).

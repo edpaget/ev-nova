@@ -635,6 +635,7 @@ fn m_beeps_as_it_opens_and_the_close_beeps_and_cues_the_course() {
     assert!(view.map_open());
     assert_eq!(view.ui_sounds, [UiSound::MapOpened], "opened");
     view.ui_sounds.clear();
+    view.map_input(&key(MAP, false));
     view.close_map();
     assert!(!view.map_open());
     assert_eq!(view.ui_sounds, [UiSound::MapClosed], "closed");

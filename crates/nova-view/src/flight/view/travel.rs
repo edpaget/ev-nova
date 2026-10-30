@@ -129,6 +129,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.map.close_find();
         self.map_open = false;
         self.map_key_held = false;
+        self.map_closing = false;
         let opened = self.map_opened.take();
         if self.map.mode() != MapMode::Hypergate {
             if docked {
@@ -274,6 +275,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// taken for nothing: the map isn't drawn until it opens again, which
     /// takes them.
     pub(super) fn map_input_then(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
+        if self.map_closing {
+            self.closing_input(input, close);
+            return;
+        }
         let selected = self.map.selected();
         let input = self.map_frame_input(input);
         if self.map_input_taken(&input) {
@@ -281,6 +286,28 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         if self.map.selected() != selected {
             self.retake_map_panel();
+        }
+    }
+
+    /// The input while the map waits for [`MAP_KEY`]'s release to close
+    /// (`_DoSystemMap`'s `BusyIdle` loop, @0x13a2e-0x13a46): only M's
+    /// release is taken, and runs the close `close`; every other input,
+    /// keys, repeats, the pointer and Find's typing, is dropped, as the
+    /// loop reads no events.
+    ///
+    /// Left out: the closing `FlushEvents(7, 0)` (@0x13c44-0x13c53) drops
+    /// only null and mouse events, so the original's key-downs typed
+    /// during the wait act after it closes; ours' are swallowed here
+    /// (filed in the `play-feel-4-followups` roadmap).
+    fn closing_input(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
+        if let Input::Key {
+            key: MAP_KEY,
+            pressed: false,
+            ..
+        } = *input
+        {
+            self.map_key_held = false;
+            close(self);
         }
     }
 
@@ -431,8 +458,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// in that mode whenever it is closed, as the hypergate map's close
     /// takes its pick ([`GalaxyMap::take_gate_choice`](crate::galaxy::GalaxyMap::take_gate_choice)). Its close is
     /// [`FlightView::close_map`]'s in port.
+    ///
+    /// The bar asks for it only on the map key (`_BarFilter`'s item 8), so
+    /// it opens with [`MAP_KEY`] held, and a close before its release
+    /// waits for it ([`FlightView::close_map`]).
     pub fn open_bar_map(&mut self) {
         self.open_map_as(MapOpening::Bar);
+        self.map_key_held = true;
     }
 
     /// [`FlightView::map_input`]'s input, translated into the map's frame,

@@ -177,6 +177,7 @@ fn tab_on_the_bars_map_is_refused_and_changes_nothing() {
         ..in_sol()
     });
     view.open_bar_map();
+    faked_map_input(&mut view, &key(MAP, false));
     let selected = view.map.selected();
     let nav = view.nav_scene.clone();
     for k in [Key::Tab, Key::Char('\\')] {
@@ -250,6 +251,7 @@ fn tab_on_the_bars_map_redraws_nothing() {
         ..in_sol()
     });
     view.open_bar_map();
+    faked_map_input(&mut view, &key(MAP, false));
     jiggle_map(&mut view);
     faked_map_input(&mut view, &key(Key::Tab, true));
     assert_eq!(sent(&view), [FlightCommand::CycleMapSelection]);

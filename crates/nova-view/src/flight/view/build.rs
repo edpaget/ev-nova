@@ -507,6 +507,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             map: opening.map,
             map_open: false,
             map_key_held: false,
+            map_closing: false,
             map_opened: None,
             map_missions: Vec::new(),
             map_borders_save: None,
