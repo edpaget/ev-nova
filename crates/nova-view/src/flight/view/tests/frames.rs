@@ -27,7 +27,8 @@ pub(super) fn sol() -> FlightFrame {
 
 /// A frame in Sol (130) holding `ships`, the player's first, each drawn
 /// in the ships' layer in their order but the player's, drawn last, and
-/// Sol's two stellars shown.
+/// Sol's two stellars shown and on the radar, where the fake catalog
+/// places them.
 pub(super) fn in_sol_with(ships: Vec<FrameShip>) -> FlightFrame {
     let mut drawn: Vec<_> = ships
         .iter()
@@ -41,6 +42,10 @@ pub(super) fn in_sol_with(ships: Vec<FrameShip>) -> FlightFrame {
         stellars: vec![
             record::stellar(StellarId(128)),
             record::stellar(StellarId(129)),
+        ],
+        radar_stellars: vec![
+            record::radar_stellar(StellarId(128), Vec2::new(0.0, -600.0)),
+            record::radar_stellar(StellarId(129), Vec2::new(300.0, -200.0)),
         ],
         ..in_sol()
     }
@@ -139,6 +144,7 @@ pub(super) fn in_alpha() -> FlightFrame {
     FlightFrame {
         system: SystemId(131),
         stellars: vec![record::stellar(StellarId(140))],
+        radar_stellars: vec![record::radar_stellar(StellarId(140), Vec2::ZERO)],
         ..sol()
     }
 }

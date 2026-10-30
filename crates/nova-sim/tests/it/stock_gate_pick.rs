@@ -6,7 +6,8 @@
 //! refused as not landable, F5 does nothing, and from further off L
 //! passes it over. The NPCs' destination pick reads K-005's listing, the
 //! wormhole in it, but the wormhole sits past the pick's 999 cap, so no
-//! NPC heads for it. Skips, passing, when `NOVA_DATA` is unset.
+//! NPC heads for it. The radar draws it there (play-feel-4 phase 15).
+//! Skips, passing, when `NOVA_DATA` is unset.
 
 use crate::common;
 
@@ -164,6 +165,26 @@ fn in_k005_spicas_wormhole_is_listed_for_the_npcs_but_past_the_cap() {
         ..listed[0]
     }];
     assert_eq!(ids(&within), [WORMHOLE], "govt {preferring:?}");
+}
+
+/// `_DrawStatusRadar` draws every `NavDefs` entry, with no active or
+/// owner test (@0x498ad-0x498c5): in K-005, which shows no stellar, the
+/// radar lists Spica's wormhole, a square (`Flags2` 0x2000,
+/// @0x49939-0x49946), at its spot.
+#[test]
+fn in_k005_the_radar_draws_spicas_wormhole_as_a_square() {
+    let Some(data) = common::opened() else {
+        return;
+    };
+    let session = in_k005(&data, Rulebook::default());
+    let mut frame = nova_sim::flight_frame::FlightFrame::default();
+    session.fill_frame(&mut frame);
+    let blips: Vec<_> = frame
+        .radar_stellars
+        .iter()
+        .map(|blip| (blip.id, blip.position, blip.square))
+        .collect();
+    assert_eq!(blips, [(WORMHOLE, wormhole_spot(&data), true)]);
 }
 
 /// Every stock wormhole sits in the last `NavDefs` slot after empty ones:

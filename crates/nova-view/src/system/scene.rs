@@ -56,9 +56,6 @@ pub struct SceneStellar {
     pub dead_sprite: Option<Result<StellarSheet, String>>,
     /// Its animation fields.
     pub animation_data: AnimationData,
-    /// Whether the radar draws it as a square: a station, hypergate or
-    /// wormhole ([`StellarContents::radar_square`]).
-    pub radar_square: bool,
     /// Whether it is destroyed, as last set.
     pub destroyed: bool,
     /// Which sheet it draws, as last set: the session's answer
@@ -119,7 +116,6 @@ impl SceneStellar {
             sprite: stellar.sprite,
             dead_sprite: stellar.dead_sprite,
             animation_data: stellar.animation,
-            radar_square: stellar.radar_square,
             destroyed: false,
             drawn: DrawnSheet::Type,
             counted: DrawnSheet::Type,
@@ -584,7 +580,6 @@ mod tests {
             sprite,
             dead_sprite: None,
             animation: WORMHOLE,
-            radar_square: false,
         }
     }
 
@@ -610,7 +605,6 @@ mod tests {
                 130,
                 vec![
                     StellarContents {
-                        radar_square: true,
                         ..stellar(129, 900, -600, Ok(sheet(1001, 4)))
                     },
                     stellar(128, 0, 0, Ok(sheet(1000, 1))),
@@ -643,7 +637,6 @@ mod tests {
                     frozen: false,
                     counts_none: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
-                    radar_square: true,
                     frames: Frames::new(),
                     gate_frame: None,
                 },
@@ -660,7 +653,6 @@ mod tests {
                     frozen: false,
                     counts_none: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
-                    radar_square: false,
                     frames: Frames::new(),
                     gate_frame: None,
                 },
@@ -677,7 +669,6 @@ mod tests {
                     frozen: false,
                     counts_none: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
-                    radar_square: false,
                     frames: Frames::new(),
                     gate_frame: None,
                 },

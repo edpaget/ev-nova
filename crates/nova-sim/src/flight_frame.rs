@@ -173,6 +173,11 @@ pub struct FlightFrame {
     /// Each stellar the system lists, in its nav order, shown or not, and
     /// how it is drawn ([`FrameStellar`]).
     pub stellars: Vec<FrameStellar>,
+    /// Each stellar the system lists, shown or not, in its `NavDefs`
+    /// order, as the radar draws it ([`FrameRadarStellar`]): kept apart
+    /// from [`FlightFrame::stellars`], whose order puts the stellars shown
+    /// first.
+    pub radar_stellars: Vec<FrameRadarStellar>,
     /// The player's effective murk, which the world is murked by
     /// ([`Session::effective_murk`](crate::Session::effective_murk)).
     pub effective_murk: u8,
@@ -268,6 +273,7 @@ impl Default for FlightFrame {
             cargo_boxes: Vec::new(),
             asteroids: Vec::new(),
             stellars: Vec::new(),
+            radar_stellars: Vec::new(),
             effective_murk: 0,
             system_murk: 0,
             system_background: None,
@@ -1860,8 +1866,25 @@ pub struct FrameStellar {
     /// one or isn't shown
     /// (`Session::gate_frame`).
     pub gate_frame: Option<u16>,
-    /// What IFF shows it as on the radar, or `None` for one that isn't
-    /// shown (`Session::stellar_iff`).
+}
+
+/// A stellar its system lists, shown or not, as the radar draws its blip
+/// (`_DrawStatusRadar`'s stellar loop, @0x498a0-0x49a8e; see the `story`
+/// module's "Checked for play-feel-4 phase 15").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameRadarStellar {
+    /// Which stellar.
+    pub id: StellarId,
+    /// Where it is, in world units (`spöb` +0x4/+0x6).
+    pub position: Vec2,
+    /// Whether its blip is a square: a station (`Flags` 0x10), hypergate
+    /// or wormhole (`Flags2` 0x1000 or 0x2000; @0x49939-0x49946).
+    pub square: bool,
+    /// The width `_GetSpriteXSize` gives of its `Type` master
+    /// (@0x499e8-0x49a0a), which sizes the oval: `None` while the master
+    /// is not loaded (`Space::radar_type_width`).
+    pub type_width: Option<u32>,
+    /// What IFF shows it as (`Session::stellar_iff`).
     pub iff: Option<StellarIff>,
 }
 
@@ -2222,7 +2245,6 @@ mod tests {
             frozen: false,
             counts_none: false,
             gate_frame: None,
-            iff: None,
         };
         let frame = FlightFrame {
             stellars: vec![stellar(131, true), stellar(128, true), stellar(129, false)],

@@ -2,6 +2,7 @@ use super::faked_flight::{at_rest, hold, last_controls, ship_at, tick_to, ticked
 use super::faked_hud::{barred, barred_by, flown};
 use super::*;
 use nova_sim::Face;
+use nova_sim::flight_frame::FrameRadarStellar;
 use nova_sim::status_cargo::StatusCargo;
 
 // Building.
@@ -794,41 +795,21 @@ fn the_hud_shows_the_status_bar_full_bars_and_the_stellars_on_radar() {
 }
 
 #[test]
-fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
-    // `w` x `h` frames: the radar reads the width, never the height.
-    let sized = |id, at, (w, h): (u32, u32), square| StellarContents {
-        sprite: Ok(StellarSheet {
-            image: crate::SheetImage::Rled(1000 + id),
-            frames: NonZeroU16::MIN,
-            frame_width: w,
-            frame_height: h,
-        }),
-        radar_square: square,
-        ..stellar(id, "Extra", at, 1)
-    };
-    let mut sites = catalog().sites;
-    sites.extend([
-        site(150, (640.0, 0.0), StellarFlags::STATION),
-        site(151, (-640.0, 320.0), 0),
-        site(152, (0.0, 640.0), 0),
-    ]);
-    let catalog = FakeCatalog {
-        sites,
-        sol_more: vec![
-            sized(150, (640, 0), (300, 300), true),
-            sized(151, (-640, 320), (120, 60), false),
-            sized(152, (0, 640), (250, 150), false),
-        ],
-        ..catalog()
+fn a_stellars_radar_shape_and_type_width_reach_the_radar() {
+    // The shape and the `Type` width are the session's
+    // (`session::frame::radar`): none of these three is in the scene.
+    let listed = |id, (x, y), square, width| FrameRadarStellar {
+        square,
+        type_width: Some(width),
+        ..record::radar_stellar(StellarId(id), Vec2::new(x, y))
     };
     let mut frame = among(Vec::new());
-    frame
-        .stellars
-        .extend([150, 151, 152].map(|id| record::stellar(StellarId(id))));
-    for stellar in &mut frame.stellars {
-        stellar.iff = None;
-    }
-    let view = barred(catalog, frame);
+    frame.radar_stellars.extend([
+        listed(150, (640.0, 0.0), true, 300),
+        listed(151, (-640.0, 320.0), false, 120),
+        listed(152, (0.0, 640.0), false, 250),
+    ]);
+    let view = barred(catalog(), frame);
     let dim = RadarColor::Dim;
     // A station is a 2×2 square whatever its size; past 89 pixels wide
     // an oval grows 2 a side, past 199, 3.

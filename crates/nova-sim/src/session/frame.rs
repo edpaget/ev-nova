@@ -1,7 +1,8 @@
 //! [`Session::fill_frame`]: what the flight view draws, filled into a
 //! [`FlightFrame`] for the view's `FlightSim` port
 //! (see [`flight_frame`](crate::flight_frame)): the nav and course here,
-//! the world's ships, shots and stellars in the `world` module.
+//! the world's ships, shots and stellars in the `world` module, the
+//! radar's stellars in the `radar` module.
 
 use super::Session;
 use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
@@ -9,6 +10,7 @@ use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 mod facts;
 mod hud;
 mod names;
+mod radar;
 mod world;
 
 impl Session {
@@ -45,6 +47,7 @@ impl Session {
             cargo_boxes,
             asteroids,
             stellars,
+            radar_stellars,
             effective_murk,
             system_murk,
             system_background,
@@ -89,6 +92,7 @@ impl Session {
         self.space.fill_boxes(cargo_boxes);
         self.space.fill_asteroids(asteroids);
         self.fill_stellars(stellars);
+        self.fill_radar_stellars(radar_stellars);
         *effective_murk = self.effective_murk();
         *system_murk = self.system_murk();
         *system_background = self.system_background();
@@ -316,6 +320,12 @@ pub(super) mod tests {
                 frozen: true,
                 counts_none: true,
                 gate_frame: Some(9),
+            }],
+            radar_stellars: vec![crate::flight_frame::FrameRadarStellar {
+                id: StellarId(999),
+                position: Vec2::new(9.0, 9.0),
+                square: true,
+                type_width: Some(999),
                 iff: Some(crate::iff::StellarIff::Dominated),
             }],
             effective_murk: 99,
@@ -751,7 +761,6 @@ pub(super) mod tests {
             frozen: session.frame_frozen(id),
             counts_none: session.counts_no_frames(id),
             gate_frame: session.gate_frame(id),
-            iff: session.stellar_iff(id),
         }
     }
 

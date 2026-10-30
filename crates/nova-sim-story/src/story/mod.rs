@@ -2642,10 +2642,11 @@
 //!   and every lookup of the stellar picked, read the whole listing,
 //!   built by rdm:phase/play-feel-4/phase-9-npc-destinations-over-navdefs
 //!   (`nova_sim_ai::traffic::destination`). The slot keys, the tutorial
-//!   hints' and `_DoNewPilot`'s candidates and the radar still read only
-//!   the stellars shown:
-//!   rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs
-//!   and rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar.
+//!   hints' and `_DoNewPilot`'s candidates still read only the stellars
+//!   shown: rdm:phase/play-feel-4/phase-13-nearest-and-slot-picks-over-navdefs.
+//!   The radar draws every listed stellar, built by
+//!   rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar (see
+//!   "Checked for play-feel-4 phase 15").
 //!
 //! ## Built by stellar-fidelity phase 8
 //!
@@ -2837,7 +2838,9 @@
 //!     is the stale frame's, its top left at the centre less 16, and a
 //!     frameless one has none. Built by stellar-fidelity phase 9 (below).
 //!   - The status radar's blip for a `Type` master that counts none (32,
-//!     the smallest): it depends on rdm:task/radar-blips-every-listed-stellar;
+//!     the smallest): built by
+//!     rdm:phase/play-feel-4/phase-15-radar-blips-every-listed-stellar,
+//!     which superseded
 //!     rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type.
 //!
 //! ## Built by stellar-fidelity phase 9
@@ -3538,6 +3541,58 @@
 //!   for the timer and the frames. The engine's
 //!   `Session::prepare_all_sprites` steps no stellar or gate. Filed as
 //!   rdm:phase/play-feel-4-followups/phase-4-prepare-all-sprites-steps-stellar-animation.
+//!
+//! ## Checked for play-feel-4 phase 15
+//!
+//! `_DrawStatusRadar`'s stellar loop (@0x498a0-0x49a8e), re-read against
+//! stellar-fidelity's record (hud-fidelity phase 2, "`_DrawStatusRadar`
+//! @0x496e0, the no-IFF path").
+//!
+//! - **Listing.** `esi` runs 0..15 (@0x49888, @0x49a8a-0x49a8e). Each pass
+//!   reads `sÿst[player +0x74]` (stride 0x1fc) `+0x2a + 2·slot`, the
+//!   `NavDefs` entry, and skips -1 (@0x498ad-0x498c5). There is no +0x44
+//!   (active), +0x14 (owner), destroyed or sprite-slot test, so a stellar
+//!   another visible system owns gets a blip, drawn in slot order. The
+//!   engine reads the chart's listing, `NavDefs` order with the gaps
+//!   dropped (`nova_sim::flight_frame::FlightFrame::radar_stellars`).
+//! - **Position.** The `spöb` (stride 0x498) +0x4/+0x6, less the player's
+//!   +0x18/+0x1c, truncated, ×0.03125, plus the centre, truncated
+//!   (@0x498cb-0x49935): the radar maths already built.
+//! - **Shape.** `Flags` 0x10 or `Flags2` 0x3000 draws a square, inset -1
+//!   (@0x49939-0x49946, @0x49971-0x499b8). It never reads the master.
+//! - **Oval size.** The master table 0x3b5040 indexed by the `spöb`'s +0xe
+//!   (its `Type`), directly, with no owner test and no 0..255 range check
+//!   (@0x499e8-0x499f9). A null master (@0x499fc), or one whose +0x4c is
+//!   null (@0x49a00-0x49a05), gives inset -1; otherwise
+//!   `_GetSpriteXSize(master)` (@0x49a0a), which gives 32 when +0x50 is
+//!   null or the frame index (+0x68) is outside 0..count (+0x54)
+//!   (@0x26d4-0x26fc), and the frame's width otherwise. Above 199 → inset
+//!   -3, above 89 → -2, else -1 (@0x49a0f-0x49a47). So the blip reads the
+//!   `Type` master, not the sheet drawn, and not `_GetStellarSpriteXSize`'s
+//!   owner test (@0xacb9-0xacc1):
+//!   [`Rebuilt::type_width`](rebuild::Rebuilt::type_width), `Unloaded` the
+//!   smallest, `OutOfRange` 32, `Frame` the `Type` frame's width
+//!   (`Space::radar_type_width`). +0x4c is read as "master loaded", as
+//!   `_LoadMasterStellarSprite`'s create sets it with +0x50 (@0x1ec30,
+//!   @0x1ece3). A destroyed stellar reads its `Type` master until the next
+//!   rebuild point frees it.
+//! - **Clip.** `SectRect` against the radar rect; a blip is skipped only
+//!   when the result is empty (@0x49997-0x499af, @0x49a68-0x49a80):
+//!   already built.
+//! - **Colour.** With IFF, `_ColorCodeStellar` (@0x49955, @0x499cf);
+//!   otherwise `_radarStatusColor[0]`, `DimRadar` (@0x4995f, @0x499d9).
+//!   `_ColorCodeStellar` (@0xaa26-0xab2a) has no owner or visibility test
+//!   and reads `_playerRecord[stellar +0x14]` (@0xaad5, @0xaaed), the
+//!   record of the system that holds the stellar: for one not shown,
+//!   another system's (`Session::stellar_iff`, through `Chart::holder_of`).
+//! - **Sound**: none in the loop.
+//! - **Left out.** A `Type` outside 0..255 indexes past the master table
+//!   (@0x499f9), a read of memory the engine doesn't model; the engine
+//!   reads it as unloaded, the smallest blip.
+//! - **Built here**: the listing, the `Type` master's width (superseding
+//!   rdm:phase/stellar-fidelity-cross-roadmap/phase-2-radar-blip-uncounted-type)
+//!   and the holder's IFF colour. No other divergence in
+//!   @0x498a0-0x49a8e; nothing filed.
 //!
 //! ## Built by stellar-fidelity phase 15
 //!

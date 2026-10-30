@@ -249,7 +249,6 @@ mod tests {
                 frame0_bias: 0,
                 flags2: 0,
             },
-            radar_square: false,
         }
     }
 

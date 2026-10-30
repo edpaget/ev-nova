@@ -37,12 +37,17 @@ impl Session {
         self.space.ship_iff(npc)
     }
 
-    /// What IFF shows `stellar` as, one of the stellars shown, as its
-    /// destroyed state stands: by the player's legal record that its
-    /// `MinStatus` is checked against (as the
+    /// What IFF shows `stellar` as, one of the stellars its system lists,
+    /// shown or not, as its destroyed state stands: by the player's legal
+    /// record that its `MinStatus` is checked against (as the
     /// [`LegalRecords`](crate::RuleKey::LegalRecords) rule reads it, by the
-    /// engine the record in the current system, `_playerRecord[stellar
-    /// +0x14]`), and its [`Standing`]. `None` for a stellar not shown.
+    /// engine `_playerRecord[stellar +0x14]`, the record of the system
+    /// that holds it, `Chart::holder_of`, @0xaad5, @0xaaed), and its
+    /// [`Standing`]. `_ColorCodeStellar` (@0xaa26-0xab2a) runs no owner or
+    /// visibility test, so a stellar the system lists but another visible
+    /// system owns is coloured by that system's record. A stellar shown is
+    /// read from the stellars shown, the rest from those listed. `None`
+    /// for a stellar the system doesn't list.
     ///
     /// The standing is:
     ///
@@ -59,14 +64,24 @@ impl Session {
     ///   snapshot makes at the same refresh.
     #[must_use]
     pub(crate) fn stellar_iff(&self, stellar: StellarId) -> Option<StellarIff> {
-        let site = self.chart.sites.iter().find(|site| site.id == stellar)?;
+        let site = self
+            .chart
+            .sites
+            .iter()
+            .chain(&self.chart.listed)
+            .find(|site| site.id == stellar)?;
         let standing = Standing {
             dominated: domination::dominated(site),
             blessed: self.blessing().blesses(site.govt, Blessed::Landing),
         };
+        let holder = self
+            .chart
+            .holder_of(&self.pilot, &self.statics, stellar)
+            .unwrap_or(self.pilot.system);
         Some(iff::stellar_iff(
             site,
-            self.chart.landing_record(&self.pilot, &self.setup, site),
+            self.chart
+                .record_in(&self.pilot, &self.setup, holder, Some(site)),
             standing,
         ))
     }
@@ -358,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stellar_not_shown_has_no_colour() {
+    fn a_stellar_not_listed_has_no_colour() {
         let session = session(&radar_catalog());
         assert_eq!(session.stellar_iff(StellarId(140)), None);
     }

@@ -137,7 +137,9 @@ use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
-use crate::landing::{LandingReach, StellarShown, TypeWidth, frame_radius, landing_reach};
+use crate::landing::{
+    LandingReach, OUT_OF_RANGE_FRAME_WIDTH, StellarShown, TypeWidth, frame_radius, landing_reach,
+};
 use crate::legal::{Crime, LegalCode};
 use crate::navigation::SpriteRect;
 use crate::pilot::Pilot;
@@ -720,6 +722,25 @@ impl Space {
             self.rebuilt.type_width(site)
         } else {
             TypeWidth::Unloaded
+        }
+    }
+
+    /// The width the radar sizes `site`'s blip by, one of the stellars
+    /// its system lists, shown or not: what `_GetSpriteXSize` (@0x49a0a)
+    /// gives of its `Type` master, which `_DrawStatusRadar` indexes by the
+    /// `spöb`'s `Type` directly (@0x499e8-0x499f9). That is the `Type`
+    /// frame's width, 32 ([`OUT_OF_RANGE_FRAME_WIDTH`]) for a `spïn` that
+    /// counts no frames (@0x26d4-0x26fc), and `None` while the master is
+    /// not loaded (@0x499fc, @0x49a00-0x49a05), which draws the smallest
+    /// blip. Unlike [`Space::type_width`], it runs no owner test: that is
+    /// `_GetStellarSpriteXSize`'s (@0xacb9-0xacc1), which the radar does
+    /// not call, so a stellar another visible system owns reads its master
+    /// too.
+    pub(super) fn radar_type_width(&self, site: &LandingSite) -> Option<u32> {
+        match self.rebuilt.type_width(site) {
+            TypeWidth::Frame => site.frame_size.map(|(width, _)| width),
+            TypeWidth::OutOfRange => Some(OUT_OF_RANGE_FRAME_WIDTH),
+            TypeWidth::Unloaded => None,
         }
     }
 

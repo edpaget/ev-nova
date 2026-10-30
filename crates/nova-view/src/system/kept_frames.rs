@@ -122,7 +122,6 @@ mod tests {
                         frame0_bias: 0,
                         flags2: 0,
                     },
-                    radar_square: false,
                 }],
                 type_zero_sprite: Ok(sheet(3000)),
                 problems: Vec::new(),

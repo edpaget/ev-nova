@@ -223,7 +223,6 @@ mod tests {
                     }),
                     dead_sprite: None,
                     animation: AnimationData::default(),
-                    radar_square: false,
                 }]
             } else {
                 vec![StellarContents {
@@ -243,7 +242,6 @@ mod tests {
                         frame0_bias: 0,
                         flags2: nova_sim::gate_sprite::RANDOM,
                     },
-                    radar_square: false,
                 }]
             };
             SystemContents {

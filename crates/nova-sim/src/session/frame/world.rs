@@ -117,7 +117,6 @@ impl Session {
                     frozen: self.frame_frozen(id),
                     counts_none: self.counts_no_frames(id),
                     gate_frame: self.gate_frame(id),
-                    iff: self.stellar_iff(id),
                 }),
         );
     }
