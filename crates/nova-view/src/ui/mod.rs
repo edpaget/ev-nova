@@ -14,6 +14,7 @@
 //!   label.
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time, or a pixel at a time.
+//! - [`scroll_arrows`]: a text dialog's scroll arrows.
 //! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
 //!   line clipped to the box. The news, exchange, flight message,
 //!   shipyard weapons, player info and shop descriptions draw through it.
@@ -91,6 +92,7 @@ pub mod plunder;
 pub mod prefs;
 pub mod quantity;
 pub mod row_list;
+pub mod scroll_arrows;
 pub mod scroll_text;
 pub mod slice;
 pub mod text_box;
