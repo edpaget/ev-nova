@@ -29,6 +29,8 @@
 //! [`MoviePlayer`]: nova_view::movie::MoviePlayer
 
 pub mod ffmpeg;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod lookup;
 mod player;
 pub mod source;
@@ -48,5 +50,20 @@ impl FfmpegPlayer {
     #[must_use]
     pub fn new(dirs: Vec<PathBuf>) -> Self {
         Self::with(FfmpegOpen, StdFolders, dirs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nova_view::movie::MoviePlayer;
+
+    use super::*;
+
+    #[test]
+    fn the_fixture_starts_from_a_folder_it_is_written_into() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join(fixture::NAME), fixture::MOVIE).expect("write");
+        let player = FfmpegPlayer::new(vec![dir.path().to_path_buf()]);
+        assert_eq!(player.start(fixture::NAME), Some(fixture::SIZE));
     }
 }

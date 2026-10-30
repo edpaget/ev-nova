@@ -22,5 +22,10 @@ nova-view = { workspace = true, features = ["fixture"] }
 # Real folders for the lookup adapter's and the decoder's tests.
 tempfile.workspace = true
 
+[features]
+# Exposes the checked-in H.264 fixture's bytes (`fixture`), so the game's
+# wiring test can write it into a folder of its own.
+fixture = []
+
 [lints]
 workspace = true

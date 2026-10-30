@@ -93,13 +93,14 @@ impl<S: FrameSource> Playing<S> {
 
     /// When it ends: as its last good frame does once decoding failed,
     /// else its duration, else the end of its last frame once every frame
-    /// is decoded, else not yet known.
+    /// is decoded, else not yet known. The source is let go only once
+    /// `next` is empty, so with no source every frame has been shown.
     fn end(&self) -> Option<Duration> {
         if self.failed {
             return Some(self.last_end);
         }
         self.duration
-            .or_else(|| (self.source.is_none() && self.next.is_none()).then_some(self.last_end))
+            .or_else(|| self.source.is_none().then_some(self.last_end))
     }
 }
 

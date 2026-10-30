@@ -46,6 +46,7 @@ fn the_fixture_decodes_ten_64x32_frames_in_display_order() {
     let (movie, frames) = decode_all("main-bframes.mov");
     assert_eq!(movie.size(), (64, 32));
     assert_eq!(movie.duration(), Some(Duration::from_secs(1)));
+    assert_eq!(movie.frames(), Some(10));
     assert_eq!(frames.len(), 10);
     let ms = Duration::from_millis(1);
     for (i, frame) in frames.iter().enumerate() {
