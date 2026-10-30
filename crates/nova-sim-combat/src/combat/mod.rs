@@ -432,6 +432,7 @@ pub mod shot_slots;
 pub mod sides;
 mod source_slot;
 pub mod spin_timer;
+pub mod sprite_load;
 pub mod stellar;
 pub mod stellar_guns;
 pub mod stellar_hazards;
@@ -470,6 +471,7 @@ use projectile::{
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
+pub use sprite_load::SpriteLoad;
 use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
