@@ -167,6 +167,14 @@ fn an_unbidden_frame_fades_a_level_a_step_with_nothing_held() {
 }
 
 #[test]
+fn a_key_held_on_an_unbidden_frame_adds_no_fade_of_its_own() {
+    // Up held in the pre-jump: the pass sets the one byte either way.
+    let unbidden = KeyFades::EVERY.with_unbidden();
+    assert_eq!(alpha_holding(unbidden, &[]), TWO, "nothing held");
+    assert_eq!(alpha_holding(unbidden, &[Key::Up]), TWO, "Up held");
+}
+
+#[test]
 fn with_nothing_fading_no_key_fades_a_slot_key_included() {
     assert_eq!(
         alpha_holding(KeyFades::NONE, &[Key::Up, STELLAR_SLOT_KEYS[1][1]]),
