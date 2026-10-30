@@ -264,8 +264,18 @@ impl AppScreen {
     /// The New Pilot dialog's input. The name and nickname confirmed are
     /// kept culled, then trimmed (`kept_name`, @0x18bd6-0x18c03), and the
     /// pilot is built with them, the gender and Strict Play chosen. A name
-    /// no file can be saved under (one culled or trimmed to nothing among
-    /// them) is refused.
+    /// no file can be saved under (blank, `.` or `..`) is refused.
+    ///
+    /// A name culled or trimmed to nothing follows
+    /// [`RuleKey::NewPilotEmptyName`]. By its other reading, the default,
+    /// it is refused too. By the engine's, it goes on as the original's
+    /// does, since `_DoNewPilotNameDialog` refuses no name
+    /// (@0x1695b-0x16a15): `_DoesPilotExist("")` answers no
+    /// (@0x72def-0x72e6a), so no replace question comes up, and the pilot
+    /// is christened and plays but is never saved, as `_SavePilotFile`
+    /// writes nothing under an empty name (@0x768f5) and `_DoNewPilot`
+    /// ignores it (@0x1935f). `save_warning` has no key to save it under
+    /// and so warns of nothing.
     ///
     /// A name already saved, ignoring case, is checked next, as
     /// `_DoNewPilot` checks it (`_DoesPilotExist` @0x18c0b) before it
@@ -297,7 +307,9 @@ impl AppScreen {
                 strict_play,
             }) => {
                 let name = kept_name(&name);
-                if pilot_key(&name).is_none() {
+                let goes_on_empty = name.is_empty()
+                    && self.rules.source_for(RuleKey::NewPilotEmptyName) == RuleSource::Engine;
+                if pilot_key(&name).is_none() && !goes_on_empty {
                     self.refuse_new_pilot(UNUSABLE_NAME);
                     return ScreenAction::None;
                 }
@@ -315,6 +327,8 @@ impl AppScreen {
                     }
                 };
                 let by_key = matches!(input, Input::Key { .. });
+                // An empty name finds no saved pilot (`saved_key` has no key
+                // for it), as `_DoesPilotExist("")` answers no.
                 if let Some(saved) = self.keeper().and_then(|keeper| keeper.saved_key(&name)) {
                     self.ask_to_replace(pilot, saved);
                 } else {
