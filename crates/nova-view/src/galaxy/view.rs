@@ -3,6 +3,13 @@
 //! in-flight maps look where their dialog's place says instead
 //! ([`place`](super::place)).
 //!
+//! A transform has two kinds of arithmetic. The viewer's is its own, in
+//! `f32`, truncated on the screen ([`Transform::scaled`]). The in-flight
+//! maps (course, hypergate and floating) use `_DrawMap`'s: each position
+//! divided by the double zoom, the add before the subtract, truncated in
+//! the map's port ([`Transform::divided`], [`Divide`]). The two can
+//! differ by a pixel where a point lands near a pixel's edge.
+//!
 //! The viewer's map area is the logical rectangle (0, 0) to
 //! ([`MAP_WIDTH`], [`MAP_HEIGHT`]); its info panel fills the rest of the
 //! screen below it.

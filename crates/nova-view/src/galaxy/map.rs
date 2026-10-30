@@ -172,12 +172,19 @@
 //! viewer, bracket the selection and name the systems again, as
 //! `_MapDialogUpdate` does after `_DrawMap` (@0xfc9c-0x1001f).
 //!
-//! Points are whole pixels: each is the transformed point truncated toward
-//! zero, as `_DrawMap` works trunc(centre + pos/zoom − scroll/zoom)
-//! (@0xe5e9-0xe662; [`Transform::pixel`]). The zoom tests take the
-//! original's zoom, the inverse of the scale ([`Transform::zoom`]):
-//! against 0.5 (0xdd128) only the largest scale, 64/27, is at or below
-//! it, and against 1.1 (0xdd1b0) the scales from 1 up are.
+//! Points are whole pixels ([`Transform::pixel`]). The in-flight maps
+//! place each as `_DrawMap` does, per axis
+//! trunc((double(pos) / zoom + double(c)) − double(scroll) / zoom), with c
+//! the map rect's whole centre in its port, the add before the subtract,
+//! and the truncation (`cvttsd2si`) in the port before its origin is
+//! added: the course @0xe6d1-0xe76f, the links @0xe895-0xe95b,
+//! @0xeab7-0xeb80 and @0xec49-0xed29, each system @0xee83-0xeef4, the
+//! current dot @0xf0ad-0xf11e, and `_MapDialogUpdate`'s brackets
+//! @0xfcb6-0xfd38. The viewer truncates its own `f32` screen point. The
+//! zoom tests take the original's zoom ([`Transform::zoom`]): an in-flight
+//! map's `_mapZoom`, the viewer's the inverse of its scale. Against 0.5
+//! (0xdd128) only the viewer's largest scale, 64/27, is at or below it,
+//! and against 1.1 (0xdd1b0) the scales from 1 up are.
 //!
 //! 1. **The course** in [`BRIGHT_GREEN`] at pen 2 (@0xe661-0xe7a2).
 //! 2. **The current system's links** in [`LESS_DARK_GREY`], or
@@ -200,11 +207,15 @@
 //!    current one, then two strokes from its tip back
 //!    ([`arrow_head`]), in white
 //!    (`ForeColor` 30) at pen 3 for the system selected, otherwise
-//!    [`CYAN`] at pen 2 (@0xf195-0xf499).
+//!    [`CYAN`] at pen 2 (@0xf195-0xf499). Each end is worked in double,
+//!    kept as a single float in the port ([`Transform::port_point`],
+//!    `cvtsd2ss` @0xf2d3-0xf330), and truncated there (`cvttss2si`)
+//!    before the port's origin is added.
 //! 8. **The names**, white, in Geneva ([`NAME_FONT`], `_smallTextFont` 3)
 //!    at [`NAME_SIZE`] (`_smallTextSize` 9), the baseline at trunc(x +
-//!    7.0), trunc(y + 4.0) (0xdd1c0, 0xdd1b8): every one at a zoom ≤ 1.1,
-//!    only the selection's above (@0xf49a-0xf5c0).
+//!    7.0), trunc(y + 4.0) (0xdd1c0, 0xdd1b8), the offset added before
+//!    the truncation ([`Transform::pixel_offset`], @0xf517-0xf595): every
+//!    one at a zoom ≤ 1.1, only the selection's above (@0xf49a-0xf5c0).
 //!
 //! After `_DrawMap`, the brackets: the selection's rect inset −8 when the
 //! zoom ≤ 0.5, otherwise −6, and eight ticks in [`BRIGHT_GREEN`] at pen 1,

@@ -38,7 +38,9 @@
 //!   then the course map's own drawing ([`GalaxyMap::draw_marks`]: what
 //!   `_DrawMap` draws, with no brackets or second names, as
 //!   `_DrawMapInFloatingFrame` runs `_DrawMap` alone) centred on the
-//!   current system at the zoom, in the 16-bit order (@0x113e3-0x11418),
+//!   current system at the zoom, each position divided by the original's
+//!   zoom in the frame's port as `_DrawMap` divides ([`transform`],
+//!   @0x113b6), in the 16-bit order (@0x113e3-0x11418),
 //!   so the map can draw over the border. Then [`clip_and_fade`] clips it
 //!   to the frame and fades it to the level.
 //! - **The selection** ([`FloatingMap::preselect`]): `_ShowFloatingMap`
