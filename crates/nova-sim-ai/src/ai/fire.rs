@@ -11,7 +11,8 @@
 //! ([`Trigger::only`]), and the pick it holds after the passes
 //! ([`Trigger::keep`]). The fight then fires it as `_FireAIShipWeapon`
 //! does ([`ai_fire`](crate::combat::ai_fire)). While it attacks or snipes
-//! at a ship that is live in the system, it also launches its fighters
+//! at a ship in the system and not breaking up, however it arrives
+//! ([`Surroundings::standing`]), it also launches its fighters
 //! ([`Trigger::bays`], `_AILaunchFighter` from the attack state, see
 //! [`bay`](crate::bay)).
 //!
@@ -35,8 +36,8 @@
 //!   missile pass alone, with no facing test (`_LowLevelAIHandler`
 //!   substates 7, 6, 0xe, 5, 0x10, 0x11 and 0x12). A ship running out from
 //!   its attacker runs none.
-//! - **The gun pass** (`_AIFireGun`), past its preamble (a target live
-//!   in the system and seen), makes the gun it finds the pick; then any
+//! - **The gun pass** (`_AIFireGun`), past its preamble (a target whose
+//!   slot is active, [`Surroundings::active`], @0x7ff11, and seen), makes the gun it finds the pick; then any
 //!   pick, found or kept, raises the flag (@0x80213-0x8021d), its
 //!   ammunition and reload not tested again. With no pick and no armed
 //!   gun it tries again with homing allowed (@0x80226-0x80243).
@@ -106,7 +107,8 @@
 //!   shield is at or above none (@0x801e5-0x801fb), else the most
 //!   `MassDmg`, a value of none or less counting as 1, a tie to the
 //!   earlier mount. Guidance 5 is never chosen.
-//! - **A turret** (3, 4, 7 and 8): none at a target whose ship type is
+//! - **A turret** (3, 4, 7 and 8): none at a target whose slot isn't
+//!   active (@0x80b32, breaking up is), nor one whose ship type is
 //!   untargetable (`shïp` `Flags2` 0x0004,
 //!   [`UNTARGETABLE`](crate::cloak::UNTARGETABLE), `_AIFireTurret`
 //!   @0x80b51), whatever the shooter's scanner, nor at one the shooter
@@ -123,6 +125,9 @@
 //!   dogfighting, sniping, fleeing, and approaching while facing within
 //!   [`GUN_FACING`]; never swarming.
 //! - **A missile** (1, `_AIFireMissile` @0x8115d): none at a target whose
+//!   slot isn't active (@0x8119a). Its preamble (@0x8115d-0x8121c) never
+//!   calls `_ShipVisibleToShip`, so a ship waiting in its gate draws one
+//!   as a ship gliding in does. None at a target whose
 //!   ship type is untargetable unless the shooter's ship type carries a
 //!   scanner with `ModVal` bit 0x0004 (@0x811a7-0x811cd,
 //!   [`CloakGear::scanner`](crate::cloak::CloakGear::scanner)), nor at a
@@ -335,8 +340,8 @@ pub fn approach_lead(
 }
 
 /// The pick `npc` holds as its low level starts among `around`: the bay
-/// `_AILaunchFighter` launches, when it attacks or snipes at a ship live
-/// there (the high level's launch comes first, @0x8e6fa, @0x81411), else
+/// `_AILaunchFighter` launches, when it attacks or snipes at a ship
+/// standing there (the high level's launch comes first, @0x8e6fa, @0x81411), else
 /// the pick it holds.
 #[must_use]
 pub fn lead_pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
@@ -548,8 +553,8 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 }
 
 /// The weapon `npc` fires now among `around`, if any (see the module
-/// docs), its fighter bays while it attacks or snipes at a ship that is
-/// live there, and its point defence while its manoeuvre reaches a turret
+/// docs), its fighter bays while it attacks or snipes at a ship standing
+/// there ([`launches`]), and its point defence while its manoeuvre reaches a turret
 /// (see the module docs).
 ///
 /// A target with no state here (gone from the system) asks for no point
@@ -595,8 +600,9 @@ fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool)
 }
 
 /// Whether `npc` launches its fighters: attacking or sniping at a ship
-/// live in the system (`_AILaunchFighter` from `_HighLevelAIHandler`'s
-/// attack block, @0x8e6fa).
+/// the attack block finds standing (+0xb8 @0x8e3df, `_IsDying` @0x8e3ef),
+/// however it arrives (`_AILaunchFighter` from `_HighLevelAIHandler`'s
+/// attack block, @0x8e6fa, which reads no sight).
 fn launches(npc: &Npc, around: &Surroundings) -> bool {
     npc.goal
         .attacking()
@@ -605,7 +611,7 @@ fn launches(npc: &Npc, around: &Surroundings) -> bool {
 
 /// Whether `npc` launches its fighters after its passes, as the snipe
 /// substate ends every frame with `_AILaunchFighter` (@0x87329-0x8732f),
-/// while it snipes at a ship live in the system:
+/// while it snipes at a ship whose slot is active (@0x813ab):
 ///
 /// - Plundering it (goal 0xd), always: the only launch, its high level
 ///   making none.
@@ -736,9 +742,10 @@ fn in_fire_box(npc: &Npc, at: &ShipState) -> bool {
 
 /// Whether `ship` is disabled and not breaking up, as the stand-off
 /// ship's target is read for `_IsDisabled` (@0x8e4ca). Narrower than
-/// [`Condition::disabled`], which counts a ship breaking up too; the two
-/// agree on every ship live in the system, as the sight and the snipe's
-/// launch read it.
+/// [`Condition::disabled`], which counts a ship breaking up too. The two
+/// agree on every ship the frames here read it of: the attack block has
+/// dropped a target breaking up by then (@0x8e3ef), and a pirate's think
+/// has dropped a victim breaking up (@0x8c315-0x8c328).
 fn disabled_not_dying(around: &Surroundings, ship: ShipRef) -> bool {
     around.condition_of(ship) == Some(Condition::Disabled)
 }
@@ -889,8 +896,8 @@ impl Passes {
 
 /// How `npc` sizes up the ship its goal is about, by `rules`, and the
 /// frame it flies its fight by ([`pursuit::frame_of`]); none for a goal
-/// that is no fight, or a ship not live or gone from the system, where
-/// every pass stops at its preamble.
+/// that is no fight, or a ship whose slot isn't active, where every pass
+/// stops at its preamble.
 fn sight<'a>(
     npc: &'a Npc,
     around: &Surroundings,
@@ -935,7 +942,7 @@ pub fn turret_find(
 /// in reach and clear of its fuse; with none, no pick held ([`Npc::pick`])
 /// and no armed gun, it tries again with homing allowed
 /// (@0x80226-0x80243), as [`trigger`]'s gun pass does. None for a target
-/// it doesn't see, or one not live or gone from the system.
+/// it doesn't see, or one whose slot isn't active.
 #[must_use]
 pub fn gun_find(
     npc: &Npc,
@@ -946,8 +953,11 @@ pub fn gun_find(
     sight_of(npc, ship, around, rules)?.gun_find(npc.pick)
 }
 
-/// How `npc` sizes up `ship`, by `rules`; none for a ship not live or
-/// gone from the system.
+/// How `npc` sizes up `ship`, by `rules`; none for a ship whose slot isn't
+/// active, as every pass's preamble reads it (`_AIFireGun` @0x7ff11,
+/// `_AIFireTurret` @0x80b32, `_AIFireMissile` @0x8119a). No preamble reads
+/// `_IsDying` or an arrival: the gun and turret ask [`Sight::seen`], and
+/// the missile doesn't.
 fn sight_of<'a>(
     npc: &'a Npc,
     ship: ShipRef,
@@ -980,7 +990,7 @@ fn sight_of<'a>(
     };
     // `_ShipVisibleToShip(target, shooter)` (@0x971c, called
     // @0x7ff1e-0x7ff2c and @0x80b5f-0x80b70; see `sight`): the target is
-    // in the system, as `live` said above.
+    // in the system, as `active` said above.
     let seen = around.sees(npc, ship);
     let (turn_rate, planet_type) = match ship {
         ShipRef::Player => around
@@ -1157,7 +1167,9 @@ impl Sight<'_> {
         })
     }
 
-    /// The missile it fires, if any (see the module docs).
+    /// The missile it fires, if any (see the module docs). It doesn't ask
+    /// [`Sight::seen`]: `_AIFireMissile` tests the cloak on its own
+    /// (@0x811e7), and never `_ShipVisibleToShip`.
     fn missile(&self) -> Option<WeaponId> {
         let scanner = self.npc.cloak_gear.scanner;
         if (self.untargetable && !scanner.untargetable)
@@ -1663,8 +1675,8 @@ mod tests {
         let fleeing = shooter(&[], Goal::Flee(ShipRef::Player));
         assert!(asks_at_player(&fleeing, 0.0, 250.9, plain));
         assert!(!asks_at_player(&fleeing, 0.0, 251.0, plain));
-        // Before the target checks (@0x80b0d): untargetable, unseen or not
-        // live.
+        // Before the target checks (@0x80b0d): untargetable, unseen or
+        // breaking up.
         let npc = shooter(&[guided(130, 4)], ATTACK);
         let untargetable = |player: &mut PlayerSide| player.untargetable = true;
         assert!(asks_at_player(&npc, 0.0, -100.0, untargetable));

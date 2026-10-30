@@ -2,8 +2,10 @@
 //! (@0x971c-0x9809 in the `EV Nova` executable) with an NPC observer
 //! ([`Surroundings::sees`]).
 //!
-//! The rule is [`cloak::visible`](crate::cloak::visible)'s: a ship coming
-//! out of a gate is seen by nobody (@0x972d); an uncloaked one is seen;
+//! The rule is [`cloak::visible`](crate::cloak::visible)'s: a ship of goal
+//! 0x15 is seen by nobody (@0x972d, [`Npc::emerging`]), the cloak's tests
+//! not reached, and that is all of an arrival this reads, so a ship
+//! gliding in or bursting out of its gate is seen; an uncloaked one is seen;
 //! a cloaked one is seen by an escort of it that has a cloak
 //! (@0x9788-0x97a2, `_HasCloak`: its own, or the target's area cloak it
 //! rides in close formation, [`rides_area_cloak`]), or by a ship with a
@@ -11,12 +13,13 @@
 //! The player is seen by the same rule ([`sees_player`]), its escorts with
 //! a cloak of their own, or riding its area cloak, seeing it cloaked. `_ShipVisibleToShip` tests no presence, so a ship
 //! not in the system (or no player in it) reads as seen: the gates that
-//! drop a gone target (`target::dropped`, [`Surroundings::live`]) are not
-//! a search's.
+//! drop a gone target (`target::dropped`, [`Surroundings::standing`]) are
+//! not a search's.
 //!
 //! Its readers: an NPC's fire ([`fire`](crate::ai::fire), whose sight of
 //! its target holds its fire: `_AIFireGun` @0x7ff25, `_AIFireTurret`
-//! @0x80b69), the lost-sight search ([`lost_sight`](crate::ai::lost_sight),
+//! @0x80b69; `_AIFireMissile` @0x8115d-0x8121c doesn't call it, and reads
+//! the slot and the cloak alone), the lost-sight search ([`lost_sight`](crate::ai::lost_sight),
 //! @0x8d738), the escorts' pick of a nearby threat
 //! ([`escort::threat_score`](crate::escort::threat_score),
 //! [`escort::player_threat_score`](crate::escort::player_threat_score),

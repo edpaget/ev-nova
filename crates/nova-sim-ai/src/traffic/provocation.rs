@@ -84,7 +84,7 @@ use crate::traffic::{board_wait, gate_entry};
 /// `around`, which it tests with `_IsDying` (@0x8e3ef). A think that turns
 /// on another ship, or flees, leaves no such attack: its goal is what the
 /// high level sees. One that lets the fight go (its
-/// [`provoked_by`](crate::ai::provoked_by) needs a live ship) stands for
+/// [`provoked_by`](crate::ai::provoked_by) needs a ship in its slot) stands for
 /// the original's think, which keeps goal 4 on +0x70, so the attack it
 /// had before is the one tested. A ship gone from the system is no longer
 /// in its slot, its target -1 by then (@0x8d4e4-0x8d50d); a disabled one

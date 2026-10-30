@@ -113,7 +113,8 @@ pub fn within_reach(off: Vec2) -> bool {
 }
 
 /// Whether `npc` inspects a ship (state 7) that its think doesn't end:
-/// one live among `around` and out of its reach ([`within_reach`]). Within
+/// one whose slot is active among `around` (+0xb8 @0x8f158, breaking up or
+/// not) and out of its reach ([`within_reach`]). Within
 /// reach, `_HighLevelAIHandler`'s state-7 block lets it go (@0x8f11e,
 /// @0x8f391: state 0, +0x70 -1), and so it does a ship gone; either way
 /// the think goes on as from state 0, with the hunt's full search
@@ -125,7 +126,7 @@ pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
     };
     around
         .state_of(ship)
-        .filter(|_| around.live(ship))
+        .filter(|_| around.active(ship))
         .is_some_and(|state| !within_reach(state.position - npc.state.position))
 }
 
@@ -311,14 +312,14 @@ fn re_pick(
 /// looked over.
 fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
     let done = [npc.inspected, npc.goal.inspecting()];
-    let player = (around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player))
+    let player = (around.active(ShipRef::Player) && around.sees(npc, ShipRef::Player))
         .then_some(ShipRef::Player);
     let npcs = around
         .npcs
         .iter()
         .filter(|other| other.id != npc.id && other.original_ai_type() != 4)
         .map(|other| ShipRef::Npc(other.id))
-        .filter(|&ship| around.live(ship) && around.sees(npc, ship));
+        .filter(|&ship| around.active(ship) && around.sees(npc, ship));
     let candidates: Vec<ShipRef> = player
         .into_iter()
         .chain(npcs)
@@ -349,7 +350,7 @@ mod tests {
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
     use crate::govt::{Governments, WARSHIPS_RETREAT};
-    use crate::traffic::npc::AiType;
+    use crate::traffic::npc::{AiType, Mode};
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
 
@@ -467,6 +468,84 @@ mod tests {
                 "the player and two NPCs; not another interceptor"
             );
         }
+    }
+
+    /// What [`police`] decides with `other` alone in the system, its draw
+    /// falling on the first candidate.
+    fn inspects_alone(other: Npc) -> Goal {
+        let npcs = [police(), other];
+        let (sites, govts) = (sites(), govts(0, 0));
+        let mut around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        around.player = None;
+        Interceptor::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn it_may_inspect_a_ship_gliding_in_or_breaking_up_but_not_one_in_its_gate() {
+        // The walk reads the slot and `_ShipVisibleToShip` (@0x8cd3c-0x8cd5f,
+        // @0x8cde1-0x8ce13), and calls no `_IsDying`.
+        let trader = || ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let with = |mode| Npc { mode, ..trader() };
+        for mode in [Mode::JumpingIn { tick: 1 }, Mode::LeavingGate { tick: 1 }] {
+            assert_eq!(inspects_alone(with(mode)), Goal::Inspect(n(2)), "{mode:?}");
+        }
+        let dying = Npc {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..trader()
+        };
+        assert_eq!(inspects_alone(dying), Goal::Inspect(n(2)));
+        for mode in [
+            Mode::Emerging { ticks_left: 3 },
+            Mode::LeavingGate { tick: 0 },
+        ] {
+            assert_ne!(inspects_alone(with(mode)), Goal::Inspect(n(2)), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn it_may_inspect_a_player_breaking_up() {
+        let npcs = [police()];
+        let (sites, govts) = (sites(), govts(0, 0));
+        let mut around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        let player = around.player.expect("in the system");
+        around.player = Some(crate::ai::PlayerSide {
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+            ..player
+        });
+        let goal = Interceptor::default().decide(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(goal, Goal::Inspect(P));
+    }
+
+    #[test]
+    fn its_inspection_holds_on_a_ship_gliding_in_or_breaking_up_and_ends_on_one_destroyed() {
+        // State 7 reads the slot alone (@0x8f158).
+        let at = |target: &dyn Fn(&mut Npc)| {
+            let cop = Npc {
+                goal: Goal::Inspect(n(2)),
+                ..police()
+            };
+            let mut trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+            target(&mut trader);
+            let npcs = [cop, trader];
+            let (sites, govts) = (sites(), govts(0, 0));
+            let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+            inspection_holds(&npcs[0], &around)
+        };
+        assert!(at(&|_| {}), "flying");
+        assert!(at(&|other| other.mode = Mode::JumpingIn { tick: 1 }));
+        assert!(at(&|other| {
+            other.condition = Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            };
+        }));
+        assert!(!at(&|other| other.condition = Condition::Destroyed));
     }
 
     #[test]

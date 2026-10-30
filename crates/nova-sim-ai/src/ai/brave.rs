@@ -67,8 +67,12 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
             .is_some_and(|state| near(state.position))
     };
     if let Some(attacker) = provoked_by(npc, around) {
-        let near = near_to(attacker);
-        return if near && (npc.hull.stands_off || !hopeless_chase(npc, attacker, around)) {
+        // A dying attacker is attacked near whatever the chase: the high
+        // level's `_IsDying` test comes before the chase's.
+        let chasable = npc.hull.stands_off
+            || !around.standing(attacker)
+            || !hopeless_chase(npc, attacker, around);
+        return if near_to(attacker) && chasable {
             Goal::Attack(attacker)
         } else {
             Goal::Flee(attacker)
@@ -82,14 +86,7 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
             Goal::Flee(attacker)
         };
     }
-    let breaking_up = npc.target.filter(|&attacker| {
-        npc.provoked > 0.0 && matches!(around.condition_of(attacker), Some(Condition::Dying { .. }))
-    });
-    match breaking_up {
-        Some(attacker) if near_to(attacker) => Goal::Attack(attacker),
-        Some(attacker) => Goal::Flee(attacker),
-        None => idle(npc, around, chance),
-    }
+    idle(npc, around, chance)
 }
 
 impl Behaviour for BraveTrader {

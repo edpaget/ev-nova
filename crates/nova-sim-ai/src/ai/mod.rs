@@ -1278,11 +1278,15 @@ pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
 }
 
 /// The ship that provoked `npc`, its target since the hit, while it is
-/// provoked and that ship is live among `around`.
+/// provoked and that ship holds its slot among `around`. The traders', the
+/// miner's and the warship's thinks read +0x96 and +0x70 alone
+/// (`_WimpyTraderAI` @0x8b1ac, `_BraveTraderAI` @0x8b616, `_MinerAI`
+/// @0x8b254, `_WarshipAI` @0x8bb0c), and a dead slot's +0x70 is cleared
+/// (@0x8d500), so an attacker arriving or breaking up provokes.
 #[must_use]
 pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
     npc.target
-        .filter(|&attacker| npc.provoked > 0.0 && around.live(attacker))
+        .filter(|&attacker| npc.provoked > 0.0 && around.active(attacker))
 }
 
 /// Whether `npc` can still fly its goal among `around`: a stellar the
@@ -1983,6 +1987,36 @@ mod tests {
         assert_eq!(provoked_by(&victim, &around), None, "gone");
         victim.target = None;
         assert_eq!(provoked_by(&victim, &around), None);
+    }
+
+    #[test]
+    fn a_ship_is_provoked_by_its_target_however_it_arrives_or_breaks_up() {
+        // +0x96 and +0x70 alone (`_WimpyTraderAI` @0x8b1ac, `_BraveTraderAI`
+        // @0x8b616, `_MinerAI` @0x8b254, `_WarshipAI` @0x8bb0c).
+        let mut victim = npc(1, AiType::WimpyTrader);
+        victim.target = Some(ShipRef::Npc(NpcId(2)));
+        victim.provoked = 0.5;
+        let at = |attacker: Npc| {
+            let npcs = [victim.clone(), attacker];
+            provoked_by(&victim, &Surroundings::new(&[], &npcs))
+        };
+        let arriving = |mode| Npc {
+            mode,
+            ..npc(2, AiType::Warship)
+        };
+        let provoker = Some(ShipRef::Npc(NpcId(2)));
+        assert_eq!(at(arriving(Mode::JumpingIn { tick: 1 })), provoker);
+        assert_eq!(at(arriving(Mode::Emerging { ticks_left: 3 })), provoker);
+        let condition = |condition| Npc {
+            condition,
+            ..npc(2, AiType::Warship)
+        };
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert_eq!(at(condition(dying)), provoker);
+        assert_eq!(at(condition(Condition::Destroyed)), None);
     }
 
     #[test]

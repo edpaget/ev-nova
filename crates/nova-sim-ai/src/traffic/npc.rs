@@ -1479,15 +1479,21 @@ impl Npc {
         bound && self.active_not_disabled() && off.x.abs() < reach && off.y.abs() < reach
     }
 
-    /// Whether it is done coming into the system, there to be seen,
-    /// fought and hailed: [`Mode::Flying`], holding its course after its
-    /// glide or burst ([`Mode::Coasting`]), which the original's +0x4c
-    /// wait marks and goal 21 does not, held at its gate attacking the
-    /// player ([`Mode::HeldAtGate`], goal 4), or entering a gate
-    /// ([`Mode::EnteringGate`]): `_ShipVisibleToShip` tests goal 0x15
-    /// alone (@0x972d). A ship gliding in, waiting in its gate or
-    /// bursting out of it is not, though it answers hits all the same
-    /// (see [`Mode::Emerging`]).
+    /// Whether it is done coming into the system: [`Mode::Flying`],
+    /// holding its course after its glide or burst ([`Mode::Coasting`]),
+    /// which the original's +0x4c wait marks and goal 21 does not, held at
+    /// its gate attacking the player ([`Mode::HeldAtGate`], goal 4), or
+    /// entering a gate ([`Mode::EnteringGate`]). A ship gliding in, waiting
+    /// in its gate or bursting out of it is not, though it answers hits
+    /// all the same (see [`Mode::Emerging`]).
+    ///
+    /// This is no sight: `_ShipVisibleToShip` hides goal 0x15 alone
+    /// (@0x972d, [`Npc::emerging`]), so a ship gliding in or bursting out
+    /// is seen, and no NPC's search, keep or launch reads a target's
+    /// arrival any other way. The goal +0xc8c8 of a ship still arriving is
+    /// 8 or 0x15 while the engine's [`Npc::goal`] holds an older one, so a
+    /// reader of another ship's goal word asks this (the hail, a person's
+    /// flight, `target::helped`).
     #[must_use]
     pub fn arrived(&self) -> bool {
         matches!(

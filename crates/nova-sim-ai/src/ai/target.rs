@@ -36,15 +36,19 @@
 //!
 //! **The target** ([`select_target`], and [`pick_target`] with whether
 //! the pick turns the ship on the player): these steps in order. A ship
-//! still jumping in is never one, nor one destroyed. An NPC is one only
-//! when the ship sees it ([`Surroundings::sees`], @0x8a0d2, @0x8a538,
+//! destroyed is never one. An NPC is one only when the ship sees it, which
+//! a ship of goal 0x15 never is and a ship gliding in or bursting out of
+//! its gate is ([`Surroundings::sees`], @0x8a0d2, @0x8a538,
 //! @0x8aa7b, @0x8ad92), and the player too: a cloaked player is seen
 //! only by a cloak scanner within 200 or by its escort with a cloak of its
 //! own ([`sight::sees_player`](crate::ai::sight::sees_player)).
 //! Step 1's keep asks no sight (@0x89e85-0x89eb6): the lost-sight search
 //! ([`lost_sight`](crate::ai::lost_sight)) drops a target the ship can't see.
 //!
-//! 1. **Keep** the live ship it attacks or flees from.
+//! 1. **Keep** the ship it attacks or flees from while its slot is active
+//!    (+0xb8 @0x89eae, [`Surroundings::active`]), however it arrives,
+//!    breaking up included; the high level's drop comes after
+//!    ([`dropped`]).
 //! 2. **A grudge** (`_SelectWarshipTarget` @0x89ebc-0x89f20): a person
 //!    whose `Flags` has 0x0001 and who holds a grudge against the player
 //!    (see `nova_sim::person`) picks the player, while it is in
@@ -107,8 +111,10 @@
 //!    and goal 4 itself (@0x8a5b0-0x8a5c1) and makes no
 //!    `_AIMakeShipAttackPlayer` call, even when T is the player, so no
 //!    attack quote comes of it. The original tests no condition of the
-//!    ally; the engine's ally is arrived, active and not disabled
-//!    ([`Npc::active_not_disabled`]), standing in for the disabled reset
+//!    ally. The engine's ally is arrived, as an ally arriving has goal 8 or
+//!    0x15, which fail @0x8a494-0x8a4a2, while [`Npc::goal`] holds an older
+//!    one. It is active and not disabled ([`Npc::active_not_disabled`]),
+//!    standing in for the disabled reset
 //!    that wipes a disabled or breaking-up ally's goal at its next think,
 //!    which spares a stellar's defence ship breaking up (@0x2d6f), so one
 //!    is helped.
@@ -227,7 +233,7 @@ pub struct TargetRules {
 /// player hostile among `around` (see the module docs).
 #[must_use]
 pub fn hostile_to_player(npc: &Npc, around: &Surroundings) -> bool {
-    let Some(player) = around.player.filter(|_| around.live(ShipRef::Player)) else {
+    let Some(player) = around.player.filter(|_| around.standing(ShipRef::Player)) else {
         return false;
     };
     let own = npc.govt;
@@ -301,20 +307,20 @@ fn enemy_class_roll(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -
         && around.govts.enemies(npc.govt, player.combat_govt);
     gated
         && chance.below(ENEMY_CLASS_SIDES) == 0
-        && around.live(ShipRef::Player)
+        && around.standing(ShipRef::Player)
         && around.sees(npc, ShipRef::Player)
 }
 
-/// Whether `npc` can take `ship` as a candidate: `ship` is there, not
-/// destroyed and not still jumping in (the active slot +0xb8), and `npc`
-/// sees it ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8a0d2,
-/// @0x8a538, @0x8aa7b, @0x8ad92), the player by its cloak.
+/// Whether `npc` can take `ship` as a candidate: `ship` is there and not
+/// destroyed (the active slot +0xb8, @0x8a1f1, @0x8aa89, @0x8ad7e), and
+/// `npc` sees it ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8a0d2,
+/// @0x8a538, @0x8aa7b, @0x8ad92), the player by its cloak. The sight's
+/// goal 0x15 is the only arrival any of these walks reads: a ship gliding
+/// in or bursting out of its gate is a candidate.
 fn seen(npc: &Npc, ship: ShipRef, around: &Surroundings) -> bool {
     let present = match ship {
         ShipRef::Player => around.player.is_some(),
-        ShipRef::Npc(id) => around
-            .npc(id)
-            .is_some_and(|npc| npc.arrived() && npc.condition.active()),
+        ShipRef::Npc(id) => around.npc(id).is_some_and(|npc| npc.condition.active()),
     };
     present && around.sees(npc, ship)
 }
@@ -361,7 +367,7 @@ pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
 }
 
 /// The ship `npc` attacks among `around` by `rules`, keeping `current`
-/// while it is live and drawing the enemy-class roll on `chance` (see the
+/// while its slot is active and drawing the enemy-class roll on `chance` (see the
 /// module docs): [`pick_target`]'s ship.
 #[must_use]
 pub fn select_target(
@@ -464,13 +470,16 @@ fn pick_by_steps(
         attacks: ship == ShipRef::Player,
     };
     let paid_off = |ship| ship == ShipRef::Player && npc.spared;
-    if let Some(ship) = current.filter(|&ship| around.live(ship) && !paid_off(ship)) {
+    if let Some(ship) = current.filter(|&ship| around.active(ship) && !paid_off(ship)) {
         return Some(kept(ship));
     }
     let grudging = npc
         .person
         .is_some_and(|person| person.grudge && person.flags & GRUDGE != 0);
-    if grudging && !npc.spared && around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player)
+    if grudging
+        && !npc.spared
+        && around.standing(ShipRef::Player)
+        && around.sees(npc, ShipRef::Player)
     {
         return Some(called(ShipRef::Player));
     }
@@ -582,6 +591,9 @@ fn helped(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRe
         .by_slot()
         .into_iter()
         .filter(|ally| {
+            // An ally gliding in or in its gate has goal 8 or 0x15, so it
+            // fails the goal test below (@0x8a494-0x8a4a2), though `Npc::goal`
+            // holds on to an older one: `arrived` stands in for the word.
             ally.id != npc.id
                 && ally.arrived()
                 && ally.active_not_disabled()
@@ -651,7 +663,7 @@ pub fn spares_ally(npc: &Npc, other: &Npc, around: &Surroundings, led_ally: Rule
 /// docs).
 #[must_use]
 pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
-    if !around.live(target) {
+    if !around.standing(target) {
         return true;
     }
     if around.condition_of(target) == Some(Condition::Disabled) && !fire::destroys(npc) {
@@ -1207,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_target_is_kept() {
+    fn a_target_in_its_slot_is_kept() {
         let npcs = [
             me(),
             ship(2, ENEMY, 10.0, 0.0),
@@ -1220,7 +1232,17 @@ mod tests {
             ticks_left: 3,
             starting: false,
         };
-        assert_eq!(chosen(0, &dying, Some(n(3)), 0, NEAR), Some(n(2)));
+        assert_eq!(
+            chosen(0, &dying, Some(n(3)), 0, NEAR),
+            Some(n(3)),
+            "the keep reads the slot alone (@0x89eae)"
+        );
+        let mut gliding = npcs.clone();
+        gliding[2].mode = Mode::JumpingIn { tick: 1 };
+        assert_eq!(chosen(0, &gliding, Some(n(3)), 0, NEAR), Some(n(3)));
+        let mut destroyed = npcs.clone();
+        destroyed[2].condition = Condition::Destroyed;
+        assert_eq!(chosen(0, &destroyed, Some(n(3)), 0, NEAR), Some(n(2)));
     }
 
     #[test]
@@ -1495,19 +1517,28 @@ mod tests {
     }
 
     #[test]
-    fn the_dying_and_the_arriving_are_never_candidates() {
+    fn neither_a_dying_ship_nor_one_of_goal_0x15_is_a_candidate_but_a_ship_gliding_in_is() {
         let mut dying = ship(2, ENEMY, 100.0, 0.0);
         dying.condition = Condition::Dying {
             ticks_left: 3,
             starting: false,
         };
-        let mut arriving = ship(3, ENEMY, 150.0, 0.0);
-        arriving.mode = Mode::JumpingIn { tick: 0 };
+        let mut gliding = ship(3, ENEMY, 150.0, 0.0);
+        gliding.mode = Mode::JumpingIn { tick: 0 };
         let mut emerging = ship(5, ENEMY, 120.0, 0.0);
         emerging.mode = Mode::Emerging { ticks_left: 3 };
-        let npcs = [me(), dying, arriving, emerging, ship(4, RIVAL, 900.0, 0.0)];
+        let mut last_frame = ship(6, ENEMY, 130.0, 0.0);
+        last_frame.mode = Mode::LeavingGate { tick: 0 };
+        let npcs = [
+            me(),
+            dying,
+            emerging,
+            last_frame,
+            ship(4, RIVAL, 900.0, 0.0),
+        ];
         assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(4)));
         assert_eq!(chosen(0, &npcs[..4], None, 0, NEAR), None);
+        assert_eq!(chosen(0, &[me(), gliding], None, 0, NEAR), Some(n(3)));
     }
 
     #[test]
@@ -1886,6 +1917,47 @@ mod tests {
             !drops(&npcs[0], n(2), &around(&npcs, &govts)),
             "it can finish it off"
         );
+    }
+
+    #[test]
+    fn a_target_is_kept_however_it_arrives_and_dropped_breaking_up() {
+        // `_WarshipAI`'s drop reads the slot and `_IsDying` (@0x8bc67,
+        // @0x8bc73), and no sight: the lost-sight search drops the unseen.
+        let govts = govts(0);
+        let by_mode = |mode: Mode| {
+            let mut enemy = ship(2, ENEMY, 100.0, 0.0);
+            enemy.mode = mode;
+            let npcs = [me(), enemy];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(&[], &npcs)
+            };
+            drops(&npcs[0], n(2), &around)
+        };
+        for mode in [
+            Mode::Flying,
+            Mode::JumpingIn { tick: 1 },
+            Mode::Emerging { ticks_left: 5 },
+            Mode::LeavingGate { tick: 0 },
+            Mode::LeavingGate { tick: 1 },
+        ] {
+            assert!(!by_mode(mode), "{mode:?}");
+        }
+        let npcs = [
+            me(),
+            Npc {
+                condition: Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+                ..ship(2, ENEMY, 100.0, 0.0)
+            },
+        ];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert!(drops(&npcs[0], n(2), &around));
     }
 
     // Persons.
@@ -3017,18 +3089,26 @@ mod tests {
     }
 
     #[test]
-    fn an_arriving_or_jumping_in_enemy_is_no_candidate() {
-        let mut arriving = ship(2, ENEMY, 100.0, 0.0);
-        arriving.mode = Mode::JumpingIn { tick: 0 };
-        let npcs = [me(), arriving.clone(), ship(3, RIVAL, 900.0, 0.0)];
-        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
-        let mut xeno = npcs.clone();
-        xeno[0].govt = Some(XENO);
-        assert_eq!(
-            chosen(0, &xeno, None, 0, (0.0, -5000.0)),
-            Some(n(3)),
-            "nor a xenophobe's"
-        );
+    fn an_enemy_gliding_in_or_bursting_out_is_a_candidate_and_one_in_its_gate_is_not() {
+        for (mode, candidate) in [
+            (Mode::JumpingIn { tick: 0 }, true),
+            (Mode::LeavingGate { tick: 1 }, true),
+            (Mode::LeavingGate { tick: 0 }, false),
+            (Mode::Emerging { ticks_left: 3 }, false),
+        ] {
+            let mut arriving = ship(2, ENEMY, 100.0, 0.0);
+            arriving.mode = mode;
+            let npcs = [me(), arriving, ship(3, RIVAL, 900.0, 0.0)];
+            let pick = if candidate { n(2) } else { n(3) };
+            assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(pick), "{mode:?}");
+            let mut xeno = npcs.clone();
+            xeno[0].govt = Some(XENO);
+            assert_eq!(
+                chosen(0, &xeno, None, 0, (0.0, -5000.0)),
+                Some(pick),
+                "a xenophobe's, {mode:?}"
+            );
+        }
     }
 
     #[test]

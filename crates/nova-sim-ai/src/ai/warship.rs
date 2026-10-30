@@ -58,8 +58,8 @@
 //!   ([`Hunt::dropped_target`]), so a person whose grudge then takes the
 //!   player again is no threat to the gate, and says its quote again
 //!   each think. The word plays no sound of its own.
-//! - **Fleeing**, it keeps fleeing while its attacker is live; then it
-//!   decides again.
+//! - **Fleeing**, it keeps fleeing while its attacker holds its slot
+//!   (@0x89eae, [`Surroundings::active`]); then it decides again.
 //! - **Its target**: provoked, the attacker it took on being hit;
 //!   otherwise the ship [`select_target`] gives, keeping the one it
 //!   attacks. A target is dropped as [`dropped`] says, a fresh pick
@@ -256,7 +256,7 @@ pub fn hunt(
         },
         None => {
             if let Goal::Flee(attacker) = npc.goal
-                && around.live(attacker)
+                && around.active(attacker)
             {
                 return Hunt::of(Goal::Flee(attacker));
             }
@@ -944,6 +944,40 @@ mod tests {
         let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         assert_eq!(decided(&[runner.clone(), pirate], 0), Goal::Flee(n(2)));
         assert_eq!(decided(&[runner], 0), Goal::Land(StellarId(128)));
+    }
+
+    #[test]
+    fn a_warship_keeps_fleeing_a_ship_gliding_in_or_breaking_up() {
+        // The keep reads goal 3 and the slot alone (@0x89eae).
+        let mut runner = police();
+        runner.goal = Goal::Flee(n(2));
+        let mut gliding = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        gliding.mode = Mode::JumpingIn { tick: 1 };
+        assert_eq!(decided(&[runner.clone(), gliding], 0), Goal::Flee(n(2)));
+        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert_eq!(decided(&[runner.clone(), dying], 0), Goal::Flee(n(2)));
+        let mut destroyed = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        destroyed.condition = Condition::Destroyed;
+        assert_eq!(decided(&[runner, destroyed], 0), Goal::Land(StellarId(128)));
+    }
+
+    #[test]
+    fn a_warship_keeps_attacking_a_ship_gliding_in_and_drops_one_breaking_up() {
+        let mut hunter = police();
+        hunter.goal = Goal::Attack(n(2));
+        let mut gliding = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        gliding.mode = Mode::JumpingIn { tick: 1 };
+        assert_eq!(decided(&[hunter.clone(), gliding], 0), Goal::Attack(n(2)));
+        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert_ne!(decided(&[hunter, dying], 0), Goal::Attack(n(2)));
     }
 
     #[test]
