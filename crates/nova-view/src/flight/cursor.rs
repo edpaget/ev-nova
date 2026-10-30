@@ -126,10 +126,12 @@ impl HoverCursor {
 
     /// One flight step: whether the pointer is over something targetable
     /// (`hovering`), how many frames the cursor's sheet holds (`None` when
-    /// it could not be read, and the cursor does nothing) and whether this
-    /// frame's pass set the byte (`keyed`), which fades it as a key pressed
-    /// since the last step ([`HoverCursor::key`]) does. See the module
-    /// docs.
+    /// it could not be read) and whether this frame's pass set the byte
+    /// (`keyed`), which fades it as a key pressed since the last step
+    /// ([`HoverCursor::key`]) does. A held button's stamp runs first,
+    /// whatever `frames` says, as `_HandleMouse`'s head comes before its
+    /// return for a sprite that failed to load; with `None` the step does
+    /// nothing more. See the module docs.
     pub fn step(&mut self, hovering: bool, frames: Option<NonZeroU16>, keyed: bool) {
         self.clock += SIXTIETHS_PER_STEP;
         let keyed = std::mem::take(&mut self.keyed) || keyed;
