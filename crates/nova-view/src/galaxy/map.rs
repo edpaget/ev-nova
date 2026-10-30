@@ -1531,11 +1531,8 @@ impl GalaxyMap {
     pub fn draw_marks(&self, list: &mut DrawList, transform: &Transform, marks: &MapMarks<'_>) {
         let picture = marks.picture;
         let zoomed = transform.zoom() <= ZOOMED;
-        let point = |id: SystemId| {
-            self.model
-                .position(id)
-                .map(|at| transform.world_to_screen(at))
-        };
+        let point = |id: SystemId| self.model.position(id).map(|at| transform.port_point(at));
+        let port = transform.port();
         let pixel = |id: SystemId| self.model.position(id).map(|at| transform.pixel(at));
         let segment = |list: &mut DrawList, (from, to): (SystemId, SystemId), pen, color| {
             if let (Some(from), Some(to)) = (pixel(from), pixel(to)) {
@@ -1608,11 +1605,12 @@ impl GalaxyMap {
                 } else {
                     (CYAN, 2)
                 };
-                pen_line(list, truncated(tip), truncated(tail), pen, color);
+                let from = in_screen(truncated(tip), port);
+                pen_line(list, from, in_screen(truncated(tail), port), pen, color);
                 let head = arrow_head(Vec2::new(tip.x, tip.y), Vec2::new(tail.x, tail.y));
                 for end in head {
-                    let end = truncated(Point::new(end.x, end.y));
-                    pen_line(list, truncated(tip), end, pen, color);
+                    let end = in_screen(truncated(Point::new(end.x, end.y)), port);
+                    pen_line(list, from, end, pen, color);
                 }
             }
         }
@@ -1634,9 +1632,9 @@ impl GalaxyMap {
             let Some(system) = self.model.catalog_system(id) else {
                 continue;
             };
-            let at = transform.world_to_screen(system.position());
-            let (x, y) = (at.x + NAME_OFFSET.0, at.y + NAME_OFFSET.1);
-            let origin = Point::new(x.trunc(), y.trunc() - NAME_SIZE);
+            let (x, y) = transform.pixel_offset(system.position(), NAME_OFFSET);
+            #[allow(clippy::cast_precision_loss)] // Screen pixels.
+            let origin = Point::new(x as f32, y as f32 - NAME_SIZE);
             list.text_in(
                 NAME_FONT,
                 system.entry.name.clone(),
@@ -1803,6 +1801,12 @@ fn around((x, y): (i32, i32), inset: i32) -> IRect {
 #[allow(clippy::cast_possible_truncation)] // Screen pixels.
 fn truncated(at: Point) -> (i32, i32) {
     (at.x.trunc() as i32, at.y.trunc() as i32)
+}
+
+/// The port point `(x, y)` on the screen: moved by the port's top-left,
+/// as QuickDraw adds the port's origin after the original truncates.
+fn in_screen((x, y): (i32, i32), port: (i32, i32)) -> (i32, i32) {
+    (x + port.0, y + port.1)
 }
 
 /// A QuickDraw `MoveTo(from)`, `LineTo(to)` with a `pen` × `pen` pen in
@@ -3837,6 +3841,151 @@ mod tests {
         assert!(beta.iter().all(|(name, _)| name == "Beta"));
     }
 
+    /// The rects of the brackets' eight ticks round `(x, y)` at `inset`.
+    #[allow(clippy::many_single_char_names)] // A rect's edges.
+    #[allow(clippy::cast_precision_loss)] // Screen pixels.
+    fn bracket_ticks((x, y): (i32, i32), inset: i32) -> [(f32, f32, f32, f32); 8] {
+        let (l, t, r, b) = (x - inset, y - inset, x + inset, y + inset);
+        [
+            (l + 1, t, l + 5, t + 1),
+            (l + 1, b, l + 5, b + 1),
+            (r - 4, t, r, t + 1),
+            (r - 4, b, r, b + 1),
+            (l, t + 1, l + 1, t + 5),
+            (l, b - 4, l + 1, b),
+            (r, t + 1, r + 1, t + 5),
+            (r, b - 4, r + 1, b),
+        ]
+        .map(|(l, t, r, b)| (l as f32, t as f32, r as f32, b as f32))
+    }
+
+    /// The course map over a galaxy of `systems`, looking at (0, 0) in
+    /// 128 after `steps` zooms out from 0.5625.
+    fn course_map_of(systems: Vec<SystemEntry>, steps: usize) -> GalaxyMap {
+        let mut map = GalaxyMap::course(&FakeCatalog::new(Galaxy {
+            systems,
+            ..Galaxy::default()
+        }));
+        map.show_course(SystemId(128), &[]);
+        for _ in 0..steps {
+            map.input(&press(Key::Char('-')));
+        }
+        map
+    }
+
+    /// `list` with each clipped command in place of its clip.
+    fn unclipped(list: &DrawList) -> DrawList {
+        let mut out = DrawList::new();
+        for command in list {
+            match command {
+                DrawCommand::Clipped { command, .. } => out.push((**command).clone()),
+                other => out.push(other.clone()),
+            };
+        }
+        out
+    }
+
+    #[test]
+    fn the_course_map_draws_a_system_where_the_original_divides_at_two_zooms() {
+        // From 0.5625 with the scroll at (0, 0), two steps out draw
+        // (−36, −36) at (413, 309) and one draws (−66, −66) at (361, 257):
+        // the f32 scale put each a pixel right and down.
+        for (steps, (x, y), (h, v)) in [(2, (-36, -36), (413, 309)), (1, (-66, -66), (361, 257))] {
+            let mut map = course_map_of(vec![system(128, x, y)], steps);
+            map.show_drawing(&MapDrawing {
+                course: Vec::new(),
+                current_links: Vec::new(),
+                links: Vec::new(),
+                mode3_link: None,
+                systems: vec![drawn_system(128, SystemColorCode::Cleared, false, false)],
+                named: vec![SystemId(128)],
+                ..drawing()
+            });
+            map.preselect(Some(SystemId(128)));
+            let list = unclipped(&drawn(&map));
+            let oval = oval_rect((h, v), SYSTEM_INSET);
+            let black = rects(&list, Color::BLACK);
+            assert!(
+                filled(&oval_fill_pixels(oval))
+                    .iter()
+                    .all(|rect| black.contains(rect)),
+                "{steps}: the oval's fill"
+            );
+            assert_eq!(
+                rects(&list, CLEARED),
+                filled(&oval_frame_pixels(oval, 1)),
+                "{steps}: the oval's frame"
+            );
+            #[allow(clippy::cast_precision_loss)] // Screen pixels.
+            let name = at((h + 7) as f32, (v + 4) as f32 - NAME_SIZE);
+            assert_eq!(
+                names(&list),
+                [
+                    ("System 128".to_owned(), name),
+                    ("System 128".to_owned(), name)
+                ],
+                "{steps}: the name, 7 right and 4 down added before truncating"
+            );
+            assert_eq!(
+                rects(&list, BRIGHT_GREEN),
+                bracket_ticks((h, v), BRACKET_INSET),
+                "{steps}: the brackets"
+            );
+        }
+    }
+
+    #[test]
+    fn the_gate_arrows_truncate_their_ends_in_the_port() {
+        // At 0.5625 with the scroll at (0, 0), Beta at (−253, 0) is at
+        // 238 − 449.78 = −211.78 in the port: 212 − 211 = 1 on the screen,
+        // where truncating on the screen (0.22) gave 0.
+        let mut map = course_map_of(vec![system(128, 0, 0), system(129, -253, 0)], 0);
+        map.offer_gates(ids(&[129]));
+        let drawing = MapDrawing {
+            hypergate: true,
+            course: Vec::new(),
+            current_links: Vec::new(),
+            links: Vec::new(),
+            mode3_link: None,
+            systems: Vec::new(),
+            gate_arrows: vec![SystemId(129)],
+            named: Vec::new(),
+            ..drawing()
+        };
+        map.show_drawing(&drawing);
+        let transform = map.transform();
+        let picture = map.picture().expect("shown").clone();
+        let mut list = DrawList::new();
+        map.draw_marks(
+            &mut list,
+            &transform,
+            &MapMarks {
+                picture: &picture,
+                selected: None,
+            },
+        );
+        assert!(
+            rects(&list, CYAN).contains(&(1.0, 346.0, 452.0, 348.0)),
+            "the shaft from 1 to 450, at pen 2"
+        );
+        let tip = transform.port_point(Point::new(-253.0, 0.0));
+        let tail = transform.port_point(Point::new(0.0, 0.0));
+        let ends = arrow_head(Vec2::new(tip.x, tip.y), Vec2::new(tail.x, tail.y))
+            .map(|end| at(212.0 + end.x.trunc() + 1.0, 128.0 + end.y.trunc() + 1.0));
+        let strokes: Vec<(Point, Point, f32)> = lines(&list, CYAN)
+            .into_iter()
+            .filter(|line| line.0.y != line.1.y)
+            .collect();
+        assert_eq!(
+            strokes,
+            [
+                (at(2.0, 347.0), ends[0], 2.0),
+                (at(2.0, 347.0), ends[1], 2.0),
+            ],
+            "the head's strokes from the tip, each end truncated in the port"
+        );
+    }
+
     #[test]
     fn the_brackets_are_eight_4_pixel_ticks_at_each_zoom() {
         let mut map = showing(&MapDrawing {
@@ -3844,20 +3993,7 @@ mod tests {
             ..drawing()
         });
         map.preselect(Some(SystemId(130)));
-        let ticks = |(x, y): (i32, i32), inset: i32| {
-            let (l, t, r, b) = (x - inset, y - inset, x + inset, y + inset);
-            [
-                (l + 1, t, l + 5, t + 1),
-                (l + 1, b, l + 5, b + 1),
-                (r - 4, t, r, t + 1),
-                (r - 4, b, r, b + 1),
-                (l, t + 1, l + 1, t + 5),
-                (l, b - 4, l + 1, b),
-                (r, t + 1, r + 1, t + 5),
-                (r, b - 4, r + 1, b),
-            ]
-            .map(|(l, t, r, b)| (l as f32, t as f32, r as f32, b as f32))
-        };
+        let ticks = bracket_ticks;
         let list = drawn(&map);
         assert_eq!(rects(&list, BRIGHT_GREEN), ticks((212, 454), BRACKET_INSET));
         let after = list
