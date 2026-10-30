@@ -59,6 +59,11 @@
 //!   ([`PersonGrant`](grant::PersonGrant)), the outfits a grant sees
 //!   ([`GrantStock`](grant::GrantStock)), and what it gave
 //!   ([`Granted`](grant::Granted)).
+//! - [`has_max`]: whether the player holds the most of an outfit it may,
+//!   `_HasMaxOfItem` ported whole
+//!   ([`has_max_of_item`](has_max::has_max_of_item)): the outfitter's buy
+//!   check, `H`'s hold, a boarding grant's pick and a boarding's Ammo
+//!   take all ask it.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
 //!   ([`HireList`](hire::HireList), [`HireRow`](hire::HireRow),
 //!   [`HireRefusal`](hire::HireRefusal)), the

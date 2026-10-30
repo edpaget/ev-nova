@@ -262,8 +262,8 @@
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
 //! above 0 is capped at that `MaxAmmo` times the player's count of the
 //! weapon, stock weapons included; a `ModType` 3 in a later slot is not
-//! capped. The product is 16-bit (`imulw` @0x45aa), compared signed, and
-//! the buy is refused, as `Max` owned, when the count owned is at least
+//! capped. The product is wide, where the original's is 16-bit (`imulw`
+//! @0x45aa), and the buy is refused, as `Max` owned, when the count owned is at least
 //! the cap: with no launcher the cap is 0 and none can be bought.
 //! `ModType` 27 never raises it. `_CanBuyOutfitItem` asks it (@0x4e87d)
 //! before `_CanBuyFighter` (@0x4e938), so a fighter whose bay weapon has a
@@ -302,7 +302,7 @@
 //! ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)). In a counted sale
 //! each pass checks the whole order, as
 //! [`RuleKey::CountedSale`](crate::RuleKey::CountedSale) says. Boarding
-//! reads the raised `Max` too (see [`grant`](crate::grant)).
+//! reads every limit too: see [`has_max`](crate::has_max).
 //!
 //! **A launcher before its ammunition** (`_DoOutfitDialog`
 //! @0x5ca75-0x5cbe0, after the free mass). A launcher is an outfit whose
@@ -351,6 +351,7 @@ use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::MOD_AMMO;
 use crate::control::Gate;
 use crate::handling::ShipFields;
+use crate::has_max::{AtMax, ItemFacts, has_max_of_item};
 use crate::landing::StellarFlags;
 use crate::market::{Direction, MORE_CARGO};
 use crate::order_loop::{OrderRun, Pass};
@@ -647,8 +648,9 @@ pub struct OutfitFacts {
     /// [`BUYS_OWNED_OUTFITS`], or flagged [`OutfitFlags::SELL_ANYWHERE`].
     pub sold_here: bool,
     /// Its ammunition cap, when it has one (`_HasMaxOfItem`
-    /// @0x457e-0x45e4; see the module docs), a 16-bit product.
-    pub ammo_cap: Option<i16>,
+    /// @0x457e-0x45e4; see the module docs and
+    /// [`ammo_cap`](crate::has_max::ammo_cap)), a wide product.
+    pub ammo_cap: Option<i64>,
     /// Its `Max` as the [`RAISES_MAX`] outfits owned raise it, when the
     /// multiplier is above 1; `None` when it is its `Max`.
     pub raised: Option<i64>,
@@ -1131,7 +1133,7 @@ fn holds(holds: bool, refusal: OutfitRefusal) -> Result<(), OutfitRefusal> {
 /// mass-expansion tests, the once-an-opening flags, `Require`,
 /// `Availability` and the cash.
 fn can_buy<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
-    let [ammunition, raised, guns, turrets] = has_max_checks();
+    let [range, ammunition, raised, guns, turrets] = has_max_checks();
     [
         Check::plain(
             "tech",
@@ -1139,6 +1141,7 @@ fn can_buy<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
              (`TechLevel` -1 skips it @0x4e802)",
             tech_buys,
         ),
+        range,
         ammunition,
         raised,
         guns,
@@ -1196,11 +1199,14 @@ fn has_max<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
     has_max_checks().into()
 }
 
-/// `_HasMaxOfItem(item, 0, 0)`'s checks, in its order: the ammunition
-/// cap, the raised `Max`, then the gun and turret limits (see the module
-/// docs).
-fn has_max_checks<'a>() -> [Check<RowOutfit<'a>, OutfitRefusal>; 4] {
+/// `_HasMaxOfItem(item, 0, 0)`'s checks, in its order: the range, the
+/// ammunition cap, the raised `Max`, then the gun and turret limits (see
+/// the module docs). Each reads the one decision
+/// ([`has_max_of_item`]) and refuses only on its own limit, so the first
+/// that refuses is the limit the original stops at.
+fn has_max_checks<'a>() -> [Check<RowOutfit<'a>, OutfitRefusal>; 5] {
     [
+        Check::plain("outfit range", "`_HasMaxOfItem` @0x451b-0x4547", in_range),
         Check::plain(
             "ammunition cap",
             "`_HasMaxOfItem` @0x457e-0x45e4, via `_CanBuyOutfitItem` @0x4e87d",
@@ -1391,47 +1397,71 @@ fn availability_holds(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
     holds(asked.row.facts.available, OutfitRefusal::NotForSale)
 }
 
-/// The count owned is below the ammunition cap, if it has one, compared
-/// signed in 16 bits (`_HasMaxOfItem` @0x45cd-0x45d1); refused as `Max`
-/// owned.
+/// What [`has_max_of_item`] reads of the row: its count owned, its `Max`
+/// as raised, its ammunition cap and flags, and the ship's guns and
+/// turrets, all settled when the outfitter was built.
+fn item_facts(asked: &RowOutfit) -> ItemFacts {
+    let row = asked.row;
+    ItemFacts {
+        id: row.id,
+        owned: i64::from(row.owned),
+        max: row.facts.raised.unwrap_or(i64::from(row.max)),
+        ammo_cap: row.facts.ammo_cap,
+        flags: row.facts.flags,
+        armed: asked.outfitter.armed,
+    }
+}
+
+/// The refusal each of `_HasMaxOfItem`'s limits gives the row: none
+/// allowed out of range or for a `Max` of none or less, `Max` owned at
+/// the ammunition cap or the `Max`, and the gun or turret limit. The
+/// match is exhaustive on purpose: between them the outfitter's checks
+/// act on every limit [`AtMax`] names.
+fn at_max_refusal(at: AtMax, row: &OutfitRow) -> OutfitRefusal {
+    match at {
+        AtMax::OutOfRange => OutfitRefusal::NoneAllowed,
+        AtMax::Max(_) if row.max <= 0 => OutfitRefusal::NoneAllowed,
+        AtMax::AmmoCap(_) | AtMax::Max(_) => OutfitRefusal::MaxOwned,
+        AtMax::Guns(_) => OutfitRefusal::GunLimit,
+        AtMax::Turrets(_) => OutfitRefusal::TurretLimit,
+    }
+}
+
+/// Refused ([`at_max_refusal`]) when `_HasMaxOfItem` stops at the limit
+/// `limit` picks out; any other limit is another check's to refuse.
+fn refused_at(asked: &RowOutfit, limit: fn(AtMax) -> bool) -> Result<(), OutfitRefusal> {
+    match has_max_of_item(&item_facts(asked)) {
+        Some(at) if limit(at) => Err(at_max_refusal(at, asked.row)),
+        _ => Ok(()),
+    }
+}
+
+/// The outfit's ID is in 128-639 (@0x451b-0x4547); refused as none
+/// allowed.
+fn in_range(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
+    refused_at(asked, |at| at == AtMax::OutOfRange)
+}
+
+/// The count owned is below the ammunition cap, if it has one
+/// (`_HasMaxOfItem` @0x45cd-0x45d1); refused as `Max` owned.
 fn under_ammo_cap(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    let capped = asked
-        .row
-        .facts
-        .ammo_cap
-        .is_some_and(|cap| i32::from(asked.row.owned) >= i32::from(cap));
-    holds(!capped, OutfitRefusal::MaxOwned)
+    refused_at(asked, |at| matches!(at, AtMax::AmmoCap(_)))
 }
 
 /// The count owned is below the raised `Max` (its `Max` when nothing
 /// raises it); refused as none allowed when the `Max` is none or less.
 fn under_raised_max(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    let row = asked.row;
-    let max = row.facts.raised.unwrap_or(i64::from(row.max));
-    if i64::from(row.owned) >= max {
-        Err(if row.max <= 0 {
-            OutfitRefusal::NoneAllowed
-        } else {
-            OutfitRefusal::MaxOwned
-        })
-    } else {
-        Ok(())
-    }
+    refused_at(asked, |at| matches!(at, AtMax::Max(_)))
 }
 
 /// A gun fits the ship's gun limit.
 fn under_gun_limit(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    let armed = asked.outfitter.armed;
-    let full = asked.row.facts.flags & OutfitFlags::GUN != 0 && armed.guns >= armed.gun_limit;
-    holds(!full, OutfitRefusal::GunLimit)
+    refused_at(asked, |at| matches!(at, AtMax::Guns(_)))
 }
 
 /// A turret fits the ship's turret limit.
 fn under_turret_limit(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    let armed = asked.outfitter.armed;
-    let full =
-        asked.row.facts.flags & OutfitFlags::TURRET != 0 && armed.turrets >= armed.turret_limit;
-    holds(!full, OutfitRefusal::TurretLimit)
+    refused_at(asked, |at| matches!(at, AtMax::Turrets(_)))
 }
 
 /// The outfit fits the free mass ([`lacks_the_mass`]).
@@ -1722,7 +1752,7 @@ fn cap_reported(asked: &RowOutfit) -> i16 {
     let armed = asked.outfitter.armed;
     let mut cap = asked.row.max;
     if let Some(ammo) = facts.ammo_cap {
-        cap = cap.min(ammo);
+        cap = cap.min(saturate_i16(ammo));
     }
     if let Some(raised) = facts.raised {
         cap = saturate_i16(raised);
@@ -2306,10 +2336,10 @@ pub struct Shop<'a> {
     pub fighter_room: &'a BTreeMap<OutfitId, u32>,
     /// For every ammunition outfit whose first mod is `ModType` 3 naming
     /// a weapon of `MaxAmmo` above 0, the most of it the player may own:
-    /// that `MaxAmmo` times the player's launchers of the weapon, as a
-    /// 16-bit product (`_HasMaxOfItem` @0x457e-0x45e4; see the module
-    /// docs).
-    pub ammo_caps: &'a BTreeMap<OutfitId, i16>,
+    /// that `MaxAmmo` times the player's launchers of the weapon, a wide
+    /// product (`_HasMaxOfItem` @0x457e-0x45e4; see the module docs and
+    /// [`ammo_cap`](crate::has_max::ammo_cap)).
+    pub ammo_caps: &'a BTreeMap<OutfitId, i64>,
     /// The ship class's `MaxGun` and `MaxTur`.
     pub hardpoints: Hardpoints,
     /// The ship's own free cargo: its cargo space less every ton held,
@@ -2755,7 +2785,7 @@ mod tests {
 
     static NO_STANDARD: BTreeMap<OutfitId, u16> = BTreeMap::new();
     static NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
-    static NO_CAPS: BTreeMap<OutfitId, i16> = BTreeMap::new();
+    static NO_CAPS: BTreeMap<OutfitId, i64> = BTreeMap::new();
     static NO_LAUNCHERS: BTreeMap<OutfitId, Launcher> = BTreeMap::new();
     static NO_VISIT: OutfitVisit = OutfitVisit {
         bought: Bought {
@@ -5463,6 +5493,27 @@ mod tests {
     }
 
     #[test]
+    fn an_outfit_outside_128_to_639_is_refused_as_none_allowed_before_all_else() {
+        // `_HasMaxOfItem` @0x451b-0x4547, read through `_CanBuyOutfitItem`
+        // @0x4e87d and `_OutfitDialogUpdate` @0x57dd6.
+        let far = OutfitRecord {
+            mass: 100,
+            ..gun(700)
+        };
+        let outfitter = armed(&[far, gun(639)], &pilot(), hardpoints(0, 0));
+        assert_eq!(buys(&outfitter, 700), Err(OutfitRefusal::NoneAllowed));
+        assert_eq!(
+            outfitter.words(OutfitId(700)),
+            Some(OutfitRefusal::NoneAllowed)
+        );
+        assert_eq!(
+            buys(&outfitter, 639),
+            Err(OutfitRefusal::GunLimit),
+            "639 is in range"
+        );
+    }
+
+    #[test]
     fn max_comes_before_the_gun_limit_and_the_gun_limit_before_space_and_cash() {
         let one = OutfitRecord { max: 1, ..gun(128) };
         let outfitter = armed(&[one], &owning(&[(128, 1)]), hardpoints(1, 0));
@@ -5910,8 +5961,10 @@ mod tests {
     ) -> Result<(), OutfitRefusal> {
         let records = raisers();
         let site = port();
-        let ammo_caps: BTreeMap<OutfitId, i16> =
-            cap.map(|cap| (OutfitId(200), cap)).into_iter().collect();
+        let ammo_caps: BTreeMap<OutfitId, i64> = cap
+            .map(|cap| (OutfitId(200), i64::from(cap)))
+            .into_iter()
+            .collect();
         let fighter_room: BTreeMap<OutfitId, u32> =
             room.map(|room| (OutfitId(200), room)).into_iter().collect();
         let outfitter = Shop {
@@ -6184,6 +6237,7 @@ mod tests {
                     "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d, as `buy tech` reads it at build \
                      (`TechLevel` -1 skips it @0x4e802)"
                 ),
+                ("outfit range", "`_HasMaxOfItem` @0x451b-0x4547"),
                 (
                     "ammunition cap",
                     "`_HasMaxOfItem` @0x457e-0x45e4, via `_CanBuyOutfitItem` @0x4e87d"
@@ -6218,9 +6272,15 @@ mod tests {
         let has_max = listed_checks(&has_max());
         assert_eq!(
             has_max.iter().map(|&(name, _)| name).collect::<Vec<_>>(),
-            ["ammunition cap", "raised max", "gun limit", "turret limit"]
+            [
+                "outfit range",
+                "ammunition cap",
+                "raised max",
+                "gun limit",
+                "turret limit"
+            ]
         );
-        assert_eq!(has_max, listed_checks(&can_buy())[1..5]);
+        assert_eq!(has_max, listed_checks(&can_buy())[1..6]);
     }
 
     #[test]
@@ -6294,10 +6354,10 @@ mod tests {
 
     #[test]
     fn each_disputed_outfitter_rule_names_its_key() {
-        let mut buying = vec![None; 13];
-        buying[9] = Some(RuleKey::OutfitLimit);
+        let mut buying = vec![None; 14];
+        buying[10] = Some(RuleKey::OutfitLimit);
         assert_eq!(keys(&can_buy()), buying);
-        assert_eq!(keys(&has_max()), [None; 4]);
+        assert_eq!(keys(&has_max()), [None; 5]);
         assert_eq!(keys(&sell_flag()), [None; 3]);
         assert_eq!(
             keys(&sale_checks()),
@@ -6961,8 +7021,10 @@ mod tests {
         source: RuleSource,
     ) -> i16 {
         let site = port();
-        let ammo_caps: BTreeMap<OutfitId, i16> =
-            ammo.map(|cap| (OutfitId(200), cap)).into_iter().collect();
+        let ammo_caps: BTreeMap<OutfitId, i64> = ammo
+            .map(|cap| (OutfitId(200), i64::from(cap)))
+            .into_iter()
+            .collect();
         let outfitter = Shop {
             ammo_caps: &ammo_caps,
             hardpoints,
@@ -7086,7 +7148,7 @@ mod tests {
                 required: true,
                 available: true,
                 sold_here: true,
-                ammo_cap: (cap < max).then_some(cap),
+                ammo_cap: (cap < max).then_some(i64::from(cap)),
                 raised: (cap > max).then_some(i64::from(cap)),
                 ..OutfitFacts::default()
             },

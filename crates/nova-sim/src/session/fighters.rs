@@ -73,15 +73,16 @@ use crate::ai::{Goal, leave};
 #[cfg(doc)]
 use crate::ai::{afterburner, swarm};
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
-use crate::catalog::{OutfitId, ShipId, WeaponId};
+use crate::catalog::{OutfitId, ShipId};
 use crate::chance::Chance;
-use crate::combat::armament::{Fold, MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
+use crate::combat::armament::{Fold, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::ion::Ion;
 use crate::combat::weapon::WeaponSpec;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
+use crate::has_max;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
 use crate::pilot::{Escort, Pilot};
@@ -534,43 +535,26 @@ impl PlayerShip {
         self.fit.armament.stow(ship, &mut rounds)
     }
 
-    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
-    /// `MaxAmmo` above 0, the most of it the player may own: that
-    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
-    /// included, as the 16-bit product the original compares
-    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
-    /// [`MOD_AMMO`] mod in a later slot is not capped, so
-    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
-    /// is not read here.
-    pub(super) fn ammo_caps(&self, statics: &Statics) -> BTreeMap<OutfitId, i16> {
-        let mut caps = BTreeMap::new();
-        for record in &statics.outfits {
-            let (kind, val) = record.mods[0];
-            if kind != MOD_AMMO {
-                continue;
-            }
-            let weapon = WeaponId(val);
-            let Some(spec) = statics
-                .arsenal
-                .weapon(weapon)
-                .filter(|spec| spec.max_ammo > 0)
-            else {
-                continue;
-            };
-            let launchers: u32 = self
-                .fit
-                .armament
-                .mounts()
+    /// For every outfit whose first mod is `ModType` 3
+    /// ([`MOD_AMMO`](crate::combat::armament::MOD_AMMO)) naming a weapon of `MaxAmmo` above 0, the most of it the player may
+    /// own: that `MaxAmmo` times the player's launchers of the weapon,
+    /// stock weapons included, a wide product where the original's is
+    /// 16-bit (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa; see
+    /// [`has_max::ammo_cap`]). An outfit with `ModType` 3 in a later
+    /// slot is not capped.
+    pub(super) fn ammo_caps(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+    ) -> BTreeMap<OutfitId, i64> {
+        self.with_room(pilot, statics, setup, |room| {
+            statics
+                .outfits
                 .iter()
-                .filter(|mount| mount.spec.id == weapon)
-                .map(|mount| mount.count)
-                .sum();
-            caps.insert(
-                record.id,
-                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
-            );
-        }
-        caps
+                .filter_map(|record| Some((record.id, has_max::ammo_cap(record, room)?)))
+                .collect()
+        })
     }
 }
 
@@ -4111,14 +4095,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_ammunition_cap_is_a_16_bit_product() {
+    fn the_ammunition_cap_is_a_wide_product() {
         let mut catalog = missile_port();
         catalog.weapons.last_mut().expect("weapon 174").max_ammo = 16_384;
-        // 16,384 x 2 wraps to -32,768: none can be bought.
-        assert_eq!(
-            ammo_for_sale(&catalog, &[(175, 2)], UNCAPPED),
-            Err(crate::outfitter::OutfitRefusal::MaxOwned)
-        );
+        // 16,384 x 2 is 32,768, where the original's `imulw` wraps it to
+        // -32,768; integer widths are not replicated, so one buys.
+        assert_eq!(ammo_for_sale(&catalog, &[(175, 2)], UNCAPPED), Ok(()));
         assert_eq!(ammo_for_sale(&catalog, &[(175, 1)], UNCAPPED), Ok(()));
     }
 

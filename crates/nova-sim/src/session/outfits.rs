@@ -92,17 +92,20 @@
 //!   systems are one set, where the original keeps `X`'s level 1 apart
 //!   from a map's level 2.
 
+use std::collections::BTreeMap;
+
 use super::story::NoCatalog;
 use super::{Chart, PlayerShip, Session, Setup, Statics, clamp_i16};
-use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
+use crate::catalog::{OutfitId, OutfitRecord, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_walks;
 use crate::grant::{GrantStock, held_to_max};
+use crate::has_max::ItemRoom;
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
-use crate::outfitter::{self, resale, unit_mass, unit_price};
+use crate::outfitter::{self, Hardpoints, resale, unit_mass, unit_price};
 use crate::pilot::{ExploredLevel, Pilot};
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
@@ -259,9 +262,58 @@ impl Statics {
     fn outfit_record(&self, outfit: OutfitId) -> Option<&OutfitRecord> {
         self.outfits.iter().find(|record| record.id == outfit)
     }
+
+    /// Ship class `ship`'s `MaxGun` and `MaxTur`; none for a class with
+    /// no record, like any class field that cannot be read.
+    pub(super) fn hardpoints(&self, ship: ShipId) -> Hardpoints {
+        self.ship_record(ship)
+            .map_or_else(Hardpoints::default, |record| Hardpoints {
+                guns: record.max_gun,
+                turrets: record.max_tur,
+            })
+    }
+
+    /// Weapon `weapon`'s `MaxAmmo`; none for a weapon of no record.
+    pub(super) fn max_ammo(&self, weapon: WeaponId) -> u32 {
+        self.arsenal.weapon(weapon).map_or(0, |spec| spec.max_ammo)
+    }
 }
 
 impl PlayerShip {
+    /// How many of each weapon the ship carries, its mounts summed by
+    /// weapon, stock weapons included: the weapon array +0xc8 that
+    /// `_HasMaxOfItem` counts the launchers from (@0x45aa).
+    pub(super) fn weapon_counts(&self) -> BTreeMap<WeaponId, u32> {
+        let mut counts = BTreeMap::new();
+        for mount in self.fit.armament.mounts() {
+            let count: &mut u32 = counts.entry(mount.spec.id).or_default();
+            *count = count.saturating_add(mount.count);
+        }
+        counts
+    }
+
+    /// Runs `with` on what `_HasMaxOfItem` reads beyond the outfits
+    /// owned ([`ItemRoom`]): the pilot's class's `MaxGun` and `MaxTur`,
+    /// the ship's weapons ([`weapon_counts`](Self::weapon_counts)), each
+    /// weapon's `MaxAmmo` and how [`RuleKey::RaisedMax`] reads a raised
+    /// `Max`.
+    pub(super) fn with_room<R>(
+        &self,
+        pilot: &Pilot,
+        statics: &Statics,
+        setup: &Setup,
+        with: impl FnOnce(&ItemRoom) -> R,
+    ) -> R {
+        let launchers = self.weapon_counts();
+        let max_ammo = |weapon| statics.max_ammo(weapon);
+        with(&ItemRoom {
+            hardpoints: statics.hardpoints(pilot.ship),
+            launchers: &launchers,
+            max_ammo: &max_ammo,
+            raised_max: setup.rules.source_for(RuleKey::RaisedMax),
+        })
+    }
+
     /// `record` as a grant sees it on the pilot's ship, its `Max` as the
     /// `ModType` 27 outfits owned raise it.
     pub(super) fn grant_stock(

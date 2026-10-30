@@ -4182,12 +4182,7 @@ impl Session {
     /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
     /// with no record, like any class field that cannot be read.
     fn hardpoints(&self) -> Hardpoints {
-        self.statics
-            .ship_record(self.pilot.ship)
-            .map_or_else(Hardpoints::default, |record| Hardpoints {
-                guns: record.max_gun,
-                turrets: record.max_tur,
-            })
+        self.statics.hardpoints(self.pilot.ship)
     }
 
     /// The outfitter of the stellar the ship is docked at, if it has
@@ -4220,7 +4215,7 @@ impl Session {
             standard: &self.ship.standard(),
             site,
             fighter_room: &self.fighter_room(),
-            ammo_caps: &self.ship.ammo_caps(&self.statics),
+            ammo_caps: &self.ship.ammo_caps(&self.pilot, &self.statics, &self.setup),
             hardpoints: self.hardpoints(),
             free_cargo: self.ship.free_cargo(&self.pilot),
             launchers: &self.launchers(),

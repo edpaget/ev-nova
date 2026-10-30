@@ -449,6 +449,7 @@ pub use nova_sim_base::player_turn;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::grant;
+pub use nova_sim_port::has_max;
 pub use nova_sim_port::hire;
 pub use nova_sim_port::iff;
 pub use nova_sim_port::murk;
