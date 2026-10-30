@@ -281,6 +281,7 @@ pub mod vacated;
 mod voice_cue_tests;
 pub mod warp_out;
 pub mod weigh;
+mod wrap_carry;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::lost_sight::{self, LostSight, SearchTimer};

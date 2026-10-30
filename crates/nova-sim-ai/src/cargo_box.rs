@@ -61,6 +61,7 @@
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
+use crate::player_wrap::PlayerWrap;
 use crate::scoop::{BoxFrames, touches};
 
 /// The most boxes in space at once: the table's 64 slots.
@@ -181,6 +182,14 @@ pub struct CargoBoxes {
 }
 
 impl CargoBoxes {
+    /// Carries each box within `wrap`'s reach: `_WrapPlayerPosition`'s loop
+    /// of `_boxData` (@0x6811f-0x681a1), which leaves its velocity.
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for cargo in &mut self.boxes {
+            wrap.carry(&mut cargo.position);
+        }
+    }
+
     /// The boxes in space.
     #[must_use]
     pub fn boxes(&self) -> &[CargoBox] {
@@ -377,6 +386,31 @@ mod tests {
         assert_eq!(escort_share(0, 50, 150), 0.0);
         assert_eq!(escort_share(30, -50, 150), -10.0, "a negative Holds too");
         assert_eq!(escort_share(30, 50, 0), 0.0, "no fleet holds, no share");
+    }
+
+    #[test]
+    fn a_wrap_carries_the_boxes_within_its_reach_and_leaves_their_velocities() {
+        use crate::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
+        let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+        let wrap = PlayerWrap::of(player).expect("past the edge");
+        let near = player + Vec2::new(-100.0, 40.0);
+        let far = player + Vec2::new(-WRAP_EDGE, 0.0);
+        let at = |position| CargoBox {
+            position,
+            velocity: Vec2::new(0.5, -1.5),
+            life: 10.0,
+            frame: 0,
+            spin: 0,
+            graphic: 0,
+            scoopable: false,
+            contents: None,
+        };
+        let mut boxes = CargoBoxes {
+            boxes: vec![at(near), at(far)],
+        };
+        boxes.carry(&wrap);
+        let moved = at(near + Vec2::new(-WRAP_SHIFT, 0.0));
+        assert_eq!(boxes.boxes(), [moved, at(far)]);
     }
 
     fn heading(heading: f32) -> ShipState {
