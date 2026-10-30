@@ -103,7 +103,6 @@ impl ScrollText {
         });
         Self {
             pixels,
-            first: 0,
             pending: 0.0,
             ..self
         }
@@ -308,7 +307,8 @@ impl ScrollText {
         let mut moved = pixels;
         if whole != 0.0 {
             moved.offset = (pixels.offset + whole).clamp(0.0, most);
-            moved.can_down = most > 0.0 && (whole < 0.0 || moved.offset > pixels.offset);
+            let failed = whole.is_sign_positive() && moved.offset <= pixels.offset;
+            moved.can_down = most > 0.0 && !failed;
         }
         if moved.offset <= 0.0 {
             self.pending = self.pending.max(0.0);
@@ -839,6 +839,17 @@ mod tests {
     }
 
     #[test]
+    fn a_text_starts_pixel_scrolling_from_its_top_with_nothing_left_over() {
+        let mut text = ten_lines();
+        text.scroll_by(3);
+        text.scroll_units(5.0);
+        let mut text = text.pixel_scrolled();
+        assert_eq!((text.offset(), text.first()), (0.0, 0));
+        text.scroll_units(0.5);
+        assert_eq!(text.offset(), 0.0, "the 5 units over are gone");
+    }
+
+    #[test]
     fn units_move_exact_pixels_and_first_floors_to_the_line_at_the_top() {
         let mut text = pixels();
         text.scroll_units(5.0);
@@ -1042,6 +1053,17 @@ mod tests {
             assert!(text.input(&input), "{input:?}");
             assert_eq!(text.offset(), offset, "{input:?}");
         }
+    }
+
+    /// `_ShowTextDialog` tests the flag before it scrolls
+    /// (@0x5b0b5-0x5b0bd), so a step it stops makes no try, and leaves
+    /// "can scroll down" alone where a scroll that can't move would set it.
+    #[test]
+    fn an_up_step_stopped_by_its_flag_is_no_scroll_at_all() {
+        let mut text = pixels();
+        text.clear_can_scroll_down();
+        text.scroll_arrow(ScrollArrow::Up);
+        assert!(!text.can_scroll_down());
     }
 
     #[test]
