@@ -772,8 +772,9 @@ pub fn is_dockable(site: &LandingSite) -> bool {
 /// [uninhabited](StellarFlags::UNINHABITED), as
 /// `_HandlePlayerCommunication` reads it (`_StellarIsLandable` @0x61fda,
 /// `Flags` 0x20 @0x61fe5, `Flags2` 0x3000 @0x61fff-0x62006). Its active
-/// byte (+0x44 @0x62009) is the session's to test: a stellar shown in the
-/// player's system.
+/// byte (+0x44 @0x62009) is the session's to test: a stellar the player's
+/// system lists whose holder is visible, owned by that system or another,
+/// as the hail reads no owner.
 #[must_use]
 pub fn answers_hail(site: &LandingSite) -> bool {
     is_dockable(site) && !has(site, StellarFlags::UNINHABITED)

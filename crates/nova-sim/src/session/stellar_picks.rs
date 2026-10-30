@@ -479,6 +479,31 @@ pub(super) mod tests {
 
     // Readers of a selection outside the stellars shown.
 
+    /// `_HandlePlayerCommunication` tests the selection's can-land,
+    /// `Flags` 0x20, `Flags2` 0x3000 and active byte, with no owner test
+    /// (@0x61fac-0x62017), and opens `_DoPlanetCommDialog` (@0x6204b): an
+    /// inhabited, landable planet another visible system owns answers.
+    #[test]
+    fn hailing_a_selected_planet_another_system_owns_opens_its_comm_dialog() {
+        let catalog = twice_listed(planet);
+        let mut session = in_131(&catalog, engine(), NEAR_200);
+        assert_eq!(session.land(), refused_200(), "selected by L");
+        assert_eq!(session.nav_target(), Some(StellarId(UNOWNED)));
+        session.take_sounds();
+        let hailed = session.hail_key(
+            &catalog,
+            &crate::hail::HailOptions::default(),
+            false,
+            &mut crate::testkit::Draws::of(&[]),
+        );
+        let Ok(crate::session::Hailed::Stellar(view)) = hailed else {
+            panic!("the planet comm dialog: {hailed:?}");
+        };
+        assert_eq!(view.stellar, StellarId(UNOWNED));
+        assert_eq!(session.take_sounds(), [SimSound::PlanetCommOpened]);
+        assert!(session.planet_comm(&catalog).is_some(), "open on it");
+    }
+
     #[test]
     fn a_wormhole_another_system_owns_is_known_as_one() {
         let catalog = twice_listed(wormhole);

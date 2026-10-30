@@ -98,9 +98,11 @@ impl Chart {
         }
     }
 
-    /// `stellar` as the player's system shows it now.
+    /// `stellar` as the player's system lists it now, shown or owned by
+    /// another visible system, as the hail reads no owner (see the
+    /// `stellar_picks` module).
     fn planet_site(&self, stellar: StellarId) -> Option<LandingSite> {
-        self.sites.iter().find(|site| site.id == stellar).copied()
+        self.listed.iter().find(|site| site.id == stellar).copied()
     }
 
     /// What a press reads of `site`, and the view shows, `pilot`'s record
@@ -133,10 +135,10 @@ impl Chart {
 }
 
 impl Session {
-    /// Opens the planet comm dialog on `stellar`, one the system shows,
+    /// Opens the planet comm dialog on `stellar`, one the system lists,
     /// drawing on `chance` and beeping, and gives what it shows, its
     /// replies read from `catalog` (see the module docs); none, opening
-    /// nothing, when the system shows no such stellar.
+    /// nothing, when the system lists no such stellar.
     pub(super) fn open_planet_comm(
         &mut self,
         stellar: StellarId,

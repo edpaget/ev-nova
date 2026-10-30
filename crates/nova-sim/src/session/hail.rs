@@ -284,9 +284,10 @@ impl Session {
     /// [`HailRefusal::NoTarget`] while cloaked, landed, jumping (the
     /// pre-jump stage included) or breaking up; then, with no ship target or Option held (`_QuickKeyCheck(0x3a)`
     /// @0x61f91-0x61fa6), the navigation stellar
-    /// ([`Session::nav_target`]) when it is shown in the system (its
-    /// active byte, +0x44 @0x62009) and [answers](landing::answers_hail),
-    /// else [`HailRefusal::NoResponse`] (@0x6261c), and
+    /// ([`Session::nav_target`]) when it is active (+0x44 @0x62009), one
+    /// of [`Chart::pick_candidates`](super::Chart::pick_candidates), and
+    /// [answers](landing::answers_hail), else [`HailRefusal::NoResponse`]
+    /// (@0x6261c), and
     /// [`HailRefusal::NoTarget`] with none (@0x6206c); else the ship
     /// target as [`Session::answering`] says.
     pub(super) fn hail_target(&self, option: bool) -> Result<HailTarget, HailRefusal> {
@@ -296,8 +297,10 @@ impl Session {
             return self.answering().map(|npc| HailTarget::Ship(npc.id));
         }
         let stellar = self.nav_target().ok_or(HailRefusal::NoTarget)?;
+        // No owner test (+0x14, @0x61fac-0x62017): a stellar another
+        // visible system owns answers as one the system shows.
         self.chart
-            .sites
+            .pick_candidates(&self.pilot, &self.statics)
             .iter()
             .find(|site| site.id == stellar)
             .filter(|site| landing::answers_hail(site))
@@ -1250,20 +1253,21 @@ pub(super) mod tests {
     }
 
     /// `catalog`'s session with nothing targeted but planet 128, which
-    /// the system shows, its navigation target, its `Flags` `flags` and
-    /// `Flags2` `flags2`.
+    /// the system shows and lists, its navigation target, its `Flags`
+    /// `flags` and `Flags2` `flags2` as both show it.
     fn at_stellar(catalog: &FakePilotCatalog, flags: u32, flags2: u16) -> Session {
         let mut session = targeting(catalog);
         session.chart.target = None;
         session.chart.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
-        let site = session
-            .chart
-            .sites
-            .iter_mut()
-            .find(|site| site.id == StellarId(128))
-            .expect("shown");
-        site.flags = flags;
-        site.flags2 = flags2;
+        let chart = &mut session.chart;
+        let sites = chart.sites.iter_mut().chain(&mut chart.listed);
+        let mut found = 0;
+        for site in sites.filter(|site| site.id == StellarId(128)) {
+            site.flags = flags;
+            site.flags2 = flags2;
+            found += 1;
+        }
+        assert_eq!(found, 2, "shown and listed");
         session
     }
 
@@ -1310,7 +1314,9 @@ pub(super) mod tests {
         let catalog = hailable();
         let land = StellarFlags::CAN_LAND;
         let mut hidden = Box::new(at_stellar(&catalog, land, 0));
+        // Listed no more, so no candidate: not active.
         hidden.chart.sites.retain(|site| site.id != StellarId(128));
+        hidden.chart.listed.retain(|site| site.id != StellarId(128));
         for (mut session, why) in [
             (
                 Box::new(at_stellar(&catalog, land | StellarFlags::UNINHABITED, 0)),
