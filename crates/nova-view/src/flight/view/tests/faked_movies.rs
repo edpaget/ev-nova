@@ -102,6 +102,41 @@ fn a_landing_plays_its_desc_movie_before_it_lands_beeps_and_redraws_the_bar() {
 }
 
 #[test]
+fn a_landing_movie_holds_back_only_the_beep_the_voice_kill_comes_out_on_the_press() {
+    let (mut view, _player) = filming(filmed(&[129], &[]), true);
+    let voice = nova_sim::SoundId(1010);
+    view.sim
+        .queue_event(FlightEvent::Sound(nova_sim::SimSound::Voice {
+            sound: voice,
+        }));
+    view.tick(TICK);
+    assert_eq!(
+        view.take_sounds(),
+        [Sound::Sim(nova_sim::SimSound::Voice { sound: voice })],
+        "a voice playing at the landing"
+    );
+    for sound in [
+        nova_sim::SimSound::HaltVoice { sound: voice },
+        nova_sim::SimSound::ThrustStopped,
+    ] {
+        view.sim.queue_event(FlightEvent::Sound(sound));
+    }
+    land_on_mars(&mut view);
+    assert!(view.playing());
+    assert_eq!(
+        view.take_sounds(),
+        [
+            Sound::Sim(nova_sim::SimSound::HaltVoice { sound: voice }),
+            Sound::Sim(nova_sim::SimSound::ThrustStopped),
+        ],
+        "_KillVoiceSound (@0x66daf) comes before the movie (@0x632a7)"
+    );
+    assert_eq!(view.take_sounds(), [], "the beep still held");
+    run_out(&mut view);
+    assert_eq!(view.take_sounds(), [Sound::Sim(nova_sim::SimSound::Landed)]);
+}
+
+#[test]
 fn a_landing_at_a_desc_naming_no_movie_or_none_at_all_loads_it_and_lands_at_once() {
     for (catalog, raw) in [
         (filmed(&[], &[129]), Some("dësc 129".to_owned())),

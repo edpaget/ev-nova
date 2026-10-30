@@ -101,9 +101,14 @@ impl Inbox {
         }
     }
 
-    /// The sounds, in order; taking them empties the list.
-    pub(super) fn take_sounds(&mut self) -> Vec<SimSound> {
-        std::mem::take(&mut self.sounds)
+    /// The sounds, in order, but those `held` says to keep, which stay,
+    /// in order, for a later take.
+    pub(super) fn take_sounds(&mut self, held: impl Fn(SimSound) -> bool) -> Vec<SimSound> {
+        let (kept, taken) = std::mem::take(&mut self.sounds)
+            .into_iter()
+            .partition(|&sound| held(sound));
+        self.sounds = kept;
+        taken
     }
 
     /// The messages, in order; taking them empties the list.
@@ -274,7 +279,7 @@ mod tests {
     #[test]
     fn an_empty_inbox_gives_nothing() {
         let mut inbox = Inbox::default();
-        assert_eq!(inbox.take_sounds(), []);
+        assert_eq!(inbox.take_sounds(|_| false), []);
         assert_eq!(inbox.take_messages(), []);
         assert_eq!(inbox.take_events(), []);
         assert!(!inbox.take_save_due());
@@ -330,7 +335,7 @@ mod tests {
             }),
         ]);
         assert_eq!(
-            inbox.take_sounds(),
+            inbox.take_sounds(|_| false),
             [SimSound::Refused, SimSound::NavSelected]
         );
         assert_eq!(
@@ -469,7 +474,7 @@ mod tests {
         fake.queue_event(FlightEvent::SaveDue);
         let mut inbox = Inbox::default();
         inbox.drain(&mut fake);
-        assert_eq!(inbox.take_sounds(), [SimSound::Refused]);
+        assert_eq!(inbox.take_sounds(|_| false), [SimSound::Refused]);
         assert!(inbox.take_save_due());
         inbox.drain(&mut fake);
         assert_eq!(inbox, Inbox::default(), "the flight handed them out once");

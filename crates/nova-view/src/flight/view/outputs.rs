@@ -343,10 +343,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// then the interface's (the escort menu's, the floating map's zooms,
     /// the player info refused, the course map's beeps), then the fight's:
     /// what [`Screen::take_sounds`](crate::Screen::take_sounds) gives.
+    /// While a landing's movie plays, the flight's sounds that follow it
+    /// stay behind until it ends (see the `movies` module).
     pub(super) fn drained_sounds(&mut self) -> Vec<Sound> {
+        let holds = self.holds_sounds();
         let mut sounds: Vec<Sound> = self
             .drain()
-            .take_sounds()
+            .take_sounds(|sound| holds && sound.follows_landing_movie())
             .into_iter()
             .map(Sound::Sim)
             .collect();

@@ -17,12 +17,18 @@
 //! - **Landing.** The flight has docked as the press answered: its refuel,
 //!   its landing beep and its story events are done. The original plays
 //!   the movie before `_DoAutoRefuel` (@0x632c5), the beep (@0x632ef) and
-//!   the bar's redraw after them (@0x632fb). So the press's sounds are
-//!   withheld while the movie plays, the status bar stays as the press
-//!   found it, and the landing reaches the router
-//!   ([`FlightView::take_landing`]) only once the movie ends, when the
-//!   sounds are released and the bar redrawn. Nothing the docking changed
-//!   is seen before then, so no boundary the player sees is crossed early.
+//!   the bar's redraw after them (@0x632fb). So the flight's sounds the
+//!   original plays after the movie, which the flight's crate marks
+//!   ([`SimSound::follows_landing_movie`]: the beep; the refuel is silent),
+//!   are withheld while it plays, the status bar stays as the press found
+//!   it, and the landing reaches the router ([`FlightView::take_landing`])
+//!   only once the movie ends, when those sounds are released and the bar
+//!   redrawn. The press's other sounds come before the movie in the
+//!   original, as `_HandlePlayerDockRequest` makes them (the voice kill,
+//!   `_KillVoiceSound` @0x66daf, and the thrust's stop among them), so
+//!   they come out on the press's frame. Nothing else the docking changed
+//!   is seen before the movie ends, so no boundary the player sees is
+//!   crossed early.
 //!   Under the movie is what `_PlayerLandOnStellar` leaves on screen
 //!   (@0x63221-0x63280): every sprite hidden, the stars among them, so the
 //!   play area is bare, and the status bar. The landing's load comes after
@@ -38,6 +44,8 @@
 //!
 //! Neither function plays a sound.
 
+#[cfg(doc)]
+use nova_sim::SimSound;
 use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry, ScreenAnswer, ScreenAsk};
 use nova_sim::{StellarId, SystemId};
 
@@ -106,7 +114,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether the landing's movie plays, holding back the press's
-    /// sounds (see the module docs).
+    /// sounds that follow it (see the module docs).
     pub(super) fn holds_sounds(&self) -> bool {
         matches!(
             self.movie,

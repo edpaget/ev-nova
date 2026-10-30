@@ -139,9 +139,6 @@ impl<
     /// the player info refused, the course map's beeps), then the fight's.
     /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
-        if self.holds_sounds() {
-            return Vec::new();
-        }
         self.drained_sounds()
     }
 
