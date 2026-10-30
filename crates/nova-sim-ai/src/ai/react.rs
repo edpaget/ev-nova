@@ -57,7 +57,10 @@
 //!   0x3be6e`, @0x3bd7e).
 //! - **A Good Samaritan**: for a hit by the player on the ship it was
 //!   meant for ([`Strike::intended`], @0x3bed2), every warship or
-//!   interceptor W not already attacking takes the player as its target
+//!   interceptor W (the original's AI type 3 or 4, @0x8289f-0x828ad,
+//!   [`Npc::original_ai_type`]: not a led ship, a fighter, a ship the
+//!   player paid off, nor a former escort still marked) not already
+//!   attacking takes the player as its target
 //!   and attacks at once, unless W is an NPC enemy of the victim, or the
 //!   victim's government is xenophobic and not W's; the victim's
 //!   government is derelict or ignored when attacked (`Flags` 0x0020); or
@@ -371,7 +374,10 @@ fn good_samaritan(npc: &Npc, victim: ShipRef, around: &Surroundings) -> bool {
     let ShipRef::Npc(victim_id) = victim else {
         return false;
     };
-    if npc.ai_type.trades() || npc.goal.attacking().is_some() || around.npc(victim_id).is_none() {
+    if !matches!(npc.original_ai_type(), 3..=4)
+        || npc.goal.attacking().is_some()
+        || around.npc(victim_id).is_none()
+    {
         return false;
     }
     let govts = around.govts;
@@ -1188,6 +1194,25 @@ mod tests {
     }
 
     #[test]
+    fn a_marked_former_escort_of_a_warship_class_is_no_samaritan() {
+        // `_DoGoodSamaritan` @0x8289f reads +0x88 of 3 or 4; the disabled
+        // reset leaves 6 until the ship's first think once whole.
+        let govts = relations(0, 0);
+        let mut marked = ship(2, Some(POLICE), AiType::Warship, 3000.0);
+        marked.kept_escort_ai = true;
+        let npcs = [ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0), marked];
+        assert_eq!(
+            answered(&govts, &npcs, 1, &strike(n(1), ShipRef::Player)),
+            Reaction::default()
+        );
+        assert_eq!(
+            samaritan(&govts, Some(POLICE), AiType::Warship, Some(TRADERS)),
+            ANSWERS,
+            "a plain warship"
+        );
+    }
+
+    #[test]
     fn no_samaritan_answers_the_players_unintended_hit() {
         let govts = relations(0, 0);
         let npcs = [
@@ -1420,10 +1445,11 @@ mod tests {
     }
 
     #[test]
-    fn a_boarding_call_makes_a_warship_lead_and_the_ship_itself_samaritans_and_a_trader_lead_nothing()
+    fn a_boarding_call_makes_a_warship_lead_a_samaritan_and_a_led_ship_boarded_or_a_trader_lead_none()
      {
         // The loop @0x82891-0x82ba8 excludes no slot: the lead and the
-        // ship boarded pass the gates as any other ship does.
+        // ship boarded meet the gates as any other ship does. The ship
+        // boarded is led, the original's AI type 6, not 3 or 4 (@0x8289f).
         let govts = relations(0, 0);
         let boarded = call(n(2));
         let warship_lead = escorted(AiType::Warship);
@@ -1434,8 +1460,15 @@ mod tests {
         );
         assert_eq!(
             answered(&govts, &warship_lead, 1, &boarded),
+            Reaction::default(),
+            "the led warship boarded"
+        );
+        let mut unled = escorted(AiType::Warship);
+        unled[1].leader = None;
+        assert_eq!(
+            answered(&govts, &unled, 1, &boarded),
             ANSWERS,
-            "the warship boarded"
+            "an unled warship boarded"
         );
         assert_eq!(
             answered(&govts, &warship_lead, 2, &boarded),

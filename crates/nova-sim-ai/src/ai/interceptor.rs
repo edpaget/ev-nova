@@ -307,8 +307,8 @@ fn re_pick(
 
 /// A ship for `npc` to inspect among `around`, picked on `chance`: the
 /// player or an NPC, not itself, not another unled interceptor (see the
-/// module docs), not the one it
-/// last inspected nor the one it has just looked over.
+/// module docs), not the one it last inspected nor the one it has just
+/// looked over.
 fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
     let done = [npc.inspected, npc.goal.inspecting()];
     let player = (around.live(ShipRef::Player) && around.sees(npc, ShipRef::Player))

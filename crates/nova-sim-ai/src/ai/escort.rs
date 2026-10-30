@@ -1784,20 +1784,27 @@ mod tests {
         // `_DoGoodSamaritan` takes AI 3 and 4 alone (@0x8289f-0x828bb).
         let mut trader = bystander(2, 3000.0, 0.0);
         trader.ai_type = AiType::WimpyTrader;
-        let npcs = [escort(None), trader];
         let strike = crate::combat::fixture::strike(n(2), ShipRef::Player);
         let govts = govts(0, 0);
+        let unled = [
+            Npc {
+                escort: None,
+                ..escort(None)
+            },
+            trader.clone(),
+        ];
         let around = Surroundings {
             player: Some(player(0.0, 0.0)),
             govts: &govts,
-            ..Surroundings::new(&[], &npcs)
+            ..Surroundings::new(&[], &unled)
         };
         assert!(
-            crate::ai::react::answer(&npcs[0], &strike, &around, RuleSource::Engine)
+            crate::ai::react::answer(&unled[0], &strike, &around, RuleSource::Engine)
                 .goal
                 .is_some(),
-            "a warship would answer"
+            "a warship of no fleet would answer"
         );
+        let npcs = [escort(None), trader];
         assert_eq!(reacts(&npcs, &strike), crate::ai::Reaction::default());
     }
 
