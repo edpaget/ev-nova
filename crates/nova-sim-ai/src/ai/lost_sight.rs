@@ -14,7 +14,9 @@
 //!
 //! - Seen, the search timer (+0xc90c, [`Npc::lost_sight`]) is cleared
 //!   (@0x8d8ab-0x8d8ae) and the handler goes on.
-//! - Unseen by a trader (AI type +0x88 of 2 or below, @0x8d748), it
+//! - Unseen by a trader (AI type +0x88 of 2 or below, @0x8d748,
+//!   [`Npc::original_ai_type`]: not a led ship or a fighter, but one the
+//!   player has paid off), it
 //!   leaves by hyperspace (state 2, target -1, @0x8d7cd-0x8d7fe) if it can
 //!   jump ([`leave::can_jump`], the inlined `_AIShipHasFuelForJump`
 //!   @0x8d756-0x8d7c9), and otherwise stops and waits (state 6,
@@ -65,7 +67,6 @@
 //!   then a warship that gives up its search re-picks the cloaked ship on
 //!   its next think and searches again.
 
-use crate::ai::plunder_target::reads_above_trader;
 use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal, Surroundings, leave};
 use crate::chance::Chance;
@@ -146,7 +147,7 @@ pub fn after_think(
             ..decision
         };
     }
-    if !reads_above_trader(npc) {
+    if npc.original_ai_type() <= 2 {
         return if leave::can_jump(npc, around.jump_fuel) {
             Decision {
                 goal: Goal::JumpOut,
@@ -470,6 +471,19 @@ mod tests {
         let interceptor = hunter(AiType::Interceptor, SearchTimer::Unset);
         let decision = lost(&interceptor, of(Goal::Attack(n(2))), &mut Draws::of(&[0]));
         assert_eq!(decision.lost_sight, Some(LostSight::Searching(100)));
+    }
+
+    #[test]
+    fn a_led_ship_paid_off_leaves_as_a_trader() {
+        // The bribe writes AI type 1 (@0x961f8), parent kept (@0x8d748).
+        let mut spared = hunter(AiType::Warship, SearchTimer::Unset);
+        spared.leader = Some(NpcId(3));
+        spared.spared = true;
+        spared.class_fuel = 100;
+        let mut chance = Draws::of(&[]);
+        let decision = lost(&spared, of(Goal::Attack(n(2))), &mut chance);
+        assert_eq!(decision.goal, Goal::JumpOut);
+        assert!(chance.asked.is_empty());
     }
 
     #[test]

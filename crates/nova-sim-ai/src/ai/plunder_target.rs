@@ -18,8 +18,9 @@
 //!   2 or below (@0x7fdad); any other only when its class's `InherentAI`
 //!   is 2 or below, or the pirate holds a destroying weapon
 //!   ([`fire::destroys`], @0x7fd23, @0x7fdb7-0x7fdde). An NPC carrier's
-//!   fighter reads as the original's AI type 5, and any other ship with a
-//!   leader as 6 ([`Npc::leader_ref`]), so neither passes as a trader;
+//!   fighter reads as the original's AI type 5, any other ship with a
+//!   leader as 6, and a ship the player paid off as 1, its leader kept
+//!   ([`Npc::original_ai_type`]);
 //! - of a class with a crew: `Crew` above none (@0x7fe04,
 //!   [`HullSpec::crew`](crate::combat::hull::HullSpec::crew)), so never
 //!   the escape pod;
@@ -72,7 +73,7 @@ pub fn find(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> bool {
     let led_by_player = other.leader_ref() == Some(ShipRef::Player);
     let takes_on = other.former.is_some()
-        || !reads_above_trader(other)
+        || other.original_ai_type() <= 2
         || other.hull.inherent_ai <= 2
         || destroys;
     other.leader_ref() != Some(ShipRef::Npc(npc.id))
@@ -83,14 +84,6 @@ fn candidate(npc: &Npc, other: &Npc, around: &Surroundings, destroys: bool) -> b
         && takes_on
         && other.hull.crew > 0
         && (led_by_player || !around.govts.allies(npc.govt, other.govt))
-}
-
-/// Whether `other` reads as an AI type above 2 (+0x88): a carried fighter
-/// (5), any other ship with a leader (6), a warship (3) or an interceptor
-/// (4); never a ship with no AI ([`Npc::no_ai`], -1).
-pub(crate) fn reads_above_trader(other: &Npc) -> bool {
-    !other.no_ai
-        && (other.carrier.is_some() || other.leader_ref().is_some() || !other.ai_type.trades())
 }
 
 /// `off`'s square, as a float, truncated to a whole number
@@ -389,6 +382,20 @@ mod tests {
             Some(n(2)),
             "a wimpy trader again"
         );
+    }
+
+    #[test]
+    fn a_led_ship_paid_off_then_disabled_reads_as_the_bribes_trader() {
+        // The bribe writes 1 (@0x961f8), which the disabled reset leaves
+        // alone, though the engine's reset gives it its class's 3.
+        let mut spared = wreck(2, 100.0);
+        spared.hull.inherent_ai = 3;
+        spared.leader = Some(NpcId(7));
+        spared.spared = true;
+        spared.condition = Condition::Disabled;
+        crate::traffic::disabled_reset::reset(&mut spared, crate::rulebook::RuleSource::Engine);
+        assert_eq!(spared.ai_type, AiType::Warship, "its class's InherentAI");
+        assert_eq!(found(&[pirate(), spared]), Some(n(2)), "AI type 1");
     }
 
     #[test]

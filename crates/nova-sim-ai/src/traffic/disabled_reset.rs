@@ -92,7 +92,7 @@ fn resets(npc: &Npc) -> bool {
 /// `npc`'s reset, by `reading` of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
 /// docs).
-fn reset(npc: &mut Npc, reading: RuleSource) {
+pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.target = None;
     npc.travel_set = false;
     npc.provoked = 0.0;
