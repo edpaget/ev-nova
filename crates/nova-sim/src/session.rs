@@ -469,6 +469,7 @@ mod deadly_stellars;
 mod derelicts;
 mod description;
 mod display_step;
+mod dock_tail;
 mod dominated_stellars;
 mod double_time;
 #[cfg(test)]
@@ -3799,15 +3800,10 @@ impl Session {
                 placed
             }
         };
-        // A gate's exit joins the take-off's path before its seed
-        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
-        // (@0x6709b; see the `precalced` module), whose `_ResetPlayer`
-        // writes -1 to +0xc908 (see the `stray_words` module). Its fold
-        // and player block come first (@0x66f72-0x67020).
-        self.ship.dock_tail_reset();
-        self.space.arm_strength_timer(chance);
-        self.reset_precalced();
-        self.ship.fate.pod_zeroed = false;
+        // A gate's exit joins the take-off's path before its fold and
+        // seed (`_HandlePlayerDockRequest` @0x66f40, @0x66f72, @0x6706f)
+        // and runs the tail's first half (see the `dock_tail` module).
+        self.begin_dock_tail(chance);
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -4094,16 +4090,9 @@ impl Session {
         // them. The take-off's restart of the auxiliary ships comes
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
-        // The dock request's tail's fold and player block, before the
-        // strength timer (@0x66f72-0x67020; the glow is already out).
-        self.ship.dock_tail_reset();
-        self.space.arm_strength_timer(chance);
-        // The dock request's reset, after the stay's days and before the
-        // setup (@0x6709b; see the `precalced` module), whose
-        // `_ResetPlayer` writes -1 to +0xc908 (see the `stray_words`
-        // module).
-        self.reset_precalced();
-        self.ship.fate.pod_zeroed = false;
+        // The dock request's tail before the setup, after the stay's days
+        // (see the `dock_tail` module; the glow is already out).
+        self.begin_dock_tail(chance);
         self.populate(catalog, chance);
         // The frames' reset (@0x675ce-0x675fa; see the `takeoff_frames`
         // module).
@@ -4111,20 +4100,11 @@ impl Session {
         self.out.sounds.push(SimSound::TookOff);
         self.out.save_due = true;
         self.run.raise(StoryEvent::TookOff { stellar });
-        // The dock request's rebuild point (@0x674c7, @0x67653).
-        self.rebuild_stellars();
-        // Its second `_PrepareAllSprites` (@0x67658), `populate`'s being
-        // the first (@0x6764e): every NPC's fade steps again.
-        self.prepare_all_sprites();
-        // Its tail: the dock request dropped (@0x6374a-0x63759; see the
-        // `clearance` module), the nav selection let go, the mode kept,
-        // then the course cued (@0x674d2-0x674d8; see the `nav` module).
-        // The original's bar is redrawn before this with the selection
+        // The rest of the tail (see the `dock_tail` module). The
+        // original's bar is redrawn before its deselect with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
         // flight view's `took_off`.
-        self.port.dock = None;
-        self.chart.deselect();
-        self.cue_course();
+        self.end_dock_tail();
         Some(stellar)
     }
 

@@ -18,7 +18,8 @@
 //!   = -1, @0x66fc4-0x66fe6);
 //! - folds the ship as a take-off does and clears its bank, display
 //!   timers, ionization, glow and boarded flag (@0x66f72-0x67020;
-//!   `PlayerShip::dock_tail_reset`);
+//!   [`Session::begin_dock_tail`], shared with the take-off and a gate's
+//!   exit in the `dock_tail` module);
 //! - shuts the escort menu, drops the dock request and lets go of the
 //!   target (@0x6705a-0x67069), and arms the escort-strength timer
 //!   (@0x6706f-0x67084);
@@ -38,7 +39,9 @@
 //! and no arrival sound or message plays.
 //!
 //! **Here.** [`Session::enter_wormhole`] beeps [`SimSound::Refused`] and
-//! runs [`Session::refuse_no_exit`], telling
+//! runs [`Session::refuse_no_exit`], which runs the tail's two shared
+//! halves ([`Session::begin_dock_tail`], [`Session::end_dock_tail`]; see
+//! the `dock_tail` module) around its own population, telling
 //! [`SessionEvent::SystemChanged`] for the ships set up afresh (no
 //! [`SessionEvent::StarfieldReset`]) and
 //! [`SessionEvent::StellarFramesReset`]. The view says the message, shuts
@@ -64,11 +67,9 @@ impl Session {
     /// request's tail in the system the player stays in, populated afresh
     /// from `catalog` on `chance` (see the module docs).
     ///
-    /// The order follows [`Session::take_off`]'s tail, not the
-    /// original's within the tick: only the deselect before the cue, and
-    /// the population before the frames' reset, the rebuild and the
-    /// sprites' preparation, matter. Everything settles before the next
-    /// frame is drawn.
+    /// The tail runs through [`Session::begin_dock_tail`] and
+    /// [`Session::end_dock_tail`], as [`Session::take_off`]'s does; see
+    /// the `dock_tail` module for the order.
     pub(super) fn refuse_no_exit(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
@@ -82,32 +83,21 @@ impl Session {
         self.kill_explosions();
         self.space.clear_boxes();
         self.space.kill_asteroids();
-        // The fold and the player block (@0x66f72-0x67020).
-        self.ship.dock_tail_reset();
-        // Player +0x70 = -1 (@0x67069).
+        // Player +0x70 = -1 (@0x67069), which neither the fold nor the
+        // reset reads.
         self.chart.target = None;
-        // `_antiEscortDelay` (@0x6706f-0x67084).
-        self.space.arm_strength_timer(chance);
-        // `_ResetPlayerPrecalcedValues` (@0x6709b; see the `precalced`
-        // module), whose `_ResetPlayer` writes -1 to +0xc908 (see the
-        // `stray_words` module).
-        self.reset_precalced();
-        self.ship.fate.pod_zeroed = false;
+        // The fold, the player block, the strength timer and the reset
+        // (@0x66f72-0x6709b; see the `dock_tail` module).
+        self.begin_dock_tail(chance);
         // `_DeleteAllComputerShips(0, 1)` (@0x67096) and
         // `_SetupShipsInSystem(+0x74, 1)` (@0x674c2), as a take-off.
         self.populate(catalog, chance);
         self.out.emit(SessionEvent::SystemChanged);
         // The frames' reset, no exit gate (@0x675ce-0x675fa).
         self.reset_stellar_frames(None);
-        // The rebuild (@0x674c7, @0x67653) and the second
-        // `_PrepareAllSprites` (@0x67658), `populate`'s the first.
-        self.rebuild_stellars();
-        self.prepare_all_sprites();
-        // `_dockPermission` = 0 (@0x6705f), then the selection let go,
-        // the mode kept, and the course cued (@0x674d2-0x674d8).
-        self.port.dock = None;
-        self.chart.deselect();
-        self.cue_course();
+        // The rebuild, the sprites, the dock request dropped and the
+        // course cued (see the `dock_tail` module).
+        self.end_dock_tail();
         // `_frameCounter` = -15 (@0x67673).
         self.start_takeoff_grace();
     }
