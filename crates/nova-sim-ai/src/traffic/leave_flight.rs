@@ -21,8 +21,9 @@
 //!   its turn and [`BRAKE_THRUST_SLACK`], whole degrees, strictly, by its
 //!   heading before the turn. With an axis at [`FULL_BRAKE`] or more it thrusts
 //!   its full thrust (@0x85510); below that on both, half of it
-//!   ([`SOFT_BRAKE`]), its velocity cut to [`BRAKE_DAMPING`] of itself
-//!   first (@0x85526-0x8558d). It has no cutoff near rest: it thrusts as
+//!   ([`SOFT_BRAKE`]), its velocity and its speed along its heading
+//!   (+0x48, [`Npc::speed`]) cut to [`BRAKE_DAMPING`] of themselves first
+//!   (@0x85526-0x8558d). It has no cutoff near rest: it thrusts as
 //!   long as the high level keeps it in sub 1, and may overshoot, turning
 //!   about to brake the other way. Its half thrust and damping bring any
 //!   thrust below 0.35 × (1 + 0.94) × 2, about 1.36 a tick (the stock's
@@ -35,21 +36,27 @@
 //!   (@0x8522d), has `_HandleShip` truncate it.
 //!
 //!   Off its retro heading, under goal 9 (+0xc8c8) alone, the refuel's
-//!   stop, its velocity is cut to [`BRAKE_DAMPING`] of itself with no
-//!   thrust (@0x85592-0x855e1); a leave (goal 2 or 3) keeps it. [`stop`]
-//!   flies sub 1 for both, its `refuelling` flag saying which.
+//!   stop, its velocity and speed are cut to [`BRAKE_DAMPING`] of
+//!   themselves with no thrust (@0x85592-0x855e1); a leave (goal 2 or 3)
+//!   keeps them. [`stop`] flies sub 1 for both, its `refuelling` flag
+//!   saying which. Both speed cuts sit in the inertial branch, so only an
+//!   inertial hull reaches them; its speed is normally 0, but an inertial
+//!   fighter launched by an inertialess carrier holds the carrier's
+//!   (`_LaunchFighter` @0x3d6da-0x3d6e0), and an inertialess dogfighter's
+//!   speed match reads it (sub 6 @0x86093, the engine's
+//!   [`pursuit`](crate::ai::pursuit)).
 //!
 //!   Below [`MOVING`](inertialess::MOVING) on both axes, inertial or
 //!   not, it settles instead: its velocity cut to [`SETTLE`] of itself,
-//!   with no thrust, its heading truncated as the low level's default
-//!   has it (@0x855e3-0x85624, @0x8522d). A leave never reaches it,
-//!   as the high level sets sub 1 only while an axis is at 0.35 or more
-//!   and the low level reads the same velocity; a refuel's stop and a
-//!   formation escort near a leader it can't see do
+//!   and its speed (+0x48) with it (@0x8560d-0x8561f), with no thrust,
+//!   its heading truncated as the low level's default has it
+//!   (@0x855e3-0x85624, @0x8522d). An inertialess ship's velocity then
+//!   follows heading × speed, so it comes to rest rather than drifting.
+//!   A leave never reaches it, as the high level sets sub 1 only while an
+//!   axis is at 0.35 or more and the low level reads the same velocity;
+//!   a refuel's stop and a formation escort near a leader it can't see do
 //!   ([`formation_flight`](crate::traffic::formation_flight), which flies
-//!   [`stop`] with `refuelling` false). Its cut of +0x48, the speed along
-//!   the heading, with the velocity is
-//!   rdm:task/ai-drags-scale-the-npc-speed's. Sub 1 writes the thrust word
+//!   [`stop`] with `refuelling` false). Sub 1 writes the thrust word
 //!   +0x30 alone, so a ship owing its gate burst bursts out on this brake
 //!   instead ([`held_burst`]). Nothing here plays a sound.
 //! - [`Leg::Jump`] (sub 4): it begins its warp out where it is, with no
@@ -178,12 +185,14 @@ pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) 
 /// handling they fly by, and the heading it wants (+0x68), its velocity
 /// cut as the substate cuts it. Moving ([`inertialess::moving`]) an
 /// inertial ship brakes, wanting its retro heading (@0x85408-0x855e1); a
-/// `refuelling` ship (goal 9, +0xc8c8) also has its velocity cut to
-/// [`BRAKE_DAMPING`] of itself while off it (@0x85592-0x855e1). An
-/// inertialess one brakes by [`inertialess::brake`] (@0x853d7-0x85403).
+/// `refuelling` ship (goal 9, +0xc8c8) also has its velocity and speed
+/// cut to [`BRAKE_DAMPING`] of themselves while off it (@0x85592-0x855e1).
+/// An inertialess one brakes by [`inertialess::brake`] (@0x853d7-0x85403),
+/// its speed left for the flight step's reverse thrust to move.
 /// Otherwise it settles, inertial or not, as the speed test comes before
-/// `_ShipIsInertialess`: its velocity cut to [`SETTLE`] of itself in
-/// doubles, with no thrust (@0x855e3-0x85624). Neither of those writes
+/// `_ShipIsInertialess`: its velocity and its speed (+0x48,
+/// [`Npc::speed`]) cut to [`SETTLE`] of themselves in doubles
+/// ([`Npc::drag_in_doubles`]), with no thrust (@0x855e3-0x8561f). Neither of those writes
 /// +0x68, so it wants its own whole heading, the low level's default
 /// (@0x8522d).
 pub(crate) fn stop_wanting(
@@ -193,12 +202,13 @@ pub(crate) fn stop_wanting(
     refuelling: bool,
 ) -> (Controls, Handling, i16) {
     if !inertialess::moving(npc.state.velocity) {
-        let state = &mut npc.state;
-        // Doubles, back to floats.
-        #[allow(clippy::cast_possible_truncation)]
-        let settle = |axis: f32| (f64::from(axis) * SETTLE) as f32;
-        state.velocity = Vec2::new(settle(state.velocity.x), settle(state.velocity.y));
-        return (Controls::default(), *handling, trig::whole(state.heading));
+        // Velocity and +0x48, in doubles, back to floats (@0x855e3-0x8561f).
+        npc.drag_in_doubles(SETTLE);
+        return (
+            Controls::default(),
+            *handling,
+            trig::whole(npc.state.heading),
+        );
     }
     match inertia {
         Inertia::Inertial => brake(npc, handling, refuelling),
@@ -212,31 +222,32 @@ pub(crate) fn stop_wanting(
 /// Substate 1's brake for an inertial `npc` on `handling`
 /// (@0x85408-0x855e1, see the module docs): the controls but their turn,
 /// the handling they fly by, and its retro heading ([`snipe::retro`]),
-/// its velocity cut as the substate cuts it, and, for a `refuelling`
-/// ship, off its retro heading too. It thrusts by its heading before the
-/// turn, as the low level runs before `_HandleShip`.
+/// its velocity and its speed along its heading (+0x48) cut as the
+/// substate cuts them on the soft brake (@0x85557-0x85588), and, for a
+/// `refuelling` ship, off its retro heading too (@0x855a3-0x855dc). Only
+/// an inertial hull reaches these speed cuts: they are seen through the
+/// pursuit's read of a target's speed (sub 6 @0x86093). It thrusts by its
+/// heading before the turn, as the low level runs before `_HandleShip`.
 fn brake(npc: &mut Npc, handling: &Handling, refuelling: bool) -> (Controls, Handling, i16) {
-    let state = &mut npc.state;
-    let retro = snipe::retro(state.velocity);
-    let thrust = fire::off_by(state.heading, retro) < handling.turn_rate + BRAKE_THRUST_SLACK;
+    let retro = snipe::retro(npc.state.velocity);
+    let thrust = fire::off_by(npc.state.heading, retro) < handling.turn_rate + BRAKE_THRUST_SLACK;
     let controls = Controls {
         thrust,
         ..Controls::default()
     };
-    // Doubles, back to floats (@0x85557-0x85574, @0x855a3-0x855cf).
-    #[allow(clippy::cast_possible_truncation)]
-    let cut = |axis: f32| (f64::from(axis) * BRAKE_DAMPING) as f32;
     if !thrust {
         if refuelling {
-            state.velocity = Vec2::new(cut(state.velocity.x), cut(state.velocity.y));
+            // Velocity and +0x48, in doubles (@0x855a3-0x855dc).
+            npc.drag_in_doubles(BRAKE_DAMPING);
         }
         return (controls, *handling, retro);
     }
     let full = |axis: f32| axis.abs() >= FULL_BRAKE;
-    if full(state.velocity.x) || full(state.velocity.y) {
+    if full(npc.state.velocity.x) || full(npc.state.velocity.y) {
         return (controls, *handling, retro);
     }
-    state.velocity = Vec2::new(cut(state.velocity.x), cut(state.velocity.y));
+    // Velocity and +0x48, in doubles (@0x85557-0x85588).
+    npc.drag_in_doubles(BRAKE_DAMPING);
     let soft = Handling {
         accel: handling.accel * SOFT_BRAKE,
         ..*handling
@@ -507,6 +518,76 @@ mod tests {
         assert_eq!(controls.turn, Turn::Right, "to its retro heading");
         assert_eq!(state.velocity, Vec2::new(0.0, -above));
         assert_eq!(SETTLE, 0.95);
+    }
+
+    /// `speed` cut to `by` of itself in doubles, as the original cuts +0x48.
+    #[allow(clippy::cast_possible_truncation)]
+    fn cut_by(speed: f32, by: f64) -> f32 {
+        (f64::from(speed) * by) as f32
+    }
+
+    #[test]
+    fn settling_inertial_or_not_its_speed_is_cut_to_0_95_of_itself_with_its_velocity() {
+        // The settle comes before `_ShipIsInertialess`, so it cuts +0x48
+        // whatever the inertia (@0x8560d-0x8561f); the float 0.35 is not
+        // moving.
+        for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 0.3 }] {
+            for refuelling in [false, true] {
+                let mut npc = npc_at(braking(0.35, -0.2, 90.0), inertia);
+                npc.speed = 0.3;
+                stop(&mut npc, &HANDLING, inertia, refuelling);
+                assert_eq!(npc.speed, cut_by(0.3, SETTLE), "{inertia:?}");
+                assert_eq!(npc.state.velocity.x, cut_by(0.35, SETTLE));
+            }
+        }
+    }
+
+    #[test]
+    fn braking_inertialess_while_moving_it_keeps_its_speed_for_its_step_to_brake() {
+        // Its reverse thrust moves the speed in the flight step, not here.
+        let above = f32::from_bits(0.35_f32.to_bits() + 1);
+        for vy in [-above, -0.5, -3.0] {
+            let inertia = Inertia::Inertialess { speed: -vy };
+            let mut npc = npc_at(braking(0.0, vy, 180.0), inertia);
+            let (controls, _) = stop(&mut npc, &HANDLING, inertia, false);
+            assert!(controls.reverse, "{vy}");
+            assert_eq!(npc.speed, -vy, "{vy}");
+        }
+    }
+
+    #[test]
+    fn on_the_soft_brake_an_inertial_ships_speed_is_cut_to_0_94_with_its_velocity() {
+        // An inertial fighter launched by an inertialess carrier holds its
+        // carrier's +0x48 (`_LaunchFighter` @0x3d6da-0x3d6e0); the soft
+        // brake cuts it (@0x85576-0x85588).
+        let mut soft = npc_at(braking(0.0, -0.5, 180.0), Inertia::Inertial);
+        soft.speed = 0.5;
+        let (controls, _) = stop(&mut soft, &HANDLING, Inertia::Inertial, false);
+        assert!(controls.thrust);
+        assert_eq!(soft.speed, cut_by(0.5, BRAKE_DAMPING));
+        // The full brake and a leave's turn keep it, as they keep the
+        // velocity.
+        for (vy, heading) in [(-3.0, 180.0), (-0.5, 0.0)] {
+            let mut kept = npc_at(braking(0.0, vy, heading), Inertia::Inertial);
+            kept.speed = 0.5;
+            stop(&mut kept, &HANDLING, Inertia::Inertial, false);
+            assert_eq!(kept.speed, 0.5, "{vy} facing {heading}");
+        }
+    }
+
+    #[test]
+    fn off_its_retro_heading_under_goal_9_an_inertial_ships_speed_is_cut_to_0_94() {
+        // Goal 9's damping cuts +0x48 too (@0x855ca-0x855dc).
+        for (vy, heading) in [(-0.5, 0.0), (-3.0, 90.0)] {
+            let mut npc = npc_at(braking(0.0, vy, heading), Inertia::Inertial);
+            npc.speed = 0.5;
+            stop(&mut npc, &HANDLING, Inertia::Inertial, true);
+            assert_eq!(
+                npc.speed,
+                cut_by(0.5, BRAKE_DAMPING),
+                "{vy} facing {heading}"
+            );
+        }
     }
 
     /// [`HANDLING`] turning `rate` degrees a tick.

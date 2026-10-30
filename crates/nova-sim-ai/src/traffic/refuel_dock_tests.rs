@@ -146,6 +146,25 @@ fn inside_the_box_a_moving_refueller_stops_through_sub_1_with_goal_9s_damping() 
 }
 
 #[test]
+fn inside_the_box_goal_9s_damping_cuts_a_moving_refuellers_speed_to_0_94_too() {
+    // An inertial ship holding a speed along its heading, as a fighter
+    // launched by an inertialess carrier does: the damping cuts +0x48
+    // with the velocity (@0x855ca-0x855dc).
+    let mut start = refueller(HELPER.0, 1, (50.0, 0.0), (0.0, 1.0), 180.0);
+    start.speed = 0.5;
+    let mut traffic = traffic_of(vec![start]);
+    tick(
+        &mut traffic,
+        &Recording::default(),
+        &world(40.0, 300.0, RuleSource::Engine),
+    );
+    let flown = ship(&traffic, HELPER);
+    #[allow(clippy::cast_possible_truncation)]
+    let cut = (f64::from(0.5_f32) * BRAKE_DAMPING) as f32;
+    assert_eq!(flown.speed, cut);
+}
+
+#[test]
 fn a_slow_refueller_inside_the_box_zeroes_its_velocity_gives_a_unit_and_closes_from_rest_the_same_tick()
  {
     // Facing the player, to its left, drifting slowly up.

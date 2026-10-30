@@ -2,8 +2,10 @@
 //! speed, not only a whole number of thrusts: every goal that flies sub 1
 //! (`_LowLevelAIHandler` @0x8536d-0x85633) brakes until it is not
 //! [`inertialess::moving`], below 0.35 on both axes, then settles by 0.95
-//! a tick (@0x855e3-0x85624); a sniper (sub 0xe) by its own
-//! [`snipe::moving`] and [`snipe::DAMPING`] (@0x870bf-0x8728e).
+//! a tick, its speed along its heading (+0x48) with its velocity, so an
+//! inertialess ship comes to rest too (@0x855e3-0x85624); a sniper (sub
+//! 0xe) by its own [`snipe::moving`] and [`snipe::DAMPING`]
+//! (@0x870bf-0x8728e).
 #![allow(clippy::float_cmp)]
 
 use super::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
@@ -109,27 +111,36 @@ fn an_inertial_ship_stopping_from_a_speed_not_a_whole_number_of_thrusts_comes_to
 }
 
 #[test]
-fn an_inertialess_ship_stopping_from_a_speed_not_a_whole_number_of_brakes_stops_moving() {
-    let mut stopping = ship(RAVEN, Goal::Idle, at(0.0, -2.95, 0.0), 2.95);
-    // Its brake is half a tick's thrust (@0x853f6).
-    not_whole(stopping.speed, stopping.stats.handling.accel * 0.5);
-    for _ in 0..100 {
+fn an_inertialess_ship_stopping_from_a_speed_not_a_whole_number_of_brakes_comes_to_rest() {
+    // The autopilot's stop and an inspector with no lead both fly sub 1.
+    for goal in [Goal::Idle, Goal::Inspect(ShipRef::Player)] {
+        let mut stopping = ship(RAVEN, goal, at(0.0, -2.95, 0.0), 2.95);
+        // Its brake is half a tick's thrust (@0x853f6).
+        not_whole(stopping.speed, stopping.stats.handling.accel * 0.5);
+        for _ in 0..100 {
+            fly(&mut stopping, None);
+        }
+        assert!(
+            !inertialess::moving(stopping.state.velocity),
+            "{goal:?}: {stopping:?}"
+        );
+        // Not moving, it settles: its speed (+0x48) is cut to 0.95 of
+        // itself with its velocity (@0x855e3-0x8561f), which then follows
+        // heading × speed, so it comes to rest rather than drifting on.
+        let speed = stopping.speed;
+        assert!(speed > 0.0, "{goal:?}");
         fly(&mut stopping, None);
-    }
-    assert!(
-        !inertialess::moving(stopping.state.velocity),
-        "{stopping:?}"
-    );
-    // Not moving, it brakes no more: it keeps its speed, the settle's
-    // +0x48 × 0.95 (@0x8560d-0x8561f) being left to
-    // ship-handling-fidelity-followups phase-2-ai-drags-scale-the-npc-speed.
-    // Its velocity's × 0.95 is overwritten by `adjust_velocity` the same
-    // tick, so heading × speed is what shows.
-    let speed = stopping.speed;
-    assert!(speed > 0.0);
-    for _ in 0..10 {
-        fly(&mut stopping, None);
-        assert_eq!(stopping.speed, speed);
+        #[allow(clippy::cast_possible_truncation)]
+        let settled = (f64::from(speed) * 0.95) as f32;
+        assert_eq!(stopping.speed, settled, "{goal:?}");
+        for _ in 0..200 {
+            fly(&mut stopping, None);
+        }
+        assert!(stopping.speed < 1e-4, "{goal:?}: {stopping:?}");
+        assert!(
+            stopping.state.velocity.length() <= AT_REST_SPEED,
+            "{goal:?}: {stopping:?}"
+        );
     }
 }
 

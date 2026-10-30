@@ -1478,11 +1478,10 @@ fn approach_brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) 
 /// keeping an owed burst: every goal the autopilot stops flies it. Moving
 /// ([`inertialess::moving`], 0.35 or more on an axis) it brakes, with no
 /// cutoff short of that; otherwise it settles, its velocity × 0.95 a tick,
-/// so it comes to rest from any speed. The settle's +0x48 × 0.95
-/// (@0x8560d-0x8561f) is left to
-/// ship-handling-fidelity-followups phase-2-ai-drags-scale-the-npc-speed:
-/// until then an inertialess ship stops at not moving and keeps its speed,
-/// `adjust_velocity` pulling its cut velocity back to heading × speed. The
+/// so it comes to rest from any speed. The settle cuts the speed along
+/// the heading (+0x48) × 0.95 with it (@0x8560d-0x8561f), so an
+/// inertialess ship, whose velocity follows heading × speed, comes to
+/// rest too. The
 /// sub-goal +0xc8ca = 0 after the settle (@0x85624) isn't modelled: the
 /// high level writes sub 1 again each pass for every stop goal, as this
 /// flies it every tick, so nothing differs.
