@@ -1715,6 +1715,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_grudge_takes_no_player_breaking_up_and_the_steps_go_on() {
+        let govts = govts(0);
+        let npcs = [grudger(), ship(2, ENEMY, 0.0, 50.0)];
+        let picked = |condition| {
+            let around = Surroundings {
+                player: Some(PlayerSide {
+                    condition,
+                    ..player(0.0, -1000.0)
+                }),
+                govts: &govts,
+                system_govt: Some(ME),
+                ..Surroundings::new(&[], &npcs)
+            };
+            select(&npcs[0], None, &around)
+        };
+        assert_eq!(picked(Condition::Intact), Some(P), "intact");
+        assert_eq!(
+            picked(Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            }),
+            Some(n(2)),
+            "breaking up (@0x89ebc-0x89f20): the steps go on"
+        );
+    }
+
     fn hunter() -> Npc {
         let mut hunter = me();
         hunter.mission = Some(crate::traffic::npc::MissionMark {
