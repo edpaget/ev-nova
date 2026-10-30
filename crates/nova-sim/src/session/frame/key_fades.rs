@@ -5,25 +5,25 @@
 //! [`key_fade`](crate::key_fade); these say each fact reaches it.
 
 use super::super::Session;
+use super::super::game_work::PlayerHead;
 use crate::key_fade::{KeyFacts, KeyFades};
-use crate::player_fate::{PlayerCommand, PlayerFate};
+use crate::player_fate::PlayerCommand;
 
 impl Session {
     /// What fades the cursor now ([`KeyFades`]). `handlers` is
     /// [`PlayerCommand::FrameRate`] taken, which is taken wherever a key
-    /// block runs; `_IsDisabled` is any fate but [`PlayerFate::Flying`] on
-    /// that path, as it holds while breaking up.
+    /// block runs. `_IsDisabled` and `_IsDying` are the next pass's
+    /// [`PlayerHead`], as the countdown and the cloak key read them.
     pub(super) fn key_fades(&self) -> KeyFades {
-        let fate = self.player_fate();
-        let dying = matches!(fate, PlayerFate::BreakingUp { .. });
+        let head = PlayerHead::of(self.ship.condition);
         KeyFades::of(KeyFacts {
             handlers: self.takes(PlayerCommand::FrameRate),
-            disabled: fate != PlayerFate::Flying,
+            disabled: head.disabled,
             jump_under_way: self.mode.jump().is_some(),
             secondary: self.secondary().is_some(),
             land: self.takes(PlayerCommand::Land),
             mission_info: self.takes(PlayerCommand::MissionInfo),
-            self_destruct: self.ship.fate.self_destruct.chord_fades(dying),
+            self_destruct: self.ship.fate.self_destruct.chord_fades(head.dying),
             auto_eject: self.ship.auto_eject_fires(&self.pilot, &self.statics),
         })
     }
