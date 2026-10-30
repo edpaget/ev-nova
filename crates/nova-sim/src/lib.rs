@@ -437,6 +437,7 @@ pub use nova_sim_ai::gate;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
+pub mod key_fade;
 pub mod map_borders;
 pub mod map_panel;
 pub mod map_route;

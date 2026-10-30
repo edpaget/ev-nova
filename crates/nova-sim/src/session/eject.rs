@@ -230,16 +230,13 @@ impl Session {
             .condition
             .breaking_up(self.pilot.reserves.armor)
             .unwrap_or(self.ship.condition);
-        let (hulk, timer) = match condition {
-            Condition::Dying { ticks_left, .. } => (condition, Some(ticks_left)),
-            Condition::Disabled => (Condition::Disabled, None),
-            Condition::Intact | Condition::Destroyed => return,
-        };
-        let auto =
-            timer.is_some_and(|timer| auto_eject_armed(timer, self.ship.fit.hull.death_delay));
+        if matches!(condition, Condition::Intact | Condition::Destroyed) {
+            return;
+        }
+        let auto = self.ship.auto_eject_fires(&self.pilot, &self.statics);
         // The pass's move has collapsed any pre-jump of a player disabled
         // or dying, so the collapse's clock is never read here.
-        self.try_eject(auto, hulk, chance);
+        self.try_eject(auto, condition, chance);
     }
 
     /// The escape ship the player can eject into now, if any
@@ -251,13 +248,12 @@ impl Session {
         escape_ship_type(self.statics.arsenal.weapons(), rounds, &self.statics.ships)
     }
 
-    /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`, while
-    /// auto-eject is, or the chord held) and the player can: an escape pod
-    /// or ship, a free ship slot and a record of the class it flies.
-    /// Whether it ejected.
+    /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`,
+    /// [`PlayerShip::auto_eject_fires`], or the chord held) and the player
+    /// can: an escape pod or ship, a free ship slot and a record of the
+    /// class it flies. Whether it ejected.
     fn try_eject(&mut self, auto: bool, hulk: Condition, chance: &mut dyn Chance) -> bool {
-        let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.statics.outfits))
-            || (self.ship.fate.eject_held && self.takes(PlayerCommand::Eject));
+        let armed = auto || (self.ship.fate.eject_held && self.takes(PlayerCommand::Eject));
         if !armed
             || !(has_escape_pod(&self.pilot.outfits, &self.statics.outfits)
                 || self.escape_ship().is_some())
@@ -441,6 +437,20 @@ impl Session {
 }
 
 impl PlayerShip {
+    /// Whether auto-eject fires this pass: the ship breaking up, armour
+    /// gone counting though nothing has settled it yet, with the timer at
+    /// [`auto_eject_armed`], on a ship carrying the outfit
+    /// ([`has_auto_eject`]).
+    pub(super) fn auto_eject_fires(&self, pilot: &Pilot, statics: &Statics) -> bool {
+        let condition = self
+            .condition
+            .breaking_up(pilot.reserves.armor)
+            .unwrap_or(self.condition);
+        matches!(condition, Condition::Dying { ticks_left, .. }
+            if auto_eject_armed(ticks_left, self.fit.hull.death_delay))
+            && has_auto_eject(&pilot.outfits, &statics.outfits)
+    }
+
     /// Holds the eject chord, Command and the eject key down together, or
     /// lets it go: what the next fight tick's eject check reads. The
     /// session takes it only while the player's fate takes

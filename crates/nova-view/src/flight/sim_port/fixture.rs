@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, MarksFrom, Names,
-    PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, KeyFades, MapKey, MarksFrom,
+    Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
@@ -502,6 +502,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         jump_readiness,
         texts_queued,
         gates,
+        key_fades,
         map_key,
         ships,
         drawn,
@@ -562,6 +563,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             Gates::NONE
         } else {
             Gates::EVERY
+        },
+        key_fades: if *key_fades == KeyFades::EVERY {
+            KeyFades::NONE
+        } else {
+            KeyFades::EVERY
         },
         map_key: MapKey {
             system: if map_key.system == other_system {
@@ -2861,6 +2867,7 @@ mod tests {
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
+            key_fades: KeyFades::EVERY.with_unbidden(),
             death_descs: vec![130],
             player_ship_name: Some("Kestrel".to_owned()),
             long_date: "June 23rd, 1177 NC".to_owned(),
@@ -2895,6 +2902,7 @@ mod tests {
                 jump_readiness,
                 texts_queued,
                 gates,
+                key_fades,
                 map_key,
                 ships,
                 drawn,
@@ -2950,6 +2958,7 @@ mod tests {
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);
+            assert_ne!(other.key_fades, *key_fades);
             assert_ne!(other.death_descs, *death_descs);
             assert_ne!(other.player_ship_name, *player_ship_name);
             assert_ne!(other.long_date, *long_date);

@@ -9,6 +9,7 @@ use crate::flight_frame::{FlightFrame, FlightOpening, Gates, MapKey};
 
 mod facts;
 mod hud;
+mod key_fades;
 mod names;
 mod radar;
 mod world;
@@ -39,6 +40,7 @@ impl Session {
             jump_readiness,
             texts_queued,
             gates,
+            key_fades,
             map_key,
             ships,
             drawn,
@@ -77,6 +79,7 @@ impl Session {
         *jump_readiness = self.jump_readiness();
         *texts_queued = self.texts_queued();
         *gates = Gates::from_fn(|command| self.takes(command));
+        *key_fades = self.key_fades();
         *map_key = MapKey {
             system: self.system(),
             explored: self.pilot.explored().collect(),
@@ -249,6 +252,7 @@ pub(super) mod tests {
     }
 
     /// A frame unlike any a test session fills, in every field.
+    #[allow(clippy::too_many_lines)] // a few lines for each of the frame's fields
     pub(super) fn stale() -> FlightFrame {
         FlightFrame {
             nav_mode: NavMode::Hyperspace(Some(SystemId(999))),
@@ -268,6 +272,7 @@ pub(super) mod tests {
             texts_queued: u64::MAX,
             // Only the cloak taken: no state of the player's gives it.
             gates: Gates::from_fn(|command| command == PlayerCommand::Cloak),
+            key_fades: crate::key_fade::KeyFades::EVERY,
             map_key: MapKey {
                 system: SystemId(999),
                 explored: vec![SystemId(997)],
