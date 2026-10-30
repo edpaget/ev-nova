@@ -98,7 +98,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::catalog::{OutfitId, OutfitRecord, ShipId};
+    use crate::catalog::{OutfitId, OutfitRecord, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::{Script, SetOp};
     use crate::outfitter::OutfitFlags;
@@ -106,7 +106,8 @@ mod tests {
     use crate::session::tests::{
         GUN, LAUNCHER, NEW, NameLists, ROCKETS, TANK, mounted, outfitted, shipbuying, stock_weapons,
     };
-    use crate::testkit::{FakePilotCatalog, land_now, outfit};
+    use crate::shipyard::ShipRefusal;
+    use crate::testkit::{FAST, FakePilotCatalog, land_now, outfit, ship};
 
     /// The first ship, which [`stock_weapons`] stocks with two guns.
     const OLD: ShipId = ShipId(128);
@@ -297,6 +298,52 @@ mod tests {
         };
         assert_eq!(carried(Rulebook::default()), 0, "cleared with the array");
         assert_eq!(carried(at_once()), 1, "owned, so carried");
+    }
+
+    /// A class (130, tech 5) whose `Require` needs bit 0x4.
+    const LICENSED: ShipId = ShipId(130);
+
+    /// [`stocked`] with [`LAUNCHER`] contributing bit 0x4 and
+    /// [`LICENSED`] on sale, requiring it.
+    fn licensing() -> FakePilotCatalog {
+        let mut catalog = stocked();
+        for record in &mut catalog.outfits {
+            if record.id == LAUNCHER {
+                record.contribute = 0x4;
+            }
+        }
+        catalog.ship_records.push(ShipRecord {
+            require: 0x4,
+            tech_level: 5,
+            ..ship(LICENSED.0, FAST)
+        });
+        catalog
+    }
+
+    /// Whether `session`'s shipyard lists [`LICENSED`] as buyable.
+    fn licensed(session: &mut Session) -> bool {
+        session
+            .shipyard(&mut NeverFires)
+            .expect("a shipyard")
+            .row(LICENSED)
+            .is_some_and(|row| row.facts.buyable)
+    }
+
+    #[test]
+    fn by_the_engine_require_leaves_out_a_held_stock_outfits_contribute_bits() {
+        let catalog = licensing();
+        let mut session = bought(&catalog, Rulebook::default());
+        assert!(!licensed(&mut session), "held in the array");
+        assert_eq!(
+            session.buy_ship(LICENSED, "Kestrel", &mut NeverFires).err(),
+            Some(ShipRefusal::NotForSale),
+            "refused"
+        );
+        session.open_outfitter();
+        session.close_outfitter();
+        assert!(licensed(&mut session), "folded");
+        let mut session = bought(&catalog, at_once());
+        assert!(licensed(&mut session), "owned at once");
     }
 
     #[test]
