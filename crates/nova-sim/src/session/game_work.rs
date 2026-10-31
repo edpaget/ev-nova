@@ -768,6 +768,7 @@ mod tests {
     use crate::session::tests::{FIRE, armed, blaster, facing_an_npc};
     use crate::story::{Fate, StoryEvent};
     use crate::testkit::FakePilotCatalog;
+    use crate::traffic::autopilot::Outcome;
     use crate::traffic::npc::{Mode, Npc, NpcId};
 
     /// What a decision saw of an NPC: whether it was provoked, the ship it
@@ -1294,5 +1295,47 @@ mod tests {
         let (lead, escort) = fleet_after_a_pass(earlier);
         assert_eq!(slot(&escort), Some((2, 2)));
         assert_ne!(escort.state.velocity, lead.state.velocity);
+    }
+
+    /// Every NPC keeps its goal, each decision recording the ships gone
+    /// that it read.
+    #[derive(Debug, Default)]
+    struct ReadingGone(RefCell<Vec<NpcId>>);
+
+    impl Behaviour for ReadingGone {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            let gone = around.gone.iter().map(|gone| gone.ship.id);
+            self.0.borrow_mut().extend(gone);
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_ship_gone_is_read_by_the_next_passes_think_and_forgotten_as_that_think_closes() {
+        let catalog = armed();
+        let mut session = warmed(&catalog);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.goal = Goal::Hold;
+        // The warm-up pass landed it on planet 128; neither ship waits.
+        npc.ai_wait = 0;
+        let mut stays = npc.clone();
+        stays.state.position.x += 250.0;
+        npc.begin_own_jump();
+        let leaver = npc.id;
+        session.space.traffic.add_npc(stays);
+        let behaviour = ReadingGone::default();
+        let reads = |session: &mut Session| {
+            pass(session, &catalog, Controls::default(), &behaviour);
+            behaviour.0.take()
+        };
+        let mut passes = 0;
+        while session.departed().is_empty() {
+            assert_eq!(reads(&mut session), [], "pass {passes}: none gone yet");
+            passes += 1;
+            assert!(passes < 1000, "it never jumped out");
+        }
+        assert_eq!(session.departed(), [(leaver, Outcome::JumpedOut)]);
+        assert_eq!(reads(&mut session), [leaver], "the next pass's think");
+        assert_eq!(reads(&mut session), [], "forgotten as that think closed");
     }
 }
