@@ -623,18 +623,22 @@ pub struct Npc {
     /// a word exists, which a reader takes as a never-used slot's 0. Never
     /// saved.
     pub slot_place: Option<Vec2>,
-    /// Its order word, the original's +0xc90a: -1 at every spawn, launch
-    /// and placement ([`OrderWord::NONE`]), then, under an NPC leader, the
-    /// order that leader last issued it
+    /// Its order word, the original's +0xc90a: -1 at every new spawn and
+    /// launch ([`OrderWord::NONE`]), then, under an NPC leader, the order
+    /// that leader last issued it
     /// ([`escort_orders`](crate::ai::escort_orders), every eighth frame),
-    /// which [`FleetEscortAi`](crate::ai::FleetEscortAi) flies. A ship the
-    /// player leads writes its own at each think
+    /// which [`FleetEscortAi`](crate::ai::FleetEscortAi) flies. A launch by
+    /// the other reading of
+    /// [`RuleKey::FighterLaunch`](crate::RuleKey::FighterLaunch) at the
+    /// player's target writes Attack's word instead (`nova_sim`'s `fighters`
+    /// module). A ship the player leads writes its own at each think
     /// ([`think_word`](crate::ai::escort::think_word)), and a command
     /// compares against it and writes it (`nova_sim`'s `command_word`
-    /// module), so it lasts through an entry, in the session. A fighter of
-    /// the player's escort writes its own each think too, and a stray beam
-    /// of `ExitType` 6 steps any NPC's (`nova_sim`'s `stray_words` module).
-    /// Never saved.
+    /// module). A fighter of the player's escort writes its own each think
+    /// too, and a stray beam of `ExitType` 6 steps any NPC's (`nova_sim`'s
+    /// `stray_words` module). A fleet's placement on an entry keeps the word
+    /// the ship held, or its record's order with no ship (`nova_sim`'s
+    /// `escorts` module). Never saved.
     pub order_word: OrderWord,
     /// Whether its leader issued it an order, the +0xc4 that
     /// `_AIIssueEscortOrders` sets on each ship it orders (@0x89b71). No
