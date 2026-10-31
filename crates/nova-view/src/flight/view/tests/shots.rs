@@ -268,15 +268,21 @@ fn a_translucent_shot_with_a_falloff_is_opaque_before_its_window_by_the_engine_o
     assert_eq!(draws[0], Some((crate::draw::lights_tint(32), true)));
 }
 
-/// Each frame's colorize of the blaster's shot over `ticks` ticks from
-/// the tick it is fired, as [`one_shot_draws`] draws it, none when it is
-/// drawn plainly.
-fn one_shot_colorize(view: &mut Faked, ticks: u32) -> Vec<Option<(Color, Colorize)>> {
+/// Each frame's draw of the blaster's shot over `ticks` ticks from the
+/// tick it is fired: its tint and its colorize, none when it is drawn
+/// plainly, or no draw at all.
+fn one_shot_colorize(view: &mut Faked, ticks: u32) -> Vec<Option<(Color, Option<Colorize>)>> {
     (0..ticks)
         .map(|tick| {
             pass_with(view, vec![blaster_shot(tick)], false, Vec::new());
             let list = super::faked_world::world_list(view);
             list.iter().find_map(|command| match *command {
+                DrawCommand::Sprite {
+                    image, tint, blend, ..
+                } if image.id == 3500 => {
+                    assert_eq!(blend, crate::draw::Blend::Normal);
+                    Some((tint, None))
+                }
                 DrawCommand::Colorized {
                     image,
                     tint,
@@ -285,7 +291,7 @@ fn one_shot_colorize(view: &mut Faked, ticks: u32) -> Vec<Option<(Color, Coloriz
                     ..
                 } if image.id == 3500 => {
                     assert_eq!(blend, crate::draw::Blend::Normal);
-                    Some((tint, colorize))
+                    Some((tint, Some(colorize)))
                 }
                 _ => None,
             })
@@ -305,9 +311,13 @@ fn a_shot_far_from_the_player_in_a_murky_system_is_mixed_toward_its_colour() {
     assert!(level > 0, "{shot:?}");
     assert_eq!(
         draws[7],
-        Some((Color::WHITE, Colorize::toward_pixel(level, 0x1081)))
+        Some((Color::WHITE, Some(Colorize::toward_pixel(level, 0x1081))))
     );
-    assert_eq!(draws[0], None, "beside the player, a plain sprite");
+    assert_eq!(
+        draws[0],
+        Some((Color::WHITE, None)),
+        "beside the player, a plain sprite"
+    );
 }
 
 /// The puffs drawn from smoke set 1's `cicn`s.
