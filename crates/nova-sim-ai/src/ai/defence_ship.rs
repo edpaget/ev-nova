@@ -135,7 +135,7 @@ pub fn think(npc: &Npc, stellar: StellarId, around: &Surroundings) -> Option<Thi
     {
         if let Some(ship) = best {
             target = Some(ship);
-            goal = with_quarry(goal, ship);
+            goal = goal.with_quarry(ship);
         } else {
             target = None;
             goal = Goal::Idle;
@@ -150,18 +150,6 @@ fn players_side(ship: ShipRef, around: &Surroundings) -> bool {
     match ship {
         ShipRef::Player => true,
         ShipRef::Npc(id) => around.npc(id).is_some_and(Npc::escorts_player),
-    }
-}
-
-/// `goal` with its ship `ship`, as a new target leaves the goal number
-/// as it was: a goal of no ship is kept.
-fn with_quarry(goal: Goal, ship: ShipRef) -> Goal {
-    match goal {
-        Goal::Attack(_) => Goal::Attack(ship),
-        Goal::Snipe(_) => Goal::Snipe(ship),
-        Goal::Flee(_) => Goal::Flee(ship),
-        Goal::Inspect(_) => Goal::Inspect(ship),
-        other => other,
     }
 }
 

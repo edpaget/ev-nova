@@ -426,6 +426,23 @@ impl Goal {
         }
     }
 
+    /// This goal with `ship` as its ship, as a new target (+0x70) leaves
+    /// the goal number as it was: an attack, snipe, flight, inspection or
+    /// plunder moves to it, and a goal of no such ship is kept. The
+    /// original's goals hold no ship, so whichever ship +0x70 names is the
+    /// one they are about.
+    #[must_use]
+    pub fn with_quarry(self, ship: ShipRef) -> Self {
+        match self {
+            Self::Attack(_) => Self::Attack(ship),
+            Self::Snipe(_) => Self::Snipe(ship),
+            Self::Flee(_) => Self::Flee(ship),
+            Self::Inspect(_) => Self::Inspect(ship),
+            Self::Plunder { hopeless, .. } => Self::Plunder { ship, hopeless },
+            other => other,
+        }
+    }
+
     /// The ship it plunders, `_AIShipIsPlundering` (@0x89841, goal 0xd),
     /// if any.
     #[must_use]
@@ -2016,6 +2033,39 @@ mod tests {
         }
         for other in [Goal::Attack(n), Goal::Snipe(n), Goal::Flee(n), Goal::Idle] {
             assert_eq!(other.plundering(), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn with_quarry_moves_each_fight_goal_and_no_other() {
+        let (old, new) = (ShipRef::Npc(NpcId(3)), ShipRef::Npc(NpcId(4)));
+        for (goal, moved) in [
+            (Goal::Attack(old), Goal::Attack(new)),
+            (Goal::Snipe(old), Goal::Snipe(new)),
+            (Goal::Flee(old), Goal::Flee(new)),
+            (Goal::Inspect(old), Goal::Inspect(new)),
+            (
+                Goal::Plunder {
+                    ship: old,
+                    hopeless: true,
+                },
+                Goal::Plunder {
+                    ship: new,
+                    hopeless: true,
+                },
+            ),
+        ] {
+            assert_eq!(goal.with_quarry(new), moved, "{goal:?}");
+        }
+        for kept in [
+            Goal::Idle,
+            Goal::Wait,
+            Goal::JumpOut,
+            Goal::Dock(old),
+            Goal::Assist(Help::Repair),
+            Goal::Formation { guard: Some(old) },
+        ] {
+            assert_eq!(kept.with_quarry(new), kept, "a goal of no quarry");
         }
     }
 
