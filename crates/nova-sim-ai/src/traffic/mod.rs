@@ -916,9 +916,9 @@ pub struct Traffic {
     /// until a ship takes the berth or the system is left ([`vacated`]).
     vacated: VacatedBerths,
     /// The frame's work on the message line, in slot order, since it was
-    /// last taken ([`Traffic::take_on_line`]): the calls the decisions
-    /// made, the scans of the player, what the pirates and repairers did
-    /// and the refuel notes.
+    /// last taken ([`Traffic::take_on_line`]): the attack quotes the thinks
+    /// raised, the calls the decisions made, the scans of the player, what
+    /// the pirates and repairers did and the refuel notes.
     on_line: LineQueue,
     /// The `STR#`s of the arrival quotes of the fleets added since the
     /// quotes were last taken, in order ([`NewShip::quote`]).
@@ -2557,7 +2557,8 @@ impl Traffic {
     }
 
     /// The work on the message line queued since this was last called, in
-    /// slot order ([`on_line`]): each think's calls ([`Decision::comm_call`],
+    /// slot order ([`on_line`]): each think's attack quote
+    /// ([`OnLine::AttackQuote`]); then its calls ([`Decision::comm_call`],
     /// then its call for reinforcements, [`Decision::calls_reinforcements`],
     /// each with the odds against its caller its think read, [`Npc::odds`],
     /// before the tick's odds pass); then, when the NPC stopped inspecting
