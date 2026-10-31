@@ -171,7 +171,7 @@ impl Session {
         }
         for &id in &killed {
             match rule {
-                DeadlyStellarKill::Vanishes => self.space.traffic.remove(id),
+                DeadlyStellarKill::Vanishes => self.space.traffic.remove_killed(id),
                 DeadlyStellarKill::Destroyed => {
                     if let Some(npc) = self.space.npc_mut(id) {
                         npc.condition = Condition::Destroyed;
@@ -304,6 +304,71 @@ pub(super) mod tests {
         };
         npc_mut(&mut session).person = Some(NpcPerson::of(&record, false));
         session
+    }
+
+    /// Keeps every goal and target, noting each ship that reads a gone
+    /// ship's slot in its think.
+    #[derive(Debug, Default)]
+    struct ReadingGone(std::cell::RefCell<Vec<NpcId>>);
+
+    impl crate::ai::Behaviour for ReadingGone {
+        fn decide(
+            &self,
+            npc: &Npc,
+            around: &crate::ai::Surroundings,
+            _chance: &mut dyn crate::chance::Chance,
+        ) -> crate::ai::Goal {
+            if around.held_gone(npc).is_some() {
+                self.0.borrow_mut().push(npc.id);
+            }
+            npc.goal
+        }
+
+        fn target(
+            &self,
+            npc: &Npc,
+            _around: &crate::ai::Surroundings,
+        ) -> Option<crate::combat::ShipRef> {
+            npc.target
+        }
+    }
+
+    #[test]
+    fn a_ship_a_stellar_killed_is_held_by_every_slot_until_its_next_step() {
+        // `_HandleDeadlyStellars` (@0x4450e) frees the slot after the ship
+        // loop (@0x39dac), so every other slot reads it in the next pass's
+        // think, and lets go at that pass's `_HandleShip` (@0x33865).
+        let catalog = armed();
+        let mut session = among(&catalog, &[on_the_npc()], 1, Rulebook::default());
+        npc_mut(&mut session).berth = 3;
+        let killed = crate::combat::ShipRef::Npc(session.npcs()[0].id);
+        let mut holding = |berth| {
+            let mut ship = crate::testkit::npc(0, crate::stats::ShipStats::default());
+            ship.state.position = Vec2::new(900.0, 0.0);
+            ship.target = Some(killed);
+            session.space.traffic.add_npc_at(ship, berth)
+        };
+        let (earlier, later) = (holding(2), holding(5));
+        let reading = ReadingGone::default();
+        let pass = |session: &mut Session| {
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &reading,
+                Rules::default(),
+                &mut NeverFires,
+            );
+        };
+        let target = |session: &Session, id| session.space.npc(id).expect("there").target;
+        pass(&mut session);
+        assert_eq!(session.npcs().len(), 2, "it vanished");
+        assert_eq!(reading.0.borrow().as_slice(), []);
+        assert_eq!(target(&session, earlier), Some(killed));
+        assert_eq!(target(&session, later), Some(killed));
+        pass(&mut session);
+        assert_eq!(reading.0.borrow().as_slice(), [earlier, later]);
+        assert_eq!(target(&session, earlier), None);
+        assert_eq!(target(&session, later), None);
     }
 
     #[test]

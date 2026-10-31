@@ -43,8 +43,9 @@
 //!    life or each other shot's move and lock, landing at its visit,
 //!    their hits settled and answered.
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
-//!    `_HandleShip` (@0x44483), its flight (the traffic's fly half, one
-//!    NPC at a time), reloads, regeneration, fire and death timer's tick,
+//!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
+//!    inactive, its flight (the traffic's fly half, one NPC at a time),
+//!    reloads, regeneration, fire and death timer's tick,
 //!    a dying NPC's escape pods and escape-ship roll (see the
 //!    `npc_escape` module), then its display (@0x444ad), which starts its
 //!    breakup's countdown or explodes it, its shockwave reaching the

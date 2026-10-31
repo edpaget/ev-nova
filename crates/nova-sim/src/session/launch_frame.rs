@@ -427,6 +427,36 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_launched_into_a_wrecks_slot_takes_the_earlier_slots_aim() {
+        // A launch takes the first free slot in the AI loop
+        // (@0x3c8c6-0x3c8e9) and leaves every other ship's +0x70, so the
+        // earlier slot's test finds its target active again: the fighter,
+        // friend or not.
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 5);
+        let plain = || crate::testkit::npc(0, crate::stats::ShipStats::default());
+        let wreck = session.space.traffic.add_npc_at(plain(), 2);
+        let aim = ShipRef::Npc(wreck);
+        let mut holding = plain();
+        holding.goal = Goal::Attack(aim);
+        holding.target = Some(aim);
+        let holding = session.space.traffic.add_npc_at(holding, 1);
+        session.space.traffic.remove_destroyed(wreck);
+        let script = Scripted {
+            carrier,
+            twice: false,
+            defenders: Vec::new(),
+            fighter: Trigger::default(),
+        };
+        game_pass(&mut session, &catalog, &script);
+        let viper = vipers(&session).remove(0);
+        assert_eq!(viper.berth, 2, "the wreck's slot");
+        let npc = session.space.npc(holding).expect("there");
+        assert_eq!(npc.target, Some(ShipRef::Npc(viper.id)));
+        assert_eq!(npc.goal, Goal::Attack(ShipRef::Npc(viper.id)));
+    }
+
+    #[test]
     fn a_fighter_launched_below_its_carrier_fires_nothing_and_has_no_pursuit_on_its_launch_tick() {
         // `_GenericRandomShipSpawn` clears its fire flag (@0x3cb60).
         let (viper, fired) = picks(RuleSource::Engine, 5);

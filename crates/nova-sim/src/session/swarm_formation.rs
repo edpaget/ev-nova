@@ -366,21 +366,28 @@ mod tests {
         assert_eq!(slots(&session), [(2, 5), (4, 5), (5, 5)]);
     }
 
-    /// Each escort but the one at berth 3 attacks [`QUARRY`].
+    /// Each escort but the one at berth 3 attacks its ship, which keeps
+    /// out of it.
     #[derive(Debug)]
-    struct TwoAttack;
+    struct TwoAttack(ShipRef);
+
+    impl TwoAttack {
+        fn attacks(&self, npc: &Npc) -> bool {
+            npc.berth != 3 && ShipRef::Npc(npc.id) != self.0
+        }
+    }
 
     impl Behaviour for TwoAttack {
         fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
-            if npc.berth == 3 {
-                Goal::Formation { guard: None }
+            if self.attacks(npc) {
+                Goal::Attack(self.0)
             } else {
-                Goal::Attack(QUARRY)
+                Goal::Formation { guard: None }
             }
         }
 
         fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
-            (npc.berth != 3).then_some(QUARRY)
+            self.attacks(npc).then_some(self.0)
         }
     }
 
@@ -397,6 +404,9 @@ mod tests {
                 npc.hull.swarms = true;
             }
         }
+        // A ship in the system, so no slot test lets go of it.
+        let quarry = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        let two_attack = TwoAttack(ShipRef::Npc(session.space.traffic.add_npc_at(quarry, 20)));
         // The ticks take the attacks and the targets, the pass names berth
         // 1 for berth 2 alone, and each tick forms by the last's before its
         // AI runs, as `_DoPlayGameWork` marks the parents before
@@ -406,7 +416,7 @@ mod tests {
                 &mut session,
                 &catalog,
                 Controls::default(),
-                &TwoAttack,
+                &two_attack,
                 Rules::default(),
                 &mut NeverFires,
             );

@@ -278,13 +278,19 @@ mod tests {
                 dying(&mut fleet.session, timer);
                 tick(&mut fleet.session, &catalog);
                 let session = &fleet.session;
+                // The lost parent keeps its target, but with no death delay
+                // the armour's end explodes the player at its display
+                // (@0x2dee0), before each slot's `_HandleShip`, which lets
+                // go (@0x33865-0x33888).
+                assert_eq!(session.ship.condition.active(), timer, "{name}");
+                let kept = timer.then_some(ShipRef::Player);
                 for id in [fleet.escort, fleet.fighter] {
                     let freed = session.space.npc(id).expect("here");
                     assert!(!freed.escorts_player(), "{name} {timer}: {id:?}");
                     assert_eq!(freed.ai_type, AiType::Warship, "{name} {timer}");
                     assert_eq!(freed.goal, Goal::Idle, "{name} {timer}");
                     assert_eq!(freed.carrier, None, "{name} {timer}");
-                    assert_eq!(freed.target, Some(ShipRef::Player), "{name} {timer}");
+                    assert_eq!(freed.target, kept, "{name} {timer}");
                 }
                 let fighter = session.space.npc(fleet.fighter).expect("here");
                 assert_eq!(
