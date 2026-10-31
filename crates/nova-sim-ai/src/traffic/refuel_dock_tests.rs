@@ -239,6 +239,31 @@ fn two_refuellers_read_the_fuel_in_berth_order() {
 }
 
 #[test]
+fn two_refuellers_in_one_run_read_the_fuel_in_berth_order() {
+    // One run of every slot, as the other reading of `LaunchFrameAi` thinks
+    // them (`nova_sim::Session::dispatch_npcs`): its world holds the tank
+    // as the run began, so the lower's unit reaches the higher in the run.
+    let mut traffic = traffic_of(vec![
+        refueller(2, 5, (0.0, 0.0), (0.0, 0.0), 0.0),
+        refueller(3, 4, (10.0, 0.0), (0.0, 0.0), 0.0),
+    ]);
+    let recording = Recording::default();
+    let tank = 100.0;
+    let world = world(tank, 300.0, RuleSource::Engine);
+    let mut chance = Scripted::default();
+    traffic.open_think(&recording, world, &[], &mut chance);
+    traffic.think_run(&recording, world, |_| true, &mut chance);
+    traffic.close_think();
+    assert_eq!(tank + traffic.take_fuel_given(), 101.0);
+    assert_eq!(ship(&traffic, NpcId(3)).goal, Goal::Assist(Help::Refuel));
+    assert_eq!(ship(&traffic, NpcId(2)).goal, Goal::Idle, "it read 101");
+    assert_eq!(
+        traffic.take_on_line(),
+        [OnLine::RefuelDone(NpcId(2), ShipId(128))]
+    );
+}
+
+#[test]
 fn a_tick_reads_only_the_fuel_given_in_that_tick_on_top_of_its_tank() {
     // The world holds the tank as the tick began, and a tally not yet taken
     // is already in a later world's tank: 99 then 100, both ticks.
