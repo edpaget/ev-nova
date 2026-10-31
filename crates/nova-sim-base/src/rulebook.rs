@@ -303,7 +303,7 @@
 //! | [`EscortOrderReach`](RuleKey::EscortOrderReach) | `escort_order_reach` | a fleet leader's orders read whether the target attacking it reaches it, and whether it reaches the target, both by `wëap` 129's reach (the stock Medium Blaster's 382), as `_AIIssueEscortOrders` passes `_AIInGunRange` weapon index 1 for both (@0x8991c, @0x89945): the two always agree, so a target that outranges its leader never presses the fleet (see `nova_sim_ai::ai::escort_orders`) | each ship reads its own stock weapons' reach, as every other caller passes weapon -1 (`_EscortAI` @0x83edb), so a target that reaches its leader from beyond the leader's own reach sends the fighters and medium ships in\* |
 //! | [`NpcFormation`](RuleKey::NpcFormation) | `npc_formation` | every ship whose formation parent is an NPC (its leader, or its swarm leader while it attacks with a target) holds a slot in that NPC's formation each frame, 2, 3, … by its berth, spaced by the widest sprite (`_DoPlayGameWork` @0x4415c-0x441de, `_AICalcFormationPositions` @0x85040-0x851d9); a fleet's escort flies goal 0xa's formation flight on its slot (see `formation_flight`) with its lead's sight, copying its lead's glow in close formation, and a fleet that jumps in arrives on its slots, one out of a gate excepted (`_HyperSpawnFleet` @0x425e4-0x42602; see `nova_sim_ai::traffic::fleet_formation`) | the port's earlier follow: a fleet's escort follows within 100 pixels of its lead, never in close formation, and a fleet arrives scattered ±150 about its lead\* |
 //! | [`SuccessorRepairer`](RuleKey::SuccessorRepairer) | `successor_repairer` | a fleet's new lead of a government other than its lost lead's (or independent) that was repairing the player attacks it, as `_AICheckParentExists` attacks a held target in any goal but inspect or refuel (@0x89429-0x8944f; see `nova_sim_ai::traffic::succession`) | it idles, as a refueller does\* |
-//! | [`HeldGateBurst`](RuleKey::HeldGateBurst) | `held_gate_burst` | a ship held at its gate still owes its emerge's burst (30, or 15 when the player leads it) once its hold ends, as the hold leaves the burst word +0x34 negative (@0x895aa-0x895bd, @0x851e9-0x8520d); the first thrust that writes +0x34 drops it, and under the swarm's thrust (sub 0x12) or the brakes of sub 1 and sub 0xe it bursts out along its heading, slowing by that thrust each frame, until it is down to its cap, where `_AIMakeShipStopJumping` sets goal 0 (@0x82e77-0x82eba) and a ship with no leader waits Rand(30) + 30 (`_HandleShip` @0x34bc0-0x34d8b; see `nova_sim_ai::traffic::held_burst`); a ship whose glide in or gate burst the loss of its lead cuts short owes the rest of it the same way, as `_AICheckParentExists`'s -1.0 over the glide's -999.0 and its sub over sub 0xa leave +0x34 negative (@0x8937c, @0x894ec, @0x8fcf5; see `nova_sim_ai::traffic::succession`) | it flies its goal from its hold, or from its glide or burst cut short, owing no burst\* |
+//! | [`HeldGateBurst`](RuleKey::HeldGateBurst) | `held_gate_burst` | a ship held at its gate still owes its emerge's burst (30, or 15 when the player leads it) once its hold ends, as the hold leaves the burst word +0x34 negative (@0x895aa-0x895bd, @0x851e9-0x8520d); the first thrust that writes +0x34 drops it, and under the swarm's thrust (sub 0x12) or the brakes of sub 1 and sub 0xe it bursts out along its heading, slowing by that thrust each frame, until it is down to its cap, where `_AIMakeShipStopJumping` sets goal 0 (@0x82e77-0x82eba) and a ship with no leader waits Rand(30) + 30 (`_HandleShip` @0x34bc0-0x34d8b; see `nova_sim_ai::traffic::held_burst`); a ship whose glide in or gate burst the loss of its lead or the player's jump cuts short owes the rest of it the same way, as `_AICheckParentExists`'s -1.0 over the glide's -999.0 and its sub over sub 0xa, or `_MakeEscortsHyperWithParent`'s +0x50 and goal 0xb's sub 0xd, leave +0x34 negative (@0x8937c, @0x894ec, @0x8fcf5, @0x3fd9a-0x3fd9e; see `nova_sim_ai::traffic::succession`); and a follower owes 1.0 from sub 0xd's stage (@0x85c4c-0x85c53), which it keeps through a jump it gives up | it flies its goal from its hold, or from its glide or burst cut short, owing no burst, and sub 0xd's stage owes it none\* |
 //! | [`PlanetBlasts`](RuleKey::PlanetBlasts) | `planet_blasts` | an expiry's or an asteroid hit's blast from a planet-type weapon (`Flags2` 0x0400) reaches no ship, and neither reaches a planet-type ship (`shïp` `Flags` 0x0400), while a shot's on-hit blast reaches every ship (`_HandleShot` @0x35fb9, @0x3602e; `_HandleAsteroidHit` @0x36734, @0x367a8; `_HandleShipHit` @0x36d4b-0x36efb; see `nova_sim::combat::planet_type`) | every blast reaches only the ships whose planet type matches its weapon's: "can only hit planet-type ships or destroyable stellars" |
 //! | [`BeamPlanetFlag`](RuleKey::BeamPlanetFlag) | `beam_planet_flag` | a beam is planet-type by its weapon's `Flags` 0x0400 (the "big smoke" bit), not `Flags2`: one without it never hits a planet-type ship, and one with it hits only planet-type ships (`_HandleBeams` @0x30d34-0x30d82, `_LoadObjectData` @0x793ca-0x793ce; see `nova_sim::combat::planet_type`) | by its `Flags2` 0x0400, the planet-type bit, as a shot is |
 //! | [`BeamStellars`](RuleKey::BeamStellars) | `beam_stellars` | a beam never hits a stellar: `_HandleBeams` (@0x30295-0x31e1f) reads no stellar (see `nova_sim::combat::beam_stellar`) | a planet-type beam (`Flags2` 0x0400) is stopped by a destroyable stellar nearer along it than the ship it hits, and takes its `MassDmg` + `EnergyDmg` a tick off its strength: "can only hit planet-type ships or destroyable stellars" |
@@ -3996,9 +3996,10 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says.
     SuccessorRepairer => "successor_repairer",
     /// Whether a ship held at its gate (the player having hit it there)
-    /// still owes the burst its emerge set up once its hold ends, and
-    /// whether a ship whose glide in or gate burst the loss of its lead cuts
-    /// short owes the rest of it. By the
+    /// still owes the burst its emerge set up once its hold ends, whether a
+    /// ship whose glide in or gate burst the loss of its lead or the
+    /// player's jump cuts short owes the rest of it, and whether a follower
+    /// owes the 1.0 of sub 0xd's stage. By the
     /// engine, as the original: the hold leaves the burst word +0x34 at
     /// the emerge's -30.0 (-15.0 when the player leads it, @0x895aa-0x895bd),
     /// as nothing writes it while +0x4c runs (`_LowLevelAIHandler`
@@ -4014,11 +4015,15 @@ rule_keys! {
     /// ship owes the rest of it: `_AICheckParentExists`'s -1.0 over the
     /// glide's -999.0 (@0x8937c, @0x894ec) ends the glide path (@0x8fcf5),
     /// and the sub it writes ends sub 0xa (see
-    /// `nova_sim_ai::traffic::succession`). By the other reading neither
-    /// owes any: a held ship flies its goal from its hold, as the port's
-    /// earlier reading had it, and a cut-short one from where it was cut
-    /// short: a stopping ship fired backwards at 30 pixels a tick reads as
-    /// a quirk. The Bible says nothing of it,
+    /// `nova_sim_ai::traffic::succession`), or
+    /// `_MakeEscortsHyperWithParent`'s copy of the player's +0x50 does
+    /// (@0x3fd9a-0x3fd9e) and goal 0xb's sub 0xd. Sub 0xd's stage writes
+    /// +0x34 = -1.0 over any word (@0x85c4c-0x85c53), which a jump given up
+    /// keeps: its next such thrust bursts at 1.0 and ends at once. By the
+    /// other reading none owes any: a held ship flies its goal from its
+    /// hold, as the port's earlier reading had it, and a cut-short one from
+    /// where it was cut short: a stopping ship fired backwards at 30 pixels
+    /// a tick reads as a quirk. The Bible says nothing of it,
     /// so the other reading is the port's earlier reading, not anything
     /// the Bible says.
     HeldGateBurst => "held_gate_burst",
