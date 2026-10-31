@@ -718,6 +718,8 @@ mod tests {
     fn an_arrival_in_a_wrecks_slot_takes_the_earlier_slots_aim() {
         // `_EnterMoreShips` (@0x44237) runs before the thinks and spawns
         // into the first free slot, leaving every other ship's +0x70.
+        // `place` stands for that spawn, across the session's passes; the
+        // traffic's `gone` tests run the arrival itself.
         let catalog = armed();
         let mut session = empty(&catalog);
         let gone = wreck(&mut session, 3, WRECKED);

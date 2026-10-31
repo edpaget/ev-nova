@@ -439,14 +439,15 @@ mod tests {
         use super::*;
         use crate::ai::fixture::{PIRATES, TRADERS, player, ship};
         use crate::ai::{CommCall, Goal, NovaAi};
-        use crate::catalog::SystemId;
+        use crate::catalog::{DudeId, GovtId, SystemId};
         use crate::chance::NeverFires;
         use crate::combat::hull::Condition;
         use crate::traffic::fixture::calls_on_line;
         use crate::traffic::npc::{AiType, Mode};
+        use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable};
         use crate::traffic::{FlyHalf, LeftShip, Traffic, World};
-        use nova_sim_base::fixture::Draws;
-        use std::collections::BTreeSet;
+        use nova_sim_base::fixture::{Draws, FAST};
+        use std::collections::{BTreeMap, BTreeSet};
 
         /// A brave trader at the centre, in slot `trader_berth`, provoked
         /// by a warship in slot `attacker_berth` at (`x`, `y`) and fleeing
@@ -856,6 +857,57 @@ mod tests {
                 assert_eq!(after.goal, goal.with_quarry(ShipRef::Npc(new)));
                 assert_eq!(after.provoked, 10.0, "{goal:?}");
             }
+        }
+
+        /// A system of `5` ships on average, all of düde 128's ship 200.
+        fn arriving() -> SpawnTable {
+            SpawnTable {
+                avg_ships: 5,
+                dudes: vec![(DudeId(128), 100)],
+                dude_records: BTreeMap::from([(
+                    DudeId(128),
+                    SpawnDude {
+                        ai_type: 1,
+                        govt: Some(GovtId(130)),
+                        ships: vec![(ShipId(200), 1)],
+                        booty: 0,
+                        info_types: 0,
+                    },
+                )]),
+                ships: BTreeMap::from([(
+                    ShipId(200),
+                    ShipKind {
+                        stats: ShipStats::new(FAST, &[]),
+                        ..ShipKind::default()
+                    },
+                )]),
+                ..SpawnTable::default()
+            }
+        }
+
+        #[test]
+        fn an_arrival_in_a_freed_slot_takes_the_aim_of_a_ship_holding_it() {
+            // `_EnterMoreShips` (@0x44237) spawns into the first free slot
+            // before the thinks, leaving every other ship's +0x70
+            // (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b).
+            let mut traffic = Traffic::new();
+            traffic.table = arriving();
+            let wreck = in_slot(&mut traffic, 2);
+            let holder = aiming_at(&mut traffic, 1, ShipRef::Npc(wreck));
+            traffic.remove_destroyed(wreck);
+            // The arrival rolled, then düde 128's ship 200.
+            traffic.enter_more_ships(World::new(&[]), &mut Draws::of(&[0, 6, 6, 0, 0, 90]));
+            let arrival = traffic
+                .npcs()
+                .iter()
+                .find(|npc| npc.berth == 2)
+                .expect("it takes the freed slot")
+                .id;
+            assert_ne!(arrival, wreck);
+            let new = ShipRef::Npc(arrival);
+            let after = trader_of(&traffic, holder);
+            assert_eq!(after.target, Some(new));
+            assert_eq!(after.goal, Goal::Attack(new));
         }
 
         #[test]
