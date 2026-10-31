@@ -278,9 +278,13 @@ fn a_loaded_fighter_with_no_saved_variant_takes_its_berths_word() {
 }
 
 #[test]
-fn a_loaded_hired_escort_speaks_its_berths_word() {
+fn a_loaded_hired_escort_speaks_its_berths_word_not_its_records() {
+    let hired = Escort {
+        voice: Some(VoiceVariant::Even),
+        ..escort(MEDIUM)
+    };
     assert_eq!(
-        loaded_voice(vec![escort(MEDIUM)], VoiceVariant::Odd),
+        loaded_voice(vec![hired], VoiceVariant::Odd),
         Some(VoiceVariant::Odd)
     );
 }

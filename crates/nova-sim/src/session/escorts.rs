@@ -195,10 +195,10 @@ pub(super) struct KeptEscort {
     /// module).
     pub(super) afterburner: Option<bool>,
     /// Its voice's variant ([`Npc::voice`]), which `_RespawnEscort` never
-    /// writes (+0xc922, @0x3d4b8-0x3d62c). None with no NPC, when it holds
-    /// its record's or else its berth's word, or for an NPC left unset by
-    /// [`RuleKey::ReusedSlotVoice`]'s other reading (see the `voices`
-    /// module).
+    /// writes (+0xc922, @0x3d4b8-0x3d62c). None with no NPC, when a carried
+    /// fighter holds its record's and any other its berth's word, or for
+    /// an NPC left unset by [`RuleKey::ReusedSlotVoice`]'s other reading
+    /// (see the `voices` module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
     /// Its order word ([`Npc::order_word`]), which `_RespawnEscort` never
     /// writes (+0xc90a, @0x3d4b8-0x3d62c); none with no NPC, and it holds
@@ -312,9 +312,9 @@ impl Session {
                     }
                 }
                 // The record's is a loaded fighter's (`_LoadPilotData`
-                // @0x75b65-0x75b85); with neither, the ship holds what its
-                // berth seeded it.
-                if let Some(variant) = kept.voice.or(self.pilot.escorts[index].voice) {
+                // @0x75b65-0x75b85), never a hired escort's; with neither,
+                // the ship holds what its berth seeded it.
+                if let Some(variant) = kept.voice.or(self.pilot.escorts[index].saved_voice()) {
                     self.space.traffic.set_voice(id, variant);
                 }
                 match kept.afterburner {

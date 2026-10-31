@@ -47,7 +47,8 @@ pub struct Escort {
     /// original writes every escort's at pilot +0xe92e (`_WritePilotData`
     /// @0x72717-0x7276c) but reads back only a fighter's (`_LoadPilotData`
     /// @0x75b65-0x75b85). None for any other escort, which holds its
-    /// slot's word (see `nova_sim_ai::traffic::berth_voices`).
+    /// slot's word (see `nova_sim_ai::traffic::berth_voices`). Read it
+    /// through [`Escort::saved_voice`], which holds to that rule.
     pub voice: Option<VoiceVariant>,
 }
 
@@ -66,6 +67,14 @@ impl Escort {
     #[must_use]
     pub fn hired(&self) -> bool {
         self.wage.is_some()
+    }
+
+    /// The variant a save writes and a loaded ship takes: a carried
+    /// fighter's alone, as `_LoadPilotData` reads no other (@0x75b65-0x75b85,
+    /// see [`Escort::voice`]).
+    #[must_use]
+    pub fn saved_voice(&self) -> Option<VoiceVariant> {
+        self.voice.filter(|_| self.carried)
     }
 }
 
@@ -141,6 +150,29 @@ impl Default for OrderWord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An escort of `voice`, carried or not.
+    fn voiced(carried: bool, voice: Option<VoiceVariant>) -> Escort {
+        Escort {
+            ship: ShipId(128),
+            reserves: Reserves::full(1.0, 1.0, 1.0),
+            order: None,
+            carried,
+            wage: None,
+            person: None,
+            mark: None,
+            voice,
+        }
+    }
+
+    #[test]
+    fn only_a_carried_fighters_voice_is_its_saved_one() {
+        for voice in [VoiceVariant::Even, VoiceVariant::Odd] {
+            assert_eq!(voiced(true, Some(voice)).saved_voice(), Some(voice));
+            assert_eq!(voiced(false, Some(voice)).saved_voice(), None);
+        }
+        assert_eq!(voiced(true, None).saved_voice(), None);
+    }
 
     #[test]
     fn an_order_word_gives_1_to_4_as_orders_and_anything_else_as_formation() {

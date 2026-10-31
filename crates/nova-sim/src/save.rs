@@ -1206,7 +1206,7 @@ pub fn encode(pilot: &Pilot) -> String {
                 wage: escort.wage,
                 person: escort.person.map(|person| person.0),
                 mark: escort.mark.map(SavedMark::from),
-                voice: escort.voice.map(SavedVoice::from),
+                voice: escort.saved_voice().map(SavedVoice::from),
             })
             .collect(),
         gone_persons: pilot.gone_persons.iter().map(|person| person.0).collect(),
@@ -4784,7 +4784,19 @@ mod tests {
     }
 
     #[test]
-    fn a_carried_fighters_variant_round_trips_and_a_hired_escort_saves_null() {
+    fn a_hired_escort_saves_null_whatever_its_record_holds() {
+        let mut pilot = with_a_fighter(seasoned(), VoiceVariant::Odd);
+        pilot.escorts[1].voice = Some(VoiceVariant::Odd);
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(value["escorts"][0]["voice"], "odd");
+        assert_eq!(value["escorts"][1]["voice"], serde_json::Value::Null);
+        let decoded = decode(&text).expect("loads");
+        assert_eq!(decoded.escorts[1].voice, None);
+    }
+
+    #[test]
+    fn a_carried_fighters_variant_round_trips() {
         for voice in [VoiceVariant::Even, VoiceVariant::Odd] {
             let pilot = with_a_fighter(seasoned(), voice);
             let text = encode(&pilot);
@@ -4797,7 +4809,6 @@ mod tests {
                     VoiceVariant::Odd => "odd",
                 }
             );
-            assert_eq!(value["escorts"][1]["voice"], serde_json::Value::Null);
         }
     }
 
