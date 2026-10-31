@@ -87,6 +87,7 @@
 //! | [`LeaderlessSwapHold`](RuleKey::LeaderlessSwapHold) | `leaderless_swap_hold` | a ship swapped in for a person by a `ShipGoal` 3 mission, neither hunting nor escorting the player, holds goal 10 with no leader: it coasts with no thrust and no fire, picks no destination, target or ship to inspect, and leaves the hold only when provoked, at its government's word, or as a plundering warship (`_AIMakeEscortFlyInForm` @0x89b8e-0x89c3d, `_HighLevelAIHandler` @0x8ed18-0x8ed31; see `nova_sim::ai::Goal::Hold`) | it decides as its `düde`'s AI from the start, landing or jumping out\* |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; `nova_sim::Session`) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; `nova_sim::Session`) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
+//! | [`JunkListing`](RuleKey::JunkListing) | `junk_listing` | at most one `jünk` a side: the highest ID that names the stellar and whose test holds, with no fallback from a winner priced 0, and a held loser is other cargo and can't be traded there (`_DoTradeDialog` @0x5dd7d-0x5de74; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, @0x4d70c-0x4d767; `nova_sim::Session`) | every matching `jünk` is listed, as the Bible's `SoldAt` and `BoughtAt` say with no limit |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; `nova_sim::Session`) | no limit§§ |
 //! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; `nova_sim::Outfitter::refund`) | every sale refunds half§§§ |
 //! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; `nova_sim::Outfitter::count_asked`) | Alt changes nothing: each click moves one¶¶¶ |
@@ -1588,6 +1589,14 @@ rule_keys! {
     /// `BoughtAt` where it "is purchased", the `SoldAt` row is bought only
     /// and the `BoughtAt` row sold only (see `nova_sim::market`).
     JunkTrade => "junk_trade",
+    /// Which `jünk` a stellar lists on each side. By the engine, at most
+    /// one a side: of those that name the stellar and whose test holds,
+    /// the highest ID, as `_DoTradeDialog`'s loops overwrite the slot
+    /// (@0x5dd7d-0x5de74), with no fallback when that winner is priced 0
+    /// (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac). By the Bible, whose
+    /// `SoldAt` and `BoughtAt` state no limit, every match is listed (see
+    /// `nova_sim::market`).
+    JunkListing => "junk_listing",
     /// Whether the outfitter sells a map or clean-record outfit only once
     /// an opening. By the engine, an outfit with a `ModType` 16 mod, or
     /// failing that a `ModType` 21 mod, is refused while the last outfit
@@ -6625,6 +6634,11 @@ mod tests {
         assert_eq!(RuleKey::from_key("junk_trade"), Some(RuleKey::JunkTrade));
         assert_eq!(RuleKey::JunkPrice.key(), "junk_price");
         assert_eq!(RuleKey::from_key("junk_price"), Some(RuleKey::JunkPrice));
+        assert_eq!(RuleKey::JunkListing.key(), "junk_listing");
+        assert_eq!(
+            RuleKey::from_key("junk_listing"),
+            Some(RuleKey::JunkListing)
+        );
         assert_eq!(RuleKey::PurchaseCargo.key(), "purchase_cargo");
         assert_eq!(
             RuleKey::from_key("purchase_cargo"),
@@ -6830,6 +6844,7 @@ mod tests {
                 RuleKey::LeaderlessSwapHold,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
+                RuleKey::JunkListing,
                 RuleKey::OutfitLimit,
                 RuleKey::OutfitRefund,
                 RuleKey::OutfitCount,
