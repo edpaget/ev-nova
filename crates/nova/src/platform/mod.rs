@@ -419,11 +419,13 @@ mod tests {
         assert_eq!(map_key(unknown), Key::Other);
     }
 
-    /// Every character key some screen other than flight reacts to, from
-    /// the constants the screens match on where they name one; flight's
-    /// come from `every_key`. A screen test that sends one of these directly
-    /// never crosses `map_key`, so this is what keeps each one reachable
-    /// from a real keyboard.
+    /// Character keys that screens other than flight react to, from the
+    /// constants the screens match on where they name one. It is kept by
+    /// hand and isn't all of them: flight's come from `every_key`, the
+    /// comm, planet comm, escort and offer dialogs' from the tests below,
+    /// and a screen's other keys may be missing. A screen test that sends
+    /// one of these directly never crosses `map_key`, so this is what keeps
+    /// each one reachable from a real keyboard.
     const GAME_CHARACTER_KEYS: [Key; 32] = [
         Key::Char('f'),
         Key::Char('i'),
@@ -504,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn every_character_key_a_screen_reacts_to_comes_from_its_physical_key() {
+    fn the_listed_character_keys_come_from_their_physical_keys() {
         for key in GAME_CHARACTER_KEYS {
             let Key::Char(c) = key else {
                 panic!("{key:?} is not a character key");
