@@ -298,12 +298,7 @@ impl<
             _ => None,
         };
         let jumping = self.jump_under_way();
-        if jumping && self.map_open && press == Some(PLAYER_INFO_KEY) {
-            return ScreenAction::None;
-        }
-        if jumping && !self.map_open && self.faded_keys.keep(press) {
-            // Kept or not, it is down: @0x702d8 has no gate.
-            self.track_held(input);
+        if jumping && self.stop_during_jump(press, input) {
             return ScreenAction::None;
         }
         if self.map_open {
@@ -335,6 +330,10 @@ impl<
             Some(LAND_KEY) => {
                 self.faded_keys.land_latch = true;
                 self.land();
+                // The hypergate's map takes its release, as M's does.
+                if self.map_open {
+                    return ScreenAction::None;
+                }
             }
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.

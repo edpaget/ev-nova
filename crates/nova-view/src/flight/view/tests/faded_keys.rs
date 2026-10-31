@@ -730,6 +730,28 @@ fn a_kept_m_acts_after_a_jump_given_up_between_steps() {
 // L and I held past a jump.
 
 #[test]
+fn l_that_opened_the_hypergate_map_is_not_read_after_a_later_jump() {
+    let mut view = faked(super::frames::sol());
+    view.sim.queue_screen(map_opening(&view.frame, Some(130)));
+    view.sim
+        .queue_answer(super::faked_landing::at_gate(nova_sim::GateKind::Hypergate));
+    view.sim
+        .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
+    view.input(&key(LAND_KEY, true));
+    assert!(view.map_open(), "the hypergate's map");
+    view.input(&key(LAND_KEY, false));
+    view.close_map();
+    assert!(!view.map_open(), "cancelled");
+    now_shows(&mut view, white());
+    view.tick(TICK);
+    let from = sent_count(&view);
+    arrives(&mut view);
+    view.tick(TICK);
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), [], "L went up under the map");
+}
+
+#[test]
 fn l_and_i_held_from_mid_jump_act_on_the_first_tick_after_the_arrival_once() {
     let mut view = under_the_white();
     view.input(&key(LAND_KEY, true));

@@ -101,7 +101,7 @@ use crate::system::catalog::SystemCatalog;
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Key, UiSound};
+use crate::{Input, Key, UiSound};
 
 use super::{FlightView, HAIL_KEY, LAND_KEY, MAP_KEY};
 
@@ -152,6 +152,22 @@ impl<
     S: FlightSim,
 > FlightView<C, S>
 {
+    /// A key's `input`, its press `press`, during a jump: whether that's
+    /// all of it. One of [`KEPT_KEYS`] is kept for the pass that reads it,
+    /// the map shut, and tracked as down, whatever comes of it (@0x702d8
+    /// has no gate); with the map open P goes nowhere, and the rest are
+    /// the map's.
+    pub(super) fn stop_during_jump(&mut self, press: Option<Key>, input: &Input) -> bool {
+        if self.map_open {
+            return press == Some(PLAYER_INFO_KEY);
+        }
+        let kept = self.faded_keys.keep(press);
+        if kept {
+            self.track_held(input);
+        }
+        kept
+    }
+
     /// Each of L and I down with its latch clear, which a pass reads
     /// besides the presses kept; when `clearing`, each latch cleared with
     /// its key up or its gate shut.
