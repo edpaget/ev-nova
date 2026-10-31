@@ -182,13 +182,16 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// read from the kept frame, which the steps and the effect's start
     /// have just filled), the ship arrives ([`FlightView::arrive`]), and
     /// the rest of the effect, the fade-in or the white flash, plays over
-    /// the new system as the arrival's fade-in. A double-time frame drawn
-    /// between its passes comes first
+    /// the new system as the arrival's fade-in. A warp ended on double
+    /// time's second pass has its frame between the passes drawn first
     /// ([`FlightView::holding_between_passes`]): that frame shows the old
     /// system, and the arrival follows on the next step, which stops
-    /// before it runs.
+    /// before it runs. One ended on the first pass is in that frame
+    /// already, so the ship arrives as in single time, and the arrival's
+    /// layout drops the hold.
     pub(super) fn arrival_frame(&mut self) {
-        if !self.frame.warp_end_due || self.holding_between_passes() {
+        let frame_comes_first = self.holding_between_passes() && !self.drawn().warp_end_due;
+        if !self.frame.warp_end_due || frame_comes_first {
             return;
         }
         self.arrive();

@@ -563,7 +563,7 @@ pub(super) mod tests {
 
     /// A catalog whose ship's class, 128, has `Flags` `flags` in its
     /// `shïp` record.
-    fn flagged(flags: u16) -> FakePilotCatalog {
+    pub(in crate::session) fn flagged(flags: u16) -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.ship_records = vec![crate::catalog::ShipRecord {
             flags,

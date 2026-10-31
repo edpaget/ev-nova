@@ -47,7 +47,10 @@
 //! a jump's fallback end on a second pass draws the frame with the warp-ups
 //! halted and the warp-out playing (`_HandlePlayer` @0x6c62a-0x6c706,
 //! @0x6bbb8-0x6bbd9), and the arrival comes on the next step, which stops
-//! before it runs. A second pass's sounds and white fade do not wait, as
+//! before it runs. An end on the first pass waits for nothing: the original
+//! settles it inside that pass, before the draw, so the frame held already
+//! says so and the ship arrives in the same tick, its layout dropping the
+//! hold. A second pass's sounds and white fade do not wait, as
 //! `PlaySound` and `_FadeWhiteIn` (@0x68404) start at once, so the jump's
 //! effect reads the kept frame.
 //!
@@ -122,8 +125,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Whether a double-time frame is drawn between its passes: an arrival
-    /// waits for it to go, as the frame it shows comes first (see the
-    /// module docs).
+    /// that frame doesn't show yet waits for it to go (see the module
+    /// docs).
     pub(super) fn holding_between_passes(&self) -> bool {
         self.between_passes.is_some() && shows_hold(&self.frame)
     }

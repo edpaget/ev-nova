@@ -558,6 +558,22 @@ fn a_double_time_warp_end_draws_a_frame_before_the_arrival() {
 }
 
 #[test]
+fn a_double_time_warp_end_on_the_first_pass_arrives_on_that_tick() {
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    view.sim.queue_report(doubled_from(FlightFrame {
+        warp_end_due: true,
+        ..under_way(true)
+    }));
+    view.tick(TICK);
+    assert!(
+        sent_but_lines(&view).contains(&FlightCommand::Arrive),
+        "the frame held has reached the end, so none waits for it"
+    );
+    assert_eq!(view.drawn(), &in_alpha(), "laid out, the hold dropped");
+}
+
+#[test]
 fn a_second_pass_that_lights_the_white_starts_the_fade_at_once() {
     let mut view = warping();
     view.sim.set_frame(FlightFrame {

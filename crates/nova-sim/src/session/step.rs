@@ -1025,6 +1025,24 @@ mod tests {
     }
 
     #[test]
+    fn a_natural_warp_end_on_the_advance_pass_is_in_the_frame_between_its_passes() {
+        // w 0.91: over on frame 115's advance pass, its warp-up stepped
+        // out at the pass's head.
+        use crate::session::warp_stage::tests::{flagged, frames, jumping_in_double_time};
+        let catalog = flagged(0x0001);
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 114);
+        assert!(!session.warp_end_due(), "frame 114");
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        let report = steps(&mut session, &catalog, &input, 1);
+        let frame = report.steps[0].between_passes.as_ref().expect("reported");
+        assert!(frame.warp_end_due, "the view arrives on that tick");
+    }
+
+    #[test]
     fn a_wrap_is_on_the_report_of_the_advance_pass_it_ran_on_alone() {
         let catalog = catalog();
         let past = Vec2::new(WRAP_EDGE + 1.0, 0.0);
