@@ -50,8 +50,8 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
-use crate::spaceport::credits::comma_number;
-use crate::spaceport::shipyard::LABEL_COLOR as MED_GREY;
+use crate::spaceport::credits::{TON, TONS, comma_number};
+use crate::spaceport::shipyard::{LABEL_COLOR as MED_GREY, NONE};
 use crate::spaceport::trade::LIGHT_GREY;
 use crate::text::TextMetrics;
 
@@ -91,12 +91,6 @@ pub const ODDS_LABEL: &str = "Capture Odds:";
 pub const CREDITS_LABEL: &str = "Credits:";
 /// `_fuelString[4]`, #7.
 pub const ENERGY_LABEL: &str = "Energy:";
-/// `STR#` 2002 #335: nothing of a kind on board.
-pub const NONE: &str = "None";
-/// `STR#` 2002 #1: a ton of cargo, or none.
-pub const TON: &str = "ton";
-/// `STR#` 2002 #2: more than a ton.
-pub const TONS: &str = "tons";
 /// `STR#` 2002 #391.
 pub const OF: &str = "of";
 /// The labels' colour: `_rgbLightGrey` (@0x92970, @0x92ce9, @0x92d86).
@@ -186,6 +180,14 @@ fn amount(n: i64) -> Option<String> {
     (n > 0).then(|| comma_number(n))
 }
 
+/// The unit after `tons` of cargo: [`TON`] at 1 or less, else [`TONS`]
+/// (@0x92a77-0x92b60). `TonUnit::of` takes [`TON`] at exactly 1 only, as a
+/// shop's info box does, so it would word 0 tons differently from this
+/// function of the original.
+fn cargo_unit(tons: u32) -> &'static str {
+    if tons <= 1 { TON } else { TONS }
+}
+
 /// The ammunition line: the count, then `LCName` for exactly 1 round and
 /// `LCPlural` for any other count, or the count alone with no outfit
 /// (@0x92bf2-0x92ccf).
@@ -202,7 +204,7 @@ fn ammo_line(rounds: u32, outfit: Option<&(String, String)>) -> String {
 fn plunder_rows(shown: &PlunderShown) -> Vec<TextRow> {
     let view = &shown.view;
     let cargo = view.cargo.map(|(_, tons)| {
-        let unit = if tons <= 1 { TON } else { TONS };
+        let unit = cargo_unit(tons);
         let good = shown.good.as_deref().unwrap_or_default();
         format!("{tons} {unit} {OF} {good}")
     });
