@@ -50,17 +50,44 @@
 //!
 //! Nothing here plays a sound. +0x6c is 16-bit there; not replicated.
 //!
-//! Left out (see the phase body of
-//! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): an NPC
-//! escort's +0x6c, its leader's slot, and `_AIDispatch`'s disabled-ship
-//! reset (@0x8feda-0x8ff13), which
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-4-escort-travel-stellar-into-pirate-think
-//! owns; and the session's writes that replace a `Land` goal without a decision, which
-//! [`take`] never sees.
+//! **A fleet's.** A ship with a leader holds its leader's slot here, the
+//! player's 0 included, and any slot reads as set. So one that leaves its
+//! fleet carries it into the idle block of the pirate it may become. Its
+//! writes:
+//!
+//! - `_EscortAI`'s order block, whoever the parent ([`order_block`]);
+//! - `_EscortAI`'s entry into goal 0xb, the lead's copied (@0x83a77-0x83a7c,
+//!   [`copied`], see [`fleet_escort`](super::fleet_escort));
+//! - goal 0xb's check and sub 0xd, copied or cleared
+//!   ([`fly_jump`](crate::traffic::warp_out::fly_jump));
+//! - the cancels of a follow, -1 (@0x90118, @0x90196), and a fighter's
+//!   turn-back, its carrier's slot (@0x8d621;
+//!   [`jump_with_leader`](crate::traffic::jump_with_leader));
+//! - a lead entering a gate, which gives its followers the gate (@0x8dd30);
+//! - a successor taking over its lead's (@0x893b0-0x893e1,
+//!   [`succession`](crate::traffic::succession));
+//! - the player's capture of a lead, -1 for each ship it led (`_DoShipCapture`
+//!   @0x41353-0x41398, [`Npc::lose_captured_lead`]);
+//! - a mission escort's join: its first think's formation, the player's
+//!   slot, as the session writes that formation.
+//!
+//! A follower keeps its own when its lead is lost, and so does a disabled
+//! one left alone, until the disabled reset clears it. A ship the player
+//! leads holds the player's slot through a mission's end, as
+//! `_AIMakeShipLeave` (@0x7e2b0) doesn't write it: so a pirate mission
+//! escort released in formation leaves, and one held picks a stellar.
+//! `_AIFightThreatToParent`'s writes (@0x81f59, @0x81f8a) aren't modelled:
+//! its one caller overwrites them (@0x83ef4, @0x83f09).
+//!
+//! Left out (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-8-left-out-of-phase-4):
+//! a lead of another AI type's own +0x6c, and the player's own copied onto
+//! a follower of its jump. And the session's writes that replace a `Land`
+//! goal without a decision, which [`take`] never sees.
 
 use crate::ai::Goal;
 #[cfg(doc)]
 use crate::ai::{Decision, idle_block};
+use crate::escort::EscortOrder;
 use crate::traffic::npc::Npc;
 
 /// How a think writes its ship's travel stellar ([`Decision::travel`]).
@@ -92,6 +119,40 @@ pub fn take(npc: &mut Npc, write: TravelWrite, goal: Goal) {
         TravelWrite::Clear => false,
         TravelWrite::Keep => npc.travel_set || stellar_goal(npc.goal) || stellar_goal(goal),
     };
+}
+
+/// The write that copies `lead`'s travel stellar as [`is_set`] reads it.
+#[must_use]
+pub fn copied(lead: &Npc) -> TravelWrite {
+    if is_set(lead) {
+        TravelWrite::Set
+    } else {
+        TravelWrite::Clear
+    }
+}
+
+/// How `_EscortAI`'s order block writes +0x6c as it decides `goal` under
+/// `order`, `new_threat` when the block took a threat rather than keeping
+/// its target, for every parent:
+///
+/// - Attack, a new threat: -1 (@0x83d83). A kept target writes none
+///   (@0x83d6d), nor does Defend while it fights (@0x83cd6, @0x83e4b).
+/// - Hold: -1 (@0x83e65).
+/// - Defend or Attack with nothing to fight, a fighter's Return and
+///   formation: the leader's slot (@0x83dac, @0x83e9f, @0x83f09).
+///
+/// The high level repeats the leader's slot every frame in goals 5, 0xa
+/// and 0xc (@0x8ec04, @0x8ed4b, @0x8ef68). The think's write stands for
+/// those: a lag of one think behind a -1 written between thinks, which
+/// crosses no boundary the player sees.
+#[must_use]
+pub fn order_block(goal: Goal, order: Option<EscortOrder>, new_threat: bool) -> TravelWrite {
+    match goal {
+        Goal::Attack(_) if new_threat && order == Some(EscortOrder::Attack) => TravelWrite::Clear,
+        Goal::Attack(_) => TravelWrite::Keep,
+        Goal::Wait => TravelWrite::Clear,
+        _ => TravelWrite::Set,
+    }
 }
 
 /// Whether `goal` carries a stellar in +0x6c: a landing (goal 1) or a gate
@@ -156,6 +217,46 @@ mod tests {
         ));
         assert!(!taken(holding(LAND, true), TravelWrite::Clear, LAND));
         assert!(!taken(holding(Goal::Idle, true), TravelWrite::Clear, GATE));
+    }
+
+    #[test]
+    fn the_order_block_sets_keeps_or_clears_the_travel_stellar() {
+        const ATTACK: Goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+        const FORM: Goal = Goal::Formation { guard: None };
+        let follow = Goal::Follow {
+            lead: NpcId(2),
+            guard: None,
+        };
+        let attack = Some(EscortOrder::Attack);
+        let defend = Some(EscortOrder::Defend);
+        for (goal, order, new_threat, write) in [
+            (ATTACK, attack, true, TravelWrite::Clear),
+            (ATTACK, attack, false, TravelWrite::Keep),
+            (ATTACK, defend, true, TravelWrite::Keep),
+            (ATTACK, defend, false, TravelWrite::Keep),
+            (ATTACK, None, true, TravelWrite::Keep),
+            (
+                Goal::Wait,
+                Some(EscortOrder::Hold),
+                false,
+                TravelWrite::Clear,
+            ),
+            (FORM, None, false, TravelWrite::Set),
+            (FORM, attack, false, TravelWrite::Set),
+            (follow, defend, false, TravelWrite::Set),
+            (
+                Goal::Dock(ShipRef::Player),
+                Some(EscortOrder::Dock),
+                false,
+                TravelWrite::Set,
+            ),
+        ] {
+            assert_eq!(
+                order_block(goal, order, new_threat),
+                write,
+                "{goal:?} {order:?} {new_threat}"
+            );
+        }
     }
 
     #[test]
