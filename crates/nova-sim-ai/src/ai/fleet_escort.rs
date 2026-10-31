@@ -204,9 +204,10 @@ pub fn decide_by(
     let fallback = out_of_ammo::escort_word(npc, order);
     let order = fallback.map_or(order, OrderWord::order);
     let writes = fallback.or_else(|| lead.escorts_player().then(|| OrderWord::of(order)));
-    if jump_with_leader::draws_followers(lead) {
-        // The entry (@0x839fd-0x83a92), then goal 0xb's block
-        // (@0x83be3): no order block runs.
+    if jump_with_leader::draws_followers(lead) || npc.joins_leaders_jump() {
+        // The entry (@0x839fd-0x83a92), then goal 0xb's block (@0x83be3),
+        // which runs whether or not the lead still draws, as a ship that
+        // entered under a wait keeps its goal: no order block runs.
         return Decision {
             goal: Goal::Follow {
                 lead: lead.id,
@@ -634,6 +635,29 @@ mod tests {
             assert_eq!(decision.goal, Goal::Attack(n(3)));
             assert!(!decision.follows_jump);
         }
+    }
+
+    #[test]
+    fn an_escort_joining_a_jump_under_a_wait_stays_on_goal_0xbs_block_though_its_lead_stopped() {
+        // Goal 0xb's block runs whether or not the lead still draws
+        // (@0x83be3), and the lost parent comes first.
+        let mut joining = targeting(escort(), n(3));
+        joining.goal = follow(None);
+        joining.warp.joining = true;
+        let npcs = [
+            lead(Goal::Hold),
+            joining.clone(),
+            raider(3, 0.0, 100.0, n(1)),
+        ];
+        let (decision, _) = decided_with(&npcs, Some(EscortOrder::Attack), (0.0, 5000.0), &[0]);
+        assert_eq!(decision.goal, follow(None));
+        assert!(decision.follows_jump);
+        assert!(decision.clears_target);
+        assert!(!decision.ends_wait);
+        let alone = [raider(3, 0.0, 100.0, n(1)), joining];
+        let (lost, _) = decided_with(&alone, Some(EscortOrder::Attack), (0.0, 5000.0), &[0]);
+        assert!(lost.leaves_fleet, "its parent is gone");
+        assert!(!lost.follows_jump);
     }
 
     #[test]

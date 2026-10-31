@@ -2499,6 +2499,8 @@ impl Traffic {
                 continue;
             };
             npc.settle_original_ai_type();
+            // A think that takes the entry again holds it (`jump_with_leader`).
+            npc.warp.joining = false;
             let calls = decision.comm_call.into_iter().chain(
                 decision
                     .calls_reinforcements

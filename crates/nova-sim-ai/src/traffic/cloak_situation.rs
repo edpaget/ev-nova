@@ -54,7 +54,8 @@ pub struct Around {
 ///   its own jump (sub-goal 4,
 ///   [`WarpGoal::Own`](crate::traffic::warp_out::WarpGoal::Own)) or a
 ///   jump with its parent (goal 0xb,
-///   [`WarpGoal::Follow`](crate::traffic::warp_out::WarpGoal::Follow)) is
+///   [`WarpGoal::Follow`](crate::traffic::warp_out::WarpGoal::Follow), or
+///   goal 0xb written under a wait, [`Npc::joins_leaders_jump`]) is
 ///   [`jumping`](cloak::Situation::jumping) (@0x834ee-0x83509). The regroup
 ///   pause keeping sub 4 is too, as the term reads sub 4 whatever the goal;
 ///   keeping sub 0xd it isn't, as goal 0x13 is neither 8 nor 0xb.
@@ -86,7 +87,8 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         Mode::LeavingGate { tick } => tick > 0,
         _ => false,
     };
-    let following_jump = matches!(npc.warp.goal, Some(WarpGoal::Follow(_)));
+    let following_jump =
+        matches!(npc.warp.goal, Some(WarpGoal::Follow(_))) || npc.joins_leaders_jump();
     let goal = match npc.mode {
         Mode::JumpingIn { .. } | Mode::LeavingGate { .. } | Mode::Emerging { .. } => None,
         _ if following_jump => None,
@@ -100,6 +102,7 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         attacking: around.attacking.filter(|_| goal.is_some()),
         reloading: npc.armament.reloading(around.cloak_on_reload),
         jumping: arriving
+            || npc.joins_leaders_jump()
             || (npc.warp.goal.is_some()
                 && npc.goal
                     != Goal::Regroup {
@@ -227,6 +230,25 @@ mod tests {
             },
         );
         assert_eq!(attacker.attacking, None, "goal 8 attacks nothing");
+    }
+
+    #[test]
+    fn goal_0xb_written_under_a_wait_is_jumping_whatever_substate_stands() {
+        // The term reads goal 0xb (@0x83505), and goal 0xb is no goal of
+        // the travelling or idle terms.
+        for goal in [
+            Goal::Formation { guard: None },
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None,
+            },
+        ] {
+            let mut joining = npc(goal, FLYING);
+            joining.warp.joining = true;
+            let read = situation(&joining, Around::default());
+            assert!(read.jumping, "{goal:?}");
+            assert!(!read.travelling, "{goal:?}");
+        }
     }
 
     #[test]

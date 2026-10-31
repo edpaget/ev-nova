@@ -191,6 +191,9 @@ pub struct Warp {
     pub aim: i16,
     /// The sub-goal it jumps by, if any.
     pub goal: Option<WarpGoal>,
+    /// Whether goal 0xb is written while its high level waits, so its old
+    /// substate stands ([`Npc::joins_leaders_jump`]).
+    pub joining: bool,
 }
 
 impl Warp {
@@ -250,11 +253,41 @@ impl Npc {
     /// goal 0xb (`_AIMakeShipJumpWithParent` @0x82bb6: +0x96 = 0, and
     /// with +0x50 at 0 or below, 1.0 and a stamp, which the copy just
     /// made leaves to a player not yet in its warp stage).
+    ///
+    /// It tests no goal (@0x82bc7), and the copy none either (@0x3fd9a):
+    ///
+    /// - Over goal 0x15 it ends a gate wait ([`Npc::leaves_gate_goal`]), as
+    ///   any goal written there does.
+    /// - Over -999.0 it ends a glide in or a burst out, as `_AIDispatch` no
+    ///   longer sends the ship to goal 8 (@0x8fcf5) and goal 0xb's block
+    ///   writes sub 0xd over sub 0xa. It flies on at the velocity it held.
+    ///   A burst left in +0x34 is sub 0xd's burst word's
+    ///   (rdm:phase/escort-fleet-fidelity-followups/phase-13-left-out-of-held-ship-burst).
+    /// - Under a wait it writes goal 0xb and no sub, so the ship keeps its
+    ///   old substate ([`Npc::joins_leaders_jump`]). As the ship can't wait
+    ///   for a think to write the goal the engine keeps beside goal 0xb, it
+    ///   writes it here, which ends a count wait as a goal, and a sub 4 goes
+    ///   with it: a ship the player leads holds none past the hold. The
+    ///   stage it copies reads as not jumping (`_AIIsShipJumping` reads the
+    ///   sub), so the warp-out zeroes it on the low level's default +0x68,
+    ///   its whole heading (@0x8522d, @0x34a27).
     pub fn follow_player_jump(&mut self, stage: f32, since: u32) {
+        self.leaves_gate_goal();
+        if self.jumping_in() {
+            self.mode = Mode::Flying;
+            self.emerges_from = None;
+        }
         self.warp.stage = stage;
         self.warp.since = since;
         self.provoked = 0.0;
-        self.follow_leaders_jump(ShipRef::Player);
+        if self.wait_running() {
+            self.goal = Goal::Formation { guard: None };
+            if self.warp.goal == Some(WarpGoal::Own) {
+                self.warp.goal = None;
+            }
+            self.warp.aim = whole(self.state.heading);
+        }
+        self.enter_leaders_jump(ShipRef::Player);
         if self.warp.stage <= 0.0 {
             self.warp.stage = 1.0;
             self.warp.stamp();

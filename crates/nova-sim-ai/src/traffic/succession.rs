@@ -337,7 +337,7 @@ impl Npc {
         self.leaves_arrival(world.held_burst);
         self.pursuit = Pursuit::default();
         self.docking = None;
-        if matches!(self.warp.goal, Some(WarpGoal::Follow(_))) {
+        if matches!(self.warp.goal, Some(WarpGoal::Follow(_))) || self.joins_leaders_jump() {
             self.goal = Goal::JumpOut;
             self.warp.goal = Some(WarpGoal::Own);
             return;
@@ -1377,6 +1377,33 @@ mod tests {
                 guard: None
             },
             "its jump is under way"
+        );
+    }
+
+    #[test]
+    fn a_successor_of_or_in_goal_0xb_written_under_a_wait_takes_goal_2_sub_4() {
+        // The goal word reads 0xb whatever substate stands (@0x8de7c →
+        // @0x8df54, @0x8940c-0x89427).
+        let traffic = taking_over(REBELS, Goal::Formation { guard: None });
+        let mut lead = of(&traffic, 0).clone();
+        lead.warp.goal = None;
+        lead.warp.joining = true;
+        let mut taker = of(&traffic, 1).clone();
+        taker.take_over(Some(&lead), &World::new(&[]));
+        assert_eq!(
+            (taker.goal, taker.warp.goal),
+            (Goal::JumpOut, Some(WarpGoal::Own)),
+            "of"
+        );
+        let mut own = of(&traffic, 1).clone();
+        own.goal = Goal::Formation { guard: None };
+        own.warp.goal = None;
+        own.warp.joining = true;
+        own.take_over(None, &World::new(&[]));
+        assert_eq!(
+            (own.goal, own.warp.goal),
+            (Goal::JumpOut, Some(WarpGoal::Own)),
+            "in"
         );
     }
 

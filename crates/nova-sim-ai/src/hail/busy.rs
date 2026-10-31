@@ -211,6 +211,13 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_joining_its_leaders_jump_under_a_wait_is_busy() {
+        let mut joining = flying(1, Goal::Formation { guard: None });
+        joining.warp.joining = true;
+        assert!(ai_is_ship_busy(&joining), "goal 0xb");
+    }
+
+    #[test]
     fn a_ship_following_its_leaders_jump_is_busy_and_one_on_its_own_jump_by_its_goal() {
         let mut follower = flying(1, Goal::Idle);
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));

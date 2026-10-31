@@ -216,7 +216,9 @@ impl Behaviour for EscortAi {
             return Decision::default();
         }
         let order = out_of_ammo::escort_order(npc, npc.escort_order());
-        if takes_players_jump(around) {
+        // Goal 0xb's block runs under a wait too (@0x83be3), the player's
+        // jump over or not: its high level gives it up.
+        if takes_players_jump(around) || npc.joins_leaders_jump() {
             return Decision {
                 goal: Goal::Formation { guard: None },
                 clears_target: true,
@@ -1424,6 +1426,27 @@ mod tests {
             decided(Some(EscortOrder::Attack), 0.0).goal,
             Goal::Attack(ShipRef::Npc(NpcId(2)))
         );
+    }
+
+    #[test]
+    fn an_escort_joining_the_players_jump_under_a_wait_stays_on_goal_0xbs_block_as_it_ends() {
+        // Goal 0xb's block runs whether or not the player's jump goes on
+        // (@0x83be3), so it runs no order block, ending no wait.
+        let govts = govts(0, 0);
+        let mut joining = escort(Some(EscortOrder::Attack));
+        joining.goal = Goal::Formation { guard: None };
+        joining.warp.joining = true;
+        let npcs = [joining, pirate(2, 0.0, 100.0)];
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            player_warp_stage: 0.0,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert!(decision.follows_jump);
+        assert!(decision.clears_target);
+        assert!(!decision.ends_wait);
     }
 
     #[test]
