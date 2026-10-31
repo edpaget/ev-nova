@@ -124,13 +124,18 @@ fn speeds_of(mode: Mode) -> (f32, f32) {
 const BURSTS: [Mode; 2] = [Mode::LeavingGate { tick: 3 }, Mode::JumpingIn { tick: 3 }];
 
 /// Flies `npc` from its glide or burst to its end at `speeds`, each tick's
-/// move dragged and its velocity not.
+/// move dragged and its velocity not. Its speed (+0x48), seeded at 2.0, is
+/// dragged too (@0x3398f-0x339a1).
 fn runs_to_its_cap_dragged(mut npc: Npc, speeds: TopSpeeds) -> Npc {
+    npc.speed = 2.0;
+    let mut own_speed = npc.speed;
     let mut position = npc.state.position;
     loop {
         let (speed, after) = speeds_of(npc.mode);
         let mode = npc.mode;
         fly(&mut npc, speeds);
+        own_speed *= DISABLED_DRAG;
+        assert_eq!(npc.speed, own_speed, "{mode:?}: +0x48 dragged");
         position = position + facing(HEADING) * (speed * DISABLED_DRAG);
         assert!(
             close(npc.state.position, position),
