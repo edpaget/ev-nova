@@ -123,6 +123,7 @@ impl Traffic {
 mod tests {
     use super::*;
     use crate::ai::lost_sight::{LostSight, SearchTimer};
+    use crate::ai::regroup::Kept;
     use crate::ai::{Behaviour, Decision, Goal, PlayerSide, Surroundings};
     use crate::catalog::GovtId;
     use crate::chance::{Chance, NeverFires};
@@ -509,10 +510,10 @@ mod tests {
         assert_eq!(of(&searching, id).display.drive.glow, GlowCopy::None);
     }
 
-    #[test]
-    fn a_frame_kept_from_the_last_tick_runs_no_branch_under_an_ai_wait() {
-        // The engine's pursuit runs nothing under a wait, where the
-        // original's low level runs on (see the phase's left-out items).
+    /// Asserts a ship holding an Approach frame from its last think,
+    /// `change`d so that its pursuit runs nothing, keeps that frame and
+    /// runs no branch on the next think.
+    fn assert_a_kept_frame_runs_no_branch(change: impl FnOnce(&mut Npc)) {
         let (mut traffic, id) = traffic(|_, _| {});
         let world = world(FAR_PLAYER);
         think_in(&mut traffic, &world);
@@ -520,12 +521,34 @@ mod tests {
         assert_ne!(nudged, START);
         let ship = traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
         let ship = ship.expect("there");
-        ship.ai_wait = 50;
+        change(ship);
         ship.display.drive.glow = GlowCopy::None;
         think_in(&mut traffic, &world);
         assert_eq!(bodies(&traffic, id), [Manoeuvre::Approach], "kept");
         assert_eq!(of(&traffic, id).state.position, nudged);
         assert_eq!(of(&traffic, id).display.drive.glow, GlowCopy::None);
+    }
+
+    #[test]
+    fn a_frame_kept_from_the_last_tick_runs_no_branch_under_an_ai_wait() {
+        // The engine's pursuit runs nothing under a wait, where the
+        // original's low level runs on (see the phase's left-out items).
+        assert_a_kept_frame_runs_no_branch(|ship| ship.ai_wait = 50);
+    }
+
+    #[test]
+    fn a_frame_kept_through_the_regroup_pause_runs_no_branch() {
+        // No high level is due at all here, where a wait's is due and skips.
+        for kept in [Kept::Coast, Kept::Formation { guard: None }] {
+            assert_a_kept_frame_runs_no_branch(|ship| {
+                ship.goal = Goal::Regroup { kept };
+            });
+        }
+    }
+
+    #[test]
+    fn a_frame_kept_by_a_ship_with_no_ai_runs_no_branch() {
+        assert_a_kept_frame_runs_no_branch(|ship| ship.no_ai = true);
     }
 
     #[test]
