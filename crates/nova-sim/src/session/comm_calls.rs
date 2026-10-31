@@ -1890,6 +1890,61 @@ mod tests {
         assert_eq!(said(&mut session), [QUOTE]);
     }
 
+    /// [`Lines`] with `'STR '` 5000, the patch of hail quote 1, as given.
+    #[derive(Debug)]
+    struct PatchedLines(crate::catalog::StringPatch);
+
+    impl CommCatalog for PatchedLines {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            Lines.string_list(id)
+        }
+
+        fn plugin_string(&self, id: i16) -> crate::catalog::StringPatch {
+            if id == 5000 {
+                self.0.clone()
+            } else {
+                crate::catalog::StringPatch::Absent
+            }
+        }
+    }
+
+    #[test]
+    fn the_quotes_said_in_a_pass_read_a_plugins_str_patch_before_str_list_7101() {
+        // `_ShowPersonHailQuote` looks up `STR ` 0x1387 + HailQuote first
+        // (`_LoadPluginString` @0x445b8-0x445cb), `STR#` 7101 only with
+        // none (@0x445e1), wherever in the frame it runs.
+        use crate::catalog::StringPatch;
+        let catalog = calling_catalog();
+        for (patch, words) in [
+            (
+                StringPatch::Text("Plug-in words".to_owned()),
+                "Plug-in words",
+            ),
+            (StringPatch::Empty, ""),
+            (StringPatch::Absent, QUOTE),
+        ] {
+            let flying_patched =
+                || flying(&catalog).with_strings(Rc::new(PatchedLines(patch.clone())));
+            // A think's, through the line's settle.
+            let mut session = flying_patched();
+            let mut calls = Calling::default();
+            quoter(&mut session, &mut calls);
+            stepped(&mut session, &catalog, &calls, &[]);
+            assert_eq!(said(&mut session), [words], "a think's: {patch:?}");
+            // One from before the loop.
+            let mut session = flying_patched();
+            let mut calls = Calling::default();
+            let quoting = quoter(&mut session, &mut calls);
+            calls.2.clear();
+            session
+                .space
+                .traffic
+                .turn_with_quote(quoting, crate::person::GateView::default());
+            stepped(&mut session, &catalog, &calls, &[]);
+            assert_eq!(said(&mut session), [words], "before the loop: {patch:?}");
+        }
+    }
+
     #[test]
     fn a_quote_queued_before_the_line_waits_while_landed() {
         let catalog = calling_catalog();
