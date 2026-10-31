@@ -182,6 +182,7 @@ fn an_inertialess_ship_drags_its_velocity_and_speed_and_takes_the_burst_as_its_s
             let flown = npc.stats.handling;
             loop {
                 let (speed, after) = speeds_of(npc.mode);
+                let on = npc.mode;
                 let mut moved = npc.clone();
                 flight::drag(&mut moved.state);
                 moved.speed *= DISABLED_DRAG;
@@ -199,6 +200,7 @@ fn an_inertialess_ship_drags_its_velocity_and_speed_and_takes_the_burst_as_its_s
                     break;
                 }
                 assert!(npc.state.velocity.length() > 0.0, "{mode:?}");
+                assert_eq!(npc.mode, next(on));
             }
             assert_eq!(npc.state.velocity, Vec2::ZERO, "{mode:?}: stopped dead");
             assert_eq!(npc.mode, Mode::Coasting { ticks_left: 59 }, "{mode:?}");
