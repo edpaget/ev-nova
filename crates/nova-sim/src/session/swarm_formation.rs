@@ -350,8 +350,19 @@ mod tests {
         );
         assert_eq!(npc.formation(), None, "no duty");
         assert_eq!(slots(&session), [(2, 5), (4, 5), (5, 5)]);
-        // The same slots give no second re-form.
+        // A second pass finds the same slots and leaves them.
+        let number = session.space.npc(id).expect("there").fleet_slot;
         session.reform_on_swarm_change();
+        assert_eq!(slots(&session), [(2, 5), (4, 5), (5, 5)]);
+        assert_eq!(session.space.npc(id).expect("there").fleet_slot, number);
+        // Its number alone differing re-forms: the duties all still match.
+        session.space.npc_mut(id).expect("there").fleet_slot = Some(FormationSlot {
+            slot: 9,
+            ships: 9,
+            spacing: 60.0,
+        });
+        session.reform_on_swarm_change();
+        assert_eq!(session.space.npc(id).expect("there").fleet_slot, number);
         assert_eq!(slots(&session), [(2, 5), (4, 5), (5, 5)]);
     }
 
