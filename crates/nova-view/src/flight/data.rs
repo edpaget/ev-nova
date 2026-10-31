@@ -294,7 +294,7 @@ impl CombatLooks for GameData {
         }
         let first_icon = FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set);
         let mut sizes = [(0, 0); 8];
-        for (size, id) in sizes.iter_mut().zip(first_icon..first_icon + SMOKE_FRAMES) {
+        for (size, id) in sizes.iter_mut().zip(first_icon..) {
             let icon = decode_cicn(self.resource(CICN, id)?.resource.data()).ok()?;
             *size = (icon.width(), icon.height());
         }
