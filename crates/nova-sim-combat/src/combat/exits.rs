@@ -52,7 +52,8 @@
 //! (+0xc8fc, [`Armament::fold`](super::armament::Armament::fold);
 //! [`step_stray`]) and starts at the centre, as the rulebook's
 //! [`RuleKey::StrayBeamExit`](crate::RuleKey::StrayBeamExit) says. One of
-//! `ExitType` 5 lands on +0xc908, which the session steps for its firer
+//! `ExitType` 4 lands on +0xc906, the swarm leader, which the session
+//! steps for its firer ([`StrayWord::SwarmLeader`]), one of 5 on +0xc908
 //! ([`StrayWord::Pods`]), and one of 6 on +0xc90a, the order word
 //! ([`StrayWord::Order`]). Any other `ExitType` outside 0-3 steps nothing,
 //! though the original steps whatever word it lands on; weapons-fidelity
@@ -435,18 +436,22 @@ impl ExitCursors {
 /// | `ExitType` | Word | Here |
 /// |---|---|---|
 /// | -1 | +0xc8fc, the fold set | [`StrayWord::FoldSet`] |
+/// | 4 | +0xc906, an NPC's swarm leader | [`StrayWord::SwarmLeader`] |
 /// | 5 | +0xc908, an NPC's crew pods left / the player's pod countdown | [`StrayWord::Pods`] |
 /// | 6 | +0xc90a, the order word of a ship an NPC leads | [`StrayWord::Order`] |
 ///
 /// Every other `ExitType` outside 0-3 lands on a word the engine doesn't
-/// model in that form (the fold direction, frame counters, the swarm
-/// leader, halves of floats and 32-bit fields, caches,
+/// model in that form (the fold direction, frame counters,
+/// halves of floats and 32-bit fields, caches,
 /// or another slot's record) and steps nothing; weapons-fidelity phase 31
 /// records each one and why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StrayWord {
     /// -1: the fold set (+0xc8fc), stepped within the fight.
     FoldSet,
+    /// 4: +0xc906, which the session steps: an NPC's swarm leader. Nothing
+    /// reads the player's.
+    SwarmLeader,
     /// 5: +0xc908, which the session steps: an NPC's crew pods left, or the
     /// player's escape-pod countdown (-1 while flying).
     Pods,
@@ -461,6 +466,7 @@ impl StrayWord {
     pub fn of(raw: i16) -> Option<Self> {
         match raw {
             -1 => Some(Self::FoldSet),
+            4 => Some(Self::SwarmLeader),
             5 => Some(Self::Pods),
             6 => Some(Self::Order),
             _ => None,
@@ -920,13 +926,14 @@ mod tests {
     }
 
     #[test]
-    fn a_stray_exit_type_names_the_fold_set_at_minus_1_the_pod_word_at_5_the_order_word_at_6_and_nothing_else()
+    fn a_stray_exit_type_names_the_fold_set_at_minus_1_the_swarm_leader_at_4_the_pod_word_at_5_the_order_word_at_6_and_nothing_else()
      {
         assert_eq!(StrayWord::of(-1), Some(StrayWord::FoldSet));
+        assert_eq!(StrayWord::of(4), Some(StrayWord::SwarmLeader));
         assert_eq!(StrayWord::of(5), Some(StrayWord::Pods));
         assert_eq!(StrayWord::of(6), Some(StrayWord::Order));
         for raw in i16::MIN..=i16::MAX {
-            if ![-1, 5, 6].contains(&raw) {
+            if ![-1, 4, 5, 6].contains(&raw) {
                 assert_eq!(StrayWord::of(raw), None, "{raw}");
             }
         }

@@ -32,6 +32,15 @@
 //! A fighter of the player's escort is stepped: its own think rewrites the
 //! word, but its target check reads it first.
 //!
+//! A beam of `ExitType` 4 steps +0xc906 the same way: an NPC's swarm leader
+//! ([`Npc::swarm_leader`](crate::Npc::swarm_leader), -1 for none), to a
+//! berth of 0-3. No reader of +0xc906 reads the player's word, so the
+//! player's beam steps nothing, recorded here as the order word's is, and
+//! its `Rand(4)` is not drawn, as draw order isn't matched. A swarmer
+//! re-verifies the word before its next high level, and a class that
+//! doesn't swarm keeps it (`nova_sim::ai::swarm` owns what it then does).
+//! No stock `wëap` reaches it (weapons-fidelity phase 31).
+//!
 //! The original steps at the beam's spawn; the engine settles after the
 //! pass's fight, in the same tick, before the frame is drawn, which no
 //! boundary the player can see lies between. No sound plays (phase 18).
@@ -47,6 +56,14 @@ fn step_word(word: i16, chance: &mut dyn Chance) -> i16 {
     let mut raw = word.cast_unsigned();
     step_stray(&mut raw, chance);
     raw.cast_signed()
+}
+
+/// Steps the swarm word `word` ([`Npc::swarm_leader`](crate::Npc::swarm_leader),
+/// none for -1) as [`step_word`] steps a ship word, a berth too big for an
+/// `i16` read as `i16::MAX`, above 3 either way.
+fn step_swarm_word(word: Option<u32>, chance: &mut dyn Chance) -> Option<u32> {
+    let raw = word.map_or(-1, |berth| i16::try_from(berth).unwrap_or(i16::MAX));
+    u32::try_from(step_word(raw, chance)).ok()
 }
 
 /// The player's +0xc908 as the engine holds it.
@@ -81,8 +98,8 @@ impl Session {
     /// Steps each word the fight's stray beams raised
     /// (`Combat::take_stray_steps`), drawing on `chance`: an NPC's crew
     /// pods left, skipped if it is gone, or the player's pod countdown;
-    /// or the order word of an NPC the player doesn't lead (see the module
-    /// docs).
+    /// the order word of an NPC the player doesn't lead; or an NPC's swarm
+    /// leader (see the module docs).
     pub(super) fn step_stray_words(&mut self, chance: &mut dyn Chance) {
         for (ship, word) in self.space.combat.take_stray_steps() {
             match (ship, word) {
@@ -99,9 +116,15 @@ impl Session {
                         npc.order_word.0 = step_word(npc.order_word.0, chance);
                     }
                 }
-                // The player's order word, and a word stepped within the
-                // fight.
-                (ShipRef::Player, StrayWord::Order) | (_, StrayWord::FoldSet) => {}
+                (ShipRef::Npc(id), StrayWord::SwarmLeader) => {
+                    if let Some(npc) = self.space.npc_mut(id) {
+                        npc.swarm_leader = step_swarm_word(npc.swarm_leader, chance);
+                    }
+                }
+                // The player's order word and swarm leader, which nothing
+                // reads, and a word stepped within the fight.
+                (ShipRef::Player, StrayWord::Order | StrayWord::SwarmLeader)
+                | (_, StrayWord::FoldSet) => {}
             }
         }
     }
@@ -455,5 +478,165 @@ mod tests {
         fire(&mut session, &mut Ranged::of(&[(4, 2)]));
         assert_eq!(session.npcs()[0].order_word, held);
         assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
+    }
+
+    /// [`armed`] with a beam of `ExitType` 4 for its weapon, its NPC firing
+    /// one too.
+    fn swarmed() -> FakePilotCatalog {
+        FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                exit_type: 4,
+                ..pod_beam()
+            }],
+            ..armed()
+        }
+    }
+
+    /// The swarm word of `catalog`'s NPC holding `held`, after a pass of
+    /// its beam's fire by `reading`, drawing on `draws`; and the bounds of
+    /// the draws asked.
+    fn stepped_swarm(
+        catalog: &FakePilotCatalog,
+        reading: RuleSource,
+        held: Option<u32>,
+        draws: &[(u32, u32)],
+    ) -> (Option<u32>, Vec<u32>) {
+        let mut session = session(catalog, reading);
+        let id = session.npcs()[0].id;
+        if let Some(npc) = session.space.npc_mut(id) {
+            npc.swarm_leader = held;
+        }
+        let mut chance = Ranged::of(draws);
+        work_with(
+            &mut session,
+            catalog,
+            Controls::default(),
+            &super::super::tests::Firing,
+            Rules::default(),
+            &mut chance,
+        );
+        let asked = chance
+            .asked
+            .into_iter()
+            .filter(|&bound| bound != crate::traffic::spawn::ARRIVAL_ODDS)
+            .collect();
+        (
+            session.space.npc(id).and_then(|npc| npc.swarm_leader),
+            asked,
+        )
+    }
+
+    #[test]
+    fn an_npc_firing_a_beam_of_exit_type_4_steps_its_swarm_leader_by_the_engine() {
+        // +0xc906, stepped as a cursor (@0x450fa-0x4523d), -1 and any word
+        // above 3 redrawn: (draw + 1) % 4.
+        let catalog = swarmed();
+        for (held, draws, stepped) in [
+            (None, vec![(4, 0)], Some(1)),
+            (None, vec![(4, 2)], Some(3)),
+            (None, vec![(4, 3)], Some(0)),
+            (Some(5), vec![(4, 1)], Some(2)),
+            (Some(2), vec![], Some(3)),
+            (Some(3), vec![], Some(0)),
+            (Some(0), vec![], Some(1)),
+        ] {
+            let (word, asked) = stepped_swarm(&catalog, RuleSource::Engine, held, &draws);
+            assert_eq!(word, stepped, "{held:?}");
+            assert_eq!(asked.len(), draws.len(), "{held:?}");
+        }
+    }
+
+    #[test]
+    fn a_swarm_word_too_big_for_the_original_is_above_3_either_way() {
+        let mut chance = Ranged::of(&[(4, 0)]);
+        assert_eq!(step_swarm_word(Some(70_000), &mut chance), Some(1));
+        assert_eq!(chance.asked, [4], "read as i16::MAX, drawn");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_beam_of_exit_type_4_steps_nothing_and_draws_nothing() {
+        let catalog = swarmed();
+        for held in [None, Some(2), Some(5)] {
+            let (word, asked) = stepped_swarm(&catalog, RuleSource::Bible, held, &[]);
+            assert_eq!(word, held);
+            assert_eq!(asked, Vec::<u32>::new());
+        }
+    }
+
+    #[test]
+    fn the_players_beam_of_exit_type_4_steps_nothing() {
+        // No reader of +0xc906 reads the player's, so its `Rand(4)` is not
+        // drawn: draw order isn't matched.
+        let catalog = swarmed();
+        let mut session = session(&catalog, RuleSource::Engine);
+        fire(&mut session, &mut NeverFires);
+        assert_eq!(session.npcs()[0].swarm_leader, None);
+        session
+            .space
+            .combat
+            .raise_stray_step(ShipRef::Player, StrayWord::SwarmLeader);
+        let mut chance = Ranged::of(&[]);
+        session.step_stray_words(&mut chance);
+        assert!(chance.asked.is_empty(), "no draw");
+        assert_eq!((session.pod, session.ship.fate.pod_zeroed), (None, false));
+    }
+
+    #[test]
+    fn a_swarm_step_for_a_ship_that_is_gone_is_skipped() {
+        let catalog = swarmed();
+        let mut session = session(&catalog, RuleSource::Engine);
+        session.space.combat.raise_stray_step(
+            ShipRef::Npc(crate::traffic::npc::NpcId(99)),
+            StrayWord::SwarmLeader,
+        );
+        let mut chance = Ranged::of(&[]);
+        session.step_stray_words(&mut chance);
+        assert!(chance.asked.is_empty(), "nothing drawn");
+    }
+
+    /// The swarm word each tick's type AI sees of the NPC, in order.
+    #[derive(Debug, Default)]
+    struct SeesWord(std::cell::RefCell<Vec<Option<u32>>>);
+
+    impl crate::ai::Behaviour for SeesWord {
+        fn decide(
+            &self,
+            npc: &crate::Npc,
+            _around: &crate::ai::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> crate::ai::Goal {
+            self.0.borrow_mut().push(npc.swarm_leader);
+            crate::ai::Goal::Idle
+        }
+
+        fn trigger(
+            &self,
+            _npc: &crate::Npc,
+            _around: &crate::ai::Surroundings,
+        ) -> crate::combat::armament::Trigger {
+            crate::session::tests::FIRE
+        }
+    }
+
+    #[test]
+    fn the_next_tick_of_the_traffic_reads_the_stepped_word() {
+        let catalog = swarmed();
+        let mut session = session(&catalog, RuleSource::Engine);
+        let id = session.npcs()[0].id;
+        if let Some(npc) = session.space.npc_mut(id) {
+            npc.swarm_leader = Some(1);
+        }
+        let seen = SeesWord::default();
+        for _ in 0..2 {
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &seen,
+                Rules::default(),
+                &mut NeverFires,
+            );
+        }
+        assert_eq!(*seen.0.borrow(), [Some(1), Some(2)]);
     }
 }

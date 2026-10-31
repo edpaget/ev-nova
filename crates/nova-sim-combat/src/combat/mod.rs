@@ -2030,12 +2030,12 @@ impl Combat {
     /// the centre. An `ExitType` of -1 indexes the word before the cursors,
     /// the fold set, and steps it as one by the engine (@0x450fa-0x4523d;
     /// [`exits::step_stray`]), the beam starting at the centre
-    /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 5 lands on
-    /// +0xc908, outside the fight (the crew pods left, or the player's pod
-    /// countdown), and one of 6 on +0xc90a (the order word): by the engine
-    /// each is returned for the caller to raise
-    /// for the firer ([`Combat::take_stray_steps`]), the beam starting at
-    /// the centre ([`StrayWord`]).
+    /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 4 lands on
+    /// +0xc906, outside the fight (the swarm leader), one of 5 on +0xc908
+    /// (the crew pods left, or the player's pod countdown), and one of 6
+    /// on +0xc90a (the order word): by the engine each is returned for the
+    /// caller to raise for the firer ([`Combat::take_stray_steps`]), the
+    /// beam starting at the centre ([`StrayWord`]).
     fn beam_exit(
         &self,
         muzzle: &mut Muzzle,
@@ -3109,6 +3109,13 @@ impl Combat {
     /// session to step ([`StrayWord`]); taking them empties the list.
     pub fn take_stray_steps(&mut self) -> Vec<(ShipRef, StrayWord)> {
         std::mem::take(&mut self.stray_steps)
+    }
+
+    /// Raises a step of `word` for `ship`, as a beam of stray `ExitType`
+    /// does, for the session's tests of a firer gone by the time it steps.
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn raise_stray_step(&mut self, ship: ShipRef, word: StrayWord) {
+        self.stray_steps.push((ship, word));
     }
 
     /// The hits on stellars made since they were last taken, in order;

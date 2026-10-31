@@ -276,6 +276,31 @@ fn a_beam_of_exit_type_6_raises_an_order_step_for_its_firer_by_the_engine_only()
 }
 
 #[test]
+fn a_beam_of_exit_type_4_raises_a_swarm_step_for_its_firer_by_the_engine_only() {
+    let swarm_beam = WeaponRecord {
+        exit_type: 4,
+        ..exit_beam(0)
+    };
+    for (reading, steps) in [
+        (
+            RuleSource::Engine,
+            vec![(ShipRef::Npc(NpcId(1)), StrayWord::SwarmLeader)],
+        ),
+        (RuleSource::Bible, vec![]),
+    ] {
+        let mut combat = Combat::default();
+        combat.set_stray_beam_exit(reading);
+        let ship = Ship::at(1, 0.0, 0.0)
+            .armed(swarm_beam)
+            .facing(0.0)
+            .of(beam_exits());
+        let (beam, _) = fired(&mut combat, ship);
+        assert!(close_to(beam.start, Vec2::ZERO), "{reading:?}: {beam:?}");
+        assert_eq!(combat.take_stray_steps(), steps, "{reading:?}");
+    }
+}
+
+#[test]
 fn by_the_other_reading_a_beam_of_exit_type_5_raises_no_pod_step() {
     let mut combat = Combat::default();
     combat.set_stray_beam_exit(RuleSource::Bible);
