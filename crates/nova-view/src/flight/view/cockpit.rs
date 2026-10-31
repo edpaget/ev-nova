@@ -417,10 +417,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// commands through it, so any
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Tracks a flight key `input` presses or lets go of as held.
+    /// Tracks a flight key `input` presses or lets go of as held. A repeat
+    /// of L or I is no fresh down: they act on being held (the
+    /// `faded_keys` module), so one taken for a press would read again
+    /// once a refusal let go of the key.
     pub(super) fn track_held(&mut self, input: &Input) {
-        if let Input::Key { key, pressed, .. } = *input
+        if let Input::Key {
+            key,
+            pressed,
+            repeat,
+        } = *input
             && FLIGHT_KEYS.contains(&key)
+            && !(repeat && matches!(key, LAND_KEY | MISSION_INFO_KEY))
         {
             if pressed {
                 self.held.insert(key);

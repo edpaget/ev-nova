@@ -300,6 +300,48 @@ fn i_with_no_mission_on_a_lit_collapse_says_so_and_held_does_nothing_after() {
 }
 
 #[test]
+fn i_refused_on_a_lit_collapse_is_not_read_afresh_by_its_key_repeats() {
+    let mut view = under_the_white();
+    view.input(&key(MISSION_INFO_KEY, true));
+    let from = sent_count(&view);
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Faded));
+    collapses_lit(&mut view);
+    for _ in 0..3 {
+        view.tick(TICK);
+        view.input(&held(MISSION_INFO_KEY));
+        view.tick(TICK);
+    }
+    assert_eq!(sent(&view, from), [FADED_I], "nothing after while held");
+}
+
+#[test]
+fn l_refused_with_m_on_a_lit_collapse_is_not_read_afresh_by_its_key_repeats() {
+    let mut view = under_the_white();
+    view.input(&key(LAND_KEY, true));
+    tap(&mut view, MAP_KEY);
+    let from = sent_count(&view);
+    collapses_lit(&mut view);
+    for _ in 0..3 {
+        view.tick(TICK);
+        view.input(&held(LAND_KEY));
+        view.tick(TICK);
+    }
+    assert_eq!(sent(&view, from), [FlightCommand::Land], "once");
+}
+
+#[test]
+fn a_repeat_of_l_or_i_does_not_stand_for_a_press_lost_to_a_dialog() {
+    for k in [LAND_KEY, MISSION_INFO_KEY] {
+        let mut view = faked(super::frames::sol());
+        let from = sent_count(&view);
+        view.input(&held(k));
+        view.tick(TICK);
+        assert_eq!(sent(&view, from), [], "{k:?}");
+    }
+}
+
+#[test]
 fn l_on_a_lit_collapse_presses_the_land_key_once() {
     let mut view = under_the_white();
     view.input(&key(LAND_KEY, true));
@@ -463,6 +505,27 @@ fn m_on_an_unlit_collapse_opens_the_map_with_its_beep_and_stops_p() {
     assert!(view.map_open());
     assert_eq!(ui_sounds(&mut view), [UiSound::MapOpened]);
     assert_eq!(sent(&view, from), [FlightCommand::Land], "L still reads");
+}
+
+#[test]
+fn m_tapped_before_an_unlit_collapse_opens_a_map_that_closes_at_once() {
+    let mut view = under_the_white();
+    tap(&mut view, MAP_KEY);
+    collapses_unlit(&mut view);
+    assert!(view.map_open());
+    view.close_map();
+    assert!(!view.map_open(), "no release left to wait for");
+}
+
+#[test]
+fn m_held_over_an_unlit_collapse_opens_a_map_that_waits_for_its_release() {
+    let mut view = under_the_white();
+    view.input(&key(MAP_KEY, true));
+    collapses_unlit(&mut view);
+    view.close_map();
+    assert!(view.map_open(), "the wait");
+    view.input(&key(MAP_KEY, false));
+    assert!(!view.map_open(), "its release");
 }
 
 #[test]

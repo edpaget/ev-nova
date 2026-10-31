@@ -56,7 +56,11 @@
 //! flight not taking the command) clears the latch; a passing gate with
 //! the latch clear acts once and sets it; the key up clears it. A press
 //! sets it. Dialog keys stay press-only otherwise, by the user's decision:
-//! M, P and Y don't act on being held.
+//! M, P and Y don't act on being held. A key let go of as a dialog or a
+//! refusal takes the latched keys is held no more until it goes down
+//! afresh: ours has no live read to see it still down, so an OS repeat
+//! doesn't count ([`FlightView::track_held`]), and the latch it would have
+//! met has nothing to do.
 //!
 //! **No note in the core.** The session reports the collapse in the step
 //! and keeps nothing after it. The view carries the fact only in the
@@ -279,14 +283,18 @@ impl<
     }
 
     /// M, read on a `faded` screen: `_DoSystemMap` refuses between its two
-    /// beeps, and the latched keys go. Otherwise it opens the map.
+    /// beeps, and the latched keys go. Otherwise it opens the map, which
+    /// waits on M's release only if M is still down: a press kept for the
+    /// tick may have gone up already.
     fn read_map(&mut self, faded: bool) {
         if faded {
             self.ui_sounds.push(UiSound::MapOpened);
             self.ui_sounds.push(UiSound::MapClosed);
             self.keep_unlatched_keys();
         } else {
+            let down = self.held.contains(&MAP_KEY);
             self.open_map_by_key();
+            self.map_key_held = down;
         }
     }
 
