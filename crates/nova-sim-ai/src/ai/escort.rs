@@ -1191,6 +1191,24 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_launched_on_an_attack_class_drops_a_disabled_target_and_writes_attack() {
+        // `_AISetup` leaves -1 (@0x7f40c), which its first think's validity
+        // step reads (@0x83ac8), then it writes its class's order.
+        let mut down = pirate(2, 100.0, 0.0);
+        down.condition = Condition::Disabled;
+        let mut launched = having(
+            fighter(Some(EscortOrder::Attack)),
+            Goal::Attack(n(2)),
+            Some(n(2)),
+        );
+        launched.order_word = OrderWord::NONE;
+        let npcs = [launched, down, pirate(3, 200.0, 0.0)];
+        let decision = decision_of(ENGINE, &npcs, 0.0, &[]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)));
+        assert_eq!(decision.order_word, Some(OrderWord(2)));
+    }
+
+    #[test]
     fn a_word_of_attack_keeps_a_disabled_target_into_a_think_of_defend_or_formation() {
         // The class cleared under it, or the fallback firing on that think:
         // Defend reads its distance (@0x83c67-0x83cd6), and formation keeps

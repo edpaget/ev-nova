@@ -30,9 +30,12 @@
 //!   ([`Session::with_rules`]): by the engine it takes the
 //!   standing order of the fleet's first escort of its class, Return to
 //!   Hangar excepted, and no target (`_LaunchFighter` @0x3dbec, `_EscortAI`
-//!   @0x83ae4-0x83b34); by the other reading, launched while the player
-//!   targets a ship that is not one of its escorts, it attacks that ship
-//!   at once. Launching makes no save due, as firing ammunition does not.
+//!   @0x83ae4-0x83b34), its order word -1 (`_AISetup` @0x3dd5e, @0x7f40c)
+//!   until its first think, so that think's validity step drops a disabled
+//!   target whatever the class's order; by the other reading, launched
+//!   while the player targets a ship that is not one of its escorts, it
+//!   attacks that ship at once, holding Attack's word as a command would
+//!   leave it. Launching makes no save due, as firing ammunition does not.
 //! - **An NPC's fighter** is led by its carrier (+0x9a = the carrier,
 //!   @0x3d866-0x3d870), of the carrier's government, with goal 0 and no
 //!   order of its own (`_AISetup` @0x7f3e8, @0x7f40c), and takes the
@@ -83,6 +86,7 @@ use crate::combat::ion::Ion;
 use crate::combat::weapon::WeaponSpec;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
+use crate::fleet::OrderWord;
 use crate::flight::ShipState;
 use crate::has_max;
 use crate::hyperspace::JUMP_FUEL;
@@ -243,6 +247,10 @@ impl Session {
                 ShipRef::Player => false,
             });
         let order = if target.is_some() {
+            // Without the word, its first think's validity step would drop
+            // the disabled target this reading keeps (`_LaunchFighter`
+            // leaves -1, @0x3dd5e).
+            npc.order_word = OrderWord::of(Some(EscortOrder::Attack));
             Some(EscortOrder::Attack)
         } else {
             self.space
@@ -1539,6 +1547,41 @@ pub(super) mod tests {
         );
         let ai = sitting_ai();
         assert!(shield_drops(&mut session, &catalog, &ai, quarry, 300));
+    }
+
+    #[test]
+    fn by_the_engine_a_fighter_launched_on_an_attack_class_holds_no_word() {
+        // `_AISetup` writes -1 last in `_LaunchFighter` (@0x3dd5e, @0x7f40c).
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
+        let id = launch_now(&mut session).expect("launched");
+        let fighter = session.space.npc(id).expect("here");
+        assert_eq!(fighter.escort_order(), Some(EscortOrder::Attack));
+        assert_eq!(fighter.order_word, crate::fleet::OrderWord::NONE);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_fighter_launched_at_a_target_holds_attacks_word() {
+        // That reading gives the launch an Attack as a command would, whose
+        // word is what keeps a disabled target through the next think.
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Bible);
+        let quarry = pirate(&mut session, 0.0, -300.0);
+        let sortie = Sortie {
+            carrier: ShipRef::Player,
+            bay: BAY,
+            ship: VIPER,
+            from: *session.player(),
+            heading: 0.0,
+            target: Some(ShipRef::Npc(quarry)),
+        };
+        let id = session
+            .launch_fighter(&sortie, &mut NeverFires)
+            .expect("launched");
+        let fighter = session.space.npc(id).expect("here");
+        assert_eq!(fighter.target, Some(ShipRef::Npc(quarry)));
+        assert_eq!(fighter.order_word, crate::fleet::OrderWord(2));
     }
 
     #[test]
