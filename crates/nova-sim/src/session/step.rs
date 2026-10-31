@@ -34,7 +34,8 @@
 //!    as its phase settles, the beams' and shockwaves' included, as
 //!    `_DamageShip` does (@0x44385, @0x4453d), so only the session's own
 //!    calls are left here, before the frame is drawn. Then the attack
-//!    quotes the answers raise are said
+//!    quotes the pass left, those the frame's line work didn't say (see
+//!    the `comm_calls` module), are said
 //!    (`_ShowPersonHailQuote` @0x89ce1) and `_HandleShip`'s quote roll runs
 //!    (@0x33f0f-0x33fba; [`Session::tick_quotes`]), and the pass's quotes,
 //!    fight events and ships are reported ([`PassReport`]);

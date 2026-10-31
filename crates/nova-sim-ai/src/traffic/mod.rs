@@ -84,7 +84,8 @@
 //!    pirate's wait on a boarded victim settled in berth order,
 //!    [`board_wait::resolve`]; each decision that turns on the player
 //!    asking its person's quote gate, [`Traffic::turn_with_quote`], before
-//!    any goal is taken; a pirate's count wait ending at none left,
+//!    any goal is taken, its quote queued on the line at its berth
+//!    ([`OnLine::AttackQuote`]); a pirate's count wait ending at none left,
 //!    [`board_wait::lapse`]; then each plunder decided, in berth order,
 //!    [`plunder::resolve`], queued on the line at the pirate's berth
 //!    ([`on_line`]); then, on the AI timer, each
@@ -2588,6 +2589,9 @@ impl Traffic {
     /// the player as `_AIMakeShipAttackPlayer` has it
     /// ([`Traffic::turn_with_quote`]), since they were last taken, in
     /// order, an NPC once for each time; taking them empties the list.
+    /// A think's isn't among them: it goes on the line
+    /// ([`OnLine::AttackQuote`]), and the session says these either side of
+    /// the line's work (see `nova_sim`'s `comm_calls` module).
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)

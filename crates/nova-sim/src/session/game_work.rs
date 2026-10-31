@@ -34,11 +34,13 @@
 //!    (`_LaunchFighter`, see the `fighters` module), a fighter above its
 //!    carrier thinking then, and the loop resumed after that slot
 //!    ([`Session::dispatch_npcs`]); then the thinks' voice cues answered
-//!    in berth order; then the frame's work on the line,
-//!    every think's calls, scan, plunders and refuel note, the launched
-//!    fighters' among them, settled in slot order
-//!    ([`Session::settle_line_queue`], see the `comm_calls` module). All
-//!    before `_HandleShot`, so the fighters move on their launch frame.
+//!    in berth order; then the attack quotes from before the loop said
+//!    ([`Session::say_quotes_before_the_line`]), and the frame's work on
+//!    the line, every think's attack quote, calls, scan, plunders and
+//!    refuel note, the launched fighters' among them, settled in slot
+//!    order ([`Session::settle_line_queue`], see the `comm_calls` module).
+//!    All before `_HandleShot`, so the fighters move on their launch
+//!    frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit,
 //!    their hits settled and answered.

@@ -51,8 +51,11 @@
 //! `_AIMakeShipAttackPlayer` has it, while it is no threat to the player
 //! yet (`_ExtendedIsThreatToPlayer`,
 //! [`Npc::threatens_player_extended`](crate::traffic::npc::Npc::threatens_player_extended)),
-//! says its quote at the start of the next quote tick, with no draw and
-//! none of the filters above. It turns so through the player's hit on a
+//! says its quote with no draw and none of the filters above: where the
+//! frame reaches it, in the line's slot order for a think's, just ahead of
+//! that for what came before the loop, and at the start of the next quote
+//! tick for the rest (see the `comm_calls` module). It turns so through
+//! the player's hit on a
 //! ship whose wait runs, that the player can't see or that is in a goal
 //! the threat leaves out; a declined bribe; or a warship's or
 //! interceptor's decision (its government's 0x0004 word, a grudge, a
@@ -199,9 +202,9 @@ impl Session {
     /// `STR#` 7101 (@0x445b8-0x445e1; see the module docs and
     /// [`person`](crate::person)), at whose head the message line counts
     /// down a frame, as `_HandleComm` does on the advance pass (see the
-    /// `comm_calls` module): first each attack quote queued, said
-    /// with no draw; then, in order, each person NPC whose quote
-    /// may be said draws `Rand(140)`, and says it when it is due now, or
+    /// `comm_calls` module): first each attack quote queued since the
+    /// line's settle, said with no draw; then, in order, each person NPC
+    /// whose quote may be said draws `Rand(140)`, and says it when it is due now, or
     /// on a draw of 0 when the message line is free
     /// ([`CommLine::free_for_calls`](crate::CommLine::free_for_calls))
     /// and its own last is more than [`QUOTE_GAP_TICKS`] back. While the
@@ -346,9 +349,10 @@ impl Session {
         }
     }
 
-    /// Says each attack quote queued so far (see the module docs), read
-    /// from the session's own string lists, drawing on `chance`. Queued
-    /// while landed, they wait.
+    /// Says each attack quote queued so far, as the frame reaches
+    /// `_AIDispatch`'s loop (see the `comm_calls` module), read from the
+    /// session's own string lists, drawing on `chance`. While the ship is
+    /// landed nothing is said, and they stay queued.
     pub(super) fn say_quotes_before_the_line(&mut self, chance: &mut dyn Chance) {
         if self.mode.landed().is_some() {
             return;

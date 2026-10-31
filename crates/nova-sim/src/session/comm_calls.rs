@@ -38,8 +38,10 @@
 //!   any ship thinks; ours counts down after the frame's traffic and
 //!   fight, before the quotes, so a line raised by the frame's traffic
 //!   or fight is read by the next frame's calls one tick shorter, as the
-//!   original's is, and a hail quote one tick longer: a one-frame lag
-//!   before a call that crosses no boundary the player sees.
+//!   original's is, and a quote said behind the countdown (one from
+//!   `_HandleShot`, the ship loop or the beams, or the roll) one tick
+//!   longer: a one-frame lag before a call that crosses no boundary the
+//!   player sees.
 //!
 //! **The calls.** Each think's call ([`Decision::comm_call`](crate::ai::Decision::comm_call),
 //! queued on the line, [`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line))
@@ -67,8 +69,9 @@
 //! inside their thinks, one slot after another in ascending order
 //! (`_DoPlayGameWork` @0x44270-0x442ae), after `_HandlePlayer`
 //! (@0x43e19), and each through `_DisplayComm`, which sets `_commCount`
-//! at once (@0x9024b): a ship's calls (`_AICallForHelp` @0x83248,
-//! `_InterceptorAI` @0x8cff5), then its scan of the player
+//! at once (@0x9024b): a ship's attack quote (`_ShowPersonHailQuote` via
+//! `_AIMakeShipAttackPlayer` @0x89ce1), its calls (`_AICallForHelp`
+//! @0x83248, `_InterceptorAI` @0x8cff5), then its scan of the player
 //! (`_ScanPlayer` from @0x8f11e-0x8f38a), its refuel note (@0x8f6a1),
 //! and its repair note, plunder lines and dock (`_LowLevelAIHandler`
 //! @0x86ef4, `_AIPlunderShipContents` @0x84791 and @0x84941, the dock
@@ -85,10 +88,10 @@
 //! among the slots, and again after the ship loop for the docks and
 //! repairs the fly half made:
 //!
-//! - an earlier slot's scan line, stolen line, refuel or repair note
-//!   keeps a later slot's distress call and pre-scan hail off, and their
-//!   `snd ` 154, while a call from an earlier slot still shows and a
-//!   later slot's line replaces it;
+//! - an earlier slot's attack quote, scan line, stolen line, refuel or
+//!   repair note keeps a later slot's distress call and pre-scan hail
+//!   off, and their `snd ` 154, while a call from an earlier slot still
+//!   shows and a later slot's line replaces it;
 //! - the ships are kept in the order they came, not by slot, so the
 //!   queue sorts its work by berth: a ship that came later into a lower
 //!   berth is answered first.
@@ -101,10 +104,26 @@
 //!
 //! The lines the view raises from `_HandlePlayer`'s keys (a jump's
 //! refusal, an escort command, Return) set the line before the frame's
-//! steps, so before every call too. The attack quotes a think raises
-//! (`_ShowPersonHailQuote` via `_AIMakeShipAttackPlayer` @0x89ce1) are
-//! still said after the fight: rdm:phase/combat-ai-fidelity/phase-28-left-out-of-phase-22.
-//! A ship that left the system in the frame calls nothing.
+//! steps, so before every call too. A ship that left the system in the
+//! frame calls nothing.
+//!
+//! **The other attack quotes.** The quotes the traffic holds apart
+//! ([`Traffic::take_attack_quotes`](crate::traffic::Traffic::take_attack_quotes))
+//! settle where the frame reaches them. A collision hit
+//! (`_DamageShip` in the passes @0x43e70-0x44010), a defence ship's respawn
+//! (`_SpawnStellarDefenseShip` @0x3d498) and a declined bribe come before
+//! `_AIDispatch`'s loop, so [`Session::game_work`] says them just ahead of
+//! the line's settle ([`Session::say_quotes_before_the_line`]), ahead of
+//! every call. What `_HandleShot`, the ship loop and the beams raise comes
+//! after the loop, so it stays with [`Session::tick_quotes`].
+//!
+//! Two orders are left out, each in
+//! rdm:phase/play-feel-6-followups/phase-19-quotes-after-the-loop-against-the-docks-lines:
+//! a quote from before the loop lands after the frame's fleet arrival line
+//! ([`Session::say_quotes_before_the_line`] follows `announce_fleets`),
+//! where the collision passes come before `_EnterMoreShips` @0x44237 and
+//! `_HyperSpawnFleet` @0x42607-0x426f4; and those after the loop aren't in
+//! slot order against the fly half's docks and repairs.
 
 use super::{Outbox, Session, Setup, Space, Statics};
 use crate::ai::CommCall;
@@ -198,8 +217,10 @@ impl Session {
 
     /// Settles the frame's work on the message line
     /// ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)),
-    /// in slot order: each scan of the player ([`Session::scanned_by`]),
-    /// convicting by `law`; each call; each pirate's or repairer's deed
+    /// in slot order: each think's attack quote
+    /// ([`Session::say_attack_quote`]); each scan of the player
+    /// ([`Session::scanned_by`]), convicting by `law`; each call; each
+    /// pirate's or repairer's deed
     /// ([`Session::answer_pirate`]); and each refuel's note, drawing on
     /// `chance`, so an earlier slot's line keeps a later slot's call off
     /// as the original's does (see the module docs). Then the
