@@ -99,7 +99,6 @@ use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcHold, NpcId};
 use crate::traffic::ship_display::{AnimRoll, NpcDisplay, Spawn};
 use crate::traffic::table::ShipKind;
-use crate::voice::roll_variant;
 
 impl Session {
     /// Puts each fighter of `sorties` in the system (see the module
@@ -205,10 +204,7 @@ impl Session {
         // `_LaunchFighter` rolls its voice, the player's fighter and an
         // NPC carrier's alike (@0x3d9cc-0x3da3a; see the `voices` module),
         // before it joins, so its record and its berth take it.
-        npc.voice = Some(roll_variant(
-            self.statics.forced_variant(npc.ship),
-            &mut *chance,
-        ));
+        npc.voice = Some(self.statics.rolled_variant(npc.ship, &mut *chance));
         match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.space.join_carrier(npc, id),

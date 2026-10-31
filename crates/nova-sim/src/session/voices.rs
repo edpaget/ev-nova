@@ -82,8 +82,21 @@ impl Statics {
 
     /// The variant the attributes government of class `ship` forces, if
     /// any (+0x40).
-    pub(super) fn forced_variant(&self, ship: ShipId) -> Option<VoiceVariant> {
+    fn forced_variant(&self, ship: ShipId) -> Option<VoiceVariant> {
         self.voices.forced_of(self.attributes_govt(ship))
+    }
+
+    /// The variant a ship of class `ship` rolls, on `chance`: the one its
+    /// class's government forces, else Rand(2) ([`roll_variant`]). Every
+    /// session writer of a rolled
+    /// [`Npc::voice`](crate::traffic::npc::Npc::voice) takes its variant
+    /// here.
+    pub(super) fn rolled_variant(
+        &self,
+        ship: ShipId,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> VoiceVariant {
+        roll_variant(self.forced_variant(ship), chance)
     }
 
     /// The attributes government of class `ship` (+0x9f6): its record's
@@ -111,11 +124,11 @@ impl Space {
         }
     }
 
-    /// Rolls the variant of NPC `id`, the one writer of a rolled
-    /// [`Npc::voice`](crate::traffic::npc::Npc::voice), on `chance`: the
-    /// variant its class's government forces, else Rand(2)
-    /// ([`roll_variant`]), and it stays in the ship's berth
-    /// ([`Traffic::set_voice`](crate::traffic::Traffic::set_voice)).
+    /// Rolls the variant of NPC `id`, a ship already in the system, on
+    /// `chance` ([`Statics::rolled_variant`]), and it stays in the ship's
+    /// berth ([`Traffic::set_voice`](crate::traffic::Traffic::set_voice)).
+    /// A fighter rolls before it joins, so its launch takes the variant
+    /// from [`Statics::rolled_variant`] directly.
     pub(super) fn roll_voice(
         &mut self,
         id: NpcId,
@@ -123,7 +136,7 @@ impl Space {
         chance: &mut (impl Chance + ?Sized),
     ) {
         if let Some(npc) = self.npc(id) {
-            let variant = roll_variant(statics.forced_variant(npc.ship), chance);
+            let variant = statics.rolled_variant(npc.ship, chance);
             self.traffic.set_voice(id, variant);
         }
     }

@@ -562,7 +562,9 @@ pub struct Npc {
     /// [`RuleKey::ReusedSlotVoice`](crate::RuleKey::ReusedSlotVoice)'s
     /// other reading until `_EscortAI`'s roll. Write it through
     /// [`Traffic::set_voice`](crate::traffic::Traffic::set_voice), so the
-    /// berth keeps it. The session rolls it as `_LaunchFighter`,
+    /// berth keeps it; a ship not yet added may carry a voice instead, for
+    /// [`Traffic::add_npc_at`](crate::traffic::Traffic::add_npc_at) to
+    /// write to its berth. The session rolls it as `_LaunchFighter`,
     /// `_DoShipCapture`, `_AIShipCapturedByPlayer` and `_EscortAI` roll
     /// it, and keeps an escort's across jumps and landings (see
     /// `nova_sim::voice`). Saved only for a carried fighter, as the
