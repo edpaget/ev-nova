@@ -5,7 +5,7 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key, MouseButton};
+use crate::input::{Input, MouseButton};
 use crate::text::TextMetrics;
 
 /// The rows' size, in Geneva, as the description's.
@@ -17,10 +17,9 @@ pub const SELECTED: Color = Color::rgba(48, 64, 112, 255);
 
 /// Rows of text a line high each, from the top of a box, as many shown
 /// as fit it whole, from a first row that follows the selection. A click
-/// on a row selects it, and Up and Down move the selection a row,
-/// stopping at the ends ([`RowList::input`]); [`RowList::step_wrapping`]
-/// steps it wrapping round the ends instead. Nothing is drawn outside the
-/// box.
+/// on a row selects it ([`RowList::input`]); [`RowList::step_wrapping`]
+/// steps it a row, wrapping round the ends, from no selection too. Nothing
+/// is drawn outside the box.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowList {
     rows: Vec<String>,
@@ -131,42 +130,21 @@ impl RowList {
         self.selected != before
     }
 
-    /// A press on a row shown selects it; Up and Down, repeats included,
-    /// move the selection, stopping at the ends. Returns whether the
-    /// selection changed.
+    /// A press on a row shown selects it. Returns whether the selection
+    /// changed.
     pub fn input(&mut self, input: &Input) -> bool {
         let before = self.selected;
-        match *input {
-            Input::Key {
-                key: Key::Up,
-                pressed: true,
-                ..
-            } => {
-                if let Some(index) = self.selected {
-                    self.select(index.saturating_sub(1));
-                }
+        if let Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        } = *input
+        {
+            let hit = (self.first..self.rows.len())
+                .find(|&index| self.row_bounds(index).is_some_and(|row| row.contains(at)));
+            if let Some(index) = hit {
+                self.select(index);
             }
-            Input::Key {
-                key: Key::Down,
-                pressed: true,
-                ..
-            } => {
-                if let Some(index) = self.selected {
-                    self.select(index + 1);
-                }
-            }
-            Input::PointerButton {
-                button: MouseButton::Left,
-                pressed: true,
-                at,
-            } => {
-                let hit = (self.first..self.rows.len())
-                    .find(|&index| self.row_bounds(index).is_some_and(|row| row.contains(at)));
-                if let Some(index) = hit {
-                    self.select(index);
-                }
-            }
-            _ => {}
         }
         self.selected != before
     }
@@ -189,6 +167,7 @@ impl RowList {
 mod tests {
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::input::Key;
     use crate::text::fixture::MonoMetrics;
 
     /// A 100 x 40 box at (10, 20): three rows of 12 fit.
@@ -203,14 +182,6 @@ mod tests {
             BOX,
             &MonoMetrics,
         )
-    }
-
-    fn key(key: Key, repeat: bool) -> Input {
-        Input::Key {
-            key,
-            pressed: true,
-            repeat,
-        }
     }
 
     fn press(at: Point) -> Input {
@@ -278,31 +249,24 @@ mod tests {
     }
 
     #[test]
-    fn up_and_down_move_the_selection_held_at_the_ends() {
+    fn keys_go_to_the_screen_not_the_list() {
         let mut rows = list(3);
-        assert!(!rows.input(&key(Key::Up, false)), "at the top");
-        assert!(rows.input(&key(Key::Down, true)), "repeats move");
-        assert_eq!(rows.selected(), Some(1));
-        assert!(rows.input(&key(Key::Down, false)));
-        assert!(!rows.input(&key(Key::Down, false)), "at the bottom");
-        assert_eq!(rows.selected(), Some(2));
-        assert!(rows.input(&key(Key::Up, false)));
-        assert_eq!(rows.selected(), Some(1));
-        assert!(!rows.input(&key(Key::Enter, false)));
-        let released = Input::Key {
-            key: Key::Down,
-            pressed: false,
-            repeat: false,
-        };
-        assert!(!rows.input(&released));
-        assert_eq!(rows.selected(), Some(1));
+        for key in [Key::Up, Key::Down, Key::Enter] {
+            let press = Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            };
+            assert!(!rows.input(&press), "{key:?}");
+            assert_eq!(rows.selected(), Some(0), "{key:?}");
+        }
     }
 
     #[test]
     fn the_list_scrolls_to_keep_the_selection_shown() {
         let mut rows = list(5);
         for _ in 0..3 {
-            rows.input(&key(Key::Down, false));
+            rows.step_wrapping(true);
         }
         assert_eq!(rows.selected(), Some(3));
         assert_eq!(rows.first(), 1);
@@ -326,7 +290,7 @@ mod tests {
     fn stepping_down_a_long_list_keeps_scrolling_a_row_at_a_time() {
         let mut rows = list(8);
         for _ in 0..5 {
-            rows.input(&key(Key::Down, false));
+            rows.step_wrapping(true);
         }
         assert_eq!(rows.selected(), Some(5));
         assert_eq!(rows.first(), 3);
@@ -417,7 +381,7 @@ mod tests {
     fn an_empty_list_selects_nothing() {
         let mut rows = list(0);
         assert_eq!(rows.selected(), None);
-        assert!(!rows.input(&key(Key::Down, false)));
+        assert!(!rows.step_wrapping(true));
         rows.select(0);
         assert_eq!(rows.selected(), None);
         assert!(drawn(&rows).is_empty());
