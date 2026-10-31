@@ -606,7 +606,7 @@ mod tests {
         let (holder, _) = held(&mut session);
         let boarded = board_by(&mut session, &NovaLaw::default());
         assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
-        session.space.escorts.aboard = None;
+        assert_eq!(take(&mut session, Take::Abort, &[]).0, Taken::Aborted);
         assert_eq!(defends(&session, holder), Some(EARTH), "@0x897e6-0x8980f");
         let target = session.space.npc(holder).map(|npc| npc.target);
         assert_eq!(target, Some(None), "let go all the same");
