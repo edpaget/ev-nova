@@ -73,9 +73,7 @@ impl Session {
             .statics
             .ship_record(npc.ship)
             .map(|record| AiType::from_raw(record.inherent_ai));
-        let order = self
-            .space
-            .class_order(&self.pilot, &self.statics, npc.class);
+        let order = self.space.class_order(npc.class);
         let Some(npc) = self.space.npc_mut(id) else {
             return;
         };
@@ -239,12 +237,7 @@ mod tests {
         assert_eq!(npc.ai_type, AiType::WimpyTrader, "ship 200's InherentAI");
         let slot = mark.formation.expect("in formation");
         assert_eq!((slot.slot, slot.ships), (2, 2));
-        assert_eq!(
-            mark.order,
-            session
-                .space
-                .class_order(&session.pilot, &session.statics, npc.class)
-        );
+        assert_eq!(mark.order, session.space.class_order(npc.class));
         assert_eq!(mark.order, Some(EscortOrder::Hold), "_EscortAI @0x83ad8");
         assert_eq!(marked(&session), [0, 0]);
         assert!(session.take_save_due());

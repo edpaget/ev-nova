@@ -28,7 +28,7 @@
 //!   phase 8's escorts. What it does first follows the rulebook's
 //!   [`RuleKey::FighterLaunch`](crate::RuleKey::FighterLaunch)
 //!   ([`Session::with_rules`]): by the engine it takes the
-//!   standing order of the fleet's first escort of its class, Return to
+//!   order kept for its class, Return to
 //!   Hangar excepted, and no target (`_LaunchFighter` @0x3dbec, `_EscortAI`
 //!   @0x83ae4-0x83b34); by the other reading, launched while the player
 //!   targets a ship that is not one of its escorts, it attacks that ship
@@ -243,8 +243,7 @@ impl Session {
         let order = if target.is_some() {
             Some(EscortOrder::Attack)
         } else {
-            self.space
-                .class_order(&self.pilot, &self.statics, npc.class)
+            self.space.class_order(npc.class)
         };
         npc.escort = Some(EscortDuty {
             formation: FormationSlot::default(),
@@ -1364,7 +1363,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fighter_launched_takes_its_classs_mission_escorts_order() {
+    fn a_fighter_launched_takes_its_classs_kept_order_beside_a_mission_escort() {
         let catalog = carrying();
         let mut session = alone(&catalog);
         let record = &catalog.ship_records[1];
@@ -1377,7 +1376,13 @@ pub(super) mod tests {
             formation: Some(FormationSlot::default()),
             order: Some(EscortOrder::Hold),
         });
-        session.space.traffic.add_npc(escort);
+        let mission = session.space.traffic.add_npc(escort);
+        session.space.mark_commanded(mission);
+        let index = EscortClass::ALL
+            .iter()
+            .position(|&each| each == class)
+            .expect("a class");
+        session.space.escorts.class_orders[index] = Some(EscortOrder::Hold);
         assert_eq!(
             launched_order(&mut session, &catalog),
             Some(EscortOrder::Hold)

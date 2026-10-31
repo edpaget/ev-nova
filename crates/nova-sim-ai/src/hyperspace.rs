@@ -13,9 +13,8 @@
 //!   undirected, rather than normalising the links itself, and
 //!   [`StarMap::neighbours`] is every system linked with one either way,
 //!   by ascending ID. [`StarMap::listed_links`] is only the links a
-//!   system's own `sÿst` lists, in Con order: the original's Hyper Select
-//!   offers just these (`_HandlePlayer` @0x69bb2-0x69ce7 walks the
-//!   current system's own Con slots). [`StarMap::route`] is the fewest
+//!   system's own `sÿst` lists, in Con order, each once and never itself.
+//!   [`StarMap::route`] is the fewest
 //!   jumps from one system to another, and [`StarMap::jumps`] the systems
 //!   one jump reaches, under a [`HyperlinkRule`].
 //! - Routing is one-way by the engine's [`HyperlinkRule`]: a jump goes
@@ -69,13 +68,14 @@
 //!   distance (at least the standard one) plus [`ARRIVAL_MARGIN`] from the
 //!   centre, on the side facing the system it came from, at rest and
 //!   facing the centre, so it can jump on at once.
-//! - [`next_hyper_destination`] is the system Hyper Select (the
-//!   original's `\` key) cycles the destination to, under the
-//!   [`HyperSelectRule`]: by the engine's, the current system's listed
-//!   links in Con order, after the system selected in nav mode 3. A link to a system
-//!   the galaxy overlay hides offers the visible system at its place
-//!   instead, or nothing when there is none, as the original resolves
-//!   each slot through `_FindActiveCoLocatedSystem` (@0x4be0).
+//! - The [`HyperSelectRule`] says which systems Hyper Select (the
+//!   original's `\` key) cycles the destination through: by the engine's,
+//!   the current system's raw Con slots, walked by
+//!   `nova_sim::Session::select_next_system`, where a slot naming a system
+//!   the galaxy overlay hides shows the visible system at its place, or
+//!   is skipped when there is none, as the original resolves each slot
+//!   through `_FindActiveCoLocatedSystem` (@0x4be0). By the other,
+//!   [`next_one_jump_destination`] is the next system one jump reaches.
 //! - [`hops_per_jump`] is how many systems along the course one jump
 //!   passes, from the ship's multi-jump total and the [`MultiJumpRule`]
 //!   it follows.
@@ -142,16 +142,20 @@ pub fn hops_per_jump(multi_jump: u32, rule: MultiJumpRule) -> u32 {
 /// hyperspace destination through, and where it starts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HyperSelectRule {
-    /// The original engine's reading: the current system's own `sÿst`
-    /// Con slots in record order ([`StarMap::listed_links`]), so a link
-    /// only the other system lists is never offered (`_HandlePlayer`
-    /// @0x69bb2-0x69ce7; `_FindActiveCoLocatedSystem` @0x4be0 skips an
-    /// empty or inactive slot). It starts after the system selected in nav
-    /// mode 3 (@0x69cab-0x69cce), or from the first slot in any other mode,
-    /// whose selection it lets go of first (@0x69c98). The course does not
-    /// count: only the cue (`_CueNextHyperRouteDest` @0xe2dc) selects its
-    /// first hop. Each press keeps the course and moves only the
-    /// selection (@0x69c8e-0x69cd2).
+    /// The original engine's reading: the current system's own 16 raw
+    /// `sÿst` Con slots in record order, each visited once, so a repeated
+    /// link is visited once per slot, the current system is visited when
+    /// it lists itself, and a link only the other system lists is never
+    /// offered. An empty slot, or one with no visible system at its place,
+    /// is skipped (`_HandlePlayer` @0x69c16-0x69c56). It starts after the
+    /// slot +0x6c holds in nav mode 3, and from the first slot with
+    /// nothing selected there or in any other mode, whose selection it
+    /// ignores (@0x69c8e-0x69cce). `nova_sim::Session::select_next_system`
+    /// runs the walk, as the slots and the slot noted are the session's.
+    /// The course does not count: only the cue
+    /// (`_CueNextHyperRouteDest` @0xe2dc) selects its first hop. Each
+    /// press keeps the course and moves only the selection
+    /// (@0x69c8e-0x69cd2).
     #[default]
     Engine,
     /// The phase text's reading: every system the ship can jump to under
@@ -190,31 +194,22 @@ pub enum HyperlinkRule {
     BothWays,
 }
 
-/// The system Hyper Select picks next from `from`, under `rule`, given the
-/// plotted `course` and the system `selected` in nav mode 3 (`None` in any
-/// other mode): the next in the rule's cycle, wrapping around. `None` when
-/// `from` has no links to offer.
-/// The [`HyperSelectRule::OneJumpCourse`] reading cycles the systems
-/// `hyperlinks` lets the ship jump to.
+/// The system Hyper Select picks next from `from` by the
+/// [`HyperSelectRule::OneJumpCourse`] reading, given the plotted `course`:
+/// the next system `hyperlinks` lets the ship jump to, wrapping around.
+/// `None` when it can jump nowhere.
 #[must_use]
-pub fn next_hyper_destination(
+pub fn next_one_jump_destination(
     map: &StarMap,
     from: SystemId,
     course: &[SystemId],
-    selected: Option<SystemId>,
-    rule: HyperSelectRule,
     hyperlinks: HyperlinkRule,
 ) -> Option<SystemId> {
-    match rule {
-        HyperSelectRule::Engine => next_after(map.listed_links(from), selected),
-        HyperSelectRule::OneJumpCourse => {
-            let current = match course {
-                [only] => Some(*only),
-                _ => None,
-            };
-            next_after(&map.jumps(from, hyperlinks), current)
-        }
-    }
+    let current = match course {
+        [only] => Some(*only),
+        _ => None,
+    };
+    next_after(&map.jumps(from, hyperlinks), current)
 }
 
 /// Why no route can be plotted.
@@ -620,9 +615,8 @@ impl StarMap {
     }
 
     /// The systems `id`'s own `sÿst` lists as hyperlinks, in its Con
-    /// order, each once, without itself or a system not on the map: the
-    /// links the original's Hyper Select offers. Empty when it is not on
-    /// the map.
+    /// order, each once, without itself or a system not on the map. Empty
+    /// when it is not on the map.
     #[must_use]
     pub fn listed_links(&self, id: SystemId) -> &[SystemId] {
         self.nodes.get(&id).map_or(&[], |node| &node.listed)
@@ -1137,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_to_a_hidden_system_reaches_the_lowest_visible_one_for_hyper_select() {
+    fn a_link_to_a_hidden_system_is_listed_and_drawn_to_the_lowest_visible_one() {
         let mut systems = replaced_systems();
         systems.push(system_at(5, (50.0, 50.0), &[]));
         let hidden = BTreeSet::from([SystemId(2)]);
@@ -1147,7 +1141,7 @@ mod tests {
         assert_eq!(
             map.links(),
             vec![(SystemId(1), SystemId(3))],
-            "drawn to the one Hyper Select offers"
+            "drawn to the lowest"
         );
         let map = StarMap::with_hidden(systems, &hidden, CoLocated::Lowest);
         assert_eq!(map.listed_links(SystemId(1)), ids(&[3]));
@@ -1430,85 +1424,37 @@ mod tests {
 
     // Hyper Select.
 
-    /// The system Hyper Select picks in `hub` from 130 with `course` and
-    /// `selected` in mode 3, by the engine's hyperlinks.
-    fn select(course: &[i16], selected: Option<i16>, rule: HyperSelectRule) -> Option<SystemId> {
-        select_by(course, selected, rule, Engine)
-    }
-
-    /// The system Hyper Select picks in `hub` from 130 with `course` and
-    /// `selected` in mode 3, under `hyperlinks`.
-    fn select_by(
-        course: &[i16],
-        selected: Option<i16>,
-        rule: HyperSelectRule,
-        hyperlinks: HyperlinkRule,
-    ) -> Option<SystemId> {
-        next_hyper_destination(
-            &hub(),
-            SystemId(130),
-            &ids(course),
-            selected.map(SystemId),
-            rule,
-            hyperlinks,
-        )
+    /// The system the one-jump course reading picks in `hub` from 130 with
+    /// `course`, under `hyperlinks`.
+    fn one_jump(course: &[i16], hyperlinks: HyperlinkRule) -> Option<SystemId> {
+        next_one_jump_destination(&hub(), SystemId(130), &ids(course), hyperlinks)
     }
 
     #[test]
-    fn the_engine_cycles_the_listed_links_after_the_system_selected() {
-        use HyperSelectRule::Engine;
-        assert_eq!(HyperSelectRule::default(), Engine);
-        assert_eq!(select(&[], None, Engine), Some(SystemId(134)), "none");
-        assert_eq!(select(&[], Some(131), Engine), Some(SystemId(135)));
-        assert_eq!(select(&[], Some(135), Engine), Some(SystemId(134)), "wraps");
-        assert_eq!(
-            select(&[131, 132], None, Engine),
-            Some(SystemId(134)),
-            "the course does not matter: nothing selected starts from the first"
-        );
-        assert_eq!(
-            select(&[131], Some(135), Engine),
-            Some(SystemId(134)),
-            "nor with a selection"
-        );
-        assert_eq!(
-            select(&[], Some(136), Engine),
-            Some(SystemId(134)),
-            "136 is not listed by 130"
-        );
+    fn the_engines_reading_is_the_default() {
+        assert_eq!(HyperSelectRule::default(), HyperSelectRule::Engine);
     }
 
     #[test]
     fn the_one_jump_course_reading_cycles_every_jump_by_ascending_id() {
-        use HyperSelectRule::OneJumpCourse;
-        assert_eq!(select(&[], None, OneJumpCourse), Some(SystemId(131)));
-        assert_eq!(select(&[131], None, OneJumpCourse), Some(SystemId(134)));
+        assert_eq!(one_jump(&[], Engine), Some(SystemId(131)));
+        assert_eq!(one_jump(&[131], Engine), Some(SystemId(134)));
+        assert_eq!(one_jump(&[135], Engine), Some(SystemId(131)), "wraps");
         assert_eq!(
-            select(&[135], None, OneJumpCourse),
-            Some(SystemId(131)),
-            "wraps"
-        );
-        assert_eq!(
-            select(&[131, 132], None, OneJumpCourse),
+            one_jump(&[131, 132], Engine),
             Some(SystemId(131)),
             "not a single jump: the first"
-        );
-        assert_eq!(
-            select(&[134], Some(131), OneJumpCourse),
-            Some(SystemId(135)),
-            "the selection does not matter"
         );
     }
 
     #[test]
     fn the_one_jump_course_reading_offers_a_one_way_link_backwards_only_both_ways() {
-        use HyperSelectRule::OneJumpCourse;
         // 136 lists 130 one way: by the engine 130 cannot jump to it.
         let cycle = |hyperlinks| {
             let mut course = vec![];
             let mut seen = vec![];
             for _ in 0..5 {
-                let next = select_by(&course, None, OneJumpCourse, hyperlinks).expect("one");
+                let next = one_jump(&course, hyperlinks).expect("one");
                 seen.push(next);
                 course = vec![next.0];
             }
@@ -1519,14 +1465,12 @@ mod tests {
     }
 
     #[test]
-    fn a_system_with_no_links_has_no_hyper_select() {
-        for rule in [HyperSelectRule::Engine, HyperSelectRule::OneJumpCourse] {
-            for hyperlinks in [Engine, BothWays] {
-                assert_eq!(
-                    next_hyper_destination(&hub(), SystemId(133), &[], None, rule, hyperlinks),
-                    None
-                );
-            }
+    fn a_system_with_no_links_has_no_one_jump_destination() {
+        for hyperlinks in [Engine, BothWays] {
+            assert_eq!(
+                next_one_jump_destination(&hub(), SystemId(133), &[], hyperlinks),
+                None
+            );
         }
     }
 

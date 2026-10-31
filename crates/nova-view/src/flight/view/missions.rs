@@ -114,7 +114,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match self.send(FlightCommand::PressMissionInfo) {
             Answer::MissionInfo(MissionInfoPress::Opens(info)) => {
                 self.pending_mission_info = Some(info);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(),
             Answer::Refused => self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS),

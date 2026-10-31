@@ -330,7 +330,7 @@ impl<C> SessionFlight<C> {
         let Ok(session) = &mut self.session else {
             return false;
         };
-        session.enter_game();
+        session.enter_game(&mut self.chance);
         true
     }
 

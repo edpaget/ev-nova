@@ -118,12 +118,7 @@ impl Session {
     /// ([`Space::class_order`], `_EscortAI` @0x83ad8-0x83b2b). Whether any joined; the formation
     /// re-forms when one did.
     pub(super) fn join_mission_escorts(&mut self) -> bool {
-        let orders = EscortClass::ALL.map(|class| {
-            (
-                class,
-                self.space.class_order(&self.pilot, &self.statics, class),
-            )
-        });
+        let orders = EscortClass::ALL.map(|class| (class, self.space.class_order(class)));
         let missions = &self.pilot.missions;
         let mut joined = false;
         for npc in self.space.traffic.npcs_mut() {
@@ -1612,7 +1607,7 @@ pub(super) mod tests {
     fn row(session: &Session, class: EscortClass) -> crate::escort::ClassRow {
         session
             .space
-            .escort_rows(&session.pilot, &session.statics)
+            .escort_rows()
             .into_iter()
             .find(|row| row.class == class)
             .expect("every class has a row")
@@ -1623,29 +1618,13 @@ pub(super) mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         let class = mission_escorts(&session)[0].class;
-        for other in session.space.escort_rows(&session.pilot, &session.statics) {
+        for other in session.space.escort_rows() {
             assert_eq!(other.present, other.class == class, "{:?}", other.class);
             assert_eq!(other.order, None);
         }
         session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
         assert_eq!(row(&session, class).order, Some(EscortOrder::Hold));
         assert!(session.space.escorts_flying());
-    }
-
-    #[test]
-    fn a_hired_escorts_order_heads_its_class_row_over_a_mission_escorts() {
-        let catalog = ships_catalog(escorting(-1, 0));
-        let (mut session, ids) = flying_with_escorts(&catalog);
-        let class = session.space.npc(ids[0]).expect("here").class;
-        assert_eq!(
-            session
-                .space
-                .escort_class(&session.pilot, &session.statics, 0),
-            class,
-            "one class"
-        );
-        session.pilot.escorts[0].order = Some(EscortOrder::Defend);
-        assert_eq!(row(&session, class).order, Some(EscortOrder::Defend));
     }
 
     #[test]
@@ -1780,7 +1759,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn with_no_hired_escort_of_a_class_its_order_is_its_first_mission_escorts() {
+    fn a_ship_joining_takes_the_order_kept_for_its_class() {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         let ids: Vec<NpcId> = mission_escorts(&session).iter().map(|npc| npc.id).collect();
@@ -1789,26 +1768,16 @@ pub(super) mod tests {
             .into_iter()
             .find(|&other| other != class)
             .expect("another class");
-        for (id, class, order) in [
-            (ids[0], other, EscortOrder::Attack),
-            (ids[1], class, EscortOrder::Hold),
-        ] {
-            let npc = session.space.npc_mut(id).expect("here");
-            npc.class = class;
-            npc.mission.as_mut().expect("marked").order = Some(order);
-        }
-        assert_eq!(
-            session
-                .space
-                .class_order(&session.pilot, &session.statics, class),
-            Some(EscortOrder::Hold)
-        );
-        assert_eq!(
-            session
-                .space
-                .class_order(&session.pilot, &session.statics, other),
-            Some(EscortOrder::Attack)
-        );
+        let index = |wanted: EscortClass| {
+            EscortClass::ALL
+                .iter()
+                .position(|&each| each == wanted)
+                .expect("a class")
+        };
+        session.space.escorts.class_orders[index(class)] = Some(EscortOrder::Hold);
+        session.space.escorts.class_orders[index(other)] = Some(EscortOrder::Attack);
+        assert_eq!(session.space.class_order(class), Some(EscortOrder::Hold));
+        assert_eq!(session.space.class_order(other), Some(EscortOrder::Attack));
     }
 
     #[test]

@@ -34,8 +34,8 @@
 //! which the double-time switch reads (see the `double_time` module).
 //! With an aim, the turn keys do nothing this tick.
 //!
-//! Both keys set *0x3b5550, the flight key the cursor fades on, which the
-//! view's held keys stand in for. Neither plays a sound.
+//! Both keys set *0x3b5550, the byte the cursor fades on, past their own
+//! gates (see the `key_fade` module). Neither plays a sound.
 //!
 //! A stellar record's position is its `spöb`'s `xPos` and `yPos`
 //! (record +4, @0x6af3f, @0x6afc0): the system's stellar's own, or, for
@@ -361,6 +361,25 @@ mod tests {
             session.ship.aim,
             intercept_angle(session.ship.player.position, Vec2::new(30.0, -40.0))
         );
+    }
+
+    #[test]
+    fn by_the_engine_after_hyper_select_the_face_key_faces_the_stellar_of_the_slot_it_noted() {
+        // `hub`'s 131 fills slots 1 and 2. Stellar 128 + 1 is east, at
+        // (2000, 0), and 128 + 2 west.
+        let mut catalog = crate::session::tests::hub();
+        catalog.marks.push(StellarMark {
+            id: StellarId(130),
+            place: (-2000, 0),
+            name: "Ceres".to_owned(),
+        });
+        let mut session = flying(&catalog, 0.0);
+        for _ in 0..3 {
+            session.select_next_system();
+        }
+        assert_eq!(session.chart.nav, NavMode::Hyperspace(Some(SystemId(131))));
+        work(&mut session, &catalog, face(Face::Target, Turn::None));
+        assert_eq!(session.ship.aim, 270);
     }
 
     #[test]

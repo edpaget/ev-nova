@@ -60,6 +60,7 @@
 use super::{Session, SessionEvent};
 use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
+use crate::gate_sprite::StellarPass;
 use crate::sound::SimSound;
 
 impl Session {
@@ -96,8 +97,9 @@ impl Session {
         // The frames' reset, no exit gate (@0x675ce-0x675fa).
         self.reset_stellar_frames(None);
         // The rebuild, the sprites, the dock request dropped and the
-        // course cued (see the `dock_tail` module).
-        self.end_dock_tail();
+        // course cued (see the `dock_tail` module). No landing ran, so its
+        // passes run at full gain.
+        self.end_dock_tail(StellarPass::Ticked, chance);
         // `_frameCounter` = -15 (@0x67673).
         self.start_takeoff_grace();
     }

@@ -41,8 +41,11 @@
 //! stellar is selected, and otherwise asks to dock at the selected one,
 //! so it never cycles. `_FindNextStellarInSystem` (@0x25a2) has no caller:
 //! the original has no stellar cycle key. [`next_after`] is the cycle
-//! Hyper Select runs over the systems it offers. The session's
-//! `nav` module has every setter.
+//! Hyper Select's
+//! [`HyperSelectRule::OneJumpCourse`](crate::hyperspace::HyperSelectRule::OneJumpCourse)
+//! reading runs over the systems it offers; the engine's walk of the Con
+//! slots is `nova_sim::Session::select_next_system`. The session's `nav`
+//! module has every setter.
 
 use crate::catalog::{LandingSite, StellarId, SystemId};
 use crate::geometry::Vec2;

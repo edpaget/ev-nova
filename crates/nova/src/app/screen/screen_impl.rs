@@ -175,10 +175,15 @@ impl Screen for AppScreen {
     /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
     /// map is drawn over them both, as the original's map dialog opens
     /// over the port window (`_DoBarDialog` @0x492a3), and so is a mission
-    /// dialog's; over flight, a mission dialog's map is drawn over the
-    /// offer and the mission dialogs it opened from. Over a widened
-    /// flight every dialog is drawn in its 1024 x 768 frame centred in the
-    /// view ([`AppScreen::overlay_offset`]); flight places its own map.
+    /// dialog's. Over flight, a mission dialog's map is drawn in three
+    /// layers: flight's paused scene and bar, the offer and the mission
+    /// dialogs it opened from, then the map and flight's fades. `_gWind`
+    /// keeps the world behind the dialogs and the map's window opens in
+    /// front of them (`_DoSystemMap` @0x125b7-0x125c9), and no world
+    /// command follows a dialog, so every upscaler shows this order. Over
+    /// a widened flight every dialog is drawn in its 1024 x 768 frame
+    /// centred in the view ([`AppScreen::overlay_offset`]); flight places
+    /// its own map.
     fn draw(&self, list: &mut DrawList) {
         if self.side == Side::Spaceport {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
@@ -186,10 +191,13 @@ impl Screen for AppScreen {
                 self.spaceport.as_ref().expect(LANDED).draw(list);
             }
         }
-        // A mission dialog's map over flight is drawn over the dialogs it
-        // opened from, after them.
+        // A mission dialog's map over flight goes over the dialogs it
+        // opened from, with flight's paused scene under them.
         let map_over = self.flight_dialog_map_open();
-        if !map_over {
+        if map_over {
+            let flight = self.flight.as_ref().expect(ENTERED);
+            flight.draw_under_dialog_map(list);
+        } else {
             self.shown().draw(list);
         }
         let hint = match (self.side, self.dialogs.is_some()) {
@@ -241,7 +249,7 @@ impl Screen for AppScreen {
         }
         list.extend_translated(&dialogs, offset);
         if map_over {
-            self.shown().draw(list);
+            self.flight.as_ref().expect(ENTERED).draw_dialog_map(list);
         }
         let mut dialogs = DrawList::new();
         if let Some(about) = &self.about {

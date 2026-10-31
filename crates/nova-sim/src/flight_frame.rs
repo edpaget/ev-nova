@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod port_screens;
 mod screen;
 
+pub use crate::key_fade::{FadeKey, KeyFades};
 pub use port_screens::{BarNews, PortShops};
 pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
 
@@ -45,6 +46,7 @@ use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
+use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::{CommNote, Haggle, HailRefusal, HailView};
@@ -149,6 +151,10 @@ pub struct FlightFrame {
     /// before it acts on a key, mid-input, reading the frame the last
     /// command or step left.
     pub gates: Gates,
+    /// What fades the flight cursor now ([`KeyFades`]). The view reads it
+    /// just before a frame's steps, so a pass's fade reads what that pass
+    /// read at its head.
+    pub key_fades: KeyFades,
     /// What the course map's drawing is taken from ([`MapKey`]).
     pub map_key: MapKey,
     /// Each ship in the system as the world draws it: the player's first,
@@ -242,8 +248,8 @@ pub struct FlightFrame {
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
     /// jump, the player flying, no hold and no leave due, no Recharge and
-    /// no intro seen, every gate taken
-    /// ([`Gates::EVERY`]), and no death `dësc`s; the player alone, drawn in
+    /// no intro seen, every gate taken ([`Gates::EVERY`]) and every key
+    /// fading ([`KeyFades::EVERY`]), and no death `dësc`s; the player alone, drawn in
     /// full in the ships' layer at the default place, with no NPCs, shots,
     /// beams, boxes, asteroids or stellars; no murk and no background; no
     /// ship's name, an empty date and no system explored.
@@ -265,6 +271,7 @@ impl Default for FlightFrame {
             jump_readiness: JumpReadiness::Blocked,
             texts_queued: 0,
             gates: Gates::EVERY,
+            key_fades: KeyFades::EVERY,
             map_key: MapKey::default(),
             ships: vec![FrameShip::default()],
             drawn: vec![(ShipRef::Player, ShipLayer::Ships)],
@@ -1461,6 +1468,9 @@ pub enum FlightEvent {
     RescueDesc(LoadedDesc),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
+    /// A stellar pass run outside a play frame, for the view to replay on
+    /// its scene before the next frame is drawn.
+    StellarPass(StellarPass),
 }
 
 /// What a frame's fixed steps are given

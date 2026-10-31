@@ -34,6 +34,7 @@ mod stock_galaxy_visibility;
 mod stock_gamble;
 mod stock_gate_pick;
 mod stock_hail_advice;
+mod stock_hyper_select;
 mod stock_inertialess;
 mod stock_ionization;
 mod stock_jump_arrival;

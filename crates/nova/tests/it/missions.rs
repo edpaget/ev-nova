@@ -85,7 +85,6 @@ use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{Chance, MissionId, Pilot, PilotKeeper, PilotStore, Session};
-use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
@@ -95,6 +94,7 @@ use nova_view::spaceport::missions::{
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
+use nova_view::{DrawCommand, DrawList, Key, Screen};
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -918,10 +918,17 @@ impl Game {
     }
 
     fn frame(&mut self) -> Frame {
+        let frame = self.frame_lacking_art();
+        assert_eq!(self.app.take_failures(), []);
+        frame
+    }
+
+    /// A frame, whatever art it could not find: this fixture has none of
+    /// the course map's.
+    fn frame_lacking_art(&mut self) -> Frame {
         self.frames += 1;
         let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
         self.send(WindowEvent::Redraw { elapsed });
-        assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
@@ -2126,6 +2133,37 @@ fn over_flight_m_on_mission_info_opens_its_map_and_escape_returns_to_it() {
     game.tap(Key::Escape);
     assert_eq!(game.showing(), Showing::MissionInfo, "back to it");
     assert!(game.app.screen().flight_mission_info().is_some());
+}
+
+#[test]
+fn over_flight_mission_infos_map_keeps_the_world_under_the_dialog_in_the_frame() {
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(0, 128, None, Some(128))]);
+    let mut game = Game::with_pilot(&store, &pilot);
+    game.frame();
+    game.tap(Key::Char('i'));
+    game.tap(Key::Char('m'));
+    assert!(game.dialog_map().0, "mission info's map");
+    let frame = game.frame_lacking_art();
+    let mut info = DrawList::new();
+    game.app
+        .screen()
+        .flight_mission_info()
+        .expect("open")
+        .draw(&mut info);
+    let texts: Vec<&str> = info
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let dialog = frame.batches.iter().position(|batch| {
+        matches!(batch, Batch::Text(runs) if runs.iter().any(|run| texts.contains(&run.text.as_str())))
+    });
+    let dialog = dialog.expect("the dialog's text is in the frame");
+    let world = frame.world.last().expect("flight's world");
+    assert!(*world < dialog, "world {world}, dialog {dialog}");
 }
 
 crate::common::entry_harness!(Game, click, frame);

@@ -694,6 +694,8 @@ use crate::system::catalog::SystemCatalog;
 use crate::system::kept_frames::KeptFrames;
 use crate::system::scene::{PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::text::TextMetrics;
+use crate::ui::mission_info::MISSION_INFO_KEY;
+use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
@@ -712,6 +714,7 @@ mod hail;
 mod hyperspace;
 mod inbox;
 mod interface;
+mod key_fade;
 mod messages;
 mod missions;
 mod movies;
@@ -778,8 +781,13 @@ pub struct FlightOverlays {
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
 /// latch and frame (see the `slot_block` module); they fade the cursor and
 /// hold the zoom back only while `_HandlePlayer` polls them
-/// ([`FlightView::slot_key_polled`]).
-const FLIGHT_KEYS: [Key; 32] = [
+/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P, I and K act
+/// on their press and are here because they stay down: `_HandlePlayer`
+/// sets the cursor's byte on every frame one is held, and the zoom reads
+/// them held. A key that opens a dialog from its press isn't tracked, as
+/// the dialog takes its release. Being here doesn't make a key fade the
+/// cursor: [`FlightView::key_fades_cursor`] says which do.
+const FLIGHT_KEYS: [Key; 40] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -812,6 +820,14 @@ const FLIGHT_KEYS: [Key; 32] = [
     STELLAR_SLOT_KEYS[2][1],
     STELLAR_SLOT_KEYS[3][1],
     NEAREST_STELLAR_KEY,
+    TARGET_KEY,
+    NEAREST_KEY,
+    HAIL_KEY,
+    MENU_CLOSE_KEY,
+    MAP_KEY,
+    JETTISON_KEY,
+    PLAYER_INFO_KEY,
+    MISSION_INFO_KEY,
 ];
 
 /// The face-target key: the original's default A for its `autopilot`
@@ -824,7 +840,8 @@ pub const FACE_TARGET_KEY: Key = Key::Char('a');
 /// +0x30, `_loadKeys` @0xcd899-0xcd8bc). Held, it engages the afterburner
 /// ([`Controls::afterburner`](nova_sim::Controls::afterburner)); a flight
 /// key, so it fades the cursor, as its press sets *0x3b5550 whether or not
-/// the ship carries an afterburner (@0x6cb03).
+/// the ship carries an afterburner, on a ship not disabled (@0x6caf2,
+/// @0x6cb03).
 pub const AFTERBURNER_KEY: Key = Key::Char('z');
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
 /// @0xcd5f8).
@@ -842,7 +859,8 @@ pub const SELECT_KEY: Key = Key::Char('w');
 /// `_loadKeys` falls back to when the defaults hold none
 /// (@0xcdde9-0xcde0c). Held, it lets go of the secondary selected, on
 /// every pass with one selected (`_HandlePlayer` @0x6adc2-0x6ae1b; see
-/// `nova_sim::Session::hold_weapon_safety`).
+/// `nova_sim::Session::hold_weapon_safety`), and fades the cursor only on
+/// those passes (@0x6ade1).
 pub const DESELECT_KEY: Key = Key::Char('s');
 /// The target select key: the original's default (`targSel`), which
 /// picks the next ship in turn.
@@ -1682,8 +1700,9 @@ struct Redrawn {
     /// The stars were scattered afresh.
     stars: bool,
     /// A take-off or a gate's exit reset every stellar's frames: those
-    /// shown and those kept were zeroed before the scene was laid out or
-    /// drawn again ([`FlightView::reset_stellar_frames`]).
+    /// shown and those kept were zeroed once the scene was laid out, among
+    /// the stellar passes ([`FlightView::reset_stellar_frames`],
+    /// [`FlightView::replay_stellar_passes`]).
     frames_reset: bool,
 }
 
@@ -1797,6 +1816,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
     );
     check("texts_queued", kept.texts_queued == fresh.texts_queued);
     check("gates", kept.gates == fresh.gates);
+    check("key_fades", kept.key_fades == fresh.key_fades);
     check("map_key", kept.map_key == fresh.map_key);
     check("ships", kept.ships == fresh.ships);
     check("drawn", kept.drawn == fresh.drawn);

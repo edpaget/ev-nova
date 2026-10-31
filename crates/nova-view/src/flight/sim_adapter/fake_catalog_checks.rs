@@ -19,6 +19,8 @@ use nova_sim::flight_frame::{
     Answer, BarNews, FlightCommand, FlightFrame, MapClick, PortShops, ScreenAnswer, ScreenAsk,
     StepInput, StepReport,
 };
+use nova_sim::gate::HYPERGATE;
+use nova_sim::gate_sprite::RANDOM;
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::landing::StellarFlags;
 use nova_sim::mission::screens::SPACEPORT;
@@ -700,6 +702,45 @@ fn opening_a_saved_pilot_at_launch_forwards_on_the_flights_chance() {
 #[test]
 fn opening_a_saved_pilot_from_open_pilot_forwards_on_the_flights_chance() {
     opens_saved_on_the_flights_chance(SavedOpening::OpenPilot);
+}
+
+/// A session over random hypergate 150, its dock request holding the gate
+/// open, entered once so the next entry's one step draws a frame: 3
+/// frames (open frame 1), `AnimDelay` 2. A gate draws only held on its
+/// loop, and the first entry's step takes it to the open frame, drawing
+/// nothing.
+fn random_gate_held() -> (Rc<FakeCatalog>, Session) {
+    let mut catalog = catalog();
+    catalog.sites.push(LandingSite {
+        flags2: HYPERGATE | RANDOM,
+        animation: nova_sim::catalog::SiteAnimation {
+            delay: 2,
+            type_frames: 3,
+            ..nova_sim::catalog::SiteAnimation::default()
+        },
+        ..site(150, (0.0, 0.0), StellarFlags::CAN_LAND)
+    });
+    let catalog = shared(catalog);
+    let mut session = SessionBuilder::flying(&*catalog)
+        .over(StellarId(150))
+        .build();
+    session.land().expect("requests clearance");
+    session.enter_game(&mut NeverFires);
+    (catalog, session)
+}
+
+#[test]
+fn entering_play_forwards_on_the_flights_chance() {
+    let (catalog, session) = random_gate_held();
+    let (script, chance) = scripted(&[1]);
+    let mut flight = flight_of(&catalog, session.clone(), rolling_on(chance));
+    assert!(flight.enter_game());
+    let mut by_hand = session;
+    let (own, mut own_chance) = scripted(&[1]);
+    by_hand.enter_game(&mut own_chance);
+    assert_eq!(flight.session(), Ok(&by_hand));
+    assert_eq!(script.borrow().asked, own.borrow().asked, "on its chance");
+    assert!(!own.borrow().asked.is_empty());
 }
 
 // The pilot, its load and its transactions.

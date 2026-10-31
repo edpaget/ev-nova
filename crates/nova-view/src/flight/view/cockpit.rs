@@ -431,6 +431,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Lets go of the flight keys and the mouse button: flight is giving
+    /// up its input, to a dialog over it or by the router's
+    /// [`Screen::release_keys`](crate::Screen::release_keys), so their
+    /// releases will never reach it. The one place that does: the
+    /// original reads both live (`_KeyCheck` @0xa19b-0xa1dc, `_Button`
+    /// @0x3803b), and ours has only the events flight is given. The
+    /// paths that keep the input in flight (the course map, a gate's
+    /// exit) clear `held` alone, as their releases still come here.
+    pub(super) fn let_go_of_input(&mut self) {
+        self.held.clear();
+        self.cursor.button(false);
+    }
+
     /// One frame of the keys `_HandlePlayer` polls with a latch before the
     /// Board and jump keys, with those held down, in its order: Option-\`
     /// and the Nav Off / Hyperspace Mode block
@@ -733,17 +746,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// A zoom key's press: while the floating map is up and no key the
     /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`
-    /// held alone doesn't count: `_HandlePlayer` checks it only with
-    /// Command down (@0x6fdc8), so alone it never sets
-    /// `_quickKeyCheckResult`. One
+    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`,
+    /// X or K held alone doesn't count: `_HandlePlayer` checks each only
+    /// with Command down (@0x6fdc8, @0x6f2a5), so alone it never sets
+    /// `_quickKeyCheckResult`, and Command itself holds the zoom back. One
     /// that changes the scale shows the map again and raises
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
         let holds = self.held.iter().any(|&held| {
-            self.slot_key_polled(held, true)
-                .unwrap_or(held != SELF_DESTRUCT_KEY)
+            self.slot_key_polled(held, true).unwrap_or(!matches!(
+                held,
+                SELF_DESTRUCT_KEY | EJECT_KEY | JETTISON_KEY
+            ))
         });
         if !self.floating.is_up() || holds {
             return;
