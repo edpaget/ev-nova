@@ -19,7 +19,7 @@
 //!   line clipped to the box. The news, exchange, flight message,
 //!   shipyard weapons, player info and shop descriptions draw through it.
 //! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
-//!   selected by a click or the arrow keys.
+//!   selected by a click or a wrapping step.
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in

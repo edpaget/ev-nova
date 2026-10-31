@@ -48,8 +48,26 @@
 //! ([`MissionInfoScreen::take_abort`]), with no confirmation, and whoever
 //! holds the session aborts it and hands the info back
 //! ([`MissionInfoScreen::set_info`]), which closes the screen once
-//! nothing is listed (@0x9e5eb-0x9e610). Done, Return, Enter and Escape
-//! close it.
+//! nothing is listed (@0x9e5eb-0x9e610). With missions left, an abort
+//! leaves nothing selected (@0x9e62d-0x9e632, @0x9e66a-0x9e680): item 4 is
+//! an empty black box (@0x987d1-0x987e6), Abort is greyed, and M asks for
+//! the map marked for nothing (@0x9e3e5-0x9e3f1). A refused abort keeps
+//! the selection (@0x9e583).
+//!
+//! Done, Return, Enter, Escape and the mission info key
+//! ([`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY), a
+//! press, so the key that opens the screen closes it) close it
+//! (`_MissionInfoFilter` @0x9d73c-0x9d769). Up and Down (key repeats too)
+//! move the selection a row, wrapping from the last mission to the first
+//! and back (@0x9d833, @0x9da56), and from no selection take the first or
+//! the last (@0x9d839, @0x9da60). Under [`FocusRing::Off`], a Tab press
+//! steps to the next mission as Down does, Shift or not (@0x9d778; the
+//! original steps on autoKey too, but dialog keys are press-only by the
+//! user's decision of 2026-10-23). By default ([`FocusRing::Tab`]) Tab
+//! moves the dialog's button focus instead and the selection stays. The
+//! filter plays no sound of its own: only the close's
+//! ([`UiSound::MissionInfoClosed`]). Without its dialog, the screen says
+//! why, and Return or Escape alone closes it.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -806,8 +824,11 @@ impl MissionInfoScreen {
 }
 
 impl Screen for MissionInfoScreen {
-    /// Up, Down and a press on the list go to the list; everything else
-    /// goes to the dialog. It never quits.
+    /// The map key asks for the map and the mission info key closes it, in
+    /// `_MissionInfoFilter`'s order (@0x9d70a, @0x9d756); Up, Down and (under
+    /// [`FocusRing::Off`]) Tab step the list, wrapping, and a press on the
+    /// list selects a row; everything else goes to the dialog. It never
+    /// quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if is_map_press(input) {
             if self.map_allowed {

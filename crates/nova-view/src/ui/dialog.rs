@@ -23,13 +23,15 @@
 //! the user's decision of 2026-10-28. The `dialog_focus_ring` rule's engine
 //! reading ([`FocusRing::Off`]) gives the original's dialogs.
 //!
-//! Two screens' filters do map Tab: the exchange's (`_TradeFilter`
-//! @0x4e184, Shift stepping back) and the mission computer's
-//! (`_MissionFilter` @0x9f8cc) step their list's selection. There the
-//! ring keeps Tab under [`FocusRing::Tab`], and the screen's row step
-//! takes it under [`FocusRing::Off`] (see
-//! [`TradeScreen`](crate::spaceport::trade::TradeScreen) and
-//! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)).
+//! Three screens' filters do map Tab: the exchange's (`_TradeFilter`
+//! @0x4e184, Shift stepping back), the mission computer's
+//! (`_MissionFilter` @0x9f8cc) and the mission info screen's
+//! (`_MissionInfoFilter` @0x9d778, no Shift test) step their list's
+//! selection. There the ring keeps Tab under [`FocusRing::Tab`], and the
+//! screen's row step takes it under [`FocusRing::Off`] (see
+//! [`TradeScreen`](crate::spaceport::trade::TradeScreen),
+//! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)
+//! and [`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen)).
 
 use std::rc::Rc;
 use std::time::Duration;
