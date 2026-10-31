@@ -1551,9 +1551,8 @@ impl Npc {
 /// gate and a fighter docking write -1 as their slots free (@0x2dee7,
 /// @0x2c07f, @0x8040b), so one destroyed and not yet taken out is led by
 /// nobody. A ship jumping out writes none (@0x859b8), read only by the
-/// slots between it and a holder in that frame's AI loop, a read the
-/// engine's later departure doesn't have
-/// (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
+/// slots after it in that frame's AI loop, where the engine's departure is
+/// still to come and it still reads as led: the same answer.
 fn led_by_player(npcs: &[Npc], id: NpcId) -> bool {
     npcs.iter()
         .any(|n| n.id == id && n.condition.active() && n.escorts_player())

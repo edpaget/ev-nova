@@ -60,6 +60,11 @@
 //! at its next test and now fights the newcomer, friend or not. It changes
 //! what is drawn and breaks no stock mission, so it has no rulebook key.
 //!
+//! The reads of a stale +0x70 not built here (a cloak's think, a skipped
+//! high level, goal 2's write, goal 0xf, the slots taken that
+//! [`Traffic::slot_taken`] can't see and the frees in a dialog) are
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-11-left-out-of-phase-7's.
+//!
 //! A ship that lands is not recorded: the original keeps a landed ship in
 //! its slot, waiting at the stellar (`_HighLevelAIHandler`
 //! @0x8dadc-0x8db5a), and so does the traffic
