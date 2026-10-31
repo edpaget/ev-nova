@@ -956,6 +956,25 @@ mod tests {
         }
 
         #[test]
+        fn a_slot_freed_after_the_ship_loop_passes_every_other_slots_holder_to_its_next_ship() {
+            // No `_HandleShip` runs between a deadly stellar's kill
+            // (@0x39dac) and the next frame's spawn, so a ship in any other
+            // slot still holds it.
+            let mut traffic = Traffic::new();
+            let killed = in_slot(&mut traffic, 4);
+            let aim = ShipRef::Npc(killed);
+            let earlier = aiming_at(&mut traffic, 2, aim);
+            let later = aiming_at(&mut traffic, 6, aim);
+            traffic.remove_killed(killed);
+            let new = ShipRef::Npc(in_slot(&mut traffic, 4));
+            for holder in [earlier, later] {
+                let after = trader_of(&traffic, holder);
+                assert_eq!(after.target, Some(new));
+                assert_eq!(after.goal, Goal::Attack(new));
+            }
+        }
+
+        #[test]
         fn a_slot_taken_elsewhere_passes_nothing() {
             let mut traffic = Traffic::new();
             let wreck = in_slot(&mut traffic, 4);
