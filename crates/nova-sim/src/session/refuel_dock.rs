@@ -56,6 +56,7 @@ mod tests {
     use crate::testkit::{work, work_with};
     use crate::traffic::npc::{Mode, NpcId};
     use crate::traffic::plunder_dock::DockSub;
+    use crate::traffic::refuel_dock::refuel_box;
 
     #[test]
     fn the_traffic_steps_in_a_world_holding_the_rulebooks_refuel_cap() {
@@ -295,8 +296,11 @@ mod tests {
     /// jump.
     const OUT: Vec2 = Vec2 { x: 0.0, y: -5000.0 };
 
-    /// The box of [`refuelled`]'s ship, of class turn 3.
-    const BOX: f32 = 105.0;
+    /// The box of `helper` of `session`, as the traffic reads it: the
+    /// traffic's rule, followed here rather than repeated.
+    fn box_of(session: &Session, helper: NpcId) -> f32 {
+        refuel_box(session.space.npc(helper).expect("here").hull.class_turn) as f32
+    }
 
     /// [`refuelled`], with the player at rest at [`OUT`] facing east, the
     /// bearing to 131, its NPC still 100 above it, and its jump begun: its
@@ -394,9 +398,10 @@ mod tests {
             let npc = session.space.npc(helper).expect("here");
             session.ship.player.position.x - npc.state.position.x
         };
-        assert!(gap(&session) <= BOX, "inside its box");
+        let side = box_of(&session, helper);
+        assert!(gap(&session) <= side, "inside its box");
         let mut passes = 0;
-        while gap(&session) <= BOX {
+        while gap(&session) <= side {
             traffic_tick(&mut session, &catalog);
             passes += 1;
             assert!(passes < 1000, "the player never moved off");
@@ -416,7 +421,7 @@ mod tests {
         assert!(npc.state.heading < at_rest.heading, "it turns to follow");
         assert!(npc.state.velocity.x > 0.0, "no longer zeroed");
         assert!(
-            npc.state.position.x > at_rest.position.x + BOX,
+            npc.state.position.x > at_rest.position.x + side,
             "it moves after the player"
         );
     }
