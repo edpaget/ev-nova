@@ -539,7 +539,7 @@ fn a_double_time_warp_end_draws_a_frame_before_the_arrival() {
     super::faked_screen::warp_ends(&mut view);
     view.sim.queue_report(doubled_from(under_way(true)));
     view.tick(TICK);
-    assert!(!view.drawn().warp_end_due, "the warp-out playing");
+    assert!(!view.drawn().warp_end_due, "drawn before the warp's end");
     assert!(
         !sent_but_lines(&view).contains(&FlightCommand::Arrive),
         "that frame shows the old system"
