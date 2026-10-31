@@ -664,6 +664,7 @@ mod tests {
             let mut traffic = Traffic::new();
             let earlier = aiming_at(&mut traffic, 2, ShipRef::Npc(left));
             let later = aiming_at(&mut traffic, 6, ShipRef::Npc(left));
+            let own_slot = aiming_at(&mut traffic, 4, ShipRef::Npc(left));
             traffic.left_behind.insert(
                 SystemId(130),
                 vec![LeftShip {
@@ -676,8 +677,10 @@ mod tests {
             );
             traffic.let_go_at_step(earlier, true);
             traffic.let_go_at_step(later, true);
+            traffic.let_go_at_step(own_slot, true);
             assert_eq!(target_of(&traffic, earlier), Some(ShipRef::Npc(left)));
             assert_eq!(target_of(&traffic, later), None);
+            assert_eq!(target_of(&traffic, own_slot), None, "not below it");
             // The pass's end frees it.
             traffic.left_behind.clear();
             traffic.let_go_at_step(earlier, true);
@@ -744,9 +747,11 @@ mod tests {
                 let earlier = aiming_at(&mut traffic, 2, aim);
                 let later = aiming_at(&mut traffic, 6, aim);
                 let elsewhere = aiming_at(&mut traffic, 1, ShipRef::Player);
+                let own_slot = aiming_at(&mut traffic, 3, aim);
                 fly(&mut traffic, leaving);
                 assert_eq!(traffic.departed().len(), 1, "{dock}: it left");
                 assert_eq!(target_of(&traffic, earlier), None, "{dock}");
+                assert_eq!(target_of(&traffic, own_slot), Some(aim), "not below");
                 assert_eq!(
                     trader_of(&traffic, earlier).goal,
                     Goal::Attack(aim),
@@ -801,6 +806,26 @@ mod tests {
             assert_eq!(after.goal, Goal::Idle, "@0x8e731");
             assert_eq!(after.target, None);
             assert_eq!(after.provoked, 10.0, "attacked near: it keeps it");
+        }
+
+        #[test]
+        fn a_step_notes_only_a_ship_that_held_a_slot_freed_in_the_ai_loop() {
+            // Another gone ship's record is no record of what this ship let
+            // go of.
+            let mut traffic = Traffic::new();
+            let runner = warping_out(&mut traffic, 3);
+            let holder = aiming_at(&mut traffic, 6, ShipRef::Npc(NpcId(99)));
+            fly(&mut traffic, runner);
+            traffic.let_go_at_step(holder, true);
+            assert_eq!(traffic.gone.ships()[0].let_go, []);
+            // A slot freed in the ship loop is read only while the ship
+            // holds it: its step is the read's end.
+            let mut traffic = Traffic::new();
+            let leaving = entering_a_gate(&mut traffic, 3);
+            let earlier = aiming_at(&mut traffic, 2, ShipRef::Npc(leaving));
+            fly(&mut traffic, leaving);
+            traffic.let_go_at_step(earlier, true);
+            assert_eq!(traffic.gone.ships()[0].let_go, []);
         }
 
         #[test]
