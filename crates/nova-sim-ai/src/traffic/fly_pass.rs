@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::autopilot::{self, Beside, Outcome, TopSpeeds};
 use super::gone::Freed;
 use super::held_burst;
-use super::inertialess::Inertia;
+use super::inertialess::{self, Inertia};
 use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
@@ -458,6 +458,12 @@ fn fly_flown(
     // The sub-goal this flight picks, stored for the next frame's sight and
     // cloak think (`_HighLevelAIHandler` writes +0xc8ca).
     npc.close_form = npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
+    // The stop's own flight sets it again. While a wait runs the high level
+    // writes no sub (@0x8d4b9-0x8d4d2), and the low level's settle alone
+    // ends a sub 1 (@0x85624).
+    if !npc.wait_running() || !inertialess::moving(npc.state.velocity) {
+        npc.stopping = false;
+    }
     let owed = npc.owed_burst;
     let outcome = fly_steered(
         npc,

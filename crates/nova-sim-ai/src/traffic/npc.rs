@@ -666,6 +666,19 @@ pub struct Npc {
     /// Sight and the cloak think read it, as they run before the frame's
     /// flight (see `nova_sim_combat::area_cloak`). Never saved.
     pub close_form: bool,
+    /// Whether its last flight left it in sub 1: the stored +0xc8ca == 1
+    /// that goal 0xb's test reads (@0x8defc-0x8df13), whichever goal wrote
+    /// it. The stop's brake sets it, moving 0.35 or more on an axis; the
+    /// stop's settle doesn't, as it writes sub 0 (@0x85624). Goal 0 flies
+    /// no sub 1 in the original (@0x8fb09-0x8fb13), so the engine's stop
+    /// there is not one ([`leave_flight::stop_wanting`]). Each flight
+    /// clears it, but while a wait runs: the high level writes no sub
+    /// (@0x8d4b9-0x8d4d2), so sub 1 stands until its low level reads it
+    /// below 0.35. An NPC held still keeps it. It starts `false`. Never
+    /// saved.
+    ///
+    /// [`leave_flight::stop_wanting`]: crate::traffic::leave_flight
+    pub stopping: bool,
 }
 
 /// The commodities 0-5 the original's ship records count.

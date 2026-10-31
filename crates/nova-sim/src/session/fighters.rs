@@ -708,6 +708,7 @@ fn fighter(
         swarm_leader: None,
         owed_burst: None,
         close_form: false,
+        stopping: false,
         fleet_slot: None,
         slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,

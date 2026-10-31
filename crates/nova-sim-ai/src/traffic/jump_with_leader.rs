@@ -196,12 +196,23 @@ fn entry(npc: &Npc, npcs: &[Npc], flight: FlightRules) -> Option<Entry> {
 
 /// Whether `npc`, a leader, is on its way out by its substate, as goal
 /// 0xb's NPC-parent test reads it (sub 1 or 4, @0x8defc-0x8df13): on its
-/// own jump (sub 4), or in goal 2 braking before it ([`Leg::Brake`]). A
-/// leader running out inside 1000 (sub 3), or itself following a jump
-/// (sub 0xd), is not, so its followers give it up.
+/// own jump (sub 4), in goal 2 braking before it ([`Leg::Brake`]), or
+/// left in sub 1 by any other goal's stop ([`Npc::stopping`]): the test
+/// reads no goal. A leader running out inside 1000 (sub 3), itself
+/// following a jump (sub 0xd), or settled below 0.35, whose low level wrote
+/// sub 0 (@0x85624), is not, so its followers give it up.
+///
+/// The stored sub is its last flight's, as a follower in a lower slot reads
+/// it. For one in a higher slot it is a tick late: a lag that crosses no
+/// boundary, as the follower's flight is the same either way until its next
+/// high level.
 #[must_use]
 pub fn leaves_by_substate(npc: &Npc) -> bool {
-    npc.warp.goal == Some(WarpGoal::Own) || brakes_for_jump(npc)
+    match npc.warp.goal {
+        Some(WarpGoal::Own) => true,
+        Some(WarpGoal::Follow(_)) => false,
+        None => brakes_for_jump(npc) || npc.stopping,
+    }
 }
 
 impl Traffic {
@@ -510,6 +521,181 @@ mod tests {
             lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(77))));
         }));
         assert!(!keeps_following(|lead| lead.goal = Goal::Idle));
+    }
+
+    /// A lead `setup` set, 3000 out, flown a tick; then a follower beside it
+    /// flown a tick: whether it still follows, and the lead's goal after.
+    fn follows_a_lead_flown_first(setup: impl Fn(&mut Npc)) -> (bool, Goal) {
+        let mut traffic = Traffic::with_interval(1);
+        // After the add, which seeds the berth's search timer.
+        let lead = traffic.add_npc(far(0));
+        setup(&mut traffic.npcs_mut()[0]);
+        let mut world = jumping_world(0.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        let mut follower = far(0);
+        follower.state.position = Vec2::new(3000.0, 100.0);
+        follower.leader = Some(lead);
+        follower.goal = Goal::Follow { lead, guard: None };
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let follower = traffic.add_npc(follower);
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        (
+            of(&traffic, follower).warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+            of(&traffic, lead).goal,
+        )
+    }
+
+    /// `setup`, then moving at 3 on an axis.
+    fn moving_at_3(setup: impl Fn(&mut Npc)) -> impl Fn(&mut Npc) {
+        move |lead| {
+            lead.state.velocity = Vec2::new(0.0, 3.0);
+            setup(lead);
+        }
+    }
+
+    #[test]
+    fn a_follower_keeps_following_and_pushes_a_lead_braking_in_any_goal_that_flies_sub_1() {
+        for (name, setup) in [
+            (
+                "a wait (@0x8f112)",
+                (|lead: &mut Npc| lead.goal = Goal::Wait) as fn(&mut Npc),
+            ),
+            ("a count wait (@0x8d48c)", |lead: &mut Npc| {
+                crate::traffic::fixture::count_waiting(lead, 50);
+            }),
+            // In goal 0xd: goal 4 cancels the follower first (@0x90125).
+            ("the lost-sight search (@0x8d822)", |lead: &mut Npc| {
+                lead.goal = Goal::Plunder {
+                    ship: ShipRef::Player,
+                    hopeless: false,
+                };
+                lead.lost_sight = crate::ai::lost_sight::SearchTimer::Searching(50);
+            }),
+            ("a mine with no rock (@0x8f879)", |lead: &mut Npc| {
+                lead.goal = Goal::Mine;
+            }),
+        ] {
+            let (follows, goal) = follows_a_lead_flown_first(moving_at_3(setup));
+            assert!(follows, "{name}");
+            assert_eq!(goal, Goal::JumpOut, "{name}: pushed (@0x8def0)");
+        }
+    }
+
+    #[test]
+    fn a_follower_keeps_following_a_lead_on_a_flees_brake() {
+        // The far branch's sub 1 (@0x8e201), its attacker out of reach.
+        let mut traffic = Traffic::with_interval(1);
+        let foe = traffic.add_npc(far(0));
+        let (follows, goal) = {
+            let mut lead = far(0);
+            lead.state.position = Vec2::new(-3000.0, 0.0);
+            lead.state.velocity = Vec2::new(0.0, 3.0);
+            lead.class_fuel = 100;
+            lead.goal = Goal::Flee(ShipRef::Npc(foe));
+            lead.target = Some(ShipRef::Npc(foe));
+            let lead = traffic.add_npc(lead);
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            assert!(of(&traffic, lead).stopping, "sub 1, a brake");
+            let mut follower = far(0);
+            follower.state.position = Vec2::new(-3000.0, 100.0);
+            follower.leader = Some(lead);
+            follower.goal = Goal::Follow { lead, guard: None };
+            follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+            let follower = traffic.add_npc(follower);
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            (
+                of(&traffic, follower).warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+                of(&traffic, lead).goal,
+            )
+        };
+        assert!(follows);
+        assert_eq!(goal, Goal::JumpOut, "pushed (@0x8def0)");
+    }
+
+    #[test]
+    fn a_lead_settled_below_0_35_or_stopping_in_goal_0_gives_its_follower_up() {
+        // The settle writes sub 0 (@0x85624) in the lead's own dispatch, so
+        // no other ship reads its sub 1 at rest, though the push still lands.
+        for setup in [
+            (|lead: &mut Npc| lead.goal = Goal::Wait) as fn(&mut Npc),
+            |lead: &mut Npc| crate::traffic::fixture::count_waiting(lead, 50),
+        ] {
+            let (follows, goal) = follows_a_lead_flown_first(setup);
+            assert!(!follows, "at rest");
+            assert_eq!(goal, Goal::JumpOut, "pushed all the same");
+        }
+        let (follows, _) = follows_a_lead_flown_first(moving_at_3(|lead| lead.goal = Goal::Idle));
+        assert!(!follows, "goal 0 is sub 0 (@0x8fb09-0x8fb13)");
+    }
+
+    #[test]
+    fn a_lead_running_out_inside_1000_gives_up_a_follower_it_gave_no_sub_1() {
+        let (follows, _) = follows_a_lead_flown_first(|lead| {
+            lead.goal = Goal::JumpOut;
+            lead.state.position = Vec2::new(500.0, 0.0);
+            lead.state.velocity = Vec2::new(2.0, 0.0);
+        });
+        assert!(!follows, "sub 3");
+    }
+
+    #[test]
+    fn a_lead_that_took_a_wait_in_sub_1_keeps_it_until_its_low_level_reads_it_slow() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.velocity = Vec2::new(0.0, 3.0);
+        lead.goal = Goal::Wait;
+        let lead = traffic.add_npc(lead);
+        let world = jumping_world(0.0);
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "sub 1");
+        traffic.npcs_mut()[0].ai_wait = 5;
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "no sub written (@0x8d4d2)");
+        traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, 0.2);
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        assert!(!of(&traffic, lead).stopping, "the settle's 0 (@0x85624)");
+    }
+
+    #[test]
+    fn a_ship_coasting_in_sub_1_keeps_it_as_its_wait_runs() {
+        use crate::traffic::npc::Mode;
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.velocity = Vec2::new(0.0, 3.0);
+        lead.stopping = true;
+        lead.mode = Mode::Coasting { ticks_left: 9 };
+        let lead = traffic.add_npc(lead);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "+0x4c runs (@0x8d4d2)");
+    }
+
+    #[test]
+    fn a_flight_of_another_sub_clears_a_stop_and_a_ship_held_still_keeps_it() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.velocity = Vec2::new(0.0, 3.0);
+        lead.stopping = true;
+        let lead = traffic.add_npc(lead);
+        let world = jumping_world(0.0);
+        let still = std::collections::BTreeSet::from([lead]);
+        traffic.fly_holding(world, &still, &mut NeverFires);
+        assert!(of(&traffic, lead).stopping, "no flight, no sub written");
+        traffic.npcs_mut()[0].goal = Goal::Hold;
+        traffic.fly_holding(world, &std::collections::BTreeSet::new(), &mut NeverFires);
+        assert!(!of(&traffic, lead).stopping, "a hold's sub isn't 1");
+    }
+
+    #[test]
+    fn a_stop_shows_on_a_leads_leave_unless_it_is_on_a_jump() {
+        let mut lead = far(1);
+        lead.stopping = true;
+        assert!(leaves_by_substate(&lead), "sub 1, whatever its goal");
+        lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert!(!leaves_by_substate(&lead), "sub 0xd");
+        lead.warp.goal = Some(WarpGoal::Own);
+        lead.stopping = false;
+        assert!(leaves_by_substate(&lead), "sub 4");
     }
 
     #[test]

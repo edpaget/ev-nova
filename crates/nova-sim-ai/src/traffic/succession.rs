@@ -329,6 +329,7 @@ impl Npc {
             self.target = lead.target;
             self.travel_set = lead.travel_set;
             self.warp.goal = lead.warp.goal;
+            self.stopping = lead.stopping;
             self.pursuit = lead.pursuit;
             self.docking = lead.docking;
             return;
@@ -687,6 +688,20 @@ mod tests {
         let mut own = of(&traffic, 1).clone();
         own.take_over(None, &World::new(&[]));
         assert_eq!(own.pursuit, Pursuit::default(), "with no record");
+    }
+
+    #[test]
+    fn the_successor_takes_its_leads_stored_sub_1_under_its_government() {
+        // +0xc8ca copied beside the goal (@0x893d9-0x893e1).
+        let traffic = taking_over(REBELS, Goal::Wait);
+        let mut lead = of(&traffic, 0).clone();
+        lead.stopping = true;
+        let mut taker = of(&traffic, 1).clone();
+        taker.take_over(Some(&lead), &World::new(&[]));
+        assert!(taker.stopping);
+        let mut own = of(&traffic, 1).clone();
+        own.take_over(None, &World::new(&[]));
+        assert!(!own.stopping, "with no record");
     }
 
     #[test]
