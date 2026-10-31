@@ -537,7 +537,7 @@ fn grown(stage: f32) -> f32 {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::testkit::work;
 
     use super::*;
@@ -930,7 +930,7 @@ mod tests {
     };
 
     /// `catalog()` with a warp-out of [`WARP_OUT_60`].
-    fn with_a_warp_out() -> FakePilotCatalog {
+    pub(in crate::session) fn with_a_warp_out() -> FakePilotCatalog {
         FakePilotCatalog {
             warp_out_sound: Some(WARP_OUT_60),
             ..catalog()
@@ -1038,7 +1038,7 @@ mod tests {
     }
 
     /// `catalog`'s ship, as [`jumping`], its jump begun in double time.
-    fn jumping_in_double_time(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn jumping_in_double_time(catalog: &FakePilotCatalog) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
         session.statics_mut().warp_sounds = [364, 252];
         session.set_double_time_key(true);
@@ -1057,7 +1057,7 @@ mod tests {
     }
 
     /// Runs `frames` double-time frames: an advance pass, then the second.
-    fn frames(session: &mut Session, frames: u32) {
+    pub(in crate::session) fn frames(session: &mut Session, frames: u32) {
         for _ in 0..frames {
             tick(session);
             again(session);

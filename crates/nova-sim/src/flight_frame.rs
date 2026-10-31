@@ -1523,6 +1523,13 @@ pub struct StepRun {
     /// Each pass that ran to its end: the advance pass, then double
     /// time's second; none when the rescue settled on the advance pass.
     pub passes: Vec<PassReport>,
+    /// The flight as it stood between double time's two passes, which is
+    /// what the original draws (`_PlayGame` @0x45d96-0x45e82 between
+    /// @0x45bc8 and @0x45f31): the frame the view shows for this step.
+    /// `None` in single time, whose frame is the flight as it stands, and
+    /// when a rescue settled on the step, as the view lays itself out
+    /// afresh.
+    pub between_passes: Option<Box<FlightFrame>>,
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.
     pub rescued: Option<ShipPlace>,
