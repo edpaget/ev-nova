@@ -1123,15 +1123,20 @@ mod tests {
     #[test]
     fn a_disabled_follower_gliding_in_left_alone_ends_its_glide() {
         // @0x894ec's -1.0 over -999.0, as a successor's.
-        let mut traffic = under_a_lead_in(Mode::Flying, FEDS, |ship| {
-            ship.condition = DISABLED;
-            ship.mode = Mode::JumpingIn { tick: 3 };
-        });
-        think(&mut traffic);
-        let alone = of(&traffic, 1);
-        assert_eq!(alone.mode, Mode::Flying);
-        assert_eq!(alone.owed_burst, Some(glide_speed(3)));
-        assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast });
+        for (burst, owed) in [
+            (RuleSource::Engine, Some(glide_speed(3))),
+            (RuleSource::Bible, None),
+        ] {
+            let mut traffic = under_a_lead_in(Mode::Flying, FEDS, |ship| {
+                ship.condition = DISABLED;
+                ship.mode = Mode::JumpingIn { tick: 3 };
+            });
+            think_bursting(&mut traffic, burst);
+            let alone = of(&traffic, 1);
+            assert_eq!(alone.mode, Mode::Flying, "{burst:?}");
+            assert_eq!(alone.owed_burst, owed, "{burst:?}");
+            assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast }, "{burst:?}");
+        }
     }
 
     #[test]
