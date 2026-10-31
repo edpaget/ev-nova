@@ -973,7 +973,9 @@ pub struct Decision {
     pub goal: Goal,
     /// Whether the original calls `_AIMakeShipAttackPlayer` in this think,
     /// whose gate says a person's attack quote at once (@0x89c50-0x89c9b,
-    /// see [`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)).
+    /// see [`Traffic::turn_with_quote`](crate::traffic::Traffic::turn_with_quote)),
+    /// which the traffic queues on the line at the ship's berth
+    /// ([`OnLine::AttackQuote`](crate::traffic::on_line::OnLine::AttackQuote)).
     /// The per-type AIs' callers are `_SelectWarshipTarget`'s grudge and
     /// `ShipBehav` 0 tail call (@0x89f20), its xenophobe (@0x8a40e) and
     /// its hunt (@0x8ad31) ([`target::Pick`]), the government's 0x0004

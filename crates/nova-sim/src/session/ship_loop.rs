@@ -216,9 +216,12 @@ impl Session {
     }
 
     /// Begins the traffic's fly half of `half`, the NPCs in `still`
-    /// keeping their place, in the world it flies in.
+    /// keeping their place, in the world it flies in, each fighter with
+    /// no bay staying out (see the `fighter_homes` module): asked after
+    /// the half has begun, whose turn-back sends a fighter home.
     fn begin_fly(&mut self, still: &BTreeSet<NpcId>, half: FlyHalf) -> FlyPass {
-        self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half))
+        let pass = self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half));
+        pass.with_no_bay(self.fighters_staying_out())
     }
 }
 

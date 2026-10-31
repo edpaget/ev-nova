@@ -222,6 +222,9 @@ fn seeded() -> MemorySettings {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            ship_animations: true,
+            engine_glows: true,
+            running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
@@ -508,9 +511,10 @@ fn the_preferences_over_the_main_menu_set_the_music_playing_there() {
     // A lower music level turns the music down.
     harness.press(Key::Char('p'));
     assert_eq!(harness.showing(), Showing::Preferences);
-    // Past Weapon Effects, Smoke Trails, Parallax Starfield, the display
-    // picker and the Scaling list to the music volume.
-    for _ in 0..11 {
+    // Past Ship Animations, Engine Glows, Running Lights, Weapon Effects,
+    // Smoke Trails, Parallax Starfield, the display picker and the Scaling
+    // list to the music volume.
+    for _ in 0..14 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
@@ -786,6 +790,55 @@ fn smoke_trails_and_weapon_effects_clicked_off_in_flight_are_saved_and_the_glow_
     assert!(!flight(&again).smoke_trails());
 }
 
+#[test]
+fn the_ship_drawing_boxes_clicked_off_in_flight_are_saved_and_wait_for_a_restart() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('f'));
+    harness.settle();
+    let launched = flight(&harness).sprite_load();
+    assert!(launched.ship_animations && launched.running_lights);
+    assert!(flight(&harness).engine_glows());
+    harness.command_comma();
+    for (key, point) in [
+        (
+            "ship_animations",
+            harness.dialog().ship_animations().rect().center(),
+        ),
+        (
+            "engine_glows",
+            harness.dialog().engine_glows().rect().center(),
+        ),
+        (
+            "running_lights",
+            harness.dialog().running_lights().rect().center(),
+        ),
+    ] {
+        harness.click(point);
+        assert_eq!(saved(&store)[key], false, "{key}");
+        assert!(harness.dialog().relaunch_notice_shown(), "{key}");
+    }
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(
+        flight(&harness).sprite_load(),
+        launched,
+        "the running game keeps its sprites until the next launch"
+    );
+    assert!(flight(&harness).engine_glows());
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('f'));
+    again.settle();
+    let load = flight(&again).sprite_load();
+    assert!(
+        !load.ship_animations && !load.running_lights,
+        "off after a restart"
+    );
+    assert!(!flight(&again).engine_glows());
+}
+
 /// Where flight draws its hover cursor.
 fn cursor(harness: &Harness) -> Option<Point> {
     harness
@@ -908,7 +961,7 @@ impl Harness {
     /// for each `true`, Up for each `false`) and presses Return.
     fn pick(&mut self, steps: &[bool]) {
         self.command_comma();
-        for _ in 0..8 {
+        for _ in 0..11 {
             self.press(Key::Tab);
         }
         for &down in steps {
@@ -1042,7 +1095,7 @@ impl Harness {
     fn step_scaling_by(&mut self, key: Key, times: usize) {
         self.command_comma();
         assert_eq!(self.showing(), Showing::Preferences);
-        for _ in 0..9 {
+        for _ in 0..12 {
             self.press(Key::Tab);
         }
         for _ in 0..times {

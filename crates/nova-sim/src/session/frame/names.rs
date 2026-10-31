@@ -11,7 +11,8 @@ impl Statics {
     /// The names of every ship class, outfit, good traded, `jünk` and
     /// stellar the session read, each as the session's own lookup gives it
     /// (`Session::ship_name`, `Statics::outfit_names`, `Statics::good_name`,
-    /// `Statics::junk_lc_name`, `TagNames::stellar_name`): the first
+    /// `Goods::commodity_lc_name`, `Statics::junk_lc_name`,
+    /// `TagNames::stellar_name`): the first
     /// record of an ID names it, as those lookups find the first.
     pub(in crate::session) fn names(&self) -> Names {
         let mut names = Names::default();
@@ -30,6 +31,11 @@ impl Statics {
                     lc_name: record.lc_name.clone(),
                     lc_plural: record.lc_plural.clone(),
                 });
+        }
+        for n in 0..COMMODITIES {
+            if let Some(name) = self.goods.commodity_lc_name(n) {
+                names.lc_goods.insert(Good::Commodity(n), name.to_owned());
+            }
         }
         let junk = self.goods.junk();
         let goods = (0..COMMODITIES)
@@ -98,6 +104,7 @@ mod tests {
             .place_names
             .stellars
             .insert(StellarId(129), "Luna".to_owned());
+        catalog.commodities.lc_names = vec!["food".to_owned()];
         catalog
     }
 
@@ -144,6 +151,14 @@ mod tests {
         }
         assert_eq!(names.good(Good::Junk(JunkId(150))), Some("Bio-weapons"));
         assert!(names.good(Good::Commodity(0)).is_some(), "food is traded");
+        assert_eq!(names.good_lc(Good::Commodity(0)), Some("food"));
+        assert_eq!(names.good_lc(Good::Commodity(1)), Some(""), "no string");
+        assert_eq!(
+            names.good_lc(Good::Commodity(crate::market::COMMODITIES)),
+            None,
+            "not traded"
+        );
+        assert_eq!(names.good_lc(Good::Junk(JunkId(150))), None, "a `jünk`");
         for junk in [JunkId(150), JunkId(999)] {
             assert_eq!(names.junk_lc(junk), session.statics.junk_lc_name(junk));
         }

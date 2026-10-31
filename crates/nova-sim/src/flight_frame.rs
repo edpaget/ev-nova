@@ -62,6 +62,7 @@ use crate::outfit_effects::Rgb15;
 use crate::planet_comm::{PlanetCommItem, PlanetCommView};
 use crate::player_fate::{Drawn as ShipDrawn, PlayerCommand, PlayerFate};
 use crate::player_info::PlayerInfo;
+use crate::player_wrap::PlayerWrap;
 use crate::red_alert::AlertIcon;
 use crate::reserves::{Gauge, Reserves};
 use crate::session::{
@@ -193,6 +194,9 @@ pub struct FlightFrame {
     /// The system's `BkgndColor`, raw `00RRGGBB`
     /// ([`Session::system_background`](crate::Session::system_background)).
     pub system_background: Option<u32>,
+    /// The RGB555 colour the world's sprites murk toward
+    /// ([`Session::murk_colour`](crate::Session::murk_colour)).
+    pub murk_colour: u16,
     /// Whether double time is on
     /// ([`Session::double_time`](crate::Session::double_time)).
     pub double_time: bool,
@@ -284,6 +288,7 @@ impl Default for FlightFrame {
             effective_murk: 0,
             system_murk: 0,
             system_background: None,
+            murk_colour: 0,
             double_time: false,
             hyper_gamma: 0.0,
             traffic_ships: Vec::new(),
@@ -403,7 +408,8 @@ impl FlightOpening {
 /// The names fixed for a flight's life, which the view words its messages
 /// with: each ship class's name and long name, each outfit's name and
 /// lower-case name and plural, each good's name as the exchange names it,
-/// each `jünk`'s lower-case name, and each stellar's `spöb` name, as the
+/// each commodity's lower-case name, each `jünk`'s lower-case name, and
+/// each stellar's `spöb` name, as the
 /// session read them when it started
 /// ([`Session::opening`](crate::Session::opening)). Plain data: a test
 /// fills it from literals. The default names nothing, a flight that could
@@ -422,6 +428,9 @@ pub struct Names {
     pub outfits: BTreeMap<OutfitId, OutfitNames>,
     /// Each good's name as the exchange names it, a `jünk` among them.
     pub goods: BTreeMap<Good, String>,
+    /// Each standard commodity's lower-case name (`_lcCargoName`): what the
+    /// plunder dialog calls it.
+    pub lc_goods: BTreeMap<Good, String>,
     /// Each `jünk`'s `LCName`, raw, by ID: what a scan that finds it calls
     /// it.
     pub junk: BTreeMap<JunkId, String>,
@@ -480,6 +489,12 @@ impl Names {
     #[must_use]
     pub fn good(&self, good: Good) -> Option<&str> {
         self.goods.get(&good).map(String::as_str)
+    }
+
+    /// Standard commodity `good`'s lower-case name: none for a `jünk`.
+    #[must_use]
+    pub fn good_lc(&self, good: Good) -> Option<&str> {
+        self.lc_goods.get(&good).map(String::as_str)
     }
 
     /// `jünk` `junk`'s lower-case name.
@@ -714,6 +729,25 @@ pub struct FrameTarget {
     /// The label against the panel's bottom right, if any
     /// (`Session::target_tag`).
     pub tag: Option<TargetTag>,
+}
+
+/// A key read on the one pass the dialogs' `_screenFaded` guards decide:
+/// the pass a jump collapses under the white
+/// ([`StepRun::lit_collapse`]), as [`FlightCommand::PressFaded`] carries
+/// it. Each is taken as its plain press, and what that would open is
+/// refused, in silence, as the screen is faded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FadedPress {
+    /// The player info key: `_DoPlayerInfoDialog`'s guard (@0x5a024).
+    PlayerInfo,
+    /// The mission info key: `_DoMissionInfoDialog`'s guard (@0x9e1ac).
+    MissionInfo,
+    /// The comm key: `_DoCommDialog`'s guard (@0x956ed) and
+    /// `_DoPlanetCommDialog`'s (@0x9695d).
+    Hail {
+        /// Whether Option was down at the press.
+        option: bool,
+    },
 }
 
 /// Something the player asks of the flight, which
@@ -980,6 +1014,10 @@ pub enum FlightCommand {
     PressMissionInfo,
     /// The player info key (`Session::press_player_info`).
     PressPlayerInfo,
+    /// A key read on the pass a jump collapsed under the white, with the
+    /// screen faded ([`FadedPress`]). Only that pass sends it: any other
+    /// press of these keys is the plain command, and acts.
+    PressFaded(FadedPress),
     /// The player info dialog opens (`Session::open_player_info`).
     OpenPlayerInfo,
     /// Jettison the cargo, `all` of it or all but the mission cargo
@@ -1011,6 +1049,12 @@ pub enum FlightCommand {
     /// ([`Session::set_sound_quiet`](crate::Session::set_sound_quiet)): a
     /// setting the view sends as the sound preferences change.
     SetSoundQuiet(bool),
+    /// What of each ship's sprites loads
+    /// ([`Session::set_sprite_load`](crate::Session::set_sprite_load)): a
+    /// setting the view sends as it is built, from the player's Ship
+    /// Animations and Running Lights, and again when a change of them
+    /// reaches it.
+    SetSpriteLoad(crate::combat::SpriteLoad),
     /// An ask ([`FlightCommand::is_ask`]): what the pointer at `at`, in
     /// system coordinates, is over among the things the player can
     /// target, the ships boxed as `drawn` says they are drawn
@@ -1077,7 +1121,8 @@ impl FlightCommand {
     ///   an escort key's [`FlightCommand::CommandEscorts`]
     ///   [`PlayerCommand::Escort`], and the mission info key's
     ///   [`FlightCommand::PressMissionInfo`] [`PlayerCommand::MissionInfo`],
-    ///   as the session asks it itself.
+    ///   as the session asks it itself. A [`FlightCommand::PressFaded`] is
+    ///   its key's.
     /// - [`FlightCommand::EnterHypergate`] comes with the hypergate map's
     ///   close, which no key gates once the map is open, and is `None`, as
     ///   are the map's clicks, cycle and Clear Route, its marks and cue,
@@ -1093,7 +1138,8 @@ impl FlightCommand {
     ///   press is gated by the key, and the player info's Jettison by no
     ///   gate. So are the settings ([`FlightCommand::SetWindowWidth`],
     ///   [`FlightCommand::SetDoubleTimeKey`],
-    ///   [`FlightCommand::SetSoundQuiet`]), which no key sends.
+    ///   [`FlightCommand::SetSoundQuiet`],
+    ///   [`FlightCommand::SetSpriteLoad`]), which no key sends.
     #[must_use]
     pub fn gate(&self) -> Option<PlayerCommand> {
         match self {
@@ -1107,11 +1153,17 @@ impl FlightCommand {
             Self::SelectWeapon { .. } => Some(PlayerCommand::SelectWeapon),
             Self::Jump => Some(PlayerCommand::Jump),
             Self::Land | Self::OpenHypergate | Self::EnterWormhole => Some(PlayerCommand::Land),
-            Self::Hail { .. } => Some(PlayerCommand::Hail),
+            Self::Hail { .. } | Self::PressFaded(FadedPress::Hail { .. }) => {
+                Some(PlayerCommand::Hail)
+            }
             Self::Board => Some(PlayerCommand::Board),
             Self::CommandEscorts { .. } => Some(PlayerCommand::Escort),
-            Self::PressMissionInfo => Some(PlayerCommand::MissionInfo),
-            Self::PressPlayerInfo => Some(PlayerCommand::PlayerInfo),
+            Self::PressMissionInfo | Self::PressFaded(FadedPress::MissionInfo) => {
+                Some(PlayerCommand::MissionInfo)
+            }
+            Self::PressPlayerInfo | Self::PressFaded(FadedPress::PlayerInfo) => {
+                Some(PlayerCommand::PlayerInfo)
+            }
             Self::MapClick(_)
             | Self::CycleMapSelection
             | Self::ClearRoute
@@ -1173,6 +1225,7 @@ impl FlightCommand {
             | Self::SetWindowWidth(_)
             | Self::SetDoubleTimeKey(_)
             | Self::SetSoundQuiet(_)
+            | Self::SetSpriteLoad(_)
             | Self::Hover { .. }
             | Self::LoadDescription { .. }
             | Self::LoadPortDescription => None,
@@ -1382,6 +1435,10 @@ pub enum Answer {
     /// own refusal, which beeps, rides it, not [`Answer::Refused`], which
     /// is left to a flight with no session.
     PlayerInfoPressed(bool),
+    /// A [`FlightCommand::PressFaded`] of the player info key taken, and
+    /// the dialog refused in silence as the screen is faded. Its own
+    /// refusal, which beeps, is [`Answer::PlayerInfoPressed`].
+    PlayerInfoFaded,
     /// What a [`FlightCommand::OpenPlayerInfo`] opened: the screen, or
     /// none in a jump or while the ship breaks up.
     PlayerInfo(Option<Box<PlayerInfo>>),
@@ -1551,6 +1608,13 @@ pub struct StepRun {
     /// Each pass that ran to its end: the advance pass, then double
     /// time's second; none when the rescue settled on the advance pass.
     pub passes: Vec<PassReport>,
+    /// The flight as it stood between double time's two passes, which is
+    /// what the original draws (`_PlayGame` @0x45d96-0x45e82 between
+    /// @0x45bc8 and @0x45f31): the frame the view shows for this step.
+    /// `None` in single time, whose frame is the flight as it stands, and
+    /// when a rescue settled on the step, as the view lays itself out
+    /// afresh.
+    pub between_passes: Option<Box<FlightFrame>>,
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.
     pub rescued: Option<ShipPlace>,
@@ -1564,6 +1628,12 @@ pub struct StepRun {
     /// shows (`_ShowEscortMenu` @0x5664a, called @0x6e388 and @0x6e446).
     /// It plays no sound.
     pub class_orders_cleared: bool,
+    /// Whether a jump collapsed on this step's passes with the screen
+    /// faded to white: `_screenFaded` is up and +0x50 at −1 for the key
+    /// blocks of that one pass (@0x689ea, the flag falling @0x6841f on the
+    /// next), the one pass the dialogs' guards decide. A one-shot, as the
+    /// flag can be gone from the frame by the step's end.
+    pub lit_collapse: bool,
 }
 
 /// One line on the message line as `_DisplayComm` (@0x90201) takes it:
@@ -1619,6 +1689,9 @@ pub struct PassReport {
     pub double_time: bool,
     /// The quotes the pass said, in order.
     pub quotes: Vec<PersonQuote>,
+    /// The wrap of the player at the pass's head, if it ran, which the
+    /// view carries its own effects by.
+    pub wrap: Option<PlayerWrap>,
 }
 
 /// A ship as a [`FlightFrame`] and a [`PassReport`] carry it: one record
@@ -2076,6 +2149,18 @@ mod tests {
     }
 
     #[test]
+    fn a_faded_press_is_gated_by_its_key() {
+        for (press, gate) in [
+            (FadedPress::PlayerInfo, PlayerCommand::PlayerInfo),
+            (FadedPress::MissionInfo, PlayerCommand::MissionInfo),
+            (FadedPress::Hail { option: false }, PlayerCommand::Hail),
+            (FadedPress::Hail { option: true }, PlayerCommand::Hail),
+        ] {
+            assert_eq!(FlightCommand::PressFaded(press).gate(), Some(gate));
+        }
+    }
+
+    #[test]
     fn each_command_is_gated_by_the_key_that_sends_it_or_by_none() {
         use crate::flight_frame::FlightCommand as C;
         let saved = SavedNav::of(NavMode::Off);
@@ -2171,6 +2256,7 @@ mod tests {
             (C::SetWindowWidth(1024), None),
             (C::SetDoubleTimeKey(true), None),
             (C::SetSoundQuiet(true), None),
+            (C::SetSpriteLoad(crate::combat::SpriteLoad::default()), None),
         ];
         for (command, gate) in gated {
             assert_eq!(command.gate(), gate, "{command:?}");

@@ -48,9 +48,7 @@
 //! nothing and runs no `OnExplore`: `_DoMainScreen`'s setup, which
 //! explores the player's system, runs once a launch, as
 //! [`Session::open_at_launch`] does ([`MissionRun::explore_here`]); Open
-//! Pilot doesn't run it. Nothing the sweep
-//! decides reads a rule, so it does not wait on task
-//! load-reads-rules-before-fly.
+//! Pilot doesn't run it. Nothing the sweep decides reads a rule.
 //!
 //! **Gate exits** explore no nebula (`_PlayerEnterHypergate` 0x637bf,
 //! `_PlayerEnterWormhole` 0x64005): their row raises no `Explored` (the

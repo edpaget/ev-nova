@@ -161,6 +161,19 @@ fn a_plugins_str_9000_wins_its_slot_over_its_own_str_4000() {
 }
 
 #[test]
+fn str_list_4001_and_a_plugins_str_9100_reach_the_lower_case_names() {
+    let plugin = [
+        (StrList::TYPE, 4001, str_list(&["food", "industrial goods"])),
+        (StrResource::TYPE, 9100, str_resource("grain")),
+    ];
+    let names: Vec<String> = goods(Some(&plugin))
+        .into_iter()
+        .map(|commodity| commodity.lc_name)
+        .collect();
+    assert_eq!(names, ["grain", "industrial goods", "", "", "", ""]);
+}
+
+#[test]
 fn a_plugins_str_list_9000_names_nothing() {
     let plugin = [(StrList::TYPE, 9000, str_list(&["Grain"]))];
     assert_eq!(names(Some(&plugin)), STOCK_NAMES);

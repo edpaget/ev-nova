@@ -22,6 +22,7 @@ use crate::session::SimCatalog;
 
 mod asks;
 mod comm;
+mod faded;
 mod missions;
 mod player_info;
 mod port;
@@ -104,6 +105,12 @@ impl Session {
     /// - The player info's are answered as the `player_info` module says:
     ///   its key, whose own refusal rides its answer, and its dialog's
     ///   opening, refused without a catalog.
+    /// - [`FlightCommand::PressFaded`] is answered as the `faded` module
+    ///   says: each key's own refusal rides its plain answer, and the
+    ///   `_screenFaded` guard's refusal is [`Answer::PlayerInfoFaded`],
+    ///   [`MissionInfoPress::Faded`](crate::session::MissionInfoPress::Faded)
+    ///   or [`Hailed::Faded`](crate::session::Hailed::Faded); the comm
+    ///   key's is refused without a catalog.
     /// - The settings are answered as the `settings` module says: the
     ///   window's width, the double-time key and the sound's quiet, each
     ///   [`Answer::Done`].
@@ -256,9 +263,11 @@ impl Session {
             FlightCommand::PressPlayerInfo | FlightCommand::OpenPlayerInfo => {
                 self.apply_player_info(command, collab)
             }
+            FlightCommand::PressFaded(press) => self.apply_faded(press, collab),
             FlightCommand::SetWindowWidth(_)
             | FlightCommand::SetDoubleTimeKey(_)
-            | FlightCommand::SetSoundQuiet(_) => self.apply_setting(command),
+            | FlightCommand::SetSoundQuiet(_)
+            | FlightCommand::SetSpriteLoad(_) => self.apply_setting(command),
             FlightCommand::Hover { .. }
             | FlightCommand::LoadDescription { .. }
             | FlightCommand::LoadPortDescription => self.apply_ask(command, collab),

@@ -16,6 +16,9 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # A button exactly two caps wide: its overlapping caps meet, and
+    # `three_slice` gives the same two caps with no middle.
+    "nova-view/src/ui/button\\.rs:[0-9]+:[0-9]+: replace < with <= in Button::draw$",
     # The full keyboard access adapters forward the real macOS setting;
     # no test may read it (hermetic tests), so none can see what they
     # return. The port's decision is tested on fakes (`nova::app`'s
@@ -682,6 +685,10 @@ exclude_re = [
     # `PlayerCommand::ALL`, whose bits are distinct: `^` onto a bit not yet
     # set is `|`, so the mutant builds the same set.
     "nova-sim/src/flight_frame\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in Gates::from_fn$",
+
+    # `murk_colour` packs three 5-bit channels, each at most 31, at shifts
+    # 10, 5 and 0: their bits are disjoint, so `^` packs the same pixel.
+    "nova-sim-port/src/murk\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in murk_colour$",
 
     # `unlike` only needs a gamma other than the frame's: `- 1.0` differs
     # as `+ 1.0` does, and `check_contract` and the fake's tests compare

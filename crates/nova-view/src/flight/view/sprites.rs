@@ -57,7 +57,7 @@ mod tests {
             id: nova_sim::combat::projectile::ShotId(0),
             spin_start: 0,
             spin_timer: 0,
-            murk: 0,
+            colorize: crate::Colorize::default(),
             at: Point::new(0.0, 0.0),
             heading: 0.0,
             age: 0,

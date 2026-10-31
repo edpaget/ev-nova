@@ -57,7 +57,9 @@
 //! **Ordering against the original.** The warp end is decided in the
 //! player's pass, as the original's is, and the view arrives
 //! ([`Session::arrive`]) in the same step, before the frame is drawn: no
-//! boundary falls between them.
+//! boundary falls between them. On double time's second pass the frame
+//! between the passes is drawn first, as the original draws it, and the
+//! view arrives on the next step, which stops before it runs.
 //!
 //! Left out: the disabled player's warp-stage branch (@0x6c70d-0x6c723,
 //! +0x50 of −999.0 to 0), which no engine state reaches: a disabled
@@ -537,7 +539,7 @@ fn grown(stage: f32) -> f32 {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use crate::testkit::work;
 
     use super::*;
@@ -561,7 +563,7 @@ mod tests {
 
     /// A catalog whose ship's class, 128, has `Flags` `flags` in its
     /// `shïp` record.
-    fn flagged(flags: u16) -> FakePilotCatalog {
+    pub(in crate::session) fn flagged(flags: u16) -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.ship_records = vec![crate::catalog::ShipRecord {
             flags,
@@ -930,7 +932,7 @@ mod tests {
     };
 
     /// `catalog()` with a warp-out of [`WARP_OUT_60`].
-    fn with_a_warp_out() -> FakePilotCatalog {
+    pub(in crate::session) fn with_a_warp_out() -> FakePilotCatalog {
         FakePilotCatalog {
             warp_out_sound: Some(WARP_OUT_60),
             ..catalog()
@@ -1038,7 +1040,7 @@ mod tests {
     }
 
     /// `catalog`'s ship, as [`jumping`], its jump begun in double time.
-    fn jumping_in_double_time(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn jumping_in_double_time(catalog: &FakePilotCatalog) -> Session {
         let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 90.0);
         session.statics_mut().warp_sounds = [364, 252];
         session.set_double_time_key(true);
@@ -1057,7 +1059,7 @@ mod tests {
     }
 
     /// Runs `frames` double-time frames: an advance pass, then the second.
-    fn frames(session: &mut Session, frames: u32) {
+    pub(in crate::session) fn frames(session: &mut Session, frames: u32) {
         for _ in 0..frames {
             tick(session);
             again(session);

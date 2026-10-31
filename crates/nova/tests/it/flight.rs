@@ -420,8 +420,32 @@ fn losing_focus_while_holding_up_stops_the_thrust() {
     harness.send(WindowEvent::FocusLost);
     // Up's release went to another window.
     let coasting = harness.ship();
+    // Play resumes, so the coast isn't the background's pause.
+    harness.send(WindowEvent::FocusGained);
     harness.run(0.5);
+    assert_ne!(harness.ship().position, coasting.position, "flying on");
     assert_eq!(harness.ship().velocity, coasting.velocity);
+}
+
+/// `_PlayGame` skips its whole frame while `_inBackground` is set
+/// (@0x45b2d-0x45b3e): nothing moves until the app comes back.
+#[test]
+fn the_game_stands_still_while_the_app_is_in_the_background() {
+    let mut harness = Harness::flying(60);
+    harness.key(Key::Up, true);
+    harness.settle_until("Up's thrust", |harness| {
+        harness.ship().velocity.length() > 0.0
+    });
+    harness.key(Key::Up, false);
+    harness.frame();
+    harness.send(WindowEvent::FocusLost);
+    let away = harness.ship();
+    harness.run(1.0);
+    assert_eq!(harness.ship().position, away.position, "standing still");
+    assert_eq!(harness.ship().velocity, away.velocity);
+    harness.send(WindowEvent::FocusGained);
+    harness.run(0.1);
+    assert_ne!(harness.ship().position, away.position, "moving on");
 }
 
 #[test]

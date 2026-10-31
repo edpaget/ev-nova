@@ -421,11 +421,11 @@ impl AppScreen {
         }
     }
 
-    /// The overlay open in front, if any: the one [`AppScreen::route`]
-    /// gives every input to. A mission dialog's map over flight is in
-    /// front of the mission dialogs it opened from.
-    fn overlay_in_front(&self) -> Option<Overlay> {
-        let open = [
+    /// Whether each overlay is open, in the order the router looks for
+    /// the one in front. A mission dialog's map over flight is in front of
+    /// the mission dialogs it opened from.
+    fn overlays_open(&self) -> [(bool, Overlay); 18] {
+        [
             (self.about.is_some(), Overlay::About),
             (self.preferences.is_some(), Overlay::Preferences),
             (self.player_info.is_some(), Overlay::PlayerInfo),
@@ -444,9 +444,28 @@ impl AppScreen {
             (self.open_pilot.is_some(), Overlay::OpenPilot),
             (self.load_note.is_some(), Overlay::LoadNote),
             (self.question.is_some(), Overlay::Question),
-        ];
-        open.into_iter()
+        ]
+    }
+
+    /// The overlay open in front, if any: the one [`AppScreen::route`]
+    /// gives every input to.
+    fn overlay_in_front(&self) -> Option<Overlay> {
+        self.overlays_open()
+            .into_iter()
             .find_map(|(is_open, overlay)| is_open.then_some(overlay))
+    }
+
+    /// How many overlays are open that flushed the event queue as they
+    /// opened: all of them bar a map, whose wait is what replays, and the
+    /// mission dialogs, which count as what they show (the
+    /// `map_wait_keys` module).
+    pub(super) fn flushing_overlays(&self) -> usize {
+        self.overlays_open()
+            .into_iter()
+            .filter(|(is_open, overlay)| {
+                *is_open && !matches!(overlay, Overlay::DialogMap | Overlay::Missions)
+            })
+            .count()
     }
 
     /// What takes every input in front of the router's own keys (its

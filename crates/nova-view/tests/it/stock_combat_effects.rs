@@ -19,6 +19,7 @@ use nova_view::flight::Looks;
 use nova_view::flight::ShipSprites;
 use nova_view::flight::effects::{Effects, LoopedSounds, Scene};
 use nova_view::flight::lightning::{StepRolls, zig_zag};
+use nova_view::flight::murk::SeenMurk;
 use nova_view::flight::shot_fade::{ShotShade, shot_shade};
 use nova_view::flight::weapons::TRANSLUCENT;
 use nova_view::{DrawCommand, DrawList, Point};
@@ -191,7 +192,12 @@ fn a_stock_escape_pod_draws_on_shan_895s_sheet_of_36_rotations() {
     assert_eq!(effects.pods().len(), 1);
     let mut list = DrawList::new();
     let camera = nova_view::system::camera::Camera::centred_on(Point::new(0.0, 0.0));
-    effects.draw_pods(&mut list, &camera, &looks, Vec2::ZERO, 0);
+    let clear = SeenMurk {
+        viewer: Vec2::ZERO,
+        murk: 0,
+        colour: 0,
+    };
+    effects.draw_pods(&mut list, &camera, &looks, clear);
     let drawn = list
         .into_iter()
         .filter(|command| {

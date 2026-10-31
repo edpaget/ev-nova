@@ -58,7 +58,9 @@
 //! `_DoPlayGameWork(1)` (@0x45bc1-0x45bc8), draws the frame, then, in
 //! double time, `_DoPlayGameWork(0)`, and only then moves the frame
 //! counter on, once. The second pass ([`Session::tick_again`]) therefore
-//! runs on the same counter value as the advance pass.
+//! runs on the same counter value as the advance pass. [`Session::step`]
+//! runs both passes in one go, and reports the frame between them for the
+//! view to draw ([`StepRun::between_passes`](crate::flight_frame::StepRun::between_passes)).
 //!
 //! **What the second pass runs** (`_DoPlayGameWork` @0x43de5-0x4453d, its
 //! argument saved @0x43dee-0x43df2):

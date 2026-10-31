@@ -502,6 +502,12 @@ fn p_during_a_jump_beeps_and_asks_nothing() {
         assert!(view.take_sounds().is_empty(), "{stage}: not a repeat");
         refuses_p(&mut view);
         tap(&mut view, PLAYER_INFO_KEY);
+        assert_eq!(sent_since(&view, from), [], "{stage}: kept for its pass");
+        view.sim.queue_report(StepReport {
+            steps: vec![nova_sim::flight_frame::StepRun::default()],
+            stopped: false,
+        });
+        view.tick(ms(17));
         assert_eq!(
             sent_since(&view, from),
             [FlightCommand::PressPlayerInfo],

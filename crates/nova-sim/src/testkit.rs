@@ -206,6 +206,22 @@ impl Behaviour for Answering {
     }
 }
 
+/// `STR#` 7101 as a session's own string lists read it
+/// ([`Session::with_strings`]), for a test of an attack quote said in a
+/// pass, which reads its words there.
+#[derive(Debug)]
+pub(crate) struct QuoteLines(pub(crate) Vec<String>);
+
+impl crate::catalog::CommCatalog for QuoteLines {
+    fn string_list(&self, id: i16) -> Vec<String> {
+        if id == crate::person::HAIL_QUOTES {
+            self.0.clone()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 /// One advance pass under `controls` ([`Session::game_work`]), the traffic
 /// drawn from `catalog` keeping its goals ([`Passive`]), the fight by the
 /// default rules, no chance firing. Asserts no rescue ended it.

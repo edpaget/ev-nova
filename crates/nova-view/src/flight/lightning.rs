@@ -4,7 +4,8 @@
 //! whose loaded `LiDensity` is above none (@0x37c75-0x37d62).
 //!
 //! - It has n = trunc(`LiDensity` × max(|dx|, |dy|) × 0.01) steps, over
-//!   whole screen pixels, or 1 when that is none or less
+//!   the whole screen pixels its ends are on, as `_HandleBeams` stores
+//!   them, or 1 when that is none or less
 //!   (@0xc40c4-0xc40ef, @0xc4833-0xc4866); a step is (end − start)/n in
 //!   `f32`.
 //! - Its points are the start, then for k = 1 to n − 2 the point
@@ -93,9 +94,10 @@ pub fn zig_zag(
     rule: RuleSource,
     chance: &mut dyn Chance,
 ) -> Vec<(Point, Point, Color)> {
-    // Whole screen pixels.
+    // The pixels `start` and `end` are on: a pixel's centre
+    // (`Camera::pixel_centre`) floors to it either side of the screen's edge.
     #[allow(clippy::cast_possible_truncation)]
-    let whole = |at: Point| (at.x as i32, at.y as i32);
+    let whole = |at: Point| (at.x.floor() as i32, at.y.floor() as i32);
     let (from, to) = (whole(start), whole(end));
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let count = steps(look.li_density, dx.abs().max(dy.abs()));
@@ -145,8 +147,11 @@ pub fn zig_zag(
             let offsets: &[i32] = if j == 0 { &[0] } else { &[j, -j] };
             for &off in offsets {
                 let (ox, oy) = if minor_x { (off, 0) } else { (0, off) };
+                // Each pixel's centre, as a line of width 1 is centred on
+                // its ends.
                 #[allow(clippy::cast_precision_loss)]
-                let point = |(x, y): (i32, i32)| Point::new((x + ox) as f32, (y + oy) as f32);
+                let point =
+                    |(x, y): (i32, i32)| Point::new((x + ox) as f32 + 0.5, (y + oy) as f32 + 0.5);
                 lines.push((point(head), point(tail), shade(look.beam_color, level)));
             }
         }
@@ -279,6 +284,11 @@ mod tests {
         Point::new(x, y)
     }
 
+    /// The centre of pixel (`x`, `y`).
+    fn pixel(x: f32, y: f32) -> Point {
+        at(x + 0.5, y + 0.5)
+    }
+
     /// The segments' ends among `lines`, j = 0's alone, for a beam one
     /// line wide.
     fn ends(lines: &[(Point, Point, Color)]) -> Vec<(Point, Point)> {
@@ -305,9 +315,32 @@ mod tests {
         let mended = zig_zag(from, to, &graviton, 0, MENDED, &mut Draws::of(&[]));
         assert_eq!(
             mended,
-            [(from, to, Color::rgba(255, 128, 0, 255))],
+            [(
+                pixel(0.0, 0.0),
+                pixel(99.0, 0.0),
+                Color::rgba(255, 128, 0, 255)
+            )],
             "one straight segment"
         );
+    }
+
+    #[test]
+    fn a_beam_past_the_screens_edge_keeps_the_pixels_its_ends_are_centred_on() {
+        // `Camera::pixel_centre` of the pixels (415, 384) and (415, -16):
+        // the same 400 rows either side of the edge, so 4 steps at 1.
+        let (from, to) = (at(415.5, 384.5), at(415.5, -15.5));
+        let lines = zig_zag(
+            from,
+            to,
+            &lightning(1, 1, 1),
+            0,
+            ENGINE,
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(lines.len(), 3, "4 steps: 3 segments");
+        let ends = ends(&lines);
+        assert_eq!(ends[0].0, from);
+        assert_eq!(ends[2].1, to);
     }
 
     #[test]
@@ -315,7 +348,7 @@ mod tests {
         let look = lightning(2, 4, 1);
         let mut none = Draws::of(&[]);
         let two = zig_zag(at(0.0, 0.0), at(100.0, 0.0), &look, 0, ENGINE, &mut none);
-        assert_eq!(ends(&two), [(at(0.0, 0.0), at(100.0, 0.0))]);
+        assert_eq!(ends(&two), [(pixel(0.0, 0.0), pixel(100.0, 0.0))]);
         assert!(none.asked.is_empty(), "no jitter");
         // 150 pixels at 2: 3 steps of 50, a point at 50 jittered by the
         // middle draws: (32767 − 32767) % 9 − 4 = −4 on each axis.
@@ -324,8 +357,8 @@ mod tests {
         assert_eq!(
             ends(&three),
             [
-                (at(0.0, 0.0), at(46.0, -4.0)),
-                (at(46.0, -4.0), at(150.0, 0.0))
+                (pixel(0.0, 0.0), pixel(46.0, -4.0)),
+                (pixel(46.0, -4.0), pixel(150.0, 0.0))
             ],
             "the last segment two steps long"
         );
@@ -371,8 +404,8 @@ mod tests {
             .expect("a draw");
         assert_eq!(jitter(2, ENGINE, &mut Draws::of(&[lowest])), -6);
         let held = low(lowest);
-        assert_eq!(held[0].1, at(94.0, -3.0), "y held at the box, x not");
-        assert_eq!(held[1].1, at(194.0, -3.0));
+        assert_eq!(held[0].1, pixel(94.0, -3.0), "y held at the box, x not");
+        assert_eq!(held[1].1, pixel(194.0, -3.0));
         // A mostly vertical beam is held on x.
         let up = zig_zag(
             at(0.0, 0.0),
@@ -382,7 +415,7 @@ mod tests {
             ENGINE,
             &mut Draws::of(&[lowest; 4]),
         );
-        assert_eq!(ends(&up)[0].1, at(-3.0, 94.0));
+        assert_eq!(ends(&up)[0].1, pixel(-3.0, 94.0));
     }
 
     #[test]
@@ -404,12 +437,12 @@ mod tests {
         // 32 / 4 = 8 a line: 32, 24, 16 32nds.
         assert_eq!(
             levels(0),
-            [(0.0, 255), (1.0, 191), (-1.0, 191), (2.0, 127), (-2.0, 127)]
+            [(0.5, 255), (1.5, 191), (-0.5, 191), (2.5, 127), (-1.5, 127)]
         );
         // 2, then held at 1.
         assert_eq!(
             levels(30),
-            [(0.0, 15), (1.0, 7), (-1.0, 7), (2.0, 7), (-2.0, 7)]
+            [(0.5, 15), (1.5, 7), (-0.5, 7), (2.5, 7), (-1.5, 7)]
         );
         assert_eq!(levels(40)[0].1, 7, "at least 1");
         for width in [0, -5] {
@@ -439,7 +472,7 @@ mod tests {
             ENGINE,
             &mut draws,
         ));
-        assert_eq!(across[0].1, at(102.0, 2.0));
+        assert_eq!(across[0].1, pixel(102.0, 2.0));
         let mut draws = Draws::of(&[highest; 4]);
         let up = ends(&zig_zag(
             at(0.0, 0.0),
@@ -449,7 +482,7 @@ mod tests {
             ENGINE,
             &mut draws,
         ));
-        assert_eq!(up[0].1, at(2.0, 102.0));
+        assert_eq!(up[0].1, pixel(2.0, 102.0));
     }
 
     #[test]
@@ -460,7 +493,7 @@ mod tests {
         let starts: Vec<Point> = lines.iter().map(|&(from, ..)| from).collect();
         assert_eq!(
             starts,
-            [at(0.0, 0.0), at(0.0, 1.0), at(0.0, -1.0)],
+            [pixel(0.0, 0.0), pixel(0.0, 1.0), pixel(0.0, -1.0)],
             "a tie is not mostly vertical"
         );
     }
@@ -495,7 +528,10 @@ mod tests {
             &mut Draws::of(&[]),
         );
         let starts: Vec<Point> = lines.iter().map(|&(from, ..)| from).collect();
-        assert_eq!(starts, [at(10.0, 0.0), at(11.0, 0.0), at(9.0, 0.0)]);
+        assert_eq!(
+            starts,
+            [pixel(10.0, 0.0), pixel(11.0, 0.0), pixel(9.0, 0.0)]
+        );
     }
 
     #[test]

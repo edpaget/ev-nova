@@ -1314,6 +1314,35 @@ mod tests {
         assert!(!audio.music_ended(), "faded out, not played to its end");
     }
 
+    /// [`AudioCommand::FadeOutMusic`]'s contract: a fade sent while one
+    /// runs replaces its remaining duration. kira's stop on a track
+    /// already stopping tweens its fade from the volume reached over the
+    /// new duration (`PlaybackStateManager::stop` sets the volume fade
+    /// again), so the adapter passes it on.
+    #[test]
+    fn a_fade_sent_while_one_runs_re_times_it() {
+        let (mut audio, _) = adapter(Some(silent_mp3(400)));
+        run(&mut audio, start_music(1.0));
+        run(
+            &mut audio,
+            AudioCommand::FadeOutMusic(std::time::Duration::from_secs(60)),
+        );
+        for _ in 0..4 {
+            run(&mut audio, AudioCommand::StopEffects);
+        }
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopping));
+        run(
+            &mut audio,
+            AudioCommand::FadeOutMusic(std::time::Duration::from_millis(20)),
+        );
+        // Each pass processes 128 frames at 48 kHz, 2.7 ms: 40 passes
+        // are 107 ms, well past the new 20 ms and far short of the 60 s.
+        for _ in 0..40 {
+            run(&mut audio, AudioCommand::StopEffects);
+        }
+        assert_eq!(audio.music_state(), Some(PlaybackState::Stopped));
+    }
+
     #[test]
     fn stopped_music_has_not_ended() {
         let (mut audio, _) = adapter(Some(silent_mp3(40)));

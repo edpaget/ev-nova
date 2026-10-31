@@ -1,7 +1,8 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
 //! and music on or off, each one's volume, Hyperspace Effects, QuickTime
-//! Movies, Smoke Trails, Weapon Effects, how the game runs fullscreen and
-//! how it is enlarged onto the window (its Scaling).
+//! Movies, Smoke Trails, Weapon Effects, Ship Animations, Engine Glows,
+//! Running Lights, how the game runs fullscreen and how it is enlarged
+//! onto the window (its Scaling).
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -22,11 +23,15 @@
 //!   closes (@0xcfed6-0xcfeec); the engine applies it at once, the game
 //!   paused under the dialog either way.
 //! - Check box 15 ("Weapon Effects") works as it stands: on, ships show
-//!   their weapon glow. The original reads it only at launch, so, opened
-//!   [`PrefsDialog::with_launch_weapon_effects`], the dialog draws the
-//!   original's notice, [`RELAUNCH_NOTICE`], while the box differs from
-//!   the value the game launched with (`settingsChange:` @0xd0b01,
-//!   @0xd0bf8-0xd0c40). The notice is drawn in the free area under
+//!   their weapon glow. Check boxes 12 ("Ship Animations"), 13 ("Engine
+//!   Glows") and 14 ("Running Lights") work as they stand: on, ships bank,
+//!   fold and animate, draw their engine glow, and show their running
+//!   lights. `Keys.nib` binds all three with no transformer, so checked is
+//!   on. The original reads these four only at launch, so, opened
+//!   [`PrefsDialog::with_launch`], the dialog draws the original's notice,
+//!   [`RELAUNCH_NOTICE`], while any of their boxes differs from the value
+//!   the game launched with ([`LaunchPrefs`], `settingsChange:` @0xd0b01,
+//!   @0xd0b90-0xd0c40). The notice is drawn in the free area under
 //!   "Check For Updates" ([`NOTICE_AREA`]), where the classic dialog has
 //!   nothing.
 //! - Check box 18 ("Parallax Starfield") works as it stands: on, each
@@ -57,8 +62,9 @@
 //!   the dialog closes, as the display picker's is, and reported as
 //!   [`Prefs::scaling`] only when the player stepped it to another
 //!   scaling than the one running.
-//! - Every other check box is drawn greyed and unchecked, and Key
-//!   Settings is a greyed button: those options do not work yet.
+//! - The one other check box, "Check For Updates", is drawn greyed and
+//!   unchecked, and Key Settings is a greyed button: those options do
+//!   not work yet.
 //! - Every other item is hidden.
 //!
 //! The dialog has no stock frame: it is drawn over a dark backdrop with a
@@ -86,7 +92,7 @@ use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
-use crate::preferences::Prefs;
+use crate::preferences::{LaunchPrefs, Prefs};
 use crate::scaling::Scaling;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::SoundPrefs;
@@ -131,6 +137,15 @@ pub const SMOKE_TRAILS_ITEM: usize = 10;
 
 /// The Weapon Effects toggle's item.
 pub const WEAPON_EFFECTS_ITEM: usize = 15;
+
+/// The Ship Animations toggle's item.
+pub const SHIP_ANIMATIONS_ITEM: usize = 12;
+
+/// The Engine Glows toggle's item.
+pub const ENGINE_GLOWS_ITEM: usize = 13;
+
+/// The Running Lights toggle's item.
+pub const RUNNING_LIGHTS_ITEM: usize = 14;
 
 /// The Parallax Starfield toggle's item.
 pub const PARALLAX_STARFIELD_ITEM: usize = 18;
@@ -178,11 +193,21 @@ pub const SMOKE_TRAILS_LABEL: &str = "Smoke Trails";
 /// The Weapon Effects toggle's label, the stock check box's title.
 pub const WEAPON_EFFECTS_LABEL: &str = "Weapon Effects";
 
+/// The Ship Animations toggle's label, the stock check box's title.
+pub const SHIP_ANIMATIONS_LABEL: &str = "Ship Animations";
+
+/// The Engine Glows toggle's label, the stock check box's title.
+pub const ENGINE_GLOWS_LABEL: &str = "Engine Glows";
+
+/// The Running Lights toggle's label, the stock check box's title.
+pub const RUNNING_LIGHTS_LABEL: &str = "Running Lights";
+
 /// The Parallax Starfield toggle's label, the stock check box's title.
 pub const PARALLAX_STARFIELD_LABEL: &str = "Parallax Starfield";
 
-/// The notice drawn while Weapon Effects differs from the value the game
-/// launched with: the original's `_relaunchStatus` text in `Keys.nib`.
+/// The notice drawn while a preference read only at launch differs from
+/// the value the game launched with: the original's `_relaunchStatus`
+/// text in `Keys.nib`.
 pub const RELAUNCH_NOTICE: &str = "(Changes will take effect the next time you run Nova)";
 
 /// Where the notice is drawn, dialog-local (left, top, right, bottom):
@@ -220,6 +245,12 @@ pub enum Focus {
     HyperspaceEffects,
     /// The QuickTime Movies toggle.
     QuickTimeMovies,
+    /// The Ship Animations toggle.
+    ShipAnimations,
+    /// The Engine Glows toggle.
+    EngineGlows,
+    /// The Running Lights toggle.
+    RunningLights,
     /// The Weapon Effects toggle.
     WeaponEffects,
     /// The Smoke Trails toggle.
@@ -244,7 +275,10 @@ impl Focus {
             Self::Music => Self::Sound,
             Self::Sound => Self::HyperspaceEffects,
             Self::HyperspaceEffects => Self::QuickTimeMovies,
-            Self::QuickTimeMovies => Self::WeaponEffects,
+            Self::QuickTimeMovies => Self::ShipAnimations,
+            Self::ShipAnimations => Self::EngineGlows,
+            Self::EngineGlows => Self::RunningLights,
+            Self::RunningLights => Self::WeaponEffects,
             Self::WeaponEffects => Self::SmokeTrails,
             Self::SmokeTrails => Self::ParallaxStarfield,
             Self::ParallaxStarfield => Self::Display,
@@ -264,6 +298,9 @@ enum Target {
     Sound,
     HyperspaceEffects,
     QuickTimeMovies,
+    ShipAnimations,
+    EngineGlows,
+    RunningLights,
     WeaponEffects,
     SmokeTrails,
     ParallaxStarfield,
@@ -294,6 +331,9 @@ fn inert_boxes(template: &DialogTemplate, dialog: &Dialog) -> Vec<Toggle> {
         QUICKTIME_MOVIES_ITEM,
         SMOKE_TRAILS_ITEM,
         WEAPON_EFFECTS_ITEM,
+        SHIP_ANIMATIONS_ITEM,
+        ENGINE_GLOWS_ITEM,
+        RUNNING_LIGHTS_ITEM,
         PARALLAX_STARFIELD_ITEM,
         DISPLAY_ITEM,
         SCALING_ITEM,
@@ -369,11 +409,15 @@ pub struct PrefsDialog {
     movies: Toggle,
     smoke: Toggle,
     weapons: Toggle,
+    animations: Toggle,
+    glows: Toggle,
+    lights: Toggle,
     parallax: Toggle,
-    /// The Weapon Effects the game launched with, when a change takes
-    /// effect only at the next launch ([`Self::with_launch_weapon_effects`]).
-    launch_weapon_effects: Option<bool>,
-    /// The notice drawn while Weapon Effects differs from its launch value.
+    /// The preferences read only at launch, as the game launched with
+    /// them, when a change of them takes effect only at the next launch
+    /// ([`Self::with_launch`]).
+    launch: Option<LaunchPrefs>,
+    /// The notice drawn while one of them differs from its launch value.
     notice: ScrollText,
     display: ModePicker,
     /// How the game runs fullscreen, as reported: the picker's choice is
@@ -420,6 +464,7 @@ impl PrefsDialog {
     /// # Errors
     ///
     /// When the template lacks one of the items the dialog is built from.
+    #[allow(clippy::too_many_lines)] // one part of the dialog after another
     pub fn new(
         template: &DialogTemplate,
         prefs: Prefs,
@@ -453,31 +498,41 @@ impl PrefsDialog {
             down: place(VOLUME_DOWN_ITEM)?,
         };
         let music_rects = effects.offset(Point::new(0.0, MUSIC_VOLUME_OFFSET));
-        let hyperspace = Toggle::new(
-            place(HYPERSPACE_EFFECTS_ITEM)?,
+        let toggle = |item: usize, label: &str, on: bool| {
+            Ok::<_, String>(Toggle::new(place(item)?, label, on))
+        };
+        let hyperspace = toggle(
+            HYPERSPACE_EFFECTS_ITEM,
             HYPERSPACE_EFFECTS_LABEL,
             prefs.hyperspace_effects,
-        );
-        let movies = Toggle::new(
-            place(QUICKTIME_MOVIES_ITEM)?,
+        )?;
+        let movies = toggle(
+            QUICKTIME_MOVIES_ITEM,
             QUICKTIME_MOVIES_LABEL,
             prefs.quicktime_movies,
-        );
-        let smoke = Toggle::new(
-            place(SMOKE_TRAILS_ITEM)?,
-            SMOKE_TRAILS_LABEL,
-            prefs.smoke_trails,
-        );
-        let weapons = Toggle::new(
-            place(WEAPON_EFFECTS_ITEM)?,
+        )?;
+        let smoke = toggle(SMOKE_TRAILS_ITEM, SMOKE_TRAILS_LABEL, prefs.smoke_trails)?;
+        let weapons = toggle(
+            WEAPON_EFFECTS_ITEM,
             WEAPON_EFFECTS_LABEL,
             prefs.weapon_effects,
-        );
-        let parallax = Toggle::new(
-            place(PARALLAX_STARFIELD_ITEM)?,
+        )?;
+        let animations = toggle(
+            SHIP_ANIMATIONS_ITEM,
+            SHIP_ANIMATIONS_LABEL,
+            prefs.ship_animations,
+        )?;
+        let glows = toggle(ENGINE_GLOWS_ITEM, ENGINE_GLOWS_LABEL, prefs.engine_glows)?;
+        let lights = toggle(
+            RUNNING_LIGHTS_ITEM,
+            RUNNING_LIGHTS_LABEL,
+            prefs.running_lights,
+        )?;
+        let parallax = toggle(
+            PARALLAX_STARFIELD_ITEM,
             PARALLAX_STARFIELD_LABEL,
             prefs.parallax_starfield,
-        );
+        )?;
         let notice = relaunch_notice(&dialog, &metrics);
         let mut display = ModePicker::new(picker_row(&dialog, place(DISPLAY_ITEM)?));
         display.set_entries(&[], prefs.fullscreen);
@@ -502,8 +557,11 @@ impl PrefsDialog {
             movies,
             smoke,
             weapons,
+            animations,
+            glows,
+            lights,
             parallax,
-            launch_weapon_effects: None,
+            launch: None,
             notice,
             display,
             fullscreen,
@@ -538,6 +596,9 @@ impl PrefsDialog {
             quicktime_movies: self.movies.on(),
             smoke_trails: self.smoke.on(),
             weapon_effects: self.weapons.on(),
+            ship_animations: self.animations.on(),
+            engine_glows: self.glows.on(),
+            running_lights: self.lights.on(),
             parallax_starfield: self.parallax.on(),
             fullscreen: self.fullscreen,
             scaling: self.scaling,
@@ -573,22 +634,23 @@ impl PrefsDialog {
         self
     }
 
-    /// The dialog for a game that launched with Weapon Effects `launch`,
-    /// where a change of it takes effect only at the next launch, as in the
-    /// original: it draws [`RELAUNCH_NOTICE`] while the box differs from
-    /// `launch`. Without it, the notice is never drawn.
+    /// The dialog for a game that launched with the preferences `launch`,
+    /// where a change of one of them takes effect only at the next launch,
+    /// as in the original: it draws [`RELAUNCH_NOTICE`] while any of their
+    /// boxes differs from its launch value. Without it, the notice is
+    /// never drawn.
     #[must_use]
-    pub fn with_launch_weapon_effects(mut self, launch: bool) -> Self {
-        self.launch_weapon_effects = Some(launch);
+    pub fn with_launch(mut self, launch: LaunchPrefs) -> Self {
+        self.launch = Some(launch);
         self
     }
 
-    /// Whether the relaunch notice is drawn: Weapon Effects differs from
-    /// the value the game launched with.
+    /// Whether the relaunch notice is drawn: a preference read only at
+    /// launch differs from the value the game launched with.
     #[must_use]
     pub fn relaunch_notice_shown(&self) -> bool {
-        self.launch_weapon_effects
-            .is_some_and(|launch| launch != self.weapons.on())
+        self.launch
+            .is_some_and(|launch| launch != LaunchPrefs::of(&self.prefs()))
     }
 
     /// The kind the player picked, once after the dialog closed on a pick
@@ -620,6 +682,9 @@ impl PrefsDialog {
             (_, Some(Focus::Sound)) => self.changed |= self.sound.input(input),
             (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
             (_, Some(Focus::QuickTimeMovies)) => self.changed |= self.movies.input(input),
+            (_, Some(Focus::ShipAnimations)) => self.changed |= self.animations.input(input),
+            (_, Some(Focus::EngineGlows)) => self.changed |= self.glows.input(input),
+            (_, Some(Focus::RunningLights)) => self.changed |= self.lights.input(input),
             (_, Some(Focus::WeaponEffects)) => self.changed |= self.weapons.input(input),
             (_, Some(Focus::SmokeTrails)) => self.changed |= self.smoke.input(input),
             (_, Some(Focus::ParallaxStarfield)) => self.changed |= self.parallax.input(input),
@@ -647,6 +712,12 @@ impl PrefsDialog {
                 Target::HyperspaceEffects
             } else if self.movies.contains(at) {
                 Target::QuickTimeMovies
+            } else if self.animations.contains(at) {
+                Target::ShipAnimations
+            } else if self.glows.contains(at) {
+                Target::EngineGlows
+            } else if self.lights.contains(at) {
+                Target::RunningLights
             } else if self.weapons.contains(at) {
                 Target::WeaponEffects
             } else if self.smoke.contains(at) {
@@ -670,6 +741,9 @@ impl PrefsDialog {
             Some(Target::Sound) => self.changed |= self.sound.input(input),
             Some(Target::HyperspaceEffects) => self.changed |= self.hyperspace.input(input),
             Some(Target::QuickTimeMovies) => self.changed |= self.movies.input(input),
+            Some(Target::ShipAnimations) => self.changed |= self.animations.input(input),
+            Some(Target::EngineGlows) => self.changed |= self.glows.input(input),
+            Some(Target::RunningLights) => self.changed |= self.lights.input(input),
             Some(Target::WeaponEffects) => self.changed |= self.weapons.input(input),
             Some(Target::SmokeTrails) => self.changed |= self.smoke.input(input),
             Some(Target::ParallaxStarfield) => self.changed |= self.parallax.input(input),
@@ -775,6 +849,24 @@ impl PrefsDialog {
         &self.weapons
     }
 
+    /// The Ship Animations toggle.
+    #[must_use]
+    pub fn ship_animations(&self) -> &Toggle {
+        &self.animations
+    }
+
+    /// The Engine Glows toggle.
+    #[must_use]
+    pub fn engine_glows(&self) -> &Toggle {
+        &self.glows
+    }
+
+    /// The Running Lights toggle.
+    #[must_use]
+    pub fn running_lights(&self) -> &Toggle {
+        &self.lights
+    }
+
     /// The Smoke Trails toggle.
     #[must_use]
     pub fn smoke_trails(&self) -> &Toggle {
@@ -825,8 +917,9 @@ impl Screen for PrefsDialog {
     /// - A click on the display picker's or the Scaling list's arrows
     ///   steps it.
     /// - Under [`FocusRing::Tab`], Tab moves the focus (music, sound,
-    ///   Hyperspace Effects, QuickTime Movies, Weapon Effects, Smoke
-    ///   Trails, Parallax Starfield, the display picker, the Scaling list,
+    ///   Hyperspace Effects, QuickTime Movies, then down the left column:
+    ///   Ship Animations, Engine Glows, Running Lights, Weapon Effects,
+    ///   Smoke Trails, Parallax Starfield; the display picker, the Scaling list,
     ///   the sound volume, the music volume, OK, and round). Space flips a
     ///   focused toggle or activates OK; the arrow keys step a focused
     ///   volume, and Up and Down the focused picker, repeats included.
@@ -853,7 +946,7 @@ impl Screen for PrefsDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The backdrop and its outline, OK and Key Settings, the greyed check
-    /// boxes, the seven toggles, the display picker, the Scaling list,
+    /// box, the ten toggles, the display picker, the Scaling list,
     /// then the two volumes, and the relaunch notice while it shows.
     /// The focused part is outlined.
     fn draw(&self, list: &mut DrawList) {
@@ -871,6 +964,12 @@ impl Screen for PrefsDialog {
             .draw(focused(Focus::HyperspaceEffects), &self.metrics, list);
         self.movies
             .draw(focused(Focus::QuickTimeMovies), &self.metrics, list);
+        self.animations
+            .draw(focused(Focus::ShipAnimations), &self.metrics, list);
+        self.glows
+            .draw(focused(Focus::EngineGlows), &self.metrics, list);
+        self.lights
+            .draw(focused(Focus::RunningLights), &self.metrics, list);
         self.weapons
             .draw(focused(Focus::WeaponEffects), &self.metrics, list);
         self.smoke
@@ -896,6 +995,9 @@ impl Screen for PrefsDialog {
         self.sound.cancel_pointer();
         self.hyperspace.cancel_pointer();
         self.movies.cancel_pointer();
+        self.animations.cancel_pointer();
+        self.glows.cancel_pointer();
+        self.lights.cancel_pointer();
         self.weapons.cancel_pointer();
         self.smoke.cancel_pointer();
         self.parallax.cancel_pointer();
@@ -1153,17 +1255,9 @@ mod tests {
             .map(|toggle| (toggle.label(), toggle.enabled(), toggle.on()))
             .collect();
         let titles: Vec<&str> = inert.iter().map(|(title, ..)| *title).collect();
-        assert_eq!(
-            titles,
-            [
-                "Ship Animations",
-                "Engine Glows",
-                "Running Lights",
-                "Check For Updates",
-            ]
-        );
+        assert_eq!(titles, ["Check For Updates"]);
         assert!(inert.iter().all(|(_, enabled, on)| !enabled && !on));
-        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 33.0, 172.0, 51.0));
+        assert_eq!(dialog.inert()[0].rect(), placed(11.0, 165.0, 156.0, 183.0));
     }
 
     #[test]
@@ -1323,7 +1417,7 @@ mod tests {
     fn space_flips_the_focused_parallax_starfield_box_and_outlines_it() {
         let mut dialog = prefs();
         let unfocused = drawn(&dialog);
-        for _ in 0..7 {
+        for _ in 0..10 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::ParallaxStarfield));
@@ -1407,6 +1501,9 @@ mod tests {
             QUICKTIME_MOVIES_ITEM,
             SMOKE_TRAILS_ITEM,
             WEAPON_EFFECTS_ITEM,
+            SHIP_ANIMATIONS_ITEM,
+            ENGINE_GLOWS_ITEM,
+            RUNNING_LIGHTS_ITEM,
             PARALLAX_STARFIELD_ITEM,
             VOLUME_LABEL_ITEM,
             VOLUME_DOWN_ITEM,
@@ -1488,6 +1585,9 @@ mod tests {
             dialog.music().rect().center(),
             dialog.sound().rect().center(),
             dialog.hyperspace_effects().rect().center(),
+            dialog.ship_animations().rect().center(),
+            dialog.engine_glows().rect().center(),
+            dialog.running_lights().rect().center(),
             dialog.weapon_effects().rect().center(),
             dialog.smoke_trails().rect().center(),
             dialog.effects_volume().rects().up.center(),
@@ -1535,7 +1635,7 @@ mod tests {
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..13 {
+        for _ in 0..16 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -1546,6 +1646,9 @@ mod tests {
                 Focus::Sound,
                 Focus::HyperspaceEffects,
                 Focus::QuickTimeMovies,
+                Focus::ShipAnimations,
+                Focus::EngineGlows,
+                Focus::RunningLights,
                 Focus::WeaponEffects,
                 Focus::SmokeTrails,
                 Focus::ParallaxStarfield,
@@ -1583,7 +1686,7 @@ mod tests {
         let mut dialog = prefs();
         dialog.input(&key(Key::Up));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
-        for _ in 0..10 {
+        for _ in 0..13 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&key(Key::Up));
@@ -1619,7 +1722,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..12 {
+        for _ in 0..15 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -1653,7 +1756,7 @@ mod tests {
         assert_eq!(dialog.take_prefs(), Some(changed));
         assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
-        for _ in 0..10 {
+        for _ in 0..13 {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
@@ -1682,15 +1785,21 @@ mod tests {
         assert!(!hyperspace.hyperspace_effects);
         let movies = focused(4, key(Key::Space)).expect("Space on QuickTime Movies");
         assert!(!movies.quicktime_movies);
-        let weapons = focused(5, key(Key::Space)).expect("Space on Weapon Effects");
+        let animations = focused(5, key(Key::Space)).expect("Space on Ship Animations");
+        assert!(!animations.ship_animations);
+        let glows = focused(6, key(Key::Space)).expect("Space on Engine Glows");
+        assert!(!glows.engine_glows);
+        let lights = focused(7, key(Key::Space)).expect("Space on Running Lights");
+        assert!(!lights.running_lights);
+        let weapons = focused(8, key(Key::Space)).expect("Space on Weapon Effects");
         assert!(!weapons.weapon_effects);
-        let smoke = focused(6, key(Key::Space)).expect("Space on Smoke Trails");
+        let smoke = focused(9, key(Key::Space)).expect("Space on Smoke Trails");
         assert!(!smoke.smoke_trails);
-        let parallax = focused(7, key(Key::Space)).expect("Space on Parallax Starfield");
+        let parallax = focused(10, key(Key::Space)).expect("Space on Parallax Starfield");
         assert!(!parallax.parallax_starfield);
-        let effects = focused(10, key(Key::Up)).expect("Up on the sound volume");
+        let effects = focused(13, key(Key::Up)).expect("Up on the sound volume");
         assert_eq!(effects.sound.effects_level, 5);
-        let volume = focused(11, key(Key::Down)).expect("Down on the music volume");
+        let volume = focused(14, key(Key::Down)).expect("Down on the music volume");
         assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
@@ -1714,6 +1823,12 @@ mod tests {
         assert!(!hyperspace.expect("Hyperspace Effects").hyperspace_effects);
         let movies = clicked(|d| d.quicktime_movies().rect().center());
         assert!(!movies.expect("QuickTime Movies").quicktime_movies);
+        let animations = clicked(|d| d.ship_animations().rect().center());
+        assert!(!animations.expect("Ship Animations").ship_animations);
+        let glows = clicked(|d| d.engine_glows().rect().center());
+        assert!(!glows.expect("Engine Glows").engine_glows);
+        let lights = clicked(|d| d.running_lights().rect().center());
+        assert!(!lights.expect("Running Lights").running_lights);
         let weapons = clicked(|d| d.weapon_effects().rect().center());
         assert!(!weapons.expect("Weapon Effects").weapon_effects);
         let smoke = clicked(|d| d.smoke_trails().rect().center());
@@ -1798,7 +1913,7 @@ mod tests {
             assert_eq!(dialog.take_sounds(), [], "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..12 {
+        for _ in 0..15 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.take_sounds(), [], "Tab to OK");
@@ -1836,6 +1951,15 @@ mod tests {
             .draw(false, &MonoMetrics, &mut expected);
         dialog
             .quicktime_movies()
+            .draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .ship_animations()
+            .draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .engine_glows()
+            .draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .running_lights()
             .draw(false, &MonoMetrics, &mut expected);
         dialog
             .weapon_effects()
@@ -1885,7 +2009,7 @@ mod tests {
         assert_eq!(commands.len(), unfocused.len() + 4);
         let music: Vec<DrawCommand> = music.iter().cloned().collect();
         assert!(commands.windows(music.len()).any(|window| window == music));
-        for _ in 0..9 {
+        for _ in 0..12 {
             dialog.input(&key(Key::Tab));
         }
         let mut effects = DrawList::new();
@@ -1958,7 +2082,7 @@ mod tests {
 
     /// Tabs to the display picker.
     fn focus_display(dialog: &mut PrefsDialog) {
-        for _ in 0..8 {
+        for _ in 0..11 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Display));
@@ -2270,7 +2394,7 @@ mod tests {
 
     /// Tabs to the Scaling list.
     fn focus_scaling(dialog: &mut PrefsDialog) {
-        for _ in 0..9 {
+        for _ in 0..12 {
             dialog.input(&key(Key::Tab));
         }
         assert_eq!(dialog.focus(), Some(Focus::Scaling));
@@ -2315,6 +2439,9 @@ mod tests {
                 dialog.sound(),
                 dialog.hyperspace_effects(),
                 dialog.quicktime_movies(),
+                dialog.ship_animations(),
+                dialog.engine_glows(),
+                dialog.running_lights(),
                 dialog.weapon_effects(),
                 dialog.smoke_trails(),
             ])
@@ -2514,6 +2641,118 @@ mod tests {
         assert_eq!(dialog.scaling().selected(), NATIVE);
     }
 
+    /// A toggle of the dialog.
+    type Part = fn(&PrefsDialog) -> &Toggle;
+
+    /// The three ship-drawing boxes: each one's toggle, item, stock title
+    /// and place, focus, and the preferences it turns off.
+    fn ship_drawing_boxes() -> [(Part, usize, &'static str, Bounds, Focus, Prefs); 3] {
+        [
+            (
+                PrefsDialog::ship_animations,
+                SHIP_ANIMATIONS_ITEM,
+                SHIP_ANIMATIONS_LABEL,
+                placed(11.0, 33.0, 172.0, 51.0),
+                Focus::ShipAnimations,
+                Prefs {
+                    ship_animations: false,
+                    ..start()
+                },
+            ),
+            (
+                PrefsDialog::engine_glows,
+                ENGINE_GLOWS_ITEM,
+                ENGINE_GLOWS_LABEL,
+                placed(11.0, 55.0, 172.0, 73.0),
+                Focus::EngineGlows,
+                Prefs {
+                    engine_glows: false,
+                    ..start()
+                },
+            ),
+            (
+                PrefsDialog::running_lights,
+                RUNNING_LIGHTS_ITEM,
+                RUNNING_LIGHTS_LABEL,
+                placed(11.0, 77.0, 172.0, 95.0),
+                Focus::RunningLights,
+                Prefs {
+                    running_lights: false,
+                    ..start()
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_ship_animations_engine_glows_and_running_lights_boxes_are_enabled_and_show_the_prefs() {
+        assert_eq!(
+            (SHIP_ANIMATIONS_ITEM, ENGINE_GLOWS_ITEM, RUNNING_LIGHTS_ITEM),
+            (12, 13, 14)
+        );
+        assert_eq!(
+            (
+                SHIP_ANIMATIONS_LABEL,
+                ENGINE_GLOWS_LABEL,
+                RUNNING_LIGHTS_LABEL
+            ),
+            ("Ship Animations", "Engine Glows", "Running Lights")
+        );
+        let dialog = prefs();
+        for (part, _, label, rect, _, off) in ship_drawing_boxes() {
+            let toggle = part(&dialog);
+            assert_eq!(toggle.rect(), rect, "{label}");
+            assert_eq!(toggle.label(), label);
+            assert!(toggle.enabled() && toggle.on(), "{label} on as given");
+            let dialog =
+                PrefsDialog::new(&template(), off, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+                    .expect("builds");
+            assert!(!part(&dialog).on(), "{label} off as given");
+            assert_eq!(dialog.prefs(), off, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_ship_drawing_box_flips_it_and_reports_once() {
+        for (part, _, label, _, _, off) in ship_drawing_boxes() {
+            let mut dialog = prefs();
+            let point = part(&dialog).rect().center();
+            click(&mut dialog, point);
+            assert_eq!(dialog.take_change(), Some(off), "{label}");
+            assert_eq!(dialog.take_change(), None, "{label} once");
+            click(&mut dialog, point);
+            assert_eq!(dialog.take_change(), Some(start()), "{label} back on");
+            dialog.input(&button(true, point));
+            dialog.cancel_pointer();
+            dialog.input(&button(false, point));
+            assert_eq!(dialog.prefs(), start(), "{label}: a cancelled click");
+        }
+    }
+
+    #[test]
+    fn space_flips_a_focused_ship_drawing_box_and_outlines_it() {
+        for (tabs, (part, _, label, _, focus, off)) in (5..).zip(ship_drawing_boxes()) {
+            let mut dialog = prefs();
+            for _ in 0..tabs {
+                dialog.input(&key(Key::Tab));
+            }
+            assert_eq!(dialog.focus(), Some(focus), "{label}");
+            let mut outlined = DrawList::new();
+            part(&dialog).draw(true, &MonoMetrics, &mut outlined);
+            let outlined: Vec<DrawCommand> = outlined.iter().cloned().collect();
+            assert!(
+                drawn(&dialog)
+                    .windows(outlined.len())
+                    .any(|w| w == outlined),
+                "{label}"
+            );
+            dialog.input(&held(Key::Space));
+            assert_eq!(dialog.prefs(), start(), "{label}: a repeat does nothing");
+            dialog.input(&key(Key::Space));
+            assert_eq!(dialog.take_change(), Some(off), "{label}");
+        }
+    }
+
     #[test]
     fn the_smoke_trails_and_weapon_effects_boxes_are_enabled_and_show_the_prefs() {
         let dialog = prefs();
@@ -2547,7 +2786,6 @@ mod tests {
 
     #[test]
     fn a_click_on_smoke_trails_or_weapon_effects_flips_it_and_reports_once() {
-        type Part = fn(&PrefsDialog) -> &Toggle;
         let parts: [(Part, Prefs); 2] = [
             (
                 PrefsDialog::smoke_trails,
@@ -2581,7 +2819,7 @@ mod tests {
 
     #[test]
     fn space_flips_the_focused_smoke_trails_or_weapon_effects_box_and_outlines_it() {
-        for (tabs, focus) in [(5, Focus::WeaponEffects), (6, Focus::SmokeTrails)] {
+        for (tabs, focus) in [(8, Focus::WeaponEffects), (9, Focus::SmokeTrails)] {
             let mut dialog = prefs();
             for _ in 0..tabs {
                 dialog.input(&key(Key::Tab));
@@ -2629,63 +2867,125 @@ mod tests {
             .any(|window| window == expected)
     }
 
-    #[test]
-    fn the_relaunch_notice_shows_while_weapon_effects_differs_from_launch() {
-        assert_eq!(
-            RELAUNCH_NOTICE,
-            "(Changes will take effect the next time you run Nova)"
-        );
-        for launch in [true, false] {
-            let mut dialog = PrefsDialog::new(
-                &template(),
-                Prefs {
-                    weapon_effects: launch,
-                    ..start()
-                },
-                ButtonStyle::STOCK,
-                Rc::new(MonoMetrics),
-            )
-            .expect("builds")
-            .with_launch_weapon_effects(launch);
-            assert!(!notice_drawn(&dialog), "agrees with launch {launch}");
-            let point = dialog.weapon_effects().rect().center();
-            click(&mut dialog, point);
-            assert!(notice_drawn(&dialog), "differs from launch {launch}");
-            let other = dialog.smoke_trails().rect().center();
-            click(&mut dialog, other);
-            assert!(notice_drawn(&dialog), "Smoke Trails takes effect at once");
-            click(&mut dialog, point);
-            assert!(!notice_drawn(&dialog), "back to launch {launch}");
-        }
-        let opened_off = PrefsDialog::new(
+    /// The launch values with one box's preference set as given.
+    type Launched = fn(bool) -> LaunchPrefs;
+
+    /// The four boxes whose change waits for the next launch: each one's
+    /// toggle, and the launch values with it set to `on`, the rest
+    /// as `start` has them.
+    fn launch_boxes() -> [(Part, &'static str, Launched); 4] {
+        [
+            (PrefsDialog::ship_animations, "Ship Animations", |on| {
+                LaunchPrefs {
+                    ship_animations: on,
+                    ..LaunchPrefs::of(&start())
+                }
+            }),
+            (PrefsDialog::engine_glows, "Engine Glows", |on| {
+                LaunchPrefs {
+                    engine_glows: on,
+                    ..LaunchPrefs::of(&start())
+                }
+            }),
+            (PrefsDialog::weapon_effects, "Weapon Effects", |on| {
+                LaunchPrefs {
+                    weapon_effects: on,
+                    ..LaunchPrefs::of(&start())
+                }
+            }),
+            (PrefsDialog::running_lights, "Running Lights", |on| {
+                LaunchPrefs {
+                    running_lights: on,
+                    ..LaunchPrefs::of(&start())
+                }
+            }),
+        ]
+    }
+
+    /// The dialog showing the preferences `launch` names, the rest as
+    /// `start` has them.
+    fn showing(launch: LaunchPrefs) -> PrefsDialog {
+        PrefsDialog::new(
             &template(),
             Prefs {
-                weapon_effects: false,
+                ship_animations: launch.ship_animations,
+                engine_glows: launch.engine_glows,
+                weapon_effects: launch.weapon_effects,
+                running_lights: launch.running_lights,
                 ..start()
             },
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
         .expect("builds")
-        .with_launch_weapon_effects(true);
-        assert!(
-            notice_drawn(&opened_off),
-            "changed earlier this run, the dialog opens with it"
+    }
+
+    #[test]
+    fn the_relaunch_notice_shows_while_any_launch_pref_differs_from_launch() {
+        assert_eq!(
+            RELAUNCH_NOTICE,
+            "(Changes will take effect the next time you run Nova)"
         );
+        for (part, label, launched) in launch_boxes() {
+            for launch in [true, false] {
+                let mut dialog = showing(launched(launch)).with_launch(launched(launch));
+                assert!(!notice_drawn(&dialog), "{label} agrees with {launch}");
+                assert!(!dialog.relaunch_notice_shown());
+                let point = part(&dialog).rect().center();
+                click(&mut dialog, point);
+                assert!(notice_drawn(&dialog), "{label} differs from {launch}");
+                assert!(dialog.relaunch_notice_shown());
+                let other = dialog.smoke_trails().rect().center();
+                click(&mut dialog, other);
+                assert!(notice_drawn(&dialog), "Smoke Trails takes effect at once");
+                click(&mut dialog, point);
+                assert!(!notice_drawn(&dialog), "{label} back to {launch}");
+            }
+            let opened_off = showing(launched(false)).with_launch(launched(true));
+            assert!(
+                notice_drawn(&opened_off),
+                "{label} changed earlier this run, the dialog opens with it"
+            );
+        }
+        let mut dialog = prefs().with_launch(LaunchPrefs::of(&start()));
+        for (part, label, _) in launch_boxes() {
+            let point = part(&dialog).rect().center();
+            click(&mut dialog, point);
+            assert!(notice_drawn(&dialog), "{label} and those before it off");
+        }
+        for (part, label, _) in launch_boxes() {
+            assert!(notice_drawn(&dialog), "{label} and those after it off");
+            let point = part(&dialog).rect().center();
+            click(&mut dialog, point);
+        }
+        assert!(!notice_drawn(&dialog), "all four back");
     }
 
     #[test]
     fn without_a_launch_value_the_notice_is_never_drawn() {
         let mut dialog = prefs();
-        let point = dialog.weapon_effects().rect().center();
-        click(&mut dialog, point);
-        assert!(!dialog.prefs().weapon_effects);
-        assert!(!notice_drawn(&dialog));
+        for (part, label, _) in launch_boxes() {
+            let point = part(&dialog).rect().center();
+            click(&mut dialog, point);
+            assert!(!notice_drawn(&dialog), "{label}");
+        }
+        assert_eq!(
+            LaunchPrefs::of(&dialog.prefs()),
+            LaunchPrefs {
+                ship_animations: false,
+                engine_glows: false,
+                weapon_effects: false,
+                running_lights: false,
+            }
+        );
     }
 
     #[test]
     fn the_notice_sits_in_the_free_area_under_check_for_updates() {
-        let dialog = prefs().with_launch_weapon_effects(false);
+        let dialog = prefs().with_launch(LaunchPrefs {
+            weapon_effects: false,
+            ..LaunchPrefs::of(&start())
+        });
         let notice = placed(11.0, 189.0, 165.0, 241.0);
         let ok = dialog.dialog().item_bounds(OK_ITEM).expect("OK");
         let keys = dialog
@@ -2700,6 +3000,9 @@ mod tests {
                 dialog.sound(),
                 dialog.hyperspace_effects(),
                 dialog.quicktime_movies(),
+                dialog.ship_animations(),
+                dialog.engine_glows(),
+                dialog.running_lights(),
                 dialog.weapon_effects(),
                 dialog.smoke_trails(),
             ])
@@ -2745,7 +3048,7 @@ mod tests {
         let mut dialog = prefs().with_focus_ring(FocusRing::Off);
         assert_eq!(dialog.focus_ring(), FocusRing::Off);
         let before = drawn(&dialog);
-        for _ in 0..13 {
+        for _ in 0..16 {
             dialog.input(&key(Key::Tab));
             assert_eq!(dialog.focus(), None);
             for k in [Key::Space, Key::Up, Key::Down, Key::Left, Key::Right] {

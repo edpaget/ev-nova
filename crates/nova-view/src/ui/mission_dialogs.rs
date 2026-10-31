@@ -530,6 +530,21 @@ impl MissionDialogs {
         !self.texts.is_empty()
     }
 
+    /// How many texts are shown or queued: closing one with any left
+    /// brings the next to the front, or a movie and then it, which drops
+    /// the keys queued (`FlushEvents(0xff7f, 0)`, `_ShowTextDialog`
+    /// @0x5ae67), so the count changing to anything but 0 says so. A movie
+    /// counts for nothing: `_PlayQTMovie` flushes only when it is skipped
+    /// (mask 0xf, @0x55e9f), and otherwise leaves the queue to what comes
+    /// next.
+    #[must_use]
+    pub fn text_stages(&self) -> usize {
+        self.texts
+            .iter()
+            .filter(|stage| matches!(stage, Stage::Text(_)))
+            .count()
+    }
+
     /// Whether a text, a movie or the mission info screen is open.
     #[must_use]
     pub fn is_open(&self) -> bool {
@@ -546,9 +561,10 @@ impl Screen for MissionDialogs {
         ScreenAction::None
     }
 
-    /// The movie shown, or the front text's fade-in, moves on; the rest
-    /// wait on input. Once the fade-in ends, what was pressed during it
-    /// reaches the text, and an empty text is done.
+    /// The movie shown, the front text's fade-in, or a press held on the
+    /// text shown's scroll arrow moves on; the rest wait on input. Once
+    /// the fade-in ends, what was pressed during it reaches the text, and
+    /// an empty text is done.
     fn tick(&mut self, dt: Duration) {
         if let Some(held) = self.screen.tick(dt) {
             if matches!(self.texts.front(), Some(Stage::Empty)) {
@@ -559,9 +575,13 @@ impl Screen for MissionDialogs {
             self.settle();
             return;
         }
-        if let Some(Stage::Movie(movie)) = self.texts.front_mut() {
-            movie.tick(dt);
-            self.settle();
+        match self.texts.front_mut() {
+            Some(Stage::Movie(movie)) => {
+                movie.tick(dt);
+                self.settle();
+            }
+            Some(Stage::Text(text)) => text.tick(dt),
+            Some(Stage::Empty | Stage::Closed) | None => {}
         }
     }
 
@@ -604,6 +624,7 @@ impl Screen for MissionDialogs {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
 
@@ -618,8 +639,9 @@ mod tests {
     use crate::sound::UiSound;
     use crate::spaceport::missions::ABORT_ITEM;
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::desc::DONE_ITEM;
+    use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::DescMovie;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -796,21 +818,69 @@ mod tests {
         let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
         let mut dialogs = dialogs();
         dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
-        let first = |dialogs: &MissionDialogs| dialogs.text().expect("open").first_line();
+        let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
         let text = dialogs.text().expect("open");
-        let visible = text.dialog().scroll_text().expect("scrolls").visible();
-        let last = text.lines().len() - visible;
-        assert!(last > 0, "the text overflows its box");
+        let end = text.dialog().scroll_text().expect("scrolls").max_offset();
+        assert!(end > 0.0, "the text overflows its box");
         dialogs.input(&key(Key::End));
-        assert_eq!(first(&dialogs), last);
+        assert_eq!(at(&dialogs), end);
         dialogs.input(&key(Key::Home));
-        assert_eq!(first(&dialogs), 0);
+        assert_eq!(at(&dialogs), 0.0);
         dialogs.input(&key(Key::PageDown));
-        let paged = first(&dialogs);
-        assert!(paged > 0);
+        assert_eq!(at(&dialogs), crate::ui::desc::PAGE_UNITS.min(end));
         dialogs.input(&key(Key::PageUp));
-        assert!(first(&dialogs) < paged);
+        assert_eq!(at(&dialogs), 0.0);
         assert!(dialogs.text().is_some(), "still open");
+    }
+
+    /// `_ShowTextDialog`'s Up and Down reach a mission text (@0x5b0af-0x5b130).
+    #[test]
+    fn a_mission_text_scrolls_ten_pixels_with_up_and_down() {
+        let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
+        let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
+        dialogs.input(&key(Key::Down));
+        assert_eq!(at(&dialogs), crate::ui::desc::ARROW_UNITS);
+        dialogs.input(&key(Key::Up));
+        assert_eq!(at(&dialogs), 0.0);
+    }
+
+    /// `_ShowTextDialog`'s arrows reach a mission text: a press held on one
+    /// runs in the host's ticks.
+    #[test]
+    fn a_mission_text_scrolls_under_a_held_arrow() {
+        let mut template = text_template();
+        template.items.extend(user_items(&[
+            (10.0, 400.0, 20.0, 20.0, false),
+            (110.0, 60.0, 23.0, 23.0, false),
+            (140.0, 60.0, 23.0, 23.0, false),
+        ]));
+        let mut dialogs = MissionDialogs::new(
+            texts(Ok(template)),
+            Ok(info_template()),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+        let long: Vec<String> = (0..40).map(|n| format!("l{n}")).collect();
+        dialogs.show_texts(vec![brief(128, &long.join("\r"))]);
+        let at = |dialogs: &MissionDialogs| dialogs.text().expect("open").scroll_offset();
+        let down = dialogs
+            .text()
+            .expect("open")
+            .dialog()
+            .item_bounds(SCROLL_DOWN_ITEM)
+            .expect("the arrow")
+            .center();
+        dialogs.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: down,
+        });
+        assert_eq!(at(&dialogs), 1.0);
+        dialogs.tick(Duration::from_secs(1) / 30);
+        assert_eq!(at(&dialogs), 3.0);
+        assert_eq!(dialogs.take_sounds(), [], "silent");
     }
 
     #[test]
@@ -1165,6 +1235,24 @@ mod tests {
             assert!(dialogs.take_info_closed(), "{close:?}");
             assert!(!dialogs.take_info_closed(), "{close:?}: once");
         }
+    }
+
+    #[test]
+    fn the_mission_info_key_closes_the_info_screen_and_asks_for_nothing_further() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        dialogs.take_sounds();
+        dialogs.input(&key(MISSION_INFO_KEY));
+        assert!(dialogs.info().is_none());
+        assert!(!dialogs.is_open());
+        assert!(dialogs.take_info_closed());
+        assert_eq!(
+            dialogs.take_sounds(),
+            [Sound::Ui(UiSound::MissionInfoClosed)]
+        );
+        assert_eq!(dialogs.take_abort(), None);
+        assert_eq!(dialogs.take_map_request(), None);
+        assert_eq!(dialogs.take_unclaimed(), []);
     }
 
     #[test]

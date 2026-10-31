@@ -30,8 +30,8 @@
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`lightning`]: a lightning beam's zig-zag.
-//! - [`murk`]: how murky a shot is far from the player's ship in a murky
-//!   system, and the tint that darkens it.
+//! - [`murk`]: how murky a sprite is far from the player's ship in a murky
+//!   system, and the colorize that mixes it toward its background.
 //! - `pen`: the `Pen` the HUD's panels set their text with, and
 //!   `_DrawCenteredText`'s centring.
 //! - [`pods`]: the NPCs' escape pods adrift, from the fight's

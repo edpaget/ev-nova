@@ -13,9 +13,8 @@
 //!   [`RuleKey::IonTintMurkColour`](nova_sim::RuleKey::IonTintMurkColour),
 //!   at level m toward the ion colour, as the 8-bit path (@0x2bf70) has it.
 //!
-//! The colorize takes the murk's one slot (sprite +0xb0/+0xb4), so a hull
-//! drawn colorized is drawn at its unmurked tint. The layers that copy the
-//! hull's colorize take it too (see the
+//! The colorize replaces the murk's in the sprite's one slot (+0xb0/+0xb4).
+//! The layers that copy the hull's colorize take it too (see the
 //! [`ship_layers`](super::ship_layers) module).
 
 use nova_sim::RuleSource;

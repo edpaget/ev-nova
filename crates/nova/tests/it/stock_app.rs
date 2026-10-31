@@ -357,6 +357,7 @@ fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
 /// the real glyphon metrics; its frame, button and text reach the Gpu
 /// with every picture resolved, Down scrolls it and Return closes it.
 #[test]
+#[allow(clippy::float_cmp)] // One step of exact pixels.
 fn i_shows_the_stock_about_text() {
     let Some(dir) = common::nova_data() else {
         return;
@@ -397,7 +398,10 @@ fn i_shows_the_stock_about_text() {
     assert!(about.lines().len() > 20, "{} lines", about.lines().len());
     assert_no_tag_or_brace(about.lines());
     send(&mut app, key(Key::Down));
-    assert_eq!(app.screen().about().expect("open").first_line(), 1);
+    assert_eq!(
+        app.screen().about().expect("open").scroll_offset(),
+        nova_view::ui::desc::ARROW_UNITS
+    );
     send(&mut app, key(Key::Enter));
     assert_eq!(app.screen().showing(), Showing::ShipBrowser);
 
@@ -419,7 +423,10 @@ fn i_shows_the_stock_about_text() {
             _ => Vec::new(),
         })
         .collect();
-    assert!(texts.contains(&"Done".to_owned()), "{texts:?}");
+    assert!(
+        texts.contains(&nova_view::ui::desc::OKAY_LABEL.to_owned()),
+        "{texts:?}"
+    );
 }
 
 /// The app driven as the window drives it: each event through the
@@ -837,6 +844,15 @@ fn a_finales_texts_show_over_earths_spaceport_before_its_q_leaves() {
             .spaceport_view()
             .is_some_and(SpaceportView::holds_leave)
     );
+
+    // The map opens over the offer with the `Q` pending, and holds it.
+    driver.press(Key::Char('m'));
+    assert_eq!(driver.showing(), Showing::FlightMap, "the map over it");
+    assert!(driver.flight().leave_due(), "the Q held under the map");
+    driver.press(Key::Char('m'));
+    assert_eq!(driver.showing(), Showing::Spaceport, "back to the offer");
+    assert_eq!(port(&driver), (String::new(), Some(MissionId(878))));
+    assert!(driver.flight().leave_due(), "still held");
 
     driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::Flight, "took off");

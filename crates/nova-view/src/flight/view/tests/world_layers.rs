@@ -451,14 +451,30 @@ fn a_beam_is_drawn_moved_with_its_firer_between_steps() {
     let camera = view.camera();
     let beams = view.shown_beams(&camera);
     assert_eq!(beams.len(), 1);
-    assert_eq!(
-        beams[0].start,
-        camera.world_to_screen(Point::new(-5.0, 3.0))
+    assert_eq!(beams[0].start, camera.pixel_centre(Point::new(-5.0, 3.0)));
+    assert_eq!(beams[0].end, camera.pixel_centre(Point::new(-5.0, -97.0)));
+    assert_eq!(beams[0].start, Point::new(415.5, 384.5));
+    assert_eq!(beams[0].end, Point::new(415.5, 284.5));
+}
+
+#[test]
+fn a_beams_ends_are_on_the_pixels_of_their_truncated_screen_coordinates() {
+    let player = Vec2::new(0.25, -0.5);
+    let end = Vec2::new(-10.45, 4.1);
+    let mut view = world(
+        armed(0, &[UNDER]),
+        FlightFrame {
+            beams: vec![beam(ShipRef::Player, UNDER, player, end)],
+            ..in_sol_with(vec![the_player_at(player, 0.0)])
+        },
     );
-    assert_eq!(
-        beams[0].end,
-        camera.world_to_screen(Point::new(-5.0, -97.0))
-    );
+    view.previous = view.frame.player().place();
+    let camera = view.camera();
+    let beams = view.shown_beams(&camera);
+    assert_eq!(beams[0].start, Point::new(415.5, 384.5));
+    // At (404.3, 388.6) from the offset (-10.7, 4.6): the coordinate
+    // truncated, where the offset truncated would give x 405.
+    assert_eq!(beams[0].end, Point::new(404.5, 388.5));
 }
 
 #[test]

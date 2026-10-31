@@ -63,10 +63,10 @@ pub(super) fn landed_filmed(
     (screen, reel)
 }
 
-/// [`landed_filmed`], before any pilot is made.
 /// The size of the movies [`filmed`]'s player plays.
 pub(super) const REEL: (u32, u32) = (160, 120);
 
+/// [`landed_filmed`], before any pilot is made.
 pub(super) fn filmed(
     flags: u16,
     text: &str,
@@ -1146,7 +1146,7 @@ fn an_offer_and_a_mission_text_open_with_the_rulebooks_focus_ring() {
 /// `QuickBrief` names "Quick.mov", hailing a second merchant, Person 129:
 /// its offer of mission 130 open over flight, whose `dësc` names
 /// "Offer.mov" as its after-movie; and the reel the movies play on.
-fn holding_and_offered_in_flight() -> (AppScreen, Rc<MockMoviePlayer>) {
+pub(super) fn holding_and_offered_in_flight() -> (AppScreen, Rc<MockMoviePlayer>) {
     let mut person = vec![0; Person::SIZE.expect("fixed")];
     put_i16s(&mut person, 0x00, &[-2, -1, 3, 2, 0, 129]);
     put_i16s(&mut person, 0x0C, &[-1; 4]);

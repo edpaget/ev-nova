@@ -307,6 +307,16 @@ impl Starfield {
         }
     }
 
+    /// Marks every slot as moved since the last snapshot, so the next
+    /// draws it where it is: the player's wrap moves the ship the stars are
+    /// placed from, though no star moves, and the original draws no path
+    /// between placements.
+    pub fn mark_jumped(&mut self) {
+        for slot in &mut self.slots {
+            slot.jumped = true;
+        }
+    }
+
     /// Hides every slot, as `_ClearStarfield` does (@0x8152-0x8170).
     pub fn clear(&mut self) {
         for slot in &mut self.slots {
@@ -446,6 +456,8 @@ fn wrap_shift(centre: i32, extent: i32, size: i32) -> Option<f32> {
 mod tests {
     use std::collections::VecDeque;
     use std::num::NonZeroU16;
+
+    use nova_sim::player_wrap::WRAP_SHIFT;
 
     use super::*;
     use crate::{Blend, DrawCommand};
@@ -889,6 +901,55 @@ mod tests {
         #[allow(clippy::cast_precision_loss)]
         let expected = Point::new(to.0 as f32 + 2.5, to.1 as f32 + 2.5);
         assert_eq!(center, expected, "scattered");
+    }
+
+    #[test]
+    fn a_star_marked_as_jumped_is_drawn_where_it_is_placed() {
+        let mut field = one_star(1010.0, -520.0, 0.0, (0, 0));
+        field.handle(&surroundings(), &mut Scripted::default());
+        field.snapshot();
+        let was = surroundings();
+        let moved = Surroundings {
+            ship: was.ship + Vec2::new(-WRAP_SHIFT, 0.0),
+            ..was
+        };
+        field.handle(&moved, &mut Scripted::default());
+        field.mark_jumped();
+        field.snapshot();
+        let to = field.placements()[0];
+        let DrawCommand::Sprite { center, .. } = drawn(&field, 0.0)[0] else {
+            panic!("a sprite")
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let expected = Point::new(to.0 as f32 + 2.5, to.1 as f32 + 2.5);
+        assert_eq!(center, expected);
+    }
+
+    #[test]
+    fn a_star_a_wrap_left_behind_steps_back_a_pass_at_a_time_and_is_shown_again() {
+        // `_HandleStars` (@0x2f87d-0x2fcae): each pass moves it W + 2 × size
+        // by its last placement, its other axis scattered about the ship, so
+        // the stars black out for 25,000 / (W + 2 × size) passes.
+        let ship = surroundings();
+        let mut field = one_star(ship.ship.x, ship.ship.y, 0.0, (0, 0));
+        field.handle(&ship, &mut Scripted::default());
+        let moved = Surroundings {
+            ship: ship.ship + Vec2::new(-WRAP_SHIFT, 0.0),
+            ..ship
+        };
+        let (width, size) = (830_i32, 5);
+        let on_screen = |field: &Starfield| (0..width).contains(&field.placements()[0].0);
+        let mut passes = 0;
+        field.handle(&moved, &mut Scripted::default());
+        while !on_screen(&field) {
+            field.handle(&moved, &mut Scripted::default());
+            passes += 1;
+            assert!(passes < 100, "it comes back");
+        }
+        let step = width + 2 * size;
+        #[allow(clippy::cast_possible_truncation)]
+        let shift = WRAP_SHIFT as i32;
+        assert_eq!(passes, (shift + step - 1) / step, "rounded up");
     }
 
     #[test]

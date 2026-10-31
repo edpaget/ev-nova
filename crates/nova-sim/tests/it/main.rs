@@ -29,6 +29,7 @@ mod stock_crons;
 mod stock_domination;
 mod stock_escape_pod;
 mod stock_escort_dialog;
+mod stock_fighter_variants;
 mod stock_galaxy_map;
 mod stock_galaxy_visibility;
 mod stock_gamble;

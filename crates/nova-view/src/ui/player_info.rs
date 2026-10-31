@@ -78,7 +78,6 @@ use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words, cheat_suffix}
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::catalog::PictureSizes;
-use super::desc::DONE_LABEL;
 use super::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing};
 use super::text_box::TextBox;
 use crate::color::Color;
@@ -89,6 +88,7 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::spaceport::credits::comma_number;
+use crate::spaceport::layout::DONE_LABEL;
 use crate::spaceport::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::text::{TextMetrics, wrap};
 

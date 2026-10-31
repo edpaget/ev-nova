@@ -52,8 +52,9 @@
 //!
 //! In double time ([`FlightView::set_double_time`]), each step runs the
 //! session's second pass ([`Session::tick_again`]) after the advance
-//! pass, and steps the effects and
-//! drains the fight's events after it as after the advance pass
+//! pass, the frame drawn between them, as `_PlayGame` draws it, and
+//! steps the effects and takes the fight's events after it as after the
+//! advance pass, held for the next frame (see the `between_passes` module)
 //! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
 //! its hits as they land and what its close struck after it
 //! (`nova_sim::Session::answer_strikes`), and says the attack quotes they
@@ -279,17 +280,22 @@
 //!   [`HYPERGATE_DENIED`], [`gate_refusal_message`]).
 //! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
 //!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
-//!   of the flight keys. While it is open flight is paused, as in the
-//!   original, only the map is drawn and every input goes to it, except
+//!   of the latched flight keys, while the keys flight polls with no latch
+//!   stay held and tracked (the [`map_wait`] module). While it is open
+//!   flight is paused, as in the original, only the map is drawn and
+//!   every input goes to it, those keys noted on the way, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
 //!   router's Escape), and so do Return and, while M is held, a key-down
 //!   the original's `_MapFilter` doesn't take (@0x13cdd-0x13d07,
 //!   @0x144db-0x14587). Every close made while M is held waits for its
 //!   release, as `_DoSystemMap` loops `BusyIdle(); while KeyCheck(M)`
 //!   before disposing of the dialog (@0x13a2e-0x13a46, `_BusyIdle`
-//!   @0x5981-0x5985 being empty): the map stays drawn, takes no input
+//!   @0x5981-0x5985 being empty): the map stays drawn, acts on no input
 //!   and runs no null events, and the close, its beep and cue among it,
-//!   lands on the release; a close with M up doesn't wait. The maps the
+//!   lands on the release; a close with M up doesn't wait. Over flight
+//!   the wait ignores keys, the live ones still tracked; over a screen it
+//!   queues them for that screen, handed back at the close through
+//!   [`FlightView::take_map_replay`]. The maps the
 //!   bar, a port screen and a mission dialog open on M open with it
 //!   held. Tab or `\` on it (repeats too) cycles the
 //!   hyperspace selection through the current system's links
@@ -300,7 +306,9 @@
 //!   nothing. It beeps as M opens it ([`UiSound::MapOpened`],
 //!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
-//!   nothing, and the hypergate map neither opens nor closes with a beep.
+//!   nothing, except on the pass a jump collapses under the white, whose
+//!   refusal comes between the two beeps (the `faded_keys` module), and
+//!   the hypergate map neither opens nor closes with a beep.
 //!   As it opens it selects the system the original's
 //!   `_DoSystemMap` does (`Session::map_preselection`): the one
 //!   selected in nav mode 3, or the current system in any other mode,
@@ -699,6 +707,7 @@ use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
+mod between_passes;
 mod board;
 mod build;
 mod cockpit;
@@ -707,6 +716,7 @@ mod departure;
 mod dialog_map;
 mod docked;
 mod drawing;
+mod faded_keys;
 mod frame_rate;
 mod gamble;
 mod gates;
@@ -715,6 +725,7 @@ mod hyperspace;
 mod inbox;
 mod interface;
 mod key_fade;
+mod map_wait;
 mod messages;
 mod missions;
 mod movies;
@@ -1215,8 +1226,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// changes: after each frame's steps, after each command
     /// ([`FlightView::send`]), as the flight is caught up with (after the
     /// drain) and after each change behind the port
-    /// ([`FlightView::change_sim`]), so whatever is drawn or read next
-    /// reads the flight as it stands. A quiet tick fills it twice: the
+    /// ([`FlightView::change_sim`]), so whatever is read next reads the
+    /// flight as it stands, and whatever is drawn next too, but for a
+    /// double-time frame drawn between its passes
+    /// ([`FlightView::drawn`]). A quiet tick fills it twice: the
     /// catch-up and the steps. The pilot panel kept is forgotten with it
     /// ([`player::KeptPanel`]), so the next read asks the flight afresh.
     pub(super) fn refresh_frame(&mut self) {
@@ -1263,7 +1276,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// and each change refills where it is made, so no read sees a value
     /// the original wouldn't at that point, and no boundary the player
     /// sees (a frame drawn, a dialog opened, a landing or jump completed,
-    /// the pilot saved) is crossed with a stale frame.
+    /// the pilot saved) is crossed with a stale frame. A double-time frame
+    /// drawn between its passes shows what a command changed on the next
+    /// step ([`FlightView::drawn`]), as the original's key reads act on
+    /// the next pass.
     pub(super) fn send(
         &mut self,
         command: nova_sim::flight_frame::FlightCommand,
@@ -1347,7 +1363,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// ([`FlightView::change_sim`], [`FlightView::begin`],
     /// [`FlightView::enter_game`]), so it is never stale at a read; an ask
     /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask))
-    /// changes nothing it shows.
+    /// changes nothing it shows. A double-time frame is drawn from the
+    /// frame between its passes instead ([`FlightView::drawn`]), so this
+    /// stays the flight as it stands for every read.
     frame: FlightFrame,
     /// Why the flight could not start, if it could not, as it opened
     /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
@@ -1381,6 +1399,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     bar_government: Option<BarFor>,
     /// Turns frame times into simulation steps.
     clock: FixedStep,
+    /// The flight as a double-time step's first pass left it, while it is
+    /// drawn, with the second pass held for the frame after; see the
+    /// `between_passes` module.
+    between_passes: Option<between_passes::BetweenPasses>,
     /// The player's ship's place a step before the frame's.
     previous: ShipPlace,
     /// How far the display is from `previous` to the session's ship.
@@ -1411,6 +1433,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// no-target and cloak returns, cleared on a frame B is up
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
+    /// The presses kept through a jump, and L's and I's latches (see the
+    /// `faded_keys` module).
+    faded_keys: faded_keys::FadedKeys,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The `dësc` movies flight plays, and whether they play (see the
@@ -1472,10 +1497,18 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of
     /// the dialog (@0x13a2e-0x13a46), and `_BusyIdle` (@0x5981-0x5985) is
     /// empty, so nothing runs meanwhile. The dialog stays as last drawn,
-    /// takes no input and runs no null events, and the whole close, its
+    /// acts on no input and runs no null events, and the whole close, its
     /// beep, cue and restores, lands on the release
-    /// ([`FlightView::close_map`]).
+    /// ([`FlightView::close_map`]). Over flight the wait's keys are
+    /// ignored and the live ones stay tracked; over a screen they are
+    /// queued for it (`wait_keys`, [`FlightView::take_map_replay`]).
     map_closing: bool,
+    /// What a map over a screen has taken during its wait
+    /// (`FlightView::closing_input`).
+    wait_keys: map_wait::WaitKeys,
+    /// What the map's wait left for the screen under it, until it is taken
+    /// ([`FlightView::take_map_replay`]).
+    map_replay: Vec<crate::Input>,
     /// How the map shown was opened (by M, the bar or a mission dialog,
     /// with its marks) and the nav as it opened: taken as each map opens,
     /// dropped as it closes ([`FlightView::close_map`]).
@@ -1515,6 +1548,13 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// Whether ships show their weapon glow, as the Weapon Effects
     /// preference says.
     weapon_effects: bool,
+    /// Whether ships draw their engine glow, as the Engine Glows
+    /// preference says.
+    engine_glows: bool,
+    /// What of each ship's sprites the session loads, as the Ship
+    /// Animations and Running Lights preferences say: the last load sent
+    /// it (`nova_sim::flight_frame::FlightCommand::SetSpriteLoad`).
+    sprite_load: nova_sim::combat::SpriteLoad,
     /// The player's sound preferences, which say whether the Red Alert
     /// blinks its icon ([`SoundPrefs::alert_quiet`]), as the session is
     /// told.
@@ -1861,6 +1901,7 @@ fn frame_fields_differing(kept: &FlightFrame, fresh: &FlightFrame) -> Vec<&'stat
         "system_background",
         kept.system_background == fresh.system_background,
     );
+    check("murk_colour", kept.murk_colour == fresh.murk_colour);
     check("double_time", kept.double_time == fresh.double_time);
     check(
         "hyper_gamma",

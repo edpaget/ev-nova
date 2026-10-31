@@ -84,7 +84,8 @@
 //!    pirate's wait on a boarded victim settled in berth order,
 //!    [`board_wait::resolve`]; each decision that turns on the player
 //!    asking its person's quote gate, [`Traffic::turn_with_quote`], before
-//!    any goal is taken; a pirate's count wait ending at none left,
+//!    any goal is taken, its quote queued on the line at its berth
+//!    ([`OnLine::AttackQuote`]); a pirate's count wait ending at none left,
 //!    [`board_wait::lapse`]; then each plunder decided, in berth order,
 //!    [`plunder::resolve`], queued on the line at the pirate's berth
 //!    ([`on_line`]); then, on the AI timer, each
@@ -167,6 +168,8 @@ pub mod approach_flight;
 #[cfg(test)]
 mod area_cloak_tests;
 pub mod assist_think;
+#[cfg(test)]
+mod attack_quote_tests;
 pub mod autopilot;
 pub mod berth_blink;
 pub mod berth_exits;
@@ -251,6 +254,7 @@ mod pursuit_tests;
 pub mod quote;
 #[cfg(test)]
 mod re_pick_tests;
+pub mod refit_frames;
 pub mod refuel_dock;
 #[cfg(test)]
 mod refuel_dock_tests;
@@ -280,6 +284,7 @@ pub mod vacated;
 mod voice_cue_tests;
 pub mod warp_out;
 pub mod weigh;
+mod wrap_carry;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::lost_sight::{self, LostSight, SearchTimer};
@@ -911,9 +916,9 @@ pub struct Traffic {
     /// until a ship takes the berth or the system is left ([`vacated`]).
     vacated: VacatedBerths,
     /// The frame's work on the message line, in slot order, since it was
-    /// last taken ([`Traffic::take_on_line`]): the calls the decisions
-    /// made, the scans of the player, what the pirates and repairers did
-    /// and the refuel notes.
+    /// last taken ([`Traffic::take_on_line`]): the attack quotes the thinks
+    /// raised, the calls the decisions made, the scans of the player, what
+    /// the pirates and repairers did and the refuel notes.
     on_line: LineQueue,
     /// The `STR#`s of the arrival quotes of the fleets added since the
     /// quotes were last taken, in order ([`NewShip::quote`]).
@@ -1394,7 +1399,9 @@ impl Traffic {
             .collect();
         let view = world.gate_view();
         for (id, dropped_target) in turning {
-            self.ask_quote_gate(id, dropped_target, view);
+            if self.ask_quote_gate(id, dropped_target, view) {
+                self.queue_on_line(id, OnLine::AttackQuote(id));
+            }
         }
         let plunders = plunder::plunders(&decisions);
         let entering = jump_with_leader::entering(&decisions);
@@ -2168,13 +2175,16 @@ impl Traffic {
     /// gate is asked before the turn sets anything. An NPC not in the
     /// system queues nothing.
     ///
-    /// Three callers ask it: the player's answered hit ([`Traffic::react`]),
-    /// as `_DamageShip` does (@0x3be69); a decision that turns on the
-    /// player ([`Decision::turns_on_player`]: `_SelectWarshipTarget`
-    /// @0x89f20, @0x8a40e and @0x8ad31, `_WarshipAI` @0x8b7da,
-    /// `_InterceptorAI` @0x8cb8f and `_HighLevelAIHandler` @0x8d6b7),
-    /// asked in the tick's decisions before any goal is taken; and the
-    /// session for a declined bribe (`_DoCommDialog` @0x9621f).
+    /// Three kinds of caller ask the gate: the player's answered hit
+    /// ([`Traffic::react`]), as `_DamageShip` does (@0x3be69); the session
+    /// for a declined bribe (`_DoCommDialog` @0x9621f) and a defence ship's
+    /// respawn; and a decision that turns on the player
+    /// ([`Decision::turns_on_player`]: `_SelectWarshipTarget` @0x89f20,
+    /// @0x8a40e and @0x8ad31, `_WarshipAI` @0x8b7da, `_InterceptorAI`
+    /// @0x8cb8f and `_HighLevelAIHandler` @0x8d6b7), asked in the tick's
+    /// decisions before any goal is taken. That last kind asks the gate
+    /// directly, and its quote goes on the line at the ship's berth
+    /// ([`OnLine::AttackQuote`]), ahead of its think's calls and scan.
     ///
     /// The original asks each ship's gate in its own think, slot by slot,
     /// each seeing the ships before it as their thinks left them; the
@@ -2195,15 +2205,17 @@ impl Traffic {
     ///   tick and are drawn together, so this crosses no boundary the
     ///   player sees, and is not filed.
     pub fn turn_with_quote(&mut self, id: NpcId, view: GateView) {
-        self.ask_quote_gate(id, false, view);
+        if self.ask_quote_gate(id, false, view) {
+            self.attack_quotes.push(id);
+        }
     }
 
-    /// [`Traffic::turn_with_quote`] for NPC `id`, its gate seeing it with
-    /// no target and no goal when its think has `dropped_target` first
-    /// ([`Decision::dropped_target`]).
-    fn ask_quote_gate(&mut self, id: NpcId, dropped_target: bool, view: GateView) {
+    /// Whether the gate of [`Traffic::turn_with_quote`] lets NPC `id`'s
+    /// quote through, the gate seeing it with no target and no goal when
+    /// its think has `dropped_target` first ([`Decision::dropped_target`]).
+    fn ask_quote_gate(&self, id: NpcId, dropped_target: bool, view: GateView) -> bool {
         let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) else {
-            return;
+            return false;
         };
         let cleared;
         let npc = if dropped_target {
@@ -2218,9 +2230,7 @@ impl Traffic {
         };
         let seen = cloak::visible(npc.cloak, npc.state.position, npc.emerging(), view.observer);
         let threatened = npc.threatens_player_extended(&self.npcs, seen);
-        if persons::turns_with_quote(npc, threatened, view.player_dying) {
-            self.attack_quotes.push(id);
-        }
+        persons::turns_with_quote(npc, threatened, view.player_dying)
     }
 
     /// The NPCs, in the order they appeared.
@@ -2547,7 +2557,8 @@ impl Traffic {
     }
 
     /// The work on the message line queued since this was last called, in
-    /// slot order ([`on_line`]): each think's calls ([`Decision::comm_call`],
+    /// slot order ([`on_line`]): each think's attack quote
+    /// ([`OnLine::AttackQuote`]); then its calls ([`Decision::comm_call`],
     /// then its call for reinforcements, [`Decision::calls_reinforcements`],
     /// each with the odds against its caller its think read, [`Npc::odds`],
     /// before the tick's odds pass); then, when the NPC stopped inspecting
@@ -2579,6 +2590,9 @@ impl Traffic {
     /// the player as `_AIMakeShipAttackPlayer` has it
     /// ([`Traffic::turn_with_quote`]), since they were last taken, in
     /// order, an NPC once for each time; taking them empties the list.
+    /// A think's isn't among them: it goes on the line
+    /// ([`OnLine::AttackQuote`]), and the session says these either side of
+    /// the line's work (see `nova_sim`'s `comm_calls` module).
     /// Entering or going on into another system drops them.
     pub fn take_attack_quotes(&mut self) -> Vec<NpcId> {
         std::mem::take(&mut self.attack_quotes)
@@ -5113,6 +5127,11 @@ mod tests {
         }
     }
 
+    /// The attack quotes `traffic`'s thinks left on the line, taking it.
+    fn think_quotes(traffic: &mut Traffic) -> Vec<NpcId> {
+        crate::traffic::fixture::quotes_on_line(&traffic.take_on_line())
+    }
+
     /// A decision of `goal`, turning on the player as `turns` says.
     fn turning_to(goal: Goal, turns: bool) -> Decides {
         Decides(crate::ai::Decision {
@@ -5161,11 +5180,11 @@ mod tests {
         let turning = turning_to(attacks, true);
         traffic.tick_in(&turning, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs[0].goal, attacks);
-        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "idle, it turns");
+        assert_eq!(think_quotes(&mut traffic), [NpcId(0)], "idle, it turns");
         traffic.ticks = 1000;
         traffic.tick_in(&turning, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
-            traffic.take_attack_quotes(),
+            think_quotes(&mut traffic),
             [],
             "already attacking the player, it threatens"
         );
@@ -5177,7 +5196,7 @@ mod tests {
             &[],
             &mut Draws::of(&[]),
         );
-        assert_eq!(traffic.take_attack_quotes(), [], "no call");
+        assert_eq!(think_quotes(&mut traffic), [], "no call");
         let mut traffic = quoting_traffic(1);
         traffic.ticks = 0;
         traffic.npcs[0].mission = Some(crate::traffic::npc::MissionMark {
@@ -5188,7 +5207,7 @@ mod tests {
         });
         traffic.tick_in(&turning, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
-            traffic.take_attack_quotes(),
+            think_quotes(&mut traffic),
             [],
             "a mission's ship fails +0xc8d2 (@0x89c71)"
         );
@@ -5220,7 +5239,7 @@ mod tests {
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
-            traffic.take_attack_quotes(),
+            think_quotes(&mut traffic),
             [NpcId(0)],
             "its target dropped first, it threatens no more as it turns"
         );
@@ -5256,13 +5275,13 @@ mod tests {
         let mut traffic = grudging(true);
         traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
         assert_eq!(traffic.npcs[0].goal, Goal::Attack(ShipRef::Player));
-        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)]);
+        assert_eq!(think_quotes(&mut traffic), [NpcId(0)]);
         traffic.ticks = 1000;
         traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
-        assert_eq!(traffic.take_attack_quotes(), [NpcId(0)], "and again");
+        assert_eq!(think_quotes(&mut traffic), [NpcId(0)], "and again");
         let mut traffic = grudging(false);
         traffic.tick_in(&warship, world, &[], &mut Draws::of(&[0; 4]));
-        assert_eq!(traffic.take_attack_quotes(), [], "no grudge: dropped");
+        assert_eq!(think_quotes(&mut traffic), [], "no grudge: dropped");
     }
 
     /// The attack quotes queued once the player hits NPC 0 of `traffic`

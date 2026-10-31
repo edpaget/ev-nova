@@ -388,6 +388,22 @@ mod tests {
     }
 
     #[test]
+    fn the_race_flushes_and_its_asked_bets_quantity_doesnt() {
+        let mut view = in_the_bar();
+        view.open_gamble(GambleOpening::Race { asked_max: 5_000 });
+        // `_DoRaceDialog` @0x48ad0; `_DoQuantityDialog` has no flush.
+        assert_eq!(view.flushing_layers(), 2);
+        view.input(&key(Key::Alt));
+        let racer = race_item(&view, FIRST_RACER_ITEM);
+        click(&mut view, racer);
+        assert!(
+            race_open(&view).is_some_and(|race| race.quantity().is_some()),
+            "asking"
+        );
+        assert_eq!(view.flushing_layers(), 2);
+    }
+
+    #[test]
     fn the_result_shows_beneath_its_text_only_once_its_movie_is_over() {
         let player = MockMoviePlayer::playing((160, 120), 2);
         let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true);

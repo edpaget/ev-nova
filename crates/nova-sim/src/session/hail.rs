@@ -1561,6 +1561,19 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn begging_a_defence_ship_is_refused_with_only_the_press_beep() {
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        npc(&mut session).defends = Some(crate::catalog::StellarId(128));
+        hail(&mut session, &catalog);
+        session.take_sounds();
+        let view = press(&mut session, &catalog, 1, 36);
+        assert_eq!(view.reply, "In your dreams, pal.");
+        assert_eq!(view.asking, None, "no price open");
+        assert_eq!(session.take_sounds(), [SimSound::CommPressed]);
+    }
+
+    #[test]
     fn a_press_while_a_price_is_asked_or_of_no_option_is_silent() {
         let catalog = hailable();
         let mut session = pirate(&catalog, PIRATES);
@@ -3498,6 +3511,36 @@ pub(super) mod tests {
         session.space.escorts.release_comm_escort = true;
         hail(&mut session, &catalog);
         assert!(!session.space.escorts.release_comm_escort, "@0x9576a");
+    }
+
+    #[test]
+    fn a_faded_hail_opens_no_comm_dialog_and_leaves_its_entry_state() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.space.escorts.release_comm_escort = true;
+        session.take_sounds();
+        let before = session.clone();
+        let mut chance = Draws::of(&[]);
+        let hailed = session.hail_key_faded(&catalog, &HailOptions::default(), false, &mut chance);
+        assert_eq!(hailed, Ok(super::super::Hailed::Faded));
+        assert_eq!(chance.asked, [0_u32; 0], "no conversation rolled");
+        assert_eq!(session, before, "no talk, @0x9576a not run, no beep");
+    }
+
+    #[test]
+    fn a_faded_hail_still_beeps_a_hails_refusal() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.chart.target = None;
+        session.take_sounds();
+        let hailed = session.hail_key_faded(
+            &catalog,
+            &HailOptions::default(),
+            false,
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(hailed, Err(HailRefusal::NoTarget));
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
     }
 
     #[test]

@@ -17,16 +17,18 @@ use nova_sim::flight_frame::FlightEvent;
 use nova_sim::{Boarding, MissionBoardLine, PlunderView, VenueOffer};
 
 /// A view over a flight in Sol, the player alone, the flight naming
-/// commodity 0 Food, outfit 310 Rockets, and outfit 200 "rocket",
-/// "rockets".
+/// commodity 0 Food ("food"), outfit 310 Rockets ("rocket pack", "rocket
+/// packs"), and outfit 200 "rocket", "rockets".
 fn sol() -> Faked {
     let mut names = Names::default();
     names.goods.insert(Good::Commodity(0), "Food".to_owned());
+    names.lc_goods.insert(Good::Commodity(0), "food".to_owned());
     names.outfits.insert(
         OutfitId(310),
         nova_sim::flight_frame::OutfitNames {
             name: "Rockets".to_owned(),
-            ..Default::default()
+            lc_name: "rocket pack".to_owned(),
+            lc_plural: "rocket packs".to_owned(),
         },
     );
     names.outfits.insert(
@@ -124,8 +126,11 @@ fn the_plunder_dialog_names_its_good_and_outfit_as_the_flight_names_them() {
     view.board();
     let shown = view.take_boarding().expect("boarded");
     assert_eq!(
-        (shown.good.as_deref(), shown.outfit.as_deref()),
-        (Some("Food"), Some("Rockets"))
+        (shown.good.as_deref(), shown.outfit.clone()),
+        (
+            Some("food"),
+            Some(("rocket pack".to_owned(), "rocket packs".to_owned()))
+        )
     );
     view.sim.queue_screen(ScreenAnswer::Boarding(ON_BOARD));
     assert_eq!(view.plunder_shown(), Some(shown));
@@ -136,6 +141,31 @@ fn the_plunder_dialog_names_its_good_and_outfit_as_the_flight_names_them() {
     }));
     let shown = view.plunder_shown().expect("under way");
     assert_eq!((shown.good, shown.outfit), (None, None), "nothing to name");
+    view.sim.queue_screen(ScreenAnswer::Boarding(PlunderView {
+        cargo: Some((Good::Commodity(3), 1)),
+        ammo: Some(nova_sim::AmmoOffer {
+            slot: nova_sim::WeaponId(140),
+            rounds: 2,
+            named: None,
+        }),
+        ..ON_BOARD
+    }));
+    let shown = view.plunder_shown().expect("under way");
+    assert_eq!(
+        (shown.good, shown.outfit),
+        (None, None),
+        "a good unnamed, and rounds no outfit names"
+    );
+    view.sim.queue_screen(ScreenAnswer::Boarding(PlunderView {
+        ammo: Some(nova_sim::AmmoOffer {
+            slot: nova_sim::WeaponId(140),
+            rounds: 2,
+            named: Some(OutfitId(999)),
+        }),
+        ..ON_BOARD
+    }));
+    let shown = view.plunder_shown().expect("under way");
+    assert_eq!(shown.outfit, None, "an outfit the names don't have");
     assert_eq!(view.plunder_shown(), None, "over: nothing answered");
 }
 

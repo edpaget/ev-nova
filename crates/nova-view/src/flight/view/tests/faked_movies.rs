@@ -81,6 +81,22 @@ fn has_sent(view: &Faked, command: &FlightCommand) -> bool {
 // The landing.
 
 #[test]
+fn a_waiting_l_whose_landing_plays_a_movie_runs_no_step_that_tick() {
+    let (mut view, _) = filming(filmed(&[129], &[]), true);
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Land));
+    view.input(&key(LAND_KEY, true));
+    view.change_sim(|sim| sim.take(PlayerCommand::Land));
+    view.sim
+        .queue_answer(Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(
+            StellarId(129),
+        ))));
+    let stepped = view.sim.steps();
+    view.tick(TICK);
+    assert!(view.playing());
+    assert_eq!(view.sim.steps(), stepped);
+}
+
+#[test]
 fn a_landing_plays_its_desc_movie_before_it_lands_beeps_and_redraws_the_bar() {
     let (mut view, player) = filming(filmed(&[129], &[]), true);
     land_on_mars(&mut view);

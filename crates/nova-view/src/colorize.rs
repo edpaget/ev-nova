@@ -1,6 +1,7 @@
 //! A sprite's colorize: the original's per-sprite mix of every texel
 //! toward one colour, at a level of 32nds, which the murk and an ionized
-//! ship's tint write (sprite +0xb0 level, +0xb4 colour).
+//! ship's tint write (sprite +0xb0 level, +0xb4 colour; see
+//! [`SeenMurk`](crate::flight::murk::SeenMurk) for the murk's).
 //!
 //! `_BlitPixieRLETranslucent` (@0xc1568) loads the colour, duplicated
 //! (@0xc15bc-0xc15cf), and 32 − level (@0xc15d1-0xc15e5);

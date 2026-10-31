@@ -432,12 +432,14 @@ pub mod shot_slots;
 pub mod sides;
 mod source_slot;
 pub mod spin_timer;
+pub mod sprite_load;
 pub mod stellar;
 pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
 pub mod weapon;
+mod wrap_carry;
 
 use std::collections::BTreeMap;
 
@@ -470,6 +472,7 @@ use projectile::{
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
+pub use sprite_load::SpriteLoad;
 use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
@@ -1383,6 +1386,9 @@ pub struct Combat {
     /// The ships deadly stellars killed since they were last taken
     /// ([`Combat::take_stellar_kills`]).
     stellar_kills: Vec<StellarKill>,
+    /// What the contact walks read of a wrap of the player on the pass it
+    /// ran ([`wrap_carry`]), until the pass's hit pass ends.
+    wrap_pass: Option<wrap_carry::WrapPass>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -2508,7 +2514,9 @@ impl Combat {
     /// and the hits' pushes and ionization read world positions, the
     /// player's where it is now. Each sub-munition's weapon is read from
     /// `arsenal`, its spread drawn on `chance`; the relations between
-    /// governments are `govts`'.
+    /// governments are `govts`'. On the pass of a wrap of the player, the
+    /// contact walks meet what it left where its sprite stood, and the
+    /// pass ends that ([`wrap_carry`]).
     ///
     /// Each hit lands as the walk finds it ([`Combat::land`]), as
     /// `_HandleShipHit` lands it before the walk's next pair, so a later
@@ -2545,7 +2553,7 @@ impl Combat {
             .iter()
             .map(|fighter| match player_stood {
                 Some(position) if fighter.ship == ShipRef::Player => position,
-                _ => fighter.state.position,
+                _ => self.ship_sprite(fighter.ship, fighter.state.position),
             })
             .collect();
         let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
@@ -2559,6 +2567,7 @@ impl Combat {
             chance,
             (stellars, &mut field),
         );
+        self.wrap_pass = None;
         self.settle_struck(fighters, first_strike, rule);
     }
 
@@ -3180,6 +3189,7 @@ impl Combat {
         self.slots.clear();
         self.ended_beams = 0;
         self.player_stood = None;
+        self.wrap_pass = None;
     }
 }
 
@@ -3708,6 +3718,7 @@ mod tests {
     mod strike_terms;
     mod tick_phases;
     mod weapon_glow;
+    mod wrap_carry;
 
     /// A ship in a test fight, owning what a fighter borrows.
     #[allow(clippy::struct_excessive_bools)]
