@@ -241,6 +241,17 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Flight's eject key, by position: X on a US-layout keyboard, the
         // original's default (keycode 0x07).
         PhysicalKey::Code(KeyCode::KeyX) => Key::Char('x'),
+        // Flight's hail key, by position: Y on a US-layout keyboard, the
+        // original's default.
+        PhysicalKey::Code(KeyCode::KeyY) => Key::Char('y'),
+        // Flight's cloak key and the comm and escort dialogs' U, by
+        // position: U on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyU) => Key::Char('u'),
+        // Flight's escort hold key, by position: V on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyV) => Key::Char('v'),
+        // Flight's afterburner key, by position: Z on a US-layout keyboard,
+        // the original's default (keycode 0x06).
+        PhysicalKey::Code(KeyCode::KeyZ) => Key::Char('z'),
         // Double time's key: each press toggles it, an accepted difference
         // from the original's following the lock state. winit 0.30.13
         // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
@@ -362,6 +373,10 @@ mod tests {
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
             (KeyCode::KeyX, Key::Char('x')),
+            (KeyCode::KeyY, Key::Char('y')),
+            (KeyCode::KeyU, Key::Char('u')),
+            (KeyCode::KeyV, Key::Char('v')),
+            (KeyCode::KeyZ, Key::Char('z')),
             (KeyCode::KeyE, Key::Char('e')),
             (KeyCode::KeyC, Key::Char('c')),
             (KeyCode::KeyT, Key::Char('t')),
@@ -395,31 +410,17 @@ mod tests {
         assert_eq!(map_key(unknown), Key::Other);
     }
 
-    /// Every character key some screen reacts to, from the constants the
-    /// screens match on where they name one. A screen test that sends one of
-    /// these directly never crosses `map_key`, so this is what keeps each
-    /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 46] = [
+    /// Every character key some screen other than flight reacts to, from
+    /// the constants the screens match on where they name one; flight's
+    /// come from `every_key`. A screen test that sends one of these directly
+    /// never crosses `map_key`, so this is what keeps each one reachable
+    /// from a real keyboard.
+    const GAME_CHARACTER_KEYS: [Key; 30] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
         nova_view::ui::player_info::PLAYER_INFO_KEY,
         crate::app::screen::PREFERENCES_KEY,
-        nova_view::flight::view::LAND_KEY,
-        nova_view::flight::view::MAP_KEY,
-        nova_view::flight::view::JUMP_KEY,
-        nova_view::flight::view::SELECT_KEY,
-        nova_view::flight::view::DESELECT_KEY,
-        nova_view::flight::view::NEAREST_KEY,
-        nova_view::flight::view::HYPER_SELECT_KEY,
-        nova_view::flight::view::HYPERSPACE_MODE_KEY,
-        nova_view::flight::view::NAV_OFF_KEY,
-        nova_view::flight::view::JETTISON_KEY,
-        nova_view::flight::view::EJECT_KEY,
-        nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
-        nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
-        nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
-        nova_view::flight::view::STELLAR_SLOT_KEYS[3][0],
         Key::Char('w'),
         Key::Char('a'),
         Key::Char('s'),
@@ -436,7 +437,6 @@ mod tests {
         nova_view::ui::mission_info::MISSION_INFO_KEY,
         nova_view::flight::escorts::MENU_KEY,
         nova_view::flight::escorts::GROUP_KEYS[4],
-        nova_view::flight::view::ESCORT_RECALL_KEY,
         nova_view::spaceport::bar::NEWS_KEYS[0],
         nova_view::spaceport::PORT_KEYS[0].0,
         nova_view::spaceport::PORT_KEYS[1].0,
@@ -470,7 +470,11 @@ mod tests {
             's' => KeyCode::KeyS,
             't' => KeyCode::KeyT,
             'w' => KeyCode::KeyW,
+            'u' => KeyCode::KeyU,
+            'v' => KeyCode::KeyV,
             'x' => KeyCode::KeyX,
+            'y' => KeyCode::KeyY,
+            'z' => KeyCode::KeyZ,
             '1' => KeyCode::Digit1,
             '2' => KeyCode::Digit2,
             '3' => KeyCode::Digit3,
@@ -493,6 +497,38 @@ mod tests {
                 panic!("{key:?} is not a character key");
             };
             assert_eq!(map_key(PhysicalKey::Code(us_position(c))), key, "{c:?}");
+        }
+    }
+
+    /// The physical key that sends `key` on a US-layout keyboard.
+    fn us_key(key: Key) -> KeyCode {
+        match key {
+            Key::Char(c) => us_position(c),
+            Key::Left => KeyCode::ArrowLeft,
+            Key::Right => KeyCode::ArrowRight,
+            Key::Up => KeyCode::ArrowUp,
+            Key::Down => KeyCode::ArrowDown,
+            Key::Enter => KeyCode::Enter,
+            Key::Space => KeyCode::Space,
+            Key::Tab => KeyCode::Tab,
+            Key::Alt => KeyCode::AltLeft,
+            Key::Control => KeyCode::ControlLeft,
+            Key::Shift => KeyCode::ShiftLeft,
+            Key::Command => KeyCode::SuperLeft,
+            Key::Function(1) => KeyCode::F1,
+            Key::Function(2) => KeyCode::F2,
+            Key::Function(3) => KeyCode::F3,
+            Key::Function(4) => KeyCode::F4,
+            Key::Function(5) => KeyCode::F5,
+            Key::Function(12) => KeyCode::F12,
+            other => panic!("no physical key listed for {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_key_flight_reads_comes_from_its_physical_key() {
+        for key in nova_view::flight::view::every_key() {
+            assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{key:?}");
         }
     }
 

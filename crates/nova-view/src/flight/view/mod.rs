@@ -830,6 +830,37 @@ const FLIGHT_KEYS: [Key; 40] = [
     MISSION_INFO_KEY,
 ];
 
+/// The keys flight acts on only as they go down, which it doesn't track as
+/// held: the rest of [`every_key`] beyond [`FLIGHT_KEYS`]. The 1-5 the
+/// escort menu takes are [`FLIGHT_KEYS`]'s too.
+const PRESS_KEYS: [Key; 17] = [
+    MAP_KEY,
+    HAIL_KEY,
+    JETTISON_KEY,
+    FRAME_RATE_KEY,
+    TARGET_KEY,
+    NEAREST_KEY,
+    super::escorts::MENU_KEY,
+    MENU_CLOSE_KEY,
+    ESCORT_ATTACK_KEY,
+    ESCORT_DEFEND_KEY,
+    ESCORT_HOLD_KEY,
+    ESCORT_RECALL_KEY,
+    ZOOM_OUT_KEY,
+    ZOOM_IN_KEY,
+    ZOOM_IN_KEYPAD_KEY,
+    crate::ui::mission_info::MISSION_INFO_KEY,
+    crate::ui::player_info::PLAYER_INFO_KEY,
+];
+
+/// Every key flight reads, held or pressed. The platform's key map is
+/// tested against this, so no key here goes without a physical key. A key
+/// can't be held unless it is in [`FLIGHT_KEYS`], and this module's tests
+/// fail on a command key that isn't listed here.
+pub fn every_key() -> impl Iterator<Item = Key> {
+    FLIGHT_KEYS.into_iter().chain(PRESS_KEYS)
+}
+
 /// The face-target key: the original's default A for its `autopilot`
 /// (keyPrefs +0xe, named by `_loadKeys` @0xcd8c5-0xcd935). Held, it turns
 /// the ship to face its target, or with Alt (Option) or no target the
