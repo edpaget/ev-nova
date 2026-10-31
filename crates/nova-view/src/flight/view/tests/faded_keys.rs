@@ -286,10 +286,11 @@ fn i_with_no_mission_on_a_lit_collapse_says_so_and_held_does_nothing_after() {
     let mut view = under_the_white();
     view.input(&key(MISSION_INFO_KEY, true));
     let from = sent_count(&view);
-    view.sim
-        .queue_answer(Answer::MissionInfo(MissionInfoPress::NoActiveMissions));
-    view.sim
-        .queue_event(FlightEvent::Message(SimMessage::NoActiveMissions));
+    view.sim.queue_answer_telling(
+        Answer::MissionInfo(MissionInfoPress::NoActiveMissions),
+        super::frames::sol(),
+        vec![FlightEvent::Message(SimMessage::NoActiveMissions)],
+    );
     collapses_lit(&mut view);
     assert_eq!(sent(&view, from), [FADED_I]);
     assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
@@ -665,6 +666,43 @@ fn a_kept_key_that_opens_something_runs_no_step_that_tick() {
     assert!(view.take_player_info_request());
     view.tick(TICK);
     assert_eq!(view.sim.steps(), stepped + 1, "and then on");
+}
+
+#[test]
+fn a_kept_y_that_opens_its_dialog_runs_no_step_that_tick() {
+    let mut view = under_the_white();
+    view.input(&key(HAIL_KEY, true));
+    arrives(&mut view);
+    let stepped = view.sim.steps();
+    view.sim
+        .queue_answer(Answer::Hailed(Hailed::Comm(faked_hail_view())));
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), stepped);
+}
+
+#[test]
+fn a_waiting_l_that_lands_runs_no_step_that_tick() {
+    let mut view = faked(super::frames::sol());
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Land));
+    view.input(&key(LAND_KEY, true));
+    view.change_sim(|sim| sim.take(PlayerCommand::Land));
+    view.sim
+        .queue_answer(Answer::LandPress(nova_sim::LandPress::Outcome(
+            nova_sim::landing::LandOutcome::Landed(StellarId(128)),
+        )));
+    let stepped = view.sim.steps();
+    view.tick(TICK);
+    assert_eq!(view.sim.steps(), stepped);
+    assert_eq!(view.take_landing(), Some(StellarId(128)));
+}
+
+#[test]
+fn m_on_the_map_during_a_jump_goes_to_the_map() {
+    let mut view = under_the_white();
+    view.open_map();
+    view.input(&key(MAP_KEY, true));
+    view.input(&key(MAP_KEY, false));
+    assert!(!view.map_open(), "only P stops short of the map");
 }
 
 #[test]
