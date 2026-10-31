@@ -558,6 +558,7 @@ mod tests {
         let named = run(|_| {});
         let unnamed = run(|ship| ship.swarm_leader = None);
         assert_eq!(named.0, unnamed.0, "the second pass moved them alike");
+        assert_eq!(named.1, GLOW + 2, "copied once, then two thrusting frames");
     }
 
     #[test]
