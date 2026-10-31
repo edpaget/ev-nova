@@ -44,7 +44,9 @@
 //! flies at its carrier. Outside its dock window ([`dock_window`]: r =
 //! trunc(([`DOCK_WINDOW_BASE`] − `Maneuver` × [`DOCK_MANEUVER_SHARE`]) ×
 //! [`DOCK_WINDOW_SCALE`]), raised to [`DOCK_WINDOW_MIN`]) on either axis
-//! it closes as an escort closes on its slot; inside, it steers at the
+//! it flies sub 0xb at the carrier, and it stops (sub 1) wherever it is
+//! while it can't see the carrier, inside the window too
+//! (`nova_sim_ai::traffic::return_flight`); inside, it steers at the
 //! carrier, thrusting within its turn rate + [`DOCK_TURN_SLACK`] degrees
 //! of it, and is pulled on each axis by
 //! `nova_sim::escort::FORMATION_NUDGE` ticks of its
