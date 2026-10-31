@@ -313,7 +313,9 @@ pub struct Npc {
     /// left, as no spawn writes +0x72
     /// ([`berth_picks`](crate::traffic::berth_picks)).
     pub pick: Option<WeaponId>,
-    /// The ship it targets, as it last decided.
+    /// The ship it targets (+0x70), as it last decided, until its step's
+    /// slot test lets go of one whose slot is inactive
+    /// ([`Traffic::let_go_at_step`](super::Traffic::let_go_at_step)).
     pub target: Option<ShipRef>,
     /// Its provocation (the original's +0x96): the nominal damage of the
     /// hits it answered while it fights, each mass and energy arg above

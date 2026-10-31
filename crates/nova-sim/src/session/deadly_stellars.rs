@@ -150,8 +150,10 @@ impl Session {
     }
 
     /// Each NPC among the fight's kills by deadly stellars
-    /// ([`Combat::take_stellar_kills`]) still here vanishes or is
-    /// destroyed, as [`Session::take_out_the_killed`] says.
+    /// ([`Combat::take_stellar_kills`]) still here vanishes, its record
+    /// kept for the next think
+    /// ([`Traffic::remove_killed`](crate::traffic::Traffic::remove_killed)),
+    /// or is destroyed, as [`Session::take_out_the_killed`] says.
     fn settle_stellar_kills(&mut self) {
         let rule = DeadlyStellarKill::from(self.setup.rules.source_for(RuleKey::DeadlyStellarKill));
         let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();

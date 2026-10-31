@@ -257,6 +257,7 @@ impl Space {
 #[allow(clippy::float_cmp)]
 mod tests {
     use crate::ai::{Behaviour, Goal, Surroundings};
+    use crate::bay::Carrier;
     use crate::catalog::WeaponRecord;
     use crate::chance::{Chance, NeverFires};
     use crate::combat::armament::Trigger;
@@ -685,6 +686,30 @@ mod tests {
         let later = holding(&mut session, 5, aim);
         pass(&mut session, &catalog, &Holds);
         assert_eq!(session.departed(), [(leaving, Outcome::JumpedOut)]);
+        assert_eq!(target(&session, earlier), None);
+        assert_eq!(target(&session, later), None);
+    }
+
+    #[test]
+    fn a_fighter_docking_is_let_go_by_every_slot_in_that_pass() {
+        // `_AIAddFighterToParent` frees the slot in the AI loop (@0x80404).
+        let catalog = armed();
+        let mut session = empty(&catalog);
+        let (bay, _) = carrier(&mut session, 7, ShipRef::Player);
+        let at = state(&session, bay).position;
+        let leaving = place(&mut session, 3, at, Vec2::ZERO);
+        let fighter = session.space.npc_mut(leaving).expect("there");
+        fighter.goal = Goal::Dock(ShipRef::Npc(bay));
+        fighter.carrier = Some(Carrier {
+            ship: ShipRef::Npc(bay),
+            window: 100.0,
+            reach: 30.0,
+        });
+        let aim = ShipRef::Npc(leaving);
+        let earlier = holding(&mut session, 2, aim);
+        let later = holding(&mut session, 5, aim);
+        pass(&mut session, &catalog, &Holds);
+        assert!(session.space.npc(leaving).is_none(), "aboard");
         assert_eq!(target(&session, earlier), None);
         assert_eq!(target(&session, later), None);
     }

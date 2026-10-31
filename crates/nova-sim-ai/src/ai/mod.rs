@@ -902,8 +902,9 @@ impl<'a> Surroundings<'a> {
     }
 
     /// The record of the gone ship `npc`'s target still names, no slot
-    /// test having cleared it ([`GoneShip::held_by`]): what `npc`'s think
-    /// reads of its target, though the ship has left.
+    /// test having cleared it before the think this stands for
+    /// ([`GoneShip::held_by`]): what `npc`'s think reads of its target,
+    /// though the ship has left.
     #[must_use]
     pub fn held_gone(&self, npc: &Npc) -> Option<&'a Npc> {
         self.gone
