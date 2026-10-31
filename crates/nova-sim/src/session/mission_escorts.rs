@@ -83,8 +83,11 @@
 //! `_AIDispatch` @0x8fc3a-0x8fc96), leaves the formation: its AI type
 //! becomes its ship type's `InherentAI` (shïp +0x12), not its `düde`'s,
 //! and it leaves the system (`_AIMakeShipLeave`), jumping out with a
-//! jump's fuel. The rest re-form. A mission ship that never joined only
-//! loses its mark. A mission escort breaking up leaves the formation
+//! jump's fuel. The rest re-form. Its travel stellar is left as it was:
+//! the player's slot in formation, -1 under Hold (@0x83f09, @0x83e65,
+//! [`travel`](crate::ai::travel)), so a pirate released in formation
+//! leaves and one held picks a stellar. A mission ship that never joined
+//! only loses its mark. A mission escort breaking up leaves the formation
 //! without losing its mark (see Death).
 //!
 //! **Death.** A mission escort that starts to break up (or is destroyed
@@ -115,8 +118,11 @@ impl Session {
     /// joins it (see the module docs): of [`ShipBehav::EscortPlayer`],
     /// intact, not yet in it, its slot holding its mission. Each keeps
     /// formation with no target, taking its class's standing order
-    /// ([`Space::class_order`], `_EscortAI` @0x83ad8-0x83b2b). Whether any joined; the formation
-    /// re-forms when one did.
+    /// ([`Space::class_order`], `_EscortAI` @0x83ad8-0x83b2b). Its travel
+    /// stellar holds the player's slot (@0x83f09), the write of the first
+    /// think the join stands for; a class on Hold writes -1 at the think
+    /// that next runs, a lag no boundary sees. Whether any joined; the
+    /// formation re-forms when one did.
     pub(super) fn join_mission_escorts(&mut self) -> bool {
         let orders = EscortClass::ALL.map(|class| (class, self.space.class_order(class)));
         let missions = &self.pilot.missions;
@@ -137,6 +143,7 @@ impl Session {
                     .and_then(|(_, order)| *order);
                 npc.goal = Goal::Formation { guard: None };
                 npc.target = None;
+                npc.travel_set = true;
                 joined = true;
             }
         }
@@ -1078,6 +1085,73 @@ pub(super) mod tests {
         ticks(&mut session, &catalog, 600);
         assert!(of(&session, &ids).is_empty(), "they jumped out");
         assert_eq!(hired_slot(&session), (2, 2), "the hired escort re-forms");
+    }
+
+    /// Two pirates escorting the player: [`ships_catalog`] with düde 150's
+    /// government 131 plundering and its ship 200 of `InherentAI` 3.
+    fn pirate_escorts() -> FakePilotCatalog {
+        let mut catalog = ships_catalog(escorting(-1, 0));
+        catalog.govts.push(crate::catalog::GovtRecord {
+            flags: crate::govt::PLUNDERS,
+            ..crate::testkit::govt(131)
+        });
+        catalog.ship_records[1].inherent_ai = 3;
+        catalog
+    }
+
+    /// The goals the pirate mission escorts of [`pirate_escorts`], flying
+    /// after `command`, take as their mission ends, over 30 ticks, far off
+    /// its stellars so a landing isn't over at once.
+    fn goals_as_the_mission_ends(command: Option<EscortCommand>) -> Vec<Goal> {
+        let catalog = pirate_escorts();
+        let mut session = flying(&catalog);
+        if let Some(command) = command {
+            session.command_escorts(EscortGroup::All, command, &mut NeverFires);
+        }
+        ticks(&mut session, &catalog, 3);
+        let ids: Vec<NpcId> = mission_escorts(&session).iter().map(|npc| npc.id).collect();
+        for npc in session.space.traffic.npcs_mut() {
+            npc.state.position = crate::geometry::Vec2::new(600.0, 600.0);
+        }
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        let mut goals = Vec::new();
+        for _ in 0..30 {
+            tick(&mut session, &catalog);
+            goals.extend(of(&session, &ids).iter().map(|npc| npc.goal));
+        }
+        goals
+    }
+
+    #[test]
+    fn a_pirate_mission_escort_whose_mission_ends_leaves_without_picking_a_stellar() {
+        // Its +0x6c holds the player's slot (@0x83f09), which the release
+        // doesn't write (`_AIMakeShipLeave` @0x7e2b0), so its idle block
+        // skips the pick (@0x8c472-0x8c477).
+        let goals = goals_as_the_mission_ends(None);
+        assert!(goals.contains(&Goal::JumpOut));
+        assert!(goals.iter().all(|goal| !matches!(goal, Goal::Land(_))));
+    }
+
+    #[test]
+    fn one_held_when_its_mission_ends_picks_a_stellar() {
+        // Hold writes -1 (@0x83e65).
+        let goals = goals_as_the_mission_ends(Some(EscortCommand::Hold));
+        assert!(goals.iter().any(|goal| matches!(goal, Goal::Land(_))));
+    }
+
+    #[test]
+    fn a_mission_escort_joining_holds_the_players_slot() {
+        // Its first think's formation writes the player's slot (@0x83f09),
+        // as the join writes that formation.
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.travel_set = false;
+        if let Some(mark) = &mut npc.mission {
+            mark.formation = None;
+        }
+        assert!(session.join_mission_escorts());
+        assert!(session.npcs()[0].travel_set);
     }
 
     #[test]
