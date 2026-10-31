@@ -3,15 +3,15 @@
 //! their berth's word, which write their own, and how
 //! [`RuleKey::ReusedSlotVoice`] and the kept berths reach the traffic.
 
-use super::fighters::tests::{fleet_npcs, flying_by, pilot, sitting_ai};
+use super::fighters::tests::{BAY, fleet_npcs, flying_by, pilot, raided, sitting_ai};
 use super::tests::{armed, boardable, captured, facing_an_npc};
 use super::voices::tests::{MEDIUM, MEDIUM_EVEN, VIPER, escort, escort_npc, fleet, heard, voiced};
 use super::*;
 use crate::ai::Peaceful;
-use crate::catalog::SystemId;
+use crate::catalog::{GovtId, SystemId};
 use crate::chance::NeverFires;
-use crate::combat::Rules;
-use crate::flight::Controls;
+use crate::combat::{Rules, ShipRef, Sortie};
+use crate::flight::{Controls, ShipState};
 use crate::rulebook::{RuleSource, Rulebook};
 use crate::session::capture_naming::tests::use_as_my_ship;
 use crate::stats::ShipStats;
@@ -200,6 +200,40 @@ fn a_launched_fighters_roll_leaves_its_word_for_the_berths_next_ship() {
     assert_eq!(fighter.voice, Some(VoiceVariant::Odd));
     let berth = vacate(&mut session, fighter.id);
     assert_eq!(next_ship_at(&mut session, berth), Some(VoiceVariant::Odd));
+}
+
+#[test]
+fn an_npc_carriers_fighters_roll_leaves_its_word_for_the_berths_next_ship() {
+    // Government 140 leaves the Rand(2) to decide and 141 forces even. Each
+    // row's berths hold the other word, so only the roll can write this one.
+    for (govt, word, rolled) in [
+        (GovtId(140), VoiceVariant::Even, VoiceVariant::Odd),
+        (GovtId(141), VoiceVariant::Odd, VoiceVariant::Even),
+    ] {
+        let mut catalog = voiced();
+        for record in &mut catalog.ship_records {
+            if record.id == VIPER {
+                record.inherent_govt = Some(govt);
+            }
+        }
+        let (mut session, raider, _) = raided(&catalog);
+        every_berth(&mut session, word);
+        let sortie = Sortie {
+            carrier: ShipRef::Npc(raider),
+            bay: BAY,
+            ship: VIPER,
+            from: ShipState::default(),
+            heading: 0.0,
+            target: None,
+        };
+        let fighter = session
+            .launch_fighter(&sortie, &mut Ranged::of(&[(2, 1)]))
+            .expect("launched");
+        let voice = session.space.npc(fighter).expect("there").voice;
+        assert_eq!(voice, Some(rolled), "{govt:?}");
+        let berth = vacate(&mut session, fighter);
+        assert_eq!(next_ship_at(&mut session, berth), Some(rolled), "{govt:?}");
+    }
 }
 
 #[test]
