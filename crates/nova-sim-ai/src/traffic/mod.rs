@@ -2833,6 +2833,8 @@ impl Traffic {
                 owed_burst: None,
                 close_form: false,
                 fleet_slot: None,
+                form_parent: None,
+                slot_place: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,

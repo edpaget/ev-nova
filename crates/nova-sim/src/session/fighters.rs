@@ -706,6 +706,8 @@ fn fighter(
         owed_burst: None,
         close_form: false,
         fleet_slot: None,
+        form_parent: None,
+        slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.

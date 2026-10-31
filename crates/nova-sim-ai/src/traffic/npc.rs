@@ -602,6 +602,21 @@ pub struct Npc {
     /// as it jumps in (see
     /// [`fleet_formation`](crate::traffic::fleet_formation)). Never saved.
     pub fleet_slot: Option<FormationSlot>,
+    /// Its formation parent as a berth, the original's +0xc92e, `None` for
+    /// -1 and 0 the player: a berth, not an [`NpcId`], as the original
+    /// reads a slot, so a re-used berth is read as its new ship. The
+    /// formation pass rewrites it for a ship of AI type above 4 and leaves
+    /// it for any other, which so keeps a stale parent
+    /// ([`swarm::formation_parent`](crate::ai::swarm::formation_parent), and
+    /// see [`fleet_formation`](crate::traffic::fleet_formation)). None at
+    /// every spawn and launch (`_AISetup` @0x7f41e). Never saved.
+    pub form_parent: Option<u32>,
+    /// The place its parent's formation last gave it, the original's
+    /// +0x28/+0x2c: where `_AIMaintainFormation` nudges it, which stays
+    /// fixed while no formation is worked out for that parent (see
+    /// [`fleet_formation`](crate::traffic::fleet_formation)). None as it
+    /// spawns. Never saved.
+    pub slot_place: Option<Vec2>,
     /// Its order word, the original's +0xc90a: -1 at every spawn, launch
     /// and placement ([`OrderWord::NONE`]), then the order its leader last
     /// issued it ([`escort_orders`](crate::ai::escort_orders), every eighth

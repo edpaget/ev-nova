@@ -59,6 +59,7 @@
 
 use super::npc::{AiType, Npc};
 use crate::ai::miner;
+use crate::combat::ShipRef;
 
 /// The original's AI type word of a ship with no AI (+0x88 -1).
 pub const NO_AI: i16 = -1;
@@ -90,9 +91,10 @@ impl Npc {
     /// launched fighter [`FIGHTER_AI`] and any other [`ESCORT_AI`] (a
     /// capture writes 6 over an earlier bribe); a bribed ship its own
     /// type's word, [`BRIBED_AI`] until a later write, ahead of a leader
-    /// or carrier it keeps; a carried fighter [`FIGHTER_AI`]; a ship
-    /// with an NPC leader, or a former escort that keeps its word,
-    /// [`ESCORT_AI`]; otherwise its own type's word.
+    /// or carrier it keeps; an NPC carrier's fighter [`FIGHTER_AI`]; a
+    /// ship with an NPC leader, or a former escort that keeps its word,
+    /// [`ESCORT_AI`]; otherwise its own type's word, so a fighter the
+    /// player carries but no longer leads reads its class's.
     #[must_use]
     pub fn original_ai_type(&self) -> i16 {
         if self.no_ai {
@@ -105,7 +107,10 @@ impl Npc {
             }
         } else if self.spared {
             self.ai_type.raw()
-        } else if self.carrier.is_some() {
+        } else if self
+            .carrier
+            .is_some_and(|carrier| carrier.ship != ShipRef::Player)
+        {
             FIGHTER_AI
         } else if self.leader.is_some() || self.kept_escort_ai {
             ESCORT_AI
@@ -151,7 +156,6 @@ impl Npc {
 mod tests {
     use super::*;
     use crate::bay::Carrier;
-    use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::stats::ShipStats;
@@ -257,6 +261,29 @@ mod tests {
             ..ship(AiType::WimpyTrader)
         };
         assert_eq!(mission.original_ai_type(), 6, "a mission escort");
+    }
+
+    #[test]
+    fn a_ship_the_player_carries_but_does_not_lead_reads_its_classs_word() {
+        // One `Session::unfleet` lost: `_DamageShip` wrote its class's
+        // `InherentAI` (@0x3b0d7), and the carrier stays for its capacities.
+        let lost = Npc {
+            carrier: Some(Carrier {
+                ship: ShipRef::Player,
+                ..carrier()
+            }),
+            ..ship(AiType::Warship)
+        };
+        assert_eq!(lost.original_ai_type(), 3);
+        let its_carrier_an_npc = Npc {
+            carrier: Some(carrier()),
+            ..ship(AiType::Warship)
+        };
+        assert_eq!(
+            its_carrier_an_npc.original_ai_type(),
+            5,
+            "an NPC carrier's fighter with no leader"
+        );
     }
 
     #[test]
