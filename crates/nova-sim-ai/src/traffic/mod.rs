@@ -1461,7 +1461,7 @@ impl Traffic {
                     Some(behaviour.target(npc, &around).filter(|_| !clears[index])),
                 )
             } else if regroup::paused(npc) {
-                let wait = behaviour.gate_wait(npc, &around);
+                let wait = regroup::held_fire(behaviour, npc, &around);
                 (wait.trigger, wait.drops_target.then_some(None))
             } else {
                 (npc.trigger, None)

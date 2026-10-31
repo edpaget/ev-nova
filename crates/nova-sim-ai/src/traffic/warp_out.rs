@@ -138,6 +138,7 @@ use crate::handling::Handling;
 use crate::traffic::Outcome;
 use crate::traffic::World;
 use crate::traffic::autopilot::{plain_step, position_step};
+use crate::traffic::formation_flight;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::jump_with_leader;
 use crate::traffic::npc::{Mode, Npc, NpcId};
@@ -603,11 +604,15 @@ pub fn settle(
 /// yet in its warp stage: the autopilot flies it as its goal says. It
 /// takes no thrust, so its top speed plays no part.
 ///
-/// A ship `paused` in the regroup pause (goal 0x13, its sub 0xd kept) runs
-/// no goal block (`_HighLevelAIHandler` has none for 0x13), so no goal
-/// 0xb check, and its low level flies sub 0xd on its successor; as
+/// A ship `paused` in the regroup pause (goal 0x13, its sub 4 or 0xd kept)
+/// runs no goal block (`_HighLevelAIHandler` has none for 0x13), so no goal
+/// 0xb check, and its low level flies its kept substate. As
 /// `_AIIsShipJumping` reads goal 0x13, the warp-out zeroes any stage it
-/// starts.
+/// starts, so sub 4 never leaves. Sub 0xd keeps its own flight under a
+/// lead at +0x50 ≤ 1.0, not the autopilot's substate pick: the lead's
+/// whole heading and velocity, `_AIMaintainFormation(ship, 0)` on the
+/// advance pass (double time's second pass runs no low level, `je 0x44350`
+/// @0x4402a), and no thrust (@0x859df-0x85a4a).
 pub fn fly_jump(
     npc: &mut Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
@@ -624,6 +629,7 @@ pub fn fly_jump(
         WarpGoal::Follow(ShipRef::Npc(id)) => leaders.get(&id).map(|&leader| (false, leader)),
         WarpGoal::Own => None,
     };
+    let mut formation = false;
     if think {
         match goal {
             WarpGoal::Follow(_) => {
@@ -648,7 +654,10 @@ pub fn fly_jump(
                         if let Some((player, leader)) = leader
                             && follow_jump(npc, leader, player) == FollowStep::Formation
                         {
-                            return None;
+                            if !paused {
+                                return None;
+                            }
+                            formation = true;
                         }
                     }
                 }
@@ -659,7 +668,7 @@ pub fn fly_jump(
                 }
             }
         }
-    } else if leader.is_some_and(|(_, leader)| leader.stage <= 1.0) {
+    } else if !paused && leader.is_some_and(|(_, leader)| leader.stage <= 1.0) {
         return None;
     }
     if !npc.jumping() {
@@ -669,6 +678,9 @@ pub fn fly_jump(
     let handling = npc
         .ionization()
         .slows(world.flight.handling(npc.own_handling()));
+    if formation && let Some(slot) = npc.parent_word() {
+        formation_flight::maintain(npc, slot, &handling, false);
+    }
     // No leader passed: close formation needs one, so the sight is moot.
     let inertia = Inertia::of(npc, None, true, world.flight);
     fly(npc, &handling, world.flight, inertia);
@@ -1624,12 +1636,16 @@ mod tests {
         let following = || {
             let mut ship = ship();
             ship.leader = Some(lead);
-            ship.goal = Goal::Follow { lead, guard: None };
+            ship.goal = Goal::Hold;
             ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
             ship
         };
         let mut paused = following();
-        assert_eq!(fly_jump(&mut paused, &views, &world, true, true), None);
+        assert_eq!(
+            fly_jump(&mut paused, &views, &world, true, true),
+            Some(Outcome::Flying),
+            "sub 0xd's flight, not the autopilot's"
+        );
         assert_eq!(
             paused.warp.goal,
             Some(WarpGoal::Follow(ShipRef::Npc(lead))),
@@ -1639,6 +1655,29 @@ mod tests {
         let mut free = following();
         fly_jump(&mut free, &views, &world, true, false);
         assert_eq!(free.warp.goal, None, "goal 0xb gives up");
+    }
+
+    #[test]
+    fn past_a_paused_ship_a_lead_at_stage_1_or_below_leaves_a_follower_to_its_autopilot() {
+        let lead = NpcId(4);
+        let mut views = BTreeMap::new();
+        let still = LeaderWarp {
+            stage: 1.0,
+            ..leader()
+        };
+        views.insert(lead, still);
+        let world = in_world(world());
+        let mut ship = ship();
+        ship.leader = Some(lead);
+        ship.goal = Goal::Follow { lead, guard: None };
+        ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        assert_eq!(fly_jump(&mut ship, &views, &world, true, false), None);
+        assert_eq!(fly_jump(&mut ship, &views, &world, false, false), None);
+        assert_eq!(
+            fly_jump(&mut ship, &views, &world, false, true),
+            Some(Outcome::Flying),
+            "paused, its second pass flies on"
+        );
     }
 
     #[test]
