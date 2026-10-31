@@ -58,7 +58,8 @@
 //! that, from the player's brake on, `_EscortAI`'s entry does, and it puts
 //! an NPC's escorts on their lead's jump (@0x839fd-0x83a92;
 //! [`jump_with_leader`]). A paused ship (goal 0x13) runs no goal 0xb
-//! check, and its warp-out zeroes any stage its sub 0xd starts.
+//! check and makes no push, and its warp-out zeroes any stage its sub 0xd
+//! starts.
 //!
 //! **Sub-goal 0xd, following** (@0x859c5-0x85c5f; [`follow_jump`]): its
 //! +0x68 is its leader's whole-degree heading. While the leader's +0x50
@@ -548,15 +549,21 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
 }
 
 /// Goal 0xb's push of an NPC leader onto its own jump (goal 2,
-/// @0x8dedf-0x8defa): each leader of a ship in `npcs` that follows its
-/// jump, is intact and whose high level runs ([`Npc::high_level_waits`])
-/// is set to jump out. A leader the player leads is not: the original
-/// pushes it too, but its own next hold puts it back on goal 0xb
-/// (@0x8d542-0x8d54c), as it is under way only on the player's jump.
+/// @0x8dedf-0x8defa): each leader of a ship in `npcs` in goal 0xb
+/// ([`Npc::follows_leaders_jump`], `cmpw $0xb` @0x8de63), so not one in the
+/// regroup pause keeping sub 0xd, that is intact and whose high level runs
+/// ([`Npc::high_level_waits`]) is set to jump out. A leader the player leads
+/// is not: the original pushes it too, but its own next hold puts it back
+/// on goal 0xb (@0x8d542-0x8d54c), as it is under way only on the player's
+/// jump.
 pub fn send_leaders_out(npcs: &mut [Npc]) {
     let sent: Vec<NpcId> = npcs
         .iter()
-        .filter(|npc| npc.condition == Condition::Intact && !npc.high_level_waits())
+        .filter(|npc| {
+            npc.condition == Condition::Intact
+                && npc.follows_leaders_jump()
+                && !npc.high_level_waits()
+        })
         .filter_map(|npc| match npc.warp.goal {
             Some(WarpGoal::Follow(ShipRef::Npc(leader))) => Some(leader),
             _ => None,
@@ -1335,6 +1342,30 @@ mod tests {
         assert!(pushed(0, false));
         assert!(!pushed(5, false), "its high level waits (@0x8d4b9)");
         assert!(!pushed(0, true), "held back by its own hold (@0x8d542)");
+    }
+
+    #[test]
+    fn only_a_ship_in_goal_0xb_sends_its_leader_out() {
+        // The push sits inside goal 0xb's block (`cmpw $0xb` @0x8de63), so
+        // a ship keeping sub 0xd under another goal makes none, its high
+        // level running with no wait.
+        let lead = NpcId(2);
+        for goal in [
+            Goal::Regroup {
+                kept: crate::ai::regroup::Kept::FollowsJump,
+            },
+            Goal::JumpOut,
+            Goal::Flee(ShipRef::Player),
+        ] {
+            let mut follower = ship();
+            follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+            follower.goal = goal;
+            let mut leader = ship();
+            leader.id = lead;
+            let mut ships = [follower, leader];
+            send_leaders_out(&mut ships);
+            assert_eq!(ships[1].goal, Goal::Idle, "{goal:?}");
+        }
     }
 
     #[test]

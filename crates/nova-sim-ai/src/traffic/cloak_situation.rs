@@ -20,6 +20,7 @@
 //! original's sub-goal does.
 
 use crate::ai::Goal;
+use crate::ai::regroup::Kept;
 use crate::area_cloak;
 use crate::cloak::{self, Cloak, MineOrder};
 use crate::combat::hull::Condition;
@@ -54,7 +55,9 @@ pub struct Around {
 ///   [`WarpGoal::Own`](crate::traffic::warp_out::WarpGoal::Own)) or a
 ///   jump with its parent (goal 0xb,
 ///   [`WarpGoal::Follow`](crate::traffic::warp_out::WarpGoal::Follow)) is
-///   [`jumping`](cloak::Situation::jumping).
+///   [`jumping`](cloak::Situation::jumping) (@0x834ee-0x83509). The regroup
+///   pause keeping sub 4 is too, as the term reads sub 4 whatever the goal;
+///   keeping sub 0xd it isn't, as goal 0x13 is neither 8 nor 0xb.
 /// - Landing, waiting, entering a gate, inspecting, or flying in form
 ///   (goal 0xa: [`Goal::Follow`], [`Goal::Formation`] or [`Goal::Hold`])
 ///   is [`travelling`](cloak::Situation::travelling).
@@ -96,7 +99,12 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         retreating: matches!(goal, Some(Goal::Flee(_))),
         attacking: around.attacking.filter(|_| goal.is_some()),
         reloading: npc.armament.reloading(around.cloak_on_reload),
-        jumping: arriving || npc.warp.goal.is_some(),
+        jumping: arriving
+            || (npc.warp.goal.is_some()
+                && npc.goal
+                    != Goal::Regroup {
+                        kept: Kept::FollowsJump,
+                    }),
         travelling: matches!(
             goal,
             Some(
@@ -234,6 +242,23 @@ mod tests {
             assert!(situation(&jumper, Around::default()).jumping, "{warp:?}");
         }
         assert!(!of(Goal::JumpOut, FLYING).jumping);
+    }
+
+    #[test]
+    fn of_a_regroup_pause_only_one_keeping_its_own_jump_is_jumping() {
+        // The term is sub 4 whatever the goal, or goal 8 or 0xb
+        // (@0x834ee-0x83509): goal 0x13 keeping sub 0xd is none of them.
+        let paused = |kept, warp| Npc {
+            warp: Warp {
+                goal: Some(warp),
+                ..Warp::default()
+            },
+            ..npc(Goal::Regroup { kept }, FLYING)
+        };
+        let own = paused(Kept::OwnJump, WarpGoal::Own);
+        assert!(situation(&own, Around::default()).jumping);
+        let follows = paused(Kept::FollowsJump, WarpGoal::Follow(ShipRef::Player));
+        assert!(!situation(&follows, Around::default()).jumping);
     }
 
     fn following_jump(goal: Goal) -> Npc {

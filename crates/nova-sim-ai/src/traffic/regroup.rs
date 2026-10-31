@@ -402,6 +402,15 @@ mod tests {
     }
 
     #[test]
+    fn a_kept_follow_sends_its_lead_nowhere() {
+        // The push (@0x8dedf-0x8def0) is goal 0xb's: on the jump path goal
+        // 0x13 runs the high level's head, never that block.
+        let (mut traffic, lead, _) = following_a_lead();
+        ticked(&mut traffic, &Recording::default(), 3);
+        assert_eq!(of(&traffic, lead).goal, Goal::Hold);
+    }
+
+    #[test]
     fn double_times_second_pass_nudges_a_kept_follow_not() {
         let (mut traffic, _, id) = following_a_lead();
         ticked(&mut traffic, &Recording::default(), 1);
