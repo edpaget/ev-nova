@@ -321,6 +321,23 @@ fn cover(view: (f32, f32)) -> (i32, i32, i32, i32) {
 #[allow(clippy::cast_possible_truncation)]
 const CLASSIC: (i32, i32, i32, i32) = (0, 0, VIEW_SIZE.0 as i32, VIEW_SIZE.1 as i32);
 
+/// Whether `input` skips a movie playing: the mouse button, Space or
+/// Return going down or up, as the original reads them held
+/// (`KeyCheck` 0x31, 0x24 and 0x4c, up to @0x55e8a).
+#[must_use]
+pub fn skips_a_movie(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::Key {
+            key: Key::Space | Key::Enter,
+            ..
+        } | Input::PointerButton {
+            button: MouseButton::Left,
+            ..
+        }
+    )
+}
+
 impl MovieStage {
     /// `movie`, played through `player` once it begins.
     #[must_use]
@@ -480,17 +497,7 @@ impl MovieStage {
         if self.phase == Phase::Ended {
             return;
         }
-        let skips = matches!(
-            input,
-            Input::Key {
-                key: Key::Space | Key::Enter,
-                ..
-            } | Input::PointerButton {
-                button: MouseButton::Left,
-                ..
-            }
-        );
-        if self.phase == Phase::Playing && skips {
+        if self.phase == Phase::Playing && skips_a_movie(input) {
             self.replay.clear();
             self.close();
             return;

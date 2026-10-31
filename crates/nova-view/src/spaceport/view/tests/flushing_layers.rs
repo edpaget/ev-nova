@@ -140,3 +140,23 @@ fn a_services_placeholder_stands_for_a_dialog_that_flushes() {
     assert!(view.open_service().is_some());
     assert_eq!(view.flushing_layers(), 1);
 }
+
+#[test]
+fn a_texts_movie_counts_for_nothing_as_it_flushes_only_when_skipped() {
+    let player = MockMoviePlayer::playing((160, 120), 2);
+    let mut view = earth().with_movies(movies_of(&player)).with_missions(
+        Ok(computer_template()),
+        Ok(info_template()),
+        pictured_offers(),
+        pictured_texts(),
+    );
+    view.show_mission_texts(vec![MissionText {
+        movie: DescMovie::from_desc("After.mov", 0x0001),
+        ..filmed_comp()
+    }]);
+    assert_eq!(shown_text(&view).as_deref(), Some("Well done."));
+    assert_eq!(view.text_stages(), 1, "the text, not its movie");
+    view.input(&key(Key::Enter));
+    assert_eq!(started(&player), ["After.mov"]);
+    assert_eq!(view.text_stages(), 0, "the movie in front");
+}

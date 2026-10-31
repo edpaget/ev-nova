@@ -11,7 +11,13 @@
 //! - A key that closes a dialog back to another passes the rest on.
 //! - A key that opens something that flushes drops the rest, as each
 //!   `FlushEvents(0xff7f, 0)` does: [`FlushMark`] tells. So does one that
-//!   brings a next text or movie to the front.
+//!   brings a next text to the front.
+//! - A movie in front flushes nothing unless it is skipped (mask 0xf,
+//!   `_PlayQTMovie` @0x55e9f), and reads the keys it skips on live, so
+//!   what is queued waits for what comes next, which a movie's own queue
+//!   does here. Those keys are the exception. Ours' movie reads one as a
+//!   skip whenever it comes, and one queued was let go long ago in the
+//!   original, so it is dropped rather than skip it.
 //! - Past the last dialog, nothing reads them: flight polls its keys live
 //!   (`_IterateInGameEventLoop` drops them, @0x56a6b, @0x56cec). What is
 //!   still down of them reads as down there, so it goes to flight's held
@@ -24,6 +30,8 @@
 use std::collections::HashSet;
 
 use nova_view::flight::FlightView;
+use nova_view::movie::skips_a_movie;
+use nova_view::spaceport::SpaceportView;
 use nova_view::{Input, Key, Showing};
 
 use super::AppScreen;
@@ -38,8 +46,8 @@ struct FlushMark {
 
 impl FlushMark {
     /// Whether anything opened through a flush since `before`: a layer
-    /// more, or a change of text or movie that leaves one showing. A
-    /// layer fewer flushes nothing, and neither does the last text closing.
+    /// more, or a change of texts that leaves one to come. A layer fewer
+    /// flushes nothing, and neither does the last text closing.
     fn flushed_since(self, before: Self) -> bool {
         self.layers > before.layers || (self.stages != before.stages && self.stages > 0)
     }
@@ -57,11 +65,11 @@ impl AppScreen {
         FlushMark {
             layers: self.flushing_overlays()
                 + usize::from(info)
-                + port.map_or(0, nova_view::spaceport::SpaceportView::flushing_layers),
+                + port.map_or(0, SpaceportView::flushing_layers),
             stages: missions.map_or(
                 0,
                 nova_view::ui::mission_dialogs::MissionDialogs::text_stages,
-            ) + port.map_or(0, nova_view::spaceport::SpaceportView::text_stages),
+            ) + port.map_or(0, SpaceportView::text_stages),
         }
     }
 
@@ -80,6 +88,9 @@ impl AppScreen {
         let mut keys = replay.into_iter();
         let mut down = HashSet::new();
         while let Some(input) = keys.next() {
+            if self.movie_skipped_by(&input) {
+                continue;
+            }
             let before = self.flush_mark();
             note_down(&mut down, &input);
             let _ = self.routed_input(&input);
@@ -97,6 +108,14 @@ impl AppScreen {
         }
     }
 
+    /// Whether `input` is queued for a movie in front that would take it
+    /// for a live skip (see the module docs).
+    fn movie_skipped_by(&self, input: &Input) -> bool {
+        let playing = self.showing() == Showing::Movie
+            || self.spaceport_view().is_some_and(SpaceportView::playing);
+        playing && skips_a_movie(input)
+    }
+
     /// Past a stop, the queued release of each key in `down`, the presses
     /// replayed and not yet let go, in order, and nothing else of `rest`:
     /// its live release has been and gone, so nothing else would let go
@@ -111,6 +130,7 @@ impl AppScreen {
                 ..
             } = input
                 && down.remove(&key)
+                && !self.movie_skipped_by(&input)
             {
                 let _ = self.routed_input(&input);
             }

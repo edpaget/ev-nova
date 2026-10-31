@@ -530,3 +530,67 @@ fn alt_down_across_a_refused_sale_is_let_go_with_it() {
     assert!(open.alert_dialog().is_some(), "the sale refused");
     assert!(!open.alt_held(), "Alt let go");
 }
+
+/// The spaceport with a text open over it that opens the map, its
+/// after-movie next, and the [`MockMoviePlayer`] that plays it.
+fn landed_with_a_filmed_text() -> (AppScreen, Rc<MockMoviePlayer>) {
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let store = MemoryPilots::new();
+    let mut screen = AppScreen::new(game_data_fork_loaded())
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+        .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create(&mut screen, "Ada");
+    land_twice(&mut screen);
+    screen
+        .spaceport
+        .as_mut()
+        .expect("landed")
+        .show_mission_texts(vec![nova_sim::MissionText {
+            kind: nova_sim::MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: "Done.".to_owned(),
+            graphic: None,
+            movie: nova_sim::DescMovie::from_desc("After.mov", 0x0001),
+            map: Some(nova_sim::MapMarks::NONE),
+        }]);
+    (screen, reel)
+}
+
+#[test]
+fn a_key_that_closes_a_text_onto_its_movie_doesnt_skip_it_with_its_release() {
+    let (mut screen, reel) = landed_with_a_filmed_text();
+    let before = reeled(&reel).len();
+    start_the_wait(&mut screen);
+    tap(&mut screen, Key::Enter);
+    tap(&mut screen, Key::Enter);
+    end_the_wait(&mut screen);
+    screen.tick(TICK);
+    assert_eq!(
+        reeled(&reel)[before..],
+        [Call::Start("After.mov".into())],
+        "started, and nothing skipped it"
+    );
+}
+
+#[test]
+fn a_key_behind_a_text_closing_onto_its_movie_waits_for_what_comes_next() {
+    // `_PlayQTMovie` flushes only when skipped (@0x55e9f).
+    let (mut screen, _reel) = landed_with_a_filmed_text();
+    start_the_wait(&mut screen);
+    tap(&mut screen, Key::Enter);
+    tap(&mut screen, Key::Escape);
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::Spaceport, "the movie isn't over");
+    assert!(spaceport(&screen).playing());
+    while spaceport(&screen).playing() {
+        screen.tick(TICK);
+    }
+    assert!(
+        screen
+            .spaceport_view()
+            .is_none_or(nova_view::spaceport::SpaceportView::left),
+        "Escape reached the spaceport"
+    );
+}

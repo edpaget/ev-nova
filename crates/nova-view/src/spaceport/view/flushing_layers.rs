@@ -74,9 +74,9 @@ impl SpaceportView {
         open + usize::from(info) + usize::from(offer) + player_info
     }
 
-    /// How many texts and movies are shown or queued
+    /// How many texts are shown or queued
     /// ([`MissionDialogs::text_stages`](MissionDialogs::text_stages)):
-    /// each that comes to the front flushes.
+    /// each flushes as it comes to the front.
     #[must_use]
     pub fn text_stages(&self) -> usize {
         self.dialogs.as_ref().map_or(0, MissionDialogs::text_stages)

@@ -530,16 +530,18 @@ impl MissionDialogs {
         !self.texts.is_empty()
     }
 
-    /// How many texts and movies are shown or queued: closing one with
-    /// any left brings the next to the front, which drops the keys queued
-    /// (`FlushEvents(0xff7f, 0)`, `_ShowTextDialog` @0x5ae67; mask 0xf,
-    /// `_PlayQTMovie` @0x55e9f), so the count changing to anything but 0
-    /// says so.
+    /// How many texts are shown or queued: closing one with any left
+    /// brings the next to the front, or a movie and then it, which drops
+    /// the keys queued (`FlushEvents(0xff7f, 0)`, `_ShowTextDialog`
+    /// @0x5ae67), so the count changing to anything but 0 says so. A movie
+    /// counts for nothing: `_PlayQTMovie` flushes only when it is skipped
+    /// (mask 0xf, @0x55e9f), and otherwise leaves the queue to what comes
+    /// next.
     #[must_use]
     pub fn text_stages(&self) -> usize {
         self.texts
             .iter()
-            .filter(|stage| matches!(stage, Stage::Text(_) | Stage::Movie(_)))
+            .filter(|stage| matches!(stage, Stage::Text(_)))
             .count()
     }
 
