@@ -3987,6 +3987,16 @@ mod tests {
     }
 
     #[test]
+    fn alt_held_follows_alt() {
+        let mut screen = counting_screen();
+        assert!(!screen.alt_held());
+        screen.input(&key(COUNT_KEY, true, false));
+        assert!(screen.alt_held());
+        screen.input(&key(COUNT_KEY, false, false));
+        assert!(!screen.alt_held());
+    }
+
+    #[test]
     fn with_alt_held_buy_opens_the_quantity_dialog_at_the_engines_maximum_titled_buy() {
         assert_eq!(COUNT_KEY, Key::Alt);
         let mut screen = counting_screen();
