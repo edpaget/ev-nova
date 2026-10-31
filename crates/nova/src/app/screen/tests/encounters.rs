@@ -153,6 +153,7 @@ fn boarding_data_with(cash: i32) -> Rc<GameData> {
         .resource(System::TYPE, 128, Some(b"Alpha"), &system)
         .resource(Dude::TYPE, 128, Some(b"Traders"), &dude)
         .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
+        .resource(StrList::TYPE, 4001, None, &str_list(&["food"]))
         .resource(StrList::TYPE, 4004, None, &str_list(&["75"]))
         .resource(
             StrList::TYPE,
@@ -282,8 +283,12 @@ pub(super) fn assignment_click(screen: &mut AppScreen, item: usize) {
 fn b_on_a_disabled_target_opens_the_plunder_dialog_over_paused_flight() {
     let mut screen = boarded();
     let dialog = screen.plunder().expect("open");
-    assert_eq!(dialog.lines()[2], "Cargo: 19 tons of Food");
-    assert_eq!(dialog.lines()[4], "Capture Odds: 28%");
+    assert_eq!(dialog.lines()[1], "Cargo: 19 tons of food");
+    assert!(
+        dialog.lines()[4].ends_with("Capture Odds: 28%"),
+        "on the Energy row: {:?}",
+        dialog.lines()[4]
+    );
     let alpha = flight(&screen).alpha();
     screen.tick(TICK / 2);
     assert_eq!(
@@ -353,7 +358,7 @@ fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
     assert_eq!(sounds, [], "a greyed button is a silent miss");
     plunder_click(&mut screen, 2);
     let dialog = screen.plunder().expect("open");
-    assert_eq!(dialog.lines()[2], "Cargo: N/A", "refreshed");
+    assert_eq!(dialog.lines()[1], "Cargo: None", "refreshed");
 }
 
 /// A click that reaches no enabled button is a miss (item -1, which

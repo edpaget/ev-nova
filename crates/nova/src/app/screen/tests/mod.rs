@@ -338,6 +338,7 @@ fn game_data_fork(
         stellar[0x06..0x0A].copy_from_slice(&0x2000_0043_u32.to_be_bytes());
         fork = fork
             .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
+            .resource(StrList::TYPE, 4001, None, &str_list(&["food"]))
             .resource(StrList::TYPE, 4004, None, &str_list(&["75"]));
     }
     if outfitting {

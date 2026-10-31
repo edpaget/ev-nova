@@ -7,9 +7,15 @@
 //! The plunder dialog's buttons are the original's (`STR#` 150 #35 and
 //! #40-44): Abort (item 1, and Return, Enter and Escape), Cargo (2),
 //! Credits (3), Ammo (4), Energy (6) and Capture Ship (7), each greyed
-//! while what it takes is not on board. Item 5 says what is (`STR#` 2002
-//! #109-112): the cargo's tons and good, the ammunition's rounds and
-//! outfit, and the capture odds. A click gives its [`Take`]
+//! while what it takes is not on board. Item 5 says what is, in the rows
+//! `_PlunderDialogUpdate` (@0x928b4-0x92f1f) draws on a black box: the
+//! cargo's tons and lower-case good, the credits, the ammunition's rounds
+//! and outfit, the energy and the capture odds, at the original's baselines
+//! and columns, [`NONE`] for nothing of a kind. The original only draws into
+//! item 5, but it stays a scrolling box, as every dialog text box here does.
+//! Its rows fit stock's box and never move; an item 5 too short for them
+//! scrolls them with the arrow keys and wheel, where the original draws past
+//! the box. A click gives its [`Take`]
 //! ([`PlunderDialog::take_take`]); the router passes it to the flight and
 //! refreshes the dialog ([`PlunderDialog::set_plunder`]). A click that
 //! reaches no enabled button (on a greyed button, on the text, outside
@@ -44,6 +50,9 @@ use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
+use crate::spaceport::credits::comma_number;
+use crate::spaceport::shipyard::LABEL_COLOR as MED_GREY;
+use crate::spaceport::trade::LIGHT_GREY;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -52,6 +61,7 @@ use super::dialog::{
     STOCK_WORD, TextBacking, outline,
 };
 use super::prefs::{BACKDROP, BORDER};
+use super::scroll_text::{TextRow, TextRun};
 
 /// The plunder dialog's `DLOG` (and `DITL`) ID.
 pub const PLUNDER_DIALOG: i16 = 1011;
@@ -76,9 +86,45 @@ pub const CARGO_LABEL: &str = "Cargo:";
 pub const AMMO_LABEL: &str = "Ammo:";
 /// `STR#` 2002 #112.
 pub const ODDS_LABEL: &str = "Capture Odds:";
-/// `STR#` 2002 #396: nothing of a kind on board.
-pub const NONE: &str = "N/A";
-/// The text's size, in Geneva.
+/// `_creditsString` (#33) with its first letter upper-cased, then ":"
+/// (@0x929de-0x92a46).
+pub const CREDITS_LABEL: &str = "Credits:";
+/// `_fuelString[4]`, #7.
+pub const ENERGY_LABEL: &str = "Energy:";
+/// `STR#` 2002 #335: nothing of a kind on board.
+pub const NONE: &str = "None";
+/// `STR#` 2002 #1: a ton of cargo, or none.
+pub const TON: &str = "ton";
+/// `STR#` 2002 #2: more than a ton.
+pub const TONS: &str = "tons";
+/// `STR#` 2002 #391.
+pub const OF: &str = "of";
+/// The labels' colour: `_rgbLightGrey` (@0x92970, @0x92ce9, @0x92d86).
+pub const LABEL_COLOR: Color = LIGHT_GREY;
+/// [`NONE`]'s colour: `_rgbMedGrey` (@0x92b44).
+pub const NONE_COLOR: Color = MED_GREY;
+/// Item 5's size, in Geneva: `_smallTextSize` (@0x928cd-0x928e8).
+pub const PLUNDER_TEXT_SIZE: f32 = 9.0;
+/// The prompt's baseline below item 5's top (@0x92970-0x929a5).
+pub const PROMPT_ROW: f32 = 12.0;
+/// The cargo's baseline (@0x929aa-0x929d9).
+pub const CARGO_ROW: f32 = 28.0;
+/// The credits' baseline (@0x929de-0x92a46).
+pub const CREDITS_ROW: f32 = 42.0;
+/// The ammunition's baseline (@0x92a4b-0x92a72).
+pub const AMMO_ROW: f32 = 56.0;
+/// The energy's and the capture odds' baseline (@0x92ccf-0x92d03).
+pub const ENERGY_ROW: f32 = 70.0;
+/// Where a value starts, right of item 5's left (@0x92a77-0x92b60).
+pub const VALUE_COLUMN: f32 = 50.0;
+/// Where the energy's label starts, a pixel right of the other labels
+/// (`incl` @0x92cdf).
+pub const ENERGY_COLUMN: f32 = 1.0;
+/// Where the capture odds' label starts (@0x92d6a-0x92da2).
+pub const ODDS_LABEL_COLUMN: f32 = 120.0;
+/// Where the capture odds start (@0x92da7-0x92dff).
+pub const ODDS_COLUMN: f32 = 195.0;
+/// The assignment question's size, in Geneva.
 pub const TEXT_SIZE: f32 = 10.0;
 /// The text's colour.
 pub const TEXT_COLOR: Color = Color::WHITE;
@@ -107,41 +153,86 @@ pub const QUESTION: &str = "Do you want to use this ship as an escort, or would 
 pub struct PlunderShown {
     /// What is on board.
     pub view: PlunderView,
-    /// The cargo's good's name, if it has one.
+    /// The cargo's good's lower-case name, if it has one.
     pub good: Option<String>,
-    /// The ammunition outfit's name, if it has one.
-    pub outfit: Option<String>,
+    /// The `LCName` and `LCPlural` of the outfit that names the ammunition,
+    /// if one does: the dialog picks by the count.
+    pub outfit: Option<(String, String)>,
 }
 
-/// Item 5's text for `shown`: the prompt, then the cargo, the ammunition
-/// and the capture odds, a line each.
-#[must_use]
-pub fn plunder_text(shown: &PlunderShown) -> String {
+/// A label in [`LABEL_COLOR`], `x` right of item 5's left.
+fn label(x: f32, text: &str) -> TextRun {
+    TextRun {
+        x,
+        text: text.to_owned(),
+        color: LABEL_COLOR,
+    }
+}
+
+/// A value in white at [`VALUE_COLUMN`], or [`NONE`] in [`NONE_COLOR`] when
+/// there is nothing of its kind.
+fn value(text: Option<String>) -> TextRun {
+    let (text, color) =
+        text.map_or_else(|| (NONE.to_owned(), NONE_COLOR), |text| (text, TEXT_COLOR));
+    TextRun {
+        x: VALUE_COLUMN,
+        text,
+        color,
+    }
+}
+
+/// `n` by `_DrawCommaNumber` when above 0: none otherwise.
+fn amount(n: i64) -> Option<String> {
+    (n > 0).then(|| comma_number(n))
+}
+
+/// The ammunition line: the count, then `LCName` for exactly 1 round and
+/// `LCPlural` for any other count, or the count alone with no outfit
+/// (@0x92bf2-0x92ccf).
+fn ammo_line(rounds: u32, outfit: Option<&(String, String)>) -> String {
+    match outfit {
+        Some((name, _)) if rounds == 1 => format!("{rounds} {name}"),
+        Some((_, plural)) => format!("{rounds} {plural}"),
+        None => rounds.to_string(),
+    }
+}
+
+/// Item 5's rows for `shown`, as `_PlunderDialogUpdate` (@0x928b4-0x92f1f)
+/// draws them.
+fn plunder_rows(shown: &PlunderShown) -> Vec<TextRow> {
     let view = &shown.view;
-    let cargo = view.cargo.map_or_else(
-        || NONE.to_owned(),
-        |(_, tons)| {
-            let unit = if tons == 1 { "ton" } else { "tons" };
-            format!(
-                "{tons} {unit} of {}",
-                shown.good.as_deref().unwrap_or("cargo")
-            )
-        },
-    );
-    let ammo = view.ammo.map_or_else(
-        || NONE.to_owned(),
-        |ammo| {
-            format!(
-                "{} {}",
-                ammo.rounds,
-                shown.outfit.as_deref().unwrap_or("rounds")
-            )
-        },
-    );
-    format!(
-        "{PROMPT}\r\r{CARGO_LABEL} {cargo}\r{AMMO_LABEL} {ammo}\r{ODDS_LABEL} {}%",
-        view.odds
-    )
+    let cargo = view.cargo.map(|(_, tons)| {
+        let unit = if tons <= 1 { TON } else { TONS };
+        let good = shown.good.as_deref().unwrap_or_default();
+        format!("{tons} {unit} {OF} {good}")
+    });
+    let ammo = view
+        .ammo
+        .map(|ammo| ammo_line(ammo.rounds, shown.outfit.as_ref()));
+    let odds = TextRun {
+        x: ODDS_COLUMN,
+        text: format!("{}%", view.odds),
+        color: TEXT_COLOR,
+    };
+    let row = |baseline, runs| TextRow { baseline, runs };
+    vec![
+        row(PROMPT_ROW, vec![label(0.0, PROMPT)]),
+        row(CARGO_ROW, vec![label(0.0, CARGO_LABEL), value(cargo)]),
+        row(
+            CREDITS_ROW,
+            vec![label(0.0, CREDITS_LABEL), value(amount(view.credits))],
+        ),
+        row(AMMO_ROW, vec![label(0.0, AMMO_LABEL), value(ammo)]),
+        row(
+            ENERGY_ROW,
+            vec![
+                label(ENERGY_COLUMN, ENERGY_LABEL),
+                value(amount(i64::from(view.fuel))),
+                label(ODDS_LABEL_COLUMN, ODDS_LABEL),
+                odds,
+            ],
+        ),
+    ]
 }
 
 /// Draws `picture` over `bounds`, or without one a dark backdrop with an
@@ -232,12 +323,14 @@ impl PlunderDialog {
             .collect();
         roles.push((
             TEXT_ITEM,
+            // Item 5's rect is painted black (@0x9296b). Its rows are
+            // [`Self::set_plunder`]'s.
             Role::ScrollText {
-                text: plunder_text(shown),
+                text: String::new(),
                 font: Font::Geneva,
-                size: TEXT_SIZE,
+                size: PLUNDER_TEXT_SIZE,
                 color: TEXT_COLOR,
-                backing: None,
+                backing: Some(TextBacking::BLACK_BOX),
             },
         ));
         let template = enabling(template, TAKE_BUTTONS.iter().map(|&(item, ..)| item));
@@ -257,10 +350,10 @@ impl PlunderDialog {
         Ok(plunder)
     }
 
-    /// Shows `shown`: item 5's text, and each button greyed while what
+    /// Shows `shown`: item 5's rows, and each button greyed while what
     /// it takes is not on board.
     pub fn set_plunder(&mut self, shown: &PlunderShown) {
-        self.dialog.set_text(TEXT_ITEM, &plunder_text(shown));
+        self.dialog.set_rows(TEXT_ITEM, plunder_rows(shown));
         for &(item, _, take) in &TAKE_BUTTONS {
             self.dialog.set_greyed(item, !shown.view.offers(take));
         }
@@ -534,7 +627,7 @@ mod tests {
 
     use super::*;
     use crate::draw::{DrawCommand, fill_command};
-    use crate::input::{Key, MouseButton};
+    use crate::input::{Key, MouseButton, ScrollDelta};
     use crate::sound::Sound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
@@ -560,8 +653,8 @@ mod tests {
     fn shown(view: PlunderView) -> PlunderShown {
         PlunderShown {
             view,
-            good: Some("Food".to_owned()),
-            outfit: Some("Rockets".to_owned()),
+            good: Some("food".to_owned()),
+            outfit: Some(("rocket".to_owned(), "rockets".to_owned())),
         }
     }
 
@@ -651,6 +744,51 @@ mod tests {
         );
     }
 
+    /// [`loaded`] with `change` made, as the dialog words it.
+    fn lines(change: impl FnOnce(&mut PlunderShown)) -> Vec<String> {
+        let mut shown = shown(loaded());
+        change(&mut shown);
+        dialog_of(&shown).lines().to_vec()
+    }
+
+    fn dialog_of(shown: &PlunderShown) -> PlunderDialog {
+        PlunderDialog::new(&stock(), shown, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds")
+    }
+
+    /// Each run in item 5: its text, its column and baseline relative to
+    /// the item, and its colour.
+    fn placed(dialog: &PlunderDialog) -> Vec<(String, f32, f32, Color)> {
+        let area = dialog.dialog().item_bounds(TEXT_ITEM).expect("the text");
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    font,
+                    size,
+                    wrap_width,
+                    color,
+                } if area.contains(origin) => {
+                    assert_eq!((font, size, wrap_width), (Font::Geneva, 9.0, None));
+                    let baseline = origin.y + size - area.min.y;
+                    Some((text, origin.x - area.min.x, baseline, color))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A trader's offer of `rounds` rounds, named or not.
+    fn ammo(rounds: u32, named: bool) -> nova_sim::AmmoOffer {
+        nova_sim::AmmoOffer {
+            slot: nova_sim::WeaponId(140),
+            rounds,
+            named: named.then_some(OutfitId(310)),
+        }
+    }
+
     #[test]
     fn it_says_what_is_on_board() {
         let dialog = dialog(loaded());
@@ -658,42 +796,221 @@ mod tests {
             dialog.lines(),
             [
                 "Select what to plunder from this ship:",
-                "",
-                "Cargo: 13 tons of Food",
-                "Ammo: 2 Rockets",
-                "Capture Odds: 43%",
+                "Cargo: 13 tons of food",
+                "Credits: 5,750",
+                "Ammo: 2 rockets",
+                "Energy: 170 Capture Odds: 43%",
             ]
         );
-        let single = PlunderView {
-            cargo: Some((Good::Commodity(0), 1)),
-            ammo: None,
-            ..loaded()
-        };
-        let text = plunder_text(&PlunderShown {
-            view: single,
-            good: None,
-            outfit: None,
-        });
         assert_eq!(
-            text,
-            "Select what to plunder from this ship:\r\rCargo: 1 ton of cargo\rAmmo: N/A\rCapture Odds: 43%"
-        );
-        let unnamed = plunder_text(&PlunderShown {
-            view: loaded(),
-            good: None,
-            outfit: None,
-        });
-        assert!(unnamed.contains("Ammo: 2 rounds"), "{unnamed}");
-        assert_eq!(
-            (PROMPT, CARGO_LABEL, AMMO_LABEL, ODDS_LABEL, NONE),
+            (
+                PROMPT,
+                CARGO_LABEL,
+                CREDITS_LABEL,
+                AMMO_LABEL,
+                ENERGY_LABEL,
+                ODDS_LABEL,
+                NONE
+            ),
             (
                 "Select what to plunder from this ship:",
                 "Cargo:",
+                "Credits:",
                 "Ammo:",
+                "Energy:",
                 "Capture Odds:",
-                "N/A"
+                "None"
             )
         );
+    }
+
+    /// `_PlunderDialogUpdate` @0x92bf2-0x92ccf: `LCName` for exactly 1
+    /// round, `LCPlural` for any other count, the count alone with no
+    /// outfit.
+    #[test]
+    fn the_ammunition_line_takes_the_outfits_name_by_the_count() {
+        let names = Some(("IR missile".to_owned(), "IR missiles".to_owned()));
+        for (rounds, outfit, line) in [
+            (1, names.clone(), "Ammo: 1 IR missile"),
+            (2, names.clone(), "Ammo: 2 IR missiles"),
+            (40, names.clone(), "Ammo: 40 IR missiles"),
+            (2, None, "Ammo: 2"),
+            (1, None, "Ammo: 1"),
+        ] {
+            let found = lines(|shown| {
+                shown.view.ammo = Some(ammo(rounds, outfit.is_some()));
+                shown.outfit.clone_from(&outfit);
+            });
+            assert_eq!(found[3], line);
+        }
+    }
+
+    /// @0x92a77-0x92b60: "ton" at 1 or less, and the good's name, which may
+    /// be missing.
+    #[test]
+    fn the_cargo_line_is_its_tons_and_lower_case_good() {
+        for (tons, good, line) in [
+            (1, Some("food"), "Cargo: 1 ton of food"),
+            (0, Some("food"), "Cargo: 0 ton of food"),
+            (2, Some("food"), "Cargo: 2 tons of food"),
+            (
+                13,
+                Some("medical supplies"),
+                "Cargo: 13 tons of medical supplies",
+            ),
+            (1, None, "Cargo: 1 ton of "),
+        ] {
+            let found = lines(|shown| {
+                shown.view.cargo = Some((Good::Commodity(0), tons));
+                shown.good = good.map(str::to_owned);
+            });
+            assert_eq!(found[1], line);
+        }
+    }
+
+    /// `_salvageCredits` above 0 by `_DrawCommaNumber` (@0x92b65-0x92bc1),
+    /// and `_salvageFuelQty` the same (@0x92d08-0x92d65).
+    #[test]
+    fn credits_and_energy_are_comma_numbers_above_0_and_none_otherwise() {
+        for (credits, line) in [
+            (5750, "Credits: 5,750"),
+            (1, "Credits: 1"),
+            (0, "Credits: None"),
+            (-40, "Credits: None"),
+        ] {
+            let found = lines(|shown| shown.view.credits = credits);
+            assert_eq!(found[2], line);
+        }
+        for (fuel, line) in [
+            (1200, "Energy: 1,200 Capture Odds: 43%"),
+            (1, "Energy: 1 Capture Odds: 43%"),
+            (0, "Energy: None Capture Odds: 43%"),
+        ] {
+            let found = lines(|shown| shown.view.fuel = fuel);
+            assert_eq!(found[4], line);
+        }
+    }
+
+    #[test]
+    fn its_rows_sit_on_the_originals_baselines_and_columns_in_its_colours() {
+        let run = |text: &str, x, baseline, color| (text.to_owned(), x, baseline, color);
+        assert_eq!(
+            placed(&dialog(loaded())),
+            [
+                run(PROMPT, 0.0, 12.0, LABEL_COLOR),
+                run("Cargo:", 0.0, 28.0, LABEL_COLOR),
+                run("13 tons of food", 50.0, 28.0, Color::WHITE),
+                run("Credits:", 0.0, 42.0, LABEL_COLOR),
+                run("5,750", 50.0, 42.0, Color::WHITE),
+                run("Ammo:", 0.0, 56.0, LABEL_COLOR),
+                run("2 rockets", 50.0, 56.0, Color::WHITE),
+                run("Energy:", 1.0, 70.0, LABEL_COLOR),
+                run("170", 50.0, 70.0, Color::WHITE),
+                run("Capture Odds:", 120.0, 70.0, LABEL_COLOR),
+                run("43%", 195.0, 70.0, Color::WHITE),
+            ]
+        );
+        assert_eq!(LABEL_COLOR, Color::rgba(0xC0, 0xC0, 0xC0, 255));
+        assert_eq!(NONE_COLOR, Color::rgba(0x80, 0x80, 0x80, 255));
+    }
+
+    #[test]
+    fn nothing_of_a_kind_on_board_is_none_in_grey() {
+        let empty = PlunderView {
+            credits: 0,
+            cargo: None,
+            ammo: None,
+            fuel: 0,
+            ..loaded()
+        };
+        let nones: Vec<_> = placed(&dialog(empty))
+            .into_iter()
+            .filter(|(text, ..)| text == NONE)
+            .collect();
+        assert_eq!(
+            nones,
+            [28.0, 42.0, 56.0, 70.0].map(|baseline| (NONE.to_owned(), 50.0, baseline, NONE_COLOR))
+        );
+    }
+
+    #[test]
+    fn its_rows_move_with_the_dialog() {
+        let fallback =
+            PlunderDialog::fallback(&shown(loaded()), ButtonStyle::STOCK, Rc::new(MonoMetrics));
+        assert_eq!(placed(&fallback), placed(&dialog(loaded())));
+        assert_ne!(
+            fallback.dialog().item_bounds(TEXT_ITEM),
+            dialog(loaded()).dialog().item_bounds(TEXT_ITEM)
+        );
+    }
+
+    /// `PaintRect` over item 5 (@0x9296b), under the text.
+    #[test]
+    fn its_text_is_drawn_over_a_black_box_filling_item_5() {
+        let dialog = dialog(loaded());
+        let area = dialog.dialog().item_bounds(TEXT_ITEM).expect("the text");
+        let commands = drawn(&dialog);
+        let fill = commands
+            .iter()
+            .position(|command| *command == fill_command(area, Color::BLACK))
+            .expect("filled black");
+        let text = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Text { origin, .. } if area.contains(*origin))
+            })
+            .expect("the prompt");
+        assert!(fill < text, "the box is under the text");
+    }
+
+    fn scrolled(dialog: &PlunderDialog) -> Option<usize> {
+        dialog.dialog().text(TEXT_ITEM).map(ScrollText::first)
+    }
+
+    /// Item 5 stays a scrolling box, though the original only draws into
+    /// it: the keep-dialog-text-scrolling decision. Its rows fit stock's
+    /// box, so only an item 5 too short for them moves.
+    #[test]
+    fn arrow_keys_and_the_wheel_scroll_an_item_5_too_short_for_its_rows() {
+        let mut template = stock();
+        let area = &mut template.items[TEXT_ITEM - 1].bounds;
+        area.max.y = area.min.y + 36.0;
+        let mut dialog = PlunderDialog::new(
+            &template,
+            &shown(loaded()),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        dialog.input(&key(Key::Down));
+        assert_eq!(scrolled(&dialog), Some(1));
+        let shown_rows: Vec<String> = placed(&dialog).into_iter().map(|run| run.0).collect();
+        assert_eq!(
+            shown_rows,
+            ["Cargo:", "13 tons of food", "Credits:", "5,750"],
+            "only the rows that fit"
+        );
+        dialog.input(&Input::Scroll {
+            delta: ScrollDelta::Lines(1.0),
+            at: center(dialog.dialog(), TEXT_ITEM),
+        });
+        assert_eq!(scrolled(&dialog), Some(2));
+        dialog.input(&key(Key::Up));
+        assert_eq!(scrolled(&dialog), Some(1));
+        assert_eq!(dialog.take_take(), None, "scrolling takes nothing");
+    }
+
+    #[test]
+    fn on_stock_item_5_its_rows_fit_and_nothing_moves_them() {
+        let mut dialog = dialog(loaded());
+        let before = placed(&dialog);
+        dialog.input(&key(Key::Down));
+        dialog.input(&Input::Scroll {
+            delta: ScrollDelta::Lines(1.0),
+            at: center(dialog.dialog(), TEXT_ITEM),
+        });
+        assert_eq!(scrolled(&dialog), Some(0));
+        assert_eq!(placed(&dialog), before);
     }
 
     /// A pointer click plays nothing: `_TrackPlunderButtons` @0x2732a
@@ -805,7 +1122,7 @@ mod tests {
             ..loaded()
         };
         dialog.set_plunder(&shown(taken));
-        assert_eq!(dialog.lines()[2], "Cargo: N/A");
+        assert_eq!(dialog.lines()[1], "Cargo: None");
         let cargo = center(dialog.dialog(), 2);
         click(&mut dialog, cargo);
         assert_eq!(dialog.take_take(), Some(Take::Miss), "greyed now");
