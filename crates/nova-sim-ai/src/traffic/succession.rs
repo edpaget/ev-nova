@@ -33,10 +33,12 @@
 //! 3. **It leads** (@0x8934a-0x89474): it leaves its fleet, +0x50 = -1.0.
 //!    Under the lost lead's own government (both not independent and
 //!    equal, @0x8938a-0x893ae), it takes over the lead's goal and
-//!    substate, target and travel stellar (@0x893b0-0x893e1), read from
-//!    the lead's record, there or gone ([`gone`](super::gone)); goal 0xa
-//!    with no leader is a hold ([`Goal::Hold`]). Otherwise its own goal
-//!    maps (@0x893ea-0x8945f):
+//!    substate, target and travel stellar (@0x893b0-0x893e1, as
+//!    [`travel::is_set`] reads it, so a lead emerging or bound for a
+//!    stellar counts), read from the lead's record, there or gone
+//!    ([`gone`](super::gone)); goal 0xa with no leader is a hold
+//!    ([`Goal::Hold`]). Otherwise its own goal maps, and it keeps its own
+//!    travel stellar (@0x893ea-0x8945f):
 //!    - following its lead's jump (goal 0xb) → its own jump (goal 2, sub
 //!      4);
 //!    - a fighter's return or a formation (goals 5, 0xa, 0xc) → goal 0;
@@ -79,9 +81,9 @@ use std::collections::BTreeSet;
 use super::npc::{AiType, Npc, NpcId};
 use super::warp_out::WarpGoal;
 use super::{Traffic, World};
-use crate::ai::Goal;
 use crate::ai::pursuit::Pursuit;
 use crate::ai::regroup::Kept;
+use crate::ai::{Goal, travel};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
@@ -188,6 +190,24 @@ impl Npc {
         self.kept_escort_ai = false;
     }
 
+    /// It loses a lead the player captured, `_DoShipCapture`'s block for
+    /// each ship of that lead (@0x41353-0x41398): its travel stellar,
+    /// target and provocation go, and it leaves its fleet, its class's AI
+    /// type written over a bribe's, as that write reads no AI type. Its
+    /// goal is kept, but for one that holds its target ([`Goal::quarry`]),
+    /// which idles, as the original's high level idles a fight with no
+    /// target.
+    pub fn lose_captured_lead(&mut self) {
+        self.overwrite_bribe();
+        self.leave_fleet();
+        self.target = None;
+        self.travel_set = false;
+        self.provoked = 0.0;
+        if self.goal.quarry().is_some() {
+            self.goal = Goal::Idle;
+        }
+    }
+
     /// It follows `successor`, its lost lead's successor (see the module
     /// docs): led by it, keeping with it or following its jump in place of
     /// the lost lead, off any carrier, and in the regroup pause, its
@@ -233,7 +253,7 @@ impl Npc {
                 goal => goal,
             };
             self.target = lead.target;
-            self.travel_set = lead.travel_set;
+            self.travel_set = travel::is_set(lead);
             self.warp.goal = lead.warp.goal;
             self.pursuit = lead.pursuit;
             self.docking = lead.docking;
@@ -562,6 +582,62 @@ mod tests {
         assert_eq!(taker.ai_type, AiType::Warship);
         assert_eq!(taker.reserves.shield.max, 30.0, "its class's capacity");
         assert_eq!(taker.warp.stage, GIVEN_UP_STAGE);
+    }
+
+    #[test]
+    fn a_successor_copies_a_lead_coming_out_of_a_gate() {
+        // The lead's +0x6c holds its gate (@0x8954a), which the engine
+        // keeps in `emerges_from`, not the flag.
+        let mut traffic = taking_over(REBELS, Goal::Hold);
+        let lead = of_mut(&mut traffic, 0);
+        lead.travel_set = false;
+        lead.emerges_from = Some(crate::catalog::StellarId(129));
+        think(&mut traffic);
+        assert!(of(&traffic, 1).travel_set);
+    }
+
+    #[test]
+    fn under_another_government_a_successor_keeps_its_own() {
+        for own in [false, true] {
+            let mut traffic = taking_over(FEDS, Goal::Hold);
+            of_mut(&mut traffic, 0).travel_set = !own;
+            of_mut(&mut traffic, 1).travel_set = own;
+            think(&mut traffic);
+            assert_eq!(of(&traffic, 1).leader, None);
+            assert_eq!(of(&traffic, 1).travel_set, own);
+        }
+    }
+
+    #[test]
+    fn a_ship_whose_lead_was_captured_loses_its_stellar_target_provocation_and_bribe() {
+        // `_DoShipCapture` @0x41353-0x41398: +0x6c, +0x70, +0x96 and +0x9a,
+        // and +0x88 its class's whatever a bribe wrote.
+        let mut led = follower(FEDS, 300);
+        led.target = Some(PLAYER);
+        led.travel_set = true;
+        led.provoked = 5.0;
+        led.take_bribe();
+        let goal = led.goal;
+        led.lose_captured_lead();
+        assert_eq!(led.leader, None);
+        assert_eq!(led.target, None);
+        assert!(!led.travel_set);
+        assert_eq!(led.provoked, 0.0);
+        assert!(!led.spared);
+        assert_eq!(led.ai_type, AiType::Warship, "its class's, not the bribe's");
+        assert_eq!(led.goal, goal, "no goal is written");
+    }
+
+    #[test]
+    fn a_ship_whose_lead_was_captured_lets_go_of_a_quarry_its_goal_held() {
+        // The engine's fight holds +0x70 in the goal: with no target the
+        // original's high level idles it (goal 3 @0x8e228-0x8e234).
+        for goal in [Goal::Attack(PLAYER), Goal::Flee(PLAYER)] {
+            let mut led = follower(FEDS, 300);
+            led.goal = goal;
+            led.lose_captured_lead();
+            assert_eq!(led.goal, Goal::Idle, "{goal:?}");
+        }
     }
 
     #[test]

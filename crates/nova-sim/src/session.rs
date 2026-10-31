@@ -5871,7 +5871,7 @@ impl Session {
         self.ship.secondary = None;
         for other in self.space.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
-                other.leader = None;
+                other.lose_captured_lead();
             }
         }
         // Use As My Ship loses the person for good (@0x41180), whatever
