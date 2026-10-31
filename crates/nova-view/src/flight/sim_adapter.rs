@@ -755,6 +755,7 @@ mod tests {
             FlightCommand::ReloadOfferDesc(MissionId(130)),
             FlightCommand::PressMissionInfo,
             FlightCommand::PressPlayerInfo,
+            FlightCommand::PressFaded(nova_sim::flight_frame::FadedPress::PlayerInfo),
             FlightCommand::OpenPlayerInfo,
             FlightCommand::Jettison { all: true },
             FlightCommand::Assign(nova_sim::Assignment::Escort),

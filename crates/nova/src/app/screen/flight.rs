@@ -260,10 +260,12 @@ impl AppScreen {
     /// ([`AppScreen::return_to_main_screen`]), or, without one, to the side
     /// flight was entered from, which fades in from black. A board the
     /// tick made, the Board key held, opens as a press's does
-    /// ([`AppScreen::open_frame_boarding`]).
+    /// ([`AppScreen::open_frame_boarding`]), and so does a dialog a key
+    /// read past a jump asked for ([`AppScreen::open_frame_dialogs`]).
     pub(super) fn after_flight_tick(&mut self) {
         self.settle_flight_movie();
         self.open_frame_boarding();
+        self.open_frame_dialogs();
         if self
             .flight
             .as_mut()

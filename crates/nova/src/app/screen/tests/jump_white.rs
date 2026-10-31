@@ -16,16 +16,64 @@ use nova_view::flight::JumpEffect;
 /// Beta, flown out past the minimum jump distance, J pressed and ticked
 /// until the warp has lit the screen white.
 fn lit() -> AppScreen {
-    let mut built = game_data_fork(false, false, false, 100, b"", b"", None).build();
+    let built = jump_ready(&game_data_fork(false, false, false, 100, b"", b"", None));
+    let mut screen = with_dialogs(loaded_bytes(built.bytes));
+    fly(&mut screen);
+    plot_beta(&mut screen);
+    lit_from(screen)
+}
+
+/// `fork` built with Alpha (128) linking Beta (129) and ship 128 fast.
+fn jump_ready(fork: &ForkBuilder) -> nova_rsrc::fixture::BuiltFork {
+    let mut built = fork.build();
     let alpha = built.layout.data_entry(System::TYPE, 128) + 4;
     built.put_u16(alpha + 0x04, 129);
     let fast = built.layout.data_entry(Ship::TYPE, 128) + 4;
     for (at, value) in [(0x04, 1500), (0x06, 1000), (0x08, 30), (0x0A, 300)] {
         built.put_u16(fast + at, value);
     }
-    let mut screen = with_dialogs(loaded_bytes(built.bytes));
-    fly(&mut screen);
+    built
+}
+
+/// [`lit`], the pilot in Ada's first flight off Alpha Prime with mission
+/// 130 active.
+fn lit_on_a_mission(store: &MemoryPilots) -> AppScreen {
+    let fork = game_data_fork(true, true, true, 100, b"", b"", None)
+        .resource(
+            Mission::TYPE,
+            130,
+            Some(b"Venue job"),
+            &venue_mission(SPACEPORT),
+        )
+        .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job 130."));
+    let mut screen = landed_at_venues(store, loaded_bytes(jump_ready(&fork).bytes));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(active(&screen), [MissionId(130)]);
+    let leave = spaceport(&screen)
+        .dialog()
+        .expect("laid out")
+        .item_bounds(LEAVE_ITEM)
+        .expect("Leave")
+        .center();
+    for pressed in [true, false] {
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: leave,
+        });
+    }
+    assert_eq!(screen.showing(), Showing::Flight);
+    for _ in 0..120 {
+        screen.tick(TICK);
+    }
     plot_beta(&mut screen);
+    lit_from(screen)
+}
+
+/// `screen` flying with a course to Beta, flown out past the minimum jump
+/// distance, J pressed and ticked until the warp has lit the screen white.
+fn lit_from(mut screen: AppScreen) -> AppScreen {
     screen.input(&key(Key::Up, true));
     for _ in 0..1800 {
         if ship(&screen).position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
@@ -90,6 +138,82 @@ fn black(screen: &AppScreen) -> Option<u8> {
             }
             _ => None,
         })
+}
+
+/// Ticks `screen` until its jump has arrived, or something opens.
+fn tick_past_the_arrival(screen: &mut AppScreen) {
+    for _ in 0..1800 {
+        let under_way = flight(screen).session().expect("flying").jumping();
+        if under_way.is_none() || screen.showing() != Showing::Flight {
+            return;
+        }
+        screen.tick(TICK);
+    }
+    panic!("the jump never arrived");
+}
+
+/// A tap of `k` on `screen`.
+fn tapped(screen: &mut AppScreen, k: Key) {
+    screen.input(&key(k, true));
+    screen.input(&key(k, false));
+}
+
+#[test]
+fn m_i_p_and_y_under_the_warps_white_leave_the_game_showing_flight() {
+    let mut screen = lit();
+    for k in [
+        MAP,
+        nova_view::ui::mission_info::MISSION_INFO_KEY,
+        PLAYER_INFO_KEY,
+        Key::Char('y'),
+    ] {
+        tapped(&mut screen, k);
+        assert_eq!(screen.showing(), Showing::Flight, "{k:?}");
+        screen.tick(TICK);
+        screen.tick(TICK);
+        assert_eq!(screen.showing(), Showing::Flight, "{k:?} ticked");
+    }
+}
+
+#[test]
+fn m_after_the_arrival_opens_the_map_and_held_through_it_does_not() {
+    let mut screen = lit();
+    screen.input(&key(MAP, true));
+    tick_past_the_arrival(&mut screen);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Flight, "held, it lost its read");
+    screen.input(&key(MAP, false));
+    tapped(&mut screen, MAP);
+    assert_eq!(screen.showing(), Showing::FlightMap);
+}
+
+#[test]
+fn p_pressed_on_the_arrivals_pass_and_held_opens_its_dialog_from_the_tick() {
+    // Pressed afresh on every pass, as one down earlier latched.
+    let mut screen = lit();
+    while flight(&screen)
+        .session()
+        .expect("flying")
+        .jumping()
+        .is_some()
+    {
+        screen.input(&key(PLAYER_INFO_KEY, false));
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        screen.tick(TICK);
+    }
+    assert_eq!(screen.showing(), Showing::Flight, "the arrival's pass");
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::PlayerInfo);
+}
+
+#[test]
+fn i_held_through_the_arrival_opens_mission_info_from_the_tick() {
+    let store = MemoryPilots::new();
+    let mut screen = lit_on_a_mission(&store);
+    screen.input(&key(nova_view::ui::mission_info::MISSION_INFO_KEY, true));
+    tick_past_the_arrival(&mut screen);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::MissionInfo);
 }
 
 #[test]

@@ -88,6 +88,11 @@ impl<
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
     /// before the frame is drawn.
+    ///
+    /// The keys kept through a jump are read at the head of the keys'
+    /// frame and right after the steps (the `faded_keys` module): a key
+    /// read at the head that opens something ends the tick, as no step
+    /// runs under it.
     fn tick(&mut self, dt: Duration) {
         self.tick_then(dt);
     }

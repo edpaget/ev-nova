@@ -406,9 +406,17 @@ impl AppScreen {
         if let Some(stellar) = flight.take_landing() {
             self.show_spaceport(stellar);
         }
-        if let Some(shown) = self.flight.as_mut().and_then(FlightView::take_boarding) {
-            self.open_plunder(&shown);
-        }
+        self.open_frame_boarding();
+        self.open_frame_dialogs();
+        self.drop_closed_missions();
+        ScreenAction::None
+    }
+
+    /// Opens what a key asked of flight, by a press or from flight's tick
+    /// (`nova_view::flight::FlightView`'s `faded_keys` module: a key held
+    /// past a jump): the comm dialog, the escort dialog, the planet comm
+    /// dialog, the player info or the mission info.
+    pub(super) fn open_frame_dialogs(&mut self) {
         if let Some(view) = self.flight.as_mut().and_then(FlightView::take_hail) {
             self.open_comm(&view);
         }
@@ -421,9 +429,6 @@ impl AppScreen {
         }
         if let Some(view) = self.flight.as_mut().and_then(FlightView::take_planet_comm) {
             self.open_planet_comm(&view);
-        }
-        if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
-            self.open_offer(prompt);
         }
         if self
             .flight
@@ -441,8 +446,6 @@ impl AppScreen {
             missions.open_info(info);
             self.load_flight_info_text();
         }
-        self.drop_closed_missions();
-        ScreenAction::None
     }
 
     /// The mission dialogs over flight, built from the interface file's
