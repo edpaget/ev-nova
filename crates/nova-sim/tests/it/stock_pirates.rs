@@ -12,6 +12,10 @@
 //! - The Pirates are xenophobic (`Flags` 0x0001), so their warship takes
 //!   an intact Federation Shuttle through the warship's pick, and plunders
 //!   it (`InherentAI` 1, a crew of 1), as it plunders one disabled first.
+//! - Three stock missions' escorts (`ShipBehav` 1) think as pirates once
+//!   their mission ends: a plundering government's `InherentAI` 3 classes,
+//!   whose travel stellar (+0x6c) then reads as the player's slot in
+//!   formation, or -1 held (see `nova_sim::ai::travel`).
 
 use crate::common;
 
@@ -24,6 +28,7 @@ use nova_sim::traffic::npc::{AiType, Npc, NpcId};
 use nova_sim::traffic::table::kind;
 use nova_sim::{
     Behaviour, Condition, Goal, GovtId, NovaAi, PilotCatalog, Rulebook, ShipId, ShipRef,
+    TrafficCatalog,
 };
 use nova_sim_base::fixture::Draws;
 
@@ -117,6 +122,46 @@ fn every_stock_class_carries_its_crew_and_inherent_ai_on_its_hull() {
     assert_eq!(crew(169), Some(0), "a Wraith");
     assert_eq!(crew(895), Some(1), "the escape pod has a crew");
     assert_eq!(crew(128), Some(1), "the Shuttle");
+}
+
+#[test]
+fn three_stock_escort_missions_fly_ships_that_plunder() {
+    let Some(data) = opened() else {
+        return;
+    };
+    let govts = Governments::read(&data);
+    let ships = data.ships();
+    let warship = |id: ShipId| {
+        ships
+            .iter()
+            .any(|ship| ship.id == id && ship.inherent_ai == 3)
+    };
+    let pirates: Vec<(i16, i16, i16, Vec<i16>)> = data
+        .missions()
+        .iter()
+        .filter(|mission| mission.ships.behav == 1)
+        .filter_map(|mission| {
+            let dude = data.dude(mission.ships.dude?)?;
+            let mut classes: Vec<i16> = dude
+                .ships
+                .iter()
+                .map(|&(ship, _)| ship)
+                .filter(|&ship| warship(ship))
+                .map(|ship| ship.0)
+                .collect();
+            classes.dedup();
+            let plunders = govts.flag(dude.govt, PLUNDERS) && !classes.is_empty();
+            plunders.then_some((mission.id.0, mission.ships.dude?.0, dude.govt?.0, classes))
+        })
+        .collect();
+    assert_eq!(
+        pirates,
+        [
+            (668, 221, 188, vec![251]),
+            (807, 266, 176, vec![289]),
+            (808, 266, 176, vec![289]),
+        ]
+    );
 }
 
 #[test]
