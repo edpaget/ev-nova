@@ -190,8 +190,9 @@ impl EscapePods {
         });
     }
 
-    /// Draws each pod shown, as `looks` says, where `camera` shows it,
-    /// murked as the player sees it, `seen` ([`SeenMurk::at`]), as
+    /// Draws each pod shown, as `looks` says, where `camera` places it, at
+    /// whole pixels by its sheet's sides ([`Camera::sprite_centre`],
+    /// `_HandleEscapePods` @0x39ef0-0x39f7d), murked as the player sees it, `seen` ([`SeenMurk::at`]), as
     /// `_HandleEscapePods` murks it at its position (@0x39f90-0x39fbc)
     /// before its fade.
     pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks, seen: SeenMurk) {
@@ -204,7 +205,7 @@ impl EscapePods {
             };
             let colorize = seen.at(Vec2::new(pod.at.x, pod.at.y));
             let frame = sheet.image.frame(pod.frame);
-            let at = camera.world_to_screen(pod.at);
+            let at = camera.sprite_centre(pod.at, sheet.size());
             let blend = if pod.life >= POD_FADE {
                 Blend::Normal
             } else {
@@ -236,6 +237,7 @@ mod tests {
     use crate::DrawCommand;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
+    use crate::system::camera::Anchor;
 
     /// Draws its script, then the last outcome.
     #[derive(Default)]
@@ -280,6 +282,38 @@ mod tests {
             &mut script(draws),
         );
         pods
+    }
+
+    #[test]
+    fn a_pod_is_placed_at_whole_pixels_by_its_sheets_own_sides() {
+        // At (103.5, 50), so (103.25, 50.5) from the camera, truncated to
+        // (103, 50): (518, 434) less (15, 14) is the top left (503, 420).
+        let pods = spawned(&[20, 90, 5]);
+        assert_eq!(pods.pods()[0].at, Point::new(103.5, 50.0));
+        let sized = Looks {
+            pod: Some(Ok(EffectSheet {
+                frame_width: 31,
+                frame_height: 29,
+                ..*looks().pod_sheet().expect("read")
+            })),
+            ..Looks::default()
+        };
+        let camera = Camera::centred_on(Point::new(0.25, -0.5)).with_anchor(Anchor::PlayAreaCentre);
+        let clear = SeenMurk {
+            viewer: Vec2::ZERO,
+            murk: 0,
+            colour: 0,
+        };
+        let mut list = DrawList::new();
+        pods.draw(&mut list, &camera, &sized, clear);
+        let drawn: Vec<Point> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Sprite { center, .. } => Some(center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, [Point::new(518.5, 434.5)]);
     }
 
     #[test]

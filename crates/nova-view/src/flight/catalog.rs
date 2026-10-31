@@ -284,6 +284,8 @@ pub struct StarSheet {
 pub struct SmokeSheet {
     /// The `cicn` of its first frame.
     pub first_icon: i16,
+    /// Each frame's width and height: a master of `cicn`s has one a frame.
+    pub sizes: [(u32, u32); 8],
 }
 
 /// The `cicn` of smoke set 0's first frame (@0x2184b).
@@ -299,6 +301,16 @@ impl SmokeSheet {
     #[must_use]
     pub fn icon(self, frame: u8) -> i16 {
         self.first_icon + i16::from(frame)
+    }
+
+    /// Its frame `frame`'s size, (width, height): what a puff on that
+    /// frame is placed by. No frame past the last has one.
+    #[must_use]
+    pub fn size(self, frame: u8) -> (u32, u32) {
+        self.sizes
+            .get(usize::from(frame))
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -863,6 +875,7 @@ mod tests {
 
         fn smoke_sheet(&self, set: u8) -> Option<SmokeSheet> {
             Some(SmokeSheet {
+                sizes: [(0, 0); 8],
                 first_icon: FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set),
             })
         }
@@ -978,10 +991,10 @@ mod tests {
         );
         let smokes: Vec<_> = looks.smokes.keys().copied().collect();
         assert_eq!(smokes, [0, 1], "only sets 0 and 1 are asked for");
-        assert_eq!(looks.smoke_set(1), Some(SmokeSheet { first_icon: 1008 }));
+        let set_1 = looks.smoke_set(1).expect("set 1");
+        assert_eq!((set_1.first_icon, set_1.icon(7)), (1008, 1015));
         assert_eq!(looks.smoke_set(2), None);
         assert_eq!(looks.smoke_set(-1), None);
-        assert_eq!(SmokeSheet { first_icon: 1008 }.icon(7), 1015);
         assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
             smokes: BTreeMap::default(),

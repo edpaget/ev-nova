@@ -1030,6 +1030,7 @@ impl CombatLooks for FakeCatalog {
     fn smoke_sheet(&self, set: u8) -> Option<crate::flight::catalog::SmokeSheet> {
         (set < 2).then(|| crate::flight::catalog::SmokeSheet {
             first_icon: 1000 + 8 * i16::from(set),
+            sizes: [(0, 0); 8],
         })
     }
 
