@@ -31,6 +31,16 @@
 //!   (`_HandleShip` @0x3390a-0x3394e). A ship jumping out or a fighter
 //!   docking is let go by every slot in that pass, as the original frees
 //!   them in the AI loop (see the traffic's `gone` module).
+//! - **The let-go before the flight** is the original's order, but the
+//!   ship flies the same either way: a flight steers by the ship its goal
+//!   names and reads no target (+0x70), and the fly half's own reads of it
+//!   ([`Traffic::begin_fly`](crate::traffic::Traffic::begin_fly)) come
+//!   before every slot's test. The one trace of the order is a flight that
+//!   drops the target itself, giving up a followed jump
+//!   ([`warp_out`](crate::traffic::warp_out)): a test after it would find
+//!   nothing to note on a ship gone in the AI loop
+//!   ([`GoneShip::let_go`](crate::traffic::gone::GoneShip::let_go)), so the
+//!   ship's next think would not read that slot.
 //! - **A ship whose flight ends it** (it lands, jumps, enters a gate or
 //!   docks) leaves at once: its slot takes no step, and no later slot's
 //!   fire or shockwave sees it.
@@ -141,7 +151,7 @@ impl Session {
         while let Some((berth, id)) = self.space.next_in_loop(after) {
             after = Some(berth);
             // `_HandleShip`'s slot test (@0x33865) comes before its move
-            // (@0x34274).
+            // (@0x34274). No flight reads the target (see the module docs).
             let player_active = self.ship.condition.active();
             self.space.traffic.let_go_at_step(id, player_active);
             if let Some(fly) = fly.as_mut() {
