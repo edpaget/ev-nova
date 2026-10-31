@@ -1561,6 +1561,19 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn begging_a_defence_ship_is_refused_with_only_the_press_beep() {
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        npc(&mut session).defends = Some(crate::catalog::StellarId(128));
+        hail(&mut session, &catalog);
+        session.take_sounds();
+        let view = press(&mut session, &catalog, 1, 36);
+        assert_eq!(view.reply, "In your dreams, pal.");
+        assert_eq!(view.asking, None, "no price open");
+        assert_eq!(session.take_sounds(), [SimSound::CommPressed]);
+    }
+
+    #[test]
     fn a_press_while_a_price_is_asked_or_of_no_option_is_silent() {
         let catalog = hailable();
         let mut session = pirate(&catalog, PIRATES);
