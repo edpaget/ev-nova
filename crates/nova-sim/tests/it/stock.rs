@@ -2591,10 +2591,15 @@ fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_
             180.0,
         )
     };
-    let player = nova_sim::combat::defence::Side {
-        ship: ShipRef::Player,
-        fleet: ShipRef::Player,
-        govt: None,
+    let player = nova_sim::combat::defence::Guard {
+        side: nova_sim::combat::defence::Side {
+            ship: ShipRef::Player,
+            fleet: ShipRef::Player,
+            govt: None,
+        },
+        leader: None,
+        threatens_player: false,
+        scanner: false,
     };
     let shots = [at_player];
     let chosen = nova_sim::combat::defence::choose(

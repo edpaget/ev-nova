@@ -3,8 +3,9 @@
 //! is the carrier or a ship the carrier leads (@0x3dd0f-0x3dd47), goal 0
 //! (`_AISetup` @0x7f3e8), gliding its bay's `Count` until a think ends it
 //! (@0x3d843-0x3d85b), and still of its carrier's lead's side for hits,
-//! sparing and point defence (`_ShipsShareParent` @0x7926-0x79c1); the
-//! player's fighters glide too. A player's fighter never launches under
+//! sparing and `Allegiance` (`_ShipsShareParent` @0x7926-0x79c1), though
+//! its point defence defends its carrier (`pd_parent`); the player's
+//! fighters glide too. A player's fighter never launches under
 //! Return to Hangar, which a joiner's class order drops (`_EscortAI`
 //! @0x83b18), so only its Hold glide is pinned.
 

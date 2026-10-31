@@ -924,7 +924,7 @@ pub struct Fighter<'a> {
     pub ship: ShipRef,
     /// Its ship type.
     pub ship_type: ShipId,
-    /// Its fleet: the lead it escorts, or itself.
+    /// Its fleet: the root of its chain of leads, or itself.
     pub fleet: ShipRef,
     /// Its government, or `None` for an independent ship or the player.
     pub govt: Option<GovtId>,
@@ -2409,7 +2409,7 @@ impl Combat {
             room,
             &mut |spec| {
                 if let Some(missile) =
-                    defence::choose(side, &state, &hull, spec, shots, rule, govts)
+                    defence::choose(guard, &state, &hull, spec, shots, rule, govts)
                 {
                     return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
                 }
@@ -3257,10 +3257,10 @@ impl Fighter<'_> {
         }
     }
 
-    /// The ship as its point defence's ship branch reads it.
+    /// The ship as its point defence reads it.
     fn guard(&self) -> Guard {
         Guard {
-            ship: self.ship,
+            side: self.side(),
             leader: self.leader,
             threatens_player: self.threatens_player,
             scanner: self.cloak_scanner,
@@ -3695,6 +3695,7 @@ mod tests {
     mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
+    mod pd_parent;
     mod phase;
     mod planet_hits;
     mod plunder_fire;

@@ -572,6 +572,8 @@ mod operator_moves;
 mod outbox;
 mod outfits;
 mod owners_unset;
+#[cfg(test)]
+mod pd_parent;
 mod person_offers;
 mod persons;
 mod pilot_panel;

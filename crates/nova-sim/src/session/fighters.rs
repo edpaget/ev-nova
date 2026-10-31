@@ -42,9 +42,11 @@
 //!   [`FleetEscortAi`](crate::FleetEscortAi) under the carrier, or by the
 //!   other reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
 //!   by [`CarriedAi`](crate::CarriedAi). Its side for hits, sparing and
-//!   point defence is still its carrier's lead's: the root of its chain
-//!   of leads (`_ShipsShareParent` @0x7926-0x79c1,
-//!   [`Npc::fleet_among`]).
+//!   [`Allegiance`](crate::combat::defence::Allegiance) is still its
+//!   carrier's lead's: the root of its chain of leads
+//!   (`_ShipsShareParent` @0x7926-0x79c1, [`Npc::fleet_among`]). Its point
+//!   defence defends its carrier, its parent one level up
+//!   (`_HandleShipPointDefense` @0x3940e-0x39426).
 //!
 //! **Every fighter** launches full at a fighter's capacities
 //! ([`RuleKey::FighterCapacity`]) and glides: its AI wait is its bay's

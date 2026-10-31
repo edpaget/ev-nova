@@ -94,9 +94,10 @@ fn an_npcs_launch_comes_after_a_lower_slots_point_defence_and_before_a_higher_sl
         bays: true,
         ..Trigger::default()
     };
-    // C flies in A's fleet, so defends against a missile aimed at A.
+    // C follows A, so defends against a missile aimed at A.
     let mut wing = defender(3, -30.0);
     wing.fleet = A;
+    wing.leader = Some(A);
     let mut ships = [
         carrying(2, 30.0, launching),
         wing,
@@ -272,6 +273,7 @@ fn launch_between_defenders(combat: &mut Combat) -> [Ship; 4] {
     };
     let mut wing = defender(3, -30.0);
     wing.fleet = A;
+    wing.leader = Some(A);
     let mut ships = [
         defender(1, 0.0),
         carrying(2, 30.0, launching),
