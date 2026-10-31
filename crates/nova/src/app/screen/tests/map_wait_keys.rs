@@ -317,3 +317,42 @@ fn caps_lock_during_a_port_maps_wait_toggles_double_time_once() {
     end_the_wait(&mut screen);
     assert!(flight(&screen).double_time(), "on, not toggled back");
 }
+
+#[test]
+fn a_key_that_opens_a_flushing_screen_takes_its_release_along() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_shipyard(&store);
+    start_the_wait(&mut screen);
+    tap(&mut screen, Key::Char('s'));
+    end_the_wait(&mut screen);
+    assert!(spaceport(&screen).open_shipyard().is_some(), "opened");
+    assert!(!screen.keys_held.s, "S isn't left down");
+}
+
+#[test]
+fn a_mission_text_over_flight_closed_by_a_replayed_key_drops_those_behind_it() {
+    let mut screen = offered_over_flight();
+    let text = |text: &str| DescShown {
+        text: text.to_owned(),
+        graphic: None,
+        movie: None,
+    };
+    screen.show_over_flight(vec![text("One."), text("Two.")]);
+    assert_eq!(screen.showing(), Showing::MissionText);
+    let shown = |screen: &AppScreen| {
+        screen
+            .missions
+            .as_ref()
+            .and_then(|dialogs| dialogs.text())
+            .map(|dialog| dialog.lines().join(" "))
+    };
+    // The texts have no map of their own, so the offer's is under them.
+    let flight = screen.flight.as_mut().expect("flying");
+    flight.open_dialog_map(nova_view::flight::MapOpener::Offer(MissionId(130)));
+    screen.input(&key(Key::Escape, true));
+    assert!(self::flight(&screen).map_waiting());
+    tap(&mut screen, Key::Enter);
+    tap(&mut screen, Key::Enter);
+    end_the_wait(&mut screen);
+    assert_eq!(shown(&screen).as_deref(), Some("Two."));
+}

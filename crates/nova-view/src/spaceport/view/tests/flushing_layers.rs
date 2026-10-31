@@ -132,3 +132,11 @@ fn a_mission_text_is_a_stage_and_no_layer() {
     view.input(&key(Key::Enter));
     assert_eq!(view.text_stages(), 0);
 }
+
+#[test]
+fn a_services_placeholder_stands_for_a_dialog_that_flushes() {
+    let mut view = earth();
+    click_item(&mut view, 11);
+    assert!(view.open_service().is_some());
+    assert_eq!(view.flushing_layers(), 1);
+}
