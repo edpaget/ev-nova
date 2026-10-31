@@ -28,13 +28,15 @@
 //! makes. A ship on the player's jump is cancelled (@0x900e3-0x9011e) and
 //! freed the frame after, which the gate gives for free.
 //!
-//! **A mission escort let go** ([`Npc::mission_let_go`]). `_AIDispatch`
-//! writes AI 6 and parent 0 for a `ShipBehav` 1 ship not disabled
-//! (@0x8fc03-0x8fc22), and `_EscortAI`'s lost parent then writes parent -1,
-//! goal 0 and its class's `InherentAI`. The re-lead's parent 0 lives only
-//! inside its own dispatch, where nothing reads it, so at every other
-//! reader, from its first think after the player starts dying, it has
-//! parent -1 and that AI type: it is drawn with the other ships (@0x2bd35)
+//! **A mission escort let go**
+//! ([`Npc::mission_let_go`](crate::traffic::npc::Npc::mission_let_go)).
+//! `_AIDispatch` writes AI 6 and parent 0 for a `ShipBehav` 1 ship not
+//! disabled (@0x8fc03-0x8fc22, [`dispatch_gate::led_again`]), and
+//! `_EscortAI`'s lost parent then writes parent -1, goal 0 and its class's
+//! `InherentAI`. The re-lead's parent 0 lives only inside its own dispatch,
+//! where nothing reads it, so at every other reader, from its first think
+//! after the player starts dying, it has parent -1 and that AI type: it is
+//! drawn with the other ships (@0x2bd35)
 //! and faintly when cloaked (@0x2d1b4), the radar, brackets, hit rules and
 //! threat tests read a stranger, it flies at its own top speed, the pod's
 //! walk fails `+0x9a == 0` (@0x6f71d) and leaves it to its next dispatch,
@@ -48,17 +50,16 @@
 //! player's formation.
 //!
 //! **A captured mission ship.** One of another `ShipBehav` is no re-lead's
-//! (@0x8fc07 → @0x8fc2d), so `_EscortAI` frees it for good. One of
-//! `ShipBehav` 2 runs `_DeathStarAI` in `_EscortAI`'s place (@0x8ff3a), and
-//! stays led.
+//! (@0x8fc07 → @0x8fc2d), so `_EscortAI` frees it for good
+//! ([`dispatch_gate::not_led_again`]). One of `ShipBehav` 2 runs
+//! `_DeathStarAI` in `_EscortAI`'s place (@0x8ff3a), and stays led.
 //!
 //! Nothing here plays a sound or draws a random number.
 
-use super::Session;
+use super::{Session, Space};
 use crate::ai::{Goal, dispatch_gate};
 use crate::combat::hull::Condition;
-use crate::mission::ships::ShipBehav;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::NpcId;
 
 impl Session {
     /// While the player breaks up or is destroyed, every ship it leads
@@ -70,7 +71,7 @@ impl Session {
             .ship
             .condition
             .dying_or_destroyed(self.pilot.reserves.armor);
-        self.let_go_of_mission_escorts(dying);
+        self.space.let_go_of_mission_escorts(dying);
         if !dying {
             return;
         }
@@ -80,30 +81,11 @@ impl Session {
             .npcs()
             .iter()
             .filter(|npc| dispatch_gate::reaches_escort_think(npc))
-            .filter(|npc| npc.is_players() || not_led_again(npc))
+            .filter(|npc| npc.is_players() || dispatch_gate::not_led_again(npc))
             .map(|npc| npc.id)
             .collect();
         for id in led {
             self.release_for_the_pod(id);
-        }
-    }
-
-    /// Each intact `ShipBehav` 1 ship is led again, as the dispatch leads
-    /// it (@0x8fc03-0x8fc22), and let go again if the player is `dying` and
-    /// its think reaches `_EscortAI`. One not intact isn't led again
-    /// (@0x8fc0c), so a let go stands. One that rejoins takes its slot from
-    /// the same pass's [`Session::reform_on_swarm_change`], the hired ships
-    /// perhaps gone meanwhile.
-    fn let_go_of_mission_escorts(&mut self, dying: bool) {
-        for npc in self
-            .space
-            .traffic
-            .npcs_mut()
-            .iter_mut()
-            .filter(|npc| npc.condition == Condition::Intact)
-        {
-            npc.mission_let_go =
-                dying && led_again(npc) && dispatch_gate::reaches_escort_think(npc);
         }
     }
 
@@ -123,17 +105,24 @@ impl Session {
     }
 }
 
-/// Whether the dispatch leads `npc` again each frame: a `ShipBehav` 1 ship
-/// in the formation.
-fn led_again(npc: &Npc) -> bool {
-    npc.mission
-        .is_some_and(|mark| mark.behav == ShipBehav::EscortPlayer && mark.formation.is_some())
-}
-
-/// Whether `npc` is a mission escort no dispatch leads again and whose
-/// think is `_EscortAI`'s: captured, of another `ShipBehav` than 1 or 2.
-fn not_led_again(npc: &Npc) -> bool {
-    npc.mission_escort() && !led_again(npc) && !npc.attacks_stellars()
+impl Space {
+    /// Each intact `ShipBehav` 1 ship is led again, as the dispatch leads
+    /// it ([`dispatch_gate::led_again`]), and let go again if the player is
+    /// `dying` and its think reaches `_EscortAI`. One not intact isn't led
+    /// again (@0x8fc0c), so a let go stands. One that rejoins takes its slot
+    /// from the same pass's [`Session::reform_on_swarm_change`], the hired
+    /// ships perhaps gone meanwhile.
+    pub(super) fn let_go_of_mission_escorts(&mut self, dying: bool) {
+        for npc in self
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .filter(|npc| npc.condition == Condition::Intact)
+        {
+            npc.mission_let_go =
+                dying && dispatch_gate::led_again(npc) && dispatch_gate::reaches_escort_think(npc);
+        }
+    }
 }
 
 #[cfg(test)]

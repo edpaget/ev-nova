@@ -12,6 +12,9 @@
 //!   (@0x4427e, [`Npc::no_ai`]);
 //! - an escape pod (class 0x2ff) flies its own block and returns
 //!   (@0x8fb62-0x8fbba, [`pod_flight::is_pod`]);
+//! - a `ShipBehav` 1 ship in the formation is led again (@0x8fc03-0x8fc22,
+//!   [`led_again`]), which stops no one: the session does it each traffic
+//!   tick (see `nova_sim`'s `dying_player_escorts` module);
 //! - a formation parent's dispatch works its followers' places out
 //!   (@0x8fcaf-0x8fcc3, [`reaches_formation_calc`]), so past those two
 //!   gates alone: before the disabled test (@0x8fcc8) and the gates below;
@@ -28,6 +31,7 @@
 //! ([`reaches_escort_think`]). Nothing here plays a sound or draws a
 //! random number.
 
+use crate::traffic::ShipBehav;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
 
@@ -45,6 +49,23 @@ pub fn reaches_think(npc: &Npc) -> bool {
 #[must_use]
 pub fn reaches_escort_think(npc: &Npc) -> bool {
     reaches_think(npc) && !npc.emerging() && !npc.count_wait()
+}
+
+/// Whether the dispatch leads `npc` again each frame (@0x8fc03-0x8fc22): a
+/// `ShipBehav` 1 ship in the formation. The re-lead also takes a ship not
+/// disabled (@0x8fc0c), which its caller tests.
+#[must_use]
+pub fn led_again(npc: &Npc) -> bool {
+    npc.mission
+        .is_some_and(|mark| mark.behav == ShipBehav::EscortPlayer && mark.formation.is_some())
+}
+
+/// Whether `npc` is a mission escort no dispatch leads again ([`led_again`])
+/// and whose think is `_EscortAI`'s: captured, of another `ShipBehav` than 1
+/// or 2.
+#[must_use]
+pub fn not_led_again(npc: &Npc) -> bool {
+    npc.mission_escort() && !led_again(npc) && !npc.attacks_stellars()
 }
 
 /// Whether `npc`'s dispatch takes the jump path (@0x8fd83-0x8fd9a →
@@ -81,8 +102,9 @@ mod tests {
     use super::*;
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
+    use crate::escort::FormationSlot;
     use crate::stats::ShipStats;
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{MissionMark, NpcId};
     use crate::traffic::warp_out::WarpGoal;
 
     fn ship() -> Npc {
@@ -184,6 +206,61 @@ mod tests {
             ..ship()
         };
         assert!(!reaches_escort_think(&counting));
+    }
+
+    /// A ship marked by a mission of `behav`, in the player's formation as
+    /// `joined` says.
+    fn marked(behav: ShipBehav, joined: bool) -> Npc {
+        Npc {
+            mission: Some(MissionMark {
+                slot: 1,
+                behav,
+                formation: joined.then(FormationSlot::default),
+                order: None,
+            }),
+            ..ship()
+        }
+    }
+
+    #[test]
+    fn the_dispatch_leads_again_only_a_behav_1_ship_in_the_formation() {
+        assert!(led_again(&marked(ShipBehav::EscortPlayer, true)));
+        assert!(
+            !led_again(&marked(ShipBehav::EscortPlayer, false)),
+            "not joined"
+        );
+        for behav in [
+            ShipBehav::Own,
+            ShipBehav::AttackPlayer,
+            ShipBehav::AttackStellars,
+        ] {
+            assert!(!led_again(&marked(behav, true)), "{behav:?}");
+        }
+        assert!(!led_again(&ship()), "no mark");
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_keeps_its_mark_and_so_is_led_again() {
+        let let_go = Npc {
+            mission_let_go: true,
+            ..marked(ShipBehav::EscortPlayer, true)
+        };
+        assert!(led_again(&let_go));
+        assert!(!not_led_again(&let_go));
+    }
+
+    #[test]
+    fn a_captured_mission_ship_is_not_led_again_but_a_behav_2_ship_keeps_its_own_think() {
+        for behav in [ShipBehav::Own, ShipBehav::AttackPlayer] {
+            assert!(not_led_again(&marked(behav, true)), "{behav:?}");
+            assert!(
+                !not_led_again(&marked(behav, false)),
+                "{behav:?} not joined"
+            );
+        }
+        assert!(!not_led_again(&marked(ShipBehav::EscortPlayer, true)));
+        assert!(!not_led_again(&marked(ShipBehav::AttackStellars, true)));
+        assert!(!not_led_again(&ship()), "no mark");
     }
 
     #[test]
