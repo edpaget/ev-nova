@@ -769,6 +769,48 @@ fn a_double_time_frame_steps_shots_boxes_and_asteroids_back_two_passes() {
     }
 }
 
+/// [`held`] with a detonation and a wrap on the second pass, for a
+/// re-seating to drop.
+fn held_a_blast_and_a_wrap() -> Faked {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.sim.set_frame(sol_at(20.0));
+    let second = PassReport {
+        combat: vec![detonation()],
+        ..wrapping(STOOD + SHIFT + MOVE, Some(wrap()))
+    };
+    frame(&mut view, doubled(fight(vec![]), second, sol_at(10.0)));
+    view
+}
+
+/// Asserts the held pass that [`held_a_blast_and_a_wrap`] scripted reached
+/// nothing, on the frame after too, the ship seated at `seat`.
+fn dropped_unreplayed(view: &mut Faked, seat: ShipPlace) {
+    let check = |view: &Faked| {
+        assert_eq!(view.effects.explosions().len(), 0, "no blast");
+        assert_eq!(view.previous, seat, "no wrap carried");
+    };
+    check(view);
+    frame(view, stopped());
+    check(view);
+}
+
+#[test]
+fn a_placing_drops_the_held_pass_unreplayed() {
+    let mut view = held_a_blast_and_a_wrap();
+    view.place_ship();
+    dropped_unreplayed(&mut view, sol_at(20.0).player().place());
+}
+
+#[test]
+fn a_takeover_drops_the_held_pass_unreplayed() {
+    let mut view = held_a_blast_and_a_wrap();
+    let taken = sol_at(40.0);
+    view.sim
+        .queue_answer_showing(Answer::Assigned(Assigned::MyShip), taken.clone());
+    view.assign(Assignment::MyShip);
+    dropped_unreplayed(&mut view, taken.player().place());
+}
+
 // The shots' looks.
 
 /// [`armed`] with the blaster's look set by `edit`.
