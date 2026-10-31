@@ -1490,6 +1490,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// beep, cue and restores, lands on the release
     /// ([`FlightView::close_map`]).
     map_closing: bool,
+    /// What a map over a screen has taken during its wait
+    /// (`FlightView::closing_input`).
+    wait_keys: map_wait::WaitKeys,
+    /// What the map's wait left for the screen under it, until it is taken
+    /// ([`FlightView::take_map_replay`]).
+    map_replay: Vec<crate::Input>,
     /// How the map shown was opened (by M, the bar or a mission dialog,
     /// with its marks) and the nav as it opened: taken as each map opens,
     /// dropped as it closes ([`FlightView::close_map`]).

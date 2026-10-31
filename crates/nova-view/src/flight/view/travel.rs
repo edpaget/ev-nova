@@ -290,15 +290,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The input while the map waits for [`MAP_KEY`]'s release to close
-    /// (`_DoSystemMap`'s `BusyIdle` loop, @0x13a2e-0x13a46): only M's
-    /// release is taken, and runs the close `close`; every other input,
-    /// keys, repeats, the pointer and Find's typing, is dropped, as the
-    /// loop reads no events.
+    /// (`_DoSystemMap`'s `BusyIdle` loop, @0x13a2e-0x13a46): M's release
+    /// runs the close `close`, and nothing else does anything, as the loop
+    /// reads no events.
     ///
-    /// Left out: the closing `FlushEvents(7, 0)` (@0x13c44-0x13c53) drops
-    /// only null and mouse events, so the original's key-downs typed
-    /// during the wait act after it closes; ours' are swallowed here
-    /// (filed in the `play-feel-4-followups` roadmap).
+    /// Its closing flush keeps the keys, though, so over a screen they
+    /// are queued for it and given back at the close
+    /// ([`FlightView::take_map_replay`]; the `map_wait` module). Over
+    /// flight nothing reads them, and what is still down is already held.
     fn closing_input(&mut self, input: &Input, close: impl FnOnce(&mut Self)) {
         if let Input::Key {
             key: MAP_KEY,
@@ -307,7 +306,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         } = *input
         {
             self.map_key_held = false;
+            self.map_replay = self.wait_keys.finish();
             close(self);
+        } else if !self.plain_map_open() {
+            self.wait_keys.take(input);
         }
     }
 

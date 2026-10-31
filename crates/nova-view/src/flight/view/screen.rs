@@ -133,11 +133,13 @@ impl<
     /// M's release closes ([`FlightView::close_map`]): ours can't read the
     /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
     /// (@0xa19b-0xa1dc), so losing them counts as the release. So it does
-    /// for a mouse button, which `_Button` reads live (@0x3803b).
+    /// for a mouse button, which `_Button` reads live (@0x3803b). What the
+    /// wait queued goes with them (the `map_wait` module).
     fn release_keys(&mut self) {
         self.let_go_of_input();
         self.map.release_keys();
         self.map_key_held = false;
+        self.wait_keys.clear();
         if self.map_closing {
             self.close_map();
         }
