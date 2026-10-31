@@ -830,9 +830,9 @@ mod tests {
 
     /// One pass with movers ([`Reading`]) at slots 2 and 5, and when
     /// `bay_between` a carrier launching at slot 3, by `source`: what the
-    /// lower mover read of the higher and what the higher read of the
-    /// lower, each its goal and target.
-    fn read_by(source: RuleSource, bay_between: bool) -> [(Goal, Option<ShipRef>); 2] {
+    /// lower mover read of the higher, what the higher read of the
+    /// lower, each its goal and target, and what they both wrote.
+    fn read_by(source: RuleSource, bay_between: bool) -> [(Goal, Option<ShipRef>); 3] {
         let catalog = catalog();
         let (mut session, carrier, raider) = raid(&catalog, source, 7);
         let low = session.space.traffic.add_npc_at(bystander(), 2);
@@ -865,7 +865,7 @@ mod tests {
                 .map(|&(_, (_, goal, target))| (goal, target))
                 .expect("it read")
         };
-        [of(low), of(high)]
+        [of(low), of(high), (written, Some(quarry))]
     }
 
     #[test]
@@ -874,17 +874,16 @@ mod tests {
         // falls: goals and targets are written in the think, and read in
         // the next slot's.
         for bay_between in [false, true] {
-            let [lower, higher] = read_by(RuleSource::Engine, bay_between);
+            let [lower, higher, written] = read_by(RuleSource::Engine, bay_between);
             assert_eq!(lower, (Goal::Idle, None), "{bay_between}: as it was");
-            assert_ne!(higher.0, Goal::Idle, "{bay_between}: slot 2's new goal");
-            assert!(higher.1.is_some(), "{bay_between}: slot 2's new target");
+            assert_eq!(higher, written, "{bay_between}: slot 2's new ones");
         }
     }
 
     #[test]
     fn by_the_other_reading_every_npc_decides_from_the_tick_as_it_began() {
         for bay_between in [false, true] {
-            let [lower, higher] = read_by(RuleSource::Bible, bay_between);
+            let [lower, higher, _] = read_by(RuleSource::Bible, bay_between);
             assert_eq!(lower, (Goal::Idle, None), "{bay_between}");
             assert_eq!(higher, (Goal::Idle, None), "{bay_between}");
         }
@@ -957,7 +956,7 @@ mod tests {
     }
 
     impl Order {
-        /// Launching from `carrier` when `carrier` is set.
+        /// Recording as [`Scripted`] launches from `carrier`.
         fn of(carrier: NpcId) -> Self {
             Self {
                 thought: std::cell::RefCell::default(),
