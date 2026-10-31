@@ -278,6 +278,7 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::flight::ShipState;
     use crate::stats::ShipStats;
+    use crate::traffic::Traffic;
     use crate::traffic::npc::{AiType, Mode};
     use crate::trig;
     use nova_sim_base::fixture::FAST;
@@ -568,6 +569,22 @@ mod tests {
         let mut traffic = swarmer(3, 5);
         traffic.swarm_leader = Some(1);
         assert_eq!(formation_parent(&traffic), None);
+    }
+
+    #[test]
+    fn an_attacker_that_let_go_marks_its_leader_as_its_parent() {
+        // The mark reads +0x70 of each ship before any dispatch (@0x44177),
+        // so one whose `_HandleShip` cleared it forms on its leader though
+        // its goal still attacks.
+        let mut npc = escort(1, 3);
+        npc.swarm_leader = Some(2);
+        let mut traffic = Traffic::new();
+        let id = traffic.add_npc_at(npc, 3);
+        let parent = |traffic: &Traffic| formation_parent(&traffic.npcs()[0]);
+        assert_eq!(parent(&traffic), Some(FormationParent::Berth(2)));
+        traffic.let_go_at_step(id, true);
+        assert_eq!(parent(&traffic), Some(FormationParent::Player));
+        assert!(traffic.npcs()[0].goal.attacking().is_some());
     }
 
     #[test]

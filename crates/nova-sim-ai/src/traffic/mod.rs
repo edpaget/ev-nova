@@ -228,6 +228,8 @@ mod landed_stay_tests;
 mod launch_room;
 pub mod leave_flight;
 #[cfg(test)]
+mod let_go_think_tests;
+#[cfg(test)]
 mod listed_stellar_tests;
 #[cfg(test)]
 mod lost_lead_travel_tests;
@@ -2360,6 +2362,7 @@ impl Traffic {
         self.mark_spawned(berth);
         // A ship taking the slot rewrites the vacated record ([`vacated`]).
         self.vacated.taken(berth);
+        self.slot_taken(berth, id);
         self.npcs.push(npc);
         id
     }
@@ -2890,6 +2893,7 @@ impl Traffic {
             self.write_berth_person(berth, name);
             self.mark_spawned(berth);
             self.vacated.taken(berth);
+            self.slot_taken(berth, npc.id);
             self.npcs.push(npc);
         }
         if formation == NpcFormation::Original {

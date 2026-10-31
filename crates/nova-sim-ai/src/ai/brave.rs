@@ -390,6 +390,7 @@ mod tests {
         let gone = [GoneShip {
             ship: attacker,
             freed,
+            let_go: Vec::new(),
         }];
         let npcs = [trader];
         let govts = govts(0, 0);
@@ -452,6 +453,7 @@ mod tests {
         let gone = [GoneShip {
             ship: attacker,
             freed: Freed::InDispatch,
+            let_go: Vec::new(),
         }];
         let npcs = [calm];
         let govts = govts(0, 0);

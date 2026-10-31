@@ -5,7 +5,8 @@
 //! [`Traffic::fly_npc`] for each NPC, then [`Traffic::end_fly`].
 //!
 //! - **Begin** forgets, on double time's second pass, the ships gone in a
-//!   ship pass (see [`gone`](super::gone)); holds every NPC's cloak; on
+//!   ship pass or after one (see [`gone`](super::gone)); holds every NPC's
+//!   cloak; on
 //!   the advance pass moves each
 //!   NPC's warp and fire clocks on (`TickCount`), holds each intact one's
 //!   warp to its goal and turns back a fighter that can't follow its
@@ -29,8 +30,10 @@
 //!   banks and glows. One whose flight ends it (it jumped, entered a gate,
 //!   docked) leaves the traffic at once, as its slot is inactive from its
 //!   own `_HandleShip` on: no later slot's step, fire or shockwave sees it;
-//!   one that left the system is recorded among the ships gone
-//!   ([`gone`](super::gone)). One that landed stays in its slot, waiting
+//!   one that left the system is recorded among the ships gone, and one
+//!   the original frees in the AI loop lets go of every earlier slot's
+//!   target at once ([`Traffic::left_the_system`], see
+//!   [`gone`](super::gone)). One that landed stays in its slot, waiting
 //!   at the stellar, as the original's does (+0xb8 is not cleared,
 //!   @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
@@ -260,7 +263,7 @@ impl Traffic {
         }
         if ends(&self.npcs[index], outcome, world) {
             if let Some(freed) = Freed::by(outcome) {
-                self.gone.record(self.npcs[index].clone(), freed);
+                self.left_the_system(self.npcs[index].clone(), freed);
             }
             self.departed.push((id, outcome));
             self.npcs.remove(index);

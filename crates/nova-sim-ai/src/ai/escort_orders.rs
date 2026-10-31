@@ -233,30 +233,27 @@ struct Target<'a> {
 
 impl<'a> Target<'a> {
     /// What `leader` reads of its target among `around`: an NPC in the
-    /// system, or by its record once gone; the player for its condition
+    /// system, or by its record once gone, a leader that let go at its step
+    /// included ([`Surroundings::held_gone`]); the player for its condition
     /// alone, as it never attacks in this sense.
     fn of(leader: &Npc, around: &Surroundings<'a>) -> Self {
-        match leader.target {
-            Some(ShipRef::Npc(id)) => {
-                let ship = around.npc(id).or_else(|| around.held_gone(leader));
-                Self {
-                    disabled: ship.is_some_and(Npc::is_disabled),
-                    attacker: ship.filter(|ship| {
-                        ship.target == Some(ShipRef::Npc(leader.id))
-                            && ship.goal.attacking().is_some()
-                    }),
-                }
+        let ship = match leader.target {
+            Some(ShipRef::Npc(id)) => around.npc(id).or_else(|| around.held_gone(leader)),
+            Some(ShipRef::Player) => {
+                return Self {
+                    disabled: around
+                        .condition_of(ShipRef::Player)
+                        .is_some_and(Condition::disabled),
+                    attacker: None,
+                };
             }
-            Some(ShipRef::Player) => Self {
-                disabled: around
-                    .condition_of(ShipRef::Player)
-                    .is_some_and(Condition::disabled),
-                attacker: None,
-            },
-            None => Self {
-                disabled: false,
-                attacker: None,
-            },
+            None => around.held_gone(leader),
+        };
+        Self {
+            disabled: ship.is_some_and(Npc::is_disabled),
+            attacker: ship.filter(|ship| {
+                ship.target == Some(ShipRef::Npc(leader.id)) && ship.goal.attacking().is_some()
+            }),
         }
     }
 }
@@ -741,6 +738,7 @@ mod tests {
         let gone = [GoneShip {
             ship: record,
             freed: Freed::InDispatch,
+            let_go: Vec::new(),
         }];
         let around = Surroundings {
             gone: &gone,
@@ -750,6 +748,36 @@ mod tests {
             orders(&npcs[0], &around, RuleSource::Engine).map(|word| word.0),
             [2, 2, 1, 0]
         );
+    }
+
+    #[test]
+    fn a_leader_that_let_go_still_reads_its_target_by_its_record() {
+        // The stand-in think for the frame of a jump out comes after the
+        // leader's step, which let go (`GoneShip::let_go`); the original's
+        // read it in that frame's dispatch, before its `_HandleShip`.
+        let mut reader = leader(Goal::Attack(n(2)), 10.0);
+        reader.berth = 5;
+        let id = reader.id;
+        let npcs = [reader];
+        let mut record = disabled(attacker(2, 100.0));
+        record.berth = 1;
+        let gone = |let_go| {
+            [GoneShip {
+                ship: record.clone(),
+                freed: Freed::InDispatch,
+                let_go,
+            }]
+        };
+        let words = |let_go| {
+            let gone = gone(let_go);
+            let around = Surroundings {
+                gone: &gone,
+                ..Surroundings::new(&[], &npcs)
+            };
+            orders(&npcs[0], &around, RuleSource::Engine).map(|word| word.0)
+        };
+        assert_eq!(words(vec![id]), [2, 2, 1, 0], "disabled, by its record");
+        assert_eq!(words(Vec::new()), [1, 1, 1, 0], "no target, no record");
     }
 
     #[test]

@@ -507,6 +507,8 @@ mod tests {
         let lead = of(&jumped, 0).clone();
         jumped.remove(LEAD);
         jumped.gone.record(lead, Freed::InDispatch);
+        let mut killed = holding(Condition::Intact);
+        killed.remove_killed(LEAD);
         let mut missing = holding(Condition::Intact);
         missing.remove(LEAD);
         for (name, mut traffic, goal) in [
@@ -514,6 +516,7 @@ mod tests {
             ("dying", holding(dying), Goal::Hold),
             ("destroyed", destroyed, Goal::Hold),
             ("jumped", jumped, Goal::Hold),
+            ("killed by a stellar", killed, Goal::Hold),
             ("missing", missing, Goal::Idle),
         ] {
             think(&mut traffic);
