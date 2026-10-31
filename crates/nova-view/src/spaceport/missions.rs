@@ -709,9 +709,12 @@ impl MissionInfoScreen {
         self.abort.take()
     }
 
-    /// Shows `info` in place of the one shown, keeping the selected slot
-    /// selected while it is listed, and otherwise the first; it closes
-    /// once nothing is listed (@0x9e5eb-0x9e610).
+    /// Shows `info` in place of the one shown: the first row selected as
+    /// the screen opens, and after that the selected slot kept while it is
+    /// listed, as a refused abort leaves it (@0x9e583). When an abort takes
+    /// it, nothing is selected (`_DoMissionInfoDialog` @0x9e62d-0x9e632,
+    /// @0x9e66a-0x9e680). It closes once nothing is listed
+    /// (@0x9e5eb-0x9e610).
     pub fn set_info(&mut self, info: MissionInfo) {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
@@ -730,10 +733,11 @@ impl MissionInfoScreen {
         });
         let rect = laid.dialog.item_bounds(INFO_LIST_ITEM).unwrap_or(NO_LIST);
         laid.rows = RowList::new(names.collect(), rect, &laid.metrics.0);
-        if let Some(index) =
-            kept.and_then(|slot| self.info.rows.iter().position(|row| row.slot == slot))
-        {
-            laid.rows.select(index);
+        if let Some(slot) = kept {
+            match self.info.rows.iter().position(|row| row.slot == slot) {
+                Some(index) => laid.rows.select(index),
+                None => laid.rows.clear_selection(),
+            }
         }
         laid.dialog.set_text(INFO_DATE_ITEM, &self.info.today);
         self.show_selected();
@@ -2189,6 +2193,75 @@ mod tests {
             ..info()
         });
         assert!(screen.closed());
+    }
+
+    /// The three missions with slot 0, selected, aborted: Abort asked and
+    /// the info handed back without it.
+    fn after_an_abort() -> MissionInfoScreen {
+        let mut screen = info_screen_of(three_info());
+        click_info(&mut screen, ABORT_ITEM);
+        assert_eq!(screen.take_abort(), Some(0));
+        let mut left = three_info();
+        left.rows.remove(0);
+        screen.take_text_request();
+        screen.set_info(left);
+        screen
+    }
+
+    /// `_DoMissionInfoDialog` rebuilds the list with no selection
+    /// (@0x9e62d-0x9e632, @0x9e66a-0x9e680).
+    #[test]
+    fn an_abort_with_missions_left_leaves_nothing_selected() {
+        let mut screen = after_an_abort();
+        assert_eq!(screen.rows().and_then(RowList::selected), None);
+        assert!(!screen.closed());
+        let area = screen
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(INFO_TEXT_ITEM))
+            .expect("item 4");
+        assert_eq!(
+            fill_and_text(&info_drawn(&screen), area).1,
+            None,
+            "an empty black box (@0x987d1-0x987e6)"
+        );
+        assert_eq!(screen.take_text_request(), None, "no text to load");
+        assert!(!info_enabled(&screen, ABORT_LABEL), "@0x283c7-0x283e4");
+        click_info(&mut screen, ABORT_ITEM);
+        assert_eq!(screen.take_abort(), None, "@0x285a3-0x285b1");
+        screen.input(&key(crate::flight::view::MAP_KEY));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(None)),
+            "@0x9e3e5-0x9e3f1"
+        );
+    }
+
+    #[test]
+    fn after_an_abort_down_selects_the_first_mission_and_up_the_last() {
+        let mut screen = after_an_abort();
+        assert_eq!(
+            info_stepped(&mut screen, &[key(Key::Down)]),
+            [Some(3)],
+            "@0x9d839"
+        );
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Hold on.");
+        let mut screen = after_an_abort();
+        assert_eq!(
+            info_stepped(&mut screen, &[key(Key::Up)]),
+            [Some(5)],
+            "@0x9da60"
+        );
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Take wing.");
+    }
+
+    /// A refused Abort does nothing (@0x9e583).
+    #[test]
+    fn a_refused_abort_keeps_the_selected_slot() {
+        let mut screen = info_screen_of(three_info());
+        screen.input(&key(Key::Down));
+        screen.set_info(three_info());
+        assert_eq!(screen.selected_row().map(|row| row.slot), Some(3));
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Hold on.");
     }
 
     #[test]
