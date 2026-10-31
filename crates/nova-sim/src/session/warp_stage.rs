@@ -57,7 +57,9 @@
 //! **Ordering against the original.** The warp end is decided in the
 //! player's pass, as the original's is, and the view arrives
 //! ([`Session::arrive`]) in the same step, before the frame is drawn: no
-//! boundary falls between them.
+//! boundary falls between them. On double time's second pass the frame
+//! between the passes is drawn first, as the original draws it, and the
+//! view arrives on the next step, which stops before it runs.
 //!
 //! Left out: the disabled player's warp-stage branch (@0x6c70d-0x6c723,
 //! +0x50 of −999.0 to 0), which no engine state reaches: a disabled
