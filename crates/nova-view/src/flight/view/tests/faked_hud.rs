@@ -367,14 +367,9 @@ fn a_double_time_frame_draws_the_first_passs_hud_and_takes_the_radar_from_it() {
     view.sim
         .queue_report(super::stepping::doubled(pass.clone(), pass, first));
     view.step_frame(1, view.anchor());
-    let mut bar = DrawList::new();
-    view.draw_status_bar(&mut bar);
-    assert!(texts(&bar).contains(&"111".to_owned()), "{:?}", texts(&bar));
-    assert!(
-        !texts(&bar).contains(&"222".to_owned()),
-        "{:?}",
-        texts(&bar)
-    );
+    let list = texts(&flown(&view));
+    assert!(list.contains(&"111".to_owned()), "{list:?}");
+    assert!(!list.contains(&"222".to_owned()), "{list:?}");
     view.radar_scene = None;
     for _ in 0..30 {
         hud_tick(&mut view);
