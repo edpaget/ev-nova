@@ -834,6 +834,29 @@ fn l_and_i_held_from_mid_jump_act_on_the_first_tick_after_the_arrival_once() {
 }
 
 #[test]
+fn l_and_i_latched_before_a_jump_lose_their_latches_to_it_and_act_after_it() {
+    let mut view = faked(super::frames::sol());
+    let from = sent_count(&view);
+    view.input(&key(LAND_KEY, true));
+    view.input(&key(MISSION_INFO_KEY, true));
+    let once = [FlightCommand::Land, FlightCommand::PressMissionInfo];
+    assert_eq!(sent(&view, from), once, "each once, each latched");
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), once, "held and latched");
+    now_shows(&mut view, white());
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), once, "their gates fail");
+    let from = sent_count(&view);
+    arrives(&mut view);
+    assert_eq!(sent(&view, from), [], "@0x6a95d, @0x6c625");
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), once, "once more");
+    view.tick(TICK);
+    view.tick(TICK);
+    assert_eq!(sent(&view, from), once, "and not again");
+}
+
+#[test]
 fn l_and_i_let_go_before_the_arrival_do_nothing_after_it() {
     let mut view = under_the_white();
     tap(&mut view, LAND_KEY);

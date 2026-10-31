@@ -176,6 +176,35 @@ fn m_i_p_and_y_under_the_warps_white_leave_the_game_showing_flight() {
 }
 
 #[test]
+fn m_on_a_collapse_under_the_white_opens_nothing_and_a_tap_after_it_opens_the_map() {
+    let mut screen = lit();
+    screen.input(&key(MAP, true));
+    flight_mut(&mut screen).change_sim(|sim| {
+        nova_sim::fixture::set_player_condition(
+            sim.session_mut().expect("flying"),
+            nova_sim::Condition::Disabled,
+        );
+    });
+    screen.take_sounds();
+    screen.tick(TICK);
+    let session = flight(&screen).session().expect("flying");
+    assert_eq!(session.jumping(), None, "collapsed");
+    assert_eq!(screen.showing(), Showing::Flight, "the map refused");
+    let beeps: Vec<UiSound> = screen
+        .take_sounds()
+        .into_iter()
+        .filter_map(|sound| match sound {
+            Sound::Ui(sound) => Some(sound),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(beeps, [UiSound::MapOpened, UiSound::MapClosed]);
+    screen.input(&key(MAP, false));
+    tapped(&mut screen, MAP);
+    assert_eq!(screen.showing(), Showing::FlightMap, "a plain press");
+}
+
+#[test]
 fn m_after_the_arrival_opens_the_map_and_held_through_it_does_not() {
     let mut screen = lit();
     screen.input(&key(MAP, true));
