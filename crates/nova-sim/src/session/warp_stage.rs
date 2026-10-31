@@ -56,8 +56,14 @@
 //!
 //! **Ordering against the original.** The warp end is decided in the
 //! player's pass, as the original's is, and the view arrives
-//! ([`Session::arrive`]) in the same step, before the frame is drawn: no
-//! boundary falls between them.
+//! ([`Session::arrive`]) in the same step, before the frame is drawn, so
+//! no frame falls between them. The original, though, arrives inside
+//! `_HandlePlayer` on that pass (@0x6bc0d-0x6c620, then `jmp 0x71113`
+//! @0x6c625), so the rest of its pass runs among the new system and the
+//! AI loop's +0x74 test (@0x4428c) skips the old system's ships. The
+//! engine only marks the end due, so that whole pass still runs over the
+//! old system. That crosses the arrival's boundary, and is filed as
+//! rdm:task/warp-end-pass-runs-the-old-system.
 //!
 //! Left out: the disabled player's warp-stage branch (@0x6c70d-0x6c723,
 //! +0x50 of −999.0 to 0), which no engine state reaches: a disabled

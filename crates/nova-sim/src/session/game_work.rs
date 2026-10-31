@@ -1162,7 +1162,7 @@ mod tests {
     #[test]
     fn the_warps_lead_in_still_steps_each_npcs_fade() {
         // The traffic flies the lead-in, and each NPC's display steps its
-        // fade (@0x2d088), though the fight stands still.
+        // fade (@0x2d088).
         let catalog = crate::testkit::catalog();
         let mut session = crate::session::tests::bound_for_131(
             &catalog,

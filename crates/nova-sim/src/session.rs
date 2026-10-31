@@ -189,8 +189,9 @@
 //! and its weapon outfits, firing the rounds of its ammunition outfits and
 //! its fuel, so a fight changes the pilot only in its shield, armour and
 //! fuel and the ammunition it owns. The fight stands still while the
-//! player is landed or jumping, though the scans are still taken through
-//! the warp's lead-in, and its shots and beams are gone once the
+//! player is landed, and runs on through a jump (see the `warp_stage`
+//! module), though the scans are taken only through the warp's lead-in,
+//! and its shots and beams are gone once the
 //! player lands or arrives elsewhere. While the player brakes and turns
 //! for a jump the fight goes on, but the player's held fire command fires
 //! nothing until arrival (@0x6aaf0, @0x6ab75), and its point defence rests

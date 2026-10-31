@@ -54,6 +54,11 @@
 //! ([`Traffic::take_fuel_given`]) and lands in the session after the
 //! traffic's tick, before the frame is drawn, so no boundary is crossed.
 //!
+//! The player's warp changes none of this: `_DoPlayGameWork`'s AI loop
+//! (@0x44270-0x442ae) tests only that a ship is active, has AI and is in
+//! the player's system, and nothing here reads the target's +0x50. The
+//! player's move-off takes the refueller out of its box, and it closes.
+//!
 //! Recorded only: the `_statusRedraw` writes (@0x8f56e-0x8f573,
 //! @0x8f6a6-0x8f6af), as the status display reads live state; the box
 //! taken as a 16-bit word (@0x8f44d), a width; and `_AIEscortFireUnprovoked`

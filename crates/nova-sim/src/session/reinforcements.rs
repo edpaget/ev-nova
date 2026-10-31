@@ -54,8 +54,8 @@
 //! *A jump's frames.* The original's clock counts down through every
 //! frame of a jump for the system being left, until the arrival changes
 //! player +0x74, and a fleet due then comes into it. The engine counts down
-//! there too and brings the fleet into the traffic, which stands still
-//! past the warp's lead-in and is dropped at the arrival.
+//! there too and brings the fleet into the traffic, which flies on until
+//! the arrival drops it.
 
 use crate::pilot::Pilot;
 use std::collections::{BTreeMap, BTreeSet};

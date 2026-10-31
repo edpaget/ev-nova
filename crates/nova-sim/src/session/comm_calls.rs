@@ -218,11 +218,9 @@ impl Session {
     /// warp's lead-in by `_ScanPlayer`'s jump-timing check
     /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
     /// the think that queued it to its pass's settling, so it settles
-    /// before the frame is drawn. In the warp the view steps the session only
-    /// while its lead-in lasts, and the arrival comes after its last step,
-    /// so work queued in the lead-in settles before the arrival too. Work
-    /// the arrival would cut off is dropped with the system's traffic, as
-    /// the original's would be held.
+    /// before the frame is drawn. The session runs through the whole warp,
+    /// and the arrival comes after its last step, so work queued on any
+    /// pass of the warp settles in that pass, before the arrival.
     pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
         if self.mode.landed().is_some() {
             return;
