@@ -419,3 +419,63 @@ fn a_kind_with_no_sheet_is_a_crossed_box_on_its_whole_point() {
     cargo_box.looks.boxes.insert(0, Err("unread".to_owned()));
     assert_crossed_box_on(&cargo_box, at(516.0, 433.0));
 }
+
+/// The ship bracket corners `view` draws, targeting NPC 0, from now on:
+/// (`cïcn`, top left), neutral, so from 10012.
+fn ship_corners(view: &mut Faked) -> Vec<(i16, Point)> {
+    let mut frame = view.frame.clone();
+    frame.hud = super::faked_world::targeting(0);
+    shows(view, frame);
+    world_list(view)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
+                Some((image.id, *top_left))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_targets_brackets_are_centred_on_its_truncated_offset_with_no_size_in_it() {
+    let size = (41, 40);
+    let mut view = placed(npc_of(size), Vec2::new(10.7, -20.3));
+    // (10.7, -20.3) truncates to (10, -20), with nothing taken off for the
+    // odd side; half 20 by the larger side, the art 16 outside it.
+    let corners = ship_corners(&mut view);
+    assert_eq!(corners, corners_at(10012, at(425.0, 364.0), 20.0));
+    assert_eq!(corners[0].1, at(389.0, 328.0));
+}
+
+#[test]
+fn a_targets_brackets_keep_to_its_hull_between_steps() {
+    let size = (41, 40);
+    let mut view = placed(npc_of(size), Vec2::new(10.7, -20.3));
+    view.npc_previous = vec![(
+        NPC_0,
+        nova_sim::flight_frame::ShipPlace {
+            position: PLAYER + Vec2::new(4.6, -11.9),
+            heading: 0.0,
+        },
+    )];
+    view.alpha = 0.5;
+    let corners = ship_corners(&mut view);
+    let hull = top_left_of(&world_list(&view), 2001, size);
+    assert_eq!(
+        corners,
+        corners_at(10012, at(hull.x + 20.0, hull.y + 20.0), 20.0)
+    );
+}
+
+#[test]
+fn a_targets_brackets_are_sized_by_the_frames_its_slot_holds() {
+    // Which frames is nova-sim's (`a_hidden_ship_is_framed_by_its_berths_last_shown_type`).
+    let mut view = placed(npc_of((41, 40)), Vec2::new(10.7, -20.3));
+    redrawn(&mut view, 1, |npc| npc.framed = Some(ShipId(131)));
+    // Ship 131 is 100 wide.
+    assert_eq!(
+        ship_corners(&mut view),
+        corners_at(10012, at(425.0, 364.0), 50.0)
+    );
+}

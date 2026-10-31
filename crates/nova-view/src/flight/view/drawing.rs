@@ -705,10 +705,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Draws the brackets round the nav target `nav`, then those round the
     /// ship target `target`, the flight's (`nova_sim::Session::nav_brackets`,
-    /// `nova_sim::Session::target_brackets`), each centred where its sprite
-    /// is drawn (see the `brackets` module): the target's where the frame's
-    /// record of its ship is drawn. A stellar whose sheet can't be read is
-    /// bracketed as one with no sprite; a ship's as its crossed box.
+    /// `nova_sim::Session::target_brackets`), each where its routine centres
+    /// it (see the `brackets` module): the nav target's by the player
+    /// truncated alone ([`Camera::nav_centre`]), the ship target's at the
+    /// [whole point](Camera::whole_point) of its ship as drawn, with no size
+    /// in it, so the same offset as its hull's. A stellar whose sheet can't
+    /// be read is bracketed as one with no sprite; a ship's as its crossed
+    /// box, sized by the frames its slot holds ([`FrameShip::framed`]), as
+    /// `_HandleWeapTargetSprites` reads the slot's hull sprite
+    /// (@0x30089-0x300dc) and [`FlightView::drawn_boxes`] boxes it.
     pub(super) fn draw_brackets(
         &self,
         list: &mut DrawList,
@@ -729,15 +734,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
                     (stellar.position, sprite)
                 });
-            let at = camera.world_to_screen(position);
+            let at = camera.nav_centre(position);
             brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);
         }
         if let Some(target) = target
             && let Some(npc) = self.frame.ship(ShipRef::Npc(target.npc))
         {
             let (at, _) = self.shown_npc(npc);
-            let sprite = drawn_size(self.npc_sheets.get(&npc.class));
-            let at = camera.world_to_screen(at);
+            let sprite = drawn_size(npc.framed.and_then(|ship| self.npc_sheets.get(&ship)));
+            let at = camera.whole_point(at);
             brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
         }
     }
