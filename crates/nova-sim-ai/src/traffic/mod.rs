@@ -735,8 +735,10 @@ pub struct World<'a> {
     /// see [`succession`]).
     pub successor_repairer: RuleSource,
     /// Whether a ship held at its gate owes its gate burst once its hold
-    /// ends ([`Npc::end_wait`]): by the engine, as the original; by the
-    /// other reading it owes none
+    /// ends ([`Npc::end_wait`]), a glide or burst cut short owes its rest
+    /// ([`Npc::leaves_arrival`]), and sub 0xd's stage owes
+    /// [`FOLLOW_BURST`](warp_out::FOLLOW_BURST) ([`warp_out::fly_jump`]): by
+    /// the engine, as the original; by the other reading none owes anything
     /// ([`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), see
     /// [`held_burst`]).
     pub held_burst: RuleSource,
