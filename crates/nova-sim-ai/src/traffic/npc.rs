@@ -606,11 +606,11 @@ pub struct Npc {
     /// [`Npc::formation`]. It stands while its parent is unmarked, and the
     /// pass clears it only for a ship with no parent. Never saved.
     pub fleet_slot: Option<FormationSlot>,
-    /// Its formation parent as a berth, the original's +0xc92e, `None` for
-    /// -1 and 0 the player: a berth, not an [`NpcId`], as the original
-    /// reads a slot, so a re-used berth is read as its new ship. The
-    /// formation pass rewrites it for a ship of AI type above 4 and leaves
-    /// it for any other, which so keeps a stale parent
+    /// Its formation parent, the original's +0xc92e: `None` for -1, no
+    /// parent, `Some(0)` for the player, otherwise a berth, not an
+    /// [`NpcId`], as the original reads a slot, so a re-used berth is read
+    /// as its new ship. The formation pass rewrites it for a ship of AI
+    /// type above 4 and leaves it for any other, which so keeps a stale parent
     /// ([`swarm::formation_parent`](crate::ai::swarm::formation_parent), and
     /// see [`fleet_formation`](crate::traffic::fleet_formation)). None at
     /// every spawn and launch (`_AISetup` @0x7f41e). Never saved.
