@@ -1817,14 +1817,17 @@ mod tests {
         let slot = FormationSlot::default();
         let mut escort = Npc {
             mission: Some(mark(ShipBehav::EscortPlayer, Some(slot))),
-            ..crate::traffic::fixture::npc(7, ShipStats::default())
+            ..crate::traffic::fixture::npc(7, ShipStats::new(nova_sim_base::fixture::FAST, &[]))
         };
+        let own = escort.own_handling().max_speed;
         assert!(escort.mission_escort());
         assert!(escort.thinks_as_escort());
+        assert_eq!(escort.top_speed(2.0), own * 2.0, "led");
         escort.mission_let_go = true;
         assert!(!escort.mission_escort());
         assert!(!escort.escorts_player());
         assert!(escort.thinks_as_escort());
+        assert_eq!(escort.top_speed(2.0), own, "`_ShipMaxSpeed` reads +0x9a");
         assert_eq!(escort.leader_ref(), None, "+0x9a -1");
         assert_eq!(escort.fleet(), ShipRef::Npc(NpcId(7)));
         assert_eq!(

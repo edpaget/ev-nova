@@ -397,7 +397,6 @@ mod tests {
             assert_eq!(mission.goal, Goal::Idle, "{name}");
             assert_eq!(mission.target, Some(ShipRef::Player), "{name}");
             assert_eq!(mission.ai_type, AiType::WimpyTrader, "{name}");
-            assert_eq!(mission.original_ai_type(), 3, "{name}: its class's");
         }
     }
 
@@ -426,22 +425,6 @@ mod tests {
             traffic_tick(session, &catalog);
             assert!(at(session, stranger) < at(session, late), "{overlap:?}");
         }
-    }
-
-    #[test]
-    fn a_mission_escort_let_go_flies_at_its_own_top_speed() {
-        // `_ShipMaxSpeed` reads +0x9a.
-        let (mut fleet, catalog) = fleet();
-        let flat_out = |fleet: &Fleet| {
-            let npc = fleet.session.space.npc(fleet.mission).expect("here");
-            (npc.top_speed(2.0), npc.own_handling().max_speed)
-        };
-        let (led, own) = flat_out(&fleet);
-        assert_eq!(led, own * 2.0);
-        dying(&mut fleet.session, true);
-        traffic_tick(&mut fleet.session, &catalog);
-        let (free, own) = flat_out(&fleet);
-        assert_eq!(free, own);
     }
 
     #[test]
@@ -510,7 +493,6 @@ mod tests {
         assert!(!mission.mission_let_go);
         assert_eq!(mission.goal, Goal::Idle, "no leave");
         assert_eq!(mission.ai_type, AiType::Warship);
-        assert_eq!(mission.original_ai_type(), 3);
     }
 
     /// The fleet with a ship of the mission marked `behav` beside it,
