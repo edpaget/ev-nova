@@ -1195,6 +1195,8 @@ pub(in crate::flight) fn trading() -> FakeCatalog {
         commodities: CommodityStrings {
             names: vec!["Food".to_owned()],
             name_patches: Default::default(),
+            lc_names: Vec::new(),
+            lc_name_patches: Default::default(),
             base_prices: vec!["75".to_owned()],
             price_patches: Default::default(),
         },

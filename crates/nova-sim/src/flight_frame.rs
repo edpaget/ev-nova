@@ -408,7 +408,8 @@ impl FlightOpening {
 /// The names fixed for a flight's life, which the view words its messages
 /// with: each ship class's name and long name, each outfit's name and
 /// lower-case name and plural, each good's name as the exchange names it,
-/// each `jünk`'s lower-case name, and each stellar's `spöb` name, as the
+/// each commodity's lower-case name, each `jünk`'s lower-case name, and
+/// each stellar's `spöb` name, as the
 /// session read them when it started
 /// ([`Session::opening`](crate::Session::opening)). Plain data: a test
 /// fills it from literals. The default names nothing, a flight that could
@@ -427,6 +428,9 @@ pub struct Names {
     pub outfits: BTreeMap<OutfitId, OutfitNames>,
     /// Each good's name as the exchange names it, a `jünk` among them.
     pub goods: BTreeMap<Good, String>,
+    /// Each standard commodity's lower-case name (`_lcCargoName`): what the
+    /// plunder dialog calls it.
+    pub lc_goods: BTreeMap<Good, String>,
     /// Each `jünk`'s `LCName`, raw, by ID: what a scan that finds it calls
     /// it.
     pub junk: BTreeMap<JunkId, String>,
@@ -485,6 +489,12 @@ impl Names {
     #[must_use]
     pub fn good(&self, good: Good) -> Option<&str> {
         self.goods.get(&good).map(String::as_str)
+    }
+
+    /// Standard commodity `good`'s lower-case name: none for a `jünk`.
+    #[must_use]
+    pub fn good_lc(&self, good: Good) -> Option<&str> {
+        self.lc_goods.get(&good).map(String::as_str)
     }
 
     /// `jünk` `junk`'s lower-case name.

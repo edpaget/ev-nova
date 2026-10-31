@@ -441,6 +441,9 @@ pub enum TradeRefusal {
 pub struct Commodity {
     /// Its name, from `STR#` 4000 or a plug-in's `'STR '` 9000 + n.
     pub name: String,
+    /// Its lower-case name (`_lcCargoName`), from `STR#` 4001 or a
+    /// plug-in's `'STR '` 9100 + n.
+    pub lc_name: String,
     /// Its base price, from `STR#` 4004.
     pub base_price: i64,
 }
@@ -654,6 +657,7 @@ pub fn commodities(strings: &CommodityStrings) -> Vec<(u8, Commodity)> {
                 n,
                 Commodity {
                     name: name_string(strings, at).to_owned(),
+                    lc_name: lc_name_string(strings, at).to_owned(),
                     base_price: i64::from(string_to_num(base_price_string(strings, at))),
                 },
             )
@@ -708,6 +712,17 @@ fn name_string(strings: &CommodityStrings, n: usize) -> &str {
         .get(n)
         .and_then(StringPatch::shown)
         .unwrap_or_else(|| strings.names.get(n).map_or("", String::as_str))
+}
+
+/// The string that names commodity `n` in lower case: its `'STR '`
+/// 9100 + n patch when one exists, whatever it holds, or else its `STR#`
+/// 4001 string (`_LoadStrings` @0x71ba4-0x71bf1), by [`name_string`]'s rule.
+fn lc_name_string(strings: &CommodityStrings, n: usize) -> &str {
+    strings
+        .lc_name_patches
+        .get(n)
+        .and_then(StringPatch::shown)
+        .unwrap_or_else(|| strings.lc_names.get(n).map_or("", String::as_str))
 }
 
 /// The string that prices commodity `n`: its `'STR '` 9300 + n patch when
@@ -841,6 +856,17 @@ impl Goods {
                 .find(|junk| junk.id == id)
                 .map(|junk| junk.name.as_str()),
         }
+    }
+
+    /// Commodity `n`'s lower-case name (`_lcCargoName`), empty for one with
+    /// no such name; none for a commodity numbered 6 or up, which is not
+    /// traded.
+    #[must_use]
+    pub fn commodity_lc_name(&self, n: u8) -> Option<&str> {
+        self.commodities
+            .iter()
+            .find(|(number, _)| *number == n)
+            .map(|(_, commodity)| commodity.lc_name.as_str())
     }
 }
 
@@ -2407,9 +2433,29 @@ mod tests {
         CommodityStrings {
             names: names.iter().map(|&s| s.to_owned()).collect(),
             name_patches: Default::default(),
+            lc_names: Vec::new(),
+            lc_name_patches: Default::default(),
             base_prices: prices.iter().map(|&s| s.to_owned()).collect(),
             price_patches: Default::default(),
         }
+    }
+
+    /// [`stock`] with `STR#` 4001's first strings.
+    fn lower_case() -> CommodityStrings {
+        CommodityStrings {
+            lc_names: ["food", "industrial goods", "medical supplies"]
+                .map(str::to_owned)
+                .to_vec(),
+            ..stock()
+        }
+    }
+
+    /// Each commodity's lower-case name, in order.
+    fn lc_names(strings: &CommodityStrings) -> Vec<String> {
+        commodities(strings)
+            .into_iter()
+            .map(|(_, commodity)| commodity.lc_name)
+            .collect()
     }
 
     /// [`stock`] with these `'STR '` 9300 + n patches.
@@ -2469,8 +2515,36 @@ mod tests {
     fn commodity(name: &str, base_price: i64) -> Commodity {
         Commodity {
             name: name.to_owned(),
+            lc_name: String::new(),
             base_price,
         }
+    }
+
+    #[test]
+    fn each_commodity_has_its_str_4001_name_and_a_missing_one_is_empty() {
+        assert_eq!(
+            lc_names(&lower_case()),
+            ["food", "industrial goods", "medical supplies", "", "", ""]
+        );
+    }
+
+    #[test]
+    fn a_lower_case_patch_wins_its_slot_whatever_it_holds() {
+        let mut strings = lower_case();
+        strings.lc_name_patches[0] = text("grain");
+        strings.lc_name_patches[1] = text("");
+        strings.lc_name_patches[2] = StringPatch::Empty;
+        strings.lc_name_patches[3] = StringPatch::Unreadable;
+        strings.lc_name_patches[5] = text("gear");
+        assert_eq!(lc_names(&strings), ["grain", "", "", "", "", "gear"]);
+    }
+
+    #[test]
+    fn a_goods_lower_case_name_is_a_traded_commoditys_alone() {
+        let goods = Goods::new(&lower_case(), Vec::new(), Vec::new());
+        assert_eq!(goods.commodity_lc_name(1), Some("industrial goods"));
+        assert_eq!(goods.commodity_lc_name(5), Some(""), "traded, unnamed");
+        assert_eq!(goods.commodity_lc_name(COMMODITIES), None, "not traded");
     }
 
     #[test]

@@ -10384,6 +10384,8 @@ pub(super) mod tests {
                 .map(str::to_owned)
                 .to_vec(),
             name_patches: Default::default(),
+            lc_names: Vec::new(),
+            lc_name_patches: Default::default(),
             base_prices: ["75", "350", "750", "900", "200"]
                 .map(str::to_owned)
                 .to_vec(),

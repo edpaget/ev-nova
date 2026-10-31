@@ -326,6 +326,8 @@ impl PilotCatalog for GameData {
         CommodityStrings {
             names: strings(self, COMMODITY_NAMES),
             name_patches: patches(self, NAME_PATCHES),
+            lc_names: strings(self, COMMODITY_LC_NAMES),
+            lc_name_patches: patches(self, LC_NAME_PATCHES),
             base_prices: strings(self, BASE_PRICES),
             price_patches: patches(self, PRICE_PATCHES),
         }
@@ -1507,6 +1509,13 @@ const COMMODITY_NAMES: i16 = 4000;
 /// The first `'STR '` patching `STR#` 4000, the Bible's Appendix III:
 /// 9000 + n patches commodity n's name.
 const NAME_PATCHES: i16 = 9000;
+
+/// The `STR#` naming them in lower case, `_lcCargoName`.
+const COMMODITY_LC_NAMES: i16 = 4001;
+
+/// The first `'STR '` patching `STR#` 4001: 9100 + n patches commodity n's
+/// lower-case name (`_LoadStrings` @0x71ba4-0x71bf1).
+const LC_NAME_PATCHES: i16 = 9100;
 
 /// The `STR#` pricing them, "Base Prices".
 const BASE_PRICES: i16 = 4004;
@@ -3593,14 +3602,17 @@ mod tests {
                 4000,
                 str_list(&["Food", "Industrial", "*Cargo"]),
             ),
+            (StrList::TYPE, 4001, str_list(&["food", "*cargo"])),
             (StrList::TYPE, 4004, str_list(&["75", "lots"])),
-            (StrList::TYPE, 4001, str_list(&["other"])),
+            (StrList::TYPE, 4002, str_list(&["other"])),
         ]);
         assert_eq!(
             data.commodity_strings(),
             CommodityStrings {
                 names: vec!["Food".into(), "Industrial".into(), "*Cargo".into()],
                 name_patches: Default::default(),
+                lc_names: vec!["food".into(), "*cargo".into()],
+                lc_name_patches: Default::default(),
                 base_prices: vec!["75".into(), "lots".into()],
                 price_patches: Default::default(),
             }
@@ -3612,6 +3624,7 @@ mod tests {
         assert_eq!(store(&[]).commodity_strings(), CommodityStrings::default());
         let data = store(&[
             (StrList::TYPE, 4000, short(str_list(&["Food"]))),
+            (StrList::TYPE, 4001, short(str_list(&["food"]))),
             (StrList::TYPE, 4004, str_list(&["75"])),
         ]);
         assert_eq!(
@@ -3619,6 +3632,8 @@ mod tests {
             CommodityStrings {
                 names: Vec::new(),
                 name_patches: Default::default(),
+                lc_names: Vec::new(),
+                lc_name_patches: Default::default(),
                 base_prices: vec!["75".into()],
                 price_patches: Default::default(),
             }
@@ -3676,6 +3691,8 @@ mod tests {
             CommodityStrings {
                 names: vec!["Food".into()],
                 name_patches: Default::default(),
+                lc_names: Vec::new(),
+                lc_name_patches: Default::default(),
                 base_prices: STOCK_PRICES.map(str::to_owned).to_vec(),
                 price_patches: [
                     StringPatch::Absent,
@@ -3793,9 +3810,38 @@ mod tests {
                     StringPatch::Absent,
                     StringPatch::Text("Gear".into()),
                 ],
+                lc_names: Vec::new(),
+                lc_name_patches: Default::default(),
                 base_prices: STOCK_PRICES.map(str::to_owned).to_vec(),
                 price_patches: Default::default(),
             }
+        );
+    }
+
+    #[test]
+    fn a_plugins_str_lower_case_patches_arrive_raw_beside_str_4001() {
+        let data = layered(
+            &[(StrList::TYPE, 4001, str_list(&["food"]))],
+            &[
+                (StrResource::TYPE, 9099, str_resource("before")),
+                (StrResource::TYPE, 9100, str_resource("grain")),
+                (StrResource::TYPE, 9101, Vec::new()),
+                (StrResource::TYPE, 9102, b"\x05ab".to_vec()),
+                (StrResource::TYPE, 9105, b"\x04gearxyz".to_vec()),
+                (StrResource::TYPE, 9106, str_resource("after")),
+                (StrList::TYPE, 9104, str_list(&["x"])),
+            ],
+        );
+        assert_eq!(
+            data.commodity_strings().lc_name_patches,
+            [
+                StringPatch::Text("grain".into()),
+                StringPatch::Empty,
+                StringPatch::Unreadable,
+                StringPatch::Absent,
+                StringPatch::Absent,
+                StringPatch::Text("gear".into()),
+            ]
         );
     }
 

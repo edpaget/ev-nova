@@ -593,15 +593,20 @@ pub struct ShipRecord {
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
 /// nth string for commodity n (from 0). A plug-in's `'STR '` 9000 + n
 /// patches commodity n's 4000 string, and its `'STR '` 9300 + n patches
-/// commodity n's 4004 string. The `nova_sim::market` rules decide
-/// which string names and which prices each commodity, and how a price
-/// is read.
+/// commodity n's 4004 string. `STR#` 4001 has their lower-case names, which
+/// `'STR '` 9100 + n patches the same way. The `nova_sim::market` rules
+/// decide which string names and which prices each commodity, and how a
+/// price is read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommodityStrings {
     /// Every string of `STR#` 4000, in order; none when it is missing.
     pub names: Vec<String>,
     /// `'STR '` 9000-9005, the nth for commodity n.
     pub name_patches: [StringPatch; 6],
+    /// Every string of `STR#` 4001, in order; none when it is missing.
+    pub lc_names: Vec<String>,
+    /// `'STR '` 9100-9105, the nth for commodity n.
+    pub lc_name_patches: [StringPatch; 6],
     /// Every string of `STR#` 4004, in order; none when it is missing.
     pub base_prices: Vec<String>,
     /// `'STR '` 9300-9305, the nth for commodity n.
@@ -2926,6 +2931,8 @@ mod tests {
             CommodityStrings {
                 names: vec!["Food".to_owned()],
                 name_patches: Default::default(),
+                lc_names: Vec::new(),
+                lc_name_patches: Default::default(),
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             }
