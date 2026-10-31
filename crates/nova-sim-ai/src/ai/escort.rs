@@ -61,8 +61,11 @@
 //! From the player's brake on (its +0x50 above 0), every ship the player
 //! leads takes its jump instead (`_EscortAI` @0x83a41-0x83a5f, goal 0xb
 //! @0x83be3): it drops its target and keeps formation, following the
-//! jump ([`Decision::follows_jump`]), whatever its order. Defend, Attack
-//! and formation write +0x50 = -1.0 with their +0x4c
+//! jump ([`Decision::follows_jump`]), whatever its order. Once goal 0xb is
+//! written under a wait
+//! ([`Npc::joins_leaders_jump`](crate::traffic::npc::Npc::joins_leaders_jump))
+//! it stays in that block until the wait ends, the player's jump over or
+//! not. Defend, Attack and formation write +0x50 = -1.0 with their +0x4c
 //! ([`Decision::ends_wait`]), as under an NPC parent.
 //!
 //! While the player breaks up (`_IsDying`), `_EscortAI`'s lost parent

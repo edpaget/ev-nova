@@ -7,7 +7,12 @@
 //! leader's orders, the think throttle, the regroup draw, the disabled
 //! reset and its type's think, `_EscortAI` included. So
 //! [`Traffic::think_holding`] makes it no decision: its goal and target
-//! stay as its jump left them. Its high level and low level still run.
+//! stay as its jump left them. Its high level and low level still run,
+//! for a disabled ship too: the high level has no disabled test on the ship
+//! (@0x901e5), so it runs the hold, the fighter turn-back and goal 0xb's
+//! block, push included, and only the low level's sub blocks are gated
+//! (@0x8521e-0x85258). A follower it gives up then takes its reset on the
+//! next dispatch, off the jump path.
 //! Before them come two cancels ([`Traffic::cancel_jump_follows`],
 //! @0x900d5-0x901a3), each to goal 0, sub 0, target and travel stellar -1
 //! and +0x50 -1.0: a follower of the player's jump while the player is
@@ -19,8 +24,8 @@
 //!
 //! **Goal 0xb** is a ship following its leader's jump
 //! ([`Npc::follows_leaders_jump`]): sub 0xd's warp goal
-//! ([`WarpGoal::Follow`]) under a goal other than its own jump's, a
-//! flee's or the regroup pause's.
+//! ([`WarpGoal::Follow`]), or goal 0xb written under a wait, under a goal
+//! other than its own jump's, a flee's or the regroup pause's.
 //!
 //! **The high level's AI wait** (`_HighLevelAIHandler` @0x8d4b9-0x8d4d2):
 //! with +0x4c above 0 and a goal other than 0xa and 0xe, the high level
@@ -41,6 +46,23 @@
 //! [`Npc::enter_leaders_jump`]), or, an NPC's escort that flies
 //! inertialess ([`Npc::flies_inertialess`]), leaves its fleet to jump on
 //! its own ([`Npc::detach_for_own_jump`], +0x50 = 0).
+//!
+//! **An entry under a wait** ([`Npc::joins_leaders_jump`]). The entry
+//! writes goal 0xb (@0x83a92) and the wait gate then returns, so the sub
+//! stays until the wait ends: it isn't 4 or 0xd, so the ship is off the jump
+//! path, its think, regroup draw, disabled reset and swarm check all run,
+//! and `_AIIsShipJumping` reads false, so a stage it holds is zeroed as it
+//! faces its +0x68. Each think stays in goal 0xb's block, whether or not
+//! its lead still draws (@0x83be3), writing its target -1 and testing
+//! `_ShipIsInertialess`, and so reaches no order block and keeps its wait.
+//! When the wait ends the same think sets sub 0xd's warp goal, and that
+//! tick's check follows or gives up, as the high level does on that frame.
+//! A launched fighter in its glide meets this as its carrier jumps, and any
+//! ship the player leads under the player's warp stage, whose write
+//! (`_AIMakeShipJumpWithParent` @0x82bb6-0x82bf3) tests no goal
+//! ([`Npc::follow_player_jump`]). A ship that runs no think, in
+//! [`Mode::Coasting`] or [`Mode::EnteringGate`], meets the entry only by that
+//! write, its first think setting the warp goal after its wait.
 //!
 //! **The fighter turn-back** ([`turn_back`], `_HighLevelAIHandler`
 //! @0x8d575-0x8d625), after the hold and before the goal blocks: a
@@ -66,6 +88,8 @@ use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::FlightRules;
 use crate::rulebook::RuleSource;
+#[cfg(doc)]
+use crate::traffic::npc::Mode;
 use crate::traffic::npc::{Npc, NpcId};
 #[cfg(doc)]
 use crate::traffic::warp_out;
@@ -94,8 +118,6 @@ impl Npc {
     /// the engine keeps beside it. A ship joining a jump counts any wait
     /// it runs, as a ship held at its gate waits in its [`Mode`], so its
     /// hold doesn't put it on sub 0xd early.
-    ///
-    /// [`Mode`]: crate::traffic::npc::Mode
     #[must_use]
     pub fn high_level_waits(&self) -> bool {
         (self.ai_wait > 0 || (self.joins_leaders_jump() && self.wait_running()))

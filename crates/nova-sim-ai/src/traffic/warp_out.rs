@@ -14,10 +14,18 @@
 //! @0x8d513-0x8d56b): on each advance pass a ship whose goal has left
 //! its jump ends its stage (the regroup pause keeping its sub-goal), a
 //! ship the player leads with its stage under way is held to the player's
-//! jump, and an NPC's follower whose stage is under way takes goal 2, or
-//! 3 with a target, and its own leave ([`leave_flight`](crate::traffic::leave_flight)),
-//! on its own clock along its leader's +0x68. It is skipped while the
-//! high level's AI wait runs ([`Npc::high_level_waits`]).
+//! jump, and any other ship under way takes goal 2, or 3 with a target,
+//! and its own leave ([`leave_flight`](crate::traffic::leave_flight)), on
+//! its own clock along any leader's +0x68. It tests no goal, so that covers
+//! a ship already in goal 2 or 3, and the high level's head first drops a
+//! target gone from the system (@0x8d4eb-0x8d50d). Goals 2 and 3's blocks
+//! then write its jump ([`hold_stage`]'s `leave_block`): goal 2 stays on
+//! sub-goal 4 only where its leave says to jump, and goal 3 under way takes
+//! it beyond 1000 or loses its stage inside. A ship taken off sub-goal 4
+//! with its stage still running reads the heading its new substate wants,
+//! as +0x68 is what the warp-out tests, and a run-out takes no thrust until
+//! the stage ends (`_HandleShip` @0x34a96-0x34a9a). The hold is skipped
+//! while the high level's AI wait runs ([`Npc::high_level_waits`]).
 //!
 //! **Sub-goal 4, its own jump** (`_LowLevelAIHandler` @0x8585b-0x859c5;
 //! [`own_jump`]), each advance pass (`_AIDispatch` runs on it alone):
@@ -49,22 +57,26 @@
 //! above 0, else it gives up (goal 0); led by an NPC, the leader is put
 //! on goal 2, and it follows while the leader's sub-goal is 1 or 4, else
 //! gives up (goal 0, its target dropped). The NPC-parent test reads the
-//! leader's substate ([`jump_with_leader::leaves_by_substate`]): its own
-//! jump or goal 2's brake. The push of the leader onto goal 2
-//! ([`send_leaders_out`]) skips a follower whose high level waits and a
-//! leader the player leads. `_MakeEscortsHyperWithParent`
-//! (@0x3fd54-0x3fdea) puts the ships the player leads on it each
-//! warp-stage frame of the player ([`Npc::follow_player_jump`]); before
-//! that, from the player's brake on, `_EscortAI`'s entry does, and it puts
-//! an NPC's escorts on their lead's jump (@0x839fd-0x83a92;
-//! [`jump_with_leader`]). A paused ship (goal 0x13) runs no goal 0xb
-//! check and makes no push, and its warp-out zeroes any stage its sub 0xd
-//! starts.
+//! leader's stored substate ([`jump_with_leader::leaves_by_substate`]) and
+//! no goal: its own jump, or sub 1 from any goal, while its brake leaves it
+//! stored. A give-up flies sub 0 in the same dispatch, moving on with no
+//! thrust. The push of the leader onto goal 2 ([`send_leaders_out`]) skips
+//! a follower whose high level waits, and reaches a leader the player
+//! leads. `_MakeEscortsHyperWithParent` (@0x3fd54-0x3fdea) puts the ships
+//! the player leads on it each warp-stage frame of the player
+//! ([`Npc::follow_player_jump`]); before that, from the player's brake on,
+//! `_EscortAI`'s entry does, and it puts an NPC's escorts on their lead's
+//! jump (@0x839fd-0x83a92; [`jump_with_leader`]). Under a wait either
+//! writes goal 0xb alone, its old substate standing
+//! ([`Npc::joins_leaders_jump`]). A paused ship (goal 0x13) runs no goal
+//! 0xb check and makes no push, and its warp-out zeroes any stage its sub
+//! 0xd starts.
 //!
 //! **Sub-goal 0xd, following** (@0x859c5-0x85c5f; [`follow_jump`]): its
 //! +0x68 is its leader's whole-degree heading. While the leader's +0x50
 //! is 1.0 or below it takes the leader's velocity and keeps formation
-//! (`_AIMaintainFormation` @0x85a28) and copies its glow. Otherwise, after
+//! (`_AIMaintainFormation` @0x85a28, in the player's formation for a ship
+//! the player leads) and copies its glow, with no thrust. Otherwise, after
 //! the clock guard: past 30.0, a ship an NPC leads leaves it and jumps on
 //! its own (goal 2, sub-goal 4, its +0x68 the leader's, its AI type +0x88
 //! its class's, @0x85a8f-0x85af1); while the leader is more than 10° off
@@ -114,19 +126,9 @@
 //!   (@0x8de9d-0x8deb0, @0x8df18-0x8df22): the engine's NPCs keep no
 //!   travel stellar for a jump
 //!   (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-4-escort-travel-stellar-into-pirate-think).
-//! - The hold's 2/3 swap by target for a ship already in goal 2 or 3
-//!   (@0x8d557-0x8d56b), the push on a leader the player leads
-//!   (@0x8def0), goal 0xb's sub-1 test for sub-1 holders other than goal
-//!   2's brake (@0x8defc-0x8df13), and a ship entering goal 0xb while its
-//!   AI wait runs keeping its old substate
-//!   (rdm:phase/escort-fleet-fidelity-followups/phase-10-left-out-of-jump-with-leader).
 //! - Sub-goal 0xd's frame after the detach reads its leader as ship −1
 //!   (@0x85af8-0x85b10, +0x9a just cleared), out of the ship table; the
 //!   engine ends the frame at the detach.
-//! - The thrust skip of a ship whose goal left its jump while its stage
-//!   is still above 0 and it does not yet face its +0x68 (@0x34a96): the
-//!   autopilot flies it as its new goal says, its thrust included, until
-//!   the warp-out's test zeroes its stage.
 
 use std::collections::BTreeMap;
 
@@ -311,9 +313,9 @@ pub struct LeaderWarp {
     pub aim: i16,
     /// Its velocity.
     pub velocity: Vec2,
-    /// Whether it is on its way out, the original's sub-goal 1 or 4
-    /// (goal 0xb's test, @0x8defc-0x8df13): an NPC's own jump or goal 2's
-    /// brake ([`jump_with_leader::leaves_by_substate`]).
+    /// Whether it is on its way out, the original's stored sub-goal 1 or 4
+    /// (goal 0xb's test, @0x8defc-0x8df13): an NPC's own jump, or any
+    /// goal's brake ([`jump_with_leader::leaves_by_substate`]).
     pub leaving: bool,
     /// Its engine glow's base, +0xc8d4, which a follower keeping formation
     /// copies (see [`follow_jump`], and the close formation's copy in
@@ -700,7 +702,8 @@ fn jump_slot(npc: &Npc, goal: WarpGoal, world: &World) -> Option<Vec2> {
 /// `leaders`, in `world` at `speeds`: goal 0xb's check and its low level,
 /// sub-goal 4 or 0xd ([`follow_check`], [`own_jump`], [`follow_jump`]) on
 /// the advance pass, then its flight ([`fly`]) and its warp-out
-/// ([`warp_block`]). None when it is not jumping: the autopilot flies it as
+/// ([`warp_block`]). A ship that gave up flies sub 0 that pass
+/// ([`fly_sub_0`]). None when it is not jumping: the autopilot flies it as
 /// its goal says. It takes no thrust, so its top speed plays no part.
 ///
 /// Sub 0xd under a lead at +0x50 ≤ 1.0 is a flight of its own, not the

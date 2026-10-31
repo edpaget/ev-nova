@@ -1332,11 +1332,11 @@ impl Npc {
     /// while it flies ([`Npc::ai_wait`]): a pirate's dock and hold after a
     /// plunder, a ship a pirate took into its fleet, a landed ship's stay
     /// at its stellar ([`land_flight::stay`](crate::traffic::land_flight::stay)),
-    /// and the wait of a ship following its leader's warp out while the
+    /// the wait of a ship following its leader's warp out while the
     /// leader still turns (`_LowLevelAIHandler` @0x85bc3, see
-    /// [`warp_out`](crate::traffic::warp_out)). The wait the engine
-    /// doesn't fly yet (a launched fighter's) will count here once built
-    /// (rdm weapons-fidelity phase 17's findings).
+    /// [`warp_out`](crate::traffic::warp_out)), and a launched fighter's
+    /// glide, from its bay weapon's record (`_LaunchFighter`
+    /// @0x3d843-0x3d85b).
     ///
     /// A pirate's count wait ([`Goal::CountWait`]) is this AI wait too, as
     /// the original keeps it in +0x4c, read so by

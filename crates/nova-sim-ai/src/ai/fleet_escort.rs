@@ -109,9 +109,12 @@
 //! its target dropped, following the lead's jump
 //! ([`Decision::follows_jump`]), or leaving its fleet when it flies
 //! inertialess. The order word is still written under a lead that is the
-//! player's escort; no order block runs, so its AI wait is kept.
-//! Defend, Attack and formation write +0x50 = -1.0 beside +0x4c,
-//! whoever the parent ([`Decision::ends_wait`]).
+//! player's escort; no order block runs, so its AI wait is kept. Once goal
+//! 0xb is written under a wait
+//! ([`Npc::joins_leaders_jump`](crate::traffic::npc::Npc::joins_leaders_jump))
+//! it stays in that block until the wait ends, whether or not its lead
+//! still draws. Defend, Attack and formation write +0x50 = -1.0 beside
+//! +0x4c, whoever the parent ([`Decision::ends_wait`]).
 //!
 //! **Not built here**, each a later phase's:
 //! - formation flight on slots, steering at the guard: phase 6's; until
@@ -146,8 +149,9 @@ pub struct FleetEscortAi {
 /// The order `npc` follows under its NPC parent among `around`
 /// (`_EscortAI` @0x83b36-0x83b7f): under a lead that is the player's
 /// escort, the lead's Defend or Attack while its goal isn't 0xa
-/// ([`Goal::flies_in_form`]), else Return (3), which docks a fighter;
-/// under any other lead, its stored word ([`Npc::order_word`]), which its
+/// ([`Goal::flies_in_form`], and not the goal the engine keeps beside goal
+/// 0xb, [`Npc::follows_leaders_jump`]), else Return (3), which docks a
+/// fighter; under any other lead, its stored word ([`Npc::order_word`]), which its
 /// lead issues ([`escort_orders`](crate::ai::escort_orders)).
 ///
 /// The lead's order is the one after the lead's own out-of-ammunition
