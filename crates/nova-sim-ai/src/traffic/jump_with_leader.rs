@@ -378,7 +378,7 @@ mod tests {
             (Goal::Flee(ShipRef::Player), false),
             (
                 Goal::Regroup {
-                    kept: crate::ai::regroup::Kept::Coast,
+                    kept: crate::ai::regroup::Kept::FollowsJump,
                 },
                 false,
             ),
@@ -899,7 +899,7 @@ mod tests {
         assert!(!cancelled(&npcs[1], &npcs[1..], None), "a lead not there");
         let mut paused = npcs.clone();
         paused[1].goal = Goal::Regroup {
-            kept: crate::ai::regroup::Kept::Coast,
+            kept: crate::ai::regroup::Kept::FollowsJump,
         };
         assert!(!cancelled(&paused[1], &paused, None), "not goal 0xb");
         let mut hulk = npcs;

@@ -29,8 +29,11 @@
 //!    candidate.
 //! 2. **None** (@0x894b1-0x894f3), a disabled ship with no intact fellow:
 //!    it leaves its fleet ([`Npc::leave_fleet`]), +0x50 = -1.0, and pauses
-//!    in goal 0x13, sub 0 ([`Kept::Coast`]), its target kept. In its gate
-//!    it is held there ([`Npc::leaves_gate_goal`]).
+//!    in goal 0x13, sub 0 ([`Kept::Coast`]), its target kept. The sub 0
+//!    write (@0x894e3) ends a jump the disabled cancel left it on, sub 4 or
+//!    0xd, so it is off the jump path ([`WarpGoal`] none) and draws its
+//!    release, disabled or whole. In its gate it is held there
+//!    ([`Npc::leaves_gate_goal`]).
 //! 3. **It leads** (@0x8934a-0x89474): it leaves its fleet, +0x50 = -1.0.
 //!    Under the lost lead's own government (both not independent and
 //!    equal, @0x8938a-0x893ae), it takes over the lead's goal and
@@ -209,12 +212,13 @@ impl Npc {
     }
 
     /// It is left with no fellow to follow: out of its fleet and any gate
-    /// goal, its warp at -1.0, in the regroup pause coasting (sub 0), its
-    /// target kept.
+    /// goal, its warp at -1.0 and off any jump, in the regroup pause
+    /// coasting (sub 0), its target kept.
     fn leave_alone(&mut self) {
         self.leaves_gate_goal();
         self.leave_fleet();
         self.warp.give_up();
+        self.warp.goal = None;
         self.goal = Goal::Regroup { kept: Kept::Coast };
         self.pursuit = Pursuit::default();
         self.docking = None;
@@ -267,18 +271,20 @@ impl Npc {
 mod tests {
     use super::*;
     use crate::ai::pursuit::Kept as PursuitKept;
-    use crate::ai::{Behaviour, Help, Surroundings};
+    use crate::ai::{Behaviour, Help, Surroundings, dispatch_gate};
     use crate::bay::Carrier;
     use crate::catalog::{GovtId, StellarId};
     use crate::chance::{Chance, NeverFires};
     use crate::escort::FormationSlot;
+    use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::gone::Freed;
     use crate::traffic::npc::Mode;
     use crate::traffic::plunder_dock::{DockSub, Docking};
+    use crate::traffic::regroup::RELEASE_DRAW;
     use crate::traffic::warp_out::GIVEN_UP_STAGE;
-    use nova_sim_base::fixture::FAST;
+    use nova_sim_base::fixture::{Draws, FAST};
 
     /// Every ship keeps its goal and target.
     #[derive(Debug)]
@@ -965,6 +971,129 @@ mod tests {
         assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast });
         assert_eq!(alone.target, Some(PLAYER), "held in the pause, not reset");
         assert_eq!(alone.warp.stage, GIVEN_UP_STAGE);
+    }
+
+    // A disabled follower alone, on a jump.
+
+    /// A disabled lead and its one follower, disabled in `goal` on `warp`,
+    /// holding the player as its target, its stage given up: the disabled
+    /// cancel's row (@0x8fce9), sub 4 or 0xd staying on the jump path.
+    fn alone_on_a_jump(goal: Goal, warp: WarpGoal) -> Traffic {
+        let mut alone = follower(FEDS, 300);
+        alone.condition = DISABLED;
+        alone.goal = goal;
+        alone.target = Some(PLAYER);
+        alone.warp.goal = Some(warp);
+        alone.warp.stage = GIVEN_UP_STAGE;
+        fleet(FEDS, DISABLED, vec![alone])
+    }
+
+    /// Each jump a follower can be on as it is left alone: its own and its
+    /// lead's, under its goal or kept in the pause.
+    fn jumps() -> [(Goal, WarpGoal); 4] {
+        let leads = WarpGoal::Follow(ShipRef::Npc(LEAD));
+        [
+            (Goal::JumpOut, WarpGoal::Own),
+            (
+                Goal::Follow {
+                    lead: LEAD,
+                    guard: None,
+                },
+                leads,
+            ),
+            (
+                Goal::Regroup {
+                    kept: Kept::OwnJump,
+                },
+                WarpGoal::Own,
+            ),
+            (
+                Goal::Regroup {
+                    kept: Kept::FollowsJump,
+                },
+                leads,
+            ),
+        ]
+    }
+
+    /// `traffic`'s think half by the engine, rolling on `chance`.
+    fn think_on(traffic: &mut Traffic, chance: &mut Draws) {
+        traffic.think_holding(&Keep, World::new(&[]), &[], chance);
+    }
+
+    #[test]
+    fn a_disabled_follower_alone_leaves_its_jump_for_sub_0() {
+        // The sub 0 write (@0x894e3) ends sub 4 or 0xd, so the jump path.
+        for (goal, warp) in jumps() {
+            let mut traffic = alone_on_a_jump(goal, warp);
+            think(&mut traffic);
+            let alone = of(&traffic, 1);
+            assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast }, "{goal:?}");
+            assert_eq!(alone.warp.goal, None, "{goal:?}");
+            assert_eq!(alone.warp.stage, GIVEN_UP_STAGE, "{goal:?}");
+            assert_eq!(alone.leader, None, "{goal:?}");
+            assert_eq!(alone.target, Some(PLAYER), "{goal:?}: kept");
+            assert!(!dispatch_gate::takes_jump_path(alone), "{goal:?}");
+            assert!(dispatch_gate::reaches_think(alone), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_alone_off_its_jump_draws_its_release_disabled_and_once_whole() {
+        // The draw (@0x8fe73) comes before the disabled reset and tests no
+        // condition, so it runs from the frame the check writes the pause.
+        for (goal, warp) in jumps() {
+            let mut traffic = alone_on_a_jump(goal, warp);
+            let mut disabled = Draws::of(&[]).keyed(RELEASE_DRAW, 99);
+            think_on(&mut traffic, &mut disabled);
+            assert_eq!(disabled.times_asked(RELEASE_DRAW), 1, "{goal:?}");
+            of_mut(&mut traffic, 1).condition = Condition::Intact;
+            let mut held = Draws::of(&[]).keyed(RELEASE_DRAW, 99);
+            think_on(&mut traffic, &mut held);
+            assert_eq!(held.times_asked(RELEASE_DRAW), 1, "{goal:?}");
+            let paused = Goal::Regroup { kept: Kept::Coast };
+            assert_eq!(of(&traffic, 1).goal, paused, "{goal:?}");
+            let mut released = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
+            think_on(&mut traffic, &mut released);
+            assert_eq!(released.times_asked(RELEASE_DRAW), 1, "{goal:?}");
+            let free = of(&traffic, 1);
+            assert_eq!(free.goal, Goal::Idle, "{goal:?}");
+            assert_eq!(free.target, Some(PLAYER), "{goal:?}: whole, no reset");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_alone_released_on_its_first_draw_takes_the_disabled_reset() {
+        // Released, the dispatch goes on to the reset (@0x8fec4-0x8ff13).
+        for (goal, warp) in jumps() {
+            let mut traffic = alone_on_a_jump(goal, warp);
+            let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
+            think_on(&mut traffic, &mut chance);
+            let reset = of(&traffic, 1);
+            assert_eq!(reset.goal, Goal::Idle, "{goal:?}");
+            assert_eq!(reset.target, None, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_follower_left_alone_coasts_once_whole_off_its_lost_leads_velocity() {
+        let at = Vec2::new(300.0, 400.0);
+        let moving = Vec2::new(0.0, 1.0);
+        for (goal, warp) in jumps() {
+            let mut traffic = alone_on_a_jump(goal, warp);
+            of_mut(&mut traffic, 0).state.velocity = Vec2::new(2.0, 0.0);
+            let alone = of_mut(&mut traffic, 1);
+            alone.state.position = at;
+            alone.state.velocity = moving;
+            alone.state.heading = 30.0;
+            think(&mut traffic);
+            of_mut(&mut traffic, 1).condition = Condition::Intact;
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
+            let state = of(&traffic, 1).state;
+            assert_eq!(state.velocity, moving, "{goal:?}");
+            assert_eq!(state.heading, 30.0, "{goal:?}");
+            assert_eq!(state.position, at + moving, "{goal:?}");
+        }
     }
 
     #[test]

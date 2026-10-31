@@ -75,7 +75,8 @@ use crate::traffic::warp_out::WarpGoal;
 /// docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kept {
-    /// Sub 0: it moves on at its velocity with no thrust or turn.
+    /// Sub 0: it moves on at its velocity with no thrust or turn. It holds
+    /// no [`WarpGoal`], so its dispatch reaches the release draw.
     Coast,
     /// Sub 0xd, its [`WarpGoal::Follow`] kept: the jump path flies it.
     FollowsJump,

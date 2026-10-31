@@ -909,7 +909,7 @@ mod tests {
         assert_eq!(fled.warp.goal, None, "goal 3 too");
         let mut paused = ship();
         paused.goal = Goal::Regroup {
-            kept: crate::ai::regroup::Kept::Coast,
+            kept: crate::ai::regroup::Kept::FollowsJump,
         };
         paused.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(5))));
         paused.warp.stage = 3.0;
