@@ -7,8 +7,9 @@ use crate::common;
 use std::rc::Rc;
 
 use nova_data::GameData;
-use nova_sim::SessionSetup;
+use nova_sim::control::Bit;
 use nova_sim::flight_frame::FlightFrame;
+use nova_sim::{HyperlinkRule, Pilot, RuleKey, RuleSource, Rulebook, SessionSetup, SystemId};
 use nova_view::Point;
 use nova_view::flight::sim_port::fixture::check_contract;
 use nova_view::flight::{Collaborators, FlightSim, FlightStart, open_flight};
@@ -42,4 +43,53 @@ fn a_stock_new_pilot_meets_the_contract_and_is_drawn_where_its_first_frame_puts_
     view.sim().frame(&mut frame);
     let at = frame.player().position;
     assert_eq!(view.shown_position(), Point::new(at.x, at.y));
+}
+
+/// Aldebaran's two versions, 141 and 532, both visible between Polaris
+/// missions 183 and 887, opened at the edge with no setup of the test's
+/// own and no tick. 173's Con slot names 532, so a pilot who explored 173
+/// knows it by the other `colocated_resolution` reading alone: the load
+/// works the known set out by the rule it is given. The two list the same
+/// slots, so their links agree here; `edge_checks`' fixture is where links
+/// differ.
+#[test]
+fn a_stock_pilot_opens_on_aldebaran_by_the_colocated_rule_it_is_set_up_with() {
+    let Some(data) = open() else {
+        return;
+    };
+    let data = Rc::new(data);
+    let mut pilot = Pilot::new(&data, "Ada").expect("a stock pilot");
+    pilot.bits_mut().set(Bit::new(305).expect("a bit"));
+    pilot.explore(SystemId(173));
+    assert!(!pilot.has_explored(SystemId(532)));
+    for source in RuleSource::ALL {
+        let rules = Rulebook::default().with_override(RuleKey::ColocatedResolution, source);
+        let view = open_flight(
+            Rc::clone(&data),
+            FlightStart::Loaded(pilot.clone()),
+            SessionSetup {
+                rules,
+                ..SessionSetup::default()
+            },
+            Collaborators::default(),
+        );
+        let session = view.session().expect("flying");
+        let (known, jumps) = match source {
+            RuleSource::Engine => (false, vec![SystemId(141)]),
+            RuleSource::Bible => (true, vec![SystemId(141), SystemId(532)]),
+        };
+        assert_eq!(session.is_known(SystemId(532)), known, "{source:?}");
+        assert_eq!(
+            session
+                .star_map()
+                .jumps(SystemId(173), HyperlinkRule::Engine),
+            jumps,
+            "{source:?}"
+        );
+        assert_eq!(
+            view.course_map().model().links(),
+            session.star_map().links(),
+            "{source:?}"
+        );
+    }
 }
