@@ -2309,6 +2309,22 @@ mod tests {
     }
 
     #[test]
+    fn neither_a_fleets_lead_nor_its_escorts_roll_a_voice() {
+        let mut out = Vec::new();
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            FleetCall::default(),
+            &mut crate::NeverFires,
+            &mut out,
+        );
+        assert_eq!(out.len(), 3, "its lead and two escorts");
+        assert!(out.iter().all(|ship| !ship.rolls_voice));
+    }
+
+    #[test]
     fn a_setup_linksyst_fleet_is_unannounced_and_an_arriving_one_announced() {
         let quotes = |ships: Vec<NewShip>| ships.iter().map(|ship| ship.quote).collect::<Vec<_>>();
         // Not a person, a fleet, slot 13 (fleet 141).
