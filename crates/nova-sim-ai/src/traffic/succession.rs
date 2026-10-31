@@ -1200,23 +1200,53 @@ mod tests {
     fn a_leads_jump_with_its_own_lead_is_taken_over_as_an_own_jump() {
         // Goal 0xb and sub 0xd copied with parent -1: the goal's block takes
         // goal 2, sub 4, target and travel stellar -1 (@0x8de7c → @0x8df54).
-        let mut traffic = taking_over(
-            REBELS,
-            Goal::Follow {
-                lead: NpcId(7),
-                guard: None,
-            },
-        );
-        of_mut(&mut traffic, 0).warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(7))));
-        think(&mut traffic);
-        let taker = of(&traffic, 1);
-        assert_eq!(taker.goal, Goal::JumpOut);
-        assert_eq!(taker.warp.goal, Some(WarpGoal::Own));
-        assert_eq!(taker.target, None);
-        assert!(!taker.travel_set);
-        assert_eq!(taker.pursuit, Pursuit::default());
-        assert_eq!(taker.docking, None);
-        assert_eq!(taker.leader, None);
+        // Its -1.0 and goal are written over any arrival it was in.
+        let taken_from = |mode: Mode, burst: RuleSource| {
+            let mut traffic = taking_over(
+                REBELS,
+                Goal::Follow {
+                    lead: NpcId(7),
+                    guard: None,
+                },
+            );
+            of_mut(&mut traffic, 0).warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(7))));
+            let taker = of_mut(&mut traffic, 1);
+            taker.mode = mode;
+            taker.emerges_from = taker.emerging().then_some(StellarId(310));
+            think_bursting(&mut traffic, burst);
+            of(&traffic, 1).clone()
+        };
+        let held = |ticks_left| Mode::HeldAtGate { ticks_left };
+        for burst in RuleSource::ALL {
+            let cut_short = |speed| (burst == RuleSource::Engine).then_some(speed);
+            for (mode, left, owed) in [
+                (Mode::Flying, Mode::Flying, None),
+                (Mode::Emerging { ticks_left: 30 }, held(30), None),
+                (Mode::LeavingGate { tick: 0 }, held(1), None),
+                (
+                    Mode::JumpingIn { tick: 3 },
+                    Mode::Flying,
+                    cut_short(glide_speed(3)),
+                ),
+                (
+                    Mode::LeavingGate { tick: 2 },
+                    Mode::Flying,
+                    cut_short(exit_speed(false, 2)),
+                ),
+            ] {
+                let taker = taken_from(mode, burst);
+                assert_eq!(taker.mode, left, "{mode:?} {burst:?}");
+                assert_eq!(taker.emerges_from, None, "{mode:?} {burst:?}");
+                assert_eq!(taker.owed_burst, owed, "{mode:?} {burst:?}");
+                assert_eq!(taker.goal, Goal::JumpOut, "{mode:?} {burst:?}");
+                assert_eq!(taker.warp.goal, Some(WarpGoal::Own), "{mode:?} {burst:?}");
+                assert_eq!(taker.target, None, "{mode:?} {burst:?}");
+                assert!(!taker.travel_set, "{mode:?} {burst:?}");
+                assert_eq!(taker.pursuit, Pursuit::default(), "{mode:?} {burst:?}");
+                assert_eq!(taker.docking, None, "{mode:?} {burst:?}");
+                assert_eq!(taker.leader, None, "{mode:?} {burst:?}");
+            }
+        }
     }
 
     #[test]
