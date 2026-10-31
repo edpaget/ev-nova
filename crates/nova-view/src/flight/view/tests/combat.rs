@@ -656,6 +656,7 @@ fn firing_at_an_npc_with_murk(catalog: FakeCatalog, murk: u8) -> Faked {
         ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc_at(npc, 180.0)])
     };
     frame.effective_murk = murk;
+    frame.murk_colour = 0x1081;
     let mut view = world(catalog, frame);
     super::faked_world::raise(&mut view, &[exploding_at(npc)]);
     view
@@ -720,16 +721,21 @@ fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
     assert!(level > 0, "murked where it went off: {boom:?}");
     let list = world_list(&view);
     let explosion = first(&list, sprite_of(400));
-    let DrawCommand::Sprite { tint, blend, .. } =
-        list.iter().nth(explosion).cloned().expect("drawn")
+    let DrawCommand::Colorized {
+        tint,
+        blend,
+        colorize,
+        ..
+    } = list.iter().nth(explosion).cloned().expect("drawn")
     else {
-        panic!("a sprite")
+        panic!("a colorized sprite")
     };
     assert_eq!(
-        (blend, tint),
+        (blend, tint, colorize),
         (
             Blend::Or,
-            crate::flight::murk::murk_tint(lights_tint(32), level)
+            lights_tint(32),
+            crate::Colorize::toward_pixel(level, 0x1081)
         )
     );
 }

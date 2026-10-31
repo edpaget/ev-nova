@@ -14,11 +14,10 @@
 //!   rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use super::catalog::Looks;
-use super::murk::murk_tint;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, Colorize, DrawList, Point};
+use crate::{Blend, Color, Colorize, DrawList, Point};
 
 /// An asteroid to draw.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,8 +39,9 @@ pub fn draw_asteroids(list: &mut DrawList, asteroids: &[AsteroidShown], looks: &
         match looks.asteroid_sheet(shown.kind) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                let tint = murk_tint(Color::WHITE, shown.colorize.level);
-                list.sprite(sheet.image.frame(frame), shown.at, tint);
+                let image = sheet.image.frame(frame);
+                let colorize = Some(shown.colorize);
+                list.mixed_sprite(image, shown.at, Color::WHITE, Blend::Normal, colorize);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -120,19 +120,19 @@ mod tests {
     }
 
     #[test]
-    fn a_murky_asteroid_is_darkened_by_its_murk() {
+    fn a_murky_asteroid_is_mixed_toward_its_colour() {
+        let murk = Colorize::toward_pixel(16, COLOUR);
         let murky = AsteroidShown {
-            colorize: Colorize::toward_pixel(16, COLOUR),
+            colorize: murk,
             ..shown(1.0, 0, 0)
         };
         let mut list = DrawList::new();
         draw_asteroids(&mut list, &[murky, shown(2.0, 0, 0)], &looks());
         let mut expected = DrawList::new();
-        let darkened = murk_tint(Color::WHITE, 16);
-        assert_eq!(darkened, Color::rgba(127, 127, 127, 255));
-        expected.sprite(ImageKey::sprite(1800, 0), at(1.0, 5.0), darkened);
-        expected.sprite(ImageKey::sprite(1800, 0), at(2.0, 5.0), Color::WHITE);
-        assert_eq!(list, expected, "murk 0 is white");
+        let image = ImageKey::sprite(1800, 0);
+        expected.colorized_sprite(image, at(1.0, 5.0), Color::WHITE, Blend::Normal, murk);
+        expected.sprite(image, at(2.0, 5.0), Color::WHITE);
+        assert_eq!(list, expected, "no murk draws plainly");
     }
 
     #[test]

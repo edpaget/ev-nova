@@ -63,10 +63,10 @@ use nova_sim::trig::intercept_angle;
 use nova_sim::{Chance, Vec2};
 
 use super::catalog::Looks;
-use super::murk::{SeenMurk, murk_tint};
+use super::murk::SeenMurk;
 use super::slot_pool::SlotPool;
 use crate::system::camera::Camera;
-use crate::{Color, DrawList, Point};
+use crate::{Blend, Color, DrawList, Point};
 
 /// Moves the place `at` if `wrap` reaches it.
 pub(super) fn carry_point(wrap: &PlayerWrap, at: &mut Point) {
@@ -202,15 +202,15 @@ impl EscapePods {
             let Some(tint) = pod.tint() else {
                 continue;
             };
-            let level = seen.at(Vec2::new(pod.at.x, pod.at.y)).level;
-            let tint = murk_tint(tint, level);
+            let colorize = seen.at(Vec2::new(pod.at.x, pod.at.y));
             let frame = sheet.image.frame(pod.frame);
             let at = camera.world_to_screen(pod.at);
-            if pod.life >= POD_FADE {
-                list.sprite(frame, at, tint);
+            let blend = if pod.life >= POD_FADE {
+                Blend::Normal
             } else {
-                list.crossfade_sprite(frame, at, tint);
-            }
+                Blend::OrCrossfade
+            };
+            list.mixed_sprite(frame, at, tint, blend, Some(colorize));
         }
     }
 
@@ -235,7 +235,6 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::ImageKey;
-    use crate::draw::Blend;
     use crate::flight::catalog::EffectSheet;
 
     /// Draws its script, then the last outcome.
@@ -423,42 +422,49 @@ mod tests {
     }
 
     #[test]
-    fn a_pod_far_from_the_viewer_in_murk_is_darkened_opaque_or_fading() {
+    fn a_pod_far_from_the_viewer_in_murk_is_mixed_opaque_or_fading() {
         let mut pods = spawned(&[20, 90, 5]);
-        let tints = |pods: &EscapePods, viewer: Vec2| -> Vec<(Color, Blend)> {
+        let mixed = |pods: &EscapePods, viewer: Vec2| -> Vec<_> {
             let mut list = DrawList::new();
             let camera = Camera::centred_on(Point::default());
             pods.draw(&mut list, &camera, &looks(), seen_from(viewer));
             list.into_iter()
                 .filter_map(|command| match command {
-                    DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend)),
+                    DrawCommand::Sprite { tint, blend, .. } => Some((*tint, *blend, None)),
+                    DrawCommand::Colorized {
+                        tint,
+                        blend,
+                        colorize,
+                        ..
+                    } => Some((*tint, *blend, Some(*colorize))),
                     _ => None,
                 })
                 .collect()
         };
         let pod = pods.pods()[0];
-        let level = seen_from(Vec2::ZERO)
-            .at(Vec2::new(pod.at.x, pod.at.y))
-            .level;
-        assert!(level > 0, "murky out here: {level}");
-        let opaque = murk_tint(Color::WHITE, level);
-        assert_eq!(tints(&pods, Vec2::ZERO), [(opaque, Blend::Normal)]);
-        let beside = Vec2::new(pod.at.x, pod.at.y);
+        let position = Vec2::new(pod.at.x, pod.at.y);
+        let murk = seen_from(Vec2::ZERO).at(position);
+        assert!(murk.level > 0, "murky out here: {}", murk.level);
         assert_eq!(
-            tints(&pods, beside),
-            [(Color::WHITE, Blend::Normal)],
-            "untinted at the viewer"
+            mixed(&pods, Vec2::ZERO),
+            [(Color::WHITE, Blend::Normal, Some(murk))]
+        );
+        assert_eq!(
+            mixed(&pods, position),
+            [(Color::WHITE, Blend::Normal, None)],
+            "plain at the viewer"
         );
         while pods.pods()[0].life >= POD_FADE {
             pods.step();
         }
         let pod = pods.pods()[0];
-        let level = seen_from(Vec2::ZERO)
-            .at(Vec2::new(pod.at.x, pod.at.y))
-            .level;
-        let fading = murk_tint(pod.tint().expect("shown"), level);
-        assert_ne!(fading, pod.tint().expect("shown"));
-        assert_eq!(tints(&pods, Vec2::ZERO), [(fading, Blend::OrCrossfade)]);
+        let murk = seen_from(Vec2::ZERO).at(Vec2::new(pod.at.x, pod.at.y));
+        let fading = pod.tint().expect("shown");
+        assert_eq!(
+            mixed(&pods, Vec2::ZERO),
+            [(fading, Blend::OrCrossfade, Some(murk))],
+            "the mix under its fade"
+        );
     }
 
     #[test]

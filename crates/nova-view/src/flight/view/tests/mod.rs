@@ -695,7 +695,13 @@ fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
 }
 
 fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
-    move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
+    move |command| {
+        matches!(
+            unclipped(command),
+            DrawCommand::Sprite { image, .. } | DrawCommand::Colorized { image, .. }
+                if image.id == id
+        )
+    }
 }
 
 /// Whether `command` is the escort menu's border's top edge, the first
