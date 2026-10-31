@@ -680,6 +680,15 @@ pub struct Npc {
     /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
     /// None at every spawn. Never saved.
     pub owed_burst: Option<f32>,
+    /// Whether its burst ended this tick in a wait
+    /// ([`held_burst::settle`](crate::traffic::held_burst::settle)), so
+    /// this tick's fire step still runs: `_HandleShip` tested the wait
+    /// before the burst block and tests none at its fire step
+    /// (@0x34a54-0x34a72, @0x34d32-0x34d8b, @0x34fcb-0x35018).
+    /// [`fire::gated`](crate::ai::fire::gated) reads it and
+    /// [`fire::after_firing`](crate::ai::fire::after_firing) clears it.
+    /// `false` at every spawn. Never saved.
+    pub fires_on_burst_end: bool,
     /// Whether its last flight kept close formation: the original's stored
     /// sub-goal +0xc8ca == 0xc, which `_IsShipInCloseForm` (@0x82f54)
     /// reads. Each flight writes it ([`Npc::keeps_close_formation`] from

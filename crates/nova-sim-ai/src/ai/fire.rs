@@ -61,6 +61,9 @@
 //!   its trigger but its fighter bays and its point defence, and its pick
 //!   is neither fired nor cleared. A waiting escort's turret find still
 //!   becomes its pick ([`escort::fire_unprovoked`](crate::ai::escort::fire_unprovoked)).
+//!   A burst that ends in its wait still takes that frame's fire step
+//!   ([`Npc::fires_on_burst_end`]), which comes after the wait's start and
+//!   tests no wait (@0x34d32-0x34d8b, @0x34fcb-0x35018).
 //! - **After firing** ([`after_firing`], `_HandleShip`): a pick fired of a
 //!   weapon without `Flags` 0x0002 is cleared, flag and pick alike; a
 //!   secondary's stays, so a gun pass that finds nothing fires it again.
@@ -648,10 +651,13 @@ fn launches_after_passes(npc: &Npc, around: &Surroundings, second: Option<Weapon
 /// An escape pod (class 0x2ff) is exempt too (@0x34a6c): its wait is its
 /// [`Mode::Adrift`](crate::traffic::npc::Mode::Adrift), which
 /// [`Npc::wait_running`] doesn't read, so no test of its class is needed.
+/// A burst that ended this tick in its wait ([`Npc::fires_on_burst_end`])
+/// passes it all, as that wait was tested before the burst block and the
+/// fire step tests none (@0x34d32-0x34d8b, @0x34fcb-0x35018).
 #[must_use]
 pub fn gated(npc: &Npc) -> Trigger {
     let trigger = npc.trigger;
-    if !npc.wait_running() || npc.count_wait() {
+    if !npc.wait_running() || npc.count_wait() || npc.fires_on_burst_end {
         return trigger;
     }
     Trigger {
@@ -674,13 +680,19 @@ pub fn gated(npc: &Npc) -> Trigger {
 /// slot's, see [`berth_picks`](crate::traffic::berth_picks)) is kept
 /// forever, firing nothing, and a weapon with no record is cleared.
 /// While its wait runs nothing was fired ([`gated`]), so its pick stays.
+/// A burst that ended this tick in its wait ([`Npc::fires_on_burst_end`])
+/// had its fire step: the mark goes, and its trigger is released, so its
+/// coast fires nothing.
 pub fn after_firing(npc: &mut Npc, arsenal: &Arsenal) {
-    let Some(fired) = gated(npc).only else {
-        return;
-    };
-    if !arsenal.weapon(fired).is_some_and(WeaponSpec::secondary) {
+    if let Some(fired) = gated(npc).only
+        && !arsenal.weapon(fired).is_some_and(WeaponSpec::secondary)
+    {
         npc.trigger.only = None;
         npc.pick = None;
+    }
+    if npc.fires_on_burst_end {
+        npc.fires_on_burst_end = false;
+        npc.trigger = Trigger::default();
     }
 }
 
@@ -3811,6 +3823,57 @@ mod tests {
         );
         npc.ai_wait = 0;
         assert_eq!(gated(&npc), FULL);
+    }
+
+    #[test]
+    fn a_burst_ending_in_its_wait_passes_its_whole_trigger_for_that_tick() {
+        // `_HandleShip` tested the wait before the burst block, and its
+        // fire step tests none (@0x34a54-0x34a72, @0x34fcb-0x35018).
+        let mut npc = shooter(&[gun(128, 1, 1)], Goal::Idle);
+        npc.trigger = FULL;
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40 };
+        assert_ne!(gated(&npc), FULL, "the wait gates it");
+        npc.fires_on_burst_end = true;
+        assert_eq!(gated(&npc), FULL);
+    }
+
+    #[test]
+    fn after_firing_on_a_bursts_end_releases_the_trigger_as_the_pick_goes_or_stays() {
+        let after = |pick: i16| {
+            let mut npc = holding(shooter(&[gun(128, 1, 1)], Goal::Idle), pick);
+            npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40 };
+            npc.trigger = Trigger {
+                only: id(pick),
+                keep: id(pick),
+                point_defence: true,
+                ..Trigger::default()
+            };
+            npc.fires_on_burst_end = true;
+            after_firing(&mut npc, &gun_and_secondary());
+            (npc.fires_on_burst_end, npc.trigger, npc.pick)
+        };
+        assert_eq!(after(128), (false, Trigger::default(), None), "a primary");
+        assert_eq!(
+            after(131),
+            (false, Trigger::default(), id(131)),
+            "a secondary's pick stays"
+        );
+    }
+
+    #[test]
+    fn after_firing_on_a_bursts_end_with_nothing_flagged_still_clears_the_mark() {
+        let mut npc = holding(shooter(&[gun(128, 1, 1)], Goal::Idle), 128);
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 40 };
+        npc.trigger = Trigger {
+            keep: id(128),
+            point_defence: true,
+            ..Trigger::default()
+        };
+        npc.fires_on_burst_end = true;
+        after_firing(&mut npc, &gun_and_secondary());
+        assert!(!npc.fires_on_burst_end);
+        assert_eq!(npc.trigger, Trigger::default());
+        assert_eq!(npc.pick, id(128), "nothing fired, so nothing cleared");
     }
 
     #[test]

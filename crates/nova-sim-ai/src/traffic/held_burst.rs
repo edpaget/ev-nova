@@ -202,7 +202,10 @@ fn burst(
 /// ([`stop_jumping`]), its glow falls (F4), and, as `inertia` says, it
 /// ends as a gate's own burst does ([`autopilot::after_burst`]: an
 /// inertialess ship's velocity zeroed, and a ship with no lead waiting
-/// its Rand(30) + 30, rolled on `chance`).
+/// its Rand(30) + 30, rolled on `chance`). This tick's fire step still
+/// runs, as it tests no wait: a ship now waiting keeps the trigger
+/// [`autopilot::after_burst`] released, marked
+/// ([`Npc::fires_on_burst_end`]). A ship with a lead takes no wait.
 pub(crate) fn settle(
     npc: &mut Npc,
     owed: Option<f32>,
@@ -218,7 +221,12 @@ pub(crate) fn settle(
     }
     stop_jumping(npc);
     npc.display.drive.thrust = Thrust::None;
+    let trigger = npc.trigger;
     autopilot::after_burst(npc, speeds, inertia, chance);
+    if npc.wait_running() {
+        npc.trigger = trigger;
+        npc.fires_on_burst_end = true;
+    }
 }
 
 /// `_AIMakeShipStopJumping` (@0x82e77-0x82eba, F3): goal and sub-goal 0
@@ -241,7 +249,9 @@ fn stop_jumping(npc: &mut Npc) {
 mod tests {
     use super::*;
     use crate::ai::pursuit::Kept;
+    use crate::catalog::WeaponId;
     use crate::combat::ShipRef;
+    use crate::combat::armament::Trigger;
     use crate::flight::{ShipState, Turn, facing};
     use crate::geometry::Vec2;
     use crate::hail::Help;
@@ -555,6 +565,75 @@ mod tests {
         let ended = settled(6.2, 5.9, led, Inertia::Inertial, &mut draws);
         assert_eq!((ended.mode, ended.owed_burst), (Mode::Flying, None));
         assert_eq!(draws.asked, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn a_burst_ending_in_a_wait_keeps_its_trigger_for_this_ticks_fire_and_is_marked() {
+        // `_HandleShip`'s fire step comes after the end and tests no wait
+        // (@0x34d32-0x34d8b, @0x34fcb-0x35018).
+        let held = Trigger {
+            only: Some(WeaponId(131)),
+            keep: Some(WeaponId(131)),
+            point_defence: true,
+            ..Trigger::default()
+        };
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        let mut npc = owing(Some(6.0));
+        npc.trigger = held;
+        settle(
+            &mut npc,
+            Some(6.2),
+            own,
+            Inertia::Inertial,
+            &mut Draws::of(&[0]),
+        );
+        assert!(matches!(npc.mode, Mode::Coasting { .. }));
+        assert_eq!(npc.trigger, held);
+        assert!(npc.fires_on_burst_end);
+    }
+
+    #[test]
+    fn a_burst_ending_with_a_lead_takes_no_wait_and_needs_no_mark() {
+        let held = Trigger {
+            only: Some(WeaponId(131)),
+            ..Trigger::default()
+        };
+        let led = TopSpeeds {
+            own: 6.0,
+            lead: Some(6.0),
+        };
+        let mut npc = owing(Some(6.0));
+        npc.trigger = held;
+        settle(
+            &mut npc,
+            Some(6.2),
+            led,
+            Inertia::Inertial,
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(npc.mode, Mode::Flying);
+        assert_eq!(npc.trigger, held);
+        assert!(!npc.fires_on_burst_end);
+    }
+
+    #[test]
+    fn a_burst_going_on_is_not_marked() {
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        let mut npc = owing(Some(7.0));
+        settle(
+            &mut npc,
+            Some(7.2),
+            own,
+            Inertia::Inertial,
+            &mut Draws::of(&[]),
+        );
+        assert!(!npc.fires_on_burst_end);
     }
 
     #[test]
