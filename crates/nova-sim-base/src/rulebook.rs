@@ -292,6 +292,7 @@
 //! | [`NpcJumpFuel`](RuleKey::NpcJumpFuel) | `npc_jump_fuel` | an NPC whose class's `Fuel` is above 99 and that no other ship tractors can jump with an empty tank; only a ship whose person starts with zero fuel (`përs` `Flags2` 0x0001) needs 100 fuel now (`_AIShipHasFuelForJump` @0x7f48f-0x7f500; see `nova_sim::ai::leave`) | every NPC also needs 100 fuel now\* |
 //! | [`OddsCache`](RuleKey::OddsCache) | `odds_cache` | each reader of a ship's odds (the warship's and interceptor's odds retreat, `_WarshipAI` @0x8bd22, `_InterceptorAI` @0x8d1cd; the call for reinforcements, `_AICallForReinforcements` @0x7f60d, @0x7f69b; a fleet leader's orders to its warships, `_AIIssueEscortOrders` @0x89a5d) reads its slot's cached odds (+0xc914): -1 from its spawn until `_DoPlayGameWork`'s odds pass reaches it, refreshing one slot a frame after the thinks (@0x442b0-0x44336, @0x44542-0x44553; see `nova_sim_ai::traffic::odds_cache`) | each reader works the odds out fresh at its read\* |
 //! | [`ReusedSlotSearch`](RuleKey::ReusedSlotSearch) | `reused_slot_search` | a ship brought into a ship-table slot takes the search timer (+0xc90c) the slot's last ship left, in any system, pilot or game since launch, as only `_HighLevelAIHandler`'s lost-sight block writes it and the table is an uncleared `NewPtr` (`_InitArrays` @0x1b7a1): a search broken off is counted down with no roll, and a never-used slot's 0 drops a lost target at once (@0x8d830, @0x8d85f-0x8d8a6; see `nova_sim_ai::traffic::berth_search`) | every ship starts with no timer, its first loss of sight rolling a 100-199 frame search\* |
+//! | [`ReusedSlotVoice`](RuleKey::ReusedSlotVoice) | `reused_slot_voice` | a ship from a spawn that writes no voice holds the variant (+0xc922) the slot's last ship left, in any system, pilot or game since launch, as `_GenericRandomShipSpawn` (@0x3c89f) never writes it, and a never-used slot's 0, the even clips: so `_EscortAI`'s roll (@0x83980-0x839f6) never fires, and a hired escort's government forces no variant (see `nova_sim_ai::traffic::berth_voices`) | such a ship holds no variant, and `_EscortAI`'s roll gives it one at its first think, the variant a government's `VoiceType` forces included |
 //! | [`RefuelCap`](RuleKey::RefuelCap) | `refuel_cap` | a refuelling ship gives a unit a think while its target holds 100 or less, with no cap at the tank, done only above 100, tested before the add (@0x8f548-0x8f57f); the player's per-frame clamp to the tank (@0x6d9c7-0x6d9e1) leaves a tank of 100 or less refuelled for ever (see `nova_sim_ai::traffic::refuel_dock`) | the add stops at the tank, and a full tank is done too\* |
 //! | [`EscapeToMainScreen`](RuleKey::EscapeToMainScreen) | `escape_to_main_screen` | Escape in flight entered from the main screen saves the pilot and returns to the main screen with it still held, so Enter Ship resumes it: the port's own control, as `_PlayGame` is left only by death (`_HandlePlayer` @0x6883d) or Quit | Escape in flight does nothing, as in the original\* |
 //! | [`IntroForReopenedPilot`](RuleKey::IntroForReopenedPilot) | `intro_for_reopened_pilot` | a pilot that hasn't seen the intro screen gets, as it enters play, the intro of the last pilot New Pilot made in this run, and an empty one (no picture, no text, still marked seen) when none has been made since launch, as the intro's IDs are globals that only `_DoNewPilot` fills (`_GetCharResourceIntroIDs` @0x193ad) and `_InitMainScreen` resets at launch (@0x16101-0x1612d; see `nova_view::menu::intro`) | the first `chär`'s intro, made in this run or not ("shown when the player starts a new game with this character") |
@@ -851,6 +852,18 @@ rule_keys! {
     /// says (see
     /// `nova_sim::Session::with_rules`).
     FighterRecall => "fighter_recall",
+    /// What voice variant (+0xc922) a ship holds when its spawn writes
+    /// none. By the engine, the word its ship-table slot's last ship left,
+    /// in any system, pilot or game since launch (see
+    /// `nova_sim_ai::traffic::kept_berths`), and a never-used slot's 0,
+    /// the even clips: `_GenericRandomShipSpawn` (@0x3c89f) never writes
+    /// it, so `_EscortAI`'s roll (@0x83980-0x839f6), which only a value
+    /// above 1 reaches, never fires, and a government's forced variant
+    /// does nothing for a hired escort (see
+    /// `nova_sim_ai::traffic::berth_voices`). By the other reading, the
+    /// Bible's forced `VoiceType`, such a ship holds none, and the roll
+    /// gives it one at its first think, a forced variant included.
+    ReusedSlotVoice => "reused_slot_voice",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
     /// it), and an unmet `Require` only hides the ship when its `Flags3`
@@ -6752,6 +6765,7 @@ mod tests {
                 RuleKey::EscortOrders,
                 RuleKey::FighterLaunch,
                 RuleKey::FighterRecall,
+                RuleKey::ReusedSlotVoice,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
@@ -8194,6 +8208,22 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(RuleKey::ALL.iter().rev().nth(37), Some(&RuleKey::OddsCache));
+    }
+
+    #[test]
+    fn the_reused_slot_voice_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::ReusedSlotVoice;
+        assert_eq!(rule.key(), "reused_slot_voice");
+        assert_eq!(RuleKey::from_key("reused_slot_voice"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(284), Some(&rule));
     }
 
     #[test]
