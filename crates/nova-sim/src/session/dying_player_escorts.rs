@@ -91,10 +91,10 @@ impl Session {
     /// Each intact `ShipBehav` 1 ship is led again, as the dispatch leads
     /// it (@0x8fc03-0x8fc22), and let go again if the player is `dying` and
     /// its think reaches `_EscortAI`. One not intact isn't led again
-    /// (@0x8fc0c), so a let go stands. The formation re-forms as one rejoins
-    /// it: the hired ships may have left meanwhile.
+    /// (@0x8fc0c), so a let go stands. One that rejoins takes its slot from
+    /// the same pass's [`Session::reform_on_swarm_change`], the hired ships
+    /// perhaps gone meanwhile.
     fn let_go_of_mission_escorts(&mut self, dying: bool) {
-        let mut rejoined = false;
         for npc in self
             .space
             .traffic
@@ -102,12 +102,8 @@ impl Session {
             .iter_mut()
             .filter(|npc| npc.condition == Condition::Intact)
         {
-            let let_go = dying && led_again(npc) && dispatch_gate::reaches_escort_think(npc);
-            rejoined |= npc.mission_let_go && !let_go;
-            npc.mission_let_go = let_go;
-        }
-        if rejoined {
-            self.reform();
+            npc.mission_let_go =
+                dying && led_again(npc) && dispatch_gate::reaches_escort_think(npc);
         }
     }
 
