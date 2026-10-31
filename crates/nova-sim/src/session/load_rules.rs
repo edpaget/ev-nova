@@ -33,9 +33,24 @@ fn loaded(catalog: &FakePilotCatalog, pilot: Pilot, rules: &Rulebook) -> Session
     Session::load(catalog, pilot, rules).expect("loads")
 }
 
+/// [`alternates`] with 130, explored, listing 134 too: a Con slot is known
+/// through its place, so the known set a rebuild works out tells a session
+/// built by a reading from one given it afterwards.
+fn listing_the_shadowed() -> FakePilotCatalog {
+    let mut catalog = alternates();
+    catalog
+        .star_map
+        .iter_mut()
+        .find(|system| system.id == SystemId(130))
+        .expect("130 on the map")
+        .links
+        .push(SystemId(134));
+    catalog
+}
+
 #[test]
 fn a_new_pilots_session_reads_the_rules_it_is_given() {
-    let catalog = alternates();
+    let catalog = listing_the_shadowed();
     for source in RuleSource::ALL {
         let rules = rules(RuleKey::ColocatedResolution, source);
         let session = Session::start_ruled(&catalog, &rules).expect("starts");
@@ -46,6 +61,11 @@ fn a_new_pilots_session_reads_the_rules_it_is_given() {
                 .jumps(SystemId(130), HyperlinkRule::Engine),
             by(source, ids(&[131]), ids(&[131, 134])),
             "{source:?}"
+        );
+        assert_eq!(
+            session.is_known(SystemId(134)),
+            by(source, false, true),
+            "the start's rebuild read that map: {source:?}"
         );
     }
 }
@@ -67,15 +87,7 @@ fn a_load_holds_the_rulebook_it_is_given() {
 
 #[test]
 fn a_loads_links_and_known_set_follow_the_colocated_rule_it_is_given() {
-    // 130, explored, lists 134 too: a Con slot is known through its place.
-    let mut catalog = alternates();
-    catalog
-        .star_map
-        .iter_mut()
-        .find(|system| system.id == SystemId(130))
-        .expect("130 on the map")
-        .links
-        .push(SystemId(134));
+    let catalog = listing_the_shadowed();
     for source in RuleSource::ALL {
         let rules = rules(RuleKey::ColocatedResolution, source);
         let session = loaded(&catalog, pilot(&catalog), &rules);
