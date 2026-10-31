@@ -10,7 +10,7 @@
 
 use super::faked_world::{shows, world_by};
 use super::*;
-use crate::flight::murk::{murk_tint, sprite_murk};
+use crate::flight::murk::sprite_murk;
 use crate::flight::ship_layers::{lights_murk, npc_glow_rolls};
 use crate::flight::weapon_glow::npc_glow_level;
 use nova_sim::catalog::{ShipDisplay, ShipExits};
@@ -53,6 +53,12 @@ fn drawn_of(view: &Faked, image: i16) -> Vec<(u16, Color, bool)> {
         .iter()
         .filter_map(|command| match *command {
             DrawCommand::Sprite {
+                image: key,
+                tint,
+                blend,
+                ..
+            }
+            | DrawCommand::Colorized {
                 image: key,
                 tint,
                 blend,
@@ -142,12 +148,17 @@ fn npc_shown(heading: f32) -> FrameShip {
     }
 }
 
+/// The colour [`shown_by`]'s system murks toward: a stock one.
+pub(super) const MURK_COLOUR: u16 = 0x1081;
+
 /// A scripted flight from `catalog` by `rules`: the player and NPC 0 as
 /// [`player_shown`] and [`npc_shown`] have them, the NPC facing
-/// `heading`, in a system of effective murk `murk`, a tick in.
+/// `heading`, in a system of effective murk `murk` toward
+/// [`MURK_COLOUR`], a tick in.
 pub(super) fn shown_by(catalog: FakeCatalog, heading: f32, murk: u8, rules: &Rulebook) -> Faked {
     let mut frame = in_sol_with(vec![player_shown(), npc_shown(heading)]);
     frame.effective_murk = murk;
+    frame.murk_colour = MURK_COLOUR;
     let mut view = world_by(catalog, frame, rules);
     view.elapsed = TICK;
     view
@@ -209,20 +220,27 @@ fn an_npcs_glow_is_drawn_at_its_base_held_below_its_murk_and_murked() {
     let murk = sprite_murk(npc.position, Vec2::ZERO, 30);
     assert!(murk > 0, "a murky system");
     let level = glow_level(29, now(&view), &npc_glow_rolls(NPC_0)).expect("lit");
-    let tint = murk_tint(lights_tint(npc_glow_level(level, murk)), murk);
+    let toward = |level| crate::Colorize::toward_pixel(level, MURK_COLOUR);
+    let list = super::faked_world::world_list(&view);
+    let tint = lights_tint(npc_glow_level(level, murk));
     let frame = frames_of(&view, 2001)[0];
+    assert_eq!(frames_of(&view, 2101), [frame]);
     assert_eq!(
-        drawn_of(&view, 2101),
-        [(frame, tint, true)],
-        "held below its murk, murked"
+        colorized_of(&list, 2101),
+        [(tint, true, toward(murk))],
+        "held below its murk, mixed"
     );
-    let hull = drawn_of(&view, 2001)[0].1;
-    assert_eq!(hull, murk_tint(Color::WHITE, murk), "its hull murked too");
-    let lights_murk = lights_murk(murk);
-    let lights = murk_tint(lights_tint(npc_glow_level(32, lights_murk)), lights_murk);
     assert_eq!(
-        drawn_of(&view, 2201),
-        [(frame, lights, true)],
+        colorized_of(&list, 2001),
+        [(Color::WHITE, false, toward(murk))],
+        "its hull mixed at its unmurked tint"
+    );
+    let lights_level = lights_murk(murk);
+    let lights = lights_tint(npc_glow_level(32, lights_level));
+    assert!(lights_level > 0, "{murk}");
+    assert_eq!(
+        colorized_of(&list, 2201),
+        [(lights, true, toward(lights_level))],
         "its steady lights a third as murky"
     );
 }
@@ -803,27 +821,73 @@ fn an_ionized_npcs_weapon_glow_takes_the_hulls_colorize_held_below_it() {
 }
 
 #[test]
-fn an_npc_below_a_third_ionized_draws_as_before() {
+fn an_npc_with_no_ion_tint_keeps_its_murks_colorize() {
     let mut view = murky_ionizing(None);
     let shield = flashing(&mut view, ShipRef::Npc(NPC_0));
     let at = nova_sim::Vec2::new(100.0, -100.0);
-    let (plain, murk) = npc_drawn_ionized(&view, |_| {}, None, at);
-    assert!(colorized_of(&plain, 2001).is_empty());
-    assert!(colorized_of(&plain, 2500).is_empty());
-    assert_eq!(
-        plain_of(&plain, 2500),
-        [(murk_tint(lights_tint(shield), murk), true)],
-        "its shield murked"
-    );
-    let hull = plain.iter().find_map(|command| match *command {
-        DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(tint),
-        _ => None,
-    });
+    let (list, murk) = npc_drawn_ionized(&view, |_| {}, None, at);
+    let colorize = crate::Colorize::toward_pixel(murk, MURK_COLOUR);
     let unmurked = Color {
         a: crate::flight::ship_layers::base_alpha(10),
         ..Color::WHITE
     };
-    assert_eq!(hull, Some(murk_tint(unmurked, murk)), "murked");
+    assert_eq!(
+        colorized_of(&list, 2001),
+        [(unmurked, false, colorize)],
+        "the murk's colorize"
+    );
+    assert_eq!(
+        colorized_of(&list, 2500),
+        [(lights_tint(shield), true, colorize)],
+        "its shield at the hull's"
+    );
+    assert_eq!(plain_of(&list, 2500), [], "drawn colorized alone");
+}
+
+#[test]
+fn a_murky_npcs_shield_and_alt_copy_the_hulls_murk_colorize() {
+    let mut view = murky_ionizing(None);
+    let shield = flashing(&mut view, ShipRef::Npc(NPC_0));
+    let at = nova_sim::Vec2::new(100.0, -100.0);
+    let (list, murk) = npc_drawn_ionized(&view, |_| {}, None, at);
+    assert!(murk > 0, "murked");
+    let hull = colorized_of(&list, 2001);
+    let (hull_tint, _, colorize) = hull[0];
+    assert_eq!(
+        colorized_of(&list, 2400),
+        [(hull_tint, false, colorize)],
+        "the alt copies the hull's tint and colorize"
+    );
+    assert_eq!(
+        colorized_of(&list, 2500),
+        [(lights_tint(shield), true, colorize)],
+        "the shield copies its colorize at its own level, held by nothing"
+    );
+}
+
+#[test]
+fn a_cloaked_npc_in_a_murky_system_keeps_its_murks_colorize() {
+    use crate::draw::{Blend, translucent_tint};
+    let view = murky_ionizing(None);
+    let (list, murk) = npc_drawn_ionized(
+        &view,
+        |npc| npc.cloak = CloakShown::Translucent(0x1e),
+        None,
+        nova_sim::Vec2::new(100.0, -100.0),
+    );
+    assert!(murk > 0, "murked");
+    let faint = translucent_tint(4, 30);
+    assert_eq!(
+        colorized_of(&list, 2001),
+        [(
+            faint,
+            false,
+            crate::Colorize::toward_pixel(murk, MURK_COLOUR)
+        )],
+        "the cloak writes the factors, never +0xb0 (@0x2d1d6-0x2d22a)"
+    );
+    let hull = commands_of(&list, 2001);
+    assert_eq!((hull[0].3, hull[0].5), (true, Blend::OrTranslucent));
 }
 
 #[test]
@@ -1160,7 +1224,7 @@ fn a_translucent_hull_whose_sheet_holds_runs_draws_them_after_it() {
     use crate::ImageKind::{Rled, RledSolid};
     use crate::draw::Blend;
     let view = murky_with(solid_sheet(false, true));
-    let (list, murk) = npc_drawn_ionized(&view, |_| {}, None, nova_sim::Vec2::new(100.0, -100.0));
+    let (list, _) = npc_drawn_ionized(&view, |_| {}, None, nova_sim::Vec2::new(100.0, -100.0));
     let drawn = commands_of(&list, 2001);
     let unmurked = Color {
         a: crate::flight::ship_layers::base_alpha(10),
@@ -1170,14 +1234,7 @@ fn a_translucent_hull_whose_sheet_holds_runs_draws_them_after_it() {
     assert_eq!(
         drawn,
         [
-            (
-                hull_at,
-                Rled,
-                frame,
-                false,
-                murk_tint(unmurked, murk),
-                Blend::Normal
-            ),
+            (hull_at, Rled, frame, true, unmurked, Blend::Normal),
             (
                 hull_at + 1,
                 RledSolid,

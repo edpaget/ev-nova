@@ -414,7 +414,7 @@ fn turning_smoke_trails_off_stops_new_smoke_and_the_puffs_left_age_out() {
 
 /// The weapon glow layers drawn: each one's frame, tint and whether it
 /// is drawn by OR.
-fn glow_layers(view: &Faked, image: i16) -> Vec<(u16, Color, bool)> {
+fn glow_layers(view: &Faked, image: i16) -> Vec<(u16, Color, bool, Option<Colorize>)> {
     super::faked_world::world_list(view)
         .iter()
         .filter_map(|command| match *command {
@@ -423,7 +423,19 @@ fn glow_layers(view: &Faked, image: i16) -> Vec<(u16, Color, bool)> {
                 tint,
                 blend,
                 ..
-            } if key.id == image => Some((key.frame, tint, blend == crate::draw::Blend::Or)),
+            } if key.id == image => Some((key.frame, tint, blend == crate::draw::Blend::Or, None)),
+            DrawCommand::Colorized {
+                image: key,
+                tint,
+                blend,
+                colorize,
+                ..
+            } if key.id == image => Some((
+                key.frame,
+                tint,
+                blend == crate::draw::Blend::Or,
+                Some(colorize),
+            )),
             _ => None,
         })
         .collect()
@@ -455,13 +467,13 @@ fn a_firing_ships_weapon_glow_is_added_at_32_then_falls_by_its_decay() {
     let frame = view.frame().expect("a sheet") % 36;
     assert_eq!(
         glow_layers(&view, 2300),
-        [(frame, crate::draw::lights_tint(32), true)],
+        [(frame, crate::draw::lights_tint(32), true, None)],
         "the frame it fired"
     );
     pass_with(&mut view, Vec::new(), false, Vec::new());
     assert_eq!(
         glow_layers(&view, 2300),
-        [(frame, crate::draw::lights_tint(30), true)],
+        [(frame, crate::draw::lights_tint(30), true, None)],
         "32 less 6 × 0.333"
     );
     for _ in 0..20 {
@@ -479,6 +491,7 @@ fn beside_an_npc(murk: u8) -> Faked {
     ];
     let mut frame = in_sol_with(ships);
     frame.effective_murk = murk;
+    frame.murk_colour = 0x1081;
     world(trafficked(&[130], 1, 129, 3), frame)
 }
 
@@ -514,10 +527,15 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         assert_eq!(level, sprite_murk, "murk {murk}");
         view.glows.step(&[(npc.ship, false)], |_| Some(1.0));
         let capped = crate::flight::weapon_glow::npc_glow_level(32, level);
-        let tint = crate::flight::murk::murk_tint(crate::draw::lights_tint(capped), level);
+        let tint = crate::draw::lights_tint(capped);
+        let colorize = (level > 0).then(|| Colorize::toward_pixel(level, 0x1081));
         let layers = glow_layers(&view, 2301);
         assert_eq!(layers.len(), 1, "murk {murk}");
-        assert_eq!((layers[0].1, layers[0].2), (tint, true), "murk {murk}");
+        assert_eq!(
+            (layers[0].1, layers[0].2, layers[0].3),
+            (tint, true, colorize),
+            "murk {murk}"
+        );
         let frame = rotation_frame(npc.heading, NonZeroU16::new(72).expect("non-zero"));
         assert_eq!(layers[0].0, frame % 72, "the hull's frame");
         if murk == 0 {

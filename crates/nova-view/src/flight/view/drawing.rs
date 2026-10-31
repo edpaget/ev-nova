@@ -23,7 +23,7 @@ use crate::flight::flash::ShieldFlash;
 use crate::flight::gate_colorize::gate_colorize;
 use crate::flight::hud::STATUS_BAR_WIDTH;
 use crate::flight::ion_tint::hull_colorize;
-use crate::flight::murk::{SeenMurk, sprite_murk};
+use crate::flight::murk::SeenMurk;
 use crate::flight::ship_layers::{Place, ShipDraw, base_alpha, npc_glow_rolls, turning};
 use crate::flight::sim_port::FlightSim;
 use crate::flight::weapons::{self, BeamShown, ShotShown};
@@ -441,20 +441,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
         heading: f32,
         (tint, cloak): (Color, Option<CloakDraw>),
     ) -> ShipDraw<'a> {
-        let viewer = self.frame.player().position;
-        let murk = sprite_murk(npc.position, viewer, self.frame.effective_murk);
+        let murk = self.seen_murk().at(npc.position);
         let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
         let glow_rolls = npc_glow_rolls(match npc.ship {
             ShipRef::Npc(id) => id,
             ShipRef::Player => NpcId(0),
         });
-        // A gate writes the hull's colorize after the ion tint, so while
-        // it fades the gate's white shows in place of the tint and the
-        // murk ([`gate_colorize`], `_HandleShipDisplay` @0x2bfa5-0x2c17b).
+        // The murk fills the sprite's one colorize slot first, and the ion
+        // tint then a gate write over it, in `_HandleShipDisplay`'s order:
+        // while it fades the gate's white shows in place of the tint and
+        // the murk ([`gate_colorize`], @0x2bfa5-0x2c17b).
         let colorize = if npc.gate.at_gate() {
             gate_colorize(npc.gate)
         } else {
-            hull_colorize(murk, npc.ion_tint, self.presentation.ion_tint_murk)
+            hull_colorize(murk.level, npc.ion_tint, self.presentation.ion_tint_murk)
         };
         ShipDraw {
             sheet,
@@ -465,13 +465,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
             paint: npc.paint,
             cloak,
             hull: true,
-            murk,
             held: true,
             glow: glow_level(npc.glow, tick, &glow_rolls).filter(|_| self.engine_glows),
             lights: npc.drawn.lights,
             weapon: self.glows.drawn(npc.ship).filter(|_| self.weapon_effects),
             shield: self.shield_drawn(npc.ship),
-            colorize,
+            colorize: colorize.or(Some(murk)),
         }
     }
 
@@ -516,7 +515,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     // faint (see `Session::player_cloak_shown`).
                     cloak: CloakDraw::of(player.cloak, player.paint, tick, &player_cloak_rolls()),
                     hull: drawn == ShipDrawn::Full,
-                    murk: 0,
                     held: false,
                     glow: glow_level(player.glow, tick, &self.glow_rolls)
                         .filter(|_| self.engine_glows),
