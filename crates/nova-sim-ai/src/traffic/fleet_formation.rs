@@ -18,7 +18,10 @@
 //! [`Npc::fleet_slot`] and the absolute place that gives them,
 //! [`Npc::slot_place`], the original's +0x28/+0x2c. A follower of an
 //! unmarked parent keeps both: the place stays where it was while the
-//! parent moves. `_HandlePlayer` tests the player's mark the same way
+//! parent moves. So does a follower of a word naming an empty slot: the
+//! mark tests no +0xb8 (@0x441d1-0x441de), but the dispatch loop does
+//! (@0x44275-0x4427c), so no calc runs for that slot, and the word stands
+//! too. `_HandlePlayer` tests the player's mark the same way
 //! (@0x6f1cb-0x6f1df), so a ship on the player takes its place only while
 //! the player is marked, here from the slot the session numbered it. The
 //! formations group the NPCs by their parents each tick, and only a ship
@@ -72,8 +75,9 @@ const PLAYER_WORD: u32 = 0;
 /// and marked (see the module docs), in that NPC's formation: `dropped`
 /// names the ships the check dropped this pass
 /// ([`Traffic::succeed_leaders`]). A ship whose parent is the player, or
-/// an NPC not here, holds none, nor does a ship that is its own parent,
-/// and nor does the follower of an unmarked parent.
+/// a berth with no ship, gets no entry, nor does a ship that is its own
+/// parent, and nor does the follower of an unmarked parent: no entry
+/// writes nothing, so each keeps what it holds ([`Traffic::form_fleets`]).
 #[must_use]
 pub fn slots(npcs: &[Npc], dropped: &BTreeSet<NpcId>) -> Vec<(NpcId, FormationSlot, Vec2)> {
     let parents = parents(npcs);
@@ -473,6 +477,40 @@ mod tests {
             assert_eq!(npc.fleet_slot, Some(slot));
             assert_eq!(npc.slot_place, Some(Vec2::new(7.0, 8.0)), "fixed");
             assert_eq!(npc.form_parent, Some(1));
+        }
+
+        #[test]
+        fn a_follower_of_a_berth_with_no_ship_keeps_its_parent_slot_and_place() {
+            // The mark tests no +0xb8 (@0x441d1-0x441de), but the dispatch
+            // loop does (@0x44275-0x4427c): no calc runs for an empty slot.
+            const EMPTY: u32 = 7;
+            let slot = FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            };
+            let place = Vec2::new(7.0, 8.0);
+            let holding = |mut npc: Npc| {
+                npc.form_parent = Some(EMPTY);
+                npc.fleet_slot = Some(slot);
+                npc.slot_place = Some(place);
+                npc
+            };
+            let (mut traffic, parent) = parented();
+            let mut attacking = ship(0, 0, Some(parent.0), None);
+            attacking.goal = Goal::Attack(ShipRef::Npc(NpcId(9)));
+            attacking.target = Some(ShipRef::Npc(NpcId(9)));
+            attacking.swarm_leader = Some(EMPTY);
+            assert!(swarm::marks_its_parent(&attacking), "above AI 4");
+            let attacking = traffic.add_npc_at(holding(attacking), 3);
+            let held = traffic.add_npc_at(holding(stale(EMPTY, None)), 4);
+            formed(&mut traffic, None);
+            for id in [attacking, held] {
+                let npc = of(&traffic, id);
+                assert_eq!(npc.form_parent, Some(EMPTY));
+                assert_eq!(npc.fleet_slot, Some(slot));
+                assert_eq!(npc.slot_place, Some(place));
+            }
         }
 
         #[test]
