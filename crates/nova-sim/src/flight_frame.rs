@@ -1594,6 +1594,12 @@ pub struct StepRun {
     /// shows (`_ShowEscortMenu` @0x5664a, called @0x6e388 and @0x6e446).
     /// It plays no sound.
     pub class_orders_cleared: bool,
+    /// Whether a jump collapsed on this step's passes with the screen
+    /// faded to white: `_screenFaded` is up and +0x50 at −1 for the key
+    /// blocks of that one pass (@0x689ea, the flag falling @0x6841f on the
+    /// next), the one pass the dialogs' guards decide. A one-shot, as the
+    /// flag can be gone from the frame by the step's end.
+    pub lit_collapse: bool,
 }
 
 /// One line on the message line as `_DisplayComm` (@0x90201) takes it:

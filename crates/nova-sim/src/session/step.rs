@@ -57,6 +57,10 @@
 //!    order ([`StepRun::class_orders_cleared`], see the `class_orders`
 //!    module), which the frame clears before its first step too: the
 //!    view shows the escort menu in full again after that step's fade.
+//!    And whether a jump collapsed under the white on the step
+//!    ([`StepRun::lit_collapse`], see the `jump_collapse` module), read
+//!    per step, so neither double time's second pass nor a catch-up
+//!    tick's later steps lose it.
 //!
 //! **The rescue.** The escape pod's rescue settles on the pass the pod's
 //! countdown runs out (`_HandlePlayer` runs it in place of the rest of
@@ -204,13 +208,15 @@ impl Session {
     }
 
     /// What `run`'s step leaves at its end, taken into it: the line it
-    /// raised last, and whether it cleared an escort class's kept order
-    /// (see the module docs). A wrap a rescue's unreported pass left is
-    /// dropped, as the view lays itself out afresh.
+    /// raised last, whether it cleared an escort class's kept order, and
+    /// whether a jump collapsed under the white on it (see the module
+    /// docs). A wrap a rescue's unreported pass left is dropped, as the
+    /// view lays itself out afresh.
     fn take_step_ends(&mut self, run: &mut StepRun) {
         self.out.player_wrap = None;
         run.last_line = self.out.last_line.take();
         run.class_orders_cleared = std::mem::take(&mut self.out.class_orders_cleared);
+        run.lit_collapse = std::mem::take(&mut self.out.lit_collapse);
     }
 
     /// Each ship's place: the player's, then each NPC's.
