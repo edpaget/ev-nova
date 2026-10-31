@@ -191,7 +191,8 @@ impl ScrollText {
         }
     }
 
-    /// Every wrapped line.
+    /// Every wrapped line, or for placed rows each row's runs joined by a
+    /// space.
     #[must_use]
     pub fn lines(&self) -> &[String] {
         &self.lines
