@@ -2459,7 +2459,11 @@ impl Traffic {
     /// `world` has it, if anywhere: one that stops inspecting a ship
     /// remembers it, and has scanned the player when it was inspecting the
     /// player within its reach, unless an interceptor's re-pick gave the
-    /// new goal ([`Decision::re_picked`]); its provocation takes the
+    /// new goal ([`Decision::re_picked`]); a ship the think looked over at
+    /// once ([`Decision::looked_over`]) is remembered last, and is a scan
+    /// if it is the player, a write on top of the first, as a kept
+    /// inspection of the player can end in the think of a pick that ends
+    /// too, which the original does on two frames; its provocation takes the
     /// decision's writes ([`provocation::take`]: zeroed where the high
     /// level ends its fight, then 1 where the word provokes it), and is
     /// otherwise kept; and one whose decision clears its target
@@ -2501,6 +2505,7 @@ impl Traffic {
                 travel,
                 visits,
                 re_picked,
+                looked_over,
                 ends_wait,
                 order_word,
                 ..
@@ -2521,6 +2526,10 @@ impl Traffic {
                 scans = !re_picked
                     && ship == ShipRef::Player
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
+            }
+            if let Some(ship) = looked_over {
+                npc.inspected = Some(ship);
+                scans |= ship == ShipRef::Player;
             }
             // The calls carry the odds the think read, before the pass.
             self.on_line
@@ -5222,6 +5231,7 @@ mod tests {
             travel: crate::ai::travel::TravelWrite::Keep,
             visits: None,
             re_picked: false,
+            looked_over: None,
             ends_wait: false,
             order_word: None,
             leaves_fleet: false,

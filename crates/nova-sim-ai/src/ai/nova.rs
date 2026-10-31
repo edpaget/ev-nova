@@ -396,6 +396,7 @@ impl Behaviour for NovaAi {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                looked_over: None,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -406,6 +407,7 @@ impl Behaviour for NovaAi {
                 goal: Goal::JumpOut,
                 turns_on_player: false,
                 clears_target: true,
+                looked_over: None,
                 ..self.thinker(npc, around).decision(npc, around, chance)
             },
             None => self.thinker(npc, around).decision(npc, around, chance),
@@ -2327,6 +2329,28 @@ mod tests {
         assert_eq!(decide(&inhabited), Goal::Land(StellarId(128)));
     }
 
+    /// Looks the player over in each decision.
+    #[derive(Debug)]
+    struct LooksOver;
+
+    impl Behaviour for LooksOver {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn decision(
+            &self,
+            _npc: &Npc,
+            _around: &Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Decision {
+            Decision {
+                looked_over: Some(ShipRef::Player),
+                ..Decision::default()
+            }
+        }
+    }
+
     /// Turns on the player in each decision, its goal idle.
     #[derive(Debug)]
     struct Turning;
@@ -2358,6 +2382,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                looked_over: None,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -2393,6 +2418,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                looked_over: None,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -2413,6 +2439,11 @@ mod tests {
             (Goal::JumpOut, false, true),
             "giving up, it turns on nobody; the rest is its type's"
         );
+        // Goal 2 runs no goal 7 block, so a pick within reach isn't looked
+        // over (@0x8d85a).
+        let picks = NovaAi::default().with(AiType::Warship, Rc::new(LooksOver));
+        let gave_up = picks.decision(&hunters[0], &disabled, &mut Draws::of(&[]));
+        assert_eq!((gave_up.goal, gave_up.looked_over), (Goal::JumpOut, None));
         let ai = NovaAi::default().with(AiType::BraveTrader, Rc::new(Turning));
         let brave = [of(2, AiType::BraveTrader)];
         let around_brave = with_player(&brave, Condition::Intact);

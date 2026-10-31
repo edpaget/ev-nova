@@ -31,8 +31,11 @@
 //!   pre-scan hail.
 //!   Within [`INSPECT_REACH`] of it on both axes
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
-//!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
-//!   looked the player over, it has scanned the player
+//!   again; a pick already within reach ends in the think that made it,
+//!   as goal 7's block runs after the think (@0x8f11e-0x8f394,
+//!   [`Decision::looked_over`]). The traffic remembers the ship
+//!   ([`Npc::inspected`]). Having looked the player over, it has scanned
+//!   the player
 //!   ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)): the
 //!   session checks the player's mission cargo against the interceptor's
 //!   government (`_ScanPlayer` @0x7e46e; see the
@@ -85,7 +88,9 @@
 //!   picks a fresh inspection too, rolling the enemy class a second time,
 //!   and never asks the threat step, which needs no target (@0x8ad3c). Its
 //!   reach then reads the new target (@0x8f11e): a re-pick away from the
-//!   player scans nothing ([`Decision::re_picked`]).
+//!   player scans nothing ([`Decision::re_picked`]), and a re-pick already
+//!   within reach is looked over at once ([`Decision::looked_over`]), a
+//!   scan if it is the player.
 
 use crate::ai::fire::FireRules;
 use crate::ai::odds::state4_attack;
@@ -126,10 +131,16 @@ pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
     let Goal::Inspect(ship) = npc.goal else {
         return false;
     };
+    reach_of(npc, ship, around) == Some(false)
+}
+
+/// Whether `ship` is within `npc`'s reach ([`within_reach`]), when its slot
+/// is active among `around` (+0xb8 @0x8f158).
+fn reach_of(npc: &Npc, ship: ShipRef, around: &Surroundings) -> Option<bool> {
     around
         .state_of(ship)
         .filter(|_| around.active(ship))
-        .is_some_and(|state| !within_reach(state.position - npc.state.position))
+        .map(|state| within_reach(state.position - npc.state.position))
 }
 
 /// An interceptor's retreat: when outnumbered, by `Flags` 0x0100, and
@@ -209,7 +220,7 @@ impl Behaviour for Interceptor {
         let decision = re_pick(npc, decision, around, self.target, chance);
         Decision {
             forgets_provocation: stops,
-            ..decision
+            ..reached(npc, decision, around)
         }
     }
 
@@ -309,6 +320,24 @@ fn re_pick(
         clears_target,
         re_picked: true,
         ..decision
+    }
+}
+
+/// `decision`, an interceptor's think, through goal 7's block, which runs
+/// after the think in the same dispatch (@0x8f11e-0x8f394): an inspection
+/// the think leaves it with, of a ship already within reach and active
+/// among `around`, ends there, goal 0 with no target (@0x8f391), the ship
+/// [`looked_over`](Decision::looked_over). Any hail it raised stands, as
+/// the pick's hail comes before the block's scan.
+fn reached(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
+    match decision.goal {
+        Goal::Inspect(ship) if reach_of(npc, ship, around) == Some(true) => Decision {
+            goal: Goal::Idle,
+            clears_target: true,
+            looked_over: Some(ship),
+            ..decision
+        },
+        _ => decision,
     }
 }
 
@@ -1140,6 +1169,7 @@ mod tests {
                 travel: crate::ai::travel::TravelWrite::Keep,
                 visits: None,
                 re_picked: false,
+                looked_over: None,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -1706,6 +1736,67 @@ mod tests {
         assert!(decision.clears_target);
         assert!(!decision.turns_on_player);
         assert!(asked.is_empty());
+    }
+
+    // A pick within reach ends in its own think: goal 7's block runs after
+    // the think (@0x8f11e-0x8f394).
+
+    #[test]
+    fn a_pick_within_reach_is_looked_over_in_its_own_think() {
+        // Picked by the draw, it being the only pick but the player.
+        let picking = |x: f32, y: f32| {
+            let trader = ship(2, TRADERS, AiType::WimpyTrader, x, y);
+            re_picked(police(), &[trader], 0, None, &[1]).0
+        };
+        for (x, y) in [(50.0, -50.0), (100.0, 100.0), (-100.0, -100.0)] {
+            let decision = picking(x, y);
+            assert_eq!(decision.goal, Goal::Idle, "goal 0 (@0x8f391)");
+            assert!(decision.clears_target, "+0x70 -1");
+            assert_eq!(decision.looked_over, Some(n(2)), "({x}, {y})");
+            assert_eq!(decision.comm_call, None);
+        }
+        for (x, y) in [(100.5, 0.0), (0.0, -100.5)] {
+            let decision = picking(x, y);
+            assert_eq!(decision.goal, Goal::Inspect(n(2)), "({x}, {y})");
+            assert!(!decision.clears_target);
+            assert_eq!(decision.looked_over, None);
+        }
+    }
+
+    #[test]
+    fn a_pick_of_the_player_within_reach_keeps_its_pre_scan_hail() {
+        // The hail comes in the pick (@0x8ce4b), before the block's scan.
+        let (sites, govts) = (sites(), govts(0, 0));
+        let npcs = [police()];
+        let seen = around(&sites, &npcs, &govts, (0.0, 50.0), 0);
+        let decision = Interceptor::default().decision(&npcs[0], &seen, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Idle);
+        assert_eq!(decision.looked_over, Some(P));
+        assert_eq!(decision.comm_call, Some(CommCall::PreScan));
+    }
+
+    #[test]
+    fn a_re_pick_within_reach_ends_the_inspection_of_the_new_ship() {
+        // The reach reads the new target (@0x8f11e).
+        let (cop, trader) = trader_cop_inspecting();
+        let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 90.0);
+        let (decision, _) = re_picked(cop.clone(), &[trader.clone(), pirate], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.re_picked);
+        assert!(decision.clears_target);
+        assert_eq!(decision.looked_over, Some(n(3)));
+        // Beyond reach, it goes on to it.
+        let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 300.0);
+        let (decision, _) = re_picked(cop, &[trader, pirate], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(3)));
+        assert_eq!(decision.looked_over, None);
+    }
+
+    #[test]
+    fn an_inspection_kept_beyond_reach_is_looked_over_by_nobody() {
+        let (cop, trader) = trader_cop_inspecting();
+        let (decision, _) = re_picked(cop, &[trader], 0, None, &[]);
+        assert_eq!(decision.looked_over, None);
     }
 
     #[test]

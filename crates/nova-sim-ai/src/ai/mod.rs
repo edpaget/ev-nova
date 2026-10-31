@@ -1083,8 +1083,15 @@ pub struct Decision {
     /// (`_InterceptorAI` @0x8d41e, see [`interceptor`]): the state-7
     /// block's reach then reads the new target (@0x8f11e), and a state-4
     /// pick runs no reach at all, so the ship it was inspecting is not
-    /// looked over and the player is not scanned.
+    /// looked over and the player is not scanned. A re-pick already within
+    /// reach is looked over ([`looked_over`](Self::looked_over)).
     pub re_picked: bool,
+    /// The ship an interceptor's think picked, or re-picked, and looked
+    /// over at once, already within reach: goal 7's block runs after the
+    /// think in one dispatch (@0x8f11e-0x8f394), so the pick ends there,
+    /// goal 0 and no target. The traffic records the ship
+    /// ([`Npc::inspected`]) and scans the player when it is the player.
+    pub looked_over: Option<ShipRef>,
     /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
     /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,
     /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) whoever the parent, an NPC
