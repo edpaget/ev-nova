@@ -12,9 +12,10 @@
 //! old word that frame and flies the new one the next. Here every leader
 //! issues before any decision of the tick: such an escort flies the new
 //! order a tick earlier than in the original, and a fleeing leader's leg
-//! is read from its state now, not from its last high level. Both are one-tick differences, settled before the frame is
-//! drawn, as [`fleet_escort`](crate::ai::fleet_escort)'s docs note for
-//! the lead's goal.
+//! is read from its state now, not from its last high level. Both are
+//! one-tick differences across a drawn frame, as
+//! [`fleet_escort`](crate::ai::fleet_escort)'s docs note for the lead's
+//! goal (filed in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
 
 use super::{Traffic, World};
 use crate::ai::Surroundings;

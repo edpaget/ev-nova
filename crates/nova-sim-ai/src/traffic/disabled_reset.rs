@@ -47,9 +47,9 @@
 //!
 //! **Ordering.** The original runs each step per ship in slot order, the
 //! cancel and the reset inside each dispatch; the engine runs each over
-//! all ships after the regroup pause's draws. A lower slot's think that
-//! reads a higher slot's reset a tick early crosses no boundary the player
-//! sees. The reset drops a disabled follower's leader after the formation
+//! all ships after the regroup pause's draws, so a lower slot's think
+//! reads a higher slot's reset a tick early (filed in
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6). The reset drops a disabled follower's leader after the formation
 //! pass has numbered it ([`fleet_formation`](super::fleet_formation)), so
 //! for that one tick its fleet's slots still count it, as the original's
 //! do (it numbers disabled followers too, and the parent's slot

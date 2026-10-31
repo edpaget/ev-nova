@@ -217,8 +217,8 @@ impl Traffic {
     /// ships as the think half found them, so a lead that turns to attack
     /// this tick cancels its escorts on the next. And a ship cancelled
     /// here makes its type's think in the same tick, where the original's
-    /// jump path had already skipped it. Each is a one-tick lag that
-    /// crosses no boundary the player sees.
+    /// jump path had already skipped it (filed in
+    /// rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
     pub(crate) fn cancel_jump_follows(&mut self, world: &World) {
         let player = world.player.map(|player| player.condition);
         let cancels: Vec<bool> = self

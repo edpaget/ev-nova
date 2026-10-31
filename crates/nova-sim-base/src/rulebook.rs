@@ -273,7 +273,7 @@
 //! | [`ReusedShotSlotSpin`](RuleKey::ReusedShotSlotSpin) | `reused_shot_slot_spin` | a new shot starts on the spin timer its shot slot's last spinning shot left, as `_SpawnShot` never writes +0x1c (@0x3e550-0x3f143), so its first frame step can come early (`_HandleShot` @0x35884-0x358c4; see `nova_sim::combat::spin_timer`) | every shot starts its spin timer on 0\* |
 //! | [`HitFocus`](RuleKey::HitFocus) | `hit_focus` | a ship attacking (goal 4) its target (+0x70, as the pass's earlier hits left it) within 44° of the heading it last wanted as the pass began keeps its target when hit, unless the attacker is nearer than half its target's distance (dist² not above 0.25 × its target's); its lead's answer, the turn on the player, the wait cut and the grudge go with it (`_DamageShip` @0x3bbf3-0x3bcac; see `nova_sim::ai::react`) | it keeps its target only when that target is nearer than half the attacker's distance and ahead, by its float heading against the bearing; the lead of an escort hit tests its own target; every answered player hit holds the grudge\* |
 //! | [`UndisplayedShips`](RuleKey::UndisplayedShips) | `undisplayed_ships` | a ship its slot has not displayed since it came (a fighter the player launches, the eject's hulk, a ship spawned below its spawner's slot) is neither walked by the collision passes nor drawn until its slot's display step, as an inactive slot's display hides its sprites (@0x2b555-0x2b60a) and the walk skips a hidden sprite (@0xacba3); it is hovered and clicked where its slot's last ship was last laid out, in that ship's frames, as only a display places the slot's rect (@0x2cd9d, `_HandleMouse` @0x38177; see `nova_sim::Session::hover_place`); `_PrepareAllSprites` (@0x3a75a) displays every slot at each entry into flight (see `nova_sim::Session::prepare_all_sprites`) | walked, drawn and boxed where it is from the moment it is in the system\* |
-//! | [`LaunchFrameAi`](RuleKey::LaunchFrameAi) | `launch_frame_ai` | a fighter an NPC launches is in the system at once: `_AIDispatch`'s loop (@0x44270-0x442ae) stops after the slot that launched, a fighter in a slot above its carrier's thinks and takes its own turn in its launch frame, and every later slot's point defence can choose it (`_GenericRandomShipSpawn` @0x3c90b; see `nova_sim::Session::dispatch_npcs`) | put in the system after the whole loop, neither thinking nor a candidate until the next tick\* |
+//! | [`LaunchFrameAi`](RuleKey::LaunchFrameAi) | `launch_frame_ai` | each slot of `_AIDispatch`'s loop (@0x44270-0x442ae) runs its whole think and its turn in the fight before the next, so a slot reads what the slots below it wrote; a fighter an NPC launches is in the system at once, a fighter in a slot above its carrier's thinks and takes its own turn in its launch frame, and every later slot can choose it (`_GenericRandomShipSpawn` @0x3c90b; see `nova_sim::Session::dispatch_npcs`) | every NPC decides in one batch, from the tick as it began, and a fighter is put in the system after the whole loop, neither thinking nor a candidate until the next tick\* |
 //! | [`CapturedPerson`](RuleKey::CapturedPerson) | `captured_person` | a person whose ship is captured with Use As Escort lives on, keeping its grudge, and can appear again; only its ship's person slot is cleared (`_DoPlunderDialog` @0x9459b-0x947cf, `_AIShipCapturedByPlayer` @0x89741; only `_DoShipCapture` @0x41180 clears the person; see `nova_sim::Session::assign`) | it is gone for good, as with Use As My Ship\* |
 //! | [`ShipAnimationDoubleStep`](RuleKey::ShipAnimationDoubleStep) | `ship_animation_double_step` | a `shän` `Flags` 0x0008 ship of more than one base set with an alt sprite steps its animation timer twice a frame, in the set block and the alt block (`_HandleShipDisplay` @0x2ba64, @0x2c9c1; see `nova_sim::combat::ship_frames`); no stock ship has both | once a frame, as `AnimDelay` says |
 //! | [`LoadedEscortFoldSet`](RuleKey::LoadedEscortFoldSet) | `loaded_escort_fold_set` | a loaded pilot's escort of `shän` `Flags` 0x0080 takes the player's class's last base set as its fold set (`_LoadPilotData` @0x763d4-0x763e7) | its own class's\* |
@@ -3610,18 +3610,22 @@ rule_keys! {
     /// Bible says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says.
     UndisplayedShips => "undisplayed_ships",
-    /// Whether a fighter an NPC launches is in the system for the rest of
-    /// its launch frame's AI loop (see `nova_sim::Session::dispatch_npcs`).
+    /// Whether each slot of the AI loop thinks and fights in turn, and so
+    /// whether a fighter an NPC launches is in the system for the rest of
+    /// its launch frame's loop (see `nova_sim::Session::dispatch_npcs`).
     /// By the engine, as `_AIDispatch`'s loop rereads each slot as it comes
     /// (`_DoPlayGameWork` @0x44270-0x442ae) and `_LaunchFighter` marks the
     /// fighter's slot active at once (`_GenericRandomShipSpawn` @0x3c90b,
-    /// @0x3d680): the loop stops after the slot that launched, the fighter
-    /// is put in the system, one in a slot above its carrier's thinks then
-    /// and takes its own turn when its slot comes, and every later slot's
-    /// point defence can choose it (@0x394ce-0x3969d). By the other
-    /// reading, the engine's before weapons-fidelity phase 44, every
-    /// fighter an NPC launches is put in the system after the whole loop,
-    /// and neither thinks nor is a candidate until the next tick. The
+    /// @0x3d680): each occupied slot runs its whole think and its turn in
+    /// the fight before the next, so it reads what the slots below it wrote
+    /// this frame; a fighter is put in the system as its carrier's turn
+    /// ends, one in a slot above its carrier's thinks and takes its own turn
+    /// when its slot comes, and every later slot can choose it, its point
+    /// defence among them (@0x394ce-0x3969d). By the other reading, the
+    /// engine's before weapons-fidelity phase 44, every NPC decides in one
+    /// batch from the tick as it began, every fighter an NPC launches is
+    /// put in the system after the whole loop, and neither thinks nor is
+    /// a candidate until the next tick. The
     /// Bible says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says.
     LaunchFrameAi => "launch_frame_ai",

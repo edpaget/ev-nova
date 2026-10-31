@@ -9,17 +9,17 @@
 //! right after its carrier's turn in the NPCs' point-defence loop
 //! ([`Session::dispatch_npcs`]), before `_HandleShot`
 //! ([`Session::game_work`]), so each moves on its launch tick. An NPC's
-//! fighter in a slot above its carrier's thinks then and takes its turn
-//! in the rest of the loop, and every later slot's point defence can
-//! choose it, as [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
+//! fighter in a slot above its carrier's is reached as its slot comes,
+//! and every later slot's think and point defence can choose it, as
+//! [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
 //! a ship slot free below the reserve it leaves (8 @0x3d648, so none at
 //! 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]):
 //! the player's bay attempts a copy only while one is free, spending,
 //! counting, sounding and reloading nothing for the rest
 //! ([`Space::count_player_berths`], `_FirePlayerWeapon`
-//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as the
-//! traffic counts the free slots as its NPCs fire (see
-//! `nova_sim::traffic`'s room ledger). A fighter whose ship type has no
+//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as each
+//! slot's think reads the slots free as it comes (see `nova_sim::traffic`'s
+//! `launch_room`). A fighter whose ship type has no
 //! record goes back into its bay, a round again. The player's glow bay
 //! lights the weapon glow only for a fighter put in the system.
 //!

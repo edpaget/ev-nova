@@ -23,27 +23,23 @@
 //!   [`BAY_LAUNCH_PRIORITY`] with no looped test (@0x81466), and a
 //!   [`Sortie`](super::Sortie) the session puts in the system before
 //!   `_HandleShot` (`nova_sim::Session::game_work`). Whether the fighter
-//!   finds a slot was settled as the traffic thought (`nova_sim::traffic`'s
-//!   room ledger), so a launch asked for here has one.
+//!   finds a slot was settled as its carrier thought (`nova_sim::traffic`'s
+//!   `launch_room`), so a launch asked for here has one.
 //!
 //! A launch shares no shot slot or exit cursor with point defence:
 //! `_LaunchFighter` spawns a ship (`_GenericRandomShipSpawn`) and writes
 //! nothing of its carrier's exits.
 //!
-//! **The fighter in the loop.** `_LaunchFighter` marks the fighter's slot
-//! active at once (`_GenericRandomShipSpawn` @0x3c90b, @0x3d680), and the
-//! loop rereads each slot as it comes, so the loop is resumable
-//! ([`Combat::defend_npcs`]'s `after` and `stop`): the session stops it
-//! after the slot that launched, puts the fighter in the system, gives a
-//! fighter in a slot above its carrier's its think, and resumes after
-//! that slot with the fighter among the ships, a candidate of every later
-//! slot's point defence and, above its carrier, taking its own turn
-//! (`nova_sim::Session::dispatch_npcs`, by
-//! [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)).
-//! An existing NPC in a higher slot still thinks before the loop, blind
-//! to the fighter, and a launched fighter's own launch settles against
-//! the room left after every existing claim
-//! (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
+//! **The loop in runs.** `_LaunchFighter` marks the fighter's slot active
+//! at once (`_GenericRandomShipSpawn` @0x3c90b, @0x3d680), and the loop
+//! rereads each slot as it comes, so the fight takes the loop in bounded
+//! runs ([`Combat::defend_npcs`]'s `after` and `through`): the session
+//! runs one slot's think and then its turn here, puts the fighters it
+//! launched in the system, and takes the next slot with them among the
+//! ships, each a candidate of every later slot's point defence and, above
+//! its carrier, taking its own turn (`nova_sim::Session::dispatch_npcs`,
+//! by [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi), whose
+//! other reading is one run of every slot).
 
 use super::defence::Candidate;
 use super::projectile::Target;

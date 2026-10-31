@@ -20,9 +20,12 @@
 //!   so it reads the ships of lower slots as their thinks this frame left
 //!   them and the higher ones as last frame's: of two pirates on one
 //!   boarded victim, the lower waits and the higher attacks. The traffic
-//!   decides every NPC from one view, so [`resolve`] replays that order
-//!   as a pass over the decisions, by berth: a lower berth's new goal, a
-//!   higher berth's goal as the tick found it. A lower berth's sub-goal
+//!   thinks each slot in its own run, so a lower berth reads as its goal
+//!   stands, this tick's; a run of several slots
+//!   ([`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)'s other
+//!   reading) decides them from one view, so [`resolve`] replays that
+//!   order as a pass over the decisions, by berth: a lower berth's new
+//!   goal, a higher berth's goal as the tick found it. A lower berth's sub-goal
 //!   0xe is read from its goal and the frame it flew last tick, its new
 //!   frame being worked out after the decisions
 //!   ([`pursuit`](crate::ai::pursuit)): a stand-off ship that took up its
