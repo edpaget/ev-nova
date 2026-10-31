@@ -731,6 +731,25 @@ pub struct FrameTarget {
     pub tag: Option<TargetTag>,
 }
 
+/// A key read on the one pass the dialogs' `_screenFaded` guards decide:
+/// the pass a jump collapses under the white
+/// ([`StepRun::lit_collapse`]), as [`FlightCommand::PressFaded`] carries
+/// it. Each is taken as its plain press, and what that would open is
+/// refused, in silence, as the screen is faded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FadedPress {
+    /// The player info key: `_DoPlayerInfoDialog`'s guard (@0x5a024).
+    PlayerInfo,
+    /// The mission info key: `_DoMissionInfoDialog`'s guard (@0x9e1ac).
+    MissionInfo,
+    /// The comm key: `_DoCommDialog`'s guard (@0x956ed) and
+    /// `_DoPlanetCommDialog`'s (@0x9695d).
+    Hail {
+        /// Whether Option was down at the press.
+        option: bool,
+    },
+}
+
 /// Something the player asks of the flight, which
 /// [`Session::apply`](crate::Session::apply) answers.
 #[derive(Clone, Debug, PartialEq)]
@@ -995,6 +1014,10 @@ pub enum FlightCommand {
     PressMissionInfo,
     /// The player info key (`Session::press_player_info`).
     PressPlayerInfo,
+    /// A key read on the pass a jump collapsed under the white, with the
+    /// screen faded ([`FadedPress`]). Only that pass sends it: any other
+    /// press of these keys is the plain command, and acts.
+    PressFaded(FadedPress),
     /// The player info dialog opens (`Session::open_player_info`).
     OpenPlayerInfo,
     /// Jettison the cargo, `all` of it or all but the mission cargo
@@ -1098,7 +1121,8 @@ impl FlightCommand {
     ///   an escort key's [`FlightCommand::CommandEscorts`]
     ///   [`PlayerCommand::Escort`], and the mission info key's
     ///   [`FlightCommand::PressMissionInfo`] [`PlayerCommand::MissionInfo`],
-    ///   as the session asks it itself.
+    ///   as the session asks it itself. A [`FlightCommand::PressFaded`] is
+    ///   its key's.
     /// - [`FlightCommand::EnterHypergate`] comes with the hypergate map's
     ///   close, which no key gates once the map is open, and is `None`, as
     ///   are the map's clicks, cycle and Clear Route, its marks and cue,
@@ -1129,11 +1153,17 @@ impl FlightCommand {
             Self::SelectWeapon { .. } => Some(PlayerCommand::SelectWeapon),
             Self::Jump => Some(PlayerCommand::Jump),
             Self::Land | Self::OpenHypergate | Self::EnterWormhole => Some(PlayerCommand::Land),
-            Self::Hail { .. } => Some(PlayerCommand::Hail),
+            Self::Hail { .. } | Self::PressFaded(FadedPress::Hail { .. }) => {
+                Some(PlayerCommand::Hail)
+            }
             Self::Board => Some(PlayerCommand::Board),
             Self::CommandEscorts { .. } => Some(PlayerCommand::Escort),
-            Self::PressMissionInfo => Some(PlayerCommand::MissionInfo),
-            Self::PressPlayerInfo => Some(PlayerCommand::PlayerInfo),
+            Self::PressMissionInfo | Self::PressFaded(FadedPress::MissionInfo) => {
+                Some(PlayerCommand::MissionInfo)
+            }
+            Self::PressPlayerInfo | Self::PressFaded(FadedPress::PlayerInfo) => {
+                Some(PlayerCommand::PlayerInfo)
+            }
             Self::MapClick(_)
             | Self::CycleMapSelection
             | Self::ClearRoute
@@ -1405,6 +1435,10 @@ pub enum Answer {
     /// own refusal, which beeps, rides it, not [`Answer::Refused`], which
     /// is left to a flight with no session.
     PlayerInfoPressed(bool),
+    /// A [`FlightCommand::PressFaded`] of the player info key taken, and
+    /// the dialog refused in silence as the screen is faded. Its own
+    /// refusal, which beeps, is [`Answer::PlayerInfoPressed`].
+    PlayerInfoFaded,
     /// What a [`FlightCommand::OpenPlayerInfo`] opened: the screen, or
     /// none in a jump or while the ship breaks up.
     PlayerInfo(Option<Box<PlayerInfo>>),
@@ -2112,6 +2146,18 @@ mod tests {
         };
         report.clear();
         assert_eq!(report, StepReport::default());
+    }
+
+    #[test]
+    fn a_faded_press_is_gated_by_its_key() {
+        for (press, gate) in [
+            (FadedPress::PlayerInfo, PlayerCommand::PlayerInfo),
+            (FadedPress::MissionInfo, PlayerCommand::MissionInfo),
+            (FadedPress::Hail { option: false }, PlayerCommand::Hail),
+            (FadedPress::Hail { option: true }, PlayerCommand::Hail),
+        ] {
+            assert_eq!(FlightCommand::PressFaded(press).gate(), Some(gate));
+        }
     }
 
     #[test]

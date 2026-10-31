@@ -516,6 +516,35 @@ mod tests {
     }
 
     #[test]
+    fn the_plain_keys_act_right_after_a_lit_collapse_as_the_session_keeps_no_note() {
+        use crate::session::MissionInfoPress;
+        let mut session = warping_lit(false);
+        session.ship.condition = Condition::Disabled;
+        stepped(&mut session, 1, true, false);
+        session.take_sounds();
+        assert!(session.press_player_info(), "P opens");
+        assert_eq!(session.take_sounds(), [], "with no beep");
+        assert_eq!(
+            session.press_mission_info(),
+            MissionInfoPress::NoActiveMissions,
+            "I is the plain key's"
+        );
+        let catalog = crate::session::hail::tests::hailable();
+        let mut session = crate::session::hail::tests::targeting(&catalog);
+        session.mode = crate::session::Mode::Jumping(Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
+        session.collapse_jump(false);
+        let mut chance = crate::testkit::Draws::of(&crate::session::hail::tests::opening(0));
+        let hailed = session.open_hail(&catalog, &crate::hail::HailOptions::default(), &mut chance);
+        assert!(
+            matches!(hailed, Ok(crate::session::Hailed::Comm(_))),
+            "Y opens: {hailed:?}"
+        );
+    }
+
+    #[test]
     fn a_collapse_with_the_gamma_only_raised_to_0_is_not_reported() {
         let mut session = warping_until(true, false, |session| session.hyper_gamma() == 0.0);
         session.ship.condition = Condition::Disabled;

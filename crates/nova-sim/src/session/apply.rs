@@ -22,6 +22,7 @@ use crate::session::SimCatalog;
 
 mod asks;
 mod comm;
+mod faded;
 mod missions;
 mod player_info;
 mod port;
@@ -256,6 +257,7 @@ impl Session {
             FlightCommand::PressPlayerInfo | FlightCommand::OpenPlayerInfo => {
                 self.apply_player_info(command, collab)
             }
+            FlightCommand::PressFaded(press) => self.apply_faded(press, collab),
             FlightCommand::SetWindowWidth(_)
             | FlightCommand::SetDoubleTimeKey(_)
             | FlightCommand::SetSoundQuiet(_)
