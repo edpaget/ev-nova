@@ -103,26 +103,32 @@ impl RowList {
         }
     }
 
+    /// Selects nothing, leaving the list scrolled as it is.
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+    }
+
     /// Steps the selection a row forward or back, wrapping from the last
     /// row to the first and from the first to the last, and scrolls to
     /// show it, as the mission computer's Tab, Down and Up do
-    /// (`_MissionFilter` @0x9f8cc, @0x9faf2, @0x9fce3). The original's
-    /// forward step from no selection selects the first row and its back
-    /// step the last (@0x9f949, @0x9fcfa); the list always has a row
-    /// selected while it has rows, so it never starts from none. Returns
-    /// whether the selection changed: never with no rows or one.
+    /// (`_MissionFilter` @0x9f8cc, @0x9faf2, @0x9fce3) and the mission info
+    /// screen's (`_MissionInfoFilter` @0x9d778, @0x9d9ac). From no
+    /// selection, which the mission info screen has after an abort, the
+    /// forward step selects the first row and the back step the last
+    /// (@0x9d839, @0x9da60; `_MissionFilter` @0x9f949, @0x9fcfa). Returns
+    /// whether the selection changed: never with no rows, nor from the
+    /// only row.
     pub fn step_wrapping(&mut self, forward: bool) -> bool {
+        let before = self.selected;
         let count = self.rows.len();
-        let Some(index) = self.selected else {
-            return false;
-        };
-        let next = if forward {
-            (index + 1) % count
-        } else {
-            (index + count - 1) % count
+        let next = match before {
+            Some(index) if forward => (index + 1) % count,
+            Some(index) => (index + count - 1) % count,
+            None if forward => 0,
+            None => count.saturating_sub(1),
         };
         self.select(next);
-        next != index
+        self.selected != before
     }
 
     /// A press on a row shown selects it; Up and Down, repeats included,
@@ -380,6 +386,31 @@ mod tests {
         assert!(!one.step_wrapping(true));
         assert!(!one.step_wrapping(false));
         assert_eq!(one.selected(), Some(0));
+    }
+
+    #[test]
+    fn step_wrapping_from_no_selection_takes_the_first_forward_and_the_last_back() {
+        let mut rows = list(8);
+        rows.select(7);
+        rows.clear_selection();
+        assert_eq!(rows.selected(), None);
+        assert_eq!(rows.first(), 5, "clearing leaves the scroll");
+        assert!(rows.step_wrapping(true), "@0x9d839");
+        assert_eq!((rows.selected(), rows.first()), (Some(0), 0), "scrolled");
+        rows.clear_selection();
+        assert!(rows.step_wrapping(false), "@0x9da60");
+        assert_eq!((rows.selected(), rows.first()), (Some(7), 5), "scrolled");
+        let mut one = list(1);
+        one.clear_selection();
+        assert!(one.step_wrapping(false), "one row is still a change");
+        assert_eq!(one.selected(), Some(0));
+    }
+
+    #[test]
+    fn with_nothing_selected_no_row_is_highlighted() {
+        let mut rows = list(2);
+        rows.clear_selection();
+        assert_eq!(drawn(&rows).len(), 2, "the two rows' text alone");
     }
 
     #[test]
