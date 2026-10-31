@@ -270,15 +270,18 @@ mod tests {
         assert_near(nudged_after_a_jump_of_the_lead(ABOVE), 50.0 + NUDGE);
     }
 
-    /// The followers of a parent whose dispatch `stops` would stop it keep
-    /// the word `written` puts down, through several ticks of its moving,
-    /// and are nudged toward it.
-    fn keeps_the_place(stops: impl Fn(&mut Npc), written: impl Fn(&mut Traffic, NpcId)) {
+    /// The followers of a parent whose dispatch `stops` stops keep the word
+    /// `written` puts down, which also applies `stops` where its writer
+    /// needs it, through several ticks of its moving, and are nudged toward
+    /// it.
+    fn keeps_the_place(
+        stops: impl Fn(&mut Npc),
+        written: impl Fn(&mut Traffic, NpcId, &dyn Fn(&mut Npc)),
+    ) {
         let (mut traffic, lead, followers) = fleet(&[ABOVE]);
         let follower = followers[0];
         let start = of(&traffic, lead).state;
-        written(&mut traffic, lead);
-        stops(of_mut(&mut traffic, lead));
+        written(&mut traffic, lead, &stops);
         let slot = of(&traffic, follower).fleet_slot;
         assert!(slot.is_some(), "the scene");
         let word = place_of(&traffic, follower, &start);
@@ -299,15 +302,17 @@ mod tests {
         assert_near(nudged, 20.0 - NUDGE);
     }
 
-    /// The arrival snap writes the followers' words.
-    fn snapped(traffic: &mut Traffic, lead: NpcId) {
-        traffic.form_fleets(None);
+    /// The arrival snap of an already stopped parent writes the followers'
+    /// words: it numbers the slots itself, and is the only writer.
+    fn snapped(traffic: &mut Traffic, lead: NpcId, stops: &dyn Fn(&mut Npc)) {
+        stops(of_mut(traffic, lead));
         fleet_formation::snap(&mut traffic.npcs, lead, &mut traffic.berth_places);
     }
 
-    /// A dispatch of the parent writes them.
-    fn dispatched(traffic: &mut Traffic, _: NpcId) {
+    /// A dispatch of the parent writes them, before it stops.
+    fn dispatched(traffic: &mut Traffic, lead: NpcId, stops: &dyn Fn(&mut Npc)) {
         traffic.form_fleets(None);
+        stops(of_mut(traffic, lead));
     }
 
     fn no_ai(parent: &mut Npc) {
