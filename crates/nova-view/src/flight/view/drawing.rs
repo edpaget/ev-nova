@@ -62,8 +62,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.alpha
     }
 
-    /// Where the ship is drawn: `alpha` of the way from where it was a step
-    /// ago to where the frame has it.
+    /// Where the ship is drawn: from where it was a step ago to where the
+    /// frame drawn has it ([`FlightView::drawn`]), at
+    /// [`FlightView::shown_alpha`], which is `alpha` except on a double-time
+    /// frame between its passes.
     #[must_use]
     pub fn shown_position(&self) -> Point {
         shown_position(
@@ -73,8 +75,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         )
     }
 
-    /// Which way the ship is drawn facing: `alpha` of the way, the short way
-    /// round, from its heading a step ago to its heading in the frame.
+    /// Which way the ship is drawn facing: the short way round from its
+    /// heading a step ago to its heading in the frame drawn
+    /// ([`FlightView::drawn`]), at [`FlightView::shown_alpha`], which is
+    /// `alpha` except on a double-time frame between its passes.
     #[must_use]
     pub fn shown_heading(&self) -> f32 {
         shown_heading(
@@ -84,9 +88,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         )
     }
 
-    /// Where NPC `npc` is drawn and which way it faces: `alpha` of the way
-    /// from its place a step ago, as the player's ship; where the frame
-    /// has it, when it was not there a step ago.
+    /// Where NPC `npc`, a record of the frame drawn
+    /// ([`FlightView::drawn`]), is drawn and which way it faces: from its
+    /// place a step ago at [`FlightView::shown_alpha`], which is `alpha`
+    /// except on a double-time frame between its passes, as the player's
+    /// ship; where the frame has it, when it was not there a step ago.
     pub(super) fn shown_npc(&self, npc: &FrameShip) -> (Point, f32) {
         let now = npc.place();
         let from = self
