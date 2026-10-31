@@ -11,7 +11,10 @@
 //!   starts. As it closes, the screen fades out again (@0x55eb8), the
 //!   cursor shows (@0x55ebd), the window goes (@0x55ec5-0x55ecd) and the
 //!   screen fades in on what is beneath (@0x55edb). Each fade takes 1.0 s
-//!   and is synchronous, so the movie does not run during one.
+//!   and is synchronous, so the movie does not run during one. The window
+//!   is the main window's port rect (`_GetCWindowPortRect` @0x55b37), so
+//!   over a widened view it and its fades cover the whole view, and the
+//!   frame is fitted to that view, not to 1024 x 768.
 //! - **Plain**: no fade, and the window is the movie's own box, painted
 //!   black, centred on the main window (@0x55b43, `_CenterWindow`
 //!   @0x55ba2).
@@ -32,14 +35,25 @@
 //!   goes down or up, so one held from before skips the movie as it is let
 //!   go: later than the original by however long it is still held.
 //!
+//! On a screen already faded (`_screenFaded` *0x3b5198 set, as under the
+//! jump's white or the intro's black), a cinematic movie's first fade does
+//! nothing (`_FadeScreenOut` @0x5316-0x531f), so it fades in on its black
+//! window at once, and its close leaves the screen faded in
+//! ([`MovieStage::begin_faded`], [`MovieStage::faded_in`]). A plain movie
+//! fades nothing, so it plays under the fade and leaves it there.
+//!
 //! It plays no sound. Its early returns (the preference, a file that is
 //! not found or does not open, @0x5597c-0x55a5f) come before any fade, so
 //! a movie that cannot start ends at once with nothing drawn.
 //!
 //! Opening and decoding the file, and finding it (by its bare name in the
 //! Plug-Ins folder, then the Nova Files folder, @0x559d2 and @0x559ff), are
-//! the [`MoviePlayer`]'s: the engine has no QuickTime decoder, and wires a
-//! player that plays nothing.
+//! the [`MoviePlayer`]'s. A player shows each decoded frame on a
+//! [`MovieScreen`](crate::MovieScreen) it owns and draws the current one through
+//! [`DrawCommand::MovieFrame`](crate::DrawCommand::MovieFrame), whose
+//! pixels the renderer uploads again only when the frame changes
+//! ([`movie_frame`](crate::movie_frame)). The real player is `nova-movie`'s
+//! FFmpeg decoder, which the game wires at its edge.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -49,7 +63,7 @@ use nova_sim::DescMovie;
 
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
-use crate::fade::{DEATH_FADE_FOR, ScreenFade};
+use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view_around_frame};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, MouseButton};
 use crate::system::camera::VIEW_SIZE;
@@ -66,26 +80,43 @@ pub trait MoviePlayer {
     fn advance(&self, dt: Duration) -> bool;
     /// Stops the movie and lets it go (`StopMovie`, `DisposeMovie`).
     fn stop(&self);
-    /// Draws the current frame stretched into `rect`.
+    /// Draws the current frame stretched into `rect`, through
+    /// [`DrawCommand::MovieFrame`](crate::DrawCommand::MovieFrame); nothing
+    /// when no movie has started.
     fn draw_frame(&self, rect: Bounds, list: &mut DrawList);
 }
 
 /// The player movies are played through, and whether they play at all:
 /// the "QuickTime Movies" preference, a set `*0x3b501c + 7` turning them
-/// off (`_PlayQTMovie` @0x5597c, and each call site). Clones share the
-/// preference, so turning it on or off reaches every screen holding one.
-/// [`Movies::none`] plays nothing.
+/// off (`_PlayQTMovie` @0x5597c, `_StartLoopingMovie` @0x60282-0x6028b,
+/// and each call site). Clones share the preference, so turning it on or
+/// off reaches every screen holding one. [`Movies::none`] plays nothing.
+///
+/// The shipyard's looping ship movie is a second QuickTime movie beside
+/// the one `_PlayQTMovie` plays (`_loopingMovie` 0xdec98), so a text's or
+/// an offer's movie shown over the shipyard leaves the loop alone. A
+/// [`MoviePlayer`] plays one movie at a time, so the loop plays through a
+/// player of its own ([`Movies::looping`]), under the same preference.
+///
+/// Clones share the view a movie plays in too ([`Movies::set_view`]): the
+/// size of the view the main window shows now, which a cinematic movie's
+/// window and fades cover.
 #[derive(Clone)]
 pub struct Movies {
     player: Option<Rc<dyn MoviePlayer>>,
+    looping: Option<Rc<dyn MoviePlayer>>,
     on: Rc<Cell<bool>>,
+    /// The view the main window shows, shared by every clone.
+    view: Rc<Cell<(f32, f32)>>,
 }
 
 impl std::fmt::Debug for Movies {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Movies")
             .field("player", &self.player.is_some())
+            .field("looping", &self.looping.is_some())
             .field("on", &self.on.get())
+            .field("view", &self.view.get())
             .finish()
     }
 }
@@ -102,7 +133,9 @@ impl Movies {
     pub fn new(player: Rc<dyn MoviePlayer>, on: bool) -> Self {
         Self {
             player: Some(player),
+            looping: None,
             on: Rc::new(Cell::new(on)),
+            view: Rc::new(Cell::new(VIEW_SIZE)),
         }
     }
 
@@ -111,8 +144,39 @@ impl Movies {
     pub fn none() -> Self {
         Self {
             player: None,
+            looping: None,
             on: Rc::new(Cell::new(false)),
+            view: Rc::new(Cell::new(VIEW_SIZE)),
         }
+    }
+
+    /// These movies played through `player`, keeping the looping player
+    /// and the preference, shared with every clone.
+    #[must_use]
+    pub fn with_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        Self {
+            player: Some(player),
+            ..self
+        }
+    }
+
+    /// These movies with the looping movies played through `player`,
+    /// keeping the main player and the preference, shared with every
+    /// clone.
+    #[must_use]
+    pub fn with_looping_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        Self {
+            looping: Some(player),
+            ..self
+        }
+    }
+
+    /// The player a looping movie plays through, while movies are on and
+    /// there is one: `_StartLoopingMovie` reads the preference only as a
+    /// loop starts (@0x60282-0x6028b).
+    #[must_use]
+    pub fn looping(&self) -> Option<Rc<dyn MoviePlayer>> {
+        self.looping.clone().filter(|_| self.on.get())
     }
 
     /// Turns movies on or off, for every clone.
@@ -126,20 +190,37 @@ impl Movies {
         self.on.get() && self.player.is_some()
     }
 
-    /// A stage playing `movie`, when movies are on.
+    /// Sets the size of the view the main window shows now, for every
+    /// clone: Nova's 1024 x 768, or flight's widened view. A holder's
+    /// 1024 x 768 frame sits centred in it,
+    /// [`classic_offset`](crate::view_shape::classic_offset) to the right.
+    /// The game's edge writes it as the screen it shows changes shape.
+    pub fn set_view(&self, view: (f32, f32)) {
+        self.view.set(view);
+    }
+
+    /// The size of the view the main window shows now: Nova's 1024 x 768
+    /// until [`Movies::set_view`] says otherwise.
+    #[must_use]
+    pub fn view(&self) -> (f32, f32) {
+        self.view.get()
+    }
+
+    /// A stage playing `movie`, when movies are on, in the shared view
+    /// ([`Movies::view`]) as it is when it draws.
     #[must_use]
     pub fn stage(&self, movie: &DescMovie) -> Option<MovieStage> {
         let player = self.player.as_ref().filter(|_| self.on.get())?;
-        Some(MovieStage::new(movie.clone(), Rc::clone(player)))
+        Some(MovieStage {
+            view: Rc::clone(&self.view),
+            ..MovieStage::new(movie.clone(), Rc::clone(player))
+        })
     }
 }
 
 /// How long each of a cinematic movie's fades takes: the 1.0 s of
 /// `_FadeScreenOut` and `_FadeScreenIn` (@0x5399, @0x542d).
 pub const MOVIE_FADE_FOR: Duration = DEATH_FADE_FOR;
-
-/// The main window a movie is placed in: the whole screen.
-const MAIN_WINDOW: (i32, i32) = (VIEW_SIZE.0 as i32, VIEW_SIZE.1 as i32);
 
 /// Where a movie stands.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -169,12 +250,14 @@ pub struct MovieStage {
     movie: DescMovie,
     player: Rc<dyn MoviePlayer>,
     phase: Phase,
-    /// Where the window is, black.
-    window: Bounds,
-    /// Where the frames are drawn.
-    frame: Bounds,
+    /// The movie's box, doubled if it is double size; set as it begins.
+    size: (i32, i32),
+    /// The view it plays in, shared with the [`Movies`] that made it.
+    view: Rc<Cell<(f32, f32)>>,
     /// The input that stays queued for what comes next.
     replay: Vec<Input>,
+    /// Whether the player started it.
+    started: bool,
 }
 
 impl std::fmt::Debug for MovieStage {
@@ -218,10 +301,25 @@ fn bounds((x, y, width, height): (i32, i32, i32, i32)) -> Bounds {
     Bounds::at(Point::new(x as f32, y as f32), width as f32, height as f32)
 }
 
-/// The full screen, which the cinematic window and its fades cover.
-fn screen() -> Bounds {
-    bounds((0, 0, MAIN_WINDOW.0, MAIN_WINDOW.1))
+/// The whole of a view `view` in size, in the coordinates of the 1024 x
+/// 768 frame centred in it ([`whole_view_around_frame`]), in whole units:
+/// left, top, width and height. The main window a cinematic movie covers,
+/// the same rect a text's fade-in on the faded screen covers.
+#[allow(clippy::cast_possible_truncation)]
+fn cover(view: (f32, f32)) -> (i32, i32, i32, i32) {
+    let whole = whole_view_around_frame(view);
+    (
+        whole.min.x as i32,
+        whole.min.y as i32,
+        whole.width() as i32,
+        whole.height() as i32,
+    )
 }
+
+/// The classic 1024 x 768 main window, which a plain movie's box is
+/// centred on.
+#[allow(clippy::cast_possible_truncation)]
+const CLASSIC: (i32, i32, i32, i32) = (0, 0, VIEW_SIZE.0 as i32, VIEW_SIZE.1 as i32);
 
 impl MovieStage {
     /// `movie`, played through `player` once it begins.
@@ -231,9 +329,10 @@ impl MovieStage {
             movie,
             player,
             phase: Phase::Waiting,
-            window: Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0),
-            frame: Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0),
+            size: (0, 0),
+            view: Rc::new(Cell::new(VIEW_SIZE)),
             replay: Vec::new(),
+            started: false,
         }
     }
 
@@ -246,6 +345,32 @@ impl MovieStage {
     /// Starts the movie, once: one the player cannot start ends at once,
     /// with nothing drawn; a cinematic one fades the screen out first.
     pub fn begin(&mut self) {
+        self.begin_on(false);
+    }
+
+    /// Starts the movie, once, on a screen already faded (`_screenFaded`
+    /// set): as [`MovieStage::begin`], but a cinematic one's first fade
+    /// does nothing, as `_FadeScreenOut` returns at once on a faded screen
+    /// (@0x5316-0x531f), so it hides the cursor and fades in on its black
+    /// window at once. A plain one plays under whatever faded the screen,
+    /// which stays faded ([`MovieStage::faded_in`]).
+    pub fn begin_faded(&mut self) {
+        self.begin_on(true);
+    }
+
+    /// Whether it has faded the screen in, clearing `_screenFaded`: a
+    /// cinematic movie that started, from its start, as its window fades
+    /// in from black (`_FadeScreenIn` @0x55dce) and its close fades in on
+    /// what is beneath (@0x55edb). A plain one, or one that could not
+    /// start (its early returns come before any fade), leaves the screen
+    /// as it found it.
+    #[must_use]
+    pub fn faded_in(&self) -> bool {
+        self.started && self.movie.cinematic
+    }
+
+    /// [`MovieStage::begin`], on a screen `faded` or not.
+    fn begin_on(&mut self, faded: bool) {
         if self.phase != Phase::Waiting {
             return;
         }
@@ -257,24 +382,16 @@ impl MovieStage {
             i32::try_from(width).unwrap_or(i32::MAX / 4),
             i32::try_from(height).unwrap_or(i32::MAX / 4),
         );
-        let size = if self.movie.double_size {
+        self.size = if self.movie.double_size {
             (2 * natural.0 + 1, 2 * natural.1 + 1)
         } else {
             natural
         };
-        let main = (0, 0, MAIN_WINDOW.0, MAIN_WINDOW.1);
-        let window = if self.movie.cinematic {
-            main
-        } else {
-            centred(main, size)
-        };
-        let frame = centred(window, fitted(size, (window.2, window.3)));
-        self.window = bounds(window);
-        self.frame = bounds(frame);
-        self.phase = if self.movie.cinematic {
-            Phase::FadingOut(ScreenFade::to_black(MOVIE_FADE_FOR))
-        } else {
-            Phase::Playing
+        self.started = true;
+        self.phase = match (self.movie.cinematic, faded) {
+            (true, false) => Phase::FadingOut(ScreenFade::to_black(MOVIE_FADE_FOR)),
+            (true, true) => Phase::FadingIn(ScreenFade::from_black(MOVIE_FADE_FOR)),
+            (false, _) => Phase::Playing,
         };
     }
 
@@ -386,33 +503,51 @@ impl MovieStage {
         }
     }
 
+    /// Where its black window and its frame are, in the view as it is now:
+    /// a cinematic movie's window is the whole view, a plain one's its box
+    /// centred on the 1024 x 768 main frame, and the frame is the box
+    /// fitted to the window and centred in it.
+    fn placed(&self) -> (Bounds, Bounds) {
+        let window = if self.movie.cinematic {
+            cover(self.view.get())
+        } else {
+            centred(CLASSIC, self.size)
+        };
+        let frame = centred(window, fitted(self.size, (window.2, window.3)));
+        (bounds(window), bounds(frame))
+    }
+
     /// What it shows over what is beneath: the fade out over it; the
     /// black window, and the frame in it, while the movie runs or stops;
     /// the fades over them, and the last fade over what is beneath again.
-    /// All of it in Nova's 1024 x 768 main window: over a widened flight
-    /// view it is drawn centred, the view's sides uncovered (filed as
-    /// rdm:phase/display-modes-fidelity/phase-3-cinematic-movie-widened).
+    /// It draws in the coordinates of Nova's 1024 x 768 main frame. A
+    /// cinematic movie's window and its fades cover the whole view that
+    /// frame is centred in ([`Movies::view`]), as the original's window
+    /// covers its main window, widened or not (@0x55b37); a plain movie's
+    /// box is centred on the frame, which the frame's offset puts where
+    /// `_CenterWindow` puts it in a widened window.
     pub fn draw(&self, list: &mut DrawList) {
-        let window = (MAIN_WINDOW.0 as f32, MAIN_WINDOW.1 as f32);
+        let whole = bounds(cover(self.view.get()));
         match self.phase {
             Phase::Waiting | Phase::Ended => {}
-            Phase::FadingOut(fade) | Phase::ClosingIn(fade) => fade.draw(list, window),
+            Phase::FadingOut(fade) | Phase::ClosingIn(fade) => fade.draw_over(list, whole),
             Phase::FadingIn(fade) => {
-                fill_rect(list, screen(), Color::BLACK);
-                fade.draw(list, window);
+                fill_rect(list, whole, Color::BLACK);
+                fade.draw_over(list, whole);
             }
             Phase::Playing => self.draw_movie(list),
             Phase::ClosingOut(fade) => {
                 self.draw_movie(list);
-                fade.draw(list, window);
+                fade.draw_over(list, whole);
             }
         }
     }
 
     /// The black window, and the frame in it.
     fn draw_movie(&self, list: &mut DrawList) {
-        fill_rect(list, self.window, Color::BLACK);
-        self.player.draw_frame(self.frame, list);
+        let (window, frame) = self.placed();
+        fill_rect(list, window, Color::BLACK);
+        self.player.draw_frame(frame, list);
     }
 }
 
@@ -421,11 +556,15 @@ pub mod fixture {
     //! A movie player for tests, and the [`MoviePlayer`] port's contract.
     //!
     //! [`MockMoviePlayer`] plays movies of a set size for a set number of
-    //! advances, or refuses to start one, and logs every call.
-    //! [`check_contract`] runs against it here and against `nova`'s
-    //! `NoMoviePlayer`, the one real adapter. That adapter plays nothing,
-    //! so the contract is thin: it says how a player that can't start
-    //! behaves, and how one that can plays out, without decoding anything.
+    //! advances, or refuses to start one, and logs every call. It draws
+    //! through [`DrawCommand::MovieFrame`] as a real player does, from a
+    //! [`MovieScreen`] of its own: a 1x1 frame of [`FRAME`], a new one each
+    //! advance. [`check_contract`] runs against it here and against
+    //! `nova`'s `NoMoviePlayer`, which plays nothing, and the decoder's
+    //! player. The contract decodes nothing: it says how a player that
+    //! can't start behaves, that one that starts draws its frame through
+    //! the movie-frame command inside the rect it is given, and how it
+    //! plays out.
 
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -433,8 +572,9 @@ pub mod fixture {
 
     use super::MoviePlayer;
     use crate::color::Color;
-    use crate::draw::{DrawList, fill_rect};
+    use crate::draw::{DrawCommand, DrawList};
     use crate::geometry::{Bounds, Point};
+    use crate::movie_frame::MovieScreen;
 
     /// How long each advance the contract makes is.
     pub const STEP: Duration = Duration::from_millis(100);
@@ -455,7 +595,7 @@ pub mod fixture {
         Draw(Bounds),
     }
 
-    /// The colour a [`MockMoviePlayer`] draws its frame in.
+    /// The colour of a [`MockMoviePlayer`]'s frame, one pixel.
     pub const FRAME: Color = Color::rgba(1, 2, 3, 255);
 
     /// A player whose movies are `size` and play for `advances` advances,
@@ -464,7 +604,10 @@ pub mod fixture {
         size: Option<(u32, u32)>,
         advances: u32,
         advanced: RefCell<u32>,
+        screen: RefCell<MovieScreen>,
         pub log: RefCell<Vec<Call>>,
+        /// How far each advance went, in order.
+        steps: RefCell<Vec<Duration>>,
     }
 
     impl MockMoviePlayer {
@@ -476,7 +619,9 @@ pub mod fixture {
                 size: Some(size),
                 advances,
                 advanced: RefCell::new(0),
+                screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
+                steps: RefCell::new(Vec::new()),
             })
         }
 
@@ -487,7 +632,9 @@ pub mod fixture {
                 size: None,
                 advances: 0,
                 advanced: RefCell::new(0),
+                screen: RefCell::new(MovieScreen::new()),
                 log: RefCell::new(Vec::new()),
+                steps: RefCell::new(Vec::new()),
             })
         }
 
@@ -502,6 +649,12 @@ pub mod fixture {
                 .collect()
         }
 
+        /// How far each advance went, in order.
+        #[must_use]
+        pub fn advanced_by(&self) -> Vec<Duration> {
+            self.steps.borrow().clone()
+        }
+
         /// The rects of the frames drawn.
         #[must_use]
         pub fn drawn(&self) -> Vec<Bounds> {
@@ -514,17 +667,32 @@ pub mod fixture {
                 })
                 .collect()
         }
+
+        /// Shows the next frame: one pixel of [`FRAME`], whatever the
+        /// movie's size, so a huge movie costs nothing.
+        fn show_next(&self) {
+            let pixel = vec![FRAME.r, FRAME.g, FRAME.b, FRAME.a];
+            let shown = self.screen.borrow_mut().show(1, 1, pixel);
+            debug_assert!(shown, "one pixel is four bytes");
+        }
     }
 
     impl MoviePlayer for MockMoviePlayer {
         fn start(&self, file: &str) -> Option<(u32, u32)> {
             self.log.borrow_mut().push(Call::Start(file.to_owned()));
             *self.advanced.borrow_mut() = 0;
+            if self.size.is_some() {
+                self.show_next();
+            }
             self.size
         }
 
-        fn advance(&self, _dt: Duration) -> bool {
+        fn advance(&self, dt: Duration) -> bool {
             self.log.borrow_mut().push(Call::Advance);
+            self.steps.borrow_mut().push(dt);
+            if self.size.is_some() {
+                self.show_next();
+            }
             let mut advanced = self.advanced.borrow_mut();
             *advanced += 1;
             *advanced < self.advances
@@ -534,12 +702,13 @@ pub mod fixture {
             self.log.borrow_mut().push(Call::Stop);
         }
 
-        /// Fills `rect` with [`FRAME`], unless the player refuses every
-        /// movie and so has no frame to draw.
+        /// Draws the frame shown last stretched into `rect`
+        /// ([`DrawCommand::MovieFrame`]); nothing before a movie starts, or
+        /// when the player refuses every movie.
         fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
             self.log.borrow_mut().push(Call::Draw(rect));
-            if self.size.is_some() {
-                fill_rect(list, rect, FRAME);
+            if let Some(frame) = self.screen.borrow().frame() {
+                list.movie_frame(frame, rect);
             }
         }
     }
@@ -549,7 +718,9 @@ pub mod fixture {
     /// 1. Stopping before anything started does nothing harmful.
     /// 2. If `file` can't start, advancing says it isn't playing, and
     ///    drawing a frame draws nothing.
-    /// 3. If it starts, its size is not zero either way; advancing says
+    /// 3. If it starts, its size is not zero either way; drawing a frame
+    ///    then draws at least one [`DrawCommand::MovieFrame`], each inside
+    ///    the rect given; advancing says
     ///    it's playing until, within [`MAX_ADVANCES`], it says it isn't,
     ///    and it stays that way; stopping it then is harmless; and
     ///    starting it again plays it as long again.
@@ -575,6 +746,7 @@ pub mod fixture {
         if width == 0 || height == 0 {
             return Err(format!("{file} started at a size of {width} x {height}"));
         }
+        drew_a_frame(player, file, rect)?;
         let length = played(player, file)?;
         for _ in 0..3 {
             if player.advance(STEP) {
@@ -595,6 +767,34 @@ pub mod fixture {
         Ok(())
     }
 
+    /// Whether the started movie draws a frame inside `rect`.
+    fn drew_a_frame(player: &impl MoviePlayer, file: &str, rect: Bounds) -> Result<(), String> {
+        let mut list = DrawList::new();
+        player.draw_frame(rect, &mut list);
+        let mut areas = list.iter().filter_map(|command| match command {
+            DrawCommand::MovieFrame { area, .. } => Some(*area),
+            _ => None,
+        });
+        let inside = |area: Bounds| {
+            area.min.x >= rect.min.x
+                && area.min.y >= rect.min.y
+                && area.max.x <= rect.max.x
+                && area.max.y <= rect.max.y
+        };
+        let Some(first) = areas.next() else {
+            return Err(format!("{file} started, but drew no frame"));
+        };
+        match std::iter::once(first)
+            .chain(areas)
+            .find(|&area| !inside(area))
+        {
+            Some(area) => Err(format!(
+                "{file} drew a frame at {area:?}, outside its rect {rect:?}"
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// How many advances the started movie plays for, the last included.
     fn played(player: &impl MoviePlayer, file: &str) -> Result<u32, String> {
         for advances in 1..=MAX_ADVANCES {
@@ -610,6 +810,50 @@ pub mod fixture {
         use std::cell::Cell;
 
         use super::*;
+        use crate::draw::fill_rect;
+        use crate::movie_frame::MovieFrame;
+
+        /// The frames `player` draws into `rect`.
+        fn frames(player: &MockMoviePlayer, rect: Bounds) -> Vec<(MovieFrame, Bounds)> {
+            let mut list = DrawList::new();
+            player.draw_frame(rect, &mut list);
+            list.iter()
+                .filter_map(|command| match command {
+                    DrawCommand::MovieFrame { frame, area } => Some((frame.clone(), *area)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn the_mocks_frame_moves_on_with_each_advance() {
+            let player = MockMoviePlayer::playing((640, 480), 5);
+            let rect = Bounds::at(Point::new(1.0, 2.0), 64.0, 48.0);
+            assert_eq!(frames(&player, rect), [], "nothing before it starts");
+            player.start("Race.mov");
+            let [(first, area)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(area, rect);
+            assert_eq!(first.image().pixels(), [FRAME.r, FRAME.g, FRAME.b, FRAME.a]);
+            player.advance(STEP);
+            let [(second, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(second.stream(), first.stream());
+            assert_ne!(second.generation(), first.generation());
+            player.stop();
+            let [(stopped, _)] = frames(&player, rect).try_into().expect("one frame");
+            assert_eq!(stopped, second, "the stopped movie's last frame stays");
+            assert_eq!(player.drawn(), [rect; 4], "every draw logged, drawn or not");
+        }
+
+        #[test]
+        fn the_mock_logs_how_far_each_advance_went() {
+            let player = MockMoviePlayer::playing((640, 480), 5);
+            assert_eq!(player.advanced_by(), []);
+            player.start("Race.mov");
+            player.advance(STEP);
+            player.advance(Duration::from_millis(250));
+            assert_eq!(player.advanced_by(), [STEP, Duration::from_millis(250)]);
+            assert_eq!(player.calls().len(), 3, "the calls log is unchanged");
+        }
 
         #[test]
         fn the_mock_meets_the_contract_playing_and_refusing() {
@@ -637,6 +881,8 @@ pub mod fixture {
             Resumes,
             RefusesASecondStart,
             ShortensTheSecondPlay,
+            DrawsNoFrame,
+            DrawsOutsideRect,
         }
 
         struct Broken {
@@ -677,6 +923,20 @@ pub mod fixture {
             fn draw_frame(&self, rect: Bounds, list: &mut DrawList) {
                 match self.flaw {
                     Flaw::DrawsWithoutStarting => fill_rect(list, rect, FRAME),
+                    Flaw::DrawsNoFrame => {}
+                    Flaw::DrawsOutsideRect => {
+                        let mut drawn = DrawList::new();
+                        self.inner.draw_frame(rect, &mut drawn);
+                        for command in &drawn {
+                            if let DrawCommand::MovieFrame { frame, area } = command {
+                                let grown = Bounds {
+                                    min: area.min,
+                                    max: Point::new(area.max.x + 1.0, area.max.y),
+                                };
+                                list.movie_frame(frame.clone(), grown);
+                            }
+                        }
+                    }
                     _ => self.inner.draw_frame(rect, list),
                 }
             }
@@ -711,6 +971,8 @@ pub mod fixture {
                 (playing(), Flaw::Resumes, "played again"),
                 (playing(), Flaw::RefusesASecondStart, "a second time"),
                 (playing(), Flaw::ShortensTheSecondPlay, "a second start"),
+                (playing(), Flaw::DrawsNoFrame, "drew no frame"),
+                (playing(), Flaw::DrawsOutsideRect, "outside its rect"),
             ] {
                 let error = broken(inner, flaw);
                 assert!(error.contains(clause), "{clause}: {error}");
@@ -722,7 +984,7 @@ pub mod fixture {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::fixture::{Call, FRAME, MockMoviePlayer};
+    use super::fixture::{Call, MockMoviePlayer};
     use super::*;
     use crate::draw::DrawCommand;
 
@@ -760,6 +1022,18 @@ mod tests {
                     ),
                     color,
                 )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The areas of the movie frames drawn.
+    fn frames(stage: &MovieStage) -> Vec<Bounds> {
+        let mut list = DrawList::new();
+        stage.draw(&mut list);
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::MovieFrame { area, .. } => Some(area),
                 _ => None,
             })
             .collect()
@@ -817,7 +1091,223 @@ mod tests {
         none.set_on(true);
         assert!(!none.on(), "no player");
         assert!(none.stage(&movie(0)).is_none());
-        assert_eq!(format!("{none:?}"), "Movies { player: false, on: true }");
+        assert_eq!(
+            format!("{none:?}"),
+            "Movies { player: false, looping: false, on: true, view: (1024.0, 768.0) }"
+        );
+    }
+
+    #[test]
+    fn looping_is_none_without_a_looping_player() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true);
+        assert!(movies.looping().is_none());
+        let none = Movies::none();
+        none.set_on(true);
+        assert!(none.looping().is_none());
+    }
+
+    #[test]
+    fn looping_follows_the_shared_preference() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let reel = MockMoviePlayer::playing((32, 32), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true)
+            .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+        let looping = movies.looping().expect("on, with a looping player");
+        assert_eq!(looping.start("Ship.mov"), Some((32, 32)));
+        assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
+        assert!(player.calls().is_empty(), "the loop has its own player");
+        movies.clone().set_on(false);
+        assert!(movies.looping().is_none(), "shared");
+        assert!(movies.stage(&movie(0)).is_none());
+        movies.set_on(true);
+        assert!(movies.looping().is_some());
+        assert_eq!(
+            format!("{movies:?}"),
+            "Movies { player: true, looping: true, on: true, view: (1024.0, 768.0) }"
+        );
+    }
+
+    #[test]
+    fn with_looping_player_keeps_the_main_player_and_with_player_keeps_the_loop() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let reel = MockMoviePlayer::playing((32, 32), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true)
+            .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+        let mut stage = movies.stage(&movie(0)).expect("on");
+        stage.begin();
+        assert_eq!(player.calls(), [Call::Start("Race.mov".to_owned())]);
+        let other = MockMoviePlayer::playing((8, 8), 3);
+        let swapped = movies
+            .clone()
+            .with_player(Rc::clone(&other) as Rc<dyn MoviePlayer>);
+        let mut stage = swapped.stage(&movie(0)).expect("on");
+        stage.begin();
+        assert_eq!(other.calls(), [Call::Start("Race.mov".to_owned())]);
+        swapped.looping().expect("kept").start("Ship.mov");
+        assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
+        movies.set_on(false);
+        assert!(!swapped.on(), "the preference kept, shared");
+        let late = Movies::none().with_player(Rc::clone(&other) as Rc<dyn MoviePlayer>);
+        late.set_on(true);
+        assert!(late.on(), "a player given to none plays");
+    }
+
+    #[test]
+    fn a_movies_view_is_classic_until_set_and_shared_by_every_clone() {
+        let player = MockMoviePlayer::playing((160, 120), 3);
+        let movies = Movies::new(Rc::clone(&player) as Rc<dyn MoviePlayer>, true);
+        assert_eq!(movies.view(), VIEW_SIZE);
+        assert_eq!(Movies::none().view(), VIEW_SIZE);
+        assert_eq!(Movies::default().view(), VIEW_SIZE);
+        let other = movies.clone();
+        let swapped = movies
+            .clone()
+            .with_player(Rc::clone(&player) as Rc<dyn MoviePlayer>);
+        let looped = movies
+            .clone()
+            .with_looping_player(Rc::clone(&player) as Rc<dyn MoviePlayer>);
+        other.set_view((1365.0, 768.0));
+        for holder in [&movies, &other, &swapped, &looped] {
+            assert_eq!(holder.view(), (1365.0, 768.0));
+        }
+        assert_eq!(
+            format!("{movies:?}"),
+            "Movies { player: true, looping: false, on: true, view: (1365.0, 768.0) }"
+        );
+    }
+
+    /// A stage playing a movie of `flags` through `player`, made by
+    /// `Movies` whose view is `view`.
+    fn staged_in(
+        player: &Rc<MockMoviePlayer>,
+        flags: u16,
+        view: (f32, f32),
+    ) -> (Movies, MovieStage) {
+        let movies = Movies::new(Rc::clone(player) as Rc<dyn MoviePlayer>, true);
+        movies.set_view(view);
+        let stage = movies.stage(&movie(flags)).expect("on");
+        (movies, stage)
+    }
+
+    #[test]
+    fn a_cinematic_movie_in_a_widened_view_fades_and_blacks_out_the_whole_view() {
+        for (width, cover) in [
+            (1365.0, rect(-170.0, 0.0, 1365.0, 768.0)),
+            (1366.0, rect(-171.0, 0.0, 1366.0, 768.0)),
+        ] {
+            let player = MockMoviePlayer::playing((160, 120), 1);
+            let (_movies, mut stage) = staged_in(&player, 0x0004, (width, 768.0));
+            stage.begin();
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::rgba(0, 0, 0, 128))],
+                "{width}: fading out over the whole view"
+            );
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::BLACK), (cover, Color::BLACK)],
+                "{width}: the black window under the fade in"
+            );
+            run(&mut stage, MOVIE_FADE_FOR);
+            assert_eq!(fills(&stage), [(cover, Color::BLACK)], "{width}: playing");
+            assert_eq!(
+                frames(&stage),
+                [rect(432.0, 324.0, 160.0, 120.0)],
+                "{width}: the frame centred in the view, each half truncated"
+            );
+            stage.tick(TICK);
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::BLACK), (cover, Color::rgba(0, 0, 0, 128))],
+                "{width}: closing out"
+            );
+            run(&mut stage, Duration::from_millis(500));
+            assert_eq!(
+                fills(&stage),
+                [(cover, Color::BLACK)],
+                "{width}: closing in"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cinematic_movies_frame_is_centred_in_the_whole_view() {
+        let player = MockMoviePlayer::playing((161, 121), 1);
+        let (_movies, mut stage) = staged_in(&player, 0x0004, (1367.0, 768.0));
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(
+            frames(&stage),
+            [rect(-171.0 + (683.0 - 80.0), 384.0 - 60.0, 161.0, 121.0)],
+            "_CenterRect over the view: −offset + (W/2 − w/2), each half truncated"
+        );
+    }
+
+    #[test]
+    fn a_cinematic_movie_wider_than_1024_plays_unscaled_in_a_view_wide_enough() {
+        let player = MockMoviePlayer::playing((1200, 600), 3);
+        let (_movies, mut stage) = staged_in(&player, 0x0004, (1365.0, 768.0));
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(
+            frames(&stage),
+            [rect(-88.0, 84.0, 1200.0, 600.0)],
+            "fitted to the whole view (@0x55cb8-0x55d5d), so not scaled"
+        );
+        let player = MockMoviePlayer::playing((1200, 600), 3);
+        let (_movies, mut stage) = staged_in(&player, 0x0004, VIEW_SIZE);
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(
+            frames(&stage),
+            [rect(0.0, 128.0, 1024.0, 512.0)],
+            "shrunk to a 1024 view"
+        );
+    }
+
+    #[test]
+    fn a_plain_movie_in_a_widened_view_is_centred_on_the_classic_frame() {
+        for flags in [0, 0x0002] {
+            let classic = MockMoviePlayer::playing((160, 120), 3);
+            let mut at_1024 = staged(&classic, flags);
+            at_1024.begin();
+            let player = MockMoviePlayer::playing((160, 120), 3);
+            let (_movies, mut stage) = staged_in(&player, flags, (1365.0, 768.0));
+            stage.begin();
+            assert_eq!(fills(&stage), fills(&at_1024), "{flags:#x}");
+            assert_eq!(frames(&stage), frames(&at_1024), "{flags:#x}");
+            for (area, _) in fills(&stage) {
+                assert!(
+                    area.min.x >= 0.0 && area.max.x <= 1024.0,
+                    "{flags:#x}: inside the classic frame, which the frame's offset moves to \
+                     where _CenterWindow puts it: {area:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_resize_while_a_cinematic_movie_plays_moves_its_cover() {
+        let player = MockMoviePlayer::playing((160, 120), 30);
+        let (movies, mut stage) = staged_in(&player, 0x0004, VIEW_SIZE);
+        stage.begin_faded();
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(fills(&stage), [(screen_rect(), Color::BLACK)]);
+        movies.set_view((1365.0, 768.0));
+        assert_eq!(
+            fills(&stage),
+            [(rect(-170.0, 0.0, 1365.0, 768.0), Color::BLACK)],
+            "the next draw covers the new view"
+        );
+    }
+
+    /// The classic 1024 x 768 screen.
+    fn screen_rect() -> Bounds {
+        rect(0.0, 0.0, 1024.0, 768.0)
     }
 
     #[test]
@@ -874,10 +1364,11 @@ mod tests {
         let box_at = rect(432.0, 324.0, 160.0, 120.0);
         assert_eq!(
             fills(&stage),
-            [(box_at, Color::BLACK), (box_at, FRAME)],
+            [(box_at, Color::BLACK)],
             "the movie's own box, centred on the screen (_CenterWindow @0x55ba2)"
         );
-        assert_eq!(player.drawn(), [box_at]);
+        assert_eq!(frames(&stage), [box_at], "the frame fills it");
+        assert_eq!(player.drawn(), [box_at; 2], "asked once a draw");
     }
 
     #[test]
@@ -888,9 +1379,10 @@ mod tests {
         let doubled = rect(352.0, 264.0, 321.0, 241.0);
         assert_eq!(
             fills(&stage),
-            [(doubled, Color::BLACK), (doubled, FRAME)],
+            [(doubled, Color::BLACK)],
             "(2w + 1) x (2h + 1) (@0x55ad8-0x55adc), the halves truncated"
         );
+        assert_eq!(frames(&stage), [doubled]);
     }
 
     #[test]
@@ -974,14 +1466,14 @@ mod tests {
         run(&mut stage, Duration::from_millis(500));
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::rgba(0, 0, 0, 128))],
+            [(screen_rect(), Color::rgba(0, 0, 0, 128))],
             "half way to black over what is beneath"
         );
         run(&mut stage, Duration::from_millis(500));
         assert!(stage.hides_cursor(), "_HideTheCursor @0x55a73");
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK), (screen(), Color::BLACK)],
+            [(screen_rect(), Color::BLACK), (screen_rect(), Color::BLACK)],
             "the black window, under the fade still black"
         );
         run(&mut stage, MOVIE_FADE_FOR);
@@ -993,9 +1485,10 @@ mod tests {
         let frame = rect(432.0, 324.0, 160.0, 120.0);
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK), (frame, FRAME)],
-            "the frame centred in the black window over the whole screen"
+            [(screen_rect(), Color::BLACK)],
+            "the black window over the whole screen"
         );
+        assert_eq!(frames(&stage), [frame], "the frame centred in it");
         stage.tick(TICK);
         assert_eq!(player.calls().last(), Some(&Call::Advance));
     }
@@ -1012,20 +1505,28 @@ mod tests {
         assert!(stage.hides_cursor());
         run(&mut stage, Duration::from_millis(500));
         let frame = rect(432.0, 324.0, 160.0, 120.0);
+        let mut list = DrawList::new();
+        stage.draw(&mut list);
+        assert!(
+            matches!(
+                list.iter().nth(1),
+                Some(DrawCommand::MovieFrame { area, .. }) if *area == frame
+            ),
+            "the stopped frame over the black window: {list:?}"
+        );
         assert_eq!(
             fills(&stage),
             [
-                (screen(), Color::BLACK),
-                (frame, FRAME),
-                (screen(), Color::rgba(0, 0, 0, 128))
+                (screen_rect(), Color::BLACK),
+                (screen_rect(), Color::rgba(0, 0, 0, 128))
             ],
-            "the stopped frame fading to black"
+            "fading to black"
         );
         run(&mut stage, Duration::from_millis(500));
         assert!(!stage.hides_cursor(), "_ShowTheCursor @0x55ebd");
         assert_eq!(
             fills(&stage),
-            [(screen(), Color::BLACK)],
+            [(screen_rect(), Color::BLACK)],
             "the window gone, black over what is beneath"
         );
         run(&mut stage, Duration::from_millis(900));
@@ -1133,6 +1634,49 @@ mod tests {
         assert!(!stage.ended());
         assert!(matches!(stage.phase, Phase::FadingOut(_)));
         assert_eq!(stage.take_replay(), [press(Key::Space)]);
+    }
+
+    #[test]
+    fn a_cinematic_movie_begun_faded_skips_its_first_fade_and_fades_in_on_its_window() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut stage = staged(&player, 0x0004);
+        stage.begin_faded();
+        assert!(
+            stage.hides_cursor(),
+            "_FadeScreenOut @0x5316-0x531f does nothing, so the cursor hides at once"
+        );
+        assert_eq!(
+            fills(&stage),
+            [(screen_rect(), Color::BLACK), (screen_rect(), Color::BLACK)],
+            "the black window, under the fade from black"
+        );
+        assert!(stage.faded_in(), "its window fades in (@0x55dce)");
+        run(&mut stage, MOVIE_FADE_FOR);
+        assert_eq!(frames(&stage).len(), 1, "playing after one fade");
+        stage.tick(TICK);
+        run(&mut stage, MOVIE_FADE_FOR * 2);
+        assert!(stage.ended());
+        assert!(stage.faded_in(), "and its close (@0x55edb)");
+    }
+
+    #[test]
+    fn only_a_cinematic_movie_that_started_fades_the_screen_back_in() {
+        for (player, flags, faded_in) in [
+            (MockMoviePlayer::playing((160, 120), 1), 0x0004, true),
+            (MockMoviePlayer::playing((160, 120), 1), 0, false),
+            (MockMoviePlayer::refusing(), 0x0004, false),
+        ] {
+            let mut stage = staged(&player, flags);
+            assert!(!stage.faded_in(), "{flags:#x}: not before it begins");
+            stage.begin_faded();
+            run(&mut stage, MOVIE_FADE_FOR * 4);
+            assert!(stage.ended(), "{flags:#x}");
+            assert_eq!(stage.faded_in(), faded_in, "{flags:#x}");
+        }
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut stage = staged(&player, 0);
+        stage.begin_faded();
+        assert_eq!(frames(&stage).len(), 1, "a plain one plays at once");
     }
 
     #[test]

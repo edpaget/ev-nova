@@ -10,6 +10,7 @@ use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
@@ -23,7 +24,14 @@ use super::{
 };
 
 impl<
-    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
     S: FlightSim,
 > Screen for FlightView<C, S>
 {
@@ -90,6 +98,13 @@ impl<
     /// [`FlightView::draw_dialog_map`], which the app draws apart when a
     /// mission dialog goes between them.
     fn draw(&self, list: &mut DrawList) {
+        if self.draw_movie(list, |list| {
+            if self.draw_scene(list) {
+                self.draw_fades(list);
+            }
+        }) {
+            return;
+        }
         if self.map_open {
             self.draw_under_dialog_map(list);
             self.draw_dialog_map(list);
@@ -153,6 +168,9 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
+        if self.playing() {
+            return self.movie_hides_pointer();
+        }
         !self.map_open && self.failure.is_none() && self.looks.cursor_sheet().is_some()
     }
 
@@ -175,7 +193,14 @@ impl<
 }
 
 impl<
-    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
     S: FlightSim,
 > FlightView<C, S>
 {
@@ -183,6 +208,10 @@ impl<
     /// the catch-up, the steps and each command fill it where they change
     /// the flight.
     fn tick_then(&mut self, dt: Duration) {
+        if self.playing() {
+            self.movie_tick(dt);
+            return;
+        }
         self.elapse_frame_rate(dt);
         self.catch_up();
         self.fade_frame(dt);
@@ -220,9 +249,29 @@ impl<
         self.advance_hud();
     }
 
+    /// `press`, if a jump under way lets it through and the flight takes
+    /// its command.
+    fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
+        let press = if jumping {
+            let option = self.held.contains(&Key::Alt);
+            let menu_open = self.escort_menu.is_open();
+            press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
+        } else {
+            press
+        };
+        press.filter(|&key| {
+            self.command_of(key)
+                .is_none_or(|command| self.takes(command))
+        })
+    }
+
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
+        if self.playing() {
+            self.movie_input(input);
+            return ScreenAction::None;
+        }
         self.cursor_input(input);
         let press = match *input {
             Input::Key {
@@ -263,18 +312,7 @@ impl<
         {
             self.click_in_space(at);
         }
-        let press = if jumping {
-            let option = self.held.contains(&Key::Alt);
-            let menu_open = self.escort_menu.is_open();
-            press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
-        } else {
-            press
-        };
-        let press = press.filter(|&key| {
-            self.command_of(key)
-                .is_none_or(|command| self.takes(command))
-        });
-        match press {
+        match self.press_taken(press, jumping) {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.

@@ -417,11 +417,19 @@ mod tests {
         assert_eq!(session.take_takeoff_nav(), None);
     }
 
+    /// 13999 as a rescue loaded it.
+    fn rescued() -> crate::flight_frame::LoadedDesc {
+        crate::flight_frame::LoadedDesc {
+            id: 13999,
+            text: Some("Rescued.".to_owned()),
+        }
+    }
+
     #[test]
     fn the_rescues_desc_is_drained() {
         let mut session = started();
-        session.ship.fate.rescue_desc_due = true;
-        assert_eq!(drained(&mut session), [FlightEvent::RescueDesc(13999)]);
+        session.ship.fate.rescue_desc = Some(rescued());
+        assert_eq!(drained(&mut session), [FlightEvent::RescueDesc(rescued())]);
         assert_eq!(session.take_rescue_desc(), None);
     }
 
@@ -448,7 +456,7 @@ mod tests {
     #[test]
     fn the_kinds_come_in_the_documented_order() {
         let mut session = started();
-        session.ship.fate.rescue_desc_due = true;
+        session.ship.fate.rescue_desc = Some(rescued());
         session.run.leave_with("Bye.");
         session.out.takeoff_nav = Some(NavMode::Off);
         session.out.stellar_passes.push(StellarPass::Still);
@@ -503,7 +511,7 @@ mod tests {
                 FlightEvent::InterfaceLoadsCleared,
                 FlightEvent::TakeoffNav(NavMode::Off),
                 FlightEvent::StellarPass(StellarPass::Still),
-                FlightEvent::RescueDesc(13999),
+                FlightEvent::RescueDesc(rescued()),
                 FlightEvent::LeaveMessage("Bye.".to_owned()),
             ]
         );

@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, KeyFades, MapKey, MarksFrom,
-    Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, Gates, KeyFades, MapKey,
+    MarksFrom, Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
@@ -97,6 +97,7 @@ pub struct FakeFlight {
     weapons: Vec<WeaponId>,
     opening_names: Names,
     descriptions: VecDeque<String>,
+    port_description: Option<String>,
     failure: Option<String>,
     desk: FakeDesk,
     edits: Vec<PilotEdit>,
@@ -177,6 +178,14 @@ impl FakeFlight {
     /// ([`FlightCommand::LoadDescription`]) as `text`.
     pub fn queue_description(&mut self, text: &str) {
         self.descriptions.push_back(text.to_owned());
+    }
+
+    /// Answers every ask for the port's own description
+    /// ([`FlightCommand::LoadPortDescription`]) with `text` from now on,
+    /// as a session landed with a catalog shared loads it; with none, as
+    /// by default, it is refused, as a flight with no catalog refuses it.
+    pub fn set_port_description(&mut self, text: Option<&str>) {
+        self.port_description = text.map(str::to_owned);
     }
 
     /// Answers the next command not yet answered with `answer`: the
@@ -322,6 +331,10 @@ impl FakeFlight {
             ),
             _ if self.failure.is_some() => Answer::Refused,
             FlightCommand::Hover { .. } => Answer::Hovered(self.hover),
+            FlightCommand::LoadPortDescription => self
+                .port_description
+                .clone()
+                .map_or(Answer::Refused, Answer::Description),
             _ => Answer::Refused,
         };
         self.asks.push(ask);
@@ -481,6 +494,8 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::Hail,
         ScreenAsk::Boarding,
         ScreenAsk::PilotPanel,
+        ScreenAsk::GateEntryDesc(GateEntry::Hypergate(Some(SystemId(131)))),
+        ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
     ]
 }
 
@@ -1035,6 +1050,13 @@ fn check_failed(
             "{clause}: failed ({reason}), a description's load was answered {answer:?}"
         ));
     }
+    let answer = sim.apply(FlightCommand::LoadPortDescription);
+    if !answer.is_refused() {
+        return Err(format!(
+            "{clause}: failed ({reason}), the port's description was answered {answer:?}, \
+             not refused, so the view loads it itself"
+        ));
+    }
     for ask in sample_screen_asks() {
         let sent = format!("{ask:?}");
         let answer = sim.screen(ask);
@@ -1075,6 +1097,7 @@ fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
             raw: Some("A dësc.".to_owned()),
             movie: None,
         },
+        FlightCommand::LoadPortDescription,
     ];
     for ask in asks {
         let sent = format!("{ask:?}");
@@ -1565,6 +1588,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_failed_flight_that_answers_the_ports_description_breaks_the_contract() {
+        let clause = check_contract(&mut LoadsThePort, &FlightOpening::failed("no chär"))
+            .expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("the port's description was answered Description"),
+            "{clause}"
+        );
+    }
+
+    /// A flight that failed and loads a description, the port's own too,
+    /// but refuses every other command and answers every screen nothing.
+    struct LoadsThePort;
+
+    impl FlightSim for LoadsThePort {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, command: FlightCommand) -> Answer {
+            match command {
+                FlightCommand::LoadDescription { .. } | FlightCommand::LoadPortDescription => {
+                    Answer::Description(String::new())
+                }
+                _ => Answer::Refused,
+            }
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, _ask: ScreenAsk) -> ScreenAnswer {
+            ScreenAnswer::Nothing
+        }
+    }
+
     /// A flight that failed and loads a description, but refuses every
     /// other command and answers every screen nothing.
     struct LoadsOnly;
@@ -1707,7 +1773,7 @@ mod tests {
 
     /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
     /// numbers are those below it.
-    const SCREEN_ASK_KINDS: usize = 23;
+    const SCREEN_ASK_KINDS: usize = 24;
 
     /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
     /// every kind, so a new one must be numbered, and then sampled
@@ -1737,6 +1803,7 @@ mod tests {
             ScreenAsk::PilotPanel => 20,
             ScreenAsk::Gamble => 21,
             ScreenAsk::CaptureNaming => 22,
+            ScreenAsk::GateEntryDesc(_) => 23,
         }
     }
 

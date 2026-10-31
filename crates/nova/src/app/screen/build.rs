@@ -29,6 +29,7 @@ use nova_view::spaceport::missions::MissionInfoScreen;
 use nova_view::spaceport::offer::OfferDialog;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
+use nova_view::ui::mission_dialogs::MissionDialogs;
 use nova_view::ui::new_pilot::NewPilotDialog;
 use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
@@ -414,6 +415,7 @@ impl AppScreen {
         .with_effects_chance(self.effects_chance.clone())
         .with_overlays(self.flight_overlays)
         .with_hyperspace_effects(self.prefs.hyperspace_effects)
+        .with_movies(self.movies.clone())
         .with_smoke_trails(self.prefs.smoke_trails)
         .with_parallax_starfield(self.prefs.parallax_starfield)
         .with_weapon_effects(self.flight_weapon_effects())
@@ -641,10 +643,23 @@ impl AppScreen {
     }
 
     /// The router playing the mission texts' and offers' movies through
-    /// `player`, while the preferences have them on.
+    /// `player`, while the preferences have them on. A looping player
+    /// given before ([`AppScreen::with_looping_movie_player`]) is kept.
     #[must_use]
     pub fn with_movie_player(self, player: Rc<dyn MoviePlayer>) -> Self {
-        let movies = Movies::new(player, self.prefs.quicktime_movies);
+        let movies = self.movies.clone().with_player(player);
+        movies.set_on(self.prefs.quicktime_movies);
+        Self { movies, ..self }
+    }
+
+    /// The router playing the shipyard's and the hire screen's looping
+    /// ship movies through `player`, beside the texts' player, as the
+    /// original's `_loopingMovie` is a QuickTime movie of its own
+    /// (0xdec98), while the preferences have movies on. The texts'
+    /// player, given before or after, is kept.
+    #[must_use]
+    pub fn with_looping_movie_player(self, player: Rc<dyn MoviePlayer>) -> Self {
+        let movies = self.movies.clone().with_looping_player(player);
         Self { movies, ..self }
     }
 
@@ -665,10 +680,11 @@ impl AppScreen {
         self.prefs
     }
 
-    /// The About dialog, or the main menu's X text, while it is open.
+    /// The About dialog, or the main menu's X text, while it shows: not
+    /// while its movie plays.
     #[must_use]
     pub fn about(&self) -> Option<&DescDialog> {
-        self.about.as_ref()
+        self.about.as_ref().and_then(MissionDialogs::text)
     }
 
     /// The Preferences dialog, while it is open.
@@ -759,6 +775,7 @@ impl AppScreen {
             Side::Flight if self.flight.as_ref().is_some_and(FlightView::map_open) => {
                 Showing::FlightMap
             }
+            Side::Flight if self.flight.as_ref().is_some_and(FlightView::playing) => Showing::Movie,
             Side::Flight => Showing::Flight,
             Side::Spaceport if self.port_map_open() => Showing::FlightMap,
             Side::Spaceport => Showing::Spaceport,

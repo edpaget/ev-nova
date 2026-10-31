@@ -14,7 +14,7 @@ fn the_save_due_the_holds_expiry_and_the_rescues_desc_are_taken_once() {
     for event in [
         FlightEvent::SaveDue,
         FlightEvent::HoldExpired,
-        FlightEvent::RescueDesc(13999),
+        FlightEvent::RescueDesc(rescued(13999)),
     ] {
         view.sim.queue_event(event);
     }
@@ -23,7 +23,7 @@ fn the_save_due_the_holds_expiry_and_the_rescues_desc_are_taken_once() {
         view.take_hold_expired(),
         "kept in the inbox for its own take"
     );
-    assert_eq!(view.take_rescue_desc(), Some(13999));
+    assert_eq!(view.take_rescue_desc(), Some(rescued(13999)));
     assert!(!view.take_save_due(), "once");
     assert!(!view.take_hold_expired(), "once");
     assert_eq!(view.take_rescue_desc(), None, "once");

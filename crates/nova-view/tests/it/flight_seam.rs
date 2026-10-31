@@ -1063,7 +1063,7 @@ fn a_rescue_in_the_pod_stops_the_step_and_opens_its_desc() {
         frames += 1;
         assert!(frames <= 20, "no rescue");
     };
-    assert_eq!(desc, 13999);
+    assert_eq!(desc.id, 13999);
     let session = view.session().expect("flying");
     assert_eq!(session.ship(), ShipId(128), "out of the pod");
     assert_eq!(session.player().position, Vec2::new(50.0, 50.0), "rescued");

@@ -816,6 +816,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_landing_pickup_no_space_text_with_no_landing_text_before_it_reads_the_ports_desc() {
+        use crate::catalog::{DescMovie, DescText};
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let port = DescMovie::from_desc("Port.mov", 0x0001);
+        let mut catalog = cargo_catalog(vec![round_trip(140, 1, -1)], vec![]);
+        catalog.descs = vec![(
+            129,
+            DescText {
+                text: "Luna's port.".to_owned(),
+                movie: port.clone(),
+            },
+        )];
+        for (source, movie) in [
+            (RuleSource::Engine, port.clone()),
+            (RuleSource::Bible, None),
+        ] {
+            let rules = Rulebook::default().with_override(RuleKey::DescMovieGlobals, source);
+            let mut session = accepted(&catalog).with_rules(rules);
+            session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
+            let earlier = DescMovie::from_desc("Earlier.mov", 0x0001);
+            let _ = session.load_description(Some("Earlier."), earlier.as_ref(), &mut NeverFires);
+            land_on(&mut session, &catalog, 129);
+            assert_eq!(
+                session.out.take_texts_only(),
+                [MissionText {
+                    movie,
+                    ..text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)
+                }],
+                "{source:?}: _DoPortDialog loads 129's dësc (@0x5f96b) before \
+                 _MissionLandCheck (@0x5fbeb), and the STR# text loads none"
+            );
+            assert_eq!(
+                session.run.loaded_movie, port,
+                "{source:?}: still the port's"
+            );
+        }
+    }
+
     /// Makes rank 200 active outside any reset, as no set expression can,
     /// each resetting as it ends.
     fn grant_blessing_rank(session: &mut Session) {

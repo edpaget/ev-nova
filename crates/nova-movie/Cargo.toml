@@ -1,0 +1,31 @@
+[package]
+name = "nova-movie"
+description = "EV Nova's QuickTime movies: found by name, decoded with a static FFmpeg, and shown through nova-view's movie port"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# FFmpeg, statically linked and built from the source pinned in
+# third_party/ffmpeg-source.toml: the demuxer, decoders and scaler.
+ffmpeg-next.workspace = true
+# The movie player port it implements, and the screen and draw command its
+# frames are shown through.
+nova-view.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The movie player port's contract check (`movie::fixture`).
+nova-view = { workspace = true, features = ["fixture"] }
+# Real folders for the lookup adapter's and the decoder's tests.
+tempfile.workspace = true
+
+[features]
+# Exposes the checked-in H.264 fixture's bytes (`fixture`), so the game's
+# wiring test can write it into a folder of its own.
+fixture = []
+
+[lints]
+workspace = true

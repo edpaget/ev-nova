@@ -787,7 +787,7 @@ fn the_texts_opening_drops_a_command_q_held_from_the_pictures() {
 }
 
 #[test]
-fn a_text_that_cant_be_found_shows_an_empty_dialog() {
+fn a_text_that_cant_be_found_shows_no_dialog_but_fades_in_for_a_second() {
     let store = MemoryPilots::new();
     let mut screen = opening_with(&store, intro_data_of(999, false), Rulebook::default());
     create_held(&mut screen, "Ada");
@@ -801,13 +801,109 @@ fn a_text_that_cant_be_found_shows_an_empty_dialog() {
     }
     assert_eq!(screen.showing(), Showing::IntroText);
     assert!(
-        screen
-            .intro_text()
-            .expect("open")
-            .lines()
-            .iter()
-            .all(String::is_empty),
-        "empty"
+        screen.intro_text().is_none(),
+        "an empty text shows no dialog (@0x5a7b0)"
+    );
+    assert_eq!(cover(&screen), Some(255), "but fades in (@0x5a7bf-0x5a874)");
+    screen.tick(SECOND / 2);
+    assert_eq!(cover(&screen), Some(128));
+    screen.tick(SECOND / 2);
+    assert_eq!(screen.showing(), Showing::IntroText, "fading to black");
+    screen.tick(SECOND);
+    assert_eq!(screen.showing(), Showing::Flight);
+}
+
+// The intro text's own movie (rdm:phase/movies/phase-4-desc-movies-outside-missions).
+
+/// The router over [`intro_data_of`] whose intro text is `desc`, with
+/// dialogs and movies played through a new [`MockMoviePlayer`], Ada
+/// entering play: on the tick its text opens.
+fn filmed_intro(desc: &[u8]) -> (AppScreen, Rc<MockMoviePlayer>) {
+    let fork = game_data_fork(false, false, false, 100, b"", b"", None)
+        .resource(
+            Character::TYPE,
+            127,
+            Some(b"Intro"),
+            &intro_character(INTRO_TEXT),
+        )
+        .resource(PICT, 8200, None, &blank())
+        .resource(PICT, 8201, None, &blank())
+        .resource(Desc::TYPE, INTRO_TEXT, None, desc);
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let store = MemoryPilots::new();
+    let mut screen = with_dialogs(loaded(&fork))
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create_held(&mut screen, "Ada");
+    choose(&mut screen, MenuChoice::EnterShip);
+    faded_out(&mut screen);
+    for _ in 0..2 {
+        picture_in(&mut screen);
+        tap(&mut screen, Key::Space);
+        screen.tick(SECOND);
+    }
+    assert_eq!(screen.showing(), Showing::IntroText);
+    (screen, reel)
+}
+
+const MOVIE_TICK: Duration = Duration::from_millis(16);
+
+#[test]
+fn a_plain_before_movie_plays_unseen_under_the_black_then_the_text_fades_in() {
+    let (mut screen, reel) = filmed_intro(&filmed_desc_of("Welcome.", "intro.mov", 0));
+    assert_eq!(reeled(&reel), [Call::Start("intro.mov".into())]);
+    assert!(screen.intro_text().is_none(), "not while it plays");
+    assert_eq!(
+        cover(&screen),
+        Some(255),
+        "the display is black over it (@0x17074)"
+    );
+    screen.tick(MOVIE_TICK);
+    screen.tick(MOVIE_TICK);
+    assert!(screen.intro_text().is_some());
+    assert_eq!(cover(&screen), Some(255), "the text fades in (@0x5b038)");
+    screen.tick(SECOND);
+    assert_eq!(cover(&screen), None);
+}
+
+#[test]
+fn a_cinematic_before_movie_fades_the_screen_in_so_the_text_shows_at_once() {
+    let (mut screen, reel) = filmed_intro(&filmed_desc_of("Welcome.", "intro.mov", 0x0004));
+    assert_eq!(reeled(&reel), [Call::Start("intro.mov".into())]);
+    assert!(screen.hides_pointer(), "no first fade (@0x5316)");
+    screen.tick(SECOND);
+    screen.tick(MOVIE_TICK);
+    screen.tick(MOVIE_TICK);
+    screen.tick(SECOND);
+    screen.tick(SECOND);
+    assert!(screen.intro_text().is_some());
+    assert_eq!(cover(&screen), None, "no fade-in after it (@0x55edb)");
+}
+
+#[test]
+fn the_intro_texts_after_movie_plays_before_the_fade_to_black() {
+    let (mut screen, reel) = filmed_intro(&filmed_desc_of("Welcome.", "intro.mov", 0x0001));
+    screen.tick(SECOND);
+    assert!(screen.intro_text().is_some());
+    assert_eq!(reeled(&reel), []);
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(reeled(&reel), [Call::Start("intro.mov".into())]);
+    assert_eq!(cover(&screen), None, "not fading yet");
+    screen.tick(MOVIE_TICK);
+    screen.tick(MOVIE_TICK);
+    assert_eq!(screen.showing(), Showing::IntroText, "fading to black");
+    screen.tick(SECOND);
+    assert_eq!(screen.showing(), Showing::Flight);
+}
+
+#[test]
+fn an_intro_text_with_a_graphic_shows_in_the_picture_variant() {
+    let (mut screen, _) = filmed_intro(&pictured_desc_of("Welcome.", 5005));
+    screen.tick(SECOND);
+    assert_eq!(
+        screen.intro_text().and_then(DescDialog::picture),
+        Some(5005)
     );
 }
 

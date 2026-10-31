@@ -166,7 +166,8 @@
 //!   sends it.
 //! - The shops' text dialogs: `_ShowTextDialog`'s `_RefreshSAT` tails run
 //!   only on a faded screen (`_screenFaded` @0x5a7c7, @0x5af9e, @0x5b45c),
-//!   around a `dësc` movie ours doesn't play.
+//!   which a spaceport never is: no fade is left set over a dock. Their
+//!   after-movie plays as the [`shop_texts`] module says.
 //! - `_MyModalDialog`'s update event (@0x59b17-0x59be6), an OS repaint:
 //!   ours draws every frame whole.
 
@@ -200,6 +201,8 @@ use super::port_map::PortMap;
 use super::service::ServiceScreen;
 use super::shipyard::{InfoTemplates, NO_SHIPS, ShipOrder, ShipyardCatalog, ShipyardScreen};
 use super::trade::{ListColors, TradeScreen};
+
+mod shop_texts;
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::flight::view::{SharedChance, is_map_press};
@@ -320,6 +323,16 @@ impl Open {
             Self::Shipyard(screen) => screen.as_mut(),
             Self::Bar(screen) => screen.as_mut(),
             Self::Computer(screen) => screen.as_mut(),
+        }
+    }
+
+    /// Stops the shipyard's or the bar's hire screen's looping ship movie,
+    /// as their dialog's close does however it leaves (@0x5f73f-0x5f750).
+    fn end_movie(&mut self) {
+        match self {
+            Self::Shipyard(screen) => screen.end_movie(),
+            Self::Bar(screen) => screen.end_movie(),
+            Self::Service(_) | Self::Trade(_) | Self::Outfitter(_) | Self::Computer(_) => {}
         }
     }
 
@@ -532,6 +545,9 @@ pub struct SpaceportView {
     port_dialog_closed: Option<PortDialog>,
     /// Whether the outfitter has closed since this was last taken.
     outfitter_closed: bool,
+    /// The after-movie the outfitter's sale alert open plays once it
+    /// closes ([`SpaceportView::alert_outfit`]).
+    alert_after: Option<DescMovie>,
     /// Whether the spaceport's own `dësc` waits to be loaded.
     description_request: bool,
     /// Whether the outfitter just opened listed nothing, and so never
@@ -646,6 +662,7 @@ impl SpaceportView {
             port_dialog_opened: None,
             port_dialog_closed: None,
             outfitter_closed: false,
+            alert_after: None,
             description_request,
             status_refresh: false,
             sounds: Vec::new(),
@@ -674,8 +691,14 @@ impl SpaceportView {
 
     /// The spaceport closes, whatever closes it: its sounds not yet taken,
     /// then its ambient sound's halt, as `_DoPortDialog` halts `_planetSnd`
-    /// as the port closes (@0x601d2-0x601eb).
+    /// as the port closes (@0x601d2-0x601eb). The shipyard's or the hire
+    /// screen's looping ship movie open over it stops, as their dialog's
+    /// close does on a pending leave (`_absquatulateStr`,
+    /// @0x5f73f-0x5f750).
     pub fn close_sounds(&mut self) -> Vec<Sound> {
+        if let Some(open) = &mut self.open {
+            open.end_movie();
+        }
         let mut sounds = std::mem::take(&mut self.sounds);
         sounds.extend(
             self.ambient
@@ -914,10 +937,15 @@ impl SpaceportView {
     }
 
     /// Opens `alert`'s words over the outfitter open
-    /// ([`OutfitterScreen::alert`]); with none open, does nothing.
-    pub fn alert_outfit(&mut self, alert: &SaleAlert) {
+    /// ([`OutfitterScreen::alert`]), then `after`, the movie a `STR#` text
+    /// plays once it closes, as [`SpaceportView::show_text`] plays it (see
+    /// the [`shop_texts`] module); with none open, does nothing.
+    pub fn alert_outfit(&mut self, alert: &SaleAlert, after: Option<DescMovie>) {
         if let Some(Open::Outfitter(screen)) = &mut self.open {
             screen.alert(alert);
+            if screen.alert_dialog().is_some() {
+                self.alert_after = shop_texts::after_movie(after);
+            }
         }
     }
 
@@ -956,9 +984,20 @@ impl SpaceportView {
             Some(Open::Bar(bar)) if bar.problem().is_none() => self.status_refresh = true,
             _ => {}
         }
-        if let Some(dialog) = self.open.take().and_then(|open| open.port_dialog()) {
+        if let Some(dialog) = self.take_open().and_then(|open| open.port_dialog()) {
             self.port_dialog_closed = Some(dialog);
         }
+    }
+
+    /// Takes the screen open, its looping ship movie stopped
+    /// ([`Open::end_movie`]): every way the spaceport drops a screen
+    /// comes through here.
+    fn take_open(&mut self) -> Option<Open> {
+        let mut open = self.open.take();
+        if let Some(open) = &mut open {
+            open.end_movie();
+        }
+        open
     }
 
     /// Whether the outfitter given has opened since this was last asked,
@@ -981,15 +1020,16 @@ impl SpaceportView {
     /// it changes nothing), and no offer is asked for: the outfitter asks
     /// for none until its listing is shown here, so its ask is dropped
     /// with it, whenever the offers are served. That is told once
-    /// ([`SpaceportView::take_empty_outfitter`]).
-    pub fn set_opened_outfitter(&mut self, outfitter: Outfitter) {
+    /// ([`SpaceportView::take_empty_outfitter`]). #206 plays `after` as
+    /// [`SpaceportView::show_text`] does.
+    pub fn set_opened_outfitter(&mut self, outfitter: Outfitter, after: Option<DescMovie>) {
         self.outfitter_unlisted = false;
         let empty = outfitter.rows.is_empty();
         self.set_outfitter(outfitter);
         if empty && matches!(self.open, Some(Open::Outfitter(_))) {
-            self.open = None;
+            self.take_open();
             self.port_dialog_opened = None;
-            self.show_text(NO_ITEMS);
+            self.show_text(NO_ITEMS, after);
             self.empty_outfitter = true;
         }
     }
@@ -1120,15 +1160,16 @@ impl SpaceportView {
     /// ([`NO_SHIPS`]) in "Desc Dialog" and returns before its nav save,
     /// its dialog and its offer (@0x5e694-0x5e6be → @0x5e8da → @0x5f906).
     /// The shipyard asks for no offer until its listing is shown here, so
-    /// its ask is dropped with it.
-    pub fn set_opened_shipyard(&mut self, shipyard: Shipyard) {
+    /// its ask is dropped with it. #223 plays `after` as
+    /// [`SpaceportView::show_text`] does.
+    pub fn set_opened_shipyard(&mut self, shipyard: Shipyard, after: Option<DescMovie>) {
         self.shipyard_unlisted = false;
         let empty = shipyard.rows.is_empty();
         self.set_shipyard(shipyard);
         if empty && matches!(self.open, Some(Open::Shipyard(_))) {
-            self.open = None;
+            self.take_open();
             self.port_dialog_opened = None;
-            self.show_text(NO_SHIPS);
+            self.show_text(NO_SHIPS, after);
         }
     }
 
@@ -1288,14 +1329,15 @@ impl SpaceportView {
     /// hire nothing opens, and `STR#` 2002 #224 ([`NONE_FOR_HIRE`]) shows
     /// in "Desc Dialog", as the original's shipyard function in hire mode
     /// shows it by `_ShowTextDialog` and returns before its save
-    /// (@0x5e8ab → @0x5e8da → @0x5f906).
-    pub fn open_hire(&mut self, list: HireList) {
+    /// (@0x5e8ab → @0x5e8da → @0x5f906), then `after`, as
+    /// [`SpaceportView::show_text`] plays it.
+    pub fn open_hire(&mut self, list: HireList, after: Option<DescMovie>) {
         let Some(Open::Bar(screen)) = &mut self.open else {
             return;
         };
         if list.rows.is_empty() {
             screen.open_hire(list);
-            self.show_text(NONE_FOR_HIRE);
+            self.show_text(NONE_FOR_HIRE, after);
             return;
         }
         let before = screen.hire_screen().is_some();
@@ -1937,16 +1979,19 @@ impl SpaceportView {
         self.dialogs.as_ref()?.text()
     }
 
-    /// Queues `text` to show in "Desc Dialog", with no picture or movie,
-    /// over the spaceport, when it has the mission dialogs: a text no
+    /// Queues `text` to show in "Desc Dialog", with no picture, over the
+    /// spaceport, when it has the mission dialogs: a `STR#` text no
     /// mission is behind, such as the report of the escorts sold and
-    /// upgraded on leaving.
-    pub fn show_text(&mut self, text: &str) {
+    /// upgraded on leaving. Once it closes, `after` plays: the last `dësc`
+    /// loaded's after-movie, as `_ShowTextDialog`'s after-check reads it
+    /// whatever its third argument (@0x5b40b-0x5b44f; see the
+    /// [`shop_texts`] module).
+    pub fn show_text(&mut self, text: &str, after: Option<DescMovie>) {
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.show_descs(vec![DescShown {
                 text: text.to_owned(),
                 graphic: None,
-                movie: None,
+                movie: shop_texts::after_movie(after),
             }]);
         }
     }
@@ -2097,8 +2142,8 @@ impl SpaceportView {
             bar = bar
                 .with_offers(missioning.offer.clone())
                 .with_offer_clock(self.offer_clock);
-            bar.set_offer_movies(self.movies.clone());
         }
+        bar.set_offer_movies(self.movies.clone());
         barkeeping.opened = true;
         self.open = Some(Open::Bar(Box::new(bar)));
         true
@@ -2320,6 +2365,7 @@ impl SpaceportView {
             self.note_info_closed();
             self.pass_unclaimed();
             self.dispose_answered_offer();
+            self.close_alerted_outfitter();
             return ScreenAction::None;
         }
         if let Some(missioning) = &mut self.missioning
@@ -2333,9 +2379,10 @@ impl SpaceportView {
                 let screen = open.screen_mut();
                 screen.input(input);
                 self.sounds.extend(screen.take_sounds());
-                if open.closed() {
-                    self.close_open();
-                }
+            }
+            self.play_alert_after();
+            if self.open.as_ref().is_some_and(Open::closed) && !self.texts_queued() {
+                self.close_open();
             }
             self.note_closings(before);
             return ScreenAction::None;
@@ -2414,6 +2461,7 @@ impl SpaceportView {
         }
         self.pass_unclaimed();
         self.dispose_answered_offer();
+        self.close_alerted_outfitter();
         let open_covered = self.mission_dialogs_open() || self.player_info.is_some();
         if let Some(missioning) = &mut self.missioning
             && !open_covered
@@ -2493,6 +2541,8 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod ship_movies;
+
     use crate::ui::mission_info::MISSION_INFO_KEY;
     use std::cell::RefCell;
 
@@ -3931,7 +3981,7 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
-    fn alert() -> SaleAlert {
+    pub(in crate::spaceport) fn alert() -> SaleAlert {
         SaleAlert {
             outfit: OutfitId(200),
             refusal: OutfitRefusal::NegativeFreeMass,
@@ -3943,10 +3993,10 @@ pub(in crate::spaceport) mod tests {
     #[test]
     fn an_alert_opens_over_the_open_outfitter_only() {
         let mut view = outfitting(Ok(outfit_template()));
-        view.alert_outfit(&alert());
+        view.alert_outfit(&alert(), None);
         assert!(view.open_outfitter().is_none(), "nothing open");
         click_item(&mut view, 8);
-        view.alert_outfit(&alert());
+        view.alert_outfit(&alert(), None);
         let open = view.open_outfitter().expect("outfitting");
         assert_eq!(
             open.alert_dialog().map(DescDialog::lines),
@@ -3974,7 +4024,7 @@ pub(in crate::spaceport) mod tests {
         assert!(!view.take_outfitter_closed(), "once");
         assert!(!view.left());
         click_item(&mut view, 8);
-        view.alert_outfit(&alert());
+        view.alert_outfit(&alert(), None);
         view.outfit_ordered(Reselection::Leave);
         assert!(view.open_outfitter().is_some(), "its alert first");
         assert!(!view.take_outfitter_closed());
@@ -4144,6 +4194,14 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
+    /// Ship 129, the one [`yard`] sells, names "Ship.mov", which plays
+    /// only once movies are given.
+    impl crate::spaceport::shipyard::ShipMovieFiles for FakePort {
+        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
+            vec![(ShipId(129), "Ship.mov".to_owned())]
+        }
+    }
+
     impl crate::ui::catalog::DescriptionGraphics for FakePort {
         fn description_graphic(&self, _id: i16) -> Option<i16> {
             None
@@ -4200,15 +4258,15 @@ pub(in crate::spaceport) mod tests {
     /// 129 for 17,500.
     pub(in crate::spaceport) fn serve_openings(view: &mut SpaceportView) {
         if view.take_outfitter_opened() {
-            view.set_opened_outfitter(tanks(1));
+            view.set_opened_outfitter(tanks(1), None);
         }
         if view.take_shipyard_opened() {
-            view.set_opened_shipyard(yard(17_500));
+            view.set_opened_shipyard(yard(17_500), None);
         }
     }
 
     /// A shipyard selling ship 129 for `price`, the player flying 128.
-    fn yard(price: i64) -> Shipyard {
+    pub(in crate::spaceport) fn yard(price: i64) -> Shipyard {
         Shipyard {
             rows: vec![ShipRow {
                 id: ShipId(129),
@@ -4526,7 +4584,7 @@ pub(in crate::spaceport) mod tests {
     }
 
     /// `rows` ships for hire, the fleet with `room` or not.
-    fn hirelings(rows: usize, room: bool) -> HireList {
+    pub(in crate::spaceport) fn hirelings(rows: usize, room: bool) -> HireList {
         HireList {
             rules: nova_sim::Rulebook::default(),
             rows: (0..rows)
@@ -4606,13 +4664,13 @@ pub(in crate::spaceport) mod tests {
     fn hire_escort_asks_through_the_spaceport_and_the_list_opens_the_hire_screen() {
         let mut view = drinking(true);
         assert!(!view.take_hire_request(), "nothing open");
-        view.open_hire(hirelings(1, true));
+        view.open_hire(hirelings(1, true), None);
         assert_eq!(view.take_hire(), None);
         click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         assert!(!view.take_hire_request(), "once");
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         view.input(&key(Key::Right));
         let hire = view
             .open_bar()
@@ -4646,7 +4704,7 @@ pub(in crate::spaceport) mod tests {
         click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         view.input(&key(Key::Right));
         assert!(!view.take_hire_closed(), "opening is not closing");
         view.input(&key(Key::Char('h')));
@@ -4657,7 +4715,7 @@ pub(in crate::spaceport) mod tests {
         assert!(!view.take_hire_closed(), "once");
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         view.input(&key(Key::Escape));
         assert!(
             view.open_bar()
@@ -4666,7 +4724,7 @@ pub(in crate::spaceport) mod tests {
         assert!(view.take_hire_closed(), "cancelled");
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(0, true));
+        view.open_hire(hirelings(0, true), None);
         assert!(
             view.take_hire_closed(),
             "nothing for hire: the hire dialog returns at once (@0x5e8df)"
@@ -4683,7 +4741,7 @@ pub(in crate::spaceport) mod tests {
         let _ = view.take_status_refresh();
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(0, true));
+        view.open_hire(hirelings(0, true), None);
         let bar = view.open_bar().expect("in the bar");
         assert!(bar.hire_screen().is_none());
         assert_eq!(shown_text(&view), Some(NONE_FOR_HIRE.to_owned()));
@@ -4942,11 +5000,11 @@ pub(in crate::spaceport) mod tests {
         }
     }
 
-    fn shown_text(view: &SpaceportView) -> Option<String> {
+    pub(in crate::spaceport) fn shown_text(view: &SpaceportView) -> Option<String> {
         view.mission_text().map(|dialog| dialog.lines().join(" "))
     }
 
-    fn done(view: &mut SpaceportView) {
+    pub(in crate::spaceport) fn done(view: &mut SpaceportView) {
         view.input(&key(Key::Enter));
     }
 
@@ -5358,7 +5416,7 @@ pub(in crate::spaceport) mod tests {
             )
     }
 
-    fn ms(n: u64) -> Duration {
+    pub(in crate::spaceport) fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
     }
 
@@ -5478,7 +5536,7 @@ pub(in crate::spaceport) mod tests {
     }
 
     /// [`venues`] with its spaceport's offer taken.
-    fn shopping() -> SpaceportView {
+    pub(in crate::spaceport) fn shopping() -> SpaceportView {
         let mut view = venues();
         assert_eq!(view.take_offer_request(), Some(SPACEPORT));
         view
@@ -5505,10 +5563,13 @@ pub(in crate::spaceport) mod tests {
             None,
             "no offer until its listing is shown"
         );
-        view.set_opened_outfitter(Outfitter {
-            rows: Vec::new(),
-            ..tanks(0)
-        });
+        view.set_opened_outfitter(
+            Outfitter {
+                rows: Vec::new(),
+                ..tanks(0)
+            },
+            None,
+        );
         assert!(view.open_outfitter().is_none());
         assert_eq!(
             shown_text(&view),
@@ -5522,7 +5583,7 @@ pub(in crate::spaceport) mod tests {
         click_item(&mut view, 8);
         assert!(view.take_outfitter_opened());
         assert_eq!(view.take_offer_request(), None, "not yet listed");
-        view.set_opened_outfitter(tanks(1));
+        view.set_opened_outfitter(tanks(1), None);
         assert_eq!(
             view.take_offer_request(),
             Some(OUTFITTER),
@@ -5561,10 +5622,13 @@ pub(in crate::spaceport) mod tests {
             None,
             "no offer until its listing is shown"
         );
-        view.set_opened_shipyard(Shipyard {
-            rows: Vec::new(),
-            ..yard(17_500)
-        });
+        view.set_opened_shipyard(
+            Shipyard {
+                rows: Vec::new(),
+                ..yard(17_500)
+            },
+            None,
+        );
         assert!(view.open_shipyard().is_none());
         assert_eq!(
             shown_text(&view),
@@ -5592,7 +5656,7 @@ pub(in crate::spaceport) mod tests {
         click_item(&mut view, 9);
         assert!(view.take_shipyard_opened());
         assert_eq!(view.take_offer_request(), None, "not yet listed");
-        view.set_opened_shipyard(yard(5_000));
+        view.set_opened_shipyard(yard(5_000), None);
         assert_eq!(
             view.take_offer_request(),
             Some(SHIPYARD),
@@ -6184,7 +6248,7 @@ pub(in crate::spaceport) mod tests {
         let mut view = drinking_with_offers();
         click_item(&mut view, 11);
         assert!(asks_player_info(&mut view), "the bar");
-        view.open_hire(hirelings(1, true));
+        view.open_hire(hirelings(1, true), None);
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
         assert!(asks_player_info(&mut view), "the hire screen");
         let mut view = trading(Ok(trade_template()));
@@ -6237,7 +6301,7 @@ pub(in crate::spaceport) mod tests {
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use nova_sim::{DescMovie, MissionShown};
 
-    fn movies_of(player: &Rc<MockMoviePlayer>) -> Movies {
+    pub(in crate::spaceport) fn movies_of(player: &Rc<MockMoviePlayer>) -> Movies {
         Movies::new(Rc::clone(player) as Rc<dyn MoviePlayer>, true)
     }
 
@@ -6281,7 +6345,7 @@ pub(in crate::spaceport) mod tests {
     }
 
     /// The movies `player` was asked to start, in order.
-    fn started(player: &MockMoviePlayer) -> Vec<String> {
+    pub(in crate::spaceport) fn started(player: &MockMoviePlayer) -> Vec<String> {
         player
             .calls()
             .into_iter()
@@ -6690,7 +6754,7 @@ pub(in crate::spaceport) mod tests {
     fn the_missions_given_before_the_focus_ring_take_it() {
         for ring in [FocusRing::Tab, FocusRing::Off] {
             let mut view = missioned().with_focus_ring(ring);
-            view.show_text("Nothing here.");
+            view.show_text("Nothing here.", None);
             assert_eq!(
                 view.mission_text().map(|text| text.dialog().focus_ring()),
                 Some(ring),
@@ -6997,11 +7061,11 @@ pub(in crate::spaceport) mod tests {
     fn by_the_engine_the_bars_hire_screen_restarts_its_wait_through_the_spaceport() {
         let mut view = refused_at(BAR, RuleSource::Engine);
         assert!(!view.take_offer_restart());
-        view.open_hire(hirelings(1, true));
+        view.open_hire(hirelings(1, true), None);
         assert!(view.take_offer_restart());
         assert!(!view.take_offer_restart(), "once");
         let mut view = refused_at(BAR, RuleSource::Bible);
-        view.open_hire(hirelings(1, true));
+        view.open_hire(hirelings(1, true), None);
         assert!(!view.take_offer_restart(), "the other reading");
         for venue in [TRADE_CENTER, OUTFITTER, SHIPYARD] {
             let mut view = refused_at(venue, RuleSource::Engine);
@@ -7035,7 +7099,7 @@ pub(in crate::spaceport) mod tests {
         click_item(&mut view, 11);
         assert!(!view.holds_leave(), "the bar (`_BarFilter`)");
         view.input(&key(Key::Char('h')));
-        view.open_hire(hirelings(1, true));
+        view.open_hire(hirelings(1, true), None);
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
         assert!(!view.holds_leave(), "the hire screen (`_ShipyardFilter`)");
     }
@@ -7109,7 +7173,7 @@ pub(in crate::spaceport) mod tests {
     fn the_outfitters_alert_and_quantity_hold_a_leave() {
         let mut view = outfitting(Ok(outfit_template()));
         click_item(&mut view, 8);
-        view.alert_outfit(&alert());
+        view.alert_outfit(&alert(), None);
         assert!(view.holds_leave(), "the alert");
         view.input(&key(Key::Escape));
         assert!(!view.holds_leave());
@@ -7381,7 +7445,7 @@ pub(in crate::spaceport) mod tests {
         click_item(&mut view, 11);
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
         // By the engine nothing is selected as it opens: Right picks the
         // first cell.
@@ -7532,11 +7596,11 @@ pub(in crate::spaceport) mod tests {
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
         assert_eq!(view.take_port_dialog_opened(), None, "only asked for");
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         view.input(&key(Key::Right));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         assert_eq!(view.take_port_dialog_opened(), None, "once");
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         assert_eq!(view.take_port_dialog_opened(), None, "already open");
         view.input(&key(Key::Down));
         assert_eq!(view.take_port_dialog_closed(), None, "still open");
@@ -7550,7 +7614,7 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(view.take_port_dialog_closed(), None, "once");
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(2, true));
+        view.open_hire(hirelings(2, true), None);
         view.input(&key(Key::Right));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         view.input(&key(Key::Char('h')));
@@ -7566,7 +7630,7 @@ pub(in crate::spaceport) mod tests {
         assert_eq!(view.take_port_dialog_closed(), None, "nothing open");
         view.input(&key(Key::Char('h')));
         assert!(view.take_hire_request());
-        view.open_hire(hirelings(0, true));
+        view.open_hire(hirelings(0, true), None);
         assert_eq!(
             view.take_port_dialog_opened(),
             None,

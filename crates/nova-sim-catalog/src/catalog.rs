@@ -1285,6 +1285,18 @@ impl DescMovie {
     }
 }
 
+/// A `dësc` as `_LoadDescription` (@0x71780) reads it: its raw text,
+/// before any conditional text is resolved, and the movie it names. What
+/// the session loads at the original's point, so the last loaded movie
+/// and the remembered governments follow the original's order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DescText {
+    /// The `Description`, raw.
+    pub text: String,
+    /// Its `MovieFile` and `Flags`, none when it names no movie.
+    pub movie: Option<DescMovie>,
+}
+
 /// The movie of each of a mission's text `dësc`s: none for -1, a `dësc`
 /// that is missing or does not decode, or one with no `MovieFile`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2179,6 +2191,13 @@ pub trait PilotCatalog {
     fn voices(&self) -> Voices {
         Voices::default()
     }
+    /// `dësc` `id`'s text and the movie it names, as `_LoadDescription`
+    /// loads it: what the session loads itself at the original's point
+    /// (the port's own `dësc` @0x5f96b, the rescue's 13999 @0x68e90).
+    /// None when it is missing or cannot be read, as by default.
+    fn desc_text(&self, _id: i16) -> Option<DescText> {
+        None
+    }
     /// `düde` `id`, as [`TrafficCatalog::dude`] reads it: what a mission
     /// of `Flags` 0x0800 draws its ships' one type from at accept (see
     /// `nova_sim::mission::SpecialShips::uniform_type`).
@@ -2371,6 +2390,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).voices()
     }
 
+    fn desc_text(&self, id: i16) -> Option<DescText> {
+        (**self).desc_text(id)
+    }
+
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
         (**self).mission_dude(id)
     }
@@ -2525,6 +2548,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn voices(&self) -> Voices {
         (**self).voices()
+    }
+
+    fn desc_text(&self, id: i16) -> Option<DescText> {
+        (**self).desc_text(id)
     }
 
     fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
@@ -3110,6 +3137,15 @@ mod tests {
             )
         }
 
+        /// `dësc` 129 reads "Docked." and names `Port.mov`, after the
+        /// dialog; every other is missing.
+        fn desc_text(&self, id: i16) -> Option<DescText> {
+            (id == 129).then(|| DescText {
+                text: "Docked.".to_owned(),
+                movie: DescMovie::from_desc("Port.mov", 0x0001),
+            })
+        }
+
         /// Düde 150 flies ship 128.
         fn mission_dude(&self, id: DudeId) -> Option<DudeRecord> {
             (id == DudeId(150)).then(|| DudeRecord {
@@ -3166,6 +3202,8 @@ mod tests {
             format!("{:?}", catalog.boom_sounds()),
             format!("{:?}", catalog.voices()),
             format!("{:?}", catalog.stellar_weapons()),
+            format!("{:?}", catalog.desc_text(129)),
+            format!("{:?}", catalog.desc_text(130)),
             format!("{:?}", catalog.stellar_scripts()),
             format!("{:?}", catalog.nav_def_slots()),
         ]
@@ -3418,11 +3456,16 @@ mod tests {
         );
         assert_eq!(direct[38], "[(StellarId(128), WeaponId(196))]");
         assert!(
-            direct[39].contains("StellarScripts { id: StellarId(128)"),
+            direct[39].contains(r#"text: "Docked.""#) && direct[39].contains("Port.mov"),
+            "forwarded, not a default: {direct:?}"
+        );
+        assert_eq!(direct[40], "None");
+        assert!(
+            direct[41].contains("StellarScripts { id: StellarId(128)"),
             "forwarded, not a default: {direct:?}"
         );
         assert!(
-            direct[40].starts_with("[(SystemId(130), [None, Some(StellarId(129)), None"),
+            direct[42].starts_with("[(SystemId(130), [None, Some(StellarId(129)), None"),
             "forwarded, not the default's numbering: {direct:?}"
         );
         assert_eq!(reads(&One), direct);

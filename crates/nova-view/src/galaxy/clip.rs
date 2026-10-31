@@ -23,8 +23,9 @@ use crate::geometry::{Bounds, Point, intersection, lerp, span_in};
 ///   and dropped when it misses;
 /// - each dot kept whole when inside, cut to the rect of its overlap when
 ///   partly inside, and dropped when outside;
-/// - each text, sprite, picture (blended or not) and OR fill wrapped in
-///   [`DrawCommand::Clipped`] with `area`, which the renderer crops;
+/// - each text, sprite, picture (blended or not), movie frame and OR fill
+///   wrapped in [`DrawCommand::Clipped`] with `area`, which the renderer
+///   crops;
 /// - each command already clipped re-clipped to the two clips' overlap,
 ///   and dropped when they share none.
 pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
@@ -86,6 +87,7 @@ pub fn clip_opaque(map: &DrawList, area: Bounds, out: &mut DrawList) {
             | DrawCommand::StretchedPicture { .. }
             | DrawCommand::BlendedPicture { .. }
             | DrawCommand::TiledPicture { .. }
+            | DrawCommand::MovieFrame { .. }
             | DrawCommand::OrFill { .. } => {
                 out.clipped(area, command.clone());
             }
@@ -231,12 +233,18 @@ mod tests {
             height: 300.0,
             blend: crate::draw::Blend::Max,
         };
+        let mut screen = crate::MovieScreen::new();
+        assert!(screen.show(1, 1, vec![0; 4]));
+        let movie = DrawCommand::MovieFrame {
+            frame: screen.frame().expect("shown"),
+            area: rect(200.0, 100.0, 300.0, 200.0),
+        };
         let drawn = clipped(|map| {
-            for command in [&text, &sprite, &picture, &plain, &nebula] {
+            for command in [&text, &sprite, &picture, &plain, &nebula, &movie] {
                 map.push(command.clone());
             }
         });
-        let wrapped: Vec<DrawCommand> = [text, sprite, picture, plain, nebula]
+        let wrapped: Vec<DrawCommand> = [text, sprite, picture, plain, nebula, movie]
             .into_iter()
             .map(|command| DrawCommand::Clipped {
                 clip: area(),

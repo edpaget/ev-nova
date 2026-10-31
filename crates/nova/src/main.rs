@@ -47,6 +47,15 @@
 //! (`Nova-DF.rsrc`, or the Windows `Nova.rez`). Without one, the game runs
 //! with a warning, and I and P do nothing.
 //!
+//! A `dësc`'s QuickTime movie plays, unless the QuickTime Movies
+//! preference is off, from the file its name names: looked for by bare
+//! name in the Plug-Ins folder (`~/Library/Application Support/EV
+//! Nova/Plug-Ins` on macOS, `Plug-ins` beside `Nova Files` elsewhere),
+//! then in `Nova Files`, and decoded with the FFmpeg linked in
+//! ([`nova::movie`]). A movie found in neither doesn't play. A ship's
+//! `MovieFile` loops in the shipyard's and the hire screen's picture
+//! item, found the same way, on a player of its own.
+//!
 //! Sound effects come from the game data's `snd ` resources and the music
 //! from `Nova Music.mp3` in `Nova Files`, played on the default audio
 //! device. Without the music the game plays none, with a warning; without
@@ -153,6 +162,7 @@ use nova::chance::SplitMix;
 use nova::config::{Os, legacy_pilots_dir, log_path, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
+use nova::movie::{movie_folders, movie_player};
 use nova::pilot_move::{DiskFiles, move_pilots, report_lines};
 use nova::platform::{Dialogs, Runner, event_loop, system_keyboard_access};
 use nova::rulebook::eight_bit_reading;
@@ -191,6 +201,20 @@ fn open_audio(
         report.warn(&warning);
     }
     audio
+}
+
+/// The pilot keeper over the pilots directory `env` names, or none, with a
+/// warning to `report`, when there is nowhere to save them.
+fn open_pilots(
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    report: &mut Report,
+) -> Option<PilotKeeper<Box<dyn PilotStore>>> {
+    let pilots = pilots_dir(Os::current(), env)
+        .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
+    if pilots.is_none() {
+        report.warn("nova: there is nowhere to save pilots (no home directory); saving nothing");
+    }
+    pilots
 }
 
 /// The interface file beside the data in `dir`, shared by the dialogs and
@@ -311,18 +335,19 @@ fn main() -> ExitCode {
             report.warn(&line);
         }
     }
-    let pilots = pilots_dir(Os::current(), env)
-        .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
-    if pilots.is_none() {
-        report.warn("nova: there is nowhere to save pilots (no home directory); saving nothing");
-    }
+    let pilots = open_pilots(env, &mut report);
     let seed = run_seed();
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     // The effects' own: drawing on it never changes the simulation's draws.
     let effects: Rc<RefCell<dyn Chance>> =
         Rc::new(RefCell::new(SplitMix::new(seed.wrapping_add(1))));
+    let movie_folders = movie_folders(Os::current(), env, &dir);
     let mut screen = start_screen(Rc::clone(&data))
         .with_prefs(settings.prefs())
+        // After the preferences, whose QuickTime Movies setting it reads.
+        .with_movie_player(movie_player(movie_folders.clone()))
+        // The shipyard's looping ship movie plays on a player of its own.
+        .with_looping_movie_player(movie_player(movie_folders))
         .with_map_borders(settings.map_borders)
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))

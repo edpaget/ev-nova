@@ -1147,6 +1147,48 @@ mod tests {
         assert!(session.warp_end_due());
     }
 
+    /// The reachability movies phase 4 (`_ShowTextDialog`'s faded branches
+    /// under the jump's white) rests on: the world runs through the lit
+    /// warp, so a mission ship destroyed there meets its goal and queues
+    /// its `ShipDoneText` (`_MissionObjectivesCheck` @0x9ed0f) with
+    /// `_hyperGamma` above 0, which the view shows on the faded screen.
+    #[test]
+    fn a_mission_ship_destroyed_under_the_lit_warp_queues_its_ship_done_text() {
+        use crate::session::mission_ships::tests::{destroy, goal_catalog, in_flight, settle};
+        let mut catalog = goal_catalog(0, 0);
+        catalog.mission_texts = vec![crate::catalog::MissionTexts {
+            ship_done: Some("Done.".to_owned()),
+            ..crate::catalog::MissionTexts::named(crate::catalog::MissionId(140), "Hunt")
+        }];
+        let mut session = in_flight(&catalog);
+        let _ = session.out.take_texts_only();
+        session.ship.player.position = OUT;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = 90.0;
+        session.plot_course(SystemId(131)).expect("a route");
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        while session.hyper_gamma() <= 0.0 {
+            work(&mut session, &catalog, Controls::default());
+            assert!(!session.warp_end_due(), "lit before the warp ends");
+        }
+        destroy(&mut session, 0);
+        destroy(&mut session, 0);
+        settle(&mut session, &catalog);
+        assert!(session.hyper_gamma() > 0.0, "still lit");
+        assert!(session.jumping().is_some());
+        let texts: Vec<_> = session
+            .out
+            .take_texts_only()
+            .into_iter()
+            .map(|shown| (shown.kind, shown.text))
+            .collect();
+        assert_eq!(
+            texts,
+            [(crate::MissionTextKind::ShipDone, "Done.".to_owned())]
+        );
+    }
+
     #[test]
     fn a_warp_ending_while_the_ship_still_turns_begins_the_jump() {
         // 1° a tick, 180° off the bearing: still turning when the warp

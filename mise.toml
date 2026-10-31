@@ -40,10 +40,12 @@ run = "cargo doc --workspace --no-deps --document-private-items --locked"
 
 # Not in `ci`: CI's own Windows leg lints natively. Needs
 # `rustup target add x86_64-pc-windows-msvc`; its own target directory keeps
-# the host build warm.
+# the host build warm. nova-movie and nova, which links it, are left out:
+# FFmpeg is built natively only (third_party/ffmpeg-sys-next), and CI's
+# windows-2025 leg lints both.
 [tasks.lint-windows]
-description = "Clippy over every crate and target for Windows (x86_64-pc-windows-msvc), from any host, warnings are errors"
-run = "cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc --target-dir target/windows --locked -- -D warnings"
+description = "Clippy over every crate and target but nova and nova-movie for Windows (x86_64-pc-windows-msvc), from any host, warnings are errors; CI's windows-2025 leg lints those two natively"
+run = "cargo clippy --workspace --exclude nova --exclude nova-movie --all-targets --target x86_64-pc-windows-msvc --target-dir target/windows --locked -- -D warnings"
 
 [tasks.lint-lib]
 description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"

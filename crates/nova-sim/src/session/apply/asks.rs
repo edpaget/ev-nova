@@ -1,6 +1,6 @@
-//! [`Session::apply`]'s asks ([`FlightCommand::is_ask`]): the hover and a
-//! description's load, each matched to the session method that answers
-//! it, as [`Session::apply_ask`] says. Neither changes anything a frame
+//! [`Session::apply`]'s asks ([`FlightCommand::is_ask`]): the hover, a
+//! description's load and the port's own description's, each matched to the session method that answers
+//! it, as [`Session::apply_ask`] says. None changes anything a frame
 //! shows, which the tests here pin, so the view keeps its frame across
 //! them. The coming traffic and a plain text's fill, asked once by a
 //! screen, are screen asks (`session/screen.rs`).
@@ -17,6 +17,10 @@ impl Session {
     /// - [`FlightCommand::LoadDescription`] runs
     ///   [`Session::load_description`] on `collab`'s chance:
     ///   [`Answer::Description`], empty for a missing `dësc`.
+    /// - [`FlightCommand::LoadPortDescription`] runs
+    ///   [`Session::port_description`] on `collab`'s catalog and chance:
+    ///   [`Answer::Description`], empty for a missing `dësc`, or refused in
+    ///   flight or with no catalog shared.
     #[allow(clippy::needless_pass_by_value)] // the commands come by value, as `Session::apply` takes them
     pub(super) fn apply_ask(
         &mut self,
@@ -28,6 +32,10 @@ impl Session {
             FlightCommand::LoadDescription { raw, movie } => Answer::Description(
                 self.load_description(raw.as_deref(), movie.as_ref(), collab.chance),
             ),
+            FlightCommand::LoadPortDescription => collab
+                .catalog
+                .and_then(|catalog| self.port_description(catalog, collab.chance))
+                .map_or(Answer::Refused, Answer::Description),
             _ => Answer::Refused,
         }
     }
@@ -36,7 +44,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{DescMovie, StellarId};
+    use crate::catalog::{DescMovie, DescText, StellarId};
     use crate::chance::NeverFires;
     use crate::flight_frame::{DrawnBoxes, FlightFrame};
     use crate::geometry::Vec2;
@@ -140,6 +148,44 @@ mod tests {
     }
 
     #[test]
+    fn the_ports_description_loads_as_the_session_loads_it_landed_and_is_refused_otherwise() {
+        let mut catalog = catalog();
+        catalog.descs = vec![(
+            128,
+            DescText {
+                text: "{b5 \"set\" \"clear\"}, sir.".to_owned(),
+                movie: DescMovie::from_desc("Port.mov", 0x0001),
+            },
+        )];
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            apply_with(&mut session, &catalog, FlightCommand::LoadPortDescription),
+            Answer::Refused,
+            "in flight"
+        );
+        assert_eq!(crate::testkit::land_now(&mut session), Ok(StellarId(128)));
+        assert_eq!(
+            apply(&mut session, FlightCommand::LoadPortDescription),
+            Answer::Refused,
+            "no catalog shared"
+        );
+        let mut by_hand = session.clone();
+        let expected = by_hand.port_description(&catalog, &mut NeverFires);
+        let before: FlightFrame = filled(&session);
+        assert_eq!(
+            apply_with(&mut session, &catalog, FlightCommand::LoadPortDescription),
+            Answer::Description("clear, sir.".to_owned())
+        );
+        assert_eq!(expected.as_deref(), Some("clear, sir."));
+        assert_eq!(session, by_hand, "left as the session's own load leaves it");
+        assert_eq!(
+            filled(&session),
+            before,
+            "an ask changes nothing a frame shows"
+        );
+    }
+
+    #[test]
     fn an_ask_changes_nothing_a_frame_shows() {
         let trafficked = crate::session::tests::trafficked(130, 2, 1);
         let mut session = Session::start(&trafficked).expect("starts");
@@ -173,6 +219,7 @@ mod tests {
                 raw: None,
                 movie: None,
             },
+            FlightCommand::LoadPortDescription,
         ] {
             assert!(command.is_ask(), "{command:?}");
             assert_eq!(command.gate(), None, "{command:?}: no key gates it");

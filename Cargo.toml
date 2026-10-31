@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The vendored FFmpeg bindings are patched in below, not a member: fmt,
+# clippy, rustdoc, the tests and mutants stay off upstream code and off
+# bindgen's output.
+exclude = ["third_party/ffmpeg-sys-next"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,6 +31,7 @@ nova-sim-ai = { path = "crates/nova-sim-ai" }
 nova-sim-story = { path = "crates/nova-sim-story" }
 nova-sim-port = { path = "crates/nova-sim-port" }
 nova-audio = { path = "crates/nova-audio" }
+nova-movie = { path = "crates/nova-movie" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
 png = "0.18"
@@ -94,6 +99,18 @@ egui-winit = { version = "0.36.2", default-features = false }
 # thread priority (and its dbus dependency) and the other formats are not
 # needed.
 kira = { version = "0.12.5", default-features = false, features = ["cpal", "mp3"] }
+# The movie decoder (nova-movie): FFmpeg, built from source and linked
+# statically by the vendored ffmpeg-sys-next (third_party/), with only the
+# demuxing, decoding and scaling libraries. ffmpeg-next 9.0.0 binds FFmpeg
+# 9.0 through ffmpeg-sys-next 9.0.1, so the two are pinned together.
+ffmpeg-next = { version = "=9.0.0", default-features = false, features = ["codec", "format", "software-scaling", "build"] }
+
+# FFmpeg's bindings, with a build script that builds the source pinned in
+# third_party/ffmpeg-source.toml, stripped down, offline when it must be,
+# and with MSVC on Windows (third_party/ffmpeg-sys-next/README.md lists
+# every change).
+[patch.crates-io]
+ffmpeg-sys-next = { path = "third_party/ffmpeg-sys-next" }
 
 # Line tables only in dev and test builds: backtraces keep their files and
 # lines, but debuggers lose local variables. It cuts a cold build by about a

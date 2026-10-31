@@ -405,6 +405,21 @@ pub enum SimSound {
     SelfDestructed,
 }
 
+impl SimSound {
+    /// Whether the original plays it after a landing's `dësc` movie, so a
+    /// view playing that movie holds it back until the movie ends:
+    /// `_PlayerLandOnStellar` plays the movie (@0x632a7) before
+    /// `_DoAutoRefuel` (@0x632c5, silent) and the landing beep
+    /// ([`SimSound::Landed`], @0x632ef). Everything else the land press
+    /// raises comes before the movie, as `_HandlePlayerDockRequest` makes
+    /// it (the voice kill [`SimSound::HaltVoice`] @0x66daf among it), and
+    /// plays at once.
+    #[must_use]
+    pub const fn follows_landing_movie(self) -> bool {
+        matches!(self, Self::Landed)
+    }
+}
+
 /// The priority an explosion's sound plays at: `_CreateExplosion`'s
 /// `_PlaySoundDistance(.., 6, ..)` (@0x3f8f1, played @0x3f91a).
 pub const EXPLOSION_PRIORITY: u16 = 6;
@@ -444,6 +459,21 @@ mod tests {
     #[test]
     fn the_escape_pod_sound_is_snd_372() {
         assert_eq!(ESCAPE_POD_SOUND, SoundId(372));
+    }
+
+    #[test]
+    fn only_the_landing_beep_follows_the_landing_movie() {
+        assert!(SimSound::Landed.follows_landing_movie());
+        for sound in [
+            SimSound::HaltVoice {
+                sound: SoundId(1010),
+            },
+            SimSound::ThrustStopped,
+            SimSound::TrafficControl,
+            SimSound::Refused,
+        ] {
+            assert!(!sound.follows_landing_movie(), "{sound:?}");
+        }
     }
 
     #[test]

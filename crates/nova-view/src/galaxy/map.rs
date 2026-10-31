@@ -2597,6 +2597,7 @@ mod tests {
             DrawCommand::Dot { .. } => "dot",
             DrawCommand::OrFill { .. } => "or-fill",
             DrawCommand::Clipped { .. } => "clipped",
+            DrawCommand::MovieFrame { .. } => "movie",
         }
     }
 

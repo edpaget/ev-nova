@@ -64,14 +64,22 @@ pub(super) fn landed_filmed(
 }
 
 /// [`landed_filmed`], before any pilot is made.
-fn filmed(flags: u16, text: &str, movie: u16, prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
+/// The size of the movies [`filmed`]'s player plays.
+pub(super) const REEL: (u32, u32) = (160, 120);
+
+pub(super) fn filmed(
+    flags: u16,
+    text: &str,
+    movie: u16,
+    prefs: Prefs,
+) -> (AppScreen, Rc<MockMoviePlayer>) {
     let mut mission = venue_mission(SPACEPORT);
     mission[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
     let offer = filmed_desc_of(text, "Offer.mov", movie);
     let fork = game_data_fork(true, true, true, 100, b"", b"", None)
         .resource(Mission::TYPE, 130, Some(b"Venue job"), &mission)
         .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &offer);
-    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let reel = MockMoviePlayer::playing(REEL, 2);
     let store = MemoryPilots::new();
     let screen = AppScreen::new(loaded(&fork))
         .with_prefs(prefs)
@@ -396,15 +404,23 @@ fn the_mission_computers_refusal_plays_the_last_descs_after_movie() {
         .appeared();
     create(&mut screen, "Ada");
     land_twice(&mut screen);
+    assert_eq!(
+        screen.showing(),
+        Showing::Movie,
+        "the landing plays the stellar's movie (@0x632a7)"
+    );
+    ticked(&mut screen, 2);
+    assert_eq!(screen.showing(), Showing::Spaceport);
+    let landing = [Call::Start("Port.mov".into()), Call::Stop];
     click_port_item(&mut screen, 10);
     assert!(
         spaceport(&screen).mission_text().is_some(),
         "nothing available here"
     );
-    assert!(reeled(&reel).is_empty());
+    assert_eq!(reeled(&reel), landing);
     screen.input(&key(Key::Enter, true));
     assert_eq!(
-        reeled(&reel),
+        reeled(&reel)[landing.len()..],
         [Call::Start("Port.mov".into())],
         "the stellar's dësc was the last loaded (@0x5f96b), and the refusal's \
          after-check reads it (@0xa3956, @0x5b40b)"

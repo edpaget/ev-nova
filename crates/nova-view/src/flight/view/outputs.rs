@@ -88,10 +88,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The escape pod's rescue's `dësc`, once, after the rescue
-    /// ([`FlightEvent::RescueDesc`]): the router shows it over flight.
+    /// ([`FlightEvent::RescueDesc`]): as the flight loaded it, first in the
+    /// rescue (`_HandlePlayer` @0x68e90), its text taken in. The router
+    /// shows that text over flight without loading it again.
     ///
     /// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
-    pub fn take_rescue_desc(&mut self) -> Option<i16> {
+    pub fn take_rescue_desc(&mut self) -> Option<nova_sim::flight_frame::LoadedDesc> {
         self.drain().take_rescue_desc()
     }
 
@@ -395,10 +397,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// then the interface's (the escort menu's, the floating map's zooms,
     /// the player info refused, the course map's beeps), then the fight's:
     /// what [`Screen::take_sounds`](crate::Screen::take_sounds) gives.
+    /// While a landing's movie plays, the flight's sounds that follow it
+    /// stay behind until it ends (see the `movies` module).
     pub(super) fn drained_sounds(&mut self) -> Vec<Sound> {
+        let holds = self.holds_landing();
         let mut sounds: Vec<Sound> = self
             .drain()
-            .take_sounds()
+            .take_sounds(|sound| holds && sound.follows_landing_movie())
             .into_iter()
             .map(Sound::Sim)
             .collect();

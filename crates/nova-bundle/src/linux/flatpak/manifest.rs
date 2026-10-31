@@ -5,8 +5,12 @@ use std::path::{Component, Path};
 
 use serde_json::{Value, json};
 
+use super::ffmpeg::FfmpegSource;
 use super::layout::FlatpakLayout;
-use super::{FINISH_ARGS, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN, RUST_EXTENSION, SDK};
+use super::{
+    CLANG, FINISH_ARGS, LIBCLANG_DIR, LLVM_EXTENSION, MODULE, RUNTIME, RUNTIME_VERSION, RUST_BIN,
+    RUST_EXTENSION, SDK,
+};
 use crate::build_id::{self, BuildId};
 use crate::fonts::{FONT_DIR, FONT_LICENCES};
 use crate::linux::EXECUTABLE;
@@ -18,6 +22,11 @@ use crate::spec::{BundleSpec, GAME_PACKAGE};
 pub const VENDOR_DEST: &str = "cargo/vendor";
 /// Where the share tree lands in the module's build directory.
 pub const SHARE_DEST: &str = "linux-share";
+/// Where the FFmpeg tarball lands in the module's build directory.
+pub const FFMPEG_DEST: &str = "ffmpeg";
+/// The variable naming the FFmpeg tarball to the vendored ffmpeg-sys-next's
+/// build script, which then never downloads it.
+pub const FFMPEG_TARBALL_VAR: &str = "NOVA_FFMPEG_TARBALL";
 
 /// What the workspace source never copies: Git's data, flatpak-builder's
 /// default cache, the nightly's output, and Cargo's target directory,
@@ -95,15 +104,21 @@ fn text(path: &Path) -> String {
 
 /// The manifest for `spec`'s build `build` under `layout`. The sandboxed
 /// build sees none of the host's environment, so the module's build
-/// options pass it `NOVA_BUILD_ID`, which `nova` compiles in.
+/// options pass it `NOVA_BUILD_ID`, which `nova` compiles in. It has no
+/// network either: the FFmpeg tarball the movie decoder builds
+/// ([`FfmpegSource::record`]) is a `file` source, which `flatpak-builder`
+/// downloads and checks before the build, and the build options name it
+/// in `NOVA_FFMPEG_TARBALL`. bindgen binds it with the LLVM extension's
+/// libclang and clang (`LIBCLANG_PATH`, `CLANG_PATH`).
 #[must_use]
 pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> Value {
+    let ffmpeg = FfmpegSource::record();
     json!({
         "id": spec.identifier,
         "runtime": RUNTIME,
         "runtime-version": RUNTIME_VERSION,
         "sdk": SDK,
-        "sdk-extensions": [RUST_EXTENSION],
+        "sdk-extensions": [RUST_EXTENSION, LLVM_EXTENSION],
         "command": EXECUTABLE,
         "finish-args": FINISH_ARGS,
         "modules": [{
@@ -114,6 +129,12 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> V
                 "env": {
                     "CARGO_HOME": format!("/run/build/{MODULE}/cargo"),
                     build_id::VAR: build.as_str(),
+                    "LIBCLANG_PATH": LIBCLANG_DIR,
+                    "CLANG_PATH": CLANG,
+                    FFMPEG_TARBALL_VAR: format!(
+                        "/run/build/{MODULE}/{FFMPEG_DEST}/{}",
+                        ffmpeg.file_name()
+                    ),
                 },
             },
             "build-commands": build_commands(&spec.identifier),
@@ -138,6 +159,12 @@ pub fn manifest(spec: &BundleSpec, layout: &FlatpakLayout, build: &BuildId) -> V
                     "type": "dir",
                     "path": text(&layout.share()),
                     "dest": SHARE_DEST,
+                },
+                {
+                    "type": "file",
+                    "url": ffmpeg.url,
+                    "sha256": ffmpeg.sha256,
+                    "dest": FFMPEG_DEST,
                 },
             ],
         }],
@@ -206,7 +233,10 @@ mod tests {
         assert_eq!(manifest["sdk"], "org.freedesktop.Sdk");
         assert_eq!(
             strings(&manifest["sdk-extensions"]),
-            ["org.freedesktop.Sdk.Extension.rust-stable"]
+            [
+                "org.freedesktop.Sdk.Extension.rust-stable",
+                "org.freedesktop.Sdk.Extension.llvm22"
+            ]
         );
         assert_eq!(
             module()["build-options"]["append-path"],
@@ -289,14 +319,72 @@ mod tests {
     }
 
     #[test]
-    fn the_build_gets_the_build_id() {
+    fn the_build_gets_the_build_id_and_the_ffmpeg_tarball() {
         let env = &module()["build-options"]["env"];
         assert_eq!(env["NOVA_BUILD_ID"], BUILD);
-        assert_eq!(env.as_object().expect("an object").len(), 2, "{env}");
+        assert_eq!(
+            env["NOVA_FFMPEG_TARBALL"],
+            "/run/build/nova/ffmpeg/ffmpeg-9.0.2.tar.xz"
+        );
+        assert_eq!(env.as_object().expect("an object").len(), 5, "{env}");
     }
 
     #[test]
-    fn its_sources_are_the_workspace_the_vendor_tree_the_config_and_the_share_tree() {
+    fn bindgen_finds_libclang_and_clang_in_the_llvm_extension() {
+        let env = &module()["build-options"]["env"];
+        assert_eq!(env["LIBCLANG_PATH"], "/usr/lib/sdk/llvm22/lib");
+        assert_eq!(env["CLANG_PATH"], "/usr/lib/sdk/llvm22/bin/clang");
+    }
+
+    #[test]
+    fn the_ffmpeg_source_is_the_recorded_tarball() {
+        let record = FfmpegSource::record();
+        let sources = module()["sources"].clone();
+        let ffmpeg = sources
+            .as_array()
+            .expect("sources")
+            .iter()
+            .find(|source| source["dest"] == FFMPEG_DEST)
+            .expect("an FFmpeg source")
+            .clone();
+        assert_eq!(
+            ffmpeg,
+            json!({
+                "type": "file",
+                "url": record.url,
+                "sha256": record.sha256,
+                "dest": "ffmpeg",
+            })
+        );
+    }
+
+    #[test]
+    fn the_ffmpeg_record_names_a_release_tarball_and_its_sha256() {
+        let record = FfmpegSource::record();
+        assert_eq!(
+            record.url,
+            format!(
+                "https://ffmpeg.org/releases/ffmpeg-{}.tar.xz",
+                record.version
+            )
+        );
+        assert_eq!(
+            record.file_name(),
+            format!("ffmpeg-{}.tar.xz", record.version)
+        );
+        assert_eq!(record.sha256.len(), 64, "{}", record.sha256);
+        assert!(
+            record
+                .sha256
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{}",
+            record.sha256
+        );
+    }
+
+    #[test]
+    fn its_sources_are_the_workspace_the_vendor_tree_the_config_the_share_tree_and_ffmpeg() {
         let layout = layout();
         let spec = spec();
         let sources = module()["sources"].clone();
@@ -324,6 +412,12 @@ mod tests {
                     "type": "dir",
                     "path": text(&layout.share()),
                     "dest": "linux-share",
+                },
+                {
+                    "type": "file",
+                    "url": FfmpegSource::record().url,
+                    "sha256": FfmpegSource::record().sha256,
+                    "dest": "ffmpeg",
                 },
             ])
         );

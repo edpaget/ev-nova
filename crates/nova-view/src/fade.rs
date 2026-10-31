@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::draw::fill_rect;
 use crate::geometry::Bounds;
+use crate::view_shape::classic_offset;
 use crate::{Color, DrawList, Point};
 
 /// How long the death's fade to black and the main screen's fades from
@@ -30,6 +31,14 @@ pub fn whole_view(view: (f32, f32)) -> Bounds {
         min: Point::new(0.0, 0.0),
         max: Point::new(view.0, view.1),
     }
+}
+
+/// The whole of a view `view` logical units in size, seen from the 1024 x
+/// 768 frame centred in it ([`classic_offset`]): what a fade drawn in a
+/// dialog's frame covers to cover the whole view.
+#[must_use]
+pub fn whole_view_around_frame(view: (f32, f32)) -> Bounds {
+    Bounds::at(Point::new(-classic_offset(view.0), 0.0), view.0, view.1)
 }
 
 /// A fade of the whole screen to black or back from it, on display time.
@@ -97,11 +106,18 @@ impl ScreenFade {
     /// alpha, if it shows at all: flight's, widened or not, or Nova's own
     /// 1024 x 768 over the main menu.
     pub fn draw(&self, list: &mut DrawList, view: (f32, f32)) {
+        self.draw_over(list, whole_view(view));
+    }
+
+    /// Covers `rect` in black at the fade's alpha, if it shows at all: a
+    /// view whose origin is not the list's, such as a widened view seen
+    /// from the 1024 x 768 frame centred in it.
+    pub fn draw_over(&self, list: &mut DrawList, rect: Bounds) {
         let alpha = self.alpha();
         if alpha > 0 {
             fill_rect(
                 list,
-                whole_view(view),
+                rect,
                 Color {
                     a: alpha,
                     ..Color::BLACK
@@ -191,6 +207,37 @@ mod tests {
             color: Color::rgba(0, 0, 0, 128),
         };
         assert_eq!(commands, [line(1024.0), line(1365.0)]);
+    }
+
+    #[test]
+    fn it_covers_a_given_rect_and_over_a_view_covers_the_whole_view() {
+        let fade = after(ScreenFade::to_black(ms(1000)), ms(500));
+        let cover = Bounds::at(Point::new(-170.0, 0.0), 1365.0, 768.0);
+        let mut over = DrawList::new();
+        fade.draw_over(&mut over, cover);
+        let mut expected = DrawList::new();
+        fill_rect(&mut expected, cover, Color::rgba(0, 0, 0, 128));
+        assert_eq!(
+            over.iter().collect::<Vec<_>>(),
+            expected.iter().collect::<Vec<_>>()
+        );
+        let mut drawn = DrawList::new();
+        fade.draw(&mut drawn, (1365.0, 768.0));
+        let mut whole = DrawList::new();
+        fade.draw_over(&mut whole, whole_view((1365.0, 768.0)));
+        assert_eq!(
+            drawn.iter().collect::<Vec<_>>(),
+            whole.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(whole_view_around_frame((1365.0, 768.0)), cover);
+        assert_eq!(
+            whole_view_around_frame((1024.0, 768.0)),
+            whole_view((1024.0, 768.0)),
+            "a classic view is its own frame"
+        );
+        let mut clear = DrawList::new();
+        ScreenFade::to_black(ms(1000)).draw_over(&mut clear, cover);
+        assert!(clear.is_empty(), "a clear fade draws nothing");
     }
 
     #[test]

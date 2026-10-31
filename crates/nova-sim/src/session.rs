@@ -513,6 +513,7 @@ mod frame;
 mod free_cargo;
 mod gamble;
 mod game_work;
+mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
@@ -591,6 +592,7 @@ mod players_hits;
 mod plunder_ammo;
 mod plunder_loop;
 mod port;
+mod port_desc;
 mod precalced;
 mod radar;
 mod ranks;
@@ -3582,14 +3584,49 @@ impl Session {
         self.chart.gate_kind(stellar)
     }
 
-    /// The pending entry, if it is through a gate of `kind`; it ends here
-    /// whatever it is.
-    fn take_gate(&mut self, kind: GateKind) -> Option<StellarId> {
+    /// The pending entry, if it is through a gate of `kind`, left pending.
+    pub(crate) fn pending_gate(&self, kind: GateKind) -> Option<StellarId> {
         self.ship
             .warp
             .gate
-            .take()
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
+    }
+
+    /// The pending entry, if it is through a gate of `kind`
+    /// ([`Session::pending_gate`]); it ends here whatever it is.
+    fn take_gate(&mut self, kind: GateKind) -> Option<StellarId> {
+        let here = self.pending_gate(kind);
+        self.ship.warp.gate = None;
+        here
+    }
+
+    /// Where the hypergate `here` takes the player who picked `to` (`None`
+    /// for no pick), read from `sites` without acting: the picked system
+    /// and the first of `here`'s links that leads there
+    /// ([`hypergate_exit`]). [`GateRefusal::NoLinks`] for a hypergate
+    /// without links ([`has_links`]), [`GateRefusal::Cancelled`] for no
+    /// pick or a pick no link leads to (@0x6392c). The one rule both
+    /// [`Session::enter_hypergate`] and [`Session::gate_entry_desc`] read.
+    pub(crate) fn hypergate_route(
+        &self,
+        here: StellarId,
+        to: Option<SystemId>,
+        sites: &[GateSite],
+    ) -> Result<(SystemId, GateSite), GateRefusal> {
+        let links = Self::links_of(sites, here);
+        if !has_links(&links) {
+            return Err(GateRefusal::NoLinks);
+        }
+        let system_of = |id| {
+            self.chart
+                .galaxy
+                .system_of(id, self.statics.listers(id), self.pilot.system)
+        };
+        to.and_then(|to| {
+            let exit = hypergate_exit(&links, sites, to, system_of, self.chart.galaxy.map())?;
+            Some((to, *exit))
+        })
+        .ok_or(GateRefusal::Cancelled)
     }
 
     /// The links of `stellar` among `sites`; none when no system lists it.
@@ -3617,10 +3654,7 @@ impl Session {
         catalog: &(impl PilotCatalog + ?Sized),
     ) -> Result<Vec<SystemId>, GateRefusal> {
         let here = self
-            .ship
-            .warp
-            .gate
-            .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
+            .pending_gate(GateKind::Hypergate)
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
@@ -3651,12 +3685,7 @@ impl Session {
     /// Empty with no hypergate entry pending.
     #[must_use]
     pub(crate) fn hypergate_cycle(&self, catalog: &impl PilotCatalog) -> Vec<Option<SystemId>> {
-        let Some(here) = self
-            .ship
-            .warp
-            .gate
-            .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
-        else {
+        let Some(here) = self.pending_gate(GateKind::Hypergate) else {
             return Vec::new();
         };
         let links = Self::links_of(&catalog.gate_sites(), here);
@@ -3684,22 +3713,7 @@ impl Session {
         let here = self
             .take_gate(GateKind::Hypergate)
             .ok_or(GateRefusal::NotAtGate)?;
-        let sites = catalog.gate_sites();
-        let links = Self::links_of(&sites, here);
-        let system_of = |id| {
-            self.chart
-                .galaxy
-                .system_of(id, self.statics.listers(id), self.pilot.system)
-        };
-        let exit = if has_links(&links) {
-            to.and_then(|to| {
-                let exit = hypergate_exit(&links, &sites, to, system_of, self.chart.galaxy.map())?;
-                Some((to, *exit))
-            })
-            .ok_or(GateRefusal::Cancelled)
-        } else {
-            Err(GateRefusal::NoLinks)
-        };
+        let exit = self.hypergate_route(here, to, &catalog.gate_sites());
         let entered = exit.map(|(system, exit)| {
             self.come_out(here, system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
@@ -3925,6 +3939,10 @@ impl Session {
         self.port.forget_shipyard_listing();
         self.port.open_outfit_visit(&self.pilot);
         self.port.stay = Stay::default();
+        // `_DoPortDialog` loads the port's own `dësc` (@0x5f96b) before the
+        // land checks (@0x5fbeb): due until the spaceport asks for it or the
+        // landing settles (see the `port_desc` module).
+        self.port.due_own_desc(stellar);
         self.out.save_due = true;
         self.ship.stop_thrust(&mut self.out);
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).

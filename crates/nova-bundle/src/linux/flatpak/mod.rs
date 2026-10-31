@@ -27,7 +27,9 @@
 //! and the vendored crates) with no network, which Flathub requires;
 //! moving to Flathub swaps those two for a git source and a generated
 //! `cargo-sources.json`, and keeps the runtime, the permissions and the
-//! rest.
+//! rest. A third source, a `file`, is the FFmpeg tarball the movie decoder
+//! builds ([`ffmpeg`]), which `flatpak-builder` downloads and checks
+//! before the offline build.
 //!
 //! It ships no zenity: the runtime's `/usr/bin/zenity` (zenity 3.44,
 //! GTK3) is on the sandbox's `PATH`, which is where rfd's message boxes
@@ -37,6 +39,7 @@
 //! runs it; [`host`] reads the edge's arguments and refuses any host but
 //! x86-64 Linux. `NOVA_CHANNEL` names the branch it builds onto.
 
+pub mod ffmpeg;
 pub mod host;
 pub mod layout;
 pub mod manifest;
@@ -61,6 +64,16 @@ pub const RUNTIME_VERSION: &str = "26.08";
 pub const RUST_EXTENSION: &str = "org.freedesktop.Sdk.Extension.rust-stable";
 /// Where the extension puts `cargo`.
 pub const RUST_BIN: &str = "/usr/lib/sdk/rust-stable/bin";
+/// The SDK extension giving libclang, which bindgen needs to bind the
+/// FFmpeg the movie decoder builds: the SDK itself has none. LLVM 22 is
+/// the extension's version on the 26.08 branch.
+pub const LLVM_EXTENSION: &str = "org.freedesktop.Sdk.Extension.llvm22";
+/// Where that extension puts `libclang.so`, as bindgen's `LIBCLANG_PATH`.
+pub const LIBCLANG_DIR: &str = "/usr/lib/sdk/llvm22/lib";
+/// Its `clang`, as bindgen's `CLANG_PATH`: bindgen asks it for the
+/// include directories (clang's own `limits.h` among them), which
+/// libclang alone doesn't find.
+pub const CLANG: &str = "/usr/lib/sdk/llvm22/bin/clang";
 /// The module's name, and so its build directory's in the sandbox
 /// (`/run/build/<name>`).
 pub const MODULE: &str = "nova";

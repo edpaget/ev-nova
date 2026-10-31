@@ -179,6 +179,19 @@ exclude_re = [
     # which no hermetic test may run. Its decisions are tested on their
     # own (`music_warning`, `voice_limit`, `game_audio`).
     "nova/src/main.rs:.*replace open_audio -> ",
+    # `open_pilots` (nova's `main.rs`) only wires the real pilots
+    # directory into a keeper, part of `main`'s wiring (excluded below);
+    # where the directory is, is `config::pilots_dir`'s, tested there.
+    "nova/src/main.rs:.*replace open_pilots -> ",
+    # nova-movie's FFmpeg set-up: FFmpeg 9 registers nothing at `init`,
+    # and the log level only silences FFmpeg's own messages on stderr,
+    # which no test reads.
+    "nova-movie/src/ffmpeg\\.rs:[0-9]+:[0-9]+: replace init with \\(\\)$",
+    # The scaler is kept while frames keep their format and size; checking
+    # with `==` rebuilds it for every frame instead, which changes only
+    # the speed (a format change mid-movie would need a fixture FFmpeg's
+    # encoders can't make).
+    "nova-movie/src/ffmpeg\\.rs:[0-9]+:[0-9]+: replace != with == in MovieFile::convert$",
     # `run_seed` reads the clock for a different seed each run: no test
     # can tell one seed from another.
     "main.rs:.*replace run_seed -> u64 with",

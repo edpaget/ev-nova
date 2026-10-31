@@ -9,13 +9,13 @@ use nova_sim_base::fixture::FAST;
 use super::{planet, star};
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
-    CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DisasterRecord, DudeId,
-    DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord, LandingSite,
-    ListedStellar, MissionRecord, MissionTexts, NavDefSlots, NebulaRecord, OutfitId, OutfitRecord,
-    PersonRecord, PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts, StringPatch,
-    SystemId, SystemReinforcements, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DescText,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord,
+    LandingSite, ListedStellar, MissionRecord, MissionTexts, NavDefSlots, NebulaRecord, OutfitId,
+    OutfitRecord, PersonRecord, PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts,
+    StringPatch, SystemId, SystemReinforcements, SystemTraffic, SystemVisibility, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::voice::Voices;
@@ -141,6 +141,11 @@ pub struct FakePilotCatalog {
     pub boom_sounds: Vec<(BoomId, SoundId)>,
     /// The escorts' voices: none, by default, so no escort speaks.
     pub voices: Voices,
+    /// Each `dësc` [`PilotCatalog::desc_text`] reads; any other is
+    /// missing. None, by default.
+    pub descs: Vec<(i16, DescText)>,
+    /// Each `dësc` asked for, in order.
+    pub desc_reads: RefCell<Vec<i16>>,
     /// Each system's `NavDefs` slots, gaps kept, where a test gives them:
     /// none, by default, so each system's slots number its
     /// [`sites`](Self::sites) in order.
@@ -242,6 +247,8 @@ pub fn catalog() -> FakePilotCatalog {
         warp_out_sound: None,
         boom_sounds: Vec::new(),
         voices: Voices::default(),
+        descs: Vec::new(),
+        desc_reads: RefCell::default(),
         nav_defs: Vec::new(),
     }
 }
@@ -469,6 +476,14 @@ impl PilotCatalog for FakePilotCatalog {
         TrafficCatalog::dude(self, id)
     }
 
+    fn desc_text(&self, id: i16) -> Option<DescText> {
+        self.desc_reads.borrow_mut().push(id);
+        self.descs
+            .iter()
+            .find(|(desc, _)| *desc == id)
+            .map(|(_, text)| text.clone())
+    }
+
     /// The first of each existing system's [`FakePilotCatalog::sites`], as
     /// [`PilotCatalog::landing_sites`] gives them, read without counting
     /// as a read of the star map or the sites.
@@ -613,6 +628,22 @@ mod tests {
         };
         assert_eq!(fake.stellar_weapons(), [(StellarId(128), WeaponId(196))]);
         assert_eq!(catalog().stellar_weapons(), [], "none by default");
+    }
+
+    #[test]
+    fn the_fake_reads_the_descs_it_is_given_and_records_each_read() {
+        let docked = DescText {
+            text: "Docked.".to_owned(),
+            movie: None,
+        };
+        let fake = FakePilotCatalog {
+            descs: vec![(129, docked.clone())],
+            ..catalog()
+        };
+        assert_eq!(fake.desc_text(129), Some(docked));
+        assert_eq!(fake.desc_text(130), None, "any other is missing");
+        assert_eq!(*fake.desc_reads.borrow(), [129, 130]);
+        assert_eq!(catalog().desc_text(129), None, "none by default");
     }
 
     #[test]
