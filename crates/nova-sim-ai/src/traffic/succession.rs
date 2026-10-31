@@ -271,6 +271,7 @@ mod tests {
     use crate::catalog::GovtId;
     use crate::chance::{Chance, NeverFires};
     use crate::escort::FormationSlot;
+    use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
@@ -951,6 +952,43 @@ mod tests {
         let mut traffic = fleet(FEDS, DISABLED, vec![zero]);
         think(&mut traffic);
         assert_eq!(of(&traffic, 1).form_parent, Some(0), "a word of 0 kept");
+    }
+
+    /// `traffic`'s think half by the engine, the player at `at`: the
+    /// player's state.
+    fn think_by_player(traffic: &mut Traffic, at: Vec2) -> ShipState {
+        let side = crate::ai::fixture::player(at.x, at.y);
+        let world = World {
+            player: Some(side),
+            ..World::new(&[])
+        };
+        traffic.think_holding(&Keep, world, &[], &mut NeverFires);
+        side.state
+    }
+
+    #[test]
+    fn a_ship_dropped_on_word_0_marks_the_player_on_that_pass_alone() {
+        // The check's pass sets the player's +0xc2 (@0x441c7-0x441de), and
+        // no ship above AI type 4 is on the player to set it again.
+        let slot = FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 38.0,
+        };
+        let mut zero = follower(FEDS, 300);
+        zero.swarm_leader = Some(0);
+        zero.fleet_slot = Some(slot);
+        let mut traffic = fleet(FEDS, DISABLED, vec![zero]);
+        let player = think_by_player(&mut traffic, Vec2::new(500.0, -300.0));
+        assert_eq!(of(&traffic, 1).leader, None);
+        assert_eq!(of(&traffic, 1).form_parent, Some(0));
+        let place = slot.position(&player);
+        assert_eq!(of(&traffic, 1).slot_place, Some(place));
+        // No later pass marks the player, so the place stands as it moves.
+        think_by_player(&mut traffic, Vec2::new(-700.0, 10.0));
+        assert_eq!(of(&traffic, 1).form_parent, Some(0));
+        assert_eq!(of(&traffic, 1).fleet_slot, Some(slot));
+        assert_eq!(of(&traffic, 1).slot_place, Some(place));
     }
 
     #[test]
