@@ -189,16 +189,19 @@ impl Npc {
         if self.carrier.is_some() {
             self.leave_carrier();
         }
-        if self.warp.stage < 0.0 {
+        if self.stage_below_zero() {
+            self.leaves_gate_goal();
             self.goal = Goal::Regroup {
                 kept: Kept::of(self),
             };
         }
     }
 
-    /// It is left with no fellow to follow: out of its fleet, its warp at
-    /// -1.0, in the regroup pause coasting (sub 0), its target kept.
+    /// It is left with no fellow to follow: out of its fleet and any gate
+    /// goal, its warp at -1.0, in the regroup pause coasting (sub 0), its
+    /// target kept.
     fn leave_alone(&mut self) {
+        self.leaves_gate_goal();
         self.leave_fleet();
         self.warp.give_up();
         self.goal = Goal::Regroup { kept: Kept::Coast };
@@ -211,6 +214,7 @@ impl Npc {
     /// [`RuleKey::SuccessorRepairer`](crate::RuleKey::SuccessorRepairer)
     /// (see the module docs).
     fn take_over(&mut self, record: Option<&Npc>, repairer: RuleSource) {
+        self.leaves_gate_goal();
         self.leave_fleet();
         self.warp.give_up();
         if let Some(lead) = record.filter(|lead| lead.govt.is_some() && lead.govt == self.govt) {
@@ -254,12 +258,13 @@ mod tests {
     use crate::ai::pursuit::Kept as PursuitKept;
     use crate::ai::{Behaviour, Help, Surroundings};
     use crate::bay::Carrier;
-    use crate::catalog::GovtId;
+    use crate::catalog::{GovtId, StellarId};
     use crate::chance::{Chance, NeverFires};
     use crate::escort::FormationSlot;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::gone::Freed;
+    use crate::traffic::npc::Mode;
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use crate::traffic::warp_out::GIVEN_UP_STAGE;
     use nova_sim_base::fixture::FAST;
@@ -743,6 +748,99 @@ mod tests {
             }
         );
         assert_eq!(paused.warp.goal, Some(WarpGoal::Own));
+    }
+
+    /// The follower NPC 2 of a lost lead, `setup` applied, once a think
+    /// has given NPC 1 the lead.
+    fn beside_a_successor(setup: impl Fn(&mut Npc)) -> Npc {
+        let mut ship = follower(FEDS, 100);
+        ship.emerges_from = Some(StellarId(310));
+        setup(&mut ship);
+        let mut traffic = fleet(FEDS, DISABLED, vec![follower(FEDS, 300), ship]);
+        think(&mut traffic);
+        of(&traffic, 2).clone()
+    }
+
+    #[test]
+    fn a_follower_waiting_in_its_gate_pauses_seen_and_out_of_its_gate() {
+        // The emerge's +0x50 of -1.0 (@0x89555), a wait skipping the hold:
+        // goal 0x13 over goal 0x15.
+        let paused = beside_a_successor(|ship| ship.mode = Mode::Emerging { ticks_left: 30 });
+        assert_eq!(paused.leader, Some(NpcId(1)));
+        assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(paused.emerges_from, None);
+        assert!(!paused.emerging());
+    }
+
+    #[test]
+    fn a_follower_held_at_its_gate_pauses_in_sub_0_whatever_its_goal() {
+        let paused = beside_a_successor(|ship| {
+            ship.mode = Mode::HeldAtGate { ticks_left: 12 };
+            ship.emerges_from = None;
+            ship.goal = Goal::Attack(PLAYER);
+            ship.target = Some(PLAYER);
+        });
+        assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 12 });
+        assert_eq!(paused.target, Some(PLAYER));
+    }
+
+    #[test]
+    fn a_follower_on_the_frame_its_wait_ran_out_pauses_and_bursts_no_more() {
+        let paused = beside_a_successor(|ship| ship.mode = Mode::LeavingGate { tick: 0 });
+        assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert_eq!(paused.emerges_from, None);
+    }
+
+    #[test]
+    fn a_follower_gliding_in_or_bursting_out_takes_no_pause() {
+        // Its -999.0 takes the write, which the glide path overwrites in
+        // the same frame (@0x8fcf5-0x8fd18).
+        for mode in [Mode::JumpingIn { tick: 3 }, Mode::LeavingGate { tick: 1 }] {
+            let led = beside_a_successor(|ship| ship.mode = mode);
+            assert_eq!(led.leader, Some(NpcId(1)), "{mode:?}");
+            assert_eq!(led.mode, mode);
+            assert!(matches!(led.goal, Goal::Follow { .. }), "{mode:?}");
+            assert_eq!(led.emerges_from, Some(StellarId(310)), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_successor_waiting_in_its_gate_leaves_it_for_the_goal_it_takes() {
+        // @0x893d0, @0x89429-0x8945f: each branch writes a goal over 0x15.
+        for (name, govt, goal) in [
+            ("the lead's", FEDS, Goal::Hold),
+            ("its own", REBELS, Goal::Idle),
+        ] {
+            let mut waiting = follower(govt, 300);
+            waiting.mode = Mode::Emerging { ticks_left: 30 };
+            waiting.emerges_from = Some(StellarId(310));
+            let mut traffic = fleet(FEDS, DISABLED, vec![waiting]);
+            of_mut(&mut traffic, 0).goal = Goal::Hold;
+            think(&mut traffic);
+            let leads = of(&traffic, 1);
+            assert_eq!(leads.leader, None, "{name}");
+            assert_eq!(leads.goal, goal, "{name}");
+            assert_eq!(leads.mode, Mode::HeldAtGate { ticks_left: 30 }, "{name}");
+            assert_eq!(leads.emerges_from, None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_alone_in_its_gate_is_left_seen_and_held() {
+        let mut alone = follower(FEDS, 300);
+        alone.condition = DISABLED;
+        alone.mode = Mode::Emerging { ticks_left: 30 };
+        alone.emerges_from = Some(StellarId(310));
+        let mut traffic = fleet(FEDS, DISABLED, vec![alone]);
+        think(&mut traffic);
+        let alone = of(&traffic, 1);
+        assert_eq!(alone.goal, Goal::Regroup { kept: Kept::Coast });
+        assert_eq!(alone.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(alone.emerges_from, None);
+        assert_eq!(alone.leader, None);
     }
 
     #[test]

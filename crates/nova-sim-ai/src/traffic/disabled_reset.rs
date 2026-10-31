@@ -95,6 +95,7 @@ fn resets(npc: &Npc) -> bool {
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
 /// docs).
 pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
+    npc.leaves_gate_goal();
     npc.target = None;
     npc.travel_set = false;
     npc.defends = None;
@@ -400,6 +401,67 @@ mod tests {
             assert_eq!(led.target, Some(ShipRef::Player), "{name}");
             assert!(led.travel_set, "{name}");
         }
+    }
+
+    /// `fleet(condition)` with its led ship in `mode`, in the gate it comes
+    /// out of.
+    fn in_gate(condition: Condition, mode: Mode) -> Traffic {
+        let mut traffic = fleet(condition);
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        let led = led.expect("there");
+        led.mode = mode;
+        led.emerges_from = Some(crate::catalog::StellarId(310));
+        traffic
+    }
+
+    #[test]
+    fn a_ship_disabled_in_its_gate_is_reset_out_of_it_seen_and_never_bursts() {
+        // The reset comes before goal 0x15's skip (@0x8fece, @0x8ff18): its
+        // goal 0 ends goal 0x15, and +0x4c runs on.
+        let dying = Condition::Dying {
+            ticks_left: 90,
+            starting: false,
+        };
+        for condition in [Condition::Disabled, dying] {
+            for reading in RuleSource::ALL {
+                let mut traffic = in_gate(condition, Mode::Emerging { ticks_left: 3 });
+                ticked(&mut traffic, reading, &mut NeverFires);
+                let reset = of(&traffic, LED);
+                assert!(was_reset(reset), "{condition:?} {reading:?}");
+                assert_eq!(reset.mode, Mode::HeldAtGate { ticks_left: 2 });
+                assert_eq!(reset.emerges_from, None, "{condition:?} {reading:?}");
+                assert!(!reset.emerging(), "{condition:?} {reading:?}");
+                ticked(&mut traffic, reading, &mut NeverFires);
+                assert_eq!(of(&traffic, LED).mode, Mode::HeldAtGate { ticks_left: 1 });
+                ticked(&mut traffic, reading, &mut NeverFires);
+                let out = of(&traffic, LED);
+                assert_eq!(out.mode, Mode::Flying, "{condition:?} {reading:?}");
+                assert_eq!(
+                    out.owed_burst,
+                    Some(crate::traffic::emerge::exit_speed(out.led_out, 0)),
+                    "{condition:?} {reading:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_disabled_as_its_wait_runs_out_bursts_no_more() {
+        let mut traffic = in_gate(Condition::Disabled, Mode::LeavingGate { tick: 0 });
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let reset = of(&traffic, LED);
+        assert_eq!(reset.mode, Mode::Flying, "its wait was out");
+        assert_eq!(reset.emerges_from, None);
+        assert!(reset.owed_burst.is_some(), "the burst it still owes");
+    }
+
+    #[test]
+    fn an_intact_ship_in_its_gate_keeps_its_mode() {
+        let mut traffic = in_gate(Condition::Intact, Mode::Emerging { ticks_left: 3 });
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let waiting = of(&traffic, LED);
+        assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2 });
+        assert!(waiting.emerges_from.is_some());
     }
 
     #[test]

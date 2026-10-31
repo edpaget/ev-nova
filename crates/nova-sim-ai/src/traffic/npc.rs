@@ -1460,11 +1460,43 @@ impl Npc {
     /// its emerge set, which it owes as the hold ends ([`Npc::end_wait`]).
     /// A ship not waiting in a gate is left as it is.
     pub fn hold_at_gate(&mut self) {
-        if let Mode::Emerging { ticks_left } = self.mode {
-            self.mode = Mode::HeldAtGate { ticks_left };
-            self.emerges_from = None;
+        if matches!(self.mode, Mode::Emerging { .. }) {
+            self.leaves_gate_goal();
             self.goal = Goal::Attack(ShipRef::Player);
         }
+    }
+
+    /// Another goal is written over its goal 0x15, which alone hides a
+    /// ship and bursts it out (`_ShipVisibleToShip` @0x972d, the fade
+    /// @0x2c090, the burst @0x8dd61-0x8dd93): its wait runs on where it
+    /// waited ([`Mode::HeldAtGate`]), seen, and it lets go of its gate
+    /// ([`Npc::emerges_from`]). The player's hit ([`Npc::hold_at_gate`]),
+    /// the succession's writes ([`succession`](super::succession)) and the
+    /// disabled reset ([`disabled_reset`](super::disabled_reset)) make such
+    /// a write. On the frame its wait ran out ([`Mode::LeavingGate`] at
+    /// tick 0, goal 0x15 still) it is held one tick, which the fly half's
+    /// step ends at once ([`Npc::end_wait`]). Any other ship is left.
+    pub fn leaves_gate_goal(&mut self) {
+        match self.mode {
+            Mode::Emerging { ticks_left } => self.mode = Mode::HeldAtGate { ticks_left },
+            Mode::LeavingGate { tick: 0 } => self.mode = Mode::HeldAtGate { ticks_left: 1 },
+            _ => return,
+        }
+        self.emerges_from = None;
+    }
+
+    /// Whether its +0x50 is below 0, as `_AICheckParentExists` tests it
+    /// (@0x8949d-0x894a4): given up ([`Warp::give_up`]), or the emerge's
+    /// -1.0 (@0x89555), which a gate wait keeps from the high level's hold
+    /// as the engine's stage doesn't
+    /// ([`hold_stage`](crate::traffic::warp_out::hold_stage)).
+    #[must_use]
+    pub fn stage_below_zero(&self) -> bool {
+        self.warp.stage < 0.0
+            || matches!(
+                self.mode,
+                Mode::Emerging { .. } | Mode::HeldAtGate { .. } | Mode::LeavingGate { tick: 0 }
+            )
     }
 
     /// Ends its AI wait (+0x4c = -1.0): [`Npc::ai_wait`] zeroed, and a
@@ -2468,6 +2500,70 @@ mod tests {
         let before = flying.clone();
         flying.hold_at_gate();
         assert_eq!(flying, before, "only a ship waiting in its gate is held");
+    }
+
+    #[test]
+    fn leaving_goal_0x15_keeps_the_wait_and_lets_go_of_the_gate() {
+        for (mode, held) in [
+            (
+                Mode::Emerging { ticks_left: 30 },
+                Mode::HeldAtGate { ticks_left: 30 },
+            ),
+            (
+                Mode::LeavingGate { tick: 0 },
+                Mode::HeldAtGate { ticks_left: 1 },
+            ),
+        ] {
+            let mut npc = Npc {
+                mode,
+                emerges_from: Some(StellarId(310)),
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            npc.leaves_gate_goal();
+            assert_eq!(npc.mode, held);
+            assert_eq!(npc.emerges_from, None, "{mode:?}");
+            assert!(!npc.emerging(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn any_other_mode_is_left() {
+        for mode in [
+            Mode::Flying,
+            Mode::JumpingIn { tick: 0 },
+            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::LeavingGate { tick: 1 },
+            Mode::Coasting { ticks_left: 3 },
+        ] {
+            let mut npc = Npc {
+                mode,
+                emerges_from: Some(StellarId(310)),
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            let before = npc.clone();
+            npc.leaves_gate_goal();
+            assert_eq!(npc, before, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_gate_wait_reads_as_a_stage_below_zero() {
+        for (mode, stage, below) in [
+            (Mode::Flying, 0.0, false),
+            (Mode::Flying, 1.0, false),
+            (Mode::Flying, -1.0, true),
+            (Mode::Emerging { ticks_left: 3 }, 0.0, true),
+            (Mode::HeldAtGate { ticks_left: 3 }, 0.0, true),
+            (Mode::LeavingGate { tick: 0 }, 0.0, true),
+            (Mode::LeavingGate { tick: 1 }, 0.0, false),
+            (Mode::JumpingIn { tick: 0 }, 0.0, false),
+            (Mode::Coasting { ticks_left: 3 }, 0.0, false),
+        ] {
+            let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
+            npc.mode = mode;
+            npc.warp.stage = stage;
+            assert_eq!(npc.stage_below_zero(), below, "{mode:?} {stage}");
+        }
     }
 
     #[test]

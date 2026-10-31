@@ -89,6 +89,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::World;
+    use crate::traffic::emerge::exit_speed;
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::{Mode, NpcId};
     use crate::traffic::warp_out::WarpGoal;
@@ -269,5 +270,50 @@ mod tests {
         assert_eq!(state.velocity, Vec2::new(1.0, 2.0));
         assert_eq!(state.heading, 30.0);
         assert_eq!(state.position, Vec2::new(1.0, 2.0));
+    }
+
+    // In its gate.
+
+    /// A ship paused coasting (sub 0) where it waited in its gate, led out
+    /// as `led_out` says, `ticks_left` of its wait left.
+    fn paused_in_gate(ticks_left: u32, led_out: bool) -> Npc {
+        Npc {
+            mode: Mode::HeldAtGate { ticks_left },
+            led_out,
+            ..paused_with(Kept::Coast)
+        }
+    }
+
+    #[test]
+    fn paused_in_its_gate_it_never_bursts_and_owes_its_burst_once_its_wait_is_out() {
+        for led_out in [false, true] {
+            let mut traffic = Traffic::with_interval(1);
+            let id = traffic.add_npc(paused_in_gate(3, led_out));
+            let behaviour = Recording::default();
+            for _ in 0..6 {
+                ticked(&mut traffic, &behaviour, 1);
+                assert!(
+                    !matches!(of(&traffic, id).mode, Mode::LeavingGate { .. }),
+                    "no burst"
+                );
+            }
+            let out = of(&traffic, id);
+            assert_eq!(out.mode, Mode::Flying);
+            assert!(paused(out), "still paused");
+            assert_eq!(out.owed_burst, Some(exit_speed(led_out, 0)));
+            assert_eq!(out.state.position, Vec2::ZERO, "at its gate");
+            assert!(behaviour.decided.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn released_in_its_gate_it_decides_in_the_same_tick() {
+        let mut traffic = Traffic::with_interval(1);
+        let id = traffic.add_npc(paused_in_gate(30, false));
+        let behaviour = Recording::default();
+        let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
+        traffic.tick_in(&behaviour, World::new(&[]), &[], &mut chance);
+        assert_eq!(of(&traffic, id).goal, Goal::Idle);
+        assert_eq!(*behaviour.decided.borrow(), [id]);
     }
 }
