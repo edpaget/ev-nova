@@ -239,6 +239,25 @@ fn two_refuellers_read_the_fuel_in_berth_order() {
 }
 
 #[test]
+fn a_tick_reads_only_the_fuel_given_in_that_tick_on_top_of_its_tank() {
+    // The world holds the tank as the tick began, and a tally not yet taken
+    // is already in a later world's tank: 99 then 100, both ticks.
+    let mut traffic = traffic_of(vec![
+        refueller(2, 5, (0.0, 0.0), (0.0, 0.0), 0.0),
+        refueller(3, 4, (10.0, 0.0), (0.0, 0.0), 0.0),
+    ]);
+    for _ in 0..2 {
+        tick(
+            &mut traffic,
+            &Recording::default(),
+            &world(99.0, 300.0, RuleSource::Engine),
+        );
+    }
+    assert_eq!(traffic.take_fuel_given(), 4.0);
+    assert_eq!(traffic.take_on_line(), [], "neither read past 100");
+}
+
+#[test]
 fn a_refueller_targeting_an_npc_raises_that_ships_fuel_and_ends_silently() {
     let mut helper = refueller(HELPER.0, 1, (10.0, 0.0), (0.0, 0.0), 0.0);
     helper.target = Some(ShipRef::Npc(NpcId(2)));

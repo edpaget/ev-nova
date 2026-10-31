@@ -1,40 +1,54 @@
-//! A fighter an NPC launches, in the ship table at once
-//! ([`Session::dispatch_npcs`]).
+//! `_AIDispatch`'s loop, slot by slot ([`Session::dispatch_npcs`]): each
+//! occupied slot's whole think, its turn in the fight and its fighters
+//! put in the system, before the next slot's.
+//!
+//! `_DoPlayGameWork`'s loop over slots 1-63 rereads each slot's active
+//! flag, AI type and system as it comes (@0x44270-0x442ae) and runs that
+//! slot's `_AIDispatch` (@0x4429d), nothing else. So a slot reads what the
+//! slots below it wrote this frame (a launched fighter, a new goal, target
+//! or condition, a claim on the last free slot, a freed pod's slot) and
+//! the slots above it as their last frame left them.
 //!
 //! `_LaunchFighter` marks the fighter's slot active as `_AIDispatch`'s
 //! loop launches it (`_GenericRandomShipSpawn` @0x3c90b, @0x3d680), in its
-//! carrier's system (@0x3d694), of AI type 5 (@0x3d771), and
-//! `_DoPlayGameWork`'s loop over slots 1-63 rereads each slot's active
-//! flag, AI type and system as it comes (@0x44270-0x442ae). So:
+//! carrier's system (@0x3d694), of AI type 5 (@0x3d771). So:
 //!
 //! - a fighter put in a slot above its carrier's is reached by the same
-//!   loop in its launch frame: its `_AIDispatch` runs its whole AI (see
-//!   `nova_sim::traffic`'s `launch_think`), its point defence among it
-//!   (`_AIFireTurret` → `_HandleShipPointDefense` @0x80b0d), and
-//!   `_HandleShip` fires the pick it chose that frame (@0x34fce-0x34ffd);
+//!   loop in its launch frame: its `_AIDispatch` runs its whole AI, its
+//!   fields on entry (mission mark -1 @0x3c9a9, fade 0 @0x3c9c7, +0x50 0
+//!   @0x3d79d, substate and goal 0 @0x3d7a3/@0x3d7af) taking it past every
+//!   gate to `_AIHandleCloaking` (@0x8fcaa), its type AI whatever the
+//!   frame counter (@0x8fe20, @0x8fe25), `_EscortAI` (@0x90011-0x90016),
+//!   `_HighLevelAIHandler` (@0x901e5) and `_LowLevelAIHandler` (@0x901f4),
+//!   its point defence among it (`_AIFireTurret` →
+//!   `_HandleShipPointDefense` @0x80b0d), and `_HandleShip` fires the
+//!   pick it chose that frame (@0x34fce-0x34ffd). If it launches from a
+//!   bay of its own it takes the next free slot ahead of any carrier
+//!   above it;
 //! - one put in a slot below (one freed earlier) has been passed, so it
 //!   thinks first in the next frame, and fires nothing in its launch frame,
 //!   as `_GenericRandomShipSpawn` clears its fire flag (@0x3cb60);
 //! - whichever slot it took, every slot whose `_AIDispatch` comes after
-//!   the launch can choose it in its point defence's ship branch, which
-//!   walks the live table (@0x394ce-0x3969d), once it fights the
-//!   defender: it launches with goal 0 (`_AISetup` @0x7f3e8), so one
-//!   above its carrier is a candidate after its launch-frame think, and
-//!   one below only from its next frame's; a slot before the carrier's
-//!   cannot.
+//!   the launch can choose it, as a target (the hunt asks nothing of its
+//!   goal or its frame, @0x8aa64-0x8aac8) or in its point defence's ship
+//!   branch, which walks the live table (@0x394ce-0x3969d), once it
+//!   fights the defender: it launches with goal 0 (`_AISetup` @0x7f3e8), so
+//!   one above its carrier is a candidate after its launch-frame think,
+//!   and one below only from its next frame's; a slot before the
+//!   carrier's cannot.
 //!
 //! Every fighter moves and is displayed in its launch frame either way,
 //! as the ship loop comes after the AI loop (@0x4445c-0x444c4). Nothing
 //! here sounds: `_LaunchFighter` and `_GenericRandomShipSpawn` play
 //! nothing, and the launch's own sound is `_AILaunchFighter`'s (@0x81466).
-//! [`RuleKey::LaunchFrameAi`]'s other reading puts every fighter in the
-//! system after the whole loop instead, neither thinking nor a candidate
-//! until the next tick.
+//! [`RuleKey::LaunchFrameAi`]'s other reading has every NPC decide in one
+//! batch, from the tick as it began, and puts every fighter in the system
+//! after the whole loop, neither thinking nor a candidate until the next
+//! tick.
 //!
-//! The existing NPCs still think in one batch before the loop, so an NPC
-//! in a slot above the carrier's thinks blind to the fighter, and the
-//! fighter's own think reads them as their last frame left them
-//! (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
+//! An escape pod's wait runs at its own slot's turn too (`_AIDispatch`
+//! @0x8fb62-0x8fbba), so its slot is free to the slots after it that
+//! frame, and not to those before (`Traffic::think_run`).
 
 use std::collections::BTreeSet;
 
@@ -44,32 +58,51 @@ use crate::chance::Chance;
 use crate::combat::{GamePass, Rules};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_layer::Slot;
-use crate::traffic::npc::NpcId;
+use crate::traffic::npc::{Npc, NpcId};
 
 impl Session {
-    /// `_AIDispatch`'s loop on `pass` by `rules`, the launched fighters
-    /// thinking as `behaviour` says, drawing on `chance` (see the module
-    /// docs): every NPC's point defence and launches in slot order
-    /// ([`Combat::defend_npcs`](crate::combat::Combat::defend_npcs)), the
-    /// loop taking one occupied slot at a time; that slot's fighters are
-    /// put in the system at once
-    /// ([`Session::launch_fighters`]), each in a slot above the
-    /// carrier's thinks
-    /// ([`Traffic::think_launched`](crate::traffic::Traffic::think_launched)),
-    /// and the loop goes on to the next slot with them among its ships.
+    /// `_AIDispatch`'s loop on `pass` by `rules`, the NPCs thinking as
+    /// `behaviour` says, drawing on `chance` (see the module docs): for
+    /// each occupied slot in ascending order, that slot's think
+    /// ([`Traffic::think_run`](crate::traffic::Traffic::think_run)), the
+    /// refuel it gave landed, its point defence and launches
+    /// ([`Combat::defend_npcs`](crate::combat::Combat::defend_npcs)) and
+    /// its fighters put in the system at once
+    /// ([`Session::launch_fighters`]). The next slot is read from the live
+    /// table, so a fighter in a slot above is reached as its slot comes,
+    /// and one below has been passed. On a pass that set a system up (not
+    /// `thought`) no NPC thinks, and only a fighter launched in it does.
     /// By [`RuleKey::LaunchFrameAi`]'s other reading, one run of every
     /// slot, its fighters put in the system after it.
     ///
-    /// The fighters' work on the line (their calls, their scans) is
-    /// queued at their own berths as they think, among every other
-    /// slot's, and the caller settles it all after this loop in slot order
-    /// ([`Session::settle_line_queue`]), where the original says each in
-    /// its own slot's `_AIDispatch`. Nothing in the loop draws a frame,
-    /// opens a dialog, lands, jumps or saves the pilot, so the wait
-    /// crosses no boundary the player sees: the lines are said before the
-    /// frame is drawn.
+    /// Whatever session state a think reads must land each slot, as the
+    /// fuel does here: `step_traffic` builds each run's world from the
+    /// session, so it reads only what has been written back by then.
+    ///
+    /// What still settles outside its slot:
+    ///
+    /// - Within a slot the point defence comes after the whole think,
+    ///   where `_AIFireTurret` runs in the low level. It is the ship's own
+    ///   turn, so no other slot reads the difference.
+    /// - Every think's work on the line (its calls, its scan, its plunder
+    ///   of the player) is queued at its berth and settled after this
+    ///   loop in slot order ([`Session::settle_line_queue`]), where the
+    ///   original says each in its own slot's `_AIDispatch`. So the lines,
+    ///   their sounds and their order stand, and are said before the frame
+    ///   is drawn; but a higher slot's think reads the legal record and
+    ///   the reinforcement clock a lower slot's scan or call changes only
+    ///   the next frame.
+    /// - What the fly half settles (a dock, a jump-out, the boarded flag, a
+    ///   gate entrant's followers), and the passes [`Traffic::open_think`]
+    ///   runs before the first slot.
+    ///
+    /// Each of those is a lag across a drawn frame for a higher slot, all
+    /// filed in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6.
+    ///
+    /// [`Traffic::open_think`]: crate::traffic::Traffic::open_think
     pub(super) fn dispatch_npcs(
         &mut self,
+        thought: bool,
         pass: GamePass,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
@@ -77,35 +110,34 @@ impl Session {
     ) {
         let by_slot = self.setup.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
         let mut after: Option<u32> = None;
+        let mut launched: BTreeSet<NpcId> = BTreeSet::new();
         loop {
             let through = if by_slot {
                 self.space.traffic.next_slot_after(after)
             } else {
                 None
             };
+            let in_run = |npc: &Npc| {
+                after.is_none_or(|after| npc.berth > after)
+                    && through.is_none_or(|through| npc.berth <= through)
+                    && (thought || launched.contains(&npc.id))
+            };
+            self.step_traffic(|traffic, world| {
+                traffic.think_run(behaviour, world, in_run, chance);
+            });
+            // The fuel a refueller gave, so the next slot reads the tank
+            // it left.
+            self.space.take_refuel(&mut self.pilot);
             self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
                 let (after, through) = (after.map(Slot::Berth), through.map(Slot::Berth));
                 combat.defend_npcs(fighters, arena, after, through, chance);
             });
             let sorties = self.space.combat.take_sorties();
-            let placed = self.launch_fighters(&sorties, chance);
-            let Some(carrier) = through else {
+            launched.extend(self.launch_fighters(&sorties, chance));
+            let Some(slot) = through else {
                 return;
             };
-            let above: BTreeSet<NpcId> = self
-                .space
-                .traffic
-                .npcs()
-                .iter()
-                .filter(|npc| placed.contains(&npc.id) && npc.berth > carrier)
-                .map(|npc| npc.id)
-                .collect();
-            if !above.is_empty() {
-                self.step_traffic(|traffic, world| {
-                    traffic.think_launched(&above, behaviour, world, chance);
-                });
-            }
-            after = through;
+            after = Some(slot);
         }
     }
 }
@@ -116,10 +148,10 @@ mod tests {
     use crate::ai::pursuit::Pursuit;
     use crate::ai::{Behaviour, CommCall, Decision, Goal, Surroundings};
     use crate::catalog::{HullRecord, StockWeapon, WeaponId, WeaponRecord};
-    use crate::chance::Chance;
+    use crate::chance::{Chance, NeverFires};
     use crate::combat::armament::{Armament, LauncherRounds, Trigger};
     use crate::combat::weapon::WeaponSpec;
-    use crate::combat::{CombatEvent, ShipRef};
+    use crate::combat::{CombatEvent, GamePass, Rules, ShipRef};
     use crate::geometry::Vec2;
     use crate::message::SimMessage;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -127,6 +159,7 @@ mod tests {
     use crate::session::fighters::tests::{
         BAY, GUN, QUAD, VIPER, armed_npc, bay, carrier_npc, carrying, flying_by, game_pass, pilot,
     };
+
     use crate::sound::SimSound;
     use crate::testkit::{FakePilotCatalog, weapon};
     use crate::traffic::npc::{Npc, NpcId};
@@ -489,9 +522,10 @@ mod tests {
         assert_eq!(next, ["low", "high"]);
     }
 
-    /// [`Scripted`], every Viper calling for help as it decides.
+    /// [`Scripted`], every Viper and the second's ship calling for help as
+    /// they decide.
     #[derive(Debug)]
-    struct CallingVipers(Scripted);
+    struct CallingVipers(Scripted, Option<NpcId>);
 
     impl Behaviour for CallingVipers {
         fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -499,8 +533,9 @@ mod tests {
         }
 
         fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            let calls = npc.ship == VIPER || Some(npc.id) == self.1;
             Decision {
-                comm_call: (npc.ship == VIPER).then_some(CommCall::Distress),
+                comm_call: calls.then_some(CommCall::Distress),
                 ..self.0.decision(npc, around, chance)
             }
         }
@@ -520,12 +555,15 @@ mod tests {
         let catalog = catalog();
         let (mut session, carrier, _) = raid(&catalog, source, carrier_berth);
         let _ = (session.take_messages(), session.take_sounds());
-        let script = CallingVipers(Scripted {
-            carrier,
-            twice: false,
-            defenders: Vec::new(),
-            fighter: Trigger::default(),
-        });
+        let script = CallingVipers(
+            Scripted {
+                carrier,
+                twice: false,
+                defenders: Vec::new(),
+                fighter: Trigger::default(),
+            },
+            None,
+        );
         game_pass(&mut session, &catalog, &script);
         assert_eq!(vipers(&session).len(), 1, "one launch");
         let said = session
@@ -544,6 +582,81 @@ mod tests {
         assert!(called(RuleSource::Engine, 1));
         assert!(!called(RuleSource::Engine, 5), "below: it thinks next tick");
         assert!(!called(RuleSource::Bible, 1), "by the other reading");
+    }
+
+    /// One pass of [`raid`] whose carrier at slot 1 launches a calling
+    /// Viper, with a calling bystander at `caller_berth`: the Viper's
+    /// berth, and the calls said.
+    fn calls_said(caller_berth: u32) -> (u32, Vec<String>) {
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 1);
+        let caller = session.space.traffic.add_npc_at(bystander(), caller_berth);
+        let _ = (session.take_messages(), session.take_sounds());
+        let script = CallingVipers(
+            Scripted {
+                carrier,
+                twice: false,
+                defenders: Vec::new(),
+                fighter: Trigger::default(),
+            },
+            Some(caller),
+        );
+        game_pass(&mut session, &catalog, &script);
+        let said = session
+            .take_messages()
+            .into_iter()
+            .filter_map(|message| match message {
+                SimMessage::CallForHelp(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        (vipers(&session)[0].berth, said)
+    }
+
+    #[test]
+    fn a_launched_fighters_call_keeps_a_higher_slots_off_the_line() {
+        // `_DisplayComm` sets `_commCount` at once (@0x9024b), so the
+        // Viper's call at slot 2 keeps slot 3's off (@0x8308c).
+        let (berth, said) = calls_said(3);
+        assert_eq!(berth, 2);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].starts_with("Ship 144"), "{said:?}");
+    }
+
+    #[test]
+    fn a_lower_slots_call_keeps_a_launched_fighters_off_the_line() {
+        let (berth, said) = calls_said(2);
+        assert_eq!(berth, 3);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(!said[0].starts_with("Ship 144"), "{said:?}");
+    }
+
+    #[test]
+    fn a_pass_with_no_think_thinks_only_a_launched_fighter() {
+        // A pass that set a system up thinks no NPC: the carrier launches
+        // from the trigger it kept, and the fighter above it thinks.
+        let catalog = catalog();
+        let (mut session, carrier, raider) = raid(&catalog, RuleSource::Engine, 1);
+        session.space.npc_mut(carrier).expect("there").trigger = Trigger {
+            bays: true,
+            ..Trigger::default()
+        };
+        let order = Order::of(carrier);
+        session.dispatch_npcs(
+            false,
+            GamePass::Advance { double_time: false },
+            &order,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1, "launched");
+        assert_eq!(launched[0].berth, 2);
+        assert_eq!(order.thought.into_inner(), [launched[0].id]);
+        assert_eq!(
+            session.space.npc(raider).expect("there").goal,
+            Goal::Attack(ShipRef::Npc(carrier))
+        );
     }
 
     #[test]
@@ -570,5 +683,479 @@ mod tests {
         for viper in &launched {
             assert!(heard.contains(&ShipRef::Npc(viper.id)), "{}", viper.berth);
         }
+    }
+
+    // The think at its slot's turn: `_AIDispatch` runs each slot's whole AI
+    // in turn (@0x44270-0x442ae), so a slot reads what the slots below it
+    // wrote this frame, and the slots above it as their last frame left
+    // them. These drive hand-written `Behaviour`s: what the real picks do
+    // with what they read is `nova_sim_ai`'s to pin.
+
+    /// [`Scripted`], but the `watcher` attacks the first Viper it reads in
+    /// the system, a ship the hunt can choose however new
+    /// (@0x8aa64-0x8aac8).
+    #[derive(Debug)]
+    struct Watching {
+        script: Scripted,
+        watcher: NpcId,
+    }
+
+    impl Behaviour for Watching {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            let seen = around.npcs.iter().find(|other| other.ship == VIPER);
+            match seen {
+                Some(viper) if npc.id == self.watcher => Decision {
+                    goal: Goal::Attack(ShipRef::Npc(viper.id)),
+                    ..Decision::default()
+                },
+                _ => self.script.decision(npc, around, chance),
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            self.script.trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            self.script.target(npc, around)
+        }
+    }
+
+    /// A ship near the fight, keeping its goal and doing nothing.
+    fn bystander() -> Npc {
+        let mut npc = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        npc.state.position = Vec2::new(1000.0, 1200.0);
+        npc
+    }
+
+    /// One pass and another of [`raid`] whose carrier, at `carrier_berth`,
+    /// launches with a [`Watching`] ship at `watcher_berth`: the Viper,
+    /// and whether the watcher attacked it after each pass.
+    fn watched(source: RuleSource, carrier_berth: u32, watcher_berth: u32) -> (Npc, [bool; 2]) {
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, source, carrier_berth);
+        let watcher = session.space.traffic.add_npc_at(bystander(), watcher_berth);
+        let script = Watching {
+            script: Scripted {
+                carrier,
+                twice: false,
+                defenders: Vec::new(),
+                fighter: Trigger::default(),
+            },
+            watcher,
+        };
+        let mut seen = [false; 2];
+        for attacked in &mut seen {
+            game_pass(&mut session, &catalog, &script);
+            let viper = vipers(&session)[0].id;
+            *attacked = session.space.npc(watcher).expect("there").goal
+                == Goal::Attack(ShipRef::Npc(viper));
+        }
+        (vipers(&session).remove(0), seen)
+    }
+
+    #[test]
+    fn an_existing_npc_above_a_carrier_can_target_its_fighter_on_the_launch_tick() {
+        // The launch at slot 3 marks the fighter's slot active at once
+        // (@0x3c90b), and slot 6's `_AIDispatch` comes after it.
+        let (viper, seen) = watched(RuleSource::Engine, 3, 6);
+        assert_eq!(viper.berth, 1);
+        assert_eq!(seen, [true, true]);
+    }
+
+    #[test]
+    fn an_npc_below_the_carrier_sees_its_fighter_only_the_next_tick() {
+        let (viper, seen) = watched(RuleSource::Engine, 3, 2);
+        assert_eq!(viper.berth, 1);
+        assert_eq!(seen, [false, true]);
+    }
+
+    #[test]
+    fn by_the_other_reading_no_npc_sees_a_fighter_on_its_launch_tick() {
+        let (_, seen) = watched(RuleSource::Bible, 3, 6);
+        assert_eq!(seen, [false, true]);
+    }
+
+    /// What one NPC's think read of another, which is `other`.
+    type Read = (NpcId, Goal, Option<ShipRef>);
+
+    /// Each thinking NPC among `movers` writes `goal` and `target`,
+    /// recording what it read of the other movers; the carrier launches.
+    #[derive(Debug)]
+    struct Reading {
+        movers: Vec<NpcId>,
+        goal: Goal,
+        target: ShipRef,
+        reads: std::cell::RefCell<Vec<(NpcId, Read)>>,
+        script: Scripted,
+    }
+
+    impl Behaviour for Reading {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            if !self.movers.contains(&npc.id) {
+                return self.script.decision(npc, around, chance);
+            }
+            for other in around.npcs.iter().filter(|other| other.id != npc.id) {
+                if self.movers.contains(&other.id) {
+                    let read = (other.id, other.goal, other.target);
+                    self.reads.borrow_mut().push((npc.id, read));
+                }
+            }
+            Decision {
+                goal: self.goal,
+                ..Decision::default()
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            self.script.trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            if self.movers.contains(&npc.id) {
+                Some(self.target)
+            } else {
+                self.script.target(npc, around)
+            }
+        }
+    }
+
+    /// One pass with movers ([`Reading`]) at slots 2 and 5, and when
+    /// `bay_between` a carrier launching at slot 3, by `source`: what the
+    /// lower mover read of the higher and what the higher read of the
+    /// lower, each its goal and target.
+    fn read_by(source: RuleSource, bay_between: bool) -> [(Goal, Option<ShipRef>); 2] {
+        let catalog = catalog();
+        let (mut session, carrier, raider) = raid(&catalog, source, 7);
+        let low = session.space.traffic.add_npc_at(bystander(), 2);
+        let high = session.space.traffic.add_npc_at(bystander(), 5);
+        let launcher = if bay_between {
+            carrier_at(&mut session, 3, raider)
+        } else {
+            NpcId(u32::MAX)
+        };
+        let (quarry, written) = (ShipRef::Npc(raider), Goal::Attack(ShipRef::Npc(carrier)));
+        let reading = Reading {
+            movers: vec![low, high],
+            goal: written,
+            target: quarry,
+            reads: std::cell::RefCell::default(),
+            script: Scripted {
+                carrier: launcher,
+                twice: false,
+                defenders: Vec::new(),
+                fighter: Trigger::default(),
+            },
+        };
+        game_pass(&mut session, &catalog, &reading);
+        assert_eq!(!vipers(&session).is_empty(), bay_between, "the launch");
+        let reads = reading.reads.into_inner();
+        let of = |reader: NpcId| {
+            reads
+                .iter()
+                .find(|(by, _)| *by == reader)
+                .map(|&(_, (_, goal, target))| (goal, target))
+                .expect("it read")
+        };
+        [of(low), of(high)]
+    }
+
+    #[test]
+    fn a_slot_reads_what_the_slots_below_it_wrote_this_tick() {
+        // Slot 5's `_AIDispatch` comes after slot 2's, wherever a ready bay
+        // falls: goals and targets are written in the think, and read in
+        // the next slot's.
+        for bay_between in [false, true] {
+            let [lower, higher] = read_by(RuleSource::Engine, bay_between);
+            assert_eq!(lower, (Goal::Idle, None), "{bay_between}: as it was");
+            assert_ne!(higher.0, Goal::Idle, "{bay_between}: slot 2's new goal");
+            assert!(higher.1.is_some(), "{bay_between}: slot 2's new target");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_every_npc_decides_from_the_tick_as_it_began() {
+        for bay_between in [false, true] {
+            let [lower, higher] = read_by(RuleSource::Bible, bay_between);
+            assert_eq!(lower, (Goal::Idle, None), "{bay_between}");
+            assert_eq!(higher, (Goal::Idle, None), "{bay_between}");
+        }
+    }
+
+    /// Records what each Viper read of the ship at slot `high`, which
+    /// writes a new goal; otherwise [`Scripted`].
+    #[derive(Debug)]
+    struct ReadingUp {
+        high: NpcId,
+        read: std::cell::RefCell<Vec<Goal>>,
+        script: Scripted,
+    }
+
+    impl Behaviour for ReadingUp {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            if npc.id == self.high {
+                return Decision {
+                    goal: Goal::JumpOut,
+                    ..Decision::default()
+                };
+            }
+            if npc.ship == VIPER {
+                let high = around.npc(self.high).expect("there");
+                self.read.borrow_mut().push(high.goal);
+            }
+            self.script.decision(npc, around, chance)
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            self.script.trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            self.script.target(npc, around)
+        }
+    }
+
+    #[test]
+    fn a_launched_fighter_reads_a_higher_slot_as_its_last_frame_left_it() {
+        // The fighter at slot 2 runs before slot 6's `_AIDispatch`.
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 1);
+        let high = session.space.traffic.add_npc_at(bystander(), 6);
+        let reading = ReadingUp {
+            high,
+            read: std::cell::RefCell::default(),
+            script: Scripted {
+                carrier,
+                twice: false,
+                defenders: Vec::new(),
+                fighter: Trigger::default(),
+            },
+        };
+        game_pass(&mut session, &catalog, &reading);
+        assert_eq!(vipers(&session)[0].berth, 2);
+        assert_eq!(session.space.npc(high).expect("there").goal, Goal::JumpOut);
+        assert_eq!(reading.read.into_inner(), [Goal::Idle]);
+    }
+
+    /// Records each NPC as it decides; otherwise [`Scripted`].
+    #[derive(Debug)]
+    struct Order {
+        thought: std::cell::RefCell<Vec<NpcId>>,
+        script: Scripted,
+    }
+
+    impl Order {
+        /// Launching from `carrier` when `carrier` is set.
+        fn of(carrier: NpcId) -> Self {
+            Self {
+                thought: std::cell::RefCell::default(),
+                script: Scripted {
+                    carrier,
+                    twice: false,
+                    defenders: Vec::new(),
+                    fighter: Trigger::default(),
+                },
+            }
+        }
+    }
+
+    impl Behaviour for Order {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            self.thought.borrow_mut().push(npc.id);
+            self.script.decision(npc, around, chance)
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            self.script.trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            self.script.target(npc, around)
+        }
+    }
+
+    #[test]
+    fn every_npc_thinks_once_in_slot_order() {
+        // The launcher at slot 1, its fighter reached at slot 2; a ready
+        // carrier launching nothing at slot 5; added out of slot order.
+        let catalog = catalog();
+        let (mut session, carrier, raider) = raid(&catalog, RuleSource::Engine, 1);
+        let ready = carrier_at(&mut session, 5, raider);
+        let third = session.space.traffic.add_npc_at(bystander(), 3);
+        let order = Order::of(carrier);
+        game_pass(&mut session, &catalog, &order);
+        let viper = vipers(&session)[0].clone();
+        assert_eq!(viper.berth, 2);
+        assert_eq!(
+            order.thought.into_inner(),
+            [carrier, viper.id, third, ready, raider]
+        );
+    }
+
+    /// [`catalog`], the Viper's hull carrying a bay of two Vipers.
+    fn fighters_carrying_a_bay() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog
+            .hulls
+            .iter_mut()
+            .find(|hull| hull.id == VIPER)
+            .expect("the Viper's")
+            .weapons
+            .push(StockWeapon {
+                weapon: BAY,
+                count: 1,
+                ammo: 2,
+            });
+        catalog
+    }
+
+    /// Keeps every goal and target, ends a Viper's glide, and asks every
+    /// ship for the goal-4 launch.
+    #[derive(Debug)]
+    struct EveryBay;
+
+    impl Behaviour for EveryBay {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn decision(
+            &self,
+            npc: &Npc,
+            _around: &Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Decision {
+            Decision {
+                goal: npc.goal,
+                ends_wait: npc.ship == VIPER,
+                ..Decision::default()
+            }
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                bays: true,
+                ..Trigger::default()
+            }
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.target
+        }
+    }
+
+    /// Puts [`bystander`]s in `berths`.
+    fn fill(session: &mut Session, berths: impl IntoIterator<Item = u32>) {
+        for berth in berths {
+            session.space.traffic.add_npc_at(bystander(), berth);
+        }
+    }
+
+    /// A pass of carriers at slots 1 and 10 by `source`, slots 2 and 3 all
+    /// that's free: the leaders of the ships at slots 2 and 3, the high
+    /// carrier, and whether it was heard launching.
+    fn at_the_last_slot(source: RuleSource) -> ([Option<NpcId>; 2], Npc, NpcId, bool) {
+        let catalog = fighters_carrying_a_bay();
+        let mut session = session(&catalog, source);
+        let (low, high) = (
+            carrier_at(&mut session, 1, NpcId(0)),
+            carrier_at(&mut session, 10, NpcId(0)),
+        );
+        let quarry = ShipRef::Npc(low);
+        session.space.npc_mut(high).expect("there").target = Some(quarry);
+        session.space.npc_mut(high).expect("there").goal = Goal::Attack(quarry);
+        let quarry = ShipRef::Npc(high);
+        session.space.npc_mut(low).expect("there").target = Some(quarry);
+        session.space.npc_mut(low).expect("there").goal = Goal::Attack(quarry);
+        fill(&mut session, (4..=55).filter(|&berth| berth != 10));
+        game_pass(&mut session, &catalog, &EveryBay);
+        let leader_at = |berth: u32| {
+            session
+                .npcs()
+                .iter()
+                .find(|npc| npc.berth == berth)
+                .and_then(|npc| npc.leader)
+        };
+        let leaders = [leader_at(2), leader_at(3)];
+        let heard = firing(&session.take_combat_events(), BAY).contains(&ShipRef::Npc(high));
+        let high_carrier = session.space.npc(high).expect("there").clone();
+        (leaders, high_carrier, low, heard)
+    }
+
+    #[test]
+    fn with_one_slot_left_a_fighter_launches_from_its_own_bay_and_the_higher_carrier_does_not() {
+        // Slot 1 launches into slot 2, whose fighter's `_AIDispatch` comes
+        // next and launches into slot 3, the last below the reserve
+        // (@0x3c8c6-0x3c8e9). Slot 10's `_LaunchFighter` finds none, and
+        // `_AILaunchFighter` returns before the sound (@0x81466), the
+        // round (@0x81481) and the reload (@0x81491).
+        let (leaders, high, low, heard) = at_the_last_slot(RuleSource::Engine);
+        assert_eq!(leaders[0], Some(low));
+        let first = leaders[1].expect("a ship at slot 3");
+        assert_ne!(first, low);
+        assert_ne!(first, high.id);
+        assert_eq!(high.rounds.slot(BAY), 2);
+        assert!(high.armament.bay_to_launch(&high.rounds).is_some());
+        assert!(!heard);
+    }
+
+    #[test]
+    fn by_the_other_reading_the_higher_carrier_takes_the_last_slot() {
+        let (leaders, high, low, heard) = at_the_last_slot(RuleSource::Bible);
+        assert_eq!(leaders, [Some(low), Some(high.id)]);
+        assert_eq!(high.rounds.slot(BAY), 1);
+        assert!(heard);
+    }
+
+    /// A pod at `berth` whose wait has run out.
+    fn expired_pod(session: &mut Session, berth: u32) -> NpcId {
+        let mut pod = bystander();
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        pod.mode = crate::traffic::npc::Mode::Adrift { ticks_left: 0 };
+        session.space.traffic.add_npc_at(pod, berth)
+    }
+
+    #[test]
+    fn an_expired_pods_slot_is_not_free_to_a_carrier_below_it() {
+        // The pod's slot frees at its own `_AIDispatch` (@0x8fbb3), which
+        // comes after slot 2's launch, so the launch takes slot 4.
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 2);
+        fill(&mut session, [1]);
+        let pod = expired_pod(&mut session, 3);
+        game_pass(&mut session, &catalog, &Order::of(carrier));
+        assert_eq!(vipers(&session)[0].berth, 4);
+        assert!(session.space.npc(pod).is_none(), "the pod is gone");
+    }
+
+    #[test]
+    fn an_expired_pods_slot_is_free_to_a_carrier_above_it_at_the_cap() {
+        // Slot 3's `_AIDispatch` frees it before slot 5's launch reads it.
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 5);
+        fill(
+            &mut session,
+            (1..=55).filter(|&berth| ![3, 5, 20].contains(&berth)),
+        );
+        expired_pod(&mut session, 3);
+        game_pass(&mut session, &catalog, &Order::of(carrier));
+        assert_eq!(vipers(&session).len(), 1, "it launched");
+        assert_eq!(vipers(&session)[0].berth, 3);
     }
 }

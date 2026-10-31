@@ -48,11 +48,12 @@
 //!   thinks afresh on the next. The flight moves it on at its velocity
 //!   meanwhile ([`autopilot`](crate::traffic::autopilot)).
 //!
-//! The original plunders inside each pirate's think, so a later slot's
-//! think sees an earlier slot's capture that frame; here the thinks all
-//! read the tick's start, and a capture is seen a tick late. That lag
-//! settles before the frame is drawn, so it is not filed. Nothing here
-//! plays a sound: the session raises `snd ` 151 with each line.
+//! The original plunders inside each pirate's think, and so does the
+//! traffic (`Traffic::think_run`): a later slot's think reads an earlier
+//! slot's capture that frame, a ship the capture dropped thinking from goal
+//! 0 and a ship taken above its pirate thinking at once as its escort.
+//! Nothing here plays a sound: the session raises `snd ` 151 with each
+//! line.
 
 #[cfg(doc)]
 use crate::ai::plunder_contents;
@@ -451,6 +452,7 @@ fn hold_words(hold: &NpcHold) -> [u32; NPC_COMMODITIES] {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::ai::Behaviour;
     use crate::ai::pirate::PirateWarship;
     use crate::ai::plunder_contents::{ClassMarines, Marines};
     use crate::combat::armament::Armament;
@@ -772,6 +774,104 @@ mod tests {
         assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 2);
     }
 
+    /// The pirate thinks as one, and every other ship as Nova's AI has it.
+    #[derive(Debug, Default)]
+    struct AmongNova {
+        pirate: PirateWarship,
+        nova: crate::ai::NovaAi,
+    }
+
+    impl Behaviour for AmongNova {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            if npc.id == PIRATE {
+                self.pirate.decision(npc, around, chance)
+            } else {
+                self.nova.decision(npc, around, chance)
+            }
+        }
+    }
+
+    /// A tick of a docked pirate at `berth` taking a former escort at
+    /// berth 9, every other ship as Nova's AI has it: the ship it took.
+    fn taken_on_the_tick(berth: u32) -> Npc {
+        let mut docked = pirate(1000);
+        docked.berth = berth;
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = former();
+        boarded.boarded = true;
+        let mut traffic = traffic_of(vec![docked, boarded]);
+        traffic.tick_in(
+            &AmongNova::default(),
+            World::new(&[]),
+            &[],
+            &mut Draws::of(&[0; 64]),
+        );
+        ship(&traffic, VICTIM).clone()
+    }
+
+    #[test]
+    fn a_ship_taken_above_its_pirate_thinks_as_its_escort_on_the_tick_it_is_taken() {
+        // Its slot comes after the pirate's: its `_EscortAI` runs on the
+        // capture's words that frame, and its formation block ends the
+        // wait (@0x83ea8-0x83eb0).
+        let taken = taken_on_the_tick(1);
+        assert_eq!(taken.leader, Some(PIRATE));
+        assert_eq!(taken.ai_wait, 0);
+        assert_eq!(
+            taken.goal,
+            Goal::Follow {
+                lead: PIRATE,
+                guard: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_ship_taken_below_its_pirate_first_thinks_the_next_tick() {
+        // Its slot came before the pirate's, disabled.
+        let taken = taken_on_the_tick(12);
+        assert_eq!(taken.leader, Some(PIRATE));
+        assert_eq!(taken.ai_wait, CAPTURED_WAIT - 1);
+        assert_eq!(taken.goal, Goal::Idle);
+    }
+
+    #[test]
+    fn a_ship_below_the_pirate_thinks_on_and_the_capture_then_drops_its_target() {
+        // Its `_AIDispatch` came first, keeping the attack; the walk
+        // (@0x84872-0x8489b) then zeroes what it kept.
+        let mut onlooker = npc(5, ShipStats::new(FAST, &[]));
+        onlooker.berth = 5;
+        onlooker.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        onlooker.target = Some(ShipRef::Npc(VICTIM));
+        onlooker.provoked = 3.0;
+        onlooker.armament = Armament::new([(WeaponSpec::new(&weapon(128)), 1)]);
+        let mut docked = pirate(1000);
+        docked.berth = 7;
+        docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
+        docked.target = Some(ShipRef::Npc(VICTIM));
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut boarded = former();
+        boarded.boarded = true;
+        let mut traffic = traffic_of(vec![docked, boarded, onlooker]);
+        tick(&mut traffic, 0);
+        assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
+        let onlooker = ship(&traffic, NpcId(5));
+        assert_eq!((onlooker.goal, onlooker.target), (Goal::Idle, None));
+        assert_eq!(onlooker.provoked, 0.0);
+    }
+
     #[test]
     fn a_bribed_ship_taken_by_a_pirate_reads_as_its_escort_not_its_bribe() {
         // `_AIPlunderShipContents` writes +0x88 = 6 (@0x8495c) over the
@@ -793,10 +893,6 @@ mod tests {
         onlooker.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         onlooker.target = Some(ShipRef::Npc(VICTIM));
         onlooker.provoked = 3.0;
-        // Armed, so its think keeps the attack: the original's loop runs in
-        // the pirate's think, before the onlooker's (a higher slot), and a
-        // ship whose own think drops the victim keeps its +0x96.
-        onlooker.armament = Armament::new([(WeaponSpec::new(&weapon(128)), 1)]);
         // Disabled, so it doesn't think: only the drop writes its +0x6c.
         let mut wrecked = npc(6, ShipStats::new(FAST, &[]));
         wrecked.berth = 6;
@@ -829,7 +925,16 @@ mod tests {
             (taken.person, taken.former, taken.boarded),
             (None, None, false)
         );
-        assert_eq!(taken.goal, Goal::Idle);
+        // A higher slot's `_AIDispatch` comes after the capture's writes
+        // (goal and sub 0, @0x8497c-0x84985), and the loop rereads its
+        // +0x88, now 6 (@0x8495c, @0x4427e), so it thinks as led that frame.
+        assert_eq!(
+            taken.goal,
+            Goal::Follow {
+                lead: PIRATE,
+                guard: None
+            }
+        );
         assert_eq!(taken.ai_wait, CAPTURED_WAIT - 1);
         assert_eq!(taken.reserves.armor.now, 66.0);
         assert_eq!(taken.reserves.shield.now, 0.0);
@@ -838,8 +943,11 @@ mod tests {
         let pirate = ship(&traffic, PIRATE);
         assert_eq!(pirate.goal, Goal::Idle, "dropped with the rest: no drift");
         assert_eq!(pirate.ai_wait, PLUNDER_HOLD - 1);
+        // The capture's walk (@0x84872-0x8489b) runs in the pirate's think,
+        // before the onlooker's in a higher slot, which starts from goal 0
+        // with no target and nothing to hunt, and leaves.
         let onlooker = ship(&traffic, NpcId(5));
-        assert_eq!((onlooker.goal, onlooker.target), (Goal::Idle, None));
+        assert_eq!((onlooker.goal, onlooker.target), (Goal::JumpOut, None));
         assert_eq!(onlooker.provoked, 0.0);
         let wrecked = ship(&traffic, NpcId(6));
         assert_eq!(wrecked.target, None);

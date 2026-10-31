@@ -109,9 +109,13 @@
 //!    @0x8fcaa), which cloaks or uncloaks it; then each escape pod's wait
 //!    counted down, a pod whose wait ran out freed
 //!    ([`pod_flight::count_down`], `Outcome::Freed`). Steps 1 to 5 are the
-//!    tick's think half ([`Traffic::think_holding`]), `_DoPlayGameWork`'s
-//!    advance-pass AI (`_EnterMoreShips` @0x44237, `_AIDispatch`
-//!    @0x4429d);
+//!    tick's think half, `_DoPlayGameWork`'s advance-pass AI
+//!    (`_EnterMoreShips` @0x44237, `_AIDispatch` @0x4429d): steps 1 to 3
+//!    once ([`Traffic::open_think`]), and steps 4 and 5 one run a slot, in
+//!    ascending order ([`Traffic::think_run`]), so each slot reads what
+//!    the slots below it wrote this tick, the run's own fight between
+//!    them in the session (`nova_sim::Session::dispatch_npcs`) and none in
+//!    [`Traffic::think_holding`];
 //! 6. every NPC's cloak held and faded: one cloaked that can no longer
 //!    cloak uncloaks (`_HandleShip` @0x3413d), and its fade steps; then the
 //!    autopilot and a flight step for every NPC, a pod at full thrust
@@ -222,7 +226,6 @@ pub mod land_flight;
 #[cfg(test)]
 mod landed_stay_tests;
 mod launch_room;
-mod launch_think;
 pub mod leave_flight;
 #[cfg(test)]
 mod listed_stellar_tests;
@@ -277,6 +280,8 @@ mod swarm_low_level;
 #[cfg(test)]
 mod swarm_tests;
 pub mod table;
+#[cfg(test)]
+mod think_run_tests;
 pub mod tractor_hold;
 pub mod vacated;
 #[cfg(test)]
@@ -970,10 +975,6 @@ pub struct Traffic {
     /// holding their berths and their persons, but not in the system:
     /// not ticked, not drawn, and not among [`Traffic::npcs`].
     left_behind: BTreeMap<SystemId, Vec<LeftShip>>,
-    /// The berths left for fighters after the tick's think
-    /// ([`Traffic::think_holding`]), for a fighter launched in the AI loop
-    /// to claim from ([`Traffic::think_launched`]); none before the first.
-    launch_room: Option<LaunchRoom>,
     /// The fuel the ships refuelling the player have given it since it was
     /// last taken ([`Traffic::take_fuel_given`], see [`refuel_dock`]).
     fuel_given: f32,
@@ -1065,7 +1066,6 @@ impl Traffic {
             berth_search: BerthSearch::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
-            launch_room: None,
             fuel_given: 0.0,
             voice_cues: Vec::new(),
             defences: stellar_defence::StellarDefences::default(),
@@ -1302,23 +1302,42 @@ impl Traffic {
     }
 
     /// The think half of a tick in `world` (steps 1 to 5 of the module
-    /// docs), `_DoPlayGameWork`'s advance-pass AI after the collision
-    /// passes: the arrivals pass (`_EnterMoreShips` @0x44237), the answers
-    /// to the `strikes` left, the lost leads' succession ([`succession`]),
-    /// the NPC formations ([`fleet_formation`]), the fleet leaders' orders
-    /// ([`escort_orders`]), the regroup pause's draws ([`regroup`]), the
-    /// disabled ships' reset ([`disabled_reset`]), the jump cancels
-    /// ([`jump_with_leader`]), the decisions as
-    /// `behaviour` says, rolling
-    /// on `chance`, their goals, pursuit, fire commands and targets, the
-    /// gate waits, each flying NPC's cloak think and each escape pod's
-    /// wait, as `_AIDispatch` runs them (@0x4429d: `_AIHandleCloaking`
-    /// @0x8fcaa, the pod's wait in [`pod_flight::count_down`]). No NPC
-    /// moves but a drifting one, 0.7 along its heading in its think, as
-    /// `_HighLevelAIHandler`'s goal 0xe moves it (@0x8eb6b-0x8ebd4,
-    /// [`plunder::drift`]), before the fight's `_HandleShot` (@0x44385)
-    /// meets it.
+    /// docs) in the default order but with no fight, for tests and
+    /// [`Traffic::tick_holding`]: [`Traffic::open_think`], one
+    /// [`Traffic::think_run`] for each occupied berth in ascending order
+    /// and [`Traffic::close_think`]. The session drives the three parts
+    /// itself, its fight between the runs
+    /// (`nova_sim::Session::dispatch_npcs`), under both readings of
+    /// [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi); this
+    /// holds one `world`, so like the session's landing it shows each run
+    /// the fuel the lower ones gave the player ([`World::with_fuel_given`]).
     pub fn think_holding(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: World,
+        strikes: &[Strike],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.open_think(behaviour, world, strikes, chance);
+        let tallied = self.fuel_given;
+        let mut after = None;
+        while let Some(slot) = self.next_slot_after(after) {
+            let world = world.with_fuel_given(self.fuel_given - tallied);
+            self.think_run(behaviour, world, |npc| npc.berth == slot, chance);
+            after = Some(slot);
+        }
+        self.close_think();
+    }
+
+    /// The part of a tick's think in `world` before the first slot's
+    /// (steps 1 to 3 of the module docs): the arrivals pass
+    /// (`_EnterMoreShips` @0x44237), the answers to the `strikes` left, the
+    /// lost leads' succession ([`succession`]), the NPC formations
+    /// ([`fleet_formation`]), the fleet leaders' orders
+    /// ([`escort_orders`]), the regroup pause's draws ([`regroup`]), the
+    /// disabled ships' reset ([`disabled_reset`]) and the jump cancels
+    /// ([`jump_with_leader`]), rolling on `chance`.
+    pub fn open_think(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
         world: World,
@@ -1334,36 +1353,39 @@ impl Traffic {
         self.release_regroups(chance);
         self.reset_disabled(world.npc_escort_ai);
         self.cancel_jump_follows(&world);
-        let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
-        let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
-        self.launch_room = Some(left);
-        let freed = pod_flight::count_down(&mut self.npcs);
-        self.freed.extend(freed);
     }
 
-    /// The per-NPC part of the think half, for each NPC `thinks` picks,
-    /// in `world`, deciding as `behaviour` says, rolling on `chance`: the
-    /// decisions, the board waits, the comm calls and the quote gate, the
-    /// plunders, the goals, pursuit, the fire commands and targets settled
-    /// against `room`, the gate waits and the cloak thinks. Every NPC it
-    /// does not pick is left exactly as it was: it decides nothing, its
-    /// trigger is not settled again, it holds no gate wait and its cloak
-    /// does not think. What room is left after.
-    fn think_npcs(
+    /// One run of `_AIDispatch`'s loop (@0x4429d) in `world`, the think of
+    /// each NPC `picks` picks, deciding as `behaviour` says, rolling on
+    /// `chance` (steps 4 and 5 of the module docs): the decisions, the
+    /// board waits, the comm calls and the quote gate, the plunders, the
+    /// goals, pursuit, the fire commands and targets, the gate waits, each
+    /// flying NPC's cloak think (`_AIHandleCloaking` @0x8fcaa) and each
+    /// escape pod's wait ([`pod_flight::count_down`]).
+    ///
+    /// Each launch settles against the berths free as the run starts
+    /// ([`LaunchRoom`]), every claim of an earlier run having been put in
+    /// the system. Every NPC it doesn't pick is left exactly as it was: it
+    /// decides nothing, its trigger is not settled again, it holds no gate
+    /// wait, its cloak does not think and its pod's wait does not run. No
+    /// NPC moves but a drifting one, 0.7 along its heading in its think,
+    /// as `_HighLevelAIHandler`'s goal 0xe moves it (@0x8eb6b-0x8ebd4,
+    /// [`plunder::drift`]), before the fight's `_HandleShot` (@0x44385)
+    /// meets it.
+    pub fn think_run(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
-        world: &World,
-        mut room: LaunchRoom,
-        thinks: impl Fn(&Npc) -> bool,
+        world: World,
+        picks: impl Fn(&Npc) -> bool,
         chance: &mut (impl Chance + ?Sized),
-    ) -> LaunchRoom {
-        let picked: Vec<bool> = self.npcs.iter().map(&thinks).collect();
+    ) {
+        let mut room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
+        let picked: Vec<bool> = self.npcs.iter().map(&picks).collect();
         let due = self.thinks_due(&picked);
-        // The decisions are the last thinks that can read a gone ship's
-        // slot ([`gone`]).
-        let gone = self.gone.take();
+        // The decisions can read a gone ship's slot, and every run of the
+        // tick does ([`gone`], [`Traffic::close_think`]).
         let around = Surroundings {
-            gone: &gone,
+            gone: self.gone.ships(),
             ..world.around(&self.npcs)
         };
         // The jump path skips the type think (`jump_with_leader`).
@@ -1401,17 +1423,17 @@ impl Traffic {
         }
         let plunders = plunder::plunders(&decisions);
         let entering = jump_with_leader::entering(&decisions);
-        self.take_goals(decisions, world);
+        self.take_goals(decisions, &world);
         jump_with_leader::enter(&mut self.npcs, &entering, world.flight);
         board_wait::lapse(&mut self.npcs, &due);
-        self.plunder(plunders, world, chance);
+        self.plunder(plunders, &world, chance);
         // `_AIDispatch`'s swarm check (@0x8ff26-0x8ff35) comes before the
         // type AI, reading the targets the frame's lower slots have just
-        // written; here it reads the targets the commands below wrote on
-        // the last tick. The tick's lag after a retarget crosses no
-        // boundary the player sees.
+        // written. Each slot's run comes after theirs, so this reads them
+        // too; a ship's own target is the one the commands below wrote on
+        // the last tick, as the swarm check reads it before its own think.
         swarm::pass(&mut self.npcs, |npc| {
-            thinks(npc)
+            picks(npc)
                 && !regroup::paused(npc)
                 && npc.warp.goal.is_none()
                 && decision_due(self.ticks, npc.id, self.interval)
@@ -1422,14 +1444,15 @@ impl Traffic {
             .zip(&picked)
             .map(|(high_level, &picked)| high_level && picked)
             .collect();
-        self.pursue(world, &high_levels, &keeps, chance);
-        self.refuel(world, &high_levels);
+        self.pursue(&world, &high_levels, &keeps, chance);
+        self.refuel(&world, &high_levels);
         plunder::drift(&mut self.npcs, &due);
         // Whether a fighter launched now finds a slot, the test
         // `_LaunchFighter` makes (@0x3d648-0x3d662), read slot by slot as
         // `_AIDispatch`'s loop runs them (@0x44270-0x442ae): a lower
         // slot's launch takes the last slot before a higher slot's AI
-        // runs (see `launch_room`). A kept trigger, of an NPC not deciding,
+        // runs (see `launch_room`). A run of several slots, the other
+        // reading's, settles them all here. A kept trigger, of an NPC not deciding,
         // takes its berth too, its launches cleared with none left until
         // it next decides.
         let mut around = world.around(&self.npcs);
@@ -1467,9 +1490,16 @@ impl Traffic {
                 npc.target = target;
             }
         }
-        self.take_gate_waits(behaviour, world, &picked);
-        self.think_cloaks(world, &picked);
-        room
+        self.take_gate_waits(behaviour, &world, &picked);
+        self.think_cloaks(&world, &picked);
+        let freed = pod_flight::count_down(&mut self.npcs, &picks);
+        self.freed.extend(freed);
+    }
+
+    /// The end of a tick's think: the ships gone are forgotten, as the
+    /// tick's thinks are the last that can read them ([`gone`]).
+    pub fn close_think(&mut self) {
+        self.gone.clear();
     }
 
     /// Whether each NPC `picked` says (one flag an NPC) thinks this tick:
@@ -1787,8 +1817,8 @@ impl Traffic {
     ///
     /// The original releases them in the same pass as the lead's think, so
     /// its later slots start for the gate that tick; here they start on
-    /// the next. That one-tick lag settles before anything the player sees
-    /// is drawn, so it is not filed.
+    /// the next (filed in
+    /// rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
     fn release_followers(&mut self, reached: &[(NpcId, StellarId, AiType)]) {
         for &(lead, gate, ai_type) in reached {
             for follower in self.npcs.iter_mut().filter(|npc| npc.leader == Some(lead)) {
@@ -4336,8 +4366,8 @@ mod tests {
                 "react 0 Npc(NpcId(1))",
                 "react 1 Npc(NpcId(1))",
                 "decide 0 None 0",
-                "decide 1 Some(Player) 4",
                 "trigger 0 Attack(Player)",
+                "decide 1 Some(Player) 4",
                 "trigger 1 Attack(Player)",
             ]
         );

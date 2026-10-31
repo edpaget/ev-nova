@@ -10,7 +10,13 @@
 //! first k carriers in slot order whose launch reaches `_LaunchFighter`,
 //! and a later carrier sees none left ([`Surroundings::fighter_room`]).
 //!
-//! The traffic decides the room once, as it asks for each NPC's trigger in
+//! Each run of the think ([`Traffic::think_run`]) starts from the berths
+//! free then, every claim of a lower slot having been put in the system,
+//! so a fighter that launches from a bay of its own takes its slot ahead
+//! of any carrier above it, as the original's loop has it. No stock
+//! fighter carries a bay.
+//!
+//! Within a run the room is read as it asks for each NPC's trigger in
 //! berth order ([`berth_order`]): before an NPC's trigger it reads whether
 //! a berth is left ([`LaunchRoom::any`]), and its settled trigger takes
 //! one for each launch it makes now, or with none left launches nothing
@@ -18,13 +24,6 @@
 //! let through. An NPC can take two berths a tick: a goal-4 sniper's
 //! second launch on a snipe frame (@0x8732f), when its first left a bay
 //! ready, takes the next free slot before any higher slot's AI runs.
-//!
-//! The room the think leaves is kept for the tick: a fighter launched in
-//! the AI loop that thinks at its launch ([`Traffic::think_launched`])
-//! claims from it, after every existing carrier's claim. The original
-//! lets that fighter's launch take a slot before a higher existing
-//! carrier's (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44);
-//! no stock fighter carries a bay.
 //!
 //! [`Surroundings::fighter_room`]: crate::ai::Surroundings::fighter_room
 
@@ -34,7 +33,7 @@ use super::npc::{Mode, Npc};
 use super::{MAX_SHIPS_IN_SYSTEM, Traffic};
 use crate::combat::armament::Trigger;
 
-/// The berths left this tick for the fighters the NPCs launch.
+/// The berths left in a run of the think for the fighters its NPCs launch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LaunchRoom {
     /// How many are left.
@@ -42,7 +41,7 @@ pub(crate) struct LaunchRoom {
 }
 
 impl LaunchRoom {
-    /// A tick's room, of `free` berths ([`Traffic::free_berths`]).
+    /// A run's room, of `free` berths ([`Traffic::free_berths`]).
     pub(crate) fn new(free: u32) -> Self {
         Self { left: free }
     }
@@ -471,16 +470,21 @@ mod tests {
         }
     }
 
-    /// Thinks a tick of `traffic` by [`Sniping`], its spawns leaving
-    /// `reserve` slots free: each NPC's room as it was asked, and its
-    /// trigger after.
+    /// Thinks a tick of `traffic` by [`Sniping`] in one run, its spawns
+    /// leaving `reserve` slots free: each NPC's room as it was asked, and
+    /// its trigger after. One run, as no fight puts a fighter in the
+    /// system between runs here: that the room lasts across slots is the
+    /// session's (`nova_sim::Session::dispatch_npcs`).
     fn think(traffic: &mut Traffic, reserve: u32) -> (Vec<(NpcId, bool)>, Vec<Trigger>) {
         let sniping = Sniping::default();
         let world = World {
             spawn_reserve: reserve,
             ..World::new(&[])
         };
-        traffic.think_holding(&sniping, world, &[], &mut Draws::of(&[]));
+        let mut chance = Draws::of(&[]);
+        traffic.open_think(&sniping, world, &[], &mut chance);
+        traffic.think_run(&sniping, world, |_| true, &mut chance);
+        traffic.close_think();
         let triggers = traffic.npcs().iter().map(|npc| npc.trigger).collect();
         (sniping.0.into_inner(), triggers)
     }

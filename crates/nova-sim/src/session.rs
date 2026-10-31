@@ -6489,23 +6489,6 @@ impl PlayerShip {
 }
 
 impl Space {
-    /// The session's work after the traffic's AI, drawing on `chance`: the
-    /// fleets announced, and the fuel the NPCs refuelling the player gave
-    /// it landed (see the `refuel_dock` module). The comm calls, scans and
-    /// the rest of the frame's work on the line are queued, and settle
-    /// later ([`Session::settle_line_queue`]): in [`Session::game_work`]
-    /// after `_AIDispatch`'s loop (`Session::dispatch_npcs`).
-    fn after_traffic_ai(
-        &mut self,
-        pilot: &mut Pilot,
-        setup: &Setup,
-        out: &mut Outbox,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        self.announce_fleets(setup, out, chance);
-        self.take_refuel(pilot);
-    }
-
     /// Shows the arrival quote of each announced fleet the traffic brought
     /// in, and beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4): a line
     /// of its `STR#` picked from the session's string lists

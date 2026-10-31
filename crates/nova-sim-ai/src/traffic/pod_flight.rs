@@ -13,8 +13,9 @@
 //!   turn (@0x3443f-0x34446). It flies by the same flight step as
 //!   every NPC, so the thrust divisor, the per-axis caps and an
 //!   inertialess hull's flight all apply.
-//! - **It counts its wait down and leaves silently** ([`count_down`]): on
-//!   the advance pass, as `_AIDispatch` runs only there, its AI wait
+//! - **It counts its wait down and leaves silently** ([`count_down`]): at
+//!   its own slot's turn in the loop, on the advance pass, as `_AIDispatch`
+//!   runs only there, its AI wait
 //!   (+0x4c, [`Mode::Adrift`]; none in any other mode) goes down a tick,
 //!   and once it is below 0 (0.0 at 0xdd054) its slot is freed (+0xb8 =
 //!   0, @0x8fbb3): no explosion, no fate, no event
@@ -63,13 +64,15 @@ pub fn controls(npc: &mut Npc) -> Controls {
     }
 }
 
-/// One `_AIDispatch` pass over the pods among `npcs`: each one's wait goes
-/// down a tick, and each whose wait goes below 0 is taken out. The pods
-/// taken out, in order, each [`Outcome::Freed`].
-pub fn count_down(npcs: &mut Vec<Npc>) -> Vec<(NpcId, Outcome)> {
+/// `_AIDispatch` for each pod among `npcs` that `picks` picks, its slot's
+/// turn in the loop: its wait goes down a tick, and it is taken out once
+/// its wait goes below 0, so its slot is free to the slots after it and
+/// not to those before. The pods taken out, in order, each
+/// [`Outcome::Freed`].
+pub fn count_down(npcs: &mut Vec<Npc>, picks: impl Fn(&Npc) -> bool) -> Vec<(NpcId, Outcome)> {
     let mut freed = Vec::new();
     npcs.retain_mut(|npc| {
-        if !is_pod(npc) {
+        if !is_pod(npc) || !picks(npc) {
             return true;
         }
         match npc.mode {

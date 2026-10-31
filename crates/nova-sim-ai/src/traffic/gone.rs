@@ -24,16 +24,18 @@
 //!
 //! [`Traffic`](crate::traffic::Traffic) keeps the gone ships in
 //! [`GoneShips`]: each departure and destruction is recorded with its
-//! record; each decision pass takes them all, as its thinks are the last
-//! that can read them; a ship pass with no decisions before it, double
+//! record; every run of a tick's think reads them all, and the think's
+//! close forgets them
+//! ([`Traffic::close_think`](crate::traffic::Traffic::close_think)), as its
+//! thinks are the last that can read them; a ship pass with no decisions
+//! before it, double
 //! time's second ([`Traffic::move_in`](crate::traffic::Traffic::move_in)),
 //! forgets those freed in a ship pass, as its `_HandleShip` clears every
 //! target that names them. A departure in the decision pass's own flight
 //! is read one tick late: the original frees a jump-out in the low level,
 //! in the same frame's AI loop, so a later slot reads it on that frame,
 //! where the engine flies after the decisions and reads it on the next
-//! tick. The lag is one tick of the reader's motion, which no player sees,
-//! and the answer settles before any dialog, landing, jump or save.
+//! tick (filed in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
 //!
 //! A ship that lands is not recorded: the original keeps a landed ship in
 //! its slot, waiting at the stellar (`_HighLevelAIHandler`
@@ -105,7 +107,7 @@ impl GoneShip {
     }
 }
 
-/// The ships gone since the last decision pass, whose slots a think may
+/// The ships gone since the last think closed, whose slots a think may
 /// still read (see the module docs).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GoneShips(Vec<GoneShip>);
@@ -114,12 +116,6 @@ impl GoneShips {
     /// Records `ship`, its slot freed as `freed` says.
     pub fn record(&mut self, ship: Npc, freed: Freed) {
         self.0.push(GoneShip { ship, freed });
-    }
-
-    /// Every ship recorded, taken for a decision pass, whose thinks are
-    /// the last to read them.
-    pub fn take(&mut self) -> Vec<GoneShip> {
-        std::mem::take(&mut self.0)
     }
 
     /// A ship pass with no decisions before it runs `_HandleShip` for
@@ -131,7 +127,8 @@ impl GoneShips {
         self.0.retain(|gone| gone.freed == Freed::InDispatch);
     }
 
-    /// Forgets every ship recorded, as a new system's slots hold none of
+    /// Forgets every ship recorded: a think's close, whose runs are the
+    /// last that can read them, or a new system, whose slots hold none of
     /// them.
     pub fn clear(&mut self) {
         self.0.clear();
@@ -225,8 +222,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [NpcId(1)]
         );
-        let taken = gone.take();
-        assert_eq!(taken.len(), 2);
+        assert_eq!(gone.ships().len(), 2);
+        gone.clear();
         assert_eq!(gone.ships(), []);
         second.clear();
         assert_eq!(second.ships(), []);

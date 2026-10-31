@@ -32,8 +32,9 @@ use crate::pilot::Pilot;
 impl Session {}
 
 impl Space {
-    /// The fuel the ships refuelling the player gave it this tick lands in
-    /// its tank (see the module docs).
+    /// The fuel the ships refuelling the player have given it lands in
+    /// its tank, after each slot's think, so the next slot reads the tank
+    /// live (see the module docs).
     pub(super) fn take_refuel(&mut self, pilot: &mut Pilot) {
         pilot.reserves.fuel.now += self.traffic.take_fuel_given();
     }
@@ -131,6 +132,57 @@ mod tests {
         moving.space.npc_mut(helper).expect("here").state.velocity = Vec2::new(0.0, 0.36);
         traffic_tick(&mut moving, &catalog);
         assert_eq!(moving.reserves().fuel.now, 40.0, "not slow enough");
+    }
+
+    /// [`refuelled`], its NPC at berth 1, with a second refueller on the
+    /// same terms at berth 5 and a ready-bay carrier launching nothing
+    /// between them. The session and the higher refueller.
+    fn refuelled_either_side_of_a_bay(
+        catalog: &FakePilotCatalog,
+        fuel: f32,
+        max: f32,
+        rules: Rulebook,
+    ) -> (Session, NpcId) {
+        let (session, low) = refuelled(catalog, fuel, max);
+        let mut session = session.with_rules(rules);
+        session.space.npc_mut(low).expect("here").berth = 1;
+        let helper = session.space.npc(low).expect("here").clone();
+        let high = session.space.traffic.add_npc_at(helper, 5);
+        let mut carrier = crate::session::fighters::tests::carrier_npc(low, 2);
+        carrier.goal = Goal::Idle;
+        carrier.target = None;
+        session.space.traffic.add_npc_at(carrier, 3);
+        (session, high)
+    }
+
+    #[test]
+    fn refuellers_either_side_of_a_ready_bay_read_the_fuel_the_lower_one_gave() {
+        // The tank is live: the higher's goal 9 reads what the lower gave
+        // this frame (@0x8f3e5-0x8f6d4), so at 101 it stops and says so.
+        let catalog = catalog();
+        let (mut session, high) =
+            refuelled_either_side_of_a_bay(&catalog, 100.0, 300.0, Rulebook::default());
+        let notes = traffic_tick(&mut session, &catalog);
+        assert_eq!(session.reserves().fuel.now, 101.0);
+        assert_eq!(notes.len(), 1, "the higher's note");
+        assert!(
+            session
+                .take_sounds()
+                .contains(&SimSound::EnergyTransferComplete)
+        );
+        assert_eq!(session.space.npc(high).expect("here").goal, Goal::Idle);
+    }
+
+    #[test]
+    fn refuellers_either_side_of_a_ready_bay_fill_no_more_than_the_tank_by_the_cap() {
+        // One unit of room: the lower fills it, and the higher reads the
+        // tank full and is done.
+        let catalog = catalog();
+        let rules = Rulebook::default().with_override(RuleKey::RefuelCap, RuleSource::Bible);
+        let (mut session, high) = refuelled_either_side_of_a_bay(&catalog, 99.0, 100.0, rules);
+        traffic_tick(&mut session, &catalog);
+        assert_eq!(session.reserves().fuel.now, 100.0);
+        assert_eq!(session.space.npc(high).expect("here").goal, Goal::Idle);
     }
 
     #[test]
