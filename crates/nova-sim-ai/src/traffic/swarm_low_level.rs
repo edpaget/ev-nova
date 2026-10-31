@@ -460,11 +460,27 @@ mod tests {
 
     #[test]
     fn with_no_word_or_word_0_it_runs_neither() {
-        for word in [None, Some(0)] {
-            let (mut traffic, id) = traffic(|ship, _| ship.swarm_leader = word);
-            think_in(&mut traffic, &world(FAR_PLAYER));
-            assert_unbranched(&traffic, id, Manoeuvre::Approach);
-        }
+        let (mut unnamed, id) = traffic(|ship, _| ship.swarm_leader = None);
+        think_in(&mut unnamed, &world(FAR_PLAYER));
+        assert_unbranched(&unnamed, id, Manoeuvre::Approach);
+        // Word 0 is the player's slot, and the gate is `testw; jle`: with a
+        // place on the player to nudge to and a ship at berth 0 to copy, it
+        // takes neither.
+        let (mut on_player, id) = traffic(|ship, _| {
+            ship.swarm_leader = Some(0);
+            ship.fleet_slot = Some(FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            });
+        });
+        let mut at_berth_0 = hull_at(Vec2::new(-900.0, 900.0));
+        at_berth_0.display.glow = 5;
+        on_player.add_npc_at(at_berth_0, 0);
+        think_in(&mut on_player, &world(FAR_PLAYER));
+        assert_eq!(of(&on_player, id).form_parent, Some(0));
+        assert!(of(&on_player, id).slot_place.is_some(), "a place to go to");
+        assert_unbranched(&on_player, id, Manoeuvre::Approach);
     }
 
     #[test]
