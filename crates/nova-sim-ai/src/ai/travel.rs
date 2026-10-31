@@ -66,8 +66,9 @@
 //! - a lead entering a gate, which gives its followers the gate (@0x8dd30);
 //! - a successor taking over its lead's (@0x893b0-0x893e1,
 //!   [`succession`](crate::traffic::succession));
-//! - the player's capture of a lead, -1 for each ship it led (`_DoShipCapture`
-//!   @0x41353-0x41398, [`Npc::lose_captured_lead`]);
+//! - Use As My Ship on a lead, -1 for each ship it led (`_DoShipCapture`
+//!   @0x41353-0x41398, [`Npc::lose_captured_lead`]); Use As Escort writes
+//!   no follower's (@0x9461f-0x947a5, @0x89693-0x897a0);
 //! - a mission escort's join: its first think's formation, the player's
 //!   slot, as the session writes that formation.
 //!
