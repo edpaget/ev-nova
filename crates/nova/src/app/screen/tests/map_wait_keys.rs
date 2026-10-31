@@ -594,3 +594,28 @@ fn a_key_behind_a_text_closing_onto_its_movie_waits_for_what_comes_next() {
         "Escape reached the spaceport"
     );
 }
+
+#[test]
+fn a_key_known_only_by_its_repeats_and_let_go_isnt_held_past_the_last_dialog() {
+    // The press went to the map; only its repeats and release came after.
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
+    screen.input(&held(Key::Up));
+    screen.input(&key(Key::Up, false));
+    tap(&mut screen, Key::Char('n'));
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight, "refused");
+    screen.tick(TICK * 3);
+    assert_eq!(ship(&screen), still, "no thrust");
+}
+
+#[test]
+fn a_key_known_only_by_its_repeats_and_still_down_reads_down_past_the_last_dialog() {
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
+    screen.input(&held(Key::Up));
+    tap(&mut screen, Key::Char('n'));
+    end_the_wait(&mut screen);
+    screen.tick(TICK * 3);
+    assert_ne!(ship(&screen), still, "thrust");
+}

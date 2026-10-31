@@ -85,8 +85,9 @@ impl WaitKeys {
     /// Takes `input` if it is a key the queue keeps, repeats included, in
     /// order. M's own never queues, as it is down throughout, and the
     /// router ran Caps Lock's double time on its press. A release goes in
-    /// only behind its key's press: otherwise the screen never saw that
-    /// key.
+    /// only behind something of its key, a press or a repeat: otherwise
+    /// the screen never saw that key. So what is queued says whether a key
+    /// it saw is still down.
     pub(super) fn take(&mut self, input: &Input) {
         let Input::Key { key, pressed, .. } = *input else {
             return;
@@ -94,7 +95,7 @@ impl WaitKeys {
         if key == MAP_KEY || key == Key::CapsLock {
             return;
         }
-        if pressed || self.keys.iter().any(|queued| is_press_of(queued, key)) {
+        if pressed || self.keys.iter().any(|queued| is_key(queued, key)) {
             self.keys.push(*input);
         }
     }
@@ -124,11 +125,6 @@ impl WaitKeys {
         }
         keys
     }
-}
-
-/// Whether `input` is a press of `key`, not a repeat.
-fn is_press_of(input: &Input, key: Key) -> bool {
-    matches!(*input, Input::Key { key: k, pressed: true, repeat: false } if k == key)
 }
 
 /// Whether `input` is a release of `key`.
@@ -266,12 +262,17 @@ mod tests {
     fn it_drops_the_release_of_a_key_whose_press_it_never_took() {
         assert_eq!(left_by(&[release(A), press(B)]), [press(B)]);
         assert_eq!(left_by(&[press(B), release(A)]), [press(B)]);
-        assert_eq!(left_by(&[repeat(A), release(A)]), [repeat(A)]);
     }
 
     #[test]
     fn it_keeps_a_repeat_with_no_press_as_an_auto_key_stays_queued() {
         assert_eq!(left_by(&[repeat(A)]), [repeat(A)]);
+    }
+
+    #[test]
+    fn it_keeps_the_release_of_a_key_it_holds_only_repeats_of() {
+        let keys = [repeat(A), release(A)];
+        assert_eq!(left_by(&keys), keys);
     }
 
     #[test]
