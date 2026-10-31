@@ -973,6 +973,143 @@ mod tests {
         }
     }
 
+    // The push on a lead the player leads.
+
+    /// A carrier the player leads at `at`, on the player's jump, and its
+    /// fighter beside it on the carrier's, whose high level pushes it.
+    fn players_carrier(at: Vec2, velocity: Vec2) -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.position = at;
+        lead.state.velocity = velocity;
+        lead.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        lead.goal = Goal::Formation { guard: None };
+        lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        let lead = traffic.add_npc(lead);
+        let mut fighter = far(0);
+        fighter.state.position = at + Vec2::new(0.0, 100.0);
+        fighter.leader = Some(lead);
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(lead),
+            window: 100.0,
+            reach: 40.0,
+        });
+        fighter.goal = Goal::Follow { lead, guard: None };
+        fighter.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        let fighter = traffic.add_npc(fighter);
+        (traffic, lead, fighter)
+    }
+
+    /// `traffic` a tick on, the player braking (its stage at 1.0).
+    fn braking_tick(traffic: &mut Traffic) {
+        let mut world = jumping_world(1.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+    }
+
+    #[test]
+    fn a_lead_the_player_leads_is_pushed_and_flies_sub_0xd_on_as_its_fighter_gives_up() {
+        let (mut traffic, lead, fighter) =
+            players_carrier(Vec2::new(3000.0, 0.0), Vec2::new(0.0, 3.0));
+        braking_tick(&mut traffic);
+        let carrier = of(&traffic, lead);
+        assert_eq!(carrier.goal, Goal::JumpOut, "pushed (@0x8def0)");
+        assert_eq!(
+            carrier.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player)),
+            "its flight is still sub 0xd"
+        );
+        assert_eq!(carrier.state.velocity, Vec2::ZERO, "the player's, at rest");
+        assert_eq!(
+            of(&traffic, fighter).goal,
+            Goal::Idle,
+            "sub 0xd: it gives up"
+        );
+        assert_eq!(of(&traffic, fighter).warp.goal, None);
+    }
+
+    #[test]
+    fn through_the_players_brake_the_lead_flickers_and_its_fighter_follows_only_its_sub_1() {
+        // The player moves: sub 0xd holds the carrier at its velocity, so it
+        // brakes on the tick it drops the jump.
+        let (mut traffic, lead, fighter) =
+            players_carrier(Vec2::new(3000.0, 0.0), Vec2::new(0.0, 3.0));
+        let mut world = jumping_world(1.0);
+        world.player = Some(crate::ai::fixture::player(0.0, 0.0));
+        world.warp.player.velocity = Vec2::new(0.0, 3.0);
+        let tick = |traffic: &mut Traffic| {
+            traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
+        };
+        let on_jump = Some(WarpGoal::Follow(ShipRef::Player));
+        tick(&mut traffic);
+        let (carrier, wing) = (of(&traffic, lead), of(&traffic, fighter));
+        assert_eq!((carrier.goal, carrier.warp.goal), (Goal::JumpOut, on_jump));
+        assert_eq!(wing.warp.goal, None, "1: it gives up over its lead's 0xd");
+        tick(&mut traffic);
+        let (carrier, wing) = (of(&traffic, lead), of(&traffic, fighter));
+        assert_eq!((carrier.goal, carrier.warp.goal), (Goal::JumpOut, None));
+        assert!(carrier.stopping, "2: goal 2's sub 1");
+        assert_eq!(
+            wing.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+            "2: it enters, and its lead's sub 1 keeps it"
+        );
+        tick(&mut traffic);
+        let carrier = of(&traffic, lead);
+        assert_eq!(carrier.warp.goal, on_jump, "3: `_EscortAI`'s entry");
+        assert_eq!(
+            carrier.goal,
+            Goal::JumpOut,
+            "3: and the fighter's push in the same tick"
+        );
+        assert_eq!(of(&traffic, fighter).warp.goal, None, "over sub 0xd again");
+    }
+
+    #[test]
+    fn a_lead_the_player_leads_pushed_runs_out_inside_1000_and_jumps_at_rest() {
+        let (mut traffic, lead, _) = players_carrier(Vec2::new(500.0, 0.0), Vec2::ZERO);
+        braking_tick(&mut traffic);
+        braking_tick(&mut traffic);
+        let ran = of(&traffic, lead);
+        assert_eq!((ran.goal, ran.warp.goal), (Goal::JumpOut, None), "sub 3");
+        assert!(ran.state.velocity.x > 0.0, "it thrusts out");
+        let (mut traffic, lead, _) = players_carrier(Vec2::new(3000.0, 0.0), Vec2::ZERO);
+        braking_tick(&mut traffic);
+        braking_tick(&mut traffic);
+        let held = of(&traffic, lead);
+        assert_eq!(
+            (held.goal, held.warp.goal),
+            (Goal::JumpOut, Some(WarpGoal::Own)),
+            "sub 4"
+        );
+        braking_tick(&mut traffic);
+        let stage = of(&traffic, lead).warp.stage;
+        assert!(stage > 0.0, "its own stage: {stage}");
+        braking_tick(&mut traffic);
+        let back = of(&traffic, lead);
+        assert_eq!(
+            back.warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Player)),
+            "under way, the hold puts goal 0xb back (@0x8d54c)"
+        );
+        assert_eq!(back.warp.stage, stage, "its stage kept");
+    }
+
+    #[test]
+    fn a_lead_the_player_leads_under_way_is_back_on_goal_0xb_at_its_next_hold() {
+        let (mut traffic, lead, _) = players_carrier(Vec2::new(3000.0, 0.0), Vec2::ZERO);
+        traffic.npcs_mut()[0].warp.stage = 4.0;
+        braking_tick(&mut traffic);
+        assert_eq!(of(&traffic, lead).goal, Goal::JumpOut, "pushed");
+        braking_tick(&mut traffic);
+        let back = of(&traffic, lead);
+        assert_eq!(back.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(back.warp.stage, 4.0, "kept");
+    }
+
     // The fighter turn-back.
 
     /// A fighter of `carrier` on its leader's jump, short of fuel when

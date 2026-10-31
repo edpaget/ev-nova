@@ -591,10 +591,25 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
 /// @0x8dedf-0x8defa): each leader of a ship in `npcs` in goal 0xb
 /// ([`Npc::follows_leaders_jump`], `cmpw $0xb` @0x8de63), so not one in the
 /// regroup pause keeping sub 0xd, that is intact and whose high level runs
-/// ([`Npc::high_level_waits`]) is set to jump out. A leader the player leads
-/// is not: the original pushes it too, but its own next hold puts it back
-/// on goal 0xb (@0x8d542-0x8d54c), as it is under way only on the player's
-/// jump.
+/// ([`Npc::high_level_waits`]) is set to jump out.
+///
+/// A leader the player leads is too. Through the player's brake it is not
+/// under way, so the push takes it off the jump for a tick or two, a
+/// flicker the player sees through the fighters it leads:
+///
+/// 1. The fighter's high level pushes it, and, as its lead is on sub 0xd,
+///    gives up. The lead flies sub 0xd on, its high level in no goal 0xb
+///    block this frame ([`fly_jump`]).
+/// 2. Its hold passes, goal 2's block drops its jump ([`hold_stage`]), and
+///    it flies goal 2's leg: sub 3, or sub 1, which its fighter follows, or
+///    sub 4.
+/// 3. In sub 3 or 1 `_EscortAI`'s entry puts it on the jump again. In sub 4
+///    it starts its own stage, and its next hold, under way, puts it back
+///    on goal 0xb (@0x8d542-0x8d54c), its stage running on with no move, as
+///    `v` is 0 under a player at 1.0.
+///
+/// From the player's warp stage on it is under way, so the hold undoes the
+/// push at once.
 pub fn send_leaders_out(npcs: &mut [Npc]) {
     let sent: Vec<NpcId> = npcs
         .iter()
@@ -608,10 +623,7 @@ pub fn send_leaders_out(npcs: &mut [Npc]) {
             _ => None,
         })
         .collect();
-    for npc in npcs
-        .iter_mut()
-        .filter(|npc| sent.contains(&npc.id) && !npc.escorts_player())
-    {
+    for npc in npcs.iter_mut().filter(|npc| sent.contains(&npc.id)) {
         npc.goal = Goal::JumpOut;
     }
 }
@@ -694,7 +706,8 @@ pub fn fly_jump(
             WarpGoal::Follow(_) => {
                 // The high level's wait skips goal 0xb's check: the low
                 // level flies sub 0xd on (@0x8d4b9-0x8d4d2).
-                let check = if paused || npc.high_level_waits() {
+                // A lead pushed onto goal 2 this tick is in no goal 0xb block.
+                let check = if paused || !npc.follows_leaders_jump() || npc.high_level_waits() {
                     FollowCheck::Follow
                 } else {
                     follow_check(leader)
@@ -1558,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn goal_0xb_sends_no_leader_out_for_a_waiting_follower_nor_one_the_player_leads() {
+    fn goal_0xb_sends_any_npc_leader_out_but_for_a_waiting_follower() {
         let lead = NpcId(2);
         let pushed = |wait: u32, escorts_player: bool| {
             let mut follower = ship();
@@ -1578,7 +1591,29 @@ mod tests {
         };
         assert!(pushed(0, false));
         assert!(!pushed(5, false), "its high level waits (@0x8d4b9)");
-        assert!(!pushed(0, true), "held back by its own hold (@0x8d542)");
+        assert!(pushed(0, true), "the player's escort too (@0x8def0)");
+        assert!(!pushed(5, true));
+    }
+
+    #[test]
+    fn a_lead_pushed_this_tick_runs_no_goal_0xb_check_of_its_own() {
+        // Pushed onto goal 2 in the follower's high level, it is in no goal
+        // 0xb block this frame, so it flies its sub 0xd on.
+        let world = in_world(world());
+        let views = BTreeMap::new();
+        let mut pushed = ship();
+        pushed.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        pushed.goal = Goal::JumpOut;
+        pushed.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert_eq!(
+            fly_jump_by(&mut pushed, &views, &world, true),
+            Some(Outcome::Flying)
+        );
+        assert_eq!(pushed.goal, Goal::JumpOut, "not given up");
+        assert_eq!(pushed.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
     }
 
     #[test]

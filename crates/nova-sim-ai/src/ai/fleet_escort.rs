@@ -161,10 +161,10 @@ pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     let Some(lead) = players_escort_lead(npc, around) else {
         return npc.order_word.order();
     };
+    // Goal 0xb is not 0xa, whatever goal the engine keeps beside it.
+    let in_form = lead.goal.flies_in_form() && !lead.follows_leaders_jump();
     Some(match out_of_ammo::escort_order(lead, lead.escort_order()) {
-        Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !lead.goal.flies_in_form() => {
-            order
-        }
+        Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !in_form => order,
         _ => EscortOrder::Dock,
     })
 }
@@ -654,7 +654,40 @@ mod tests {
         let decision = FleetEscortAi::default().decision(&npcs[1], &around, &mut Draws::of(&[0]));
         assert_eq!(decision.goal, follow(None));
         assert!(decision.follows_jump);
-        assert_eq!(decision.order_word, Some(OrderWord(3)), "Return: in form");
+        assert_eq!(
+            decision.order_word,
+            Some(OrderWord::of(Some(EscortOrder::Attack))),
+            "goal 0xb isn't 0xa (@0x83b66)"
+        );
+    }
+
+    #[test]
+    fn a_lead_in_goal_0xb_hands_down_its_defend_or_attack_whatever_goal_it_keeps_beside() {
+        // The read tests its lead's goal against 0xa (@0x83b66), and the
+        // goal the engine keeps beside goal 0xb flies in form.
+        for order in [EscortOrder::Defend, EscortOrder::Attack] {
+            for beside in [
+                Goal::Formation { guard: None },
+                Goal::Follow {
+                    lead: NpcId(9),
+                    guard: None,
+                },
+            ] {
+                let mut escort = lead(beside);
+                escort.escort = Some(crate::escort::EscortDuty {
+                    formation: crate::escort::FormationSlot::default(),
+                    order: Some(order),
+                });
+                escort.warp.goal =
+                    Some(crate::traffic::warp_out::WarpGoal::Follow(ShipRef::Player));
+                let npcs = [escort, fighter(n(1))];
+                assert_eq!(
+                    order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+                    Some(order),
+                    "{beside:?}"
+                );
+            }
+        }
     }
 
     #[test]
