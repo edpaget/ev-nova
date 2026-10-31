@@ -397,24 +397,43 @@ mod tests {
         assert_eq!(ship.parent_word(), Some(Vec2::ZERO));
     }
 
+    /// The player's formation place of [`hired`].
+    const HIRED: FormationSlot = FormationSlot {
+        slot: 2,
+        ships: 3,
+        spacing: 30.0,
+    };
+
+    /// A [`FAST`] escort of the player, at [`HIRED`].
+    fn hired() -> Npc {
+        let mut ship = npc(0, ShipStats::new(FAST, &[]));
+        ship.escort = Some(EscortDuty {
+            formation: HIRED,
+            order: None,
+        });
+        ship
+    }
+
+    #[test]
+    fn a_think_writes_the_players_followers_places_from_the_player_in_its_world() {
+        let mut traffic = Traffic::with_interval(1);
+        let hired = traffic.add_npc_at(hired(), BELOW);
+        let world = world_with(Condition::Intact);
+        let player = world.player.expect("the player").state;
+        let on_player = Some(HIRED.position(&player));
+        traffic.think_holding(&Keep, world, &[], &mut Draws::of(&[]));
+        assert_eq!(of(&traffic, hired).slot_place, on_player);
+        assert_eq!(traffic.berth_place(BELOW), on_player);
+    }
+
     #[test]
     fn a_ship_of_the_player_reads_the_players_place_and_keeps_it_when_a_parent_above_it_takes_it() {
         let mut traffic = Traffic::with_interval(1);
         let lead = traffic.add_npc_at(lead_at(100.0), LEAD_BERTH);
-        let formation = FormationSlot {
-            slot: 2,
-            ships: 3,
-            spacing: 30.0,
-        };
-        let mut hired = npc(0, ShipStats::new(FAST, &[]));
-        hired.escort = Some(EscortDuty {
-            formation,
-            order: None,
-        });
-        let hired = traffic.add_npc_at(hired, BELOW);
+        let hired = traffic.add_npc_at(hired(), BELOW);
         let world = world_with(Condition::Intact);
         let player = world.player.expect("the player").state;
-        let on_player = Some(formation.position(&player));
+        let on_player = Some(HIRED.position(&player));
         traffic.form_fleets(Some(&player));
         assert_eq!(of(&traffic, hired).slot_place, on_player);
         assert_eq!(traffic.berth_place(BELOW), on_player);
