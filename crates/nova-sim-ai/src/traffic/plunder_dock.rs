@@ -31,9 +31,11 @@
 //!   [`CLOSE_CAP_BOX`] on both axes, it thrusts up to half its top speed
 //!   ([`CLOSE_CAP`]). Closing with a swarm leader (+0xc906 > 0), it first
 //!   takes its swarm leader's glow ([`swarm_branch`], @0x87364-0x873a3);
-//!   its nudge toward a formation slot there is none, as a docking ship
-//!   has no formation parent (+0xc92e) and `_AIMaintainFormation` returns
-//!   at once (@0x84f30). Both fire nothing: they end in
+//!   a docking ship is of AI type 4 or below, so the marking pass leaves
+//!   its formation parent (+0xc92e) alone: with none,
+//!   `_AIMaintainFormation` returns at once (@0x84f30), and with a stale
+//!   one it nudges the ship toward the place it holds
+//!   ([`swarm_low_level::slot_place`]). Both fire nothing: they end in
 //!   `_AIEscortFireUnprovoked`, which does nothing for AI type 4 or below.
 //!   An escort keeping formation flies them too
 //!   ([`formation_flight`](crate::traffic::formation_flight)).
@@ -97,6 +99,7 @@ use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
 use crate::traffic::ship_display::GlowCopy;
+use crate::traffic::swarm_low_level;
 use nova_sim_base::trig;
 
 /// The turns a docking box is worked out from, less the class's turn (the
@@ -274,7 +277,8 @@ pub fn fly(
         sub => {
             let close = sub == DockSub::Close;
             if close {
-                swarm_branch(npc, swarm, None, handling);
+                let slot = swarm_low_level::slot_place(npc, flight);
+                swarm_branch(npc, swarm, slot, handling);
             }
             let (controls, flown, wanted) = approach(npc, victim, handling, close);
             (controls, flown, wanted, DockOutcome::Flying)
@@ -300,20 +304,23 @@ pub fn fly(
     outcome
 }
 
-/// Sub 0xb's swarm branch (@0x87364-0x873a3), before it steers: with a
-/// swarm leader (+0xc906 > 0, [`Npc::swarm_leader`]), `npc` is nudged
-/// toward its formation slot at `slot`, when it has one, by its thrust on
-/// `handling` (`_AIMaintainFormation(ship, 0)`,
-/// [`formation_flight::maintain`]), and takes the glow of its swarm
-/// leader, `swarm`'s, when that ship is there (the original reads
-/// whatever ship holds the slot). Nothing without a swarm leader.
+/// The swarm branch of subs 5, 7, 0xb and 0x11 (@0x85c87-0x85cbf,
+/// @0x867e0-0x86818, @0x87364-0x873a3, @0x8660b-0x8663d): with a swarm
+/// leader (+0xc906 above 0, tested signed, `testw; jle`,
+/// [`Npc::swarm_leader`]), `npc` is nudged toward its formation slot at
+/// `slot`, when it has one, by its thrust on `handling`
+/// (`_AIMaintainFormation(ship, 0)`, [`formation_flight::maintain`]), and
+/// takes the glow of its swarm leader, `swarm`'s, when that ship is there
+/// (the original reads whatever ship holds the slot). Nothing with a word
+/// of 0 or none. Sub 0xb runs it before it steers (see
+/// [`swarm_low_level`](crate::traffic::swarm_low_level) for the others).
 pub(crate) fn swarm_branch(
     npc: &mut Npc,
     swarm: Option<SwarmLead>,
     slot: Option<Vec2>,
     handling: &Handling,
 ) {
-    if npc.swarm_leader.is_none() {
+    if npc.swarm_leader.is_none_or(|word| word == 0) {
         return;
     }
     if let Some(slot) = slot {
@@ -643,6 +650,51 @@ mod tests {
         assert!((i32::from(direction) - i32::from(bearing)).abs() <= VELOCITY_SLACK);
         let (ship, _) = flown(pirate(near, DockSub::Approach), &victim, &[]);
         assert_eq!(ship.state.heading, 180.0);
+    }
+
+    #[test]
+    fn closing_with_a_stale_parent_and_a_swarm_leader_it_is_nudged_to_the_place_it_holds() {
+        // A plunderer's AI type is 4 or below, so the pass left +0xc92e
+        // as it was (@0x84f30 passes on a parent of 63 or below).
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let close = || {
+            let mut ship = pirate(at(50.0, -50.0, 0.0, 0.0, 90.0), DockSub::Close);
+            ship.swarm_leader = Some(4);
+            ship.form_parent = Some(4);
+            ship.slot_place = Some(Vec2::new(500.0, 500.0));
+            ship
+        };
+        let flown = |mut ship: Npc, flight: FlightRules| {
+            fly(
+                &mut ship,
+                &victim,
+                &HANDLING,
+                flight,
+                None,
+                &mut Draws::of(&[]),
+            );
+            ship.state.position
+        };
+        let by = HANDLING.accel * crate::escort::FORMATION_NUDGE;
+        assert_eq!(
+            flown(close(), FlightRules::default()),
+            Vec2::new(50.0 + by, -50.0 + by)
+        );
+        // No parent, no nudge, whatever place it holds.
+        let parentless = Npc {
+            form_parent: None,
+            ..close()
+        };
+        assert_eq!(
+            flown(parentless, FlightRules::default()),
+            Vec2::new(50.0, -50.0)
+        );
+        // Nor on an NPC parent's slot, by the other reading.
+        let earlier = FlightRules {
+            npc_formation: crate::flight::NpcFormation::Earlier,
+            ..FlightRules::default()
+        };
+        assert_eq!(flown(close(), earlier), Vec2::new(50.0, -50.0));
     }
 
     #[test]

@@ -271,6 +271,7 @@ pub mod stellar_defence;
 mod stop_tests;
 pub mod strength;
 pub mod succession;
+mod swarm_low_level;
 #[cfg(test)]
 mod swarm_tests;
 pub mod table;
@@ -1570,7 +1571,8 @@ impl Traffic {
     /// in the same frame as the think (`_AIDispatch` @0x901e5-0x901f4),
     /// after the goal and before the passes and the flight read its frame.
     /// One whose decision `keeps` its pursuit ([`Decision::keeps_pursuit`])
-    /// holds on to the substate it kept.
+    /// holds on to the substate it kept. Each whose pursuit ran then runs
+    /// its frame's swarm branch ([`swarm_low_level`]).
     fn pursue(
         &mut self,
         world: &World,
@@ -1603,6 +1605,10 @@ impl Traffic {
                 })
             })
             .collect();
+        let ran: Vec<bool> = steps
+            .iter()
+            .map(|step| step.is_some_and(|(high, _)| high != HighLevel::Skipped))
+            .collect();
         for ((npc, step), &keep) in self.npcs.iter_mut().zip(steps).zip(keeps) {
             let Some((high, pursuit)) = step else {
                 continue;
@@ -1620,6 +1626,7 @@ impl Traffic {
                 pursuit
             };
         }
+        self.swarm_low_level(world, &ran);
     }
 
     /// Moves the traffic again in `world`, rolling on `chance`, as double
