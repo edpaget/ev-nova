@@ -274,6 +274,7 @@ impl Session {
             wage: None,
             person: None,
             mark: None,
+            voice: npc.voice,
         };
         let id = self.space.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
@@ -1341,6 +1342,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
@@ -1853,6 +1855,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 
@@ -1866,6 +1869,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 
@@ -3791,6 +3795,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
         assert!(
@@ -3836,6 +3841,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
         let facts = session.ship.facts(&session.pilot, &session.statics);

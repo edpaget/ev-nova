@@ -242,6 +242,7 @@ impl Session {
                     wage: Some(wage),
                     person: None,
                     mark: None,
+                    voice: None,
                 });
             }
         });
@@ -808,6 +809,7 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 
@@ -893,6 +895,7 @@ mod tests {
                 wage: Some(100),
                 person: None,
                 mark: None,
+                voice: None,
             }]
         );
         assert!(session.take_save_due());

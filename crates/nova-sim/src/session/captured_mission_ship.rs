@@ -206,6 +206,7 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 

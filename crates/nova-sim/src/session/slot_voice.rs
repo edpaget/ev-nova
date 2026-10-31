@@ -203,6 +203,104 @@ fn a_launched_fighters_roll_leaves_its_word_for_the_berths_next_ship() {
 }
 
 #[test]
+fn a_ship_the_traffic_draws_may_be_odd_though_its_class_forces_even() {
+    let mut catalog = crate::session::tests::trafficked(130, 1, 3);
+    catalog.voices = voiced().voices;
+    for record in &mut catalog.ship_records {
+        record.inherent_govt = Some(crate::catalog::GovtId(141));
+    }
+    let mut session = Session::start(&catalog).expect("starts");
+    // `NeverFires` draws the top of every range: a Rand(2) of 1.
+    session.populate(&catalog, &mut NeverFires);
+    let [ship] = session.npcs() else {
+        panic!("one ship: {:?}", session.npcs());
+    };
+    assert_eq!(ship.voice, Some(VoiceVariant::Odd));
+}
+
+#[test]
+fn a_launched_fighters_record_keeps_its_voice() {
+    let mut catalog = voiced();
+    for record in &mut catalog.ship_records {
+        if record.id == VIPER {
+            record.inherent_govt = Some(crate::catalog::GovtId(140));
+        }
+    }
+    let mut session = flying_by(
+        &catalog,
+        pilot(&catalog, 1, Vec::new()),
+        Rulebook::default(),
+    );
+    session.hold_fire(false, true);
+    session.game_work(
+        Controls::default(),
+        &catalog,
+        &Peaceful,
+        Rules::default(),
+        &mut Ranged::of(&[(2, 1)]),
+    );
+    assert_eq!(session.pilot.escorts[0].voice, Some(VoiceVariant::Odd));
+}
+
+/// A session of `escorts` loaded with every berth holding `word`, its fleet
+/// placed: escort 0's voice.
+fn loaded_voice(escorts: Vec<Escort>, word: VoiceVariant) -> Option<VoiceVariant> {
+    let catalog = voiced();
+    let mut session = Session::fly(&catalog, pilot(&catalog, 0, escorts)).expect("flies");
+    every_berth(&mut session, word);
+    session.populate(&catalog, &mut NeverFires);
+    escort_npc(&mut session, 0).voice
+}
+
+#[test]
+fn a_loaded_fighter_speaks_its_saved_variant_over_its_berths_word() {
+    let fighter = Escort {
+        carried: true,
+        voice: Some(VoiceVariant::Odd),
+        ..escort(VIPER)
+    };
+    assert_eq!(
+        loaded_voice(vec![fighter], VoiceVariant::Even),
+        Some(VoiceVariant::Odd)
+    );
+}
+
+#[test]
+fn a_loaded_fighter_with_no_saved_variant_takes_its_berths_word() {
+    let fighter = Escort {
+        carried: true,
+        ..escort(VIPER)
+    };
+    assert_eq!(
+        loaded_voice(vec![fighter], VoiceVariant::Odd),
+        Some(VoiceVariant::Odd)
+    );
+}
+
+#[test]
+fn a_loaded_hired_escort_speaks_its_berths_word() {
+    assert_eq!(
+        loaded_voice(vec![escort(MEDIUM)], VoiceVariant::Odd),
+        Some(VoiceVariant::Odd)
+    );
+}
+
+#[test]
+fn a_loaded_fighters_variant_is_left_in_its_berth() {
+    let catalog = voiced();
+    let fighter = Escort {
+        carried: true,
+        voice: Some(VoiceVariant::Odd),
+        ..escort(VIPER)
+    };
+    let mut session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
+    session.populate(&catalog, &mut NeverFires);
+    let id = session.space.escorts.fleet[0].expect("placed");
+    let berth = vacate(&mut session, id);
+    assert_eq!(next_ship_at(&mut session, berth), Some(VoiceVariant::Odd));
+}
+
+#[test]
 fn the_reused_slot_voice_reading_is_set_by_the_rulebook_and_outlives_a_new_traffic() {
     let catalog = armed();
     for source in [RuleSource::Engine, RuleSource::Bible] {

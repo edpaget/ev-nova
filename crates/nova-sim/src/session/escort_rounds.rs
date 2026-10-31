@@ -180,6 +180,7 @@ fn an_escort_keeps_its_rounds_through_a_gate_exit() {
         wage: None,
         person: None,
         mark: None,
+        voice: None,
     });
     take_off(&mut session, &catalog);
     let id = session.space.escorts.fleet[0].expect("placed");

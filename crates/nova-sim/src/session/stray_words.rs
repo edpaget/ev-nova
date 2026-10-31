@@ -471,6 +471,7 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         });
         session.space.escorts.fleet.push(Some(id));
         work_with(

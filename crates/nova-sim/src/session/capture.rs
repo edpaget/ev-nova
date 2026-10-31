@@ -234,6 +234,7 @@ impl PlayerShip {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 }
@@ -295,6 +296,7 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 

@@ -695,6 +695,7 @@ mod tests {
                 wage: Some(10),
                 person: None,
                 mark: None,
+                voice: None,
             },
         });
         ship

@@ -1013,6 +1013,7 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         });
         session.pilot.escorts = vec![filler; crate::board::MAX_ESCORTS];
         assert_eq!(

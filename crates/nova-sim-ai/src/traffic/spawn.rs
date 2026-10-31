@@ -3433,6 +3433,7 @@ mod tests {
                 wage: None,
                 person: Some(PersonId(id)),
                 mark: None,
+                voice: None,
             })
             .collect()
     }

@@ -5,6 +5,8 @@
 //! How the escorts fly, take orders and keep formation is
 //! `nova_sim::escort`'s; the pilot keeps the fleet (`nova_sim::Pilot`).
 
+use nova_sim_catalog::voice::VoiceVariant;
+
 use crate::catalog::{PersonId, ShipId};
 use crate::reserves::Reserves;
 
@@ -41,6 +43,12 @@ pub struct Escort {
     /// sale (+0xbe), which never both stand; none at every join, as
     /// `_SpawnEscort` @0x3ff98 and a capture clear both.
     pub mark: Option<EscortMark>,
+    /// The variant of its voice a save keeps for a carried fighter: the
+    /// original writes every escort's at pilot +0xe92e (`_WritePilotData`
+    /// @0x72717-0x7276c) but reads back only a fighter's (`_LoadPilotData`
+    /// @0x75b65-0x75b85). None for any other escort, which holds its
+    /// slot's word (see `nova_sim_ai::traffic::berth_voices`).
+    pub voice: Option<VoiceVariant>,
 }
 
 /// What an escort is marked for at the next shipyard (`_DoEscortLand`

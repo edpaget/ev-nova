@@ -1,8 +1,8 @@
 //! The berths a session's traffic keeps for the next, across the
 //! session's own traffic Reset and from one session to the next (see
 //! [`kept_berths`](crate::traffic::kept_berths)): each berth's cached
-//! odds (+0xc914), search timer (+0xc90c) and person (+0xc8d0), which the
-//! original's ship table keeps from `_InitArrays` (@0x1b7a1-0x1b7b5) until
+//! odds (+0xc914), search timer (+0xc90c), voice variant (+0xc922) and
+//! person (+0xc8d0), which the original's ship table keeps from `_InitArrays` (@0x1b7a1-0x1b7b5) until
 //! the app quits, as no relocation, pilot load or new game writes them.
 //!
 //! The session hands them on as [`Session::with_slot_sprites`] hands on

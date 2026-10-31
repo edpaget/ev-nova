@@ -153,6 +153,13 @@
 //!   data no longer lists and zeroes a dominated stellar's count (see the
 //!   session's `stellar_defence` module). No older save kept them, so the
 //!   upgrade gives `false` and `[]`.
+//! - Version 36: adds each escort's voice variant (`voice`: `even`, `odd`
+//!   or `null`), the original's pilot `+0xe92e + 2i`. `_WritePilotData`
+//!   writes it for every active ship the player leads, hired escorts too
+//!   (@0x72717-0x7276c), but `_LoadPilotData` reads it only for a carried
+//!   fighter (@0x75b65-0x75b85): a hired escort's copy has no reader, and
+//!   is `null` here. No older save kept one, so the upgrade gives `null`
+//!   and a fighter from it holds its berth's word.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -253,9 +260,10 @@ use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 use crate::traffic::stellar_defence::DefenceShips;
+use crate::voice::VoiceVariant;
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 35;
+pub const CURRENT: u64 = 36;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -355,6 +363,34 @@ struct SavedEscort {
     person: Option<i16>,
     #[serde(deserialize_with = "Option::deserialize")]
     mark: Option<SavedMark>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    voice: Option<SavedVoice>,
+}
+
+/// A saved fighter's voice variant (see the module docs' version 36).
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SavedVoice {
+    Even,
+    Odd,
+}
+
+impl From<VoiceVariant> for SavedVoice {
+    fn from(variant: VoiceVariant) -> Self {
+        match variant {
+            VoiceVariant::Even => Self::Even,
+            VoiceVariant::Odd => Self::Odd,
+        }
+    }
+}
+
+impl From<SavedVoice> for VoiceVariant {
+    fn from(saved: SavedVoice) -> Self {
+        match saved {
+            SavedVoice::Even => Self::Even,
+            SavedVoice::Odd => Self::Odd,
+        }
+    }
 }
 
 /// A saved escort's mark for the next shipyard.
@@ -1170,6 +1206,7 @@ pub fn encode(pilot: &Pilot) -> String {
                 wage: escort.wage,
                 person: escort.person.map(|person| person.0),
                 mark: escort.mark.map(SavedMark::from),
+                voice: escort.voice.map(SavedVoice::from),
             })
             .collect(),
         gone_persons: pilot.gone_persons.iter().map(|person| person.0).collect(),
@@ -1236,7 +1273,14 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     nickname,
     escort_marks,
     dominations,
+    fighter_voices,
 ];
+
+/// Version 35 to 36: no fighter's voice variant, as no older save kept it,
+/// so a fighter from one holds its berth's word.
+fn fighter_voices(save: &mut Value) {
+    add_to_each(save, "escorts", "voice", &Value::Null);
+}
 
 /// Version 34 to 35: no stellar dominated, and every defence count its
 /// decode, as no older save kept them.
@@ -1673,6 +1717,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
                 wage: saved.wage,
                 person: saved.person.map(PersonId),
                 mark: saved.mark.map(EscortMark::from),
+                voice: saved.voice.map(VoiceVariant::from),
             })
             .collect(),
         gone_persons: saved.gone_persons.into_iter().map(PersonId).collect(),
@@ -1760,6 +1805,7 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             },
             Escort {
                 ship: ShipId(141),
@@ -1769,6 +1815,7 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             },
             Escort {
                 ship: ShipId(144),
@@ -1778,6 +1825,7 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             },
             Escort {
                 ship: ShipId(128),
@@ -1787,6 +1835,7 @@ mod tests {
                 wage: Some(100),
                 person: None,
                 mark: None,
+                voice: None,
             },
             Escort {
                 ship: ShipId(136),
@@ -1796,6 +1845,7 @@ mod tests {
                 wage: None,
                 person: Some(PersonId(128)),
                 mark: None,
+                voice: None,
             },
         ]
     }
@@ -2008,7 +2058,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 35);
+        assert_eq!(CURRENT, 36);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -2090,9 +2140,18 @@ mod tests {
                 "carried": false,
                 "wage": null,
                 "person": null,
-                "mark": null
+                "mark": null,
+                "voice": null
             })
         );
+        assert_eq!(value["strict_play"], false);
+        assert_eq!(value["jumped_from"], 130);
+        assert!(text.contains("\n  \"version\": 36"), "{text}");
+    }
+
+    #[test]
+    fn a_save_lists_each_escorts_own_fields() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
         assert_eq!(value["escorts"][4]["person"], 128);
         assert_eq!(value["escorts"][1]["ship"], 141);
         assert_eq!(value["escorts"][1]["order"], serde_json::Value::Null);
@@ -2102,9 +2161,6 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert_eq!(value["strict_play"], false);
-        assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 35"), "{text}");
     }
 
     #[test]
@@ -2339,6 +2395,7 @@ mod tests {
                     wage: None,
                     person: None,
                     mark: None,
+                    voice: None,
                 },
                 Escort {
                     ship: ShipId(141),
@@ -2348,6 +2405,7 @@ mod tests {
                     wage: None,
                     person: None,
                     mark: None,
+                    voice: None,
                 },
             ]
         );
@@ -4684,13 +4742,87 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 35", "\"version\": 36");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 36 }));
+        let newer = encode(&seasoned()).replace("\"version\": 36", "\"version\": 37");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 37 }));
         assert_eq!(
-            SaveError::Newer { version: 36 }.to_string(),
+            SaveError::Newer { version: 37 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 36, and this version of Nova reads up to 35)."
+             (it is version 37, and this version of Nova reads up to 36)."
         );
+    }
+
+    /// `pilot` flying a carried fighter of `voice`, and a hired escort.
+    fn with_a_fighter(mut pilot: Pilot, voice: VoiceVariant) -> Pilot {
+        let escort = pilot.escorts.first().copied().map_or_else(
+            || Escort {
+                ship: ShipId(136),
+                reserves: Reserves::full(10.0, 10.0, 100.0),
+                order: None,
+                carried: false,
+                wage: None,
+                person: None,
+                mark: None,
+                voice: None,
+            },
+            |escort| Escort {
+                voice: None,
+                ..escort
+            },
+        );
+        pilot.escorts = vec![
+            Escort {
+                carried: true,
+                voice: Some(voice),
+                ..escort
+            },
+            Escort {
+                carried: false,
+                ..escort
+            },
+        ];
+        pilot
+    }
+
+    #[test]
+    fn a_carried_fighters_variant_round_trips_and_a_hired_escort_saves_null() {
+        for voice in [VoiceVariant::Even, VoiceVariant::Odd] {
+            let pilot = with_a_fighter(seasoned(), voice);
+            let text = encode(&pilot);
+            assert_eq!(decode(&text), Ok(pilot.clone()));
+            let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+            assert_eq!(
+                value["escorts"][0]["voice"],
+                match voice {
+                    VoiceVariant::Even => "even",
+                    VoiceVariant::Odd => "odd",
+                }
+            );
+            assert_eq!(value["escorts"][1]["voice"], serde_json::Value::Null);
+        }
+    }
+
+    #[test]
+    fn a_version_35_saves_escorts_load_with_no_variant() {
+        let pilot = with_a_fighter(seasoned(), VoiceVariant::Odd);
+        let mut value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(35);
+        for escort in value["escorts"].as_array_mut().expect("escorts") {
+            escort.as_object_mut().expect("an escort").remove("voice");
+        }
+        let decoded = decode(&value.to_string()).expect("loads");
+        assert_eq!(decoded.escorts.len(), 2);
+        assert!(decoded.escorts.iter().all(|escort| escort.voice.is_none()));
+    }
+
+    #[test]
+    fn a_save_missing_an_escorts_voice_at_the_current_version_is_refused() {
+        let pilot = with_a_fighter(seasoned(), VoiceVariant::Odd);
+        let mut value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        value["escorts"][0]
+            .as_object_mut()
+            .expect("an escort")
+            .remove("voice");
+        assert!(unusable(&value.to_string()).contains("voice"));
     }
 
     fn unusable(text: &str) -> String {

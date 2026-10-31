@@ -295,6 +295,7 @@ fn a_real_session_meets_the_contract_in_each_state() {
         wage: Some(10),
         person: None,
         mark: None,
+        voice: None,
     };
     let unplaced = SessionFlight::<Rc<GameData>>::from(
         SessionBuilder::flying(&data)

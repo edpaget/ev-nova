@@ -193,6 +193,7 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             };
             MAX_ESCORTS
         ];
@@ -426,6 +427,7 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             };
             MAX_ESCORTS
         ];

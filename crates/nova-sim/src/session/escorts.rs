@@ -311,8 +311,10 @@ impl Session {
                         None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
                     }
                 }
-                // With neither, it holds what its berth seeded it.
-                if let Some(variant) = kept.voice {
+                // The record's is a loaded fighter's (`_LoadPilotData`
+                // @0x75b65-0x75b85); with neither, the ship holds what its
+                // berth seeded it.
+                if let Some(variant) = kept.voice.or(self.pilot.escorts[index].voice) {
                     self.space.traffic.set_voice(id, variant);
                 }
                 match kept.afterburner {
@@ -1317,6 +1319,7 @@ pub(super) mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             };
             2
         ];
@@ -1496,6 +1499,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 

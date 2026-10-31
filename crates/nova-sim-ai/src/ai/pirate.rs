@@ -651,6 +651,7 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
             },
         });
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), escort];

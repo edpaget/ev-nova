@@ -3579,6 +3579,7 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         }
     }
 
@@ -3807,6 +3808,7 @@ pub(super) mod tests {
                 wage: None,
                 person: Some(crate::catalog::PersonId(600)),
                 mark: None,
+                voice: None,
             }],
             "its reserves as they were, not halved"
         );

@@ -130,6 +130,7 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
         };
         session.enlist(NpcId(1), record);
         assert_eq!(session.npcs()[1].leader_ref(), Some(ShipRef::Player));
