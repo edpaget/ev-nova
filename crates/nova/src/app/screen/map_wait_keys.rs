@@ -13,7 +13,9 @@
 //!   `FlushEvents(0xff7f, 0)` does: [`FlushMark`] tells. So does one that
 //!   brings a next text or movie to the front.
 //! - Past the last dialog, nothing reads them: flight polls its keys live
-//!   (`_IterateInGameEventLoop` drops them, @0x56a6b, @0x56cec).
+//!   (`_IterateInGameEventLoop` drops them, @0x56a6b, @0x56cec). What is
+//!   still down of them reads as down there, so it goes to flight's held
+//!   keys ([`FlightView::hold_live_key`]).
 //!
 //! Past either end, the queued release of every press already replayed
 //! still goes, only so what took the press isn't left holding it: the
@@ -71,6 +73,10 @@ impl AppScreen {
             .as_mut()
             .map(FlightView::take_map_replay)
             .unwrap_or_default();
+        let mut still_down = HashSet::new();
+        for input in &replay {
+            note_down(&mut still_down, input);
+        }
         let mut keys = replay.into_iter();
         let mut down = HashSet::new();
         while let Some(input) = keys.next() {
@@ -79,6 +85,13 @@ impl AppScreen {
             let _ = self.routed_input(&input);
             if self.showing() == Showing::Flight || self.flush_mark().flushed_since(before) {
                 self.let_go_of_replayed(keys, down);
+                if self.showing() == Showing::Flight
+                    && let Some(flight) = &mut self.flight
+                {
+                    for key in still_down {
+                        flight.hold_live_key(key);
+                    }
+                }
                 return;
             }
         }
@@ -87,9 +100,9 @@ impl AppScreen {
     /// Past a stop, the queued release of each key in `down`, the presses
     /// replayed and not yet let go, in order, and nothing else of `rest`:
     /// its live release has been and gone, so nothing else would let go
-    /// of it. A press replayed with no release queued is still physically
-    /// down, and its release comes live, once. So does a press dropped
-    /// here's, whose key the router noted as it was typed.
+    /// of it. A press with no release queued is still physically down,
+    /// replayed or dropped, and its release comes live, once. The router
+    /// noted a dropped press's key as it was typed.
     fn let_go_of_replayed(&mut self, rest: impl Iterator<Item = Input>, mut down: HashSet<Key>) {
         for input in rest {
             if let Input::Key {

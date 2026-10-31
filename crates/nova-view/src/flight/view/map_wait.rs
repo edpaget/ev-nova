@@ -165,6 +165,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Holds `key` if flight would read it down at once
+    /// ([`UNLATCHED_KEYS`]), for one still down as the last dialog over
+    /// flight closes. Its release comes to flight live.
+    pub fn hold_live_key(&mut self, key: Key) {
+        if UNLATCHED_KEYS.contains(&key) {
+            self.held.insert(key);
+        }
+    }
+
     /// What the last map over a screen left for the screen under it, in
     /// order, once: the keys typed during its wait (see the module docs),
     /// for the router to replay. Nothing from a map over flight, and

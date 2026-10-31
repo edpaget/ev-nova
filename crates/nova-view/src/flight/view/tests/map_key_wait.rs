@@ -467,3 +467,12 @@ fn the_wait_is_read_from_its_start_not_from_ms_press() {
     view.port_map_input(&key(MAP, false));
     assert!(!view.map_waiting());
 }
+
+#[test]
+fn a_live_key_handed_over_is_held_only_if_flight_reads_it_with_no_latch() {
+    let mut view = faked_sol(in_sol());
+    view.hold_live_key(Key::Up);
+    view.hold_live_key(JUMP_KEY);
+    assert!(view.held.contains(&Key::Up));
+    assert!(!view.held.contains(&JUMP_KEY));
+}

@@ -253,19 +253,85 @@ fn a_key_that_closes_the_exchange_passes_the_next_on_to_the_spaceport() {
     assert_eq!(screen.showing(), Showing::Flight, "the spaceport left");
 }
 
-#[test]
-fn a_key_that_answers_an_offer_over_flight_leaves_the_next_unread_by_flight() {
+/// [`offered_over_flight`] with its map open and waiting.
+fn offer_map_waiting() -> AppScreen {
     let mut screen = offered_over_flight();
-    let still = ship(&screen);
     screen.input(&key(MAP, true));
     screen.input(&key(Key::Escape, true));
     screen.input(&key(Key::Escape, false));
+    assert!(flight(&screen).map_waiting());
+    screen
+}
+
+#[test]
+fn a_key_that_answers_an_offer_over_flight_leaves_the_next_unread_by_flight() {
+    let mut screen = offer_map_waiting();
+    tap(&mut screen, Key::Char('n'));
+    tap(&mut screen, LAND);
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight, "refused");
+    // Two presses land: the replay must not have been the first.
+    screen.tick(TICK);
+    tap(&mut screen, LAND);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Flight, "L's first press");
+    tap(&mut screen, LAND);
+    assert_eq!(screen.showing(), Showing::Spaceport, "L's second");
+}
+
+#[test]
+fn an_unlatched_key_tapped_behind_the_answer_does_nothing_in_flight() {
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
+    tap(&mut screen, Key::Char('n'));
+    tap(&mut screen, Key::Up);
+    end_the_wait(&mut screen);
+    screen.tick(TICK * 3);
+    assert_eq!(ship(&screen), still, "no thrust");
+}
+
+#[test]
+fn an_unlatched_key_still_down_as_the_last_dialog_closes_reads_down_in_flight() {
+    // `_HandlePlayer` polls it (`_QuickKeyCheck` @0xa0f5).
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
     tap(&mut screen, Key::Char('n'));
     screen.input(&key(Key::Up, true));
     end_the_wait(&mut screen);
-    assert_eq!(screen.showing(), Showing::Flight, "refused");
     screen.tick(TICK * 3);
-    assert_eq!(ship(&screen), still, "no thrust");
+    assert_ne!(ship(&screen), still, "thrust");
+    screen.input(&key(Key::Up, false));
+    let velocity = |screen: &AppScreen| ship(screen).velocity.length();
+    let coasting = velocity(&screen);
+    screen.tick(TICK * 3);
+    assert!(velocity(&screen) <= coasting, "let go live");
+}
+
+#[test]
+fn an_unlatched_key_replayed_to_the_offer_and_still_down_reads_down_in_flight() {
+    let mut screen = offer_map_waiting();
+    let still = ship(&screen);
+    screen.input(&key(Key::Up, true));
+    tap(&mut screen, Key::Char('n'));
+    end_the_wait(&mut screen);
+    screen.tick(TICK * 3);
+    assert_ne!(ship(&screen), still, "thrust");
+}
+
+#[test]
+fn an_unlatched_key_still_down_at_a_take_off_reads_down_in_flight() {
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    start_the_wait(&mut screen);
+    tap(&mut screen, Key::Escape);
+    screen.input(&key(Key::Up, true));
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK * 3);
+    assert_ne!(
+        ship(&screen).velocity,
+        nova_sim::ShipState::default().velocity
+    );
 }
 
 #[test]
