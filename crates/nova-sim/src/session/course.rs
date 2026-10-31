@@ -16,9 +16,7 @@
 //! rewrote or cut shows again. A start cut is the exception: it empties
 //! the course shown at once. A galaxy change is no rebuild point, so between rebuild points
 //! the course keeps its IDs and each hop is resolved by place when it is
-//! used. A load's rebuild rewrites under the default reading, as
-//! `Session::fly` runs before `Session::with_rules` (task
-//! load-reads-rules-before-fly).
+//! used. A load's rebuild rewrites by the rule `Session::load` was given.
 //!
 //! **An arrival** ([`Chart::course_after_arrival`]): the jump's entry
 //! drops the hops made, the start then the last one made, and an arrival

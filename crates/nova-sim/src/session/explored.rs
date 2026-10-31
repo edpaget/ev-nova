@@ -40,9 +40,8 @@
 //! (@0x32b13-0x32b8f, @0x32b5a-0x32b6b). The session shares first thing at
 //! each rebuild point, docked or not (see the `stellars` module's
 //! "Rebuild points"), raising no event: a level-1 head explores its
-//! members, a level-2 head charts them. A load's rebuild shares under the
-//! default reading, as `Session::fly` runs before `Session::with_rules`
-//! (task load-reads-rules-before-fly).
+//! members, a level-2 head charts them. A load's rebuild shares by the
+//! rule `Session::load` was given.
 //!
 //! **A new pilot** ([`Chart::explore_start_neighbours`]): `_DoNewPilot`
 //! clears every level, then, for each of the start system's Con slots

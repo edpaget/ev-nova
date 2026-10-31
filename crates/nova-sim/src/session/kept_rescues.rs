@@ -45,9 +45,11 @@
 //!
 //! By the other reading (crons-news-ranks phase 13's) no rescue is kept:
 //! the holder derives it for the player's current system alone, so a
-//! rescued stellar follows the player. A session is built by the default
-//! rulebook, whose rebuilds keep rescues, so `Session::with_rules`
-//! forgets them when it installs this reading. The rescue plays no sound.
+//! rescued stellar follows the player. `Session::load` holds its rules
+//! before its first rebuild, so it keeps none by this reading. A bare
+//! `Session::fly`, built by the default rulebook, whose rebuilds keep
+//! rescues, is the remaining case: `Session::with_rules` forgets them when
+//! it installs this reading. The rescue plays no sound.
 
 use super::{Chart, Setup, Statics};
 use crate::pilot::Pilot;
@@ -73,10 +75,11 @@ impl Chart {
 
     /// The session given `rules` (`Session::with_rules`): by the other
     /// reading of [`RuleKey::RescueUntilRefresh`], every rescue kept so far
-    /// is forgotten, as the session was built by the default rulebook, whose
-    /// rebuilds keep them, and the holder reads no kept rescue by that
-    /// reading; nor are the owners left unset (see the `owners_unset`
-    /// module).
+    /// is forgotten, as a bare `Session::fly` was built by the default
+    /// rulebook, whose rebuilds keep them, and the holder reads no kept
+    /// rescue by that reading; nor are the owners left unset (see the
+    /// `owners_unset` module). A session `Session::load` built by that
+    /// reading has none to forget.
     pub(super) fn read_rescue_rule(&mut self, rules: &Rulebook) {
         if rules.source_for(RuleKey::RescueUntilRefresh) == RuleSource::Bible {
             self.forget_rescues();
