@@ -23,8 +23,10 @@
 //!   (@0x8fd83-0x8fd9a → @0x900d5): any [`Warp::goal`](crate::traffic::warp_out::Warp).
 //!
 //! A ship waiting in its gate (goal 0x15) passes them: its skip comes
-//! after the reset (@0x8ff18). So does a disabled ship. Nothing here plays
-//! a sound or draws a random number.
+//! after the reset (@0x8ff18). So does a disabled ship. Past them,
+//! `_EscortAI` is reached out of goals 0x15 and 0x16 alone
+//! ([`reaches_escort_think`]). Nothing here plays a sound or draws a
+//! random number.
 
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;

@@ -109,12 +109,16 @@ pub enum Mode {
         ticks_left: u32,
     },
     /// Held where it waited in its gate, for this many more ticks, once
-    /// the player's hit (or a Good Samaritan's answer to the player) made
-    /// it attack the player there: `_AIMakeShipAttackPlayer` (@0x89d3e)
-    /// sets goal 4 whatever the goal, so it is no longer goal 0x15 and
-    /// `_ShipVisibleToShip` (@0x972d) sees it, it is targeted and drawn
-    /// unfaded, it lets go of the gate's sprite (@0x2e8bd-0x2e8d7), and
-    /// `_HighLevelAIHandler` never bursts it out (@0x8dd61). Its wait
+    /// another goal was written over its goal 0x15
+    /// ([`Npc::leaves_gate_goal`]): the player's hit (or a Good Samaritan's
+    /// answer to the player) made it attack the player there
+    /// (`_AIMakeShipAttackPlayer` @0x89d3e, goal 4 whatever the goal), its
+    /// lead was lost (`_AICheckParentExists`, a successor's goal or goal
+    /// 0x13), or it was disabled (`_AIDispatch`'s reset, goal 0). So it is
+    /// no longer goal 0x15 and `_ShipVisibleToShip` (@0x972d) sees it, it
+    /// is targeted and drawn unfaded, it lets go of the gate's sprite
+    /// (@0x2e8bd-0x2e8d7), and `_HighLevelAIHandler` never bursts it out
+    /// (@0x8dd61). Its wait
     /// +0x4c still runs: `_HandleShip` skips its steering, thrust and fire
     /// (@0x34a54-0x34a72), so it moves on only at its velocity, at rest
     /// unless a hit pushed it, and once the wait is out it flies its goal
@@ -1376,7 +1380,7 @@ impl Npc {
     /// (`_ShipVisibleToShip` @0x972d): waiting at the gate it comes out of
     /// ([`Mode::Emerging`]), or its wait just out ([`Mode::LeavingGate`] at
     /// tick 0). From its first burst tick it has goal 8 (@0x8dd8a) and is
-    /// no longer. A ship held at its gate has goal 4.
+    /// no longer. A ship held at its gate has another goal.
     #[must_use]
     pub fn emerging(&self) -> bool {
         matches!(
@@ -1565,7 +1569,7 @@ impl Npc {
     /// Whether it is done coming into the system: [`Mode::Flying`],
     /// holding its course after its glide or burst ([`Mode::Coasting`]),
     /// which the original's +0x4c wait marks and goal 21 does not, held at
-    /// its gate attacking the player ([`Mode::HeldAtGate`], goal 4), or
+    /// its gate ([`Mode::HeldAtGate`], a goal other than 21), or
     /// entering a gate ([`Mode::EnteringGate`]). A ship gliding in, waiting
     /// in its gate or bursting out of it is not, though it answers hits
     /// all the same (see [`Mode::Emerging`]).

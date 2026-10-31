@@ -29,7 +29,8 @@
 //!    candidate.
 //! 2. **None** (@0x894b1-0x894f3), a disabled ship with no intact fellow:
 //!    it leaves its fleet ([`Npc::leave_fleet`]), +0x50 = -1.0, and pauses
-//!    in goal 0x13, sub 0 ([`Kept::Coast`]), its target kept.
+//!    in goal 0x13, sub 0 ([`Kept::Coast`]), its target kept. In its gate
+//!    it is held there ([`Npc::leaves_gate_goal`]).
 //! 3. **It leads** (@0x8934a-0x89474): it leaves its fleet, +0x50 = -1.0.
 //!    Under the lost lead's own government (both not independent and
 //!    equal, @0x8938a-0x893ae), it takes over the lead's goal and
@@ -48,17 +49,27 @@
 //!    - else goal 0.
 //!
 //!    Each writes sub 0 (pursuit and docking none) but the jump's sub 4,
-//!    and clears the warp's sub-goal but in the jump.
+//!    and clears the warp's sub-goal but in the jump. Each writes a goal
+//!    over a successor's goal 0x15 too, so one waiting in its gate is held
+//!    there ([`Npc::leaves_gate_goal`], @0x893d0, @0x89429-0x8945f).
 //! 4. **Another leads** (@0x89479-0x894af, [`Npc::follow_successor`]): its
 //!    parent is the successor; a fighter (AI type 5) becomes an escort (6,
 //!    @0x89480-0x89491), so off its carrier with its class's capacities;
-//!    and while its +0x50 is below 0.0 it pauses in goal 0x13, its
-//!    substate kept ([`Kept::of`]), sub 4 or 0xd included (its
-//!    [`WarpGoal`], rewritten to the successor). An escort rests at 0, as
-//!    the hold undoes `_EscortAI`'s -1.0 in the same dispatch (see
+//!    and while its +0x50 is below 0.0 ([`Npc::stage_below_zero`]) it
+//!    pauses in goal 0x13, its substate kept ([`Kept::of`]): sub 4 or 0xd
+//!    on its jump (its [`WarpGoal`], rewritten to the successor), else
+//!    sub 0, the only substates that reach it
+//!    ([`regroup`](crate::ai::regroup)). An escort rests at 0, as the hold
+//!    undoes `_EscortAI`'s -1.0 in the same dispatch (see
 //!    [`jump_with_leader`](super::jump_with_leader)), so one whose lead is
-//!    lost forms on the successor at once; a follower that gave its
-//!    stage up pauses, and its jump path then runs every frame.
+//!    lost forms on the successor at once; a follower that gave its stage
+//!    up pauses, and its jump path then runs every frame.
+//!
+//!    The emerge's -1.0 (@0x89555) stands through a gate wait, which skips
+//!    the hold, so a follower whose lead is lost in its gate pauses too, in
+//!    sub 0: goal 0x13 over goal 0x15 holds it there, seen, for about 100
+//!    frames ([`Npc::leaves_gate_goal`]), where a ship gliding in takes the
+//!    write only for the glide path to overwrite it (@0x8fcf5-0x8fd18).
 //!
 //! It writes no order word (+0xc90a): a follower flies the word its old
 //! lead gave it until its new lead's next order frame. Nor a follower's

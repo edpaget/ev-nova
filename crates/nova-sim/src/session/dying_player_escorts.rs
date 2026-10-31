@@ -16,14 +16,41 @@
 //! original's AI loop (@0x44270) follows them (@0x43e70-0x44015): a hit
 //! there frees the escorts before the next frame's eject (`_HandlePlayer`
 //! @0x6f22c), and a player who then ejects into a pod has lost them. Each
-//! leaves the fleet as the pod releases it ([`Session::release_led`]). A
-//! mission escort stays its mission's: the dispatch leads it again each
-//! frame (@0x8fbcd-0x8fc22), so it idles under its own think
-//! ([`EscortAi`](crate::ai::EscortAi)); its +0x9a of -1 between its think
-//! and the next dispatch is
-//! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
-//! An escort's own fighters are led by the escort, not the player, and
-//! stay. No rulebook key: no reading disagrees with the original's.
+//! leaves the fleet as the pod releases it
+//! ([`Session::release_for_the_pod`]). An escort's own fighters are led by
+//! the escort, not the player, and stay. No rulebook key: no reading
+//! disagrees with the original's.
+//!
+//! **Who `_EscortAI` reaches** ([`dispatch_gate::reaches_escort_think`]).
+//! It doesn't run for a ship in goal 0x15, gliding or bursting
+//! (@0x8fd38-0x8fd7e), on the jump path, or in goal 0x16 (@0x838ef), so a
+//! ship the player leads in any of those is freed at the think it next
+//! makes. A ship on the player's jump is cancelled (@0x900e3-0x9011e) and
+//! freed the frame after, which the gate gives for free.
+//!
+//! **A mission escort let go** ([`Npc::mission_let_go`]). `_AIDispatch`
+//! writes AI 6 and parent 0 for a `ShipBehav` 1 ship not disabled
+//! (@0x8fc03-0x8fc22), and `_EscortAI`'s lost parent then writes parent -1,
+//! goal 0 and its class's `InherentAI`. The re-lead's parent 0 lives only
+//! inside its own dispatch, where nothing reads it, so at every other
+//! reader, from its first think after the player starts dying, it has
+//! parent -1 and that AI type: it is drawn with the other ships (@0x2bd35)
+//! and faintly when cloaked (@0x2d1b4), the radar, brackets, hit rules and
+//! threat tests read a stranger, it flies at its own top speed, the pod's
+//! walk fails `+0x9a == 0` (@0x6f71d) and leaves it to its next dispatch,
+//! its mission's end only clears its mark (@0x8fc3a-0x8fc4b), and its own
+//! break-up takes no cargo share (@0x350ab). It idles under its own think
+//! ([`EscortAi`](crate::ai::EscortAi)). Each traffic tick here is that
+//! dispatch: once the player is whole, it is led again and the formation
+//! re-forms, the hired ships perhaps gone. A ship not intact isn't led
+//! again (@0x8fc0c). Its +0xc92e and the player's +0xc2 have no reader
+//! here (@0x440d8, @0x6f1cb): it flies sub 0, and no other ship keeps the
+//! player's formation.
+//!
+//! **A captured mission ship.** One of another `ShipBehav` is no re-lead's
+//! (@0x8fc07 → @0x8fc2d), so `_EscortAI` frees it for good. One of
+//! `ShipBehav` 2 runs `_DeathStarAI` in `_EscortAI`'s place (@0x8ff3a), and
+//! stays led.
 //!
 //! Nothing here plays a sound or draws a random number.
 

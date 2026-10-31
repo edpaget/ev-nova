@@ -81,9 +81,12 @@
 //! the hulk instead. In the pod, each other NPC the player leads is
 //! released (+0x9a = -1, @0x6f71d-0x6f732): a hired or captured escort
 //! and a launched fighter leave the fleet, and a mission escort the
-//! formation, each deciding afresh. A pilot's escort with no NPC in the
-//! system has no counterpart in the original, where every escort is a ship
-//! in a slot: it is dropped with the rest.
+//! formation, each deciding afresh. A mission escort let go while the
+//! player broke up (`Npc::mission_let_go`, see
+//! [`dying_player_escorts`](super::dying_player_escorts)) has parent -1
+//! and stays, for its next dispatch to lead it again. A pilot's escort
+//! with no NPC in the system has no counterpart in the original, where
+//! every escort is a ship in a slot: it is dropped with the rest.
 //!
 //! The walk writes +0x9a alone, so a launched fighter is still AI type 5
 //! as it leaves. Its think that same frame (`_DoPlayGameWork` runs

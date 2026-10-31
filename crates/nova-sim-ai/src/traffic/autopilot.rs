@@ -224,8 +224,10 @@
 //!   ([`TopSpeeds::burst_cap`]: the lower of its own top speed and its
 //!   lead's, the player's for a ship the player leads; see
 //!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship not
-//!   intact by then drifts instead of bursting, flying from there on.
-//!   It is out of its gate ([`Npc::emerges_from`] cleared) from its first
+//!   intact in its gate was reset out of it and is held there
+//!   ([`Npc::leaves_gate_goal`]), so only a hit since its last reset, or a
+//!   ship disabled by then with no reset yet, drifts instead of bursting,
+//!   flying from there on. It is out of its gate ([`Npc::emerges_from`] cleared) from its first
 //!   burst tick, as `_HighLevelAIHandler` sets its travel stellar (+0x6c)
 //!   to -1 in the pass that starts the burst (@0x8dd93), and
 //!   `_AIMakeShipStopJumping` sets it to -1 again as the burst ends

@@ -298,10 +298,10 @@ fn takes_players_jump(around: &Surroundings) -> bool {
 /// `_IsDying` reads it (@0x253d: its death timer set, or its armour at or
 /// below none, [`Condition::dying_or_destroyed`]): `_EscortAI`'s lost
 /// parent then frees every ship it leads at that ship's think
-/// (@0x83917-0x8397b). The session frees the player's own (`nova_sim`'s
-/// `dying_player_escorts` module); a mission escort, which the dispatch
-/// leads again each frame (@0x8fbcd-0x8fc22), idles here, its mission's
-/// still.
+/// (@0x83917-0x8397b). The session frees the player's own and lets go of a
+/// mission escort until the next dispatch leads it again, @0x8fbcd-0x8fc22
+/// (`nova_sim`'s `dying_player_escorts` module, [`Npc::mission_let_go`]),
+/// so a mission escort idles here, its mission's still.
 fn player_breaking_up(around: &Surroundings) -> bool {
     around
         .player

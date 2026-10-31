@@ -38,10 +38,11 @@
 //!   a miner ([`Npc::settle_original_ai_type`]);
 //! - by the other reading it keeps its leader, as the port had it.
 //!
-//! The reset precedes goal 0x15's skip
-//! (@0x8ff18), so a ship disabled in its gate is reset too; which of its
-//! goals that ship keeps is
-//! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
+//! The reset precedes goal 0x15's skip (@0x8ff18), so a ship disabled in
+//! its gate is reset too. Its goal 0 ends goal 0x15 where its wait runs on
+//! ([`Npc::leaves_gate_goal`], by both readings, as the reset's other
+//! writes are): it is seen and drawn unfaded, drifts there and never
+//! bursts, keeping its burst word (@0x851e9-0x8520d).
 //! Goal 0 is never throttled (@0x8fdee-0x8fe6f), so it repeats every
 //! frame the ship is disabled: the leader is gone for good.
 //!

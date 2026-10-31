@@ -101,6 +101,15 @@
 //! own by the other reading of
 //! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare). A
 //! disabled mission escort keeps its place and takes nothing.
+//!
+//! **The player's death.** While the player breaks up, a `ShipBehav` 1
+//! ship is let go between its think and the next dispatch
+//! ([`Npc::mission_let_go`], see
+//! [`dying_player_escorts`](super::dying_player_escorts)): to every reader
+//! it is a stranger, so a pod leaves it, its mission's end only clears its
+//! mark, and its break-up takes no share, and it is led again once the
+//! player is whole. A mission's ship captured for an escort, of a
+//! `ShipBehav` other than 1 or 2, is freed for good.
 
 use super::{Session, Space, Statics};
 use crate::ai::Goal;
