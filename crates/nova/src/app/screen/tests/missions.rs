@@ -1275,6 +1275,27 @@ fn closing_the_mission_info_over_a_flight_offer_reloads_the_offers_after_movie()
 }
 
 #[test]
+fn a_plain_q_on_an_offer_whose_labels_dont_start_with_it_does_nothing() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.open_offer(nova_sim::OfferPrompt {
+        mission: MissionId(130),
+        text: "Job.".to_owned(),
+        labels: nova_sim::mission::offer_labels("", "", true),
+        graphic: None,
+        movie: None,
+    });
+    for pressed in [true, false] {
+        assert_eq!(
+            screen.input(&key(Key::Char('q'), pressed)),
+            ScreenAction::None
+        );
+    }
+    assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
+    assert_eq!(screen.showing(), Showing::Offer, "still open");
+}
+
+#[test]
 fn i_on_a_persons_offer_over_flight_with_no_mission_held_does_nothing() {
     let mut screen = with_dialogs(data());
     fly(&mut screen);

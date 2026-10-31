@@ -252,6 +252,14 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Flight's afterburner key, by position: Z on a US-layout keyboard,
         // the original's default (keycode 0x06).
         PhysicalKey::Code(KeyCode::KeyZ) => Key::Char('z'),
+        // The comm and planet comm dialogs' Greetings key and the bar's
+        // Gamble key, by position: G on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyG) => Key::Char('g'),
+        // Command-Q where no menu bar takes it, and an offer button's key
+        // when its label starts with Q, by position: Q on a US-layout
+        // keyboard. No screen acts on a plain Q's key: the main menu's Quit
+        // reads the typed text.
+        PhysicalKey::Code(KeyCode::KeyQ) => Key::Char('q'),
         // Double time's key: each press toggles it, an accepted difference
         // from the original's following the lock state. winit 0.30.13
         // sends no Caps Lock key on macOS (its `key_to_modifier` maps Alt,
@@ -382,6 +390,8 @@ mod tests {
             (KeyCode::KeyT, Key::Char('t')),
             (KeyCode::KeyO, Key::Char('o')),
             (KeyCode::KeyN, Key::Char('n')),
+            (KeyCode::KeyG, Key::Char('g')),
+            (KeyCode::KeyQ, Key::Char('q')),
             (KeyCode::SuperLeft, Key::Command),
             (KeyCode::SuperRight, Key::Command),
             (KeyCode::CapsLock, Key::CapsLock),
@@ -399,7 +409,6 @@ mod tests {
             (KeyCode::F5, Key::Function(5)),
             (KeyCode::F11, Key::Function(11)),
             (KeyCode::F12, Key::Function(12)),
-            (KeyCode::KeyQ, Key::Other),
             (KeyCode::Digit6, Key::Other),
             (KeyCode::F6, Key::Other),
         ];
@@ -415,7 +424,7 @@ mod tests {
     /// come from `every_key`. A screen test that sends one of these directly
     /// never crosses `map_key`, so this is what keeps each one reachable
     /// from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 30] = [
+    const GAME_CHARACTER_KEYS: [Key; 32] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -438,6 +447,8 @@ mod tests {
         nova_view::flight::escorts::MENU_KEY,
         nova_view::flight::escorts::GROUP_KEYS[4],
         nova_view::spaceport::bar::NEWS_KEYS[0],
+        nova_view::spaceport::bar::GAMBLE_KEYS[0],
+        nova_view::spaceport::bar::GAMBLE_KEYS[1],
         nova_view::spaceport::PORT_KEYS[0].0,
         nova_view::spaceport::PORT_KEYS[1].0,
         nova_view::spaceport::PORT_KEYS[2].0,
@@ -457,6 +468,7 @@ mod tests {
             'd' => KeyCode::KeyD,
             'e' => KeyCode::KeyE,
             'f' => KeyCode::KeyF,
+            'g' => KeyCode::KeyG,
             'h' => KeyCode::KeyH,
             'i' => KeyCode::KeyI,
             'j' => KeyCode::KeyJ,
@@ -466,6 +478,7 @@ mod tests {
             'n' => KeyCode::KeyN,
             'o' => KeyCode::KeyO,
             'p' => KeyCode::KeyP,
+            'q' => KeyCode::KeyQ,
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
             't' => KeyCode::KeyT,
@@ -529,6 +542,75 @@ mod tests {
     fn every_key_flight_reads_comes_from_its_physical_key() {
         for key in nova_view::flight::view::every_key() {
             assert_eq!(map_key(PhysicalKey::Code(us_key(key))), key, "{key:?}");
+        }
+    }
+
+    /// Asserts that `letter`'s physical key sends it. The dialogs take
+    /// either case and a physical key sends the lower.
+    fn assert_physical(letter: char) {
+        let sent = letter.to_ascii_lowercase();
+        assert_eq!(
+            map_key(PhysicalKey::Code(us_position(sent))),
+            Key::Char(sent),
+            "{letter:?}"
+        );
+    }
+
+    #[test]
+    fn every_letter_the_comm_dialog_and_its_haggle_read_comes_from_its_physical_key() {
+        use nova_view::ui::comm::{ACCEPT_KEY, CLOSE_KEY, LOWER_KEY};
+        let options = nova_sim::HailOptions::nova(&nova_sim::Rulebook::default());
+        for letter in options.keys().chain([CLOSE_KEY, ACCEPT_KEY, LOWER_KEY]) {
+            assert_physical(letter);
+        }
+    }
+
+    /// Every character the planet comm and escort dialogs take, with each
+    /// button shown: both match on their letters, so asking them is what
+    /// keeps this list from being a second one.
+    #[test]
+    fn every_letter_the_planet_comm_and_escort_dialogs_read_comes_from_its_physical_key() {
+        use nova_sim::planet_comm::{PlanetCommButton, PlanetCommView};
+        use nova_view::ui::{escort_dialog, planet_comm};
+        let views = [
+            PlanetCommButton::Greetings,
+            PlanetCommButton::OfferBribe,
+            PlanetCommButton::DemandTribute,
+            PlanetCommButton::Release,
+        ]
+        .map(|button| PlanetCommView {
+            stellar: nova_sim::StellarId(128),
+            name: String::new(),
+            type_label: String::new(),
+            reply: String::new(),
+            second: button,
+            third: Some(button),
+            status: None,
+            asking: None,
+        });
+        for c in ' '..='~' {
+            let key = Key::Char(c);
+            let planet = views
+                .iter()
+                .any(|view| planet_comm::key_press(key, view).is_some());
+            if planet || escort_dialog::key_press(key).is_some() {
+                assert_physical(c);
+            }
+        }
+    }
+
+    /// An offer button's key is its label's first letter, so every
+    /// character a label can start with is a key: `offer_labels` keeps a
+    /// mission's own label only when it starts with a letter. P, I and M
+    /// ask for their screens before an offer reads the labels' letters.
+    #[test]
+    fn every_letter_an_offer_label_can_start_with_comes_from_its_physical_key() {
+        use nova_sim::mission::offer_labels;
+        for c in ' '..='~' {
+            let label = offer_labels(&c.to_string(), "", false).accept;
+            if label.starts_with(c) {
+                assert_physical(c);
+            }
         }
     }
 

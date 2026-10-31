@@ -697,6 +697,13 @@ impl HailOptions {
             .filter(|option| option.applies(hail))
             .collect()
     }
+
+    /// Every option's hotkey, whatever it applies to. The platform's key
+    /// map is tested against these, so no option's hotkey goes without a
+    /// physical key.
+    pub fn keys(&self) -> impl Iterator<Item = char> + '_ {
+        self.options.iter().filter_map(|option| option.key())
+    }
 }
 
 #[cfg(test)]
@@ -1507,6 +1514,20 @@ mod tests {
             .iter()
             .map(|option| option.label())
             .collect()
+    }
+
+    #[test]
+    fn keys_are_every_options_hotkey_whatever_it_applies_to() {
+        let keys = |options: HailOptions| options.keys().collect::<Vec<_>>();
+        assert_eq!(
+            keys(HailOptions::nova(&Rulebook::default())),
+            ['G', 'R', 'R', 'R', 'U']
+        );
+        assert_eq!(
+            keys(HailOptions::empty().with(Rc::new(WhileBusy))),
+            [],
+            "an option with no hotkey"
+        );
     }
 
     #[test]

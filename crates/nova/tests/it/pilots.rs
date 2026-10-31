@@ -483,8 +483,10 @@ impl Harness {
             let code = match c.to_ascii_lowercase() {
                 'a' => KeyCode::KeyA,
                 'd' => KeyCode::KeyD,
+                'g' => KeyCode::KeyG,
                 'l' => KeyCode::KeyL,
                 'p' => KeyCode::KeyP,
+                'q' => KeyCode::KeyQ,
                 'x' => KeyCode::KeyX,
                 ' ' => KeyCode::Space,
                 other => panic!("no key listed for {other:?}"),
@@ -922,6 +924,37 @@ fn flying(store: &MemoryPilots, name: &str) -> Harness {
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     game
+}
+
+/// G and Q arrive as keys and as text, and a name takes the text alone.
+#[test]
+fn a_name_typed_with_g_and_q_spells_each_once() {
+    let store = MemoryPilots::new();
+    flying(&store, "GqQg");
+    assert_eq!(store.keys(), ["GqQg"]);
+}
+
+/// A plain Q or G in flight does nothing; Q quits only with Command held,
+/// as the router's Command-Q reads it from the keyboard.
+#[test]
+fn in_flight_a_plain_q_or_g_does_nothing_and_command_q_exits() {
+    let store = MemoryPilots::new();
+    let mut game = flying(&store, "Ada");
+    game.type_key(KeyCode::KeyQ, Some("q"));
+    game.type_key(KeyCode::KeyG, Some("g"));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.redraw(), Control::Continue);
+    game.send(platform::key_event(
+        PhysicalKey::Code(KeyCode::SuperLeft),
+        ElementState::Pressed,
+        false,
+    ));
+    let pressed = platform::key_event(
+        PhysicalKey::Code(KeyCode::KeyQ),
+        ElementState::Pressed,
+        false,
+    );
+    assert_eq!(game.handle(pressed), Control::Exit);
 }
 
 /// The event loop ending under the game (macOS's `terminate:`, a quit

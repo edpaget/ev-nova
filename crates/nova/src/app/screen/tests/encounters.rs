@@ -724,6 +724,20 @@ fn tab_then_space_closes_the_channel_only_with_the_focus_ring() {
 }
 
 #[test]
+fn a_plain_q_over_the_comm_dialog_does_nothing() {
+    let screen = &mut hailing();
+    for pressed in [true, false] {
+        assert_eq!(
+            screen.input(&key(Key::Char('q'), pressed)),
+            ScreenAction::None
+        );
+    }
+    assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
+    assert_eq!(screen.showing(), Showing::Comm, "still open");
+    assert_eq!(reply(screen), "Channel open.", "nothing pressed");
+}
+
+#[test]
 fn each_press_goes_through_the_flight_and_refreshes_the_dialog() {
     let screen = &mut hailing();
     tap(screen, Key::Char('g'));
