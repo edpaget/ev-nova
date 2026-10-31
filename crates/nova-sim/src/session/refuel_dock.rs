@@ -465,7 +465,6 @@ mod tests {
         assert!(traffic_tick(&mut session, &catalog).is_empty());
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert!(!took_the_refuels_sound(&mut session));
-        refuelling_from_here(&mut session, helper);
         assert_eq!(traffic_tick(&mut session, &catalog).len(), 1);
         assert_eq!(session.reserves().fuel.now, 101.0);
         assert!(took_the_refuels_sound(&mut session));
