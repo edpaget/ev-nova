@@ -636,6 +636,15 @@ fn a_stop_with_no_step_releases_it() {
 }
 
 #[test]
+fn a_step_with_no_second_pass_replays_its_one_pass_on_its_frame() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let mut report = one_step(vec![fight(vec![detonation()])]);
+    report.steps[0].between_passes = Some(Box::new(sol()));
+    frame(&mut view, report);
+    assert_eq!(view.effects.explosions().len(), 1, "only a second is held");
+}
+
+#[test]
 fn a_single_time_step_draws_the_frame_as_it_stands() {
     let mut view = stepping(armed(1, &[BLASTER]));
     let now = sol_at(20.0);
