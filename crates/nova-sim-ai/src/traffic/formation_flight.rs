@@ -107,8 +107,7 @@
 //!   ([`succession`](crate::traffic::succession)), and `_EscortAI`'s lost
 //!   parent resets a leaderless ship to goal 0 (@0x83942-0x8397b,
 //!   [`Decision::leaves_fleet`](crate::ai::Decision::leaves_fleet)). Here
-//!   an escort with no leader or slot brakes, and one in the regroup pause
-//!   keeping formation with no leader holds ([`Goal::flown`]).
+//!   an escort with no leader or slot brakes.
 //! - `_AIMaintainFormation`'s snap (snap 1) is passed only by
 //!   `_AICalcFormationPositions(parent, 1)` from `_SetupShipsInSystem`
 //!   and `_HyperSpawnFleet`, which the session's arrival places and the

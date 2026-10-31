@@ -11,8 +11,8 @@
 //! formation as the lead cruises (`_AICalcFormationPositions`, goal 0xa),
 //! or, by the other reading of `npc_formation`, follows within 100 of it.
 //! Its lead disabled, the heaviest escort leads in its place and the other
-//! pauses, keeping formation on it, until a draw releases it to its kept
-//! order (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13). Its lead
+//! pauses coasting (sub 0) until a draw releases it to its kept order
+//! (`_AICheckParentExists` @0x8926a-0x89501, goal 0x13). Its lead
 //! leaving by hyperspace draws it onto the lead's jump (`_EscortAI`
 //! @0x839fd-0x83a92): it follows (sub 0xd), takes its own leave once its
 //! stage starts, and departs; a lead turning to attack cancels an early
