@@ -673,6 +673,10 @@ exclude_re = [
     # set is `|`, so the mutant builds the same set.
     "nova-sim/src/flight_frame\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in Gates::from_fn$",
 
+    # `murk_colour` packs three 5-bit channels, each at most 31, at shifts
+    # 10, 5 and 0: their bits are disjoint, so `^` packs the same pixel.
+    "nova-sim-port/src/murk\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in murk_colour$",
+
     # `unlike` only needs a gamma other than the frame's: `- 1.0` differs
     # as `+ 1.0` does, and `check_contract` and the fake's tests compare
     # nothing else of it.
