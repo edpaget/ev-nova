@@ -530,6 +530,19 @@ impl MissionDialogs {
         !self.texts.is_empty()
     }
 
+    /// How many texts and movies are shown or queued: closing one with
+    /// any left brings the next to the front, which drops the keys queued
+    /// (`FlushEvents(0xff7f, 0)`, `_ShowTextDialog` @0x5ae67; mask 0xf,
+    /// `_PlayQTMovie` @0x55e9f), so the count changing to anything but 0
+    /// says so.
+    #[must_use]
+    pub fn text_stages(&self) -> usize {
+        self.texts
+            .iter()
+            .filter(|stage| matches!(stage, Stage::Text(_) | Stage::Movie(_)))
+            .count()
+    }
+
     /// Whether a text, a movie or the mission info screen is open.
     #[must_use]
     pub fn is_open(&self) -> bool {

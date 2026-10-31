@@ -183,6 +183,7 @@ use nova_sim::{
     services,
 };
 
+mod flushing_layers;
 mod gamble;
 
 use super::ambient::Ambient;
@@ -2541,6 +2542,7 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod flushing_layers;
     mod ship_movies;
 
     use crate::ui::mission_info::MISSION_INFO_KEY;
