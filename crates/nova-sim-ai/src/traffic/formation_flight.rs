@@ -76,13 +76,17 @@
 //!   [`ION_HOLD`]. Each axis [`FORMATION_SLACK`] or more off its slot,
 //!   inclusive, moves by the whole nudge toward it, which can carry it
 //!   past. Nothing moves while its warp stage runs. The nudge comes
-//!   before `_HandleShip`'s move, so it is nudged, then moves.
-//! - The slot is where the engine puts it ([`FormationSlot::position`]),
-//!   from the leader as the fly pass found it, after the player's move
-//!   (an NPC lead's, as the fly half began; see
-//!   [`fleet_formation`](crate::traffic::fleet_formation) for how that
-//!   differs from the original).
-//!   The original works the player's escorts' slots out in
+//!   before `_HandleShip`'s move, so it is nudged, then moves. Double
+//!   time's second pass runs no `_LowLevelAIHandler` (`je 0x44350`
+//!   @0x4402a), so no nudge ([`Beside::second_pass`]).
+//! - **The slot** ([`Npc::slot_at`]): under [`Goal::Follow`], the word of
+//!   its berth as the frame's dispatches left it
+//!   ([`Npc::slot_place`], see
+//!   [`formation_places`](crate::traffic::formation_places)); under
+//!   [`Goal::Formation`], where the engine puts it
+//!   ([`FormationSlot::position`]) from the player as the fly pass found
+//!   it, after the player's move. The original works the player's
+//!   escorts' slots out in
 //!   `_HandlePlayer`, after the player's move
 //!   (`_AICalcFormationPositions(player, 0)` @0x6f1df), which runs before
 //!   `_AIDispatch` (`_DoPlayGameWork` @0x43e19, @0x4429d): the same
@@ -219,14 +223,15 @@ pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
     npc.state.position = Vec2::new(towards(at.x, slot.x), towards(at.y, slot.y));
 }
 
-/// Sub 0xc for `npc` beside its leader at `leader`, its slot at `slot`,
-/// on `handling` under `flight` (see the module docs): the controls, and
-/// the handling they fly by, its velocity, heading, position and glow
-/// copy set as the substate sets them.
+/// Sub 0xc for `npc` beside its leader at `leader`, nudged toward `slot`
+/// when it has one (double time's second pass has none), on `handling`
+/// under `flight` (see the module docs): the controls, and the handling
+/// they fly by, its velocity, heading, position and glow copy set as the
+/// substate sets them.
 fn keep(
     npc: &mut Npc,
     leader: &ShipState,
-    slot: Vec2,
+    slot: Option<Vec2>,
     handling: &Handling,
     flight: FlightRules,
 ) -> (Controls, Handling) {
@@ -251,7 +256,9 @@ fn keep(
     npc.state.velocity = leader.velocity;
     let wanted = matched_heading(npc.state.heading, leader.heading, npc.skill);
     let turn = flight::turn_to(&mut npc.state, wanted, rate);
-    maintain(npc, slot, handling, false);
+    if let Some(slot) = slot {
+        maintain(npc, slot, handling, false);
+    }
     npc.display.drive.glow = GlowCopy::Leader;
     let controls = Controls {
         turn,
@@ -329,12 +336,13 @@ pub(crate) fn fly(
         held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
         return;
     };
+    let slot = (!beside.second_pass).then_some(slot);
     let (controls, flown) = match sub {
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
             let target = beside.guard.unwrap_or(*leader);
             let close = sub == Sub::Close;
-            steer(npc, &target, close, beside.swarm, Some(slot), handling)
+            steer(npc, &target, close, beside.swarm, slot, handling)
         }
     };
     held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
@@ -586,7 +594,7 @@ mod tests {
         let (controls, flown) = keep(
             &mut ship,
             &leader,
-            Vec2::new(50.0, 0.0),
+            Some(Vec2::new(50.0, 0.0)),
             &HANDLING,
             FlightRules::default(),
         );
@@ -651,7 +659,7 @@ mod tests {
         keep(
             &mut ship,
             &leader,
-            Vec2::new(80.0, 30.0),
+            Some(Vec2::new(80.0, 30.0)),
             &HANDLING,
             FlightRules::default(),
         );
@@ -675,7 +683,7 @@ mod tests {
         let (controls, ..) = keep(
             &mut ship,
             &leader,
-            Vec2::new(50.0, 0.0),
+            Some(Vec2::new(50.0, 0.0)),
             &handling,
             FlightRules::default(),
         );
@@ -723,7 +731,7 @@ mod tests {
         let (controls, flown) = keep(
             &mut ship,
             &leader,
-            Vec2::new(100.0, 0.0),
+            Some(Vec2::new(100.0, 0.0)),
             &GENTLE,
             FlightRules::default(),
         );
@@ -749,7 +757,7 @@ mod tests {
         keep(
             &mut ship,
             &leader,
-            Vec2::new(50.0, 0.0),
+            Some(Vec2::new(50.0, 0.0)),
             &HANDLING,
             FlightRules::default(),
         );
@@ -925,6 +933,60 @@ mod tests {
         #[allow(clippy::cast_possible_truncation)]
         let nudge = (f64::from(handling.accel * 10.0) * 0.5) as f32;
         assert_eq!(ship.state.position.x, slot.x + 20.0 - nudge);
+    }
+
+    #[test]
+    fn on_the_second_pass_close_formation_steers_and_matches_with_no_nudge() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_of(&leader);
+        let second = Beside {
+            second_pass: true,
+            ..Beside::default()
+        };
+        let mut ship = escort(at(slot.x + 20.0, slot.y, 1.0, -2.0, 27.0));
+        flown(&mut ship, Some(&leader), second);
+        assert_eq!(ship.state.velocity, leader.velocity);
+        assert_eq!(ship.state.heading, 28.0);
+        assert!(
+            near(
+                ship.state.position,
+                Vec2::new(slot.x + 20.0, slot.y) + leader.velocity
+            ),
+            "{:?}",
+            ship.state
+        );
+    }
+
+    #[test]
+    fn on_the_second_pass_a_closing_swarmer_takes_no_nudge() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let swarm = Some(SwarmLead {
+            aim: Vec2::ZERO,
+            leads_it: false,
+            glow: 12,
+        });
+        let start = at(450.0, 0.0, 0.0, 0.0, 90.0);
+        let second = Beside {
+            swarm,
+            second_pass: true,
+            ..Beside::default()
+        };
+        let mut ship = escort(start);
+        ship.swarm_leader = Some(5);
+        flown(&mut ship, Some(&leader), second);
+        assert_eq!(ship.state.position, start.position, "no nudge");
+        // Its advance pass nudges it.
+        let mut ship = escort(start);
+        ship.swarm_leader = Some(5);
+        flown(
+            &mut ship,
+            Some(&leader),
+            Beside {
+                second_pass: false,
+                ..second
+            },
+        );
+        assert_ne!(ship.state.position, start.position);
     }
 
     // A fleet escort ([`Goal::Follow`]).

@@ -41,10 +41,10 @@
 //! The block's +0x8c gate (@0x8ebd7): +0x8c marks a defence ship, never a
 //! fighter.
 
-use crate::ai::swarm::SwarmLead;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::traffic::autopilot::Beside;
 use crate::traffic::formation_flight;
 use crate::traffic::held_burst::{Flight, Word};
 use crate::traffic::npc::Npc;
@@ -76,18 +76,21 @@ pub fn sub(at: Vec2, carrier: Vec2, window: f32, seen: bool) -> Sub {
 }
 
 /// Sub 0xb of `npc` closing on its carrier at `carrier` on `handling`,
-/// with `swarm` its swarm lead (see the module docs).
+/// with `beside` its swarm lead and whether it flies double time's second
+/// pass, which nudges nothing (see the module docs).
 pub(crate) fn close(
     npc: &mut Npc,
     carrier: &ShipState,
-    swarm: Option<SwarmLead>,
+    beside: Beside,
     handling: &Handling,
 ) -> Flight {
     let slot = npc
         .formation()
         .map(|place| place.position(carrier))
-        .or_else(|| npc.parent_word());
-    let (controls, flown) = formation_flight::steer(npc, carrier, true, swarm, slot, handling);
+        .or_else(|| npc.parent_word())
+        .filter(|_| !beside.second_pass);
+    let (controls, flown) =
+        formation_flight::steer(npc, carrier, true, beside.swarm, slot, handling);
     Flight {
         controls,
         word: Word::Writes,
@@ -100,13 +103,14 @@ pub(crate) fn close(
 mod tests {
     use super::*;
     use crate::ai::Goal;
+    use crate::ai::swarm::SwarmLead;
     use crate::bay::Carrier;
     use crate::combat::ShipRef;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::flight::{FlightRules, FormationFlight};
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
-    use crate::traffic::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
+    use crate::traffic::autopilot::{self, Outcome, Readings, TopSpeeds};
     use crate::traffic::fixture::npc;
     use crate::traffic::ship_display::GlowCopy;
     use crate::trig;
@@ -370,6 +374,21 @@ mod tests {
             (to_zero - Vec2::new(450.0 - nudge, 0.0)).length() < 1e-5,
             "{to_zero:?}"
         );
+    }
+
+    #[test]
+    fn on_the_second_pass_a_returning_swarmer_is_not_nudged() {
+        let start = at(450.0, 0.0, 0.0, 0.0, 90.0);
+        let mut ship = returning(100.0, start);
+        ship.fleet_slot = Some(FormationSlot::default());
+        ship.slot_place = Some(Vec2::new(900.0, 300.0));
+        ship.swarm_leader = Some(5);
+        let second = Beside {
+            second_pass: true,
+            ..Beside::default()
+        };
+        flown_under(&mut ship, Some(&CARRIER), second, FlightRules::default());
+        assert_eq!(ship.state.position, start.position);
     }
 
     #[test]

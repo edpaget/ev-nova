@@ -400,9 +400,14 @@ pub struct Beside {
     /// ([`mine_orders::nearest_box`](crate::ai::mine_orders::nearest_box)),
     /// if any ([`mine_flight`]).
     pub scoop_box: Option<Vec2>,
+    /// Whether it flies double time's second pass, which runs no
+    /// `_LowLevelAIHandler` (`je 0x44350` @0x4402a), so no
+    /// `_AIMaintainFormation` ([`formation_flight::maintain`]).
+    pub second_pass: bool,
 }
 
-/// No swarm lead, no guard, its leader seen, and no asteroid or box.
+/// No swarm lead, no guard, its leader seen, no asteroid or box, on the
+/// advance pass.
 impl Default for Beside {
     fn default() -> Self {
         Self {
@@ -411,6 +416,7 @@ impl Default for Beside {
             leader_seen: true,
             rock: None,
             scoop_box: None,
+            second_pass: false,
         }
     }
 }
@@ -832,7 +838,7 @@ fn dock(
             match return_flight::sub(at, carrier.position, dock.window, seen) {
                 return_flight::Sub::Stop => return Ok(braking(npc, handling, inertia)),
                 return_flight::Sub::Close => {
-                    return Ok(return_flight::close(npc, carrier, beside.swarm, handling));
+                    return Ok(return_flight::close(npc, carrier, beside, handling));
                 }
                 return_flight::Sub::Dock => {}
             }

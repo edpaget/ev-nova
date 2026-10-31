@@ -499,6 +499,65 @@ mod tests {
         assert_eq!(traffic.berth_place(BELOW), word);
     }
 
+    /// A matched [`FAST`] ship far enough off its slot to be nudged by the
+    /// advance pass, near a leader moving (1, 0), facing 3 degrees off the
+    /// leader's 30: the second pass moves it and steps its heading, and
+    /// nudges it not at all.
+    fn second_pass_moves(mut traffic: Traffic, id: NpcId, world: &World) {
+        let ship = of_mut(&mut traffic, id);
+        ship.state = ShipState {
+            position: Vec2::new(20.0, 0.0),
+            velocity: Vec2::new(1.0, 0.0),
+            heading: 27.0,
+        };
+        traffic.move_in(*world, &mut Draws::of(&[]));
+        let ship = of(&traffic, id);
+        assert_eq!(ship.state.heading, 28.0, "still turning");
+        assert_eq!(ship.state.velocity, Vec2::new(1.0, 0.0));
+        assert_eq!(ship.state.position, Vec2::new(21.0, 0.0), "no nudge");
+    }
+
+    /// Moving (1, 0) at 30 degrees.
+    const LEADING: ShipState = ShipState {
+        position: Vec2::new(0.0, 100.0),
+        velocity: Vec2::new(1.0, 0.0),
+        heading: 30.0,
+    };
+
+    #[test]
+    fn the_second_pass_nudges_no_fleet_escort() {
+        let (mut traffic, lead, followers) = fleet(&[ABOVE]);
+        of_mut(&mut traffic, lead).state = LEADING;
+        traffic.form_fleets(None);
+        of_mut(&mut traffic, followers[0]).slot_place = Some(Vec2::ZERO);
+        second_pass_moves(traffic, followers[0], &World::new(&[]));
+    }
+
+    #[test]
+    fn the_second_pass_nudges_no_escort_of_the_player() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut hired = npc(0, ShipStats::new(FAST, &[]));
+        hired.goal = Goal::Formation { guard: None };
+        hired.escort = Some(EscortDuty {
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        let hired = traffic.add_npc(hired);
+        let side = world_with(Condition::Intact).player.expect("the player");
+        let world = World {
+            player: Some(crate::ai::PlayerSide {
+                state: LEADING,
+                ..side
+            }),
+            ..World::new(&[])
+        };
+        second_pass_moves(traffic, hired, &world);
+    }
+
     #[test]
     fn dispatch_places_writes_the_word_for_the_next_frame() {
         let (mut traffic, lead, followers) = fleet(&[BELOW]);

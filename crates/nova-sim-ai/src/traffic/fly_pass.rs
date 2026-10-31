@@ -367,7 +367,8 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 }
 
 /// What `npc`'s flight reads beside the ship it is about, in the fly
-/// half `pass` ([`Beside`]): its swarm lead, its guard where the half
+/// half `pass` ([`Beside`]): whether the half is double time's second
+/// pass, its swarm lead, its guard where the half
 /// found it while it keeps formation ([`Goal::Formation`]) or keeps with
 /// a lead ([`Goal::Follow`]), and whether it sees its leader as the half
 /// began (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): a fleet escort
@@ -392,6 +393,7 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
         swarm: pass.leads.get(&npc.id).copied(),
         guard: guard.and_then(|guard| state_of(pass, guard)),
         leader_seen,
+        second_pass: !pass.think,
         ..Beside::default()
     }
 }
