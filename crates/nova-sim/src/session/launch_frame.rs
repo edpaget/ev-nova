@@ -159,7 +159,6 @@ mod tests {
     use crate::session::fighters::tests::{
         BAY, GUN, QUAD, VIPER, armed_npc, bay, carrier_npc, carrying, flying_by, game_pass, pilot,
     };
-
     use crate::sound::SimSound;
     use crate::testkit::{FakePilotCatalog, weapon};
     use crate::traffic::npc::{Npc, NpcId};
