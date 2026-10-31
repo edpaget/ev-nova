@@ -116,11 +116,15 @@ pub fn fly(
         Leg::RunOut => {
             let mut controls = run_out(&mut npc.state, handling);
             if npc.warp.under_way() {
-                // Sub 3 writes +0x68 and +0x34 = 0: `_HandleShip` skips the
-                // thrust of a ship under way with no burst word (@0x34a96),
-                // and its warp-out test reads that bearing, so the stage
-                // ends as it faces out (@0x346f2-0x34741).
+                // Sub 3 writes +0x68 and, inside its thrust window, +0x34 = 0
+                // (@0x85845-0x85858): `_HandleShip` skips the thrust of a
+                // ship under way with no burst word (@0x34a96), and its
+                // warp-out test reads that bearing, so the stage ends as it
+                // faces out (@0x346f2-0x34741).
                 npc.warp.aim = trig::intercept_angle(Vec2::ZERO, npc.state.position);
+                if controls.thrust {
+                    npc.owed_burst = None;
+                }
                 controls.thrust = false;
             }
             (*handling, Flight::from(controls))
@@ -778,6 +782,47 @@ mod tests {
     }
 
     // A stage still under way.
+
+    #[test]
+    fn running_out_under_way_inside_its_thrust_window_drops_what_it_owes_with_no_thrust() {
+        // Sub 3 writes +0x34 inside its window whatever `_HandleShip` then
+        // skips (@0x85845-0x85858, @0x34a96).
+        let mut inside = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::JumpOut,
+            at(500.0, 0.0, 90.0),
+        );
+        inside.warp.stage = 3.0;
+        inside.owed_burst = Some(1.0);
+        let rules = FlightRules::default();
+        fly(
+            &mut inside,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(inside.owed_burst, None);
+        assert_eq!(inside.state.velocity, Vec2::ZERO, "no thrust");
+        // Outside it, off the bearing by its turn and 3 degrees, sub 3
+        // writes nothing.
+        let off = 90.0 + HANDLING.turn_rate + RUN_OUT_THRUST;
+        let mut outside = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::JumpOut,
+            at(500.0, 0.0, off),
+        );
+        outside.warp.stage = 3.0;
+        outside.owed_burst = Some(1.0);
+        fly(
+            &mut outside,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(outside.owed_burst, Some(1.0));
+    }
 
     #[test]
     fn running_out_under_way_it_takes_no_thrust_and_reads_its_out_bearing_until_its_stage_ends() {
