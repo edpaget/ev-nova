@@ -154,6 +154,19 @@ impl Traffic {
         let free = (1..bound).filter(|berth| !held.contains(berth)).count();
         u32::try_from(free).unwrap_or(u32::MAX)
     }
+
+    /// The lowest berth of any NPC above `after`, or the lowest of all
+    /// with none: the next slot `_AIDispatch`'s loop reaches that holds a
+    /// ship (@0x44270-0x442ae). It reads the ships as they stand, so a
+    /// fighter just put in a slot above is reached as that slot comes.
+    #[must_use]
+    pub fn next_slot_after(&self, after: Option<u32>) -> Option<u32> {
+        self.npcs
+            .iter()
+            .map(|npc| npc.berth)
+            .filter(|&berth| after.is_none_or(|after| berth > after))
+            .min()
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +431,28 @@ mod tests {
         assert_eq!(traffic.free_berths(56), 1);
         assert_eq!(traffic.free_berths(8), 55 - 6);
         assert_eq!(traffic.free_berths(64), 0);
+    }
+
+    #[test]
+    fn next_slot_after_is_the_lowest_berth_above() {
+        // Added out of order, as the table is not in berth order.
+        let mut traffic = Traffic::new();
+        for berth in [5, 2] {
+            traffic.add_npc_at(carrier(), berth);
+        }
+        assert_eq!(traffic.next_slot_after(None), Some(2));
+        assert_eq!(traffic.next_slot_after(Some(2)), Some(5));
+        traffic.add_npc_at(carrier(), 3);
+        assert_eq!(traffic.next_slot_after(Some(2)), Some(3), "added since");
+    }
+
+    #[test]
+    fn next_slot_after_is_none_above_the_last() {
+        let mut traffic = Traffic::new();
+        assert_eq!(traffic.next_slot_after(None), None, "an empty system");
+        traffic.add_npc_at(carrier(), 5);
+        assert_eq!(traffic.next_slot_after(Some(5)), None);
+        assert_eq!(traffic.next_slot_after(Some(9)), None);
     }
 
     /// Keeps each goal, and asks for both a goal-4 sniper's launches as
