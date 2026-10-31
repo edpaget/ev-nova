@@ -48,7 +48,10 @@
 //! the player, it follows (sub-goal 0xd) while the player's +0x50 is
 //! above 0, else it gives up (goal 0); led by an NPC, the leader is put
 //! on goal 2, and it follows while the leader's sub-goal is 1 or 4, else
-//! gives up (goal 0, its target dropped). The NPC-parent test reads the
+//! gives up (goal 0, its target dropped). Its travel stellar, +0x6c, is
+//! -1 for a jump alone or a give-up (@0x8df5d, @0x8dec2, @0x8df3a), and
+//! its NPC leader's for a follow (@0x8df18-0x8df22,
+//! [`travel`](crate::ai::travel)). The NPC-parent test reads the
 //! leader's substate ([`jump_with_leader::leaves_by_substate`]): its own
 //! jump or goal 2's brake. The push of the leader onto goal 2
 //! ([`send_leaders_out`]) skips a follower whose high level waits and a
@@ -69,9 +72,10 @@
 //! its class's, @0x85a8f-0x85af1); while the leader is more than 10° off
 //! its own +0x68 (@0x85af8-0x85b33), more than this ship's turn rate
 //! off gives up its stage (+0x50 = −1.0) and aims at the leader's +0x68,
-//! and within it waits (+0x4c = 180.0, @0x85bc3); within 10° it starts
-//! its stage (+0x50 from 0 to 1.0, stamped), its velocity × 0.95, its
-//! thrust off, and +0x50 grows by 1.0 (@0x85bcf-0x85c5a).
+//! and within it waits (+0x4c = 180.0, @0x85bc3); within 10° it copies
+//! its NPC leader's +0x6c (@0x85bf1-0x85bf6), starts its stage (+0x50 from
+//! 0 to 1.0, stamped), its velocity × 0.95, its thrust off, and +0x50
+//! grows by 1.0 (@0x85bcf-0x85c5a).
 //!
 //! **`_HandleShip`'s warp-out** (@0x346b3-0x34a31; [`warp_block`]), on
 //! both passes, for any ship with +0x50 above 0 that is not disabled
@@ -109,10 +113,11 @@
 //!
 //! **Left out.**
 //!
-//! - Sub-goal 0xd's nav copy, +0x6c (@0x85bf1-0x85bf6), and goal 0xb's
-//!   (@0x8de9d-0x8deb0, @0x8df18-0x8df22): the engine's NPCs keep no
-//!   travel stellar for a jump
-//!   (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-4-escort-travel-stellar-into-pirate-think).
+//! - The copies of the player's own +0x6c onto a follower of its jump
+//!   (@0x83a7c, @0x8de9d-0x8deb0, @0x85bf1-0x85bf6 under parent 0):
+//!   [`WarpWorld`] carries no nav stellar, and such a ship leaves with the
+//!   player, or gives up with -1
+//!   (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-8-left-out-of-phase-4).
 //! - The hold's 2/3 swap by target for a ship already in goal 2 or 3
 //!   (@0x8d557-0x8d56b), the push on a leader the player leads
 //!   (@0x8def0), goal 0xb's sub-1 test for sub-1 holders other than goal
@@ -129,7 +134,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ai::Goal;
+use crate::ai::{Goal, travel};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::{self, Controls, FlightRules, drag_by, turned};
@@ -283,6 +288,10 @@ pub struct LeaderWarp {
     /// copies (see [`follow_jump`], and the close formation's copy in
     /// [`ship_display`](crate::traffic::ship_display)).
     pub glow: i16,
+    /// Whether its travel stellar, +0x6c, is set, as
+    /// [`travel::is_set`] reads it: an NPC's, which goal 0xb and sub-goal
+    /// 0xd copy. The player's reads false (see the module docs).
+    pub travel_set: bool,
 }
 
 /// What the traffic reads of the warps: the player's, the warp sound's
@@ -421,6 +430,9 @@ pub fn follow_jump(npc: &mut Npc, leader: LeaderWarp, player: bool) -> FollowSte
         }
         return FollowStep::Waiting;
     }
+    if !player {
+        npc.travel_set = leader.travel_set;
+    }
     if npc.warp.stage == 0.0 {
         npc.warp.stage = 1.0;
         npc.warp.stamp();
@@ -540,6 +552,7 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
                 velocity: npc.state.velocity,
                 leaving: jump_with_leader::leaves_by_substate(npc),
                 glow: npc.display.glow,
+                travel_set: travel::is_set(npc),
             };
             (npc.id, view)
         })
@@ -629,26 +642,36 @@ pub fn fly_jump(
             WarpGoal::Follow(_) => {
                 // The high level's wait skips goal 0xb's check: the low
                 // level flies sub 0xd on (@0x8d4b9-0x8d4d2).
-                let check = if paused || npc.high_level_waits() {
+                let skipped = paused || npc.high_level_waits();
+                let check = if skipped {
                     FollowCheck::Follow
                 } else {
                     follow_check(leader)
                 };
                 match check {
-                    FollowCheck::Own => npc.begin_own_jump(),
+                    FollowCheck::Own => {
+                        // +0x6c -1 (@0x8df5d).
+                        npc.travel_set = false;
+                        npc.begin_own_jump();
+                    }
                     FollowCheck::GiveUp => {
-                        // Goal 0, sub 0, target -1 (@0x8deb9-0x8ded1,
-                        // @0x8df31-0x8df49).
+                        // Goal 0, sub 0, target and +0x6c -1
+                        // (@0x8deb9-0x8ded1, @0x8df31-0x8df49).
                         npc.goal = Goal::Idle;
                         npc.target = None;
+                        npc.travel_set = false;
                         npc.warp.goal = None;
                         return None;
                     }
                     FollowCheck::Follow => {
-                        if let Some((player, leader)) = leader
-                            && follow_jump(npc, leader, player) == FollowStep::Formation
-                        {
-                            return None;
+                        if let Some((player, leader)) = leader {
+                            if !skipped && !player {
+                                // +0x6c its leader's (@0x8df18-0x8df22).
+                                npc.travel_set = leader.travel_set;
+                            }
+                            if follow_jump(npc, leader, player) == FollowStep::Formation {
+                                return None;
+                            }
                         }
                     }
                 }
@@ -993,6 +1016,7 @@ mod tests {
             velocity: Vec2::new(1.0, 0.5),
             leaving: true,
             glow: 20,
+            travel_set: false,
         }
     }
 
@@ -1267,6 +1291,7 @@ mod tests {
                 velocity: Vec2::new(1.0, 2.0),
                 leaving: true,
                 glow: 7,
+                travel_set: false,
             }
         );
         assert!(!views[&crate::traffic::npc::NpcId(2)].leaving);
@@ -1550,6 +1575,152 @@ mod tests {
         free.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
         assert_eq!(fly_jump_by(&mut free, &views, &world, true), None);
         assert_eq!(free.warp.goal, None, "with no wait, it gives up");
+    }
+
+    // +0x6c.
+
+    /// NPC 4, a lead.
+    const LEAD: NpcId = NpcId(4);
+
+    /// [`leader`] as NPC [`LEAD`]'s view, on its way out, not yet warping,
+    /// its travel stellar `travel_set`.
+    fn views_of(travel_set: bool) -> BTreeMap<NpcId, LeaderWarp> {
+        BTreeMap::from([(
+            LEAD,
+            LeaderWarp {
+                stage: 1.0,
+                leaving: true,
+                travel_set,
+                ..leader()
+            },
+        )])
+    }
+
+    /// [`ship`] following NPC [`LEAD`]'s jump, its travel stellar `own`.
+    fn following_lead(own: bool) -> Npc {
+        let mut ship = ship();
+        ship.leader = Some(LEAD);
+        ship.travel_set = own;
+        ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
+        ship
+    }
+
+    #[test]
+    fn goal_0xb_copies_its_npc_leaders_travel_stellar() {
+        let world = in_world(world());
+        for set in [false, true] {
+            let mut ship = following_lead(!set);
+            fly_jump_by(&mut ship, &views_of(set), &world, true);
+            assert_eq!(ship.travel_set, set, "@0x8df18-0x8df22");
+            assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(LEAD))));
+            let mut ship = following_lead(!set);
+            ship.ai_wait = 1;
+            fly_jump_by(&mut ship, &views_of(set), &world, true);
+            assert_eq!(ship.travel_set, !set, "the wait skips the check");
+            let mut paused = following_lead(!set);
+            fly_jump(&mut paused, &views_of(set), &world, true, true);
+            assert_eq!(paused.travel_set, !set, "goal 0x13 runs no check");
+        }
+    }
+
+    #[test]
+    fn giving_up_or_jumping_alone_clears_it() {
+        let world = in_world(world());
+        // The player no longer on its jump (@0x8dec2).
+        let mut ship = following_lead(true);
+        ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        fly_jump_by(&mut ship, &BTreeMap::new(), &world, true);
+        assert_eq!(ship.goal, Goal::Idle);
+        assert!(!ship.travel_set);
+        // An NPC lead not on its way out (@0x8df3a).
+        let stays = BTreeMap::from([(LEAD, LeaderWarp::default())]);
+        let mut ship = following_lead(true);
+        fly_jump_by(&mut ship, &stays, &world, true);
+        assert_eq!(ship.goal, Goal::Idle);
+        assert!(!ship.travel_set);
+        // No leader (@0x8df5d).
+        let mut ship = following_lead(true);
+        fly_jump_by(&mut ship, &BTreeMap::new(), &world, true);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own));
+        assert!(!ship.travel_set);
+    }
+
+    #[test]
+    fn a_follower_of_the_player_keeps_its_own() {
+        // The copies of the player's own +0x6c are left out (@0x8de9d-0x8deb0,
+        // @0x85bf1-0x85bf6 under parent 0).
+        let mut warp = world();
+        warp.player = LeaderWarp {
+            stage: 4.0,
+            heading: 90.0,
+            aim: 90,
+            ..LeaderWarp::default()
+        };
+        let world = in_world(warp);
+        for own in [false, true] {
+            let mut ship = following_lead(own);
+            ship.leader = None;
+            ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+            fly_jump_by(&mut ship, &BTreeMap::new(), &world, true);
+            assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+            assert_eq!(ship.travel_set, own);
+        }
+    }
+
+    #[test]
+    fn past_its_wait_a_warping_follower_copies_it() {
+        // @0x85bf1-0x85bf6: sub 0xd's warping branch alone.
+        let warping = LeaderWarp {
+            travel_set: true,
+            ..leader()
+        };
+        let mut ship = following_lead(false);
+        assert_eq!(
+            follow_jump(&mut ship, warping, false),
+            FollowStep::Warping,
+            "under an NPC"
+        );
+        assert!(ship.travel_set);
+        let cleared = LeaderWarp {
+            travel_set: false,
+            ..leader()
+        };
+        assert_eq!(follow_jump(&mut ship, cleared, false), FollowStep::Warping);
+        assert!(!ship.travel_set);
+        let mut led = following_lead(false);
+        assert_eq!(follow_jump(&mut led, warping, true), FollowStep::Warping);
+        assert!(!led.travel_set, "the player's is left out");
+        for (step, view) in [
+            (
+                FollowStep::Formation,
+                LeaderWarp {
+                    stage: 1.0,
+                    ..warping
+                },
+            ),
+            (
+                FollowStep::Waiting,
+                LeaderWarp {
+                    aim: 180,
+                    ..warping
+                },
+            ),
+        ] {
+            let mut ship = following_lead(false);
+            assert_eq!(follow_jump(&mut ship, view, false), step);
+            assert!(!ship.travel_set, "{step:?}");
+        }
+    }
+
+    #[test]
+    fn a_leaders_view_reads_its_travel_stellar_as_set_by_a_stellar_goal_too() {
+        let mut lead = ship();
+        assert!(!leaders(std::slice::from_ref(&lead))[&lead.id].travel_set);
+        lead.travel_set = true;
+        assert!(leaders(std::slice::from_ref(&lead))[&lead.id].travel_set);
+        lead.travel_set = false;
+        lead.goal = Goal::Land(crate::catalog::StellarId(128));
+        assert!(leaders(std::slice::from_ref(&lead))[&lead.id].travel_set);
     }
 
     #[test]

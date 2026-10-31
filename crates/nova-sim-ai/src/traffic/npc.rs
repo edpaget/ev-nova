@@ -429,8 +429,11 @@ pub struct Npc {
     /// -1 (see [`travel`](crate::ai::travel)), the disabled reset
     /// ([`disabled_reset`](crate::traffic::disabled_reset), @0x8fece) and a
     /// successor taking over its lost lead's
-    /// ([`succession`](crate::traffic::succession), @0x893b0). Every spawn
-    /// clears it (@0x1c3c1, @0x3c444, @0x3c9e2).
+    /// ([`succession`](crate::traffic::succession), @0x893b0). A ship in a
+    /// fleet holds its leader's slot here, which reads as set, through
+    /// `_EscortAI`'s order block and its leader's jump (the module docs of
+    /// [`travel`](crate::ai::travel) list every write), and carries it out
+    /// of the fleet. Every spawn clears it (@0x1c3c1, @0x3c444, @0x3c9e2).
     pub travel_set: bool,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself

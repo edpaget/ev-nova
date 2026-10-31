@@ -227,6 +227,8 @@ pub mod leave_flight;
 #[cfg(test)]
 mod listed_stellar_tests;
 #[cfg(test)]
+mod lost_lead_travel_tests;
+#[cfg(test)]
 mod lost_sight_ai_tests;
 #[cfg(test)]
 mod lost_sight_tests;
@@ -1773,7 +1775,8 @@ impl Traffic {
     /// this tick, not entering one as the tick began, with that gate and
     /// its AI type (see
     /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
-    /// loses its lead, its carrier and its target, its provocation -1
+    /// loses its lead, its carrier and its target, its travel stellar the
+    /// lead's, the gate (@0x8dd30), its provocation -1
     /// ([`gate_entry::RELEASED_PROVOCATION`]), takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
     /// over a bribe's ([`Npc::overwrite_bribe`], as the original's write
@@ -1794,6 +1797,7 @@ impl Traffic {
                 follower.ai_type = gate_entry::released_ai_type(ai_type);
                 follower.overwrite_bribe();
                 follower.target = None;
+                follower.travel_set = true;
                 follower.provoked = gate_entry::RELEASED_PROVOCATION;
                 follower.goal = Goal::EnterGate(gate);
             }

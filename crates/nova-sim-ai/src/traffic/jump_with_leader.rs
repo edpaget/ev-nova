@@ -34,9 +34,10 @@
 //! ship's think decides it follows its leader's jump
 //! ([`Decision::follows_jump`]): an NPC's escort while its lead
 //! [draws its followers](draws_followers)
-//! ([`fleet_escort`](crate::ai::fleet_escort)), and every ship the player
-//! leads while the player's +0x50 is above 0, its brake included
-//! ([`EscortAi`](crate::ai::EscortAi)). Its target goes, and right after
+//! ([`fleet_escort`](crate::ai::fleet_escort)), copying its lead's travel
+//! stellar (@0x83a77-0x83a7c, [`travel`](crate::ai::travel)), and every
+//! ship the player leads while the player's +0x50 is above 0, its brake
+//! included ([`EscortAi`](crate::ai::EscortAi)). Its target goes, and right after
 //! the goals are taken ([`enter`]) it follows the jump (sub 0xd,
 //! [`Npc::follow_leaders_jump`]), or, an NPC's escort that flies
 //! inertialess ([`Npc::flies_inertialess`]), leaves its fleet to jump on
@@ -208,8 +209,8 @@ impl Traffic {
     /// `_AIDispatch`'s cancels on the jump path (@0x900d5-0x901a3), in
     /// `world`: each ship there in goal 0xb is put back to goal 0 when its
     /// leader can no longer take it along ([`cancelled`]). It loses its
-    /// goal, substate, target and jump, and gives up its stage (+0x50 =
-    /// -1.0).
+    /// goal, substate, target, travel stellar (@0x90118, @0x90196) and
+    /// jump, and gives up its stage (+0x50 = -1.0).
     ///
     /// The original cancels inside each ship's dispatch, reading its lead's
     /// goal as the frame's lower slots left it; here the cancels read the
@@ -230,6 +231,7 @@ impl Traffic {
                 npc.goal = Goal::Idle;
                 npc.pursuit = Pursuit::default();
                 npc.target = None;
+                npc.travel_set = false;
                 npc.warp.goal = None;
                 npc.warp.give_up();
             }
@@ -265,7 +267,8 @@ fn cancelled(npc: &Npc, npcs: &[Npc], player: Option<Condition>) -> bool {
 /// can't jump (`_AIShipHasFuelForJump` inlined, [`leave::can_jump`] by
 /// `reading` of [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel))
 /// turns back to dock with its carrier: goal 5 ([`Goal::Dock`]), target
-/// -1, its jump dropped. Its stage is left, for the warp-out's
+/// -1, its travel stellar its carrier's slot (@0x8d621), its jump dropped.
+/// Its stage is left, for the warp-out's
 /// not-jumping test to zero. The player's fighters dock with the player,
 /// an NPC's with its carrier. It plays no sound and draws nothing.
 pub fn turn_back(npc: &mut Npc, reading: RuleSource) {
@@ -275,6 +278,7 @@ pub fn turn_back(npc: &mut Npc, reading: RuleSource) {
     if npc.follows_leaders_jump() && !leave::can_jump(npc, reading) {
         npc.goal = Goal::Dock(carrier.ship);
         npc.target = None;
+        npc.travel_set = true;
         npc.warp.goal = None;
     }
 }
@@ -757,6 +761,20 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_turned_back_holds_its_carriers_slot() {
+        // +0x6c its parent (@0x8d621).
+        let reading = crate::rulebook::RuleSource::Engine;
+        for carrier in [ShipRef::Player, ShipRef::Npc(NpcId(4))] {
+            let mut short = fighter_on_jump(carrier, true);
+            turn_back(&mut short, reading);
+            assert!(short.travel_set, "{carrier:?}");
+            let mut able = fighter_on_jump(carrier, false);
+            turn_back(&mut able, reading);
+            assert!(!able.travel_set, "{carrier:?}: it jumps on");
+        }
+    }
+
+    #[test]
     fn an_npc_carriers_fighter_short_of_fuel_turns_back_to_its_jumping_carrier_in_the_fly_half() {
         let mut traffic = Traffic::with_interval(1);
         let mut carrier = far(0);
@@ -905,6 +923,31 @@ mod tests {
         let mut hulk = npcs;
         hulk[1].no_ai = true;
         assert!(!cancelled(&hulk[1], &hulk, None), "no jump path");
+    }
+
+    #[test]
+    fn a_cancelled_follow_loses_its_travel_stellar() {
+        // @0x90118 under the player, @0x90196 under an NPC.
+        use crate::combat::hull::Condition;
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.condition = Condition::Disabled;
+        for leader in [ShipRef::Npc(NpcId(0)), ShipRef::Player] {
+            let attacking = Goal::Attack(ShipRef::Player);
+            let mut ships = on_leaders_jump(leader, 0.5, attacking, Condition::Intact);
+            ships[1].travel_set = true;
+            let mut traffic = Traffic::with_interval(1);
+            for ship in ships {
+                traffic.add_npc(ship);
+            }
+            let world = World {
+                player: Some(player),
+                ..jumping_world(0.0)
+            };
+            traffic.cancel_jump_follows(&world);
+            let escort = of(&traffic, NpcId(1));
+            assert_eq!(escort.goal, Goal::Idle, "{leader:?}");
+            assert!(!escort.travel_set, "{leader:?}");
+        }
     }
 
     #[test]
