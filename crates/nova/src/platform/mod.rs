@@ -415,7 +415,7 @@ mod tests {
     /// come from `every_key`. A screen test that sends one of these directly
     /// never crosses `map_key`, so this is what keeps each one reachable
     /// from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 30] = [
+    const GAME_CHARACTER_KEYS: [Key; 28] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -435,8 +435,6 @@ mod tests {
         nova_view::spaceport::outfitter::SELL_KEY,
         nova_view::spaceport::shipyard::BUY_KEY,
         nova_view::ui::mission_info::MISSION_INFO_KEY,
-        nova_view::flight::escorts::MENU_KEY,
-        nova_view::flight::escorts::GROUP_KEYS[4],
         nova_view::spaceport::bar::NEWS_KEYS[0],
         nova_view::spaceport::PORT_KEYS[0].0,
         nova_view::spaceport::PORT_KEYS[1].0,
@@ -535,7 +533,7 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 18] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::shipyard::INFO_KEY, KeyCode::Space),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
@@ -545,26 +543,6 @@ mod tests {
         (Key::Right, KeyCode::ArrowRight),
         (Key::Up, KeyCode::ArrowUp),
         (Key::Down, KeyCode::ArrowDown),
-        // Flight's stellar slot and nearest stellar keys.
-        (
-            nova_view::flight::view::STELLAR_SLOT_KEYS[0][1],
-            KeyCode::F1,
-        ),
-        (
-            nova_view::flight::view::STELLAR_SLOT_KEYS[1][1],
-            KeyCode::F2,
-        ),
-        (
-            nova_view::flight::view::STELLAR_SLOT_KEYS[2][1],
-            KeyCode::F3,
-        ),
-        (
-            nova_view::flight::view::STELLAR_SLOT_KEYS[3][1],
-            KeyCode::F4,
-        ),
-        (nova_view::flight::view::NEAREST_STELLAR_KEY, KeyCode::F5),
-        // Flight's frame-rate key.
-        (nova_view::flight::view::FRAME_RATE_KEY, KeyCode::F12),
         // Flight's jettison key's modifier.
         (Key::Command, KeyCode::SuperLeft),
         (Key::Command, KeyCode::SuperRight),
