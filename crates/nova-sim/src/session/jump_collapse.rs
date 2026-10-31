@@ -167,7 +167,7 @@ mod tests {
     use crate::session::step::StepCollaborators;
     use crate::session::tests::{DISABLING, OUT, bound_for_131};
     use crate::sound::PLAYER_EXPLOSION_HALTS;
-    use crate::testkit::{Passive, work, work_with};
+    use crate::testkit::{FakePilotCatalog, Passive, work, work_with};
     use crate::testkit::{catalog, fly_out};
 
     // The pure parts.
@@ -471,6 +471,17 @@ mod tests {
     /// `count` steps on `session` by rules that keep a disabled player
     /// disabled, Hyperspace Effects and double time held as given.
     fn stepped(session: &mut Session, count: u32, effects: bool, double: bool) -> StepReport {
+        stepped_over(session, &catalog(), count, effects, double)
+    }
+
+    /// [`stepped`], over `catalog`.
+    fn stepped_over(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        count: u32,
+        effects: bool,
+        double: bool,
+    ) -> StepReport {
         let mut report = StepReport::default();
         let input = StepInput {
             window_width: 1024,
@@ -482,7 +493,7 @@ mod tests {
             &input,
             count,
             &mut StepCollaborators {
-                catalog: &catalog(),
+                catalog,
                 behaviour: &Passive,
                 rules: DISABLING,
                 chance: &mut NeverFires,
@@ -515,29 +526,63 @@ mod tests {
         assert_eq!(session.preparing_jump(), None, "collapsed");
     }
 
-    #[test]
-    fn the_plain_keys_act_right_after_a_lit_collapse_as_the_session_keeps_no_note() {
-        use crate::session::MissionInfoPress;
-        let mut session = warping_lit(false);
+    /// `session`, flying over `catalog`, sent out on a jump to 131 and
+    /// collapsed under the white on a step, its report checked.
+    fn collapsed_lit(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.ship.settle_box(&session.pilot, &session.setup);
+        session.plot_course(SystemId(131)).expect("a route");
+        session.ship.player.position = OUT;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = 90.0;
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        while session.hyper_gamma() <= 0.0 {
+            work(session, catalog, Controls::default());
+        }
         session.ship.condition = Condition::Disabled;
-        stepped(&mut session, 1, true, false);
+        let report = stepped_over(session, catalog, 1, true, false);
+        assert_eq!(lit_steps(&report), [true]);
+        assert_eq!(session.jumping(), None, "collapsed");
         session.take_sounds();
+    }
+
+    #[test]
+    fn plain_p_and_i_act_right_after_a_lit_collapse_as_the_session_keeps_no_note() {
+        use crate::session::mission_screens::tests::{docked, screens, to_mars};
+        let catalog = screens(vec![to_mars(130)], Vec::new());
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(crate::catalog::MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        collapsed_lit(&mut session, &catalog);
         assert!(session.press_player_info(), "P opens");
         assert_eq!(session.take_sounds(), [], "with no beep");
-        assert_eq!(
-            session.press_mission_info(),
-            MissionInfoPress::NoActiveMissions,
-            "I is the plain key's"
+        assert!(
+            matches!(
+                session.press_mission_info(),
+                crate::session::MissionInfoPress::Opens(_)
+            ),
+            "I opens, not refused as the pass's own would be"
         );
-        let catalog = crate::session::hail::tests::hailable();
-        let mut session = crate::session::hail::tests::targeting(&catalog);
-        session.mode = crate::session::Mode::Jumping(Jump::Hyperspace {
-            to: SystemId(131),
-            warp: 0,
-        });
-        session.collapse_jump(false);
-        let mut chance = crate::testkit::Draws::of(&crate::session::hail::tests::opening(0));
-        let hailed = session.open_hail(&catalog, &crate::hail::HailOptions::default(), &mut chance);
+    }
+
+    #[test]
+    fn plain_y_acts_right_after_a_lit_collapse_as_the_session_keeps_no_note() {
+        use crate::session::hail::tests::{hailable, npc, opening, targeting};
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        collapsed_lit(&mut session, &catalog);
+        // The rules that keep the player disabled disable the target too.
+        npc(&mut session).condition = Condition::Intact;
+        let hailed = session.hail_key(
+            &catalog,
+            &crate::hail::HailOptions::default(),
+            false,
+            &mut crate::testkit::Draws::of(&opening(0)),
+        );
         assert!(
             matches!(hailed, Ok(crate::session::Hailed::Comm(_))),
             "Y opens: {hailed:?}"

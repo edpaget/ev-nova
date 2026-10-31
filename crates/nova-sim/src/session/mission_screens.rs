@@ -921,7 +921,7 @@ impl MissionRun {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{
         DateAffixes, DescMovie, MissionRecord, PlaceNames, StellarId, SystemId, TextGraphics,
@@ -955,7 +955,10 @@ mod tests {
 
     /// [`catalog`], named, with 131 linked back to 130, `missions` and
     /// `texts`.
-    fn screens(missions: Vec<MissionRecord>, texts: Vec<MissionTexts>) -> FakePilotCatalog {
+    pub(in crate::session) fn screens(
+        missions: Vec<MissionRecord>,
+        texts: Vec<MissionTexts>,
+    ) -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.star_map[1].links.push(SystemId(130));
         catalog.place_names = names();
@@ -969,7 +972,7 @@ mod tests {
     }
 
     /// A session of `catalog` landed on 128 and settled, every roll 1.
-    fn docked(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn docked(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, catalog);
@@ -977,7 +980,7 @@ mod tests {
     }
 
     /// Mission `id`, offered at the mission computer, to Mars for 900.
-    fn to_mars(id: i16) -> MissionRecord {
+    pub(in crate::session) fn to_mars(id: i16) -> MissionRecord {
         MissionRecord {
             travel_stel: 140,
             pay_val: 900,
