@@ -6240,17 +6240,19 @@ mod tests {
 
     #[test]
     fn an_escort_whose_lead_is_gone_ends_its_burst_at_its_own_top_speed() {
-        // Past tick 0: at tick 0 its goal is 0x15 still, and the lost lead's
-        // write ends that, so it wouldn't burst (`Npc::leaves_gate_goal`).
+        // By `NpcEscortAi`'s other reading: by the engine's the check writes
+        // -1.0 over its -999.0 and a goal over its goal 8, so its burst ends
+        // there (`succession`).
         let mut traffic = Traffic::new();
-        let escort = traffic.add_npc(Npc {
-            mode: Mode::LeavingGate { tick: 1 },
-            ..bursting(Npc {
-                leader: Some(NpcId(99)),
-                ..of_speed(0, 6.0)
-            })
-        });
-        let speed = burst_speed(&mut traffic, &World::new(&[]), escort);
+        let escort = traffic.add_npc(bursting(Npc {
+            leader: Some(NpcId(99)),
+            ..of_speed(0, 6.0)
+        }));
+        let world = World {
+            npc_escort_ai: RuleSource::Bible,
+            ..World::new(&[])
+        };
+        let speed = burst_speed(&mut traffic, &world, escort);
         assert!((speed - 6.7).abs() < 1e-4, "{speed}");
     }
 
