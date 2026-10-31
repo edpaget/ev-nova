@@ -730,6 +730,7 @@ fn fighter(
         odds: crate::traffic::odds_cache::STALE,
         no_ai: false,
         kept_escort_ai: false,
+        mission_let_go: false,
         defends: None,
     };
     fighter.independent();

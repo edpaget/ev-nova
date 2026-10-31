@@ -262,8 +262,8 @@ impl NovaAi {
     }
 
     /// The behaviour for `npc` among `around`: the escorts' for the
-    /// player's escort (its fighters too) and for a mission escort
-    /// ([`Npc::mission_escort`]); for a ship with an NPC parent, a leader
+    /// player's escort (its fighters too) and for a mission escort, let go
+    /// or not ([`Npc::thinks_as_escort`]); for a ship with an NPC parent, a leader
     /// or a carrier (the original's AI types 6 and 5, `_AIDispatch`
     /// @0x90011-0x90016), the fleet escorts' ([`FleetEscortAi`]) by the
     /// engine's reading of [`RuleKey::NpcEscortAi`], and by its other
@@ -272,7 +272,7 @@ impl NovaAi {
     /// a government with `Flags` 0x1000 ([`PLUNDERS`], `_AIDispatch`
     /// @0x8ffc8-0x8fff0); otherwise the one for its AI type.
     fn of(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
-        if npc.escorts_player() {
+        if npc.thinks_as_escort() {
             return &*self.escorts;
         }
         if (npc.leader.is_some() || npc.carrier.is_some())
@@ -1787,6 +1787,31 @@ mod tests {
         };
         assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
         assert!(mark.asked.borrow().is_empty(), "not its type's");
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_still_goes_to_the_escort_behaviour() {
+        // The dispatch leads it again before its think (@0x8fc03-0x8fc22),
+        // so it is no miner either (@0x8ff80).
+        let (ai, _, [escorts, _, miners]) = marked();
+        for ship in [
+            of(1, AiType::Warship),
+            mining(of(1, AiType::Warship), MINER_BITS),
+        ] {
+            let mut let_go = mission_ship(ship, 1);
+            if let Some(mission) = &mut let_go.mission {
+                mission.formation = Some(crate::escort::FormationSlot::default());
+            }
+            let_go.mission_let_go = true;
+            let npcs = [let_go];
+            let around = with_player(&npcs, Condition::Intact);
+            assert_eq!(
+                ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+                Goal::Attack(escorts.ship())
+            );
+            assert_eq!(ai.target(&npcs[0], &around), Some(escorts.ship()));
+        }
+        assert!(miners.asked.borrow().is_empty(), "not a miner's");
     }
 
     /// `npc` with a gun ahead that destroys ([`fire::destroys`]).

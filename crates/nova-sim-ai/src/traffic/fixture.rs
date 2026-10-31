@@ -99,6 +99,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         odds: 0.0,
         no_ai: false,
         kept_escort_ai: false,
+        mission_let_go: false,
         defends: None,
     }
 }

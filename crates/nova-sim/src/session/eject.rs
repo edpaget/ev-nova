@@ -403,7 +403,7 @@ impl Session {
     /// carrier, deciding afresh ([`Session::release_led`]), as its think
     /// that frame takes `_EscortAI`'s lost-parent branch (see the module
     /// docs).
-    fn release_for_the_pod(&mut self, id: NpcId) {
+    pub(super) fn release_for_the_pod(&mut self, id: NpcId) {
         if let Some(mark) = self.space.npc_mut(id).and_then(|npc| npc.mission.as_mut()) {
             mark.formation = None;
         }
@@ -549,6 +549,7 @@ impl PlayerShip {
             // AI type -1 (@0x6f31f).
             no_ai: true,
             kept_escort_ai: false,
+            mission_let_go: false,
             defends: None,
         };
         hulk.independent();
@@ -1733,6 +1734,39 @@ mod tests {
         assert!(!npc(mission).escorts_player(), "out of the formation");
         assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
         assert_eq!(session.space.escorts.fleet, []);
+    }
+
+    #[test]
+    fn the_pod_leaves_a_mission_escort_let_go_and_its_next_dispatch_leads_it_again() {
+        // +0x9a -1, so the walk's `== 0` fails (@0x6f71d), where a hit after
+        // the AI loop (@0x44385) leaves parent 0 and the walk releases it.
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 4));
+        let mission = session.space.traffic.add_npc(Npc {
+            mission: Some(MissionMark {
+                slot: 0,
+                behav: ShipBehav::EscortPlayer,
+                formation: Some(FormationSlot::default()),
+                order: None,
+            }),
+            mission_let_go: true,
+            ..npc(0, ShipStats::default())
+        });
+        session.ship.condition = Condition::Disabled;
+        eject_check(&mut session, true);
+        assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
+        let left = session.space.npc(mission).expect("here");
+        assert!(
+            left.mission.is_some_and(|mark| mark.formation.is_some()),
+            "not released"
+        );
+        assert!(left.mission_let_go);
+        fight(&mut session, &catalog, false);
+        assert!(session.space.npc(mission).expect("here").mission_escort());
     }
 
     #[test]

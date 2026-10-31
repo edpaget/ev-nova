@@ -227,7 +227,12 @@ impl Space {
             return false;
         };
         npc.mission = None;
-        if escort {
+        if npc.mission_let_go {
+            // `_EscortAI` has written +0x88 already, and with +0x9a -1 the
+            // slot-freed branch clears only the mark (@0x8fc3a-0x8fc4b).
+            npc.mission_let_go = false;
+            npc.ai_type = AiType::from_raw(npc.hull.inherent_ai);
+        } else if escort {
             leave_formation(npc, inherent);
         }
         escort
@@ -753,6 +758,27 @@ pub(super) mod tests {
         let npc = session.space.npc(id).expect("breaking up");
         assert!(matches!(npc.condition, Condition::Dying { .. }));
         id
+    }
+
+    #[test]
+    fn a_mission_escort_breaking_up_while_let_go_takes_no_cargo_share() {
+        // `_HandleShip`'s dying branch tests parent 0 (@0x350ab): no share
+        // and no AI write.
+        let mut session = laden(1, RuleSource::Engine);
+        session.ship.condition = Condition::Dying {
+            ticks_left: 90,
+            starting: false,
+        };
+        tick(&mut session, &ships_catalog(escorting(-1, 0)));
+        let ai_type = session.space.traffic.npcs()[0].ai_type;
+        assert!(session.space.traffic.npcs()[0].mission_let_go);
+        let id = break_up(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 9), (OPALS, 3)]),
+            "nothing destroyed"
+        );
+        assert_eq!(session.space.npc(id).expect("here").ai_type, ai_type);
     }
 
     #[test]

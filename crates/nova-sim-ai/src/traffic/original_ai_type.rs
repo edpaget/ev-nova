@@ -86,7 +86,10 @@ impl AiType {
 
 impl Npc {
     /// The original's AI type (+0x88), as its readers compare it (see the
-    /// module docs): [`NO_AI`] with no AI; for the player's escort, its
+    /// module docs): [`NO_AI`] with no AI; a mission escort let go
+    /// ([`Npc::mission_let_go`]) its class's `InherentAI`, as `_EscortAI`'s
+    /// lost parent writes it (@0x83c4a), the dispatch's 6 lasting only
+    /// inside its own dispatch; for the player's escort, its
     /// launched fighter [`FIGHTER_AI`] and any other [`ESCORT_AI`] (a
     /// capture writes 6 over an earlier bribe); a bribed ship its own
     /// type's word, [`BRIBED_AI`] until a later write, ahead of a leader
@@ -97,6 +100,8 @@ impl Npc {
     pub fn original_ai_type(&self) -> i16 {
         if self.no_ai {
             NO_AI
+        } else if self.mission_let_go {
+            self.hull.inherent_ai
         } else if self.escorts_player() {
             if self.carrier.is_some() {
                 FIGHTER_AI
@@ -257,6 +262,28 @@ mod tests {
             ..ship(AiType::WimpyTrader)
         };
         assert_eq!(mission.original_ai_type(), 6, "a mission escort");
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_reads_its_classs_inherent_ai() {
+        // `_EscortAI`'s lost parent's write (@0x83c4a), its own type kept.
+        let mut let_go = Npc {
+            mission: Some(MissionMark {
+                slot: 1,
+                behav: ShipBehav::EscortPlayer,
+                formation: Some(slot()),
+                order: None,
+            }),
+            mission_let_go: true,
+            leader: Some(NpcId(0)),
+            carrier: Some(carrier()),
+            spared: true,
+            ..ship(AiType::WimpyTrader)
+        };
+        let_go.hull.inherent_ai = 3;
+        assert_eq!(let_go.original_ai_type(), 3);
+        let_go.no_ai = true;
+        assert_eq!(let_go.original_ai_type(), NO_AI);
     }
 
     #[test]

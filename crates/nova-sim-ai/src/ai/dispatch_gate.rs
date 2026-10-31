@@ -35,6 +35,16 @@ pub fn reaches_think(npc: &Npc) -> bool {
     passes_entry_gates(npc) && npc.warp.goal.is_none()
 }
 
+/// Whether `npc`'s dispatch reaches `_EscortAI`, which frees a ship whose
+/// parent is dying (@0x83917-0x8397b): past the gates ([`reaches_think`]),
+/// out of goal 0x15 (@0x8ff18, [`Npc::emerging`]) and out of goal 0x16
+/// (@0x838ef, [`Npc::count_wait`]). Goals 9 and 0xf return there too, but
+/// only under an NPC parent (@0x838e4-0x83911).
+#[must_use]
+pub fn reaches_escort_think(npc: &Npc) -> bool {
+    reaches_think(npc) && !npc.emerging() && !npc.count_wait()
+}
+
 /// Whether `npc`'s dispatch takes the jump path (@0x8fd83-0x8fd9a →
 /// @0x900d5): past the gates before it, on its own jump or its leader's
 /// (sub 4 or 0xd). There it skips the leader's orders, the regroup draw,
@@ -145,6 +155,33 @@ mod tests {
             assert!(takes_jump_path(&jumping), "{goal:?}");
         }
         assert!(!takes_jump_path(&ship()), "no warp goal");
+    }
+
+    #[test]
+    fn an_escort_think_is_reached_off_the_gate_the_glide_the_jump_and_a_count_wait() {
+        assert!(reaches_escort_think(&ship()));
+        for mode in [
+            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::Coasting { ticks_left: 3 },
+        ] {
+            assert!(reaches_escort_think(&Npc { mode, ..ship() }), "{mode:?}");
+        }
+        for mode in [
+            Mode::Emerging { ticks_left: 3 },
+            Mode::LeavingGate { tick: 0 },
+            Mode::LeavingGate { tick: 1 },
+            Mode::JumpingIn { tick: 0 },
+        ] {
+            assert!(!reaches_escort_think(&Npc { mode, ..ship() }), "{mode:?}");
+        }
+        let mut jumping = ship();
+        jumping.warp.goal = Some(WarpGoal::Own);
+        assert!(!reaches_escort_think(&jumping));
+        let counting = Npc {
+            goal: crate::ai::Goal::CountWait,
+            ..ship()
+        };
+        assert!(!reaches_escort_think(&counting));
     }
 
     #[test]

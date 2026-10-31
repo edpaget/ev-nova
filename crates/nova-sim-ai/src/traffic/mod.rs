@@ -2868,6 +2868,7 @@ impl Traffic {
                 odds: odds_cache::STALE,
                 no_ai: false,
                 kept_escort_ai: false,
+                mission_let_go: false,
                 defends: None,
             };
             npc.join_govt(ship.govt, govts);

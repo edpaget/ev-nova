@@ -541,6 +541,13 @@ pub struct Npc {
     /// @0x83c4a), or for its whole stay if it thinks as a miner
     /// (@0x8ff76-0x8ff8d). See [`Npc::original_ai_type`]. Never saved.
     pub kept_escort_ai: bool,
+    /// Whether it is a mission escort let go while the player breaks up:
+    /// its +0x9a of -1 from its think to the next dispatch, which leads it
+    /// again (`_EscortAI` @0x83917-0x8397b, `_AIDispatch` @0x8fc03-0x8fc22),
+    /// so it reads as a stranger ([`Npc::mission_escort`]) but thinks as an
+    /// escort ([`Npc::thinks_as_escort`]). See `nova_sim`'s
+    /// `dying_player_escorts` module. Never saved.
+    pub mission_let_go: bool,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
@@ -871,10 +878,20 @@ impl Npc {
 
     /// Whether it is a mission escort: a mission's special ship that has
     /// joined the player's formation ([`MissionMark::formation`]), a
-    /// `ShipBehav` 1 ship or one captured for an escort.
+    /// `ShipBehav` 1 ship or one captured for an escort, and not let go
+    /// while the player breaks up ([`Npc::mission_let_go`]).
     #[must_use]
     pub fn mission_escort(&self) -> bool {
-        self.mission.is_some_and(|mark| mark.formation.is_some())
+        self.mission.is_some_and(|mark| mark.formation.is_some()) && !self.mission_let_go
+    }
+
+    /// Whether its think is an escort's: it
+    /// [escorts the player](Npc::escorts_player), or is a mission escort
+    /// let go ([`Npc::mission_let_go`]), which the dispatch leads again
+    /// before that think.
+    #[must_use]
+    pub fn thinks_as_escort(&self) -> bool {
+        self.escorts_player() || self.mission_let_go
     }
 
     /// Whether it attacks stellars: a mission's special ship of `ShipBehav`
@@ -1789,6 +1806,30 @@ mod tests {
             formation,
             order: None,
         }
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_escorts_no_one_but_thinks_as_one() {
+        let slot = FormationSlot::default();
+        let mut escort = Npc {
+            mission: Some(mark(ShipBehav::EscortPlayer, Some(slot))),
+            ..crate::traffic::fixture::npc(7, ShipStats::default())
+        };
+        assert!(escort.mission_escort());
+        assert!(escort.thinks_as_escort());
+        escort.mission_let_go = true;
+        assert!(!escort.mission_escort());
+        assert!(!escort.escorts_player());
+        assert!(escort.thinks_as_escort());
+        assert_eq!(escort.leader_ref(), None, "+0x9a -1");
+        assert_eq!(escort.fleet(), ShipRef::Npc(NpcId(7)));
+        assert_eq!(
+            escort.mission.and_then(|mark| mark.formation),
+            Some(slot),
+            "+0xc92e stays"
+        );
+        let stranger = crate::traffic::fixture::npc(8, ShipStats::default());
+        assert!(!stranger.thinks_as_escort());
     }
 
     #[test]
