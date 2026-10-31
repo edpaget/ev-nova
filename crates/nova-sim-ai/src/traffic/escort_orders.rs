@@ -241,6 +241,7 @@ mod tests {
             formation: FormationSlot::default(),
             order: Some(crate::escort::EscortOrder::Defend),
         });
+        carrier.order_word = OrderWord(1);
         let mut fighter = led(EscortClass::Fighter);
         fighter.carrier = Some(Carrier {
             ship: ShipRef::Npc(NpcId(0)),

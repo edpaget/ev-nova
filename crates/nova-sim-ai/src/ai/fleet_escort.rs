@@ -154,12 +154,15 @@ pub struct FleetEscortAi {
 /// fighter; under any other lead, its stored word ([`Npc::order_word`]), which its
 /// lead issues ([`escort_orders`](crate::ai::escort_orders)).
 ///
-/// The lead's order is the one after the lead's own out-of-ammunition
-/// fallback ([`out_of_ammo::escort_order`], @0x83b56): an escort carrier
-/// fully dry keeps formation, so it sends its fighters home. The original
-/// reads the word the lead's last think left; this works it out from the
-/// lead's state at the fighter's think. The lag is at most one think
-/// interval and crosses no boundary the player sees.
+/// The lead's order is the word it holds ([`Npc::order_word`], @0x83b56),
+/// which its own out-of-ammunition fallback may have written, read raw:
+/// -1 and every word but 1 and 2 give Return (@0x83b5d-0x83b7f), so an
+/// escort carrier fully dry sends its fighters home. A lead that hasn't
+/// thought yet, or isn't thinking (gliding in, in its gate, on the jump
+/// path), gives the word it holds for as long as that lasts. A lead in a
+/// lower slot than its fighter thinks in the same pass in the original, so
+/// the fighter reads this tick's word there and last tick's here, as every
+/// think reads the tick's start: a lag no frame shows.
 #[must_use]
 pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     let Some(lead) = players_escort_lead(npc, around) else {
@@ -167,7 +170,7 @@ pub fn order_of(npc: &Npc, around: &Surroundings) -> Option<EscortOrder> {
     };
     // Goal 0xb is not 0xa, whatever goal the engine keeps beside it.
     let in_form = lead.goal.flies_in_form() && !lead.follows_leaders_jump();
-    Some(match out_of_ammo::escort_order(lead, lead.escort_order()) {
+    Some(match lead.order_word.order() {
         Some(order @ (EscortOrder::Defend | EscortOrder::Attack)) if !in_form => order,
         _ => EscortOrder::Dock,
     })
@@ -673,6 +676,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order: Some(EscortOrder::Attack),
         });
+        first.order_word = OrderWord::of(Some(EscortOrder::Attack));
         let npcs = [first, fighter(n(1)), raider(3, 0.0, 100.0, n(1))];
         let govts = govts(0, 0);
         let around = Surroundings {
@@ -706,6 +710,7 @@ mod tests {
                     formation: crate::escort::FormationSlot::default(),
                     order: Some(order),
                 });
+                escort.order_word = OrderWord::of(Some(order));
                 escort.warp.goal =
                     Some(crate::traffic::warp_out::WarpGoal::Follow(ShipRef::Player));
                 let npcs = [escort, fighter(n(1))];
@@ -1035,6 +1040,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order,
         });
+        escort.order_word = OrderWord::of(order);
         let npcs = [escort, fighter(n(1))];
         order_of(&npcs[1], &Surroundings::new(&[], &npcs))
     }
@@ -1104,6 +1110,7 @@ mod tests {
                 formation: crate::escort::FormationSlot::default(),
                 order: Some(order),
             });
+            first.order_word = OrderWord::of(Some(order));
         }
         let mut second = if fighter {
             self::fighter(n(1))
@@ -1247,6 +1254,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order: Some(order),
         });
+        first.order_word = OrderWord::of(Some(order));
         first
     }
 
@@ -1269,31 +1277,52 @@ mod tests {
         assert_eq!(decision.order_word, Some(OrderWord(3)));
     }
 
+    /// The order a fighter of the lead takes, the lead the player's escort
+    /// following `order` and holding `word`.
+    fn order_under_word(order: EscortOrder, word: i16) -> Option<EscortOrder> {
+        let mut first = players_escort(order);
+        first.order_word = OrderWord(word);
+        let npcs = [first, fighter(n(1)), raider(3, 0.0, 500.0, n(1))];
+        order_of(&npcs[1], &Surroundings::new(&[], &npcs))
+    }
+
     #[test]
-    fn a_fighter_of_a_players_escort_out_of_ammunition_returns_home() {
-        // The fighter reads its lead's word (@0x83b56), which the lead's
-        // fallback wrote: 0 for an escort fully dry, so Return (@0x83b7f).
+    fn a_fighter_reads_its_leads_word_not_its_leads_order() {
+        // @0x83b56 reads the lead's +0xc90a raw: a lead run dry has written
+        // 0 (@0x83bda), one that hasn't thought holds -1, and either sends
+        // the fighter home under its Attack (@0x83b5d-0x83b7f).
         for order in [EscortOrder::Defend, EscortOrder::Attack] {
-            let order_with = |left: AmmoLeft| {
-                let npcs = [
-                    short(players_escort(order), left),
-                    fighter(n(1)),
-                    raider(3, 0.0, 500.0, n(1)),
-                ];
-                order_of(&npcs[1], &Surroundings::new(&[], &npcs))
-            };
-            assert_eq!(
-                order_with(AmmoLeft::Dry),
-                Some(EscortOrder::Dock),
-                "{order:?}"
-            );
-            assert_eq!(
-                order_with(AmmoLeft::OnlyUnlimited),
-                Some(order),
-                "{order:?}: unlimited weapons left"
-            );
-            assert_eq!(order_with(AmmoLeft::Armed), Some(order), "{order:?}");
+            for word in [-1, 0, 3, 4, 7] {
+                assert_eq!(
+                    order_under_word(order, word),
+                    Some(EscortOrder::Dock),
+                    "{order:?} {word}"
+                );
+            }
         }
+        assert_eq!(
+            order_under_word(EscortOrder::Hold, 2),
+            Some(EscortOrder::Attack),
+            "the word, its order changed since"
+        );
+        assert_eq!(
+            order_under_word(EscortOrder::Attack, 1),
+            Some(EscortOrder::Defend)
+        );
+    }
+
+    #[test]
+    fn a_fighter_ignores_its_leads_ammunition_until_its_lead_writes_the_word() {
+        // The word the lead's last think left, however dry it is now.
+        let npcs = [
+            short(players_escort(EscortOrder::Attack), AmmoLeft::Dry),
+            fighter(n(1)),
+            raider(3, 0.0, 500.0, n(1)),
+        ];
+        assert_eq!(
+            order_of(&npcs[1], &Surroundings::new(&[], &npcs)),
+            Some(EscortOrder::Attack)
+        );
     }
 
     #[test]

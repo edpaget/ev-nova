@@ -171,6 +171,49 @@ fn an_npc_carriers_fighter_out_of_ammunition_writes_its_return_and_docks() {
     assert_eq!(thought.order_word, OrderWord(3));
 }
 
+/// `ship` once a think half has run, [`NovaAi`] deciding, the player 400
+/// below the centre.
+fn thought(ship: Npc) -> Npc {
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship];
+    traffic.think_holding(
+        &NovaAi::default(),
+        world(RuleSource::Engine),
+        &[],
+        &mut NeverFires,
+    );
+    traffic.npcs[0].clone()
+}
+
+#[test]
+fn a_hired_escorts_think_stores_its_word() {
+    // `_EscortAI` writes +0xc90a at every think (@0x83ae4-0x83b0f).
+    let mut escort = players_escort(Some(EscortOrder::Attack));
+    escort.mode = Mode::Flying;
+    assert_eq!(escort.order_word, OrderWord::NONE, "before its first think");
+    assert_eq!(thought(escort).order_word, OrderWord(2));
+}
+
+#[test]
+fn a_mission_escorts_think_stores_its_word() {
+    let mut escort = npc(1, ShipStats::new(FAST, &[]));
+    escort.mission = Some(crate::traffic::npc::MissionMark {
+        slot: 0,
+        behav: crate::traffic::ShipBehav::EscortPlayer,
+        formation: Some(FormationSlot::default()),
+        order: Some(EscortOrder::Hold),
+    });
+    assert_eq!(thought(escort).order_word, OrderWord(4));
+}
+
+#[test]
+fn a_ship_the_player_leads_keeps_its_word_while_no_think_reaches_it() {
+    // `_AIDispatch` runs no type think in its gate (@0x8ff18-0x8ff20).
+    let mut waiting = players_escort(Some(EscortOrder::Attack));
+    waiting.order_word = OrderWord(4);
+    assert_eq!(thought(waiting).order_word, OrderWord(4));
+}
+
 #[test]
 fn a_holding_escort_held_at_its_gate_keeps_its_point_defence_beside_the_gate_wait() {
     // Hold's `_AIFireTurret` (@0x83f4e) runs its point defence whether or

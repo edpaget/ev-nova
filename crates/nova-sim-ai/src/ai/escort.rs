@@ -76,8 +76,15 @@
 //! mission's still, as the dispatch leads it again each frame
 //! (@0x8fbcd-0x8fc22).
 //!
+//! **The order word** ([`think_word`], [`Npc::order_word`]). Every think
+//! past the lost parent rewrites the word (@0x83ae4-0x83bda), the jump's
+//! block too, and the word is what the rest of the think flies and what
+//! the player's next command compares against (`nova_sim`'s `command_word`
+//! module). Its validity step reads the word the last think or command
+//! left, before the rewrite (@0x83ac8, [`valid_target`]).
+//!
 //! **Out of ammunition** (`_EscortAI` @0x83b88-0x83bda,
-//! [`out_of_ammo::escort_order`]), on Defend or Attack with `Flags2`
+//! [`think_word`]), on Defend or Attack with `Flags2`
 //! 0x0080: a fighter short of any ammunition returns to its hangar, its
 //! wait kept, and any other escort fully dry keeps formation as with no
 //! standing command (order 0), whichever
@@ -106,6 +113,7 @@ use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, threats};
 use crate::escort_voice::VoiceCue;
+use crate::fleet::OrderWord;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
@@ -146,7 +154,7 @@ impl EscortAi {
         };
         match order {
             Some(fighting @ (EscortOrder::Defend | EscortOrder::Attack)) => {
-                let target = valid_target(npc, order, around);
+                let target = valid_target(npc, npc.order_word.order(), around);
                 let radius = (fighting == EscortOrder::Defend).then_some(DEFEND_RADIUS);
                 if let Some(kept) = kept_by_order(order, target, player.position, around) {
                     return (Goal::Attack(kept), VoiceCue::Thought);
@@ -195,13 +203,13 @@ impl Behaviour for EscortAi {
     ///
     /// 1. While the player breaks up, the lost parent: goal 0, its target
     ///    kept, no +0x4c write (@0x83917-0x8397b).
-    /// 2. The out-of-ammunition fallback (@0x83b88-0x83bda,
-    ///    [`out_of_ammo::escort_order`]): the order the rest flies.
+    /// 2. Its order word ([`think_word`], @0x83ae4-0x83bda), the
+    ///    out-of-ammunition fallback included, which it writes
+    ///    ([`Decision::order_word`]) and the rest flies.
     /// 3. From the player's brake on, the player's jump
     ///    (`takes_players_jump`): formation, its target dropped,
     ///    following the jump ([`Decision::follows_jump`]), its wait kept,
-    ///    as no order block runs. The engine keeps no word for a ship the
-    ///    player leads, so the fallback has nothing to write here.
+    ///    as no order block runs.
     /// 4. The order block (`EscortAi::goal_by`), ending its AI wait
     ///    ([`Decision::ends_wait`]) in the Defend, Attack and formation
     ///    blocks (+0x4c = -1.0, @0x83c6b, @0x83d62, @0x83ea8), but not
@@ -218,7 +226,8 @@ impl Behaviour for EscortAi {
             // Goal 0 ([`Goal::Idle`], the default), its target kept.
             return Decision::default();
         }
-        let order = out_of_ammo::escort_order(npc, npc.escort_order());
+        let word = think_word(npc, npc.escort_order());
+        let order = word.order();
         // Goal 0xb's block runs under a wait too (@0x83be3), the player's
         // jump over or not: its high level gives it up.
         if takes_players_jump(around) || npc.joins_leaders_jump() {
@@ -227,6 +236,7 @@ impl Behaviour for EscortAi {
                 clears_target: true,
                 follows_jump: true,
                 voice: Some(VoiceCue::Thought),
+                order_word: Some(word),
                 ..Decision::default()
             };
         }
@@ -237,6 +247,7 @@ impl Behaviour for EscortAi {
             goal,
             ends_wait: !keeps_wait,
             voice: Some(cue),
+            order_word: Some(word),
             ..Decision::default()
         }
     }
@@ -287,6 +298,21 @@ impl Behaviour for EscortAi {
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
         react::victim(npc, strike, around)
     }
+}
+
+/// The order word `npc`, a ship the player leads following `order`, writes
+/// at its think (`_EscortAI` @0x83ae4-0x83bda), after the validity step
+/// ([`valid_target`]) and before the jump's return (@0x83be3): `order`, the
+/// engine's stand-in for its class's kept order (@0x83ae4-0x83b0f), Return
+/// only on a fighter (@0x83b18-0x83b2b), then what the out-of-ammunition
+/// fallback makes of it ([`out_of_ammo::escort_word`]). A fighter whose
+/// +0xc4 is clear takes 0 there too: the command that would leave it so
+/// gives it no standing Return (`nova_sim`'s `command_word` module).
+#[must_use]
+pub fn think_word(npc: &Npc, order: Option<EscortOrder>) -> OrderWord {
+    out_of_ammo::escort_word(npc, order).unwrap_or_else(|| {
+        OrderWord::of(order.filter(|&order| order != EscortOrder::Dock || npc.carrier.is_some()))
+    })
 }
 
 /// Whether every ship the player leads takes its jump, its +0x50 above 0
@@ -396,13 +422,14 @@ pub fn unprovoked(
     }
 }
 
-/// The target `npc`, an escort or fighter following `order`, keeps
-/// through its think's validity step among `around` (`_EscortAI`
-/// @0x83a9b-0x83ad2, for every parent): none once the target's slot is
-/// inactive (+0xb8: gone from the system, or destroyed; a ship still
-/// arriving holds its slot, @0x3c90b) or, unless the order is Attack, once
-/// it is `_IsDisabled` (breaking up included, but for a stellar's
-/// defence ship, @0x2d6f: [`Npc::is_disabled`], the player's
+/// The target `npc`, an escort or fighter, keeps through its think's
+/// validity step among `around` (`_EscortAI` @0x83a9b-0x83ad2, for every
+/// parent), `order` being what its stored word gives ([`Npc::order_word`],
+/// @0x83ac8), as the think rewrites the word only after this step: none
+/// once the target's slot is inactive (+0xb8: gone from the system, or
+/// destroyed; a ship still arriving holds its slot, @0x3c90b) or, unless
+/// that is Attack, once it is `_IsDisabled` (breaking up included, but for
+/// a stellar's defence ship, @0x2d6f: [`Npc::is_disabled`], the player's
 /// [`Condition::disabled`]).
 /// Phase 1 of escort-fleet-fidelity left this step to the low level's
 /// [`unprovoked`], so a disabled guard stood until the next think.
@@ -473,7 +500,7 @@ fn attack_or_form(threat: Option<NpcId>) -> Goal {
 /// @0x83ef4), in the same think; none when there is none. The player is
 /// never kept (@0x83f0d-0x83f1a).
 fn guard(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<ShipRef> {
-    let kept = match valid_target(npc, None, around) {
+    let kept = match valid_target(npc, npc.order_word.order(), around) {
         Some(ShipRef::Npc(id)) => around
             .npc(id)
             .filter(|target| fire::in_reach(npc, &target.state)),
@@ -502,6 +529,7 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
     use crate::escort::{EscortClass, EscortDuty};
+    use crate::fleet::OrderWord;
     use crate::traffic::npc::AiType;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
@@ -553,6 +581,7 @@ mod tests {
             },
             order,
         });
+        npc.order_word = OrderWord::of(order);
         npc
     }
 
@@ -738,6 +767,7 @@ mod tests {
         if let Some(mark) = &mut npc.mission {
             mark.order = Some(order);
         }
+        npc.order_word = OrderWord::of(Some(order));
         npc
     }
 
@@ -1131,6 +1161,51 @@ mod tests {
             assert_eq!(target, Some(n(2)), "{mode:?}: not dropped");
             assert_eq!(trigger, fires, "{mode:?}");
         }
+    }
+
+    /// What the escort, following `order` and holding `word`, decides
+    /// with disabled NPC 2 for its target, 100 off the player, and NPC 3
+    /// threatening the player at 200.
+    fn holding_a_disabled_target(word: i16, order: Option<EscortOrder>) -> Goal {
+        let mut down = pirate(2, 100.0, 0.0);
+        down.condition = Condition::Disabled;
+        let mut holder = having(escort(order), Goal::Attack(n(2)), Some(n(2)));
+        holder.order_word = OrderWord(word);
+        decide(&[holder, down, pirate(3, 200.0, 0.0)], (0.0, 0.0), &[0]).0
+    }
+
+    #[test]
+    fn a_word_that_isnt_attack_drops_a_disabled_target_whatever_its_order_is_now() {
+        // The validity step reads +0xc90a before the think rewrites it
+        // (@0x83ac8): a launched fighter's -1 drops it on an Attack class,
+        // and so does the word the fallback left.
+        let attack = Some(EscortOrder::Attack);
+        for word in [-1, 0, 1, 3, 4] {
+            assert_eq!(
+                holding_a_disabled_target(word, attack),
+                Goal::Attack(n(3)),
+                "{word}: dropped for the best threat"
+            );
+        }
+        assert_eq!(holding_a_disabled_target(2, attack), Goal::Attack(n(2)));
+    }
+
+    #[test]
+    fn a_word_of_attack_keeps_a_disabled_target_into_a_think_of_defend_or_formation() {
+        // The class cleared under it, or the fallback firing on that think:
+        // Defend reads its distance (@0x83c67-0x83cd6), and formation keeps
+        // it in reach (@0x83eb3-0x83ee4), each past the validity step.
+        let defend = Some(EscortOrder::Defend);
+        assert_eq!(holding_a_disabled_target(2, defend), Goal::Attack(n(2)));
+        assert_eq!(
+            holding_a_disabled_target(2, None),
+            Goal::Formation { guard: Some(n(2)) }
+        );
+        assert_eq!(
+            holding_a_disabled_target(0, None),
+            Goal::Formation { guard: Some(n(3)) },
+            "dropped, and drawn again"
+        );
     }
 
     #[test]
@@ -2005,6 +2080,99 @@ mod tests {
                 assert!(!decision.ends_wait);
             }
         }
+    }
+
+    /// Every standing order, none included.
+    const STANDING: [Option<EscortOrder>; 5] = [
+        None,
+        Some(EscortOrder::Defend),
+        Some(EscortOrder::Attack),
+        Some(EscortOrder::Hold),
+        Some(EscortOrder::Dock),
+    ];
+
+    #[test]
+    fn a_think_writes_its_orders_word() {
+        // The class's order, or 0 for none (@0x83ae4-0x83b0f).
+        for order in STANDING {
+            assert_eq!(
+                think_word(&fighter(None), order),
+                OrderWord::of(order),
+                "{order:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_think_turns_return_to_formation_on_a_ship_that_is_no_fighter() {
+        // A word of 3 stays only on AI type 5 (@0x83b18-0x83b2b).
+        let dock = Some(EscortOrder::Dock);
+        assert_eq!(think_word(&escort(None), dock), OrderWord(0));
+        assert_eq!(think_word(&fighter(None), dock), OrderWord(3));
+    }
+
+    #[test]
+    fn a_thinks_word_is_the_out_of_ammunition_fallbacks() {
+        // @0x83b88-0x83bda, on Defend or Attack alone.
+        for order in [Some(EscortOrder::Defend), Some(EscortOrder::Attack)] {
+            for left in [AmmoLeft::OnlyUnlimited, AmmoLeft::Dry] {
+                let short_fighter = short(fighter(None), left);
+                assert_eq!(think_word(&short_fighter, order), OrderWord(3), "{left:?}");
+            }
+            let dry = short(escort(None), AmmoLeft::Dry);
+            assert_eq!(think_word(&dry, order), OrderWord(0), "{order:?}");
+            let unlimited = short(escort(None), AmmoLeft::OnlyUnlimited);
+            assert_eq!(think_word(&unlimited, order), OrderWord::of(order));
+            let armed = short(fighter(None), AmmoLeft::Armed);
+            assert_eq!(think_word(&armed, order), OrderWord::of(order));
+            let unflagged = crate::ai::fixture::short_of_ammo(fighter(None), AmmoLeft::Dry, false);
+            assert_eq!(think_word(&unflagged, order), OrderWord::of(order));
+        }
+        for order in [None, Some(EscortOrder::Hold), Some(EscortOrder::Dock)] {
+            let dry = short(fighter(None), AmmoLeft::Dry);
+            assert_eq!(think_word(&dry, order), OrderWord::of(order), "{order:?}");
+        }
+    }
+
+    #[test]
+    fn every_think_past_the_lost_parent_writes_its_word() {
+        // The fallback's and the plain word alike, the jump's block too, as
+        // the write comes before it (@0x83be3).
+        let defend = Some(EscortOrder::Defend);
+        let npcs = [short(escort(defend), AmmoLeft::Dry), pirate(2, 0.0, 100.0)];
+        let flown = decision_of(ENGINE, &npcs, 0.0, &[0]);
+        assert_eq!(flown.order_word, Some(OrderWord(0)));
+        let jumping = decision_of(ENGINE, &npcs, 1.0, &[0]);
+        assert!(jumping.follows_jump);
+        assert_eq!(jumping.order_word, Some(OrderWord(0)));
+        let npcs = [escort(Some(EscortOrder::Hold))];
+        assert_eq!(
+            decision_of(ENGINE, &npcs, 0.0, &[]).order_word,
+            Some(OrderWord(4))
+        );
+        assert_eq!(
+            decision_of(ENGINE, &npcs, 1.0, &[]).order_word,
+            Some(OrderWord(4))
+        );
+    }
+
+    #[test]
+    fn a_think_under_a_player_breaking_up_writes_no_word() {
+        // The lost parent returns before the write (@0x83942-0x8397b).
+        let mut stray = escort(Some(EscortOrder::Attack));
+        stray.order_word = OrderWord(7);
+        let npcs = [stray];
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                condition: Condition::Destroyed,
+                ..player(0.0, 0.0)
+            }),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decision = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.order_word, None);
     }
 
     #[test]

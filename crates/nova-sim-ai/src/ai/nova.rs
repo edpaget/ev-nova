@@ -1857,6 +1857,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order: Some(crate::escort::EscortOrder::Attack),
         });
+        escort.order_word = crate::fleet::OrderWord(2);
         escort.goal = Goal::Attack(NPC_TWO);
         escort.target = Some(NPC_TWO);
         escort.provoked = 5.0;
@@ -1950,6 +1951,7 @@ mod tests {
             formation: crate::escort::FormationSlot::default(),
             order: Some(crate::escort::EscortOrder::Attack),
         });
+        escort.order_word = crate::fleet::OrderWord(2);
         escort.goal = Goal::Attack(NPC_TWO);
         escort.target = Some(NPC_TWO);
         escort.provoked = 5.0;

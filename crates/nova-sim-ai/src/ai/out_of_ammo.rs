@@ -82,14 +82,6 @@ pub fn escort_word(npc: &Npc, order: Option<EscortOrder>) -> Option<OrderWord> {
     }
 }
 
-/// The order `npc`, an escort or fighter following `order`, flies after
-/// `_EscortAI`'s out-of-ammunition fallback: the order of the word
-/// [`escort_word`] writes, else `order`.
-#[must_use]
-pub fn escort_order(npc: &Npc, order: Option<EscortOrder>) -> Option<EscortOrder> {
-    escort_word(npc, order).map_or(order, OrderWord::order)
-}
-
 /// The goal of a warship `npc` that has decided on `goal`, after its
 /// fully-dry drop (see the module docs): an attack or a snipe of a ship
 /// with [`AmmoLeft::Dry`] is [`Goal::Idle`]; any other goal is kept.
@@ -233,11 +225,6 @@ mod tests {
                     Some(OrderWord(3)),
                     "{order:?} {left:?}"
                 );
-                assert_eq!(
-                    escort_order(&fighter, order),
-                    Some(EscortOrder::Dock),
-                    "{order:?} {left:?}"
-                );
             }
         }
     }
@@ -248,10 +235,8 @@ mod tests {
         for order in FIGHTING {
             let dry = escort(AmmoLeft::Dry, true, false);
             assert_eq!(escort_word(&dry, order), Some(OrderWord(0)), "{order:?}");
-            assert_eq!(escort_order(&dry, order), None, "{order:?}");
             let short = escort(AmmoLeft::OnlyUnlimited, true, false);
             assert_eq!(escort_word(&short, order), None, "{order:?}");
-            assert_eq!(escort_order(&short, order), order, "{order:?}");
         }
     }
 
@@ -263,14 +248,12 @@ mod tests {
             for order in FIGHTING {
                 let armed = escort(AmmoLeft::Armed, true, fighter);
                 assert_eq!(escort_word(&armed, order), None, "{fighter} {order:?}");
-                assert_eq!(escort_order(&armed, order), order, "{fighter} {order:?}");
                 let unflagged = escort(AmmoLeft::Dry, false, fighter);
                 assert_eq!(escort_word(&unflagged, order), None, "{fighter} {order:?}");
             }
             for order in [None, Some(EscortOrder::Hold), Some(EscortOrder::Dock)] {
                 let dry = escort(AmmoLeft::Dry, true, fighter);
                 assert_eq!(escort_word(&dry, order), None, "{fighter} {order:?}");
-                assert_eq!(escort_order(&dry, order), order, "{fighter} {order:?}");
             }
         }
     }
