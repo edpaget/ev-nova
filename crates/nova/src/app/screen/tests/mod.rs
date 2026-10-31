@@ -105,6 +105,7 @@ mod jump_white;
 mod landing_texts_after_movie;
 mod launch;
 mod map_find;
+mod map_wait_keys;
 mod menu;
 mod menu_commands;
 mod missions;

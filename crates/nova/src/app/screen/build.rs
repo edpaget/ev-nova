@@ -803,7 +803,11 @@ impl AppScreen {
 
     /// The input to flight's course map open over something: an Escape
     /// press closes it ([`FlightView::close_map`]), unless its Find is
-    /// open, and anything else goes to it ([`FlightView::port_map_input`]).
+    /// open or it already waits for M's release, and anything else goes to
+    /// it ([`FlightView::port_map_input`]), the wait queueing the keys.
+    /// Then what an input that closed it left goes to the screen under it
+    /// (the `map_wait_keys` module), the one place every map over a screen
+    /// closes.
     fn map_over_input(&mut self, input: &Input) {
         let flight = self.flight.as_mut().expect(ENTERED);
         let escape = Input::Key {
@@ -812,11 +816,12 @@ impl AppScreen {
             repeat: false,
         };
         // Find, while open, takes Escape too, doing nothing with it.
-        if *input == escape && !flight.map_finding() {
+        if *input == escape && !flight.map_finding() && !flight.map_waiting() {
             flight.close_map();
         } else {
             flight.port_map_input(input);
         }
+        self.replay_map_wait_keys();
     }
 
     /// Whether a mission dialog's map is open over flight

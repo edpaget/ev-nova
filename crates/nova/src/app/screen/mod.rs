@@ -383,6 +383,7 @@ mod flight;
 mod game;
 mod jump_white;
 mod launch;
+mod map_wait_keys;
 mod menu;
 mod menu_commands;
 mod overlays;
