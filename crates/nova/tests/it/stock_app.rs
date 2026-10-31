@@ -845,6 +845,15 @@ fn a_finales_texts_show_over_earths_spaceport_before_its_q_leaves() {
             .is_some_and(SpaceportView::holds_leave)
     );
 
+    // The map opens over the offer with the `Q` pending, and holds it.
+    driver.press(Key::Char('m'));
+    assert_eq!(driver.showing(), Showing::FlightMap, "the map over it");
+    assert!(driver.flight().leave_due(), "the Q held under the map");
+    driver.press(Key::Char('m'));
+    assert_eq!(driver.showing(), Showing::Spaceport, "back to the offer");
+    assert_eq!(port(&driver), (String::new(), Some(MissionId(878))));
+    assert!(driver.flight().leave_due(), "still held");
+
     driver.press(Key::Enter);
     assert_eq!(driver.showing(), Showing::Flight, "took off");
     let flight = driver.flight();
