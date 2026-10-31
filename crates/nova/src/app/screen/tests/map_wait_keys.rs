@@ -531,9 +531,9 @@ fn alt_down_across_a_refused_sale_is_let_go_with_it() {
     assert!(!open.alt_held(), "Alt let go");
 }
 
-/// The spaceport with a text open over it that opens the map, its
-/// after-movie next, and the [`MockMoviePlayer`] that plays it.
-fn landed_with_a_filmed_text() -> (AppScreen, Rc<MockMoviePlayer>) {
+/// A pilot in flight, her movies played through the
+/// [`MockMoviePlayer`] given back.
+fn flying_filmed() -> (AppScreen, Rc<MockMoviePlayer>) {
     let reel = MockMoviePlayer::playing((160, 120), 2);
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(game_data_fork_loaded())
@@ -542,20 +542,52 @@ fn landed_with_a_filmed_text() -> (AppScreen, Rc<MockMoviePlayer>) {
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
+    (screen, reel)
+}
+
+/// A mission text saying `text`, opening the map on `map`, its
+/// after-movie `movie`.
+fn mission_text(
+    text: &str,
+    map: Option<nova_sim::MapMarks>,
+    movie: Option<nova_sim::DescMovie>,
+) -> nova_sim::MissionText {
+    nova_sim::MissionText {
+        kind: nova_sim::MissionTextKind::Comp,
+        mission: MissionId(130),
+        text: text.to_owned(),
+        graphic: None,
+        movie,
+        map,
+    }
+}
+
+/// The after-movie the tests' filmed texts play.
+fn after_movie() -> Option<nova_sim::DescMovie> {
+    nova_sim::DescMovie::from_desc("After.mov", 0x0001)
+}
+
+/// The spaceport with `texts` open over it, and the
+/// [`MockMoviePlayer`] that plays their movies.
+fn landed_with_texts(texts: Vec<nova_sim::MissionText>) -> (AppScreen, Rc<MockMoviePlayer>) {
+    let (mut screen, reel) = flying_filmed();
     land_twice(&mut screen);
     screen
         .spaceport
         .as_mut()
         .expect("landed")
-        .show_mission_texts(vec![nova_sim::MissionText {
-            kind: nova_sim::MissionTextKind::Comp,
-            mission: MissionId(130),
-            text: "Done.".to_owned(),
-            graphic: None,
-            movie: nova_sim::DescMovie::from_desc("After.mov", 0x0001),
-            map: Some(nova_sim::MapMarks::NONE),
-        }]);
+        .show_mission_texts(texts);
     (screen, reel)
+}
+
+/// The spaceport with a text open over it that opens the map, its
+/// after-movie next, and the [`MockMoviePlayer`] that plays it.
+fn landed_with_a_filmed_text() -> (AppScreen, Rc<MockMoviePlayer>) {
+    landed_with_texts(vec![mission_text(
+        "Done.",
+        Some(nova_sim::MapMarks::NONE),
+        after_movie(),
+    )])
 }
 
 #[test]
@@ -618,4 +650,55 @@ fn a_key_known_only_by_its_repeats_and_still_down_reads_down_past_the_last_dialo
     end_the_wait(&mut screen);
     screen.tick(TICK * 3);
     assert_ne!(ship(&screen), still, "thrust");
+}
+
+#[test]
+fn a_replay_stopped_facing_a_movie_doesnt_skip_it_with_a_release() {
+    let (mut screen, reel) = landed_with_texts(vec![
+        mission_text("One.", Some(nova_sim::MapMarks::NONE), after_movie()),
+        mission_text("Two.", None, None),
+    ]);
+    let before = reeled(&reel).len();
+    start_the_wait(&mut screen);
+    tap(&mut screen, Key::Enter);
+    end_the_wait(&mut screen);
+    screen.tick(TICK);
+    assert_eq!(
+        reeled(&reel)[before..],
+        [Call::Start("After.mov".into())],
+        "started, and Return's release didn't skip it"
+    );
+    while spaceport(&screen).playing() {
+        screen.tick(TICK);
+    }
+    let shown = spaceport(&screen).mission_text().expect("the second text");
+    assert_eq!(shown.lines().join(" "), "Two.", "after the movie");
+}
+
+#[test]
+fn a_movie_over_flight_isnt_skipped_by_a_key_queued_behind_the_text_before_it() {
+    let (mut screen, reel) = flying_filmed();
+    screen.show_over_flight(vec![DescShown {
+        text: "One.".to_owned(),
+        graphic: None,
+        movie: after_movie(),
+    }]);
+    assert_eq!(screen.showing(), Showing::MissionText);
+    let before = reeled(&reel).len();
+    let flying = screen.flight.as_mut().expect("flying");
+    flying.open_dialog_map(nova_view::flight::MapOpener::Briefing(
+        nova_sim::MapMarks::NONE,
+    ));
+    screen.input(&key(Key::Escape, true));
+    assert!(flight(&screen).map_waiting());
+    tap(&mut screen, Key::Enter);
+    tap(&mut screen, Key::Enter);
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::Movie);
+    screen.tick(TICK);
+    assert_eq!(
+        reeled(&reel)[before..],
+        [Call::Start("After.mov".into())],
+        "started, and the second Return didn't skip it"
+    );
 }
