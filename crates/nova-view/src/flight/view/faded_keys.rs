@@ -93,7 +93,6 @@
 //!   `warp_stage` docs in `nova_sim`), so the refusal runs there as well,
 //!   where the original has no flag: the same accepted reading.
 
-use nova_sim::PlayerCommand;
 #[cfg(doc)]
 use nova_sim::flight_frame::{FlightCommand, FlightFrame, StepRun};
 
@@ -125,9 +124,9 @@ pub(super) struct FadedKeys {
     /// The keys pressed during the jump, not yet read.
     kept: Vec<Key>,
     /// L's latch (0xdee34).
-    pub(super) land_latch: bool,
+    land_latch: bool,
     /// I's latch (0xdee00).
-    pub(super) mission_latch: bool,
+    mission_latch: bool,
 }
 
 impl FadedKeys {
@@ -141,6 +140,15 @@ impl FadedKeys {
     /// Drops the presses kept.
     pub(super) fn forget(&mut self) {
         self.kept.clear();
+    }
+
+    /// `key`'s latch, L's or else I's.
+    fn latch_mut(&mut self, key: Key) -> &mut bool {
+        if key == LAND_KEY {
+            &mut self.land_latch
+        } else {
+            &mut self.mission_latch
+        }
     }
 }
 
@@ -176,24 +184,33 @@ impl<
     /// besides the presses kept; when `clearing`, each latch cleared with
     /// its key up or its gate shut.
     fn waiting_keys(&mut self, clearing: bool) -> Vec<Key> {
-        let land = self.held.contains(&LAND_KEY);
-        let mission = self.held.contains(&MISSION_INFO_KEY);
-        let mut waiting = Vec::new();
-        if land && !self.faded_keys.land_latch {
-            waiting.push(LAND_KEY);
-        }
-        if mission && !self.faded_keys.mission_latch {
-            waiting.push(MISSION_INFO_KEY);
-        }
-        if clearing {
-            if !land || !self.takes(PlayerCommand::Land) {
-                self.faded_keys.land_latch = false;
-            }
-            if !mission || !self.takes(PlayerCommand::MissionInfo) {
-                self.faded_keys.mission_latch = false;
-            }
-        }
-        waiting
+        [LAND_KEY, MISSION_INFO_KEY]
+            .into_iter()
+            .filter(|&key| {
+                let down = self.held.contains(&key);
+                let taken = self.press_taken(Some(key), false).is_some();
+                let latch = self.faded_keys.latch_mut(key);
+                let waiting = down && !*latch;
+                if clearing && !(down && taken) {
+                    *latch = false;
+                }
+                waiting
+            })
+            .collect()
+    }
+
+    /// A press of L read: its latch set, and the land key pressed. It is
+    /// the keyboard's and the polls' alike.
+    pub(super) fn press_land(&mut self) {
+        self.faded_keys.land_latch = true;
+        self.land();
+    }
+
+    /// A press of I read: its latch set (@0x7047a), and the mission info
+    /// asked for. It is the keyboard's and the polls' alike.
+    pub(super) fn press_mission_info(&mut self) {
+        self.faded_keys.mission_latch = true;
+        self.ask_mission_info();
     }
 
     /// The top of a tick, before the held keys' polls: during a jump, L's
@@ -256,28 +273,19 @@ impl<
     /// screen or not (see the module docs): M, then L, then P, Y and I
     /// until one of them latches the rest.
     fn read_keys(&mut self, reads: &[Key], faded: bool) {
-        let read = |key: Key, gate: PlayerCommand| reads.contains(&key) && self.takes(gate);
-        let (map, land) = (
-            read(MAP_KEY, PlayerCommand::Map),
-            read(LAND_KEY, PlayerCommand::Land),
-        );
-        let (player, hail, mission) = (
-            read(PLAYER_INFO_KEY, PlayerCommand::PlayerInfo),
-            read(HAIL_KEY, PlayerCommand::Hail),
-            read(MISSION_INFO_KEY, PlayerCommand::MissionInfo),
-        );
+        let read = |key: Key| reads.contains(&key) && self.press_taken(Some(key), false).is_some();
+        let (map, land, player) = (read(MAP_KEY), read(LAND_KEY), read(PLAYER_INFO_KEY));
+        let (hail, mission) = (read(HAIL_KEY), read(MISSION_INFO_KEY));
         if map {
             self.read_map(faded);
         }
         if land {
-            self.faded_keys.land_latch = true;
-            self.land();
+            self.press_land();
         }
         if map || (player && self.read_player_info(faded)) || (hail && self.read_hail(faded)) {
             return;
         }
         if mission {
-            self.faded_keys.mission_latch = true;
             self.read_mission_info(faded);
         }
     }
@@ -321,9 +329,10 @@ impl<
     /// I, read on a `faded` screen or not.
     fn read_mission_info(&mut self, faded: bool) {
         if faded {
+            self.faded_keys.mission_latch = true;
             self.press_faded_mission_info();
         } else {
-            self.ask_mission_info();
+            self.press_mission_info();
         }
     }
 }

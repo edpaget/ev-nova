@@ -267,7 +267,7 @@ impl<
 
     /// `press`, if a jump under way lets it through and the flight takes
     /// its command.
-    fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
+    pub(super) fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
         let press = if jumping {
             let option = self.held.contains(&Key::Alt);
             let menu_open = self.escort_menu.is_open();
@@ -328,8 +328,7 @@ impl<
         }
         match self.press_taken(press, jumping) {
             Some(LAND_KEY) => {
-                self.faded_keys.land_latch = true;
-                self.land();
+                self.press_land();
                 // The hypergate's map takes its release, as M's does.
                 if self.map_open {
                     return ScreenAction::None;
@@ -360,8 +359,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => {
-                self.faded_keys.mission_latch = true;
-                self.ask_mission_info();
+                self.press_mission_info();
                 if self.pending_mission_info.is_some() {
                     return ScreenAction::None;
                 }
