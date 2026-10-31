@@ -692,6 +692,26 @@ fn a_layout_a_placing_a_takeover_a_landing_and_the_holds_expiry_drop_it() {
 }
 
 #[test]
+fn a_many_step_frame_holds_its_last_step_and_replays_the_others_in_full() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let run = |between: &FlightFrame| StepRun {
+        between_passes: Some(Box::new(between.clone())),
+        ..step(vec![fight(vec![]), fight(vec![detonation()])])
+    };
+    let last = sol_at(30.0);
+    let report = StepReport {
+        steps: vec![run(&sol_at(10.0)), run(&last)],
+        stopped: false,
+    };
+    view.sim.set_frame(sol_at(40.0));
+    frame(&mut view, report);
+    assert_eq!(view.drawn(), &last);
+    assert_eq!(view.effects.explosions().len(), 1, "the earlier step's");
+    frame(&mut view, stopped());
+    assert_eq!(view.effects.explosions().len(), 2, "the last one's too");
+}
+
+#[test]
 fn a_double_time_frame_smooths_over_two_passes() {
     let mut view = stepping(armed(1, &[BLASTER]));
     let mut first = sol_at(10.0);
