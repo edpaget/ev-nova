@@ -392,3 +392,75 @@ fn a_key_that_opens_mission_info_over_an_offer_over_flight_drops_those_behind_it
     end_the_wait(&mut screen);
     assert!(screen.flight_mission_info().is_some(), "still open");
 }
+
+#[test]
+fn command_down_across_a_key_that_flushes_is_let_go_with_it() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_at_venues(&store, game_data_fork_loaded());
+    start_the_wait(&mut screen);
+    screen.input(&key(Key::Command, true));
+    tap(&mut screen, Key::Char('b'));
+    screen.input(&key(Key::Command, false));
+    end_the_wait(&mut screen);
+    assert!(spaceport(&screen).open_bar().is_some(), "the bar opened");
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::None,
+        "a plain Q, no Command-Q"
+    );
+}
+
+#[test]
+fn command_down_across_escape_taking_off_is_let_go_with_it() {
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    start_the_wait(&mut screen);
+    screen.input(&key(Key::Command, true));
+    tap(&mut screen, Key::Escape);
+    screen.input(&key(Key::Command, false));
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight, "took off");
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::None,
+        "a plain Q, no Command-Q"
+    );
+}
+
+#[test]
+fn a_press_dropped_by_a_flush_leaves_no_key_down_and_its_key_still_lets_go_live() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_at_venues(&store, game_data_fork_loaded());
+    start_the_wait(&mut screen);
+    tap(&mut screen, Key::Char('b'));
+    screen.input(&key(Key::Command, true));
+    end_the_wait(&mut screen);
+    assert_eq!(
+        screen.input(&key(Key::Char('q'), true)),
+        ScreenAction::Quit,
+        "Command is physically down, so Command-Q stands"
+    );
+    screen.input(&key(Key::Char('q'), false));
+    screen.input(&key(Key::Command, false));
+    assert_eq!(screen.input(&key(Key::Char('q'), true)), ScreenAction::None);
+}
+
+#[test]
+fn alt_down_across_a_refused_sale_is_let_go_with_it() {
+    let store = MemoryPilots::new();
+    let mut screen = landed_outfitter_over(&store, pod_data());
+    click_port_item(&mut screen, 8);
+    select_first_outfit(&mut screen);
+    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::Right, true));
+    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(Key::Left, true));
+    start_the_wait(&mut screen);
+    screen.input(&key(Key::Alt, true));
+    tap(&mut screen, Key::Char('s'));
+    screen.input(&key(Key::Alt, false));
+    end_the_wait(&mut screen);
+    let open = spaceport(&screen).open_outfitter().expect("outfitting");
+    assert!(open.alert_dialog().is_some(), "the sale refused");
+    assert!(!open.alt_held(), "Alt let go");
+}

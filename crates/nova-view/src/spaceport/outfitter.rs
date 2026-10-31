@@ -899,6 +899,12 @@ impl OutfitterScreen {
         self.alert.open((), dialog);
     }
 
+    /// Whether Alt is held, for Buy and Sell to ask for a count.
+    #[must_use]
+    pub fn alt_held(&self) -> bool {
+        self.quantity.alt_held()
+    }
+
     /// The alert, while it is open.
     #[must_use]
     pub fn alert_dialog(&self) -> Option<&DescDialog> {

@@ -15,11 +15,14 @@
 //! - Past the last dialog, nothing reads them: flight polls its keys live
 //!   (`_IterateInGameEventLoop` drops them, @0x56a6b, @0x56cec).
 //!
-//! A press's release goes with it, past either end, only so what took
-//! the press isn't left holding it.
+//! Past either end, the queued release of every press already replayed
+//! still goes, only so what took the press isn't left holding it: the
+//! router's own Command, a screen's Alt.
+
+use std::collections::HashSet;
 
 use nova_view::flight::FlightView;
-use nova_view::{Input, Showing};
+use nova_view::{Input, Key, Showing};
 
 use super::AppScreen;
 
@@ -38,17 +41,6 @@ impl FlushMark {
     fn flushed_since(self, before: Self) -> bool {
         self.layers > before.layers || (self.stages != before.stages && self.stages > 0)
     }
-}
-
-/// Whether `release` lets go of the key `press` went down on.
-fn lets_go_of(release: &Input, press: &Input) -> bool {
-    matches!(
-        (*release, *press),
-        (
-            Input::Key { key, pressed: false, .. },
-            Input::Key { key: down, pressed: true, .. },
-        ) if key == down
-    )
 }
 
 impl AppScreen {
@@ -80,23 +72,52 @@ impl AppScreen {
             .map(FlightView::take_map_replay)
             .unwrap_or_default();
         let mut keys = replay.into_iter();
+        let mut down = HashSet::new();
         while let Some(input) = keys.next() {
             let before = self.flush_mark();
+            note_down(&mut down, &input);
             let _ = self.routed_input(&input);
             if self.showing() == Showing::Flight || self.flush_mark().flushed_since(before) {
-                if let Some(release) = keys.find(|queued| lets_go_of(queued, &input)) {
-                    let _ = self.routed_input(&release);
-                }
+                self.let_go_of_replayed(keys, down);
                 return;
             }
+        }
+    }
+
+    /// Past a stop, the queued release of each key in `down`, the presses
+    /// replayed and not yet let go, in order, and nothing else of `rest`:
+    /// its live release has been and gone, so nothing else would let go
+    /// of it. A press replayed with no release queued is still physically
+    /// down, and its release comes live, once. So does a press dropped
+    /// here's, whose key the router noted as it was typed.
+    fn let_go_of_replayed(&mut self, rest: impl Iterator<Item = Input>, mut down: HashSet<Key>) {
+        for input in rest {
+            if let Input::Key {
+                key,
+                pressed: false,
+                ..
+            } = input
+                && down.remove(&key)
+            {
+                let _ = self.routed_input(&input);
+            }
+        }
+    }
+}
+
+/// Notes in `down` a key `input` presses or lets go of.
+fn note_down(down: &mut HashSet<Key>, input: &Input) {
+    if let Input::Key { key, pressed, .. } = *input {
+        if pressed {
+            down.insert(key);
+        } else {
+            down.remove(&key);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use nova_view::Key;
-
     use super::*;
 
     fn mark(layers: usize, stages: usize) -> FlushMark {
@@ -116,19 +137,5 @@ mod tests {
         assert!(mark(0, 1).flushed_since(mark(0, 0)), "one shown afresh");
         assert!(!mark(0, 0).flushed_since(mark(0, 1)), "the last closed");
         assert!(!mark(0, 2).flushed_since(mark(0, 2)), "unchanged");
-    }
-
-    #[test]
-    fn a_release_lets_go_only_of_its_own_keys_press() {
-        let input = |key, pressed| Input::Key {
-            key,
-            pressed,
-            repeat: false,
-        };
-        let (a, b) = (Key::Char('a'), Key::Char('b'));
-        assert!(lets_go_of(&input(a, false), &input(a, true)));
-        assert!(!lets_go_of(&input(b, false), &input(a, true)));
-        assert!(!lets_go_of(&input(a, true), &input(a, true)), "a press");
-        assert!(!lets_go_of(&input(a, false), &input(a, false)));
     }
 }
