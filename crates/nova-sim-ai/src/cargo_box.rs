@@ -698,9 +698,10 @@ mod tests {
 
     #[test]
     fn a_disc_touches_a_box_by_its_graphics_frame() {
-        // Graphic 1 is 40 across: the box at 45 is 25 from its edge.
+        // Graphic 1 is 40 across, drawn up and left of the box's point: the
+        // box at 65 is 25 from its frame's left edge.
         let frames = BoxFrames::new([None, Some((40, 40)), None, None, None]);
-        let mut boxes = with_scoopable(&[(45.0, 0.0)], &[3]);
+        let mut boxes = with_scoopable(&[(65.0, 0.0)], &[3]);
         assert_eq!(boxes.take_touching(Vec2::ZERO, 24.0, &frames), None);
         assert!(boxes.take_touching(Vec2::ZERO, 25.0, &frames).is_some());
     }
