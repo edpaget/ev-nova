@@ -253,6 +253,15 @@ pub struct EffectSheet {
     pub frame_height: u32,
 }
 
+impl EffectSheet {
+    /// Its frame's size, (width, height): what a sprite of it is placed
+    /// by.
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        (self.frame_width, self.frame_height)
+    }
+}
+
 /// The starfield's sprite sheet ([`CombatLooks::star_sheet`]): its
 /// `rlëD`, how many frames it holds and each frame's width and height,
 /// which the stars wrap and are placed by (`_HandleStars` reads them with
