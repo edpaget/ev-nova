@@ -2933,6 +2933,33 @@ mod tests {
     }
 
     #[test]
+    fn threatens_player_extended_reads_a_goal_for_a_target_only_while_its_ship_is_active() {
+        // A fight's goal names its ship as +0x70 does, and a ship that has
+        // let go keeps that goal until its next think. A stellar defender
+        // passes every other test (@0x81bd3), so the goal's read alone
+        // decides.
+        let quarry = plain(7);
+        let let_go = Npc {
+            goal: Goal::Attack(ShipRef::Npc(quarry.id)),
+            target: None,
+            defends: Some(StellarId(128)),
+            ..plain(1)
+        };
+        assert!(
+            let_go.threatens_player_extended(std::slice::from_ref(&quarry), true),
+            "its quarry stands: the goal counts as a target"
+        );
+        let wreck = Npc {
+            condition: Condition::Destroyed,
+            ..quarry
+        };
+        assert!(
+            !let_go.threatens_player_extended(std::slice::from_ref(&wreck), true),
+            "destroyed but not yet taken out: its slot is inactive"
+        );
+    }
+
+    #[test]
     fn a_target_destroyed_but_not_yet_taken_out_is_led_by_nobody() {
         // Its slot's free writes +0x9a -1 (@0x2dee7), which the threat
         // tests read with no test of its slot (@0x7f587, @0x81c3f).
