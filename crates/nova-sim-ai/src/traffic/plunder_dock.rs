@@ -145,7 +145,7 @@ pub const DOCK_WAIT: u32 = 100;
 /// `Rand(80)`: the spread of the dock's wait.
 pub const DOCK_WAIT_SPREAD: u16 = 80;
 /// How many times the docking box an inertialess ship's is (`leal
-/// (,%ebx,4)` @0x8e904).
+/// (,%ebx,4)`: goal 0xd's @0x8e904, goal 0xf's @0x8f786).
 pub const INERTIALESS_BOX: i32 = 4;
 
 /// The docking a pirate keeps from tick to tick: the ship it docks with
@@ -183,6 +183,19 @@ pub fn dock_box(class_turn: f32) -> i32 {
     side
 }
 
+/// The box `side`, [`INERTIALESS_BOX`] times as wide when `npc` flies
+/// inertialess, a dampener counting as `rule` says: `_ShipIsInertialess`
+/// with no leader, as a plunder and a repair are no formation. The ×4 is
+/// on the truncated integer, so a fractional box truncates first.
+#[must_use]
+pub(crate) fn inertialess_box(npc: &Npc, side: i32, rule: InertialDampener) -> i32 {
+    if npc.hull_inertialess(rule) {
+        side * INERTIALESS_BOX
+    } else {
+        side
+    }
+}
+
 /// What the high level of a plunder of a disabled ship does (see the
 /// module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,16 +215,9 @@ pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool, rule: InertialDampener
     if boarded && npc.ai_wait == 0 {
         return DockStep::GiveUp;
     }
-    let side = dock_box(npc.hull.class_turn);
-    // `_ShipIsInertialess` with no leader: a plunder is no formation.
-    let side = if npc.hull_inertialess(rule) {
-        side * INERTIALESS_BOX
-    } else {
-        side
-    };
     // f32: the box is converted back to a float for the test.
     #[allow(clippy::cast_precision_loss)]
-    let side = side as f32;
+    let side = inertialess_box(npc, dock_box(npc.hull.class_turn), rule) as f32;
     let off = npc.state.position - victim;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
     DockStep::Sub(if within(side) {

@@ -185,7 +185,7 @@ pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> H
         };
     }
     if npc.goal == Goal::Assist(Help::Repair) {
-        return match (repair_dock::high_level(npc, around), npc.target) {
+        return match (repair_dock::high_level(npc, around, rule), npc.target) {
             (Some(step), Some(ship)) => HighLevel::Docks { ship, step },
             _ => HighLevel::Skipped,
         };
@@ -1055,6 +1055,37 @@ mod tests {
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
             HighLevel::Skipped,
             "no target: nothing changes"
+        );
+    }
+
+    #[test]
+    fn the_repair_high_level_takes_the_dampener_rule() {
+        let mut helper = npc(1, ShipStats::new(FAST, &[]));
+        helper.goal = Goal::Assist(Help::Repair);
+        helper.target = Some(ShipRef::Player);
+        helper.hull.class_turn = 3.0;
+        helper.state.position = Vec2::new(1040.0, 0.0);
+        helper.stats.dampener = true;
+        let downed = crate::ai::PlayerSide {
+            condition: Condition::Disabled,
+            ..crate::ai::fixture::player(0.0, 0.0)
+        };
+        let world = World {
+            player: Some(downed),
+            ..World::new(&[])
+        };
+        let npcs = [helper];
+        let docks = |sub| HighLevel::Docks {
+            ship: ShipRef::Player,
+            step: DockStep::Sub(sub),
+        };
+        assert_eq!(
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::AnyShip),
+            docks(DockSub::Dock)
+        );
+        assert_eq!(
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly),
+            docks(DockSub::Close)
         );
     }
 
