@@ -1,8 +1,8 @@
 //! Sprite murk: how far a sprite has faded into a murky system's space,
 //! as the original's `_HandleSpriteMurkiness(x, y, sprite)`
 //! (@0x2b42f-0x2b513) works it out for a shot on every live tick
-//! (`_HandleShot` @0x35c48-0x35c61), and how the view darkens the sprite
-//! by it.
+//! (`_HandleShot` @0x35c48-0x35c61), and how the view mixes the sprite
+//! toward its system's background by it.
 //!
 //! - The level ([`sprite_murk`]): the shot's position truncated to whole
 //!   pixels (`cvttss2si`, `cwtl` @0x35c4f-0x35c5d), each axis' distance
@@ -14,10 +14,16 @@
 //!   (`imull` @0x2b469-0x2b48e), its positions 16-bit and its level
 //!   stored in 16 bits, which would wrap far out; ours are wide and never
 //!   wrap.
-//! - The tint ([`murk_tint`]): the original mixes a murky sprite toward
-//!   its system's `BkgndColor`, `src × (32 − m) >> 5 | colour × m >> 5`
-//!   per 5-bit channel (`_BlitPixieTranslucentCopy` @0xc1140-0xc11ca),
-//!   the colour the `sÿst` +0x1f8 RGB555 (built @0x77d85-0x77e99).
+//! - The mix ([`SeenMurk::at`]): the level and the system's colour fill
+//!   the sprite's one colorize slot (+0xb0 and +0xb4, written @0x2b509),
+//!   and the draw mixes each texel, `src × (32 − m) >> 5 | colour × m >> 5`
+//!   per 5-bit channel, the halves OR-ed ([`Colorize`];
+//!   `_BlitPixieTranslucentCopy` @0xc1140-0xc11ca), before its tint and
+//!   blend apply. The colour is the `sÿst`'s `BkgndColor` as RGB555
+//!   (`nova_sim::murk::murk_colour`, built @0x77d85-0x77e99): stock murky
+//!   systems give 1 to 4 of 31 a channel, so far out a sprite fades to
+//!   nearly black, tinged by its system. A sprite at level 0 is drawn
+//!   plainly ([`DrawList::mixed_sprite`](crate::DrawList::mixed_sprite)).
 //!
 //! Its eight callers each pass their sprite's centre in whole pixels, and
 //! the view murks all of them: the ships (`_HandleShipDisplay` @0x2be3a),
@@ -29,21 +35,12 @@
 //!
 //! Left out:
 //!
-//! - **The murk colour.** The sprite tint can only multiply, so the view
-//!   darkens toward black, `rgb × (32 − m)/32`, and never adds the
-//!   colour. The RGB555 rounding gives even a black `BkgndColor` 1 of 31
-//!   a channel, and the stock systems that murk 1 to 4 of 31, so at full
-//!   murk the view is within 4/31 a channel of the original, and nearer
-//!   below it. Loading `BkgndColor` and drawing the murk with the
-//!   renderer's colorize ([`Colorize`](crate::Colorize), which an ionized
-//!   ship's tint already uses) is
-//!   rdm:task/murk-mixes-toward-the-background-colour.
 //! - **The 8-bit depth's cap of 24** (@0x2b4b1-0x2b4c1): the engine draws
 //!   at 16-bit only.
 
 use nova_sim::Vec2;
 
-use crate::{Color, Colorize};
+use crate::Colorize;
 
 /// What the squared distance times the murk is multiplied by (the double
 /// @0xdd560).
@@ -51,9 +48,6 @@ pub const MURK_SCALE: f64 = 1.2e-5;
 
 /// The most a sprite murks, out of 32 (@0x2b4cc-0x2b4d2).
 pub const MAX_SPRITE_MURK: u8 = 31;
-
-/// The steps of the murk's mix: a level of 32 would be all colour.
-const MURK_STEPS: u16 = 32;
 
 /// How the player sees a system's murk: from its ship at `viewer`, at
 /// its effective murk `murk`, toward its colour `colour`.
@@ -97,19 +91,6 @@ pub fn sprite_murk(at: Vec2, viewer: Vec2, murk: u8) -> u8 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let level = level.clamp(0.0, f64::from(MAX_SPRITE_MURK)) as u8;
     level
-}
-
-/// `base` darkened by a murk of `level` out of 32 ([`sprite_murk`]): its
-/// red, green and blue times (32 − `level`)/32, rounded down as the
-/// original's `>> 5` does, its alpha kept. Toward black, not the
-/// system's background colour (see the module docs).
-#[must_use]
-pub fn murk_tint(base: Color, level: u8) -> Color {
-    let keep = MURK_STEPS - u16::from(level).min(MURK_STEPS);
-    // At most 255 × 32 / 32: within a `u8`.
-    #[allow(clippy::cast_possible_truncation)]
-    let scale = |channel: u8| (u16::from(channel) * keep / MURK_STEPS) as u8;
-    Color::rgba(scale(base.r), scale(base.g), scale(base.b), base.a)
 }
 
 #[cfg(test)]
@@ -182,17 +163,5 @@ mod tests {
             }
         );
         assert_eq!(seen.at(Vec2::ZERO).level, 0, "at the viewer");
-    }
-
-    #[test]
-    fn the_tint_darkens_toward_black_and_keeps_alpha() {
-        let base = Color::rgba(255, 128, 31, 200);
-        assert_eq!(murk_tint(base, 0), base);
-        assert_eq!(murk_tint(base, 16), Color::rgba(127, 64, 15, 200));
-        assert_eq!(murk_tint(base, 31), Color::rgba(7, 4, 0, 200));
-        assert_eq!(murk_tint(base, 32), Color::rgba(0, 0, 0, 200));
-        assert_eq!(murk_tint(base, 255), Color::rgba(0, 0, 0, 200));
-        let shot = Color::rgba(255, 255, 255, 191); // `see_through(8)`
-        assert_eq!(murk_tint(shot, 16), Color::rgba(127, 127, 127, 191));
     }
 }

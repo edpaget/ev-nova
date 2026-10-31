@@ -554,7 +554,7 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     // at k = 0, and two solid lit squares crossfaded at k = 16 over the
     // clear, (14..18, 14..18) then (16..20, 14..18), the second over half
     // the first. Beside them, a hull square at (24..28, 14..18) with the
-    // sheet crossfaded over it by 8 at a murk of 16, its colour halved.
+    // sheet crossfaded over it by 8, its colour halved by the tint.
     // White at (32 - t) 32nds of full alpha: a shot translucent by t.
     let translucent_by = |t: u8| match t {
         8 => Color::rgba(255, 255, 255, 191),
@@ -581,7 +581,7 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
         .crossfade_sprite(
             ImageKey::sprite(7, 0),
             Point::new(26.0, 16.0),
-            // Translucent by 8, its colour halved by a murk of 16.
+            // Translucent by 8, its colour halved.
             Color::rgba(127, 127, 127, 191),
         )
         .crossfade_sprite(
@@ -639,12 +639,12 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     assert_area(&pixels, (14, 14), (16, 18), first, 0);
     assert_area(&pixels, (16, 14), (18, 18), both, 0);
     assert_area(&pixels, (18, 14), (20, 18), first, 0);
-    // A darkened tint scales the source's colour before the crossfade:
-    // at a murk of 16, by 16/32.
-    let murked = w555(original_crossfade_555(LIT_555.map(|c| c / 2), HULL_555, 24));
-    assert_eq!(murked, [49, 24, 8, 255]);
-    assert_ne!(murked, lit_24, "the crossfade ignoring the tint's colour");
-    assert_area(&pixels, (26, 14), (28, 18), murked, 0);
+    // A dimmed tint scales the source's colour before the crossfade: by
+    // 16/32.
+    let dimmed = w555(original_crossfade_555(LIT_555.map(|c| c / 2), HULL_555, 24));
+    assert_eq!(dimmed, [49, 24, 8, 255]);
+    assert_ne!(dimmed, lit_24, "the crossfade ignoring the tint's colour");
+    assert_area(&pixels, (26, 14), (28, 18), dimmed, 0);
 }
 
 /// The original's 16-bit translucent copy with its factors set apart, as

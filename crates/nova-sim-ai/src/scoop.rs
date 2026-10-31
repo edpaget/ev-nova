@@ -48,7 +48,7 @@
 //!   branch doesn't read it.
 //!
 //! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
-//! `nova_view::flight::murk` darkens each box
+//! `nova_view::flight::murk` mixes each box toward the background
 //! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use std::collections::BTreeMap;
