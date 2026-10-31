@@ -457,15 +457,15 @@ mod tests {
     #[test]
     fn with_the_player_gone_its_followers_keep_their_words() {
         let mut traffic = Traffic::with_interval(1);
-        let mut hired = npc(0, ShipStats::new(FAST, &[]));
-        hired.escort = Some(EscortDuty {
-            formation: FormationSlot::default(),
-            order: None,
-        });
-        let hired = traffic.add_npc_at(hired, BELOW);
+        let hired = traffic.add_npc_at(hired(), BELOW);
+        let world = world_with(Condition::Intact);
+        let player = world.player.expect("the player").state;
+        let on_player = Some(HIRED.position(&player));
+        traffic.form_fleets(Some(&player));
+        assert_eq!(of(&traffic, hired).slot_place, on_player, "the scene");
         traffic.form_fleets(None);
-        assert_eq!(of(&traffic, hired).slot_place, None);
-        assert_eq!(traffic.berth_place(BELOW), None);
+        assert_eq!(of(&traffic, hired).slot_place, on_player);
+        assert_eq!(traffic.berth_place(BELOW), on_player);
     }
 
     #[test]
