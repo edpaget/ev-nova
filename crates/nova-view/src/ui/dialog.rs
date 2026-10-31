@@ -48,7 +48,7 @@ use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::scroll_arrows::{ArrowHold, ScrollArrow};
-use super::scroll_text::ScrollText;
+use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
 
 /// The logical screen dialogs are placed on: Nova's 1024 x 768.
@@ -635,6 +635,21 @@ impl Dialog {
         }
     }
 
+    /// Replaces the text of item `item` (from 1) with `rows`, in its font,
+    /// size and box and shown from the first row. An item that is not text,
+    /// or no such item, changes nothing.
+    pub fn set_rows(&mut self, item: usize, rows: Vec<TextRow>) {
+        let Some(found) = item
+            .checked_sub(1)
+            .and_then(|index| self.items.get_mut(index))
+        else {
+            return;
+        };
+        if let Widget::Text { text: shown, .. } = &mut found.widget {
+            *shown = shown.with_rows(rows);
+        }
+    }
+
     /// The text of item `item` (from 1), if it is a text item.
     #[must_use]
     pub fn text(&self, item: usize) -> Option<&ScrollText> {
@@ -1107,7 +1122,7 @@ mod tests {
     use crate::draw::fill_command;
     use crate::input::{MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::scroll_text::ARROW_UNITS;
+    use crate::ui::scroll_text::{ARROW_UNITS, TextRun};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -2005,6 +2020,42 @@ mod tests {
         let before = drawn(&dialog);
         for other in [0, 1, 2, 4, 99] {
             dialog.set_text(other, "other");
+        }
+        assert_eq!(drawn(&dialog), before, "only text items change");
+    }
+
+    #[test]
+    fn set_rows_replaces_a_text_items_rows_from_the_first_and_nothing_else() {
+        let rows = |labels: &[&str]| -> Vec<TextRow> {
+            labels
+                .iter()
+                .zip(1..)
+                .map(|(label, row)| TextRow {
+                    baseline: row as f32 * 12.0,
+                    runs: vec![TextRun {
+                        x: 0.0,
+                        text: (*label).to_owned(),
+                        color: Color::WHITE,
+                    }],
+                })
+                .collect()
+        };
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        dialog.input(&key(Key::Down));
+        dialog.set_rows(3, rows(&["a", "b", "c", "d"]));
+        let text = dialog.scroll_text().expect("scrolling text");
+        assert_eq!(text.first(), 0);
+        assert_eq!(text.lines(), ["a", "b", "c", "d"]);
+        assert_eq!(text.rect(), rect(10.0, 10.0, 40.0, 36.0));
+        dialog.input(&key(Key::Down));
+        assert_eq!(
+            dialog.scroll_text().expect("scrolling text").first(),
+            1,
+            "it still scrolls"
+        );
+        let before = drawn(&dialog);
+        for other in [0, 1, 2, 4, 99] {
+            dialog.set_rows(other, rows(&["other"]));
         }
         assert_eq!(drawn(&dialog), before, "only text items change");
     }

@@ -1,6 +1,7 @@
 //! Text wrapped into a box and scrolled through it a whole line at a time,
 //! or a pixel at a time as `_ScrollDialogText` @0x51839 scrolls one
-//! ([`ScrollText::pixel_scrolled`]).
+//! ([`ScrollText::pixel_scrolled`]). It can also hold rows placed by hand
+//! ([`TextRow`]) in place of wrapped lines.
 
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList};
@@ -26,6 +27,10 @@ pub const ARROW_UNITS: f32 = 10.0;
 /// [`ScrollText::pixel_scrolled`] makes it scroll by pixels instead: it
 /// then shows every line that reaches into the box, a partial one clipped
 /// to it.
+///
+/// [`ScrollText::with_rows`] makes its lines rows placed by hand ([`TextRow`]),
+/// which scroll by whole rows the same way. A text is one or the other: no
+/// caller needs rows scrolled by pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollText {
     lines: Vec<String>,
@@ -43,6 +48,50 @@ pub struct ScrollText {
     pending: f32,
     /// Where a pixel-scrolled text is; none for one of whole lines.
     pixels: Option<PixelScroll>,
+    /// The placed rows that are its lines; none for wrapped text.
+    rows: Vec<TextRow>,
+}
+
+/// A line placed by hand, as a dialog's update routine places its text with
+/// `MoveTo` and `DrawString`: it isn't wrapped, and its runs have their own
+/// columns and colours.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRow {
+    /// Its baseline, below the box's top.
+    pub baseline: f32,
+    /// What it draws.
+    pub runs: Vec<TextRun>,
+}
+
+/// A run of a [`TextRow`], in the box's font and size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRun {
+    /// Where it starts, right of the box's left.
+    pub x: f32,
+    /// Its text.
+    pub text: String,
+    /// Its colour.
+    pub color: Color,
+}
+
+impl TextRow {
+    /// Its runs joined by a space: what [`ScrollText::lines`] reads.
+    fn line(&self) -> String {
+        let runs: Vec<&str> = self.runs.iter().map(|run| run.text.as_str()).collect();
+        runs.join(" ")
+    }
+}
+
+/// How many of `rows` a box `height` high shows at once: the most that stay
+/// inside it from any first row, as that row lands on the first row's
+/// baseline and the rest keep their spacing.
+fn visible_rows(rows: &[TextRow], height: f32) -> usize {
+    let top = rows.first().map_or(0.0, |row| row.baseline);
+    let fits = |n: usize| {
+        rows.windows(n)
+            .all(|shown| top + shown[n - 1].baseline - shown[0].baseline <= height)
+    };
+    (1..=rows.len()).rev().find(|&n| fits(n)).unwrap_or(0)
 }
 
 /// Where a pixel-scrolled text is.
@@ -89,6 +138,7 @@ impl ScrollText {
             first: 0,
             pending: 0.0,
             pixels: None,
+            rows: Vec::new(),
         }
     }
 
@@ -119,6 +169,25 @@ impl ScrollText {
             new.pixel_scrolled()
         } else {
             new
+        }
+    }
+
+    /// `rows` in this one's font, size and box, shown from the first
+    /// (see [`TextRow`]), scrolled by whole rows.
+    #[must_use]
+    pub fn with_rows(&self, rows: Vec<TextRow>) -> Self {
+        Self {
+            lines: rows.iter().map(TextRow::line).collect(),
+            font: self.font,
+            size: self.size,
+            color: self.color,
+            rect: self.rect,
+            line_height: self.line_height,
+            visible: visible_rows(&rows, self.rect.height()),
+            first: 0,
+            pending: 0.0,
+            pixels: None,
+            rows,
         }
     }
 
@@ -340,9 +409,16 @@ impl ScrollText {
     /// one crossing either edge is cut there, as [`list.clipped`](DrawList::clipped)
     /// cuts it. At the start, a box that isn't a whole number of lines
     /// shows a partial last line, as `TETextBox` does.
+    ///
+    /// Placed rows draw their runs instead ([`TextRow`]), the row at
+    /// [`Self::first`] on the first row's baseline.
     pub fn draw(&self, list: &mut DrawList) {
         if let Some(pixels) = self.pixels {
             self.draw_pixels(pixels.offset, list);
+            return;
+        }
+        if !self.rows.is_empty() {
+            self.draw_rows(list);
             return;
         }
         let shown = self.lines.iter().skip(self.first).take(self.visible);
@@ -355,6 +431,19 @@ impl ScrollText {
                 self.rect.min.y + row as f32 * self.line_height,
             );
             list.text_in(self.font, line, origin, self.size, None, self.color);
+        }
+    }
+
+    fn draw_rows(&self, list: &mut DrawList) {
+        let baseline = |at: usize| self.rows.get(at).map_or(0.0, |row| row.baseline);
+        let shift = baseline(self.first) - baseline(0);
+        let shown = self.rows.iter().skip(self.first).take(self.visible);
+        for row in shown {
+            let top = self.rect.min.y + row.baseline - shift - self.size;
+            for run in &row.runs {
+                let origin = Point::new(self.rect.min.x + run.x, top);
+                list.text_in(self.font, &run.text, origin, self.size, None, run.color);
+            }
         }
     }
 
@@ -804,6 +893,177 @@ mod tests {
                 ("abcd".to_owned(), Point::new(100.0, 50.0)),
                 ("efgh".to_owned(), Point::new(100.0, 62.0)),
             ]
+        );
+    }
+
+    // Placed rows.
+
+    const RED: Color = Color::rgba(255, 0, 0, 255);
+
+    /// `(baseline, label)` rows, each with its label in green at 0 and a
+    /// value in red at 50, in a [`scroll`] box `height` high.
+    fn rowed(rows: &[(f32, &str)], height: f32) -> ScrollText {
+        let rows = rows
+            .iter()
+            .map(|&(baseline, label)| TextRow {
+                baseline,
+                runs: vec![
+                    TextRun {
+                        x: 0.0,
+                        text: label.to_owned(),
+                        color: GREEN,
+                    },
+                    TextRun {
+                        x: 50.0,
+                        text: "v".to_owned(),
+                        color: RED,
+                    },
+                ],
+            })
+            .collect();
+        scroll("", height).with_rows(rows)
+    }
+
+    /// Five rows spaced as the plunder dialog's, in a box `height` high.
+    fn five_rows(height: f32) -> ScrollText {
+        rowed(
+            &[
+                (12.0, "r0"),
+                (28.0, "r1"),
+                (42.0, "r2"),
+                (56.0, "r3"),
+                (70.0, "r4"),
+            ],
+            height,
+        )
+    }
+
+    /// Each run drawn: its text, where and in what colour.
+    fn placed(text: &ScrollText) -> Vec<(String, Point, Color)> {
+        let mut list = DrawList::new();
+        text.draw(&mut list);
+        list.iter()
+            .map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    font,
+                    size,
+                    wrap_width,
+                    color,
+                } => {
+                    assert_eq!((*font, *size, *wrap_width), (Font::Geneva, 10.0, None));
+                    (text.clone(), *origin, *color)
+                }
+                other => panic!("not text: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rows_runs_draw_at_their_columns_and_colours_a_size_above_its_baseline() {
+        assert_eq!(
+            placed(&rowed(&[(12.0, "a"), (28.0, "b")], 96.0)),
+            [
+                ("a".to_owned(), Point::new(100.0, 52.0), GREEN),
+                ("v".to_owned(), Point::new(150.0, 52.0), RED),
+                ("b".to_owned(), Point::new(100.0, 68.0), GREEN),
+                ("v".to_owned(), Point::new(150.0, 68.0), RED),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rows_runs_read_as_one_line_joined_by_a_space_and_are_not_wrapped() {
+        let long = "far wider than the box";
+        let text = rowed(&[(12.0, long), (28.0, "b")], 96.0);
+        assert_eq!(text.lines(), [format!("{long} v"), "b v".to_owned()]);
+        assert_eq!(placed(&text)[0].0, long);
+    }
+
+    #[test]
+    fn rows_that_fit_their_box_do_not_move() {
+        let mut text = five_rows(96.0);
+        assert_eq!(text.visible(), 5);
+        assert!(!text.overflows());
+        let before = placed(&text);
+        assert!(text.input(&down(false)));
+        assert!(text.input(&lines(3.0)));
+        assert_eq!(text.first(), 0);
+        assert_eq!(placed(&text), before);
+    }
+
+    #[test]
+    fn an_overflowing_box_scrolls_by_rows_and_draws_only_those_visible() {
+        let mut text = five_rows(36.0);
+        assert_eq!(text.visible(), 2);
+        assert!(text.overflows());
+        let tops = |text: &ScrollText| -> Vec<(String, f32)> {
+            placed(text)
+                .into_iter()
+                .filter(|(text, ..)| text != "v")
+                .map(|(text, origin, _)| (text, origin.y))
+                .collect()
+        };
+        assert_eq!(
+            tops(&text),
+            [("r0".to_owned(), 52.0), ("r1".to_owned(), 68.0)]
+        );
+        assert!(text.input(&down(false)));
+        assert_eq!(text.first(), 1);
+        assert_eq!(
+            tops(&text),
+            [("r1".to_owned(), 52.0), ("r2".to_owned(), 66.0)],
+            "the first shown on the first row's baseline, the rest as spaced"
+        );
+        assert!(text.input(&lines(1.0)), "a wheel moves them too");
+        assert_eq!(text.first(), 2);
+        text.input(&lines(100.0));
+        assert_eq!(text.first(), 3, "until the last row is shown");
+        assert_eq!(tops(&text)[1].0, "r4");
+        assert!(text.input(&up(false)));
+        assert_eq!(text.first(), 2);
+    }
+
+    #[test]
+    fn a_row_shows_only_if_it_fits_wherever_the_scroll_stops() {
+        let rows = [(12.0, "a"), (20.0, "b"), (40.0, "c")];
+        assert_eq!(rowed(&rows, 30.0).visible(), 1, "b to c needs 40");
+        assert_eq!(rowed(&rows, 40.0).visible(), 3, "exactly its height");
+        assert_eq!(rowed(&rows, 39.9).visible(), 2, "not a to c");
+    }
+
+    #[test]
+    fn a_box_too_short_for_any_row_draws_none_and_no_rows_draw_nothing() {
+        let mut short = five_rows(11.9);
+        assert_eq!(short.visible(), 0);
+        short.scroll_by(100);
+        assert_eq!(placed(&short), []);
+        assert_eq!(placed(&five_rows(11.9)), []);
+        let none = rowed(&[], 96.0);
+        assert_eq!((none.visible(), none.lines().len()), (0, 0));
+        assert_eq!(placed(&none), []);
+    }
+
+    #[test]
+    fn new_rows_show_from_the_first_with_nothing_left_over() {
+        let mut text = five_rows(36.0);
+        text.scroll_by(2);
+        text.input(&units(11.0));
+        let mut new = text.with_rows(five_rows(36.0).rows);
+        assert_eq!(new.first(), 0);
+        assert_eq!(new.rect(), text.rect());
+        new.input(&units(11.0));
+        assert_eq!(new.first(), 0, "the 11 units over are gone");
+        assert_eq!(
+            rowed(&[(12.0, "a")], 96.0)
+                .with_rows(vec![TextRow {
+                    baseline: 12.0,
+                    runs: Vec::new(),
+                }])
+                .lines(),
+            [String::new()],
+            "no runs, a blank line"
         );
     }
 
