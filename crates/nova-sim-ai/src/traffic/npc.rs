@@ -591,16 +591,20 @@ pub struct Npc {
     /// [`swarm`](crate::ai::swarm)). A berth, not an [`NpcId`], as the
     /// original holds a slot index: a name for a berth re-used before the
     /// next pass reads its new ship. None at every spawn and launch
-    /// (`_AISetup` @0x7f415). Never saved.
+    /// (`_AISetup` @0x7f415). A stray beam of `ExitType` 4 steps it to 0-3
+    /// (`nova_sim::stray_words`), and 0 is no swarm leader to any test of
+    /// one above 0. Never saved.
     pub swarm_leader: Option<u32>,
-    /// Its place in the formation of its NPC formation parent (its leader,
-    /// or its swarm leader while it attacks with a target;
-    /// [`swarm::formation_parent`](crate::ai::swarm::formation_parent)),
-    /// the original's +0x28/+0x2c as `_AICalcFormationPositions` numbers
-    /// it (@0x85137-0x851cc): none for a ship whose parent is the player
-    /// or none. The formation pass sets it each tick, and a fleet's arrival
+    /// Its number in the formation of its formation parent
+    /// ([`swarm::formation_parent`](crate::ai::swarm::formation_parent)),
+    /// as `_AICalcFormationPositions` numbers it (@0x85137-0x851cc): the
+    /// formation pass sets it for a marked NPC parent, and a fleet's arrival
     /// as it jumps in (see
-    /// [`fleet_formation`](crate::traffic::fleet_formation)). Never saved.
+    /// [`fleet_formation`](crate::traffic::fleet_formation)); a ship on the
+    /// player that the player doesn't lead holds its number from the
+    /// session (`Session::reform`), as one it leads holds it in
+    /// [`Npc::formation`]. It stands while its parent is unmarked, and the
+    /// pass clears it only for a ship with no parent. Never saved.
     pub fleet_slot: Option<FormationSlot>,
     /// Its formation parent as a berth, the original's +0xc92e, `None` for
     /// -1 and 0 the player: a berth, not an [`NpcId`], as the original

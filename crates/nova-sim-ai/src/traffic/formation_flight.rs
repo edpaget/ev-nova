@@ -109,8 +109,11 @@
 //!   traffic's arrival snap
 //!   ([`fleet_formation::snap`](crate::traffic::fleet_formation::snap))
 //!   cover.
-//!   Its formation-parent gate (+0xc92e above 63) stands as the slot:
-//!   a ship with none is never nudged.
+//!   Its formation-parent gate (+0xc92e above 63) stands as the slot: a
+//!   ship with none is passed none and is never nudged, here by
+//!   [`Npc::formation_slot`], in a fight or a dock by
+//!   [`swarm_low_level::slot_place`](crate::traffic::swarm_low_level::slot_place),
+//!   which a stale parent passes.
 //!
 //! # Left out
 //!

@@ -17,10 +17,20 @@
 //! A ship that left takes a slot in its swarm leader's formation from the
 //! traffic's formation pass
 //! ([`fleet_formation`](crate::traffic::fleet_formation),
-//! [`Npc::fleet_slot`]). Its `_AIMaintainFormation` calls in substates 5,
-//! 0x11 and 7 are
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-1-left-out-of-combat-ai-fidelity-14's
-//! item 2.
+//! [`Npc::fleet_slot`](crate::traffic::npc::Npc::fleet_slot)), and is
+//! nudged toward it in substates 5, 0x11 and 7 (`nova_sim_ai`'s
+//! `swarm_low_level` module).
+//!
+//! The formation numbers every ship whose parent is the player, not only
+//! the ships it leads ([`Session::formation_slots`]): `_HandlePlayer`'s
+//! `_AICalcFormationPositions` reads +0xc92e alone (@0x6f1cb-0x6f1df). So
+//! a ship the player lost keeps its number until it's gone, its AI type
+//! down and its parent the last pass's: an escort or fighter a hit took
+//! (`_DamageShip` @0x3b0d7), a mission escort dying or sent off
+//! (`_HandleShip` @0x3512b, `_AbortMission` @0x99af8). The check here sees
+//! it go, and the rest close up. A release writes -1 (`_AISetup`
+//! @0x7f41e), so it leaves no gap. A fleet escort attacking on a word of 0
+//! counts here too, whoever leads it.
 
 use super::Session;
 

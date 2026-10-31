@@ -47,8 +47,19 @@
 //!   @0x64ff-0x6539): a ship spawned at a berth another ship still names
 //!   as its swarm leader has no afterburner.
 //! - **The formation parent** ([`formation_parent`], `_DoPlayGameWork`
-//!   @0x44160-0x441c0): a ship with a leader (the original's AI type 5 or
-//!   6) attacking with a swarm leader forms on it, any other on its leader.
+//!   @0x44160-0x441c0): a ship of AI type above 4 attacking with a swarm
+//!   word forms on it (word 0 is the player, whoever leads it), any other
+//!   of them on its leader; a ship at or below it holds the last word
+//!   written ([`Npc::form_parent`]), which a dropped ship keeps stale (see
+//!   [`fleet_formation`](crate::traffic::fleet_formation)). The test is the
+//!   original's AI word, not a leader: a bribed ship keeps its leader and
+//!   reads 1, and a kept former escort has none and reads 6.
+//! - **The stray word.** A beam of `ExitType` 4 steps its firer's word to
+//!   0-3 (`_SpawnBeam` @0x450fa-0x4523d, `nova_sim::stray_words`). A
+//!   swarmer drops it at its next check for what Find gives, a class that
+//!   doesn't swarm keeps it (Verify's early true), and [`named`] and
+//!   [`formation_parent`] read it as any other. It also runs the swarm
+//!   branch of substates 5, 7, 0x11 and 0xb, which test the word alone.
 //! - Nothing here plays a sound.
 //!
 //! # Not modelled
@@ -61,13 +72,15 @@
 //! - The mission escort's +0xc906 of 0 (@0x430da): no reader tells it from
 //!   -1, as every swarm test needs one above 0 and the parent it gives is
 //!   its own leader.
-//! - The swarm leader's slot formation for an escort or fighter, the
-//!   `_AIMaintainFormation` calls and glow copies in substates 5, 0x11 and
-//!   7, the stale parent of a ship whose AI type `_AICheckParentExists`
-//!   dropped, a leftover substate 0x12
-//!   outside state 4, and a beam of `ExitType` 4 stepping its firer's
-//!   swarm leader as an exit cursor (`_SpawnBeam` @0x450fa-0x4511e): rdm
-//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14.
+//! - A leftover substate 0x12 outside state 4. A walk of
+//!   `_HighLevelAIHandler` from entry to exit, avoiding its 76 writes of
+//!   +0xc8ca, finds no path a ship holding 0x12 can fly: each exit that
+//!   writes no substate is an AI wait, where `_HandleShip` skips its turn
+//!   and thrust and the missile needs state 4 (@0x85340-0x85357), or a goal
+//!   that no ship in 0x12 holds there. 0x12 is written only at @0x8e679
+//!   (@0x80296 is dead), and the successor's copy of its lead's substate
+//!   copies goal 4 with it (@0x893c8-0x893e1). The table is in rdm phase
+//!   combat-ai-fidelity-cross-roadmap/phase-1-left-out-of-combat-ai-fidelity-14.
 
 use crate::ai::Surroundings;
 use crate::combat::ShipRef;

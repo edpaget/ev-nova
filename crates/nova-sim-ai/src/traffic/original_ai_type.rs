@@ -33,6 +33,17 @@
 //!   [`Npc::leave_fleet`] keeps a bribed ship's word.
 //! - -1, no AI ([`NO_AI`]): the player's eject hulk (`_HandlePlayer`
 //!   @0x6f31f).
+//! - Its class's `InherentAI`: `_DamageShip` @0x3b0d7, on a hit that
+//!   leaves `_IsDisabled` a ship the player leads with no mission (+0x9a
+//!   0, +0xc8d2 -1, @0x3ae58-0x3ae62, @0x3af8f-0x3afa5), AI 5 and 6 alike
+//!   (the AI 6 compare @0x3afd5 picks the route, not the write, and each
+//!   route reaches @0x3b0d7). `Session::unfleet` clears the ship's duty and
+//!   leaves its carrier, for the capacities it holds, so
+//!   [`Npc::original_ai_type`] reads a ship the player carries but doesn't
+//!   lead as its own type's word, not [`FIGHTER_AI`]. A ship's other
+//!   carrier (an NPC's, or one a mission or NPC-led ship holds) goes past
+//!   this write to @0x3b0de, so `disabled_reset`'s AI 5 stands for it. The
+//!   formation pass reads this word ([`swarm`](crate::ai::swarm)).
 //!
 //! **The disabled former escort.** `_AIDispatch`'s reset drops a disabled
 //! escort's parent and leaves +0x88 at 6 until its first think once whole,

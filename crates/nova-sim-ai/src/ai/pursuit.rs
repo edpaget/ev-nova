@@ -102,14 +102,14 @@
 //! - Every facing test is the original's: `_AngularDifference` of the
 //!   whole-degree heading and the heading wanted
 //!   ([`fire::faces`](crate::ai::fire::faces)).
+//! - The swarm branch of subs 5, 0x11 and 7, its `_AIMaintainFormation`
+//!   and +0xc8d4 copy (@0x85c87-0x85cbf, @0x8660b-0x8663d,
+//!   @0x867e0-0x86818), runs off the frame this step writes, once for each
+//!   such body (`Traffic`'s `swarm_low_level` module).
 //! - None of these blocks calls `PlaySound` or `_beepSnd`.
 //!
 //! # Not modelled
 //!
-//! - The swarm's `_AIMaintainFormation` and +0xc8d4 copy in subs 5, 0x11
-//!   and 7 (@0x85c87-0x85cbf, @0x8660b-0x8663d, @0x867e0-0x86818): rdm
-//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14, after NPC
-//!   formation parents and glow.
 //! - The order of the joust's draws: the rolls come after its other
 //!   gates here, which decides the same.
 
