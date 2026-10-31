@@ -5603,6 +5603,7 @@ impl Session {
     /// intact, its armour at half its most, its cloak's fade and direction
     /// zeroed (@0x946e3, @0x946f9), defending no stellar (+0x8c = -1,
     /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
+    /// with no swarm leader or formation parent (`_AISetup` @0x9478f),
     /// and then as [`Session::fleet_up`]
     /// says: a mission's special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
@@ -5628,6 +5629,7 @@ impl Session {
         npc.condition = Condition::Intact;
         npc.cloak = crate::cloak::Cloak::default();
         npc.defends = None;
+        npc.clear_swarm_words();
         self.fleet_up(id, None);
         // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
         // see the `voices` module).
@@ -26555,6 +26557,8 @@ pub(super) mod tests {
         );
         session.space.traffic.npcs_mut()[1].leader = Some(NpcId(0));
         session.space.traffic.npcs_mut()[0].pick = Some(WeaponId(131));
+        session.space.traffic.npcs_mut()[0].swarm_leader = Some(2);
+        session.space.traffic.npcs_mut()[0].form_parent = Some(2);
         assert_eq!(
             take(&mut session, Take::Capture, &[10, 1]).0,
             Taken::Escorted
@@ -26565,6 +26569,14 @@ pub(super) mod tests {
             session.npcs()[0].pick,
             None,
             "_DoShipCapture clears the kept pick (@0x41207)"
+        );
+        assert_eq!(
+            (
+                session.npcs()[0].swarm_leader,
+                session.npcs()[0].form_parent
+            ),
+            (None, None),
+            "_AISetup (@0x9478f)"
         );
         assert_eq!(session.npcs()[1].leader, None, "its own escort let go");
         assert_eq!(session.target(), None);

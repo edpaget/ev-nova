@@ -23,7 +23,6 @@
 //! item 2.
 
 use super::Session;
-use crate::traffic::npc::Npc;
 
 impl Session {
     /// Re-forms the player's formation ([`Session::reform`]) when a slot
@@ -31,10 +30,12 @@ impl Session {
     /// ship holds: a ship left it or rejoined it as its formation parent
     /// changed (see the module docs).
     pub(super) fn reform_on_swarm_change(&mut self) {
-        let stale = self
-            .formation_slots()
-            .into_iter()
-            .any(|(id, slot)| self.space.npc(id).and_then(Npc::formation) != Some(slot));
+        let stale = self.formation_slots().into_iter().any(|(id, slot)| {
+            self.space
+                .npc(id)
+                .and_then(|npc| npc.formation().or(npc.fleet_slot))
+                != Some(slot)
+        });
         if stale {
             self.reform();
         }
@@ -49,13 +50,14 @@ mod tests {
     use crate::chance::{Chance, NeverFires};
     use crate::combat::Rules;
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::escort::FormationSlot;
     use crate::flight::Controls;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, ship};
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{Npc, NpcId};
 
     /// The escorts' ship type, 40 pixels across.
     const ESCORT: ShipId = ShipId(150);
@@ -201,6 +203,146 @@ mod tests {
         attacking(&mut session, 2, None);
         session.reform_on_swarm_change();
         assert_eq!(slots(&session), [(2, 4), (3, 4), (4, 4)]);
+    }
+
+    #[test]
+    fn a_rejoined_escort_with_a_leftover_fleet_slot_flies_the_slot_it_holds() {
+        let catalog = fleeted();
+        let mut session = escorted(&catalog);
+        let escort = escorts(&session)[0].clone();
+        let held = escort.formation().expect("in formation");
+        let leftover = FormationSlot {
+            slot: 7,
+            ships: 8,
+            spacing: 60.0,
+        };
+        if let Some(npc) = session.space.npc_mut(escort.id) {
+            npc.fleet_slot = Some(leftover);
+        }
+        session.reform_on_swarm_change();
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        let npc = session.space.npc(escort.id).expect("there");
+        assert_eq!(npc.formation(), Some(held));
+        assert_eq!(npc.slot_place, Some(held.position(&session.ship.player)));
+    }
+
+    #[test]
+    fn a_released_escort_leaves_no_gap() {
+        // `_AISetup` writes -1 to +0xc906 and +0xc92e (@0x7f415-0x7f41e), so
+        // no pass numbers it, as the ship flies off.
+        let catalog = fleeted();
+        let mut session = escorted(&catalog);
+        let id = escorts(&session)[0].id;
+        session.space.npc_mut(id).expect("there").swarm_leader = Some(2);
+        session.release(id);
+        let released = session.space.npc(id).expect("there");
+        assert_eq!(released.form_parent, None);
+        assert_eq!(released.swarm_leader, None);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)], "straight after");
+    }
+
+    /// The (slot, ships) of the ship `id`, a lost one, and of the others
+    /// in berth order, after a marking pass and the fleet losing it.
+    fn lost(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        id: NpcId,
+    ) -> ((u8, u8), Vec<(u8, u8)>) {
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Peaceful,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        session.space.npc_mut(id).expect("there").condition = Condition::Disabled;
+        assert!(session.unfleet(id));
+        let lost = session.space.npc(id).expect("there");
+        assert_eq!(lost.escort, None);
+        let slot = lost.fleet_slot.expect("numbered");
+        ((slot.slot, slot.ships), slots(session))
+    }
+
+    #[test]
+    fn a_lost_escort_keeps_its_number_while_its_ship_stays() {
+        let catalog = fleeted();
+        let mut session = escorted(&catalog);
+        let id = escorts(&session)[0].id;
+        assert_eq!(
+            lost(&mut session, &catalog, id),
+            ((2, 4), vec![(3, 4), (4, 4)])
+        );
+        // It reads its class's type and holds the player, the store.
+        let npc = session.space.npc(id).expect("there");
+        assert_eq!(npc.original_ai_type(), 3);
+        assert_eq!(npc.form_parent, Some(0));
+        // A tick on it stays, and so does the rest's formation.
+        session.reform_on_swarm_change();
+        assert_eq!(slots(&session), [(3, 4), (4, 4)]);
+        // The rest close up once it's gone.
+        session.space.traffic.remove(id);
+        session.reform_on_swarm_change();
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+    }
+
+    #[test]
+    fn a_lost_fighter_keeps_its_number_while_its_ship_stays() {
+        let catalog = fleeted();
+        let mut session = escorted(&catalog);
+        let id = escorts(&session)[0].id;
+        let carrier = session.player_carrier(5);
+        let fighter = session.space.npc_mut(id).expect("there");
+        fighter.carrier = Some(carrier);
+        assert_eq!(
+            lost(&mut session, &catalog, id),
+            ((2, 4), vec![(3, 4), (4, 4)])
+        );
+        let npc = session.space.npc(id).expect("there");
+        assert!(npc.carrier.is_some(), "kept for its capacities");
+        assert_eq!(npc.original_ai_type(), 3, "its class's, not AI 5");
+        session.space.traffic.remove(id);
+        session.reform_on_swarm_change();
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+    }
+
+    #[test]
+    fn a_fleet_escort_attacking_on_word_0_counts_in_the_players_formation() {
+        // @0x44195: parent 0 whoever leads it, and @0x6f1cb-0x6f1df numbers
+        // it with the player's own. By berth, so it moves them on.
+        let catalog = fleeted();
+        let mut session = escorted(&catalog);
+        let mut fleet = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
+        fleet.leader = Some(NpcId(77));
+        fleet.goal = Goal::Attack(QUARRY);
+        fleet.target = Some(QUARRY);
+        fleet.swarm_leader = Some(0);
+        fleet.hull.sprite_size = Some(40.0);
+        let berth = escorts(&session)[1].berth;
+        let lowered: Vec<NpcId> = escorts(&session).iter().skip(1).map(|npc| npc.id).collect();
+        for id in lowered {
+            let npc = session.space.npc_mut(id).expect("there");
+            npc.berth += 10;
+        }
+        let id = session.space.traffic.add_npc_at(fleet, berth);
+        session.reform_on_swarm_change();
+        let npc = session.space.npc(id).expect("there");
+        assert_eq!(
+            npc.fleet_slot.map(|slot| (slot.slot, slot.ships)),
+            Some((3, 5))
+        );
+        assert_eq!(npc.formation(), None, "no duty");
+        assert_eq!(slots(&session), [(2, 5), (4, 5), (5, 5)]);
+        // The same slots give no second re-form.
+        session.reform_on_swarm_change();
+        assert_eq!(slots(&session), [(2, 5), (4, 5), (5, 5)]);
     }
 
     /// Each escort but the one at berth 3 attacks [`QUARRY`].

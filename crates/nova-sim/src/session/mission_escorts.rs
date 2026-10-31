@@ -704,8 +704,17 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         assert_eq!(session.npcs().len(), 1);
-        assert_eq!(slots(&session), [(2, 2)]);
         assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
+        // The next pass finds it gone (`Session::reform_on_swarm_change`).
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(slots(&session), [(2, 2)]);
     }
 
     // Death.
@@ -816,9 +825,20 @@ pub(super) mod tests {
                 &mut NeverFires,
             );
             assert!(session.space.npc(id).is_none(), "{reading:?}: killed");
-            assert_eq!(slots(&session), [(2, 2)], "{reading:?}: re-formed");
             assert_eq!(session.pilot.cargo, cargo, "{reading:?}");
             assert_eq!(ships_of(&session).destroyed, destroyed, "{reading:?}");
+            // `_HandleShip`'s dying branch left it its parent, so it held
+            // its number until it went: the rest close up on the next
+            // pass (`Session::reform_on_swarm_change`).
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
+            assert_eq!(slots(&session), [(2, 2)], "{reading:?}: re-formed");
         }
     }
 
@@ -868,7 +888,8 @@ pub(super) mod tests {
         assert!(!npc.mission_escort());
         assert!(npc.mission.is_some(), "still its mission's ship");
         assert_eq!(npc.ai_type, AiType::WimpyTrader, "its ship's InherentAI");
-        assert_eq!(slots(&session), [(2, 2)], "the other re-forms");
+        assert_eq!(npc.form_parent, Some(0), "the store: the player");
+        assert_eq!(slots(&session), [(3, 3)], "it keeps its number");
         for _ in 0..100 {
             if session.space.npc(id).is_none() {
                 break;
@@ -883,6 +904,15 @@ pub(super) mod tests {
             );
         }
         assert_eq!(session.space.npc(id), None, "destroyed and gone");
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Passive,
+            crate::combat::Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(slots(&session), [(2, 2)], "the other closes up");
         assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
         assert_eq!(
             session.pilot.cargo,
@@ -1038,11 +1068,16 @@ pub(super) mod tests {
         let catalog = inherent_catalog(escorting(-1, 0));
         let (mut session, ids) = flying_with_escorts(&catalog);
         assert_eq!(hired_slot(&session), (2, 4));
+        tick(&mut session, &catalog);
         assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
         assert_released(&session, &ids);
-        assert_eq!(hired_slot(&session), (2, 2), "the hired escort re-forms");
+        // `_AbortMission` drops its type (@0x99af8), so the marking pass
+        // skips it and it keeps its number, the last pass's parent, until
+        // it's gone.
+        assert_eq!(hired_slot(&session), (2, 4), "while they stay");
         ticks(&mut session, &catalog, 600);
         assert!(of(&session, &ids).is_empty(), "they jumped out");
+        assert_eq!(hired_slot(&session), (2, 2), "the hired escort re-forms");
     }
 
     #[test]

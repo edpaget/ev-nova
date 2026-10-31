@@ -519,16 +519,20 @@ impl Session {
         self.out.save_due = true;
     }
 
-    /// Gives each ship the player leads ([`Session::player_led`]) whose
-    /// formation parent is the player its slot in one formation of them
-    /// and the player ([`Session::formation_slots`]). The parent is the
-    /// player for each ship it leads but one attacking with a swarm leader,
-    /// which forms on that ([`swarm::formation_parent`], `_DoPlayGameWork`
-    /// @0x44160-0x441c0) and keeps the slot it held. The original
-    /// recomputes the formation every frame (the parent's +0xc2 flag); the
-    /// engine re-forms on each change to the led set, and on each change
-    /// of parent before the traffic's tick (the `swarm_formation` module),
-    /// which gives the same slots at every frame.
+    /// Gives each ship whose formation parent is the player its slot in
+    /// one formation of them and the player
+    /// ([`Session::formation_slots`]). The parent is the player for each
+    /// ship it leads but one attacking with a swarm leader, which forms on
+    /// that ([`swarm::formation_parent`], `_DoPlayGameWork`
+    /// @0x44160-0x441c0) and keeps the slot it held, and for any ship
+    /// left holding the player: a ship the player no longer leads, whose
+    /// AI type dropped, or one attacking on a word of 0. Such a ship holds
+    /// no place in the formation of its own, so its number goes to its
+    /// [`Npc::fleet_slot`]. The original recomputes the formation every
+    /// frame (the parent's +0xc2 flag); the engine re-forms on each change
+    /// to the led set, and on each change of parent before the traffic's
+    /// tick (the `swarm_formation` module), which gives the same slots at
+    /// every frame.
     pub(super) fn reform(&mut self) {
         for (id, formation) in self.formation_slots() {
             let Some(npc) = self.space.npc_mut(id) else {
@@ -536,16 +540,17 @@ impl Session {
             };
             if let Some(duty) = &mut npc.escort {
                 duty.formation = formation;
-            } else if let Some(mark) = &mut npc.mission
-                && mark.formation.is_some()
+            } else if let Some(mark) = npc.mission.as_mut().filter(|mark| mark.formation.is_some())
             {
                 mark.formation = Some(formation);
+            } else {
+                npc.fleet_slot = Some(formation);
             }
         }
     }
 
-    /// The slot each ship in the player's formation takes: those the
-    /// player leads whose formation parent is the player, 2, 3, … in
+    /// The slot each ship in the player's formation takes: those whose
+    /// formation parent is the player, led by it or not, 2, 3, … in
     /// ship-table order, by berth, hired and mission escorts alike, as
     /// `_AICalcFormationPositions` numbers every ship whose formation
     /// parent is the player in table-slot order (@0x85137-0x851cc), out of
@@ -554,7 +559,10 @@ impl Session {
     /// NPC's formation too).
     pub(super) fn formation_slots(&self) -> Vec<(NpcId, FormationSlot)> {
         let placed = self
-            .player_led()
+            .space
+            .traffic
+            .npcs()
+            .iter()
             .filter(|npc| swarm::formation_parent(npc) == Some(FormationParent::Player));
         escort::number_formation(self.ship.fit.hull.sprite_size, placed)
     }
@@ -741,10 +749,12 @@ impl Session {
     /// never be boarded (+0xb9 1), it is no former escort (+0xc8de -1),
     /// its AI type is its class's `InherentAI` (+0x88, which an escort's
     /// already is in the engine), and `_AISetup` (@0x7f3e2) clears its
-    /// order word (+0xc90a, [`Npc::order_word`]). `_AISetup`'s goal and
-    /// sub 0 and its goal targets +0x90 and +0x92 (-2) give way to the
-    /// leave's goal and its target cleared, which follow at once; the
-    /// engine has no field for its +0xc906 or +0xc92e.
+    /// order word (+0xc90a, [`Npc::order_word`]) and its swarm leader and
+    /// formation parent (+0xc906, +0xc92e, [`Npc::clear_swarm_words`]).
+    /// `_AISetup`'s goal and sub 0 and its goal targets +0x90 and +0x92
+    /// (-2) give way to the leave's goal and its target cleared, which
+    /// follow at once. With no parent it holds no number, so the rest
+    /// close up as it goes, where a ship lost to a hit keeps its number.
     ///
     /// A mission escort, which only the comm dialog's Release reaches (a
     /// mission ship captured for an escort, see the
@@ -768,6 +778,7 @@ impl Session {
         if let Some(npc) = self.space.npc_mut(id) {
             reset_released(npc);
         }
+        self.reform();
     }
 
     /// Whether NPC `id` is one of the player's escorts.
@@ -1151,12 +1162,14 @@ impl Space {
 /// The resets a ship released by hail takes as it goes (`_DoCommDialog`
 /// @0x96896-0x968b7, `_DoEscortDialog` @0x954bb-0x954f2): it can never be
 /// boarded (+0xb9 1), it is no former escort (+0xc8de -1), `_AISetup`
-/// clears its order word (+0xc90a), and it leaves the system
+/// clears its order word (+0xc90a), its swarm leader and its formation
+/// parent (@0x7f40c-0x7f41e), and it leaves the system
 /// (`_AIMakeShipLeave`, [`super::hail::make_leave`]).
 pub(super) fn reset_released(npc: &mut Npc) {
     npc.boarded = true;
     npc.former = None;
     npc.order_word = crate::fleet::OrderWord::NONE;
+    npc.clear_swarm_words();
     super::hail::make_leave(npc);
 }
 
@@ -2403,12 +2416,14 @@ pub(super) mod tests {
         assert!(!session.is_escort(warship));
         assert!(session.take_save_due());
         let freighter = escort_npcs(&session)[0];
+        // Its type is its class's now (`_DamageShip` @0x3b0d7), so the
+        // marking pass skips it and it holds its number while it stays.
         assert_eq!(
             freighter
                 .escort
                 .map(|duty| (duty.formation.slot, duty.formation.ships)),
-            Some((2, 2)),
-            "the rest re-form"
+            Some((3, 3)),
+            "the lost ship keeps its number"
         );
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         assert_eq!(

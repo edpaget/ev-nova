@@ -169,6 +169,17 @@ pub fn snap(npcs: &mut [Npc], lead: NpcId) {
     }
 }
 
+impl Npc {
+    /// `_AISetup`'s +0xc906 and +0xc92e (@0x7f415-0x7f41e), for a ship
+    /// that stays in its slot and runs it: a release, a capture, or a
+    /// former escort boarded back. No swarm leader and no formation
+    /// parent, so no formation numbers it while its AI type stays down.
+    pub fn clear_swarm_words(&mut self) {
+        self.swarm_leader = None;
+        self.form_parent = None;
+    }
+}
+
 impl Traffic {
     /// Writes each NPC's formation parent ([`Npc::form_parent`]), its
     /// slot in each marked NPC parent's formation ([`slots`]) and the
