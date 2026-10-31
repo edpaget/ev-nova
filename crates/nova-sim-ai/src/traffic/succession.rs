@@ -191,7 +191,7 @@ impl Npc {
         }
         if self.warp.stage < 0.0 {
             self.goal = Goal::Regroup {
-                kept: Kept::of(self.goal),
+                kept: Kept::of(self),
             };
         }
     }
@@ -696,52 +696,53 @@ mod tests {
     // Another ship leads.
 
     #[test]
-    fn every_other_follower_follows_the_successor_and_pauses_keeping_its_substate() {
+    fn off_its_jump_a_follower_pauses_in_sub_0_whatever_its_goal() {
         // The pause takes a follower whose +0x50 is below 0
-        // (@0x8949d-0x894a4), as its jump's give-up leaves it.
-        let mut guarding = follower(FEDS, 100);
-        guarding.goal = Goal::Follow {
-            lead: LEAD,
-            guard: Some(PLAYER),
-        };
-        guarding.warp.stage = -1.0;
-        let mut fighting = follower(FEDS, 100);
-        fighting.goal = Goal::Attack(PLAYER);
-        fighting.target = Some(PLAYER);
-        fighting.warp.stage = -1.0;
-        let mut traffic = fleet(
-            FEDS,
-            DISABLED,
-            vec![follower(FEDS, 300), guarding, fighting],
-        );
-        think(&mut traffic);
-        let successor = NpcId(1);
-        let guarding = of(&traffic, 2);
-        assert_eq!(guarding.leader, Some(successor));
-        assert_eq!(
-            guarding.goal,
-            Goal::Regroup {
-                kept: Kept::Formation {
-                    guard: Some(PLAYER)
-                }
-            }
-        );
-        assert_eq!(
-            guarding.flown_goal(),
+        // (@0x8949d-0x894a4), as a give-up leaves it in sub 0, whatever
+        // goal the engine still holds beside it.
+        for goal in [
             Goal::Follow {
-                lead: successor,
-                guard: Some(PLAYER)
-            }
-        );
-        assert_eq!(guarding.ai_type, AiType::WimpyTrader, "it keeps its type");
-        let fighting = of(&traffic, 3);
+                lead: LEAD,
+                guard: Some(PLAYER),
+            },
+            Goal::Attack(PLAYER),
+            Goal::Dock(ShipRef::Npc(LEAD)),
+            Goal::Wait,
+            Goal::Idle,
+        ] {
+            let mut given_up = follower(FEDS, 100);
+            given_up.goal = goal;
+            given_up.target = Some(PLAYER);
+            given_up.warp.stage = -1.0;
+            let mut traffic = fleet(FEDS, DISABLED, vec![follower(FEDS, 300), given_up]);
+            think(&mut traffic);
+            let paused = of(&traffic, 2);
+            assert_eq!(paused.leader, Some(NpcId(1)), "{goal:?}");
+            assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
+            assert_eq!(paused.flown_goal(), Goal::Hold);
+            assert_eq!(paused.ai_type, AiType::WimpyTrader, "it keeps its type");
+            assert_eq!(paused.target, Some(PLAYER), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_follower_on_its_own_jump_given_up_keeps_sub_4() {
+        // The disabled cancel's -1.0 (@0x8fce9) on the jump path, its lead
+        // lost: it stays on the jump path.
+        let mut given_up = follower(FEDS, 100);
+        given_up.goal = Goal::JumpOut;
+        given_up.warp.goal = Some(WarpGoal::Own);
+        given_up.warp.stage = -1.0;
+        let mut traffic = fleet(FEDS, DISABLED, vec![follower(FEDS, 300), given_up]);
+        think(&mut traffic);
+        let paused = of(&traffic, 2);
         assert_eq!(
-            fighting.goal,
+            paused.goal,
             Goal::Regroup {
-                kept: Kept::Attack(PLAYER)
+                kept: Kept::OwnJump
             }
         );
-        assert_eq!(fighting.target, Some(PLAYER));
+        assert_eq!(paused.warp.goal, Some(WarpGoal::Own));
     }
 
     #[test]
@@ -831,7 +832,7 @@ mod tests {
         assert_eq!(
             gave_up.goal,
             Goal::Regroup {
-                kept: Kept::Formation { guard: None }
+                kept: Kept::FollowsJump
             }
         );
         assert_eq!(

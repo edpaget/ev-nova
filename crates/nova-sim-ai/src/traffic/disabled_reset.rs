@@ -381,9 +381,7 @@ mod tests {
         let gliding = |npc: &mut Npc| npc.mode = Mode::JumpingIn { tick: 0 };
         let jumping = |npc: &mut Npc| npc.warp.goal = Some(WarpGoal::Own);
         let paused = |npc: &mut Npc| {
-            npc.goal = Goal::Regroup {
-                kept: Kept::Attack(ShipRef::Player),
-            };
+            npc.goal = Goal::Regroup { kept: Kept::Coast };
         };
         let cases: [(&str, Setup); 5] = [
             ("pod", &pod),

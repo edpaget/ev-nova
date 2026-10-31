@@ -124,7 +124,6 @@
 //! player sees.
 
 use crate::ai::fire::FireRules;
-use crate::ai::regroup::Kept;
 use crate::ai::{
     Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, escort, fire, out_of_ammo, react,
 };
@@ -348,27 +347,10 @@ impl Behaviour for FleetEscortAi {
     }
 
     /// [`escort::fire_unprovoked`], as for every escort or fighter (AI type
-    /// above 4, @0x80e59). In the regroup pause it fires the substate it
-    /// kept ([`regroup`](crate::ai::regroup)): a fight's passes at its
-    /// target without the high level's launch
-    /// ([`fire::low_level_trigger`]), else unprovoked (subs 0, 1, 9, 0xb
-    /// and 0xc).
+    /// above 4, @0x80e59), a wait and the regroup pause's sub 0 alike
+    /// ([`regroup`](crate::ai::regroup)).
     fn gate_wait(&self, npc: &Npc, around: &Surroundings) -> GateWait {
-        match npc.goal {
-            Goal::Regroup {
-                kept: Kept::Attack(_) | Kept::Snipe(_),
-            } => {
-                let flying = Npc {
-                    goal: npc.flown_goal(),
-                    ..npc.clone()
-                };
-                GateWait {
-                    trigger: fire::low_level_trigger(&flying, around, self.fire),
-                    drops_target: false,
-                }
-            }
-            _ => escort::fire_unprovoked(npc, around, self.fire),
-        }
+        escort::fire_unprovoked(npc, around, self.fire)
     }
 
     /// [`react::victim`]: `_DamageShip`'s reaction block reads no AI type,
@@ -1413,9 +1395,9 @@ mod tests {
         assert_eq!(command(&npcs, Goal::Snipe(n(3))).1, Some(n(3)));
     }
 
-    /// What `npcs[1]` holds in the regroup pause, keeping `kept`, its
+    /// What `npcs[1]` holds in the regroup pause, coasting (sub 0), its
     /// target `target`, the player at (0, 5000).
-    fn paused(npcs: &[Npc], kept: Kept, target: Option<ShipRef>) -> GateWait {
+    fn paused(npcs: &[Npc], target: Option<ShipRef>) -> GateWait {
         let govts = govts(0, 0);
         let around = Surroundings {
             player: Some(player(0.0, 5000.0)),
@@ -1423,80 +1405,28 @@ mod tests {
             ..Surroundings::new(&[], npcs)
         };
         let mut npc = npcs[1].clone();
-        npc.goal = Goal::Regroup { kept };
+        npc.goal = Goal::Regroup {
+            kept: crate::ai::regroup::Kept::Coast,
+        };
         npc.target = target;
         FleetEscortAi::default().gate_wait(&npc, &around)
     }
 
     #[test]
-    fn paused_in_a_kept_fight_it_fires_its_passes_at_its_target_launching_nothing() {
-        // The pause skips `_HighLevelAIHandler` and its `_AILaunchFighter`
-        // (@0x8e6fa); `_LowLevelAIHandler` runs the fight's substate.
+    fn paused_in_sub_0_it_fires_unprovoked_at_its_target() {
         let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, -50.0, n(1))];
-        let govts = govts(0, 0);
-        let around = Surroundings {
-            player: Some(player(0.0, 5000.0)),
-            govts: &govts,
-            ..Surroundings::new(&[], &npcs)
-        };
-        for (kept, goal) in [
-            (Kept::Attack(n(3)), Goal::Attack(n(3))),
-            (Kept::Snipe(n(3)), Goal::Snipe(n(3))),
-        ] {
-            let mut fighting = npcs[1].clone();
-            fighting.goal = goal;
-            fighting.target = Some(n(3));
-            let full = fire::trigger(&fighting, &around, FireRules::default());
-            let wait = paused(&npcs, kept, Some(n(3)));
-            assert_eq!(
-                wait,
-                GateWait {
-                    trigger: Trigger {
-                        bays: false,
-                        ..full
-                    },
-                    drops_target: false,
-                },
-                "{kept:?}"
-            );
-            assert!(wait.trigger.only.is_some(), "{kept:?}: its passes fire");
-        }
-        assert!(
-            fire::trigger(
-                &Npc {
-                    goal: Goal::Attack(n(3)),
-                    ..npcs[1].clone()
-                },
-                &around,
-                FireRules::default()
-            )
-            .bays,
-            "the high level's launch, which the pause skips"
+        assert_eq!(
+            paused(&npcs, Some(n(3))),
+            GateWait {
+                trigger: fired(140),
+                drops_target: false
+            }
         );
-    }
-
-    #[test]
-    fn paused_in_any_other_substate_it_fires_unprovoked_at_its_target() {
-        let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, -50.0, n(1))];
-        for kept in [
-            Kept::Formation { guard: Some(n(3)) },
-            Kept::Coast,
-            Kept::Stop,
-        ] {
-            assert_eq!(
-                paused(&npcs, kept, Some(n(3))),
-                GateWait {
-                    trigger: fired(140),
-                    drops_target: false
-                },
-                "{kept:?}"
-            );
-        }
         let mut down = raider(3, 0.0, -50.0, n(1));
         down.condition = Condition::Disabled;
         let npcs = [lead(Goal::Idle), escort(), down];
         assert_eq!(
-            paused(&npcs, Kept::Formation { guard: Some(n(3)) }, Some(n(3))),
+            paused(&npcs, Some(n(3))),
             GateWait {
                 trigger: Trigger::default(),
                 drops_target: true

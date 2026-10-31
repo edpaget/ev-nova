@@ -31,7 +31,7 @@ use crate::combat::armament::Armament;
 use crate::combat::weapon::WeaponSpec;
 use crate::escort::{FORMATION_NUDGE, FORMATION_SLACK};
 use crate::fleet::OrderWord;
-use crate::flight::{FlightRules, NpcFormation};
+use crate::flight::{FlightRules, NpcFormation, ShipState};
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::stats::ShipStats;
@@ -329,7 +329,7 @@ fn npc(traffic: &Traffic, id: NpcId) -> &Npc {
 }
 
 #[test]
-fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_in_formation_then_takes_up_its_order()
+fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_coasting_then_takes_up_its_order()
  {
     let mut traffic = cruising_fleet();
     let govts = govts();
@@ -365,33 +365,24 @@ fn a_disabled_leads_heaviest_escort_leads_and_one_that_gave_its_stage_up_pauses_
     assert_eq!(heavy.goal, Goal::Hold, "its lead's hold, taken over");
     let light = npc(&traffic, LIGHT);
     assert_eq!(light.leader, Some(HEAVY));
-    assert_eq!(
-        light.goal,
-        Goal::Regroup {
-            kept: Kept::Formation { guard: None }
-        }
-    );
-    let flight = FlightRules::default();
-    let thrust = flight.handling(ShipStats::new(FAST, &[]).handling).accel;
-    let slack = FORMATION_SLACK + FORMATION_NUDGE * thrust;
+    assert_eq!(light.goal, Goal::Regroup { kept: Kept::Coast });
+    let coasting = light.state;
     for tick in 0..150 {
+        let before = npc(&traffic, LIGHT).state.position;
         traffic.tick_in(&NovaAi::default(), world, &[], &mut held());
         let light = npc(&traffic, LIGHT);
         assert!(
             matches!(light.goal, Goal::Regroup { .. }),
             "tick {tick}: still paused"
         );
-        if tick >= 100 {
-            let slot = light
-                .fleet_slot
-                .expect("a slot in its new lead's formation")
-                .position(&npc(&traffic, HEAVY).state);
-            let off = light.state.position - slot;
-            assert!(
-                off.x.abs() <= slack && off.y.abs() <= slack,
-                "tick {tick}: {off:?} off its slot on the heavy escort"
-            );
-        }
+        assert_eq!(
+            light.state,
+            ShipState {
+                position: before + coasting.velocity,
+                ..coasting
+            },
+            "tick {tick}: no thrust or turn"
+        );
     }
     let mut releasing = Draws::of(&[0; 64]).keyed(RELEASE_DRAW, 0);
     traffic.tick_in(&NovaAi::default(), world, &[], &mut releasing);

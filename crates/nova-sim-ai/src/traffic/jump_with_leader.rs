@@ -798,7 +798,7 @@ mod tests {
         paused.state.position = Vec2::new(3000.0, 300.0);
         paused.leader = Some(successor);
         paused.goal = Goal::Regroup {
-            kept: Kept::Formation { guard: None },
+            kept: Kept::FollowsJump,
         };
         paused.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(successor)));
         let paused = traffic.add_npc(paused);
