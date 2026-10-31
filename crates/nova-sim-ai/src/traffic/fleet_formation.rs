@@ -542,6 +542,15 @@ mod tests {
             assert_eq!(of(&traffic, back).form_parent, Some(1));
         }
 
+        #[test]
+        fn clearing_the_swarm_words_leaves_a_ship_with_no_parent() {
+            let mut held = stale(1, None);
+            held.swarm_leader = Some(1);
+            held.clear_swarm_words();
+            assert_eq!((held.swarm_leader, held.form_parent), (None, None));
+            assert_eq!(swarm::formation_parent(&held), None);
+        }
+
         /// A ship the player leads, in `slot`.
         fn escorting(slot: FormationSlot) -> Npc {
             let mut hired = ship(0, 0, None, None);

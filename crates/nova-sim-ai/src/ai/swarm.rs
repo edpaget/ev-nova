@@ -278,7 +278,7 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::flight::ShipState;
     use crate::stats::ShipStats;
-    use crate::traffic::npc::Mode;
+    use crate::traffic::npc::{AiType, Mode};
     use crate::trig;
     use nova_sim_base::fixture::FAST;
 
@@ -568,6 +568,30 @@ mod tests {
         let mut traffic = swarmer(3, 5);
         traffic.swarm_leader = Some(1);
         assert_eq!(formation_parent(&traffic), None);
+    }
+
+    #[test]
+    fn the_pass_reaches_ai_types_above_4_alone() {
+        // `cmpw $0x4; jle` @0x440d8, @0x44160.
+        for ai_type in [
+            AiType::WimpyTrader,
+            AiType::BraveTrader,
+            AiType::Warship,
+            AiType::Interceptor,
+        ] {
+            let mut ship = swarmer(3, 5);
+            ship.ai_type = ai_type;
+            ship.form_parent = Some(6);
+            assert!(!marks_its_parent(&ship), "{ai_type:?}");
+            assert_eq!(
+                formation_parent(&ship),
+                Some(FormationParent::Berth(6)),
+                "{ai_type:?}"
+            );
+        }
+        let mut led = swarmer(3, 5);
+        led.leader = Some(NpcId(8));
+        assert!(marks_its_parent(&led), "AI 6");
     }
 
     #[test]
