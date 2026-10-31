@@ -7,9 +7,9 @@
 //! - **Begin** forgets, on double time's second pass, the ships gone in a
 //!   ship pass (see [`gone`](super::gone)); holds every NPC's cloak; on
 //!   the advance pass moves each
-//!   NPC's warp and fire clocks on (`TickCount`), holds each intact one's
-//!   warp to its goal and turns back a fighter that can't follow its
-//!   leader's jump, unless its high level waits (see
+//!   NPC's warp and fire clocks on (`TickCount`), holds the warp of each one
+//!   intact or on the jump path to its goal and turns back a fighter that
+//!   can't follow its leader's jump, unless its high level waits (see
 //!   [`jump_with_leader`](super::jump_with_leader)), holds its fold to
 //!   its dispatch, and runs the odds pass
 //!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
@@ -157,12 +157,16 @@ impl Traffic {
             for npc in &mut self.npcs {
                 npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
-                // `_AIDispatch` runs no high level for a disabled ship, nor
-                // the high level past its AI wait (`jump_with_leader`). A
-                // stellar's defence ship breaking up is not disabled
-                // (@0x2d6f), but it holds no warp and no carrier, so neither
-                // step below changes it.
-                if npc.condition == Condition::Intact && !npc.high_level_waits() {
+                // `_AIDispatch` runs no high level for a disabled ship off the
+                // jump path: its reset comes first. On the jump path it does,
+                // and the high level has no disabled test (@0x8fd83-0x8fd9a,
+                // @0x901e5). Neither runs past its AI wait
+                // (`jump_with_leader`). A stellar's defence ship breaking up
+                // is not disabled (@0x2d6f), but it holds no warp and no
+                // carrier, so neither step below changes it.
+                let high_level = npc.condition == Condition::Intact
+                    || crate::ai::dispatch_gate::takes_jump_path(npc);
+                if high_level && !npc.high_level_waits() {
                     if lost.contains(&npc.id) {
                         npc.target = None;
                     }

@@ -3717,6 +3717,7 @@ mod tests {
             npc.warp.aim = 180;
         }
         traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[1].warp.goal = None;
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         assert_eq!(traffic.npcs[0].warp.stage, 5.0, "not on the second pass");
         traffic.tick(&Keep, &[], &mut Draws::of(&[]));
@@ -3724,8 +3725,24 @@ mod tests {
         assert_eq!(
             traffic.npcs[1].warp.stage,
             warp_out::GIVEN_UP_STAGE,
-            "none for a disabled ship, whose dispatch cancels its warp (@0x8fcc8)"
+            "none for a disabled ship off the jump path, whose dispatch cancels \
+             its warp (@0x8fcc8)"
         );
+    }
+
+    #[test]
+    fn the_hold_ends_the_stage_of_a_disabled_ship_on_the_jump_path() {
+        // The cancel's -1.0 (@0x8fcc8), then its high level, which has no
+        // disabled test (@0x8fd83-0x8fd9a, @0x901e5).
+        let mut traffic = populated(2, 1);
+        let npc = &mut traffic.npcs[1];
+        npc.begin_own_jump();
+        npc.warp.stage = 5.0;
+        npc.goal = Goal::Idle;
+        npc.condition = Condition::Disabled;
+        traffic.tick(&Keep, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[1].warp.stage, 0.0);
+        assert_eq!(traffic.npcs[1].warp.goal, None);
     }
 
     #[test]

@@ -1110,6 +1110,144 @@ mod tests {
         assert_eq!(back.warp.stage, 4.0, "kept");
     }
 
+    // A disabled ship on the jump path.
+
+    const BREAKING_UP: Condition = Condition::Dying {
+        ticks_left: 300,
+        starting: false,
+    };
+
+    /// A lead `setup` set, and its follower on its jump, `condition`, moving
+    /// east at 2.
+    fn disabled_follower(
+        condition: Condition,
+        setup: impl Fn(&mut Npc),
+    ) -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        setup(&mut lead);
+        let lead = traffic.add_npc(lead);
+        let mut follower = far(0);
+        follower.state.position = Vec2::new(3000.0, 300.0);
+        follower.state.velocity = Vec2::new(2.0, 0.0);
+        follower.leader = Some(lead);
+        follower.goal = Goal::Follow { lead, guard: None };
+        follower.target = Some(ShipRef::Player);
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        follower.condition = condition;
+        let follower = traffic.add_npc(follower);
+        (traffic, lead, follower)
+    }
+
+    #[test]
+    fn a_disabled_follower_gives_up_a_lead_that_stops_leaving_and_is_reset_the_next_tick() {
+        // The jump path reaches the high level, which has no disabled test
+        // (@0x8fd83-0x8fd9a, @0x901e5).
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let (mut traffic, lead, follower) = disabled_follower(condition, |_| {});
+            let world = jumping_world(0.0);
+            traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+            let ship = of(&traffic, follower);
+            assert_eq!(
+                (ship.goal, ship.target, ship.warp.goal),
+                (Goal::Idle, None, None),
+                "{condition:?}"
+            );
+            assert_eq!(ship.leader, Some(lead), "not reset yet");
+            traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+            assert_eq!(of(&traffic, follower).leader, None, "{condition:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_pushes_its_lead() {
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let (mut traffic, lead, _) = disabled_follower(condition, |_| {});
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            assert_eq!(of(&traffic, lead).goal, Goal::JumpOut, "{condition:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_under_a_lead_still_leaving_keeps_sub_0xd_and_flies_none_of_it() {
+        // The low level's sub blocks are gated (@0x8524e-0x85258).
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let (mut traffic, lead, follower) = disabled_follower(condition, Npc::begin_own_jump);
+            traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, 4.0);
+            traffic.npcs_mut()[0].warp.stage = 0.5;
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            let ship = of(&traffic, follower);
+            assert_eq!(
+                ship.warp.goal,
+                Some(WarpGoal::Follow(ShipRef::Npc(lead))),
+                "{condition:?}"
+            );
+            assert_eq!(ship.warp.stage, 0.0, "no stage started: {condition:?}");
+            assert_ne!(
+                ship.state.velocity,
+                Vec2::new(0.0, 4.0),
+                "no copy of its lead's: {condition:?}"
+            );
+            assert!(ship.state.velocity.x > 0.0, "it drifts: {condition:?}");
+        }
+    }
+
+    #[test]
+    fn a_disabled_follower_with_no_leader_there_takes_its_own_jump_and_flies_none_of_it() {
+        // @0x8df54: goal 2, sub 4, its low level gated.
+        let (mut traffic, _, follower) = disabled_follower(Condition::Disabled, |_| {});
+        traffic.npcs_mut().iter_mut().for_each(|npc| {
+            if npc.id == follower {
+                npc.leader = None;
+                npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(77))));
+            }
+        });
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        let ship = of(&traffic, follower);
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert_eq!(ship.warp.stage, 0.0, "sub 4 is gated");
+    }
+
+    #[test]
+    fn a_disabled_fighter_that_cannot_jump_turns_back() {
+        for condition in [Condition::Disabled, BREAKING_UP] {
+            let mut traffic = Traffic::with_interval(1);
+            let mut carrier = far(0);
+            carrier.begin_own_jump();
+            let carrier = traffic.add_npc(carrier);
+            let mut fighter = fighter_on_jump(ShipRef::Npc(carrier), true);
+            fighter.leader = Some(carrier);
+            fighter.warp.stage = 0.0;
+            fighter.condition = condition;
+            let fighter = traffic.add_npc(fighter);
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            let ship = of(&traffic, fighter);
+            assert_eq!(
+                ship.goal,
+                Goal::Dock(ShipRef::Npc(carrier)),
+                "{condition:?}"
+            );
+            assert_eq!(ship.warp.goal, None);
+        }
+    }
+
+    #[test]
+    fn a_disabled_ship_off_the_jump_path_runs_no_high_level() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.condition = Condition::Disabled;
+        ship.warp.stage = 3.0;
+        ship.warp.aim = 90;
+        ship.goal = Goal::Attack(ShipRef::Player);
+        let id = traffic.add_npc(ship);
+        traffic.fly_holding(
+            jumping_world(0.0),
+            &std::collections::BTreeSet::new(),
+            &mut NeverFires,
+        );
+        assert_eq!(of(&traffic, id).warp.stage, 3.0, "no hold");
+    }
+
     // The fighter turn-back.
 
     /// A fighter of `carrier` on its leader's jump, short of fuel when

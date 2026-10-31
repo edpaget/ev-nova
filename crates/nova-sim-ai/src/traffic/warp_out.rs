@@ -590,8 +590,10 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
 /// Goal 0xb's push of an NPC leader onto its own jump (goal 2,
 /// @0x8dedf-0x8defa): each leader of a ship in `npcs` in goal 0xb
 /// ([`Npc::follows_leaders_jump`], `cmpw $0xb` @0x8de63), so not one in the
-/// regroup pause keeping sub 0xd, that is intact and whose high level runs
-/// ([`Npc::high_level_waits`]) is set to jump out.
+/// regroup pause keeping sub 0xd, whose high level runs
+/// ([`Npc::high_level_waits`]) is set to jump out. A disabled follower
+/// pushes too: the jump path reaches the high level, which has no disabled
+/// test (@0x901e5).
 ///
 /// A leader the player leads is too. Through the player's brake it is not
 /// under way, so the push takes it off the jump for a tick or two, a
@@ -613,11 +615,7 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
 pub fn send_leaders_out(npcs: &mut [Npc]) {
     let sent: Vec<NpcId> = npcs
         .iter()
-        .filter(|npc| {
-            npc.condition == Condition::Intact
-                && npc.follows_leaders_jump()
-                && !npc.high_level_waits()
-        })
+        .filter(|npc| npc.follows_leaders_jump() && !npc.high_level_waits())
         .filter_map(|npc| match npc.warp.goal {
             Some(WarpGoal::Follow(ShipRef::Npc(leader))) => Some(leader),
             _ => None,
@@ -683,6 +681,12 @@ fn jump_slot(npc: &Npc, goal: WarpGoal, world: &World) -> Option<Vec2> {
 /// 0xb check, and its low level flies its kept substate. As
 /// `_AIIsShipJumping` reads goal 0x13, the warp-out zeroes any stage it
 /// starts, so sub 4 never leaves.
+///
+/// A ship not intact on the jump path runs goal 0xb's check all the same,
+/// as `_HighLevelAIHandler` has no disabled test on the ship (@0x901e5). Its
+/// low level's sub 4 and 0xd are gated (@0x8524e-0x85258) and `_HandleShip`
+/// drifts it, so it flies none of this ([`autopilot`](crate::traffic::autopilot)'s
+/// drift flies it).
 pub fn fly_jump(
     npc: &mut Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
@@ -690,9 +694,10 @@ pub fn fly_jump(
     think: bool,
     paused: bool,
 ) -> Option<Outcome> {
-    if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
+    if npc.mode != Mode::Flying {
         return None;
     }
+    let intact = npc.condition == Condition::Intact;
     let goal = npc.warp.goal?;
     let leader = match goal {
         WarpGoal::Follow(ShipRef::Player) => Some((true, world.warp.player)),
@@ -723,20 +728,20 @@ pub fn fly_jump(
                         gave_up = true;
                     }
                     FollowCheck::Follow => {
-                        if let Some((player, leader)) = leader {
+                        if intact && let Some((player, leader)) = leader {
                             formation = follow_jump(npc, leader, player) == FollowStep::Formation;
                         }
                     }
                 }
             }
             WarpGoal::Own => {
-                if npc.jumping() && own_jump(npc, world.warp.duration()) {
+                if intact && npc.jumping() && own_jump(npc, world.warp.duration()) {
                     return Some(Outcome::JumpedOut);
                 }
             }
         }
     }
-    if !gave_up && !npc.jumping() {
+    if !intact || (!gave_up && !npc.jumping()) {
         return None;
     }
     let jumping = !paused && !gave_up;
@@ -1542,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn goal_0xb_sends_an_intact_followers_npc_leader_out() {
+    fn goal_0xb_sends_a_followers_npc_leader_out_disabled_or_not() {
         let lead = crate::traffic::npc::NpcId(2);
         let mut follower = ship();
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
@@ -1560,7 +1565,7 @@ mod tests {
         leader.id = lead;
         let mut ships = [disabled, leader];
         send_leaders_out(&mut ships);
-        assert_eq!(ships[1].goal, Goal::Idle, "a disabled follower sends none");
+        assert_eq!(ships[1].goal, Goal::JumpOut, "no disabled test (@0x901e5)");
         let mut own = ship();
         own.begin_own_jump();
         let mut leader = ship();
