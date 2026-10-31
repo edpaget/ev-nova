@@ -89,10 +89,13 @@ use crate::rulebook::RuleSource;
 impl Traffic {
     /// Each ship whose lead is lost takes a new lead, leads, or is left
     /// alone, in `world` (see the module docs): by the engine's reading of
-    /// its [`npc_escort_ai`](World::npc_escort_ai) alone.
-    pub(crate) fn succeed_leaders(&mut self, world: &World) {
+    /// its [`npc_escort_ai`](World::npc_escort_ai) alone. The ships it
+    /// dropped, each of which marks the parent it now holds on this pass
+    /// alone ([`fleet_formation`](super::fleet_formation)).
+    pub(crate) fn succeed_leaders(&mut self, world: &World) -> BTreeSet<NpcId> {
+        let mut dropped = BTreeSet::new();
         if world.npc_escort_ai != RuleSource::Engine {
-            return;
+            return dropped;
         }
         let lost: BTreeSet<NpcId> = self
             .npcs
@@ -102,7 +105,7 @@ impl Traffic {
             .filter(|&lead| !self.intact(lead))
             .collect();
         if lost.is_empty() {
-            return;
+            return dropped;
         }
         let before = self.npcs.clone();
         for lead in lost {
@@ -128,10 +131,21 @@ impl Traffic {
                     Some(id) if id == npc.id => {
                         npc.take_over(record.as_ref(), world.successor_repairer);
                     }
-                    Some(id) => npc.follow_successor(id),
+                    Some(id) => {
+                        npc.follow_successor(id);
+                        continue;
+                    }
+                }
+                // Its type is down, so the pass gives it +0xc906 for its
+                // parent (@0x441b9-0x441c0). A bribed ship's type was down
+                // before, and the pass skips it (@0x440d8).
+                if !npc.spared {
+                    npc.form_parent = npc.swarm_leader;
+                    dropped.insert(npc.id);
                 }
             }
         }
+        dropped
     }
 
     /// Whether NPC `id` is here and intact.
@@ -257,6 +271,7 @@ mod tests {
     use crate::catalog::GovtId;
     use crate::chance::{Chance, NeverFires};
     use crate::escort::FormationSlot;
+    use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
     use crate::traffic::gone::Freed;
@@ -874,6 +889,95 @@ mod tests {
             })
         );
         assert_eq!(of(&traffic, 1).fleet_slot, None);
+    }
+
+    // The stale parent (@0x441b9-0x441c0, @0x441de).
+
+    /// The ship at berth 9 of `traffic`, a stranger of no fleet at (100,
+    /// 200), facing up.
+    fn stranger(traffic: &mut Traffic) -> NpcId {
+        let mut other = ship(REBELS, 100);
+        other.state.position = Vec2::new(100.0, 200.0);
+        traffic.add_npc_at(other, 9)
+    }
+
+    #[test]
+    fn the_heaviest_follower_swarming_leads_and_holds_its_swarm_leader_as_its_parent() {
+        let mut heavy = follower(FEDS, 300);
+        heavy.swarm_leader = Some(9);
+        let mut traffic = fleet(FEDS, DISABLED, vec![heavy, follower(FEDS, 100)]);
+        let parent = stranger(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).leader, None);
+        assert_eq!(of(&traffic, 1).form_parent, Some(9));
+        // The same pass marks it (@0x441de), though no other ship names
+        // it: it counts, and takes its place.
+        let slot = FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 38.0,
+        };
+        let state = of(&traffic, parent.0).state;
+        assert_eq!(of(&traffic, 1).fleet_slot, Some(slot));
+        assert_eq!(of(&traffic, 1).slot_place, Some(slot.position(&state)));
+        // No later pass marks it, so its place stands as its parent moves.
+        of_mut(&mut traffic, parent.0).state.position = Vec2::new(-700.0, 10.0);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(9));
+        assert_eq!(of(&traffic, 1).slot_place, Some(slot.position(&state)));
+    }
+
+    #[test]
+    fn the_lone_disabled_ship_holds_its_swarm_leader_as_its_parent_too() {
+        let mut alone = follower(FEDS, 300);
+        alone.condition = DISABLED;
+        alone.swarm_leader = Some(9);
+        let mut traffic = fleet(FEDS, DISABLED, vec![alone]);
+        stranger(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(9));
+        assert!(of(&traffic, 1).fleet_slot.is_some());
+    }
+
+    #[test]
+    fn with_no_word_it_holds_no_parent_and_word_0_is_the_player() {
+        let mut clear = follower(FEDS, 300);
+        clear.form_parent = Some(1);
+        let mut traffic = fleet(FEDS, DISABLED, vec![clear]);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, None);
+        let mut zero = follower(FEDS, 300);
+        zero.swarm_leader = Some(0);
+        let mut traffic = fleet(FEDS, DISABLED, vec![zero]);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(0), "a word of 0 kept");
+    }
+
+    #[test]
+    fn a_bribed_ship_keeps_the_parent_it_holds() {
+        let mut bribed = follower(FEDS, 300);
+        bribed.take_bribe();
+        bribed.form_parent = Some(5);
+        bribed.swarm_leader = Some(9);
+        let mut traffic = fleet(FEDS, DISABLED, vec![bribed]);
+        stranger(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(5));
+        assert_eq!(of(&traffic, 1).fleet_slot, None, "it marks nothing");
+    }
+
+    #[test]
+    fn a_ship_the_disabled_reset_keeps_at_ai_6_reads_no_parent_at_the_next_pass() {
+        // The reset drops its leader and leaves +0x88, so the pass still
+        // runs for it, and answers -1 (@0x8feda-0x8ff0a).
+        let mut down = follower(FEDS, 300);
+        down.condition = DISABLED;
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![down]);
+        think(&mut traffic);
+        assert!(of(&traffic, 1).kept_escort_ai);
+        assert_eq!(of(&traffic, 1).form_parent, Some(1), "the reset came after");
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, None);
     }
 
     #[test]

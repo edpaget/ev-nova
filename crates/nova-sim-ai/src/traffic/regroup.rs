@@ -85,6 +85,7 @@ pub(super) fn fresh(npcs: &[Npc], due: &[bool], picked: &[bool]) -> Vec<bool> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeSet;
 
     use super::*;
     use crate::ai::pursuit::Frame;
@@ -324,11 +325,10 @@ mod tests {
         lead.goal = Goal::Hold;
         lead.state.velocity = Vec2::new(2.0, 0.0);
         let lead_id = traffic.add_npc(lead);
-        traffic.form_fleets();
         let mut follower = paused_with(Kept::Formation { guard: None });
         follower.leader = Some(lead_id);
         let id = traffic.add_npc(follower);
-        traffic.form_fleets();
+        traffic.form_fleets(&World::new(&[]), &BTreeSet::new());
         let slot = of(&traffic, id).fleet_slot.expect("a slot");
         let lead_state = of(&traffic, lead_id).state;
         let follower = traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);

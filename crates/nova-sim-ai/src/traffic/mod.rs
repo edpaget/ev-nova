@@ -1325,8 +1325,8 @@ impl Traffic {
         self.on_line.next_frame();
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
-        self.succeed_leaders(&world);
-        self.form_fleets();
+        let dropped = self.succeed_leaders(&world);
+        self.form_fleets(&world, &dropped);
         self.issue_escort_orders(&world);
         self.release_regroups(chance);
         self.reset_disabled(world.npc_escort_ai);

@@ -225,6 +225,13 @@ impl FormationParent {
 /// written.
 const PASS_SKIPS_AI: i16 = 4;
 
+/// Whether the marking pass reaches `npc`, so it marks its formation
+/// parent (+0xc2, @0x441c7-0x441de): above AI type 4 (@0x440d8).
+#[must_use]
+pub fn marks_its_parent(npc: &Npc) -> bool {
+    npc.original_ai_type() > PASS_SKIPS_AI
+}
+
 /// The ship `npc` forms on (`_DoPlayGameWork` @0x44160-0x441c0): above AI
 /// type 4 ([`Npc::original_ai_type`], not whether it has a leader, as a
 /// bribed ship keeps its leader and a kept former escort has none), its
@@ -234,7 +241,7 @@ const PASS_SKIPS_AI: i16 = 4;
 /// (@0x440d8).
 #[must_use]
 pub fn formation_parent(npc: &Npc) -> Option<FormationParent> {
-    if npc.original_ai_type() <= PASS_SKIPS_AI {
+    if !marks_its_parent(npc) {
         return npc.form_parent.map(FormationParent::of_word);
     }
     if npc.goal.attacking().is_some()
