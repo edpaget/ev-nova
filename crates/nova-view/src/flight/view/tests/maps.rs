@@ -642,6 +642,23 @@ pub(super) fn alpha_of(view: &Faked) -> Option<u8> {
 }
 
 #[test]
+fn a_held_frame_centres_the_floating_map_on_its_own_place() {
+    let frame = sol();
+    let mut view = floating_in(frame);
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let drawn = floating_dots(&floating_drawn(&view));
+    let first = view.frame.clone();
+    let mut now = first.clone();
+    now.floating.current = Vec2::new(40.0, 30.0);
+    view.sim.set_frame(now);
+    let pass = nova_sim::flight_frame::PassReport::default();
+    view.sim
+        .queue_report(super::stepping::doubled(pass.clone(), pass, first));
+    view.step_frame(1, view.anchor());
+    assert_eq!(floating_dots(&floating_drawn(&view)), drawn);
+}
+
+#[test]
 fn holding_h_shows_the_floating_map_bordered_and_centred_on_the_current_system() {
     let mut view = floating_in(in_sol());
     assert_eq!(floating_border(&floating_drawn(&view)), [], "down at first");

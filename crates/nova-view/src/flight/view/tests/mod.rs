@@ -69,6 +69,7 @@ use nova_sim::{GLOW_CRUISE, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
 mod anchor;
+mod between_passes;
 mod boarding;
 mod cloak;
 mod combat;
