@@ -160,6 +160,11 @@ pub(in crate::flight) struct FakeCatalog {
     /// with no links and Proxima Reborn (141) at its centre: not by
     /// default.
     pub(in crate::flight) reborn: bool,
+    /// Whether Sol lists Alpha Reborn too, after its other links, so that
+    /// a place's two systems link differently by
+    /// `RuleKey::ColocatedResolution`: not by default. It needs
+    /// [`reborn`](Self::reborn).
+    pub(in crate::flight) sol_lists_reborn: bool,
     /// Whether system 128 exists, the escape pod's rescue's fallback,
     /// with no links and no stellars: not by default.
     pub(in crate::flight) home: bool,
@@ -241,6 +246,9 @@ impl FakeCatalog {
         }
         if self.near {
             links.push(134);
+        }
+        if self.sol_lists_reborn {
+            links.push(133);
         }
         links
     }
@@ -349,6 +357,7 @@ pub(in crate::flight) fn catalog() -> FakeCatalog {
         fan: false,
         near: false,
         reborn: false,
+        sol_lists_reborn: false,
         home: false,
         nebula: false,
         sol_navs: Vec::new(),

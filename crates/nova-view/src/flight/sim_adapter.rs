@@ -29,8 +29,8 @@
 //!
 //! **The edge's API**, which the port leaves out, is the adapter's own:
 //! the constructors that build the session ([`SessionFlight::start`],
-//! [`SessionFlight::fly`], [`SessionFlight::load`]), what the view is
-//! handed as it opens ([`SessionFlight::opening`]), its setup and the
+//! [`SessionFlight::start_ruled`], [`SessionFlight::load`]), what the view
+//! is handed as it opens ([`SessionFlight::opening`]), its setup and the
 //! run's history ([`SessionFlight::set_up`], [`SessionFlight::carry_over`],
 //! one `Session` call each), entering play ([`SessionFlight::begin`],
 //! [`SessionFlight::enter_game`], [`SessionFlight::open_saved`]),
@@ -184,8 +184,9 @@ impl std::fmt::Debug for SharedCatalog {
 /// hold ([`SessionFlight::share_catalog`]), so the flight's answers that
 /// read the catalog read the one the view draws from. The flight has
 /// Nova's collaborators ([`SessionFlight::new`]), which the edge replaces
-/// with the `with_*` builders, and the session is set up afterwards
-/// ([`SessionFlight::set_up`]), once the view has read it as it opens.
+/// with the `with_*` builders. The edge's rulebook goes in here, so the
+/// view's opening read is already by it; the rest of the setup comes
+/// afterwards ([`SessionFlight::set_up`]), once the view has read it.
 impl<C: SimCatalog + CombatCatalog + AsteroidCatalog + 'static> SessionFlight<C> {
     /// A new, unnamed pilot's flight (`nova_sim::Session::start`), or why
     /// it could not start.
@@ -194,16 +195,17 @@ impl<C: SimCatalog + CombatCatalog + AsteroidCatalog + 'static> SessionFlight<C>
         Self::opened(catalog, Session::start(&**catalog))
     }
 
-    /// `pilot`'s flight, as `nova_sim::Session::fly` builds it: for a
-    /// pilot just made, or one opened with no load's fallbacks.
+    /// [`SessionFlight::start`] by `rules` throughout
+    /// (`nova_sim::Session::start_ruled`): the edge's start.
     #[must_use]
-    pub fn fly(catalog: &Rc<C>, pilot: Pilot) -> Self {
-        Self::opened(catalog, Session::fly(&**catalog, pilot))
+    pub fn start_ruled(catalog: &Rc<C>, rules: &Rulebook) -> Self {
+        Self::opened(catalog, Session::start_ruled(&**catalog, rules))
     }
 
-    /// `pilot`'s flight as `nova_sim::Session::load` builds it, its load's
-    /// fallbacks reading `rules`: for a pilot opened from a save, whose
-    /// repair [`SessionFlight::load_repaired`] reports.
+    /// `pilot`'s flight as `nova_sim::Session::load` builds it, by `rules`
+    /// throughout: for a pilot opened from a save, whose repair
+    /// [`SessionFlight::load_repaired`] reports, or one just made, which
+    /// has no repair to take.
     #[must_use]
     pub fn load(catalog: &Rc<C>, pilot: Pilot, rules: &Rulebook) -> Self {
         Self::opened(catalog, Session::load(&**catalog, pilot, rules))
@@ -964,7 +966,7 @@ mod tests {
         let pilot = || Pilot::new(&*catalog, "Ada").expect("a pilot");
         let built: [fn(&Rc<_>, Pilot) -> SessionFlight<_>; 3] = [
             |catalog, _| SessionFlight::start(catalog),
-            SessionFlight::fly,
+            |catalog, _| SessionFlight::start_ruled(catalog, &Rulebook::default()),
             |catalog, pilot| SessionFlight::load(catalog, pilot, &Rulebook::default()),
         ];
         for build in built {

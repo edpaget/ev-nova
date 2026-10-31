@@ -1,19 +1,18 @@
-//! The edge that builds a flight: [`open_flight`] builds the session, wraps
-//! it in a [`SessionFlight`] with its collaborators, hands it to the view
-//! ([`FlightView::over`]), and then sets the session up
-//! ([`SessionFlight::set_up`]) and shows the view what that changed
-//! ([`FlightView::show_set_up`]). Entering play pairs the view's half with
-//! the adapter's: [`begin_game`] for a new pilot, [`enter_game`] from the
-//! main screen.
+//! The edge that builds a flight: [`open_flight`] builds the session by the
+//! setup's rulebook, wraps it in a [`SessionFlight`] with its
+//! collaborators, hands it to the view ([`FlightView::over`]), and then
+//! sets the session up ([`SessionFlight::set_up`]) and shows the view what
+//! that changed ([`FlightView::show_set_up`]). Entering play pairs the
+//! view's half with the adapter's: [`begin_game`] for a new pilot,
+//! [`enter_game`] from the main screen.
 //!
-//! **The opening order.** The view reads the bare session as it opens, and
-//! the setup comes after, as the app's `with_*` builders came after the
-//! read: one setup rule changes what the read builds.
-//! `RuleKey::ColocatedResolution` rebuilds the galaxy's links as it is
-//! set (`OverlaidGalaxy::set_colocated`), after the course map has shown
-//! the galaxy, and the map shows the links again only at the next
-//! `GalaxyChanged`. Setting the session up before the read would show the
-//! other reading's links at once, which the player would see.
+//! **The opening order.** The session is built by the setup's rulebook
+//! whichever way the flight starts, so the view's opening read is already
+//! the chosen reading: the course map shows the rulebook's links from the
+//! first frame, with no `GalaxyChanged` to wait for. The rest of the setup
+//! comes after the read: the disable rule, hire terms, strings, person
+//! rules, control bits and the run's history. Handing the rulebook in again
+//! there changes nothing.
 //!
 //! **One rulebook and one chance, by construction.** The setup's rulebook
 //! is the session's rules, a load's fallbacks and the view's presentation
@@ -38,14 +37,14 @@ use crate::system::catalog::SystemCatalog;
 /// How a flight starts: the pilot it flies, and whether it is loaded.
 #[derive(Clone, Debug)]
 pub enum FlightStart {
-    /// A new, unnamed pilot (`nova_sim::Session::start`): the developer's
-    /// flight.
+    /// A new, unnamed pilot (`nova_sim::Session::start_ruled`): the
+    /// developer's flight.
     New,
-    /// `Pilot`, flown as it is (`nova_sim::Session::fly`): a pilot just
-    /// made.
+    /// `Pilot`, just made: built as a load is, by the setup's rulebook
+    /// (`nova_sim::Session::load`), with no fallback to take.
     Pilot(Pilot),
-    /// `Pilot`, loaded from a save, its load's fallbacks reading the
-    /// setup's rulebook (`nova_sim::Session::load`).
+    /// `Pilot`, loaded from a save, by the setup's rulebook, its load's
+    /// fallbacks among what reads it (`nova_sim::Session::load`).
     Loaded(Pilot),
 }
 
@@ -79,9 +78,9 @@ impl<
 }
 
 /// The flight `start` says, over `catalog`, set up with `setup`, its calls
-/// handed `collaborators` (see the module docs): the view reads the bare
-/// session as it opens, by the setup's rulebook and on the collaborators'
-/// chance, and the session is set up after.
+/// handed `collaborators` (see the module docs): the session is built by
+/// the setup's rulebook, the view reads it as it opens, by that rulebook
+/// and on the collaborators' chance, and the rest of the setup comes after.
 pub fn open_flight<C: EdgeCatalog + 'static>(
     catalog: C,
     start: FlightStart,
@@ -114,9 +113,9 @@ pub fn enter_game<C: SystemCatalog + ShipSprites + CombatLooks>(flight: &mut Fli
 
 /// The bare opening, which [`open_flight`] sets up after and the test
 /// flights leave bare: the [`SessionFlight`] `start` says over `catalog`,
-/// a load's fallbacks reading `rules`, its calls handed `collaborators`,
-/// read by the view ([`FlightView::over`]) by `rules`, its wording on the
-/// collaborators' chance.
+/// built by `rules`, its calls handed `collaborators`, read by the view
+/// ([`FlightView::over`]) by `rules`, its wording on the collaborators'
+/// chance.
 fn opened<C: EdgeCatalog + 'static>(
     catalog: Rc<C>,
     start: FlightStart,
@@ -125,9 +124,10 @@ fn opened<C: EdgeCatalog + 'static>(
 ) -> FlightView<C> {
     let chance = collaborators.chance.clone();
     let sim = match start {
-        FlightStart::New => SessionFlight::start(&catalog),
-        FlightStart::Pilot(pilot) => SessionFlight::fly(&catalog, pilot),
-        FlightStart::Loaded(pilot) => SessionFlight::load(&catalog, pilot, rules),
+        FlightStart::New => SessionFlight::start_ruled(&catalog, rules),
+        FlightStart::Pilot(pilot) | FlightStart::Loaded(pilot) => {
+            SessionFlight::load(&catalog, pilot, rules)
+        }
     }
     .with_collaborators(collaborators);
     let opening = sim.opening();
@@ -155,8 +155,8 @@ pub mod test_flight {
 
     /// The flight `start` says over `catalog`, its calls handed
     /// `collaborators`, the view's wording on their chance, shown by the
-    /// default rulebook, with no setup. A loaded pilot's fallbacks read the
-    /// default rulebook.
+    /// default rulebook, with no setup. The session is built by the default
+    /// rulebook, a loaded pilot's fallbacks among what reads it.
     #[must_use]
     pub fn flown<C: EdgeCatalog + 'static>(
         catalog: C,
