@@ -7108,7 +7108,7 @@ mod tests {
                 &mut ships,
                 rules,
                 |combat, fighters, arena, chance| {
-                    combat.defend_npcs(fighters, arena, None, false, chance);
+                    combat.defend_npcs(fighters, arena, None, None, chance);
                 },
             );
             combat
@@ -7301,7 +7301,7 @@ mod tests {
                     arena,
                     &mut NeverFires,
                     |combat, fighters, arena, chance| {
-                        combat.defend_npcs(fighters, arena, None, false, chance);
+                        combat.defend_npcs(fighters, arena, None, None, chance);
                     },
                 );
             }
@@ -7338,7 +7338,7 @@ mod tests {
             &mut ships,
             DOUBLE_TIME,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         assert_eq!(combat.beams().len(), 1, "fired at the missile");
@@ -7372,7 +7372,7 @@ mod tests {
             &mut ships,
             DOUBLE_TIME,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         beams(&mut combat, &mut ships, DOUBLE_TIME);
@@ -11162,7 +11162,7 @@ mod tests {
     /// ([`phase::defend_npcs`]).
     fn defend_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
         drawing(combat, ships, chance, |combat, fighters, arena, chance| {
-            combat.defend_npcs(fighters, arena, None, false, chance);
+            combat.defend_npcs(fighters, arena, None, None, chance);
         });
     }
 
@@ -12004,7 +12004,7 @@ mod tests {
             arena,
             &mut chance,
             |c, f, a, ch| {
-                c.defend_npcs(f, a, None, false, ch);
+                c.defend_npcs(f, a, None, None, ch);
             },
         );
         phase::run_in(
@@ -12125,7 +12125,7 @@ mod tests {
             combat.set_pd_hostility(source);
             let mut ships = fighter_attack(quad(), 0.0, -100.0);
             phase::run_by(&mut combat, &mut ships, rules, |c, f, a, ch| {
-                c.defend_npcs(f, a, None, false, ch);
+                c.defend_npcs(f, a, None, None, ch);
             });
             assert_eq!(fired(&combat.take_events(), A), 1, "{source:?}");
         }
@@ -13211,7 +13211,7 @@ mod tests {
         let mut rocks = Rocks::of([rock(0, 0.0, -40.0)]);
         missile_in_flight(&mut combat, &mut ships);
         phase::run_by(&mut combat, &mut ships, rules, |c, f, a, ch| {
-            c.defend_npcs(f, a, None, false, ch);
+            c.defend_npcs(f, a, None, None, ch);
         });
         assert_eq!(pd_shots(&combat).len(), 1, "fired at the missile");
         // Its second move, from 20 to 40 pixels out, meets the asteroid.

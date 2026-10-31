@@ -1580,7 +1580,7 @@ fn test_hits(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
 /// ([`Combat::defend_npcs`]).
 fn defend_npcs(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
     run(combat, ships, arsenal, |combat, fighters, arena, chance| {
-        combat.defend_npcs(fighters, arena, None, false, chance);
+        combat.defend_npcs(fighters, arena, None, None, chance);
     });
 }
 
@@ -6791,7 +6791,7 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             ground,
             &mut chance,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         let rolls: Vec<Option<u32>> = combat

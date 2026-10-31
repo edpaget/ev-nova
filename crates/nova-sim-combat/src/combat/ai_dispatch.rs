@@ -55,31 +55,30 @@ use crate::ship_layer::Slot;
 
 impl Combat {
     /// `_AIDispatch`'s loop over the NPCs among `fighters` in slots above
-    /// `run`'s first (see the module docs): by slot, each one's goal-4
-    /// launch, its point defence ([`Combat::defend_ship`]) at the ships as
-    /// they were when the run began, then the snipe's launch, aimed among
-    /// `targets`, point defence asking `rule` as [`Combat::defend_ship`]
-    /// does, drawing on `chance`. With `run`'s second set, it stops right
-    /// after a slot whose turn launched a fighter: that slot, or none once
-    /// it reaches the end.
+    /// `run`'s first and up to its second, each bound open with none (see
+    /// the module docs): by slot, each one's goal-4 launch, its point
+    /// defence ([`Combat::defend_ship`]) at the ships as they were when
+    /// the run began, then the snipe's launch, aimed among `targets`,
+    /// point defence asking `rule` as [`Combat::defend_ship`] does,
+    /// drawing on `chance`.
     pub(super) fn dispatch_npcs(
         &mut self,
         fighters: &mut [Fighter],
         targets: &[Target],
         defence: (&dyn PointDefenceRule, &Governments),
-        run: (Option<Slot>, bool),
+        run: (Option<Slot>, Option<Slot>),
         chance: &mut dyn Chance,
-    ) -> Option<Slot> {
-        let (after, stop) = run;
+    ) {
+        let (after, through) = run;
         let candidates: Vec<Candidate> = fighters.iter().map(Fighter::as_candidate).collect();
         let mut order: Vec<usize> = (0..fighters.len())
             .filter(|&index| fighters[index].ship != ShipRef::Player)
             .filter(|&index| after.is_none_or(|after| fighters[index].slot > after))
+            .filter(|&index| through.is_none_or(|through| fighters[index].slot <= through))
             .collect();
         order.sort_by_key(|&index| fighters[index].slot);
         for index in order {
             let fighter = &mut fighters[index];
-            let launched = self.sorties.len();
             let trigger = fighter.trigger;
             if trigger.bays {
                 self.launch_bay(fighter, targets, chance);
@@ -90,11 +89,7 @@ impl Combat {
             if trigger.bays_after {
                 self.launch_bay(fighter, targets, chance);
             }
-            if stop && self.sorties.len() > launched {
-                return Some(fighter.slot);
-            }
         }
-        None
     }
 
     /// One `_AILaunchFighter` of `fighter`'s

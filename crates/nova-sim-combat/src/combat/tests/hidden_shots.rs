@@ -291,7 +291,7 @@ fn a_missile_a_beam_downs_before_its_first_move_is_still_tested() {
         Ship::at(2, 1000.0, 1000.0),
     ];
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
     combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     drop(fighters);
     assert_eq!(shot_down(&combat.take_events()).len(), 1);
@@ -338,7 +338,7 @@ fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
         ships[2].trigger = QUIET;
         let beams_before = combat.beams().len();
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
+        combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
         drop(fighters);
         combat.beams()[beams_before..]
             .iter()
@@ -360,7 +360,7 @@ fn hidden_shots_are_neither_drawn_nor_counted_nor_chosen_by_point_defence() {
     let (mut combat, missile, mut ships) = scene();
     ships[2].trigger.point_defence = false;
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
     combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     drop(fighters);
     assert_eq!(combat.hidden.len(), 1, "kept hidden");
@@ -395,7 +395,7 @@ fn clearing_the_fight_lets_go_of_the_hidden_shots() {
         Ship::at(2, 1000.0, 1000.0),
     ];
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.defend_npcs(&mut fighters, arena, None, false, &mut NeverFires);
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
     combat.close_tick_in(&mut fighters, arena, &mut [], None, &mut NeverFires);
     drop(fighters);
     assert_eq!(combat.hidden.len(), 1, "kept hidden");

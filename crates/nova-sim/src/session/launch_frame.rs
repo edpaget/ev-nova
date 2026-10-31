@@ -51,14 +51,14 @@ impl Session {
     /// thinking as `behaviour` says, drawing on `chance` (see the module
     /// docs): every NPC's point defence and launches in slot order
     /// ([`Combat::defend_npcs`](crate::combat::Combat::defend_npcs)), the
-    /// loop stopping after each slot whose turn launched; that slot's
-    /// fighters are put in the system at once
+    /// loop taking one occupied slot at a time; that slot's fighters are
+    /// put in the system at once
     /// ([`Session::launch_fighters`]), each in a slot above the
     /// carrier's thinks
     /// ([`Traffic::think_launched`](crate::traffic::Traffic::think_launched)),
-    /// and the loop resumes from the next slot with them among its ships.
-    /// By [`RuleKey::LaunchFrameAi`]'s other reading, one run that never
-    /// stops, its fighters put in the system after it.
+    /// and the loop goes on to the next slot with them among its ships.
+    /// By [`RuleKey::LaunchFrameAi`]'s other reading, one run of every
+    /// slot, its fighters put in the system after it.
     ///
     /// The fighters' work on the line (their calls, their scans) is
     /// queued at their own berths as they think, among every other
@@ -75,16 +75,21 @@ impl Session {
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
-        let stop = self.setup.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
-        let mut after = None;
+        let by_slot = self.setup.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
+        let mut after: Option<u32> = None;
         loop {
-            let mut stopped = None;
+            let through = if by_slot {
+                self.space.traffic.next_slot_after(after)
+            } else {
+                None
+            };
             self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-                stopped = combat.defend_npcs(fighters, arena, after, stop, chance);
+                let (after, through) = (after.map(Slot::Berth), through.map(Slot::Berth));
+                combat.defend_npcs(fighters, arena, after, through, chance);
             });
             let sorties = self.space.combat.take_sorties();
             let placed = self.launch_fighters(&sorties, chance);
-            let Some(Slot::Berth(carrier)) = stopped else {
+            let Some(carrier) = through else {
                 return;
             };
             let above: BTreeSet<NpcId> = self
@@ -100,7 +105,7 @@ impl Session {
                     traffic.think_launched(&above, behaviour, world, chance);
                 });
             }
-            after = stopped;
+            after = through;
         }
     }
 }
