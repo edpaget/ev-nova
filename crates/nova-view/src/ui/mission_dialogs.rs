@@ -626,6 +626,7 @@ mod tests {
     use crate::text::fixture::MonoMetrics;
     use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+    use crate::ui::mission_info::MISSION_INFO_KEY;
     use nova_sim::DescMovie;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -1219,6 +1220,24 @@ mod tests {
             assert!(dialogs.take_info_closed(), "{close:?}");
             assert!(!dialogs.take_info_closed(), "{close:?}: once");
         }
+    }
+
+    #[test]
+    fn the_mission_info_key_closes_the_info_screen_and_asks_for_nothing_further() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        dialogs.take_sounds();
+        dialogs.input(&key(MISSION_INFO_KEY));
+        assert!(dialogs.info().is_none());
+        assert!(!dialogs.is_open());
+        assert!(dialogs.take_info_closed());
+        assert_eq!(
+            dialogs.take_sounds(),
+            [Sound::Ui(UiSound::MissionInfoClosed)]
+        );
+        assert_eq!(dialogs.take_abort(), None);
+        assert_eq!(dialogs.take_map_request(), None);
+        assert_eq!(dialogs.take_unclaimed(), []);
     }
 
     #[test]

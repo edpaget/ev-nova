@@ -824,6 +824,10 @@ impl Screen for MissionInfoScreen {
             }
             return ScreenAction::None;
         };
+        if is_mission_info_press(input) {
+            self.close();
+            return ScreenAction::None;
+        }
         if let Some(forward) = list_step(laid.dialog.focus_ring(), input) {
             if laid.rows.step_wrapping(forward) {
                 self.show_selected();
@@ -2431,18 +2435,70 @@ mod tests {
         }
     }
 
-    /// The original's `_MissionInfoFilter` (@0x9d6e5) maps Return and Escape
-    /// to Done without a click sound: only the close's beep plays.
+    /// The original's `_MissionInfoFilter` (@0x9d6e5) maps Return, Escape
+    /// and the mission info key to Done without a click sound: only the
+    /// close's beep plays. Its steps play nothing.
     #[test]
     fn keyboard_activation_is_silent_as_the_original_on_the_info_screen() {
-        for k in [Key::Enter, Key::Escape] {
-            let mut screen = info_screen();
-            screen.take_sounds();
-            for input in press_and_release(k) {
-                screen.input(&input);
+        for ring in BOTH_RINGS {
+            for k in [Key::Enter, Key::Escape, MISSION_INFO_KEY] {
+                let mut screen = info_screen().with_focus_ring(ring);
+                screen.take_sounds();
+                for input in press_and_release(k) {
+                    screen.input(&input);
+                }
+                assert_eq!(screen.take_sounds(), [CLOSED], "{k:?} ({ring:?})");
             }
-            assert_eq!(screen.take_sounds(), [CLOSED], "{k:?}");
+            for k in [Key::Tab, Key::Up, Key::Down] {
+                let mut screen = info_screen().with_focus_ring(ring);
+                screen.take_sounds();
+                for input in press_and_release(k) {
+                    screen.input(&input);
+                }
+                assert_eq!(screen.take_sounds(), [], "{k:?} ({ring:?})");
+            }
         }
+    }
+
+    /// `_MissionInfoFilter` gives Done for the key that opens the screen
+    /// (@0x9d756-0x9d769).
+    #[test]
+    fn the_mission_info_key_closes_mission_info() {
+        for ring in BOTH_RINGS {
+            for screen in [info_screen(), info_screen().with_map_allowed(false)] {
+                let mut screen = screen.with_focus_ring(ring);
+                screen.take_sounds();
+                screen.input(&key(MISSION_INFO_KEY));
+                assert!(screen.closed(), "{ring:?}");
+                assert_eq!(screen.take_sounds(), [CLOSED], "once, {ring:?}");
+                assert_eq!(screen.take_abort(), None, "{ring:?}");
+                assert_eq!(screen.take_map_request(), None, "{ring:?}");
+            }
+        }
+    }
+
+    /// Dialog keys are press-only by the user's decision of 2026-10-23.
+    #[test]
+    fn a_repeat_or_release_of_the_mission_info_key_does_not_close_mission_info() {
+        let mut screen = info_screen();
+        for (pressed, repeat) in [(true, true), (false, false)] {
+            screen.input(&Input::Key {
+                key: MISSION_INFO_KEY,
+                pressed,
+                repeat,
+            });
+        }
+        assert!(!screen.closed());
+    }
+
+    /// Without its dialog the screen's message offers Return and Escape
+    /// alone, and they alone close it.
+    #[test]
+    fn without_its_dialog_the_mission_info_key_does_not_close_mission_info() {
+        let mut screen =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        screen.input(&key(MISSION_INFO_KEY));
+        assert!(!screen.closed());
     }
 
     /// The computer's and the info screen's buttons take Tab then Space
