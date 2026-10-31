@@ -280,17 +280,22 @@
 //!   [`HYPERGATE_DENIED`], [`gate_refusal_message`]).
 //! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
 //!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
-//!   of the flight keys. While it is open flight is paused, as in the
-//!   original, only the map is drawn and every input goes to it, except
+//!   of the latched flight keys, while the keys flight polls with no latch
+//!   stay held and tracked (the [`map_wait`] module). While it is open
+//!   flight is paused, as in the original, only the map is drawn and
+//!   every input goes to it, those keys noted on the way, except
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
 //!   router's Escape), and so do Return and, while M is held, a key-down
 //!   the original's `_MapFilter` doesn't take (@0x13cdd-0x13d07,
 //!   @0x144db-0x14587). Every close made while M is held waits for its
 //!   release, as `_DoSystemMap` loops `BusyIdle(); while KeyCheck(M)`
 //!   before disposing of the dialog (@0x13a2e-0x13a46, `_BusyIdle`
-//!   @0x5981-0x5985 being empty): the map stays drawn, takes no input
+//!   @0x5981-0x5985 being empty): the map stays drawn, acts on no input
 //!   and runs no null events, and the close, its beep and cue among it,
-//!   lands on the release; a close with M up doesn't wait. The maps the
+//!   lands on the release; a close with M up doesn't wait. Over flight
+//!   the wait ignores keys, the live ones still tracked; over a screen it
+//!   queues them for that screen, handed back at the close through
+//!   [`FlightView::take_map_replay`]. The maps the
 //!   bar, a port screen and a mission dialog open on M open with it
 //!   held. Tab or `\` on it (repeats too) cycles the
 //!   hyperspace selection through the current system's links
@@ -1486,9 +1491,11 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// `BusyIdle(); while KeyCheck(_keyPrefs+0x12)` before disposing of
     /// the dialog (@0x13a2e-0x13a46), and `_BusyIdle` (@0x5981-0x5985) is
     /// empty, so nothing runs meanwhile. The dialog stays as last drawn,
-    /// takes no input and runs no null events, and the whole close, its
+    /// acts on no input and runs no null events, and the whole close, its
     /// beep, cue and restores, lands on the release
-    /// ([`FlightView::close_map`]).
+    /// ([`FlightView::close_map`]). Over flight the wait's keys are
+    /// ignored and the live ones stay tracked; over a screen they are
+    /// queued for it (`wait_keys`, [`FlightView::take_map_replay`]).
     map_closing: bool,
     /// What a map over a screen has taken during its wait
     /// (`FlightView::closing_input`).
