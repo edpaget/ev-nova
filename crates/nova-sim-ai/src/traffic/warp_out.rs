@@ -649,6 +649,7 @@ pub fn fly_jump(
         WarpGoal::Own => None,
     };
     let mut formation = false;
+    let mut gave_up = false;
     if think {
         match goal {
             WarpGoal::Follow(_) => {
@@ -667,7 +668,7 @@ pub fn fly_jump(
                         npc.goal = Goal::Idle;
                         npc.target = None;
                         npc.warp.goal = None;
-                        return None;
+                        gave_up = true;
                     }
                     FollowCheck::Follow => {
                         if let Some((player, leader)) = leader {
@@ -683,10 +684,10 @@ pub fn fly_jump(
             }
         }
     }
-    if !npc.jumping() {
+    if !gave_up && !npc.jumping() {
         return None;
     }
-    let jumping = !paused;
+    let jumping = !paused && !gave_up;
     let handling = npc
         .ionization()
         .slows(world.flight.handling(npc.own_handling()));
@@ -695,9 +696,25 @@ pub fn fly_jump(
     }
     // No leader passed: close formation needs one, so the sight is moot.
     let inertia = Inertia::of(npc, None, true, world.flight);
-    fly(npc, &handling, world.flight, inertia);
+    if gave_up {
+        fly_sub_0(npc, &handling, world.flight, inertia);
+    } else {
+        fly(npc, &handling, world.flight, inertia);
+    }
     warp_block(npc, led(npc, leaders), &world.warp, jumping);
     Some(Outcome::Flying)
+}
+
+/// Sub 0's flight, the frame a ship gives up its leader's jump: goal 0xb's
+/// block writes goal 0 and sub 0 and the low level runs in the same
+/// dispatch, so it moves on at its velocity with no thrust, on its own whole
+/// heading (@0x8521e-0x8522d, @0x85231). From the next tick on
+/// [`Goal::Idle`] flies a stop, the engine's own stand-in
+/// (rdm:phase/escort-fleet-fidelity-followups/phase-18-goal-0-coasts).
+fn fly_sub_0(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Inertia) {
+    npc.trigger = crate::combat::armament::Trigger::default();
+    flight::turn_to_own(&mut npc.state);
+    plain_step(npc, handling, Controls::default(), flight, inertia);
 }
 
 #[cfg(test)]
@@ -1540,7 +1557,10 @@ mod tests {
         follower.goal = Goal::Formation { guard: None };
         follower.target = Some(ShipRef::Npc(NpcId(9)));
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
-        assert_eq!(fly_jump_by(&mut follower, &views, &world, true), None);
+        assert_eq!(
+            fly_jump_by(&mut follower, &views, &world, true),
+            Some(Outcome::Flying)
+        );
         assert_eq!(follower.warp.goal, None, "sub 0");
         assert_eq!(follower.goal, Goal::Idle, "goal 0 (@0x8deb9-0x8ded1)");
         assert_eq!(follower.target, None);
@@ -1551,12 +1571,63 @@ mod tests {
         follower.goal = Goal::Follow { lead, guard: None };
         follower.target = Some(ShipRef::Player);
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-        assert_eq!(fly_jump_by(&mut follower, &views, &world, true), None);
+        assert_eq!(
+            fly_jump_by(&mut follower, &views, &world, true),
+            Some(Outcome::Flying)
+        );
         assert_eq!(
             (follower.goal, follower.target, follower.warp.goal),
             (Goal::Idle, None, None),
             "an NPC's too (@0x8df31-0x8df49)"
         );
+    }
+
+    #[test]
+    fn the_frame_a_follower_gives_up_it_flies_sub_0_on_at_its_velocity_with_no_thrust() {
+        // Goal 0, sub 0 and the low level in one dispatch: no thrust, its
+        // whole heading (@0x8521e-0x8522d, @0x85231).
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let mut follower = ship();
+        follower.state.velocity = Vec2::new(2.0, 0.0);
+        follower.state.heading = 42.7;
+        follower.trigger.primary = true;
+        follower.goal = Goal::Formation { guard: None };
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert_eq!(
+            fly_jump_by(&mut follower, &views, &world, true),
+            Some(Outcome::Flying)
+        );
+        assert_eq!(follower.goal, Goal::Idle);
+        assert_eq!(follower.state.velocity, Vec2::new(2.0, 0.0), "no brake");
+        assert_eq!(follower.state.position, Vec2::new(2002.0, 0.0));
+        assert_eq!(follower.state.heading, 42.0, "truncated (@0x8522d)");
+        assert_eq!(follower.display.drive.thrust, Thrust::None);
+        assert_eq!(
+            follower.trigger,
+            crate::combat::armament::Trigger::default(),
+            "the low level clears it (@0x851f6)"
+        );
+    }
+
+    #[test]
+    fn a_stage_a_follower_gave_up_with_goes_through_the_warp_out_as_not_jumping() {
+        let views = BTreeMap::new();
+        let world = in_world(world());
+        let gave_up = |aim: i16| {
+            let mut follower = ship();
+            follower.goal = Goal::Formation { guard: None };
+            follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+            follower.warp.stage = 4.0;
+            follower.warp.since = 9;
+            follower.warp.aim = aim;
+            fly_jump_by(&mut follower, &views, &world, true);
+            follower.warp
+        };
+        assert_eq!(gave_up(90).stage, 0.0, "it faces its aim (@0x34a27)");
+        let turning = gave_up(180);
+        assert_eq!(turning.stage, 4.0, "not yet");
+        assert_eq!(turning.since, 0, "restamped (@0x34a31)");
     }
 
     #[test]
@@ -1604,7 +1675,10 @@ mod tests {
         let mut free = self::ship();
         free.leader = Some(lead);
         free.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-        assert_eq!(fly_jump_by(&mut free, &views, &world, true), None);
+        assert_eq!(
+            fly_jump_by(&mut free, &views, &world, true),
+            Some(Outcome::Flying)
+        );
         assert_eq!(free.warp.goal, None, "with no wait, it gives up");
     }
 
