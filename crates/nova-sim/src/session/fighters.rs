@@ -2200,7 +2200,7 @@ pub(super) mod tests {
     /// the port's earlier routing: the carrier, which escorts its lead,
     /// raids by its type, and its fighters fly
     /// [`CarriedAi`](crate::CarriedAi).
-    fn earlier_raiding_ai() -> NovaAi {
+    pub(in crate::session) fn earlier_raiding_ai() -> NovaAi {
         NovaAi::from_rulebook(&earlier_escorts())
             .with(AiType::Interceptor, Rc::new(Sitting))
             .with(AiType::WimpyTrader, Rc::new(Sitting))
