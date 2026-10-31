@@ -10,7 +10,7 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::flight_frame::{DrawnBoxes, FlightCommand, FrameShip};
 use nova_sim::sprite_layer::SpriteLayer;
 use nova_sim::{Drawn as ShipDrawn, NpcId};
-use nova_sim::{ShipRef, Vec2, glow_level};
+use nova_sim::{ShipRef, Vec2, WeaponId, glow_level};
 
 use crate::draw::crossed_box;
 use crate::flight::asteroids::AsteroidShown;
@@ -582,10 +582,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 spin_start: self.shot_looks.spin_starts.start(shot.id),
                 spin_timer: shot.spin_timer,
                 colorize: seen.at(shot.position),
-                at: camera.world_to_screen(Point::new(
-                    shot.velocity.x.mul_add(-behind, shot.position.x),
-                    shot.velocity.y.mul_add(-behind, shot.position.y),
-                )),
+                at: self.shot_placed(
+                    camera,
+                    shot.weapon,
+                    Point::new(
+                        shot.velocity.x.mul_add(-behind, shot.position.x),
+                        shot.velocity.y.mul_add(-behind, shot.position.y),
+                    ),
+                ),
                 heading: shot.heading,
                 age: shot.age,
                 weapon: shot.weapon,
@@ -594,8 +598,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .collect()
     }
 
+    /// The point a shot of `weapon` standing at world point `at` is
+    /// centred on: by its sheet's width on both axes
+    /// ([`Camera::shot_centre`]), or, with no sheet, at its
+    /// [whole point](Camera::whole_point).
+    fn shot_placed(&self, camera: &Camera, weapon: WeaponId, at: Point) -> Point {
+        let look = self.looks.weapon(weapon);
+        match look.and_then(|look| look.sheet.as_ref()?.as_ref().ok()) {
+            Some(sheet) => camera.shot_centre(at, sheet.size()),
+            None => camera.whole_point(at),
+        }
+    }
+
     /// The cargo boxes in space, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the shots are; each with its
+    /// way from where it was a step ago, as the shots are, its bottom right
+    /// on that point's whole pixels ([`Camera::box_centre`], a crossed box
+    /// at its [whole point](Camera::whole_point)); each with its
     /// murk where the frame holds it ([`FlightView::seen_murk`]), as
     /// `_HandleBoxes` murks it (@0x2e15e-0x2e181).
     pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
@@ -604,40 +622,53 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame
             .cargo_boxes
             .iter()
-            .map(|cargo_box| BoxShown {
-                at: camera.world_to_screen(Point::new(
+            .map(|cargo_box| {
+                let at = Point::new(
                     cargo_box.velocity.x.mul_add(-behind, cargo_box.position.x),
                     cargo_box.velocity.y.mul_add(-behind, cargo_box.position.y),
-                )),
-                frame: cargo_box.frame,
-                fade: cargo_box.fade,
-                colorize: seen.at(cargo_box.position),
-                graphic: cargo_box.graphic,
+                );
+                BoxShown {
+                    at: match self.looks.box_sheet(cargo_box.graphic) {
+                        Some(sheet) => camera.box_centre(at, sheet.size()),
+                        None => camera.whole_point(at),
+                    },
+                    frame: cargo_box.frame,
+                    fade: cargo_box.fade,
+                    colorize: seen.at(cargo_box.position),
+                    graphic: cargo_box.graphic,
+                }
             })
             .collect()
     }
 
     /// The asteroids in the field, each where it is drawn: `alpha` of the
-    /// way from where it was a step ago, as the cargo boxes are, at its
-    /// whole frame, murked as the cargo boxes are (`_HandleAsteroids`
-    /// @0x36422-0x36446).
+    /// way from where it was a step ago, as the cargo boxes are, placed by
+    /// its own sheet's sides ([`Camera::sprite_centre`], a crossed box at
+    /// its [whole point](Camera::whole_point)), at its whole frame, murked
+    /// as the cargo boxes are (`_HandleAsteroids` @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
         let behind = 1.0 - self.alpha;
         let seen = self.seen_murk();
         self.frame
             .asteroids
             .iter()
-            .map(|asteroid| AsteroidShown {
-                at: camera.world_to_screen(Point::new(
+            .map(|asteroid| {
+                let at = Point::new(
                     asteroid.velocity.x.mul_add(-behind, asteroid.position.x),
                     asteroid.velocity.y.mul_add(-behind, asteroid.position.y),
-                )),
-                // Its whole part; a frame below 0, which the single wrap
-                // can leave, shows the first.
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                frame: asteroid.frame as u16,
-                kind: asteroid.kind,
-                colorize: seen.at(asteroid.position),
+                );
+                AsteroidShown {
+                    at: match self.looks.asteroid_sheet(asteroid.kind) {
+                        Some(sheet) => camera.sprite_centre(at, sheet.size()),
+                        None => camera.whole_point(at),
+                    },
+                    // Its whole part; a frame below 0, which the single wrap
+                    // can leave, shows the first.
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    frame: asteroid.frame as u16,
+                    kind: asteroid.kind,
+                    colorize: seen.at(asteroid.position),
+                }
             })
             .collect()
     }

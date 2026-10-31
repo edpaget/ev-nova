@@ -765,11 +765,7 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
         .find(|(image, _)| image.id == 3500)
         .expect("the shot");
     assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "heading 45");
-    let expected = view.camera().world_to_screen(shown);
-    assert!(
-        (drawn_at.1.x - expected.x).abs() < 1e-3 && (drawn_at.1.y - expected.y).abs() < 1e-3,
-        "{drawn_at:?} {expected:?}"
-    );
+    assert_eq!(drawn_at.1, view.camera().shot_centre(shown, (0, 0)));
 }
 
 #[test]
@@ -1028,7 +1024,7 @@ fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
     // A whole step on, it is drawn a step behind, where it left.
     assert_eq!(view.alpha(), 0.0);
     let left = shot.position - shot.velocity;
-    let centre = view.camera().world_to_screen(at(left.x, left.y));
+    let centre = view.camera().whole_point(at(left.x, left.y));
     crossed_box(
         &mut boxed,
         centre,
