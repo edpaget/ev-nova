@@ -727,7 +727,7 @@ pub struct Surroundings<'a> {
     /// it carries the weapon (@0x85e4c-0x85e59, @0x2b06a-0x2b075; see
     /// [`fire::dogfight_lead`]).
     pub weapons: &'a Arsenal,
-    /// The ships gone from the system since the last decision pass, their
+    /// The ships gone from the system since the last think closed, their
     /// records as they left, whose slots a ship's target may still name
     /// ([`gone`](crate::traffic::gone)): what a brave trader reads of a
     /// gone attacker ([`Surroundings::held_gone`]).
@@ -875,7 +875,7 @@ impl<'a> Surroundings<'a> {
     }
 
     /// NPC `id`'s record as it left, if it is gone from the system since
-    /// the last decision pass ([`Surroundings::gone`]).
+    /// the last think closed ([`Surroundings::gone`]).
     #[must_use]
     pub fn gone_npc(&self, id: NpcId) -> Option<&'a Npc> {
         self.gone

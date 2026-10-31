@@ -25,8 +25,8 @@ use crate::ai::escort_orders::{for_class, issues, issues_on, orders};
 impl Traffic {
     /// Each leader due on `world`'s frame issues its escorts' orders (see
     /// the module docs). A leader reads the ships gone since the last
-    /// decision pass by their records, leaving them for the decisions to
-    /// take.
+    /// think closed by their records, leaving them for the tick's thinks
+    /// to read.
     ///
     /// Every due leader's table is worked out, then written: the leaders
     /// read the NPCs while the writes need them mutably. No table reads an
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leader_reads_a_target_gone_since_the_last_decisions_by_its_record() {
+    fn a_leader_reads_a_target_gone_since_the_last_think_closed_by_its_record() {
         // Its shield low, a disabled target sends fighters in (2).
         let mut low = leader();
         low.reserves.shield.now = 0.0;
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(
             traffic.gone.ships().len(),
             1,
-            "left for the decisions to take"
+            "left for the tick's thinks to read"
         );
     }
 

@@ -912,7 +912,7 @@ pub struct Traffic {
     /// ([`Traffic::think_holding`]), which its fly half adds to the
     /// departures.
     freed: Vec<(NpcId, Outcome)>,
-    /// The ships gone since the last decision pass whose slots a think may
+    /// The ships gone since the last think closed whose slots a think may
     /// still read ([`gone`]).
     gone: GoneShips,
     /// The last ship of each berth whose slot lost only its active flag,

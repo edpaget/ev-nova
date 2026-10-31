@@ -122,7 +122,7 @@ impl GoneShips {
     /// every slot, clearing each target that names a slot freed before it
     /// in a ship pass. One freed in the AI loop stands for a read the
     /// original made on that frame, before the pass, so it is kept for the
-    /// next decision pass (see the module docs).
+    /// next think (see the module docs).
     pub fn ship_pass(&mut self) {
         self.0.retain(|gone| gone.freed == Freed::InDispatch);
     }
@@ -208,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn a_decision_pass_takes_every_gone_ship_and_a_lone_ship_pass_forgets_those_it_clears() {
+    fn a_thinks_close_forgets_every_gone_ship_and_a_lone_ship_pass_forgets_those_it_clears() {
         let mut gone = GoneShips::default();
         gone.record(at_berth(1, 1), Freed::InDispatch);
         gone.record(at_berth(2, 2), Freed::InShipPass);
