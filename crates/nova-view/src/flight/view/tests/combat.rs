@@ -896,7 +896,7 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     view.alpha = 0.5;
     let list = world_list(&view);
     let camera = view.camera();
-    let player = camera.world_to_screen(view.shown_position());
+    let player = camera.pixel_centre(view.shown_position());
     let over = beam_starts(&list, Color::rgba(0, 255, 0, 255));
     assert!(!over.is_empty());
     assert!(
@@ -906,12 +906,9 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     let (npc_shown, _) = view.shown_npc(&npc_record(&view, NpcId(0)));
     let under = beam_starts(&list, Color::rgba(0, 0, 255, 255));
     assert!(!under.is_empty());
-    let expected = camera.world_to_screen(npc_shown);
+    let expected = camera.pixel_centre(npc_shown);
     assert!(
-        under
-            .iter()
-            .all(|start| (start.x - expected.x).abs() < 1e-3
-                && (start.y - expected.y).abs() < 1e-3),
+        under.iter().all(|&start| start == expected),
         "the NPC's, from the NPC as drawn: {under:?} {expected:?}"
     );
 }

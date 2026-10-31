@@ -673,14 +673,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .collect()
     }
 
-    /// The beams being fired, each moved with its firer as it is drawn.
+    /// The beams being fired, each moved with its firer as it is drawn,
+    /// each end on the pixel `_HandleBeams` stores for it
+    /// ([`Camera::pixel_centre`]).
     pub(super) fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
         self.frame
             .beams
             .iter()
             .map(|beam| {
                 let (dx, dy) = self.drawn_off(beam.firer);
-                let shown = |at: Vec2| camera.world_to_screen(Point::new(at.x + dx, at.y + dy));
+                let shown = |at: Vec2| camera.pixel_centre(Point::new(at.x + dx, at.y + dy));
                 BeamShown {
                     start: shown(beam.start),
                     end: shown(beam.end),
