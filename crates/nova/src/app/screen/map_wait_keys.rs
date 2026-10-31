@@ -92,3 +92,43 @@ impl AppScreen {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use nova_view::Key;
+
+    use super::*;
+
+    fn mark(layers: usize, stages: usize) -> FlushMark {
+        FlushMark { layers, stages }
+    }
+
+    #[test]
+    fn a_layer_more_flushed_and_a_layer_fewer_or_the_same_didnt() {
+        assert!(mark(2, 0).flushed_since(mark(1, 0)));
+        assert!(!mark(1, 0).flushed_since(mark(1, 0)));
+        assert!(!mark(0, 0).flushed_since(mark(1, 0)));
+    }
+
+    #[test]
+    fn a_change_of_text_flushed_unless_it_leaves_none() {
+        assert!(mark(0, 1).flushed_since(mark(0, 2)), "the next in front");
+        assert!(mark(0, 1).flushed_since(mark(0, 0)), "one shown afresh");
+        assert!(!mark(0, 0).flushed_since(mark(0, 1)), "the last closed");
+        assert!(!mark(0, 2).flushed_since(mark(0, 2)), "unchanged");
+    }
+
+    #[test]
+    fn a_release_lets_go_only_of_its_own_keys_press() {
+        let input = |key, pressed| Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        };
+        let (a, b) = (Key::Char('a'), Key::Char('b'));
+        assert!(lets_go_of(&input(a, false), &input(a, true)));
+        assert!(!lets_go_of(&input(b, false), &input(a, true)));
+        assert!(!lets_go_of(&input(a, true), &input(a, true)), "a press");
+        assert!(!lets_go_of(&input(a, false), &input(a, false)));
+    }
+}

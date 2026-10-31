@@ -356,3 +356,39 @@ fn a_mission_text_over_flight_closed_by_a_replayed_key_drops_those_behind_it() {
     end_the_wait(&mut screen);
     assert_eq!(shown(&screen).as_deref(), Some("Two."));
 }
+
+#[test]
+fn a_key_that_opens_an_overlay_drops_those_behind_it() {
+    let mut screen = offered_over_flight();
+    screen.input(&key(MAP, true));
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    end_the_wait(&mut screen);
+    assert_eq!(screen.showing(), Showing::PlayerInfo);
+}
+
+#[test]
+fn a_key_that_opens_the_player_info_over_a_port_offer_drops_those_behind_it() {
+    let mut screen = offered_docked();
+    screen.input(&key(MAP, true));
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tap(&mut screen, Key::Escape);
+    end_the_wait(&mut screen);
+    assert!(spaceport(&screen).player_info().is_some(), "still open");
+}
+
+#[test]
+fn a_key_that_opens_mission_info_over_an_offer_over_flight_drops_those_behind_it() {
+    let (mut screen, _reel) = super::missions::holding_and_offered_in_flight();
+    screen.input(&key(MAP, true));
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    screen.input(&key(MISSION_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    end_the_wait(&mut screen);
+    assert!(screen.flight_mission_info().is_some(), "still open");
+}

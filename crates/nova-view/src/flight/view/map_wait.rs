@@ -256,6 +256,8 @@ mod tests {
     #[test]
     fn it_drops_the_release_of_a_key_whose_press_it_never_took() {
         assert_eq!(left_by(&[release(A), press(B)]), [press(B)]);
+        assert_eq!(left_by(&[press(B), release(A)]), [press(B)]);
+        assert_eq!(left_by(&[repeat(A), release(A)]), [repeat(A)]);
     }
 
     #[test]
