@@ -1261,6 +1261,24 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_joining_a_jump_waits_only_while_a_wait_runs_and_only_joining_reads_a_modes_wait() {
+        use crate::traffic::npc::Mode;
+        let mut joining = far(1);
+        joining.goal = Goal::Formation { guard: None };
+        joining.warp.joining = true;
+        assert!(joining.joins_leaders_jump());
+        assert!(!joining.high_level_waits(), "its wait is over");
+        joining.mode = Mode::HeldAtGate { ticks_left: 9 };
+        assert!(joining.high_level_waits(), "it waits in its mode");
+        let mut held = far(1);
+        held.mode = Mode::Coasting { ticks_left: 9 };
+        assert!(
+            !held.high_level_waits(),
+            "not joining: the flying wait alone"
+        );
+    }
+
+    #[test]
     fn a_goal_written_over_the_entry_ends_it_and_the_next_think_runs_the_order_block() {
         let (mut traffic, _, escort) = waiting_escort(50);
         fleet_tick(&mut traffic);
