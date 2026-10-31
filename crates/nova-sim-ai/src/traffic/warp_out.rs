@@ -388,7 +388,7 @@ pub fn hold_stage(npc: &mut Npc) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FollowStep {
     /// Its leader is not yet in its warp stage: it took its velocity and
-    /// keeps formation, as the autopilot flies it.
+    /// keeps formation, with no thrust ([`fly_jump`]).
     Formation,
     /// It left its NPC leader to jump on its own.
     Detached,
@@ -603,23 +603,35 @@ pub fn settle(
     }
 }
 
+/// Where sub 0xd's `_AIMaintainFormation` puts `npc` on `goal`, in `world`
+/// (see [`fly_jump`]): it reads +0x28 and its gate +0xc92e (@0x84f30),
+/// which `_HandlePlayer`'s calc fills for the ships the player leads, so
+/// their slot is their place in the player's formation, not the NPC word.
+fn jump_slot(npc: &Npc, goal: WarpGoal, world: &World) -> Option<Vec2> {
+    match goal {
+        WarpGoal::Follow(ShipRef::Player) => Some(npc.formation()?.position(&world.player?.state)),
+        _ => npc.parent_word(),
+    }
+}
+
 /// Flies `npc` one pass of its jump, the advance pass when `think`, among
 /// `leaders`, in `world` at `speeds`: goal 0xb's check and its low level,
 /// sub-goal 4 or 0xd ([`follow_check`], [`own_jump`], [`follow_jump`]) on
 /// the advance pass, then its flight ([`fly`]) and its warp-out
-/// ([`warp_block`]). None when it is not jumping, or follows a leader not
-/// yet in its warp stage: the autopilot flies it as its goal says. It
-/// takes no thrust, so its top speed plays no part.
+/// ([`warp_block`]). None when it is not jumping: the autopilot flies it as
+/// its goal says. It takes no thrust, so its top speed plays no part.
+///
+/// Sub 0xd under a lead at +0x50 ≤ 1.0 is a flight of its own, not the
+/// autopilot's substate pick: the lead's whole heading and velocity,
+/// `_AIMaintainFormation(ship, 0)` on the advance pass ([`jump_slot`];
+/// double time's second pass runs no low level, `je 0x44350` @0x4402a), and
+/// no thrust (@0x859df-0x85a4a).
 ///
 /// A ship `paused` in the regroup pause (goal 0x13, its sub 4 or 0xd kept)
 /// runs no goal block (`_HighLevelAIHandler` has none for 0x13), so no goal
 /// 0xb check, and its low level flies its kept substate. As
 /// `_AIIsShipJumping` reads goal 0x13, the warp-out zeroes any stage it
-/// starts, so sub 4 never leaves. Sub 0xd keeps its own flight under a
-/// lead at +0x50 ≤ 1.0, not the autopilot's substate pick: the lead's
-/// whole heading and velocity, `_AIMaintainFormation(ship, 0)` on the
-/// advance pass (double time's second pass runs no low level, `je 0x44350`
-/// @0x4402a), and no thrust (@0x859df-0x85a4a).
+/// starts, so sub 4 never leaves.
 pub fn fly_jump(
     npc: &mut Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
@@ -658,13 +670,8 @@ pub fn fly_jump(
                         return None;
                     }
                     FollowCheck::Follow => {
-                        if let Some((player, leader)) = leader
-                            && follow_jump(npc, leader, player) == FollowStep::Formation
-                        {
-                            if !paused {
-                                return None;
-                            }
-                            formation = true;
+                        if let Some((player, leader)) = leader {
+                            formation = follow_jump(npc, leader, player) == FollowStep::Formation;
                         }
                     }
                 }
@@ -675,8 +682,6 @@ pub fn fly_jump(
                 }
             }
         }
-    } else if !paused && leader.is_some_and(|(_, leader)| leader.stage <= 1.0) {
-        return None;
     }
     if !npc.jumping() {
         return None;
@@ -685,7 +690,7 @@ pub fn fly_jump(
     let handling = npc
         .ionization()
         .slows(world.flight.handling(npc.own_handling()));
-    if formation && let Some(slot) = npc.parent_word() {
+    if formation && let Some(slot) = jump_slot(npc, goal, world) {
         formation_flight::maintain(npc, slot, &handling, false);
     }
     // No leader passed: close formation needs one, so the sight is moot.
@@ -699,9 +704,11 @@ pub fn fly_jump(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::escort::FORMATION_NUDGE;
     use crate::flight::ShipState;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
+    use crate::traffic::ship_display::Thrust;
     use crate::warp::warp_factor;
 
     /// 3° a tick, w 1.3.
@@ -1497,16 +1504,22 @@ mod tests {
     }
 
     #[test]
-    fn a_follower_of_a_leader_not_yet_warping_is_flown_by_its_goal_on_either_pass() {
+    fn a_follower_of_a_leader_not_yet_warping_flies_sub_0xd_on_either_pass() {
         let views = BTreeMap::new();
         let mut world = world();
         world.player.stage = 1.0;
         let world = in_world(world);
         let mut follower = ship();
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
-        assert_eq!(fly_jump_by(&mut follower, &views, &world, true), None);
+        assert_eq!(
+            fly_jump_by(&mut follower, &views, &world, true),
+            Some(Outcome::Flying)
+        );
         assert_eq!(follower.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
-        assert_eq!(fly_jump_by(&mut follower, &views, &world, false), None);
+        assert_eq!(
+            fly_jump_by(&mut follower, &views, &world, false),
+            Some(Outcome::Flying)
+        );
         let mut warping_world = self::world();
         warping_world.player.stage = 4.0;
         warping_world.player.heading = 90.0;
@@ -1688,27 +1701,134 @@ mod tests {
         assert_eq!(free.warp.goal, None, "goal 0xb gives up");
     }
 
-    #[test]
-    fn past_a_paused_ship_a_lead_at_stage_1_or_below_leaves_a_follower_to_its_autopilot() {
-        let lead = NpcId(4);
+    /// A follower of `lead` facing north at rest, heading for a slot worked
+    /// out by `goal`, and views of a lead at stage 1.0 moving east and
+    /// glowing, leaving, facing east.
+    fn off_the_pause(lead: NpcId, goal: Goal) -> (Npc, BTreeMap<NpcId, LeaderWarp>) {
         let mut views = BTreeMap::new();
         let still = LeaderWarp {
             stage: 1.0,
-            ..leader()
+            heading: 90.4,
+            velocity: Vec2::new(1.0, 0.5),
+            glow: 20,
+            leaving: true,
+            ..LeaderWarp::default()
         };
         views.insert(lead, still);
-        let world = in_world(world());
         let mut ship = ship();
+        ship.state.heading = 0.0;
         ship.leader = Some(lead);
-        ship.goal = Goal::Follow { lead, guard: None };
+        ship.fleet_slot = Some(crate::escort::FormationSlot::default());
+        ship.slot_place = Some(Vec2::new(5000.0, 5000.0));
+        ship.goal = goal;
         ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-        assert_eq!(fly_jump(&mut ship, &views, &world, true, false), None);
-        assert_eq!(fly_jump(&mut ship, &views, &world, false, false), None);
+        (ship, views)
+    }
+
+    #[test]
+    fn an_unpaused_follower_of_a_lead_at_stage_1_or_below_flies_sub_0xd_whatever_goal_it_keeps() {
+        let lead = NpcId(4);
+        let world = in_world(world());
+        for goal in [
+            Goal::Idle,
+            Goal::Formation { guard: None },
+            Goal::Follow { lead, guard: None },
+        ] {
+            let (mut ship, views) = off_the_pause(lead, goal);
+            ship.trigger.primary = true;
+            let start = ship.state.position;
+            assert_eq!(
+                fly_jump(&mut ship, &views, &world, true, false),
+                Some(Outcome::Flying),
+                "{goal:?}"
+            );
+            assert_eq!(ship.state.velocity, Vec2::new(1.0, 0.5), "{goal:?}");
+            assert_eq!(ship.state.heading, 3.0, "turning to 90 by its turn");
+            assert_eq!(ship.warp.aim, 90, "the lead's whole heading");
+            assert_eq!(ship.display.glow, 20, "its glow copied");
+            let step = world.flight.handling(ship.stats.handling).accel * FORMATION_NUDGE;
+            let moved = ship.state.position - start - Vec2::new(1.0, 0.5);
+            assert!(moved.x > 0.0 && (moved.x - step).abs() < 1e-3, "{moved:?}");
+            assert!(moved.y > 0.0 && (moved.y - step).abs() < 1e-3, "{moved:?}");
+            assert_eq!(ship.goal, goal, "its goal beside isn't read");
+            assert_eq!(ship.trigger, crate::combat::armament::Trigger::default());
+            assert_eq!(ship.display.drive.thrust, Thrust::None, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn double_times_second_pass_flies_sub_0xd_on_with_no_nudge_or_copy() {
+        let lead = NpcId(4);
+        let world = in_world(world());
+        let (mut ship, views) = off_the_pause(lead, Goal::Follow { lead, guard: None });
+        ship.state.velocity = Vec2::new(0.25, 0.0);
+        ship.state.heading = 0.0;
+        ship.warp.aim = 90;
         assert_eq!(
-            fly_jump(&mut ship, &views, &world, false, true),
-            Some(Outcome::Flying),
-            "paused, its second pass flies on"
+            fly_jump(&mut ship, &views, &world, false, false),
+            Some(Outcome::Flying)
         );
+        assert_eq!(
+            ship.state.position,
+            Vec2::new(2000.25, 0.0),
+            "no low level on the second pass (@0x4402a)"
+        );
+        assert_eq!(ship.state.velocity, Vec2::new(0.25, 0.0));
+        assert_eq!(ship.state.heading, 3.0, "`_HandleShip` still turns it");
+    }
+
+    #[test]
+    fn a_follower_of_the_player_is_nudged_toward_its_place_in_the_players_formation() {
+        let mut warp = world();
+        warp.player.stage = 1.0;
+        let mut world = in_world(warp);
+        let mut player = crate::ai::fixture::player(9000.0, -9000.0);
+        player.state.heading = 0.0;
+        world.player = Some(player);
+        let views = BTreeMap::new();
+        let flown = |formation: Option<crate::escort::FormationSlot>| {
+            let mut ship = ship();
+            ship.escort = formation.map(|formation| crate::escort::EscortDuty {
+                formation,
+                order: None,
+            });
+            ship.goal = Goal::Formation { guard: None };
+            ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+            assert_eq!(
+                fly_jump_by(&mut ship, &views, &world, true),
+                Some(Outcome::Flying)
+            );
+            ship
+        };
+        let east = flown(Some(crate::escort::FormationSlot::default()));
+        let step = world.flight.handling(east.stats.handling).accel * FORMATION_NUDGE;
+        assert!((east.state.position.x - (2000.0 + step)).abs() < 1e-3);
+        assert!((east.state.position.y + step).abs() < 1e-3);
+        let unslotted = flown(None);
+        assert_eq!(
+            unslotted.state.position,
+            Vec2::new(2000.0, 0.0),
+            "no place in the formation, no nudge"
+        );
+    }
+
+    #[test]
+    fn a_ship_on_a_jump_is_never_in_close_formation() {
+        // `_IsShipInCloseForm` reads sub 0xc (@0x82f54): sub 0xd isn't.
+        let leader = ShipState {
+            position: Vec2::new(2100.0, 0.0),
+            ..ShipState::default()
+        };
+        let mut ship = ship();
+        ship.goal = Goal::Formation { guard: None };
+        ship.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let rules = FlightRules::default();
+        assert!(ship.keeps_close_formation(Some(&leader), true, rules));
+        ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        assert!(!ship.keeps_close_formation(Some(&leader), true, rules));
     }
 
     #[test]

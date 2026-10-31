@@ -984,7 +984,8 @@ impl Npc {
     /// [`KEEP_FORMATION`] of the leader on each axis with the leader seen,
     /// where goal 0xa picks substate 0xc ([`formation_flight::sub`]); by
     /// the port's earlier one, within [`KEEP_FORMATION`] of the slot, where
-    /// the autopilot moves it with its leader.
+    /// the autopilot moves it with its leader. A ship on a jump, sub 4 or
+    /// 0xd, is on no sub 0xc, whatever goal the engine keeps beside it.
     #[must_use]
     pub fn keeps_close_formation(
         &self,
@@ -992,6 +993,9 @@ impl Npc {
         leader_seen: bool,
         flight: FlightRules,
     ) -> bool {
+        if self.warp.goal.is_some() {
+            return false;
+        }
         let keeps = match self.goal {
             Goal::Formation { .. } => true,
             Goal::Follow { .. } => flight.npc_formation == NpcFormation::Original,
