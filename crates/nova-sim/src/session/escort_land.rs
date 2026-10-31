@@ -126,6 +126,7 @@ impl Session {
             npc.afterburner = old.afterburner;
             npc.aux = old.aux;
             npc.voice = old.voice;
+            npc.order_word = old.order_word;
             npc.cloak = old.cloak;
             npc.state = old.state;
         }
@@ -442,12 +443,14 @@ mod tests {
             npc.voice = Some(VoiceVariant::Odd);
             npc.cloak = cloak;
             npc.state = state;
+            npc.order_word = crate::fleet::OrderWord(4);
         }
         mark(&mut session, 0, EscortMark::Upgrade);
         session.land_escorts(&mut NeverFires).expect("upgraded");
         let id = ids(&session)[0].expect("placed");
         assert_ne!(id, old, "a new NPC");
         let npc = session.space.npc(id).expect("in the system");
+        assert_eq!(npc.order_word, crate::fleet::OrderWord(4), "the slot's");
         assert_eq!(npc.ship, ShipId(130));
         assert!(npc.afterburner, "afterburner");
         assert_eq!(npc.aux, Some(4), "aux");

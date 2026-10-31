@@ -74,20 +74,22 @@
 //! **Commands** ([`Session::command_escorts`], `_IssueNewEscortCommand`
 //! @0x660d5): a command goes to every escort of its group, hired or a
 //! mission escort (the original takes every ship led by the player whose
-//! class matches, @0x6614a-0x66176), each taking the command's order,
-//! and Attack copies the player's target to each, unless the player
+//! class matches, @0x6614a-0x66176), and each compares it with its order
+//! word, not its standing order (see the
+//! [`command_word`](super::command_word) module). Attack copies the
+//! player's target to each, unless the player
 //! leads it or it is led by a ship the player leads (`_AlliedWithPlayer`
 //! @0x6985-0x69d0); its report says it attacks the target unless the
 //! player leads it (@0x6653f-0x66559). Return to Hangar
 //! ([`EscortCommand::Dock`]) sends the carried fighters home and any
 //! other escort back to formation; its report says Recall when some such
-//! escort had another order. Under any other command a carried fighter
+//! escort held another word. Under any other command a carried fighter
 //! flying home lets go of its target, which counts as a change
 //! (`_IssueNewEscortCommand` @0x6627a-0x662dc). It reports what it
-//! changed ([`Commanded`]) only when some escort's order or target
+//! changed ([`Commanded`]) only when some escort's word or target
 //! changed, and then beeps ([`SimSound::EscortsCommanded`](crate::SimSound),
 //! `_beepSnd[1]` @0x665be-0x665e1); when some escort that isn't mute
-//! (`Flags2` 0x0010) had its order changed, one of the group, drawn in
+//! (`Flags2` 0x0010) had its word changed, one of the group, drawn in
 //! berth order, acknowledges it in its class's voice (@0x665e6-0x6667a;
 //! see [`voices`](super::voices)). A command is taken while a jump is
 //! under way, the pre-jump stage included, and reported as under way, its
@@ -137,6 +139,7 @@
 
 use std::collections::BTreeSet;
 
+use super::command_word::{standing, word_change};
 use super::{Session, Setup, Space, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::swarm::{self, FormationParent};
@@ -156,6 +159,7 @@ use crate::escort::{
     FormationSlot,
 };
 use crate::escort_voice::{Speaker, Voter, returning_fighter};
+use crate::fleet::OrderWord;
 use crate::flight::ShipState;
 use crate::market;
 use crate::pilot::{Escort, Pilot};
@@ -195,6 +199,11 @@ pub(super) struct KeptEscort {
     /// is unset, and it rolls one at its first think (see the `voices`
     /// module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
+    /// Its order word ([`Npc::order_word`]), which `_RespawnEscort` never
+    /// writes (+0xc90a, @0x3d4b8-0x3d62c); none with no NPC, and it holds
+    /// its record's order, which stands in for the class table
+    /// `_LoadPilotData` writes it from (@0x76102-0x7613b).
+    pub(super) order_word: Option<OrderWord>,
     /// Its weapons and rounds, each weapon entry's count, rounds and reload
     /// as its slot held them: kept whole with no restock, and only the
     /// reloads with one (`_RespawnEscort` @0x3d5a7-0x3d600; see
@@ -215,8 +224,8 @@ impl Session {
     /// the player, for [`Session::place_entering_escorts`] to put on its
     /// slot, escort `i` at berth `berths[i]` ([`Space::fleet_berths`])
     /// with what it kept, `kept[i]` ([`Space::fleet_kept`]): its aux
-    /// mark, its skill, its afterburner, its voice, its cloak, and its
-    /// display and fold, the fold timed as never fired (`_RespawnEscort`
+    /// mark, its skill, its afterburner, its voice, its order word, its
+    /// cloak, and its display and fold, the fold timed as never fired (`_RespawnEscort`
     /// zeroes the stamp +0xa8, @0x3d50e), with no ionization, or a loaded
     /// pilot's fold set with none kept
     /// ([`PlayerShip::loaded_escort_set`](super::PlayerShip::loaded_escort_set)).
@@ -237,6 +246,14 @@ impl Session {
         // Every ship marked is gone with the system left (see the
         // `class_orders` module).
         self.space.escorts.commanded.clear();
+        // Read before the reset: `_LoadPilotData` writes each word (see
+        // [`KeptEscort::order_word`]) before the reset comes.
+        let recorded: Vec<Option<EscortOrder>> = self
+            .pilot
+            .escorts
+            .iter()
+            .map(|escort| escort.order)
+            .collect();
         let reset = self.setup.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine;
         if reset {
             for escort in &mut self.pilot.escorts {
@@ -266,6 +283,7 @@ impl Session {
                 if let Some(npc) = self.space.npc_mut(id) {
                     npc.aux = kept.aux;
                     npc.voice = kept.voice;
+                    npc.order_word = kept.order_word.unwrap_or(OrderWord::of(recorded[index]));
                     npc.ion = Ion::default();
                     npc.cloak = kept.cloak;
                     // `_RespawnEscort` clears its glow (@0x3d505).
@@ -777,7 +795,7 @@ impl Session {
     }
 
     /// Gives every escort of `group` `command` (see the module docs), and
-    /// what it changed: none when it changed no escort's order or
+    /// what it changed: none when it changed no escort's word or
     /// target, when the player has no escort of `group`, and while
     /// landed. A command given while a jump is under way, the pre-jump
     /// stage included, reaches the escorts as any other does and is
@@ -788,20 +806,24 @@ impl Session {
     ///
     /// Under any command but Return to Hangar, a fighter flying home
     /// ([`returning_fighter`]) lets go of its target and counts as changed
-    /// (@0x6627a-0x662dc). When some escort that isn't mute had its order
+    /// (@0x6627a-0x662dc). When some escort that isn't mute had its word
     /// changed, one of the group acknowledges it, drawn on `chance`
     /// ([`command_speaker`](crate::escort_voice::command_speaker)):
     /// "attacking target" when the report says so (@0x6660a-0x6663c), else
     /// the acknowledgement, queued on the voice channel (see the `voices`
     /// module).
     ///
-    /// Each escort placed whose order before the command differs from the
-    /// command's (a Return to Hangar compared as given, so one that is no
-    /// carried fighter is marked though it keeps formation) is marked as
-    /// having taken a command (@0x66183-0x66190; see the `class_orders`
-    /// module). The mark follows the same change test as the order, which
-    /// rdm:phase/escort-fleet-fidelity-followups/phase-11-left-out-of-escorts-run-dry
-    /// moves onto the order word; the mark moves with it.
+    /// Each ship compares the command with its order word
+    /// ([`word_change`](super::command_word::word_change)), and writes it,
+    /// and each record and duty takes the standing order the command leaves
+    /// ([`standing`](super::command_word::standing)). A record with no ship
+    /// placed compares its order, and counts as marked, so it keeps a
+    /// Return. Each ship placed whose word differs from
+    /// the command (a Return to Hangar compared as given, so one that is
+    /// no carried fighter is marked though it keeps formation) is marked
+    /// as having taken a command (@0x66183-0x66190; see the `class_orders`
+    /// module). The class's kept order takes the command whatever the ships
+    /// do, as `_HandlePlayer` writes the table first (@0x6e23e-0x6e26b).
     pub(crate) fn command_escorts(
         &mut self,
         group: EscortGroup,
@@ -832,22 +854,27 @@ impl Session {
             if !group.holds(self.space.escort_class(&self.pilot, &self.statics, index)) {
                 continue;
             }
-            let escort = &mut self.pilot.escorts[index];
-            let (order, recall) = order_for(command, escort.carried, escort.order);
-            recalled |= recall;
-            let reordered = escort.order != order;
-            let marks = command.order() != escort.order;
-            changed |= reordered;
-            escort.order = order;
+            let escort = &self.pilot.escorts[index];
+            let (held, carried) = (escort.order, escort.carried);
             let placed = self.space.escorts.fleet.get(index).copied().flatten();
-            marked.extend(placed.filter(|_| marks));
+            let npc = placed.and_then(|id| self.space.npc(id));
+            let word = npc.map_or(OrderWord::of(held), |npc| npc.order_word);
+            let taken = word_change(word, command, carried);
+            // A record with no ship counts as marked, and keeps a Return.
+            let keeps_mark = taken.marks || npc.is_none_or(|npc| self.space.marked(npc));
+            let order = standing(command, carried, keeps_mark);
+            self.pilot.escorts[index].order = order;
+            recalled |= taken.recalled;
+            changed |= taken.reordered;
+            marked.extend(placed.filter(|_| taken.marks));
             let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) else {
                 continue;
             };
+            npc.order_word = taken.word;
             if let Some(duty) = &mut npc.escort {
                 duty.order = order;
             }
-            let voter = obey(npc, command, target, reordered);
+            let voter = obey(npc, command, target, taken.reordered);
             changed |= voter.changed;
             voters.push(voter);
         }
@@ -868,17 +895,17 @@ impl Session {
             let Some(npc) = self.space.npc_mut(id) else {
                 continue;
             };
+            let taken = word_change(npc.order_word, command, false);
             let Some(mark) = &mut npc.mission else {
                 continue;
             };
-            let (order, recall) = order_for(command, false, mark.order);
-            recalled |= recall;
-            let reordered = mark.order != order;
-            if command.order() != mark.order {
+            mark.order = standing(command, false, false);
+            npc.order_word = taken.word;
+            recalled |= taken.recalled;
+            if taken.marks {
                 marked.push(id);
             }
-            mark.order = order;
-            let voter = obey(npc, command, target, reordered);
+            let voter = obey(npc, command, target, taken.reordered);
             changed |= voter.changed;
             voters.push(voter);
         }
@@ -1002,6 +1029,7 @@ impl Space {
                     skill: Some(npc.skill),
                     afterburner: Some(npc.afterburner),
                     voice: npc.voice,
+                    order_word: Some(npc.order_word),
                     cloak: npc.cloak,
                     arms: Some((npc.armament.clone(), npc.rounds.clone())),
                 })
@@ -1193,23 +1221,6 @@ pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.leader = None;
     npc.goal = Goal::Formation { guard: None };
     npc.target = None;
-}
-
-/// The order an escort holding `order`, carried or not, takes from
-/// `command`, and whether that is a recall: Return to Hangar sends any
-/// escort but a carried fighter back to formation (`_IssueNewEscortCommand`
-/// @0x661a5-0x661ed, the AI type 5 test), a recall when it had another
-/// order.
-fn order_for(
-    command: EscortCommand,
-    carried: bool,
-    order: Option<EscortOrder>,
-) -> (Option<EscortOrder>, bool) {
-    if command == EscortCommand::Dock && !carried {
-        (None, order.is_some())
-    } else {
-        (command.order(), false)
-    }
 }
 
 /// `npc`, an escort of the command's group whose order changed as
@@ -1638,10 +1649,6 @@ pub(super) mod tests {
             .map(|npc| (npc.ship, npc.pods_left))
             .collect();
         assert_eq!(pods, [(WARSHIP, 3), (FREIGHTER, 0)]);
-        for npc in escort_npcs(&session) {
-            // `_SpawnEscort` @0x3ffb8.
-            assert_eq!(npc.order_word, crate::fleet::OrderWord::NONE);
-        }
         catalog.hulls[1].pod_count = -3;
         let session = flying(&catalog, RuleSource::Engine);
         assert_eq!(escort_npcs(&session)[0].pods_left, -3, "raw");
@@ -3066,6 +3073,7 @@ pub(super) mod tests {
     fn a_command_that_changes_nothing_reports_nothing() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
+        crate::testkit::words_of_orders(&mut session);
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Recall, &mut NeverFires),
             None,

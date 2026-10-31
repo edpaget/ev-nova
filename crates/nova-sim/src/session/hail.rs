@@ -3736,6 +3736,24 @@ pub(super) mod tests {
         assert_eq!(session.space.npc(NpcId(0)).expect("here").cloak, fading);
     }
 
+    /// A hail's join calls no `_AISetup` (@0x62509), so the person keeps
+    /// its word.
+    #[test]
+    fn a_person_joining_by_hail_keeps_its_order_word() {
+        use crate::fleet::OrderWord;
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        session.space.npc_mut(NpcId(0)).expect("here").order_word = OrderWord(2);
+        opened(&mut session, &catalog, &bible);
+        session
+            .answer(2, &catalog, &bible, &mut Draws::of(&[]))
+            .expect("open");
+        assert!(session.is_escort(NpcId(0)), "joined");
+        let npc = session.space.npc(NpcId(0)).expect("here");
+        assert_eq!(npc.order_word, OrderWord(2));
+    }
+
     #[test]
     fn by_the_other_reading_a_person_whose_mission_is_unavailable_lists_no_way_to_join() {
         let mut catalog = merchants();

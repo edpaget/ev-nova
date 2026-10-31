@@ -1524,6 +1524,7 @@ pub(super) mod tests {
         let mut session = accepted(catalog);
         take_off(&mut session, catalog);
         assert_eq!(mission_escorts(&session).len(), 2);
+        crate::testkit::words_of_orders(&mut session);
         session
     }
 

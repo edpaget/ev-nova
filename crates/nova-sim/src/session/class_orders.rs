@@ -4,12 +4,16 @@
 //! table at 0x3b5394) is cleared in flight once no ship of the class can
 //! hold it ([`Space::settle_class_orders`]).
 //!
-//! **The mark.** A ship of the player's that takes a command whose order
-//! differs from its own is marked ([`Escorts::commanded`](super::space::Escorts),
+//! **The mark.** A ship of the player's that takes a command differing from
+//! its order word is marked ([`Escorts::commanded`](super::space::Escorts),
 //! the original's +0xc4, `_IssueNewEscortCommand` @0x66183-0x66190; see
-//! `Session::command_escorts`). A ship that isn't a carried fighter given
-//! Return to Hangar is marked, though it keeps formation. Every placement,
-//! respawn and launch starts unmarked (@0x3c6ff, @0x3d546, @0x3d9c2).
+//! the [`command_word`](super::command_word) module). A ship that isn't a
+//! carried fighter given Return to Hangar is marked, though it keeps
+//! formation. Every placement, respawn and launch starts unmarked
+//! (@0x3c6ff, @0x3d546, @0x3d9c2). So a fighter the out-of-ammunition
+//! fallback sent home, never commanded, is skipped by a Return and left
+//! unmarked: its class's Return is cleared on the same pass unless a
+//! marked fellow holds it, and that fighter keeps formation either way.
 //!
 //! **The bookkeeping** runs on every pass, both of double time's
 //! (`_DoPlayGameWork` calls `_HandlePlayer` on both, @0x43e19), after the
@@ -124,11 +128,17 @@ impl Space {
         !cleared.is_empty()
     }
 
+    /// Whether `npc` is marked as having taken a command, the original's
+    /// +0xc4 (see the module docs).
+    pub(super) fn marked(&self, npc: &Npc) -> bool {
+        self.escorts.commanded.contains(&npc.id)
+    }
+
     /// Whether a ship of `class` the player leads, marked as having taken a
     /// command and as `also` says, is out, disabled or dying too.
     fn holds_class(&self, class: EscortClass, also: impl Fn(&Npc) -> bool) -> bool {
         self.player_led()
-            .any(|npc| npc.class == class && also(npc) && self.escorts.commanded.contains(&npc.id))
+            .any(|npc| npc.class == class && also(npc) && self.marked(npc))
     }
 
     /// Every escort of `class` keeps formation, as each takes the class's

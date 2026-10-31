@@ -233,6 +233,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::Rules;
     use crate::escort::{Commanded, EscortCommand, EscortGroup, EscortOrder};
+    use crate::fleet::OrderWord;
     use crate::flight::Controls;
     use crate::pilot::Escort;
     use crate::rulebook::Rulebook;
@@ -349,10 +350,13 @@ mod tests {
         session.space.npc_mut(id).expect("in the system")
     }
 
-    /// Escort `index`'s standing order set to `order`, record and NPC.
+    /// Escort `index`'s standing order set to `order`, record and NPC,
+    /// and the word its next command reads.
     fn order(session: &mut Session, index: usize, order: Option<EscortOrder>) {
         session.pilot.escorts[index].order = order;
-        if let Some(duty) = &mut escort_npc(session, index).escort {
+        let npc = escort_npc(session, index);
+        npc.order_word = OrderWord::of(order);
+        if let Some(duty) = &mut npc.escort {
             duty.order = order;
         }
     }
@@ -648,6 +652,32 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_the_word_skips_says_nothing_and_its_old_order_given_again_speaks() {
+        // The voice's flag sits behind the change test (@0x6617c-0x6622c):
+        // the fallback's word 0 under a standing Defend.
+        let catalog = voiced();
+        let mut session = fleet(&catalog, &[WARSHIP]);
+        order(&mut session, 0, Some(EscortOrder::Defend));
+        escort_npc(&mut session, 0).order_word = OrderWord(0);
+        session.take_sounds();
+        assert_eq!(command(&mut session, EscortCommand::Recall), None);
+        assert!(session.space.voice.idle(), "skipped");
+        assert_eq!(command(&mut session, EscortCommand::Dock), None);
+        assert!(session.space.voice.idle(), "skipped, though marked");
+        assert!(command(&mut session, EscortCommand::Defend).is_some());
+        assert_eq!(
+            heard(
+                &mut session,
+                &catalog,
+                &Peaceful,
+                &mut Ranged::of(&[(5, 0)])
+            ),
+            [voice(1300)],
+            "acknowledged"
+        );
+    }
+
+    #[test]
     fn a_command_that_changes_nothing_says_nothing() {
         let catalog = voiced();
         let mut session = fleet(&catalog, &[WARSHIP]);
@@ -681,6 +711,7 @@ mod tests {
         assert!(fighter.carrier.is_some(), "carried");
         fighter.goal = Goal::Dock(crate::combat::ShipRef::Player);
         fighter.target = Some(crate::combat::ShipRef::Npc(target));
+        fighter.order_word = OrderWord::of(order);
         session.take_sounds();
         (session, target)
     }

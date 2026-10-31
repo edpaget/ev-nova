@@ -463,6 +463,7 @@ mod cloaks;
 mod collision_order;
 mod combat_rating;
 mod comm_calls;
+mod command_word;
 mod control;
 mod course;
 mod crons;
@@ -5583,7 +5584,8 @@ impl Session {
     /// intact, its armour at half its most, its cloak's fade and direction
     /// zeroed (@0x946e3, @0x946f9), defending no stellar (+0x8c = -1,
     /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
-    /// and then as [`Session::fleet_up`]
+    /// holding no order word, as `_AISetup` writes -1 on every capture
+    /// (@0x9478f, @0x7f40c), and then as [`Session::fleet_up`]
     /// says: a mission's special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
     /// `captured_mission_ship` module). Its voice's variant is rolled on
@@ -5608,6 +5610,7 @@ impl Session {
         npc.condition = Condition::Intact;
         npc.cloak = crate::cloak::Cloak::default();
         npc.defends = None;
+        npc.order_word = crate::fleet::OrderWord::NONE;
         self.fleet_up(id, None);
         // `_AIShipCapturedByPlayer` rolls its voice (@0x8974a-0x89799;
         // see the `voices` module).

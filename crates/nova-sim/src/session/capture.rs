@@ -354,6 +354,30 @@ mod tests {
         session.space.npc(ON_BOARD.npc).expect("here").cloak
     }
 
+    /// `_DoPlunderDialog` calls `_AISetup` on every capture (@0x9478f),
+    /// which writes the word -1 (@0x7f40c), whatever its lead issued it.
+    #[test]
+    fn a_ship_captured_joins_holding_no_word() {
+        use crate::fleet::OrderWord;
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        session
+            .space
+            .npc_mut(ON_BOARD.npc)
+            .expect("here")
+            .order_word = OrderWord(2);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[0, 1]).0,
+            Taken::Captured
+        );
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        let npc = session.space.npc(ON_BOARD.npc).expect("here");
+        assert_eq!(npc.order_word, OrderWord::NONE);
+    }
+
     /// `_DoPlunderDialog`'s escort path zeroes the captured ship's fade
     /// direction (+0xc8d8 @0x946e3) and fade (+0x64 @0x946f9), whichever
     /// way it joins: at once for a crewless player's ship, or once the

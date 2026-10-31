@@ -141,7 +141,8 @@ mod tests {
     use super::*;
     use crate::catalog::{HullRecord, ShipId, SystemId};
     use crate::chance::NeverFires;
-    use crate::escort::{FormationSlot, KEEP_FORMATION};
+    use crate::escort::{EscortCommand, EscortGroup, FormationSlot, KEEP_FORMATION};
+    use crate::fleet::OrderWord;
     use crate::gate::{GateArrivalRule, GateKind};
     use crate::geometry::Vec2;
     use crate::pilot::Escort;
@@ -272,6 +273,36 @@ mod tests {
         let (hired, mission) = (hired_npc(&session), mission_npc(&session));
         assert!(mission.berth < hired.berth, "the mission escort first");
         session
+    }
+
+    #[test]
+    fn an_escort_gliding_in_compares_a_command_with_the_word_it_kept() {
+        // `_RespawnEscort` writes no word (@0x3d4b8-0x3d62c), and the glide
+        // runs past the type think (@0x8fcf5-0x8fd38), so a command reads
+        // the word the ship held in the system it left.
+        for (command, word, marked) in [
+            (EscortCommand::Hold, 4, false),
+            (EscortCommand::Defend, 1, true),
+        ] {
+            let catalog = catalog();
+            let mut session = hired_in_flight(&catalog, Rulebook::default());
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold, &mut NeverFires);
+            jump_to(&mut session, &catalog, 131);
+            assert_eq!(hired_npc(&session).mode, Mode::JumpingIn { tick: 0 });
+            assert_eq!(hired_npc(&session).order_word, OrderWord(4), "kept");
+            assert_eq!(hired_npc(&session).escort_order(), None, "reset");
+            session.command_escorts(EscortGroup::All, command, &mut NeverFires);
+            assert_eq!(hired_npc(&session).order_word, OrderWord(word));
+            assert_eq!(
+                session
+                    .space
+                    .escorts
+                    .commanded
+                    .contains(&hired_npc(&session).id),
+                marked,
+                "{command:?}"
+            );
+        }
     }
 
     #[test]
