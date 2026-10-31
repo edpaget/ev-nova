@@ -29,10 +29,13 @@
 //!   [`Blend::Or`](crate::draw::Blend::Or) the order rarely shows.
 //! - Each frame a puff is shown at full `AddOver`, [`Blend::Or`](crate::draw::Blend::Or)
 //!   at [`lights_tint`]`(32)` (+0xa8 and its channels 0x20,
-//!   @0x2e377-0x2e3b3), murked by where it is ([`sprite_murk`],
+//!   @0x2e377-0x2e3b3), murked by where it is ([`SeenMurk::at`],
 //!   @0x2e367), and then ages by [`PUFF_AGE_STEP`]; its frame is then set
 //!   from its age ([`smoke_frame`], @0x2e3f9-0x2e499), and a puff past its
 //!   last frame is freed. It never moves.
+//! - It is placed at whole pixels from the player by its current frame's
+//!   own size ([`SmokeSheet::size`], [`Camera::sprite_centre`],
+//!   @0x2e4ac-0x2e52d), a master of `cicn`s having a size a frame.
 //! - A system change frees every puff (@0x2e2d3, @0x2e56e-0x2e59a), as
 //!   the effects are cleared.
 //!
@@ -49,13 +52,14 @@
 //! (@0x35ccf, @0x2e3bc), which the engine never has.
 
 use nova_sim::Vec2;
+use nova_sim::player_wrap::PlayerWrap;
 
 use super::catalog::SmokeSheet;
-use super::murk::{murk_tint, sprite_murk};
+use super::murk::SeenMurk;
 use super::slot_pool::SlotPool;
 use crate::draw::lights_tint;
 use crate::system::camera::Camera;
-use crate::{DrawList, ImageKey, Point};
+use crate::{Blend, DrawList, ImageKey, Point};
 
 /// `Flags`: the shot leaves a big smoke trail, kind 1.
 pub const BIG_SMOKE: u16 = 0x0200;
@@ -160,6 +164,14 @@ impl SmokePuffs {
         self.puffs.insert(puff, caps.then_some(MAX_PUFFS));
     }
 
+    /// Carries each puff within `wrap`'s reach: `_WrapPlayerPosition`'s
+    /// loop of `_smokeData` (@0x681a7-0x68229).
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for puff in self.puffs.iter_mut() {
+            wrap.carry(&mut puff.at);
+        }
+    }
+
     /// Ages every puff a tick, freeing each past its last frame, as
     /// `_HandleSmoke` does after it shows them.
     pub fn step(&mut self) {
@@ -169,15 +181,23 @@ impl SmokePuffs {
         });
     }
 
-    /// Draws each puff where `camera` shows it, at its frame, added at
-    /// full and murked as seen from the player's ship at `viewer` in a
-    /// system of effective murk `murk`.
-    pub fn draw(&self, list: &mut DrawList, camera: &Camera, viewer: Vec2, murk: u8) {
+    /// Draws each puff where `camera` places it, at whole pixels by its
+    /// current frame's own size ([`Camera::sprite_centre`], `_HandleSmoke`
+    /// @0x2e4ac-0x2e52d), at its frame, added at full and murked as the
+    /// player sees it, `seen`.
+    pub fn draw(&self, list: &mut DrawList, camera: &Camera, seen: SeenMurk) {
         for puff in self.puffs.iter() {
-            let image = ImageKey::icon(puff.sheet.icon(puff.frame()));
-            let at = camera.world_to_screen(Point::new(puff.at.x, puff.at.y));
-            let level = sprite_murk(puff.at, viewer, murk);
-            list.or_sprite(image, at, murk_tint(lights_tint(32), level));
+            let frame = puff.frame();
+            let image = ImageKey::icon(puff.sheet.icon(frame));
+            let at = Point::new(puff.at.x, puff.at.y);
+            let at = camera.sprite_centre(at, puff.sheet.size(frame));
+            list.mixed_sprite(
+                image,
+                at,
+                lights_tint(32),
+                Blend::Or,
+                Some(seen.at(puff.at)),
+            );
         }
     }
 
@@ -197,9 +217,31 @@ impl SmokePuffs {
 mod tests {
     use super::*;
     use crate::Color;
+    use crate::Colorize;
     use crate::DrawCommand;
+    use crate::system::camera::Anchor;
 
-    const SET_0: SmokeSheet = SmokeSheet { first_icon: 1000 };
+    const SET_0: SmokeSheet = SmokeSheet {
+        first_icon: 1000,
+        sizes: [(0, 0); 8],
+    };
+
+    #[test]
+    fn a_wrap_carries_the_puffs_within_its_reach() {
+        use nova_sim::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
+        let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+        let wrap = PlayerWrap::of(player).expect("past the edge");
+        let mut puffs = SmokePuffs::default();
+        let (near, far) = (
+            player - Vec2::new(100.0, 0.0),
+            player - Vec2::new(WRAP_EDGE * 2.0, 0.0),
+        );
+        puffs.spawn(near, 0, Some(SET_0), false);
+        puffs.spawn(far, 0, Some(SET_0), false);
+        puffs.carry(&wrap);
+        let at: Vec<Vec2> = puffs.puffs().iter().map(|puff| puff.at).collect();
+        assert_eq!(at, [near - Vec2::new(WRAP_SHIFT, 0.0), far]);
+    }
 
     #[test]
     fn a_shots_smoke_is_its_kind_by_its_flags() {
@@ -302,7 +344,11 @@ mod tests {
         assert_eq!(xs(&puffs), [30.0, 20.0], "in slot order");
         let camera = Camera::centred_on(Point::default());
         let mut list = DrawList::new();
-        puffs.draw(&mut list, &camera, Vec2::ZERO, 0);
+        let clear = SeenMurk {
+            murk: 0,
+            ..seen_from(Vec2::ZERO)
+        };
+        puffs.draw(&mut list, &camera, clear);
         let drawn: Vec<f32> = list
             .iter()
             .filter_map(|command| match *command {
@@ -310,8 +356,42 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let screen = |x| camera.world_to_screen(Point::new(x, 0.0)).x;
+        let screen = |x| camera.whole_point(Point::new(x, 0.0)).x;
         assert_eq!(drawn, [screen(30.0), screen(20.0)], "the new one first");
+    }
+
+    #[test]
+    fn a_puff_is_placed_at_whole_pixels_by_its_current_frames_size() {
+        let mut sizes = [(0, 0); 8];
+        sizes[0] = (7, 9);
+        sizes[1] = (8, 6);
+        let sheet = SmokeSheet { sizes, ..SET_0 };
+        let mut puffs = SmokePuffs::default();
+        puffs.spawn(Vec2::new(10.75, -20.25), 0, Some(sheet), false);
+        let camera = Camera::centred_on(Point::new(0.25, -0.5)).with_anchor(Anchor::PlayAreaCentre);
+        let clear = SeenMurk {
+            murk: 0,
+            ..seen_from(Vec2::ZERO)
+        };
+        let centre = |puffs: &SmokePuffs| {
+            let mut list = DrawList::new();
+            puffs.draw(&mut list, &camera, clear);
+            list.iter()
+                .find_map(|command| match *command {
+                    DrawCommand::Sprite { center, .. } => Some(center),
+                    _ => None,
+                })
+                .expect("drawn")
+        };
+        // (10.5, -19.75) truncates to (10, -19), so (425, 365) less (3, 4)
+        // is the top left (422, 361).
+        assert_eq!(centre(&puffs), Point::new(425.5, 365.5));
+        for _ in 0..4 {
+            puffs.step();
+        }
+        assert_eq!(puffs.puffs()[0].frame(), 1);
+        // (425, 365) less (4, 3).
+        assert_eq!(centre(&puffs), Point::new(425.0, 365.0));
     }
 
     #[test]
@@ -321,31 +401,44 @@ mod tests {
         assert_eq!(puffs.puffs(), []);
     }
 
+    /// The murk at its worst as seen from `viewer`.
+    fn seen_from(viewer: Vec2) -> SeenMurk {
+        SeenMurk {
+            viewer,
+            murk: 100,
+            colour: 0x1081,
+        }
+    }
+
     #[test]
     fn a_puff_is_added_at_full_murked_at_its_frames_cicn_where_it_is() {
         let mut puffs = SmokePuffs::default();
-        let set_1 = SmokeSheet { first_icon: 1008 };
+        let set_1 = SmokeSheet {
+            first_icon: 1008,
+            ..SET_0
+        };
         puffs.spawn(Vec2::new(0.0, 160.0), 0, Some(set_1), false);
         for _ in 0..6 {
             puffs.step();
         }
         let camera = Camera::centred_on(Point::new(0.0, 0.0));
         let mut list = DrawList::new();
-        puffs.draw(&mut list, &camera, Vec2::ZERO, 100);
-        let level = sprite_murk(Vec2::new(0.0, 160.0), Vec2::ZERO, 100);
+        puffs.draw(&mut list, &camera, seen_from(Vec2::ZERO));
+        let level = seen_from(Vec2::ZERO).at(Vec2::new(0.0, 160.0)).level;
         assert_eq!(level, 30);
         assert_eq!(
             list.iter().cloned().collect::<Vec<_>>(),
-            [DrawCommand::Sprite {
+            [DrawCommand::Colorized {
                 image: ImageKey::icon(1009),
-                center: camera.world_to_screen(Point::new(0.0, 160.0)),
-                tint: murk_tint(lights_tint(32), level),
+                center: camera.whole_point(Point::new(0.0, 160.0)),
+                tint: lights_tint(32),
                 blend: crate::Blend::Or,
+                colorize: Colorize::toward_pixel(level, 0x1081),
             }],
             "age 1.5: frame 1"
         );
         let mut clear = DrawList::new();
-        puffs.draw(&mut clear, &camera, Vec2::new(0.0, 160.0), 100);
+        puffs.draw(&mut clear, &camera, seen_from(Vec2::new(0.0, 160.0)));
         let tints: Vec<Color> = clear
             .iter()
             .filter_map(|command| match *command {

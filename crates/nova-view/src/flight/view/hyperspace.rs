@@ -91,7 +91,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// begun ([`FlightFrame::warping`]), or lights the screen, unless it is
     /// playing already; and starts its fade to white once the frame's
     /// `_hyperGamma` is above 0 ([`FlightFrame::hyper_gamma`]), as the kept
-    /// frame holds them after the steps or the jump just begun.
+    /// frame holds them after the steps or the jump just begun: a second
+    /// pass's fade starts at once, as `_FadeWhiteIn` is called inside the
+    /// pass (`_HandlePlayer` @0x68404), like a sound, not drawn with the
+    /// frame.
     ///
     /// [`FlightFrame::warping`]: nova_sim::flight_frame::FlightFrame::warping
     /// [`FlightFrame::hyper_gamma`]: nova_sim::flight_frame::FlightFrame::hyper_gamma
@@ -207,9 +210,16 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// read from the kept frame, which the steps and the effect's start
     /// have just filled), the ship arrives ([`FlightView::arrive`]), and
     /// the rest of the effect, the fade-in or the white flash, plays over
-    /// the new system as the arrival's fade-in.
+    /// the new system as the arrival's fade-in. A warp ended on double
+    /// time's second pass has its frame between the passes drawn first
+    /// ([`FlightView::holding_between_passes`]): that frame shows the old
+    /// system, and the arrival follows on the next step, which stops
+    /// before it runs. One ended on the first pass is in that frame
+    /// already, so the ship arrives as in single time, and the arrival's
+    /// layout drops the hold.
     pub(super) fn arrival_frame(&mut self) {
-        if !self.frame.warp_end_due {
+        let frame_comes_first = self.holding_between_passes() && !self.drawn().warp_end_due;
+        if !self.frame.warp_end_due || frame_comes_first {
             return;
         }
         self.arrive();
@@ -240,10 +250,11 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// holds it
     /// ([`FlightFrame::long_date`](nova_sim::flight_frame::FlightFrame::long_date)),
     /// or the system's message buoy in its place ([`SimMessage::Buoy`],
-    /// its text as the flight gives it), followed by the flight's other
-    /// messages ([`FlightView::word`]), then how
-    /// many fighters were abandoned and how many hired escorts defected
-    /// unpaid, if any, the fighters first. A buoy's arrival carries no
+    /// its text as the flight gives it), followed by how many fighters
+    /// were abandoned, the line's own tail (`_HandlePlayer`
+    /// @0x6c3c4-0x6c42b), then the flight's other messages
+    /// ([`FlightView::word`]) and how many hired escorts defected unpaid,
+    /// if any. A buoy's arrival carries no
     /// fighter notes: the flight drops them, as the buoy replaces the
     /// arrival line's suffix too. The escort menu shuts at once and
     /// silently, at a jump's arrival (`_HandlePlayer` @0x6c50e) and a
@@ -270,22 +281,26 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             return;
         };
         let stellars = !scene.stellars().is_empty();
+        let chance = &mut self.words_chance;
         let mut said: Vec<(String, u16)> = messages
             .iter()
             .filter_map(|message| {
                 let text = match message {
                     SimMessage::Buoy(text) => text.clone(),
-                    _ => {
-                        arrival_message_with(arrival_lead(message)?, scene.name(), &date, stellars)
-                    }
+                    _ => arrival_message_with(
+                        arrival_lead(message, chance)?,
+                        scene.name(),
+                        &date,
+                        stellars,
+                    ),
                 };
                 Some((text, message.ticks()))
             })
             .next_back()
             .into_iter()
             .collect();
-        said.extend(worded);
         said.extend(fighters);
+        said.extend(worded);
         said.extend(pay);
         self.say_all(&said);
     }

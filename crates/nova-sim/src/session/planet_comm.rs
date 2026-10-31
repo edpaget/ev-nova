@@ -500,6 +500,24 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
+    fn a_faded_hail_of_a_stellar_that_answers_opens_nothing_and_rolls_nothing() {
+        let catalog = planet_catalog();
+        let mut session = at_earth(&catalog, 1_000_000, 0);
+        session.take_sounds();
+        let before = session.clone();
+        let mut chance = Draws::of(&[]);
+        let hailed = session.hail_key_faded(
+            &catalog,
+            &crate::hail::HailOptions::default(),
+            false,
+            &mut chance,
+        );
+        assert_eq!(hailed, Ok(Hailed::Faded));
+        assert_eq!(chance.asked, [0_u32; 0], "@0x9695d comes before the roll");
+        assert_eq!(session, before, "no dialog, no bribe roll, no beep");
+    }
+
+    #[test]
     fn a_refusing_stellar_offers_its_bribe_and_shows_its_record_line() {
         let catalog = planet_catalog();
         let mut session = at_earth(&catalog, 1_000_000, 1);

@@ -118,7 +118,7 @@ pub use input::{Input, Key, MouseButton, ScrollDelta};
 pub use menu_command::MenuCommand;
 pub use movie_frame::{MovieFrame, MovieScreen, StreamId};
 pub use navigator::Navigator;
-pub use preferences::Prefs;
+pub use preferences::{LaunchPrefs, Prefs};
 pub use scaling::{Enlargement, Scaling};
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sheet_image::SheetImage;

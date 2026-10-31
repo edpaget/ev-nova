@@ -141,7 +141,6 @@ mod tests {
             paint: None,
             cloak: None,
             hull: true,
-            murk: 0,
             held: true,
             glow: Some(20),
             lights: Some(20),
@@ -209,8 +208,7 @@ mod tests {
         assert!(!images.contains(&(RUNS, 1930)), "{images:?}");
         // A murk of 22 holds the layers to none.
         let held_out = ShipDraw {
-            colorize: None,
-            murk: 22,
+            colorize: Some(Colorize::toward_pixel(22, 0)),
             ..ship(&sheet, &spec)
         };
         let images = drawn(&held_out);

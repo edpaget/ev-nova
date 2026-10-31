@@ -593,15 +593,20 @@ pub struct ShipRecord {
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
 /// nth string for commodity n (from 0). A plug-in's `'STR '` 9000 + n
 /// patches commodity n's 4000 string, and its `'STR '` 9300 + n patches
-/// commodity n's 4004 string. The `nova_sim::market` rules decide
-/// which string names and which prices each commodity, and how a price
-/// is read.
+/// commodity n's 4004 string. `STR#` 4001 has their lower-case names, which
+/// `'STR '` 9100 + n patches the same way. The `nova_sim::market` rules
+/// decide which string names and which prices each commodity, and how a
+/// price is read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommodityStrings {
     /// Every string of `STR#` 4000, in order; none when it is missing.
     pub names: Vec<String>,
     /// `'STR '` 9000-9005, the nth for commodity n.
     pub name_patches: [StringPatch; 6],
+    /// Every string of `STR#` 4001, in order; none when it is missing.
+    pub lc_names: Vec<String>,
+    /// `'STR '` 9100-9105, the nth for commodity n.
+    pub lc_name_patches: [StringPatch; 6],
     /// Every string of `STR#` 4004, in order; none when it is missing.
     pub base_prices: Vec<String>,
     /// `'STR '` 9300-9305, the nth for commodity n.
@@ -1704,6 +1709,12 @@ pub struct HullRecord {
     /// ([`EscortClass::of`]), which sets which turret shots miss it (see
     /// `nova_sim::combat::hull::HullSpec::miss_class`).
     pub escort_class: EscortClass,
+    /// The ship whose sprites it draws, ship class +0xa08: the first ship
+    /// by ID whose `shän` has the same `BaseImage`, or itself with none
+    /// earlier or no `shän` that can be read (`_LoadExtendedShipSprites`
+    /// @0x227c9-0x227f0, @0x22849; `_InitObjects` @0x1c653-0x1c65a). A
+    /// fighter docks into a bay of it (see `nova_sim::bay`).
+    pub sprite_base: ShipId,
 }
 
 /// A government's penalties for crimes against its ships, raw from its
@@ -2920,6 +2931,8 @@ mod tests {
             CommodityStrings {
                 names: vec!["Food".to_owned()],
                 name_patches: Default::default(),
+                lc_names: Vec::new(),
+                lc_name_patches: Default::default(),
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             }

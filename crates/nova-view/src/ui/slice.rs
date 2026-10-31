@@ -1,5 +1,6 @@
 //! Three-slice geometry: a rectangle cut into two fixed-length caps and a
-//! stretched middle, as Nova draws its buttons and dialog frames.
+//! middle that fills the rest, as Nova draws its buttons, whose middle
+//! stretches, and its dialog frames, whose middle is cut to the band.
 
 use crate::geometry::{Bounds, Point};
 

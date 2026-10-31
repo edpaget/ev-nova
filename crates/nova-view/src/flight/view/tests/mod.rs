@@ -69,6 +69,7 @@ use nova_sim::{GLOW_CRUISE, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
 mod anchor;
+mod between_passes;
 mod boarding;
 mod cloak;
 mod combat;
@@ -76,6 +77,7 @@ mod comm_line;
 mod controls;
 mod dialog_map;
 mod escorts;
+mod faded_keys;
 mod faked_board;
 mod faked_combat;
 mod faked_desk;
@@ -698,7 +700,13 @@ fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
 }
 
 fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
-    move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
+    move |command| {
+        matches!(
+            unclipped(command),
+            DrawCommand::Sprite { image, .. } | DrawCommand::Colorized { image, .. }
+                if image.id == id
+        )
+    }
 }
 
 /// Whether `command` is the escort menu's border's top edge, the first

@@ -74,9 +74,11 @@ pub(crate) struct Facts<'a> {
 pub(super) const REGISTERED: bool = true;
 
 impl Facts<'_> {
-    /// The outfit a carried fighter of ship type `ship` docks back into:
-    /// the first bay launching it, that bay's ammunition outfit of lowest
-    /// ID, the routing [`Armament::stow`] takes.
+    /// The outfit a carried fighter of ship type `ship` counts as: the
+    /// first bay launching it, by the exact type alone, as
+    /// `_PlayerHasFightersOfOutfitType` compares (@0x8089), and that bay's
+    /// ammunition outfit of lowest ID. Unlike [`Armament::stow`]'s routing
+    /// ([`Armament::dock_bay`]), no bay of its sprite base counts.
     fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
         let bay = self.armament.bay_of(ship)?;
         lowest_ammo_outfit(self.ammo_outfits, bay)

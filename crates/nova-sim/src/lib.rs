@@ -286,6 +286,9 @@
 //! - [`player_turn`]: the player's turn block: the whole-degree turn,
 //!   the auto-turn toward an aim that holds the turn keys off, and the
 //!   aims reverse and the jump's brake take.
+//! - [`player_wrap`]: the player's wrap, `_WrapPlayerPosition`: a ship
+//!   past the edge of the system carried back, and whether what stands
+//!   near it comes along.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -453,6 +456,7 @@ pub use nova_sim_ai::planet_comm;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;
+pub use nova_sim_base::player_wrap;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::gamble;

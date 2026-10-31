@@ -119,14 +119,11 @@ impl Session {
         let Some(dude) = aux_dude(&record.aux) else {
             return;
         };
-        let items = self.setup.npc_items();
-        self.space.traffic.table_mut().add_mission_dudes(
+        self.setup.add_dudes(
+            &self.statics,
+            self.space.traffic.table_mut(),
             catalog,
             &[dude],
-            &self.statics.ships,
-            &self.statics.outfits,
-            &self.statics.arsenal,
-            items,
         );
         let spawn = AuxSpawn {
             slot,

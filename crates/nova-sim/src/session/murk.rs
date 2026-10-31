@@ -1,6 +1,7 @@
 //! What the murk asks of the session (see [`murk`]): the
-//! player's effective murk in its system, which the view darkens shots by,
-//! and its system's murk as loaded, which the starfield reads.
+//! player's effective murk in its system, which the view murks sprites by,
+//! the colour they murk toward, and its system's murk as loaded, which
+//! the starfield reads.
 
 use super::{Chart, Session, Setup, Statics};
 use crate::murk;
@@ -22,6 +23,14 @@ impl Session {
     pub fn effective_murk(&self) -> u8 {
         self.chart
             .effective_murk(&self.pilot, &self.statics, &self.setup)
+    }
+
+    /// The RGB555 colour the player's system's sprites murk toward
+    /// ([`murk::murk_colour`]): its `BkgndColor`, as `_LoadObjectData`
+    /// builds it. A system off the map reads as a black `BkgndColor`.
+    #[must_use]
+    pub fn murk_colour(&self) -> u16 {
+        murk::murk_colour(self.system_background().unwrap_or(0))
     }
 
     /// The player's system's `Murk` as loaded ([`murk::loaded_murk`], by
@@ -70,8 +79,12 @@ mod tests {
     use crate::rulebook::{RuleSource, Rulebook};
     use crate::testkit::{FakePilotCatalog, catalog, outfit};
 
-    /// System 130 of `Murk` `murk`, the others of none; outfit 300 adding
-    /// 15 murk in two slots (10 and 5), 301 taking 40 away.
+    /// The `BkgndColor` of the murky fixture's system 130.
+    const BACKGROUND: u32 = 0x0019_090f;
+
+    /// System 130 of `Murk` `murk` and [`BACKGROUND`], the others of none
+    /// and black; outfit 300 adding 15 murk in two slots (10 and 5), 301
+    /// taking 40 away.
     fn murky(murk: i16) -> FakePilotCatalog {
         let base = catalog();
         FakePilotCatalog {
@@ -84,6 +97,11 @@ mod tests {
                 .iter()
                 .map(|system| StarSystem {
                     murk: if system.id == SystemId(130) { murk } else { 0 },
+                    background: if system.id == SystemId(130) {
+                        BACKGROUND
+                    } else {
+                        0
+                    },
                     ..system.clone()
                 })
                 .collect(),
@@ -100,6 +118,29 @@ mod tests {
         let session = session(&murky(40));
         assert_eq!(session.pilot.system, SystemId(130));
         assert_eq!(session.effective_murk(), 40);
+    }
+
+    #[test]
+    fn the_murk_colour_is_the_players_systems() {
+        let catalog = murky(40);
+        let mut session = session(&catalog);
+        assert_eq!(session.pilot.system, SystemId(130));
+        assert_eq!(session.murk_colour(), murk::murk_colour(BACKGROUND));
+
+        let other = catalog
+            .star_map
+            .iter()
+            .find(|system| system.id != SystemId(130))
+            .expect("a second system");
+        session.pilot.system = other.id;
+        assert_eq!(session.murk_colour(), murk::murk_colour(0), "black");
+
+        session.pilot.system = SystemId(1999);
+        assert_eq!(
+            session.murk_colour(),
+            murk::murk_colour(0),
+            "off the map, as a black BkgndColor"
+        );
     }
 
     #[test]

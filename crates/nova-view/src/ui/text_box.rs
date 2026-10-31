@@ -12,11 +12,13 @@
 //! @0x53799 and @0x539bb), and the outfitter's, shipyard's and hiring
 //! dialog's description (`_OutfitDialogUpdate` @0x57f2b,
 //! `_ShipyardDialogUpdate` @0x597ac).
-//! [`ScrollText`](super::scroll_text::ScrollText) differs: it shows only
-//! whole lines and scrolls. The dialog texts the player scrolls with the
+//! [`ScrollText`](super::scroll_text::ScrollText) differs: it scrolls, and
+//! shows only whole lines unless it is
+//! [pixel-scrolled](super::scroll_text::ScrollText::pixel_scrolled), as
+//! "Desc Dialog"'s text is. The dialog texts the player scrolls with the
 //! arrow keys (bar, port, comm, captured assignment, mission computer and
-//! mission info) keep it, though the original sets them with `TETextBox`
-//! too.
+//! mission info) keep whole lines, though the original sets them with
+//! `TETextBox` too.
 
 use crate::color::Color;
 use crate::draw::{DrawCommand, DrawList};

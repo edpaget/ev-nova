@@ -236,6 +236,118 @@ fn tab_opens_the_map_and_its_frame_reaches_the_gpu() {
     assert!(shows(&frame, "Alpha"), "a system's name from the data");
 }
 
+/// A press lost with the focus is over: the original's `Button()` goes
+/// false wherever the pointer is, and the release is dropped in the
+/// background, so nothing else would end it.
+#[test]
+fn a_press_lost_with_the_focus_drags_the_map_no_further() {
+    let (mut harness, _) = Harness::open_map();
+    let view = |harness: &Harness| {
+        *harness
+            .app
+            .screen()
+            .galaxy_map()
+            .view()
+            .expect("the viewer")
+    };
+    let before = view(&harness);
+    harness.point(Point::new(500.0, 400.0));
+    harness.button(true);
+    harness.send(WindowEvent::FocusLost);
+    harness.button(false);
+    harness.point(Point::new(600.0, 400.0));
+    harness.send(WindowEvent::FocusGained);
+    assert_eq!(view(&harness), before, "the move passed on as it came back");
+    harness.point(Point::new(700.0, 400.0));
+    assert_eq!(view(&harness), before, "and the moves after");
+}
+
+/// Each side's pillar in a 1280x768 window: the 1024-wide content starts
+/// here, and its window pixels stay logical units past this offset.
+const PILLAR: f32 = 128.0;
+
+impl Harness {
+    /// The map open in a 1280x768 window, which has a pillar each side.
+    fn open_map_with_pillars() -> Self {
+        let (mut harness, _) = Self::open_map();
+        harness.send(WindowEvent::Resized {
+            size_px: (1280, 768),
+            scale_factor: 1.0,
+        });
+        harness
+    }
+
+    /// Moves the pointer to logical `at` in a window with pillars.
+    fn point_past_pillar(&mut self, at: Point) {
+        self.point(Point::new(at.x + PILLAR, at.y));
+    }
+
+    /// What a drag has left the viewer showing.
+    fn view(&self) -> nova_view::galaxy::MapView {
+        *self.app.screen().galaxy_map().view().expect("the viewer")
+    }
+
+    /// Presses at (500, 400), drags to (520, 400), then has `leave` take
+    /// the pointer out of the game and let the button go, and comes back
+    /// to a point the press hasn't seen: the view stays where the drag
+    /// left it.
+    fn assert_lost_release_ends_the_drag(mut self, leave: impl FnOnce(&mut Self)) {
+        let before = self.view();
+        self.point_past_pillar(Point::new(500.0, 400.0));
+        self.button(true);
+        self.point_past_pillar(Point::new(520.0, 400.0));
+        let dragged = self.view();
+        assert_ne!(dragged, before, "the drag moved the map");
+
+        leave(&mut self);
+        self.point_past_pillar(Point::new(600.0, 450.0));
+        assert_eq!(self.view(), dragged, "the move back");
+        self.point_past_pillar(Point::new(700.0, 500.0));
+        assert_eq!(self.view(), dragged, "and the moves after");
+    }
+}
+
+/// A left release in a pillar reaches no screen as a release, but it
+/// still ends the drag.
+#[test]
+fn a_release_in_a_pillar_ends_the_drag() {
+    Harness::open_map_with_pillars().assert_lost_release_ends_the_drag(|harness| {
+        harness.point(Point::new(PILLAR / 2.0, 400.0));
+        harness.button(false);
+    });
+}
+
+/// So does one off the window.
+#[test]
+fn a_release_off_the_window_ends_the_drag() {
+    Harness::open_map_with_pillars().assert_lost_release_ends_the_drag(|harness| {
+        harness.send(WindowEvent::PointerLeft);
+        harness.button(false);
+    });
+}
+
+/// A press on a system let go of outside the game never counted as a
+/// click, in a pillar or off the window.
+#[test]
+fn a_lost_release_clicks_nothing() {
+    let leaves: [fn(&mut Harness); 2] = [
+        |harness| harness.point(Point::new(PILLAR / 2.0, 400.0)),
+        |harness| harness.send(WindowEvent::PointerLeft),
+    ];
+    for leave in leaves {
+        let mut harness = Harness::open_map_with_pillars();
+        let selected = harness.app.screen().galaxy_map().selected();
+        let beta = harness.system_at(129);
+        assert_ne!(selected, Some(SystemId(129)), "not selected to begin with");
+        harness.point_past_pillar(beta);
+        harness.button(true);
+        leave(&mut harness);
+        harness.button(false);
+        harness.point_past_pillar(beta);
+        assert_eq!(harness.app.screen().galaxy_map().selected(), selected);
+    }
+}
+
 #[test]
 fn keys_reach_the_map() {
     let (mut harness, _) = Harness::open_map();

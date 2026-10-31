@@ -101,7 +101,7 @@ pub(super) mod tests {
     use crate::flight::Controls;
     use crate::geometry::Vec2;
     use crate::pilot::Escort;
-    use crate::session::fighters::tests::{VIPER, VIPER_FIELDS, carrying, fleet, out};
+    use crate::session::fighters::tests::{VIPER, VIPER_FIELDS, VIPERS, carrying, fleet, out};
     use crate::testkit::{Draws, FakePilotCatalog, hull, ship};
     use crate::traffic::warp_out::WarpGoal;
 
@@ -344,7 +344,8 @@ pub(super) mod tests {
 
     #[test]
     fn a_fighter_short_of_fuel_turns_back_and_docks_if_it_reaches_the_player_in_time() {
-        let catalog = catalog();
+        let mut catalog = catalog();
+        catalog.weapons[0].ammo_type = DART.0;
         let mut session = flying(&catalog, &[DART]);
         let player = session.player().position;
         let id = npc_of(&session, DART).expect("out").id;
@@ -353,6 +354,19 @@ pub(super) mod tests {
         assert_eq!(session.take_fighter_notes(), [], "docked, none abandoned");
         assert!(session.pilot().escorts().is_empty(), "aboard: none out");
         assert_eq!(npc_of(&session, DART), None);
+        assert_eq!(session.pilot().owned(VIPERS), 1, "a round of its bay");
+    }
+
+    #[test]
+    fn a_fighter_short_of_fuel_with_no_bay_stays_out_and_is_abandoned() {
+        // @0x80384 writes nothing, so it is still out at the arrival.
+        let catalog = catalog();
+        let mut session = flying(&catalog, &[DART]);
+        let player = session.player().position;
+        let id = npc_of(&session, DART).expect("out").id;
+        session.space.npc_mut(id).expect("out").state.position = player + Vec2::new(30.0, 0.0);
+        jump_through(&mut session, &catalog);
+        assert_eq!(session.take_fighter_notes(), [FighterNote::Abandoned(1)]);
     }
 
     #[test]

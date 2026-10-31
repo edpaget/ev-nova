@@ -1,6 +1,7 @@
 //! The mission info key ([`MISSION_INFO_KEY`]), shared by every screen
 //! that asks for the mission info screen
-//! ([`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen)).
+//! ([`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen))
+//! and by that screen, which it closes.
 
 use crate::input::{Input, Key};
 
@@ -15,7 +16,8 @@ pub const MISSION_INFO_KEY: Key = Key::Char('i');
 
 /// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks
 /// for the mission info screen where the original's filters read
-/// `_keyPrefs` +0x50.
+/// `_keyPrefs` +0x50, and on that screen itself closes it
+/// (`_MissionInfoFilter` @0x9d756-0x9d769).
 #[must_use]
 pub fn is_mission_info_press(input: &Input) -> bool {
     *input

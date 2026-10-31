@@ -28,6 +28,13 @@
 //! - `screen_to_world(s) = center + (s - anchor) / WORLD_SCALE`
 //! - a sprite placed as the original places one, at whole pixels from
 //!   the center: [`Camera::sprite_top_left`] and [`Camera::sprite_centre`]
+//! - the rules of flight's other routines, each built on that one or on
+//!   `world_to_screen`: [`Camera::whole_point`] (a ship's brackets),
+//!   [`Camera::shot_centre`] (a shot, by its width alone),
+//!   [`Camera::box_centre`] (a cargo box, up and left of its point),
+//!   [`Camera::nav_centre`] (a stellar's brackets, the center truncated
+//!   alone) and [`Camera::pixel_centre`] (a beam's ends, the whole screen
+//!   coordinate truncated)
 
 use nova_sim::navigation::SpriteRect;
 use nova_sim::{RuleSource, Vec2};
@@ -206,7 +213,9 @@ impl Camera {
     /// steps and equal to the step's at alpha 0. Taking the camera's
     /// center lets the whole-pixel offset move with the drawn world between
     /// steps rather than jump a pixel against it; no frame boundary sees
-    /// the difference.
+    /// the difference. Every other rule here reads the center the same
+    /// way, and the caller passes each thing as it is drawn, so what is
+    /// rounded is the difference between the two as drawn.
     #[must_use]
     pub fn sprite_top_left(&self, at: Point, size: (u32, u32)) -> Point {
         let (dx, dy) = nova_sim::story::sprite_pool::offset(
@@ -228,13 +237,82 @@ impl Camera {
     /// takes it: the top left plus half the size.
     #[must_use]
     pub fn sprite_centre(&self, at: Point, size: (u32, u32)) -> Point {
-        let top_left = self.sprite_top_left(at, size);
+        Self::centred(self.sprite_top_left(at, size), size)
+    }
+
+    /// The centre of a frame of `size` whose top left is `top_left`.
+    fn centred(top_left: Point, size: (u32, u32)) -> Point {
         // A sprite's frame is far within an `f32`'s whole numbers.
         #[allow(clippy::cast_precision_loss)]
         Point::new(
             top_left.x + size.0 as f32 / 2.0,
             top_left.y + size.1 as f32 / 2.0,
         )
+    }
+
+    /// The whole-pixel point of world point `at`: `trunc(at - center) +
+    /// anchor` on each axis, a sprite's placement before any size comes off
+    /// it, so [`Camera::sprite_top_left`] of a frame of no size.
+    /// `_HandleWeapTargetSprites` centres a ship's brackets here
+    /// (@0x30060-0x30085), with no size in it, so an odd-sized ship's
+    /// bracket centre is half a pixel up and left of its sprite's middle.
+    /// A sprite with no sheet, which the original doesn't have, is placed
+    /// here too.
+    #[must_use]
+    pub fn whole_point(&self, at: Point) -> Point {
+        self.sprite_top_left(at, (0, 0))
+    }
+
+    /// The point a shot whose frame is `size` is centred on: `_HandleShot`
+    /// takes half the frame's width from both axes of its offset and never
+    /// asks its height (@0x35c66-0x35cc0, `_GetSpriteYSize` is not called),
+    /// so a frame taller than wide sits below the standard rule's place,
+    /// one wider than tall above it.
+    #[must_use]
+    pub fn shot_centre(&self, at: Point, size: (u32, u32)) -> Point {
+        Self::centred(self.sprite_top_left(at, (size.0, size.0)), size)
+    }
+
+    /// The point a cargo box whose frame is `size` is centred on:
+    /// `_HandleBoxes` takes the whole size from its offset, not half
+    /// (@0x2e1c2-0x2e250), so the frame's bottom right is the
+    /// [whole point](Camera::whole_point) of the box's position.
+    #[must_use]
+    pub fn box_centre(&self, at: Point, size: (u32, u32)) -> Point {
+        let corner = self.whole_point(at);
+        // A sprite's frame is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let top_left = Point::new(corner.x - size.0 as f32, corner.y - size.1 as f32);
+        Self::centred(top_left, size)
+    }
+
+    /// The point the nav brackets of a stellar at `at` are centred on:
+    /// `_HandleNavTargetSprites` truncates the player alone, so `at -
+    /// trunc(center) + anchor` (@0x2fdab-0x2fddb). A stellar's position is
+    /// whole, and a fractional center leaves this a pixel from the
+    /// stellar's own [whole point](Camera::whole_point) on the side the
+    /// truncations part, as in the original.
+    #[must_use]
+    pub fn nav_centre(&self, at: Point) -> Point {
+        let anchor = self.anchor();
+        Point::new(
+            (at.x - self.center.x.trunc()).mul_add(WORLD_SCALE, anchor.x),
+            (at.y - self.center.y.trunc()).mul_add(WORLD_SCALE, anchor.y),
+        )
+    }
+
+    /// The centre of the pixel a beam's end at `at` is plotted on:
+    /// `_HandleBeams` truncates the whole screen coordinate, `trunc(at -
+    /// center + anchor)` (@0x30927-0x30982, @0x309df-0x30a4a,
+    /// @0x31dc8-0x31de4), not the offset, so for a point on screen a
+    /// negative offset rounds away from the anchor, unlike
+    /// [`Camera::whole_point`]. It takes 0.5 on each axis because a line
+    /// of width 1 is centred on its ends: a whole end would straddle two
+    /// rows of pixels.
+    #[must_use]
+    pub fn pixel_centre(&self, at: Point) -> Point {
+        let screen = self.world_to_screen(at);
+        Point::new(screen.x.trunc() + 0.5, screen.y.trunc() + 0.5)
     }
 
     /// The rect, in world coordinates, a sprite whose frame is `size` is
@@ -631,5 +709,57 @@ mod tests {
             screen(camera.sprite_rect_from(Vec2::new(-30.9, 12.9), (8, 5))),
             at(381.0, 394.0)
         );
+    }
+
+    #[test]
+    fn a_whole_point_is_the_offset_truncated_toward_zero_from_the_anchor() {
+        let camera = on_fraction();
+        assert_eq!(camera.whole_point(at(110.7, 195.4)), at(425.0, 379.0));
+        assert_eq!(camera.whole_point(at(89.3, 204.6)), at(405.0, 387.0));
+    }
+
+    #[test]
+    fn a_shot_is_centred_from_a_top_left_its_width_places_on_both_axes() {
+        let camera = on_fraction();
+        // The top left is (422, 376): 7 halved on both axes, not 12.
+        assert_eq!(
+            camera.shot_centre(at(110.7, 195.4), (7, 12)),
+            at(425.5, 382.0)
+        );
+        // 12 halved on both: the top left is (419, 373).
+        assert_eq!(
+            camera.shot_centre(at(110.7, 195.4), (12, 7)),
+            at(425.0, 376.5)
+        );
+    }
+
+    #[test]
+    fn a_box_is_centred_up_and_left_of_its_point_by_half_its_size() {
+        // Its bottom right is the point, so its top left is (418, 374).
+        assert_eq!(
+            on_fraction().box_centre(at(110.7, 195.4), (7, 5)),
+            at(421.5, 376.5)
+        );
+    }
+
+    #[test]
+    fn a_nav_centre_takes_the_center_truncated_alone() {
+        let camera = on_fraction();
+        assert_eq!(camera.nav_centre(at(300.0, -200.0)), at(615.0, -16.0));
+        assert_eq!(camera.whole_point(at(300.0, -200.0)), at(614.0, -16.0));
+        let behind = Camera::centred_on(at(-100.25, -200.75)).with_anchor(Anchor::PlayAreaCentre);
+        assert_eq!(behind.nav_centre(at(-300.0, -400.0)), at(215.0, 184.0));
+        assert_eq!(behind.whole_point(at(-300.0, -400.0)), at(216.0, 185.0));
+    }
+
+    #[test]
+    fn a_pixel_centre_truncates_the_whole_screen_coordinate() {
+        let camera = on_fraction();
+        assert_eq!(camera.pixel_centre(at(110.7, 195.4)), at(425.5, 378.5));
+        // Unlike a whole point, a negative offset rounds away from the
+        // center: 404.05 truncates to 404, where the offset gave 405.
+        assert_eq!(camera.pixel_centre(at(89.3, 204.6)), at(404.5, 387.5));
+        // A point drawn left of the screen: -10.7 truncates to -10.
+        assert_eq!(camera.pixel_centre(at(100.25 - 425.7, 200.75)).x, -9.5);
     }
 }

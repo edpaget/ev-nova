@@ -17,7 +17,7 @@
 //! - **No person** (@0x65b8a): a former hired or captured escort (+0xc8de
 //!   1 or 2) is repaired when the fleet has room (`_CanHireEscorts`);
 //!   otherwise a former fighter is repaired, and a ship that never was
-//!   the player's captured, when a bay that carries its type has room
+//!   the player's captured, when a bay of its type or sprite base has room
 //!   (+0xc8de 0 or -1, `_CanBuyFighter`); anything else is plundered.
 //!
 //! So a person-flown former escort never comes back as an escort, and a

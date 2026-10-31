@@ -607,6 +607,32 @@ mod tests {
     }
 
     #[test]
+    fn a_wrap_leaves_the_field_behind_and_the_edge_refills_it_about_the_player() {
+        // `_WrapPlayerPosition` reads no `_asteroidData`, so the field stays
+        // in the world, a shift off screen, and goes on the wrap's pass.
+        let catalog = FakePilotCatalog {
+            asteroid_fields: vec![field(130, 1, 0x0001)],
+            ..rocky(catalog())
+        };
+        let mut session = flying(&catalog);
+        pass(&mut session, &catalog, &mut NeverFires);
+        let first = *session.asteroids().next().expect("spawned");
+        let past = Vec2::new(crate::player_wrap::WRAP_EDGE + 1.0, 0.0);
+        session.ship.player.position = past;
+        session.space.asteroids.clear();
+        session.space.asteroids.place(Asteroid {
+            position: past + first.position,
+            ..first
+        });
+        pass(&mut session, &catalog, &mut NeverFires);
+        assert_eq!(session.asteroids().count(), 0, "culled, none spawned");
+        pass(&mut session, &catalog, &mut NeverFires);
+        let refilled = *session.asteroids().next().expect("refilled");
+        let off = refilled.position - session.player().position;
+        assert!((off - first.position).length() < 1e-3, "{off:?}");
+    }
+
+    #[test]
     fn nothing_spawns_or_steps_while_landed() {
         let catalog = rocky(catalog());
         let mut session = flying(&catalog);

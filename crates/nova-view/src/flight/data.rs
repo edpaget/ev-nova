@@ -293,13 +293,12 @@ impl CombatLooks for GameData {
             return None;
         }
         let first_icon = FIRST_SMOKE_ICON + SMOKE_FRAMES * i16::from(set);
-        let decodes = |id: i16| {
-            self.resource(CICN, id)
-                .is_some_and(|found| decode_cicn(found.resource.data()).is_ok())
-        };
-        (first_icon..first_icon + SMOKE_FRAMES)
-            .all(decodes)
-            .then_some(SmokeSheet { first_icon })
+        let mut sizes = [(0, 0); 8];
+        for (size, id) in sizes.iter_mut().zip(first_icon..) {
+            let icon = decode_cicn(self.resource(CICN, id)?.resource.data()).ok()?;
+            *size = (icon.width(), icon.height());
+        }
+        Some(SmokeSheet { first_icon, sizes })
     }
 }
 
@@ -1017,9 +1016,20 @@ mod tests {
         let icons = |first: i16| (first..first + 8).map(|id| (CICN, id, None, icon(4, 4)));
         let mut resources: Vec<_> = icons(1000).chain(icons(1008)).collect();
         resources.extend(icons(1016));
+        // A master of `cicn`s has a size a frame.
+        resources[3].3 = icon(6, 5);
         let data = named_store(&resources);
-        assert_eq!(data.smoke_sheet(0), Some(SmokeSheet { first_icon: 1000 }));
-        assert_eq!(data.smoke_sheet(1), Some(SmokeSheet { first_icon: 1008 }));
+        let mut sizes = [(4, 4); 8];
+        let first_icon = 1000;
+        assert_eq!(
+            data.smoke_sheet(1),
+            Some(SmokeSheet {
+                first_icon: 1008,
+                sizes
+            })
+        );
+        sizes[3] = (6, 5);
+        assert_eq!(data.smoke_sheet(0), Some(SmokeSheet { first_icon, sizes }));
         assert_eq!(data.smoke_sheet(2), None, "only sets 0 and 1");
         let mut gap: Vec<_> = icons(1000).collect();
         gap.remove(7);

@@ -124,6 +124,9 @@ pub struct FlyPass {
     docks: DockNotes,
     /// Each lead that reached its gate's box, its gate and AI type.
     reached: Vec<(NpcId, StellarId, AiType)>,
+    /// The docking fighters with no bay on their carrier, which stay out
+    /// ([`Beside::no_bay`]).
+    no_bay: BTreeSet<NpcId>,
 }
 
 impl FlyPass {
@@ -131,6 +134,14 @@ impl FlyPass {
     #[must_use]
     pub fn order(&self) -> &[NpcId] {
         &self.order
+    }
+
+    /// This half, the fighters `no_bay` having no bay on their carrier
+    /// ([`Beside::no_bay`]): none unless told, as the session decides it,
+    /// holding the player's armament and the rulebook.
+    #[must_use]
+    pub fn with_no_bay(self, no_bay: BTreeSet<NpcId>) -> Self {
+        Self { no_bay, ..self }
     }
 }
 
@@ -232,6 +243,7 @@ impl Traffic {
             first: self.first_class,
             docks: DockNotes::default(),
             reached: Vec::new(),
+            no_bay: BTreeSet::new(),
         }
     }
 
@@ -362,7 +374,8 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 }
 
 /// What `npc`'s flight reads beside the ship it is about, in the fly
-/// half `pass` ([`Beside`]): its swarm lead, its guard where the half
+/// half `pass` ([`Beside`]): whether it has no bay to dock in, its swarm
+/// lead, its guard where the half
 /// found it while it keeps formation ([`Goal::Formation`]) or keeps with
 /// a lead ([`Goal::Follow`]), and whether it sees its leader as the half
 /// began (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): a fleet escort
@@ -386,6 +399,7 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
         swarm: pass.leads.get(&npc.id).copied(),
         guard: guard.and_then(|guard| state_of(pass, guard)),
         leader_seen,
+        no_bay: pass.no_bay.contains(&npc.id),
         ..Beside::default()
     }
 }
@@ -909,6 +923,21 @@ mod tests {
                 ship: ShipId(200)
             }
         );
+    }
+
+    #[test]
+    fn the_half_tells_a_fighter_that_it_has_no_bay() {
+        let sites = sites();
+        let world = World::new(&sites);
+        let mut traffic = busy();
+        let pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        assert!(
+            !beside_of(&pass, &traffic.npcs[1]).no_bay,
+            "none unless told"
+        );
+        let pass = pass.with_no_bay(BTreeSet::from([NpcId(1)]));
+        assert!(beside_of(&pass, &traffic.npcs[1]).no_bay);
+        assert!(!beside_of(&pass, &traffic.npcs[0]).no_bay, "another ship");
     }
 
     #[test]

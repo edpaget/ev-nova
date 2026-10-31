@@ -183,6 +183,7 @@ use nova_sim::{
     services,
 };
 
+mod flushing_layers;
 mod gamble;
 
 use super::ambient::Ambient;
@@ -2035,6 +2036,11 @@ impl SpaceportView {
     /// `_TradeFilter` @0x4e0b5, `_OutfitFilter` @0x58042, and
     /// `_ShipyardFilter` @0x60452 (the shipyard and the bar's hire
     /// screen) and `_MissionFilter` @0x9f7b2 (the mission computer).
+    ///
+    /// The galaxy map has no term here. `_MapFilter` @0x13c63 never reads
+    /// the string, but each port filter tests it before the map key
+    /// (`_PortFilter` @0x4f047-0x4f063, the key @0x4f171), so a `Q` pending
+    /// on the map always has one of these dialogs under it, still open.
     #[must_use]
     pub fn holds_leave(&self) -> bool {
         if self.mission_dialogs_open()
@@ -2541,6 +2547,7 @@ impl SpaceportView {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
+    mod flushing_layers;
     mod ship_movies;
 
     use crate::ui::mission_info::MISSION_INFO_KEY;

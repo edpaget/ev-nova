@@ -47,6 +47,22 @@ fn a_stock_system_of_murk_20_murks_at_20() {
 }
 
 #[test]
+fn the_stock_murky_systems_murk_toward_their_background_colours() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for (system, murk, colour) in [(131, 20, 0x1081), (155, 50, 0x1081), (271, 50, 0x1042)] {
+        assert_eq!(murk_of(&data, system), murk, "system {system}");
+        assert_eq!(
+            flying_in(&data, system).murk_colour(),
+            colour,
+            "system {system}"
+        );
+    }
+}
+
+#[test]
 fn a_stock_system_of_murk_5_murks_not_at_all_by_the_engine_and_at_5_by_the_bible() {
     let Some(dir) = common::nova_data() else {
         return;

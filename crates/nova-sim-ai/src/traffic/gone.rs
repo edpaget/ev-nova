@@ -45,6 +45,7 @@
 //! (`_AIDispatch` @0x8fbb3) fires nothing, so no target names it.
 
 use crate::combat::ShipRef;
+use crate::player_wrap::PlayerWrap;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::Npc;
 
@@ -135,6 +136,14 @@ impl GoneShips {
     /// them.
     pub fn clear(&mut self) {
         self.0.clear();
+    }
+
+    /// Carries each ship recorded within `wrap`'s reach, as the slot still
+    /// holds it (see the `wrap_carry` module).
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for gone in &mut self.0 {
+            wrap.carry(&mut gone.ship.state.position);
+        }
     }
 
     /// The ships recorded, in order.

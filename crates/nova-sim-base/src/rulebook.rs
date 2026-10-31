@@ -26,6 +26,7 @@
 //! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation (`nova_sim::Session`) | the orders are kept\* |
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command (`nova_sim::Session`) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed (`nova_sim::Session`) | every fighter out goes back into its bay on arrival and on landing\* |
+//! | [`FighterNoBay`](RuleKey::FighterNoBay) | `fighter_no_bay` | a fighter whose carrier has no bay for it stays out at its carrier, steering and thrusting at it, and docks the first tick a bay is there (`_AIAddFighterToParent` @0x80384; `nova_sim::Session`) | it docks and is lost, with a save due\* |
 //! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 (`nova_sim::Session`) | an unmet `Require` makes a listed ship greyed and refused\* |
 //! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage (`nova_sim::Session`) | wages are paid only for a jump's days; the days a stay passes pay none\* |
 //! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; `nova_sim::Session`) | a stay passes no days: only a jump's and a gate's like a jump pass\*\*\*\*\*\* |
@@ -86,6 +87,7 @@
 //! | [`LeaderlessSwapHold`](RuleKey::LeaderlessSwapHold) | `leaderless_swap_hold` | a ship swapped in for a person by a `ShipGoal` 3 mission, neither hunting nor escorting the player, holds goal 10 with no leader: it coasts with no thrust and no fire, picks no destination, target or ship to inspect, and leaves the hold only when provoked, at its government's word, or as a plundering warship (`_AIMakeEscortFlyInForm` @0x89b8e-0x89c3d, `_HighLevelAIHandler` @0x8ed18-0x8ed31; see `nova_sim::ai::Goal::Hold`) | it decides as its `düde`'s AI from the start, landing or jumping out\* |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; `nova_sim::Session`) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; `nova_sim::Session`) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
+//! | [`JunkListing`](RuleKey::JunkListing) | `junk_listing` | at most one `jünk` a side: the highest ID that names the stellar and whose test holds, with no fallback from a winner priced 0, and a held loser is other cargo and can't be traded there (`_DoTradeDialog` @0x5dd7d-0x5de74; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, @0x4d70c-0x4d767; `nova_sim::Session`) | every matching `jünk` is listed, as the Bible's `SoldAt` and `BoughtAt` say with no limit |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; `nova_sim::Session`) | no limit§§ |
 //! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; `nova_sim::Outfitter::refund`) | every sale refunds half§§§ |
 //! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; `nova_sim::Outfitter::count_asked`) | Alt changes nothing: each click moves one¶¶¶ |
@@ -164,6 +166,7 @@
 //! | [`BattleHelpGoneSlots`](RuleKey::BattleHelpGoneSlots) | `battle_help_gone_slots` | a helper sent to fight a threat to the player, by rank battle help or for a price, also counts and picks a vacated berth's last ship that threatens the player, as `_AIFightEnemyThreatToPlayer` (@0x82c80-0x82dba) never tests the active flag and a person swapped for its mission ship on the hail clears only that flag (@0x62520; see `nova_sim_ai::traffic::vacated`) | only ships still in the system\* |
 //! | [`FlightAnchor`](RuleKey::FlightAnchor) | `flight_anchor` | flight draws the player's ship, and the world, the play area, the brackets, clicks in space and the starfield about it, at the play area's centre left of the status bar, (trunc((W − 194) / 2), trunc(H / 2)), (415, 384) at 1024 x 768: `_screenCenter` as `_SetupWind` sets it (@0x1b720-0x1b78a; see `nova_view`'s `Camera`) | the view's centre, (floor(W / 2), H / 2): the port's earlier reading\* |
 //! | [`FlightStarfield`](RuleKey::FlightStarfield) | `flight_starfield` | flight draws the original's sprite starfield: min(trunc(play height / 600 × 20), 20) stars of `spïn` 700 (`_RandomizeStars` @0x0b145-0x0b324), wrapped at twice their size outside the play area and dimmed by the system's murk (`_HandleStars` @0x2f87d-0x2fcae), moved by their parallax factor of the ship's last move (`_ScrollStarfield` @0x8171-0x81d5), none in a system of negative `Murk`; scattered afresh at a jump's arrival, a gate's exit and the rescue (see `nova_view`'s `flight::stars`) | three layers of procedural dots at fixed parallax covering the view: the port's earlier reading\* |
+//! | [`PlayerWrap`](RuleKey::PlayerWrap) | `player_wrap` | past 15,000 pixels from the system's centre on an axis, the ship is carried back 25,000 on it with what stands within 15,000 of it (`_WrapPlayerPosition` @0x67efa-0x6838f, see [`player_wrap`](crate::player_wrap)) | no wrap: the ship flies on for ever, the port's earlier reading\* |
 //! | [`EmptySecondary`](RuleKey::EmptySecondary) | `empty_secondary` | a selected secondary of `Flags` 0x0800 (more persistent smoke) that `_WeaponHasAmmo` fails is let go, silently, on every `_HandlePlayer` pass, fire key held or not, disabled or in a jump too (@0x6abcc-0x6ac08; see `nova_sim::session`'s `secondary_select`) | one of `Flags2` 0x0800, hidden when empty, as the select key tests (@0x6ad72)\* |
 //! | [`NewPilotNameTaken`](RuleKey::NewPilotNameTaken) | `new_pilot_name_taken` | a New Pilot named as a saved pilot (ignoring case, as `_DoesPilotExist` @0x72def-0x72e6a matches) asks `STR#` 140 #9 in the Yes/No dialog: Yes goes on to the christening and replaces the saved pilot when the new one is first saved, No returns to the main menu with nothing changed (`_DoNewPilot` @0x18c08-0x18c63; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open\* |
 //! | [`NewPilotEmptyName`](RuleKey::NewPilotEmptyName) | `new_pilot_empty_name` | a New Pilot whose name is empty once culled and trimmed goes on to the christening with no replace question, and plays but is never saved, silently: `_DoNewPilotNameDialog` refuses no name (@0x1695b-0x16a15), and `FSMakeFSRefUnicode` fails on a 0-length name in `_DoesPilotExist` (@0x72e54) and `_SavePilotFile` (@0x768f5), whose failure `_DoNewPilot` ignores (@0x1935f; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open: **the default — a deliberate departure from the original**†††††††††††††††††† |
@@ -269,7 +272,7 @@
 //! | [`FaceNavSlot`](RuleKey::FaceNavSlot) | `face_nav_slot` | in nav mode 3 the face-target key faces stellar record [the selected system's link slot], `spöb` 128 + slot, as it reads +0x6c as a stellar index whatever the mode (@0x6af2a-0x6af65, @0x6afa4-0x6afea; see the session's `steering` module) | mode 3 has no stellar to face\* |
 //! | [`InertialDampener`](RuleKey::InertialDampener) | `inertial_dampener` | an `oütf` of `ModType` 38 makes only the player's ship inertialess; an NPC is inertialess only by its hull's `Flags2` 0x0040 (`_ShipIsInertialess` @0x7a10-0x7a26; see [`inertialess`](crate::inertialess)) | any ship carrying one is inertialess, an NPC's default items included ("makes ship inertialess") |
 //! | [`EscapeShipCut`](RuleKey::EscapeShipCut) | `escape_ship_cut` | the shield roll and velocity halving of a dying NPC's last launch land on the ship in slot 1, or on the player when no fighter launched (`_HandleShip` @0x354ea-0x35553; see `nova_sim::npc_escape`) | on the fighter launched; nothing when none is\* |
-//! | [`WeaponEffectsNextLaunch`](RuleKey::WeaponEffectsNextLaunch) | `weapon_effects_next_launch` | a change of the Weapon Effects preference takes effect at the next launch, the Preferences dialog drawing "(Changes will take effect the next time you run Nova)" while the box differs from the launch value (`_LoadPrefs` @0xceeda-0xcef11, `_LoadExtendedShipSprites` @0x2343c-0x2344b, `settingsChange:` @0xd0b01; see `nova::app::screen`) | at once, with no notice\* |
+//! | [`WeaponEffectsNextLaunch`](RuleKey::WeaponEffectsNextLaunch) | `weapon_effects_next_launch` | a change of the Weapon Effects, Engine Glows, Ship Animations or Running Lights preference takes effect at the next launch, the Preferences dialog drawing "(Changes will take effect the next time you run Nova)" while any of their boxes differs from its launch value (`_LoadPrefs` @0xcee57-0xcef50, `_LoadExtendedShipSprites` @0x22ac3-0x2344b, `settingsChange:` @0xd0b01-0xd0c40; see `nova::app::screen` and `nova_view::ui::prefs`) | at once, with no notice\* |
 //! | [`ReusedShotSlotSpin`](RuleKey::ReusedShotSlotSpin) | `reused_shot_slot_spin` | a new shot starts on the spin timer its shot slot's last spinning shot left, as `_SpawnShot` never writes +0x1c (@0x3e550-0x3f143), so its first frame step can come early (`_HandleShot` @0x35884-0x358c4; see `nova_sim::combat::spin_timer`) | every shot starts its spin timer on 0\* |
 //! | [`HitFocus`](RuleKey::HitFocus) | `hit_focus` | a ship attacking (goal 4) its target (+0x70, as the pass's earlier hits left it) within 44° of the heading it last wanted as the pass began keeps its target when hit, unless the attacker is nearer than half its target's distance (dist² not above 0.25 × its target's); its lead's answer, the turn on the player, the wait cut and the grudge go with it (`_DamageShip` @0x3bbf3-0x3bcac; see `nova_sim::ai::react`) | it keeps its target only when that target is nearer than half the attacker's distance and ahead, by its float heading against the bearing; the lead of an escort hit tests its own target; every answered player hit holds the grudge\* |
 //! | [`UndisplayedShips`](RuleKey::UndisplayedShips) | `undisplayed_ships` | a ship its slot has not displayed since it came (a fighter the player launches, the eject's hulk, a ship spawned below its spawner's slot) is neither walked by the collision passes nor drawn until its slot's display step, as an inactive slot's display hides its sprites (@0x2b555-0x2b60a) and the walk skips a hidden sprite (@0xacba3); it is hovered and clicked where its slot's last ship was last laid out, in that ship's frames, as only a display places the slot's rect (@0x2cd9d, `_HandleMouse` @0x38177; see `nova_sim::Session::hover_place`); `_PrepareAllSprites` (@0x3a75a) displays every slot at each entry into flight (see `nova_sim::Session::prepare_all_sprites`) | walked, drawn and boxed where it is from the moment it is in the system\* |
@@ -313,7 +316,7 @@
 //! | [`NewPilotVisibility`](RuleKey::NewPilotVisibility) | `new_pilot_visibility` | a new pilot's neighbour pass reads the visible flags the run's last galaxy refresh left: a pilot loaded, made or flown earlier in the run, or at launch with no pilot the refresh of clear bits, as `_DoNewPilot` tests +0x1eb (@0x18fc5) before its own refresh (@0x1925e; launch @0x4740c; see `nova_sim::Session::begin`) | it reads the new pilot's own refresh\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
-//! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
+//! `fighter_launch`, `fighter_recall`, `fighter_no_bay`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
@@ -377,7 +380,8 @@
 //! `escort_order_reach`, `npc_formation`, `successor_repairer`,
 //! `held_gate_burst`, `new_pilot_visibility`, `recharge_debt`,
 //! `battle_help_gone_slots`, `flight_anchor`, `flight_starfield`,
-//! `empty_secondary`, `escort_arrival`, `dialog_text_wheel`,
+//! `player_wrap`, `empty_secondary`, `escort_arrival`,
+//! `dialog_text_wheel`,
 //! `loaded_course`, `loaded_jumped_from`, `hail_busy_under_attack`,
 //! `purchase_stock_fold`, `new_pilot_escape` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
@@ -851,6 +855,25 @@ rule_keys! {
     /// says (see
     /// `nova_sim::Session::with_rules`).
     FighterRecall => "fighter_recall",
+    /// What becomes of a fighter that reaches its carrier with no bay for
+    /// it: by the engine, it stays out, steering and thrusting at its
+    /// carrier, for as long as the order stands, and docks the first tick
+    /// a bay is there (`_AIAddFighterToParent` @0x80384); otherwise it
+    /// docks and is lost, which makes a save due, so that a fighter with
+    /// no home doesn't hover for good. The Bible is silent here, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see
+    /// `nova_sim::Session::with_rules`).
+    FighterNoBay => "fighter_no_bay",
+    /// Whether a ship past 15,000 pixels from the system's centre on an
+    /// axis wraps. By the engine, `_WrapPlayerPosition` (@0x67efa-0x6838f,
+    /// from `_HandlePlayer` @0x6864d, unless the jump's +0x50 is above 0)
+    /// carries it back 25,000 on that axis, with the ships, shots, boxes,
+    /// beams and effects near it (see [`player_wrap`](crate::player_wrap)).
+    /// The 16-bit beam store it evidently exists to serve is gone, so by
+    /// the other reading nothing wraps and the ship flies on for ever, the
+    /// port's earlier behaviour. The Bible says nothing of it.
+    PlayerWrap => "player_wrap",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
     /// it), and an unmet `Require` only hides the ship when its `Flags3`
@@ -1566,6 +1589,14 @@ rule_keys! {
     /// `BoughtAt` where it "is purchased", the `SoldAt` row is bought only
     /// and the `BoughtAt` row sold only (see `nova_sim::market`).
     JunkTrade => "junk_trade",
+    /// Which `jünk` a stellar lists on each side. By the engine, at most
+    /// one a side: of those that name the stellar and whose test holds,
+    /// the highest ID, as `_DoTradeDialog`'s loops overwrite the slot
+    /// (@0x5dd7d-0x5de74), with no fallback when that winner is priced 0
+    /// (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac). By the Bible, whose
+    /// `SoldAt` and `BoughtAt` state no limit, every match is listed (see
+    /// `nova_sim::market`).
+    JunkListing => "junk_listing",
     /// Whether the outfitter sells a map or clean-record outfit only once
     /// an opening. By the engine, an outfit with a `ModType` 16 mod, or
     /// failing that a `ModType` 21 mod, is refused while the last outfit
@@ -3546,18 +3577,26 @@ rule_keys! {
     /// ship's escape ship, so the other reading is the intended behaviour,
     /// not anything the Bible says.
     EscapeShipCut => "escape_ship_cut",
-    /// When a change of the Weapon Effects preference reaches the flight
-    /// (see `nova::app::screen` and `nova_view::ui::prefs`). By the
-    /// engine, as the original reads `WeaponEffects` only at launch
-    /// (`_LoadPrefs` @0xceeda-0xcef11, which only `_InitEVNova` calls,
-    /// @0x4677b, @0x467d2) and loads the ships' weapon sprites only there
-    /// (`_LoadExtendedShipSprites` @0x2343c-0x2344b): at the next launch,
-    /// the change saved at once and the Preferences dialog drawing "(Changes
-    /// will take effect the next time you run Nova)" while the box differs
-    /// from the value the game launched with (`settingsChange:` @0xd0b01,
-    /// @0xd0bf8-0xd0c40). By the other reading, at once, with no notice.
-    /// The Bible says nothing of it, so the other reading is the intended
-    /// behaviour, not anything the Bible says.
+    /// When a change of the Weapon Effects, Engine Glows, Ship Animations
+    /// or Running Lights preference reaches the flight (see
+    /// `nova::app::screen`, `nova_view::ui::prefs` and
+    /// `nova_view::LaunchPrefs`). By the engine, as the original reads the
+    /// four only at launch (`_LoadPrefs`: `WeaponEffects` +0x10
+    /// @0xceeda-0xcef11, `ShipAnimations` +0xe @0xcee57-0xcee93,
+    /// `EngineGlows` +0xf @0xcee96-0xceed2, `RunningLights` +0x11
+    /// @0xcef14-0xcef50; only `_InitEVNova` calls it, @0x4677b, @0x467d2)
+    /// and loads the ships' sprites by them only there
+    /// (`_LoadExtendedShipSprites` @0x47371: the weapon sprites
+    /// @0x2343c-0x2344b, the sets @0x22ac3-0x22b1e, the glow
+    /// @0x22e07-0x22e25, the lights @0x230d7-0x230f5): at the next launch,
+    /// the change saved at once and the Preferences dialog drawing
+    /// "(Changes will take effect the next time you run Nova)" while any
+    /// of the four boxes differs from the value the game launched with
+    /// (`settingsChange:` @0xd0b01, @0xd0b90-0xd0c40). By the other
+    /// reading, at once, with no notice. The key keeps Weapon Effects'
+    /// name, which the first of the four gave it, so overrides already
+    /// saved still load. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says.
     WeaponEffectsNextLaunch => "weapon_effects_next_launch",
     /// Which spin timer a new shot starts on (see
     /// `nova_sim::combat::spin_timer` and `nova_sim::combat::shot_slots`).
@@ -6595,6 +6634,11 @@ mod tests {
         assert_eq!(RuleKey::from_key("junk_trade"), Some(RuleKey::JunkTrade));
         assert_eq!(RuleKey::JunkPrice.key(), "junk_price");
         assert_eq!(RuleKey::from_key("junk_price"), Some(RuleKey::JunkPrice));
+        assert_eq!(RuleKey::JunkListing.key(), "junk_listing");
+        assert_eq!(
+            RuleKey::from_key("junk_listing"),
+            Some(RuleKey::JunkListing)
+        );
         assert_eq!(RuleKey::PurchaseCargo.key(), "purchase_cargo");
         assert_eq!(
             RuleKey::from_key("purchase_cargo"),
@@ -6738,6 +6782,8 @@ mod tests {
                 RuleKey::EscortOrders,
                 RuleKey::FighterLaunch,
                 RuleKey::FighterRecall,
+                RuleKey::FighterNoBay,
+                RuleKey::PlayerWrap,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
@@ -6798,6 +6844,7 @@ mod tests {
                 RuleKey::LeaderlessSwapHold,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
+                RuleKey::JunkListing,
                 RuleKey::OutfitLimit,
                 RuleKey::OutfitRefund,
                 RuleKey::OutfitCount,
@@ -7041,6 +7088,7 @@ mod tests {
         assert_eq!(RuleKey::EscortWage.key(), "escort_wage");
         assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");
         assert_eq!(RuleKey::FighterRecall.key(), "fighter_recall");
+        assert_eq!(RuleKey::FighterNoBay.key(), "fighter_no_bay");
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");
         assert_eq!(RuleKey::EmptyBooty.key(), "empty_booty");
         assert_eq!(RuleKey::CrewlessCapture.key(), "crewless_capture");
@@ -8299,6 +8347,21 @@ mod tests {
         let rule = RuleKey::FlightAnchor;
         assert_eq!(rule.key(), "flight_anchor");
         assert_eq!(RuleKey::from_key("flight_anchor"), Some(rule));
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+    }
+
+    #[test]
+    fn the_player_wrap_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::PlayerWrap;
+        assert_eq!(rule.key(), "player_wrap");
+        assert_eq!(RuleKey::from_key("player_wrap"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
         assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         assert_eq!(
             Rulebook::default()

@@ -37,10 +37,10 @@ use super::{AppScreen, Side};
 
 impl AppScreen {
     /// `pilot`'s flight, built as every flight is ([`AppScreen::flight`])
-    /// and shown nowhere: one `loaded` from a save reads its load's
-    /// fallbacks from the router's rules ([`FlightStart::Loaded`]), a new
-    /// one is flown as it is ([`FlightStart::Pilot`]), its neighbour pass
-    /// reading `last_refresh`, the run's as the pilot was made
+    /// and shown nowhere: both read the router's rules from the session's
+    /// build on, one `loaded` from a save ([`FlightStart::Loaded`]) and a
+    /// new one ([`FlightStart::Pilot`]), whose neighbour pass reads
+    /// `last_refresh`, the run's as the pilot was made
     /// ([`AppScreen::run_refresh`]); a loaded one is handed none.
     pub(super) fn pilot_flight(
         &self,

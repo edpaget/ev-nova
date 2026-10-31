@@ -116,6 +116,10 @@ pub enum Hailed {
     /// The navigation stellar, which answers: the planet comm dialog
     /// (`_DoPlanetCommDialog` @0x6204b; see the `planet_comm` module).
     Stellar(PlanetCommView),
+    /// The comm dialog, the escort dialog or the planet comm dialog would
+    /// have opened, and its `_screenFaded` guard refused it in silence
+    /// ([`Session::hail_key_faded`]).
+    Faded,
 }
 
 impl Session {
@@ -216,11 +220,48 @@ impl Session {
         option: bool,
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
+        self.hail_key_on(catalog, options, option, false, chance)
+    }
+
+    /// The comm key read on the pass a jump collapsed under the white: as
+    /// [`Session::hail_key`], but `_DoCommDialog`'s `_screenFaded` guard
+    /// (@0x956ed to @0x9693e) and `_DoPlanetCommDialog`'s (@0x9695d to
+    /// @0x97b8c) refuse what would open, silently and with nothing of the
+    /// dialog's entry written: [`Hailed::Faded`]. A [`HailRefusal`] beeps
+    /// as ever, and a person's offer shows ([`Hailed::Offer`]), as
+    /// `_OfferOneMission` has no such refusal: it only fades the screen in
+    /// (@0xa22b0).
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::hail_key`].
+    pub(crate) fn hail_key_faded(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        options: &HailOptions,
+        option: bool,
+        chance: &mut dyn Chance,
+    ) -> Result<Hailed, HailRefusal> {
+        self.hail_key_on(catalog, options, option, true, chance)
+    }
+
+    /// [`Session::hail_key`], on a `faded` screen or not.
+    fn hail_key_on(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        options: &HailOptions,
+        option: bool,
+        faded: bool,
+        chance: &mut dyn Chance,
+    ) -> Result<Hailed, HailRefusal> {
         self.space.escorts.talk = None;
         self.space.escorts.dialog = None;
         self.chart.planet_comm = None;
         // Beeps here once: once answering, it answers in `hail` too.
         if let HailTarget::Stellar(stellar) = self.out.beep_unanswered(self.hail_target(option))? {
+            if faded {
+                return Ok(Hailed::Faded);
+            }
             return self
                 .open_planet_comm(stellar, catalog, chance)
                 .map(Hailed::Stellar)
@@ -232,6 +273,9 @@ impl Session {
         self.reach_linked(linked);
         let npc = self.answering()?;
         if super::escort_dialog::gets_escort_dialog(npc) {
+            if faded {
+                return Ok(Hailed::Faded);
+            }
             let id = npc.id;
             if let Some(view) = self.open_escort_dialog(id) {
                 return Ok(Hailed::Escort(view));
@@ -243,6 +287,7 @@ impl Session {
             .filter(|_| !self.joins_instead(npc, options));
         match offered {
             Some(offering) => Ok(Hailed::Offer(self.offer_from_ship(offering, chance))),
+            None if faded => Ok(Hailed::Faded),
             None => self.hail(catalog, options, chance).map(Hailed::Comm),
         }
     }
@@ -818,6 +863,34 @@ pub(super) mod tests {
             Some("Ace".to_owned()),
             "the offer stays open"
         );
+    }
+
+    #[test]
+    fn a_person_offers_through_the_faded_screen_as_the_offer_has_no_guard() {
+        let catalog = talking();
+        let mut session = targeting_ace(&catalog);
+        session.take_sounds();
+        let mut plain = session.clone();
+        let (offered, _) = hail(&mut plain, &catalog);
+        let mut chance = Draws::of(&[]);
+        let hailed = session.hail_key_faded(&catalog, &HailOptions::default(), false, &mut chance);
+        assert_eq!(hailed, offered, "@0xa22b0 only fades in");
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        assert_eq!(session.take_sounds(), [crate::SimSound::HailOffer]);
+    }
+
+    #[test]
+    fn a_faded_hail_names_a_linked_persons_ship_before_its_comm_dialog_refuses() {
+        let mut unavailable = talking();
+        unavailable.missions[0].avail_random = 50;
+        let mut session = targeting_ace(&unavailable);
+        session.run.offers.set_roll(MissionId(130), 51);
+        session.run.offering_ship = None;
+        let mut chance = Draws::of(&[]);
+        let hailed =
+            session.hail_key_faded(&unavailable, &HailOptions::default(), false, &mut chance);
+        assert_eq!(hailed, Ok(Hailed::Faded), "the comm dialog refused");
+        assert!(session.run.offering_ship.is_some(), "@0x621de runs first");
     }
 
     #[test]

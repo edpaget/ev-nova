@@ -30,7 +30,9 @@
 //!   [`Goal::Scoop`](crate::ai::Goal::Scoop); see [`Npc::is_scooping`]),
 //!   with no +0xc3 test (@0x370cb-0x370d5). The
 //!   box must be scoopable (@0x370fb) and must pass `_SWRLECollision`
-//!   (@0x3710c), which the engine stands in for with [`touches`]. Then the
+//!   (@0x3710c) over the two sprites' placed rects, the box's up and left
+//!   of its point as `_HandleBoxes` places it (@0x2e1c2-0x2e250), which
+//!   the engine stands in for with [`touches`], on that same rect. Then the
 //!   box's life becomes −1 and its sprite is hidden (@0x37119-0x3712e);
 //!   contents 0-5 add a ton of that commodity to the ship's own hold
 //!   (@0x3713a-0x37158); otherwise an NPC stops there (@0x3715f); for the
@@ -47,13 +49,8 @@
 //!   [`Npc::can_scoop`], see [`miner`](crate::ai::miner)). The scoop
 //!   branch doesn't read it.
 //!
-//! **Left out.**
-//!
-//! - The wrap shift (`_WrapPlayerPosition` @0x6811f-): the engine has no
-//!   player wrap.
-//!
 //! The murk (`_HandleSpriteMurkiness` @0x2e15e-0x2e181) is the view's:
-//! `nova_view::flight::murk` darkens each box
+//! `nova_view::flight::murk` mixes each box toward the background
 //! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use std::collections::BTreeMap;
@@ -154,7 +151,7 @@ impl BoxFrames {
 
     /// Half graphic `graphic`'s frame, across and down: none when its
     /// size is not known or there is no such graphic, so the box is
-    /// tested as a point at its centre.
+    /// tested as its point alone.
     #[must_use]
     pub fn half(&self, graphic: u16) -> Vec2 {
         match self.0.get(usize::from(graphic)).copied().flatten() {
@@ -167,14 +164,18 @@ impl BoxFrames {
 }
 
 /// Whether a ship's disc, `radius` about `ship_at`, touches a box at
-/// `box_at` whose frame is `half` across and down from its centre: no
-/// farther than `radius` from the frame's rectangle. This is the engine's
-/// approximation of `_SWRLECollision` (@0x3710c), which tests the two
-/// sprites pixel by pixel; the engine has no pixel masks, as
-/// `nova_sim::story` approximates it for stellars.
+/// `box_at` whose frame is `half` × 2 across and down: no farther than
+/// `radius` from the frame's rectangle, `[box_at − half × 2, box_at]`.
+/// `_HandleBoxes` places the sprite up and left of the box's point
+/// (@0x2e1c2-0x2e250), and `_SWRLECollision` (@0x3710c) tests the rect so
+/// placed, pixel by pixel. So the frame's centre is `box_at − half`, not
+/// the box's point, which is the rectangle's corner: a ship on the point
+/// still touches, as a miner flying at it (`_MinerAI` reads the position)
+/// must. The disc is the engine's approximation of the pixels; the engine
+/// has no pixel masks, as `nova_sim::story` approximates it for stellars.
 #[must_use]
 pub fn touches(ship_at: Vec2, radius: f32, box_at: Vec2, half: Vec2) -> bool {
-    let off = ship_at - box_at;
+    let off = ship_at - (box_at - half);
     let outside = Vec2::new(
         (off.x.abs() - half.x).max(0.0),
         (off.y.abs() - half.y).max(0.0),
@@ -300,22 +301,28 @@ mod tests {
         let half = Vec2::new(10.0, 5.0);
         let box_at = Vec2::new(100.0, 200.0);
         let touches_at = |x, y| touches(Vec2::new(x, y), 4.0, box_at, half);
-        assert!(touches_at(100.0, 200.0), "on the centre");
-        assert!(touches_at(109.0, 196.0), "inside the frame");
-        assert!(touches_at(114.0, 200.0), "the radius off the right edge");
-        assert!(touches_at(86.0, 200.0), "the radius off the left edge");
-        assert!(touches_at(100.0, 209.0), "the radius off the bottom edge");
-        assert!(touches_at(100.0, 191.0), "the radius off the top edge");
-        assert!(!touches_at(114.1, 200.0), "just beyond the right edge");
-        assert!(!touches_at(85.9, 200.0), "just beyond the left edge");
-        assert!(!touches_at(100.0, 209.1), "just beyond the bottom edge");
-        assert!(!touches_at(100.0, 190.9), "just beyond the top edge");
-        // Off the corner (110, 205): 3.5 across and 3.5 down, each within
+        // The frame is up and left of the box's point: x 80 to 100, y 190
+        // to 200.
+        assert!(touches_at(100.0, 200.0), "on the box's own point");
+        assert!(touches_at(90.0, 195.0), "on the frame's centre");
+        assert!(touches_at(104.0, 195.0), "the radius off the right edge");
+        assert!(touches_at(76.0, 195.0), "the radius off the left edge");
+        assert!(touches_at(90.0, 204.0), "the radius off the bottom edge");
+        assert!(touches_at(90.0, 186.0), "the radius off the top edge");
+        assert!(!touches_at(104.1, 195.0), "just beyond the right edge");
+        assert!(!touches_at(75.9, 195.0), "just beyond the left edge");
+        assert!(!touches_at(90.0, 204.1), "just beyond the bottom edge");
+        assert!(!touches_at(90.0, 185.9), "just beyond the top edge");
+        // Off the corner (100, 200): 3.5 across and 3.5 down, each within
         // the radius, but 4.95 away.
-        assert!(!touches_at(113.5, 208.5), "diagonal off a corner");
-        assert!(touches_at(112.0, 207.0), "2.83 off a corner");
+        assert!(!touches_at(103.5, 203.5), "diagonal off a corner");
+        assert!(touches_at(102.0, 202.0), "2.83 off a corner");
+        assert!(
+            !touches_at(109.0, 205.0),
+            "inside a frame centred on the point, but nothing is drawn there"
+        );
         let point = |x, y| touches(Vec2::new(x, y), 4.0, box_at, Vec2::ZERO);
-        assert!(point(104.0, 200.0), "a frame of no size is its centre");
+        assert!(point(104.0, 200.0), "a frame of no size is its point");
         assert!(!point(103.0, 203.0));
     }
 
@@ -454,7 +461,8 @@ mod tests {
             boxes.spawn_scoopable(Vec2::new(x, 0.0), Some(contents), 1, &mut NeverFires);
         }
         let mut hold = NpcHold::default();
-        // Graphic 1 is 10 across: the box at 30 is 25 from its edge.
+        // Graphic 1 is 10 across, up and left of the box: the box at 30
+        // is 20 from its edge.
         let frames = BoxFrames::new([None, Some((10, 10)), None, None, None]);
         npc_scoop(&mut boxes, &frames, Vec2::ZERO, 16.0, &mut hold);
         assert_eq!((hold.tons(0), hold.tons(4)), (2, 1));

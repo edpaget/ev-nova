@@ -17,7 +17,7 @@ const OFFSET_X: f32 = 170.0;
 
 /// The router under `rules`, in widened flight, offering a mission whose
 /// text overflows its box.
-fn offering(rules: Rulebook) -> AppScreen {
+pub(super) fn offering(rules: Rulebook) -> AppScreen {
     let mut screen = AppScreen::new(data())
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
         .with_rules(rules);
@@ -36,7 +36,7 @@ fn offering(rules: Rulebook) -> AppScreen {
     screen
 }
 
-fn text(screen: &AppScreen) -> &ScrollText {
+pub(super) fn text(screen: &AppScreen) -> &ScrollText {
     screen
         .offer()
         .and_then(|offer| offer.dialog())
@@ -46,7 +46,7 @@ fn text(screen: &AppScreen) -> &ScrollText {
 
 /// A notch over the text's right edge, as the widened window gives it:
 /// outside the text unless moved back into the classic frame.
-fn wheel_over_text(screen: &mut AppScreen) {
+pub(super) fn wheel_over_text(screen: &mut AppScreen) {
     let rect = text(screen).rect();
     screen.input(&Input::Scroll {
         delta: ScrollDelta::Lines(1.0),

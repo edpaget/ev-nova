@@ -125,8 +125,8 @@ pub fn jitter(reach: u16, tick: u64, rolls: &impl BlinkChance) -> Point {
 /// How a cloak changes a ship's drawing (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CloakDraw {
-    /// Its hull's tint and blend in place of its own, murk and all, when
-    /// drawn: the alt layer takes it too.
+    /// Its hull's tint and blend in place of its own, when drawn: the alt
+    /// layer takes it too. Its colorize stays, as a cloak leaves +0xb0.
     pub hull: Option<(Color, Blend)>,
     /// How far its hull, alt, glow, lights and weapon glow are moved.
     pub offset: Point,
@@ -417,7 +417,6 @@ mod tests {
                 paint: None,
                 cloak,
                 hull: cloak.is_none_or(|cloak| cloak.hull.is_some()),
-                murk: 0,
                 held: true,
                 glow: Some(20),
                 lights: Some(20),

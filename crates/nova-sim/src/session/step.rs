@@ -34,12 +34,16 @@
 //!    as its phase settles, the beams' and shockwaves' included, as
 //!    `_DamageShip` does (@0x44385, @0x4453d), so only the session's own
 //!    calls are left here, before the frame is drawn. Then the attack
-//!    quotes the answers raise are said
+//!    quotes the pass left, those the frame's line work didn't say (see
+//!    the `comm_calls` module), are said
 //!    (`_ShowPersonHailQuote` @0x89ce1) and `_HandleShip`'s quote roll runs
 //!    (@0x33f0f-0x33fba; [`Session::tick_quotes`]), and the pass's quotes,
 //!    fight events and ships are reported ([`PassReport`]);
-//! 4. in double time, the second pass (`_DoPlayGameWork(0)` @0x45f31,
-//!    [`Session::tick_again`]), the rescue asked after it
+//! 4. in double time, the frame as it stands is reported
+//!    ([`StepRun::between_passes`]), as that is what the original draws
+//!    (`_PlayGame` @0x45d96-0x45e82), then the second pass
+//!    (`_DoPlayGameWork(0)` @0x45f31, [`Session::tick_again`]), the rescue
+//!    asked after it
 //!    ([`Session::rescue_if_due`]), the strikes answered, the quote roll
 //!    on the clock unmoved ([`Session::tick_quotes_again`]), and its own
 //!    report. Its comm notes are taken with the step's, so the frame that
@@ -54,6 +58,10 @@
 //!    order ([`StepRun::class_orders_cleared`], see the `class_orders`
 //!    module), which the frame clears before its first step too: the
 //!    view shows the escort menu in full again after that step's fade.
+//!    And whether a jump collapsed under the white on the step
+//!    ([`StepRun::lit_collapse`], see the `jump_collapse` module), read
+//!    per step, so neither double time's second pass nor a catch-up
+//!    tick's later steps lose it.
 //!
 //! **The rescue.** The escape pod's rescue settles on the pass the pod's
 //! countdown runs out (`_HandlePlayer` runs it in place of the rest of
@@ -62,7 +70,8 @@
 //! put the ship (@0x68fab). The pass is not reported, and its quotes and
 //! fight events wait for the next frame's take; its comm and its last
 //! line are taken all the same, on either pass, so a note shows before
-//! the `dësc` opens.
+//! the `dësc` opens. A rescue on the second pass reports no frame between
+//! the passes, as the view shows the new layout at once.
 
 use crate::ai::Behaviour;
 use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
@@ -70,7 +79,9 @@ use crate::chance::Chance;
 use crate::combat::{Rules, ShipRef};
 #[cfg(doc)]
 use crate::flight_frame::RaisedLine;
-use crate::flight_frame::{FrameShot, PassReport, ShipPlace, StepInput, StepReport, StepRun};
+use crate::flight_frame::{
+    FlightFrame, FrameShot, PassReport, ShipPlace, StepInput, StepReport, StepRun,
+};
 
 use super::Session;
 
@@ -163,6 +174,7 @@ impl Session {
             self.take_step_ends(&mut run);
             return run;
         }
+        run.between_passes = Some(self.frame_between_passes());
         self.tick_again(
             input.controls,
             collab.behaviour,
@@ -175,6 +187,7 @@ impl Session {
                 .raise_line(&mut self.out, crate::flight_frame::RaisedLine::Comm(note));
         }
         if self.rescue_if_due(catalog, &mut *collab.chance) {
+            run.between_passes = None;
             run.comm.extend(self.take_comm());
             run.rescued = Some(ShipPlace::from(*self.player()));
             self.take_step_ends(&mut run);
@@ -188,12 +201,23 @@ impl Session {
         run
     }
 
+    /// The flight as it stands, between double time's two passes.
+    fn frame_between_passes(&self) -> Box<FlightFrame> {
+        let mut frame = Box::<FlightFrame>::default();
+        self.fill_frame(&mut frame);
+        frame
+    }
+
     /// What `run`'s step leaves at its end, taken into it: the line it
-    /// raised last, and whether it cleared an escort class's kept order
-    /// (see the module docs).
+    /// raised last, whether it cleared an escort class's kept order, and
+    /// whether a jump collapsed under the white on it (see the module
+    /// docs). A wrap a rescue's unreported pass left is dropped, as the
+    /// view lays itself out afresh.
     fn take_step_ends(&mut self, run: &mut StepRun) {
+        self.out.player_wrap = None;
         run.last_line = self.out.last_line.take();
         run.class_orders_cleared = std::mem::take(&mut self.out.class_orders_cleared);
+        run.lit_collapse = std::mem::take(&mut self.out.lit_collapse);
     }
 
     /// Each ship's place: the player's, then each NPC's.
@@ -224,6 +248,7 @@ impl Session {
             player_position: self.player().position,
             double_time: self.double_time(),
             quotes: self.take_quotes(),
+            wrap: self.out.player_wrap.take(),
         }
     }
 }
@@ -235,7 +260,9 @@ mod tests {
     use crate::combat::CombatEvent;
     use crate::flight::Controls;
     use crate::flight_frame::RaisedLine;
+    use crate::geometry::Vec2;
     use crate::hail::CommNote;
+    use crate::player_wrap::{PlayerWrap, WRAP_EDGE};
     use crate::session::PersonQuote;
     use crate::session::tests::{armed, facing_an_npc};
     use crate::testkit::{FakePilotCatalog, catalog};
@@ -573,7 +600,8 @@ mod tests {
     #[test]
     fn an_attack_quote_is_said_on_the_pass_of_its_hit() {
         let catalog = crate::session::tests::quoting_armed();
-        let mut session = facing_an_npc(&catalog, 180);
+        let lines = crate::testkit::QuoteLines(catalog.strings[0].1.clone());
+        let mut session = facing_an_npc(&catalog, 180).with_strings(std::rc::Rc::new(lines));
         crate::session::tests::make_quoting_warship(&mut session);
         for _ in 0..60 {
             session.chart.target = Some(crate::traffic::npc::NpcId(0));
@@ -728,6 +756,7 @@ mod tests {
         assert!(report.stopped);
         let run = &report.steps[0];
         assert_eq!(run.passes.len(), 1, "the advance pass alone");
+        assert_eq!(run.between_passes, None, "the view lays out afresh");
         let player = session.player();
         assert_eq!(
             run.rescued,
@@ -943,6 +972,121 @@ mod tests {
             double_time: session.double_time(),
             quotes: session.take_quotes(),
             combat: session.take_combat_events(),
+            wrap: session.out.player_wrap.take(),
         }
+    }
+
+    // The wrap (see the `player_wrap` module).
+
+    /// [`catalog`]'s session flown a pass, the ship at `at` at `velocity`.
+    fn flying_at(catalog: &FakePilotCatalog, at: Vec2, velocity: Vec2) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        steps(&mut session, catalog, &StepInput::default(), 1);
+        session.ship.player.position = at;
+        session.ship.player.velocity = velocity;
+        session
+    }
+
+    #[test]
+    fn a_double_time_step_reports_the_frame_between_its_passes() {
+        let catalog = catalog();
+        let at = Vec2::new(100.0, 0.0);
+        let mut session = flying_at(&catalog, at, Vec2::new(2.0, 0.0));
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        session.set_double_time_key(true);
+        let report = steps(&mut session, &catalog, &input, 1);
+        let run = &report.steps[0];
+        let first = &run.passes[0];
+        let frame = run.between_passes.as_ref().expect("reported");
+        assert_eq!(frame.ships, first.ships);
+        assert_eq!(frame.player().position, first.player_position);
+        assert_ne!(frame.player().position, session.player().position);
+
+        let mut session = flying_at(&catalog, at, Vec2::new(2.0, 0.0));
+        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert_eq!(report.steps[0].between_passes, None, "single time");
+    }
+
+    #[test]
+    fn a_warp_end_on_the_second_pass_reports_a_frame_not_yet_arrived() {
+        use crate::session::warp_stage::tests::{frames, jumping_in_double_time, with_a_warp_out};
+        use crate::sound::{SimSound, WARP_UP_HALTS};
+        let catalog = with_a_warp_out();
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 96);
+        session.take_sounds();
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        let report = steps(&mut session, &catalog, &input, 1);
+        let sounds = session.take_sounds();
+        assert!(
+            sounds.contains(&SimSound::Halt(&WARP_UP_HALTS)) && sounds.contains(&SimSound::Arrived),
+            "the halt and the warp-out raised with that step: {sounds:?}"
+        );
+        let frame = report.steps[0].between_passes.as_ref().expect("reported");
+        assert!(!frame.warp_end_due, "the frame between its passes");
+        assert!(session.warp_end_due(), "the second pass ended the warp");
+        let next = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(next.steps, []);
+        assert!(next.stopped);
+    }
+
+    #[test]
+    fn a_natural_warp_end_on_the_advance_pass_is_in_the_frame_between_its_passes() {
+        // w 0.91: over on frame 115's advance pass, its warp-up stepped
+        // out at the pass's head.
+        use crate::session::warp_stage::tests::{flagged, frames, jumping_in_double_time};
+        let catalog = flagged(0x0001);
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 114);
+        assert!(!session.warp_end_due(), "frame 114");
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        let report = steps(&mut session, &catalog, &input, 1);
+        let frame = report.steps[0].between_passes.as_ref().expect("reported");
+        assert!(frame.warp_end_due, "the view arrives on that tick");
+    }
+
+    #[test]
+    fn a_wrap_is_on_the_report_of_the_advance_pass_it_ran_on_alone() {
+        let catalog = catalog();
+        let past = Vec2::new(WRAP_EDGE + 1.0, 0.0);
+        let mut session = flying_at(&catalog, past, Vec2::ZERO);
+        let report = steps(&mut session, &catalog, &StepInput::default(), 2);
+        let wraps: Vec<_> = report.steps.iter().map(|run| run.passes[0].wrap).collect();
+        assert_eq!(wraps, [PlayerWrap::of(past), None]);
+    }
+
+    #[test]
+    fn a_wrap_is_on_the_report_of_double_times_second_pass_when_it_ran_there() {
+        let catalog = catalog();
+        let near = Vec2::new(WRAP_EDGE - 1.0, 0.0);
+        let mut session = flying_at(&catalog, near, Vec2::new(2.0, 0.0));
+        let input = StepInput {
+            double_time_key: true,
+            ..StepInput::default()
+        };
+        session.set_double_time_key(true);
+        let report = steps(&mut session, &catalog, &input, 2);
+        let wraps: Vec<_> = report.steps[0].passes.iter().map(|p| p.wrap).collect();
+        assert_eq!(wraps, [None, PlayerWrap::of(near + Vec2::new(2.0, 0.0))]);
+        assert!(report.steps[1].passes.iter().all(|p| p.wrap.is_none()));
+    }
+
+    #[test]
+    fn a_rescues_dropped_wrap_reaches_no_report() {
+        let catalog = catalog();
+        let mut session = in_the_pod(&catalog, 1);
+        session.ship.player.position = Vec2::new(WRAP_EDGE + 1.0, 0.0);
+        let report = steps(&mut session, &catalog, &StepInput::default(), 1);
+        assert!(report.steps[0].rescued.is_some());
+        assert_eq!(session.out.player_wrap, None, "dropped");
     }
 }

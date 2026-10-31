@@ -5,7 +5,8 @@
 //! **The order** (`_DoPlayGameWork` @0x43de5-0x4453d):
 //!
 //! 1. `_HandlePlayer` (@0x43e19) up to its move: the pass's head and the
-//!    player's work before the move; its self-repair (@0x68b3d), point
+//!    player's work before the move, `_WrapPlayerPosition` (@0x6864d)
+//!    among it (see the `player_wrap` module); its self-repair (@0x68b3d), point
 //!    defence (@0x68c74), sabotage (@0x692e5), trigger (@0x6ab55) and
 //!    reloads' countdown (@0x6ae25), its recoil (@0x62f35) and its bays'
 //!    fighters (@0x62c61) settled, and its regeneration (@0x6cf86), before
@@ -33,11 +34,13 @@
 //!    (`_LaunchFighter`, see the `fighters` module), a fighter above its
 //!    carrier thinking then, and the loop resumed after that slot
 //!    ([`Session::dispatch_npcs`]); then the thinks' voice cues answered
-//!    in berth order; then the frame's work on the line,
-//!    every think's calls, scan, plunders and refuel note, the launched
-//!    fighters' among them, settled in slot order
-//!    ([`Session::settle_line_queue`], see the `comm_calls` module). All
-//!    before `_HandleShot`, so the fighters move on their launch frame.
+//!    in berth order; then the attack quotes from before the loop said
+//!    ([`Session::say_quotes_before_the_line`]), and the frame's work on
+//!    the line, every think's attack quote, calls, scan, plunders and
+//!    refuel note, the launched fighters' among them, settled in slot
+//!    order ([`Session::settle_line_queue`], see the `comm_calls` module).
+//!    All before `_HandleShot`, so the fighters move on their launch
+//!    frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit,
 //!    their hits settled and answered.
@@ -328,6 +331,9 @@ impl Session {
             for event in std::mem::take(&mut self.space.queued_in_frame) {
                 self.space.traffic.queue_pirate_event(event);
             }
+            // The quotes from before the loop, ahead of the frame's line
+            // work (see the `comm_calls` module).
+            self.say_quotes_before_the_line(chance);
             // Every think's work on the line, the launched fighters'
             // among it, in slot order (see `Session::dispatch_npcs`).
             self.settle_line_queue(rules.law, chance);

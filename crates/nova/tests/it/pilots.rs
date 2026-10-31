@@ -23,7 +23,10 @@ use nova::app::screen::QUIT_DELAY;
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
-use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, music_fade};
+use nova_audio::{
+    Audio, AudioCommand, AudioCore, AudioSettings, music_fade, music_fade_left,
+    switched_out_music_fade,
+};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -606,6 +609,13 @@ impl Harness {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
+    /// Draws a frame `skipped` frames' time after the last, as one comes
+    /// after the app was in the background, asking for none meanwhile.
+    fn frame_after(&mut self, skipped: u64) -> Frame {
+        self.frames += skipped;
+        self.frame()
+    }
+
     /// Draws frames until the dock approach has cleared the request.
     fn approach(&mut self) {
         self.settle_until("the dock approach's clearance", |game| {
@@ -909,6 +919,34 @@ fn the_main_menu_plays_the_music_until_a_pilot_enters_the_game() {
     assert_eq!(game.showing(), Showing::MainMenu);
     game.frame();
     assert_eq!(game.music(), [], "spent for the rest of the run");
+}
+
+/// A switch-out fades the music 30 times slower, as `_StopIntroMusic`
+/// sleeps 30 ticks a step in the background (@0x61cfa); back to the
+/// front, what is left fades at a tick a step, from the first frame after.
+#[test]
+fn switched_out_the_music_fades_slowly_and_back_its_rest_fades_at_once() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening(&store);
+    game.frame();
+    let volume = AudioSettings::default().music_volume;
+    assert_eq!(game.music(), [AudioCommand::StartMusic { volume }]);
+    game.send(WindowEvent::FocusLost);
+    assert_eq!(
+        game.music(),
+        [AudioCommand::FadeOutMusic(switched_out_music_fade(volume))]
+    );
+    // The switched-out picture, 16 ms after the last frame.
+    game.frame();
+    game.send(WindowEvent::FocusGained);
+    assert_eq!(game.music(), [], "told at the first frame back");
+    // 63 frames' time later: 1,008 ms.
+    game.frame_after(62);
+    let away = Duration::from_millis(16 + 1008);
+    let rest = music_fade_left(volume, away).expect("16 steps, 2 done");
+    assert_eq!(game.music(), [AudioCommand::FadeOutMusic(rest)]);
+    game.frame();
+    assert_eq!(game.music(), [], "once");
 }
 
 /// A new pilot named `name`, flying, and one frame drawn.

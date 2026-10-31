@@ -146,13 +146,15 @@
 //! 3. A mission ship of `ShipBehav` 0, attacking the player, its slot
 //!    active ([`Hail::mission`], @0x9610f-0x96142): "In your dreams,
 //!    pal." (@0x9664c), and it keeps attacking, bribable or not.
-//! 4. A ship the bounty hunter flies (`përs` 1150,
+//! 4. A stellar's defence ship ([`Npc::defends`](crate::traffic::npc::Npc::defends),
+//!    +0x8c != -1, @0x96148-0x96150): "In your dreams, pal." (@0x9664c),
+//!    bribable or not.
+//! 5. A ship the bounty hunter flies (`përs` 1150,
 //!    [`BOUNTY_HUNTER`](crate::catalog::BOUNTY_HUNTER), +0xc8d0 0x3fe
-//!    @0x96156): "In your dreams, pal.", bribable or not. The defence
-//!    ship's refusal before it (@0x96148) waits on defence fleets.
-//! 5. A ship that takes no bribes: "In your dreams, pal.", and it keeps
+//!    @0x96156): "In your dreams, pal.", bribable or not.
+//! 6. A ship that takes no bribes: "In your dreams, pal.", and it keeps
 //!    attacking.
-//! 6. It says its mood (as above, or "You'll have to pay me first.") and
+//! 7. It says its mood (as above, or "You'll have to pay me first.") and
 //!    asks its price: paid, "A pleasure doing business with you." and it
 //!    spares the player; declined, "What? How dare you! Prepare to die!"
 //!    and it attacks; short, "Yeah, come back when you actually have some
@@ -461,14 +463,12 @@ impl HailOption for BegForMercy {
         let attacks_player = hail
             .mission
             .is_some_and(|mission| mission.behav == ShipBehav::AttackPlayer);
-        // The defence ship's refusal sits between these two (+0x8c != -1,
-        // @0x96148-0x96150), filed as
-        // rdm:phase/play-feel-cross-roadmap/phase-5-defence-ship-refuses-beg-for-mercy.
+        let defence_ship = hail.npc.defends.is_some();
         let bounty_hunter = hail
             .npc
             .person
             .is_some_and(|person| person.id == BOUNTY_HUNTER);
-        if attacks_player || bounty_hunter || !hail.dispositions.bribable {
+        if attacks_player || defence_ship || bounty_hunter || !hail.dispositions.bribable {
             return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
         }
         Answer {
@@ -1738,6 +1738,47 @@ mod tests {
                 .is_some(),
             "another person is asked its price"
         );
+    }
+
+    /// A ship defending a stellar (the original's +0x8c), or not.
+    fn defender(defends: Option<crate::catalog::StellarId>) -> Npc {
+        Npc { defends, ..ship() }
+    }
+
+    #[test]
+    fn beg_for_mercy_to_a_defence_ship_is_in_your_dreams_bribable_or_not() {
+        let npc = defender(Some(crate::catalog::StellarId(128)));
+        for bribable in [false, true] {
+            assert_eq!(
+                press(&BegForMercy::default(), &begging(&npc, bribable)),
+                says(IN_YOUR_DREAMS),
+                "no price asked, nothing done (@0x96148, @0x9664c)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_ship_defending_nothing_is_asked_its_price() {
+        let npc = defender(None);
+        assert!(
+            press(&BegForMercy::default(), &begging(&npc, true))
+                .ask
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_quiet_defence_ship_ignores_begging_first() {
+        let npc = defender(Some(crate::catalog::StellarId(128)));
+        let hail = Hail {
+            dispositions: quiet(),
+            ..begging(&npc, true)
+        };
+        assert_eq!(press(&BegForMercy::default(), &hail), Answer::default());
+        let bible = BegForMercy {
+            quiet_hails: RuleSource::Bible,
+        };
+        assert_eq!(press(&bible, &hail), says(IN_YOUR_DREAMS));
     }
 
     #[test]
