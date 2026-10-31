@@ -109,6 +109,20 @@
 //! own, the price is never below 0, and a row priced 0 is listed and
 //! bought free, limited by space alone.
 //!
+//! Which `jünk` a stellar lists follows
+//! [`RuleKey::JunkListing`](crate::RuleKey::JunkListing). By the engine
+//! (the default), a side lists at most one: the last match of the
+//! original's loop over the records overwrites the slot, so the highest ID
+//! that names the stellar and whose test holds wins (`_DoTradeDialog`
+//! @0x5dd7d-0x5de74). A `jünk` that fails its test takes nothing, and the
+//! two sides choose on their own, so the rows may be two different `jünk`.
+//! The price is written unconditionally, so a winner priced 0 hides its
+//! row (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac) with no fallback to a lower
+//! ID, and stays named. A held `jünk` no slot names has no row, can't be
+//! traded there, and counts as "other cargo", compared by index and not by
+//! price (@0x4d70c-0x4d767). By the Bible, whose `SoldAt` and `BoughtAt`
+//! state no limit, every match is listed, and every match is named.
+//!
 //! # Tribbles and perishables
 //!
 //! In flight, a held `jünk` with the Tribbles flag ([`TRIBBLES`]) gains a
@@ -863,8 +877,9 @@ pub struct MarketRow {
 /// A stellar's exchange, as the player sees it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Market {
-    /// The goods traded, standard commodities first by number, then
-    /// `jünk` by ID.
+    /// The goods traded, by slot and then by good: standard commodities
+    /// first by number, then the `jünk` bought, then the `jünk` sold, as
+    /// the original's rows. By the engine a side holds one `jünk`.
     pub rows: Vec<MarketRow>,
     /// What the exchange says of the events active here, one line each,
     /// drawn in item 15 (`_TradeDialogUpdate` @0x4df54-0x4dfb5).
@@ -1414,8 +1429,8 @@ pub struct Exchange<'a> {
 ///
 /// Each standard commodity is listed at its [`commodity_price`], when it
 /// has one, traded both ways; each `jünk` row a stellar lists, as
-/// [`junk_listing`] lists it. Then the rows are ordered by good, and
-/// each shows the tons held.
+/// [`junk_listing`] lists it. Then the rows are ordered by slot and then
+/// by good, and each shows the tons held.
 #[must_use]
 pub fn market(exchange: &Exchange) -> Option<Market> {
     let &Exchange {
@@ -1467,7 +1482,7 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
         .collect();
     let (junk_rows, named) = junk_listing(exchange);
     rows.extend(junk_rows);
-    rows.sort_by_key(|row| row.good);
+    rows.sort_by_key(|row| (row.slot, row.good));
     for row in &mut rows {
         row.held = pilot.held(row.good);
     }
@@ -1501,29 +1516,32 @@ pub fn market(exchange: &Exchange) -> Option<Market> {
     })
 }
 
-/// The `jünk` rows `exchange` lists. A `jünk` whose `BoughtAt` lists the
-/// stellar, while the gate allows its `BuyOn`, has a row at
-/// [`JunkSide::BoughtAt`]; one whose `SoldAt` lists it, while the gate
-/// allows its `SellOn`, a row at [`JunkSide::SoldAt`]: the bought one
-/// first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f). Each is
-/// priced by [`junk_price`], and not listed without a price, and traded
-/// the [`junk_ways`]. Also every `jünk` a side names, priced or not,
-/// which the cargo summary leaves out of its "other cargo".
+/// The `jünk` rows `exchange` lists, and every `jünk` a side names, priced
+/// or not, which the cargo summary leaves out of its "other cargo".
+///
+/// A `jünk` matches [`JunkSide::BoughtAt`] where its `BoughtAt` lists the
+/// stellar and the gate allows its `BuyOn`, and [`JunkSide::SoldAt`] where
+/// its `SoldAt` does and the gate allows its `SellOn`. Each side keeps the
+/// matches [`junk_kept`] says: by the engine only the highest ID, and that
+/// choice comes before any price, so a winner priced 0 stays named and
+/// hides its side's row, with no fallback to a lower ID. Each kept `jünk`
+/// is priced by [`junk_price`], not listed without a price, and traded the
+/// [`junk_ways`].
 fn junk_listing(exchange: &Exchange) -> (Vec<MarketRow>, Vec<JunkId>) {
     let mut rows = Vec::new();
     let mut named = Vec::new();
-    for junk in &exchange.goods.junk {
-        let bought =
-            junk.bought_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.buy_on);
-        let sold = junk.sold_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.sell_on);
-        let sides = [
-            bought.then_some(JunkSide::BoughtAt),
-            sold.then_some(JunkSide::SoldAt),
-        ];
-        if bought || sold {
+    for side in [JunkSide::BoughtAt, JunkSide::SoldAt] {
+        let matches = JunkMatches {
+            exchange,
+            matches: exchange
+                .goods
+                .junk
+                .iter()
+                .filter(|junk| side.matches(junk, exchange))
+                .collect(),
+        };
+        for junk in junk_kept().of(&matches) {
             named.push(junk.id);
-        }
-        for side in sides.into_iter().flatten() {
             let quote = JunkQuote {
                 exchange,
                 base: i64::from(junk.base_price),
@@ -1657,6 +1675,60 @@ impl JunkSide {
             Self::SoldAt => PriceLevel::Low,
         }
     }
+
+    /// Whether `junk` is listed at `exchange`'s stellar on this side and
+    /// the side's test holds.
+    fn matches(self, junk: &JunkRecord, exchange: &Exchange) -> bool {
+        let (stellars, test) = match self {
+            Self::BoughtAt => (&junk.bought_at, &junk.buy_on),
+            Self::SoldAt => (&junk.sold_at, &junk.sell_on),
+        };
+        stellars.contains(&exchange.stellar) && exchange.gate.allows(test)
+    }
+}
+
+/// The `jünk` matching one side of an exchange: the facts
+/// [`junk_kept`] reads.
+struct JunkMatches<'a> {
+    /// The exchange: its rule set.
+    exchange: &'a Exchange<'a>,
+    /// Every `jünk` that names the stellar on the side and passes its test.
+    matches: Vec<&'a JunkRecord>,
+}
+
+impl Context for JunkMatches<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.exchange.rules
+    }
+}
+
+/// Which of a side's matches the exchange lists, as
+/// [`RuleKey::JunkListing`](crate::RuleKey::JunkListing) says: by the
+/// engine the highest ID alone, by the Bible all of them.
+fn junk_kept<'a>() -> Value<JunkMatches<'a>, Vec<&'a JunkRecord>> {
+    Value::disputed(
+        "jünk kept",
+        "one slot a side, the last match overwriting it `_DoTradeDialog` @0x5dd7d-0x5de74",
+        RuleKey::JunkListing,
+        highest_junk,
+        every_junk,
+    )
+}
+
+/// The engine's choice: the highest ID, by ID and not by position, as the
+/// original's loops run over the records in ascending index.
+fn highest_junk<'a>(side: &JunkMatches<'a>) -> Vec<&'a JunkRecord> {
+    side.matches
+        .iter()
+        .copied()
+        .max_by_key(|junk| junk.id)
+        .into_iter()
+        .collect()
+}
+
+/// The Bible's choice: every match.
+fn every_junk<'a>(side: &JunkMatches<'a>) -> Vec<&'a JunkRecord> {
+    side.matches.clone()
 }
 
 /// One `jünk` row being priced and listed at an exchange: the facts its
@@ -2696,6 +2768,7 @@ mod tests {
 
     const EARTH: StellarId = StellarId(140);
     const MARS: StellarId = StellarId(141);
+    const VENUS: StellarId = StellarId(142);
 
     /// A `jünk` 0 that no stellar lists, at no price.
     fn unlisted() -> JunkRecord {
@@ -2714,7 +2787,7 @@ mod tests {
         }
     }
 
-    /// Opals, sold at Earth and bought at Mars; water, sold at Earth.
+    /// Opals, sold at Earth and bought at Mars; water, sold at Venus.
     fn junk() -> Vec<JunkRecord> {
         vec![
             JunkRecord {
@@ -2730,7 +2803,7 @@ mod tests {
                 id: JunkId(134),
                 name: "Water".to_owned(),
                 base_price: 300,
-                sold_at: vec![EARTH],
+                sold_at: vec![VENUS],
                 ..unlisted()
             },
         ]
@@ -3231,12 +3304,15 @@ mod tests {
         .expect("trades");
         assert_eq!(
             at_earth.rows,
-            [
-                row(Good::Junk(JunkId(134)), "Water", 240),
-                row(Good::Junk(JunkId(146)), "Opals", 960),
-            ],
-            "by ID, each traded both ways by the engine"
+            [row(Good::Junk(JunkId(146)), "Opals", 960)],
+            "traded both ways by the engine"
         );
+        let at_venus = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), VENUS, TRADE, &pilot(0))
+        })
+        .expect("trades");
+        assert_eq!(at_venus.rows, [row(Good::Junk(JunkId(134)), "Water", 240)]);
         let at_mars = market(&Exchange {
             rules: rules(RuleSource::Engine),
             ..exchange(&goods(), MARS, TRADE, &pilot(0))
@@ -3279,10 +3355,9 @@ mod tests {
             [
                 (Good::Commodity(0), 0),
                 (Good::Commodity(4), 4),
-                (Good::Junk(JunkId(134)), 7),
                 (Good::Junk(JunkId(146)), 7),
             ],
-            "Earth sells water and opals"
+            "Earth sells opals"
         );
     }
 
@@ -3308,7 +3383,6 @@ mod tests {
                 (Good::Commodity(0), food),
                 (Good::Commodity(1), Some(Medium)),
                 (Good::Commodity(4), Some(High)),
-                (Good::Junk(JunkId(134)), Some(Low)),
                 (Good::Junk(JunkId(146)), Some(Low)),
             ]
         };
@@ -3448,16 +3522,10 @@ mod tests {
         };
         assert_eq!(
             at(EARTH),
-            [
-                MarketRow {
-                    bought_here: false,
-                    ..row(Good::Junk(JunkId(134)), "Water", 240)
-                },
-                MarketRow {
-                    bought_here: false,
-                    ..row(Good::Junk(JunkId(146)), "Opals", 960)
-                },
-            ]
+            [MarketRow {
+                bought_here: false,
+                ..row(Good::Junk(JunkId(146)), "Opals", 960)
+            }]
         );
         assert_eq!(
             at(MARS),
@@ -3664,15 +3732,11 @@ mod tests {
     fn the_markup_prices_junk_where_it_is_sold_and_where_it_is_bought() {
         let water = Good::Junk(JunkId(134));
         let opals = Good::Junk(JunkId(146));
-        assert_eq!(
-            priced(EARTH, TRADE, Markup::Outlaw),
-            [(water, 272), (opals, 1090)]
-        );
+        assert_eq!(priced(EARTH, TRADE, Markup::Outlaw), [(opals, 1090)]);
+        assert_eq!(priced(VENUS, TRADE, Markup::Outlaw), [(water, 272)]);
         assert_eq!(priced(MARS, TRADE, Markup::Outlaw), [(opals, 1320)]);
-        assert_eq!(
-            priced(EARTH, TRADE, Markup::Dominated),
-            [(water, 200), (opals, 800)]
-        );
+        assert_eq!(priced(EARTH, TRADE, Markup::Dominated), [(opals, 800)]);
+        assert_eq!(priced(VENUS, TRADE, Markup::Dominated), [(water, 200)]);
         assert_eq!(priced(MARS, TRADE, Markup::Dominated), [(opals, 1800)]);
     }
 
@@ -3717,6 +3781,200 @@ mod tests {
         control_bits: &RefuseBits(&[7]),
         ..Gate::FRESH
     };
+
+    /// A `jünk` of `id` and `base` price, named for its ID, that `sold_at`
+    /// and `bought_at` list.
+    fn listing(id: i16, base: i16, sold_at: &[StellarId], bought_at: &[StellarId]) -> JunkRecord {
+        JunkRecord {
+            id: JunkId(id),
+            name: format!("Junk {id}"),
+            base_price: base,
+            sold_at: sold_at.to_vec(),
+            bought_at: bought_at.to_vec(),
+            ..unlisted()
+        }
+    }
+
+    /// The exchange at Earth of `junk`, in the order given, for `trader`,
+    /// through `gate`, by `rules`.
+    fn listing_at_earth(
+        junk: Vec<JunkRecord>,
+        trader: &FakePilot,
+        gate: Gate,
+        rules: Rulebook,
+    ) -> Market {
+        let goods = Goods::new(&CommodityStrings::default(), junk, Vec::new());
+        market(&Exchange {
+            gate,
+            rules,
+            ..exchange(&goods, EARTH, TRADE, trader)
+        })
+        .expect("trades")
+    }
+
+    /// The rule set with `jünk` listed by the Bible, every match.
+    fn listing_all() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::JunkListing, RuleSource::Bible)
+    }
+
+    /// A row's good and slot.
+    fn slotted(market: &Market) -> Vec<(Good, u8)> {
+        market.rows.iter().map(|row| (row.good, row.slot)).collect()
+    }
+
+    fn junk_good(id: i16) -> Good {
+        Good::Junk(JunkId(id))
+    }
+
+    #[test]
+    fn the_highest_id_takes_a_side_at_its_own_price_whatever_the_order_held() {
+        let (low, high) = (
+            listing(140, 400, &[EARTH], &[]),
+            listing(150, 800, &[EARTH], &[]),
+        );
+        for junk in [vec![low.clone(), high.clone()], vec![high, low]] {
+            let found = listing_at_earth(junk, &pilot(0), Gate::FRESH, Rulebook::default());
+            assert_eq!(found.rows, [row(junk_good(150), "Junk 150", 640)], "sold");
+        }
+        let (low, high) = (
+            listing(140, 400, &[], &[EARTH]),
+            listing(150, 800, &[], &[EARTH]),
+        );
+        for junk in [vec![low.clone(), high.clone()], vec![high, low]] {
+            let found = listing_at_earth(junk, &pilot(0), Gate::FRESH, Rulebook::default());
+            assert_eq!(
+                found.rows,
+                [bought(row(junk_good(150), "Junk 150", 1000))],
+                "bought"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_sides_choose_on_their_own() {
+        let junk = vec![
+            listing(150, 800, &[], &[EARTH]),
+            listing(145, 800, &[EARTH], &[]),
+            listing(140, 400, &[], &[EARTH]),
+        ];
+        let found = listing_at_earth(junk, &pilot(0), Gate::FRESH, Rulebook::default());
+        assert_eq!(
+            slotted(&found),
+            [(junk_good(150), 6), (junk_good(145), 7)],
+            "a different jünk on each side"
+        );
+        let junk = vec![
+            listing(150, 800, &[EARTH], &[EARTH]),
+            listing(140, 400, &[EARTH], &[EARTH]),
+        ];
+        let found = listing_at_earth(junk, &pilot(0), Gate::FRESH, Rulebook::default());
+        assert_eq!(
+            slotted(&found),
+            [(junk_good(150), 6), (junk_good(150), 7)],
+            "one jünk winning both sides keeps both rows"
+        );
+    }
+
+    #[test]
+    fn a_junk_whose_test_fails_does_not_take_the_slot() {
+        let gated = |mut junk: JunkRecord| {
+            junk.buy_on = Test::parse("b7");
+            junk.sell_on = Test::parse("b7");
+            junk
+        };
+        let junk = vec![
+            listing(130, 100, &[EARTH], &[EARTH]),
+            listing(140, 400, &[EARTH], &[EARTH]),
+            gated(listing(150, 800, &[EARTH], &[EARTH])),
+        ];
+        let found = listing_at_earth(junk, &pilot(0), REFUSING_7, Rulebook::default());
+        assert_eq!(slotted(&found), [(junk_good(140), 6), (junk_good(140), 7)]);
+    }
+
+    #[test]
+    fn a_winner_priced_0_hides_its_side_with_no_fallback() {
+        let junk = || {
+            vec![
+                listing(140, 400, &[EARTH], &[EARTH]),
+                listing(150, 0, &[EARTH], &[EARTH]),
+            ]
+        };
+        let mut trader = pilot(0);
+        trader.cargo = BTreeMap::from([(junk_good(150), 3), (junk_good(140), 2)]);
+        let found = listing_at_earth(junk(), &trader, Gate::FRESH, Rulebook::default());
+        assert_eq!(found.rows, [], "the slots still name the winner");
+        assert_eq!(
+            (found.summary.misc_kinds, found.summary.misc_tons),
+            (1, 2),
+            "the winner stays out of other cargo, the loser does not"
+        );
+        let rules = Rulebook::default().with_override(RuleKey::JunkPrice, RuleSource::Bible);
+        let found = listing_at_earth(junk(), &trader, Gate::FRESH, rules);
+        assert_eq!(
+            slotted(&found),
+            [(junk_good(150), 6), (junk_good(150), 7)],
+            "selection comes first by either price reading"
+        );
+    }
+
+    #[test]
+    fn a_held_junk_that_lost_its_slot_is_other_cargo_and_not_traded() {
+        let junk = vec![
+            listing(140, 400, &[EARTH], &[]),
+            listing(150, 800, &[EARTH], &[]),
+        ];
+        let mut trader = pilot(100_000);
+        trader.cargo = BTreeMap::from([(junk_good(140), 2), (junk_good(150), 7)]);
+        let goods = Goods::new(&CommodityStrings::default(), junk, Vec::new());
+        let found = market(&Exchange {
+            capacity: 20,
+            ..exchange(&goods, EARTH, TRADE, &trader)
+        })
+        .expect("trades");
+        assert_eq!(slotted(&found), [(junk_good(150), 7)]);
+        assert_eq!((found.summary.misc_kinds, found.summary.misc_tons), (1, 2));
+        for direction in [Direction::Buy, Direction::Sell] {
+            assert_eq!(
+                found.tons(order(0, junk_good(140), direction, Lot::Click)),
+                Err(TradeRefusal::NotTraded),
+                "{direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rows_are_in_slot_order_whatever_the_ids() {
+        let junk = vec![
+            listing(134, 300, &[EARTH], &[]),
+            listing(136, 300, &[], &[EARTH]),
+        ];
+        let found = listing_at_earth(junk, &pilot(0), Gate::FRESH, Rulebook::default());
+        assert_eq!(slotted(&found), [(junk_good(136), 6), (junk_good(134), 7)]);
+    }
+
+    #[test]
+    fn by_the_bible_every_match_is_listed_by_slot_then_good_and_named() {
+        let junk = vec![
+            listing(150, 800, &[EARTH], &[]),
+            listing(140, 400, &[EARTH], &[EARTH]),
+            listing(145, 800, &[], &[EARTH]),
+            listing(141, 400, &[EARTH], &[]),
+        ];
+        let mut trader = pilot(0);
+        trader.cargo = BTreeMap::from([(junk_good(140), 1), (junk_good(141), 2)]);
+        let found = listing_at_earth(junk, &trader, Gate::FRESH, listing_all());
+        assert_eq!(
+            slotted(&found),
+            [
+                (junk_good(140), 6),
+                (junk_good(145), 6),
+                (junk_good(140), 7),
+                (junk_good(141), 7),
+                (junk_good(150), 7),
+            ]
+        );
+        assert_eq!(found.summary.misc_kinds, 0, "every match is named");
+    }
 
     #[test]
     fn sell_on_gates_the_junk_a_stellar_sells_and_buy_on_what_it_buys() {
@@ -3800,11 +4058,7 @@ mod tests {
         let held: Vec<_> = found.rows.iter().map(|row| (row.good, row.held)).collect();
         assert_eq!(
             held,
-            [
-                (Good::Commodity(0), 3),
-                (Good::Junk(JunkId(134)), 0),
-                (Good::Junk(JunkId(146)), 2),
-            ]
+            [(Good::Commodity(0), 3), (Good::Junk(JunkId(146)), 2),]
         );
         assert_eq!(
             (found.capacity, found.free),
@@ -4053,7 +4307,6 @@ mod tests {
                     ..marked(Lower, row(FOOD, "Food", 60))
                 },
                 marked(Low, row(Good::Commodity(1), "Industrial", 280)),
-                row(Good::Junk(JunkId(134)), "Water", 240),
                 row(Good::Junk(JunkId(146)), "Opals", 960),
             ]
         );
@@ -4108,11 +4361,7 @@ mod tests {
             .collect();
         assert_eq!(
             listed,
-            [
-                (Good::Commodity(1), 280),
-                (Good::Junk(JunkId(134)), 240),
-                (Good::Junk(JunkId(146)), 960),
-            ],
+            [(Good::Commodity(1), 280), (Good::Junk(JunkId(146)), 960),],
             "an event on a commodity not traded here lists nothing"
         );
     }
@@ -4161,7 +4410,7 @@ mod tests {
             (RuleSource::Bible, &[0, 4][..]),
         ] {
             for event_price in RuleSource::ALL {
-                let rules = Rulebook::default()
+                let rules = listing_all()
                     .with_override(RuleKey::EventPrice, event_price)
                     .with_override(RuleKey::JunkPrice, junk_price);
                 let found = market(&Exchange {
@@ -4798,6 +5047,7 @@ mod tests {
             (event_price().about().reads(), RuleKey::EventPrice),
             (junk_price().about().reads(), RuleKey::JunkPrice),
             (junk_ways().about().reads(), RuleKey::JunkTrade),
+            (junk_kept().about().reads(), RuleKey::JunkListing),
             (click_lot().about().reads(), RuleKey::TradeLot),
             (cash_divided().about().reads(), RuleKey::TradeDebt),
             (quotient().about().reads(), RuleKey::TradeQuotient),

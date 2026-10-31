@@ -11359,13 +11359,16 @@ pub(super) mod tests {
     }
 
     /// `session`, landed on planet 128 of [`breeding`], buys `tons` of
-    /// each good, a ton a click: it is left on the other reading of
-    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
+    /// each good, a ton a click: it is left on the other readings of
+    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) and, as
+    /// [`breeding`]'s planet sells several `jünk`,
+    /// [`RuleKey::JunkListing`](crate::RuleKey::JunkListing).
     fn buy_goods(session: &mut Session, tons: &[(Good, u32)]) {
         session.setup.rules = session
             .setup
             .rules
-            .with_override(RuleKey::TradeLot, RuleSource::Bible);
+            .with_override(RuleKey::TradeLot, RuleSource::Bible)
+            .with_override(RuleKey::JunkListing, RuleSource::Bible);
         for &(good, tons) in tons {
             for _ in 0..tons {
                 let bought = session.trade(order(session, good, Direction::Buy, Lot::Click));
