@@ -15,8 +15,9 @@
 //! It lives as long as the [`Traffic`](crate::traffic::Traffic) holding
 //! it: across systems, but not across a new traffic, where the
 //! original's table keeps the picks and exit cursors until the app quits,
-//! as it does the odds, search timers, persons and formation places the
-//! traffic hands on ([`kept_berths`](super::kept_berths)). Whether to hand
+//! as it does the odds, search timers, voice variants, persons and
+//! formation places the traffic hands on
+//! ([`kept_berths`](super::kept_berths)). Whether to hand
 //! the picks and cursors on too is the user's to decide: rdm task
 //! carry-slot-picks-and-exits-across-app-life.
 

@@ -195,8 +195,8 @@ pub(super) struct KeptEscort {
     /// module).
     pub(super) afterburner: Option<bool>,
     /// Its voice's variant ([`Npc::voice`]), which `_RespawnEscort` never
-    /// writes (+0xc922, @0x3d4b8-0x3d62c); none with no NPC, and it holds
-    /// its record's, or else its berth's word, or while it is unset by
+    /// writes (+0xc922, @0x3d4b8-0x3d62c). None with no NPC, when it holds
+    /// its record's or else its berth's word, or for an NPC left unset by
     /// [`RuleKey::ReusedSlotVoice`]'s other reading (see the `voices`
     /// module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
