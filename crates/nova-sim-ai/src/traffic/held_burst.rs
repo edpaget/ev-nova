@@ -66,6 +66,16 @@
 //!   goal 0 bursts nothing on its own (@0x34a84). The engine's
 //!   [`Goal::Idle`] stands in for it with a stop, which keeps what it owes
 //!   without bursting.
+//! - **A ship disabled keeps it**: its +0x50 is -1.0, so it takes the
+//!   ordinary path and the disabled reset, goal 0 every frame
+//!   (@0x8fece-0x8ff13). Subs 1, 0xe and 0x12 all test not disabled
+//!   (@0x85378, @0x870b3, @0x85252), so it writes no +0x30, the burst block
+//!   is skipped (@0x34a84) and the preamble keeps the word. The autopilot's
+//!   drift flies no [`step`], so it drifts dragged, and once repaired its
+//!   next such thrust bursts out what is left, with no lead by then as the
+//!   reset cleared +0x9a. A ship disabled in a gate's own burst or a glide
+//!   is another matter: that block runs on
+//!   ([`autopilot::burst_motion`]).
 //!
 //! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. Sub 8's
 //! lowering of +0x34 by its pull (@0x880c0-0x880c9) is

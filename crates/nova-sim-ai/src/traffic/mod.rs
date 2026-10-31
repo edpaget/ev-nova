@@ -185,6 +185,8 @@ mod comm_call_tests;
 #[cfg(test)]
 mod count_wait_turn_tests;
 pub mod destination;
+#[cfg(test)]
+mod disabled_burst_tests;
 pub mod disabled_reset;
 #[cfg(test)]
 mod display_tests;

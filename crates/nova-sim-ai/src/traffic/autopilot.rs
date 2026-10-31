@@ -202,10 +202,14 @@
 //!   [`glide_speed`] a tick, with no steering, and flies on at that speed
 //!   once the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]), as it does bursting out of a gate (see
-//!   below). A disabled ship glides on too: `_AIDispatch`
-//!   cancels a disabled ship's jump out but lets its jump in run
-//!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
-//!   comes in ends its glide in the system.
+//!   below). A ship disabled or breaking up glides on too, along the
+//!   heading it had, each move dragged ([`burst_motion`]): `_AIDispatch`
+//!   cancels a disabled ship's jump out but lets its jump in run, as its
+//!   -999.0 is no stage above 0 (@0x8fcd2-0x8fce9) and takes the -900 test
+//!   past the reset (@0x8fcf5, @0x8fece), and `_HandleShip`'s burst block
+//!   has no disabled test (@0x34424 → @0x34679 → @0x34a54 → @0x34bc0). So a
+//!   rescue mission's ship held disabled as it comes in ends its glide in
+//!   the system.
 //! - While it waits at the gate it comes out of ([`Mode::Emerging`]) it
 //!   moves on its velocity, at rest where it was put unless a hit pushed
 //!   it, a disabled one dragged first, its wait counting down whatever its
@@ -223,16 +227,20 @@
 //!   the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]: the lower of its own top speed and its
 //!   lead's, the player's for a ship the player leads; see
-//!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship not
-//!   intact in its gate is held there, the disabled reset having ended its
-//!   goal 0x15 ([`Npc::leaves_gate_goal`]), so only one hit since its last
-//!   reset drifts instead of bursting, flying from there on. It is out of
+//!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship
+//!   disabled in its gate is held there, the disabled reset having ended
+//!   its goal 0x15 ([`Npc::leaves_gate_goal`]), so only a hit since its
+//!   last dispatch, whose high level had written goal 8, finds it about to
+//!   burst. One disabled or breaking up from there on keeps bursting, as
+//!   the glide does: its -999.0 and sub 0xa stand (@0x8f3c8-0x8f3d9,
+//!   @0x88114-0x8813d), it skips its turn (@0x34424), and each move is
+//!   dragged ([`burst_motion`]) down to its cap, where the reset takes it
+//!   on its next dispatch. It is out of
 //!   its gate ([`Npc::emerges_from`] cleared) from its first
 //!   burst tick, as `_HighLevelAIHandler` sets its travel stellar (+0x6c)
 //!   to -1 in the pass that starts the burst (@0x8dd93), and
 //!   `_AIMakeShipStopJumping` sets it to -1 again as the burst ends
-//!   (@0x82eaa); a ship not intact drifts out still carrying it, cleared
-//!   as it flies. While it waits it holds the gate's sprite open
+//!   (@0x82eaa). While it waits it holds the gate's sprite open
 //!   (`nova_sim::gate_sprite`). Hit while it waits and
 //!   answering the hit, its wait is cut to at most [`HIT_WAIT`] ticks; its
 //!   trigger, which may hold its point defence through the wait, is
@@ -275,7 +283,8 @@
 //!   at most [`HIT_WAIT`] ticks.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
-//!   never lands or jumps. A stellar's defence ship breaking up is not
+//!   never lands or jumps. Only a destroyed ship drifts out of a glide or
+//!   burst, its slot inactive. A stellar's defence ship breaking up is not
 //!   disabled (@0x2d6f), and `_HandleShip`'s drift reads `_IsDisabled`
 //!   (@0x33846, @0x34424), so it steers on. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
@@ -289,6 +298,7 @@ use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::{Arsenal, Trigger};
+#[cfg(any(doc, test))]
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
@@ -1084,7 +1094,8 @@ fn glide(
 /// destroyed (`_HandleShip` reads `_IsDisabled` once, @0x33846, for its
 /// drag @0x33950 and its drift @0x34424, so a stellar's defence ship
 /// breaking up still steers, [`Npc::active_not_disabled`]), gliding in from
-/// hyperspace (intact or disabled), bursting out of a gate, or holding
+/// hyperspace or bursting out of a gate (`_IsDisabled` or not, as the
+/// burst block has no disabled test, @0x34a54 → @0x34bc0), or holding
 /// its course after either (see the module docs), on `handling` under
 /// `flight`, as `inertia` says, its burst ending at `speeds`'
 /// [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on `chance`;
@@ -1114,8 +1125,11 @@ fn unsteered(
         (Mode::HeldAtGate { ticks_left }, _) => {
             hold_at_gate(npc, ticks_left, flown, held_burst);
         }
-        (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
+        (Mode::JumpingIn { tick }, false) if npc.is_disabled() => {
             glide(npc, tick, speeds, flown, chance);
+        }
+        (Mode::LeavingGate { tick }, false) if npc.is_disabled() => {
+            leave_gate(npc, tick, speeds, flown, chance);
         }
         (mode, false) => {
             match mode {
@@ -1283,14 +1297,22 @@ fn burst(
 /// heading at `speed`; an inertialess one, as `inertia` says, takes
 /// `speed` as its speed along its heading after its velocity has followed
 /// the last tick's at `handling`'s rate and it has moved
-/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0).
+/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0). A ship
+/// disabled or breaking up ([`disabled_drag`]) is dragged before its move
+/// (@0x33950-0x339a1), which the burst block doesn't test, and the block
+/// overwrites the dragged velocity after it: each move is its speed ×
+/// [`flight::DISABLED_DRAG`], its velocity left at its full speed.
 pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inertia: Inertia) {
     if let Inertia::Inertialess { .. } = inertia {
+        disabled_drag(npc);
         inertialess::drift(npc, handling);
         npc.speed = speed;
     } else {
-        npc.state.velocity = flight::facing(npc.state.heading) * speed;
+        let velocity = flight::facing(npc.state.heading) * speed;
+        npc.state.velocity = velocity;
+        disabled_drag(npc);
         npc.state.position = npc.state.position + npc.state.velocity;
+        npc.state.velocity = velocity;
     }
 }
 
@@ -2534,21 +2556,13 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_breaking_up_or_destroyed_jumping_in_drifts_with_no_glide() {
-        for condition in [
-            Condition::Dying {
-                ticks_left: 4,
-                starting: false,
-            },
-            Condition::Destroyed,
-        ] {
-            let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
-            jumper.condition = condition;
-            jumper.mode = Mode::JumpingIn { tick: 3 };
-            assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
-            assert_eq!(jumper.state, drifted(condition), "drifting");
-            assert_eq!(jumper.mode, Mode::JumpingIn { tick: 3 }, "no glide");
-        }
+    fn a_destroyed_ship_jumping_in_drifts_with_no_glide() {
+        let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+        jumper.condition = Condition::Destroyed;
+        jumper.mode = Mode::JumpingIn { tick: 3 };
+        assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
+        assert_eq!(jumper.state, drifted(Condition::Destroyed), "drifting");
+        assert_eq!(jumper.mode, Mode::JumpingIn { tick: 3 }, "no glide");
     }
 
     /// A ship of `fields` coming out of a gate at (100, -200), heading 90°,
@@ -2757,7 +2771,9 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_not_intact_still_waits_out_its_gate_but_drifts_instead_of_bursting() {
+    fn a_ship_not_intact_still_waits_out_its_gate_and_bursts_from_its_first_tick_dragged() {
+        // The think would hold it (`Npc::leaves_gate_goal`): this is a hit
+        // after its dispatch, whose high level had written goal 8.
         let mut ship = emerging(AVERAGE, 2);
         ship.condition = Condition::Disabled;
         ship.emerges_from = Some(StellarId(129));
@@ -2767,9 +2783,15 @@ mod tests {
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
         assert_eq!(ship.emerges_from, Some(StellarId(129)));
         fly(&mut ship, &[], None);
-        assert_eq!(ship.mode, Mode::Flying, "no burst");
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 1 }, "it bursts");
         assert_eq!(ship.emerges_from, None, "out of the gate");
-        assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "drifting");
+        let speed = exit_speed(false, 0);
+        let moved = flight::facing(90.0) * (speed * flight::DISABLED_DRAG);
+        assert!(
+            (ship.state.position - (Vec2::new(100.0, -200.0) + moved)).length() < 1e-3,
+            "{:?}",
+            ship.state
+        );
     }
 
     #[test]
@@ -3096,7 +3118,8 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_ship_jumping_in_glides_in_as_an_intact_one_does() {
+    fn a_disabled_ship_jumping_in_glides_in_on_an_intact_ones_modes_and_heading_each_move_dragged()
+    {
         let speeds = TopSpeeds {
             own: 6.0,
             lead: Some(9.0),
@@ -3104,10 +3127,15 @@ mod tests {
         let mut intact = jumping_in(AVERAGE);
         let mut disabled = intact.clone();
         disabled.condition = Condition::Disabled;
+        let mut position = disabled.state.position;
         while intact.mode != Mode::Flying {
+            let before = intact.state.position;
             assert_eq!(fly_at(&mut disabled, &[], None, speeds), Outcome::Flying);
             fly_at(&mut intact, &[], None, speeds);
-            assert_eq!(disabled.state, intact.state);
+            position = position + (intact.state.position - before) * flight::DISABLED_DRAG;
+            assert!((disabled.state.position - position).length() < 1e-2);
+            assert_eq!(disabled.state.heading, intact.state.heading);
+            assert_eq!(disabled.state.velocity, intact.state.velocity, "undragged");
             assert_eq!(disabled.mode, intact.mode);
         }
         assert_eq!(disabled.condition, Condition::Disabled);
