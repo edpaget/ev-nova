@@ -219,8 +219,8 @@ fn the_combat_keys_do_nothing_while_the_map_is_open() {
     );
     assert_eq!(
         held_in_the_next_step(&mut view),
-        ((false, false), false),
-        "no fire or safety held"
+        ((true, true), false),
+        "the fire keys read down as the map closes, and the safety's waits for its release"
     );
 }
 

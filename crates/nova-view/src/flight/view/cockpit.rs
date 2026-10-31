@@ -437,8 +437,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// releases will never reach it. The one place that does: the
     /// original reads both live (`_KeyCheck` @0xa19b-0xa1dc, `_Button`
     /// @0x3803b), and ours has only the events flight is given. The
-    /// paths that keep the input in flight (the course map, a gate's
-    /// exit) clear `held` alone, as their releases still come here.
+    /// paths that keep the input in flight (a gate's exit, the course map
+    /// opened over a screen) clear `held` alone, as their releases still
+    /// come here, and the course map opened in flight keeps the keys read
+    /// with no latch ([`FlightView::open_map_as`]).
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
         self.cursor.button(false);

@@ -293,6 +293,9 @@ impl<
             return action;
         }
         if self.map_open {
+            if self.plain_map_open() {
+                self.track_unlatched(input);
+            }
             // M types into Find while it is open.
             if press == Some(MAP_KEY) && !self.map.finding() {
                 // M's own close reads M held, so it waits for the release.

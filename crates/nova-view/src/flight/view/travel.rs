@@ -333,12 +333,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         Point::new(x, 0.0)
     }
 
-    /// Lets go of the flight keys and shows the course map, with the
-    /// system the original's `_DoSystemMap` selects as it opens
+    /// Lets go of the latched flight keys and shows the course map, with
+    /// the system the original's `_DoSystemMap` selects as it opens
     /// (`Session::map_preselection`, with the rest of its opening,
     /// [`ScreenAsk::MapOpening`]) selected, and the system selected in nav
     /// mode 3 drawn as its link. The hypergate map opens this way too, its
     /// pick still only an offered system.
+    ///
+    /// The keys flight polls with no latch stay held across it, as flight
+    /// reads them live when it next runs (the `map_wait` module). Every
+    /// other opener lets go of them all ([`FlightView::open_map_as`]).
     ///
     /// Clear Route is enabled off the hypergate map with a course
     /// (`showClearRouteButton`, @0x12396-0x123c3), and never on it.
@@ -356,6 +360,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// nav noted, the marks the opener gives itself
     /// ([`MarksFrom::unanswered`](nova_sim::flight_frame::MarksFrom::unanswered)),
     /// no borders shown, nothing preselected and no mission systems.
+    ///
+    /// Only [`MapOpening::Plain`] keeps any flight key held: any other
+    /// map's releases go to the screen under it, not to flight, so a key
+    /// kept there would outlive the take-off.
     pub(super) fn open_map_as(&mut self, by: MapOpening) {
         let marks = by.marks_from();
         let open = match self.sim.screen(ScreenAsk::MapOpening { marks }) {
@@ -373,7 +381,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             None => (None, marks.unanswered(), None, None, Vec::new()),
         };
         self.map_opened = Some(MapOpened { by, nav, marks });
-        self.held.clear();
+        if by == MapOpening::Plain {
+            self.keep_unlatched_keys();
+        } else {
+            self.held.clear();
+        }
         self.map_open = true;
         if let Some(sources) = borders {
             self.map.show_border_sources(sources);

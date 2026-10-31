@@ -85,7 +85,7 @@ pub(super) fn sent_count(view: &Faked) -> usize {
 // The course map.
 
 #[test]
-fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
+fn m_opens_the_map_over_everything_and_keeps_the_live_flight_keys() {
     let mut view = in_flight();
     view.input(&key(Key::Up, true));
     assert_eq!(view.input(&key(MAP, true)), ScreenAction::None);
@@ -108,7 +108,7 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     view.input(&key(MAP, false));
     assert!(!view.map_open());
     view.tick(TICK);
-    assert_eq!(last_controls(&view), Controls::default(), "Up was let go");
+    assert!(last_controls(&view).thrust, "Up reads down still");
 }
 
 #[test]
@@ -144,8 +144,8 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
     view.tick(TICK);
     assert_eq!(
         last_controls(&view).turn,
-        Controls::default().turn,
-        "Left went to the map"
+        Turn::Left,
+        "Left scrolled the map, and flight reads it down as the map closes"
     );
 }
 

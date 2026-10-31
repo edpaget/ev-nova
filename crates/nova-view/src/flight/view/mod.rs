@@ -717,6 +717,7 @@ mod hyperspace;
 mod inbox;
 mod interface;
 mod key_fade;
+mod map_wait;
 mod messages;
 mod missions;
 mod movies;

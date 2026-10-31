@@ -1,7 +1,10 @@
 use super::faked_screen::{sent_count, sent_since};
 use super::*;
+use crate::flight::view::dialog_map::MapOpening;
 use crate::galaxy::buttons::{MapButton, MapButtons};
 use crate::galaxy::dialog::DIALOG_ORIGIN;
+use nova_sim::Face;
+use nova_sim::flight_frame::StepInput;
 
 // The map key's wait on close in flight (`_DoSystemMap`
 // @0x13a2e-0x13a46): every close waits, inert, while M is held, and the
@@ -183,4 +186,167 @@ fn the_hypergate_map_closed_with_m_held_enters_the_gate_on_the_release() {
     view.input(&key(MAP, false));
     assert!(!view.map_open());
     assert!(entered(&view), "on the release");
+}
+
+// What flight reads live as the map closes (`_QuickKeyCheck` @0xa0f5 on
+// the snapshot `_DoPlayGameWork` takes): see the `map_wait` module.
+
+/// What the next step read of the keys held on `view`.
+fn next_step(view: &mut Faked) -> StepInput {
+    view.tick(TICK);
+    *view.sim.inputs().last().expect("a step")
+}
+
+/// A key and what a step reads it down by.
+type KeyRead = (Key, fn(&StepInput) -> bool);
+
+/// Each unlatched key's read in a step, as flight acts on it at once.
+fn unlatched_reads() -> [KeyRead; 8] {
+    [
+        (Key::Up, |step| step.controls.thrust),
+        (Key::Left, |step| step.controls.turn == Turn::Left),
+        (Key::Right, |step| step.controls.turn == Turn::Right),
+        (Key::Down, |step| step.controls.reverse),
+        (FACE_TARGET_KEY, |step| step.controls.face == Face::Target),
+        (AFTERBURNER_KEY, |step| step.controls.afterburner),
+        (FIRE_KEY, |step| step.fire.0),
+        (SECONDARY_KEY, |step| step.fire.1),
+    ]
+}
+
+#[test]
+fn a_flight_key_pressed_during_the_wait_and_still_down_acts_after_the_close() {
+    for (k, read) in unlatched_reads() {
+        let mut view = faked_m_open();
+        view.input(&key(MAP, true));
+        view.input(&key(k, true));
+        view.input(&key(MAP, false));
+        assert!(!view.map_open());
+        assert!(read(&next_step(&mut view)), "{k:?} reads down");
+    }
+}
+
+#[test]
+fn option_command_and_shift_pressed_during_the_wait_stay_down_after_the_close() {
+    for k in [Key::Alt, Key::Command, Key::Shift] {
+        let mut view = faked_m_open();
+        view.input(&key(MAP, true));
+        view.input(&key(k, true));
+        view.input(&key(MAP, false));
+        assert!(view.held.contains(&k), "{k:?} reads down");
+    }
+    let mut view = faked_m_open();
+    view.input(&key(MAP, true));
+    view.input(&key(Key::Alt, true));
+    view.input(&key(FACE_TARGET_KEY, true));
+    view.input(&key(MAP, false));
+    assert_eq!(next_step(&mut view).controls.face, Face::Stellar);
+}
+
+#[test]
+fn a_flight_key_tapped_during_the_wait_does_nothing_after_the_close() {
+    for (k, read) in unlatched_reads() {
+        let mut view = faked_m_open();
+        view.input(&key(MAP, true));
+        tap(&mut view, k);
+        view.input(&key(MAP, false));
+        assert!(!read(&next_step(&mut view)), "{k:?} reads up");
+    }
+}
+
+#[test]
+fn a_flight_key_down_since_before_the_wait_reads_down_after_the_close() {
+    for (k, read) in unlatched_reads() {
+        // Pressed with the map open, before any wait.
+        let mut view = faked_m_open();
+        view.input(&key(k, true));
+        tap(&mut view, MAP);
+        assert!(read(&next_step(&mut view)), "{k:?} pressed on the map");
+
+        // Held from before the map opened.
+        let mut view = faked_sol(in_sol());
+        view.input(&key(k, true));
+        tap(&mut view, MAP);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert!(read(&next_step(&mut view)), "{k:?} held across the map");
+    }
+}
+
+#[test]
+fn a_flight_key_let_go_on_the_map_reads_up_after_the_close() {
+    for (k, read) in unlatched_reads() {
+        let mut view = faked_sol(in_sol());
+        view.input(&key(k, true));
+        tap(&mut view, MAP);
+        view.input(&key(k, false));
+        tap(&mut view, MAP);
+        assert!(!read(&next_step(&mut view)), "{k:?} let go");
+    }
+}
+
+#[test]
+fn a_latched_key_held_past_the_close_waits_for_its_release() {
+    // `_HandlePlayer` sets every latch after M's map (@0x6a898).
+    for k in [JUMP_KEY, BOARD_KEY, LAND_KEY, TARGET_KEY] {
+        let mut view = faked_m_open();
+        view.input(&key(MAP, true));
+        view.input(&key(k, true));
+        let from = sent_count(&view);
+        view.input(&key(MAP, false));
+        view.tick(TICK);
+        assert_eq!(
+            sent_since(&view, from)
+                .into_iter()
+                .filter(|command| *command != FlightCommand::CueCourse)
+                .collect::<Vec<_>>(),
+            [],
+            "{k:?} sends nothing"
+        );
+        assert!(!view.held.contains(&k), "{k:?} not held");
+    }
+}
+
+#[test]
+fn a_latched_key_held_as_the_map_opens_is_let_go() {
+    let mut view = faked_sol(in_sol());
+    view.input(&key(JUMP_KEY, true));
+    view.input(&key(MAP, true));
+    assert!(!view.held.contains(&JUMP_KEY));
+}
+
+#[test]
+fn a_click_on_done_during_the_wait_is_dropped_by_the_close() {
+    let mut view = faked_m_open();
+    view.input(&key(MAP, true));
+    let selected = view.map.selected();
+    let done = done_at(&view);
+    click_at(&mut view, done);
+    let from = sent_count(&view);
+    view.input(&key(MAP, false));
+    assert_eq!(sent_since(&view, from), [FlightCommand::CueCourse]);
+    assert_eq!(view.map.selected(), selected);
+}
+
+#[test]
+fn every_other_map_clears_the_flight_keys_as_it_opens() {
+    for opening in [
+        MapOpening::Bar,
+        MapOpening::Port(crate::flight::PortScreen::Exchange),
+    ] {
+        let mut view = faked_sol(in_sol());
+        view.input(&key(Key::Up, true));
+        view.open_map_as(opening);
+        assert!(view.held.is_empty(), "{opening:?}");
+    }
+}
+
+#[test]
+fn a_flight_key_lost_with_the_focus_on_the_map_reads_up_after_the_close() {
+    let mut view = faked_m_open();
+    view.input(&key(Key::Up, true));
+    view.release_keys();
+    assert!(view.map_open(), "the map stays");
+    tap(&mut view, MAP);
+    assert!(!next_step(&mut view).controls.thrust);
 }
