@@ -81,8 +81,8 @@
 //! the player's display step), so their lines come before every call, as
 //! the original's do, and the scans' law is at hand: in
 //! [`Session::game_work`] after `_AIDispatch`'s loop
-//! (`Session::dispatch_npcs`), the fighters launched and thinking in it
-//! among the slots, and again after the ship loop for the docks and
+//! (`Session::dispatch_npcs`), the fighters launched in it among the
+//! slots, each at its own, and again after the ship loop for the docks and
 //! repairs the fly half made:
 //!
 //! - an earlier slot's scan line, stolen line, refuel or repair note
@@ -409,6 +409,7 @@ mod tests {
     };
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
+    use crate::combat::armament::Trigger;
     use crate::mission::{ActiveMission, SpecialShips};
     use crate::pilot::Pilot;
     use crate::testkit::{
@@ -1032,6 +1033,94 @@ mod tests {
         assert_eq!(messages, [smuggling()], "no call for help");
         assert_eq!(sounds, [SimSound::Smuggling], "no snd 154");
         assert_eq!(asked, [100], "the scan's roll, no distress line drawn");
+    }
+
+    /// [`calling_catalog`], with a bay and the fighter it carries, ship
+    /// 144.
+    fn launching_catalog() -> FakePilotCatalog {
+        let mut catalog = calling_catalog();
+        catalog.ship_records.push(ship(144, FAST));
+        catalog.hulls.push(crate::testkit::hull(144));
+        catalog.weapons.push(crate::session::fighters::tests::bay());
+        catalog
+    }
+
+    /// [`Calling`], the carrier launching and every fighter it launches
+    /// calling for help as it decides.
+    #[derive(Debug)]
+    struct FighterCalls(Calling, NpcId);
+
+    impl Behaviour for FighterCalls {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            Decision {
+                comm_call: (npc.ship == crate::session::fighters::tests::VIPER)
+                    .then_some(CommCall::Distress),
+                ..self.0.decision(npc, around, chance)
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                bays: npc.id == self.1,
+                ..Trigger::default()
+            }
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.target
+        }
+    }
+
+    /// A pass with a scanner at slot 1, whose find it is when `finds`, and
+    /// a trader's carrier launching into a slot above it: the messages and
+    /// sounds it raised.
+    fn scanned_around_a_launch(finds: bool) -> (Vec<SimMessage>, Vec<SimSound>) {
+        let catalog = launching_catalog();
+        let mut session = flying(&catalog);
+        if finds {
+            session.pilot.missions.put(0, carrying(140, 4));
+        }
+        scanner(&mut session);
+        let quarry = add(&mut session, None, ShipId(128));
+        let mut ship = crate::session::fighters::tests::carrier_npc(quarry, 2);
+        ship.leader = None;
+        ship.govt = Some(TRADERS);
+        ship.state.position = session.ship.player.position;
+        ship.goal = Goal::Attack(ShipRef::Npc(quarry));
+        ship.target = Some(ShipRef::Npc(quarry));
+        let carrier = session.space.traffic.add_npc(ship);
+        let behaviour = FighterCalls(Calling::default(), carrier);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut Draws::of(&[0, 0, 0]),
+        );
+        (session.take_messages(), session.take_sounds())
+    }
+
+    #[test]
+    fn a_lower_slots_scan_line_keeps_a_launched_fighters_call_off() {
+        // The scan's line at slot 1 sets `_commCount` (@0x9024b), and the
+        // fighter, launched in the same frame, reaches its own slot after.
+        let (messages, sounds) = scanned_around_a_launch(true);
+        assert_eq!(messages, [smuggling()], "no call for help");
+        assert!(!sounds.contains(&SimSound::CallForHelp), "no snd 154");
+        // With nothing found, it says its call.
+        let (messages, sounds) = scanned_around_a_launch(false);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, SimMessage::CallForHelp(_))),
+            "{messages:?}"
+        );
+        assert!(sounds.contains(&SimSound::CallForHelp));
     }
 
     #[test]
