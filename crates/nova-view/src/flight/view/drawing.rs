@@ -566,7 +566,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The shots in flight in the order they are drawn
     /// ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots)),
     /// each where it is drawn: `alpha` of the way from where it was a step
-    /// ago, as the ships are; each with the index its spin started on
+    /// ago, as the ships are, placed from that point by its sheet's width
+    /// ([`FlightView::shot_placed`]); each with the index its spin started on
     /// ([`SpinStarts`](crate::flight::spin::SpinStarts)) and its murk where
     /// the frame holds it, seen from the player's ship as the frame holds
     /// it ([`FlightView::seen_murk`]), as `_HandleShot` murks it once a

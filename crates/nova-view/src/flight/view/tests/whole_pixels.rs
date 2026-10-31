@@ -1,10 +1,13 @@
-//! The ships drawn, and boxed, at whole pixels from the player, as
-//! `_HandleShipDisplay` places each sprite (@0x2cd17-0x2d083; rdm
-//! play-feel-4 phase 12). The rule is the camera's
-//! ([`Camera::sprite_top_left`](crate::system::camera::Camera::sprite_top_left),
-//! pinned in its own tests); these pin the wiring: every ship sprite goes
-//! through it, and the click and hover box is the rect the hull is drawn
-//! in, in the same frame.
+//! The flight's world drawn at whole pixels from the player: the ships,
+//! and their boxes, as `_HandleShipDisplay` places each sprite
+//! (@0x2cd17-0x2d083; rdm play-feel-4 phase 12), and the shots, asteroids,
+//! cargo boxes and ship brackets as their own routines do, from the
+//! positions as drawn between steps (rdm play-feel-6 phase 8). The rules
+//! are the camera's
+//! ([`Camera::sprite_top_left`](crate::system::camera::Camera::sprite_top_left)
+//! and its neighbours, pinned in its own tests); these pin the wiring:
+//! every sprite goes through its rule, by its own sheet's size, and the
+//! click and hover box is the rect the hull is drawn in, in the same frame.
 
 use super::faked_world::{asteroid_at, box_at, shot_of, shows, world, world_list};
 use super::missions::rocky;

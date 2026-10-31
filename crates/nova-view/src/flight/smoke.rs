@@ -33,6 +33,9 @@
 //!   @0x2e367), and then ages by [`PUFF_AGE_STEP`]; its frame is then set
 //!   from its age ([`smoke_frame`], @0x2e3f9-0x2e499), and a puff past its
 //!   last frame is freed. It never moves.
+//! - It is placed at whole pixels from the player by its current frame's
+//!   own size ([`SmokeSheet::size`], [`Camera::sprite_centre`],
+//!   @0x2e4ac-0x2e52d), a master of `cicn`s having a size a frame.
 //! - A system change frees every puff (@0x2e2d3, @0x2e56e-0x2e59a), as
 //!   the effects are cleared.
 //!

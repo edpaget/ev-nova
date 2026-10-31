@@ -2,10 +2,13 @@
 //! Nova` executable) shows it.
 //!
 //! - An asteroid is a frame of its type's master sprite, `spïn` 800 +
-//!   type (`_LoadSprites` @0x20bb7), centred on where it is (@0x364df).
-//!   Its frame is the simulation's whole frame (@0x363f6), taken round
-//!   the sheet's frames.
-//! - An asteroid whose sheet was not read is the shots' crossed box.
+//!   type (`_LoadSprites` @0x20bb7), placed at whole pixels from the
+//!   player by its own sides
+//!   ([`Camera::sprite_centre`](crate::system::camera::Camera::sprite_centre),
+//!   @0x36459-0x364df). Its frame is the simulation's whole frame
+//!   (@0x363f6), taken round the sheet's frames.
+//! - An asteroid whose sheet was not read is the shots' crossed box, on
+//!   the whole point of its position.
 //! - Asteroids draw in their own layer, over the stellars and under the
 //!   disabled ships and the cargo boxes (`_SetupSpriteWorld`
 //!   @0x21d0c-0x21d74).

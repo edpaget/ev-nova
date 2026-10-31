@@ -28,6 +28,13 @@
 //! - `screen_to_world(s) = center + (s - anchor) / WORLD_SCALE`
 //! - a sprite placed as the original places one, at whole pixels from
 //!   the center: [`Camera::sprite_top_left`] and [`Camera::sprite_centre`]
+//! - the rules of flight's other routines, each built on that one or on
+//!   `world_to_screen`: [`Camera::whole_point`] (a ship's brackets),
+//!   [`Camera::shot_centre`] (a shot, by its width alone),
+//!   [`Camera::box_centre`] (a cargo box, up and left of its point),
+//!   [`Camera::nav_centre`] (a stellar's brackets, the center truncated
+//!   alone) and [`Camera::pixel_centre`] (a beam's ends, the whole screen
+//!   coordinate truncated)
 
 use nova_sim::navigation::SpriteRect;
 use nova_sim::{RuleSource, Vec2};
@@ -206,7 +213,9 @@ impl Camera {
     /// steps and equal to the step's at alpha 0. Taking the camera's
     /// center lets the whole-pixel offset move with the drawn world between
     /// steps rather than jump a pixel against it; no frame boundary sees
-    /// the difference.
+    /// the difference. Every other rule here reads the center the same
+    /// way, and the caller passes each thing as it is drawn, so what is
+    /// rounded is the difference between the two as drawn.
     #[must_use]
     pub fn sprite_top_left(&self, at: Point, size: (u32, u32)) -> Point {
         let (dx, dy) = nova_sim::story::sprite_pool::offset(

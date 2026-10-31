@@ -28,6 +28,9 @@
 //! - **Each step** ([`EscapePods::step`]): it drifts by its velocity and a
 //!   tick comes off its life. It is held, unseen, at a life of 0, and its
 //!   slot is free once the life is below 0.
+//! - **The place** ([`EscapePods::draw`]): at whole pixels from the player,
+//!   by its sheet's own sides
+//!   ([`Camera::sprite_centre`], @0x39ef0-0x39f7d).
 //! - **The fade** ([`EscapePods::draw`]): opaque at a life of 32 or more
 //!   (32.0 at 0xdd654), at alpha life/32 over its last 32 ticks, and not
 //!   drawn at 0 or less. `_HandleEscapePods` sets the sprite's destination

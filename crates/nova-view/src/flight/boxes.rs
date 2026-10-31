@@ -4,14 +4,17 @@
 //!
 //! - A box is a frame of its graphic's sheet, `spïn` 500 + graphic (the
 //!   box masters `_InitSprites` loads; a jettisoned box is graphic 0, an
-//!   asteroid's 1-4),
-//!   centred on where it is (@0x2e1c2-0x2e250). Its frame is the
-//!   simulation's, `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the
-//!   sheet's frames.
+//!   asteroid's 1-4), its bottom right on the box's position at whole
+//!   pixels from the player, the whole size taken off, not half
+//!   ([`Camera::box_centre`](crate::system::camera::Camera::box_centre),
+//!   @0x2e1c2-0x2e250). The scoop reads the same rect, up and left of the
+//!   point (`nova_sim::scoop::touches`). Its frame is the simulation's,
+//!   `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the sheet's frames.
 //! - Over its last 32 ticks it fades: its blend level `n`, 0 to 31
 //!   ([`CargoBox::fade`](nova_sim::cargo_box::CargoBox::fade)), draws it
 //!   `n`/32 transparent, white at alpha `(32 − n)/32`.
-//! - A box whose sheet was not read is the shots' crossed box.
+//! - A box whose sheet was not read is the shots' crossed box, on the
+//!   whole point of its position.
 //! - Boxes draw in `_boxLayer`, over the stellars and under the ships and
 //!   the shots.
 //! - A box is murked at its position, seen from the player's ship

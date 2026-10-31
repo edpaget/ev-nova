@@ -12,6 +12,11 @@
 //!   its age is below `ProxSafety` (`Flags2` 0x0001). A shot's spin starts
 //!   on a random index, `Rand(36)`, unless its weapon has `Flags` 0x0004
 //!   ([`spin`](super::spin)).
+//! - A shot is placed at whole pixels from the player, half its frame's
+//!   width off both axes: `_HandleShot` never asks its height
+//!   ([`Camera::shot_centre`](crate::system::camera::Camera::shot_centre),
+//!   @0x35c66-0x35cc0). One whose look or sheet was not read is a crossed
+//!   box on the whole point of its position.
 //! - A shot fades in and out by its `Falloff`, crossfaded by OR with what
 //!   is under it, and a translucent one (`Flags3` 0x0002) is added to it
 //!   ([`shot_fade`](super::shot_fade)); a shot far from the player's ship
@@ -24,6 +29,11 @@
 //!   from alpha 16/32 down by that falloff/32 a line while above 2/32. A
 //!   lightning beam (`LiDensity`) is drawn as its zig-zag, fading by its
 //!   fade over 32 ticks ([`lightning`]).
+//! - A beam's ends are the pixels `_HandleBeams` stores, the whole screen
+//!   coordinate truncated
+//!   ([`Camera::pixel_centre`](crate::system::camera::Camera::pixel_centre),
+//!   @0x30927-0x30982, @0x309df-0x30a4a, @0x31dc8-0x31de4), each given
+//!   at its pixel's centre.
 //! - A beam whose weapon sets `Flags2` 0x2000 is drawn under the ships,
 //!   and every other beam over them.
 
