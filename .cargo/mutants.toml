@@ -694,4 +694,7 @@ exclude_re = [
     # contour as closed whether or not the path closes it, so dropping the
     # close changes no coverage.
     "nova-render/src/glyph_raster\\.rs:[0-9]+:[0-9]+: replace <impl OutlinePen for Path>::close with \\(\\)$",
+    # Whether a follower's berth is below its parent's: a berth holds one
+    # ship and a ship is never its own follower, so the two never tie.
+    "nova-sim-ai/src/traffic/fleet_formation\\.rs:[0-9]+:[0-9]+: replace < with <= in written$",
 ]
