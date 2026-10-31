@@ -449,6 +449,11 @@ pub struct NewShip {
     /// Whether it starts boarded (+0xb9): a rescue ship of an expired
     /// mission set up in the system does ([`mission_ships`]).
     pub boarded: bool,
+    /// Whether it draws its voice variant as it spawns: a `düde` ship of
+    /// the traffic does, Rand(2) with no government
+    /// (`_RandomShipSpawn` @0x3c709-0x3c719), and every other spawn holds
+    /// its berth's word ([`berth_voices`](super::berth_voices)).
+    pub rolls_voice: bool,
 }
 
 /// What a caller of [`fleet`] asks of the fleet: `_HyperSpawnFleet`'s
@@ -566,6 +571,7 @@ impl<'a> PersonDraw<'a> {
             aux: None,
             quote: None,
             cargo: None,
+            rolls_voice: false,
         })
     }
 }
@@ -634,6 +640,7 @@ pub fn initial(
                 aux: None,
                 quote: None,
                 cargo: None,
+                rolls_voice: true,
             });
         }
     }
@@ -781,6 +788,7 @@ fn hyper_ship(
             aux: None,
             quote: None,
             cargo: None,
+            rolls_voice: true,
         });
     }
 }
@@ -925,6 +933,7 @@ pub(super) fn specific_dude_ship(
         aux: None,
         quote: None,
         cargo: None,
+        rolls_voice: false,
     })
 }
 
@@ -1229,6 +1238,7 @@ pub fn fleet(
         aux: None,
         quote: record.quote.filter(|_| call.announced),
         cargo: random_cargo(record.flags, kind, chance),
+        rolls_voice: false,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -1272,6 +1282,7 @@ pub fn fleet(
                 aux: None,
                 quote: None,
                 cargo: random_cargo(record.flags, kind, chance),
+                rolls_voice: false,
             });
         }
     }
@@ -1748,6 +1759,7 @@ mod tests {
                 aux: None,
                 quote: None,
                 cargo: None,
+                rolls_voice: true,
             }]
         );
     }
@@ -1984,6 +1996,7 @@ mod tests {
             ship.state.position,
             Vec2::new(jump_in_distance(), 0.0)
         ));
+        assert!(ship.rolls_voice, "`_RandomShipSpawn` draws it");
     }
 
     #[test]
@@ -3137,6 +3150,7 @@ mod tests {
                 aux: None,
                 quote: None,
                 cargo: None,
+                rolls_voice: false,
             }]
         );
     }
@@ -3735,6 +3749,7 @@ mod tests {
                 aux: None,
                 quote: None,
                 cargo: None,
+                rolls_voice: false,
             }]
         );
     }
@@ -4362,6 +4377,7 @@ mod tests {
                 aux: None,
                 quote: None,
                 cargo: None,
+                rolls_voice: false,
             })
         );
     }

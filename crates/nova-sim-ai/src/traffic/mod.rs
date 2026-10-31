@@ -175,6 +175,7 @@ pub mod berth_exits;
 pub mod berth_kept;
 pub mod berth_picks;
 pub mod berth_search;
+pub mod berth_voices;
 pub mod board_wait;
 pub mod cloak_situation;
 #[cfg(test)]
@@ -315,6 +316,7 @@ use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use berth_search::BerthSearch;
+use berth_voices::BerthVoices;
 pub use fly_pass::{FlyHalf, FlyPass};
 use formation_places::BerthPlaces;
 use gone::{Freed, GoneShips};
@@ -962,6 +964,11 @@ pub struct Traffic {
     /// timer changes, kept as it dies or leaves, across systems, and
     /// handed on to the next traffic ([`kept_berths`]).
     berth_search: BerthSearch,
+    /// The voice variant (+0xc922) of the ship last at each berth, which a
+    /// new ship there takes unless its spawn writes its own
+    /// ([`berth_voices`]): kept as it dies or leaves, across systems, and
+    /// handed on to the next traffic ([`kept_berths`]).
+    berth_voices: BerthVoices,
     /// The word (+0x28/+0x2c) each berth holds, as the frame's dispatches
     /// have left it ([`formation_places`]): it outlives its ship, across
     /// systems, and is handed on to the next traffic ([`kept_berths`]).
@@ -1069,6 +1076,7 @@ impl Traffic {
             berth_blink: BerthBlink::default(),
             first_class: ship_display::FirstClass::default(),
             berth_search: BerthSearch::default(),
+            berth_voices: BerthVoices::default(),
             berth_places: BerthPlaces::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
@@ -2330,6 +2338,9 @@ impl Traffic {
         npc.display.frames.lights.timer = self.berth_blink_timer(berth);
         // Nor the search timer (+0xc90c): it is the berth's.
         npc.lost_sight = self.berth_search.seed(berth);
+        // A voice set up is written to the berth (+0xc922); with none, the
+        // ship holds the berth's word.
+        npc.voice = self.berth_voices.bring_in(berth, npc.voice);
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -2768,6 +2779,12 @@ impl Traffic {
                 &mut &mut *chance,
             );
             let skill = random_skill_level(kind.skill_var, &mut *chance);
+            // `_RandomShipSpawn` draws +0xc922 (@0x3c709-0x3c719), with no
+            // government; `_GenericRandomShipSpawn` keeps the slot's last.
+            let drawn = ship
+                .rolls_voice
+                .then(|| crate::voice::roll_variant(None, &mut *chance));
+            let voice = self.berth_voices.bring_in(berth, drawn);
             self.quotes.extend(ship.quote);
             placed.push(Some(id));
             if let Some(lead) = leader.filter(|lead| !leads.contains(lead)) {
@@ -2846,11 +2863,7 @@ impl Traffic {
                 tractor: None,
                 ion: Ion::default(),
                 afterburner,
-                // `_RandomShipSpawn` draws +0xc922 (@0x3c709-0x3c719) and
-                // `_GenericRandomShipSpawn` keeps the slot's last; the
-                // engine leaves it unset, and `_EscortAI` rolls it should
-                // the ship ever be the player's (see `Npc::voice`).
-                voice: None,
+                voice,
                 pursuit: Pursuit::default(),
                 ai_wait: 0,
                 docking: None,
@@ -6564,6 +6577,7 @@ mod tests {
             aux: None,
             quote: None,
             cargo: None,
+            rolls_voice: false,
         }
     }
 

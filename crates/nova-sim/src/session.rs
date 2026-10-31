@@ -625,6 +625,8 @@ mod shot_slots;
 #[cfg(test)]
 mod slot_search;
 mod slot_visibility;
+#[cfg(test)]
+mod slot_voice;
 mod smoke_frame;
 mod space;
 mod spawn_availability;
@@ -1520,6 +1522,9 @@ impl Session {
         self.space
             .traffic
             .set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
+        self.space
+            .traffic
+            .set_reused_slot_voice(rules.source_for(RuleKey::ReusedSlotVoice));
         self.chart.read_rescue_rule(&rules);
         self.setup.rules = rules;
         self
@@ -17056,8 +17061,8 @@ pub(super) mod tests {
         session.populate(&catalog, &mut Draws::of(&[0]));
         assert_eq!(session.npcs(), []);
         // An arrival, then the gate: 1 of planet 128 and the gate, planet
-        // 129 being 2000 out.
-        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, 1]);
+        // 129 being 2000 out; then its voice.
+        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, 1, 0]);
         work_with(
             &mut session,
             &catalog,
@@ -17066,7 +17071,7 @@ pub(super) mod tests {
             Rules::default(),
             &mut chance,
         );
-        assert_eq!(chance.asked, [500, 7, 7, 100, 1, 360, 2, 3]);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 1, 360, 2, 3, 2]);
         let npc = &session.npcs()[0];
         assert!(npc.emerging(), "{:?}", npc.mode);
         assert_eq!(npc.state.position, Vec2::new(300.0, -400.0));

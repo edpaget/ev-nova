@@ -13,16 +13,24 @@
 //! message is said in the voice set of the speaker's class's attributes
 //! government ([`Statics::speech`]).
 //!
-//! **The variant** ([`Npc::voice`]) is rolled by [`Space::roll_voice`]
-//! alone: as a fighter is launched (`_LaunchFighter` @0x3d9cc-0x3da3a; see
-//! [`fighters`](super::fighters)), as a ship is captured
-//! (`_AIShipCapturedByPlayer` @0x8974a-0x89799), for the old ship kept
-//! on Use As My Ship (`_DoShipCapture` @0x41288-0x412db), and at the
-//! first think of a ship the player leads that has none (`_EscortAI`
-//! @0x83980-0x839f6, [`Space::answer_voice_cues`]). An escort keeps its
+//! **The variant** ([`Npc::voice`]) is the word of the ship's slot (see
+//! [`berth_voices`](crate::traffic::berth_voices)): a ship the traffic
+//! draws takes its own Rand(2) (`_RandomShipSpawn` @0x3c709-0x3c719), and
+//! one from any other spawn, a hired escort among them, holds what its
+//! berth's last ship left, even in a never-used berth. Three writers roll
+//! it with the government's forced variant: a fighter as it is launched
+//! (`_LaunchFighter` @0x3d9cc-0x3da3a; see [`fighters`](super::fighters)),
+//! and through [`Space::roll_voice`] a ship as it is captured
+//! (`_AIShipCapturedByPlayer` @0x8974a-0x89799) and the old ship kept on
+//! Use As My Ship (`_DoShipCapture` @0x41288-0x412db). `_EscortAI`'s roll
+//! at the first think of a ship the player leads that has none
+//! (@0x83980-0x839f6, [`Space::answer_voice_cues`]) runs only by
+//! [`RuleKey::ReusedSlotVoice`](crate::rulebook::RuleKey::ReusedSlotVoice)'s
+//! other reading: by the engine no ship is unset. An escort keeps its
 //! variant across jumps and landings, as its skill and afterburner (see
-//! the `escorts` module's `KeptEscort`), but not across a save, and a
-//! ship hired or spawned rolls none until that first think.
+//! the `escorts` module's `KeptEscort`). A save keeps a carried fighter's
+//! alone, as `_LoadPilotData` reads no other (@0x75b65-0x75b85; see
+//! [`Escort::voice`](crate::pilot::Escort::voice)).
 //!
 //! **In a pass** (see the `game_work` module):
 //!
@@ -106,15 +114,17 @@ impl Space {
     /// Rolls the variant of NPC `id`, the one writer of a rolled
     /// [`Npc::voice`](crate::traffic::npc::Npc::voice), on `chance`: the
     /// variant its class's government forces, else Rand(2)
-    /// ([`roll_variant`]).
+    /// ([`roll_variant`]), and it stays in the ship's berth
+    /// ([`Traffic::set_voice`](crate::traffic::Traffic::set_voice)).
     pub(super) fn roll_voice(
         &mut self,
         id: NpcId,
         statics: &Statics,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        if let Some(npc) = self.npc_mut(id) {
-            npc.voice = Some(roll_variant(statics.forced_variant(npc.ship), chance));
+        if let Some(npc) = self.npc(id) {
+            let variant = roll_variant(statics.forced_variant(npc.ship), chance);
+            self.traffic.set_voice(id, variant);
         }
     }
 
@@ -224,7 +234,7 @@ impl Space {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::Session;
     use super::super::fighters::tests::{carrying, fleet_npcs, flying_by, pilot, sitting_ai};
     use super::*;
@@ -236,7 +246,7 @@ mod tests {
     use crate::fleet::OrderWord;
     use crate::flight::Controls;
     use crate::pilot::Escort;
-    use crate::rulebook::Rulebook;
+    use crate::rulebook::{RuleSource, Rulebook};
     use crate::session::capture_naming::tests::use_as_my_ship;
     use crate::sound::SimSound;
     use crate::stats::ShipStats;
@@ -248,17 +258,17 @@ mod tests {
 
     /// The fighter, a Viper (`EscortType` 0), of government 141: set 4,
     /// forced even.
-    const VIPER: ShipId = ShipId(144);
+    pub(in crate::session) const VIPER: ShipId = ShipId(144);
     /// A warship escort (`EscortType` 2) of government 140: set 3, free.
     const WARSHIP: ShipId = ShipId(150);
     /// A medium escort (`EscortType` 1) of government 141.
-    const MEDIUM_EVEN: ShipId = ShipId(152);
+    pub(in crate::session) const MEDIUM_EVEN: ShipId = ShipId(152);
     /// A freighter escort (`EscortType` 3, a trader) of government 140.
     const FREIGHTER: ShipId = ShipId(153);
     /// A mute medium escort (`Flags2` 0x0010) of government 141.
     const DRONE: ShipId = ShipId(154);
     /// A medium escort (`EscortType` 1) of government 140.
-    const MEDIUM: ShipId = ShipId(156);
+    pub(in crate::session) const MEDIUM: ShipId = ShipId(156);
     /// Set 3's government: `VoiceType` 3.
     const FREE: GovtId = GovtId(140);
     /// Set 4's government, forcing the even voice: `VoiceType` 2004.
@@ -289,7 +299,7 @@ mod tests {
 
     /// [`carrying`], voiced: the Viper of government 141, and escorts of
     /// each class of governments 140 and 141.
-    fn voiced() -> FakePilotCatalog {
+    pub(in crate::session) fn voiced() -> FakePilotCatalog {
         let mut catalog = carrying();
         for record in &mut catalog.ship_records {
             record.inherent_govt = match record.id {
@@ -324,7 +334,7 @@ mod tests {
     }
 
     /// An escort of `ship`, of no standing order.
-    fn escort(ship: ShipId) -> Escort {
+    pub(in crate::session) fn escort(ship: ShipId) -> Escort {
         Escort {
             ship,
             reserves: ShipStats::new(FAST, &[]).full(),
@@ -337,15 +347,28 @@ mod tests {
     }
 
     /// `catalog`'s session flying with a fleet of `ships`, placed.
-    fn fleet(catalog: &FakePilotCatalog, ships: &[ShipId]) -> Session {
+    pub(in crate::session) fn fleet(catalog: &FakePilotCatalog, ships: &[ShipId]) -> Session {
+        fleet_by(catalog, ships, Rulebook::default())
+    }
+
+    /// [`fleet`] by `rules`.
+    fn fleet_by(catalog: &FakePilotCatalog, ships: &[ShipId], rules: Rulebook) -> Session {
         let escorts = ships.iter().map(|&ship| escort(ship)).collect();
-        let session = flying_by(catalog, pilot(catalog, 0, escorts), Rulebook::default());
+        let session = flying_by(catalog, pilot(catalog, 0, escorts), rules);
         assert_eq!(fleet_npcs(&session).len(), ships.len(), "placed");
         session
     }
 
+    /// [`fleet`] with no variants: [`RuleKey::ReusedSlotVoice`]'s other
+    /// reading.
+    fn unvoiced_fleet(catalog: &FakePilotCatalog, ships: &[ShipId]) -> Session {
+        let rules = Rulebook::default()
+            .with_override(crate::rulebook::RuleKey::ReusedSlotVoice, RuleSource::Bible);
+        fleet_by(catalog, ships, rules)
+    }
+
     /// The NPC of escort `index`.
-    fn escort_npc(session: &mut Session, index: usize) -> &mut Npc {
+    pub(in crate::session) fn escort_npc(session: &mut Session, index: usize) -> &mut Npc {
         let id = session.space.escorts.fleet[index].expect("placed");
         session.space.npc_mut(id).expect("in the system")
     }
@@ -371,7 +394,7 @@ mod tests {
 
     /// The voice sounds of an advance pass of `session`, its NPCs as
     /// `behaviour` says, drawing on `chance`.
-    fn heard(
+    pub(in crate::session) fn heard(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         behaviour: &impl Behaviour,
@@ -456,7 +479,11 @@ mod tests {
         let catalog = boardable();
         let mut session = captured(&catalog);
         let id = session.space.escorts.aboard.expect("aboard").npc;
-        assert_eq!(session.space.npc(id).expect("there").voice, None);
+        assert_eq!(
+            session.space.npc(id).expect("there").voice,
+            Some(VoiceVariant::Odd),
+            "its spawn's draw, a Rand(2) of 1"
+        );
         assert_eq!(
             session.assign(Assignment::Escort, &mut Ranged::of(&[(2, 0)])),
             Some(Assigned::Escort)
@@ -482,7 +509,7 @@ mod tests {
             (MEDIUM, 0, VoiceVariant::Even),
             (MEDIUM, 1, VoiceVariant::Odd),
         ] {
-            let mut session = fleet(&catalog, &[ship]);
+            let mut session = unvoiced_fleet(&catalog, &[ship]);
             assert_eq!(escort_npc(&mut session, 0).voice, None, "{ship:?}");
             heard(
                 &mut session,
@@ -631,7 +658,7 @@ mod tests {
         // one only on a Rand(2) of 0, which `NeverFires` never draws. The
         // medium is the fleet's second, at the lower berth.
         let catalog = voiced();
-        let mut session = fleet(&catalog, &[WARSHIP, MEDIUM_EVEN]);
+        let mut session = unvoiced_fleet(&catalog, &[WARSHIP, MEDIUM_EVEN]);
         let berths = [
             escort_npc(&mut session, 0).berth,
             escort_npc(&mut session, 1).berth,
@@ -886,6 +913,9 @@ mod tests {
         // target, on Rand(3) of 1.
         let catalog = voiced();
         let (mut session, _) = raided_swapped(&catalog, &[MEDIUM, MEDIUM_EVEN]);
+        for index in [0, 1] {
+            escort_npc(&mut session, index).voice = None;
+        }
         heard(
             &mut session,
             &catalog,
@@ -994,15 +1024,16 @@ mod tests {
         // to answer on its own draws.
         let catalog = voiced();
         let (mut session, _) = raided(&catalog, &[MEDIUM]);
+        escort_npc(&mut session, 0).voice = None;
         work_with(
             &mut session,
             &catalog,
             Controls::default(),
             &sitting_ai(),
             Rules::default(),
-            &mut Ranged::of(&[(2, 0), (3, 1)]),
+            &mut Ranged::of(&[(2, 1), (3, 1)]),
         );
-        assert_eq!(escort_npc(&mut session, 0).voice, Some(VoiceVariant::Even));
+        assert_eq!(escort_npc(&mut session, 0).voice, Some(VoiceVariant::Odd));
     }
 
     // `_HandleShipHit`'s victory (@0x36c7f-0x36d45).

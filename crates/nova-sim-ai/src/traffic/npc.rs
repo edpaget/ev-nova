@@ -556,12 +556,17 @@ pub struct Npc {
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
     pub afterburner: bool,
-    /// The variant of its voice (the original's +0xc922): none while it is
-    /// unset (above 1), as it is at every spawn, launch and placing here.
-    /// The session rolls it, the one writer, as `_LaunchFighter`,
+    /// The variant of its voice (the original's +0xc922): the word its
+    /// berth holds as it comes in, or its spawn's own (see
+    /// [`berth_voices`](crate::traffic::berth_voices)), and none only by
+    /// [`RuleKey::ReusedSlotVoice`](crate::RuleKey::ReusedSlotVoice)'s
+    /// other reading until `_EscortAI`'s roll. Write it through
+    /// [`Traffic::set_voice`](crate::traffic::Traffic::set_voice), so the
+    /// berth keeps it. The session rolls it as `_LaunchFighter`,
     /// `_DoShipCapture`, `_AIShipCapturedByPlayer` and `_EscortAI` roll
     /// it, and keeps an escort's across jumps and landings (see
-    /// `nova_sim::voice`). Never saved.
+    /// `nova_sim::voice`). Saved only for a carried fighter, as the
+    /// original reads it back (`nova_sim_combat::fleet::Escort::voice`).
     pub voice: Option<crate::voice::VoiceVariant>,
     /// The pursuit it keeps from tick to tick (substate 0x10 or 0x11) and
     /// this tick's frame (see [`pursuit`](crate::ai::pursuit)): none as it

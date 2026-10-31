@@ -195,8 +195,9 @@ pub(super) struct KeptEscort {
     /// module).
     pub(super) afterburner: Option<bool>,
     /// Its voice's variant ([`Npc::voice`]), which `_RespawnEscort` never
-    /// writes (+0xc922, @0x3d4b8-0x3d62c); none with no NPC, or while it
-    /// is unset, and it rolls one at its first think (see the `voices`
+    /// writes (+0xc922, @0x3d4b8-0x3d62c); none with no NPC, and it holds
+    /// its record's, or else its berth's word, or while it is unset by
+    /// [`RuleKey::ReusedSlotVoice`]'s other reading (see the `voices`
     /// module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
     /// Its order word ([`Npc::order_word`]), which `_RespawnEscort` never
@@ -282,7 +283,6 @@ impl Session {
                     .map(|npc| self.ship.loaded_escort_set(&self.setup, &npc.hull.frames));
                 if let Some(npc) = self.space.npc_mut(id) {
                     npc.aux = kept.aux;
-                    npc.voice = kept.voice;
                     npc.order_word = kept.order_word.unwrap_or(OrderWord::of(recorded[index]));
                     npc.ion = Ion::default();
                     npc.cloak = kept.cloak;
@@ -310,6 +310,10 @@ impl Session {
                         }
                         None => npc.armament.fold_mut().set = loaded.unwrap_or(0),
                     }
+                }
+                // With neither, it holds what its berth seeded it.
+                if let Some(variant) = kept.voice {
+                    self.space.traffic.set_voice(id, variant);
                 }
                 match kept.afterburner {
                     Some(afterburner) => {

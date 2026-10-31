@@ -1,23 +1,26 @@
 //! What the original's ship table keeps from one traffic to the next: each
-//! slot's cached odds (+0xc914), search timer (+0xc90c), person (+0xc8d0)
-//! and formation place (+0x28/+0x2c).
+//! slot's cached odds (+0xc914), search timer (+0xc90c), voice variant
+//! (+0xc922), person (+0xc8d0) and formation place (+0x28/+0x2c).
 //!
 //! **The original.** The ship table is one `NewPtr(0x325000)` that
 //! `_InitArrays` takes once (@0x1b7a1-0x1b7b5, called from `_InitEVNova`
 //! @0x466fa) and keeps until the app quits. `_InitObjects` (@0x1c2e5,
 //! called once from `_InitEVNova` @0x47252) sets some of each slot's words
-//! at launch, none of these four, and the fresh pages the table is
+//! at launch, none of these five, and the fresh pages the table is
 //! served from read 0. After that, only the spawns, the odds pass and the
 //! AI write +0xc914 (see [`odds_cache`](super::odds_cache)), only
 //! `_HighLevelAIHandler` writes +0xc90c (see
-//! [`berth_search`](super::berth_search)), only the spawns and the
+//! [`berth_search`](super::berth_search)), only `_RandomShipSpawn`,
+//! `_LaunchFighter`, the captures, `_EscortAI` and, for a carried fighter,
+//! `_LoadPilotData` write +0xc922 (see
+//! [`berth_voices`](super::berth_voices)), only the spawns and the
 //! captures write an NPC slot's +0xc8d0 (`_ResetPlayer` @0x1d4fb writes
 //! the player's slot 0 alone), and only the formation calc and
 //! `_RespawnEscort` write +0x28/+0x2c (see
 //! [`formation_places`](super::formation_places)). No relocation, pilot
 //! load or new game
 //! (`_OpenPilotFile`, `_LoadPilotData`, `_ResetPlayer`, `_DoNewPilot`,
-//! `_EnterGameFromMainScreen`, `_PlayGame`) writes them, so each slot's
+//! `_EnterGameFromMainScreen`, `_PlayGame`) clears them, so each slot's
 //! words outlast its ship, its system, its pilot and its game.
 //!
 //! **Here.** A [`Traffic`] lasts until a traffic Reset (the developer
@@ -29,7 +32,9 @@
 //! (`nova_sim::Session::with_kept_berths`), so it lasts as long as the app.
 //!
 //! What the carry changes: the search timers reach a new ship by
-//! [`RuleKey::ReusedSlotSearch`](crate::RuleKey::ReusedSlotSearch), and
+//! [`RuleKey::ReusedSlotSearch`](crate::RuleKey::ReusedSlotSearch), the
+//! voice variants by
+//! [`RuleKey::ReusedSlotVoice`](crate::RuleKey::ReusedSlotVoice), and
 //! `<OSN>` reads the person of the slot a hail named after a Reset, while
 //! no new ship has come into it (a new pilot or a load names no slot,
 //! `_InitMissions` @0x97bbf). The odds carry changes no read: every
@@ -45,6 +50,7 @@ use std::collections::BTreeMap;
 
 use super::Traffic;
 use super::berth_search::BerthSearch;
+use super::berth_voices::BerthVoices;
 use super::formation_places::BerthPlaces;
 use super::odds_cache::OddsCache;
 
@@ -54,6 +60,8 @@ use super::odds_cache::OddsCache;
 pub struct KeptBerths {
     /// Each berth's last search timer.
     search: BerthSearch,
+    /// Each berth's last voice variant.
+    voices: BerthVoices,
     /// Each berth's cached odds, and the pass's marker.
     odds: OddsCache,
     /// The person of the ship last brought in at each berth.
@@ -69,6 +77,7 @@ impl Traffic {
     pub fn kept_berths(&self) -> KeptBerths {
         KeptBerths {
             search: self.berth_search.clone(),
+            voices: self.berth_voices.clone(),
             odds: self.odds.clone(),
             persons: self.berth_persons.clone(),
             places: self.berth_places.clone(),
@@ -80,6 +89,7 @@ impl Traffic {
     /// [`kept_berths`](self)).
     pub fn keep_berths(&mut self, kept: KeptBerths) {
         self.berth_search.take_timers_of(kept.search);
+        self.berth_voices.take_variants_of(kept.voices);
         self.odds = kept.odds;
         self.berth_persons = kept.persons;
         self.berth_places.take_words_of(kept.places);
@@ -101,6 +111,7 @@ mod tests {
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::NpcId;
     use crate::traffic::odds_cache::LAST_SLOT;
+    use crate::voice::VoiceVariant;
     use nova_sim_base::fixture::FAST;
 
     /// A traffic of three ships at berths 1-3, the third attacking the
@@ -158,6 +169,26 @@ mod tests {
         let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
         let ship = new.npcs().iter().find(|npc| npc.id == id).expect("added");
         assert_eq!(ship.lost_sight, SearchTimer::Unset, "no timer taken");
+    }
+
+    #[test]
+    fn a_ship_brought_into_a_new_traffic_takes_its_berths_voice_by_that_traffics_reading() {
+        let mut old = passed();
+        old.write_berth_voice(1, VoiceVariant::Odd);
+        let voice = |reading| {
+            let mut new = Traffic::new();
+            new.set_reused_slot_voice(reading);
+            new.keep_berths(old.kept_berths());
+            assert_eq!(new.reused_slot_voice(), reading);
+            let id = new.add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
+            new.npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("added")
+                .voice
+        };
+        assert_eq!(voice(RuleSource::Engine), Some(VoiceVariant::Odd));
+        assert_eq!(voice(RuleSource::Bible), None);
     }
 
     #[test]
