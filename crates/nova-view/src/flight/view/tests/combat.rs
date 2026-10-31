@@ -282,11 +282,12 @@ fn a_ship_held_at_its_gate_is_drawn_plain_on_the_frame_it_is_held() {
 }
 
 #[test]
-fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_that_frame() {
+fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_the_next_frame() {
     // Double time's second pass answers the hit too (`_HandleShot`
     // @0x44385 runs on both): the session's (nova-sim's
     // `session::step::tests::a_step_runs_a_second_pass_only_in_double_time`).
-    // The frame after the step's two passes is drawn.
+    // The frame between the step's two passes is drawn, so it shows on
+    // the next (`_PlayGame` @0x45d96-0x45f31).
     let mut view = world(
         volleying(),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
@@ -301,12 +302,20 @@ fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_that_frame() {
     let mut waiting = held.clone();
     waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
     view.sim.set_frame(held.clone());
+    view.sim.queue_report(super::stepping::doubled(
+        pass(&waiting),
+        pass(&held),
+        waiting.clone(),
+    ));
+    view.step_frame(1, view.anchor());
+    assert_eq!(
+        npc_tints(&world_list(&view)),
+        [],
+        "still waiting that frame"
+    );
     view.sim.queue_report(StepReport {
-        steps: vec![StepRun {
-            passes: vec![pass(&waiting), pass(&held)],
-            ..StepRun::default()
-        }],
-        stopped: false,
+        steps: Vec::new(),
+        stopped: true,
     });
     view.step_frame(1, view.anchor());
     assert_eq!(npc_tints(&world_list(&view)), [Color::WHITE], "seen");
@@ -333,13 +342,11 @@ fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
         quotes,
         ..PassReport::default()
     };
-    view.sim.queue_report(StepReport {
-        steps: vec![StepRun {
-            passes: vec![pass(Vec::new()), pass(vec![quote])],
-            ..StepRun::default()
-        }],
-        stopped: false,
-    });
+    view.sim.queue_report(super::stepping::doubled(
+        pass(Vec::new()),
+        pass(vec![quote]),
+        frame.clone(),
+    ));
     view.step_frame(1, view.anchor());
     assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
 }

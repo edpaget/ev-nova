@@ -176,6 +176,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// the course map's course, and the ship drawn from where the frame,
     /// filled afresh, has it, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
+        self.between_passes = None;
         self.show_scene();
         self.map.show_course(system, &self.frame.course_shown);
         self.previous = self.player_place();
@@ -195,6 +196,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
     /// a new pilot's beginning. Its place is the kept frame's
     /// ([`FlightView::player_place`]), which the change filled afresh.
     pub(super) fn place_ship(&mut self) {
+        self.between_passes = None;
         self.previous = self.player_place();
         self.show_course();
         self.alpha = 0.0;

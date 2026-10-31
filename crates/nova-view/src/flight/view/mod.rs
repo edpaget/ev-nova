@@ -52,8 +52,9 @@
 //!
 //! In double time ([`FlightView::set_double_time`]), each step runs the
 //! session's second pass ([`Session::tick_again`]) after the advance
-//! pass, and steps the effects and
-//! drains the fight's events after it as after the advance pass
+//! pass, the frame drawn between them, as `_PlayGame` draws it, and
+//! steps the effects and takes the fight's events after it as after the
+//! advance pass, held for the next frame (see the `between_passes` module)
 //! (`_HandleExplods` runs on both, @0x444e1). The second pass answers
 //! its hits as they land and what its close struck after it
 //! (`nova_sim::Session::answer_strikes`), and says the attack quotes they
@@ -697,6 +698,7 @@ use crate::text::TextMetrics;
 use crate::{Color, Diagnostic, Key, Point, SoundPrefs, UiSound};
 use dialog_map::MapOpened;
 
+mod between_passes;
 mod board;
 mod build;
 mod cockpit;
@@ -1169,8 +1171,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// changes: after each frame's steps, after each command
     /// ([`FlightView::send`]), as the flight is caught up with (after the
     /// drain) and after each change behind the port
-    /// ([`FlightView::change_sim`]), so whatever is drawn or read next
-    /// reads the flight as it stands. A quiet tick fills it twice: the
+    /// ([`FlightView::change_sim`]), so whatever is read next reads the
+    /// flight as it stands, and whatever is drawn next too, but for a
+    /// double-time frame drawn between its passes
+    /// ([`FlightView::drawn`]). A quiet tick fills it twice: the
     /// catch-up and the steps. The pilot panel kept is forgotten with it
     /// ([`player::KeptPanel`]), so the next read asks the flight afresh.
     pub(super) fn refresh_frame(&mut self) {
@@ -1217,7 +1221,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// and each change refills where it is made, so no read sees a value
     /// the original wouldn't at that point, and no boundary the player
     /// sees (a frame drawn, a dialog opened, a landing or jump completed,
-    /// the pilot saved) is crossed with a stale frame.
+    /// the pilot saved) is crossed with a stale frame. A double-time frame
+    /// drawn between its passes shows what a command changed on the next
+    /// step ([`FlightView::drawn`]), as the original's key reads act on
+    /// the next pass.
     pub(super) fn send(
         &mut self,
         command: nova_sim::flight_frame::FlightCommand,
@@ -1301,7 +1308,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// ([`FlightView::change_sim`], [`FlightView::begin`],
     /// [`FlightView::enter_game`]), so it is never stale at a read; an ask
     /// ([`FlightCommand::is_ask`](nova_sim::flight_frame::FlightCommand::is_ask))
-    /// changes nothing it shows.
+    /// changes nothing it shows. A double-time frame is drawn from the
+    /// frame between its passes instead ([`FlightView::drawn`]), so this
+    /// stays the flight as it stands for every read.
     frame: FlightFrame,
     /// Why the flight could not start, if it could not, as it opened
     /// ([`FlightOpening::failure`](nova_sim::flight_frame::FlightOpening::failure)):
@@ -1335,6 +1344,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     bar_government: Option<BarFor>,
     /// Turns frame times into simulation steps.
     clock: FixedStep,
+    /// The flight as a double-time step's first pass left it, while it is
+    /// drawn, with the second pass held for the frame after; see the
+    /// `between_passes` module.
+    between_passes: Option<between_passes::BetweenPasses>,
     /// The player's ship's place a step before the frame's.
     previous: ShipPlace,
     /// How far the display is from `previous` to the session's ship.

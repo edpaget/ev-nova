@@ -76,7 +76,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         true
     }
 
-    /// Draws the scene and its HUD from the kept frame, the fades left
+    /// Draws the scene and its HUD from the frame drawn, the fades left
     /// out: whether there was a scene to draw, or only why flight could
     /// not start (`reason`, asked only then). The sprite world goes
     /// first ([`FlightView::draw_world_scene`]), then the status bar over
@@ -94,7 +94,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             return false;
         }
         match &self.status_bar {
-            Ok(bar) => self.draw_bar(list, (bar, self.view.0), &self.frame),
+            Ok(bar) => self.draw_bar(list, (bar, self.view.0), self.drawn()),
             Err(reason) => hud::draw_unavailable(list, reason, self.view.0),
         }
         true
@@ -117,7 +117,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Draws the sprite world, pass by pass in [`WORLD_PASSES`]' order
-    /// (see the module docs), from the kept frame, its brackets, icon and
+    /// (see the module docs), from the frame drawn, its brackets, icon and
     /// escort rows from the frame's HUD
     /// ([`FlightFrame::hud`](nova_sim::flight_frame::FlightFrame::hud)).
     /// The message line's box is drawn over the stars and its text with
@@ -175,7 +175,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// (@0x20390-0x203fd), while the frame says double time is on: the
     /// brackets and the icon as the frame's HUD holds them.
     fn draw_targets(&self, list: &mut DrawList, at: (&SystemScene, &Camera)) {
-        let hud = &self.frame.hud;
+        let hud = &self.drawn().hud;
         self.draw_brackets(list, at, hud.nav_brackets, hud.target_brackets);
         if !self.map_open {
             self.cursor.draw(list, &self.looks, self.play_rect());
@@ -183,7 +183,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if let (Some(icon), Some(width)) = (hud.red_alert, self.alert_width) {
             alert::draw_red_alert(list, icon, width, self.view.0);
         }
-        if self.frame.double_time {
+        if self.drawn().double_time {
             alert::draw_double_time(list);
         }
     }
@@ -222,14 +222,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     fn draw_floaters(&self, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {
-            let background = message_background(self.frame.system_background);
+            let background = message_background(self.drawn().system_background);
             hud::or_message_background(list, self.view, background);
             hud::draw_message_text(list, message, self.view, metrics);
         }
         self.draw_floating_map(list);
         self.escort_menu.draw(
             list,
-            &self.frame.hud.escort_rows,
+            &self.drawn().hud.escort_rows,
             self.escort_colors,
             metrics,
         );
@@ -245,7 +245,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let source = self.presentation.starfield;
         stars::draw(list, (&self.stars, &self.looks), source, camera, self.alpha);
         if self.message().is_some() {
-            let background = message_background(self.frame.system_background);
+            let background = message_background(self.drawn().system_background);
             hud::draw_message_box(list, self.view, background);
         }
     }

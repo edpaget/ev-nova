@@ -62,7 +62,9 @@ impl<
     /// fades to white from the first step the session's `_hyperGamma` is
     /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives on the step
     /// the session says the warp has ended ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due)),
-    /// whose steps stop there, before the frame is drawn. From then on the
+    /// whose steps stop there, before the frame is drawn, or, on a
+    /// double time second pass, on the next step, after the frame between
+    /// its passes is drawn ([`FlightView::holding_between_passes`]). From then on the
     /// rest of the effect, the fade-in or the white flash, plays over the
     /// new system; that plays on with the map open too, as the original's
     /// display fade does. A jump the session gave up instead is settled at

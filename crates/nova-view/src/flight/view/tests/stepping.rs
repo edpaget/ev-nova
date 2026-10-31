@@ -17,7 +17,7 @@ use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
 use super::faked_travel::{faked_lasts, shown_to_flight};
 
 use crate::flight::stars::Star;
-use crate::system::camera::Anchor;
+use crate::system::camera::{Anchor, Camera};
 
 use super::*;
 
@@ -72,6 +72,18 @@ fn step(passes: Vec<PassReport>) -> StepRun {
         before: vec![(ShipRef::Player, ShipPlace::default())],
         passes,
         ..StepRun::default()
+    }
+}
+
+/// A frame of one double-time step of passes `first` and `second`, with
+/// `between` the flight as it stood between them.
+pub(super) fn doubled(first: PassReport, second: PassReport, between: FlightFrame) -> StepReport {
+    StepReport {
+        steps: vec![StepRun {
+            between_passes: Some(Box::new(between)),
+            ..step(vec![first, second])
+        }],
+        stopped: false,
     }
 }
 
@@ -541,20 +553,191 @@ fn double_times_second_pass_ages_the_effects_again() {
     let mut twice = detonated();
     frame(&mut twice, one_step(vec![fight(vec![])]));
     frame(&mut twice, one_step(vec![fight(vec![])]));
-    let mut doubled = detonated();
-    frame(&mut doubled, one_step(vec![fight(vec![]), fight(vec![])]));
-    assert_eq!(doubled.effects.explosions()[0].frame, 2.0);
-    assert_eq!(doubled.effects, twice.effects);
+    let mut both = detonated();
+    let report = doubled(fight(vec![]), fight(vec![]), sol());
+    frame(&mut both, report);
+    frame(&mut both, stopped());
+    assert_eq!(both.effects.explosions()[0].frame, 2.0);
+    assert_eq!(both.effects, twice.effects);
 }
 
 #[test]
-fn a_detonation_on_the_second_pass_is_shown_that_frame() {
+fn a_detonation_on_the_second_pass_is_shown_the_frame_after() {
     let mut view = stepping(armed(1, &[BLASTER]));
-    frame(
-        &mut view,
-        one_step(vec![fight(vec![]), fight(vec![detonation()])]),
-    );
+    let report = doubled(fight(vec![]), fight(vec![detonation()]), sol());
+    frame(&mut view, report);
+    assert_eq!(view.effects.explosions().len(), 0, "held with its pass");
+    frame(&mut view, one_step(vec![fight(vec![])]));
     assert_eq!(view.effects.explosions().len(), 1);
+}
+
+// A double-time frame, drawn between its passes.
+
+/// A frame whose stepping stopped before its first step.
+fn stopped() -> StepReport {
+    StepReport {
+        steps: vec![],
+        stopped: true,
+    }
+}
+
+/// `sol()` with the player's ship at `x`.
+fn sol_at(x: f32) -> FlightFrame {
+    let mut frame = sol();
+    frame.ships[0].position = Vec2::new(x, 0.0);
+    frame
+}
+
+/// A view over a flight whose double-time step left the ship at 20, the
+/// first pass having left it at 10: what it holds, and the flight now.
+fn held() -> (Faked, FlightFrame, FlightFrame) {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let (first, now) = (sol_at(10.0), sol_at(20.0));
+    view.sim.set_frame(now.clone());
+    let report = doubled(fight(vec![]), fight(vec![]), first.clone());
+    frame(&mut view, report);
+    (view, first, now)
+}
+
+#[test]
+fn a_double_time_frame_is_drawn_on_the_first_passs_state() {
+    let (view, first, now) = held();
+    assert_eq!(view.drawn(), &first);
+    assert_eq!(view.frame, now, "the kept frame is the flight as it stands");
+    view.check_frame_kept();
+}
+
+#[test]
+fn the_first_passs_state_stays_drawn_on_a_frame_with_no_step() {
+    let (mut view, first, _) = held();
+    view.step_frame(0, anchor());
+    assert_eq!(view.drawn(), &first);
+}
+
+#[test]
+fn a_command_leaves_the_first_passs_state_drawn() {
+    let (mut view, first, _) = held();
+    view.send(FlightCommand::Jump);
+    assert_eq!(view.drawn(), &first);
+}
+
+#[test]
+fn the_next_step_replaces_it() {
+    let (mut view, _, now) = held();
+    frame(&mut view, one_step(vec![fight(vec![])]));
+    assert_eq!(view.drawn(), &now);
+}
+
+#[test]
+fn a_stop_with_no_step_releases_it() {
+    let (mut view, _, now) = held();
+    frame(&mut view, stopped());
+    assert_eq!(view.drawn(), &now);
+}
+
+#[test]
+fn a_single_time_step_draws_the_frame_as_it_stands() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let now = sol_at(20.0);
+    view.sim.set_frame(now.clone());
+    frame(&mut view, one_step(vec![fight(vec![])]));
+    assert_eq!(view.drawn(), &now);
+}
+
+#[test]
+fn a_layout_a_placing_a_takeover_a_landing_and_the_holds_expiry_drop_it() {
+    let (mut view, ..) = held();
+    super::faked_screen::warp_ends(&mut view);
+    view.arrive();
+    assert_eq!(view.drawn(), &in_alpha(), "laid out afresh");
+
+    let (mut view, _, now) = held();
+    view.place_ship();
+    assert_eq!(view.drawn(), &now, "placed");
+    assert_eq!(view.previous, now.player().place());
+
+    let (mut view, ..) = held();
+    let taken = sol_at(40.0);
+    view.sim
+        .queue_answer_showing(Answer::Assigned(Assigned::MyShip), taken.clone());
+    view.assign(Assignment::MyShip);
+    assert_eq!(view.drawn(), &taken, "taken over");
+
+    let (mut view, ..) = held();
+    let landed = FlightFrame {
+        landed: Some(StellarId(128)),
+        ..sol_at(20.0)
+    };
+    view.sim.set_frame(landed.clone());
+    view.refresh_frame();
+    assert_eq!(view.drawn(), &landed, "landed");
+
+    let (mut view, ..) = held();
+    let expired = FlightFrame {
+        hold_expired: true,
+        ..sol_at(20.0)
+    };
+    view.sim.set_frame(expired.clone());
+    view.refresh_frame();
+    assert_eq!(view.drawn(), &expired, "the hold run out");
+}
+
+#[test]
+fn a_double_time_frame_smooths_over_two_passes() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let mut first = sol_at(10.0);
+    first.ships[0].heading = 10.0;
+    first.ships.push(the_npc(Vec2::new(110.0, -100.0)));
+    view.sim.set_frame(sol_at(20.0));
+    let mut report = doubled(fight(vec![]), fight(vec![]), first);
+    report.steps[0].before = vec![
+        (ShipRef::Player, place(Vec2::ZERO)),
+        (NPC, place(Vec2::new(100.0, -100.0))),
+    ];
+    frame(&mut view, report);
+    for (alpha, x, heading) in [(0.0, -10.0, 350.0), (0.5, 0.0, 0.0), (1.0, 10.0, 10.0)] {
+        view.alpha = alpha;
+        assert_eq!(view.shown_position(), Point::new(x, 0.0), "{alpha}");
+        assert_eq!(view.shown_heading(), heading, "{alpha}");
+        let npc = view.drawn().ships[1];
+        let (at, _) = view.shown_npc(&npc);
+        assert_eq!(at, Point::new(100.0 + x, -100.0), "{alpha}");
+    }
+    assert_eq!(view.alpha(), 1.0, "the display's own stays raw");
+}
+
+#[test]
+fn a_double_time_frame_steps_shots_boxes_and_asteroids_back_two_passes() {
+    let (at, velocity) = (Vec2::new(100.0, 50.0), Vec2::new(8.0, -4.0));
+    let first = FlightFrame {
+        shots: vec![FrameShot {
+            weapon: WeaponId(9999),
+            position: at,
+            velocity,
+            ..record::shot()
+        }],
+        cargo_boxes: vec![nova_sim::flight_frame::FrameBox {
+            velocity,
+            ..super::faked_world::box_at(at)
+        }],
+        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+            velocity,
+            ..super::faked_world::asteroid_at(at)
+        }],
+        ..sol()
+    };
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.sim.set_frame(sol());
+    let report = doubled(fight(vec![]), fight(vec![]), first);
+    frame(&mut view, report);
+    let camera = Camera::centred_on_in(Point::new(0.0, 0.0), VIEW_SIZE);
+    for (alpha, back) in [(1.0, 0.0), (0.5, 1.0), (0.0, 2.0)] {
+        view.alpha = alpha;
+        let drawn = camera.whole_point(Point::new(100.0 - 8.0 * back, 50.0 + 4.0 * back));
+        assert_eq!(view.shown_shots(&camera)[0].at, drawn, "{alpha}");
+        assert_eq!(view.shown_boxes(&camera)[0].at, drawn, "{alpha}");
+        assert_eq!(view.shown_asteroids(&camera)[0].at, drawn, "{alpha}");
+    }
 }
 
 // The shots' looks.
@@ -960,6 +1143,64 @@ fn a_second_pass_wrap_leaves_the_first_passs_scroll_alone() {
     step_from(&mut view, start, passes);
     scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
     assert_eq!(view.previous.position, start + SHIFT);
+}
+
+/// A double-time step from `start` to the ship past the wrap, its first
+/// pass leaving it at `first`, that pass's frame held.
+fn wrapped_on_the_second_pass(start: Vec2, first: Vec2) -> StepReport {
+    let pass = |pass: PassReport| PassReport {
+        double_time: true,
+        ..pass
+    };
+    StepReport {
+        steps: vec![StepRun {
+            before: vec![(ShipRef::Player, place(start))],
+            between_passes: Some(Box::new(sol_at(first.x))),
+            passes: vec![
+                pass(wrapping(first, None)),
+                pass(wrapping(STOOD + SHIFT + MOVE, Some(wrap()))),
+            ],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    }
+}
+
+#[test]
+fn a_second_pass_wrap_is_carried_on_the_frame_after() {
+    let (start, first) = (STOOD - MOVE - MOVE, STOOD - MOVE);
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let near = PassReport {
+        combat: vec![CombatEvent::Exploded {
+            at: first + Vec2::new(-100.0, 0.0),
+            explosion: Explosion {
+                boom: BoomId(128),
+                extra: false,
+            },
+            size: 0.0,
+        }],
+        ..wrapping(first, None)
+    };
+    frame(&mut view, one_step(vec![near]));
+    let boom = view.effects.explosions()[0].at;
+    frame(&mut view, wrapped_on_the_second_pass(start, first));
+    assert_eq!(view.previous.position, start, "uncarried while it shows");
+    assert_eq!(view.effects.explosions()[0].at, boom);
+    frame(&mut view, stopped());
+    assert_eq!(view.previous.position, start + SHIFT);
+    let carried = Point::new(boom.x + SHIFT.x, boom.y + SHIFT.y);
+    assert_eq!(view.effects.explosions()[0].at, carried);
+}
+
+#[test]
+fn a_held_second_pass_wrap_leaves_the_first_passs_scroll_alone() {
+    let (start, first) = (STOOD - MOVE - MOVE, STOOD - MOVE);
+    let mut view = starry_about(first);
+    let before = stars_now(&view);
+    frame(&mut view, wrapped_on_the_second_pass(start, first));
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
+    frame(&mut view, stopped());
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
 }
 
 #[test]

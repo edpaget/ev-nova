@@ -612,6 +612,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             bar_government: opening.bar_government,
             status_bar: opening.status_bar,
             clock: FixedStep::new(),
+            between_passes: None,
             previous: opening.frame.player().place(),
             alpha: 0.0,
             elapsed: Duration::ZERO,

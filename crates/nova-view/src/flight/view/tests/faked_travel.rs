@@ -9,7 +9,7 @@ use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
 use crate::flight::fake_catalog::scripted;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, PassReport};
 use nova_sim::{SessionEvent, SimSound};
 
 /// One tick of flight time on `view`'s clock, as a frame's tick moves it
@@ -521,6 +521,55 @@ pub(super) fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
         combat,
     });
     arrived_in_alpha(view);
+}
+
+/// A frame's report of a double-time step, `first` the flight between
+/// its passes.
+fn doubled_from(first: FlightFrame) -> StepReport {
+    let pass = PassReport {
+        double_time: true,
+        ..PassReport::default()
+    };
+    super::stepping::doubled(pass.clone(), pass, first)
+}
+
+#[test]
+fn a_double_time_warp_end_draws_a_frame_before_the_arrival() {
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    view.sim.queue_report(doubled_from(under_way(true)));
+    view.tick(TICK);
+    assert!(!view.drawn().warp_end_due, "the warp-out playing");
+    assert!(
+        !sent_but_lines(&view).contains(&FlightCommand::Arrive),
+        "that frame shows the old system"
+    );
+    view.tick(TICK);
+    assert!(
+        !sent_but_lines(&view).contains(&FlightCommand::Arrive),
+        "a tick with no step keeps showing it"
+    );
+    view.sim.queue_report(StepReport {
+        steps: Vec::new(),
+        stopped: true,
+    });
+    view.tick(TICK);
+    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+}
+
+#[test]
+fn a_second_pass_that_lights_the_white_starts_the_fade_at_once() {
+    let mut view = warping();
+    view.sim.set_frame(FlightFrame {
+        hyper_gamma: 0.5,
+        ..under_way(true)
+    });
+    view.sim.queue_report(doubled_from(under_way(true)));
+    view.tick(TICK);
+    assert!(matches!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(_))
+    ));
 }
 
 #[test]

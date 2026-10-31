@@ -374,14 +374,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// wide flight's view is, so the bar is drawn at that width's right
     /// edge.
     ///
-    /// It draws the kept frame ([`FlightView::frame`](FlightView#structfield.frame)),
-    /// which every change made while docked fills afresh: a command
+    /// It draws the frame drawn ([`FlightView::drawn`]), while docked the
+    /// kept frame, which every change made there fills afresh: a command
     /// ([`FlightView::send`]), a change behind the port
     /// ([`FlightView::change_sim`], which the test-only `transact` goes
     /// through), and the pilot desk's edits, which its caller resyncs.
     pub fn draw_status_bar(&self, list: &mut DrawList) {
         if let Ok(bar) = &self.status_bar {
-            self.draw_bar(list, (bar, VIEW_SIZE.0), &self.frame);
+            self.draw_bar(list, (bar, VIEW_SIZE.0), self.drawn());
         }
     }
 
@@ -794,7 +794,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Some(picture) = &self.floating_picture else {
             return;
         };
-        let current = self.frame.floating.current;
+        let current = self.drawn().floating.current;
         let at = Point::new(current.x, current.y);
         let frame = floating::frame(self.view);
         let transform = floating::transform(frame, at, self.floating.zoom());

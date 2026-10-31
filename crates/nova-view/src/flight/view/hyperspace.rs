@@ -91,7 +91,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// begun ([`FlightFrame::warping`]), or lights the screen, unless it is
     /// playing already; and starts its fade to white once the frame's
     /// `_hyperGamma` is above 0 ([`FlightFrame::hyper_gamma`]), as the kept
-    /// frame holds them after the steps or the jump just begun.
+    /// frame holds them after the steps or the jump just begun: a second
+    /// pass's fade starts at once, as `_FadeWhiteIn` is called inside the
+    /// pass (`_HandlePlayer` @0x68404), like a sound, not drawn with the
+    /// frame.
     ///
     /// [`FlightFrame::warping`]: nova_sim::flight_frame::FlightFrame::warping
     /// [`FlightFrame::hyper_gamma`]: nova_sim::flight_frame::FlightFrame::hyper_gamma
@@ -179,9 +182,13 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// read from the kept frame, which the steps and the effect's start
     /// have just filled), the ship arrives ([`FlightView::arrive`]), and
     /// the rest of the effect, the fade-in or the white flash, plays over
-    /// the new system as the arrival's fade-in.
+    /// the new system as the arrival's fade-in. A double-time frame drawn
+    /// between its passes comes first
+    /// ([`FlightView::holding_between_passes`]): that frame shows the old
+    /// system, and the arrival follows on the next step, which stops
+    /// before it runs.
     pub(super) fn arrival_frame(&mut self) {
-        if !self.frame.warp_end_due {
+        if !self.frame.warp_end_due || self.holding_between_passes() {
             return;
         }
         self.arrive();

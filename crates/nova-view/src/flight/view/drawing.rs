@@ -1,7 +1,7 @@
 //! [`FlightView`]'s world as drawn, over the [`FlightSim`] port: the ships,
-//! shots, cargo boxes, asteroids and beams where the kept frame puts them
-//! ([`FlightView::frame`](FlightView#structfield.frame)), each smoothed
-//! between the last two steps, the camera on the player's ship as drawn,
+//! shots, cargo boxes, asteroids and beams where the frame drawn puts them
+//! ([`FlightView::drawn`]), each smoothed between the last two steps
+//! ([`FlightView::shown_alpha`]), the camera on the player's ship as drawn,
 //! the boxes the ships are drawn in for the cursor's hover and a click in
 //! space, and the brackets round them. Any flight draws them, a scripted
 //! one in the component tests.
@@ -66,14 +66,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ago to where the frame has it.
     #[must_use]
     pub fn shown_position(&self) -> Point {
-        shown_position(self.previous, self.frame.player().place(), self.alpha)
+        shown_position(
+            self.previous,
+            self.drawn().player().place(),
+            self.shown_alpha(),
+        )
     }
 
     /// Which way the ship is drawn facing: `alpha` of the way, the short way
     /// round, from its heading a step ago to its heading in the frame.
     #[must_use]
     pub fn shown_heading(&self) -> f32 {
-        shown_heading(self.previous, self.frame.player().place(), self.alpha)
+        shown_heading(
+            self.previous,
+            self.drawn().player().place(),
+            self.shown_alpha(),
+        )
     }
 
     /// Where NPC `npc` is drawn and which way it faces: `alpha` of the way
@@ -87,14 +95,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .find(|&&(id, _)| npc.ship == ShipRef::Npc(id))
             .map_or(now, |&(_, place)| place);
         (
-            shown_position(from, now, self.alpha),
-            shown_heading(from, now, self.alpha),
+            shown_position(from, now, self.shown_alpha()),
+            shown_heading(from, now, self.shown_alpha()),
         )
     }
 
     /// The NPCs, each with where it is drawn and which way it faces.
     pub(super) fn shown_npcs(&self) -> Vec<(&FrameShip, Point, f32)> {
-        self.frame
+        self.drawn()
             .npcs()
             .map(|npc| {
                 let (at, heading) = self.shown_npc(npc);
@@ -130,7 +138,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     #[must_use]
     pub fn frame(&self) -> Option<u16> {
         let sheet = self.sheet.as_ref().ok()?;
-        let player = self.frame.player();
+        let player = self.drawn().player();
         // A failed flight's record turns on no frame table, set 0: the
         // sheet's own rotation frame.
         let spec = turning(&player.frames, sheet);
@@ -246,7 +254,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`nova_sim::RuleKey::UndisplayedShips`] chooses).
     pub(super) fn drawn_boxes(&self) -> DrawnBoxes {
         let npcs = self
-            .frame
+            .drawn()
             .npcs()
             .filter_map(|npc| {
                 let ShipRef::Npc(id) = npc.ship else {
@@ -278,7 +286,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// while its slot holds its own type's frames, otherwise of the type's
     /// whose frames it holds (see [`FlightView::drawn_boxes`]).
     fn player_box(&self) -> nova_sim::DrawnBox {
-        let player = self.frame.player();
+        let player = self.drawn().player();
         let size = if player.framed == Some(player.class) {
             drawn_size(Some(&self.sheet))
         } else {
@@ -319,7 +327,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight that failed to start draws the player alone, in the ships'
     /// layer.
     pub(super) fn sprites_stacked(&self, camera: &Camera) -> Vec<(SpriteLayer, Sprite)> {
-        sprite_stack(self.frame.drawn.iter().copied(), self.shown_shots(camera))
+        sprite_stack(self.drawn().drawn.iter().copied(), self.shown_shots(camera))
     }
 
     /// Draws the sprites of `stacked` in `layer`, in their order: the
@@ -342,7 +350,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             match sprite {
                 Sprite::Ship(ShipRef::Player) => {
                     let place = |size| camera.sprite_centre(player, size);
-                    self.draw_ship(list, &place, self.frame.player().shown);
+                    self.draw_ship(list, &place, self.drawn().player().shown);
                 }
                 Sprite::Ship(ship @ ShipRef::Npc(_)) => {
                     if let Some(&(npc, at, heading)) =
@@ -500,7 +508,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match &self.sheet {
             Ok(sheet) => {
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-                let player = self.frame.player();
+                let player = self.drawn().player();
                 let ship = ShipDraw {
                     sheet,
                     spec: &player.frames,
@@ -556,10 +564,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// How the player sees its system's murk, as the frame holds it.
     pub(super) fn seen_murk(&self) -> SeenMurk {
+        let frame = self.drawn();
         SeenMurk {
-            viewer: self.frame.player().position,
-            murk: self.frame.effective_murk,
-            colour: self.frame.murk_colour,
+            viewer: frame.player().position,
+            murk: frame.effective_murk,
+            colour: frame.murk_colour,
         }
     }
 
@@ -573,9 +582,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// it ([`FlightView::seen_murk`]), as `_HandleShot` murks it once a
     /// pass after it moves (@0x35c48).
     pub(super) fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
-        let behind = 1.0 - self.alpha;
+        let behind = 1.0 - self.shown_alpha();
         let seen = self.seen_murk();
-        self.frame
+        self.drawn()
             .shots
             .iter()
             .map(|shot| ShotShown {
@@ -618,9 +627,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// murk where the frame holds it ([`FlightView::seen_murk`]), as
     /// `_HandleBoxes` murks it (@0x2e15e-0x2e181).
     pub(super) fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
-        let behind = 1.0 - self.alpha;
+        let behind = 1.0 - self.shown_alpha();
         let seen = self.seen_murk();
-        self.frame
+        self.drawn()
             .cargo_boxes
             .iter()
             .map(|cargo_box| {
@@ -648,9 +657,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// its [whole point](Camera::whole_point)), at its whole frame, murked
     /// as the cargo boxes are (`_HandleAsteroids` @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
-        let behind = 1.0 - self.alpha;
+        let behind = 1.0 - self.shown_alpha();
         let seen = self.seen_murk();
-        self.frame
+        self.drawn()
             .asteroids
             .iter()
             .map(|asteroid| {
@@ -678,7 +687,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// each end on the pixel `_HandleBeams` stores for it
     /// ([`Camera::pixel_centre`]).
     pub(super) fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
-        self.frame
+        self.drawn()
             .beams
             .iter()
             .map(|beam| {
@@ -696,9 +705,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// How far `ship` is drawn from where the frame has it.
     fn drawn_off(&self, ship: ShipRef) -> (f32, f32) {
+        let frame = self.drawn();
         let (shown, now) = match ship {
-            ShipRef::Player => (self.shown_position(), self.frame.player().position),
-            ShipRef::Npc(_) => match self.frame.ship(ship) {
+            ShipRef::Player => (self.shown_position(), frame.player().position),
+            ShipRef::Npc(_) => match frame.ship(ship) {
                 Some(npc) => (self.shown_npc(npc).0, npc.position),
                 None => return (0.0, 0.0),
             },
@@ -741,7 +751,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);
         }
         if let Some(target) = target
-            && let Some(npc) = self.frame.ship(ShipRef::Npc(target.npc))
+            && let Some(npc) = self.drawn().ship(ShipRef::Npc(target.npc))
         {
             let (at, _) = self.shown_npc(npc);
             let sprite = drawn_size(npc.framed.and_then(|ship| self.npc_sheets.get(&ship)));
