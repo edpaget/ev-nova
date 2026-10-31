@@ -545,6 +545,8 @@ mod landing_fee;
 mod last_refresh;
 mod launch_frame;
 mod load_reset;
+#[cfg(test)]
+mod load_rules;
 mod lost_lead;
 mod lost_target;
 mod map;
@@ -1055,11 +1057,20 @@ pub struct Session {
 
 impl Session {
     /// A new pilot's session, read from `catalog`: an unnamed
-    /// [`Pilot::new`], flown.
+    /// [`Pilot::new`], flown under [`Rulebook::default`].
     pub fn start(
         catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
     ) -> Result<Self, StartError> {
-        let mut session = Self::fly(catalog, Pilot::new(catalog, "")?)?;
+        Self::start_ruled(catalog, &Rulebook::default())
+    }
+
+    /// [`Session::start`] by `rules` throughout, as [`Session::load`] reads
+    /// them: the edge's start.
+    pub fn start_ruled(
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
+        rules: &Rulebook,
+    ) -> Result<Self, StartError> {
+        let mut session = Self::load(catalog, Pilot::new(catalog, "")?, rules)?;
         // A new pilot's ship folds as `_ResetPlayer` leaves it
         // (@0x1d55a-0x1d565; see the `ship_display` module).
         session.ship.reset_fold();
@@ -1119,7 +1130,9 @@ impl Session {
     ///
     /// [`Session::load`] under [`Rulebook::default`]: see there for the
     /// fallbacks a save whose data is missing takes. The session's own
-    /// rule set is [`Rulebook::default`] until [`Session::with_rules`].
+    /// rule set is [`Rulebook::default`] until [`Session::with_rules`],
+    /// which redoes nothing the load worked out; the edge flies every
+    /// pilot by [`Session::load`] instead.
     ///
     /// # Errors
     ///
@@ -1131,10 +1144,15 @@ impl Session {
         Self::load(catalog, pilot, &Rulebook::default())
     }
 
-    /// `pilot`'s session as [`Session::fly`] builds it, the load's
-    /// fallbacks reading `rules`, and [`Session::load_repaired`] saying
-    /// whether one applied, as `_LoadPilotData` returns -0x2e when it set
-    /// its warning flag (@0x7648b-0x76498), the load otherwise complete:
+    /// `pilot`'s session as [`Session::fly`] builds it, holding `rules` as
+    /// its own from before its first read of the galaxy, so the resume,
+    /// the rebuild, the refresh and whatever they write to the pilot read
+    /// them too, as the original holds one set of readings. So a caller
+    /// wanting a rule set hands it in here, not to [`Session::with_rules`]
+    /// after. The load's fallbacks read `rules` as well, and
+    /// [`Session::load_repaired`] says whether one applied, as
+    /// `_LoadPilotData` returns -0x2e when it set its warning flag
+    /// (@0x7648b-0x76498), the load otherwise complete:
     ///
     /// - A pilot whose stellar no system lists, so the loaded data doesn't
     ///   place it, resumes as [`RuleKey::UnlistedStellar`] reads: by the
@@ -1196,6 +1214,9 @@ impl Session {
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        galaxy.set_colocated(CoLocated::from(
+            rules.source_for(RuleKey::ColocatedResolution),
+        ));
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {
@@ -1332,7 +1353,8 @@ impl Session {
             chart: Chart::new(galaxy, system),
             port: Port::new(player.position),
             run: MissionRun::new(),
-        };
+        }
+        .with_rules(*rules);
         session.run.register_offer_roll();
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);
