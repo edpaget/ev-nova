@@ -384,7 +384,9 @@ pub struct Npc {
     /// the defence fleet's spawn (`_SpawnStellarDefenseShip` @0x3d387, see
     /// [`stellar_defence`](crate::traffic::stellar_defence)), and cleared
     /// by a capture, a pirate taking it into its fleet and the disabled
-    /// reset; none for every other ship.
+    /// reset, as it is for the ships that held a ship as the player
+    /// captured it (`_AIShipCapturedByPlayer` @0x896b6-0x89704); none for
+    /// every other ship.
     pub defends: Option<StellarId>,
     /// Its cloak: how far it has faded, and which way (see
     /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked

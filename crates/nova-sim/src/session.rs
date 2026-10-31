@@ -5232,6 +5232,8 @@ impl Session {
             }
             self.space.call_good_samaritans(&npc);
         }
+        self.space
+            .note_capture_holders(npc.id, self.out.board_line.is_some());
         self.mark_boarded(npc.id);
         self.out.sounds.push(SimSound::Boarded);
         if rule.repels(npc.booty.unwrap_or(0)) {
@@ -5610,12 +5612,14 @@ impl Session {
     /// intact, its armour at half its most, its cloak's fade and direction
     /// zeroed (@0x946e3, @0x946f9), defending no stellar (+0x8c = -1,
     /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
-    /// and then as [`Session::fleet_up`]
-    /// says: a mission's special ship keeps its mark and joins as a
+    /// the ships that held it as it was boarded defending none either
+    /// (@0x896b6-0x89704; see the `stellar_defence` module), and then as
+    /// [`Session::fleet_up`] says: a mission's special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
     /// `captured_mission_ship` module). Its voice's variant is rolled on
     /// `chance` (see the `voices` module).
     fn join_fleet(&mut self, id: NpcId, chance: &mut dyn Chance) {
+        self.space.free_capture_holders();
         self.space.lose_captured(
             &mut self.pilot,
             id,

@@ -41,12 +41,25 @@
 //!   stellar's count, which nothing reads: such a stellar offers no
 //!   Demand Tribute, so it never launches.
 //!
-//! A defender captured stops defending (`Session::join_fleet`, @0x9470d).
+//! - **The capture's holders** ([`Space::note_capture_holders`],
+//!   [`Space::free_capture_holders`]): a defender captured stops defending
+//!   (`Session::join_fleet`, @0x9470d), and so does each ship holding the
+//!   capture as `_AIShipCapturedByPlayer` walks them (@0x896b6-0x89704).
+//!   `_AIShipBoardedByPlayer` leaves +0x8c (@0x897e6-0x8980f), so boarding
+//!   and leaving, and Use As My Ship (@0x41309-0x413ac), keep them
+//!   defending. The original's dialog runs before its boarding drops the
+//!   holders; the engine's `Session::mark_boarded` runs before the plunder,
+//!   so the holders are noted just before it. A mission's early board
+//!   (@0x653c0, @0x6575d) drops them before the dialog in the original too,
+//!   so a failed mission's ship boarded early notes none. Each boarding
+//!   overwrites the note and only a capture reads it, so one left by a
+//!   boarding that captured nothing is never read.
+//!
 //! Nothing here plays a sound.
 
 use std::collections::BTreeSet;
 
-use super::Session;
+use super::{Session, Space, holds_quarry};
 use crate::catalog::{ListedStellar, StellarId};
 use crate::chance::Chance;
 use crate::domination;
@@ -92,6 +105,34 @@ impl Session {
     ) -> Option<NpcId> {
         let site = *self.chart.listed.iter().find(|site| site.id == stellar)?;
         self.step_traffic(|traffic, world| traffic.spawn_defender(&site, &world, chance))
+    }
+}
+
+impl Space {
+    /// Notes the ships holding NPC `id` as it is boarded, none when
+    /// `boarded_early` (see the module docs' "The capture's holders").
+    pub(super) fn note_capture_holders(&mut self, id: NpcId, boarded_early: bool) {
+        self.escorts.capture_holders = if boarded_early {
+            Vec::new()
+        } else {
+            self.traffic
+                .npcs()
+                .iter()
+                .filter(|npc| holds_quarry(npc, id))
+                .map(|npc| npc.id)
+                .collect()
+        };
+    }
+
+    /// The ships noted stop defending, the note used up; one that has
+    /// gone is skipped (see the module docs' "The capture's holders").
+    pub(super) fn free_capture_holders(&mut self) {
+        let holders = std::mem::take(&mut self.escorts.capture_holders);
+        for npc in self.traffic.npcs_mut() {
+            if holders.contains(&npc.id) {
+                npc.defends = None;
+            }
+        }
     }
 }
 
@@ -151,12 +192,20 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::Goal;
+    use crate::board::{Assigned, Assignment, Boarding, NovaBoarding, Take, Taken};
     use crate::catalog::{DudeId, DudeRecord, LandingSite, ShipId, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::ShipRef;
     use crate::control::SetExpr;
     use crate::flight::Controls;
+    use crate::legal::NovaLaw;
+    use crate::mission::FailedBy;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, ship, work};
+    use crate::session::capture_naming::tests::use_as_my_ship;
+    use crate::session::mission_ships::tests::{in_flight_with, rescuing};
+    use crate::session::tests::{alongside, board_by, boardable, take};
+    use crate::testkit::{Draws, FAST, FakePilotCatalog, catalog, jump, land_now, ship, work};
 
     const EARTH: StellarId = StellarId(128);
 
@@ -484,5 +533,162 @@ mod tests {
             .expect("up");
         session.join_fleet(id, &mut NeverFires);
         assert_eq!(session.space.npc(id).map(|npc| npc.defends), Some(None));
+    }
+
+    // The holders of a captured ship.
+
+    /// What ship `id` defends.
+    fn defends(session: &Session, id: NpcId) -> Option<StellarId> {
+        session.space.npc(id).and_then(|npc| npc.defends)
+    }
+
+    /// Adds a defender of Earth, a copy of the police (NPC 1), that
+    /// targets and fights `quarry`.
+    fn defender_aimed_at(session: &mut Session, quarry: ShipRef) -> NpcId {
+        let mut npc = session.npcs()[1].clone();
+        npc.defends = Some(EARTH);
+        npc.target = Some(quarry);
+        npc.goal = Goal::Attack(quarry);
+        session.space.traffic.add_npc(npc)
+    }
+
+    /// [`alongside`] with a defender holding the trader (NPC 0) and one
+    /// aimed at the player: (the holder, the other).
+    fn held(session: &mut Session) -> (NpcId, NpcId) {
+        (
+            defender_aimed_at(session, ShipRef::Npc(NpcId(0))),
+            defender_aimed_at(session, ShipRef::Player),
+        )
+    }
+
+    /// Boards the target and captures it, its dialog left where the
+    /// capture leaves it.
+    fn board_and_capture(session: &mut Session) -> Taken {
+        let boarded = board_by(session, &NovaLaw::default());
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        take(session, Take::Capture, &[0, 1]).0
+    }
+
+    #[test]
+    fn use_as_escort_stops_the_captured_ships_holders_defending_only() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let (holder, other) = held(&mut session);
+        assert_eq!(board_and_capture(&mut session), Taken::Captured);
+        assert_eq!(defends(&session, holder), Some(EARTH), "not yet captured");
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(defends(&session, holder), None, "@0x896b6-0x89704");
+        assert_eq!(defends(&session, other), Some(EARTH));
+    }
+
+    #[test]
+    fn a_crewless_capture_stops_the_holders_defending_only() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        for record in &mut session.statics_mut().ships {
+            if record.id == ShipId(128) {
+                record.crew = 0;
+            }
+        }
+        let (holder, other) = held(&mut session);
+        assert_eq!(board_and_capture(&mut session), Taken::Escorted);
+        assert_eq!(defends(&session, holder), None);
+        assert_eq!(defends(&session, other), Some(EARTH));
+    }
+
+    #[test]
+    fn a_holder_of_a_ship_boarded_and_left_keeps_defending() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let (holder, _) = held(&mut session);
+        let boarded = board_by(&mut session, &NovaLaw::default());
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        session.space.escorts.aboard = None;
+        assert_eq!(defends(&session, holder), Some(EARTH), "@0x897e6-0x8980f");
+        let target = session.space.npc(holder).map(|npc| npc.target);
+        assert_eq!(target, Some(None), "let go all the same");
+    }
+
+    #[test]
+    fn a_holder_of_a_ship_taken_as_my_ship_keeps_defending() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let (holder, _) = held(&mut session);
+        assert_eq!(board_and_capture(&mut session), Taken::Captured);
+        let assigned = use_as_my_ship(&mut session, "Prize", &mut NeverFires);
+        assert!(assigned.is_some());
+        assert_eq!(defends(&session, holder), Some(EARTH), "@0x41309-0x413ac");
+    }
+
+    #[test]
+    fn a_repelled_boardings_holder_keeps_defending_through_a_later_capture() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let (holder, _) = held(&mut session);
+        let mut second = session.npcs()[0].clone();
+        session.space.traffic.npcs_mut()[0].booty = Some(0);
+        second.booty = None;
+        let second = session.space.traffic.add_npc(second);
+        let repelling = NovaBoarding {
+            empty_booty: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        assert_eq!(
+            session.board(&NovaLaw::default(), &repelling, &mut Draws::of(&[])),
+            Ok(Boarding::Repelled)
+        );
+        session.chart.target = Some(second);
+        assert_eq!(board_and_capture(&mut session), Taken::Captured);
+        session.assign(Assignment::Escort, &mut Draws::of(&[]));
+        assert_eq!(defends(&session, holder), Some(EARTH));
+    }
+
+    /// Whether a holder of a failed mission's ship, boarded with `left`
+    /// ships left and captured, still defends, and whether that board
+    /// said a line.
+    fn failed_mission_holder_keeps_defending(left: i16) -> (bool, bool) {
+        let catalog = rescuing(5, left, 0x0001);
+        let mut session = in_flight_with(&catalog, left);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Marked);
+        }
+        let mut npc = session.npcs()[0].clone();
+        npc.mission = None;
+        let quarry = session.npcs()[0].id;
+        npc.defends = Some(EARTH);
+        npc.target = Some(ShipRef::Npc(quarry));
+        let holder = session.space.traffic.add_npc(npc);
+        session.chart.target = Some(quarry);
+        session.ship.player.position = session.npcs()[0].state.position;
+        let boarded = board_by(&mut session, &NovaLaw::default());
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        let spoke = session.take_board_line().is_some();
+        if let Some(aboard) = &mut session.space.escorts.aboard {
+            aboard.plunder.odds = 100;
+        }
+        let taken = take(&mut session, Take::Capture, &[0, 1]).0;
+        if taken == Taken::Captured {
+            session.assign(Assignment::Escort, &mut Draws::of(&[]));
+        } else {
+            assert_eq!(taken, Taken::Escorted);
+        }
+        (defends(&session, holder).is_some(), spoke)
+    }
+
+    #[test]
+    fn a_failed_missions_ship_boarded_early_keeps_its_holder_through_a_capture() {
+        assert_eq!(
+            failed_mission_holder_keeps_defending(1),
+            (true, true),
+            "dropped by the early board, before the plunder (@0x6575d)"
+        );
+    }
+
+    #[test]
+    fn a_failed_missions_ship_with_no_early_board_loses_its_holder_to_a_capture() {
+        assert_eq!(failed_mission_holder_keeps_defending(2), (false, false));
     }
 }
