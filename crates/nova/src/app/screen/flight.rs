@@ -455,8 +455,9 @@ impl AppScreen {
     ///
     /// The galaxy map needs no term here: a `Q` pending on it always has
     /// a holding dialog under it ([`SpaceportView::holds_leave`]). So the
-    /// leave goes in the settle of the replayed key that answers that
-    /// dialog, before anything reaches the port.
+    /// leave goes in the settle of the key that answers that dialog; if a
+    /// key from the map's wait answers it, that is the replayed key's
+    /// settle, before anything reaches the port.
     ///
     /// Either leave first settles the escorts' marks: a report of what
     /// they sold and upgraded shows over the spaceport and holds the
