@@ -429,7 +429,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the session had queued then.
     pub(super) fn retake_nav(&mut self) {
         self.nav_marked = false;
-        self.nav_scene = Some((self.drawn().nav_mode, self.nav_now()));
+        self.nav_scene = Some((self.nav_frame().nav_mode, self.nav_now()));
         self.nav_texts = self.frame.texts_queued;
     }
 
@@ -439,10 +439,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame.nav_mode
     }
 
-    /// What the HUD's nav area shows now, for the nav mode drawn
+    /// The frame the nav area reads: the frame drawn
+    /// ([`FlightView::drawn`]), but the kept one while the course map is
+    /// open. No step runs under the map, so a double-time frame stays
+    /// held, and the map's selection and Clear Route redraw the nav area
+    /// at once (`_DrawStatus` @0x12dba, @0x13fb2-0x1406e). As the map
+    /// closes the area goes back to the frame drawn, which shows what the
+    /// map changed from the next step, as a command does.
+    fn nav_frame(&self) -> &FlightFrame {
+        if self.map_open {
+            &self.frame
+        } else {
+            self.drawn()
+        }
+    }
+
+    /// What the HUD's nav area shows now, for the nav mode of the frame
+    /// it reads (`FlightView::nav_frame`)
     /// ([`FlightView::nav_display`]).
     pub(super) fn nav_now(&self) -> NavDisplay {
-        self.nav_display(self.drawn().nav_mode)
+        self.nav_display(self.nav_frame().nav_mode)
     }
 
     /// What the HUD's nav area shows for nav mode `mode` (see
@@ -455,7 +471,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// for none), with whether the ship can jump there now; with the nav
     /// system off, "Nav System Off". Each read from what the flight gave:
     /// the opening's names ([`Names::stellar`](nova_sim::flight_frame::Names::stellar))
-    /// and the frame drawn
+    /// and the frame it reads (`FlightView::nav_frame`)
     /// ([`FlightFrame::has_explored`](nova_sim::flight_frame::FlightFrame::has_explored),
     /// [`FlightFrame::jump_readiness`](nova_sim::flight_frame::FlightFrame::jump_readiness)).
     /// `mode` may be held or noted from before (a take-off's, a text's, an
@@ -474,7 +490,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             })),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {
-                    self.drawn()
+                    self.nav_frame()
                         .has_explored(next)
                         .then(|| self.map.model().system(next))
                         .flatten()
@@ -482,15 +498,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
                             NavDestination::Named(system.entry.name.clone())
                         })
                 }),
-                readiness: self.drawn().jump_readiness,
+                readiness: self.nav_frame().jump_readiness,
             },
         }
     }
 
-    /// Whether the nav area's snapshot was taken for the nav mode drawn
-    /// now.
+    /// Whether the nav area's snapshot was taken for the nav mode of the
+    /// frame it reads now (`FlightView::nav_frame`).
     fn nav_mode_shown(&self) -> bool {
-        let mode = self.drawn().nav_mode;
+        let mode = self.nav_frame().nav_mode;
         self.nav_scene
             .as_ref()
             .is_some_and(|(shown, _)| *shown == mode)
