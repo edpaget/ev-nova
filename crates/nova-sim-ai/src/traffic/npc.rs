@@ -1168,8 +1168,9 @@ impl Npc {
     /// asks it whole ([`Npc::threatens_player_or_led`]), reading which
     /// ships the player leads from `npcs`: those that
     /// [escort the player](Npc::escorts_player), as
-    /// [`Traffic::player_led`](super::Traffic::player_led) does. A ship
-    /// whose quarry isn't in `npcs` is led by nobody.
+    /// [`Traffic::player_led`](super::Traffic::player_led) does, while
+    /// their slots are active. A ship whose quarry isn't in `npcs` is led by
+    /// nobody.
     ///
     /// It serves the callers of `_IsThreatToPlayer` only: every modelled
     /// one asks it (`_IsPlayerThreatened` @0x8245c among them, the hail's
@@ -1178,7 +1179,7 @@ impl Npc {
     /// [`Npc::threatens_player_extended`], which lists them.
     #[must_use]
     pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
-        self.threatens_player_or_led(|id| npcs.iter().any(|n| n.id == id && n.escorts_player()))
+        self.threatens_player_or_led(|id| led_by_player(npcs, id))
     }
 
     /// Whether it threatens the player as `_ExtendedIsThreatToPlayer`
@@ -1245,13 +1246,20 @@ impl Npc {
     ///
     #[must_use]
     pub fn threatens_player_extended(&self, npcs: &[Npc], seen: bool) -> bool {
-        let led = |id: NpcId| npcs.iter().any(|n| n.id == id && n.escorts_player());
+        let led = |id: NpcId| led_by_player(npcs, id);
         let at_player = |ship: Option<ShipRef>| match ship {
             Some(ShipRef::Player) => true,
             Some(ShipRef::Npc(id)) => led(id),
             None => false,
         };
-        let has_target = self.target.is_some() || self.goal.quarry().is_some();
+        // A fight's goal names its ship as +0x70 does; once that slot is
+        // inactive the ship's step lets go of it, and its goal stays until
+        // its next think.
+        let has_target = self.target.is_some()
+            || self.goal.quarry().is_some_and(|ship| match ship {
+                ShipRef::Player => true,
+                ShipRef::Npc(id) => npcs.iter().any(|n| n.id == id && n.condition.active()),
+            });
         let inactive = !self.condition.active();
         if !seen || inactive || self.is_disabled() || self.escorts_player() || !has_target {
             return false;
@@ -1532,6 +1540,21 @@ impl Npc {
             .and_then(|frame| frame.last())
             .map(|body| body.heading)
     }
+}
+
+/// Whether NPC `id` is a ship among `npcs` the player leads, as the threat
+/// tests read a target's leader (+0x9a): they test no slot (@0x7f587,
+/// @0x81c3f), so a target gone from `npcs` is read by its record, but
+/// nothing the player leads is left there. A ship destroyed, one entering a
+/// gate and a fighter docking write -1 as their slots free (@0x2dee7,
+/// @0x2c07f, @0x8040b), so one destroyed and not yet taken out is led by
+/// nobody. A ship jumping out writes none (@0x859b8), read only by the
+/// slots between it and a holder in that frame's AI loop, a read the
+/// engine's later departure doesn't have
+/// (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
+fn led_by_player(npcs: &[Npc], id: NpcId) -> bool {
+    npcs.iter()
+        .any(|n| n.id == id && n.condition.active() && n.escorts_player())
 }
 
 #[cfg(test)]
@@ -2874,6 +2897,59 @@ mod tests {
             !at_seven.threatens_player_extended(&[at_seven.clone(), plain(7), hired(8)], true),
             "another ship the player leads is not its target"
         );
+    }
+
+    #[test]
+    fn threatens_player_extended_finds_no_threat_in_a_ship_that_let_go_of_its_target() {
+        // A target of -1 ends the test (@0x81bad), stellar defender or
+        // lead alike, though the engine's goal names the gone ship until
+        // the ship's next think.
+        let gone = ShipRef::Npc(NpcId(9));
+        let holding = Npc {
+            goal: Goal::Attack(gone),
+            target: Some(gone),
+            defends: Some(StellarId(128)),
+            ..plain(1)
+        };
+        let let_go = |ship: &Npc| Npc {
+            target: None,
+            ..ship.clone()
+        };
+        assert!(holding.threatens_player_extended(&[], true));
+        assert!(!let_go(&holding).threatens_player_extended(&[], true));
+        let lead = Npc {
+            defends: None,
+            ..holding
+        };
+        let wing = Npc {
+            leader: Some(NpcId(1)),
+            target: Some(ShipRef::Player),
+            ..plain(2)
+        };
+        assert!(lead.threatens_player_extended(&[lead.clone(), wing.clone()], true));
+        let lead = let_go(&lead);
+        assert!(!lead.threatens_player_extended(&[lead.clone(), wing], true));
+    }
+
+    #[test]
+    fn a_target_destroyed_but_not_yet_taken_out_is_led_by_nobody() {
+        // Its slot's free writes +0x9a -1 (@0x2dee7), which the threat
+        // tests read with no test of its slot (@0x7f587, @0x81c3f).
+        let aim = ShipRef::Npc(NpcId(7));
+        let holder = Npc {
+            goal: Goal::Attack(aim),
+            target: Some(aim),
+            ..plain(1)
+        };
+        let escort = hired(7);
+        assert!(holder.threatens_player_among(std::slice::from_ref(&escort)));
+        assert!(holder.threatens_player_extended(std::slice::from_ref(&escort), true));
+        let wreck = Npc {
+            condition: Condition::Destroyed,
+            ..escort
+        };
+        assert!(!holder.threatens_player_among(std::slice::from_ref(&wreck)));
+        assert!(!holder.threatens_player_extended(std::slice::from_ref(&wreck), true));
     }
 
     #[test]
