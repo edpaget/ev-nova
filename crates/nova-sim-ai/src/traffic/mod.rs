@@ -2864,6 +2864,7 @@ impl Traffic {
                 fleet_slot: None,
                 slot_place: None,
                 order_word: crate::fleet::OrderWord::NONE,
+                ordered_by_lead: false,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,
                 warp: warp_out::Warp::default(),

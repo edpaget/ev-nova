@@ -14,6 +14,11 @@
 //! fallback sent home, never commanded, is skipped by a Return and left
 //! unmarked: its class's Return is cleared on the same pass unless a
 //! marked fellow holds it, and that fighter keeps formation either way.
+//! `_AIIssueEscortOrders` sets the same byte on each ship it orders
+//! (@0x89b71, [`Npc::ordered_by_lead`](crate::Npc::ordered_by_lead)), and
+//! no clear follows a capture, as `_AISetup` leaves it, so a ship captured
+//! from an NPC fleet joins marked and holds its class's kept order
+//! ([`Space::marked`]).
 //!
 //! **The bookkeeping** runs on every pass, both of double time's
 //! (`_DoPlayGameWork` calls `_HandlePlayer` on both, @0x43e19), after the
@@ -128,10 +133,10 @@ impl Space {
         !cleared.is_empty()
     }
 
-    /// Whether `npc` is marked as having taken a command, the original's
+    /// Whether `npc` is marked as having taken an order, the original's
     /// +0xc4 (see the module docs).
     pub(super) fn marked(&self, npc: &Npc) -> bool {
-        self.escorts.commanded.contains(&npc.id)
+        self.escorts.commanded.contains(&npc.id) || npc.ordered_by_lead
     }
 
     /// Whether a ship of `class` the player leads, marked as having taken a
@@ -464,6 +469,27 @@ mod tests {
         assert!(settle(&mut session));
         let orders: Vec<_> = session.pilot().escorts().iter().map(|e| e.order).collect();
         assert_eq!(orders, [None, Some(EscortOrder::Hold)]);
+    }
+
+    #[test]
+    fn a_ship_its_old_lead_ordered_holds_its_classs_order_through_the_bookkeeping() {
+        // `_AIIssueEscortOrders` sets +0xc4 (@0x89b71), and no clear
+        // follows a capture, so the loops read it marked (@0x6e3f1).
+        for (ordered, cleared) in [(true, false), (false, true)] {
+            let catalog = carrying();
+            let mut session = flying(&catalog, vec![warship(None)], RuleSource::Engine);
+            command(&mut session, WARSHIPS, EscortCommand::Hold);
+            session.space.escorts.commanded.clear();
+            let id = fleet_ids(&session)[0];
+            session.space.npc_mut(id).expect("there").ordered_by_lead = ordered;
+            assert_eq!(settle(&mut session), cleared);
+            let held = if ordered {
+                Some(EscortOrder::Hold)
+            } else {
+                None
+            };
+            assert_eq!(kept(&session, EscortClass::Warship), held);
+        }
     }
 
     #[test]

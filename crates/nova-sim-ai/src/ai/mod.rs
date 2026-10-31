@@ -1106,11 +1106,15 @@ pub struct Decision {
     /// (see [`jump_with_leader`](crate::traffic::jump_with_leader)); the
     /// high level's hold zeroes the stage again in the same tick.
     pub ends_wait: bool,
-    /// The order word the think writes to the ship, if any: a fighter of
-    /// the player's escort writes the order it takes from its parent
-    /// (`_EscortAI` @0x83b76, @0x83b7f; [`fleet_escort`]), which its next
-    /// target check, and a stray beam, then read. The traffic sets
-    /// [`Npc::order_word`] as it takes the goal; none leaves it as it was.
+    /// The order word the think writes to the ship, if any: a ship the
+    /// player leads writes its own at every think past its lost parent
+    /// ([`escort::think_word`], @0x83ae4-0x83bda), a fighter of the
+    /// player's escort the order it takes from its parent (`_EscortAI`
+    /// @0x83b76, @0x83b7f; [`fleet_escort`]), and the out-of-ammunition
+    /// fallback its word under any parent (@0x83bc9, @0x83bda). Its next
+    /// target check, the player's next command and a stray beam then read
+    /// it. The traffic sets [`Npc::order_word`] as it takes the goal; none
+    /// leaves it as it was.
     pub order_word: Option<crate::fleet::OrderWord>,
     /// Whether the think takes the ship out of its fleet: `_EscortAI`'s
     /// lost parent (@0x83917-0x8397b, its AI type @0x83c4a), for a ship

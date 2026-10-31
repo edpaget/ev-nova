@@ -440,6 +440,7 @@ impl Session {
             fleet_slot: None,
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
+            ordered_by_lead: false,
             marines: kind.marines,
             // A hired escort's slot keeps the `PodCount` its first spawn
             // gave it (`_GenericRandomShipSpawn` @0x3ca48), as

@@ -542,6 +542,7 @@ impl PlayerShip {
             fleet_slot: None,
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
+            ordered_by_lead: false,
             marines: kind.marines,
             // `_GenericRandomShipSpawn` makes the hulk (@0x6f2f8), setting
             // its class's `PodCount` (@0x3ca48).

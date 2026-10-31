@@ -624,13 +624,26 @@ pub struct Npc {
     /// saved.
     pub slot_place: Option<Vec2>,
     /// Its order word, the original's +0xc90a: -1 at every spawn, launch
-    /// and placement ([`OrderWord::NONE`]), then the order its leader last
-    /// issued it ([`escort_orders`](crate::ai::escort_orders), every eighth
-    /// frame), which [`FleetEscortAi`](crate::ai::FleetEscortAi) flies. A
-    /// fighter of the player's escort writes its own each think, and a
-    /// stray beam of `ExitType` 6 steps it (`nova_sim::stray_words`).
+    /// and placement ([`OrderWord::NONE`]), then, under an NPC leader, the
+    /// order that leader last issued it
+    /// ([`escort_orders`](crate::ai::escort_orders), every eighth frame),
+    /// which [`FleetEscortAi`](crate::ai::FleetEscortAi) flies. A ship the
+    /// player leads writes its own at each think
+    /// ([`think_word`](crate::ai::escort::think_word)), and a command
+    /// compares against it and writes it (`nova_sim`'s `command_word`
+    /// module), so it lasts through an entry, in the session. A fighter of
+    /// the player's escort writes its own each think too, and a stray beam
+    /// of `ExitType` 6 steps any NPC's (`nova_sim`'s `stray_words` module).
     /// Never saved.
     pub order_word: OrderWord,
+    /// Whether its leader issued it an order, the +0xc4 that
+    /// `_AIIssueEscortOrders` sets on each ship it orders (@0x89b71). No
+    /// clear follows a capture, as `_AISetup` leaves +0xc4, so a ship
+    /// captured from an NPC fleet joins the player's marked (`nova_sim`'s
+    /// `class_orders` module). False on every new NPC, as every spawn
+    /// clears the byte. Here and not beside the commands' marks, as the
+    /// traffic writes it. Never saved.
+    pub ordered_by_lead: bool,
     /// Its class's `Strength` and the marines its default items give its
     /// plunder (see [`plunder_contents`](crate::ai::plunder_contents)), as
     /// the spawn table sets them ([`ShipKind`](crate::traffic::table::ShipKind)).
