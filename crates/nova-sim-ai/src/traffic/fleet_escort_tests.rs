@@ -535,18 +535,24 @@ fn a_lead_turning_to_attack_cancels_its_escorts_early_follow() {
 #[test]
 fn an_inertialess_fleet_escort_leaves_its_fleet_to_jump_on_its_own() {
     use crate::traffic::warp_out::WarpGoal;
-    let mut traffic = leaving_fleet(true);
-    // Out of close formation, which no ship flies inertialess.
-    traffic
-        .npcs_mut()
-        .iter_mut()
-        .find(|npc| npc.id == ESCORT)
-        .expect("there")
-        .state
-        .position = Vec2::new(3000.0, 600.0);
-    jump_tick(&mut traffic);
-    let escort = npc(&traffic, ESCORT);
-    assert_eq!(escort.leader, None, "+0x9a -1 (@0x83c11)");
-    assert_eq!(escort.goal, Goal::JumpOut);
-    assert_eq!(escort.warp.goal, Some(WarpGoal::Own));
+    for (velocity, sub) in [
+        (Vec2::ZERO, Some(WarpGoal::Own)),
+        // Goal 2's block, in the same dispatch: sub 1 (@0x8de49).
+        (Vec2::new(2.0, 0.0), None),
+    ] {
+        let mut traffic = leaving_fleet(true);
+        // Out of close formation, which no ship flies inertialess.
+        let escort = traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == ESCORT)
+            .expect("there");
+        escort.state.position = Vec2::new(3000.0, 600.0);
+        escort.state.velocity = velocity;
+        jump_tick(&mut traffic);
+        let escort = npc(&traffic, ESCORT);
+        assert_eq!(escort.leader, None, "+0x9a -1 (@0x83c11)");
+        assert_eq!(escort.goal, Goal::JumpOut);
+        assert_eq!(escort.warp.goal, sub, "{velocity:?}");
+    }
 }

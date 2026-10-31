@@ -113,7 +113,18 @@ pub fn fly(
             npc.begin_own_jump();
             return Outcome::Flying;
         }
-        Leg::RunOut => (*handling, Flight::from(run_out(&mut npc.state, handling))),
+        Leg::RunOut => {
+            let mut controls = run_out(&mut npc.state, handling);
+            if npc.warp.under_way() {
+                // Sub 3 writes +0x68 and +0x34 = 0: `_HandleShip` skips the
+                // thrust of a ship under way with no burst word (@0x34a96),
+                // and its warp-out test reads that bearing, so the stage
+                // ends as it faces out (@0x346f2-0x34741).
+                npc.warp.aim = trig::intercept_angle(Vec2::ZERO, npc.state.position);
+                controls.thrust = false;
+            }
+            (*handling, Flight::from(controls))
+        }
         // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
         Leg::Brake => {
             let chosen = stop_flight(npc, handling, inertia);
@@ -167,6 +178,11 @@ pub(crate) fn stop(
     refuelling: bool,
 ) -> (Controls, Handling) {
     let (controls, flown, wanted) = stop_wanting(npc, handling, inertia, refuelling);
+    if npc.warp.under_way() && npc.goal == Goal::JumpOut {
+        // Its +0x68, which the warp-out's test reads (@0x346f2-0x34741):
+        // goal 2's is the one stop still under way past the hold.
+        npc.warp.aim = wanted;
+    }
     let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
     (Controls { turn, ..controls }, flown)
 }
@@ -761,9 +777,55 @@ mod tests {
         );
     }
 
+    // A stage still under way.
+
+    #[test]
+    fn running_out_under_way_it_takes_no_thrust_and_reads_its_out_bearing_until_its_stage_ends() {
+        // Sub 3 writes +0x68 and +0x34 = 0, so `_HandleShip` skips its
+        // thrust (@0x34a96-0x34a9a) and turns its warp-out test on that
+        // bearing (@0x346f2-0x34741).
+        let start = at(500.0, 0.0, 90.0);
+        let mut runner = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        runner.warp.stage = 3.0;
+        runner.warp.aim = 300;
+        let rules = FlightRules::default();
+        fly(
+            &mut runner,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(runner.state.velocity, Vec2::ZERO, "no thrust");
+        assert_eq!(runner.warp.aim, 90, "out from the centre");
+        runner.warp.stage = 0.0;
+        fly(
+            &mut runner,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert!(runner.state.velocity.x > 0.0, "it thrusts the tick after");
+    }
+
+    #[test]
+    fn a_stop_under_way_reads_the_heading_it_wants_as_its_aim() {
+        // Sub 1's +0x68 is what the warp-out's test reads (@0x346f2-0x34741).
+        let stopped = |stage: f32, vy: f32| {
+            let mut npc = npc_at(braking(0.0, vy, 90.0), Inertia::Inertial);
+            npc.warp.stage = stage;
+            npc.warp.aim = 300;
+            stop(&mut npc, &HANDLING, Inertia::Inertial, false);
+            npc.warp.aim
+        };
+        assert_eq!(stopped(3.0, -3.0), 180, "its retro heading");
+        assert_eq!(stopped(3.0, -0.2), 90, "settling, its own whole heading");
+        assert_eq!(stopped(0.0, -3.0), 300, "no stage, none read");
+    }
+
     // The leave flown through the autopilot.
 
-    use crate::ai::Goal;
     use crate::combat::ShipRef;
     use crate::flight::FlightRules;
     use crate::fuel::OutfitMod;

@@ -825,6 +825,87 @@ mod tests {
     }
 
     #[test]
+    fn an_inertialess_escort_detached_inside_1000_runs_out_before_it_jumps() {
+        // `_EscortAI`'s detach writes goal 2, sub 4 (@0x83c11-0x83c43), and
+        // the same dispatch's high level writes sub 3 (@0x8fb1e).
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.position = Vec2::new(500.0, 0.0);
+        lead.begin_own_jump();
+        let lead = traffic.add_npc(lead);
+        let mut escort = far(0);
+        escort.state.position = Vec2::new(500.0, 500.0);
+        escort.leader = Some(lead);
+        escort.stats.inertialess_hull = true;
+        let escort = traffic.add_npc(escort);
+        traffic.tick_in(
+            &crate::ai::FleetEscortAi::default(),
+            jumping_world(0.0),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, escort);
+        assert_eq!(ship.leader, None, "detached");
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert_eq!(ship.warp.goal, None, "off sub 4: it runs out");
+        assert_eq!(ship.warp.stage, 0.0);
+    }
+
+    #[test]
+    fn a_ship_taken_off_sub_4_by_its_brake_ends_its_stage_facing_it_and_jumps_later() {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.state.velocity = Vec2::new(0.0, 3.0);
+        ship.begin_own_jump();
+        ship.warp.stage = 5.0;
+        ship.warp.aim = 90;
+        let id = traffic.add_npc(ship);
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        let flown = of(&traffic, id);
+        assert_eq!(flown.goal, Goal::JumpOut);
+        assert_eq!(flown.warp.goal, None, "sub 1");
+        assert_eq!(flown.warp.stage, 5.0, "it doesn't yet face its retro");
+        assert_eq!(flown.warp.aim, 0, "its +0x68, up");
+        let mut ticks = 0;
+        while of(&traffic, id).warp.stage > 0.0 {
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            ticks += 1;
+            assert!(ticks < 200, "its stage ends");
+        }
+        assert_eq!(of(&traffic, id).warp.goal, None, "still braking");
+        while of(&traffic, id).warp.goal.is_none() {
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            ticks += 1;
+            assert!(ticks < 2000, "it brakes to rest, and takes sub 4");
+        }
+        assert_eq!(of(&traffic, id).warp.goal, Some(WarpGoal::Own));
+    }
+
+    #[test]
+    fn a_run_out_under_way_ends_its_stage_facing_out_then_thrusts() {
+        // Goal 2's sub 3 inside 1000 (@0x8fb1e): its stage ends by the
+        // warp-out on its out bearing, its thrust skipped until it does.
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = far(0);
+        ship.state.position = Vec2::new(500.0, 0.0);
+        ship.state.heading = 0.0;
+        ship.begin_own_jump();
+        ship.warp.stage = 5.0;
+        ship.warp.aim = 0;
+        let id = traffic.add_npc(ship);
+        let mut ticks = 0;
+        while of(&traffic, id).warp.stage > 0.0 {
+            assert_eq!(of(&traffic, id).state.velocity, Vec2::ZERO, "no thrust");
+            traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+            ticks += 1;
+            assert!(ticks < 200, "its stage ends");
+        }
+        assert_eq!(of(&traffic, id).warp.aim, 90, "out, by its stage's end");
+        traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
+        assert!(of(&traffic, id).state.velocity.x > 0.0, "it runs out");
+    }
+
+    #[test]
     fn a_think_that_follows_a_jump_enters_it_in_the_same_tick() {
         let mut traffic = Traffic::with_interval(1);
         let mut lead = far(0);

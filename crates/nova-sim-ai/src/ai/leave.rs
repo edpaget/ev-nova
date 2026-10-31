@@ -111,7 +111,8 @@ pub fn flee_leg(state: &ShipState, expedites: bool, can_jump: bool) -> Leg {
 /// Whether `state` is beyond [`LEAVE_REACH_SQ`]: `_FloatAbs` of the `f32`
 /// dist² from the centre above it, a NaN counting as beyond (`jp`
 /// @0x8dde3).
-fn beyond_reach(state: &ShipState) -> bool {
+#[must_use]
+pub(crate) fn beyond_reach(state: &ShipState) -> bool {
     let at = state.position;
     let squared = (at.x * at.x + at.y * at.y).abs();
     squared.is_nan() || squared > LEAVE_REACH_SQ

@@ -151,6 +151,7 @@ impl Traffic {
         }
         self.hold_cloaks(world);
         if think {
+            let lost = self.lost_jump_targets(world);
             // `TickCount` moves on between advance passes alone, and the
             // high level holds each ship's warp to its goal.
             for npc in &mut self.npcs {
@@ -162,6 +163,9 @@ impl Traffic {
                 // (@0x2d6f), but it holds no warp and no carrier, so neither
                 // step below changes it.
                 if npc.condition == Condition::Intact && !npc.high_level_waits() {
+                    if lost.contains(&npc.id) {
+                        npc.target = None;
+                    }
                     warp_out::hold_stage(npc);
                     jump_with_leader::turn_back(npc, world.npc_jump_fuel);
                 }
@@ -238,6 +242,21 @@ impl Traffic {
             docks: DockNotes::default(),
             reached: Vec::new(),
         }
+    }
+
+    /// The ships under way whose target has left the system: the high
+    /// level's head drops it (@0x8d4eb-0x8d50d), so the hold reads none
+    /// ([`warp_out::hold_stage`]). A ship off a jump keeps what its think
+    /// does (rdm:phase/escort-fleet-fidelity-followups/phase-14-left-out-of-attack-block).
+    fn lost_jump_targets(&self, world: &World) -> BTreeSet<NpcId> {
+        let around = world.around(&self.npcs);
+        self.npcs
+            .iter()
+            .filter(|npc| {
+                npc.warp.under_way() && npc.target.is_some_and(|target| !around.active(target))
+            })
+            .map(|npc| npc.id)
+            .collect()
     }
 
     /// Flies NPC `id` a tick in `world`, in the fly half `pass`, rolling
