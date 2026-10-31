@@ -35,7 +35,9 @@
 //!   ([`maintain`]) and copies the swarm leader's glow
 //!   ([`plunder_dock::swarm_branch`], @0x87364-0x873a3). `_HandleShip`
 //!   turns it to the heading it wants as in close formation
-//!   ([`flight::turn_to`]).
+//!   ([`flight::turn_to`]). A returning fighter
+//!   ([`return_flight`](crate::traffic::return_flight)) and an inspector
+//!   ([`Goal::Inspect`]) fly these too ([`steer`]).
 //! - **Stop** (sub 1, @0x8536d-0x85633): [`leave_flight::stop`], which
 //!   brakes a moving escort and settles a slow one, turned as
 //!   `_HandleShip` turns every substate ([`flight::turn_to`]).
@@ -111,16 +113,19 @@
 //!   cover.
 //!   Its formation-parent gate (+0xc92e above 63) stands as the slot:
 //!   a ship with none is never nudged.
-//!
-//! # Left out
-//!
-//! Sub 0xc's inspection hold under goal 7 (@0x87c7e-0x87db9) and goal 5's
-//! return flight (@0x8ebd7-0x8ed0c) are
-//! rdm:phase/escort-fleet-fidelity-followups/phase-2-left-out-of-formation-flight's.
+//! - Sub 0xc's tail under goal 7, the inspection hold (@0x87c7e-0x87db9):
+//!   it needs goal 7 and sub 0xc together on entry to `_LowLevelAIHandler`,
+//!   which can't happen, on any data. Goal 7's block runs just before the
+//!   low level, or a skipped think leaves what the last one did, and it
+//!   never leaves goal 7 with any sub but 9 (@0x8f1ed): every other way
+//!   out of it writes goal 0 (@0x8f3bc, @0x8f3ae, @0x8f394) or the shareware
+//!   nag's goal 4 or 2. Only goals 0xa and 0xc write sub 0xc (@0x8ee8e,
+//!   @0x8f03e), and neither is a goal 7 think.
 
 #[cfg(doc)]
 use crate::ai::Goal;
 use crate::ai::fire::off_by;
+use crate::ai::swarm::SwarmLead;
 #[cfg(doc)]
 use crate::escort::FormationSlot;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
@@ -330,17 +335,34 @@ pub(crate) fn fly(
     let (controls, flown) = match sub {
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
-            let close = sub == Sub::Close;
-            if close {
-                plunder_dock::swarm_branch(npc, beside.swarm, Some(slot), handling);
-            }
             let target = beside.guard.unwrap_or(*leader);
-            let (controls, flown, wanted) = plunder_dock::approach(npc, &target, handling, close);
-            let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
-            (Controls { turn, ..controls }, flown)
+            let close = sub == Sub::Close;
+            steer(npc, &target, close, beside.swarm, Some(slot), handling)
         }
     };
     held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
+}
+
+/// Sub 9, or sub 0xb when `close`, of `npc` steering at a ship at
+/// `target` on `handling` (see the module docs): closing, the swarm
+/// branch first ([`plunder_dock::swarm_branch`], with `swarm` its swarm
+/// lead and `slot` its slot), then [`plunder_dock::approach`], turned as
+/// `_HandleShip` turns it ([`flight::turn_to`]). The controls, and the
+/// handling they fly by.
+pub(crate) fn steer(
+    npc: &mut Npc,
+    target: &ShipState,
+    close: bool,
+    swarm: Option<SwarmLead>,
+    slot: Option<Vec2>,
+    handling: &Handling,
+) -> (Controls, Handling) {
+    if close {
+        plunder_dock::swarm_branch(npc, swarm, slot, handling);
+    }
+    let (controls, flown, wanted) = plunder_dock::approach(npc, target, handling, close);
+    let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+    (Controls { turn, ..controls }, flown)
 }
 
 #[cfg(test)]
@@ -1013,8 +1035,8 @@ mod tests {
 
     #[test]
     fn by_the_earlier_follow_a_fleet_escort_follows_within_100_of_its_lead() {
-        // It flies as a ship inspecting its lead does, and not as the
-        // original's formation does.
+        // It flies as a ship inspecting its lead does by the earlier
+        // flight, and not as the original's formation does.
         let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let start = at(250.0, 0.0, 0.0, 0.0, 0.0);
         let mut follower = fleet_escort_of(30.0, start);
@@ -1036,7 +1058,10 @@ mod tests {
                 &mut inspector,
                 Some(&leader),
                 Beside::default(),
-                earlier_follow(),
+                FlightRules {
+                    formation_flight: crate::flight::FormationFlight::Earlier,
+                    ..earlier_follow()
+                },
             );
             assert_eq!(follower.state, inspector.state, "tick {tick}");
             closest = closest.min((follower.state.position - leader.position).length());

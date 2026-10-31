@@ -261,6 +261,7 @@ mod reinforcing;
 pub mod repair_dock;
 #[cfg(test)]
 mod repair_dock_tests;
+pub mod return_flight;
 pub mod ship_display;
 pub mod skill;
 #[cfg(test)]

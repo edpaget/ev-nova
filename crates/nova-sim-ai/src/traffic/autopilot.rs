@@ -76,7 +76,15 @@
 //!   [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation); by the
 //!   other, it keeps within [`FOLLOW_DISTANCE`] of its lead, matching its
 //!   lead's velocity there, as [`Goal::Inspect`] keeps with the ship it
-//!   inspects.
+//!   inspects by the port's earlier flight.
+//! - [`Goal::Inspect`]: by the original's flight
+//!   ([`FormationFlight::Original`]), it flies sub 9 at the ship it
+//!   inspects (`_HighLevelAIHandler` @0x8f1ed, the low level
+//!   @0x8769a-0x878f4; [`formation_flight::steer`]); its think ends the
+//!   inspection within reach ([`interceptor`](crate::ai::interceptor)). By
+//!   the port's earlier one ([`FormationFlight::Earlier`]), it keeps
+//!   within [`FOLLOW_DISTANCE`] of it, matching its velocity there. With
+//!   the ship gone it brakes.
 //! - [`Goal::Assist`]: its docking flies it
 //!   ([`repair_dock`](crate::traffic::repair_dock),
 //!   [`refuel_dock`](crate::traffic::refuel_dock)); holding none (with no
@@ -104,9 +112,12 @@
 //! - [`Goal::Dock`]: a fighter flies back to its
 //!   [`Carrier`](crate::bay::Carrier)
 //!   (`_LowLevelAIHandler` sub 8 and 0xb, see [`bay`](crate::bay)).
-//!   Outside its dock window on either axis it closes on the carrier as
-//!   an escort on its slot, at full speed beyond [`APPROACH_FORMATION`];
-//!   inside, it turns to the carrier's table bearing
+//!   Outside its dock window on either axis it flies sub 0xb at the
+//!   carrier, and it stops wherever it is while it can't see the carrier
+//!   ([`return_flight`]); by the port's earlier flight
+//!   ([`FormationFlight::Earlier`]), which reads no sight, it closes on
+//!   the carrier as an escort on its slot, at full speed beyond
+//!   [`APPROACH_FORMATION`]. Inside, it turns to the carrier's table bearing
 //!   (`_CalcInterceptAngle`, as `_HandleShip` turns it,
 //!   [`flight::turn_to`]), thrusting while off it by less than its turn
 //!   rate and [`DOCK_TURN_SLACK`], whole degrees, strictly, and each axis more than
@@ -298,6 +309,7 @@ use crate::traffic::leave_flight;
 use crate::traffic::mine_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
+use crate::traffic::return_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
 use crate::traffic::spawn::glide_speed;
@@ -374,9 +386,11 @@ pub struct Beside {
     /// its approach steers at it ([`formation_flight`]).
     pub guard: Option<ShipState>,
     /// Whether a [`Goal::Formation`] or [`Goal::Follow`] escort sees its
-    /// leader (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): with its
-    /// leader unseen it brakes near it ([`formation_flight`]) and is not
-    /// in close formation ([`Npc::keeps_close_formation`]).
+    /// leader (`_ShipVisibleToShip(leader, ship)` @0x8ed5f), or a
+    /// [`Goal::Dock`] fighter its carrier (@0x8ed00): with its leader
+    /// unseen it brakes near it ([`formation_flight`]) and is not in close
+    /// formation ([`Npc::keeps_close_formation`]); with its carrier unseen
+    /// it stops ([`return_flight`]).
     pub leader_seen: bool,
     /// Asteroid slot 0, while it is live, which a [`Goal::Mine`] miner
     /// chases and holds by ([`mine_flight`]).
@@ -569,7 +583,12 @@ fn fly_mobile(
         Goal::AttackStellar(_) => {
             return stellar_attack::fly(npc, sites, weapons, &handling, (flight, inertia));
         }
-        Goal::Inspect(_) => follow_or_brake(npc, &handling, other, inertia),
+        Goal::Inspect(_) => match other {
+            Some(target) if flight.formation_flight == FormationFlight::Original => {
+                inspect(npc, target, &handling)
+            }
+            _ => follow_or_brake(npc, &handling, other, inertia),
+        },
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
         Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
@@ -610,7 +629,7 @@ fn fly_mobile(
                 Err(outcome) => return outcome,
             }
         }
-        Goal::Dock(_) => match dock(npc, other, &handling, flight, inertia) {
+        Goal::Dock(_) => match dock(npc, other, beside, &handling, flight, inertia) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
@@ -789,13 +808,14 @@ fn formation(
     Ok(rejoin(&mut npc.state, handling, slot, leader.velocity, inertia).into())
 }
 
-/// How `npc` flies back to its carrier at `carrier` (see the module
-/// docs), under `flight`: the controls to fly outside its dock window, or
-/// braking with no carrier there; or, inside it, what became of it,
-/// having flown.
+/// How `npc` flies back to its carrier at `carrier`, with `beside` its
+/// sight of it and its swarm lead (see the module docs), under `flight`:
+/// the flight outside its dock window, or its carrier unseen, or braking
+/// with no carrier there; or, inside it, what became of it, having flown.
 fn dock(
     npc: &mut Npc,
     carrier: Option<&ShipState>,
+    beside: Beside,
     handling: &Handling,
     flight: FlightRules,
     inertia: Inertia,
@@ -805,15 +825,29 @@ fn dock(
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
-    if !within(dock.window) {
-        return Ok(rejoin(
-            &mut npc.state,
-            handling,
-            carrier.position,
-            carrier.velocity,
-            inertia,
-        )
-        .into());
+    match flight.formation_flight {
+        FormationFlight::Original => {
+            let at = npc.state.position;
+            let seen = beside.leader_seen;
+            match return_flight::sub(at, carrier.position, dock.window, seen) {
+                return_flight::Sub::Stop => return Ok(braking(npc, handling, inertia)),
+                return_flight::Sub::Close => {
+                    return Ok(return_flight::close(npc, carrier, beside.swarm, handling));
+                }
+                return_flight::Sub::Dock => {}
+            }
+        }
+        FormationFlight::Earlier if !within(dock.window) => {
+            return Ok(rejoin(
+                &mut npc.state,
+                handling,
+                carrier.position,
+                carrier.velocity,
+                inertia,
+            )
+            .into());
+        }
+        FormationFlight::Earlier => {}
     }
     if within(dock.reach) {
         return Err(Outcome::Docked {
@@ -1498,6 +1532,18 @@ fn approach_brake(state: &mut ShipState, handling: &Handling, inertia: Inertia) 
 /// flies it every tick, so nothing differs.
 fn braking(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
     leave_flight::stop_flight(npc, handling, inertia)
+}
+
+/// Sub 9 of `npc` inspecting the ship at `target` on `handling`
+/// (`_HighLevelAIHandler` @0x8f1ed, see the module docs): it writes +0x34
+/// as it thrusts (@0x878e4), so an owed burst drops.
+fn inspect(npc: &mut Npc, target: &ShipState, handling: &Handling) -> Flight {
+    let (controls, flown) = formation_flight::steer(npc, target, false, None, None, handling);
+    Flight {
+        controls,
+        word: Word::Writes,
+        flown: Some(flown),
+    }
 }
 
 /// [`follow`]s a lead at `lead`, or brakes with none there
@@ -4426,11 +4472,11 @@ mod tests {
     }
 
     #[test]
-    fn inspecting_it_closes_in_and_keeps_alongside() {
+    fn by_the_earlier_formation_inspecting_it_closes_in_and_keeps_alongside() {
         let target = at(400.0, 0.0, 0.0, 0.0, 0.0);
         let mut inspector = fighter(Goal::Inspect(FOE), 0.0);
         for _ in 0..600 {
-            fly(&mut inspector, &[], Some(&target));
+            fly_earlier(&mut inspector, Some(&target));
         }
         let apart = (inspector.state.position - target.position).length();
         assert!(
@@ -4668,14 +4714,15 @@ mod tests {
     }
 
     #[test]
-    fn a_fighter_outside_its_dock_window_closes_as_on_a_slot_and_far_off_at_full_speed() {
+    fn by_the_earlier_formation_a_fighter_outside_its_dock_window_closes_as_on_a_slot_and_far_off_at_full_speed()
+     {
         let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
         // At full speed (3) straight down at the carrier from above.
         let mut near = docking(AVERAGE, at(0.0, -400.0, 0.0, 3.0, 180.0));
         let mut far = docking(AVERAGE, at(0.0, -700.0, 0.0, 3.0, 180.0));
         let before = (near.state, far.state);
-        assert_eq!(fly(&mut near, &[], Some(&carrier)), Outcome::Flying);
-        fly(&mut far, &[], Some(&carrier));
+        assert_eq!(fly_earlier(&mut near, Some(&carrier)), Outcome::Flying);
+        fly_earlier(&mut far, Some(&carrier));
         assert_ne!(
             near.state.heading, before.0.heading,
             "400 off, it turns to slow down"
@@ -4687,7 +4734,7 @@ mod tests {
         assert_eq!(far.state.velocity, before.1.velocity);
         for distance in [101.0, 400.0, 700.0] {
             let mut ship = docking(AVERAGE, at(0.0, -distance, 0.0, 0.0, 180.0));
-            fly(&mut ship, &[], Some(&carrier));
+            fly_earlier(&mut ship, Some(&carrier));
             assert!(ship.state.velocity.y > 0.0, "{distance}: {:?}", ship.state);
         }
     }
@@ -4762,7 +4809,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sluggish_fighter_far_off_on_one_axis_flies_at_full_speed() {
+    fn by_the_earlier_formation_a_sluggish_fighter_far_off_on_one_axis_flies_at_full_speed() {
         // 0.01 of acceleration and half a degree a tick: it could not
         // brake from its top speed within 700.
         const SLUGGISH: ShipFields = ShipFields {
@@ -4773,11 +4820,11 @@ mod tests {
         let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let start = at(0.0, -700.0, 0.0, 3.0, 180.0);
         let mut far = docking(SLUGGISH, start);
-        fly(&mut far, &[], Some(&carrier));
+        fly_earlier(&mut far, Some(&carrier));
         assert_eq!(far.state.heading, 180.0, "700 off on y, it keeps going");
         assert_eq!(far.state.velocity, start.velocity);
         let mut near = docking(SLUGGISH, at(0.0, -500.0, 0.0, 3.0, 180.0));
-        fly(&mut near, &[], Some(&carrier));
+        fly_earlier(&mut near, Some(&carrier));
         assert_ne!(near.state.heading, 180.0, "500 off, it turns to brake");
     }
 
