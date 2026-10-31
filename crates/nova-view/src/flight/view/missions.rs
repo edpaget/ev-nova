@@ -10,7 +10,7 @@
 //! redraws around an accept, a refusal, an abort and an offer accepted at
 //! once are staged as their scripts ran ([`FlightView::stage_bar`]).
 
-use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ComputerRow, MissionComputer, MissionId, MissionInfo,
@@ -118,6 +118,20 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(),
             Answer::Refused => self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS),
+            _ => {}
+        }
+    }
+
+    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// read on the pass a jump collapsed under the white
+    /// ([`FadedPress::MissionInfo`]): refused by `_DoMissionInfoDialog`'s
+    /// guard (@0x9e1ac), letting go of the latched keys
+    /// (`_SetAllKeyCmdFlags` @0x70524), or with no missions #354, which no
+    /// guard touches (@0x7052e).
+    pub(super) fn press_faded_mission_info(&mut self) {
+        match self.send(FlightCommand::PressFaded(FadedPress::MissionInfo)) {
+            Answer::MissionInfo(MissionInfoPress::Faded) => self.keep_unlatched_keys(),
+            Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(),
             _ => {}
         }
     }

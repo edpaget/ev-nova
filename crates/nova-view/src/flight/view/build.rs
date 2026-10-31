@@ -624,6 +624,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             slot_block: super::slot_block::SlotBlock::default(),
             jump_latch: false,
             board_latch: false,
+            faded_keys: super::faded_keys::FadedKeys::default(),
             pending_landing: None,
             movies: crate::movie::Movies::none(),
             movie: None,

@@ -370,6 +370,12 @@ fn hail_is_refused_silently_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
         tap(&mut view, HAIL_KEY);
+        assert_eq!(sent_since(&view, from), [], "{stage}: kept for its pass");
+        view.sim.queue_report(StepReport {
+            steps: vec![nova_sim::flight_frame::StepRun::default()],
+            stopped: false,
+        });
+        view.tick(TICK);
         assert_eq!(
             sent_since(&view, from),
             [FlightCommand::Hail { option: false }],

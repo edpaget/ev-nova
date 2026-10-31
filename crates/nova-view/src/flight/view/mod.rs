@@ -306,7 +306,9 @@
 //!   nothing. It beeps as M opens it ([`UiSound::MapOpened`],
 //!   `_beepSnd[2]`, `_HandlePlayer` @0x6a809) and as it closes
 //!   ([`UiSound::MapClosed`], `_beepSnd[0]`, @0x6a85a); a refused M says
-//!   nothing, and the hypergate map neither opens nor closes with a beep.
+//!   nothing, except on the pass a jump collapses under the white, whose
+//!   refusal comes between the two beeps (the `faded_keys` module), and
+//!   the hypergate map neither opens nor closes with a beep.
 //!   As it opens it selects the system the original's
 //!   `_DoSystemMap` does (`Session::map_preselection`): the one
 //!   selected in nav mode 3, or the current system in any other mode,
@@ -714,6 +716,7 @@ mod departure;
 mod dialog_map;
 mod docked;
 mod drawing;
+mod faded_keys;
 mod frame_rate;
 mod gamble;
 mod gates;
@@ -1430,6 +1433,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// no-target and cloak returns, cleared on a frame B is up
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
+    /// The presses kept through a jump, and L's and I's latches (see the
+    /// `faded_keys` module).
+    faded_keys: faded_keys::FadedKeys,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The `dësc` movies flight plays, and whether they play (see the

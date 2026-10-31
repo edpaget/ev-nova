@@ -99,17 +99,13 @@ fn in_a_flight_that_never_started_p_asks_the_router_which_opens_nothing() {
 fn p_in_a_jump_presses_for_the_flights_refusal_only_when_its_gate_is_taken() {
     let mut view = faked(in_sol());
     view.change_sim(|sim| sim.refuse(PlayerCommand::PlayerInfo));
-    let _ = view.refuse_player_info();
+    view.refuse_player_info();
     assert_eq!(sent_but_lines(&view), [], "its fate refuses it: nothing");
     view.change_sim(|sim| sim.take(PlayerCommand::PlayerInfo));
     view.sim.queue_answer(Answer::PlayerInfoPressed(false));
-    let _ = view.refuse_player_info();
+    view.refuse_player_info();
     assert_eq!(sent_but_lines(&view), [FlightCommand::PressPlayerInfo]);
     assert!(!view.take_player_info_request(), "refused in the jump");
-    let mut on_map = faked(in_sol());
-    on_map.map_open = true;
-    let _ = on_map.refuse_player_info();
-    assert_eq!(sent_but_lines(&on_map), [], "the map takes it");
 }
 
 #[test]

@@ -36,7 +36,8 @@ impl<
 > Screen for FlightView<C, S>
 {
     /// Never quits: Escape is the router's. While a jump is under way,
-    /// the pre-jump stage included, P is refused with its beep, and a press
+    /// the pre-jump stage included, M, L, P, Y and I are kept for the pass
+    /// that reads them (the `faded_keys` module), and any other press
     /// goes on only when [`FlightView::taken_during_jump`] takes it; a
     /// click in space selects nothing then, as [`Session::select_stellar`](nova_sim::Session::select_stellar)
     /// refuses during a jump (@0x6a145, @0x6a5ef). Otherwise, and of the
@@ -52,7 +53,8 @@ impl<
     /// itself, P with its beep among them. The flight keys are still
     /// tracked as held, so one held at arrival acts on the next tick, as
     /// the original reads them live, H, \`, `\` and J as their latches
-    /// let them ([`FlightView::held_keys_frame`]; see the module docs).
+    /// let them ([`FlightView::held_keys_frame`]; see the module docs), L
+    /// and I too ([`FlightView::faded_keys_frame`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.take_input(input)
     }
@@ -234,11 +236,16 @@ impl<
             return;
         }
         self.step_stellars(dt);
+        if self.faded_keys_frame() {
+            return;
+        }
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         let keyed = self.cursor_keyed();
+        let jumping = self.jump_under_way();
         self.run_steps(steps);
+        self.settle_faded_keys(jumping);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();
@@ -286,13 +293,13 @@ impl<
             _ => None,
         };
         let jumping = self.jump_under_way();
-        if jumping && press == Some(PLAYER_INFO_KEY) {
-            let action = self.refuse_player_info();
-            if !self.map_open {
-                // Refused or not, it is down: @0x702d8 has no gate.
-                self.track_held(input);
-            }
-            return action;
+        if jumping && self.map_open && press == Some(PLAYER_INFO_KEY) {
+            return ScreenAction::None;
+        }
+        if jumping && !self.map_open && self.faded_keys.keep(press) {
+            // Kept or not, it is down: @0x702d8 has no gate.
+            self.track_held(input);
+            return ScreenAction::None;
         }
         if self.map_open {
             if self.plain_map_open() {
@@ -320,7 +327,10 @@ impl<
             self.click_in_space(at);
         }
         match self.press_taken(press, jumping) {
-            Some(LAND_KEY) => self.land(),
+            Some(LAND_KEY) => {
+                self.faded_keys.land_latch = true;
+                self.land();
+            }
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
@@ -346,6 +356,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => {
+                self.faded_keys.mission_latch = true;
                 self.ask_mission_info();
                 if self.pending_mission_info.is_some() {
                     return ScreenAction::None;
