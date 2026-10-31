@@ -105,6 +105,12 @@ impl Session {
     /// - The player info's are answered as the `player_info` module says:
     ///   its key, whose own refusal rides its answer, and its dialog's
     ///   opening, refused without a catalog.
+    /// - [`FlightCommand::PressFaded`] is answered as the `faded` module
+    ///   says: each key's own refusal rides its plain answer, and the
+    ///   `_screenFaded` guard's refusal is [`Answer::PlayerInfoFaded`],
+    ///   [`MissionInfoPress::Faded`](crate::session::MissionInfoPress::Faded)
+    ///   or [`Hailed::Faded`](crate::session::Hailed::Faded); the comm
+    ///   key's is refused without a catalog.
     /// - The settings are answered as the `settings` module says: the
     ///   window's width, the double-time key and the sound's quiet, each
     ///   [`Answer::Done`].
