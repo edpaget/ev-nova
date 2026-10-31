@@ -40,6 +40,9 @@ use nova_sim_catalog::catalog::ShipId;
 /// One piece of a think's work on the message line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OnLine {
+    /// The think turned the NPC on the player and its person's quote gate
+    /// let it through: its person says its hail quote.
+    AttackQuote(NpcId),
     /// A call the think made ([`CommCall`]), with the odds against the
     /// caller its think read.
     Call(NpcId, CommCall, f32),
@@ -240,6 +243,31 @@ mod tests {
                 call(A),
                 plunder,
                 OnLine::Call(A, CommCall::PreScan, ODDS),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_attack_quote_sorts_by_berth_ahead_of_what_its_berth_queues_after_it() {
+        let quote = OnLine::AttackQuote(B);
+        let later_frames = OnLine::AttackQuote(A);
+        let mut queue = LineQueue::default();
+        queue.next_frame();
+        queue.push_think(4, C, [CommCall::Distress], ODDS, false);
+        queue.push(2, quote);
+        queue.push_think(2, B, [CommCall::PreScan], ODDS, true);
+        queue.push_think(1, A, [CommCall::Distress], ODDS, false);
+        queue.next_frame();
+        queue.push(1, later_frames);
+        assert_eq!(
+            queue.take_all(),
+            [
+                call(A),
+                quote,
+                OnLine::Call(B, CommCall::PreScan, ODDS),
+                OnLine::Scan(B),
+                call(C),
+                later_frames,
             ]
         );
     }

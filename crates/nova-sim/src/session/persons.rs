@@ -346,6 +346,16 @@ impl Session {
         }
     }
 
+    /// NPC `id`'s person says its hail quote, read from the session's own
+    /// string lists, as the line's other work reads its words there
+    /// ([`Session::settle_line_queue`]), drawing on `chance` as
+    /// [`Session::say_hail_quote`] takes it in.
+    pub(super) fn say_attack_quote(&mut self, id: NpcId, chance: &mut dyn Chance) {
+        let strings = Rc::clone(&self.setup.strings.0);
+        let lines = strings.string_list(HAIL_QUOTES);
+        self.say_hail_quote(id, &*strings, &lines, chance);
+    }
+
     /// NPC `id`'s person says its hail quote, its tags read, as
     /// `_ShowPersonHailQuote` has it (@0x4457e-0x44660): `catalog`'s
     /// `'STR '` 0x1387 + `HailQuote` when there is one (`_LoadPluginString`
@@ -1824,6 +1834,20 @@ mod tests {
         catalog
     }
 
+    /// `STR#` 7101, as a session's own string lists read it.
+    #[derive(Debug)]
+    struct QuoteLines(Vec<String>);
+
+    impl CommCatalog for QuoteLines {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == HAIL_QUOTES {
+                self.0.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
     /// A pilot named "Stock" flying among [`quoters`] of `flags`.
     fn quoting(flags: [u16; 2]) -> (FakePilotCatalog, Session) {
         let catalog = quoters(flags);
@@ -2643,7 +2667,9 @@ mod tests {
             ..crate::testkit::govt(140)
         }];
         let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
-        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(QuoteLines(catalog.strings[0].1.clone())));
         session.populate(&catalog, &mut NeverFires);
         session.space.traffic.npcs_mut()[1].person = None;
         session.space.traffic.npcs_mut()[0].armament = crate::combat::armament::Armament::new([(

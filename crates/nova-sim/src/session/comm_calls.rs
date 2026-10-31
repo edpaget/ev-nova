@@ -229,6 +229,7 @@ impl Session {
         }
         for work in self.space.traffic.take_on_line() {
             match work {
+                OnLine::AttackQuote(id) => self.say_attack_quote(id, chance),
                 OnLine::Scan(id) => self.scanned_by(id, law, chance),
                 OnLine::Call(id, call, odds) => self.answer_call(id, call, odds, chance),
                 OnLine::Pirate(event) => self.answer_pirate(event, chance),
@@ -449,16 +450,25 @@ mod tests {
                         _ => String::new(),
                     })
                     .collect(),
+                crate::person::HAIL_QUOTES => vec![QUOTE.to_owned()],
                 _ => Vec::new(),
             }
         }
     }
 
+    /// `STR#` 7101 #1, what the persons here say.
+    const QUOTE: &str = "Prepare to die!";
+
     /// Each NPC listed decides its goal and makes its call, if any; the
     /// others idle, calling nothing. Each NPC of the second plunders the
-    /// player in its think, drifting after.
+    /// player in its think, drifting after. Each NPC of the third turns on
+    /// the player in its think, attacking it.
     #[derive(Debug, Default)]
-    struct Calling(BTreeMap<NpcId, (Goal, Option<CommCall>)>, BTreeSet<NpcId>);
+    struct Calling(
+        BTreeMap<NpcId, (Goal, Option<CommCall>)>,
+        BTreeSet<NpcId>,
+        BTreeSet<NpcId>,
+    );
 
     impl Behaviour for Calling {
         fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -475,6 +485,13 @@ mod tests {
                 return Decision {
                     goal: Goal::Drift,
                     plunders: Some(ShipRef::Player),
+                    ..Decision::default()
+                };
+            }
+            if self.2.contains(&npc.id) {
+                return Decision {
+                    goal: Goal::Attack(ShipRef::Player),
+                    turns_on_player: true,
                     ..Decision::default()
                 };
             }
@@ -573,7 +590,7 @@ mod tests {
 
     /// `calls`, no NPC plundering.
     fn calling<const N: usize>(calls: [(NpcId, (Goal, Option<CommCall>)); N]) -> Calling {
-        Calling(BTreeMap::from(calls), BTreeSet::new())
+        Calling(BTreeMap::from(calls), BTreeSet::new(), BTreeSet::new())
     }
 
     /// A pass of `catalog` as `behaviour` decides, which settles the
@@ -1489,6 +1506,204 @@ mod tests {
         let (messages, _, asked) = stepped(&mut session, &catalog, &calls, &[0, 0]);
         assert_eq!(messages, help("Ship 128:  Help 1"), "berth 2's");
         assert_eq!(asked, [DISTRESS_LINE_COUNT], "berth 5's kept off");
+    }
+
+    // The attack quotes a think raises, in slot order with the calls (see
+    // the module docs).
+
+    /// NPC `id` of `session` becomes a warship flown by a person of `Flags`
+    /// 0x0010, saying `STR#` 7101 #1.
+    fn make_quoting(session: &mut Session, id: NpcId) {
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.ai_type = AiType::Warship;
+        npc.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(600),
+            flags: crate::person::QUOTE_ON_ATTACK,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: 1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+            zero_fuel: false,
+        });
+    }
+
+    /// Adds a person that turns on the player in its think, as `calls` has
+    /// it.
+    fn quoter(session: &mut Session, calls: &mut Calling) -> NpcId {
+        let id = add(session, None, ShipId(128));
+        make_quoting(session, id);
+        calls.2.insert(id);
+        id
+    }
+
+    /// Adds, to `calls`, a trader fleeing a pirate, calling for help.
+    fn caller(session: &mut Session, calls: &mut Calling) -> NpcId {
+        let (trader, fled) = fleeing(session, Some(TRADERS), CALLER);
+        calls.0.insert(trader, fled.0[&trader]);
+        trader
+    }
+
+    /// Adds, to `calls`, an interceptor hailing the player before its scan,
+    /// the player carrying mission 140's cargo and the line idle.
+    fn hailer(session: &mut Session, calls: &mut Calling) -> NpcId {
+        session.pilot.missions.put(0, carrying(140, 4));
+        let hailer = add(session, Some(TRADERS), CALLER);
+        session.space.npc_mut(hailer).expect("there").ai_type = AiType::Interceptor;
+        session.space.count_down_comm_line();
+        calls.0.insert(
+            hailer,
+            (Goal::Inspect(ShipRef::Player), Some(CommCall::PreScan)),
+        );
+        hailer
+    }
+
+    /// The hail quotes said since they were last taken, their words.
+    fn said(session: &mut Session) -> Vec<String> {
+        let quotes = session.take_quotes();
+        quotes.into_iter().map(|quote| quote.text).collect()
+    }
+
+    /// The line's count as a hail quote set it.
+    fn showing_a_quote() -> CommLine {
+        let mut line = CommLine::default();
+        line.show(crate::person::QUOTE_SHOWN_TICKS);
+        line
+    }
+
+    /// The quote `id` says, as the line raised last holds it.
+    fn raised_quote(id: NpcId) -> RaisedLine {
+        RaisedLine::Quote(super::super::PersonQuote {
+            npc: id,
+            text: QUOTE.to_owned(),
+        })
+    }
+
+    #[test]
+    fn an_earlier_slots_attack_quote_keeps_a_later_slots_distress_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let mut calls = Calling::default();
+        quoter(&mut session, &mut calls);
+        caller(&mut session, &mut calls);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(messages, [], "no call for help");
+        assert_eq!(sounds, [SimSound::HailQuote], "no snd 154 for the call");
+        assert_eq!(asked, Vec::<u32>::new(), "no distress line drawn");
+        assert_eq!(said(&mut session), [QUOTE]);
+    }
+
+    #[test]
+    fn a_later_slots_attack_quote_replaces_an_earlier_slots_call() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let mut calls = Calling::default();
+        caller(&mut session, &mut calls);
+        let quoting = quoter(&mut session, &mut calls);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(messages, help("Ship 129:  Help 1"));
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::HailQuote]);
+        assert_eq!(asked, [DISTRESS_LINE_COUNT]);
+        assert_eq!(session.out.last_line, Some(raised_quote(quoting)));
+        assert_eq!(session.comm_line(), showing_a_quote(), "the quote's count");
+    }
+
+    #[test]
+    fn an_earlier_slots_attack_quote_keeps_a_later_interceptors_pre_scan_hail_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let mut calls = Calling::default();
+        quoter(&mut session, &mut calls);
+        hailer(&mut session, &mut calls);
+        assert!(session.comm_line().idle());
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(messages, [], "no hail");
+        assert_eq!(sounds, [SimSound::HailQuote], "no snd 154 for the hail");
+        assert_eq!(asked, Vec::<u32>::new(), "no hail's words drawn");
+        assert_eq!(said(&mut session), [QUOTE]);
+    }
+
+    #[test]
+    fn a_later_slots_attack_quote_replaces_an_earlier_interceptors_pre_scan_hail() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let mut calls = Calling::default();
+        hailer(&mut session, &mut calls);
+        let quoting = quoter(&mut session, &mut calls);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(
+            messages,
+            [SimMessage::ScanHail(
+                "Ship 129:  Ship 128, halt.".to_owned()
+            )]
+        );
+        assert_eq!(sounds, [SimSound::ScanHail, SimSound::HailQuote]);
+        assert_eq!(asked, [SCAN_HAIL_COUNT]);
+        assert_eq!(session.out.last_line, Some(raised_quote(quoting)));
+        assert_eq!(session.comm_line(), showing_a_quote(), "the quote's count");
+    }
+
+    /// Adds an NPC flying `class`, at the player's side, to berth `at`.
+    fn add_at(session: &mut Session, at: u32, class: ShipId) -> NpcId {
+        let mut ship = npc(0, session.stats());
+        ship.govt = Some(TRADERS);
+        ship.ship = class;
+        ship.state.position = session.ship.player.position;
+        session.space.traffic.add_npc_at(ship, at)
+    }
+
+    #[test]
+    fn a_quote_from_a_reused_lower_berth_keeps_a_higher_berths_call_off() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let pirate = add(&mut session, None, ShipId(128));
+        let trader = add_at(&mut session, 5, CALLER);
+        let person = add_at(&mut session, 2, ShipId(128));
+        make_quoting(&mut session, person);
+        let flees = (Goal::Flee(ShipRef::Npc(pirate)), Some(CommCall::Distress));
+        let mut calls = calling([(trader, flees)]);
+        calls.2.insert(person);
+        let (messages, sounds, asked) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(messages, [], "berth 2's quote keeps berth 5's call off");
+        assert_eq!(sounds, [SimSound::HailQuote]);
+        assert_eq!(asked, Vec::<u32>::new());
+        assert_eq!(said(&mut session), [QUOTE]);
+    }
+
+    #[test]
+    fn a_call_from_a_reused_lower_berth_shows_and_a_higher_berths_quote_replaces_it() {
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let pirate = add(&mut session, None, ShipId(128));
+        let person = add_at(&mut session, 5, ShipId(128));
+        make_quoting(&mut session, person);
+        let trader = add_at(&mut session, 2, CALLER);
+        let flees = (Goal::Flee(ShipRef::Npc(pirate)), Some(CommCall::Distress));
+        let mut calls = calling([(trader, flees)]);
+        calls.2.insert(person);
+        let (messages, sounds, _) = stepped(&mut session, &catalog, &calls, &[0]);
+        assert_eq!(messages, help("Ship 129:  Help 1"), "berth 2's");
+        assert_eq!(sounds, [SimSound::CallForHelp, SimSound::HailQuote]);
+        assert_eq!(session.out.last_line, Some(raised_quote(person)));
+    }
+
+    #[test]
+    fn the_next_frames_call_reads_a_thinks_quote_a_tick_down() {
+        // `_HandleComm` (@0x4421e) counts down before the next frame's
+        // `_AIDispatch` reads it: 419, as `_AICallForHelp` (@0x8308c) does.
+        let catalog = calling_catalog();
+        let mut session = flying(&catalog);
+        let mut calls = Calling::default();
+        quoter(&mut session, &mut calls);
+        stepped(&mut session, &catalog, &calls, &[]);
+        session.tick_quotes(&catalog, &mut NeverFires);
+        let mut line = showing_a_quote();
+        line.tick();
+        assert_eq!(session.comm_line(), line);
     }
 
     #[test]

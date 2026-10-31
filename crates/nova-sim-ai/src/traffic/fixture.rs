@@ -144,6 +144,18 @@ pub fn calls_on_line(work: &[super::on_line::OnLine]) -> Vec<(NpcId, crate::ai::
         .collect()
 }
 
+/// The NPCs whose attack quotes are among the line's `work`, in order.
+#[cfg(test)]
+#[must_use]
+pub fn quotes_on_line(work: &[super::on_line::OnLine]) -> Vec<NpcId> {
+    work.iter()
+        .filter_map(|work| match *work {
+            super::on_line::OnLine::AttackQuote(id) => Some(id),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A behaviour logging the ships it decides for ([`assisting::Recording`]),
 /// and the player in a condition ([`assisting::player_in`]) in a world of
 /// its own ([`assisting::world_with`]), for the tests of the ships
