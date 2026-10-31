@@ -3128,7 +3128,10 @@ mod tests {
         let mut disabled = intact.clone();
         disabled.condition = Condition::Disabled;
         let mut position = disabled.state.position;
+        let mut ticks = 0;
         while intact.mode != Mode::Flying {
+            ticks += 1;
+            assert!(ticks < 100, "never ended");
             let before = intact.state.position;
             assert_eq!(fly_at(&mut disabled, &[], None, speeds), Outcome::Flying);
             fly_at(&mut intact, &[], None, speeds);
