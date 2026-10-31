@@ -26,6 +26,11 @@
 //! input. A movie that ends on its own hands the keys pressed under it to
 //! what comes next. An offer's movie the session queued among the texts
 //! ([`MissionShown::Movie`]) plays in its place.
+//!
+//! On a screen its holder has faded ([`MissionDialogs::set_faded`]: the
+//! jump's white, the intro's black), the front text shows as
+//! `_ShowTextDialog` shows it with `_screenFaded` set: see the
+//! [`faded_texts`](super::faded_texts) module.
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -46,6 +51,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::ButtonStyle;
 use crate::ui::desc::{DescDialog, DescTemplates};
 use crate::ui::dialog::{DialogTemplate, FocusRing};
+use crate::ui::faded_texts::FadedScreen;
 
 /// A `dësc`'s text shown with no mission behind it: its text, its
 /// `Graphic` and its movie.
@@ -67,6 +73,9 @@ enum Stage {
     Movie(MovieStage),
     /// A text in "Desc Dialog".
     Text(DescDialog),
+    /// An empty text: no dialog, but on a faded screen a fade-in
+    /// (@0x5a7bf-0x5a874).
+    Empty,
     /// A mission text and its movies are done, shown or dropped
     /// ([`MissionDialogs::take_texts_closed`]).
     Closed,
@@ -104,6 +113,9 @@ pub struct MissionDialogs {
     unclaimed: Vec<Input>,
     /// How many mission texts have closed since this was last taken.
     texts_closed: usize,
+    /// Whether the screen under them is faded, and the front text's
+    /// fade-in.
+    screen: FadedScreen,
 }
 
 impl std::fmt::Debug for MissionDialogs {
@@ -141,7 +153,35 @@ impl MissionDialogs {
             info_closed_laid_out: false,
             unclaimed: Vec::new(),
             texts_closed: 0,
+            screen: FadedScreen::default(),
         }
+    }
+
+    /// The screen under these dialogs is faded, as its holder's fade
+    /// (the jump's white, the intro's black) covers it: the texts shown
+    /// next show as `_ShowTextDialog` shows them with `_screenFaded` set
+    /// (see the [`faded_texts`](super::faded_texts) module). With
+    /// something already open, the screen under it has faded in, so this
+    /// does nothing.
+    pub fn set_faded(&mut self) {
+        if !self.is_open() {
+            self.screen.fade();
+        }
+    }
+
+    /// Whether the holder's fade still covers the screen: the holder draws
+    /// it over these dialogs, and over a plain movie playing under it.
+    #[must_use]
+    pub fn faded(&self) -> bool {
+        self.screen.faded()
+    }
+
+    /// Whether the screen has faded in since this was last asked, once:
+    /// a text's fade-in from black has begun (`_FadeScreenIn` @0x5b038,
+    /// which jumps the display to black first), or a cinematic movie has
+    /// begun on its black window. The holder's fade is gone.
+    pub fn take_faded_in(&mut self) -> bool {
+        self.screen.take_faded_in()
     }
 
     /// These dialogs with their buttons taking the keyboard focus as
@@ -235,6 +275,7 @@ impl MissionDialogs {
             self.queue_movie(before);
         }
         if shown.text.is_empty() {
+            self.texts.push_back(Stage::Empty);
             return;
         }
         if let Ok(dialog) = self.text.open(
@@ -259,25 +300,63 @@ impl MissionDialogs {
         }
     }
 
-    /// Begins the movie in front, if one is; drops it once it has ended,
-    /// handing what was pressed under it to what comes next, until a
-    /// text, or a movie still playing, is in front.
+    /// Readies what is in front, other than a movie: lets go of the marks
+    /// of the texts done, drops an empty text on an unfaded screen, and
+    /// begins the fade-in of a text, or an empty one, on a faded screen.
+    fn ready_front(&mut self) {
+        loop {
+            self.pop_closed();
+            match self.texts.front() {
+                Some(Stage::Text(_)) => {
+                    self.screen.show_text();
+                    return;
+                }
+                Some(Stage::Empty) => {
+                    if self.screen.show_text() {
+                        return;
+                    }
+                    self.texts.pop_front();
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// Begins the movie in front, if one is (on the faded screen, if it
+    /// is); drops it once it has ended, handing what was pressed under it
+    /// to what comes next, until a text, or a movie still playing, is in
+    /// front.
     fn settle(&mut self) {
-        self.pop_closed();
+        self.ready_front();
         while let Some(Stage::Movie(movie)) = self.texts.front_mut() {
-            movie.begin();
+            if !movie.begun() {
+                if self.screen.faded() {
+                    movie.begin_faded();
+                    if movie.faded_in() {
+                        self.screen.clear();
+                    }
+                } else {
+                    movie.begin();
+                }
+            }
             if !movie.ended() {
                 return;
             }
             let replay = movie.take_replay();
             self.texts.pop_front();
-            self.pop_closed();
-            for input in replay {
-                if self.is_open() {
-                    self.front_input(&input);
-                } else {
-                    self.unclaimed.push(input);
-                }
+            self.ready_front();
+            self.pass_on(replay);
+        }
+    }
+
+    /// Gives `inputs`, left by what was in front, to what is in front now,
+    /// or keeps them for what is beneath once nothing is.
+    fn pass_on(&mut self, inputs: Vec<Input>) {
+        for input in inputs {
+            if self.is_open() {
+                self.front_input(&input);
+            } else {
+                self.unclaimed.push(input);
             }
         }
     }
@@ -292,7 +371,11 @@ impl MissionDialogs {
     /// Gives `input` to what is in front: the movie or text shown, or else
     /// the mission info screen.
     fn front_input(&mut self, input: &Input) {
-        self.pop_closed();
+        self.ready_front();
+        if self.screen.fading_in() {
+            self.screen.hold(input);
+            return;
+        }
         match self.texts.front_mut() {
             Some(Stage::Movie(movie)) => movie.input(input),
             Some(Stage::Text(text)) => {
@@ -300,10 +383,10 @@ impl MissionDialogs {
                 self.sounds.extend(text.take_sounds());
                 if text.closed() {
                     self.texts.pop_front();
-                    self.pop_closed();
+                    self.ready_front();
                 }
             }
-            Some(Stage::Closed) => {}
+            Some(Stage::Closed | Stage::Empty) => {}
             None => {
                 if let Some(info) = &mut self.info {
                     info.input(input);
@@ -385,7 +468,7 @@ impl MissionDialogs {
     pub fn take_map_request(&mut self) -> Option<MapOpener> {
         let text = self.texts.iter_mut().find_map(|stage| match stage {
             Stage::Text(text) => text.take_map_request(),
-            Stage::Movie(_) | Stage::Closed => None,
+            Stage::Movie(_) | Stage::Empty | Stage::Closed => None,
         });
         let info = self
             .info
@@ -463,16 +546,27 @@ impl Screen for MissionDialogs {
         ScreenAction::None
     }
 
-    /// The movie shown moves on, and a press held on the text shown's
-    /// scroll arrow; the rest wait on input.
+    /// The movie shown, the front text's fade-in, or a press held on the
+    /// text shown's scroll arrow moves on; the rest wait on input. Once
+    /// the fade-in ends, what was pressed during it reaches the text, and
+    /// an empty text is done.
     fn tick(&mut self, dt: Duration) {
+        if let Some(held) = self.screen.tick(dt) {
+            if matches!(self.texts.front(), Some(Stage::Empty)) {
+                self.texts.pop_front();
+            }
+            self.ready_front();
+            self.pass_on(held);
+            self.settle();
+            return;
+        }
         match self.texts.front_mut() {
             Some(Stage::Movie(movie)) => {
                 movie.tick(dt);
                 self.settle();
             }
             Some(Stage::Text(text)) => text.tick(dt),
-            Some(Stage::Closed) | None => {}
+            Some(Stage::Empty | Stage::Closed) | None => {}
         }
     }
 
@@ -484,14 +578,15 @@ impl Screen for MissionDialogs {
         match self.texts.front() {
             Some(Stage::Text(text)) => text.draw(list),
             Some(Stage::Movie(movie)) => movie.draw(list),
-            Some(Stage::Closed) | None => {}
+            Some(Stage::Closed | Stage::Empty) | None => {}
         }
+        self.screen.draw(list, self.movies.view());
     }
 
     fn cancel_pointer(&mut self) {
         match self.texts.front_mut() {
             Some(Stage::Text(text)) => text.cancel_pointer(),
-            Some(Stage::Movie(_) | Stage::Closed) => {}
+            Some(Stage::Movie(_) | Stage::Empty | Stage::Closed) => {}
             None => {
                 if let Some(info) = &mut self.info {
                     info.cancel_pointer();
@@ -519,11 +614,12 @@ mod tests {
     use nova_sim::{InfoRow, MapMarks, MissionId, MissionText, MissionTextKind};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::color::Color;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::flight::MapOpener;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
-    use crate::movie::fixture::{Call, FRAME, MockMoviePlayer};
+    use crate::movie::fixture::{Call, MockMoviePlayer};
     use crate::movie::{MOVIE_FADE_FOR, MoviePlayer};
     use crate::sound::UiSound;
     use crate::spaceport::missions::ABORT_ITEM;
@@ -1397,9 +1493,7 @@ mod tests {
             .expect("the info screen");
         let frame = commands
             .iter()
-            .position(
-                |command| matches!(command, DrawCommand::Line { color, .. } if *color == FRAME),
-            )
+            .position(|command| matches!(command, DrawCommand::MovieFrame { .. }))
             .expect("the frame");
         assert!(run < frame);
         dialogs.cancel_pointer();
@@ -1416,6 +1510,195 @@ mod tests {
         assert!(!dialogs.hides_pointer(), "not during the fade out");
         dialogs.tick(MOVIE_FADE_FOR);
         assert!(dialogs.hides_pointer());
+    }
+
+    // On a faded screen (`_ShowTextDialog` @0x5af96-0x5b038,
+    // @0x5a7bf-0x5a874).
+
+    /// The alpha of the black fade drawn over the dialogs, if one is.
+    fn fade_alpha(dialogs: &MissionDialogs) -> Option<u8> {
+        let mut list = DrawList::new();
+        dialogs.draw(&mut list);
+        list.iter().rev().find_map(|command| match *command {
+            DrawCommand::Line { color, width, .. } if width >= 700.0 && color.r == 0 => {
+                Some(color.a)
+            }
+            _ => None,
+        })
+    }
+
+    const HALF: Duration = Duration::from_millis(500);
+
+    #[test]
+    fn a_text_on_a_faded_screen_fades_in_from_black_under_its_dialog() {
+        let mut dialogs = dialogs();
+        dialogs.set_faded();
+        assert!(dialogs.faded(), "the holder's fade, with nothing shown yet");
+        dialogs.show_descs(vec![shown_desc("Faded.", None)]);
+        assert!(!dialogs.faded(), "the text's fade-in takes the screen over");
+        assert!(dialogs.take_faded_in());
+        assert!(!dialogs.take_faded_in(), "once");
+        assert_eq!(shown(&dialogs).as_deref(), Some("Faded."), "under the fade");
+        assert_eq!(fade_alpha(&dialogs), Some(255), "from black (@0x5b038)");
+        dialogs.tick(HALF);
+        assert_eq!(fade_alpha(&dialogs), Some(128));
+        dialogs.tick(HALF);
+        assert_eq!(fade_alpha(&dialogs), None, "faded in after a second");
+        assert_eq!(shown(&dialogs).as_deref(), Some("Faded."));
+    }
+
+    #[test]
+    fn a_text_fading_in_on_a_faded_screen_covers_the_movies_view() {
+        let movies = Movies::none();
+        movies.set_view((1365.0, 768.0));
+        let mut dialogs = dialogs().with_movies(movies);
+        dialogs.set_faded();
+        dialogs.show_descs(vec![shown_desc("Faded.", None)]);
+        dialogs.tick(HALF);
+        let mut list = DrawList::new();
+        dialogs.draw(&mut list);
+        let mut cover = DrawList::new();
+        fill_rect(
+            &mut cover,
+            Bounds::at(Point::new(-170.0, 0.0), 1365.0, 768.0),
+            Color::rgba(0, 0, 0, 128),
+        );
+        assert_eq!(
+            list.iter().last(),
+            cover.iter().next(),
+            "the fade-in over the whole widened view, last"
+        );
+    }
+
+    #[test]
+    fn what_is_pressed_during_the_fade_in_reaches_the_dialog_once_it_ends() {
+        let mut dialogs = dialogs();
+        dialogs.set_faded();
+        dialogs.show_descs(vec![
+            shown_desc("First.", None),
+            shown_desc("Second.", None),
+        ]);
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(shown(&dialogs).as_deref(), Some("First."), "held");
+        dialogs.tick(HALF);
+        dialogs.tick(HALF);
+        assert_eq!(
+            shown(&dialogs).as_deref(),
+            Some("Second."),
+            "the Return reached the first, and the second shows unfaded"
+        );
+        assert_eq!(fade_alpha(&dialogs), None);
+    }
+
+    #[test]
+    fn an_empty_text_on_a_faded_screen_fades_in_with_no_dialog() {
+        let mut dialogs = dialogs();
+        dialogs.set_faded();
+        dialogs.show_texts(vec![brief(128, "")]);
+        assert!(dialogs.is_open(), "the fade-in (@0x5a7bf-0x5a874)");
+        assert!(dialogs.take_faded_in());
+        assert_eq!(shown(&dialogs), None, "no dialog");
+        assert_eq!(dialogs.take_texts_closed(), 0, "not until it has faded in");
+        assert_eq!(fade_alpha(&dialogs), Some(255));
+        dialogs.input(&key(Key::Escape));
+        dialogs.tick(HALF);
+        dialogs.tick(HALF);
+        assert!(!dialogs.is_open());
+        assert_eq!(dialogs.take_texts_closed(), 1);
+        assert_eq!(
+            dialogs.take_unclaimed(),
+            [key(Key::Escape)],
+            "for what is beneath"
+        );
+        let mut unfaded = self::dialogs();
+        unfaded.show_texts(vec![brief(128, "")]);
+        assert!(!unfaded.is_open(), "unfaded, nothing shows");
+    }
+
+    #[test]
+    fn a_plain_before_movie_plays_under_the_fade_then_the_text_fades_in() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.set_faded();
+        dialogs.show_texts(vec![filmed("Briefed.", 0)]);
+        assert_eq!(player.calls(), [Call::Start("Brief.mov".to_owned())]);
+        assert!(dialogs.faded(), "the holder still draws its fade over it");
+        assert!(!dialogs.take_faded_in());
+        dialogs.tick(TICK);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Briefed."));
+        assert!(dialogs.take_faded_in(), "then the text's own fade-in");
+        assert_eq!(fade_alpha(&dialogs), Some(255));
+    }
+
+    #[test]
+    fn a_cinematic_before_movie_fades_the_screen_in_and_the_text_shows_at_once() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.set_faded();
+        dialogs.show_texts(vec![filmed("Briefed.", 0x0004)]);
+        assert!(
+            !dialogs.faded(),
+            "its window fades in at once (@0x5316, @0x55dce)"
+        );
+        assert!(dialogs.take_faded_in());
+        assert!(dialogs.hides_pointer(), "no first fade");
+        dialogs.tick(MOVIE_FADE_FOR);
+        dialogs.tick(TICK);
+        dialogs.tick(MOVIE_FADE_FOR);
+        dialogs.tick(MOVIE_FADE_FOR);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Briefed."));
+        assert_eq!(fade_alpha(&dialogs), None, "no fade-in after it");
+        assert!(!dialogs.take_faded_in(), "told once");
+    }
+
+    #[test]
+    fn a_cinematic_movie_that_cannot_start_leaves_the_screen_faded() {
+        let player = MockMoviePlayer::refusing();
+        let mut dialogs = playing(&player);
+        dialogs.set_faded();
+        dialogs.show_texts(vec![filmed("Briefed.", 0x0004)]);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Briefed."));
+        assert_eq!(fade_alpha(&dialogs), Some(255), "the text fades in");
+    }
+
+    #[test]
+    fn an_after_movie_plays_once_the_faded_in_text_closes() {
+        let player = MockMoviePlayer::playing((160, 120), 1);
+        let mut dialogs = playing(&player);
+        dialogs.set_faded();
+        dialogs.show_texts(vec![filmed("Briefed.", 0x0001)]);
+        dialogs.tick(MOVIE_FADE_FOR);
+        assert!(player.calls().is_empty());
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(player.calls(), [Call::Start("Brief.mov".to_owned())]);
+        assert_eq!(fade_alpha(&dialogs), None);
+        dialogs.tick(TICK);
+        assert!(!dialogs.is_open());
+    }
+
+    #[test]
+    fn a_fade_told_over_a_text_already_shown_changes_nothing() {
+        let mut dialogs = dialogs();
+        dialogs.show_descs(vec![shown_desc("Shown.", None)]);
+        dialogs.set_faded();
+        assert!(!dialogs.faded());
+        dialogs.input(&key(Key::Enter));
+        assert!(!dialogs.is_open(), "the Return reached it at once");
+    }
+
+    #[test]
+    fn a_text_queued_once_the_screen_has_faded_in_shows_unfaded() {
+        let mut dialogs = dialogs();
+        dialogs.set_faded();
+        dialogs.show_descs(vec![shown_desc("First.", None)]);
+        assert!(dialogs.take_faded_in());
+        dialogs.tick(MOVIE_FADE_FOR);
+        dialogs.input(&key(Key::Enter));
+        dialogs.show_descs(vec![shown_desc("Later.", None)]);
+        assert_eq!(shown(&dialogs).as_deref(), Some("Later."));
+        assert_eq!(fade_alpha(&dialogs), None);
+        assert!(!dialogs.faded());
+        assert!(!dialogs.take_faded_in());
     }
 
     /// A mission text is `_ShowTextDialog`'s, whose `_TextDialogFilter`

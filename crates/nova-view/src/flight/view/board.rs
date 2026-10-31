@@ -60,7 +60,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match boarding {
             Boarding::Opened(_) => {
                 self.pending_boarding = true;
-                self.held.clear();
+                self.let_go_of_input();
                 if let Some(granted) = self.grant_drained() {
                     let (name, plural) = self.names.outfit_lc(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);

@@ -9,8 +9,7 @@ use crate::gpu::{Frame, Gpu, PageId};
 use crate::upscale::{Upscaler, WorldResolution};
 use crate::viewport::PixelRect;
 
-/// wgpu's default maximum 2D texture side, which the adapters request.
-pub const MAX_TEXTURE_SIDE: u32 = 8192;
+pub use crate::gpu::MAX_TEXTURE_SIDE;
 
 /// The target a finished frame was drawn into, for an overlay to draw over.
 pub struct PaintTarget<'a> {

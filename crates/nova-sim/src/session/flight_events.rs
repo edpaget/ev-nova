@@ -25,9 +25,10 @@
 //!    [`FlightEvent::InterfaceLoadsCleared`] when a run of docked scripts
 //!    began since the last drain;
 //! 8. the take-off's nav ([`FlightEvent::TakeoffNav`]);
-//! 9. the rescue's `dësc` ([`FlightEvent::RescueDesc`], on the
-//!    `PlayerShip`) and the leave message ([`FlightEvent::LeaveMessage`],
-//!    on the `MissionRun`).
+//! 9. the stellar passes ([`FlightEvent::StellarPass`]);
+//! 10. the rescue's `dësc` ([`FlightEvent::RescueDesc`], on the
+//!     `PlayerShip`) and the leave message ([`FlightEvent::LeaveMessage`],
+//!     on the `MissionRun`).
 //!
 //! Within a kind the order is the session's. The script notes are not
 //! drained: no view takes them. Nor are the fight's events, which come
@@ -90,6 +91,11 @@ impl Session {
                 .map(FlightEvent::InterfaceLoad),
         );
         into.extend(self.take_takeoff_nav().map(FlightEvent::TakeoffNav));
+        into.extend(
+            self.take_stellar_passes()
+                .into_iter()
+                .map(FlightEvent::StellarPass),
+        );
         into.extend(self.take_rescue_desc().map(FlightEvent::RescueDesc));
         into.extend(self.take_leave_message().map(FlightEvent::LeaveMessage));
     }
@@ -114,6 +120,7 @@ mod tests {
     use crate::catalog::{DescMovie, MissionId, OutfitId, StellarId, WeaponId};
     use crate::chance::NeverFires;
     use crate::combat::report::SimDiagnostic;
+    use crate::gate_sprite::StellarPass;
     use crate::grant::Granted;
     use crate::hail::CommNote;
     use crate::hire::PayNote;
@@ -410,11 +417,19 @@ mod tests {
         assert_eq!(session.take_takeoff_nav(), None);
     }
 
+    /// 13999 as a rescue loaded it.
+    fn rescued() -> crate::flight_frame::LoadedDesc {
+        crate::flight_frame::LoadedDesc {
+            id: 13999,
+            text: Some("Rescued.".to_owned()),
+        }
+    }
+
     #[test]
     fn the_rescues_desc_is_drained() {
         let mut session = started();
-        session.ship.fate.rescue_desc_due = true;
-        assert_eq!(drained(&mut session), [FlightEvent::RescueDesc(13999)]);
+        session.ship.fate.rescue_desc = Some(rescued());
+        assert_eq!(drained(&mut session), [FlightEvent::RescueDesc(rescued())]);
         assert_eq!(session.take_rescue_desc(), None);
     }
 
@@ -430,11 +445,21 @@ mod tests {
     }
 
     #[test]
+    fn the_stellar_passes_are_drained_in_order() {
+        let mut session = started();
+        let passes = [StellarPass::Entry, StellarPass::Ticked, StellarPass::Still];
+        session.out.stellar_passes.extend(passes);
+        assert_eq!(drained(&mut session), passes.map(FlightEvent::StellarPass));
+        assert_eq!(session.take_stellar_passes(), []);
+    }
+
+    #[test]
     fn the_kinds_come_in_the_documented_order() {
         let mut session = started();
-        session.ship.fate.rescue_desc_due = true;
+        session.ship.fate.rescue_desc = Some(rescued());
         session.run.leave_with("Bye.");
         session.out.takeoff_nav = Some(NavMode::Off);
+        session.out.stellar_passes.push(StellarPass::Still);
         session.out.begin_docked_run();
         let bar = queue_text(&mut session, text(128));
         session.out.quotes.push(PersonQuote {
@@ -485,7 +510,8 @@ mod tests {
                 },
                 FlightEvent::InterfaceLoadsCleared,
                 FlightEvent::TakeoffNav(NavMode::Off),
-                FlightEvent::RescueDesc(13999),
+                FlightEvent::StellarPass(StellarPass::Still),
+                FlightEvent::RescueDesc(rescued()),
                 FlightEvent::LeaveMessage("Bye.".to_owned()),
             ]
         );

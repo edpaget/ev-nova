@@ -151,6 +151,34 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.jump.as_ref().or(self.fade_in.as_ref())
     }
 
+    /// Whether the jump's white leaves the screen faded
+    /// ([`JumpEffect::faded`]): a text shown over flight now shows on the
+    /// faded screen, which whoever shows it tells its dialogs
+    /// ([`MissionDialogs::set_faded`](crate::ui::mission_dialogs::MissionDialogs::set_faded)).
+    #[must_use]
+    pub fn screen_faded(&self) -> bool {
+        self.jump_effect().is_some_and(JumpEffect::faded)
+    }
+
+    /// A text over flight has faded the screen in from black
+    /// ([`MissionDialogs::take_faded_in`](crate::ui::mission_dialogs::MissionDialogs::take_faded_in)):
+    /// the white is gone, the warp to be lit again, or the arrival's
+    /// effect over ([`JumpEffect::faded_in`]).
+    pub fn screen_faded_in(&mut self) {
+        self.jump = self.jump.take().and_then(JumpEffect::faded_in);
+        self.fade_in = self.fade_in.take().and_then(JumpEffect::faded_in);
+    }
+
+    /// The fade to white moves on by `dt` while flight is paused under a
+    /// text on the faded screen, as the original's `_FadeWhiteIn` is an
+    /// asynchronous display fade that runs on under the dialog's movie.
+    /// The arrival's fade-in is flight's own, and waits.
+    pub fn advance_white(&mut self, dt: std::time::Duration) {
+        if let Some(effect) = &mut self.jump {
+            effect.advance(dt);
+        }
+    }
+
     /// Shows the explosions the jump left pending, `combat` as the
     /// arrival's answer carries them ([`Answer::Arrived`]), a crön's `Y`
     /// on its days among them, in the scene just laid out, so they are on

@@ -36,6 +36,8 @@
 //!   on a cell, which opens Info.
 //! - [`shipyard_grid`]: the shipyard's and the hire screen's grid
 //!   selection, as `_ShipyardFilter` keeps it for both.
+//! - [`ship_movie`]: the shipyard's and the hire screen's looping ship
+//!   movie in the picture item.
 //! - [`modal`]: the [`ModalHost`](modal::ModalHost) the screens open
 //!   their dialogs in, over themselves.
 //! - [`port_map`]: the [`PortMap`] the spaceport asks for, the bar's or a
@@ -64,6 +66,7 @@ pub mod port_map;
 pub mod quantity_ask;
 pub mod race;
 pub mod service;
+mod ship_movie;
 pub mod shipyard;
 mod shipyard_grid;
 pub mod trade;
@@ -79,6 +82,6 @@ pub use offer::{OfferChoice, OfferDialog};
 pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use port_map::PortMap;
 pub use service::ServiceScreen;
-pub use shipyard::{ShipBaseImages, ShipOrder, ShipyardCatalog, ShipyardScreen};
+pub use shipyard::{ShipBaseImages, ShipMovieFiles, ShipOrder, ShipyardCatalog, ShipyardScreen};
 pub use trade::{ListColors, ListLooks, TradeScreen};
 pub use view::{PortDialog, SpaceportView};

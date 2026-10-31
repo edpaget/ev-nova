@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, Gates, MapKey, MarksFrom, Names,
-    PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, Gates, KeyFades, MapKey,
+    MarksFrom, Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
@@ -87,7 +87,7 @@ pub struct FakeFlight {
     applied: Vec<FlightCommand>,
     answers: VecDeque<(Answer, Option<FlightFrame>, Vec<FlightEvent>)>,
     events: Vec<FlightEvent>,
-    reports: VecDeque<StepReport>,
+    reports: VecDeque<(StepReport, Option<FlightFrame>)>,
     stepped: Vec<(StepInput, u32)>,
     refused: Vec<PlayerCommand>,
     asks: Vec<FlightCommand>,
@@ -97,6 +97,7 @@ pub struct FakeFlight {
     weapons: Vec<WeaponId>,
     opening_names: Names,
     descriptions: VecDeque<String>,
+    port_description: Option<String>,
     failure: Option<String>,
     desk: FakeDesk,
     edits: Vec<PilotEdit>,
@@ -179,6 +180,14 @@ impl FakeFlight {
         self.descriptions.push_back(text.to_owned());
     }
 
+    /// Answers every ask for the port's own description
+    /// ([`FlightCommand::LoadPortDescription`]) with `text` from now on,
+    /// as a session landed with a catalog shared loads it; with none, as
+    /// by default, it is refused, as a flight with no catalog refuses it.
+    pub fn set_port_description(&mut self, text: Option<&str>) {
+        self.port_description = text.map(str::to_owned);
+    }
+
     /// Answers the next command not yet answered with `answer`: the
     /// message line's commands ([`FlightCommand::CommShown`],
     /// [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
@@ -216,7 +225,13 @@ impl FakeFlight {
     /// Reports `report` for the next call of [`FlightSim::step`] not yet
     /// reported, whatever its step count.
     pub fn queue_report(&mut self, report: StepReport) {
-        self.reports.push_back(report);
+        self.reports.push_back((report, None));
+    }
+
+    /// Reports `report` as [`FakeFlight::queue_report`] does, and shows
+    /// `frame` from then on, as a step that changes the flight leaves it.
+    pub fn queue_report_showing(&mut self, report: StepReport, frame: FlightFrame) {
+        self.reports.push_back((report, Some(frame)));
     }
 
     /// The commands applied, in the order sent.
@@ -316,6 +331,10 @@ impl FakeFlight {
             ),
             _ if self.failure.is_some() => Answer::Refused,
             FlightCommand::Hover { .. } => Answer::Hovered(self.hover),
+            FlightCommand::LoadPortDescription => self
+                .port_description
+                .clone()
+                .map_or(Answer::Refused, Answer::Description),
             _ => Answer::Refused,
         };
         self.asks.push(ask);
@@ -337,7 +356,12 @@ impl FlightSim for FakeFlight {
     fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
         self.stepped.push((*input, steps));
         match self.reports.pop_front() {
-            Some(report) => into.clone_from(&report),
+            Some((report, frame)) => {
+                into.clone_from(&report);
+                if let Some(frame) = frame {
+                    self.frame = frame;
+                }
+            }
             None => into.clear(),
         }
     }
@@ -471,6 +495,8 @@ pub fn sample_screen_asks() -> Vec<ScreenAsk> {
         ScreenAsk::Hail,
         ScreenAsk::Boarding,
         ScreenAsk::PilotPanel,
+        ScreenAsk::GateEntryDesc(GateEntry::Hypergate(Some(SystemId(131)))),
+        ScreenAsk::GateEntryDesc(GateEntry::Wormhole),
     ]
 }
 
@@ -503,6 +529,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         jump_readiness,
         texts_queued,
         gates,
+        key_fades,
         map_key,
         ships,
         drawn,
@@ -564,6 +591,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
             Gates::NONE
         } else {
             Gates::EVERY
+        },
+        key_fades: if *key_fades == KeyFades::EVERY {
+            KeyFades::NONE
+        } else {
+            KeyFades::EVERY
         },
         map_key: MapKey {
             system: if map_key.system == other_system {
@@ -1021,6 +1053,13 @@ fn check_failed(
             "{clause}: failed ({reason}), a description's load was answered {answer:?}"
         ));
     }
+    let answer = sim.apply(FlightCommand::LoadPortDescription);
+    if !answer.is_refused() {
+        return Err(format!(
+            "{clause}: failed ({reason}), the port's description was answered {answer:?}, \
+             not refused, so the view loads it itself"
+        ));
+    }
     for ask in sample_screen_asks() {
         let sent = format!("{ask:?}");
         let answer = sim.screen(ask);
@@ -1061,6 +1100,7 @@ fn check_asks(sim: &mut impl FlightSim, once: &FlightFrame) -> Result<(), String
             raw: Some("A dësc.".to_owned()),
             movie: None,
         },
+        FlightCommand::LoadPortDescription,
     ];
     for ask in asks {
         let sent = format!("{ask:?}");
@@ -1551,6 +1591,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_failed_flight_that_answers_the_ports_description_breaks_the_contract() {
+        let clause = check_contract(&mut LoadsThePort, &FlightOpening::failed("no chär"))
+            .expect_err("broken");
+        assert!(
+            clause.starts_with("a failed flight shows nothing"),
+            "{clause}"
+        );
+        assert!(
+            clause.contains("the port's description was answered Description"),
+            "{clause}"
+        );
+    }
+
+    /// A flight that failed and loads a description, the port's own too,
+    /// but refuses every other command and answers every screen nothing.
+    struct LoadsThePort;
+
+    impl FlightSim for LoadsThePort {
+        fn frame(&self, into: &mut FlightFrame) {
+            *into = FlightFrame::default();
+        }
+
+        fn step(&mut self, _input: &StepInput, _steps: u32, into: &mut StepReport) {
+            into.clear();
+        }
+
+        fn apply(&mut self, command: FlightCommand) -> Answer {
+            match command {
+                FlightCommand::LoadDescription { .. } | FlightCommand::LoadPortDescription => {
+                    Answer::Description(String::new())
+                }
+                _ => Answer::Refused,
+            }
+        }
+
+        fn drain(&mut self, _into: &mut Vec<FlightEvent>) {}
+
+        fn screen(&mut self, _ask: ScreenAsk) -> ScreenAnswer {
+            ScreenAnswer::Nothing
+        }
+    }
+
     /// A flight that failed and loads a description, but refuses every
     /// other command and answers every screen nothing.
     struct LoadsOnly;
@@ -1693,7 +1776,7 @@ mod tests {
 
     /// How many kinds of [`ScreenAsk`] there are: `screen_ask_kind`'s
     /// numbers are those below it.
-    const SCREEN_ASK_KINDS: usize = 23;
+    const SCREEN_ASK_KINDS: usize = 24;
 
     /// `ask`'s kind, a number below [`SCREEN_ASK_KINDS`]: the match names
     /// every kind, so a new one must be numbered, and then sampled
@@ -1723,6 +1806,7 @@ mod tests {
             ScreenAsk::PilotPanel => 20,
             ScreenAsk::Gamble => 21,
             ScreenAsk::CaptureNaming => 22,
+            ScreenAsk::GateEntryDesc(_) => 23,
         }
     }
 
@@ -1929,6 +2013,28 @@ mod tests {
             fake.inputs(),
             [held, StepInput::default(), StepInput::default()]
         );
+    }
+
+    #[test]
+    fn the_fake_shows_a_frame_queued_with_a_report_from_that_step_on() {
+        let mut fake = FakeFlight::new();
+        let shown = FlightFrame {
+            texts_queued: 7,
+            ..FlightFrame::default()
+        };
+        fake.queue_report_showing(StepReport::default(), shown.clone());
+        fake.queue_report(StepReport::default());
+        let filled = |fake: &FakeFlight| {
+            let mut frame = FlightFrame::default();
+            fake.frame(&mut frame);
+            frame
+        };
+        assert_eq!(filled(&fake), FlightFrame::default(), "before the step");
+        let mut report = StepReport::default();
+        fake.step(&StepInput::default(), 1, &mut report);
+        assert_eq!(filled(&fake), shown, "after it");
+        fake.step(&StepInput::default(), 1, &mut report);
+        assert_eq!(filled(&fake), shown, "a report with none keeps it");
     }
 
     #[test]
@@ -2865,6 +2971,7 @@ mod tests {
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
+            key_fades: KeyFades::EVERY.with_unbidden(),
             death_descs: vec![130],
             player_ship_name: Some("Kestrel".to_owned()),
             long_date: "June 23rd, 1177 NC".to_owned(),
@@ -2899,6 +3006,7 @@ mod tests {
                 jump_readiness,
                 texts_queued,
                 gates,
+                key_fades,
                 map_key,
                 ships,
                 drawn,
@@ -2956,6 +3064,7 @@ mod tests {
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);
+            assert_ne!(other.key_fades, *key_fades);
             assert_ne!(other.death_descs, *death_descs);
             assert_ne!(other.player_ship_name, *player_ship_name);
             assert_ne!(other.long_date, *long_date);

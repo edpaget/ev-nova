@@ -99,7 +99,8 @@
 //! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
 //! unless `Session::with_hyper_select` says otherwise). By the engine's
-//! reading each press moves only the selection and keeps the course; by
+//! reading each press steps to the next Con slot that holds a link, moves
+//! only the selection and keeps the course; by
 //! [`HyperSelectRule::OneJumpCourse`] it leaves a one-jump course.
 //!
 //! Each day that goes by steps the planetary events (see
@@ -513,6 +514,7 @@ mod frame;
 mod free_cargo;
 mod gamble;
 mod game_work;
+mod gate_desc;
 mod gate_escorts;
 mod gate_follow;
 mod gate_sprites;
@@ -592,6 +594,7 @@ mod players_hits;
 mod plunder_ammo;
 mod plunder_loop;
 mod port;
+mod port_desc;
 mod precalced;
 mod radar;
 mod ranks;
@@ -634,6 +637,7 @@ mod steering;
 mod stellar_attackers;
 mod stellar_defence;
 mod stellar_guns;
+mod stellar_passes;
 mod stellar_picks;
 mod stellars;
 mod step;
@@ -705,6 +709,7 @@ use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::space::Space;
 use self::statics::Statics;
+use self::stellar_passes::GateHolds;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
@@ -743,6 +748,7 @@ use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
 };
+use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
@@ -3323,6 +3329,7 @@ impl Session {
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         Some(self.pilot.system)
     }
 
@@ -3584,14 +3591,49 @@ impl Session {
         self.chart.gate_kind(stellar)
     }
 
-    /// The pending entry, if it is through a gate of `kind`; it ends here
-    /// whatever it is.
-    fn take_gate(&mut self, kind: GateKind) -> Option<StellarId> {
+    /// The pending entry, if it is through a gate of `kind`, left pending.
+    pub(crate) fn pending_gate(&self, kind: GateKind) -> Option<StellarId> {
         self.ship
             .warp
             .gate
-            .take()
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
+    }
+
+    /// The pending entry, if it is through a gate of `kind`
+    /// ([`Session::pending_gate`]); it ends here whatever it is.
+    fn take_gate(&mut self, kind: GateKind) -> Option<StellarId> {
+        let here = self.pending_gate(kind);
+        self.ship.warp.gate = None;
+        here
+    }
+
+    /// Where the hypergate `here` takes the player who picked `to` (`None`
+    /// for no pick), read from `sites` without acting: the picked system
+    /// and the first of `here`'s links that leads there
+    /// ([`hypergate_exit`]). [`GateRefusal::NoLinks`] for a hypergate
+    /// without links ([`has_links`]), [`GateRefusal::Cancelled`] for no
+    /// pick or a pick no link leads to (@0x6392c). The one rule both
+    /// [`Session::enter_hypergate`] and [`Session::gate_entry_desc`] read.
+    pub(crate) fn hypergate_route(
+        &self,
+        here: StellarId,
+        to: Option<SystemId>,
+        sites: &[GateSite],
+    ) -> Result<(SystemId, GateSite), GateRefusal> {
+        let links = Self::links_of(sites, here);
+        if !has_links(&links) {
+            return Err(GateRefusal::NoLinks);
+        }
+        let system_of = |id| {
+            self.chart
+                .galaxy
+                .system_of(id, self.statics.listers(id), self.pilot.system)
+        };
+        to.and_then(|to| {
+            let exit = hypergate_exit(&links, sites, to, system_of, self.chart.galaxy.map())?;
+            Some((to, *exit))
+        })
+        .ok_or(GateRefusal::Cancelled)
     }
 
     /// The links of `stellar` among `sites`; none when no system lists it.
@@ -3619,10 +3661,7 @@ impl Session {
         catalog: &(impl PilotCatalog + ?Sized),
     ) -> Result<Vec<SystemId>, GateRefusal> {
         let here = self
-            .ship
-            .warp
-            .gate
-            .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
+            .pending_gate(GateKind::Hypergate)
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
@@ -3653,12 +3692,7 @@ impl Session {
     /// Empty with no hypergate entry pending.
     #[must_use]
     pub(crate) fn hypergate_cycle(&self, catalog: &impl PilotCatalog) -> Vec<Option<SystemId>> {
-        let Some(here) = self
-            .ship
-            .warp
-            .gate
-            .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
-        else {
+        let Some(here) = self.pending_gate(GateKind::Hypergate) else {
             return Vec::new();
         };
         let links = Self::links_of(&catalog.gate_sites(), here);
@@ -3686,24 +3720,9 @@ impl Session {
         let here = self
             .take_gate(GateKind::Hypergate)
             .ok_or(GateRefusal::NotAtGate)?;
-        let sites = catalog.gate_sites();
-        let links = Self::links_of(&sites, here);
-        let system_of = |id| {
-            self.chart
-                .galaxy
-                .system_of(id, self.statics.listers(id), self.pilot.system)
-        };
-        let exit = if has_links(&links) {
-            to.and_then(|to| {
-                let exit = hypergate_exit(&links, &sites, to, system_of, self.chart.galaxy.map())?;
-                Some((to, *exit))
-            })
-            .ok_or(GateRefusal::Cancelled)
-        } else {
-            Err(GateRefusal::NoLinks)
-        };
+        let exit = self.hypergate_route(here, to, &catalog.gate_sites());
         let entered = exit.map(|(system, exit)| {
-            self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
+            self.come_out(here, system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
             self.space
                 .say(&mut self.out, SimMessage::ExitedHypergate(system));
@@ -3783,15 +3802,18 @@ impl Session {
             return Err(GateRefusal::NoExit);
         };
         let (site, system) = (*exit.site, exit.system);
-        self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
+        self.come_out(here, system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.space
             .say(&mut self.out, SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
-    /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
-    /// [`Session::enter_wormhole`]. Before it enters, the exit decides
+    /// Brings the ship out of `exit`, a gate of `kind`, in `system`, having
+    /// gone in at `entered`: see [`Session::enter_wormhole`]. Each
+    /// `_PrepareAllSprites` runs a stellar pass, the entry's on the exit
+    /// system's stellars, before the frames' reset (see the
+    /// `stellar_passes` module). Before it enters, the exit decides
     /// what becomes of the special ships following the player
     /// ([`Session::exit_gate_slots`]); once it has, the exit's arrivals
     /// pass runs ([`Session::gate_exit_pass`]), those that follow come
@@ -3801,6 +3823,7 @@ impl Session {
     /// @0x674ef).
     fn come_out(
         &mut self,
+        entered: StellarId,
         system: SystemId,
         exit: &GateSite,
         kind: GateKind,
@@ -3815,6 +3838,13 @@ impl Session {
         self.ship.step_cloak_fade(&self.pilot, &self.statics);
         self.space
             .step_fades_at_gate_entry(system, self.pilot.system);
+        // Its stellar pass reads the old ships and the request where the
+        // exit is in the system gone in; otherwise it follows the system's
+        // entry, below, and they reach none of its gates.
+        let exit_elsewhere = system != self.pilot.system;
+        if !exit_elsewhere {
+            self.stellar_pass(StellarPass::Entry, GateHolds::Entered(entered), chance);
+        }
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
@@ -3850,6 +3880,9 @@ impl Session {
             catalog,
             chance,
         );
+        if exit_elsewhere {
+            self.stellar_pass(StellarPass::Entry, GateHolds::Nobody, chance);
+        }
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
@@ -3858,9 +3891,11 @@ impl Session {
         self.reset_stellar_frames((kind == GateKind::Hypergate).then_some(exit.id));
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
         // out, and again after the stellars' visibility (@0x67658): every
-        // NPC's fade steps twice.
+        // NPC's fade steps twice, and every gate.
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -3911,6 +3946,10 @@ impl Session {
         self.port.forget_shipyard_listing();
         self.port.open_outfit_visit(&self.pilot);
         self.port.stay = Stay::default();
+        // `_DoPortDialog` loads the port's own `dësc` (@0x5f96b) before the
+        // land checks (@0x5fbeb): due until the spaceport asks for it or the
+        // landing settles (see the `port_desc` module).
+        self.port.due_own_desc(stellar);
         self.out.save_due = true;
         self.ship.stop_thrust(&mut self.out);
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
@@ -4132,8 +4171,9 @@ impl Session {
         // The rest of the tail (see the `dock_tail` module). The
         // original's bar is redrawn before its deselect with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
-        // flight view's `took_off`.
-        self.end_dock_tail();
+        // flight view's `took_off`. A landing left `_gSpeedMult` 0
+        // (@0x6375e-0x63769), so its passes add nothing.
+        self.end_dock_tail(StellarPass::Still, chance);
         Some(stellar)
     }
 
@@ -28178,14 +28218,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_hyper_select_key_cycles_the_listed_systems_and_wraps() {
+    fn the_hyper_select_key_visits_each_con_slot_that_holds_a_link_and_wraps() {
         let mut session = Session::start(&hub()).expect("starts");
-        for expected in [134, 131, 135, 134] {
+        session.take_sounds();
+        for expected in [134, 131, 131, 130, 135, 134] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(
                 session.nav_mode(),
                 NavMode::Hyperspace(Some(SystemId(expected)))
             );
+            assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
             assert_eq!(session.course(), [], "no course plotted");
         }
     }
@@ -28197,7 +28239,8 @@ pub(super) mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.course(), ids(&[131, 132]));
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
-        for expected in [135, 134, 131] {
+        // The cue noted slot 1, so the presses step on from there.
+        for expected in [131, 130, 135, 134, 131] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(session.course(), ids(&[131, 132]), "after {expected}");
         }
@@ -28220,7 +28263,9 @@ pub(super) mod tests {
         let catalog = hub();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        assert_eq!(session.select_next_system(), Some(SystemId(135)));
+        for expected in [131, 130, 135] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+        }
         fly_out(&mut session, &catalog);
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(135)));
         assert_eq!(

@@ -1,17 +1,18 @@
 //! The spaceport's ports over the game data: a thin mapping from
-//! `GameData`'s `spöb` records, `PICT`s, `shän` base images and `cölr`
-//! 128's list and grid colours.
+//! `GameData`'s `spöb` records, `PICT`s, `shän` base images, `shïp`
+//! movie files and `cölr` 128's list and grid colours.
 
 use nova_data::GameData;
 use nova_data::graphics::PICT;
 use nova_data::records::colors::Colors;
+use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
 use nova_sim::ShipId;
 
 use super::catalog::{PortRecord, SpaceportCatalog, StellarId};
 use super::grid::{GridColors, GridLooks};
-use super::shipyard::ShipBaseImages;
+use super::shipyard::{ShipBaseImages, ShipMovieFiles};
 use super::trade::{ListColors, ListLooks};
 use crate::color::Color;
 
@@ -70,6 +71,19 @@ impl SpaceportCatalog for GameData {
     }
 }
 
+/// Reads every `shïp` afresh; the shipyard and the hire screen ask once,
+/// as each opens.
+impl ShipMovieFiles for GameData {
+    fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
+        self.records::<Ship>()
+            .filter_map(|(id, ship)| {
+                let file = ship.ok()?.record.movie_file.as_str().to_owned();
+                (!file.is_empty()).then_some((ShipId(id), file))
+            })
+            .collect()
+    }
+}
+
 /// Reads every `shän` afresh; the shipyard asks once, when it opens.
 impl ShipBaseImages for GameData {
     fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
@@ -83,7 +97,7 @@ impl ShipBaseImages for GameData {
 mod tests {
 
     use nova_data::Record;
-    use nova_data::records::fixture::ShipAnimBuilder;
+    use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
     use nova_data::store::fixture::one_file;
 
     use nova_rsrc::fixture::ForkBuilder;
@@ -271,5 +285,36 @@ mod tests {
             "an undecodable one is left out"
         );
         assert_eq!(self::data().ship_base_images(), []);
+    }
+
+    /// A `shïp` whose `MovieFile` (offset 0x6AE) is `movie`.
+    fn ship_naming(movie: &str) -> Vec<u8> {
+        let mut bytes = ShipBuilder::new().build();
+        bytes[0x6AE..0x6AE + movie.len()].copy_from_slice(movie.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn the_ships_movies_are_each_readable_ships_movie_file_not_empty() {
+        let mut short = ship_naming("Short.mov");
+        short.pop();
+        let fork = ForkBuilder::new()
+            .resource(Ship::TYPE, 200, None, &ship_naming("Late.mov"))
+            .resource(Ship::TYPE, 128, Some(b"Filmed"), &ship_naming("Ship.mov"))
+            .resource(Ship::TYPE, 129, None, &ship_naming(""))
+            .resource(Ship::TYPE, 130, None, &short)
+            .build()
+            .bytes;
+        let data = one_file(fork).load();
+        assert_eq!(
+            data.ship_movie_files(),
+            [
+                (ShipId(128), "Ship.mov".to_owned()),
+                (ShipId(200), "Late.mov".to_owned())
+            ],
+            "an empty name names no movie (@0x60858-0x60866), and an \
+             undecodable ship is left out"
+        );
+        assert_eq!(self::data().ship_movie_files(), []);
     }
 }

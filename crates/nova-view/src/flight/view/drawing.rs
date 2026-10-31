@@ -34,8 +34,8 @@ use crate::{Color, DrawList, Input, Point};
 
 use super::sprites::{Sprite, sprite_stack};
 use super::{
-    DESELECT_KEY, FlightView, MESSAGE_GAP, OVERLAY_SIZE, drawn_size, npc_tint, placeholder_size,
-    shown_heading, shown_position,
+    FlightView, MESSAGE_GAP, OVERLAY_SIZE, drawn_size, npc_tint, placeholder_size, shown_heading,
+    shown_position,
 };
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -172,43 +172,48 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Runs the cursor's `steps` flight steps (see the `cursor` module),
     /// hovering as the pointer is over something targetable now
     /// ([`FlightView::hovering`]), once the flight's steps have run and
-    /// the ships are where the frame draws them. A key pressed since the
-    /// last step, or a flight key held, fades it; the weapon safety key
-    /// ([`DESELECT_KEY`]) only by its press, as `_HandlePlayer` sets
-    /// *0x3b5550 for it only on the pass it lets go of a secondary
-    /// (@0x6ade1), which its press has faded already; a stellar slot key
-    /// only while the slot block polls it, as the block sets *0x3b5550 on
-    /// every frame it finds one down (@0x69e0d-0x69e12), and the escort
-    /// menu's loop never does ([`FlightView::slot_key_polled`]).
-    pub(super) fn step_cursor(&mut self, steps: u32) {
+    /// the ships are where the frame draws them. `keyed`, what
+    /// [`FlightView::cursor_keyed`] said before those steps, fades it, as
+    /// a key that fades pressed since the last step does.
+    ///
+    /// Ordering against the original: `keyed` is read before the steps, as
+    /// `_HandlePlayer` reads its gates at its pass's head, so a ship
+    /// disabled by the pass's fight still fades on that frame and an
+    /// arrival frame keeps its jump's. A tick of several steps reads once
+    /// for all of them: nothing is drawn between them, so that crosses no
+    /// boundary the player can see.
+    pub(super) fn step_cursor(&mut self, steps: u32, keyed: bool) {
         if steps == 0 {
             return;
         }
         let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
         let hovering = self.hovering();
-        let held = self.held.iter().any(|&key| {
-            self.slot_key_polled(key, false)
-                .unwrap_or(key != DESELECT_KEY)
-        });
         for _ in 0..steps {
-            self.cursor.step(hovering, frames, held);
+            self.cursor.step(hovering, frames, keyed);
         }
     }
 
     /// What `input` tells the cursor: a pointer move or button press shows
-    /// it where the pointer is, and the pointer leaving the window hides
-    /// it; a key pressed fades it at the next flight step (none runs while
-    /// the map is open, and the M that opened it has faded it already).
+    /// it where the pointer is, a button holds it whole until its release,
+    /// and the pointer leaving the window hides it; a key pressed that
+    /// fades it ([`FlightView::key_fades_cursor`]) does so at the next
+    /// flight step. A key typed into the open map doesn't: no frame runs
+    /// there. The M that opens it does, read before the dispatch, on the
+    /// first step after the close.
     pub(super) fn cursor_input(&mut self, input: &Input) {
         match *input {
-            Input::PointerMoved(at)
-            | Input::PointerButton {
+            Input::PointerMoved(at) => self.cursor.pointer(at),
+            Input::PointerButton {
                 pressed: true, at, ..
             } => {
                 self.cursor.pointer(at);
+                self.cursor.button(true);
             }
+            Input::PointerButton { pressed: false, .. } => self.cursor.button(false),
             Input::PointerLeft => self.cursor.left(),
-            Input::Key { pressed: true, .. } => self.cursor.key(),
+            Input::Key {
+                pressed: true, key, ..
+            } if !self.map_open && self.key_fades_cursor(key) => self.cursor.key(),
             _ => {}
         }
     }

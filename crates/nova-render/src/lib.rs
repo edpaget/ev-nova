@@ -21,6 +21,10 @@
 //!   and turns a draw list into batches in draw order, keeping flight's
 //!   world layer ([`nova_view::DrawLayer`]) apart from the overlay: no
 //!   batch holds both.
+//! - [`streams`]: the movie frames ([`nova_view::DrawCommand::MovieFrame`])
+//!   the [`Renderer`] streams onto pages of their own, numbered down from
+//!   the top so they never take an atlas page's id, and uploads again only
+//!   when a stream's generation moves on.
 //! - [`enlarge`]: the [`Enlarger`] port, the load-time scaling site: what
 //!   the atlas holds for each decoded frame, which the [`Renderer`] draws
 //!   at the frame's own logical size. [`NativeDetail`] holds each frame
@@ -92,6 +96,7 @@ pub mod present;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
 pub mod source;
+pub mod streams;
 pub mod super_xbr;
 pub mod upscale;
 pub mod viewport;
@@ -101,7 +106,9 @@ pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPa
 pub use batch::{RenderReport, Renderer};
 pub use enlarge::{Enlarger, NativeDetail, enlarger_for};
 pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
-pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace};
+pub use gpu::{
+    Batch, Frame, Gpu, MAX_TEXTURE_SIDE, QuadInstance, Rect, SolidQuad, TextRun, WorldSpace,
+};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use source::GameImages;

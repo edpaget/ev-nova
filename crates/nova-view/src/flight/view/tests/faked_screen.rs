@@ -811,7 +811,7 @@ fn a_click_on_a_ship_targets_it_during_a_jump() {
 }
 
 #[test]
-fn a_slot_key_held_during_a_jump_fades_the_cursor_only_by_its_press() {
+fn a_slot_key_held_during_a_jump_adds_nothing_to_the_cursors_fade() {
     use super::controls::NOWHERE;
     /// The cursor's alpha two ticks after `k` is pressed and held.
     fn alpha_holding(mut view: Faked, k: Key) -> Option<u8> {

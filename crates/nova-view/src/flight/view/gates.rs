@@ -6,7 +6,7 @@
 //! its hypergate entry among it. The flight's messages are worded by the
 //! flight's names ([`FlightView::word`]).
 
-use nova_sim::flight_frame::{Answer, FlightCommand};
+use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry};
 use nova_sim::landing::LandOutcome;
 use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress};
 
@@ -15,13 +15,23 @@ use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::jump::JumpEffect;
 use crate::flight::sim_port::FlightSim;
 use crate::system::catalog::SystemCatalog;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 
 use super::{
     FlightView, GATE_REFUSAL_TICKS, HYPERGATE_CANCELLED, MAP_KEY, gate_refusal_message,
     landing_refusal_ticks, refusal_message, stellar_name,
 };
 
-impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> FlightView<C, S> {
+impl<
+    C: SystemCatalog
+        + ShipSprites
+        + CombatLooks
+        + StatusBars
+        + DescriptionSource
+        + DescriptionGraphics,
+    S: FlightSim,
+> FlightView<C, S>
+{
     /// Presses the land key ([`FlightCommand::Land`]): requests clearance,
     /// lands, enters a gate, or shows why not. What the press said (the
     /// request's line, or "No response."), shows first, so a
@@ -30,7 +40,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// view keeps of the fight; over a cleared hypergate the course map
     /// opens offering its links ([`FlightCommand::OpenHypergate`]), and
     /// over a wormhole the ship passes through at once
-    /// ([`FlightCommand::EnterWormhole`]). A refusal names its stellar from
+    /// ([`FlightCommand::EnterWormhole`]). With movies on, a landing and a
+    /// wormhole's entry first play the stellar's `dësc` movie, flight
+    /// frozen under it (see the `movies` module). A refusal names its stellar from
     /// the scene, or by the opening's name for one the scene doesn't hold
     /// ([`Names::stellar`](nova_sim::flight_frame::Names::stellar)),
     /// and says the gate's line when the flight says the stellar is one
@@ -48,14 +60,13 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         self.say_messages();
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
-                self.pending_landing = Some(stellar);
                 self.blank_message();
                 self.effects.clear();
                 self.flashes.clear();
                 self.held_alts.get_mut().clear();
                 self.glows.clear();
                 self.shot_looks.clear();
-                self.redraw_status();
+                self.land_with_movie(stellar);
             }
             Answer::LandPress(LandPress::AtGate {
                 kind: GateKind::Hypergate,
@@ -72,13 +83,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             Answer::LandPress(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
-            }) => match self.send_gated(FlightCommand::EnterWormhole) {
-                Answer::Arrived { combat, .. } => {
-                    self.came_through(JumpEffect::flash(), &combat);
-                }
-                Answer::GateRefused(refusal) => self.gate_refused(refusal),
-                _ => {}
-            },
+            }) => self.enter_with_movie(GateEntry::Wormhole),
             Answer::LandRefused { refusal, gate } => {
                 // A stellar the scene doesn't hold, such as one another
                 // system owns, by its spöb name (`stellar_name`).
@@ -100,6 +105,15 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         }
     }
 
+    /// The landing on `stellar` reaches the router
+    /// ([`FlightView::take_landing`]) and the status bar is redrawn: at
+    /// the press, or once the landing's movie has ended
+    /// ([`FlightView::land_with_movie`]).
+    pub(super) fn landed_on(&mut self, stellar: nova_sim::StellarId) {
+        self.pending_landing = Some(stellar);
+        self.redraw_status();
+    }
+
     /// Shows what the original says when entering a gate is refused, if
     /// anything: a cancelled hypergate jump, or a wormhole leading
     /// nowhere. A hypergate without links says nothing.
@@ -110,7 +124,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// system it stays in out afresh, its old ships, shots, smoke and
     /// effects let go and its new ships' sheets read; then shuts the
     /// escort menu (@0x6705a) and says why. The beep is the flight's.
-    fn gate_refused(&mut self, refusal: GateRefusal) {
+    pub(super) fn gate_refused(&mut self, refusal: GateRefusal) {
         match refusal {
             GateRefusal::Cancelled => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
             GateRefusal::NoExit => {
@@ -126,7 +140,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// fight's events its arrival left pending, caught up with as an
     /// arrival is ([`FlightView::arrived`]); the flight keys
     /// are let go.
-    fn came_through(&mut self, effect: JumpEffect, combat: &[CombatEvent]) {
+    pub(super) fn came_through(&mut self, effect: JumpEffect, combat: &[CombatEvent]) {
         self.held.clear();
         self.arrived(combat);
         self.fade_in = Some(effect);
@@ -140,7 +154,9 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// the new system fades in from white ([`JumpEffect::emerging`], or
     /// flashes white with the Hyperspace Effects preference off), its
     /// arrival said; with no pick, the jump is cancelled
-    /// ([`HYPERGATE_CANCELLED`]). The hypergate map closes silently:
+    /// ([`HYPERGATE_CANCELLED`]). With movies on, the entry first plays
+    /// the movie of the `dësc` the flight names for it (see the `movies`
+    /// module). The hypergate map closes silently:
     /// `_PlayerEnterHypergate` plays no beep around it (@0x6385b). See
     /// [`FlightView::close_map_then`] for the course map's close.
     ///
@@ -159,14 +175,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             return;
         }
         self.close_map_then(|view, choice| {
-            match view.send(FlightCommand::EnterHypergate(choice)) {
-                Answer::Arrived { combat, .. } => {
-                    let effect = JumpEffect::emerging(view.hyperspace_effects);
-                    view.came_through(effect, &combat);
-                }
-                Answer::GateRefused(refusal) => view.gate_refused(refusal),
-                _ => {}
-            }
+            view.enter_with_movie(GateEntry::Hypergate(choice));
         });
     }
 

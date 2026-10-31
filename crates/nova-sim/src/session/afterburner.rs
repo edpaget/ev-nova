@@ -137,8 +137,8 @@ impl PlayerShip {
     /// The afterburner's engage test for this tick under `controls`
     /// (@0x6cad4-0x6cb59; [`engages`]): the key held, the ship intact,
     /// carrying an afterburner, out of a jump and with the fuel for it.
-    /// Its press counts as a flight key whatever the outcome, which the
-    /// view's cursor reads (*0x3b5550, @0x6cb03).
+    /// Its press fades the cursor whatever the outcome, on a ship not
+    /// disabled (*0x3b5550, @0x6cb03; see the `key_fade` module).
     pub(super) fn engage_afterburner(
         &mut self,
         pilot: &Pilot,

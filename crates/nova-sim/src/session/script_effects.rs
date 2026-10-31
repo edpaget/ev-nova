@@ -333,7 +333,9 @@ pub struct Departure {
 
 impl Session {
     /// Applies what the set expressions run since the last settling
-    /// queued (see the module docs): first a person's swap for its
+    /// queued (see the module docs): first the port's own `dësc`, when a
+    /// landing has made it due and the spaceport hasn't asked for it yet
+    /// (see the `port_desc` module), then a person's swap for its
     /// mission's ship that an accept on its hail made due (see the
     /// `mission_ships` module), then the moves in order, each read from
     /// `catalog`, populating on `chance` where the rules say, then a `Q`'s
@@ -356,6 +358,10 @@ impl Session {
         // A new run of docked scripts (see [`Session::take_interface_loads`]).
         self.out.begin_docked_run();
         let mut settled = Settled::default();
+        // The port's own `dësc` before the land checks (`_DoPortDialog`
+        // @0x5f96b, then `_MissionLandCheck` @0x5fbeb; see the `port_desc`
+        // module).
+        self.load_own_desc(catalog, &mut &mut *chance);
         if let Some(stellar) = self.run.offer_roll_due.take()
             && self.mode.landed() == Some(stellar)
         {

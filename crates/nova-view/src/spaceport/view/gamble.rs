@@ -122,7 +122,9 @@ impl SpaceportView {
                 }
             }
             GambleOpening::NoCash => {
-                self.show_text(NO_CASH_TO_BET);
+                // No after-movie yet: `rdm` task `gamble-361-after-movie`
+                // passes the last `dësc` loaded's.
+                self.show_text(NO_CASH_TO_BET, None);
                 self.gambling.after = Some(AfterTexts::NoCash);
                 self.settle_gamble();
             }

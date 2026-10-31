@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_sim::flight_frame::LoadedDesc;
 use nova_sim::{PilotKeeper, PilotStore, RuleKey, pilot_key};
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::FlightView;
@@ -217,30 +218,27 @@ impl AppScreen {
         self.fade_once_dialogs_close();
     }
 
-    /// Shows the escape pod's rescue's `dësc` `id` over flight, as
-    /// `_HandlePlayer`'s `_ShowTextDialog` does (@0x68e80-0x68eac), in the
-    /// variant its `Graphic` picks, loaded through flight as
-    /// `_LoadDescription` (@0x68e90) loads it
-    /// ([`FlightView::load_description`]); one that cannot be read is a
-    /// warning. The rescue settled before it, and flight goes on once it closes: no
-    /// fade follows, unlike the death's.
-    fn show_rescue_desc(&mut self, id: i16) {
-        let loaded = match &mut self.flight {
-            Some(flight) => flight.load_description(id),
-            None => self.data.description(id),
-        };
-        match loaded {
-            Ok(text) => {
-                let graphic = self.data.description_graphic(id);
-                self.show_over_flight(vec![DescShown {
-                    text,
-                    graphic,
-                    movie: self.data.description_movie(id),
-                }]);
-            }
-            Err(reason) => self
-                .warnings
-                .push(format!("nova: cannot show the rescue dësc {id}: {reason}")),
+    /// Shows the escape pod's rescue's `dësc` over flight, as
+    /// `_HandlePlayer`'s `_ShowTextDialog` does (@0x68eac), in the variant
+    /// its `Graphic` picks: the text flight's session loaded first in the
+    /// rescue (`_LoadDescription` @0x68e90, before the missions ended), so
+    /// it is not loaded again here. One that could not be read is a
+    /// warning, saying why as the catalog reads it. The rescue settled
+    /// before it, and flight goes on once it closes: no fade follows,
+    /// unlike the death's.
+    fn show_rescue_desc(&mut self, desc: LoadedDesc) {
+        let id = desc.id;
+        if let Some(text) = desc.text {
+            let graphic = self.data.description_graphic(id);
+            self.show_over_flight(vec![DescShown {
+                text,
+                graphic,
+                movie: self.data.description_movie(id),
+            }]);
+        } else {
+            let reason = self.data.description(id).err().unwrap_or_default();
+            self.warnings
+                .push(format!("nova: cannot show the rescue dësc {id}: {reason}"));
         }
     }
 
@@ -264,6 +262,7 @@ impl AppScreen {
     /// tick made, the Board key held, opens as a press's does
     /// ([`AppScreen::open_frame_boarding`]).
     pub(super) fn after_flight_tick(&mut self) {
+        self.settle_flight_movie();
         self.open_frame_boarding();
         if self
             .flight
@@ -272,8 +271,8 @@ impl AppScreen {
         {
             self.at_hold_expiry();
         }
-        if let Some(id) = self.flight.as_mut().and_then(FlightView::take_rescue_desc) {
-            self.show_rescue_desc(id);
+        if let Some(desc) = self.flight.as_mut().and_then(FlightView::take_rescue_desc) {
+            self.show_rescue_desc(desc);
         }
         if self.flight.as_ref().is_some_and(FlightView::game_over) {
             if self.menu.is_some() {
@@ -282,6 +281,33 @@ impl AppScreen {
                 self.end_flight(self.return_to);
                 self.fade_in = Some(ScreenFade::from_black(DEATH_FADE_FOR));
             }
+        }
+    }
+
+    /// Takes what a stellar's movie in front of flight left once it has
+    /// ended ([`FlightView::playing`]): the landing it held back shows the
+    /// spaceport, and what was pressed under it goes to what is shown
+    /// next, the spaceport or flight
+    /// ([`FlightView::take_movie_replay`]), as the original's queued
+    /// events reach the next event loop. Nothing while it plays.
+    ///
+    /// After a landing, the land checks' texts the movie held
+    /// ([`FlightView::take_mission_texts`]) and the venues' offers settle
+    /// over the opened spaceport before the replay, as `_DoPortDialog`
+    /// shows the spaceport (@0x5faff), then runs `_MissionLandCheck`
+    /// (@0x5fbeb) and `_OfferMissionFromPort` (@0x5fc37) before its own
+    /// loop: the replayed keys reach the first text.
+    pub(super) fn settle_flight_movie(&mut self) {
+        let Some(flight) = self.flight.as_mut().filter(|flight| !flight.playing()) else {
+            return;
+        };
+        let replay = flight.take_movie_replay();
+        if let Some(stellar) = flight.take_landing() {
+            self.show_spaceport(stellar);
+            self.settle_script();
+        }
+        for input in replay {
+            let _ = self.routed_input(&input);
         }
     }
 
@@ -558,7 +584,11 @@ impl AppScreen {
         let below = self.shown_mut();
         below.cancel_pointer();
         below.release_keys();
+        let faded = self.white_faded();
         if let Some(missions) = &mut self.missions {
+            if faded {
+                missions.set_faded();
+            }
             show(missions);
         }
         self.drop_closed_missions();

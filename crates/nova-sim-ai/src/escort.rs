@@ -226,10 +226,10 @@ pub struct Commanded {
 pub struct ClassRow {
     /// The class.
     pub class: EscortClass,
-    /// Whether the player has an escort of it.
+    /// Whether a ship of it the player leads is here, disabled or dying too.
     pub present: bool,
-    /// The standing order of its first escort; none for formation, or
-    /// with no escort of it.
+    /// The order kept for its class, as `_DrawEscortMenuInFrame` reads it
+    /// (@0x56534); none for formation, or with no escort of it.
     pub order: Option<EscortOrder>,
 }
 

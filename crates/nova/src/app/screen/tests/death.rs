@@ -318,6 +318,68 @@ fn the_rescue_desc_reads_its_conditional_text_through_flight() {
     );
 }
 
+/// [`escape_pod_fork`] with `dësc` 13999 reading [`RESCUE_TEXT`], its
+/// after-movie "Rescue.mov"; mission 130, which the `chär`'s `OnStart`
+/// starts, its `OnAbort` starting mission 131, briefed "Briefed." (`dësc`
+/// 5000), its after-movie "Brief.mov".
+fn aborting_pod_data() -> Rc<GameData> {
+    let held = |on_abort: &[u8], brief: i16| {
+        let mut bytes = venue_mission(0);
+        bytes[0x1C..0x20].copy_from_slice(&0_i32.to_be_bytes());
+        bytes[0x34..0x36].copy_from_slice(&brief.to_be_bytes());
+        bytes[0x557..0x557 + on_abort.len()].copy_from_slice(on_abort);
+        bytes
+    };
+    let mut built = escape_pod_fork()
+        .resource(
+            Desc::TYPE,
+            13999,
+            None,
+            &filmed_desc_of(RESCUE_TEXT, "Rescue.mov", 0x0001),
+        )
+        .resource(Mission::TYPE, 130, Some(b"Held"), &held(b"S131", -1))
+        .resource(Mission::TYPE, 131, Some(b"Next"), &held(b"", 5000))
+        .resource(
+            Desc::TYPE,
+            5000,
+            None,
+            &filmed_desc_of("Briefed.", "Brief.mov", 0x0001),
+        )
+        .build();
+    let character = built.layout.data_entry(Character::TYPE, 128) + 4;
+    built.bytes[character + 0x32..character + 0x36].copy_from_slice(b"S130");
+    loaded_bytes(built.bytes)
+}
+
+#[test]
+fn a_rescue_shows_its_desc_before_the_brief_an_on_abort_starts_and_leaves_the_brief_last_loaded() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected_from(&store, with_dialogs(aborting_pod_data()), create);
+    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+        screen.showing() == Showing::MissionText
+    });
+    assert_eq!(
+        shown_text(&screen).as_deref(),
+        Some(RESCUE_TEXT),
+        "shown (@0x68eac) before the missions end (@0x68f0d)"
+    );
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(shown_text(&screen).as_deref(), Some("Briefed."));
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.showing(), Showing::Flight, "flying on");
+    assert_eq!(
+        flight(&screen)
+            .sim()
+            .loaded_after_movie()
+            .map(|movie| movie.file)
+            .as_deref(),
+        Some("Brief.mov"),
+        "13999 was loaded first (@0x68e90), and the rescue's text shown \
+         without loading it again"
+    );
+    assert_eq!(screen.take_warnings(), Vec::<String>::new());
+}
+
 #[test]
 fn a_strict_pilot_rescued_from_the_pod_is_saved_before_the_rescue_is_drawn() {
     let store = MemoryPilots::new();

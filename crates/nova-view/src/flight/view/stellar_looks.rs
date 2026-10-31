@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use nova_sim::SystemId;
+use nova_sim::gate_sprite::StellarPass;
 
 use crate::flight::catalog::{CombatLooks, ShipSprites};
 use crate::flight::sim_port::FlightSim;
@@ -42,16 +43,45 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`SystemScene::take_off_reset`](crate::system::scene::SystemScene::take_off_reset))
     /// and those kept
     /// ([`KeptFrames::reset`](crate::system::kept_frames::KeptFrames::reset)).
-    /// [`FlightView::redraw_scene_then`] runs it before the scene is laid
-    /// out or drawn again, so a gate's exit keeps the old scene's frames
-    /// zeroed and the new scene resumes them zeroed, as the original
-    /// zeroes every `spöb` before its rebuild (@0x67653). The session
-    /// raises the event at the take-off or the exit, and the view settles
-    /// it in the catch-up that follows, before the first frame is drawn.
+    /// [`FlightView::replay_stellar_passes`] runs it once the scene is laid
+    /// out, so it zeroes what the layout just kept of the old scene with
+    /// the new scene's own, as the original zeroes every `spöb` (@0x675ce)
+    /// whether a slot shows it or not. The session raises the event at the
+    /// take-off or the exit, and the view settles it in the catch-up that
+    /// follows, before the first frame is drawn.
     pub(super) fn reset_stellar_frames(&mut self) {
         self.kept_frames.reset();
         if let Some(scene) = &mut self.scene {
             scene.take_off_reset();
+        }
+    }
+
+    /// Replays the stellar passes the flight raised on the scene shown, the
+    /// system entered's, on the effects' chance: the entry's first, on each
+    /// stellar's true frames ([`StellarPass::Entry`]); then the frames'
+    /// reset when `frames_reset`; then the rest, so a take-off's and a
+    /// gate's exit step from the frames it leaves, before the first frame
+    /// is drawn. Every view method that drives a transition catches up
+    /// last, so a catch-up holds one transition's passes.
+    fn replay_stellar_passes(&mut self, frames_reset: bool) {
+        let (entry, others): (Vec<StellarPass>, Vec<StellarPass>) = self
+            .inbox
+            .take_stellar_passes()
+            .into_iter()
+            .partition(|&pass| pass == StellarPass::Entry);
+        self.step_scene_by(&entry);
+        if frames_reset {
+            self.reset_stellar_frames();
+        }
+        self.step_scene_by(&others);
+    }
+
+    /// Steps the scene shown once for each of `passes`.
+    fn step_scene_by(&mut self, passes: &[StellarPass]) {
+        if let Some(scene) = &mut self.scene {
+            for pass in passes {
+                scene.step_pass(pass.gain(), &mut self.effects_chance);
+            }
         }
     }
 
@@ -119,9 +149,10 @@ impl<C: SystemCatalog, S: FlightSim> FlightView<C, S> {
 impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::catch_up`]'s redraws, given what the events asked for
     /// (`redrawn`), in their order: the ship's sheet, the bar (`bar`), the
-    /// stellars' frames reset ([`FlightView::reset_stellar_frames`]), the
     /// layout or the ship's place, the scene read again, the stellars'
-    /// looks, the status bar (`status`, on a system entered) and the stars.
+    /// looks, the stellar passes with the frames' reset among them
+    /// ([`FlightView::replay_stellar_passes`]), the status bar (`status`,
+    /// on a system entered) and the stars.
     /// The kept frame was filled afresh as the events were drained
     /// ([`FlightView::catch_up_then`]), so each reads the flight as the
     /// events left it. `bar` and `status` are the session's still
@@ -147,9 +178,6 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
             self.follow_ship();
         }
         bar(self);
-        if redrawn.frames_reset {
-            self.reset_stellar_frames();
-        }
         if redrawn.system {
             self.lay_out(system);
         } else if redrawn.stellar {
@@ -163,6 +191,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks, S: FlightSim> FlightView<C, S
         } else if redrawn.galaxy || redrawn.system {
             self.show_destroyed();
         }
+        self.replay_stellar_passes(redrawn.frames_reset);
         if redrawn.system {
             status(self);
         }

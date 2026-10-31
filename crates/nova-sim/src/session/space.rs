@@ -24,6 +24,7 @@ use super::{Aboard, hail, persons, reinforcements};
 /// What is in the system around the player, in `Session`'s former field
 /// order, then its part.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, each set and read on its own
 pub(super) struct Space {
     /// The sprite of each hypergate the flight has shown, as it opens and
     /// closes, kept while it is not shown (see the `gate_sprites`
@@ -60,6 +61,10 @@ pub(super) struct Space {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     pub(super) traffic_due: bool,
+    /// Whether the gates' step of game entry's third stellar pass is owed
+    /// to the setup `traffic_due` waits for (see the `stellar_passes`
+    /// module); never saved.
+    pub(super) entry_gate_pass_owed: bool,
     /// The heading each ship in the fight was drawn at after the last
     /// pass ([`Session::game_work`](super::Session::game_work)): its heading as that pass ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -181,9 +186,12 @@ pub(super) struct Escorts {
     /// The last order the player gave each escort class, in
     /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
     /// original's one order per class (0x3b5394), which a ship joining
-    /// the class takes (see [`Space::class_order`]). Not saved, as the
-    /// hired escorts keep theirs on their records and mission escorts are
-    /// never saved; reset with their orders on entering a system by the
+    /// the class takes (see [`Space::class_order`]) and which the escort
+    /// menu's rows show. Not saved, as the hired escorts keep theirs on
+    /// their records, which seed it on an entry that keeps the orders (a
+    /// pilot loaded by the other reading,
+    /// [`Space::keep_record_orders`]), and mission escorts are never
+    /// saved; reset with their orders on entering a system by the
     /// engine's [`RuleKey::EscortOrders`](crate::rulebook::RuleKey::EscortOrders),
     /// and cleared in flight, with the orders of the class's escorts, once
     /// no ship of the class the player leads has taken a command since it
@@ -216,6 +224,7 @@ impl Space {
             #[cfg(test)]
             queued_in_frame: Vec::new(),
             traffic_due: true,
+            entry_gate_pass_owed: false,
             drawn: BTreeMap::new(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),

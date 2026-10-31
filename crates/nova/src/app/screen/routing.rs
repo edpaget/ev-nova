@@ -110,14 +110,17 @@ impl AppScreen {
             // the buy's reset and either's status draw. A sale
             // refused in the sell loop shows its words over the
             // outfitter, at whatever pass it is refused; the sales before
-            // it stand. Any other refusal changes nothing. Then the
+            // it stand. It plays the last `dësc` loaded's after-movie as it
+            // closes, read before the descriptions this input asks for are
+            // served (`_DoOutfitDialog` loads the selection's after the
+            // alert, @0x5d3b4/@0x5d737). Any other refusal changes nothing. Then the
             // outfitter follows what the order left its selection at: an
             // order that changed the listing resets it, or closes the
             // outfitter when nothing is listed.
             if let Some((order, count)) = outfit {
                 let run = flight.outfit_order(order, count);
                 if let Some(alert) = &run.alert {
-                    spaceport.alert_outfit(alert);
+                    spaceport.alert_outfit(alert, flight.sim().loaded_after_movie());
                 }
                 spaceport.outfit_ordered(run.after);
             }
@@ -206,14 +209,26 @@ impl AppScreen {
     /// The `dësc`s the spaceport's screens have shown, each loaded
     /// through flight as `_LoadDescription` loads one
     /// ([`FlightView::load_description`](nova_view::flight::FlightView::load_description)) and shown in its place, in the
-    /// input that showed it, so no frame draws the raw read. One that
-    /// cannot be read keeps the raw read's blank.
+    /// input that showed it, so no frame draws the raw read. The port's own
+    /// (the request whose ID is the stellar's, as
+    /// [`SpaceportView::show_description`](nova_view::spaceport::SpaceportView::show_description) routes it) is the text the
+    /// session loaded before the land checks
+    /// ([`FlightView::load_port_description`](nova_view::flight::FlightView::load_port_description);
+    /// `_DoPortDialog` @0x5f96b), never loaded a second time, as the
+    /// spaceport opening after the landing's movie would. One that cannot
+    /// be read keeps the raw read's blank.
     pub(super) fn serve_descriptions(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
         };
         while let Some(id) = spaceport.take_description_request() {
-            if let Ok(text) = flight.load_description(id) {
+            let stellar = spaceport.stellar();
+            let loaded = if id == stellar.0 {
+                flight.load_port_description(stellar)
+            } else {
+                flight.load_description(id)
+            };
+            if let Ok(text) = loaded {
                 spaceport.show_description(id, &text);
             }
         }
@@ -389,14 +404,18 @@ impl AppScreen {
     /// every input, the Preferences keys and the side's own keys
     /// included, as `_DoSystemSearch`'s `ModalDialog` takes every event
     /// (@0x11dd1): flight's course map, the bar's map over the spaceport,
-    /// or the galaxy viewer.
+    /// or the galaxy viewer. A stellar's movie in front of flight takes
+    /// every input too, as `_PlayQTMovie`'s loop is modal (@0x55de0),
+    /// and goes to flight, which plays it
+    /// ([`FlightView::playing`]).
     fn map_takes_every_key(&self) -> bool {
         match self.side {
             // In port, flight's map is open only as the bar's or a mission
             // dialog's.
-            Side::Flight | Side::Spaceport => {
-                self.flight.as_ref().is_some_and(FlightView::map_finding)
-            }
+            Side::Flight | Side::Spaceport => self
+                .flight
+                .as_ref()
+                .is_some_and(|flight| FlightView::map_finding(flight) || flight.playing()),
             Side::Galaxy => self.galaxy.system().is_none() && self.galaxy.map().finding(),
             Side::MainMenu | Side::Ships => false,
         }

@@ -43,6 +43,7 @@ use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{INFO_DIALOG, MissionInfoScreen};
 use nova_view::spaceport::offer::{OFFER_DIALOG, PICTURE_OFFER_DIALOG};
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
+use nova_view::ui::DescDialog;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
 use nova_view::ui::mission_dialogs::DescShown;
@@ -88,16 +89,20 @@ use nova_view::ui::plunder::{
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
+mod about_movies;
 mod appear;
 mod background;
 mod capture_naming;
 mod christening;
 mod death;
+mod desc_load_order;
 mod dialog_maps;
 mod encounters;
 mod entry;
 mod flight;
 mod game;
+mod jump_white;
+mod landing_texts_after_movie;
 mod launch;
 mod map_find;
 mod menu;
@@ -108,6 +113,9 @@ mod overlays;
 mod planet_comm;
 mod port;
 mod quit_question;
+mod ship_movies;
+mod shop_text_movies;
+mod stellar_movies;
 mod wheel;
 mod widescreen;
 

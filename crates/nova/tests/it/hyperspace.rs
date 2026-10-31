@@ -28,12 +28,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::common::{EntryHarness, Frames};
-use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::RecordingAudio;
 use nova_audio::{Audio, AudioCommand, AudioCore};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::desc::Desc;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::fixture::{ShipAnimBuilder, ShipBuilder};
 use nova_data::records::interface::Interface;
@@ -48,6 +49,7 @@ use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
+use nova_sim::DescMovie;
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
 use nova_sim::hyperspace::{HyperlinkRule, MIN_JUMP_DISTANCE};
@@ -56,9 +58,11 @@ use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
 use nova_view::galaxy::dialog::map_area;
 use nova_view::menu::MenuChoice;
+use nova_view::movie::MoviePlayer;
+use nova_view::movie::fixture::{Call, MockMoviePlayer};
 use nova_view::sound::SimSound;
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::{Key, MouseButton, Point};
+use nova_view::{Key, MouseButton, Point, Prefs};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -206,6 +210,11 @@ fn food_surplus() -> Vec<u8> {
 /// Alpha. The status bar is `ïntf` 128, over a 194 x 16 `PICT` 700. A
 /// food surplus can break out at Beta Prime.
 fn data() -> Rc<GameData> {
+    load(data_fork())
+}
+
+/// [`data`]'s fork, before it is loaded.
+fn data_fork() -> ForkBuilder {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
@@ -243,6 +252,11 @@ fn data() -> Rc<GameData> {
             .resource(PICT, state + 100, None, &button_picture(13))
             .resource(PICT, state + 102, None, &button_picture(13));
     }
+    fork
+}
+
+/// `fork`, with the bracket art, loaded.
+fn load(fork: ForkBuilder) -> Rc<GameData> {
     Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
 }
 
@@ -270,6 +284,12 @@ impl Harness {
     /// from the ship browser with F.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
         let screen = start_screen(Rc::clone(&data)).with_chance(chance);
+        Self::flying_in(data, screen)
+    }
+
+    /// The app over `data`, showing `screen`, in flight, entered from the
+    /// ship browser with F.
+    fn flying_in(data: Rc<GameData>, screen: AppScreen) -> Self {
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -781,7 +801,40 @@ fn hypergate(x: i16, y: i16, angle: i16, links: &[i16]) -> Vec<u8> {
 /// starts, linked to hypergate 132 in Gamma at (50, 60), which heads ships
 /// out on 90°.
 fn gate_data() -> Rc<GameData> {
-    let fork = ForkBuilder::new()
+    gate_data_with(gate_fork())
+}
+
+/// `fork` loaded, with the bracket art.
+fn gate_data_with(fork: ForkBuilder) -> Rc<GameData> {
+    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
+}
+
+/// [`gate_data`]'s resources, before they are loaded.
+fn gate_fork() -> ForkBuilder {
+    gates_fork(
+        &hypergate(0, 0, 120, &[132]),
+        &hypergate(50, 60, 90, &[131]),
+    )
+}
+
+/// A wormhole `spöb` (a landable station, `Flags2` 0x2000) at (`x`, `y`),
+/// linked to `links`; every other slot -1.
+fn wormhole(x: i16, y: i16, links: &[i16]) -> Vec<u8> {
+    let mut bytes = hypergate(x, y, 0, links);
+    bytes[0x20..0x22].copy_from_slice(&0x2000_u16.to_be_bytes());
+    bytes
+}
+
+/// [`gate_fork`]'s galaxy with wormhole 131 at Alpha's centre, where the
+/// ship starts, linked to wormhole 132 in Gamma at (50, 60).
+fn wormhole_fork() -> ForkBuilder {
+    gates_fork(&wormhole(0, 0, &[132]), &wormhole(50, 60, &[131]))
+}
+
+/// [`data`]'s galaxy with stellar 131, `alpha_gate`, at Alpha's centre and
+/// 132, `gamma_gate`, in Gamma, before they are loaded.
+fn gates_fork(alpha_gate: &[u8], gamma_gate: &[u8]) -> ForkBuilder {
+    ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim())
@@ -807,18 +860,8 @@ fn gate_data() -> Rc<GameData> {
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar())
         .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &stellar())
         .resource(Stellar::TYPE, 130, Some(b"Gamma Prime"), &stellar())
-        .resource(
-            Stellar::TYPE,
-            131,
-            Some(b"HG-Alpha"),
-            &hypergate(0, 0, 120, &[132]),
-        )
-        .resource(
-            Stellar::TYPE,
-            132,
-            Some(b"HG-Gamma"),
-            &hypergate(50, 60, 90, &[131]),
-        )
+        .resource(Stellar::TYPE, 131, Some(b"Alpha Gate"), alpha_gate)
+        .resource(Stellar::TYPE, 132, Some(b"Gamma Gate"), gamma_gate)
         .resource(Spin::TYPE, 1000, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 8))
         .resource(
@@ -827,15 +870,19 @@ fn gate_data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
-    Rc::new(one_file(crate::bracket_art::with_bracket_art(fork).build().bytes).load())
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
 }
 
 impl Harness {
     /// In flight over [`gate_data`], L pressed twice over HG-Alpha: the
     /// hypergate map is open, and Gamma clicked on it.
     fn gamma_picked() -> Self {
-        let mut harness = Self::flying_over(gate_data(), SharedChance::default());
+        Self::gamma_picked_in(gate_data(), start_screen(gate_data()))
+    }
+
+    /// [`Harness::gamma_picked`] over `data`, showing `screen`.
+    fn gamma_picked_in(data: Rc<GameData>, screen: AppScreen) -> Self {
+        let mut harness = Self::flying_in(data, screen);
         harness.frame();
         harness.press(Key::Char('l'));
         harness.approach();
@@ -858,3 +905,291 @@ fn a_hypergate_picked_on_the_map_brings_the_ship_into_its_system() {
 }
 
 crate::common::entry_harness!(Harness, click, frame);
+
+/// A `dësc` of "Gate." naming the movie "Gate.mov", played after the
+/// dialog (`Flags` 0x0001), so the `STR#` texts read it as the last
+/// loaded.
+fn filmed_desc() -> Vec<u8> {
+    let text = b"Gate.";
+    let mut bytes = text.to_vec();
+    bytes.push(0);
+    bytes.extend((-1_i16).to_be_bytes());
+    bytes.extend([0; 34]);
+    let at = text.len() + 3;
+    bytes[at..at + 8].copy_from_slice(b"Gate.mov");
+    bytes[at + 32..at + 34].copy_from_slice(&0x0001_u16.to_be_bytes());
+    bytes
+}
+
+/// [`Harness::gamma_picked`] over [`gate_data`] with `dësc` 130, Gamma's
+/// number, naming "Gate.mov", movies played through a new
+/// [`MockMoviePlayer`] while `on`.
+fn gamma_picked_filmed(on: bool) -> (Harness, Rc<MockMoviePlayer>) {
+    let data = gate_data_with(gate_fork().resource(Desc::TYPE, 130, None, &filmed_desc()));
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let screen = start_screen(Rc::clone(&data))
+        .with_prefs(Prefs {
+            quicktime_movies: on,
+            ..Prefs::default()
+        })
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+    (Harness::gamma_picked_in(data, screen), reel)
+}
+
+#[test]
+fn a_hypergate_entry_with_movies_on_leaves_its_descs_movie_the_last_loaded() {
+    let (mut harness, reel) = gamma_picked_filmed(true);
+    assert_eq!(harness.session().loaded_after_movie(), None);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Movie);
+    assert_eq!(
+        harness.session().loaded_after_movie(),
+        DescMovie::from_desc("Gate.mov", 0x0001),
+        "dësc 130, Gamma's number, by the engine (@0x639cc)"
+    );
+    assert_eq!(harness.session().system(), SystemId(128), "not yet entered");
+    assert_eq!(reel.calls().first(), Some(&Call::Start("Gate.mov".into())));
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() == Showing::Flight
+    });
+    assert_eq!(harness.session().system(), SystemId(130));
+}
+
+#[test]
+fn a_hypergate_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
+    let (mut harness, reel) = gamma_picked_filmed(false);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(130));
+    assert_eq!(harness.session().loaded_after_movie(), None);
+    assert!(reel.calls().is_empty());
+}
+
+#[test]
+fn a_flight_key_pressed_under_a_hypergates_movie_reaches_flight_after_the_come_out() {
+    let (mut harness, _) = gamma_picked_filmed(true);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Movie);
+    harness.key(Key::Up, true);
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() != Showing::Movie
+    });
+    assert_eq!(harness.session().system(), SystemId(130), "entered");
+    let out = harness.ship().velocity.length();
+    for _ in 0..60 {
+        harness.frame();
+    }
+    assert!(
+        harness.ship().velocity.length() > out,
+        "the Up pressed under the movie thrusts once the gate lets go: {:?}",
+        harness.ship()
+    );
+}
+
+/// In flight over [`wormhole_fork`] with `dësc` 131, the wormhole's own
+/// number, naming "Gate.mov", movies played through a new
+/// [`MockMoviePlayer`] while `on`, L pressed over the wormhole, the dock
+/// approach run, and L pressed again: the wormhole entered.
+fn wormhole_entered_filmed(on: bool) -> (Harness, Rc<MockMoviePlayer>) {
+    let data = gate_data_with(wormhole_fork().resource(Desc::TYPE, 131, None, &filmed_desc()));
+    let reel = MockMoviePlayer::playing((160, 120), 2);
+    let screen = start_screen(Rc::clone(&data))
+        .with_prefs(Prefs {
+            quicktime_movies: on,
+            ..Prefs::default()
+        })
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+    let mut harness = Harness::flying_in(data, screen);
+    harness.frame();
+    harness.press(Key::Char('l'));
+    harness.approach();
+    harness.press(Key::Char('l'));
+    (harness, reel)
+}
+
+#[test]
+fn a_wormhole_entry_with_movies_on_leaves_its_own_descs_movie_the_last_loaded() {
+    let (mut harness, reel) = wormhole_entered_filmed(true);
+    assert_eq!(harness.showing(), Showing::Movie);
+    assert_eq!(
+        harness.session().loaded_after_movie(),
+        DescMovie::from_desc("Gate.mov", 0x0001),
+        "dësc 131, the wormhole's own (@0x6426b-0x6427d)"
+    );
+    assert_eq!(harness.session().system(), SystemId(128), "not yet entered");
+    assert_eq!(reel.calls().first(), Some(&Call::Start("Gate.mov".into())));
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() == Showing::Flight
+    });
+    assert_eq!(harness.session().system(), SystemId(130), "passed through");
+}
+
+#[test]
+fn a_wormhole_entry_with_movies_off_leaves_the_last_loaded_movie_alone() {
+    let (harness, reel) = wormhole_entered_filmed(false);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(130), "passed through");
+    assert_eq!(harness.session().loaded_after_movie(), None);
+    assert!(reel.calls().is_empty());
+}
+
+// A text over the jump's white
+// (rdm:phase/movies/phase-4-desc-movies-outside-missions).
+
+/// "Desc Dialog" alone: Done (1), a parked picture (2) and the text (3).
+struct DescDialogOnly;
+
+impl nova_view::ui::DialogResources for DescDialogOnly {
+    fn dialog_template(&self, id: i16) -> Result<nova_view::ui::DialogTemplate, String> {
+        use nova_view::geometry::Bounds;
+        use nova_view::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+        if id != nova_view::ui::desc::DESC_DIALOG {
+            return Err(format!("no DLOG {id}"));
+        }
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        Ok(nova_view::ui::DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(100.0, 70.0, 99.0, 25.0, ItemSpec::User),
+                item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
+                item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
+            ],
+        })
+    }
+}
+
+/// The app over [`data`] with "Desc Dialog" and an About text, flying out
+/// towards Beta, J pressed and frames drawn until the warp has lit the
+/// screen white.
+fn lit_with_about() -> Harness {
+    lit_with_about_filmed(None).0
+}
+
+/// [`lit_with_about`], its About text naming `movie` with `Flags` 0 when
+/// given, movies played through a new [`MockMoviePlayer`] whose movies
+/// last 30 advances.
+fn lit_with_about_filmed(movie: Option<&str>) -> (Harness, Rc<MockMoviePlayer>) {
+    let about = {
+        let mut bytes = b"About.".to_vec();
+        bytes.push(0);
+        bytes.extend([0xFF; 2]);
+        let mut film = [0; 34];
+        if let Some(file) = movie {
+            film[..file.len()].copy_from_slice(file.as_bytes());
+        }
+        bytes.extend(film);
+        bytes
+    };
+    // The text box's frame pictures, any: they are stretched.
+    let fork = (8524..=8526).fold(
+        data_fork().resource(Desc::TYPE, 32767, None, &about),
+        |fork, id| fork.resource(PICT, id, None, &button_picture(13)),
+    );
+    let data = load(fork);
+    let reel = MockMoviePlayer::playing((160, 120), 30);
+    let screen = start_screen(Rc::clone(&data))
+        .with_dialogs(Rc::new(DescDialogOnly), Rc::new(MonoMetrics))
+        .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+    let mut harness = Harness::flying_in(data, screen);
+    harness.out_towards_beta();
+    harness.press(Key::Char('j'));
+    harness.settle_until("the white", |game| game.flight().screen_faded());
+    (harness, reel)
+}
+
+/// The white's alpha over flight, if the jump's effect shows one.
+fn white(harness: &Harness) -> Option<u8> {
+    harness
+        .flight()
+        .jump_effect()
+        .map(nova_view::flight::JumpEffect::fade_alpha)
+}
+
+#[test]
+fn about_under_the_warps_white_fades_in_from_black_and_the_white_is_lit_again_after_it() {
+    let mut harness = lit_with_about();
+    harness.send(WindowEvent::Menu(nova_view::MenuCommand::About));
+    assert_eq!(harness.showing(), Showing::About);
+    assert!(
+        !harness.flight().screen_faded(),
+        "_FadeScreenIn @0x5b038 jumps the display to black and fades it in"
+    );
+    assert_eq!(white(&harness), Some(0), "the white is gone");
+    harness.press(Key::Enter);
+    assert_eq!(
+        harness.showing(),
+        Showing::About,
+        "held through its fade-in"
+    );
+    for _ in 0..61 {
+        harness.frame();
+    }
+    assert_eq!(harness.showing(), Showing::Flight, "the Return reached it");
+    let relit = white(&harness).expect("still warping");
+    assert!(
+        relit < 128,
+        "the white fades in again over 1.5 s on the next pass: {relit}"
+    );
+    assert!(harness.flight().screen_faded());
+}
+
+#[test]
+fn abouts_plain_movie_plays_under_the_white_which_runs_on_over_it() {
+    use nova_view::Screen;
+    let (mut harness, reel) = lit_with_about_filmed(Some("about.mov"));
+    harness.send(WindowEvent::Menu(nova_view::MenuCommand::About));
+    assert_eq!(reel.calls().first(), Some(&Call::Start("about.mov".into())));
+    assert!(
+        harness.flight().screen_faded(),
+        "a plain movie fades nothing (@0x55a6e is the cinematic's)"
+    );
+    let before = white(&harness).expect("lit");
+    for _ in 0..3 {
+        harness.frame();
+    }
+    let after = white(&harness).expect("lit");
+    assert!(
+        after > before || after == u8::MAX,
+        "the white runs on under it, asynchronous: {before} then {after}"
+    );
+    let mut list = nova_view::DrawList::new();
+    harness.app.screen().draw(&mut list);
+    assert!(
+        matches!(
+            list.iter().last(),
+            Some(nova_view::DrawCommand::Line { color, .. })
+                if (color.r, color.g, color.b) == (255, 255, 255)
+        ),
+        "the white over the movie"
+    );
+}
+
+#[test]
+fn with_no_text_up_the_white_runs_at_flights_own_pace_and_is_drawn_once() {
+    use nova_view::Screen;
+    let mut harness = lit_with_about();
+    let start = white(&harness).expect("lit");
+    for _ in 0..45 {
+        harness.frame();
+    }
+    let half = white(&harness).expect("lit");
+    assert!(
+        half > start && half < 200,
+        "half way through its 1.5 s, not further: {start} then {half}"
+    );
+    let mut list = nova_view::DrawList::new();
+    harness.app.screen().draw(&mut list);
+    let whites = list
+        .iter()
+        .filter(|command| {
+            matches!(command, nova_view::DrawCommand::Line { color, .. }
+                if (color.r, color.g, color.b, color.a) == (255, 255, 255, half))
+        })
+        .count();
+    assert_eq!(whites, 1, "flight's own, not again over it");
+}

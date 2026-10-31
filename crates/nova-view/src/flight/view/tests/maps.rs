@@ -1122,6 +1122,29 @@ fn minus_held_alone_does_not_hold_the_zoom_in_back() {
 }
 
 #[test]
+fn tab_held_holds_the_zoom_back() {
+    // Its `_QuickKeyCheck` (@0x69df6) sets `_quickKeyCheckResult`, which
+    // the zoom reads (@0x70f4e).
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    floating_key(&mut view, TARGET_KEY, true);
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+}
+
+#[test]
+fn x_and_k_held_alone_do_not_hold_the_zoom_back() {
+    // Both are polled only with Command down (@0x6f2a5), as `-` is.
+    for k in [EJECT_KEY, JETTISON_KEY] {
+        let mut view = floating_near(in_sol());
+        floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+        floating_key(&mut view, k, true);
+        floating_tap(&mut view, ZOOM_OUT_KEY);
+        assert_eq!(near_dot(&view), near_at(4.0 / 3.0), "{k:?}");
+    }
+}
+
+#[test]
 fn equals_and_keypad_plus_zoom_in_a_step() {
     for k in [ZOOM_IN_KEY, ZOOM_IN_KEYPAD_KEY] {
         let mut view = floating_near(in_sol());

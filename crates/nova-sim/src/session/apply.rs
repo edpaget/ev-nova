@@ -108,8 +108,8 @@ impl Session {
     ///   window's width, the double-time key and the sound's quiet, each
     ///   [`Answer::Done`].
     /// - The asks ([`FlightCommand::is_ask`]) are answered as the `asks`
-    ///   module says: the hover and a description's load, neither
-    ///   changing anything a frame shows.
+    ///   module says: the hover, a description's load and the port's own
+    ///   description's, none changing anything a frame shows.
     /// - The rest are never refused, and answer [`Answer::Done`]:
     ///   [`FlightCommand::SelectWeapon`] ([`Session::press_weapon_select`],
     ///   which the next pass takes; the view asks the gate first),
@@ -260,9 +260,9 @@ impl Session {
             | FlightCommand::SetDoubleTimeKey(_)
             | FlightCommand::SetSoundQuiet(_)
             | FlightCommand::SetSpriteLoad(_) => self.apply_setting(command),
-            FlightCommand::Hover { .. } | FlightCommand::LoadDescription { .. } => {
-                self.apply_ask(command, collab)
-            }
+            FlightCommand::Hover { .. }
+            | FlightCommand::LoadDescription { .. }
+            | FlightCommand::LoadPortDescription => self.apply_ask(command, collab),
         }
     }
 }

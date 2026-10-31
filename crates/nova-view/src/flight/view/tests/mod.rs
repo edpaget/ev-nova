@@ -89,6 +89,7 @@ mod faked_hud;
 mod faked_keys;
 mod faked_landing;
 mod faked_missions;
+mod faked_movies;
 mod faked_open;
 mod faked_player;
 mod faked_screen;
@@ -101,6 +102,7 @@ mod frame_rate;
 mod frames;
 mod hyperspace;
 mod kept_frame;
+mod key_fades;
 mod landing;
 mod layers;
 mod map_borders;
@@ -117,6 +119,7 @@ mod ship_drawing;
 mod shots;
 mod stars;
 mod stellar_looks;
+mod stellar_passes;
 mod stellars;
 mod stepping;
 mod whole_pixels;
@@ -894,6 +897,16 @@ fn floating_alpha(view: &FlightView<FakeCatalog, impl FlightSim>) -> Option<u8> 
             DrawCommand::Line { color, .. } => color.a,
             _ => unreachable!(),
         })
+}
+
+/// `dësc` `id` as the rescue loaded it ([`FlightEvent::RescueDesc`]).
+///
+/// [`FlightEvent::RescueDesc`]: nova_sim::flight_frame::FlightEvent::RescueDesc
+fn rescued(id: i16) -> nova_sim::flight_frame::LoadedDesc {
+    nova_sim::flight_frame::LoadedDesc {
+        id,
+        text: Some("Rescued.".to_owned()),
+    }
 }
 
 /// The world point `drawn`'s rect is centred on.

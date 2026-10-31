@@ -41,7 +41,7 @@ impl Session {
         *nav_brackets = self.chart.nav_brackets();
         *target_brackets = self.target_brackets();
         *red_alert = self.red_alert.icon();
-        *escort_rows = self.space.escort_rows(pilot, statics);
+        *escort_rows = self.space.escort_rows();
         *escorts_flying = self.space.escorts_flying();
     }
 
@@ -242,10 +242,7 @@ mod tests {
                 order: None,
             })
         );
-        assert_eq!(
-            rows,
-            session.space.escort_rows(&session.pilot, &session.statics)
-        );
+        assert_eq!(rows, session.space.escort_rows());
     }
 
     #[test]

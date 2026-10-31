@@ -45,8 +45,11 @@
 //! 16-pixel test reads the same: a difference inside a frame that crosses
 //! no boundary the player can see.
 //!
-//! Left out, with no counterpart in the engine: `_keyPressedThisFrame`
-//! (*0x3b5550, set @0x6fe0d, @0x701d5) and the status redraw flag
+//! `_keyPressedThisFrame` (*0x3b5550, set @0x6fe0d, @0x701d5) is read by
+//! the frame's [`key_fade`](crate::key_fade), from
+//! [`SelfDestruct::chord_fades`](crate::self_destruct::SelfDestruct::chord_fades).
+//!
+//! Left out, with no counterpart in the engine: the status redraw flag
 //! (*0x3b506c +3, @0x70278).
 
 use super::{PlayerShip, Session};

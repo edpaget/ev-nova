@@ -155,6 +155,60 @@ fn a_refused_hail_opens_nothing_and_says_nothing() {
     assert!(view.held.contains(&Key::Up), "the keys held");
 }
 
+// Y's press through the input.
+
+#[test]
+fn y_answered_with_a_dialog_leaves_no_key_held_as_the_dialog_takes_its_release() {
+    for answer in [
+        Hailed::Comm(hail_view("Channel open.")),
+        Hailed::Stellar(planet_view(128)),
+        Hailed::Escort(escort_view(None)),
+        Hailed::Offer(VenueOffer::Prompt(prompt("Help?"))),
+    ] {
+        let mut view = sol();
+        view.sim.queue_answer(Answer::Hailed(answer.clone()));
+        view.input(&key(HAIL_KEY, true));
+        assert!(!view.holds_keys(), "{answer:?}");
+    }
+}
+
+#[test]
+fn y_answered_with_a_dialog_lets_go_of_the_mouse_button_too() {
+    for answer in [
+        Hailed::Comm(hail_view("Channel open.")),
+        Hailed::Stellar(planet_view(128)),
+        Hailed::Escort(escort_view(None)),
+        Hailed::Offer(VenueOffer::Prompt(prompt("Help?"))),
+    ] {
+        let mut view = super::faked_screen::in_flight();
+        super::key_fades::button_down(&mut view);
+        view.sim.queue_answer(Answer::Hailed(answer));
+        view.input(&key(HAIL_KEY, true));
+        view.take_hail();
+        view.take_escort_dialog();
+        view.take_planet_comm();
+        view.take_offer();
+        view.hang_up();
+        super::key_fades::fades_with_no_release(&mut view);
+    }
+}
+
+#[test]
+fn y_refused_stays_held_until_its_release() {
+    let mut view = sol();
+    view.input(&key(HAIL_KEY, true));
+    assert!(view.holds_keys(), "no answer but a refusal");
+    view.input(&key(HAIL_KEY, false));
+    assert!(!view.holds_keys(), "its release");
+
+    let mut view = sol();
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Hail));
+    view.input(&key(HAIL_KEY, true));
+    assert!(view.holds_keys(), "refused by the gate");
+    view.input(&key(HAIL_KEY, false));
+    assert!(!view.holds_keys(), "its release");
+}
+
 // The planet comm dialog.
 
 #[test]

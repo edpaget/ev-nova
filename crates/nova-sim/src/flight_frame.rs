@@ -20,8 +20,9 @@ use std::collections::{BTreeMap, BTreeSet};
 mod port_screens;
 mod screen;
 
+pub use crate::key_fade::{FadeKey, KeyFades};
 pub use port_screens::{BarNews, PortShops};
-pub use screen::{FloatingMap, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
+pub use screen::{FloatingMap, GateEntry, MapOpen, MapScreen, MarksFrom, ScreenAnswer, ScreenAsk};
 
 use crate::asteroid::Asteroid;
 use crate::bay::FighterNote;
@@ -45,6 +46,7 @@ use crate::escort_dialog::{EscortButton, EscortDialogView};
 use crate::flight::{Controls, ShipState};
 use crate::gamble::{Bet, RaceRun};
 use crate::gate::{GateKind, GateRefusal};
+use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::grant::Granted;
 use crate::hail::{CommNote, Haggle, HailRefusal, HailView};
@@ -150,6 +152,10 @@ pub struct FlightFrame {
     /// before it acts on a key, mid-input, reading the frame the last
     /// command or step left.
     pub gates: Gates,
+    /// What fades the flight cursor now ([`KeyFades`]). The view reads it
+    /// just before a frame's steps, so a pass's fade reads what that pass
+    /// read at its head.
+    pub key_fades: KeyFades,
     /// What the course map's drawing is taken from ([`MapKey`]).
     pub map_key: MapKey,
     /// Each ship in the system as the world draws it: the player's first,
@@ -246,8 +252,8 @@ pub struct FlightFrame {
 impl Default for FlightFrame {
     /// A session that failed to start: nav off, no course, in flight, no
     /// jump, the player flying, no hold and no leave due, no Recharge and
-    /// no intro seen, every gate taken
-    /// ([`Gates::EVERY`]), and no death `dësc`s; the player alone, drawn in
+    /// no intro seen, every gate taken ([`Gates::EVERY`]) and every key
+    /// fading ([`KeyFades::EVERY`]), and no death `dësc`s; the player alone, drawn in
     /// full in the ships' layer at the default place, with no NPCs, shots,
     /// beams, boxes, asteroids or stellars; no murk and no background; no
     /// ship's name, an empty date and no system explored.
@@ -269,6 +275,7 @@ impl Default for FlightFrame {
             jump_readiness: JumpReadiness::Blocked,
             texts_queued: 0,
             gates: Gates::EVERY,
+            key_fades: KeyFades::EVERY,
             map_key: MapKey::default(),
             ships: vec![FrameShip::default()],
             drawn: vec![(ShipRef::Player, ShipLayer::Ships)],
@@ -1040,6 +1047,18 @@ pub enum FlightCommand {
         /// The movie it names.
         movie: Option<DescMovie>,
     },
+    /// An ask ([`FlightCommand::is_ask`]): the port's own `dësc` as the
+    /// spaceport shows it, landed
+    /// ([`Session::port_description`](crate::Session::port_description)),
+    /// answered [`Answer::Description`], empty for a missing one. The
+    /// session loads it itself, read from the catalog the view shared, the
+    /// first time this or the landing's settle comes (`_DoPortDialog`
+    /// @0x5f96b, before the land checks @0x5fbeb), and serves the text it
+    /// loaded after that without loading it again. Refused in flight or
+    /// with no catalog shared. Like a description's load, it can write the
+    /// run's rank governments and its last movie and draw on the chance,
+    /// none of which a frame shows.
+    LoadPortDescription,
 }
 
 impl FlightCommand {
@@ -1168,23 +1187,28 @@ impl FlightCommand {
             | Self::SetSoundQuiet(_)
             | Self::SetSpriteLoad(_)
             | Self::Hover { .. }
-            | Self::LoadDescription { .. } => None,
+            | Self::LoadDescription { .. }
+            | Self::LoadPortDescription => None,
         }
     }
 
-    /// Whether the command only asks: [`FlightCommand::Hover`] and
-    /// [`FlightCommand::LoadDescription`]. An ask changes nothing a frame
+    /// Whether the command only asks: [`FlightCommand::Hover`],
+    /// [`FlightCommand::LoadDescription`] and
+    /// [`FlightCommand::LoadPortDescription`]. An ask changes nothing a frame
     /// shows (`Session::fill_frame` fills the same frame after it, pinned
     /// in `session/apply/asks.rs`), so the view doesn't refill the frame
     /// it keeps after one (`nova_view`'s `FlightView::send`). The hover is
     /// asked after each tick's steps with the boxes the view draws, a
-    /// per-frame question, and a description's load writes the run's
-    /// rank governments and its last movie and draws on the chance, so
-    /// neither is a screen's ask ([`ScreenAsk`]); a question a screen asks
+    /// per-frame question, and a description's load (the port's own too)
+    /// writes the run's rank governments and its last movie and draws on
+    /// the chance, so none is a screen's ask ([`ScreenAsk`]); a question a screen asks
     /// as it opens is.
     #[must_use]
     pub fn is_ask(&self) -> bool {
-        matches!(self, Self::Hover { .. } | Self::LoadDescription { .. })
+        matches!(
+            self,
+            Self::Hover { .. } | Self::LoadDescription { .. } | Self::LoadPortDescription
+        )
     }
 }
 
@@ -1379,8 +1403,9 @@ pub enum Answer {
     /// What a [`FlightCommand::Hover`] found under the pointer, `None` for
     /// nothing.
     Hovered(Option<Hover>),
-    /// The text a [`FlightCommand::LoadDescription`] loaded, empty for a
-    /// missing `dësc`.
+    /// The text a [`FlightCommand::LoadDescription`] or a
+    /// [`FlightCommand::LoadPortDescription`] loaded, empty for a missing
+    /// `dësc`.
     Description(String),
 }
 
@@ -1390,6 +1415,18 @@ impl Answer {
     pub fn is_refused(&self) -> bool {
         matches!(self, Self::Refused)
     }
+}
+
+/// A `dësc` the session loaded itself at the original's point, as
+/// `_LoadDescription` loads one: what a screen shows of it without loading
+/// it again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedDesc {
+    /// The `dësc`'s ID.
+    pub id: i16,
+    /// Its text, taken in for the pilot as it was loaded; `None` when it
+    /// is missing or can't be read.
+    pub text: Option<String>,
 }
 
 /// Something the flight raised for the view to act on once: one of the
@@ -1439,10 +1476,14 @@ pub enum FlightEvent {
     InterfaceLoad(InterfaceLoad),
     /// The nav mode as the last take-off began, before its deselect.
     TakeoffNav(NavMode),
-    /// The escape pod's rescue's `dësc`.
-    RescueDesc(i16),
+    /// The escape pod's rescue's `dësc`, as the rescue loaded it first
+    /// (`_HandlePlayer` @0x68e90), before the missions ended.
+    RescueDesc(LoadedDesc),
     /// The message the last take-off left on, a held `Q`'s.
     LeaveMessage(String),
+    /// A stellar pass run outside a play frame, for the view to replay on
+    /// its scene before the next frame is drawn.
+    StellarPass(StellarPass),
 }
 
 /// What a frame's fixed steps are given

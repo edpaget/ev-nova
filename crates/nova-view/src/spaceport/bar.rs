@@ -281,6 +281,8 @@ pub struct BarScreen {
     race: Option<RaceScreen>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
+    /// The movies its offers and its hire screen's ship loop play.
+    movies: Movies,
     /// What the bar has asked for since each was last taken.
     asks: Asks,
     closed: bool,
@@ -372,6 +374,7 @@ impl BarScreen {
             ),
             race: None,
             offering: None,
+            movies: Movies::none(),
             asks: Asks::default(),
             closed: false,
             sounds: Vec::new(),
@@ -597,11 +600,31 @@ impl BarScreen {
         }
     }
 
-    /// Its offers play their movies as `movies` says.
+    /// Its offers play their movies as `movies` says, and so does its
+    /// hire screen's ship loop in item 8, through their looping player
+    /// ([`HireScreen::set_movies`]).
     pub fn set_offer_movies(&mut self, movies: Movies) {
-        if let Some(offering) = &mut self.offering {
-            offering.set_movies(movies);
+        if let Some(hire) = &mut self.hire {
+            hire.set_movies(movies.clone());
         }
+        if let Some(offering) = &mut self.offering {
+            offering.set_movies(movies.clone());
+        }
+        self.movies = movies;
+    }
+
+    /// Stops its hire screen's looping ship movie, if it is open, as the
+    /// hire dialog's close does (@0x5f73f-0x5f750).
+    pub(crate) fn end_movie(&mut self) {
+        if let Some(hire) = &mut self.hire {
+            hire.end_movie();
+        }
+    }
+
+    /// Drops the hire screen, its ship movie stopped: whether it was open.
+    fn close_hire(&mut self) -> bool {
+        self.end_movie();
+        self.hire.take().is_some()
     }
 
     /// Asks for the next offer after `gap`.
@@ -623,10 +646,11 @@ impl BarScreen {
 
     /// Ticks only its offers' timer, as covered: something is open over
     /// the bar. The hire screen's time runs on too, the gap between two
-    /// presses on its grid measured by the clock.
+    /// presses on its grid measured by the clock, and its ship movie's
+    /// time base, unserviced.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
         if let Some(hire) = &mut self.hire {
-            hire.tick(dt);
+            hire.tick_covered(dt);
         }
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
@@ -749,16 +773,16 @@ impl BarScreen {
         if let Some(offering) = &mut self.offering {
             offering.restart();
         }
-        self.hire = Some(
-            HireScreen::new(
-                layout,
-                self.hiring.info.clone(),
-                list,
-                Rc::clone(&self.hiring.catalog),
-                self.style,
-            )
-            .with_focus_ring(self.focus_ring),
-        );
+        let mut hire = HireScreen::new(
+            layout,
+            self.hiring.info.clone(),
+            list,
+            Rc::clone(&self.hiring.catalog),
+            self.style,
+        )
+        .with_focus_ring(self.focus_ring);
+        hire.set_movies(self.movies.clone());
+        self.hire = Some(hire);
     }
 
     /// The ship the hire screen asked for since it was last taken, once.
@@ -778,7 +802,7 @@ impl BarScreen {
     /// After a hire: the hire screen closes back to the bar, whose Hire
     /// Escort is greyed unless `list`'s fleet still has room.
     pub fn set_hire(&mut self, list: &HireList) {
-        self.hire_closed |= self.hire.take().is_some();
+        self.hire_closed |= self.close_hire();
         self.room = list.room;
         if let Ok(laid) = &mut self.laid {
             laid.dialog.set_greyed(HIRE_ITEM, !self.room);
@@ -895,7 +919,7 @@ impl Screen for BarScreen {
             hire.input(input);
             self.sounds.extend(hire.take_sounds());
             if hire.closed() {
-                self.hire = None;
+                self.close_hire();
                 self.hire_closed = true;
             }
             return ScreenAction::None;
@@ -1038,7 +1062,7 @@ mod tests {
     use crate::geometry::{Bounds, Point};
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog};
-    use crate::spaceport::shipyard::ShipBaseImages;
+    use crate::spaceport::shipyard::{ShipBaseImages, ShipMovieFiles};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::ScrollText;
     use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
@@ -1132,6 +1156,13 @@ mod tests {
     impl ShipBaseImages for FakeArt {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
             Vec::new()
+        }
+    }
+
+    /// Ship 128 names "Ship.mov", which plays only once movies are given.
+    impl ShipMovieFiles for FakeArt {
+        fn ship_movie_files(&self) -> Vec<(ShipId, String)> {
+            vec![(ShipId(128), "Ship.mov".to_owned())]
         }
     }
 
@@ -2766,5 +2797,92 @@ mod tests {
                 assert_eq!(screen.take_hire(), None);
             }
         }
+    }
+
+    // The hire screen's looping ship movie (`ship_movie`).
+
+    use crate::movie::MoviePlayer;
+    use crate::movie::fixture::{Call, MockMoviePlayer};
+
+    /// [`laid_hire_bar`], given movies played on a main player and loops
+    /// on `reel`, its hire screen open on [`list`]`(1)` and ship 128,
+    /// naming "Ship.mov", selected.
+    fn hiring_with_loop(reel: &Rc<MockMoviePlayer>) -> BarScreen {
+        let main = MockMoviePlayer::playing((640, 480), 5);
+        let mut screen = laid_hire_bar();
+        screen.set_offer_movies(
+            Movies::new(main as Rc<dyn MoviePlayer>, true)
+                .with_looping_player(Rc::clone(reel) as Rc<dyn MoviePlayer>),
+        );
+        screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
+        assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
+        screen
+    }
+
+    #[test]
+    fn the_bar_gives_its_movies_to_the_hire_screen_it_opens_and_a_hire_stops_its_loop() {
+        let reel = MockMoviePlayer::playing((32, 32), 100);
+        let mut screen = hiring_with_loop(&reel);
+        screen.input(&key(Key::Char('h'), false));
+        assert_eq!(screen.take_hire(), Some(ShipId(128)));
+        screen.set_hire(&list(1));
+        assert!(screen.hire_screen().is_none());
+        assert!(screen.take_hire_closed());
+        assert_eq!(
+            reel.calls(),
+            [Call::Start("Ship.mov".to_owned()), Call::Stop],
+            "the hire closes the dialog (@0x5f73f-0x5f750)"
+        );
+    }
+
+    #[test]
+    fn done_on_the_hire_screen_stops_its_loop_once() {
+        let reel = MockMoviePlayer::playing((32, 32), 100);
+        let mut screen = hiring_with_loop(&reel);
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.hire_screen().is_none());
+        assert_eq!(
+            reel.calls(),
+            [Call::Start("Ship.mov".to_owned()), Call::Stop]
+        );
+    }
+
+    #[test]
+    fn the_bars_end_movie_stops_its_hire_screens_loop() {
+        let reel = MockMoviePlayer::playing((32, 32), 100);
+        let mut screen = hiring_with_loop(&reel);
+        screen.end_movie();
+        assert_eq!(
+            reel.calls(),
+            [Call::Start("Ship.mov".to_owned()), Call::Stop]
+        );
+        let mut bare = laid_hire_bar();
+        bare.end_movie();
+        assert!(bare.hire_screen().is_none(), "nothing to stop");
+    }
+
+    #[test]
+    fn a_hire_screen_covered_over_the_bar_holds_its_loop_and_owes_the_time() {
+        let reel = MockMoviePlayer::playing((32, 32), 100);
+        let mut screen = hiring_with_loop(&reel);
+        screen.tick_covered(Duration::from_millis(100));
+        assert_eq!(reel.calls().len(), 1, "not advanced");
+        screen.tick(Duration::from_millis(16));
+        assert_eq!(reel.advanced_by(), [Duration::from_millis(116)]);
+    }
+
+    #[test]
+    fn movies_given_with_the_hire_screen_open_reach_it() {
+        let reel = MockMoviePlayer::playing((32, 32), 100);
+        let main = MockMoviePlayer::playing((640, 480), 5);
+        let mut screen = laid_hire_bar();
+        screen.open_hire(list(1));
+        screen.input(&key(Key::Right, false));
+        screen.set_offer_movies(
+            Movies::new(main as Rc<dyn MoviePlayer>, true)
+                .with_looping_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>),
+        );
+        assert_eq!(reel.calls(), [Call::Start("Ship.mov".to_owned())]);
     }
 }

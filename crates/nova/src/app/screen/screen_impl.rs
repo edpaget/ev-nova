@@ -141,6 +141,7 @@ impl Screen for AppScreen {
                 }
             }
         }
+        self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
             overlay.tick(dt);
             // The spaceport isn't ticked under it, so says so: the
@@ -156,6 +157,7 @@ impl Screen for AppScreen {
         }
         self.settle_offer();
         self.drop_closed_missions();
+        self.drop_closed_about();
         self.advance_appear(dt);
         self.advance_entry(dt);
         self.advance_fade_in(dt);
@@ -174,10 +176,15 @@ impl Screen for AppScreen {
     /// cover its left edge (`_DoPortDialog` @0x5fbca). The bar's course
     /// map is drawn over them both, as the original's map dialog opens
     /// over the port window (`_DoBarDialog` @0x492a3), and so is a mission
-    /// dialog's; over flight, a mission dialog's map is drawn over the
-    /// offer and the mission dialogs it opened from. Over a widened
-    /// flight every dialog is drawn in its 1024 x 768 frame centred in the
-    /// view ([`AppScreen::overlay_offset`]); flight places its own map.
+    /// dialog's. Over flight, a mission dialog's map is drawn in three
+    /// layers: flight's paused scene and bar, the offer and the mission
+    /// dialogs it opened from, then the map and flight's fades. `_gWind`
+    /// keeps the world behind the dialogs and the map's window opens in
+    /// front of them (`_DoSystemMap` @0x125b7-0x125c9), and no world
+    /// command follows a dialog, so every upscaler shows this order. Over
+    /// a widened flight every dialog is drawn in its 1024 x 768 frame
+    /// centred in the view ([`AppScreen::overlay_offset`]); flight places
+    /// its own map.
     fn draw(&self, list: &mut DrawList) {
         if self.side == Side::Spaceport {
             self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
@@ -185,10 +192,13 @@ impl Screen for AppScreen {
                 self.spaceport.as_ref().expect(LANDED).draw(list);
             }
         }
-        // A mission dialog's map over flight is drawn over the dialogs it
-        // opened from, after them.
+        // A mission dialog's map over flight goes over the dialogs it
+        // opened from, with flight's paused scene under them.
         let map_over = self.flight_dialog_map_open();
-        if !map_over {
+        if map_over {
+            let flight = self.flight.as_ref().expect(ENTERED);
+            flight.draw_under_dialog_map(list);
+        } else {
             self.shown().draw(list);
         }
         let hint = match (self.side, self.dialogs.is_some()) {
@@ -202,7 +212,8 @@ impl Screen for AppScreen {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
         // The dialogs, in their 1024 x 768 frame, centred over a widened
-        // flight.
+        // flight; a cinematic movie's cover and a text's fade-in reach
+        // from there over the whole view (`movie_view`).
         let offset = self.overlay_offset();
         let mut dialogs = DrawList::new();
         let under_map = [
@@ -239,7 +250,7 @@ impl Screen for AppScreen {
         }
         list.extend_translated(&dialogs, offset);
         if map_over {
-            self.shown().draw(list);
+            self.flight.as_ref().expect(ENTERED).draw_dialog_map(list);
         }
         let mut dialogs = DrawList::new();
         if let Some(about) = &self.about {
@@ -249,6 +260,7 @@ impl Screen for AppScreen {
             dialog.draw(&mut dialogs);
         }
         list.extend_translated(&dialogs, offset);
+        self.draw_white_over_texts(list);
         if let Some(fade) = &self.fade_in {
             fade.draw(list, CLASSIC_VIEW);
         }
@@ -497,10 +509,14 @@ impl Screen for AppScreen {
         if let Some(hides) = self.entry_hides_pointer() {
             return hides;
         }
+        if let Some(about) = &self.about {
+            return about.hides_pointer();
+        }
         match self.showing() {
-            Showing::Movie => match &self.missions {
-                Some(missions) => missions.hides_pointer(),
-                None => self.offer.as_ref().is_some_and(Screen::hides_pointer),
+            Showing::Movie => match (&self.missions, &self.offer) {
+                (Some(missions), _) => missions.hides_pointer(),
+                (None, Some(offer)) => offer.hides_pointer(),
+                (None, None) => self.shown().hides_pointer(),
             },
             Showing::Flight | Showing::Spaceport => self.shown().hides_pointer(),
             _ => false,
@@ -543,12 +559,13 @@ impl Screen for AppScreen {
     }
 
     /// Keeps `size` for every flight, and tells those built, shown or
-    /// held.
+    /// held, and the movies, if flight shows.
     fn set_widened_size(&mut self, size: (f32, f32)) {
         self.widened = size;
         for flight in self.flights_mut() {
             flight.set_view_size(size);
         }
+        self.movies.set_view(self.movie_view());
     }
 
     /// Quit and Preferences… as their Command chords, and About as I's
@@ -601,15 +618,26 @@ impl AppScreen {
     }
 
     /// How far right the dialogs over the side shown are drawn, their
-    /// pointer moved back by as much: their 1024 x 768 frame centred over
-    /// a widened flight, and nothing elsewhere.
+    /// pointer moved back by as much: their 1024 x 768 frame centred in
+    /// the view the side fills ([`AppScreen::movie_view`]), so over a
+    /// widened flight, and nothing elsewhere. Derived from that view, so
+    /// the dialogs' frame and a cinematic movie's cover, which the stage
+    /// moves left by the same offset, always agree.
     pub(super) fn overlay_offset(&self) -> Point {
-        let x = if self.view_shape() == ViewShape::Widened {
-            classic_offset(self.widened.0)
+        Point::new(classic_offset(self.movie_view().0), 0.0)
+    }
+
+    /// The size of the view the side shown fills, which a cinematic
+    /// movie and a text's fade-in cover ([`Movies::set_view`](nova_view::movie::Movies::set_view)): the
+    /// widened view over flight, Nova's 1024 x 768 elsewhere. The router
+    /// writes it to the shared movies as the side or the size changes,
+    /// and no draw writes it.
+    pub(super) fn movie_view(&self) -> (f32, f32) {
+        if self.view_shape() == ViewShape::Widened {
+            self.widened
         } else {
-            0.0
-        };
-        Point::new(x, 0.0)
+            CLASSIC_VIEW
+        }
     }
 }
 

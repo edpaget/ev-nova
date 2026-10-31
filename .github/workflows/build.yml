@@ -95,13 +95,17 @@ jobs:
       # rustup's toolchain and the C build scripts, git and curl for
       # checkout and mise, ALSA's headers (nova-audio plays through cpal,
       # which builds against ALSA on Linux), objdump (binutils) for the
-      # tarball's glibc check.
+      # tarball's glibc check, libclang for bindgen over the FFmpeg
+      # nova-movie builds (curl and xz-utils fetch and unpack its source).
       - if: runner.os == 'Linux'
         run: |
           apt-get update
           # libasound2-dev keeps its name on 24.04; only the runtime package became libasound2t64.
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils
+            build-essential pkg-config libasound2-dev binutils git curl ca-certificates xz-utils libclang-dev
+      # As in ci.yml: FFmpeg's configure and make run in MSYS2.
+      - if: runner.os == 'Windows'
+        run: C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils
       # The commit to build: the pushed one for the nightly, the nightly's
       # own commit for a promotion.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

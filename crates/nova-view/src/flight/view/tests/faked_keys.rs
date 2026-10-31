@@ -165,6 +165,42 @@ fn each_key_asks_the_session_for_its_command() {
 }
 
 #[test]
+fn every_key_that_is_a_command_is_published() {
+    let mut view = fleet(&[EscortClass::Fighter]);
+    tap(&mut view, MENU_KEY);
+    view.input(&key(Key::Command, true));
+    let named = [
+        Key::Left,
+        Key::Right,
+        Key::Up,
+        Key::Down,
+        Key::PageUp,
+        Key::PageDown,
+        Key::Home,
+        Key::End,
+        Key::Enter,
+        Key::Escape,
+        Key::Space,
+        Key::Tab,
+        Key::Backspace,
+        Key::Alt,
+        Key::Control,
+        Key::Shift,
+        Key::Command,
+        Key::CapsLock,
+    ];
+    let keys = (' '..='~')
+        .map(Key::Char)
+        .chain((1..=24).map(Key::Function))
+        .chain(named);
+    for k in keys {
+        if view.command_of(k).is_some() {
+            assert!(every_key().any(|published| published == k), "{k:?}");
+        }
+    }
+}
+
+#[test]
 fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
     let mut view = fleet(&[EscortClass::Warship]);
     tap(&mut view, MENU_KEY);

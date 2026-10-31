@@ -652,6 +652,13 @@ impl Shown {
     /// over it, as `TETextBox` then `InvertRect` show it (@0x57f2b-0x57f39,
     /// @0x597ac-0x597ba).
     pub fn draw(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
+        self.draw_picture(list, area, metrics);
+        self.draw_description(list);
+    }
+
+    /// The picture stretched into `area`, or, with none, "No Picture" and
+    /// "Available" centred across it ([`Shown::draw`]'s first half).
+    pub fn draw_picture(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
         if let Some(id) = self.picture {
             list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
         } else {
@@ -663,6 +670,11 @@ impl Shown {
                 draw_centred_text(list, metrics, area, baseline, words);
             }
         }
+    }
+
+    /// The description's box filled black and the description in white
+    /// over it ([`Shown::draw`]'s second half).
+    pub fn draw_description(&self, list: &mut DrawList) {
         fill_rect(list, self.description.rect(), Color::BLACK);
         self.description.draw(list);
     }

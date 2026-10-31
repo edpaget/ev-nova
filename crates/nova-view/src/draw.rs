@@ -7,6 +7,7 @@ use crate::colorize::Colorize;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
+use crate::movie_frame::MovieFrame;
 
 /// How a sprite combines with what is beneath it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -271,6 +272,20 @@ pub enum DrawCommand {
         /// Its colour.
         color: Color,
     },
+    /// A movie's frame stretched (or shrunk) to fill `area`, untinted and
+    /// with [`Blend::Normal`]: what a movie player draws
+    /// ([`MoviePlayer::draw_frame`](crate::movie::MoviePlayer::draw_frame)).
+    /// Its pixels come with it, not from the game data, and the renderer
+    /// uploads them again only when the frame's stream has a new
+    /// generation ([`MovieFrame`]). An area whose width or height is not a
+    /// positive, finite number draws nothing, as for
+    /// [`DrawCommand::StretchedPicture`].
+    MovieFrame {
+        /// The frame.
+        frame: MovieFrame,
+        /// Where it is drawn.
+        area: Bounds,
+    },
     /// A rectangle whose colour is OR-ed into what is beneath it, per 5-bit
     /// channel, keeping the destination's alpha. The arithmetic is
     /// [`Blend::Or`]'s at level 32 (`s5 = c8 >> 3`,
@@ -285,10 +300,10 @@ pub enum DrawCommand {
         color: Color,
     },
     /// `command` drawn only inside `clip`: a text run cut to it, a
-    /// sprite's or picture's quad cropped to it with its texture
-    /// coordinates, a tiled picture's or OR fill's area cut to it. A line or a dot is
-    /// drawn as it is, uncut. The floating map clips its names and arrows
-    /// to its frame so.
+    /// sprite's, picture's or movie frame's quad cropped to it with its
+    /// texture coordinates, a tiled picture's or OR fill's area cut to it. A
+    /// line or a dot is drawn as it is, uncut. The floating map clips its
+    /// names and arrows to its frame so.
     Clipped {
         /// Where it may draw.
         clip: Bounds,
@@ -314,7 +329,9 @@ impl DrawCommand {
             Self::Picture { top_left, .. }
             | Self::StretchedPicture { top_left, .. }
             | Self::BlendedPicture { top_left, .. } => *top_left = moved(*top_left),
-            Self::OrFill { area, .. } => *area = moved_bounds(*area),
+            Self::OrFill { area, .. } | Self::MovieFrame { area, .. } => {
+                *area = moved_bounds(*area);
+            }
             Self::TiledPicture { area, origin, .. } => {
                 *area = moved_bounds(*area);
                 *origin = moved(*origin);
@@ -658,6 +675,11 @@ impl DrawList {
         })
     }
 
+    /// Appends a [`DrawCommand::MovieFrame`]: `frame` stretched into `area`.
+    pub fn movie_frame(&mut self, frame: MovieFrame, area: Bounds) -> &mut Self {
+        self.push(DrawCommand::MovieFrame { frame, area })
+    }
+
     /// Appends a [`DrawCommand::OrFill`].
     pub fn or_fill(&mut self, area: Bounds, color: Color) -> &mut Self {
         self.push(DrawCommand::OrFill { area, color })
@@ -875,6 +897,7 @@ impl<'a> IntoIterator for &'a DrawList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movie_frame::MovieScreen;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -1407,7 +1430,74 @@ mod tests {
                     origin,
                 }),
             },
+            DrawCommand::MovieFrame {
+                frame: FRAME.with(Clone::clone),
+                area: area(24.0),
+            },
         ]
+    }
+
+    thread_local! {
+        /// One movie frame, the same for every call on a thread.
+        static FRAME: MovieFrame = movie_frame();
+    }
+
+    /// A 1x1 movie frame.
+    fn movie_frame() -> MovieFrame {
+        let mut screen = MovieScreen::new();
+        assert!(screen.show(1, 1, vec![1, 2, 3, 255]));
+        screen.frame().expect("shown")
+    }
+
+    #[test]
+    fn a_movie_frame_is_pushed_in_the_overlay_with_its_area() {
+        let frame = movie_frame();
+        let area = Bounds::at(at(10.0, 20.0), 160.0, 120.0);
+        let mut list = DrawList::new();
+        list.movie_frame(frame.clone(), area);
+        assert_eq!(
+            list.layered().collect::<Vec<_>>(),
+            [(DrawLayer::Overlay, &DrawCommand::MovieFrame { frame, area })]
+        );
+    }
+
+    #[test]
+    fn translating_a_movie_frame_moves_its_area() {
+        let frame = movie_frame();
+        let command = DrawCommand::MovieFrame {
+            frame: frame.clone(),
+            area: Bounds::at(at(10.0, 20.0), 160.0, 120.0),
+        };
+        assert_eq!(
+            command.translated(at(5.0, -3.0)),
+            DrawCommand::MovieFrame {
+                frame,
+                area: Bounds::at(at(15.0, 17.0), 160.0, 120.0),
+            }
+        );
+    }
+
+    #[test]
+    fn a_clipped_movie_frame_translates_both() {
+        let frame = movie_frame();
+        let clip = Bounds::at(at(0.0, 0.0), 50.0, 50.0);
+        let command = DrawCommand::Clipped {
+            clip,
+            command: Box::new(DrawCommand::MovieFrame {
+                frame: frame.clone(),
+                area: Bounds::at(at(10.0, 20.0), 160.0, 120.0),
+            }),
+        };
+        assert_eq!(
+            command.translated(at(1.0, 2.0)),
+            DrawCommand::Clipped {
+                clip: Bounds::at(at(1.0, 2.0), 50.0, 50.0),
+                command: Box::new(DrawCommand::MovieFrame {
+                    frame,
+                    area: Bounds::at(at(11.0, 22.0), 160.0, 120.0),
+                }),
+            }
+        );
     }
 
     #[test]

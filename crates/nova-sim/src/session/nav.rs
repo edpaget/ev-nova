@@ -45,14 +45,15 @@
 //!   Con slot that has none either, which reads as no destination (a −1
 //!   = −1 match, @0xe334). Otherwise nothing changes. It makes no sound.
 //! - Hyper Select, `\` ([`Session::select_next_system`],
-//!   @0x69bb2-0x69cec): with links, [`SimSound::HyperSelected`]
-//!   (@0x69c89), and mode 3 with the next link selected, cycling from the
-//!   one selected in mode 3 and from the first in any other (@0x69c98,
-//!   @0x69ca5-0x69cce). With none, the selection let go, the mode kept,
+//!   @0x69bb2-0x69cec): with a Con slot that holds a link,
+//!   [`SimSound::HyperSelected`] (@0x69c89), and mode 3 with the next such
+//!   slot's raw system selected and the slot noted, stepping on from the
+//!   slot selected in mode 3 and from the first in any other (@0x69c98,
+//!   @0x69c9e-0x69cce). With none, the selection let go, the mode kept,
 //!   in silence (@0x69cd4). The course is kept either way, as the press
 //!   writes nothing else (@0x69c8e-0x69cd2); the
 //!   [`HyperSelectRule::OneJumpCourse`] reading plots a one-jump course
-//!   to the system selected instead.
+//!   to the system selected instead, and notes no slot.
 //! - The stellar keys 1-4, F1-F4 and F5 ([`Session::select_stellar`],
 //!   @0x69e1f-0x69f17): the beep whenever they find a stellar, even the
 //!   one selected (@0x69ebc); then, unless it is selected in mode 2
@@ -220,7 +221,7 @@
 use super::{Chart, Jump, Outbox, Session, Setup, Statics};
 use crate::catalog::{StellarId, SystemId};
 use crate::flight_frame::FloatingLinks;
-use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
+use crate::hyperspace::{HyperSelectRule, next_one_jump_destination};
 use crate::landing::nearest_stellar;
 use crate::navigation::NavMode;
 use crate::pilot::Pilot;
@@ -237,8 +238,8 @@ const SYSTEM_IDS: std::ops::RangeInclusive<i16> = 128..=2175;
 
 /// The Con slot a mode-3 selection was written from, as the original
 /// keeps it at +0x6c where ours keeps the system. A setter that knows the
-/// slot notes it ([`Session::cycle_map_selection`], [`Session::cue_course`]);
-/// it stands while the player is still in `system` and the raw selection
+/// slot notes it ([`Session::select_next_system`],
+/// [`Session::cycle_map_selection`], [`Session::cue_course`]); it stands while the player is still in `system` and the raw selection
 /// is still `selected`, and a later cycle steps on from it. Every other
 /// write of the nav forgets it ([`Chart::set_nav`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,19 +500,19 @@ impl Session {
 
     /// Presses Hyper Select (the original's `\` key): selects in mode 3
     /// the next system the session's [`HyperSelectRule`](crate::HyperSelectRule)
-    /// cycles to ([`next_hyper_destination`]), from the one selected in
-    /// mode 3 and from the start in any other, with
-    /// [`SimSound::HyperSelected`], and gives it. With no system to offer
-    /// it lets go of the selection, keeps the mode and makes no sound
-    /// (@0x69cd4), and gives `None`. `None`, and nothing changes, during a
-    /// jump (pre-jump stage too).
+    /// cycles to, with [`SimSound::HyperSelected`], and gives it, resolved
+    /// by place. With no system to offer it lets go of the selection,
+    /// keeps the mode and makes no sound (@0x69cd4), and gives `None`.
+    /// `None`, and nothing changes, during a jump (pre-jump stage too).
     ///
-    /// By the engine's reading the course is kept: the press moves only
-    /// the selection, as `_HandlePlayer` @0x69c8e-0x69cd2 writes nothing
-    /// but +0x6a and +0x6c, and the galaxy map draws the selection as its
-    /// own link. J then jumps to the system selected, and an arrival off
-    /// the course clears it, or drops its first hop when it is there
-    /// (`course::after_arrival`). By
+    /// By the engine's reading it walks the current system's raw Con
+    /// slots, one visit a slot, and notes the slot it lands on, as
+    /// [`Chart::select_next_system`] says. The course is kept: the press
+    /// moves only the selection, as `_HandlePlayer` @0x69c8e-0x69cd2
+    /// writes nothing but +0x6a and +0x6c, and the galaxy map draws the
+    /// selection as its own link. J then jumps to the system selected, and
+    /// an arrival off the course clears it, or drops its first hop when it
+    /// is there (`course::after_arrival`). By
     /// [`HyperSelectRule::OneJumpCourse`](crate::HyperSelectRule::OneJumpCourse)
     /// the press plots a one-jump course to the system selected, the
     /// course that reading's cycle starts from.
@@ -653,15 +654,14 @@ impl Chart {
     /// Writes the nav mode and its selection, as each of the original's
     /// setters writes +0x6a and +0x6c, and forgets the Con slot noted for
     /// the old selection ([`NavSlot`]). A setter that writes mode 3 from a
-    /// slot it knows ([`Session::cycle_map_selection`],
-    /// [`Session::cue_course`]) notes that slot after. Every other one's
-    /// selection stands in the first slot naming it
-    /// ([`Chart::selected_slot`]). The floating map's click writes that
-    /// slot, the first whose box it hits, as a repeated link's slots
-    /// share a box (@0x6a332 → @0x6a719). Hyper Select writes the slot it
-    /// steps to (@0x69cce), and ours, whose cycle visits each link once
-    /// ([`HyperSelectRule`]), stands it in that link's first slot, the
-    /// one the original steps to from any slot before it. The port
+    /// slot it knows ([`Session::select_next_system`],
+    /// [`Session::cycle_map_selection`], [`Session::cue_course`]) notes
+    /// that slot after. Every other one's selection stands in the first
+    /// slot naming it ([`Chart::selected_slot`]). The floating map's click
+    /// writes that slot, the first whose box it hits, as a repeated link's
+    /// slots share a box (@0x6a332 → @0x6a719). Hyper Select's
+    /// [`HyperSelectRule::OneJumpCourse`] reading, which has no original,
+    /// stands in it too. The port
     /// dialogs' and the bar's restores write mode 3 only after
     /// [`Session::land_at`], which has no original.
     pub(super) fn set_nav(&mut self, nav: NavMode) {
@@ -862,24 +862,19 @@ impl Chart {
         had
     }
 
-    /// Presses Hyper Select (the original's `\` key): selects in mode 3
-    /// the next system the session's [`HyperSelectRule`](crate::HyperSelectRule)
-    /// cycles to ([`next_hyper_destination`]), from the one selected in
-    /// mode 3 and from the start in any other, with
-    /// [`SimSound::HyperSelected`], and gives it. With no system to offer
-    /// it lets go of the selection, keeps the mode and makes no sound
-    /// (@0x69cd4), and gives `None`. `None`, and nothing changes, during a
-    /// jump (pre-jump stage too).
-    ///
-    /// By the engine's reading the course is kept: the press moves only
-    /// the selection, as `_HandlePlayer` @0x69c8e-0x69cd2 writes nothing
-    /// but +0x6a and +0x6c, and the galaxy map draws the selection as its
-    /// own link. J then jumps to the system selected, and an arrival off
-    /// the course clears it, or drops its first hop when it is there
-    /// (`course::after_arrival`). By
-    /// [`HyperSelectRule::OneJumpCourse`](crate::HyperSelectRule::OneJumpCourse)
-    /// the press plots a one-jump course to the system selected, the
-    /// course that reading's cycle starts from.
+    /// Presses Hyper Select (the original's `\` key), as
+    /// [`Session::select_next_system`] says. By the engine's reading it
+    /// walks the current system's first [`CON_SLOTS`] raw Con slots in
+    /// record order, as `_HandlePlayer` does (@0x69c16-0x69cce): the next
+    /// that holds a link ([`Chart::flags`]) after the slot +0x6c holds in
+    /// mode 3, or from the first with nothing selected there and in any
+    /// other mode, whatever +0x6c holds (@0x69c98), so it doesn't read
+    /// [`RuleKey::MapCycleStart`]. A repeated link and the current system
+    /// each count as any other slot, and a press with one such slot lands
+    /// on it again. It writes mode 3 with the slot's raw system and notes
+    /// the slot (@0x69cce), and gives the system resolved by place, the
+    /// one the player sees. With no such slot it lets go of the selection,
+    /// in silence (@0x69cd4).
     fn select_next_system(
         &mut self,
         pilot: &mut Pilot,
@@ -890,23 +885,42 @@ impl Chart {
         if jump.is_some() {
             return None;
         }
-        let selected = self.nav_mode().hyperspace();
-        let Some(next) = next_hyper_destination(
+        if setup.hyper_select == HyperSelectRule::OneJumpCourse {
+            return self.select_one_jump_course(pilot, setup, out);
+        }
+        let Some((slot, selected)) = self.next_link_slot(pilot, self.mode_3_slot(pilot)) else {
+            self.deselect();
+            return None;
+        };
+        out.sounds.push(SimSound::HyperSelected);
+        self.select_slot(pilot, slot, selected);
+        self.nav_mode().hyperspace()
+    }
+
+    /// Hyper Select by [`HyperSelectRule::OneJumpCourse`]: the next system
+    /// that reading cycles to ([`next_one_jump_destination`]), plotted as a
+    /// one-jump course and selected in mode 3 with
+    /// [`SimSound::HyperSelected`]. No slot is noted, so it stands in the
+    /// first slot naming it ([`Chart::selected_slot`]). With none, the
+    /// selection let go, the mode kept, in silence.
+    fn select_one_jump_course(
+        &mut self,
+        pilot: &mut Pilot,
+        setup: &Setup,
+        out: &mut Outbox,
+    ) -> Option<SystemId> {
+        let Some(next) = next_one_jump_destination(
             self.galaxy.map(),
             pilot.system,
             &self.course_shown(pilot),
-            selected,
-            setup.hyper_select,
             setup.hyperlinks,
         ) else {
             self.deselect();
             return None;
         };
         out.sounds.push(SimSound::HyperSelected);
-        if setup.hyper_select == HyperSelectRule::OneJumpCourse {
-            pilot.restart_course(pilot.system);
-            pilot.course = vec![next];
-        }
+        pilot.restart_course(pilot.system);
+        pilot.course = vec![next];
         self.set_nav(NavMode::Hyperspace(Some(next)));
         Some(next)
     }
@@ -945,7 +959,8 @@ impl Chart {
     /// Whether a Con slot naming `slot` is one the link cycles and the
     /// floating map take: in the catalog, with a visible system at its
     /// place (`_FindActiveCoLocatedSystem` ≠ −1, `_MapFilter`
-    /// @0x13f4f-0x13f65, `_HandlePlayer` @0x6a21f).
+    /// @0x13f4f-0x13f65, `_HandlePlayer` @0x6a21f and Hyper Select's pass
+    /// @0x69c39-0x69c4c).
     fn flags(&self, slot: SystemId) -> bool {
         self.galaxy.exists(slot) && self.galaxy.same_place(slot).is_some()
     }
@@ -986,17 +1001,53 @@ impl Chart {
     /// does every deselect.
     fn cycle_from(&self, pilot: &Pilot, setup: &Setup) -> i32 {
         match self.nav {
-            NavMode::Hyperspace(Some(selected)) => self
-                .selected_slot(pilot, selected)
-                .and_then(|slot| i32::try_from(slot).ok())
-                .unwrap_or(-1),
             NavMode::Stellar(Some(stellar))
                 if setup.rules.source_for(RuleKey::MapCycleStart) == RuleSource::Engine =>
             {
                 i32::from(stellar.0) - 128
             }
-            _ => -1,
+            _ => self.mode_3_slot(pilot),
         }
+    }
+
+    /// The slot +0x6c holds in mode 3, the one the selection stands in, or
+    /// −1 with nothing selected there, or in any other mode.
+    fn mode_3_slot(&self, pilot: &Pilot) -> i32 {
+        let NavMode::Hyperspace(Some(selected)) = self.nav else {
+            return -1;
+        };
+        self.selected_slot(pilot, selected)
+            .and_then(|slot| i32::try_from(slot).ok())
+            .unwrap_or(-1)
+    }
+
+    /// The next of the current system's Con slots that holds a link
+    /// ([`Chart::flags`]) from +0x6c holding `from`, with its raw system:
+    /// past the last slot to the first and below the first to the last, so
+    /// a start past the slots begins the walk at the first, and the slot it
+    /// started from is the last one tried (`_MapFilter` @0x13f77-0x13f9b).
+    fn next_link_slot(&self, pilot: &Pilot, from: i32) -> Option<(usize, SystemId)> {
+        let start = usize::try_from(from + 1).unwrap_or(CON_SLOTS - 1);
+        let slots = self.galaxy.con_slots(pilot.system);
+        let slots = &slots[..slots.len().min(CON_SLOTS)];
+        (start..slots.len()).chain(0..start).find_map(|at| {
+            slots
+                .get(at)
+                .copied()
+                .filter(|&slot| self.flags(slot))
+                .map(|slot| (at, slot))
+        })
+    }
+
+    /// Writes mode 3 with the raw `selected` and notes the Con slot it came
+    /// from ([`NavSlot`]).
+    fn select_slot(&mut self, pilot: &Pilot, slot: usize, selected: SystemId) {
+        self.set_nav(NavMode::Hyperspace(Some(selected)));
+        self.nav_slot = Some(NavSlot {
+            system: pilot.system,
+            slot,
+            selected,
+        });
     }
 
     /// The galaxy map's Tab or `\`, as `_MapFilter` cycles the hyperspace
@@ -1034,25 +1085,10 @@ impl Chart {
         if landed.is_some() {
             return false;
         }
-        // The step goes on from +0x6c, past the last slot to the first and
-        // below the first to the last (@0x13f77-0x13f9b): a start past the
-        // slots begins the walk at the first.
-        let start = usize::try_from(self.cycle_from(pilot, setup) + 1).unwrap_or(CON_SLOTS - 1);
-        let slots = self.galaxy.con_slots(pilot.system);
-        let slots = &slots[..slots.len().min(CON_SLOTS)];
-        let next = (start..slots.len()).chain(0..start).find_map(|at| {
-            slots
-                .get(at)
-                .copied()
-                .filter(|&slot| self.flags(slot))
-                .map(|slot| (at, slot))
-        });
-        self.set_nav(NavMode::Hyperspace(next.map(|(_, selected)| selected)));
-        self.nav_slot = next.map(|(slot, selected)| NavSlot {
-            system: pilot.system,
-            slot,
-            selected,
-        });
+        match self.next_link_slot(pilot, self.cycle_from(pilot, setup)) {
+            Some((slot, selected)) => self.select_slot(pilot, slot, selected),
+            None => self.set_nav(NavMode::Hyperspace(None)),
+        }
         true
     }
 
@@ -1323,10 +1359,102 @@ mod tests {
     #[test]
     fn hyper_select_from_off_starts_at_the_first_link_and_cycles_in_mode_3() {
         let mut session = quiet(Session::start(&hub()).expect("starts"));
-        for expected in [134, 131, 135, 134] {
+        for expected in [134, 131, 131, 130, 135, 134] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(session.nav_mode(), hyperspace(expected));
             assert_eq!(session.course(), [], "no course plotted");
+            assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+        }
+    }
+
+    #[test]
+    fn hyper_select_visits_a_system_that_lists_only_itself() {
+        let mut catalog = hub();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[130]);
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        assert_eq!(session.select_next_system(), Some(SystemId(130)));
+        assert_eq!(session.nav_mode(), hyperspace(130));
+        assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
+    }
+
+    #[test]
+    fn hyper_select_visits_the_system_at_a_hidden_links_place_once_per_slot() {
+        // 134 stands at hidden 131's place: slot 0 names 131, slot 1 134.
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131, 134, 132]);
+        with_alternate(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(hide(&mut session, &catalog, &[131]));
+        assert_eq!(
+            session.select_next_system(),
+            Some(SystemId(134)),
+            "the system the player sees"
+        );
+        assert_eq!(session.chart.nav, hyperspace(131), "the raw slot");
+        for expected in [134, 132] {
+            session.select_next_system();
+            assert_eq!(session.nav_mode(), hyperspace(expected));
+        }
+    }
+
+    #[test]
+    fn hyper_select_passes_over_empty_slots() {
+        let mut catalog = hub();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[-1, 131, -1, 132]);
+        let mut session = Session::start(&catalog).expect("starts");
+        for expected in [131, 132, 131] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+        }
+    }
+
+    #[test]
+    fn hyper_select_from_a_stellar_ignores_its_index_by_either_map_cycle_reading() {
+        let other = Rulebook::default().with_override(RuleKey::MapCycleStart, RuleSource::Bible);
+        for rules in [Rulebook::default(), other] {
+            let mut session = Session::start(&hub()).expect("starts").with_rules(rules);
+            session.chart.nav = stellar(129);
+            assert_eq!(session.select_next_system(), Some(SystemId(134)));
+        }
+        let mut session = Session::start(&hub()).expect("starts");
+        session.chart.nav = stellar(129);
+        assert_eq!(cycle(&mut session), hyperspace(131), "the map's, slot 2");
+    }
+
+    #[test]
+    fn hyper_select_from_off_or_mode_3_with_none_starts_at_the_first_slot() {
+        for before in [NavMode::Off, NavMode::Hyperspace(None)] {
+            let mut session = Session::start(&hub()).expect("starts");
+            session.chart.nav = before;
+            assert_eq!(
+                session.select_next_system(),
+                Some(SystemId(134)),
+                "{before:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hyper_select_with_only_slots_that_hold_no_link_lets_go_in_silence() {
+        // A missing ID, and hidden 133 with nothing at its place.
+        let mut catalog = catalog();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[999, 133]);
+        with_alternate(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(hide(&mut session, &catalog, &[133]));
+        session.chart.nav = stellar(128);
+        session.take_sounds();
+        assert_eq!(session.select_next_system(), None);
+        assert_eq!(session.nav_mode(), NavMode::Stellar(None));
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn hyper_select_with_one_link_lands_on_it_each_press_and_beeps_each_time() {
+        let mut catalog = hub();
+        catalog.star_map[0] = star(130, (0.0, 0.0), &[131]);
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        for _ in 0..2 {
+            assert_eq!(session.select_next_system(), Some(SystemId(131)));
             assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
         }
     }
@@ -1405,6 +1533,16 @@ mod tests {
             Some(session.system()),
             "the one-jump course starts at the current system"
         );
+    }
+
+    #[test]
+    fn hyper_select_by_the_one_jump_course_reading_notes_no_slot() {
+        let mut session = Session::start(&hub())
+            .expect("starts")
+            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        assert_eq!(session.select_next_system(), Some(SystemId(131)));
+        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
+        assert_eq!(cycle(&mut session), hyperspace(130));
     }
 
     // The stellar keys, the click and the land key.
@@ -2211,19 +2349,26 @@ mod tests {
     }
 
     #[test]
-    fn a_map_cycle_after_hyper_select_steps_on_from_the_first_slot_naming_its_system() {
-        // `hub`'s 130 lists 134, 131, 131, 130, 999, 135. The cycle notes
-        // slot 2 for 131; Hyper Select comes back round to 131, writing
-        // slot 1 (@0x69cce), and the next cycle steps on to slot 2.
+    fn a_map_cycle_after_hyper_select_steps_on_from_the_slot_it_noted() {
+        // `hub`'s 130 lists 134, 131, 131, 130, 999, 135. Hyper Select
+        // writes the slot it steps to (@0x69cce).
+        for (presses, expected) in [(2, 131), (3, 130)] {
+            let mut session = Session::start(&hub()).expect("starts");
+            for _ in 0..presses {
+                session.select_next_system();
+            }
+            assert_eq!(cycle(&mut session), hyperspace(expected), "{presses}");
+        }
+    }
+
+    #[test]
+    fn hyper_select_after_a_map_cycle_steps_on_from_the_slot_it_noted() {
         let mut session = Session::start(&hub()).expect("starts");
-        for _ in 0..3 {
-            cycle(&mut session);
+        for _ in 0..2 {
+            session.select_next_system();
         }
-        assert_eq!(session.chart.nav, hyperspace(131), "slot 2");
-        for expected in [135, 134, 131] {
-            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
-        }
-        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2, after slot 1");
+        assert_eq!(cycle(&mut session), hyperspace(131), "slot 2");
+        assert_eq!(session.select_next_system(), Some(SystemId(130)));
     }
 
     #[test]

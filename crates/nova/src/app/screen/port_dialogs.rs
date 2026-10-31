@@ -7,11 +7,9 @@ use nova_sim::{MissionInfo, text_tags};
 use nova_view::Screen;
 use nova_view::flight::FlightView;
 use nova_view::spaceport::{PortMap, SpaceportView};
-use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::mission_dialogs::MissionDialogs;
-use nova_view::ui::{DescDialog, DescriptionSource, FocusRing};
 
-use super::{Dialogs, ENTERED};
+use super::ENTERED;
 
 /// Shows `spaceport`'s outfitter as `flight` has it, once it has opened
 /// ([`SpaceportView::take_outfitter_opened`]): `flight` clears what lasts
@@ -19,14 +17,18 @@ use super::{Dialogs, ENTERED};
 /// opens ([`SpaceportView::set_opened_outfitter`]), and the port's
 /// `_DrawStatus` after it still draws a marked nav
 /// ([`FlightView::empty_outfitter_returned`]), before any port dialog's
-/// opening is told.
+/// opening is told. Its text plays the last `dësc` loaded's after-movie
+/// ([`SessionFlight::loaded_after_movie`](nova_view::flight::SessionFlight::loaded_after_movie)),
+/// read before the opening loads anything, as the original shows #206
+/// before any load (@0x5bba0-0x5bbf2).
 pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
     if !spaceport.take_outfitter_opened() {
         return;
     }
+    let after = flight.sim().loaded_after_movie();
     flight.open_outfitter();
     if let Some(outfitter) = flight.outfitter() {
-        spaceport.set_opened_outfitter(outfitter);
+        spaceport.set_opened_outfitter(outfitter, after);
     }
     if spaceport.take_empty_outfitter() {
         flight.empty_outfitter_returned();
@@ -38,14 +40,16 @@ pub(super) fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightV
 /// the list and keeps it for the visit first ([`FlightView::open_shipyard`]).
 /// Listing nothing, the shipyard says so and never opens
 /// ([`SpaceportView::set_opened_shipyard`]), before any port dialog's
-/// opening is told.
+/// opening is told, playing the last `dësc` loaded's after-movie as the
+/// outfitter's text does ([`open_outfitter`]; #223 @0x5e8da).
 pub(super) fn open_shipyard(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
     if !spaceport.take_shipyard_opened() {
         return;
     }
+    let after = flight.sim().loaded_after_movie();
     flight.open_shipyard();
     if let Some(shipyard) = flight.shops().shipyard {
-        spaceport.set_opened_shipyard(shipyard);
+        spaceport.set_opened_shipyard(shipyard, after);
     }
 }
 
@@ -72,7 +76,9 @@ pub(super) fn open_port_map(spaceport: &mut SpaceportView, flight: &mut FlightVi
 }
 
 /// Answers `spaceport`'s Mission BBS with `flight`'s mission computer and
-/// the bar's Hire Escort with the ships for hire, then tells `flight` of
+/// the bar's Hire Escort with the ships for hire (none for hire, its text
+/// playing the last `dësc` loaded's after-movie, #224 @0x5e8da), then
+/// tells `flight` of
 /// the port dialog that has opened ([`FlightView::open_port_dialog`]),
 /// which saves the nav before any order or offer run inside it, in the
 /// input that opened it.
@@ -87,7 +93,7 @@ pub(super) fn open_port_dialogs(
     if spaceport.take_hire_request()
         && let Some(list) = flight.escorts_for_hire()
     {
-        spaceport.open_hire(list);
+        spaceport.open_hire(list, flight.sim().loaded_after_movie());
     }
     if spaceport.take_port_dialog_opened().is_some() {
         flight.open_port_dialog();
@@ -291,24 +297,6 @@ pub(super) fn load_info_text(
     {
         holder.show_info_text(slot, &text);
     }
-}
-
-/// "Desc Dialog" showing `text`, from the dialogs, in the game data's
-/// button style, its Done taking the keyboard focus as `ring` says.
-pub(super) fn desc_dialog(
-    dialogs: &Dialogs,
-    data: &GameData,
-    text: &str,
-    ring: FocusRing,
-) -> Result<DescDialog, String> {
-    let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
-    Ok(DescDialog::new(
-        &template,
-        text,
-        data.button_style(),
-        Rc::clone(&dialogs.metrics),
-    )
-    .with_focus_ring(ring))
 }
 
 /// The about text or the main menu's X text `raw` as the original loads

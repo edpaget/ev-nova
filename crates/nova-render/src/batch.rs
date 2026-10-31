@@ -14,6 +14,7 @@ use crate::gpu::{
     Batch, Frame, Gpu, NO_COLORIZE, QuadInstance, Rect, SolidQuad, TextRun, colorize_instance,
 };
 use crate::images::{ImageError, ImageSource};
+use crate::streams::Streams;
 use crate::upscale::world_space;
 use crate::viewport::{PixelRect, Viewport};
 
@@ -61,6 +62,8 @@ pub struct Renderer<S> {
     /// Whether the atlas starts afresh at the next frame, for a new
     /// enlarger.
     rebuild: bool,
+    /// The movie frames' pages.
+    streams: Streams,
 }
 
 impl<S: ImageSource> Renderer<S> {
@@ -82,6 +85,7 @@ impl<S: ImageSource> Renderer<S> {
             reported: HashSet::new(),
             enlarger: Box::new(NativeDetail),
             rebuild: false,
+            streams: Streams::default(),
         }
     }
 
@@ -107,10 +111,11 @@ impl<S: ImageSource> Renderer<S> {
         if !std::mem::take(&mut self.rebuild) {
             return;
         }
-        if self.atlas.page_count() > 0 {
+        if self.atlas.page_count() > 0 || self.streams.has_pages() {
             gpu.clear_pages();
         }
         self.atlas = Atlas::new(self.atlas.page_size());
+        self.streams = Streams::default();
         self.resident
             .retain(|_, resident| matches!(resident, Resident::Failed));
     }
@@ -131,8 +136,14 @@ impl<S: ImageSource> Renderer<S> {
     /// batches are the same with it or without, and the GPU cuts the
     /// world's draws to it ([`Frame::world_scissor`]).
     ///
+    /// A movie frame ([`DrawCommand::MovieFrame`]) is uploaded onto its
+    /// stream's page only when the page doesn't hold it yet
+    /// ([`crate::streams`]); a stream not drawn in this frame frees its
+    /// page.
+    ///
     /// A frame drawn after [`Renderer::set_enlarger`] first starts the
-    /// atlas afresh; a zero-area viewport leaves that to the next frame.
+    /// atlas afresh, the stream pages with it; a zero-area viewport leaves
+    /// that to the next frame.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -150,6 +161,7 @@ impl<S: ImageSource> Renderer<S> {
             let run = layers.run_in(layer);
             self.draw(command, None, target, run, gpu, &mut report);
         }
+        self.streams.end_frame();
         let Layers { batches, world, .. } = layers.settled();
         gpu.submit(&Frame {
             target: viewport.window_px(),
@@ -308,6 +320,25 @@ impl<S: ImageSource> Renderer<S> {
                 size,
                 color,
             } => push_solid(batches, square(center, size), color),
+            DrawCommand::MovieFrame { ref frame, area } => {
+                // An area with no drawable size draws nothing, so its frame
+                // is not even uploaded.
+                if drawable(area.width())
+                    && drawable(area.height())
+                    && let Some(entry) = self.streams.place(frame, gpu)
+                {
+                    let dest = Rect {
+                        x: area.min.x,
+                        y: area.min.y,
+                        w: area.width(),
+                        h: area.height(),
+                    };
+                    if let Some((entry, dest)) = cropped(&entry, dest, clip) {
+                        let plain = (Color::WHITE, NO_COLORIZE);
+                        push_quad(batches, &entry, dest, plain, Blend::Normal);
+                    }
+                }
+            }
             DrawCommand::OrFill { area, color } => {
                 let area = match clip {
                     Some(clip) => meet(area, clip),

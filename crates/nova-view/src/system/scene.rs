@@ -182,6 +182,12 @@ impl SceneStellar {
     /// when it counts none), shown on the sheet drawn; a frozen frame
     /// stays shown. A random next frame is drawn on `chance`.
     fn step(&mut self, chance: &mut dyn Chance) {
+        self.step_by(1, chance);
+    }
+
+    /// One pass of its animation at `gain` ticks, as [`SceneStellar::step`]
+    /// runs one at 1.
+    fn step_by(&mut self, gain: u8, chance: &mut dyn Chance) {
         let counted = if self.counts_none {
             NonZeroU16::MIN
         } else {
@@ -189,11 +195,17 @@ impl SceneStellar {
         };
         if self.frozen {
             self.frames
-                .step_frozen(self.animation_data, self.destroyed, counted, chance);
+                .step_frozen_by(gain, self.animation_data, self.destroyed, counted, chance);
         } else {
             let drawn = self.frame_count(self.drawn);
-            self.frames
-                .step(self.animation_data, self.destroyed, counted, drawn, chance);
+            self.frames.step_by(
+                gain,
+                self.animation_data,
+                self.destroyed,
+                counted,
+                drawn,
+                chance,
+            );
         }
     }
 
@@ -411,6 +423,15 @@ impl SystemScene {
             for stellar in &mut self.stellars {
                 stellar.step(chance);
             }
+        }
+    }
+
+    /// Steps every stellar's animation one pass of `gain` ticks: a stellar
+    /// pass outside a play frame (`nova_sim::gate_sprite::StellarPass`), its
+    /// random next frames drawn on `chance`, a visual-only source.
+    pub fn step_pass(&mut self, gain: u8, chance: &mut dyn Chance) {
+        for stellar in &mut self.stellars {
+            stellar.step_by(gain, chance);
         }
     }
 

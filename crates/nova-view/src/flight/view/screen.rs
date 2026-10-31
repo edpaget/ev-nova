@@ -10,6 +10,7 @@ use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::GalaxyCatalog;
 use crate::system::catalog::SystemCatalog;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
@@ -23,7 +24,14 @@ use super::{
 };
 
 impl<
-    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
     S: FlightSim,
 > Screen for FlightView<C, S>
 {
@@ -87,14 +95,21 @@ impl<
     /// less the cursor, which the map hides, its 1024 x 768
     /// frame centred in a widened view ([`FlightView::map_offset`]); in
     /// port, where the bar opens it, the dialog alone, where the classic
-    /// spaceport has it, for the app to draw over the spaceport.
+    /// spaceport has it, for the app to draw over the spaceport. These are
+    /// [`FlightView::draw_under_dialog_map`] and
+    /// [`FlightView::draw_dialog_map`], which the app draws apart when a
+    /// mission dialog goes between them.
     fn draw(&self, list: &mut DrawList) {
-        if self.map_open {
-            if !self.frame.docked() {
-                self.draw_scene(list);
+        if self.draw_movie(list, |list| {
+            if self.draw_scene(list) {
+                self.draw_fades(list);
             }
-            self.draw_open_map(list);
-            self.draw_fades(list);
+        }) {
+            return;
+        }
+        if self.map_open {
+            self.draw_under_dialog_map(list);
+            self.draw_dialog_map(list);
             return;
         }
         if self.draw_scene(list) {
@@ -117,9 +132,10 @@ impl<
     /// course map doesn't take no longer closes it, and a map waiting for
     /// M's release closes ([`FlightView::close_map`]): ours can't read the
     /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
-    /// (@0xa19b-0xa1dc), so losing them counts as the release.
+    /// (@0xa19b-0xa1dc), so losing them counts as the release. So it does
+    /// for a mouse button, which `_Button` reads live (@0x3803b).
     fn release_keys(&mut self) {
-        self.held.clear();
+        self.let_go_of_input();
         self.map.release_keys();
         self.map_key_held = false;
         if self.map_closing {
@@ -154,6 +170,9 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
+        if self.playing() {
+            return self.movie_hides_pointer();
+        }
         !self.map_open && self.failure.is_none() && self.looks.cursor_sheet().is_some()
     }
 
@@ -176,7 +195,14 @@ impl<
 }
 
 impl<
-    C: CombatLooks + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog + EscortMenuLooks,
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
     S: FlightSim,
 > FlightView<C, S>
 {
@@ -184,6 +210,10 @@ impl<
     /// the catch-up, the steps and each command fill it where they change
     /// the flight.
     fn tick_then(&mut self, dt: Duration) {
+        if self.playing() {
+            self.movie_tick(dt);
+            return;
+        }
         self.elapse_frame_rate(dt);
         self.catch_up();
         self.fade_frame(dt);
@@ -205,13 +235,14 @@ impl<
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
+        let keyed = self.cursor_keyed();
         self.run_steps(steps);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();
         self.update_escort_menu(steps);
         self.alpha = alpha;
-        self.step_cursor(steps);
+        self.step_cursor(steps, keyed);
         self.start_jump_effect();
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
@@ -220,9 +251,29 @@ impl<
         self.advance_hud();
     }
 
+    /// `press`, if a jump under way lets it through and the flight takes
+    /// its command.
+    fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
+        let press = if jumping {
+            let option = self.held.contains(&Key::Alt);
+            let menu_open = self.escort_menu.is_open();
+            press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
+        } else {
+            press
+        };
+        press.filter(|&key| {
+            self.command_of(key)
+                .is_none_or(|command| self.takes(command))
+        })
+    }
+
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
+        if self.playing() {
+            self.movie_input(input);
+            return ScreenAction::None;
+        }
         self.cursor_input(input);
         let press = match *input {
             Input::Key {
@@ -234,7 +285,12 @@ impl<
         };
         let jumping = self.jump_under_way();
         if jumping && press == Some(PLAYER_INFO_KEY) {
-            return self.refuse_player_info();
+            let action = self.refuse_player_info();
+            if !self.map_open {
+                // Refused or not, it is down: @0x702d8 has no gate.
+                self.track_held(input);
+            }
+            return action;
         }
         if self.map_open {
             // M types into Find while it is open.
@@ -258,18 +314,7 @@ impl<
         {
             self.click_in_space(at);
         }
-        let press = if jumping {
-            let option = self.held.contains(&Key::Alt);
-            let menu_open = self.escort_menu.is_open();
-            press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
-        } else {
-            press
-        };
-        let press = press.filter(|&key| {
-            self.command_of(key)
-                .is_none_or(|command| self.takes(command))
-        });
-        match press {
+        match self.press_taken(press, jumping) {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.
@@ -281,7 +326,7 @@ impl<
             }
             Some(HAIL_KEY) => {
                 self.hail();
-                if self.pending_hail.is_some() {
+                if self.hail_opened() {
                     return ScreenAction::None;
                 }
             }
@@ -295,9 +340,20 @@ impl<
                 self.jump_frame(true);
             }
             Some(JETTISON_KEY) => self.jettison(),
-            Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(MISSION_INFO_KEY) => {
+                self.ask_mission_info();
+                if self.pending_mission_info.is_some() {
+                    return ScreenAction::None;
+                }
+            }
             Some(FRAME_RATE_KEY) => self.toggle_frame_rate(),
-            Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
+            Some(PLAYER_INFO_KEY) => {
+                let action = self.ask_player_info();
+                if !self.pending_player_info {
+                    self.track_held(input);
+                }
+                return action;
+            }
             Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => self.hyperspace_key(key),
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
                 self.zoom_floating_map(key);
@@ -323,5 +379,23 @@ impl<
         #[cfg(test)]
         self.check_frame_kept();
         self.draw_flight(list, || self.failure.clone().unwrap_or_default())
+    }
+
+    /// What goes under the dialogs a map opened from and under the map:
+    /// the paused scene and its HUD, or nothing in port, where the app
+    /// draws the spaceport instead. The original leaves the last frame
+    /// drawn in `_gWind` behind each dialog and behind the map.
+    pub fn draw_under_dialog_map(&self, list: &mut DrawList) {
+        if !self.frame.docked() {
+            self.draw_scene(list);
+        }
+    }
+
+    /// What goes over the dialogs a map opened from: the open map, whose
+    /// window opens in front of theirs (`_DoSystemMap` @0x125b7-0x125c9),
+    /// then the fades.
+    pub fn draw_dialog_map(&self, list: &mut DrawList) {
+        self.draw_open_map(list);
+        self.draw_fades(list);
     }
 }

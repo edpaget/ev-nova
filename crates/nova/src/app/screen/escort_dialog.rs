@@ -13,11 +13,15 @@
 //! `_DoEscortLand` shows it with `_ShowTextDialog` before the leave's
 //! days, pay and take-off (@0x405bb-0x407e8), and the leave waits for it
 //! to close: the take-off is a boundary the player sees, so the report
-//! never shows over flight.
+//! never shows over flight. Once it closes it plays the last `dësc`
+//! loaded's after-movie, as `_ShowTextDialog`'s after-check reads it
+//! (@0x5b40b-0x5b44f; `SessionFlight::loaded_after_movie`), and the leave
+//! waits through that too.
 
 use std::rc::Rc;
 
 use nova_sim::escort_dialog::EscortDialogView;
+#[cfg(doc)]
 use nova_view::flight::FlightView;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::escort_dialog::{ESCORT_DIALOG, EscortDialog};
@@ -89,13 +93,17 @@ impl AppScreen {
     /// report holds the leave. Without the spaceport's text dialog the
     /// report is not shown and nothing holds the leave.
     pub(super) fn report_escorts_landed(&mut self) -> bool {
-        let Some(text) = self.flight.as_mut().and_then(FlightView::land_escorts) else {
+        let Some(flight) = self.flight.as_mut() else {
             return false;
         };
+        let Some(text) = flight.land_escorts() else {
+            return false;
+        };
+        let after = flight.sim().loaded_after_movie();
         let Some(spaceport) = &mut self.spaceport else {
             return false;
         };
-        spaceport.show_text(&text);
+        spaceport.show_text(&text, after);
         spaceport.holds_leave()
     }
 }

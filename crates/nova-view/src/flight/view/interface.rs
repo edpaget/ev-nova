@@ -1,7 +1,7 @@
 //! [`FlightView`]'s status bar and description reads.
 
 use nova_sim::flight_frame::{Answer, FlightCommand};
-use nova_sim::{GovtId, InterfaceLoad};
+use nova_sim::{GovtId, InterfaceLoad, StellarId};
 
 use crate::flight::catalog::StatusBars;
 use crate::flight::hud::{self};
@@ -51,6 +51,25 @@ impl<C: DescriptionSource + DescriptionGraphics, S: FlightSim> FlightView<C, S> 
             Answer::Description(text) => text,
             _ => raw,
         })
+    }
+
+    /// `stellar`'s own `dësc`, landed there, as the spaceport shows it as
+    /// it opens (`_DoPortDialog` @0x5f96b): asked of the flight
+    /// ([`FlightCommand::LoadPortDescription`], an ask), which loads it
+    /// itself once, before the land checks, and serves the text it loaded
+    /// (`nova_sim::Session::port_description`), so it is never loaded a
+    /// second time after them. A flight that refuses it (a session that
+    /// failed, or one with no catalog shared) has it loaded here, as
+    /// [`FlightView::load_description`] loads it.
+    ///
+    /// # Errors
+    ///
+    /// Why the `dësc` cannot be read, when it is loaded here.
+    pub fn load_port_description(&mut self, stellar: StellarId) -> Result<String, String> {
+        match self.send(FlightCommand::LoadPortDescription) {
+            Answer::Description(text) => Ok(text),
+            _ => self.load_description(stellar.0),
+        }
     }
 }
 

@@ -695,7 +695,11 @@ mod tests {
             })
         );
         assert_eq!(session.take_quotes(), [quote], "its quotes not taken");
-        assert_eq!(session.take_rescue_desc(), Some(13999), "rescued");
+        assert_eq!(
+            session.take_rescue_desc().map(|desc| desc.id),
+            Some(13999),
+            "rescued"
+        );
     }
 
     #[test]
@@ -760,7 +764,7 @@ mod tests {
         copy.out.second_pass_comm.push(repaired());
         let report = steps(&mut copy, &catalog, &input, 1);
         assert_eq!(
-            copy.take_rescue_desc(),
+            copy.take_rescue_desc().map(|desc| desc.id),
             Some(13999),
             "rescued on the second pass"
         );

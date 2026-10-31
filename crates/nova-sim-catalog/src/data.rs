@@ -38,7 +38,7 @@ use crate::buoy::BUOY_STRINGS;
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, AuxShip, BOX_GRAPHICS, BoomId,
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DescMovie, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
+    DescMovie, DescText, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
     Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
     MissionRecord, MissionShip, MissionTexts, NavDefSlots, NebulaId, NebulaRecord, OutfitId,
@@ -597,6 +597,17 @@ impl PilotCatalog for GameData {
                 })
             })
             .collect()
+    }
+
+    /// `dësc` `id`'s text, raw, and the movie its `MovieFile` names,
+    /// played as its `Flags` say; none when it is missing or does not
+    /// decode.
+    fn desc_text(&self, id: i16) -> Option<DescText> {
+        let desc = self.get::<Desc>(id)?.ok()?.record;
+        Some(DescText {
+            movie: DescMovie::from_desc(desc.movie_file.as_str(), desc.flags.0),
+            text: desc.text.as_str().to_owned(),
+        })
     }
 
     /// Each text from its `dësc`, none for -1 or one that cannot be read;
@@ -5684,6 +5695,32 @@ mod tests {
             DescMovie::from_desc("Quick.mov", 0x0001),
             "the info screen loads it (@0x9d89f)"
         );
+    }
+
+    #[test]
+    fn a_desc_is_read_with_its_text_and_the_movie_it_names() {
+        let data = store_named(&[
+            (Desc::TYPE, 129, None, filmed("Docked.", "Port.mov", 0x0005)),
+            (Desc::TYPE, 130, None, desc("{b5 \"set\" \"clear\"}")),
+            (Desc::TYPE, 131, None, b"No end".to_vec()),
+        ]);
+        assert_eq!(
+            data.desc_text(129),
+            Some(DescText {
+                text: "Docked.".to_owned(),
+                movie: DescMovie::from_desc("Port.mov", 0x0005),
+            })
+        );
+        assert_eq!(
+            data.desc_text(130),
+            Some(DescText {
+                text: "{b5 \"set\" \"clear\"}".to_owned(),
+                movie: None,
+            }),
+            "raw, its conditional text unresolved, and no movie"
+        );
+        assert_eq!(data.desc_text(131), None, "undecodable");
+        assert_eq!(data.desc_text(132), None, "missing");
     }
 
     #[test]

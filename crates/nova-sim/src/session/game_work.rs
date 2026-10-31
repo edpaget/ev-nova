@@ -160,16 +160,22 @@ pub(super) struct PlayerHead {
     pub(super) disabled: bool,
 }
 
+impl PlayerHead {
+    /// What a pass beginning with the player in `condition` reads.
+    pub(super) fn of(condition: Condition) -> Self {
+        Self {
+            dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
+            disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
+        }
+    }
+}
+
 impl PassStart {
     /// `session` as its pass's fight begins.
     pub(super) fn of(session: &Session) -> Self {
-        let condition = session.ship.condition;
         Self {
             npcs: session.space.npcs_before(),
-            player: PlayerHead {
-                dying: matches!(condition, Condition::Dying { .. } | Condition::Destroyed),
-                disabled: matches!(condition, Condition::Disabled | Condition::Dying { .. }),
-            },
+            player: PlayerHead::of(session.ship.condition),
         }
     }
 
@@ -431,6 +437,7 @@ impl Session {
             // No system is set up while the jump is under way.
             if self.jumping().is_none() {
                 self.populate(catalog, chance);
+                self.take_entry_gate_pass(chance);
             }
             return None;
         }

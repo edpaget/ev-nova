@@ -23,9 +23,15 @@
 //!
 //! **The text** opens in "Desc Dialog" over black, its `dësc` loaded and
 //! munged as `_LoadDescription` + `_MungeBriefing(0,-1)` do for the About
-//! and X texts; a `dësc` that can't be found shows an empty text, as
-//! `_LoadDescription` @0x71a5e-0x71a81 gives one. Without dialogs it is
-//! passed over.
+//! and X texts. It goes through [`MissionDialogs`] on the faded screen
+//! (`_FadeScreenOut` @0x17074 ran after the pictures), as
+//! `_ShowTextDialog(0, 0, 1)` @0x17112 shows it: its own `dësc`'s movie
+//! plays before it (unseen under the black, when plain) or after it, a
+//! `Graphic` above 127 shows it in the picture variant, and it fades in
+//! from black over a second (`nova_view::ui::faded_texts`). A `dësc`
+//! that can't be found is an empty text, as `_LoadDescription`
+//! @0x71a5e-0x71a81 gives one, which shows no dialog and fades in all
+//! the same. Without dialogs it is passed over.
 //!
 //! **The handover** moves the game into the flight slot and shows flight,
 //! which a return from play comes back to the main menu from. Before
@@ -41,11 +47,13 @@
 //! ([`FlightView::warm_up_traffic`]), so the first step, which fills the
 //! system, doesn't stall on reading them. The load or New Pilot already ran the rebuilds the original
 //! makes at entry (`_PropagateMissionBitEffects`,
-//! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`,
-//! `_HandleStellarSprites`), and nothing changes the game on the main
-//! screen between that rebuild and entry, so a re-entry after Escape's
-//! return, under the engine's reading of `escape_to_main_screen`, runs
-//! no fresh one.
+//! `_ResetPlayerPrecalcedValues`, `_HandleStellarSystemVisibility`), and
+//! nothing changes the game on the main screen between that rebuild and
+//! entry, so a re-entry after Escape's return, under the engine's reading
+//! of `escape_to_main_screen`, runs no fresh one. Its
+//! `_HandleStellarSprites` passes do run, at every entry: the edge's
+//! [`enter_game`] raises them, and that tick of no time steps the scene
+//! by them.
 //!
 //! **What the entry held** (Command chords, the window's close) is
 //! replayed into the router at the handover, where
@@ -60,7 +68,7 @@
 //! keyed click's 601, which the click's end raised: inaudible, and before
 //! any boundary the player sees.
 //!
-//! Left out, the display-mode check and the text's movie:
+//! Left out, the display-mode check:
 //! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs. The starfield's
 //! re-randomising at entry, and its clear in a system of negative murk,
 //! are the flight's (`nova_view::flight::FlightView`), which scatters its
@@ -69,22 +77,28 @@
 use std::time::Duration;
 
 use nova_sim::{RuleKey, RuleSource};
+use nova_view::fade::whole_view;
 use nova_view::flight::enter_game;
 #[cfg(doc)]
 use nova_view::flight::{FlightView, SessionFlight};
 use nova_view::menu::entry::{Deferred, Entry, Verdict};
 use nova_view::menu::intro::{CharacterIntro, Intro, IntroSource};
 use nova_view::ui::DescDialog;
-use nova_view::{DrawList, Input, Key, MenuCommand, Screen, ScreenAction, Showing, Sound, UiSound};
+use nova_view::ui::catalog::DescriptionGraphics;
+use nova_view::ui::desc::DESC_DIALOG;
+use nova_view::ui::mission_dialogs::{DescShown, MissionDialogs};
+use nova_view::{
+    Color, DrawList, Input, Key, MenuCommand, Screen, ScreenAction, Showing, Sound, UiSound,
+};
 
-use super::port_dialogs::desc_dialog;
 use super::{AppScreen, CLASSIC_VIEW, Side, chord_command};
 
-/// An entry running, and its intro's text while it is open.
+/// An entry running, and its intro's text, with its movies, while it is
+/// open.
 #[derive(Clone, Debug)]
 pub(super) struct Entering {
     core: Entry,
-    text: Option<DescDialog>,
+    text: Option<MissionDialogs>,
 }
 
 impl AppScreen {
@@ -145,10 +159,10 @@ impl AppScreen {
         self.entry.is_some()
     }
 
-    /// The intro's text, while it is open.
+    /// The intro's text, while it shows: not while its movie plays.
     #[must_use]
     pub fn intro_text(&self) -> Option<&DescDialog> {
-        self.entry.as_ref()?.text.as_ref()
+        self.entry.as_ref()?.text.as_ref()?.text()
     }
 
     /// `input` while play is entered: what it did, once the entry has
@@ -234,12 +248,14 @@ impl AppScreen {
         (showing != Showing::Flight).then_some(showing)
     }
 
-    /// Whether the entry hides the pointer, until flight takes over.
+    /// Whether the entry hides the pointer, until flight takes over: the
+    /// intro's pictures, or a cinematic movie of its text's.
     pub(super) fn entry_hides_pointer(&self) -> Option<bool> {
         self.entry_showing()?;
-        self.entry
-            .as_ref()
-            .map(|entering| entering.core.hides_pointer())
+        self.entry.as_ref().map(|entering| {
+            entering.core.hides_pointer()
+                || entering.text.as_ref().is_some_and(Screen::hides_pointer)
+        })
     }
 
     /// The entry's sounds and its text's since they were last taken.
@@ -260,8 +276,10 @@ impl AppScreen {
     }
 
     /// Draws the entry over what the side shown drew: under the intro's
-    /// text, the text, then the fades over it all, in the classic frame
-    /// or in flight's widened view once flight shows.
+    /// text, the text (with its movie and its fade-in), black over a plain
+    /// movie of its played while the screen is still faded, then the fades
+    /// over it all, in the classic frame or in flight's widened view once
+    /// flight shows.
     pub(super) fn draw_entry(&self, list: &mut DrawList) {
         let Some(entering) = &self.entry else {
             return;
@@ -274,19 +292,25 @@ impl AppScreen {
         entering.core.draw_under(list, view);
         if let Some(text) = &entering.text {
             text.draw(list);
+            if text.faded() {
+                nova_view::draw::fill_rect(list, whole_view(view), Color::BLACK);
+            }
         }
         entering.core.draw_over(list, view);
     }
 
-    /// The intro's text, once closed: dropped, its sounds kept, and the
-    /// entry told.
+    /// The intro's text, once it and its movies are done: dropped, its
+    /// sounds kept, and the entry told. What was pressed under its last
+    /// movie is dropped, as the flush after the text drops it
+    /// (@0x1711a-0x17165).
     fn poll_intro_text(&mut self) {
         let Some(entering) = &mut self.entry else {
             return;
         };
-        if entering.text.as_ref().is_some_and(DescDialog::closed)
+        if entering.text.as_ref().is_some_and(|text| !text.is_open())
             && let Some(mut text) = entering.text.take()
         {
+            text.take_unclaimed();
             self.sounds.extend(text.take_sounds());
             entering.core.text_closed();
         }
@@ -343,21 +367,26 @@ impl AppScreen {
         }
     }
 
-    /// "Desc Dialog" on the intro's text `id`, munged for the game held,
-    /// or `None` without dialogs or when it can't be built (the reason to
+    /// The intro's text `id`, munged for the game held, shown on the
+    /// faded screen with its own `dësc`'s movie and graphic, or `None`
+    /// without dialogs or when "Desc Dialog" can't be built (the reason to
     /// stderr). A `dësc` that can't be found is an empty text.
-    fn intro_text_dialog(&mut self, id: i16) -> Option<DescDialog> {
+    fn intro_text_dialog(&mut self, id: i16) -> Option<MissionDialogs> {
         self.dialogs.as_ref()?;
         let words = self.main_screen_words(id).unwrap_or_default();
-        let ring = self.dialog_focus_ring();
         let dialogs = self.dialogs.as_ref()?;
-        match desc_dialog(dialogs, &self.data, &words, ring) {
-            Ok(dialog) => Some(dialog),
-            Err(reason) => {
-                eprintln!("nova: cannot show the intro's dësc {id}: {reason}");
-                None
-            }
+        if let Err(reason) = dialogs.resources.dialog_template(DESC_DIALOG) {
+            eprintln!("nova: cannot show the intro's dësc {id}: {reason}");
+            return None;
         }
+        let mut text = self.text_dialogs()?;
+        text.set_faded();
+        text.show_descs(vec![DescShown {
+            text: words,
+            graphic: self.data.description_graphic(id),
+            movie: self.data.description_movie(id),
+        }]);
+        Some(text)
     }
 
     /// Moves the game into the flight slot and shows flight, which a

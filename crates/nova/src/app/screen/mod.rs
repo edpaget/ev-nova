@@ -326,6 +326,11 @@
 //! ([`classic_offset`](nova_view::view_shape::classic_offset)), where the
 //! original's `_CenterWindow` puts a dialog in a window that wide, and take
 //! the pointer moved back to match. Flight places its own course map so.
+//! A cinematic movie's black window and fades, and a text's fade-in on a
+//! faded screen, cover the whole widened view from that frame, as the
+//! original's movie window is its main window; the router tells the shared
+//! [`Movies`] the view the side shown fills as the side or the size
+//! changes (`AppScreen::movie_view`).
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`](nova_view::Screen::take_sounds), and what it shows through
@@ -361,8 +366,8 @@ use nova_view::ui::note::NoteDialog;
 use nova_view::ui::player_info::PlayerInfoScreen;
 use nova_view::ui::text_input::TextInputDialog;
 use nova_view::ui::{
-    AssignmentDialog, CommDialog, DescDialog, DialogResources, HaggleDialog, PlunderDialog,
-    PrefsDialog, YesNoDialog,
+    AssignmentDialog, CommDialog, DialogResources, HaggleDialog, PlunderDialog, PrefsDialog,
+    YesNoDialog,
 };
 use nova_view::{Color, Input, Key, LaunchPrefs, MenuCommand, Navigator, Point, Prefs, Sound};
 use nova_view::{FullscreenKind, Scaling};
@@ -376,6 +381,7 @@ mod entry;
 mod escort_dialog;
 mod flight;
 mod game;
+mod jump_white;
 mod launch;
 mod menu;
 mod menu_commands;
@@ -566,8 +572,10 @@ pub struct AppScreen {
     map_borders: bool,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
-    /// The About dialog, or the main menu's X text, while it is open.
-    about: Option<DescDialog>,
+    /// The About text, or the main menu's X text, while it or its movie
+    /// is open: its own `dësc`, shown with its movie and graphic as
+    /// `_ShowTextDialog(0, 0, 1)` shows it (@0x16062, @0x1acde).
+    about: Option<MissionDialogs>,
     /// The `dësc` the open [`about`](Self::about) dialog shows.
     about_text: i16,
     /// The spaceport, while the ship is landed.
@@ -675,8 +683,8 @@ pub struct AppScreen {
     missions: Option<MissionDialogs>,
     /// The movies the mission texts and offers play, and whether they
     /// play: [`NoMoviePlayer`](crate::movie::NoMoviePlayer)'s unless
-    /// another is given ([`AppScreen::with_movie_player`]), on as the
-    /// preferences say.
+    /// another is given ([`AppScreen::with_movie_player`], which `main`
+    /// does with the FFmpeg decoder), on as the preferences say.
     movies: Movies,
     /// Whether the player has asked the system for keyboard access to
     /// every control, asked each time Preferences opens:

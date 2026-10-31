@@ -301,29 +301,14 @@ pub fn wormhole_exit<'a>(
     rule: WormholeRule,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<WormholeExit<'a>> {
-    let entered = site(sites, here)?;
-    let out = |site: &'a GateSite| owner_of(site.id).map(|system| WormholeExit { site, system });
-    if has_links(&entered.links) {
-        let owned: Vec<WormholeExit<'a>> = exits(&entered.links, sites)
-            .into_iter()
-            .filter_map(out)
-            .collect();
-        return pick(&owned, chance).copied();
-    }
-    let candidates: Vec<WormholeExit<'a>> = sites
-        .iter()
-        .filter(|site| site.id != here && site.flags2 & WORMHOLE != 0)
-        .filter_map(out)
-        .filter(|exit| exit.system != player_system)
-        .collect();
-    let unlinked: Vec<WormholeExit<'a>> = candidates
-        .iter()
-        .copied()
-        .filter(|exit| !has_links(&exit.site.links))
-        .collect();
-    if unlinked.is_empty() {
-        return None;
-    }
+    let (entered, choices) = wormhole_choices(here, player_system, sites, owner_of)?;
+    let (candidates, unlinked) = match choices {
+        WormholeChoices::Linked(owned) => return pick(&owned, chance).copied(),
+        WormholeChoices::Unlinked {
+            candidates,
+            unlinked,
+        } => (candidates, unlinked),
+    };
     match rule {
         WormholeRule::Engine => {
             let picked = *pick(&candidates, chance)?;
@@ -338,6 +323,74 @@ pub fn wormhole_exit<'a>(
         }
         WormholeRule::UnlinkedOnly => pick(&unlinked, chance).copied(),
     }
+}
+
+/// Whether a ship entering wormhole `here`, with the player in
+/// `player_system`, comes out anywhere: whether [`wormhole_exit`] gives an
+/// exit, by either [`WormholeRule`], read without rolling. The exit's
+/// roll only picks among its candidates, so whether there is one doesn't
+/// depend on it. The view asks it before the wormhole's movie, which the
+/// original plays only past the no-exit refusal
+/// (`_PlayerEnterWormhole` @0x6409d, @0x641a6-0x641b3, before the movie
+/// @0x6427d).
+pub fn wormhole_leads_anywhere(
+    here: StellarId,
+    player_system: SystemId,
+    sites: &[GateSite],
+    owner_of: impl Fn(StellarId) -> Option<SystemId>,
+) -> bool {
+    wormhole_choices(here, player_system, sites, owner_of).is_some()
+}
+
+/// What a wormhole entered rolls over ([`wormhole_choices`]).
+enum WormholeChoices<'a> {
+    /// A linked wormhole's owned exits, in slot order, repeats kept.
+    Linked(Vec<WormholeExit<'a>>),
+    /// An unlinked wormhole's: every other wormhole elsewhere, and the
+    /// unlinked ones among them.
+    Unlinked {
+        candidates: Vec<WormholeExit<'a>>,
+        unlinked: Vec<WormholeExit<'a>>,
+    },
+}
+
+/// The wormhole `here` as listed, and what [`wormhole_exit`] rolls over
+/// from it (see there); `None` when it leads nowhere: no system lists it,
+/// none of its links has an owner, or, unlinked, no unlinked wormhole is
+/// owned elsewhere.
+fn wormhole_choices<'a>(
+    here: StellarId,
+    player_system: SystemId,
+    sites: &'a [GateSite],
+    owner_of: impl Fn(StellarId) -> Option<SystemId>,
+) -> Option<(&'a GateSite, WormholeChoices<'a>)> {
+    let entered = site(sites, here)?;
+    let out = |site: &'a GateSite| owner_of(site.id).map(|system| WormholeExit { site, system });
+    if has_links(&entered.links) {
+        let owned: Vec<WormholeExit<'a>> = exits(&entered.links, sites)
+            .into_iter()
+            .filter_map(out)
+            .collect();
+        return (!owned.is_empty()).then_some((entered, WormholeChoices::Linked(owned)));
+    }
+    let candidates: Vec<WormholeExit<'a>> = sites
+        .iter()
+        .filter(|site| site.id != here && site.flags2 & WORMHOLE != 0)
+        .filter_map(out)
+        .filter(|exit| exit.system != player_system)
+        .collect();
+    let unlinked: Vec<WormholeExit<'a>> = candidates
+        .iter()
+        .copied()
+        .filter(|exit| !has_links(&exit.site.links))
+        .collect();
+    (!unlinked.is_empty()).then_some((
+        entered,
+        WormholeChoices::Unlinked {
+            candidates,
+            unlinked,
+        },
+    ))
 }
 
 /// One of `choices`, rolled on `chance`; `None` when there are none.
@@ -861,6 +914,56 @@ mod tests {
                 (None, vec![]),
                 "{rule:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_wormhole_leads_anywhere_exactly_when_it_has_an_exit_by_either_rule() {
+        type Owners = Box<dyn Fn(StellarId) -> Option<SystemId>>;
+        let network = unlinked_network();
+        let linked = [
+            wormhole(500, &[510, 520]),
+            wormhole(510, &[]),
+            wormhole(520, &[]),
+        ];
+        let only_linked_elsewhere = [
+            wormhole(500, &[]),
+            wormhole(505, &[]),
+            wormhole(520, &[500]),
+        ];
+        let cases: [(&[GateSite], Owners, bool); 6] = [
+            (&network, Box::new(network_owners()), true),
+            (
+                &network,
+                Box::new(resolver(&[(500, 130), (510, 130), (530, 130)])),
+                false,
+            ),
+            (&linked, Box::new(resolver(&[(500, 130), (520, 132)])), true),
+            (&linked, Box::new(resolver(&[(500, 130)])), false),
+            (
+                &only_linked_elsewhere,
+                Box::new(resolver(&[(500, 130), (505, 130), (520, 132)])),
+                false,
+            ),
+            (&network[3..4], Box::new(resolver(&[(510, 131)])), false),
+        ];
+        for (at, (sites, owners, leads)) in cases.iter().enumerate() {
+            assert_eq!(
+                wormhole_leads_anywhere(StellarId(500), SystemId(130), sites, owners),
+                *leads,
+                "case {at}"
+            );
+            for rule in [WormholeRule::Engine, WormholeRule::UnlinkedOnly] {
+                let exit = wormhole_exit(
+                    StellarId(500),
+                    SystemId(130),
+                    sites,
+                    owners,
+                    rule,
+                    &mut Scripted::rolling(&[0]),
+                );
+                assert_eq!(exit.is_some(), *leads, "case {at}, {rule:?}");
+            }
         }
     }
 

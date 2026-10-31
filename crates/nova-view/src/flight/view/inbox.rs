@@ -19,7 +19,8 @@
 //! so a fight's diagnostic and a report can interleave in the app's log.
 //! Nothing the player sees depends on it.
 
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, LoadedDesc};
+use nova_sim::gate_sprite::StellarPass;
 use nova_sim::{
     CommNote, FighterNote, Granted, InterfaceLoad, MissionBoardLine, MissionShown, NavMode,
     PayNote, PersonQuote, SessionEvent, SimDiagnostic, SimMessage, SimSound, TextBar,
@@ -61,10 +62,12 @@ pub(super) struct Inbox {
     interface_loads: Vec<InterfaceLoad>,
     /// The nav mode as the last take-off began.
     takeoff_nav: Option<NavMode>,
-    /// The rescue's `dësc`.
-    rescue_desc: Option<i16>,
+    /// The rescue's `dësc`, as the flight loaded it.
+    rescue_desc: Option<LoadedDesc>,
     /// The message the last take-off left on.
     leave_message: Option<String>,
+    /// The stellar passes, in order.
+    stellar_passes: Vec<StellarPass>,
 }
 
 impl Inbox {
@@ -97,13 +100,19 @@ impl Inbox {
                 FlightEvent::TakeoffNav(nav) => self.takeoff_nav = Some(nav),
                 FlightEvent::RescueDesc(desc) => self.rescue_desc = Some(desc),
                 FlightEvent::LeaveMessage(text) => self.leave_message = Some(text),
+                FlightEvent::StellarPass(pass) => self.stellar_passes.push(pass),
             }
         }
     }
 
-    /// The sounds, in order; taking them empties the list.
-    pub(super) fn take_sounds(&mut self) -> Vec<SimSound> {
-        std::mem::take(&mut self.sounds)
+    /// The sounds, in order, but those `held` says to keep, which stay,
+    /// in order, for a later take.
+    pub(super) fn take_sounds(&mut self, held: impl Fn(SimSound) -> bool) -> Vec<SimSound> {
+        let (kept, taken) = std::mem::take(&mut self.sounds)
+            .into_iter()
+            .partition(|&sound| held(sound));
+        self.sounds = kept;
+        taken
     }
 
     /// The messages, in order; taking them empties the list.
@@ -198,14 +207,19 @@ impl Inbox {
         self.takeoff_nav.take()
     }
 
-    /// The rescue's `dësc`, once.
-    pub(super) fn take_rescue_desc(&mut self) -> Option<i16> {
+    /// The rescue's `dësc`, as the flight loaded it, once.
+    pub(super) fn take_rescue_desc(&mut self) -> Option<LoadedDesc> {
         self.rescue_desc.take()
     }
 
     /// The message the last take-off left on, once.
     pub(super) fn take_leave_message(&mut self) -> Option<String> {
         self.leave_message.take()
+    }
+
+    /// The stellar passes, in order; taking them empties the list.
+    pub(super) fn take_stellar_passes(&mut self) -> Vec<StellarPass> {
+        std::mem::take(&mut self.stellar_passes)
     }
 }
 
@@ -218,6 +232,14 @@ mod tests {
 
     use super::*;
     use crate::flight::sim_port::fixture::FakeFlight;
+
+    /// `dësc` `id` as the rescue loaded it.
+    fn rescued(id: i16) -> LoadedDesc {
+        LoadedDesc {
+            id,
+            text: Some("Rescued.".to_owned()),
+        }
+    }
 
     fn received(events: Vec<FlightEvent>) -> Inbox {
         let mut inbox = Inbox::default();
@@ -272,9 +294,23 @@ mod tests {
     }
 
     #[test]
+    fn the_stellar_passes_are_taken_in_order_across_receives_once() {
+        let mut inbox = received(vec![
+            FlightEvent::StellarPass(StellarPass::Entry),
+            FlightEvent::StellarPass(StellarPass::Ticked),
+        ]);
+        inbox.receive(vec![FlightEvent::StellarPass(StellarPass::Still)]);
+        assert_eq!(
+            inbox.take_stellar_passes(),
+            [StellarPass::Entry, StellarPass::Ticked, StellarPass::Still]
+        );
+        assert_eq!(inbox.take_stellar_passes(), []);
+    }
+
+    #[test]
     fn an_empty_inbox_gives_nothing() {
         let mut inbox = Inbox::default();
-        assert_eq!(inbox.take_sounds(), []);
+        assert_eq!(inbox.take_sounds(|_| false), []);
         assert_eq!(inbox.take_messages(), []);
         assert_eq!(inbox.take_events(), []);
         assert!(!inbox.take_save_due());
@@ -330,7 +366,7 @@ mod tests {
             }),
         ]);
         assert_eq!(
-            inbox.take_sounds(),
+            inbox.take_sounds(|_| false),
             [SimSound::Refused, SimSound::NavSelected]
         );
         assert_eq!(
@@ -393,7 +429,7 @@ mod tests {
             }),
             FlightEvent::BoardLine(MissionBoardLine::Boarded),
             FlightEvent::TakeoffNav(NavMode::Off),
-            FlightEvent::RescueDesc(13999),
+            FlightEvent::RescueDesc(rescued(13999)),
             FlightEvent::LeaveMessage("first".to_owned()),
         ]);
         let later = Granted {
@@ -408,13 +444,13 @@ mod tests {
             FlightEvent::Grant(later),
             FlightEvent::BoardLine(refuelled.clone()),
             FlightEvent::TakeoffNav(nav),
-            FlightEvent::RescueDesc(14000),
+            FlightEvent::RescueDesc(rescued(14000)),
             FlightEvent::LeaveMessage("second".to_owned()),
         ]);
         assert_eq!(inbox.take_grant(), Some(later));
         assert_eq!(inbox.take_board_line(), Some(refuelled));
         assert_eq!(inbox.take_takeoff_nav(), Some(nav));
-        assert_eq!(inbox.take_rescue_desc(), Some(14000));
+        assert_eq!(inbox.take_rescue_desc(), Some(rescued(14000)));
         assert_eq!(inbox.take_leave_message().as_deref(), Some("second"));
         assert_eq!(inbox, Inbox::default(), "each once");
     }
@@ -469,7 +505,7 @@ mod tests {
         fake.queue_event(FlightEvent::SaveDue);
         let mut inbox = Inbox::default();
         inbox.drain(&mut fake);
-        assert_eq!(inbox.take_sounds(), [SimSound::Refused]);
+        assert_eq!(inbox.take_sounds(|_| false), [SimSound::Refused]);
         assert!(inbox.take_save_due());
         inbox.drain(&mut fake);
         assert_eq!(inbox, Inbox::default(), "the flight handed them out once");

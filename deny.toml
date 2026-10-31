@@ -44,7 +44,7 @@ deny = [
     #   catalog, state, combat, ai, story, port;
     # - nova-sim (the facade);
     # - nova-view;
-    # - nova-render and nova-audio;
+    # - nova-render, nova-audio and nova-movie;
     # - nova.
     #
     # The platform shims are each reached only by their owner: nova-metalfx
@@ -63,9 +63,10 @@ deny = [
     # its own entry and is added to the `wrappers` of every crate it uses.
     { crate = "nova-rsrc", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-rsrc", "nova-sim", "nova-sim-catalog", "nova-view"], reason = "the resource-fork reader sits at the bottom and is reached only by the crates that read the game's files" },
     { crate = "nova-data", wrappers = ["nova", "nova-audio", "nova-data", "nova-dump", "nova-render", "nova-sim", "nova-sim-catalog", "nova-sim-state", "nova-view"], reason = "the game data sits on nova-rsrc, below the nova-sim layers and everything above them" },
-    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
+    { crate = "nova-view", wrappers = ["nova", "nova-audio", "nova-movie", "nova-render", "nova-view"], reason = "the view sits on the nova-sim facade, below the renderer, the audio and the game" },
     { crate = "nova-render", wrappers = ["nova", "nova-render"], reason = "only the game draws through the renderer" },
     { crate = "nova-audio", wrappers = ["nova", "nova-audio"], reason = "only the game plays sound through the audio crate" },
+    { crate = "nova-movie", wrappers = ["nova"], reason = "only the game plays movies through the decoder" },
     { crate = "nova", wrappers = ["nova"], reason = "nothing but the game's own tests depends on the game" },
     { crate = "nova-winres", wrappers = ["nova", "nova-bundle"], reason = "the Windows resources are built only for the game and the bundler" },
     # The headed third-party crates: only the crates that own them may
@@ -79,6 +80,10 @@ deny = [
     { crate = "winit", wrappers = ["nova"], reason = "only the game opens a window" },
     { crate = "glyphon", wrappers = ["nova-render"], reason = "only the renderer draws text" },
     { crate = "kira", wrappers = ["nova-audio"], reason = "only the audio crate plays sound" },
+    # FFmpeg's unsafe bindings are reached only through ffmpeg-next's safe
+    # API, and that only by the movie decoder.
+    { crate = "ffmpeg-next", wrappers = ["nova-movie"], reason = "FFmpeg is reached only through the movie decoder" },
+    { crate = "ffmpeg-sys-next", wrappers = ["ffmpeg-next"], reason = "FFmpeg's bindings are reached only through ffmpeg-next" },
     { crate = "nova-sim", wrappers = ["nova", "nova-sim", "nova-view"], reason = "a layered nova-sim crate must never depend on the facade above it" },
     { crate = "nova-sim-base", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-catalog", "nova-sim-combat", "nova-sim-port", "nova-sim-state", "nova-sim-story"], reason = "the foundation sits below every nova-sim crate and is reached through the nova-sim facade" },
     { crate = "nova-sim-catalog", wrappers = ["nova-sim", "nova-sim-ai", "nova-sim-combat", "nova-sim-port", "nova-sim-state", "nova-sim-story"], reason = "the catalog layer sits below every nova-sim crate but the foundation and is reached through the nova-sim facade" },

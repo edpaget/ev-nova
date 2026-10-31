@@ -139,10 +139,19 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
     /// over flight were staged as it was answered
     /// ([`FlightView::answer_in_flight`]), so nothing is redrawn for them:
     /// they show over the bar held from before the answer.
+    ///
+    /// While a landing's movie plays, none: `_PlayerLandOnStellar` plays it
+    /// (@0x632a7) before `_DoPortDialog` (@0x63381), which shows the
+    /// spaceport and only then runs the land checks' texts (@0x5fbeb). They
+    /// stay queued, the bar as the press found it, until it ends (see the
+    /// `movies` module).
     pub fn take_mission_texts(&mut self) -> Vec<MissionShown>
     where
         C: StatusBars,
     {
+        if self.holds_landing() {
+            return Vec::new();
+        }
         if self.docked() {
             self.stage_bar(Vec::new(), Then::Nothing);
             return self.docked_texts();
