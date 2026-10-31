@@ -1098,7 +1098,8 @@ pub struct Decision {
     /// ([`fleet_escort`]) or the player ([`EscortAi`]), so a ship a pirate
     /// took into its fleet ends its
     /// [`CAPTURED_WAIT`](plunder_contents::CAPTURED_WAIT) at its first
-    /// think. The traffic ends the wait as it takes the goal
+    /// think. [`CarriedAi`] sets it as it attacks, by the Attack block
+    /// alone. The traffic ends the wait as it takes the goal
     /// ([`Npc::end_wait`]): [`Npc::ai_wait`] zeroed, and a hold at its gate
     /// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate))
     /// ended, so it flies this tick. It gives up its warp stage, as the blocks write +0x50 = -1.0 with it
