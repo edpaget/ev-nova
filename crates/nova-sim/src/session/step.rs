@@ -599,7 +599,8 @@ mod tests {
     #[test]
     fn an_attack_quote_is_said_on_the_pass_of_its_hit() {
         let catalog = crate::session::tests::quoting_armed();
-        let mut session = facing_an_npc(&catalog, 180);
+        let lines = crate::testkit::QuoteLines(catalog.strings[0].1.clone());
+        let mut session = facing_an_npc(&catalog, 180).with_strings(std::rc::Rc::new(lines));
         crate::session::tests::make_quoting_warship(&mut session);
         for _ in 0..60 {
             session.chart.target = Some(crate::traffic::npc::NpcId(0));

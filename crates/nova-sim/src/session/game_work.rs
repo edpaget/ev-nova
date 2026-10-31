@@ -329,6 +329,9 @@ impl Session {
             for event in std::mem::take(&mut self.space.queued_in_frame) {
                 self.space.traffic.queue_pirate_event(event);
             }
+            // The quotes from before the loop, ahead of the frame's line
+            // work (see the `comm_calls` module).
+            self.say_quotes_before_the_line(chance);
             // Every think's work on the line, the launched fighters'
             // among it, in slot order (see `Session::dispatch_npcs`).
             self.settle_line_queue(rules.law, chance);
