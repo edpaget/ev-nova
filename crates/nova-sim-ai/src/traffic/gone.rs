@@ -442,12 +442,25 @@ mod tests {
         use crate::catalog::{DudeId, GovtId, SystemId};
         use crate::chance::NeverFires;
         use crate::combat::hull::Condition;
+        use crate::rulebook::RuleSource;
         use crate::traffic::fixture::calls_on_line;
-        use crate::traffic::npc::{AiType, Mode};
+        use crate::traffic::npc::{AiType, MissionMark, Mode};
         use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable};
-        use crate::traffic::{FlyHalf, LeftShip, Traffic, World};
+        use crate::traffic::{FlyHalf, LeftShip, ShipBehav, Traffic, World};
         use nova_sim_base::fixture::{Draws, FAST};
+        use nova_sim_catalog::fixture::planet;
         use std::collections::{BTreeMap, BTreeSet};
+
+        /// The stellar a landing ship lands on.
+        const STELLAR: StellarId = StellarId(140);
+
+        /// A mission's special ship's mark.
+        const MISSION_SHIP: MissionMark = MissionMark {
+            slot: 0,
+            behav: ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        };
 
         /// A brave trader at the centre, in slot `trader_berth`, provoked
         /// by a warship in slot `attacker_berth` at (`x`, `y`) and fleeing
@@ -612,22 +625,17 @@ mod tests {
         }
 
         #[test]
-        fn a_ship_keeps_a_target_breaking_up_disabled_or_landed() {
+        fn a_ship_keeps_a_target_breaking_up_or_disabled() {
             // +0xb8 stays set for each.
             let dying = Condition::Dying {
                 ticks_left: 5,
                 starting: false,
             };
-            for (condition, mode) in [
-                (dying, Mode::Flying),
-                (Condition::Disabled, Mode::Flying),
-                (Condition::Intact, Mode::Emerging { ticks_left: 5 }),
-            ] {
+            for condition in [dying, Condition::Disabled] {
                 let mut traffic = Traffic::new();
                 let other = in_slot(&mut traffic, 2);
                 let holder = aiming_at(&mut traffic, 3, ShipRef::Npc(other));
                 traffic.npcs[0].condition = condition;
-                traffic.npcs[0].mode = mode;
                 traffic.let_go_at_step(holder, true);
                 assert_eq!(
                     target_of(&traffic, holder),
@@ -726,11 +734,37 @@ mod tests {
             traffic.add_npc_at(entering, berth)
         }
 
+        /// A ship in slot `berth` of `traffic`, marked as `mission` says, at
+        /// rest over planet 140: its next flight lands it there.
+        fn landing(traffic: &mut Traffic, berth: u32, mission: Option<MissionMark>) -> NpcId {
+            let mut lander = ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+            lander.goal = Goal::Land(STELLAR);
+            lander.mission = mission;
+            traffic.add_npc_at(lander, berth)
+        }
+
+        /// NPC `id`'s flight, alone, in a fly half of `traffic` in `world`:
+        /// what became of it.
+        fn fly_in(traffic: &mut Traffic, id: NpcId, world: &World) -> Option<Outcome> {
+            let mut pass = traffic.begin_fly(world, &BTreeSet::new(), FlyHalf::Advance);
+            traffic.fly_npc(&mut pass, id, world, &mut NeverFires)
+        }
+
         /// NPC `id`'s flight, alone, in a fly half of `traffic`.
         fn fly(traffic: &mut Traffic, id: NpcId) {
-            let world = World::new(&[]);
-            let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
-            traffic.fly_npc(&mut pass, id, &world, &mut NeverFires);
+            fly_in(traffic, id, &World::new(&[]));
+        }
+
+        /// NPC `id`'s flight, alone, in a fly half of `traffic` over planet
+        /// 140, a mission ship that lands leaving as `landed_leaves` says:
+        /// what became of it.
+        fn land(traffic: &mut Traffic, id: NpcId, landed_leaves: RuleSource) -> Option<Outcome> {
+            let sites = [planet(140, 0.0, 0.0)];
+            let world = World {
+                landed_leaves,
+                ..World::new(&sites)
+            };
+            fly_in(traffic, id, &world)
         }
 
         #[test]
@@ -781,6 +815,77 @@ mod tests {
             assert_eq!(traffic.departed().len(), 1, "it left");
             assert_eq!(target_of(&traffic, earlier), Some(aim));
             assert!(traffic.gone.ships()[0].held_by(trader_of(&traffic, earlier)));
+        }
+
+        #[test]
+        fn a_ship_keeps_a_target_that_landed_and_stays_in_its_slot() {
+            // State 1's landing leaves +0xb8 set (@0x8dadc-0x8db5a), so
+            // `_HandleShip`'s slot test (@0x33865-0x33888) finds it active
+            // from an earlier slot and a later one. `landed_leaves`' other
+            // reading moves only a mission ship.
+            for (mission, reading) in [
+                (None, RuleSource::Engine),
+                (None, RuleSource::Bible),
+                (Some(MISSION_SHIP), RuleSource::Engine),
+            ] {
+                let mut traffic = Traffic::new();
+                let lander = landing(&mut traffic, 3, mission);
+                let aim = ShipRef::Npc(lander);
+                let earlier = aiming_at(&mut traffic, 2, aim);
+                let later = aiming_at(&mut traffic, 6, aim);
+                let case = format!("{mission:?} {reading:?}");
+                assert_eq!(
+                    land(&mut traffic, lander, reading),
+                    Some(Outcome::Landed(STELLAR)),
+                    "{case}"
+                );
+                for holder in [earlier, later] {
+                    traffic.let_go_at_step(holder, true);
+                    assert_eq!(target_of(&traffic, holder), Some(aim), "{case}");
+                }
+                assert!(trader_of(&traffic, lander).wait_running(), "{case}");
+                assert_eq!(traffic.gone.ships(), [], "{case}");
+            }
+        }
+
+        #[test]
+        fn a_ship_lets_go_at_its_step_of_a_mission_ship_that_left_as_it_landed() {
+            // By `landed_leaves`' other reading the ship leaves with no
+            // record, so nothing sweeps the earlier slot as a departure in
+            // the AI loop would: each holder finds the slot inactive at its
+            // own step, writing +0x70 alone.
+            let mut traffic = Traffic::new();
+            let lander = landing(&mut traffic, 3, Some(MISSION_SHIP));
+            let aim = ShipRef::Npc(lander);
+            let earlier = aiming_at(&mut traffic, 2, aim);
+            let later = aiming_at(&mut traffic, 6, aim);
+            assert_eq!(
+                land(&mut traffic, lander, RuleSource::Bible),
+                Some(Outcome::Landed(STELLAR))
+            );
+            assert_eq!(traffic.departed(), [(lander, Outcome::Landed(STELLAR))]);
+            assert_eq!(traffic.gone.ships(), []);
+            for holder in [earlier, later] {
+                assert_eq!(target_of(&traffic, holder), Some(aim), "till its step");
+                traffic.let_go_at_step(holder, true);
+                assert_eq!(target_of(&traffic, holder), None);
+                assert_eq!(trader_of(&traffic, holder).goal, Goal::Attack(aim));
+            }
+        }
+
+        #[test]
+        fn a_slot_left_by_a_mission_ship_as_it_landed_passes_nothing_to_its_next_ship() {
+            // No record names the slot, so a ship still holding it goes on
+            // naming the ship that left until its step lets go.
+            let mut traffic = Traffic::new();
+            let lander = landing(&mut traffic, 3, Some(MISSION_SHIP));
+            let aim = ShipRef::Npc(lander);
+            let earlier = aiming_at(&mut traffic, 2, aim);
+            land(&mut traffic, lander, RuleSource::Bible);
+            in_slot(&mut traffic, 3);
+            assert_eq!(target_of(&traffic, earlier), Some(aim));
+            traffic.let_go_at_step(earlier, true);
+            assert_eq!(target_of(&traffic, earlier), None);
         }
 
         #[test]
