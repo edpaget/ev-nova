@@ -3936,6 +3936,7 @@ mod tests {
         };
         for _ in 0..600 {
             lead.position = lead.position + lead.velocity;
+            ship.slot_place = Some(slot.position(&lead));
             assert_eq!(fly(&mut ship, &[], Some(&lead)), Outcome::Flying);
         }
         assert_eq!(ship.state.velocity, lead.velocity, "{:?}", ship.state);

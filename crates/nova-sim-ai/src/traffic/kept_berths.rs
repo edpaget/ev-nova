@@ -1,18 +1,21 @@
 //! What the original's ship table keeps from one traffic to the next: each
-//! slot's cached odds (+0xc914), search timer (+0xc90c) and person
-//! (+0xc8d0).
+//! slot's cached odds (+0xc914), search timer (+0xc90c), person (+0xc8d0)
+//! and formation place (+0x28/+0x2c).
 //!
 //! **The original.** The ship table is one `NewPtr(0x325000)` that
 //! `_InitArrays` takes once (@0x1b7a1-0x1b7b5, called from `_InitEVNova`
 //! @0x466fa) and keeps until the app quits. `_InitObjects` (@0x1c2e5,
 //! called once from `_InitEVNova` @0x47252) sets some of each slot's words
-//! at launch, none of these three, and the fresh pages the table is
+//! at launch, none of these four, and the fresh pages the table is
 //! served from read 0. After that, only the spawns, the odds pass and the
 //! AI write +0xc914 (see [`odds_cache`](super::odds_cache)), only
 //! `_HighLevelAIHandler` writes +0xc90c (see
-//! [`berth_search`](super::berth_search)), and only the spawns and the
+//! [`berth_search`](super::berth_search)), only the spawns and the
 //! captures write an NPC slot's +0xc8d0 (`_ResetPlayer` @0x1d4fb writes
-//! the player's slot 0 alone). No relocation, pilot load or new game
+//! the player's slot 0 alone), and only the formation calc and
+//! `_RespawnEscort` write +0x28/+0x2c (see
+//! [`formation_places`](super::formation_places)). No relocation, pilot
+//! load or new game
 //! (`_OpenPilotFile`, `_LoadPilotData`, `_ResetPlayer`, `_DoNewPilot`,
 //! `_EnterGameFromMainScreen`, `_PlayGame`) writes them, so each slot's
 //! words outlast its ship, its system, its pilot and its game.
@@ -31,7 +34,8 @@
 //! no new ship has come into it (a new pilot or a load names no slot,
 //! `_InitMissions` @0x97bbf). The odds carry changes no read: every
 //! active slot was written -1 by its spawn, and a carried marker only
-//! joins the walk the new ships' marks make.
+//! joins the walk the new ships' marks make. The formation places reach a
+//! new follower, as its berth's word.
 //!
 //! The picks (+0x72) and the exit cursors (+0xc8fe-+0xc905) the original's
 //! table keeps too are not handed on: a new traffic starts them empty (see
@@ -41,6 +45,7 @@ use std::collections::BTreeMap;
 
 use super::Traffic;
 use super::berth_search::BerthSearch;
+use super::formation_places::BerthPlaces;
 use super::odds_cache::OddsCache;
 
 /// The words each berth keeps from one traffic to the next (see the
@@ -53,6 +58,8 @@ pub struct KeptBerths {
     odds: OddsCache,
     /// The person of the ship last brought in at each berth.
     persons: BTreeMap<u32, String>,
+    /// Each berth's formation place.
+    places: BerthPlaces,
 }
 
 impl Traffic {
@@ -64,6 +71,7 @@ impl Traffic {
             search: self.berth_search.clone(),
             odds: self.odds.clone(),
             persons: self.berth_persons.clone(),
+            places: self.berth_places.clone(),
         }
     }
 
@@ -74,6 +82,7 @@ impl Traffic {
         self.berth_search.take_timers_of(kept.search);
         self.odds = kept.odds;
         self.berth_persons = kept.persons;
+        self.berth_places.take_words_of(kept.places);
     }
 }
 
@@ -85,6 +94,7 @@ mod tests {
     use crate::ai::lost_sight::SearchTimer;
     use crate::catalog::GovtId;
     use crate::combat::ShipRef;
+    use crate::geometry::Vec2;
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::traffic::World;
@@ -158,5 +168,16 @@ mod tests {
         new.keep_berths(old.kept_berths());
         assert_eq!(new.berth_person(9), Some("Ace"));
         assert_eq!(new.berth_person(1), None);
+    }
+
+    #[test]
+    fn a_new_traffic_given_the_kept_berths_reads_each_berths_place() {
+        let mut old = passed();
+        let word = Vec2::new(40.0, -60.0);
+        old.berth_places.write(2, Some(word));
+        let mut new = Traffic::new();
+        new.keep_berths(old.kept_berths());
+        assert_eq!(new.berth_place(2), Some(word));
+        assert_eq!(new.berth_place(1), None);
     }
 }

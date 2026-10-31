@@ -12,6 +12,9 @@
 //!   (@0x4427e, [`Npc::no_ai`]);
 //! - an escape pod (class 0x2ff) flies its own block and returns
 //!   (@0x8fb62-0x8fbba, [`pod_flight::is_pod`]);
+//! - a formation parent's dispatch works its followers' places out
+//!   (@0x8fcaf-0x8fcc3, [`reaches_formation_calc`]), so past those two
+//!   gates alone: before the disabled test (@0x8fcc8) and the gates below;
 //! - +0x50 below -900.0 (0xdda4c) takes the glide-in path and returns
 //!   (@0x8fcf5-0x8fd7e): a ship gliding in from hyperspace, or bursting out
 //!   of a gate past its first tick ([`Mode::JumpingIn`],
@@ -43,11 +46,18 @@ pub fn takes_jump_path(npc: &Npc) -> bool {
     passes_entry_gates(npc) && npc.warp.goal.is_some()
 }
 
+/// Whether `npc`'s dispatch reaches `_AICalcFormationPositions(ship, 0)`
+/// (@0x8fcaf): not without AI, not an escape pod. A disabled or breaking-up
+/// ship reaches it, as a ship gliding in does (see the module docs).
+#[must_use]
+pub fn reaches_formation_calc(npc: &Npc) -> bool {
+    !npc.no_ai && !pod_flight::is_pod(npc)
+}
+
 /// Whether `npc`'s dispatch passes the gates before the jump path's test:
 /// not without AI, not an escape pod, not on the glide-in path.
 fn passes_entry_gates(npc: &Npc) -> bool {
-    !pod_flight::is_pod(npc)
-        && !npc.no_ai
+    reaches_formation_calc(npc)
         && !matches!(
             npc.mode,
             Mode::JumpingIn { .. } | Mode::LeavingGate { tick: 1.. }
@@ -106,6 +116,24 @@ mod tests {
         for mode in [Mode::JumpingIn { tick: 0 }, Mode::LeavingGate { tick: 1 }] {
             assert!(!reaches_think(&Npc { mode, ..ship() }), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn a_formation_calc_is_reached_past_the_ai_and_pod_gates_alone() {
+        assert!(reaches_formation_calc(&ship()));
+        let mut disabled = ship();
+        disabled.condition = Condition::Disabled;
+        assert!(reaches_formation_calc(&disabled));
+        assert!(reaches_formation_calc(&Npc {
+            mode: Mode::JumpingIn { tick: 0 },
+            ..ship()
+        }));
+        let mut pod = ship();
+        pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
+        assert!(!reaches_formation_calc(&pod));
+        let mut hulk = ship();
+        hulk.no_ai = true;
+        assert!(!reaches_formation_calc(&hulk));
     }
 
     #[test]

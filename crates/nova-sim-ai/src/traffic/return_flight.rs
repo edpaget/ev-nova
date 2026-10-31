@@ -26,8 +26,10 @@
 //! - **The swarm branch** (@0x87364-0x873a3): a returning fighter of a
 //!   `Flags2` 0x0001 class has it too. Its formation parent in goal 5 is
 //!   its leader (`_DoPlayGameWork` @0x44160-0x441c0), so its slot is its
-//!   place in the player's formation ([`Npc::formation`]) or in its NPC
-//!   parent's ([`Npc::fleet_slot`]), from the carrier.
+//!   place in the player's formation ([`Npc::formation`]), from the
+//!   carrier, or, with an NPC parent ([`Npc::fleet_slot`]), the word that
+//!   parent wrote ([`Npc::parent_word`]), under both readings of
+//!   [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation).
 //! - **Stop** (sub 1): as any stop flies, with the settle
 //!   ([`leave_flight::stop_flight`](crate::traffic::leave_flight::stop_flight)).
 //! - With no target, `_AIEscortFireUnprovoked` returns (@0x80e6b), so subs
@@ -83,8 +85,8 @@ pub(crate) fn close(
 ) -> Flight {
     let slot = npc
         .formation()
-        .or(npc.fleet_slot)
-        .map(|place| place.position(carrier));
+        .map(|place| place.position(carrier))
+        .or_else(|| npc.parent_word());
     let (controls, flown) = formation_flight::steer(npc, carrier, true, swarm, slot, handling);
     Flight {
         controls,
@@ -311,6 +313,7 @@ mod tests {
         });
         let mut fleet = returning(100.0, start);
         fleet.fleet_slot = Some(place);
+        fleet.slot_place = Some(slot);
         for (name, mut ship) in [("the player's", own), ("a fleet's", fleet)] {
             ship.swarm_leader = Some(5);
             let rules = FlightRules::default();
@@ -326,6 +329,57 @@ mod tests {
             );
             assert_eq!(ship.display.drive.glow, GlowCopy::Swarm(12), "{name}");
         }
+    }
+
+    /// A swarmer of a fleet at rest 450 right of the carrier, facing away
+    /// from it, flown a tick with `slot` its number and `word` its place:
+    /// where it ends, moved only by a nudge.
+    fn returning_swarmer(slot: Option<FormationSlot>, word: Option<Vec2>) -> Vec2 {
+        let mut ship = returning(100.0, at(450.0, 0.0, 0.0, 0.0, 90.0));
+        ship.fleet_slot = slot;
+        ship.slot_place = word;
+        ship.swarm_leader = Some(5);
+        flown(&mut ship);
+        ship.state.position
+    }
+
+    #[test]
+    fn a_returning_swarmer_is_nudged_to_the_word_not_its_place_off_the_carrier() {
+        let place = FormationSlot {
+            slot: 2,
+            ships: 3,
+            spacing: 30.0,
+        };
+        let nudge = 0.18_f32 * 10.0;
+        let word = Vec2::new(900.0, 300.0);
+        let nudged = Vec2::new(450.0 + nudge, nudge);
+        let at_word = returning_swarmer(Some(place), Some(word));
+        assert!((at_word - nudged).length() < 1e-5, "{at_word:?}");
+    }
+
+    #[test]
+    fn a_returning_swarmer_with_a_parent_but_no_word_is_nudged_toward_zero() {
+        let place = FormationSlot {
+            slot: 2,
+            ships: 3,
+            spacing: 30.0,
+        };
+        let nudge = 0.18_f32 * 10.0;
+        let to_zero = returning_swarmer(Some(place), None);
+        assert!(
+            (to_zero - Vec2::new(450.0 - nudge, 0.0)).length() < 1e-5,
+            "{to_zero:?}"
+        );
+    }
+
+    #[test]
+    fn a_returning_swarmer_with_a_word_but_no_parent_is_not_nudged() {
+        let word = Vec2::new(900.0, 300.0);
+        assert_eq!(
+            returning_swarmer(None, Some(word)),
+            Vec2::new(450.0, 0.0),
+            "the +0xc92e gate"
+        );
     }
 
     #[test]

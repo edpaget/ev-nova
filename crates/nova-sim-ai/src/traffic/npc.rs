@@ -595,15 +595,23 @@ pub struct Npc {
     /// next pass reads its new ship. None at every spawn and launch
     /// (`_AISetup` @0x7f415). Never saved.
     pub swarm_leader: Option<u32>,
-    /// Its place in the formation of its NPC formation parent (its leader,
-    /// or its swarm leader while it attacks with a target;
+    /// Its number in the formation of its NPC formation parent (its
+    /// leader, or its swarm leader while it attacks with a target;
     /// [`swarm::formation_parent`](crate::ai::swarm::formation_parent)),
-    /// the original's +0x28/+0x2c as `_AICalcFormationPositions` numbers
-    /// it (@0x85137-0x851cc): none for a ship whose parent is the player
-    /// or none. The formation pass sets it each tick, and a fleet's arrival
-    /// as it jumps in (see
+    /// as `_AICalcFormationPositions` numbers it (@0x85137-0x851cc): none
+    /// for a ship whose parent is the player or none, so it stands for the
+    /// original's +0xc92e gate too (@0x84f30). The place it flies to is
+    /// [`Npc::slot_place`]. The formation pass sets it each tick, and a
+    /// fleet's arrival as it jumps in (see
     /// [`fleet_formation`](crate::traffic::fleet_formation)). Never saved.
     pub fleet_slot: Option<FormationSlot>,
+    /// The absolute place of its slot, the original's +0x28/+0x2c, as its
+    /// low level reads it this frame: the word its berth held as the frame
+    /// began, unless a parent or the player wrote it earlier in the frame
+    /// ([`formation_places`](crate::traffic::formation_places)). None until
+    /// a word exists, which a reader takes as a never-used slot's 0. Never
+    /// saved.
+    pub slot_place: Option<Vec2>,
     /// Its order word, the original's +0xc90a: -1 at every spawn, launch
     /// and placement ([`OrderWord::NONE`]), then the order its leader last
     /// issued it ([`escort_orders`](crate::ai::escort_orders), every eighth
@@ -915,6 +923,31 @@ impl Npc {
             Goal::Follow { .. } => self.fleet_slot,
             _ => None,
         }
+    }
+
+    /// Where the goal it flies ([`Npc::flown_goal`]) puts its slot, beside
+    /// its leader at `leader`, as `_AIMaintainFormation` reads it
+    /// (@0x84fd0-0x85034): its place in the player's formation, worked out
+    /// from the leader ([`Goal::Formation`]), or the word of its berth
+    /// ([`Npc::slot_place`], [`Goal::Follow`]), the 0 of a never-used slot
+    /// with none. None with no slot to keep: the word's +0xc92e gate
+    /// (@0x84f30) is [`Npc::fleet_slot`], and any other goal keeps none.
+    #[must_use]
+    pub fn slot_at(&self, leader: &ShipState) -> Option<Vec2> {
+        match self.flown_goal() {
+            Goal::Formation { .. } => Some(self.formation()?.position(leader)),
+            Goal::Follow { .. } => self.parent_word(),
+            _ => None,
+        }
+    }
+
+    /// The word of its berth as its low level reads it, while it has an
+    /// NPC parent ([`Npc::fleet_slot`], +0xc92e above 63 @0x84f30): the 0
+    /// of a never-used slot with no word.
+    #[must_use]
+    pub fn parent_word(&self) -> Option<Vec2> {
+        self.fleet_slot
+            .map(|_| self.slot_place.unwrap_or(Vec2::ZERO))
     }
 
     /// Whether it keeps close formation with its leader, at `leader` and
@@ -1850,6 +1883,60 @@ mod tests {
         );
         for goal in [Goal::Hold, Goal::Wait, Goal::Attack(ShipRef::Player)] {
             assert_eq!(in_goal(goal).formation_slot(), None, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn the_place_a_goal_flies_to_is_worked_out_for_the_player_and_the_word_for_a_parent() {
+        let players = FormationSlot {
+            slot: 2,
+            ships: 4,
+            spacing: 35.0,
+        };
+        let leader = ShipState {
+            position: Vec2::new(100.0, -200.0),
+            velocity: Vec2::new(3.0, 4.0),
+            heading: 37.0,
+        };
+        let word = Vec2::new(-40.0, 60.0);
+        let both = Npc {
+            escort: Some(EscortDuty {
+                formation: players,
+                order: None,
+            }),
+            fleet_slot: Some(FormationSlot::default()),
+            slot_place: Some(word),
+            ..crate::traffic::fixture::npc(6, ShipStats::default())
+        };
+        let following = Goal::Follow {
+            lead: NpcId(1),
+            guard: None,
+        };
+        let in_goal = |goal| Npc {
+            goal,
+            ..both.clone()
+        };
+        assert_eq!(
+            in_goal(Goal::Formation { guard: None }).slot_at(&leader),
+            Some(players.position(&leader))
+        );
+        assert_eq!(in_goal(following).slot_at(&leader), Some(word));
+        let never_written = Npc {
+            slot_place: None,
+            ..in_goal(following)
+        };
+        assert_eq!(
+            never_written.slot_at(&leader),
+            Some(Vec2::ZERO),
+            "a never-used slot's 0"
+        );
+        let no_parent = Npc {
+            fleet_slot: None,
+            ..in_goal(following)
+        };
+        assert_eq!(no_parent.slot_at(&leader), None, "the +0xc92e gate");
+        for goal in [Goal::Hold, Goal::Attack(ShipRef::Player)] {
+            assert_eq!(in_goal(goal).slot_at(&leader), None, "{goal:?}");
         }
     }
 

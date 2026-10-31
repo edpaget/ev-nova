@@ -7,14 +7,18 @@
 //! keeps one such word for each berth (a
 //! [`Npc::berth`](crate::traffic::npc::Npc::berth)), written as each ship's
 //! changes, and gives a new ship its berth's by a rulebook reading: the
-//! last ship's by the engine, none by the other reading.
+//! last ship's by the engine, none by the other reading. The formation
+//! places (+0x28/+0x2c, [`formation_places`](super::formation_places)) are
+//! such words too, but with no reading: each ship reads the word as it
+//! stands ([`BerthKept::left`]).
 //!
 //! It lives as long as the [`Traffic`](crate::traffic::Traffic) holding
 //! it: across systems, but not across a new traffic, where the
 //! original's table keeps the picks and exit cursors until the app quits,
-//! as it does the odds, search timers and persons the traffic hands on
-//! ([`kept_berths`](super::kept_berths)). Whether to hand these on too is
-//! the user's to decide: rdm task carry-slot-picks-and-exits-across-app-life.
+//! as it does the odds, search timers, persons and formation places the
+//! traffic hands on ([`kept_berths`](super::kept_berths)). Whether to hand
+//! the picks and cursors on too is the user's to decide: rdm task
+//! carry-slot-picks-and-exits-across-app-life.
 
 use std::collections::BTreeMap;
 

@@ -200,6 +200,7 @@ mod fleet_escort_tests;
 pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
+pub mod formation_places;
 #[cfg(test)]
 mod gate_approach_tests;
 pub mod gate_entry;
@@ -315,6 +316,7 @@ use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use berth_search::BerthSearch;
 pub use fly_pass::{FlyHalf, FlyPass};
+use formation_places::BerthPlaces;
 use gone::{Freed, GoneShips};
 use launch_room::LaunchRoom;
 use nova_sim_combat::asteroid::Asteroid;
@@ -960,6 +962,10 @@ pub struct Traffic {
     /// timer changes, kept as it dies or leaves, across systems, and
     /// handed on to the next traffic ([`kept_berths`]).
     berth_search: BerthSearch,
+    /// The word (+0x28/+0x2c) each berth holds, as the frame's dispatches
+    /// have left it ([`formation_places`]): it outlives its ship, across
+    /// systems, and is handed on to the next traffic ([`kept_berths`]).
+    berth_places: BerthPlaces,
     /// The odds each berth caches (+0xc914), refreshed one berth a tick
     /// ([`odds_cache`]): kept as its ship dies or leaves, across systems,
     /// and handed on to the next traffic ([`kept_berths`]).
@@ -1063,6 +1069,7 @@ impl Traffic {
             berth_blink: BerthBlink::default(),
             first_class: ship_display::FirstClass::default(),
             berth_search: BerthSearch::default(),
+            berth_places: BerthPlaces::default(),
             odds: OddsCache::default(),
             left_behind: BTreeMap::new(),
             launch_room: None,
@@ -1329,7 +1336,7 @@ impl Traffic {
         self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         self.succeed_leaders(&world);
-        self.form_fleets();
+        self.form_fleets(world.player.map(|player| player.state).as_ref());
         self.issue_escort_orders(&world);
         self.release_regroups(chance);
         self.reset_disabled(world.npc_escort_ai);
@@ -2852,6 +2859,7 @@ impl Traffic {
                 owed_burst: None,
                 close_form: false,
                 fleet_slot: None,
+                slot_place: None,
                 order_word: crate::fleet::OrderWord::NONE,
                 marines: kind.marines,
                 pods_left: kind.hull.signed_pod_count,
@@ -2870,7 +2878,7 @@ impl Traffic {
         }
         if formation == NpcFormation::Original {
             for lead in leads {
-                fleet_formation::snap(&mut self.npcs, lead);
+                fleet_formation::snap(&mut self.npcs, lead, &mut self.berth_places);
             }
         }
         placed.iter().flatten().count()

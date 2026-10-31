@@ -317,21 +317,18 @@ pub(crate) fn fly(
     flight: FlightRules,
     inertia: Inertia,
 ) {
-    let flying = match (leader, npc.formation_slot()) {
-        (Some(leader), Some(place)) => {
-            let sub = sub(npc.state.position, leader.position, beside.leader_seen);
-            (sub != Sub::Stop).then_some((leader, place, sub))
-        }
-        _ => None,
-    };
+    let flying = leader.and_then(|leader| {
+        let slot = npc.slot_at(leader)?;
+        let sub = sub(npc.state.position, leader.position, beside.leader_seen);
+        (sub != Sub::Stop).then_some((leader, slot, sub))
+    });
     // With no leader or slot, or in sub 1: a stop, which keeps +0x34.
-    let Some((leader, place, sub)) = flying else {
+    let Some((leader, slot, sub)) = flying else {
         let stop = leave_flight::stop_flight(npc, handling, inertia);
         let flown = stop.flown.unwrap_or(*handling);
         held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
         return;
     };
-    let slot = place.position(leader);
     let (controls, flown) = match sub {
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
@@ -972,6 +969,7 @@ mod tests {
         let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
         let slot = slot_of(&leader);
         let mut ship = fleet_escort_of(30.0, at(slot.x + 20.0, slot.y, 1.0, -2.0, 27.0));
+        ship.slot_place = Some(slot);
         flown(&mut ship, Some(&leader), Beside::default());
         assert_eq!(ship.state.velocity, leader.velocity);
         assert_eq!(ship.state.heading, 28.0);
