@@ -650,9 +650,16 @@ fn fly_mobile(
         Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), &handling, weapons)
             .unwrap_or_else(|| braking(npc, &handling, inertia)),
         Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, &handling),
-        Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
-            braking(npc, &handling, inertia)
-        }
+        // Goal 0 flies sub 0, which writes no +0x30 (@0x34a84), so it keeps
+        // what it owes of a burst and doesn't burst: the stop is the
+        // engine's stand-in, which
+        // rdm:phase/escort-fleet-fidelity-followups/phase-18-goal-0-coasts
+        // replaces.
+        Goal::Idle => Flight {
+            word: Word::Keeps { thrust: 0.0 },
+            ..braking(npc, &handling, inertia)
+        },
+        Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => braking(npc, &handling, inertia),
         // A drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
         // does nothing (@0x87345-0x87351). +0x68 is the low level's

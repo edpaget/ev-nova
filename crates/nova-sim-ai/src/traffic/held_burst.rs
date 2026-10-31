@@ -38,19 +38,42 @@
 //!   the cap ([`TopSpeeds::burst_cap`], @0x34c68-0x34d2a),
 //!   `_AIMakeShipStopJumping` (@0x82e77-0x82eba) sets goal and sub-goal 0
 //!   unless the goal is 9 or 0xf (@0x82e7d-0x82e9f), its travel stellar
-//!   +0x6c to -1 and +0x30 = +0x34 = 0, keeping its target +0x70; an
-//!   inertialess ship's velocity is zeroed (@0x34d37-0x34d59); and a ship
-//!   with no leader waits Rand(30) + 30 (@0x34d5c-0x34d8b), as after a
-//!   gate's own burst ([`autopilot::after_burst`]). Its glow falls on the
-//!   end frame, as +0x30 is zeroed before the glow reads it (F4,
-//!   @0x34eec-0x34fc4).
+//!   +0x6c to -1, its stage +0x50 to 0 and +0x30 = +0x34 = 0, keeping its
+//!   target +0x70; an inertialess ship's velocity is zeroed
+//!   (@0x34d37-0x34d59); and a ship with no leader waits Rand(30) + 30
+//!   (@0x34d5c-0x34d8b), as after a gate's own burst
+//!   ([`autopilot::after_burst`]). Its glow falls on the end frame, as
+//!   +0x30 is zeroed before the glow reads it (F4, @0x34eec-0x34fc4).
+//! - **The last frame fires**: `_HandleShip` tests the wait once, before
+//!   the burst block (@0x34a54-0x34a72), and its fire step runs after the
+//!   end and reads only the low level's flag and pick (@0x34fcb-0x35018).
+//!   So a ship with no leader fires what its low level flagged that frame,
+//!   a swarmer's missile (@0x85343-0x85357) say, and nothing through the
+//!   wait after ([`Npc::fires_on_burst_end`]).
+//! - **Sub 0xd's word**: a follower's stage writes +0x30 = 0 and
+//!   +0x34 = -1.0 every frame it gets there, over any word it held
+//!   (@0x85bcf-0x85c5a; [`FOLLOW_BURST`], by the engine's reading of
+//!   [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)). With
+//!   +0x30 at 0 that frame doesn't burst (@0x34a84). No jump given up
+//!   writes +0x34, so its next thrust of sub 1, 0xe or 0x12 bursts at 1.0
+//!   and, for any ship of top speed above 1.0 less that thrust, ends at
+//!   once. Sub 3 writes it inside its thrust window even under way, where
+//!   `_HandleShip` then skips the thrust (@0x85845-0x85858, @0x34a96). A
+//!   jump completed keeps nothing: a ship gone is gone, and a player's
+//!   escort comes back through `_RespawnEscort` (@0x3d4f1), which zeroes
+//!   the word, as `Session::place_escort` builds a new ship.
+//! - **Goal 0 keeps it**: sub 0 writes no +0x30, so a ship that gave up to
+//!   goal 0 bursts nothing on its own (@0x34a84). The engine's
+//!   [`Goal::Idle`] stands in for it with a stop, which keeps what it owes
+//!   without bursting.
 //!
-//! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. The
-//! fire on the burst's last frame (F4), sub 0xd's -1.0, the inspection
-//! hold's `_Accel` and a ship disabled during its burst are
-//! rdm:phase/escort-fleet-fidelity-followups/phase-13-left-out-of-held-ship-burst's;
+//! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. Sub 8's
+//! lowering of +0x34 by its pull (@0x880c0-0x880c9) is
+//! rdm:phase/escort-fleet-fidelity-followups/phase-21-dock-pull-lowers-burst-word's;
 //! the mining orders' thrusts are
-//! rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-2-mining-orders-burst-an-owed-burst's.
+//! rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-2-mining-orders-burst-an-owed-burst's;
+//! sub 0xc's inspection hold is dead code on any data
+//! (rdm:phase/escort-fleet-fidelity-followups/phase-2-left-out-of-formation-flight).
 //!
 //! The engine sets the burst's velocity and moves the ship in the tick
 //! its flight thrusts, where the original's move comes first in the next
@@ -66,6 +89,8 @@ use crate::traffic::autopilot::{self, TopSpeeds};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::Npc;
 use crate::traffic::ship_display::{self, Thrust};
+#[cfg(doc)]
+use crate::traffic::warp_out::FOLLOW_BURST;
 
 /// What a flight's substate does this tick to the burst word +0x34 beside
 /// its thrust word +0x30 (see the module docs).
@@ -230,17 +255,19 @@ pub(crate) fn settle(
 }
 
 /// `_AIMakeShipStopJumping` (@0x82e77-0x82eba, F3): goal and sub-goal 0
-/// ([`Goal::Idle`], its kept pursuit and docking dropped) unless it
-/// assists the player (goal 9 or 0xf, @0x82e96); its travel stellar
-/// cleared (+0x6c = -1) and its burst gone (+0x34 = 0). Its target is
-/// kept.
+/// ([`Goal::Idle`], its kept pursuit, docking and any sub 4 or 0xd
+/// dropped) unless it assists the player (goal 9 or 0xf, @0x82e96); its
+/// travel stellar cleared (+0x6c = -1), its stage ended (+0x50 = 0,
+/// @0x82eb0) and its burst gone (+0x34 = 0). Its target is kept.
 fn stop_jumping(npc: &mut Npc) {
     if !matches!(npc.goal, Goal::Assist(_)) {
         npc.goal = Goal::Idle;
         npc.pursuit.kept = None;
         npc.docking = None;
+        npc.warp.goal = None;
     }
     npc.travel_set = false;
+    npc.warp.stage = 0.0;
     npc.owed_burst = None;
 }
 
@@ -258,6 +285,7 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::traffic::npc::Mode;
     use crate::traffic::plunder_dock::{DockSub, Docking};
+    use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::{Draws, FAST};
 
     const INERTIALESS: Inertia = Inertia::Inertialess { speed: 2.0 };
@@ -665,6 +693,36 @@ mod tests {
             &mut Draws::of(&[]),
         );
         assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+    }
+
+    #[test]
+    fn the_end_of_a_burst_zeroes_its_stage_and_drops_its_jump_with_its_sub() {
+        // +0x50 = 0 in every case (@0x82eb0); sub 0 where goal 0 is written
+        // (@0x82e9f).
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        for (goal, sub) in [
+            (Goal::Idle, None),
+            (Goal::Assist(Help::Refuel), Some(WarpGoal::Own)),
+        ] {
+            for stage in [-1.0, 5.0] {
+                let mut npc = owing(Some(6.0));
+                npc.goal = goal;
+                npc.warp.stage = stage;
+                npc.warp.goal = Some(WarpGoal::Own);
+                settle(
+                    &mut npc,
+                    Some(6.2),
+                    own,
+                    Inertia::Inertial,
+                    &mut Draws::of(&[0]),
+                );
+                assert_eq!(npc.warp.stage, 0.0, "{goal:?} {stage}");
+                assert_eq!(npc.warp.goal, sub, "{goal:?} {stage}");
+            }
+        }
     }
 
     #[test]

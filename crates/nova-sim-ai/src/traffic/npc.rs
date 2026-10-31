@@ -667,17 +667,18 @@ pub struct Npc {
     /// and how it was flown this tick (see
     /// [`ship_display`](crate::traffic::ship_display)). Never saved.
     pub display: NpcDisplay,
-    /// The gate burst it still owes, released from its hold at its gate
-    /// ([`Mode::HeldAtGate`]): the speed of the original's negative burst
-    /// word +0x34, |+0x34|, which the emerge set (-30.0, or -15.0 when the
-    /// player leads it, @0x895aa-0x895bd) and the hold left, as nothing
-    /// writes it while +0x4c runs and `_LowLevelAIHandler` keeps a negative
-    /// one (@0x851e9-0x8520d). Set only by [`Npc::end_wait`], by the
-    /// engine's reading of
-    /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst); lowered
-    /// by each tick it bursts on, and dropped by the first thrust that
-    /// writes +0x34, by a dogfight's speed cap, by the burst's end and by
-    /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
+    /// The burst it still owes: the speed of the original's negative burst
+    /// word +0x34, |+0x34|, which `_LowLevelAIHandler` keeps
+    /// (@0x851e9-0x8520d). Set, by the engine's reading of
+    /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), by
+    /// [`Npc::end_wait`], from the emerge's word (-30.0, or -15.0 when the
+    /// player leads it, @0x895aa-0x895bd) that a hold at its gate
+    /// ([`Mode::HeldAtGate`]) left, as nothing writes it while +0x4c runs;
+    /// by a glide or burst cut short ([`Npc::leaves_arrival`]); and by sub
+    /// 0xd's stage ([`FOLLOW_BURST`](crate::traffic::warp_out::FOLLOW_BURST)).
+    /// Lowered by each tick it bursts on, and dropped by the first thrust
+    /// that writes +0x34, by a dogfight's speed cap, by the burst's end and
+    /// by a new emerge (see [`held_burst`](crate::traffic::held_burst)).
     /// None at every spawn. Never saved.
     pub owed_burst: Option<f32>,
     /// Whether its burst ended this tick in a wait

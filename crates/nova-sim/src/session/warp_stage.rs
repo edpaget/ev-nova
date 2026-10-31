@@ -71,6 +71,7 @@ use crate::pilot::Pilot;
 use crate::player_turn::brake_aim;
 use crate::player_turn::turn;
 use crate::pre_jump::{self, PreJump};
+use crate::rulebook::RuleKey;
 use crate::traffic::npc::NpcId;
 use crate::traffic::warp_out::{LeaderWarp, WarpWorld};
 use crate::trig::{self, angular_difference, whole};
@@ -327,17 +328,20 @@ impl Session {
 
     /// `_MakeEscortsHyperWithParent` (@0x3fd54-0x3fdea): each ship the
     /// player leads takes its +0x50 and clock, lets go of its target and
-    /// follows its jump ([`Npc::follow_player_jump`]). Its test of +0x8c,
+    /// follows its jump ([`Npc::follow_player_jump`]), a glide or burst it
+    /// cuts short owing its rest as the rulebook reads
+    /// [`RuleKey::HeldGateBurst`]. Its test of +0x8c,
     /// the stellar a ship defends, always holds: a defence ship has no leader (its spawn writes -1) and a capture or a pirate's take clears its stellar.
     ///
     /// [`Npc::follow_player_jump`]: crate::traffic::npc::Npc::follow_player_jump
     fn make_escorts_hyper(&mut self) {
         let stage = self.ship.warp.warp.stage;
         let since = self.warp_clock().unwrap_or(0);
+        let burst = self.setup.rules.source_for(RuleKey::HeldGateBurst);
         let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
         for id in led {
             if let Some(npc) = self.space.npc_mut(id) {
-                npc.follow_player_jump(stage, since);
+                npc.follow_player_jump(stage, since, burst);
             }
         }
     }
@@ -1187,6 +1191,32 @@ mod tests {
             texts,
             [(crate::MissionTextKind::ShipDone, "Done.".to_owned())]
         );
+    }
+
+    #[test]
+    fn the_players_stage_cuts_a_glide_short_owing_its_rest_as_the_rulebook_reads() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        for (reading, owed) in [
+            (
+                RuleSource::Engine,
+                Some(crate::traffic::spawn::glide_speed(3)),
+            ),
+            (RuleSource::Bible, None),
+        ] {
+            let mut session = jumping(&catalog());
+            session.setup.rules =
+                Rulebook::default().with_override(RuleKey::HeldGateBurst, reading);
+            let mut escort = crate::testkit::npc(0, crate::stats::ShipStats::new(FAST, &[]));
+            escort.escort = Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            });
+            escort.mode = crate::traffic::npc::Mode::JumpingIn { tick: 3 };
+            let id = session.space.traffic.add_npc(escort);
+            session.make_escorts_hyper();
+            let escort = session.space.npc(id).expect("it stays");
+            assert_eq!(escort.owed_burst, owed, "{reading:?}");
+        }
     }
 
     #[test]

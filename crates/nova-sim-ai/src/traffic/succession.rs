@@ -254,8 +254,9 @@ impl Npc {
     /// ends sub 0xa. It then flies, at once, its +0x34 left negative: it
     /// owes the rest of its burst ([`Npc::owed_burst`]) by `burst`'s reading
     /// of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), as a
-    /// ship held at its gate does.
-    fn leaves_arrival(&mut self, burst: RuleSource) {
+    /// ship held at its gate does. The player's warp stage does the same
+    /// ([`Npc::follow_player_jump`]).
+    pub(crate) fn leaves_arrival(&mut self, burst: RuleSource) {
         self.leaves_gate_goal();
         let speed = match self.mode {
             Mode::JumpingIn { tick } => glide_speed(tick),

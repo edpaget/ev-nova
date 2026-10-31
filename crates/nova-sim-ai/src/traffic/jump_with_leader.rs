@@ -1361,7 +1361,7 @@ mod tests {
         for (name, goal, mode, wait) in waits() {
             let mut ship = players_ship(goal, mode, wait);
             ship.target = Some(ShipRef::Player);
-            ship.follow_player_jump(5.0, 7);
+            ship.follow_player_jump(5.0, 7, RuleSource::Engine);
             assert!(ship.joins_leaders_jump(), "{name}");
             assert!(ship.high_level_waits(), "{name}");
             assert_eq!(ship.warp.goal, None, "{name}: its old substate");
@@ -1386,7 +1386,7 @@ mod tests {
         for (name, goal, mode, wait) in waits() {
             let mut traffic = Traffic::with_interval(1);
             let mut ship = players_ship(goal, mode, wait);
-            ship.follow_player_jump(5.0, 7);
+            ship.follow_player_jump(5.0, 7, RuleSource::Engine);
             assert_eq!(ship.warp.aim, 90, "{name}");
             let id = traffic.add_npc(ship);
             traffic.fly_holding(
@@ -1403,7 +1403,7 @@ mod tests {
         use crate::traffic::npc::Mode;
         let mut ship = players_ship(Goal::Idle, Mode::Emerging { ticks_left: 30 }, 0);
         ship.emerges_from = Some(crate::catalog::StellarId(128));
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 30 });
         assert_eq!(ship.emerges_from, None);
     }
@@ -1412,7 +1412,7 @@ mod tests {
     fn the_players_warp_stage_clears_an_own_jump_under_a_wait_and_starts_no_stage_of_its_own() {
         let mut ship = players_ship(Goal::JumpOut, crate::traffic::npc::Mode::Flying, 30);
         ship.warp.goal = Some(WarpGoal::Own);
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         assert_eq!(ship.warp.goal, None);
         assert!(ship.joins_leaders_jump());
         assert!(!ship.jumping());
@@ -1422,7 +1422,7 @@ mod tests {
     fn a_ship_on_sub_0xd_in_its_180_wait_keeps_it() {
         let mut ship = players_ship(Goal::Idle, crate::traffic::npc::Mode::Flying, 180);
         ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
         assert!(!ship.warp.joining);
         let mut led = far(0);
@@ -1439,7 +1439,7 @@ mod tests {
     #[test]
     fn with_no_wait_the_players_warp_stage_puts_it_straight_on_sub_0xd_over_its_goal() {
         let mut ship = players_ship(Goal::Wait, crate::traffic::npc::Mode::Flying, 0);
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
         assert_eq!(ship.goal, Goal::Wait, "the hold's own write, later");
         assert!(!ship.warp.joining);
@@ -1451,7 +1451,7 @@ mod tests {
         use crate::traffic::npc::Mode;
         let mut traffic = Traffic::with_interval(1);
         let mut ship = players_ship(Goal::Idle, Mode::Coasting { ticks_left: 1 }, 0);
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         let id = traffic.add_npc(ship);
         let mut world = jumping_world(5.0);
         world.player = Some(crate::ai::fixture::player(0.0, 0.0));
@@ -1481,20 +1481,27 @@ mod tests {
         // `_MakeEscortsHyperWithParent` copies +0x50 with no goal test
         // (@0x3fd9a-0x3fd9e): over -999.0, so `_AIDispatch` no longer sends
         // it to goal 8 (@0x8fcf5), and goal 0xb's block writes sub 0xd.
+        use crate::traffic::emerge::exit_speed;
         use crate::traffic::npc::Mode;
-        for mode in [Mode::JumpingIn { tick: 4 }, Mode::LeavingGate { tick: 4 }] {
-            let mut ship = players_ship(Goal::Idle, mode, 0);
-            ship.state.velocity = Vec2::new(20.0, 0.0);
-            ship.emerges_from = Some(crate::catalog::StellarId(128));
-            ship.follow_player_jump(5.0, 7);
-            assert_eq!(ship.mode, Mode::Flying, "{mode:?}");
-            assert_eq!(ship.emerges_from, None, "{mode:?}");
-            assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
-            assert_eq!(ship.warp.stage, 5.0);
-            assert!(ship.jumping(), "{mode:?}");
-            assert!(dispatch_gate::takes_jump_path(&ship), "{mode:?}");
-            assert_eq!(ship.state.velocity, Vec2::new(20.0, 0.0), "kept");
-            assert_eq!(ship.owed_burst, None, "phase 13's word");
+        use crate::traffic::spawn::glide_speed;
+        for (mode, speed) in [
+            (Mode::JumpingIn { tick: 4 }, glide_speed(4)),
+            (Mode::LeavingGate { tick: 4 }, exit_speed(false, 4)),
+        ] {
+            for (reading, owed) in [(RuleSource::Engine, Some(speed)), (RuleSource::Bible, None)] {
+                let mut ship = players_ship(Goal::Idle, mode, 0);
+                ship.state.velocity = Vec2::new(20.0, 0.0);
+                ship.emerges_from = Some(crate::catalog::StellarId(128));
+                ship.follow_player_jump(5.0, 7, reading);
+                assert_eq!(ship.mode, Mode::Flying, "{mode:?}");
+                assert_eq!(ship.emerges_from, None, "{mode:?}");
+                assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+                assert_eq!(ship.warp.stage, 5.0);
+                assert!(ship.jumping(), "{mode:?}");
+                assert!(dispatch_gate::takes_jump_path(&ship), "{mode:?}");
+                assert_eq!(ship.state.velocity, Vec2::new(20.0, 0.0), "kept");
+                assert_eq!(ship.owed_burst, owed, "{mode:?} {reading:?}");
+            }
         }
     }
 
@@ -1503,7 +1510,7 @@ mod tests {
         // Goal 0x15 still (@0x8dd8a), +0x4c just out: held one tick.
         use crate::traffic::npc::Mode;
         let mut ship = players_ship(Goal::Idle, Mode::LeavingGate { tick: 0 }, 0);
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1 });
         assert!(ship.joins_leaders_jump());
     }

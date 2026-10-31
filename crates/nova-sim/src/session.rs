@@ -24335,7 +24335,13 @@ pub(super) mod tests {
         };
         assert!(fires(|_| {}), "not warping, it fires");
         assert!(
-            !fires(|session| session.space.traffic.npcs_mut()[0].follow_player_jump(2.0, 0)),
+            !fires(
+                |session| session.space.traffic.npcs_mut()[0].follow_player_jump(
+                    2.0,
+                    0,
+                    RuleSource::Engine
+                )
+            ),
             "following the player's jump"
         );
     }

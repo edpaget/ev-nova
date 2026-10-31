@@ -487,16 +487,26 @@ fn fly_flown(
     if !npc.wait_running() || !inertialess::moving(npc.state.velocity) {
         npc.stopping = false;
     }
-    let owed = npc.owed_burst;
-    let outcome = fly_steered(
-        npc,
-        pass,
-        world,
-        (other, other_disabled, beside),
-        speeds,
-        &mut *chance,
-    );
-    held_burst::settle(npc, owed, speeds, inertia, &mut *chance);
+    // The goal it holds, not the one it flies (see `fly_one`).
+    let paused = pass.paused.contains(&npc.id);
+    let jump = warp_out::fly_jump(npc, &pass.leaders, world, pass.think, paused);
+    let outcome = if let Some(outcome) = jump {
+        outcome
+    } else {
+        // Read after the jump: it bursts nothing, and sub 0xd's word over a
+        // higher one is no burst lowering it (@0x34a84).
+        let owed = npc.owed_burst;
+        let outcome = fly_steered(
+            npc,
+            pass,
+            world,
+            (other, other_disabled, beside),
+            speeds,
+            &mut *chance,
+        );
+        held_burst::settle(npc, owed, speeds, inertia, &mut *chance);
+        outcome
+    };
     ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
     outcome
 }
@@ -515,8 +525,9 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
     }
 }
 
-/// Flies `npc` a tick in `world` in the fly half `pass`: its jump, its
-/// dock with a ship it plunders or repairs, or its goal, toward `other`,
+/// Flies `npc`, on no jump ([`warp_out::fly_jump`]), a tick in `world` in
+/// the fly half `pass`: its dock with a ship it plunders or repairs, or its
+/// goal, toward `other`,
 /// disabled as `other_disabled` says, with `beside` what it reads beside
 /// it (its swarm lead, a formation escort's guard and sight), at
 /// `speeds`, a dock it starts or a repair it completes noted in the
@@ -533,11 +544,6 @@ fn fly_steered(
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    // The goal it holds, not the one it flies (see `fly_one`).
-    let paused = pass.paused.contains(&npc.id);
-    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think, paused) {
-        return outcome;
-    }
     match plunder::fly_docking(
         npc,
         other.as_ref(),
@@ -579,7 +585,8 @@ fn fly_steered(
         world.weapons,
         &mut *chance,
     );
-    let jumping = npc.jumping() && !paused;
+    // The goal it holds, not the one it flies (see `fly_one`).
+    let jumping = npc.jumping() && !pass.paused.contains(&npc.id);
     warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
     outcome
 }

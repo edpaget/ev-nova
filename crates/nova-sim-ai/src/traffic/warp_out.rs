@@ -84,7 +84,12 @@
 //! off gives up its stage (+0x50 = −1.0) and aims at the leader's +0x68,
 //! and within it waits (+0x4c = 180.0, @0x85bc3); within 10° it starts
 //! its stage (+0x50 from 0 to 1.0, stamped), its velocity × 0.95, its
-//! thrust off, and +0x50 grows by 1.0 (@0x85bcf-0x85c5a).
+//! thrust off, +0x50 grows by 1.0, and +0x34 = -1.0 over whatever it held
+//! (@0x85bcf-0x85c5a; [`FOLLOW_BURST`], by the engine's reading of
+//! [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)): every frame
+//! it gets there, which no jump given up undoes (see
+//! [`held_burst`](crate::traffic::held_burst)). Its formation, waiting and
+//! detach frames write no word.
 //!
 //! **`_HandleShip`'s warp-out** (@0x346b3-0x34a31; [`warp_block`]), on
 //! both passes, for any ship with +0x50 above 0 that is not disabled
@@ -139,6 +144,7 @@ use crate::combat::hull::Condition;
 use crate::flight::{self, Controls, FlightRules, drag_by, turned};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::rulebook::RuleSource;
 use crate::traffic::Outcome;
 use crate::traffic::World;
 use crate::traffic::autopilot::{plain_step, position_step};
@@ -172,6 +178,10 @@ pub const DETACH_STAGE: f32 = 30.0;
 /// The warp stage a ship's jump is given up at (+0x50 = -1.0, float
 /// 0xdd04c, 0xbf800000 inline): [`Warp::give_up`].
 pub const GIVEN_UP_STAGE: f32 = -1.0;
+
+/// What sub 0xd's stage owes of a burst, |+0x34| (the -1.0 written
+/// @0x85c4c-0x85c53), which outlives a jump given up ([`fly_jump`]).
+pub const FOLLOW_BURST: f32 = 1.0;
 
 /// Whose jump an NPC's warp follows: its sub-goal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -262,9 +272,11 @@ impl Npc {
     ///   any goal written there does.
     /// - Over -999.0 it ends a glide in or a burst out, as `_AIDispatch` no
     ///   longer sends the ship to goal 8 (@0x8fcf5) and goal 0xb's block
-    ///   writes sub 0xd over sub 0xa. It flies on at the velocity it held.
-    ///   A burst left in +0x34 is sub 0xd's burst word's
-    ///   (rdm:phase/escort-fleet-fidelity-followups/phase-13-left-out-of-held-ship-burst).
+    ///   writes sub 0xd over sub 0xa. It flies on at the velocity it held,
+    ///   owing the rest of its burst by `burst`'s reading of
+    ///   [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
+    ///   ([`Npc::leaves_arrival`]), until sub 0xd's stage writes its own
+    ///   word over it ([`fly_jump`]).
     /// - Under a wait it writes goal 0xb and no sub, so the ship keeps its
     ///   old substate ([`Npc::joins_leaders_jump`]). As the ship can't wait
     ///   for a think to write the goal the engine keeps beside goal 0xb, it
@@ -273,10 +285,10 @@ impl Npc {
     ///   stage it copies reads as not jumping (`_AIIsShipJumping` reads the
     ///   sub), so the warp-out zeroes it on the low level's default +0x68,
     ///   its whole heading (@0x8522d, @0x34a27).
-    pub fn follow_player_jump(&mut self, stage: f32, since: u32) {
+    pub fn follow_player_jump(&mut self, stage: f32, since: u32, burst: RuleSource) {
         self.leaves_gate_goal();
         if self.jumping_in() {
-            self.mode = Mode::Flying;
+            self.leaves_arrival(burst);
             self.emerges_from = None;
         }
         self.warp.stage = stage;
@@ -712,6 +724,10 @@ fn jump_slot(npc: &Npc, goal: WarpGoal, world: &World) -> Option<Vec2> {
 /// double time's second pass runs no low level, `je 0x44350` @0x4402a), and
 /// no thrust (@0x859df-0x85a4a).
 ///
+/// Sub 0xd's stage owes [`FOLLOW_BURST`] by `world`'s reading of
+/// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), over anything
+/// it owed. It doesn't burst that frame: its +0x30 is 0 (@0x34a84).
+///
 /// A ship `paused` in the regroup pause (goal 0x13, its sub 4 or 0xd kept)
 /// runs no goal block (`_HighLevelAIHandler` has none for 0x13), so no goal
 /// 0xb check, and its low level flies its kept substate. As
@@ -765,7 +781,13 @@ pub fn fly_jump(
                     }
                     FollowCheck::Follow => {
                         if intact && let Some((player, leader)) = leader {
-                            formation = follow_jump(npc, leader, player) == FollowStep::Formation;
+                            let step = follow_jump(npc, leader, player);
+                            formation = step == FollowStep::Formation;
+                            // +0x34 = -1.0 over whatever it held (@0x85c53).
+                            if step == FollowStep::Warping && world.held_burst == RuleSource::Engine
+                            {
+                                npc.owed_burst = Some(FOLLOW_BURST);
+                            }
                         }
                     }
                 }
@@ -820,8 +842,10 @@ mod tests {
     use crate::escort::FORMATION_NUDGE;
     use crate::flight::ShipState;
     use crate::stats::ShipStats;
+    use crate::traffic::emerge::exit_speed;
     use crate::traffic::fixture::npc;
     use crate::traffic::ship_display::Thrust;
+    use crate::traffic::spawn::glide_speed;
     use crate::warp::warp_factor;
 
     /// 3° a tick, w 1.3.
@@ -1279,15 +1303,47 @@ mod tests {
         let mut ship = ship();
         ship.target = Some(ShipRef::Npc(crate::traffic::npc::NpcId(9)));
         ship.provoked = 12.0;
-        ship.follow_player_jump(5.0, 7);
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         assert_eq!(ship.warp.stage, 5.0);
         assert_eq!(ship.warp.since, 7);
         assert_eq!(ship.target, None);
         assert_eq!(ship.provoked, 0.0);
         assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
-        ship.follow_player_jump(0.0, 7);
+        ship.follow_player_jump(0.0, 7, RuleSource::Engine);
         assert_eq!(ship.warp.stage, 1.0, "a stage of none starts at 1.0");
         assert_eq!(ship.warp.since, 0, "stamped");
+    }
+
+    #[test]
+    fn a_glide_or_burst_cut_short_by_the_players_jump_owes_its_rest_by_the_engine_only() {
+        // `_MakeEscortsHyperWithParent` copies the player's +0x50 over the
+        // -999.0 (@0x3fd9a-0x3fd9e) and leaves +0x34.
+        for (mode, led, speed) in [
+            (Mode::LeavingGate { tick: 3 }, false, exit_speed(false, 3)),
+            (Mode::LeavingGate { tick: 3 }, true, exit_speed(true, 3)),
+            (Mode::JumpingIn { tick: 3 }, false, glide_speed(3)),
+        ] {
+            for (reading, owed) in [(RuleSource::Engine, Some(speed)), (RuleSource::Bible, None)] {
+                let mut ship = ship();
+                ship.mode = mode;
+                ship.led_out = led;
+                ship.emerges_from = Some(crate::catalog::StellarId(128));
+                ship.follow_player_jump(5.0, 7, reading);
+                assert_eq!(ship.mode, Mode::Flying, "{mode:?} {reading:?}");
+                assert_eq!(ship.emerges_from, None, "{mode:?} {reading:?}");
+                assert_eq!(ship.owed_burst, owed, "{mode:?} {led} {reading:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_burst_on_its_first_tick_still_goes_through_the_gate_goal_and_owes_nothing_there() {
+        // Goal 0x15 still (@0x8dd8a): it holds, and the hold's end owes.
+        let mut ship = ship();
+        ship.mode = Mode::LeavingGate { tick: 0 };
+        ship.follow_player_jump(5.0, 7, RuleSource::Engine);
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert_eq!(ship.owed_burst, None);
     }
 
     // Sub-goal 0xd.
