@@ -235,7 +235,8 @@ pub(super) struct WalkTerms<'a> {
     pub(super) arsenal: &'a Arsenal,
     /// When a ship is disabled.
     pub(super) rule: &'a dyn DisableRule,
-    /// The masks and readings a contact is tested by ([`contact`]).
+    /// The masks and readings a contact is tested by
+    /// ([`contact`](super::contact)).
     pub(super) sprites: &'a ContactSprites,
 }
 

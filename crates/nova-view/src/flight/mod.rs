@@ -48,7 +48,6 @@
 //! - `slot_pool`: the original's fixed sprite tables, a new item taking
 //!   the first free slot and each drawn in slot order.
 //! - [`smoke`]: the puffs a smoking shot leaves.
-//! - [`spin`]: the index each spinning shot's frames start on.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
 //! - [`stars`]: the starfield as the original builds it, 20 star sprites
