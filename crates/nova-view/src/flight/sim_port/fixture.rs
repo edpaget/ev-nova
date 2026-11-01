@@ -643,7 +643,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         },
         murk_colour: murk_colour.wrapping_add(1),
         double_time: !double_time,
-        speed_mult: nova_sim::SpeedMult::new(1.0 - speed_mult.get() / 2.0),
+        speed_mult: if *speed_mult == nova_sim::SpeedMult::FULL {
+            nova_sim::SpeedMult::ZERO
+        } else {
+            nova_sim::SpeedMult::FULL
+        },
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
         hud: unlike_hud(hud),
