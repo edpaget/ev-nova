@@ -114,7 +114,20 @@ impl Space {
     /// `_HandlePlayer`'s class-order bookkeeping (see the module docs),
     /// the escorts' records in `pilot`, their classes read through
     /// `statics`: whether it cleared any class.
+    ///
+    /// It waits while the system isn't set up yet (the first pass after a
+    /// load, whose traffic tick places the escorts after this turn):
+    /// `_LoadPilotData` spawns them before any pass, so the original's
+    /// first bookkeeping finds them, and running it on an empty system
+    /// would clear the loaded table and rewrite the pilot's copy before
+    /// the escorts take their words from it (see the `class_table`
+    /// module). The engine's first bookkeeping then comes one pass later
+    /// than the original's, before any save or dialog; the frame between
+    /// shows the escorts' own orders either way.
     pub(super) fn settle_class_orders(&mut self, pilot: &mut Pilot, statics: &Statics) -> bool {
+        if self.traffic_due {
+            return false;
+        }
         let mut cleared = Vec::new();
         for (index, class) in EscortClass::ALL.into_iter().enumerate() {
             let kept = self.escorts.class_orders[index];

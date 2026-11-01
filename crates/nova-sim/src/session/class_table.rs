@@ -267,6 +267,27 @@ mod tests {
     }
 
     #[test]
+    fn the_first_pass_after_a_load_sets_the_system_up_before_the_bookkeeping_reads_it() {
+        // `_LoadPilotData` spawns the escorts before any pass; the engine
+        // places them on the first pass's traffic tick, after the
+        // bookkeeping's turn, which waits for them.
+        let hold = Some(EscortOrder::Hold);
+        let catalog = carrying();
+        let mut saved = pilot(&catalog, 0, vec![warship(hold)]);
+        saved.class_orders = words([-1, 0, 4, 3]);
+        let rules = Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible);
+        let mut session = Session::fly(&catalog, saved)
+            .expect("flies")
+            .with_rules(rules);
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(fleet_npcs(&session).len(), 1, "placed");
+        assert_eq!(word(&session, 0), OrderWord(4));
+        assert_eq!(session.space.escorts.class_orders[2], hold, "not cleared");
+        assert_eq!(session.pilot().class_orders, words([-1, 0, 4, 3]));
+        assert_eq!(session.pilot().escorts()[0].order, hold);
+    }
+
+    #[test]
     fn a_class_out_of_the_table_reads_its_own_entry() {
         let mut pilot = pilot(&carrying(), 0, Vec::new());
         pilot.class_orders = words([1, 2, 3, 4]);
