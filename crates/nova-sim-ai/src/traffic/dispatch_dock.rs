@@ -55,7 +55,7 @@ use super::plunder_dock::DockOutcome;
 #[cfg(doc)]
 use super::plunder_dock::{self, DockFlight};
 use super::{Traffic, World, repair_dock};
-use crate::ai::swarm;
+use crate::ai::{Surroundings, swarm};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 
@@ -84,7 +84,13 @@ impl Traffic {
                 .find(|npc| npc.id == ship)
                 .map(|npc| npc.state),
         };
-        let swarm = swarm::lead(npc, &world.around(&self.npcs));
+        // Sub 0xb's swarm branch reads its swarm leader's slot live, a freed
+        // one by its record (see `swarm::lead`).
+        let around = Surroundings {
+            gone: self.gone.ships(),
+            ..world.around(&self.npcs)
+        };
+        let swarm = swarm::lead(npc, &around);
         let own = npc.top_speed(world.led_speed);
         let npc = &mut self.npcs[index];
         let flight = world.flight;

@@ -12,9 +12,11 @@
 //!   ships are entering a gate; and snapshots what each flight reads of
 //!   the others: every ship's state before any moves, the player's, the
 //!   top speeds, the disabled ships, the leaders' warps, the tractors'
-//!   holders, each
-//!   swarmer's lead and the ships that don't see their leader. The
-//!   original's steering reads come from
+//!   holders (one that left at its slot this tick by its record, see
+//!   [`tractor_hold`]), each swarmer's lead (a freed slot by its record,
+//!   [`swarm::lead`]) and the ships that don't see their leader (one that
+//!   left at its slot this tick as it left: `_ShipVisibleToShip` tests no
+//!   +0xb8). The original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
 //!   at each reader's own slot. So on the advance pass a flight reads a
 //!   ship of a higher slot where it was as the AI loop opened, before that
@@ -68,9 +70,9 @@ use super::skipped_high_level::SkippedReads;
 use super::{
     Traffic, World, ionization, land_flight, plunder, regroup, ship_display, tractor_hold, warp_out,
 };
-use crate::ai::Goal;
 use crate::ai::mine_orders;
 use crate::ai::swarm::{self, SwarmLead};
+use crate::ai::{Goal, Surroundings};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
@@ -246,25 +248,14 @@ impl Traffic {
         } else {
             BTreeMap::new()
         };
-        let holders = tractor_hold::Holders::of(world, &self.npcs);
+        let holders = tractor_hold::Holders::of(world, &self.npcs).and_left(left_in_dispatch);
         let disabled = self
             .npcs
             .iter()
             .filter(|npc| npc.condition == Condition::Disabled)
             .map(|npc| npc.id)
             .collect();
-        let around = world.around(&self.npcs);
-        let leads = self
-            .npcs
-            .iter()
-            .filter_map(|npc| swarm::lead(npc, &around).map(|lead| (npc.id, lead)))
-            .collect();
-        let unseen = self
-            .npcs
-            .iter()
-            .filter(|npc| !around.sees_leader(npc))
-            .map(|npc| npc.id)
-            .collect();
+        let (leads, unseen) = self.leads_and_sight(world, left_in_dispatch);
         let paused = self
             .npcs
             .iter()
@@ -302,6 +293,41 @@ impl Traffic {
             records,
             first: self.first_class,
         }
+    }
+
+    /// Each swarmer's lead in `world`, a swarm leader gone read by its
+    /// slot's record ([`swarm::lead`]), and the NPCs that don't see their
+    /// leader, `left` (the ships that left at their slot of this tick's AI
+    /// loop) seen as they left: `_ShipVisibleToShip` tests no +0xb8
+    /// (@0x971c-0x97fe), so the escorts below a leaver, whose high level
+    /// came first, and those above it, by its record, read it alike. A
+    /// leader gone by an earlier tick has handed its fleet on
+    /// (`_AICheckParentExists`, see [`succession`](super::succession)).
+    fn leads_and_sight(
+        &self,
+        world: &World,
+        left: &[Npc],
+    ) -> (BTreeMap<NpcId, SwarmLead>, BTreeSet<NpcId>) {
+        let around = Surroundings {
+            gone: self.gone.ships(),
+            ..world.around(&self.npcs)
+        };
+        let leads = (self.npcs.iter())
+            .filter_map(|npc| swarm::lead(npc, &around).map(|lead| (npc.id, lead)))
+            .collect();
+        let with_left: Vec<Npc>;
+        let sighted = if left.is_empty() {
+            &self.npcs
+        } else {
+            with_left = (self.npcs.iter()).chain(left).cloned().collect();
+            &with_left
+        };
+        let sight = world.around(sighted);
+        let unseen = (self.npcs.iter())
+            .filter(|npc| !sight.sees_leader(npc))
+            .map(|npc| npc.id)
+            .collect();
+        (leads, unseen)
     }
 
     /// Flies NPC `id` a tick in `world`, in the fly half `pass`, rolling
@@ -1283,6 +1309,54 @@ mod tests {
             beside_of(&pass, &own_cloak.npcs[1]).leader_seen,
             "a cloak of its own sees its cloaked lead"
         );
+    }
+
+    #[test]
+    fn an_escort_beside_a_cloaked_lead_that_left_at_its_slot_reads_it_unseen_below_and_above_it() {
+        // `_ShipVisibleToShip(leader, ship)` (@0x8ed5f), in the escort's own
+        // high level, tests no +0xb8 (@0x971c-0x97fe): one below the lead
+        // read it before it left, one above reads its freed slot's record,
+        // cloaked either way.
+        let world = World::new(&[]);
+        for berth in [1, 5] {
+            let mut traffic = fleet(true);
+            let lead = traffic.npcs.remove(0);
+            traffic.left_in_dispatch.push(lead);
+            traffic.npcs[0].berth = berth;
+            let pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+            assert!(!beside_of(&pass, &traffic.npcs[0]).leader_seen, "{berth}");
+        }
+        // Gone by an earlier tick, it is out of every view: seen.
+        let mut traffic = fleet(true);
+        traffic.npcs.remove(0);
+        let pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        assert!(beside_of(&pass, &traffic.npcs[0]).leader_seen);
+    }
+
+    #[test]
+    fn a_swarmer_whose_swarm_leader_left_reads_its_freed_slots_record() {
+        // The swarm branches and sub 0x12 read the swarm leader's slot
+        // (+0xc906) with no +0xb8 test (@0x8525e-0x852c4, @0x87364-0x873a3),
+        // and the record stands until a ship takes the berth. A swarm leader
+        // is always below its swarmer (`_AIFindSwarmLeader` @0x7e3af-0x7e45b).
+        let world = World::new(&[]);
+        let mut leader = at(1, 300.0, 0.0);
+        leader.state.heading = 90.0;
+        leader.display.glow = 9;
+        let mut swarmer = at(4, 0.0, 0.0);
+        swarmer.swarm_leader = Some(leader.berth);
+        let mut traffic = Traffic {
+            npcs: vec![swarmer],
+            ..Traffic::default()
+        };
+        traffic.left_the_system(leader.clone(), Freed::InDispatch);
+        let pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        let lead = beside_of(&pass, &traffic.npcs[0])
+            .swarm
+            .expect("its record");
+        assert_eq!(lead.glow, 9);
+        assert!(lead.aim.y.abs() < 1e-3, "{:?}", lead.aim);
+        assert!(lead.aim.x > 300.0, "ahead of it, east: {:?}", lead.aim);
     }
 
     #[test]

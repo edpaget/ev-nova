@@ -8,7 +8,14 @@
 //! world's [`tractor_step`](super::World::tractor_step), then released
 //! when its holder is gone, disabled or dying, then aged and lapsed. It
 //! runs for every NPC the flight reaches, on both passes, aging on the
-//! advance pass alone, before the ship moves and after its ion block.
+//! advance pass alone, before the ship moves and after its ion block. A
+//! ship held by a holder that left at its slot of the frame's AI loop is
+//! pulled by the holder's record, then released ([`Holders::and_left`]),
+//! at any slot: the pull reads the slot with no active test. The player's
+//! hold releases first and isn't pulled on the frame it is released
+//! (`_HandlePlayer` @0x68436-0x684b7, see
+//! [`player_pass`](crate::combat::tractor_hold::player_pass)), so a
+//! holder gone that way pulls the player not at all.
 //!
 //! Two ordering notes, neither crossing a boundary the player sees. The
 //! hold reads its holder's velocity as the pass began, where the original
@@ -85,6 +92,23 @@ impl Holders {
                 .map(|npc| (npc.id, there(npc.state.velocity, npc.condition)))
                 .collect(),
         }
+    }
+
+    /// The holders, `left` among them, the ships that left at their slot of
+    /// this tick's AI loop, by their records: `_HandleShip`'s pull reads
+    /// the holder's slot (+0x20/+0x24, @0x3401f-0x34032) with no +0xb8
+    /// test, and its release tests the slot (@0x353ba-0x35449), so a ship
+    /// held by one is pulled by its record, then released, at any slot.
+    #[must_use]
+    pub fn and_left(mut self, left: &[Npc]) -> Self {
+        for npc in left {
+            let record = Holder::There {
+                velocity: npc.state.velocity,
+                intact: false,
+            };
+            self.npcs.entry(npc.id).or_insert(record);
+        }
+        self
     }
 
     /// `ship` as a hold reads it: gone when it is not in the system.
@@ -198,6 +222,37 @@ mod tests {
         let mut traffic = traffic_of(vec![held_by(ShipRef::Npc(NpcId(1)), Vec2::new(5.0, -0.25))]);
         again(&mut traffic, &pulling(0.5));
         assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.0)));
+    }
+
+    #[test]
+    fn a_ship_held_by_a_holder_that_left_at_its_slot_is_pulled_by_its_record_then_released() {
+        // `_HandleShip`'s pull reads the holder's slot (+0x20/+0x24,
+        // @0x3401f-0x34032) with no +0xb8 test, after the whole AI loop,
+        // and its release tests the slot later (@0x353ba-0x35449): every
+        // ship held by a ship that left in the AI loop, at any slot, is
+        // pulled once by the record, then let go.
+        for berth in [1, 5] {
+            let mut held = held_by(ShipRef::Npc(HOLDER), Vec2::new(5.0, 0.0));
+            held.berth = berth;
+            let mut traffic = traffic_of(vec![held]);
+            let mut holder = moving(2, Vec2::new(1.0, 0.0));
+            holder.berth = 3;
+            traffic.left_in_dispatch.push(holder);
+            traffic.fly_holding(
+                pulling(0.5),
+                &std::collections::BTreeSet::new(),
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.0)), "{berth}");
+            assert_eq!(traffic.npcs[0].tractor, None, "{berth}: let go");
+        }
+        // Double time's second pass has no AI loop and no leavers.
+        let mut traffic = traffic_of(vec![held_by(ShipRef::Npc(HOLDER), Vec2::new(5.0, 0.0))]);
+        traffic
+            .left_in_dispatch
+            .push(moving(2, Vec2::new(1.0, 0.0)));
+        again(&mut traffic, &pulling(0.5));
+        assert_eq!(velocity(&traffic), drifted(Vec2::new(5.0, 0.0)));
     }
 
     #[test]

@@ -184,10 +184,21 @@ pub struct SwarmLead {
 }
 
 /// `npc`'s swarm lead among `around` (see the module docs): none with no
-/// swarm leader, or none at its berth.
+/// swarm leader, or none at its berth. A berth whose ship is gone is read
+/// by its record among `around`'s gone ships, which stands until a ship
+/// takes the berth: the readers of the swarm leader's slot test no +0xb8
+/// (sub 0x12 @0x8525e-0x852c4, the swarm branches @0x85c87, @0x867e0,
+/// @0x87364, @0x8660b), so a swarmer that kept its word past its swarm
+/// check (off its AI timer, in the regroup pause, on the jump path, or a
+/// class that doesn't swarm holding a stray word) reads the freed slot.
 #[must_use]
 pub fn lead(npc: &Npc, around: &Surroundings) -> Option<SwarmLead> {
-    let leader = at_berth(around.npcs, npc.swarm_leader?)?;
+    let berth = npc.swarm_leader?;
+    let leader = at_berth(around.npcs, berth).or_else(|| {
+        (around.gone.iter())
+            .map(|gone| &gone.ship)
+            .find(|ship| ship.berth == berth)
+    })?;
     let ahead = npc.top_speed(around.led_speed) * SWARM_AHEAD;
     Some(SwarmLead {
         aim: leader.state.position + trig::accel(trig::whole(leader.state.heading), ahead),
