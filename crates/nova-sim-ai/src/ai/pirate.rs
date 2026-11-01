@@ -117,9 +117,8 @@
 //! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols and
 //! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): none. The
 //! plunder's +0x8c write (-1, @0x8c791) is the pirate's own, the plunder's
-//! ([`plunder`](crate::traffic::plunder)). The take also clears the
-//! captured ship's, which `_AIPlunderShipContents` never writes: filed as
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-16-left-out-of-phase-13.
+//! ([`plunder`](crate::traffic::plunder)); the captured ship keeps its
+//! own, which `_AIPlunderShipContents` never writes.
 
 use crate::ai::fire::{AmmoLeft, FireRules, ammo_left};
 use crate::ai::odds::state4_attack;

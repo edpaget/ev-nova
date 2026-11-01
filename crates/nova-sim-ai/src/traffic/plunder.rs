@@ -35,7 +35,7 @@
 //!   ([`Decision::plunders`], [`resolve`]), in berth order, and in sub
 //!   0xf's completion under goal 0xd at the pirate's slot (the traffic's
 //!   `dispatch_dock`): the pirate takes goal 0xe ([`Goal::Drift`]), an AI
-//!   wait of [`PLUNDER_HOLD`] and +0x8c -1 ([`Npc::defends`]), then
+//!   wait of [`PLUNDER_HOLD`] and its own +0x8c -1 ([`Npc::defends`]), then
 //!   plunders its nav, then its target and nav are cleared. A ship gone
 //!   from the system, read by its slot's record, or breaking up yields
 //!   nothing (@0x83fbd-0x83fd4). Against an NPC it moves the
@@ -49,7 +49,14 @@
 //!   unboarded, of the pirate's government, waiting [`CAPTURED_WAIT`],
 //!   its armour [`CAPTURED_ARMOR_SHARE`] of its capacity, its shield none,
 //!   and its condition as the [`World`]'s disable rule reads that
-//!   (@0x84946-0x849cd). An announced capture ([`taken`]) first drops
+//!   (@0x84946-0x849cd). No +0x8c of the ship taken is written anywhere in
+//!   `_AIPlunderShipContents` (@0x83fab-0x84a23), so a stellar's defence
+//!   ship keeps [`Npc::defends`]: it is never disabled by its armour
+//!   (`_IsDisabled` branch 3, @0x2d6f-0x2d77), and it thinks as a defence
+//!   ship under its pirate, as `_AIDispatch` tests +0x8c before the escort
+//!   AI (@0x8ff4d-0x8ff5a). No stock pirate takes one, as one is disabled
+//!   only by a hold no stock stellar's defenders have; the case is a
+//!   plug-in's. An announced capture ([`taken`]) first drops
 //!   every ship in slots 1-63 that targets the victim: target and nav -1,
 //!   goal and sub 0, provocation 0 (@0x8484a-0x848b1), the pirate among
 //!   them, so it doesn't drift; a silent one drops none. Against the
@@ -79,7 +86,7 @@ use crate::ai::swarm::SwarmLead;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
+use crate::combat::hull::{Condition, under_armour_line};
 use crate::flight::{self, FlightRules, ShipState};
 use crate::hail::Help;
 use crate::inertialess::InertialDampener;
@@ -522,10 +529,6 @@ fn plunder_npc(
     // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
     // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
     ship.overwrite_bribe();
-    // It defends no stellar now. The original writes no +0x8c of the ship
-    // it takes (@0x8c791 is the pirate's): see
-    // rdm:phase/combat-ai-fidelity-cross-roadmap/phase-16-left-out-of-phase-13.
-    ship.defends = None;
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
     ship.docking = None;
@@ -536,7 +539,15 @@ fn plunder_npc(
     let armor = (f64::from(ship.reserves.armor.max) * CAPTURED_ARMOR_SHARE) as f32;
     ship.reserves.armor.now = armor;
     ship.reserves.shield.now = 0.0;
-    ship.condition = if armor > 0.0 && world.disable.disabled(ship.reserves.armor, &ship.hull) {
+    // `_IsDisabled` reads the armour later; a defence ship's +0x8c, which
+    // the take leaves, skips its armour line (branch 3, @0x2d6f-0x2d77).
+    ship.condition = if armor > 0.0
+        && under_armour_line(
+            ship.reserves.armor,
+            &ship.hull,
+            world.disable,
+            ship.defends.is_some(),
+        ) {
         Condition::Disabled
     } else {
         Condition::Intact
@@ -812,8 +823,9 @@ mod tests {
         ship
     }
 
-    #[test]
-    fn a_defence_ship_a_pirate_takes_into_its_fleet_defends_no_stellar() {
+    /// The traffic of a pirate docked with a boarded former escort that
+    /// defends stellar 128, its dock wait out.
+    fn docked_with_a_defence_ship() -> Traffic {
         let mut taken = former();
         taken.defends = Some(crate::catalog::StellarId(128));
         let mut docked = pirate(1000);
@@ -824,10 +836,80 @@ mod tests {
             sub: DockSub::Dock,
         });
         taken.boarded = true;
-        let mut traffic = traffic_of(vec![docked, taken]);
+        traffic_of(vec![docked, taken])
+    }
+
+    #[test]
+    fn a_defence_ship_a_pirate_takes_into_its_fleet_still_defends_its_stellar() {
+        // `_AIPlunderShipContents` writes no +0x8c of the ship it takes
+        // (@0x83fab-0x84a23); @0x8c791 is the pirate's own.
+        let mut traffic = docked_with_a_defence_ship();
         tick(&mut traffic, 0);
         assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
-        assert_eq!(ship(&traffic, VICTIM).defends, None, "see phase 16");
+        assert_eq!(
+            ship(&traffic, VICTIM).defends,
+            Some(crate::catalog::StellarId(128))
+        );
+        assert_eq!(ship(&traffic, PIRATE).defends, None, "the pirate's -1");
+    }
+
+    #[test]
+    fn a_captured_defence_ship_is_not_disabled_by_its_armour() {
+        // The capture leaves its armour at the share and writes no
+        // condition; `_IsDisabled` never reads the armour of a ship whose
+        // +0x8c is set (branch 3, @0x2d6f-0x2d77).
+        #[derive(Debug)]
+        struct AlwaysDisabled;
+        impl crate::combat::hull::DisableRule for AlwaysDisabled {
+            fn disabled(
+                &self,
+                _armor: crate::reserves::Gauge,
+                _hull: &crate::combat::hull::HullSpec,
+            ) -> bool {
+                true
+            }
+        }
+        let mut traffic = docked_with_a_defence_ship();
+        let world = World {
+            disable: &AlwaysDisabled,
+            ..World::new(&[])
+        };
+        traffic.tick_in(
+            &PirateWarship::default(),
+            world,
+            &[],
+            &mut Draws::of(&[0; 64]),
+        );
+        let taken = ship(&traffic, VICTIM);
+        assert_eq!(taken.leader, Some(PIRATE));
+        assert_eq!(taken.condition, Condition::Intact);
+    }
+
+    #[test]
+    fn a_captured_defence_ship_thinks_as_a_defence_ship_under_its_pirate() {
+        // `_AIDispatch` tests +0x8c before the escort AI (@0x8ff4d-0x8ff5a):
+        // `_DefenseShipAI` reads no leader and no government (@0x7f7ed-
+        // 0x7f9d4), ends +0x4c (@0x7f906), and with no player to attack
+        // lands on its stellar (goal 1, +0x6c = +0x8c).
+        let mut traffic = docked_with_a_defence_ship();
+        tick(&mut traffic, 0);
+        let nova = crate::ai::NovaAi::default();
+        let mut alone = traffic.clone();
+        alone.tick_in(&nova, World::new(&[]), &[], &mut Draws::of(&[0; 64]));
+        let taken = ship(&alone, VICTIM);
+        assert_eq!(taken.goal, Goal::Land(crate::catalog::StellarId(128)));
+        assert_eq!(taken.ai_wait, 0, "its wait ended");
+        assert_eq!(taken.leader, Some(PIRATE), "still the pirate's");
+        let world = World {
+            player: Some(crate::ai::fixture::player(0.0, 300.0)),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&nova, world, &[], &mut Draws::of(&[0; 64]));
+        assert_eq!(
+            ship(&traffic, VICTIM).goal,
+            Goal::Attack(ShipRef::Player),
+            "the player it sees"
+        );
     }
 
     /// The traffic once a docked pirate has taken a former escort into
