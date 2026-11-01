@@ -644,10 +644,7 @@ fn fly_steered(
     if let Some(flown) = flown.filter(|_| flies) {
         // `_HandleShip`'s own reads, after the frame's ion block and with
         // the hold as it stands (its release comes after the flight).
-        let at_step = plunder_dock::AtStep {
-            turn_rate: npc.flying_handling(speeds.own, world.flight).turn_rate,
-            top_speed: npc.top_speed(world.led_speed),
-        };
+        let at_step = plunder_dock::AtStep::of_npc(npc, world.led_speed, world.flight);
         plunder_dock::handle_ship(npc, &flown, at_step, world.flight);
         return Outcome::Flying;
     }

@@ -351,7 +351,6 @@ mod tests {
 
     #[test]
     fn an_ionized_pirate_docking_thrusts_and_turns_slower() {
-        use crate::traffic::autopilot::TopSpeeds;
         use crate::traffic::plunder::fly_docking;
         use crate::traffic::plunder_dock::{DockSub, Docking};
         let victim = crate::flight::ShipState::default();
@@ -360,8 +359,7 @@ mod tests {
                 ship: crate::combat::ShipRef::Player,
                 sub: DockSub::Approach,
             });
-            let speeds = TopSpeeds::own_of(ship);
-            let flown = fly_docking(ship, Some(&victim), speeds, FlightRules::default(), None);
+            let flown = fly_docking(ship, Some(&victim), 1.0, FlightRules::default(), None);
             assert!(flown.is_some());
         };
         // Approaching the victim straight up the screen.

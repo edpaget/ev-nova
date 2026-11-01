@@ -14,7 +14,6 @@ use crate::hail::Help;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
-use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::fixture::assisting::{Recording, player_in};
 use crate::traffic::fixture::npc;
 use crate::traffic::inertialess::Inertia;
@@ -87,11 +86,10 @@ fn docked_by_hand(npc: &Npc, sub: DockSub) -> Npc {
         ship: ShipRef::Player,
         sub,
     });
-    let speeds = TopSpeeds::own_of(&flown);
     plunder::fly_docking(
         &mut flown,
         Some(&player_in(Condition::Intact).state),
-        speeds,
+        1.0,
         FlightRules::default(),
         None,
     );

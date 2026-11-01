@@ -84,8 +84,6 @@ use crate::flight::{self, FlightRules, ShipState};
 use crate::hail::Help;
 use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
-#[cfg(test)]
-use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::npc::{NPC_COMMODITIES, Npc, NpcHold, NpcId};
 use crate::traffic::plunder_dock::{self, DockOutcome, DockStep, Docking};
 use crate::traffic::repair_dock;
@@ -308,20 +306,24 @@ pub fn dock_low_level(
 }
 
 /// `npc`'s whole tick of its docking at `victim`, its low level then
-/// `_HandleShip` ([`dock_low_level`], [`plunder_dock::handle_ship`]), at
-/// `speeds` under `flight` with `swarm` its swarm lead, a dock's wait
-/// rolling 0: for the tests of the flight it shares.
+/// `_HandleShip` ([`dock_low_level`], [`plunder_dock::handle_ship`]), the
+/// ships the player leads at `led_speed`, under `flight` with `swarm` its
+/// swarm lead, a dock's wait rolling 0: for the tests of the flight it
+/// shares. Each half reads its top speed as the traffic's does: the low
+/// level at its slot (`dispatch_dock`), `_HandleShip` at its step
+/// ([`plunder_dock::AtStep::of_npc`]).
 #[cfg(test)]
 pub(crate) fn fly_docking(
     npc: &mut Npc,
     victim: Option<&ShipState>,
-    speeds: TopSpeeds,
+    led_speed: f32,
     flight: FlightRules,
     swarm: Option<SwarmLead>,
 ) -> Option<DockOutcome> {
     let chance = &mut crate::chance::NeverFires;
-    let (flown, outcome) = dock_low_level(npc, victim, speeds.own, flight, swarm, chance)?;
-    let at_step = plunder_dock::AtStep::of(&npc.flying_handling(speeds.own, flight));
+    let own = npc.top_speed(led_speed);
+    let (flown, outcome) = dock_low_level(npc, victim, own, flight, swarm, chance)?;
+    let at_step = plunder_dock::AtStep::of_npc(npc, led_speed, flight);
     plunder_dock::handle_ship(npc, &flown, at_step, flight);
     Some(outcome)
 }
@@ -1146,31 +1148,26 @@ mod tests {
         let victim = ShipState::default();
         let mut far = pirate(1);
         far.state.position = Vec2::new(0.0, 1000.0);
-        // At its own top speed of 1.0 (not its class's): `_AdjustedAccel`
-        // adds no push to an axis already at its share.
-        far.state.velocity = Vec2::new(0.0, -1.0);
+        // Held in a tractor beam, its own top speed is a third of its
+        // class's: at it, `_AdjustedAccel` adds no push to an axis already
+        // at its share.
+        let holder = ShipRef::Npc(NpcId(2));
+        far.tractor = Some(crate::combat::impact::TractorLock::by(holder));
+        let top = far.top_speed(1.0);
+        assert!(top < far.class_handling().max_speed, "held");
+        far.state.velocity = Vec2::new(0.0, -top);
         far.docking = Some(Docking {
             ship: ShipRef::Npc(VICTIM),
             sub: DockSub::Approach,
         });
-        let speeds = TopSpeeds {
-            own: 1.0,
-            lead: None,
-        };
         let mut flown = far.clone();
         assert_eq!(
-            fly_docking(
-                &mut flown,
-                Some(&victim),
-                speeds,
-                FlightRules::default(),
-                None
-            ),
+            fly_docking(&mut flown, Some(&victim), 1.0, FlightRules::default(), None),
             Some(DockOutcome::Flying)
         );
         assert_eq!(
             flown.state.velocity.length(),
-            1.0,
+            top,
             "held at its own top speed"
         );
         for (condition, mode) in [
@@ -1184,20 +1181,14 @@ mod tests {
             down.condition = condition;
             down.mode = mode;
             assert_eq!(
-                fly_docking(
-                    &mut down,
-                    Some(&victim),
-                    speeds,
-                    FlightRules::default(),
-                    None
-                ),
+                fly_docking(&mut down, Some(&victim), 1.0, FlightRules::default(), None),
                 None,
                 "{condition:?} {mode:?}"
             );
         }
         let mut lost = far.clone();
         assert_eq!(
-            fly_docking(&mut lost, None, speeds, FlightRules::default(), None),
+            fly_docking(&mut lost, None, 1.0, FlightRules::default(), None),
             None
         );
         assert_eq!(lost.docking, None, "its victim gone");
@@ -1339,11 +1330,10 @@ mod tests {
         let mut traffic = traffic_of(vec![closing_plunder(), record.clone()]);
         traffic.remove_destroyed(VICTIM);
         let mut flown = closing_plunder();
-        let speeds = TopSpeeds::own_of(&flown);
         fly_docking(
             &mut flown,
             Some(&record.state),
-            speeds,
+            1.0,
             FlightRules::default(),
             None,
         );

@@ -345,9 +345,26 @@ pub struct AtStep {
 }
 
 impl AtStep {
-    /// The turn rate and top speed of `handling`.
+    /// What `_HandleShip` reads of `npc` at its step under `flight`, the
+    /// ships the player leads at `led_speed`: its turn rate after the
+    /// frame's ion block ([`Npc::flying_handling`], whose top speed it
+    /// doesn't read) and its `_ShipMaxSpeed` with the hold as it stands
+    /// then and no charge ([`Npc::top_speed`]). Every caller that flies a
+    /// docking reads it here.
     #[must_use]
-    pub fn of(handling: &Handling) -> Self {
+    pub fn of_npc(npc: &Npc, led_speed: f32, flight: FlightRules) -> Self {
+        let top_speed = npc.top_speed(led_speed);
+        Self {
+            turn_rate: npc.flying_handling(top_speed, flight).turn_rate,
+            top_speed,
+        }
+    }
+
+    /// The turn rate and top speed of `handling`: for tests that hand in
+    /// a canned handling.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn of(handling: &Handling) -> Self {
         Self {
             turn_rate: handling.turn_rate,
             top_speed: handling.max_speed,
@@ -1455,6 +1472,33 @@ mod tests {
         let (slot, step) = shed_between(&mut ship, 200.0);
         assert!(step.accel > slot.accel, "the shed raised its thrust");
         assert_eq!(ship.state.velocity, Vec2::new(0.0, -slot.accel));
+    }
+
+    #[test]
+    fn at_its_step_it_reads_its_turn_rate_after_the_shed_and_its_top_speed_held_and_led() {
+        // `_HandleShip` reads `_ShipTurnRate` after the frame's ion block
+        // (@0x344b0) and `_ShipMaxSpeed` with the hold as it stands then,
+        // times the led speed for a ship the player leads, and no charge
+        // (@0x34aab).
+        use crate::combat::impact::TractorLock;
+        use crate::escort::{EscortDuty, FormationSlot};
+        let flight = FlightRules::default();
+        let mut ship = ionized_approach(0.0);
+        ship.tractor = Some(TractorLock::by(ShipRef::Npc(NpcId(2))));
+        ship.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let held = ship.own_handling();
+        assert!(held.max_speed < ship.class_handling().max_speed, "held");
+        let at_step = AtStep::of_npc(&ship, 1.5, flight);
+        assert_eq!(at_step.top_speed, held.max_speed * 1.5);
+        let ionized = ship.flying_handling(held.max_speed, flight);
+        assert!(
+            ionized.turn_rate < flight.handling(held).turn_rate,
+            "ionized"
+        );
+        assert_eq!(at_step.turn_rate, ionized.turn_rate);
     }
 
     #[test]

@@ -12,7 +12,6 @@ use crate::flight::FlightRules;
 use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::stats::ShipStats;
-use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::fixture::assisting::{Recording, player_in as player, world_with as world};
 use crate::traffic::fixture::npc;
 use crate::traffic::npc::{Mode, Npc, NpcId};
@@ -158,11 +157,10 @@ fn far_off_a_repairer_closes_on_the_player_through_sub_0xb() {
         ship: ShipRef::Player,
         sub: DockSub::Close,
     });
-    let speeds = TopSpeeds::own_of(&closing);
     plunder::fly_docking(
         &mut closing,
         Some(&player(Condition::Disabled).state),
-        speeds,
+        1.0,
         FlightRules::default(),
         None,
     );
