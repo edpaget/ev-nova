@@ -1065,7 +1065,7 @@ fn take_off_says_the_greeting_for_240() {
 }
 
 #[test]
-fn the_greeting_leads_the_pay_notes() {
+fn a_take_offs_defection_is_kept_for_a_dialog_not_said_after_the_greeting() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::TookOff {
@@ -1076,21 +1076,21 @@ fn the_greeting_leads_the_pay_notes() {
         .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
     view.sim.queue_answer_showing(departed(128), sol());
     view.take_off().expect("takes off");
-    let said = format!("{}  {DEFECTED_ONE}", take_off_greeting(4, "Earth", DATE));
-    faked_lasts(&mut view, &said, 240);
+    faked_lasts(&mut view, &take_off_greeting(4, "Earth", DATE), 240);
+    assert_eq!(view.take_defections(), [DEFECTED_ONE]);
 }
 
 #[test]
-fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
+fn a_landed_qs_message_is_said_alone_and_its_defection_kept() {
     let mut view = faked(docked_at(128, Vec2::ZERO));
     view.sim
         .queue_event(FlightEvent::LeaveMessage("Off you go.".to_owned()));
     view.sim
-        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(1)));
+        .queue_event(FlightEvent::PayNote(nova_sim::PayNote::Defected(3)));
     view.sim.queue_answer_showing(departed(128), sol());
     view.take_off().expect("takes off");
-    let said = format!("Off you go.  {DEFECTED_ONE}");
-    faked_lasts(&mut view, &said, SCRIPT_MESSAGE_TICKS);
+    faked_lasts(&mut view, "Off you go.", SCRIPT_MESSAGE_TICKS);
+    assert_eq!(view.take_defections(), [DEFECTED_SOME]);
 }
 
 #[test]

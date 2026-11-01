@@ -781,7 +781,7 @@ fn ui_sounds(view: &mut FlightView<FakeCatalog, impl FlightSim>) -> Vec<UiSound>
         })
         .collect()
 }
-use nova_sim::hire::DEFECTED_ONE;
+use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 
 use nova_sim::MissionTextKind;
 

@@ -14,7 +14,7 @@ use crate::{Diagnostic, Sound};
 
 use super::{
     FlightView, MESSAGE_TICKS, Message, SCRIPT_MESSAGE_TICKS, Said, Wording, comm_message,
-    message_text, pay_said,
+    message_text, pay_notes_message,
 };
 use nova_sim::flight_frame::{FlightCommand, RaisedLine};
 
@@ -360,17 +360,29 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// What an arrival says after its line: the fighters abandoned
-    /// ([`FlightView::fighters_said`]) and the escorts that defected unpaid
-    /// ([`pay_said`]), and the flight's messages, which the arrival words
-    /// ([`FlightEvent::PayNote`], [`FlightEvent::Message`]).
+    /// ([`FlightView::fighters_said`]), and the flight's messages, which
+    /// the arrival words ([`FlightEvent::Message`]). The escorts that
+    /// defected unpaid stay for [`FlightView::take_defections`].
+    ///
+    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
+    pub(super) fn arrival_outputs(&mut self) -> (Said, Vec<SimMessage>) {
+        let fighters = self.fighters_said();
+        (fighters, self.drain().take_messages())
+    }
+
+    /// The defection messages of the escorts that left for want of pay
+    /// since this was last taken, in order, each once
+    /// ([`FlightEvent::PayNote`], worded by
+    /// [`defection_message`](super::defection_message)): at an arrival,
+    /// at a take-off, or as the router settles the escorts on a leave
+    /// ([`FlightView::land_escorts`]). They are not said on the message
+    /// line: whoever shows texts shows each in "Desc Dialog", as
+    /// `_DoEscortPayment` shows it with `_ShowTextDialog(0, 0, 0)`
+    /// (@0x40301).
     ///
     /// [`FlightEvent::PayNote`]: nova_sim::flight_frame::FlightEvent::PayNote
-    /// [`FlightEvent::Message`]: nova_sim::flight_frame::FlightEvent::Message
-    pub(super) fn arrival_outputs(&mut self) -> (Said, Said, Vec<SimMessage>) {
-        let fighters = self.fighters_said();
-        let inbox = self.drain();
-        let pay = pay_said(&inbox.take_pay_notes());
-        (fighters, pay, inbox.take_messages())
+    pub fn take_defections(&mut self) -> Vec<String> {
+        pay_notes_message(&self.drain().take_pay_notes())
     }
 
     /// The message the last take-off left on, a held `Q`'s, said for
@@ -386,16 +398,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .collect()
     }
 
-    /// What a take-off says and shows: the escorts that defected for want
-    /// of its pay ([`pay_said`]), the flight's messages, which the
+    /// What a take-off says and shows: the flight's messages, which the
     /// take-off words, and the nav as the take-off began
-    /// ([`FlightEvent::TakeoffNav`]).
+    /// ([`FlightEvent::TakeoffNav`]). The escorts that defected for want
+    /// of its pay stay for [`FlightView::take_defections`].
     ///
     /// [`FlightEvent::TakeoffNav`]: nova_sim::flight_frame::FlightEvent::TakeoffNav
-    pub(super) fn takeoff_outputs(&mut self) -> (Said, Vec<SimMessage>, Option<NavMode>) {
+    pub(super) fn takeoff_outputs(&mut self) -> (Vec<SimMessage>, Option<NavMode>) {
         let inbox = self.drain();
-        let pay = pay_said(&inbox.take_pay_notes());
-        (pay, inbox.take_messages(), inbox.take_takeoff_nav())
+        (inbox.take_messages(), inbox.take_takeoff_nav())
     }
 
     /// The flight's sounds (thrust, landing, taking off and jumping),

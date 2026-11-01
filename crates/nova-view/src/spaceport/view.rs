@@ -945,7 +945,7 @@ impl SpaceportView {
         if let Some(Open::Outfitter(screen)) = &mut self.open {
             screen.alert(alert);
             if screen.alert_dialog().is_some() {
-                self.alert_after = shop_texts::after_movie(after);
+                self.alert_after = DescShown::str_movie(after);
             }
         }
     }
@@ -1989,11 +1989,7 @@ impl SpaceportView {
     /// [`shop_texts`] module).
     pub fn show_text(&mut self, text: &str, after: Option<DescMovie>) {
         if let Some(dialogs) = &mut self.dialogs {
-            dialogs.show_descs(vec![DescShown {
-                text: text.to_owned(),
-                graphic: None,
-                movie: shop_texts::after_movie(after),
-            }]);
+            dialogs.show_descs(vec![DescShown::str_text(text, after)]);
         }
     }
 

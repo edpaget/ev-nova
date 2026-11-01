@@ -65,6 +65,31 @@ pub struct DescShown {
     pub movie: Option<DescMovie>,
 }
 
+impl DescShown {
+    /// A `STR#` text no `dësc` is behind, such as an escort's defection
+    /// or the report of the escorts sold and upgraded: `text`, with no
+    /// picture, playing `after` once it closes when it is an after-movie
+    /// ([`DescShown::str_movie`]).
+    #[must_use]
+    pub fn str_text(text: impl Into<String>, after: Option<DescMovie>) -> Self {
+        Self {
+            text: text.into(),
+            graphic: None,
+            movie: Self::str_movie(after),
+        }
+    }
+
+    /// `after`, if it is an after-movie: the only kind a `STR#` text
+    /// plays. `_ShowTextDialog`'s after-check plays the last `dësc`
+    /// loaded's movie whatever its third argument (@0x5b40b-0x5b44f),
+    /// while a `STR#` text, passing no `dësc`, plays no before-movie
+    /// (@0x5a76a-0x5a7ab).
+    #[must_use]
+    pub fn str_movie(after: Option<DescMovie>) -> Option<DescMovie> {
+        after.filter(|movie| movie.after)
+    }
+}
+
 /// One of the things shown one after another: a movie or a text, or
 /// the mark that a mission text is done.
 #[derive(Clone, Debug)]
@@ -646,6 +671,27 @@ mod tests {
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
+    }
+
+    #[test]
+    fn a_str_text_keeps_only_an_after_movie_and_shows_no_picture() {
+        let movie = |after| DescMovie {
+            file: "Clip.mov".to_owned(),
+            after,
+            double_size: false,
+            cinematic: false,
+        };
+        let shown = DescShown::str_text("Gone.", Some(movie(true)));
+        assert_eq!(
+            shown,
+            DescShown {
+                text: "Gone.".to_owned(),
+                graphic: None,
+                movie: Some(movie(true)),
+            }
+        );
+        assert_eq!(DescShown::str_text("Gone.", Some(movie(false))).movie, None);
+        assert_eq!(DescShown::str_text("Gone.", None).movie, None);
     }
 
     fn user_items(items: &[(f32, f32, f32, f32, bool)]) -> Vec<ItemTemplate> {

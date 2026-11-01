@@ -45,8 +45,9 @@ use super::{JUMP_KEY, LAND_KEY, MAP_KEY};
 /// lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
-/// [`REPELLED`]) and of the defection notice, which the original
-/// shows in a dialog (`_DoEscortPayment` @0x40301).
+/// [`REPELLED`]). An escort's defection is not said here: it shows in a
+/// text dialog, as `_DoEscortPayment` shows it (@0x40301;
+/// [`FlightView::take_defections`](super::FlightView::take_defections)).
 pub const MESSAGE_TICKS: u16 = 240;
 /// A grant's message: 240 (0xf0, `_DoPlunderDialog` @0x9342c).
 pub const GRANT_TICKS: u16 = 240;
@@ -1412,15 +1413,6 @@ pub fn pay_notes_message(notes: &[PayNote]) -> Vec<String> {
     notes
         .iter()
         .map(|&PayNote::Defected(count)| defection_message(count).to_owned())
-        .collect()
-}
-
-/// What the player is told of each of `notes`, in order, each for
-/// [`MESSAGE_TICKS`].
-pub(super) fn pay_said(notes: &[PayNote]) -> Vec<(String, u16)> {
-    pay_notes_message(notes)
-        .into_iter()
-        .map(|text| (text, MESSAGE_TICKS))
         .collect()
 }
 

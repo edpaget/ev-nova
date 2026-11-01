@@ -29,10 +29,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// from before the landing, but greets the pilot past the tutorial
     /// ([`take_off_greeting`](super::take_off_greeting)), or shows a held `Q`'s message, for
     /// [`SCRIPT_MESSAGE_TICKS`], in place of the greeting
-    /// (`_PlayerLandOnStellar` @0x63588-0x635e3), followed by how many
-    /// hired escorts defected
-    /// for want of the take-off's pay ([`defection_message`](super::defection_message)); the
-    /// session has populated the system's traffic afresh
+    /// (`_PlayerLandOnStellar` @0x63588-0x635e3). The hired escorts that
+    /// defected for want of the take-off's pay are kept for a text dialog
+    /// ([`FlightView::take_defections`]), not said. The session has
+    /// populated the system's traffic afresh
     /// (`nova_sim::Session::take_off`), so no frame draws the ships from before
     /// the landing. Leaving passes the stay's days, their
     /// events rolled on the flight's chance, and what settling them did
@@ -58,11 +58,14 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Settles the escorts' marks as the ship leaves the stellar it is
-    /// landed at ([`FlightCommand::LandEscorts`], `nova_sim::Session::land_escorts`),
-    /// drawing on the flight's
-    /// chance, and gives the report to show over the spaceport; none when
-    /// nothing was sold or upgraded. The router calls it before either
-    /// leave.
+    /// landed at, then, once a leave, passes the escort days and pays a
+    /// day's wages ([`FlightCommand::LandEscorts`],
+    /// `nova_sim::Session::land_escorts`), reading the catalog and drawing
+    /// on the flight's chance, and gives the report to show over the
+    /// spaceport; none when nothing was sold or upgraded. The escorts that
+    /// defected for want of that pay are kept for
+    /// [`FlightView::take_defections`], to show over the spaceport too.
+    /// The router calls it before either leave.
     pub fn land_escorts(&mut self) -> Option<String> {
         match self.send(FlightCommand::LandEscorts) {
             Answer::EscortReport(report) => report,
@@ -171,7 +174,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     ///
     /// It gives, last, whether the system was laid out afresh.
     fn took_off(&mut self) -> (Said, Said, bool) {
-        let (pay, messages, held) = self.takeoff_outputs();
+        let (messages, held) = self.takeoff_outputs();
         let nav_texts = self.nav_texts;
         let system = self.catch_up().system;
         self.place_ship();
@@ -189,8 +192,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
         let (greeting, rest): (Vec<_>, Vec<_>) = messages
             .into_iter()
             .partition(|message| matches!(message, SimMessage::TookOff { .. }));
-        let mut line = self.word(greeting);
-        line.extend(pay);
+        let line = self.word(greeting);
         (line, self.word(rest), system)
     }
 

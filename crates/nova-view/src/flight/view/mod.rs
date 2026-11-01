@@ -590,7 +590,9 @@
 //!   ([`SessionSetup::hire_terms`](nova_sim::SessionSetup::hire_terms), [`SessionSetup::control_bits`](nova_sim::SessionSetup::control_bits)),
 //!   and its disputed hiring rules come from its rule set
 //!   ([`SessionSetup::rules`](nova_sim::SessionSetup::rules)). Hired escorts who defect unpaid
-//!   on arrival or at take-off are told ([`defection_message`]).
+//!   on arrival or at take-off are kept, worded by [`defection_message`],
+//!   for whoever shows texts to show each in a text dialog
+//!   ([`FlightView::take_defections`]), not said on the message line.
 //! - Persons appear as the session's rules say
 //!   ([`SessionSetup::person_rules`](nova_sim::SessionSetup::person_rules)); the target panel shows a
 //!   person's own name and subtitle, a person hailed says its comm quote

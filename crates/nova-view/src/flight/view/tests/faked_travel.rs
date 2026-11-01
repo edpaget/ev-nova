@@ -1214,26 +1214,28 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
 }
 
 #[test]
-fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
+fn an_escort_left_unpaid_by_a_jump_is_kept_for_a_dialog_off_the_message_line() {
     let mut view = arriving_with(vec![FlightEvent::PayNote(nova_sim::PayNote::Defected(1))]);
     view.arrival_frame();
-    let said = format!("{}  {DEFECTED_ONE}", alpha_arrival());
-    assert_eq!(view.message(), Some(said.as_str()), "after the arrival");
+    assert_eq!(
+        view.message(),
+        Some(alpha_arrival().as_str()),
+        "the arrival alone"
+    );
+    assert_eq!(view.take_defections(), [DEFECTED_ONE]);
+    assert_eq!(view.take_defections(), Vec::<String>::new(), "once");
 }
 
 #[test]
-fn fighters_abandoned_and_escorts_defected_on_one_arrival_are_said_together() {
+fn fighters_abandoned_are_said_and_escorts_defected_kept_on_one_arrival() {
     let mut view = arriving_with(vec![
         FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
         FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
     ]);
     view.arrival_frame();
-    let said = format!(
-        "{}  {}  {DEFECTED_ONE}",
-        alpha_arrival(),
-        fighters_abandoned_message(2)
-    );
-    assert_eq!(view.message(), Some(said.as_str()), "the fighters first");
+    let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
+    assert_eq!(view.message(), Some(said.as_str()));
+    assert_eq!(view.take_defections(), [DEFECTED_ONE]);
 }
 
 // The tutorial's hints, relayed from a frame's steps.
