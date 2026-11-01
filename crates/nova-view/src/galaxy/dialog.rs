@@ -524,7 +524,16 @@ mod tests {
             })
             .map(|(_, up)| up)
             .collect();
-        assert_eq!(enabled, [true, true, false, false, true, true]);
+        assert_eq!(enabled, [true, false, true, true], "the text labels");
+        let (up, grey) = (ButtonStyle::STOCK.up, ButtonStyle::STOCK.grey);
+        let glyphs: Vec<Color> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Line { color, .. } if [up, grey].contains(color) => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(glyphs, [up, grey, grey], "- is one stroke, + two");
         assert_eq!(ORDER[2], MapButton::ZoomIn);
     }
 
@@ -729,6 +738,7 @@ mod tests {
     use crate::galaxy::map::{BUTTON, ENTER_BUTTON, ENTER_LABEL, GalaxyMap, PANEL};
     use crate::galaxy::testkit::{FakeCatalog, galaxy, system};
     use crate::galaxy::view::{MapView, PAN_STEP, SCALES};
+    use crate::ui::button::ButtonSkin;
     use crate::{Font, Input, MouseButton, Screen};
     use nova_sim::galaxy_map::{DrawnSystem, MapDrawing};
     use nova_sim::iff::SystemColorCode;
@@ -850,8 +860,6 @@ mod tests {
             labels(&list),
             [
                 label("Done", true),
-                label("-", true),
-                label("+", true),
                 label(CLEAR_ROUTE_LABEL, false),
                 label(HIDE_BORDERS_LABEL, true),
                 label("Find", true),
@@ -860,16 +868,16 @@ mod tests {
         );
         map.show_course(SystemId(128), &[SystemId(129)]);
         assert_eq!(
-            labels(&drawn(&map))[3],
+            labels(&drawn(&map))[1],
             label(CLEAR_ROUTE_LABEL, false),
             "the course alone doesn't set showClearRouteButton"
         );
         map.set_clear_route(true);
-        assert_eq!(labels(&drawn(&map))[3], label(CLEAR_ROUTE_LABEL, true));
+        assert_eq!(labels(&drawn(&map))[1], label(CLEAR_ROUTE_LABEL, true));
         map.show_borders_setting(false);
-        assert_eq!(labels(&drawn(&map))[4], label(SHOW_BORDERS_LABEL, true));
+        assert_eq!(labels(&drawn(&map))[2], label(SHOW_BORDERS_LABEL, true));
         map.set_clear_route(false);
-        assert_eq!(labels(&drawn(&map))[3], label(CLEAR_ROUTE_LABEL, false));
+        assert_eq!(labels(&drawn(&map))[1], label(CLEAR_ROUTE_LABEL, false));
     }
 
     #[test]
@@ -877,18 +885,26 @@ mod tests {
         let mut map = course_map();
         map.input(&press(Key::Char('=')));
         assert_eq!(zoom(&map), 0.421_875);
+        // Their labels are pen glyphs: read the state off their left caps.
         let enabled = |map: &GalaxyMap| {
-            labels(&drawn(map))
-                .into_iter()
-                .map(|(_, on)| on)
-                .collect::<Vec<_>>()
+            let list = drawn(map);
+            [MapButton::ZoomOut, MapButton::ZoomIn].map(|which| {
+                let at = MapButtons::new(DIALOG_ORIGIN).rect(which).min;
+                list.iter().any(|command| {
+                    matches!(
+                        command,
+                        DrawCommand::StretchedPicture { image, top_left, .. }
+                            if *top_left == at && *image == ButtonSkin::NOVA.normal.left
+                    )
+                })
+            })
         };
-        assert_eq!(enabled(&map)[1..3], [true, false], "+ at 0.421875");
+        assert_eq!(enabled(&map), [true, false], "+ at 0.421875");
         for _ in 0..6 {
             map.input(&press(Key::Char('-')));
         }
         assert!(zoom(&map) > 2.0);
-        assert_eq!(enabled(&map)[1..3], [false, true], "- past 2.0");
+        assert_eq!(enabled(&map), [false, true], "- past 2.0");
     }
 
     /// In Alpha, with the course to Beta, every system drawn and named.
@@ -1115,7 +1131,7 @@ mod tests {
                 clear_route,
             }));
             map.input(&left(false, alpha));
-            labels(&drawn(map))[3].1
+            labels(&drawn(map))[1].1
         };
         assert!(!answer(&mut map, None), "nothing written");
         assert!(answer(&mut map, Some(true)), "set");
@@ -1123,7 +1139,7 @@ mod tests {
         assert!(!answer(&mut map, Some(false)), "turned off");
         assert!(answer(&mut map, Some(true)), "set again");
         map.route_cleared();
-        assert!(!labels(&drawn(&map))[3].1, "the clear");
+        assert!(!labels(&drawn(&map))[1].1, "the clear");
     }
 
     #[test]

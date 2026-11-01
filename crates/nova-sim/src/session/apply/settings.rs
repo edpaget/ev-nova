@@ -1,5 +1,5 @@
 //! [`Session::apply`]'s settings arms: the view's game window's width, the
-//! double-time key and the sound's quiet, each matched to the session
+//! double-time key, the sound's quiet and the sprite load, each matched to the session
 //! method that takes it and answered as [`Session::apply_setting`] says.
 //! None is a player's command: the view sends each as it is built, resized
 //! or told a preference, and none is gated.
@@ -15,13 +15,15 @@ impl Session {
     ///   [`Session::set_window_width`];
     /// - [`FlightCommand::SetDoubleTimeKey`] runs
     ///   [`Session::set_double_time_key`];
-    /// - [`FlightCommand::SetSoundQuiet`] runs [`Session::set_sound_quiet`].
+    /// - [`FlightCommand::SetSoundQuiet`] runs [`Session::set_sound_quiet`];
+    /// - [`FlightCommand::SetSpriteLoad`] runs [`Session::set_sprite_load`].
     #[allow(clippy::needless_pass_by_value)] // the commands come by value, as `Session::apply` takes them
     pub(super) fn apply_setting(&mut self, command: FlightCommand) -> Answer {
         match command {
             FlightCommand::SetWindowWidth(width) => self.set_window_width(width),
             FlightCommand::SetDoubleTimeKey(on) => self.set_double_time_key(on),
             FlightCommand::SetSoundQuiet(quiet) => self.set_sound_quiet(quiet),
+            FlightCommand::SetSpriteLoad(load) => self.set_sprite_load(load),
             _ => return Answer::Refused,
         }
         Answer::Done
@@ -76,6 +78,28 @@ mod tests {
             Answer::Done
         );
         assert!(!session.setup.sound_quiet);
+    }
+
+    #[test]
+    fn the_sprite_load_is_taken_and_done() {
+        let mut session = session();
+        let still = crate::combat::SpriteLoad {
+            ship_animations: false,
+            running_lights: true,
+        };
+        assert_eq!(
+            apply(&mut session, FlightCommand::SetSpriteLoad(still)),
+            Answer::Done
+        );
+        assert_eq!(session.sprite_load(), still);
+        assert_eq!(
+            apply(
+                &mut session,
+                FlightCommand::SetSpriteLoad(crate::combat::SpriteLoad::default())
+            ),
+            Answer::Done
+        );
+        assert_eq!(session.sprite_load(), crate::combat::SpriteLoad::default());
     }
 
     #[test]

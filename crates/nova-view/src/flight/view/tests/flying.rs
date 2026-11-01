@@ -312,9 +312,8 @@ fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         for star in faked_stars(&view) {
             expected.push(star);
         }
-        let seen = (view.frame.player().position, view.frame.effective_murk);
         let scene = view.scene().expect("a scene");
-        scene::draw_stellars(expected, scene, &view.camera(), Some(seen));
+        scene::draw_stellars(expected, scene, &view.camera(), Some(view.seen_murk()));
         expected.sprite(ImageKey::sprite(2000, 0), PLAYER_AT, Color::WHITE);
     });
     let bar = view.status_bar.as_ref().expect("a status bar");
@@ -480,6 +479,45 @@ fn a_thrusting_ship_draws_its_glow_between_it_and_its_lights() {
             (ImageKey::sprite(2200, 0), centre),
         ]
     );
+}
+
+#[test]
+fn with_engine_glows_off_no_ship_draws_its_engine_glow() {
+    use super::ship_drawing::{display, flying_with, npc_sheet, shown};
+    // That the glow word still steps is nova-sim's: the frame's glow
+    // base is the session's, the view only leaves its layer out.
+    assert!(at_rest(layered()).engine_glows(), "on by default");
+    let mut view = lit(at_rest(layered()), Some(32), 6);
+    view.set_engine_glows(false);
+    assert!(!view.engine_glows());
+    assert_eq!(faked_glow_commands(&view), [], "the player's not drawn");
+    assert_eq!(
+        view.frame.ships[0].glow, 6,
+        "its base as the session left it"
+    );
+    assert_eq!(faked_lights_commands(&view).len(), 1, "its lights drawn");
+    view.set_engine_glows(true);
+    assert_eq!(faked_glow_commands(&view).len(), 1, "drawn once on");
+    let view = at_rest(layered()).with_engine_glows(false);
+    assert!(!view.engine_glows(), "built off");
+
+    let npc_glows = |view: &Faked| {
+        super::faked_world::world_list(view)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2101),
+            )
+            .count()
+    };
+    let mut view = flying_with(
+        shown(display(0, 1, 0), display(0, 1, 0), Some(npc_sheet())),
+        0.0,
+    );
+    assert_eq!(npc_glows(&view), 1, "an NPC's, on");
+    view.set_engine_glows(false);
+    assert_eq!(npc_glows(&view), 0, "an NPC's neither");
+    view.set_engine_glows(true);
+    assert_eq!(npc_glows(&view), 1);
 }
 
 #[test]

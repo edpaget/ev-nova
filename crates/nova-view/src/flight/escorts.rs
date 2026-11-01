@@ -545,8 +545,9 @@ pub use nova_sim::player_info::NUMBER_WORDS;
 /// What the flight says of `count` fighters abandoned as the player
 /// jumped (`_HandlePlayer` @0x6c3c4-0x6c42b): in brackets, the count in
 /// words up to ten, its first letter capitalised, and in digits above
-/// that, then `STR#` 2002 #164 or #165. The original adds it to its
-/// arrival line, which the flight does not show yet.
+/// that, then `STR#` 2002 #164 or #165: the tail of the arrival line, which
+/// [`FlightView::arrived`](super::view::FlightView::arrived) joins to it
+/// with two spaces, as the original does.
 #[must_use]
 pub fn fighters_abandoned_message(count: u32) -> String {
     let words = usize::try_from(count)

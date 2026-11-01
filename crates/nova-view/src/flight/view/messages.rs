@@ -771,10 +771,14 @@ pub(super) fn message_text(
     }
 }
 
-/// `STR#` 2002 #44. The original picks #43, #44 or #45 ("Entering the",
-/// "Jumping into the", "Arriving in the") at random; this port always
-/// says #44, matching none of its random rolls.
+/// `STR#` 2002 #43, a jump's lead for a roll of 0.
+pub const ENTERING: &str = "Entering the";
+/// `STR#` 2002 #44, a jump's lead for a roll of 1.
 pub const JUMPING_INTO: &str = "Jumping into the";
+/// `STR#` 2002 #45, a jump's lead for a roll of 2.
+pub const ARRIVING_IN: &str = "Arriving in the";
+/// A jump's leads, one by `Rand(3) + 43` (`_HandlePlayer` @0x6c27f-0x6c2ab).
+const JUMP_LEADS: [&str; 3] = [ENTERING, JUMPING_INTO, ARRIVING_IN];
 /// `STR#` 2002 #48.
 pub const SYSTEM_ON: &str = "system on";
 
@@ -786,17 +790,18 @@ pub const PASSING_WORMHOLE: &str = "Passing through a wormhole into the";
 /// What the message line says on arriving from a jump in the system
 /// named `system` on `date`, as the original's `HandlePlayer` builds it,
 /// adding [`NO_STELLARS`] when the system has no stellars: the
-/// [`JUMPING_INTO`] reading of [`arrival_message_with`]. The original's
-/// fighters-abandoned suffix follows it as a note of its own
-/// ([`FlightView::arrived`](super::FlightView::arrived)), and a system's message buoy replaces the
-/// whole line ([`SimMessage::Buoy`]).
+/// [`JUMPING_INTO`] reading of [`arrival_message_with`], one of the three
+/// a jump rolls ([`arrival_lead`]). The fighters-abandoned tail follows it
+/// directly on the same line
+/// ([`FlightView::arrived`](super::FlightView::arrived)), and a system's
+/// message buoy replaces the whole line ([`SimMessage::Buoy`]).
 #[must_use]
 pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
     arrival_message_with(JUMPING_INTO, system, date, stellars)
 }
 
 /// What the message line says on arriving in the system named `system` on
-/// `date`, led by `lead`: [`JUMPING_INTO`] from a jump, and
+/// `date`, led by `lead`: one of a jump's ([`arrival_lead`]), or
 /// [`EXITING_HYPERGATE`] or [`PASSING_WORMHOLE`] through a gate, as
 /// `_PlayerEnterHypergate` (@0x63c45-0x63dbe) and `_PlayerEnterWormhole`
 /// (@0x6444c-0x6457d) build it; [`NO_STELLARS`] follows when the system
@@ -813,11 +818,11 @@ pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool
     text
 }
 
-/// The lead of the message line on the arrival `message` raises: none for
-/// a message of another kind.
-pub(super) fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
+/// The lead of the message line on the arrival `message` raises, a
+/// jump's rolled on `chance`: none for a message of another kind.
+pub(super) fn arrival_lead(message: &SimMessage, chance: &mut dyn Chance) -> Option<&'static str> {
     match message {
-        SimMessage::Arrived(_) => Some(JUMPING_INTO),
+        SimMessage::Arrived(_) => JUMP_LEADS.get(usize::from(chance.roll(3))).copied(),
         SimMessage::ExitedHypergate(_) => Some(EXITING_HYPERGATE),
         SimMessage::PassedWormhole(_) => Some(PASSING_WORMHOLE),
         SimMessage::MissionFailed
@@ -2129,7 +2134,9 @@ mod tests {
 
     #[test]
     fn the_arrival_strings_are_the_originals() {
+        assert_eq!(ENTERING, "Entering the");
         assert_eq!(JUMPING_INTO, "Jumping into the");
+        assert_eq!(ARRIVING_IN, "Arriving in the");
         assert_eq!(SYSTEM_ON, "system on");
     }
 

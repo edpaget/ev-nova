@@ -152,7 +152,7 @@ mod tests {
         }
         assert!(row(&session, class).present, "until its dispatch");
         tick(&mut session, &catalog);
-        for other in session.space.escort_rows(&session.pilot, &session.statics) {
+        for other in session.space.escort_rows() {
             assert!(!other.present, "{:?}", other.class);
         }
         assert!(!session.space.escorts_flying());

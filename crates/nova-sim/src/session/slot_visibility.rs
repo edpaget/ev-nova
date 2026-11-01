@@ -82,8 +82,12 @@
 //! **`_PrepareAllSprites`' other parts** change nothing the player sees
 //! (rdm weapons-fidelity phase 47's findings): no site that runs it holds
 //! a dying ship, a live shot, a cargo box or a live asteroid field, and
-//! the rest (stellars, explosions, smoke, stars, target and escape-pod
-//! sprites) is display the view draws from state each frame.
+//! the rest (explosions, smoke, stars, target and escape-pod sprites) is
+//! display the view draws from state each frame. Its stellars' part isn't
+//! display: it steps their timers and frames. [`Session::stellar_pass`]
+//! runs it beside each call of [`Session::prepare_all_sprites`] that needs
+//! it, and game entry's where the ships are set up (see the
+//! `stellar_passes` module).
 //!
 //! Left out, each with its owner: the box of a slot never laid out this
 //! run (`_InitSprites`' clone rect @0x1f135, here no box), and

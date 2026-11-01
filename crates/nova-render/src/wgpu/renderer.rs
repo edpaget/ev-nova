@@ -1158,15 +1158,15 @@ impl Scissors {
 /// texture world allows without a transparent world texture, which cannot
 /// work: additive and max world batches keep the destination's alpha, so
 /// over a transparent clear they would vanish when composited. So an
-/// overlay batch that comes before the world in the frame (a mission
-/// dialog drawn before flight while its map is open over it) is drawn
-/// over the world here, where natively the world draws over it; and a
-/// second world run after an overlay run is drawn with the first, under
-/// that overlay. This differs from native on purpose
-/// (rdm:phase/display-modes-fidelity/phase-5-paused-flight-under-mission-dialogs
-/// tracks it). Text is never world (the batcher keeps it in the overlay),
-/// so it is always laid out with the overlay; no rule here singles it
-/// out.
+/// overlay batch that comes before the world in the frame is drawn over
+/// the world here, where natively the world draws over it; and a second
+/// world run after an overlay run is drawn with the first, under that
+/// overlay. This differs from native on purpose. It remains for text
+/// among flight's world, such as the message line. A dialog's map doesn't
+/// meet it: flight's scene comes first, under the dialogs and the map
+/// (rdm:phase/play-feel-7/phase-2-paused-flight-under-mission-dialogs).
+/// Text is never world (the batcher keeps it in the overlay), so it is
+/// always laid out with the overlay; no rule here singles it out.
 ///
 /// Each world draw of a clipped world (`nova_view::DrawList::world_in`)
 /// is scissored to [`Frame::world_scissor`], in target pixels or texels

@@ -9,7 +9,7 @@
 //! path, so a `nova_sim::…` path doesn't depend on which crate holds the
 //! code. The crate's own modules are the session layer's: [`session`],
 //! [`save`], [`saves`], [`course`], [`flight_frame`], [`galaxy_map`], [`glow`],
-//! [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
+//! [`key_fade`], [`map_borders`], [`map_panel`], [`map_route`], [`map_search`], [`pre_jump`], [`rating`],
 //! [`red_alert`], [`status_cargo`], [`target_panel`] and [`top_speed`],
 //! with the test support in `fixture`.
 //!
@@ -183,6 +183,8 @@
 //!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
 //!   drawn at a tick, flickering on the [`BlinkChance`] port
 //!   ([`glow_level`]).
+//! - [`key_fade`]: what fades the flight cursor: which keys set
+//!   `_keyPressedThisFrame`, past which gates.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
@@ -284,6 +286,9 @@
 //! - [`player_turn`]: the player's turn block: the whole-degree turn,
 //!   the auto-turn toward an aim that holds the turn keys off, and the
 //!   aims reverse and the jump's brake take.
+//! - [`player_wrap`]: the player's wrap, `_WrapPlayerPosition`: a ship
+//!   past the edge of the system carried back, and whether what stands
+//!   near it comes along.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -437,6 +442,7 @@ pub use nova_sim_ai::gate;
 pub use nova_sim_base::geometry;
 pub use nova_sim_port::gate_sprite;
 pub mod glow;
+pub mod key_fade;
 pub mod map_borders;
 pub mod map_panel;
 pub mod map_route;
@@ -450,6 +456,7 @@ pub use nova_sim_ai::planet_comm;
 pub use nova_sim_base::handling;
 pub use nova_sim_base::inertialess;
 pub use nova_sim_base::player_turn;
+pub use nova_sim_base::player_wrap;
 pub use nova_sim_combat::message;
 pub use nova_sim_combat::player_fate;
 pub use nova_sim_port::gamble;
@@ -574,7 +581,7 @@ pub use hover::{DrawnBox, DrawnShips, Hover, hover_gate};
 pub use hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone,
-    next_hyper_destination,
+    next_one_jump_destination,
 };
 pub use iff::{RadarGear, ShipIff, StellarIff};
 pub use landing::{

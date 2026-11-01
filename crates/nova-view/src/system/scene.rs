@@ -22,10 +22,10 @@ use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
 };
 use crate::draw::crossed_box;
-use crate::flight::murk::{murk_tint, sprite_murk};
+use crate::flight::murk::SeenMurk;
 use crate::geometry::Bounds;
 use crate::image::ImageKey;
-use crate::{Color, DrawList, Point};
+use crate::{Blend, Color, DrawList, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
 pub const PLACEHOLDER_SIZE: f32 = 64.0;
@@ -182,6 +182,12 @@ impl SceneStellar {
     /// when it counts none), shown on the sheet drawn; a frozen frame
     /// stays shown. A random next frame is drawn on `chance`.
     fn step(&mut self, chance: &mut dyn Chance) {
+        self.step_by(1, chance);
+    }
+
+    /// One pass of its animation at `gain` ticks, as [`SceneStellar::step`]
+    /// runs one at 1.
+    fn step_by(&mut self, gain: u8, chance: &mut dyn Chance) {
         let counted = if self.counts_none {
             NonZeroU16::MIN
         } else {
@@ -189,11 +195,17 @@ impl SceneStellar {
         };
         if self.frozen {
             self.frames
-                .step_frozen(self.animation_data, self.destroyed, counted, chance);
+                .step_frozen_by(gain, self.animation_data, self.destroyed, counted, chance);
         } else {
             let drawn = self.frame_count(self.drawn);
-            self.frames
-                .step(self.animation_data, self.destroyed, counted, drawn, chance);
+            self.frames.step_by(
+                gain,
+                self.animation_data,
+                self.destroyed,
+                counted,
+                drawn,
+                chance,
+            );
         }
     }
 
@@ -414,6 +426,15 @@ impl SystemScene {
         }
     }
 
+    /// Steps every stellar's animation one pass of `gain` ticks: a stellar
+    /// pass outside a play frame (`nova_sim::gate_sprite::StellarPass`), its
+    /// random next frames drawn on `chance`, a visual-only source.
+    pub fn step_pass(&mut self, gain: u8, chance: &mut dyn Chance) {
+        for stellar in &mut self.stellars {
+            stellar.step_by(gain, chance);
+        }
+    }
+
     /// Marks each stellar's frame frozen or not as `frozen` gives it
     /// (`Session::frame_frozen`): a flight frame's clone freezes or thaws
     /// a slot with no event to tell it, so the view reads it after each
@@ -481,16 +502,15 @@ impl SystemScene {
 /// walks each layer from its head (@0xb9727). The scene itself stays in
 /// navigation order.
 ///
-/// With `seen` (the player's ship's position and the player's effective
-/// murk), each sprite is murked as `_HandleStellarSprites` murks it at its
-/// stellar's position (@0x2ee57-0x2eea4, [`sprite_murk`]); the placeholder
-/// and the names are not, as they are not the original's. The system view
-/// passes none.
+/// With `seen` (how the player sees the murk), each sprite is murked as
+/// `_HandleStellarSprites` murks it at its stellar's position
+/// (@0x2ee57-0x2eea4, [`SeenMurk::at`]); the placeholder and the names are
+/// not, as they are not the original's. The system view passes none.
 pub fn draw_stellars(
     list: &mut DrawList,
     scene: &SystemScene,
     camera: &Camera,
-    seen: Option<(Vec2, u8)>,
+    seen: Option<SeenMurk>,
 ) {
     let mut by_id: Vec<&SceneStellar> = scene.stellars().iter().collect();
     by_id.sort_by_key(|stellar| stellar.id);
@@ -500,11 +520,9 @@ pub fn draw_stellars(
             (None | Some(Ok(_)), None) => (camera.world_to_screen(stellar.position), (0.0, 0.0)),
             (_, Some((image, size))) => {
                 let at = stellar.sprite_centre(camera, size);
-                let level = seen.map_or(0, |(viewer, murk)| {
-                    let position = Vec2::new(stellar.position.x, stellar.position.y);
-                    sprite_murk(position, viewer, murk)
-                });
-                list.sprite(image, at, murk_tint(Color::WHITE, level));
+                let position = Vec2::new(stellar.position.x, stellar.position.y);
+                let colorize = seen.map(|seen| seen.at(position));
+                list.mixed_sprite(image, at, Color::WHITE, Blend::Normal, colorize);
                 (at, size)
             }
             (Some(Err(message)), None) => {
@@ -544,7 +562,6 @@ mod tests {
 
     use super::*;
     use crate::ImageKey;
-    use crate::flight::murk::murk_tint;
     use crate::system::catalog::SystemContents;
 
     /// Canned systems; records every system asked for.
@@ -980,20 +997,34 @@ mod tests {
             );
             list.iter()
                 .filter_map(|command| match command {
-                    crate::DrawCommand::Sprite { tint, .. } => Some(*tint),
-                    crate::DrawCommand::Text { color, .. } => Some(*color),
+                    crate::DrawCommand::Sprite { tint, .. } => Some((*tint, None)),
+                    crate::DrawCommand::Colorized { tint, colorize, .. } => {
+                        Some((*tint, Some(*colorize)))
+                    }
+                    crate::DrawCommand::Text { color, .. } => Some((*color, None)),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
         };
-        let level = sprite_murk(Vec2::new(200.0, 0.0), Vec2::ZERO, 50);
+        let seen_from = |viewer, murk| SeenMurk {
+            viewer,
+            murk,
+            colour: 0x1081,
+        };
+        let level = seen_from(Vec2::ZERO, 50).at(Vec2::new(200.0, 0.0)).level;
         assert_eq!(level, 24, "200 off in murk 50");
-        let murked = tints(Some((Vec2::ZERO, 50)));
-        assert_eq!(murked[0], murk_tint(Color::WHITE, 24));
+        let murked = tints(Some(seen_from(Vec2::ZERO, 50)));
+        assert_eq!(
+            murked[0],
+            (
+                Color::WHITE,
+                Some(crate::Colorize::toward_pixel(24, 0x1081))
+            )
+        );
         let plain = tints(None);
-        assert_eq!(plain[0], Color::WHITE, "no murk is white");
+        assert_eq!(plain[0], (Color::WHITE, None), "no murk draws plainly");
         assert_eq!(murked[1..], plain[1..], "the placeholder and the names");
-        let beside = tints(Some((Vec2::new(200.0, 0.0), 100)));
+        let beside = tints(Some(seen_from(Vec2::new(200.0, 0.0), 100)));
         assert_eq!(beside, plain, "nothing at the viewer");
     }
 

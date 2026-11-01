@@ -169,6 +169,7 @@ use super::hire::Shared;
 use super::{Outbox, PlayerShip, ReservePolicy, Session, SessionEvent, Setup};
 use crate::catalog::{CommCatalog, GovtId, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
+use crate::combat::ShipRef;
 use crate::combat::armament;
 use crate::combat::exits::ExitCursors;
 use crate::combat::hull::{DisableRule, NovaDisable};
@@ -420,6 +421,10 @@ impl Session {
         // 0 (`_HandlePlayer` @0x6ef1b-0x6ef3f), 0 for a hull of one set,
         // by either reading (see the `ship_display` module).
         self.ship.last_set_fold();
+        // The fighters out reach the new sprite (see the `fighter_homes`
+        // module).
+        self.space
+            .set_fighters_reach(self.reach_of(ShipRef::Player));
         self.out.save_due = true;
         self.out.emit(SessionEvent::ShipChanged);
     }

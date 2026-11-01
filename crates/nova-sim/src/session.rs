@@ -99,7 +99,8 @@
 //! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
 //! unless `Session::with_hyper_select` says otherwise). By the engine's
-//! reading each press moves only the selection and keeps the course; by
+//! reading each press steps to the next Con slot that holds a link, moves
+//! only the selection and keeps the course; by
 //! [`HyperSelectRule::OneJumpCourse`] it leaves a one-jump course.
 //!
 //! Each day that goes by steps the planetary events (see
@@ -381,7 +382,7 @@
 //!   change it only through `statics_mut`.
 //! - `setup: setup::Setup` (`setup` module; phase 2, done): the rule set
 //!   and the strategy ports the `with_*` builders set, written only by
-//!   those builders and `set_sound_quiet`.
+//!   those builders, `set_sound_quiet` and `set_sprite_load`.
 //! - `out: outbox::Outbox` (`outbox` module; phase 3, done): what the
 //!   session fills and the view takes with the `take_*` methods; nothing
 //!   reads it back but to undo its own writes.
@@ -505,6 +506,7 @@ mod fight_order;
 mod fight_phase_order;
 #[cfg(test)]
 mod fighter_capacity;
+mod fighter_homes;
 mod fighters;
 #[cfg(test)]
 mod fire_gates;
@@ -546,6 +548,8 @@ mod landing_fee;
 mod last_refresh;
 mod launch_frame;
 mod load_reset;
+#[cfg(test)]
+mod load_rules;
 mod loaded_berths;
 mod lost_lead;
 mod lost_target;
@@ -595,6 +599,7 @@ mod player_info;
 mod player_led;
 mod player_repair;
 mod player_ship;
+mod player_wrap;
 mod players_hits;
 mod plunder_ammo;
 mod plunder_loop;
@@ -635,6 +640,7 @@ mod slot_voice;
 mod smoke_frame;
 mod space;
 mod spawn_availability;
+mod sprite_load;
 mod stale_sprites;
 mod statics;
 mod status_cargo;
@@ -643,6 +649,7 @@ mod steering;
 mod stellar_attackers;
 mod stellar_defence;
 mod stellar_guns;
+mod stellar_passes;
 mod stellar_picks;
 mod stellars;
 mod step;
@@ -714,6 +721,7 @@ use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::space::Space;
 use self::statics::Statics;
+use self::stellar_passes::GateHolds;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
@@ -752,6 +760,7 @@ use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
 };
+use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
@@ -1058,11 +1067,20 @@ pub struct Session {
 
 impl Session {
     /// A new pilot's session, read from `catalog`: an unnamed
-    /// [`Pilot::new`], flown.
+    /// [`Pilot::new`], flown under [`Rulebook::default`].
     pub fn start(
         catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
     ) -> Result<Self, StartError> {
-        let mut session = Self::fly(catalog, Pilot::new(catalog, "")?)?;
+        Self::start_ruled(catalog, &Rulebook::default())
+    }
+
+    /// [`Session::start`] by `rules` throughout, as [`Session::load`] reads
+    /// them: the edge's start.
+    pub fn start_ruled(
+        catalog: &(impl PilotCatalog + CombatCatalog + AsteroidCatalog),
+        rules: &Rulebook,
+    ) -> Result<Self, StartError> {
+        let mut session = Self::load(catalog, Pilot::new(catalog, "")?, rules)?;
         // A new pilot's ship folds as `_ResetPlayer` leaves it
         // (@0x1d55a-0x1d565; see the `ship_display` module).
         session.ship.reset_fold();
@@ -1122,7 +1140,9 @@ impl Session {
     ///
     /// [`Session::load`] under [`Rulebook::default`]: see there for the
     /// fallbacks a save whose data is missing takes. The session's own
-    /// rule set is [`Rulebook::default`] until [`Session::with_rules`].
+    /// rule set is [`Rulebook::default`] until [`Session::with_rules`],
+    /// which redoes nothing the load worked out; the edge flies every
+    /// pilot by [`Session::load`] instead.
     ///
     /// # Errors
     ///
@@ -1134,10 +1154,15 @@ impl Session {
         Self::load(catalog, pilot, &Rulebook::default())
     }
 
-    /// `pilot`'s session as [`Session::fly`] builds it, the load's
-    /// fallbacks reading `rules`, and [`Session::load_repaired`] saying
-    /// whether one applied, as `_LoadPilotData` returns -0x2e when it set
-    /// its warning flag (@0x7648b-0x76498), the load otherwise complete:
+    /// `pilot`'s session as [`Session::fly`] builds it, holding `rules` as
+    /// its own from before its first read of the galaxy, so the resume,
+    /// the rebuild, the refresh and whatever they write to the pilot read
+    /// them too, as the original holds one set of readings. So a caller
+    /// wanting a rule set hands it in here, not to [`Session::with_rules`]
+    /// after. The load's fallbacks read `rules` as well, and
+    /// [`Session::load_repaired`] says whether one applied, as
+    /// `_LoadPilotData` returns -0x2e when it set its warning flag
+    /// (@0x7648b-0x76498), the load otherwise complete:
     ///
     /// - A pilot whose stellar no system lists, so the loaded data doesn't
     ///   place it, resumes as [`RuleKey::UnlistedStellar`] reads: by the
@@ -1204,6 +1229,9 @@ impl Session {
         // resume reads the saved visibility, as `leave_hidden` does, both
         // standing in for the load's first refresh (@0x751ca, @0x751cf).
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        galaxy.set_colocated(CoLocated::from(
+            rules.source_for(RuleKey::ColocatedResolution),
+        ));
         let saved = pilot.system;
         let mut load_repaired = false;
         if let Some(stellar) = pilot.stellar {
@@ -1342,7 +1370,8 @@ impl Session {
             chart: Chart::new(galaxy, system),
             port: Port::new(player.position),
             run: MissionRun::new(),
-        };
+        }
+        .with_rules(*rules);
         // `_LoadPilotData` reads the class table back (@0x760c2-0x760ea;
         // see the `class_table` module).
         session.space.seed_class_orders(&session.pilot);
@@ -1389,7 +1418,9 @@ impl Session {
         // `_LoadPilotData`'s fold (@0x76348-0x76376; see the
         // `ship_display` module).
         session.ship.last_set_fold();
-        session.space.set_first_class(&session.statics);
+        session
+            .space
+            .set_first_class(&session.statics, &session.setup);
         // `_PrepareAllSprites`' display of the player's lights before the
         // first frame (see the `ship_display` module).
         session.ship.prepare_player_lights(&session.setup);
@@ -1648,7 +1679,8 @@ impl Session {
     /// `_HandlePlayer`'s work on `frame` before its move, on `pass`: first
     /// the tractor's hold on the player and the screen's white, at the very
     /// top of `_HandlePlayer` (see the `tractor_hold` and `warp_stage`
-    /// modules), then its lost-target check (see the `lost_target`
+    /// modules), then the player's wrap (see the `player_wrap` module),
+    /// then its lost-target check (see the `lost_target`
     /// module), then the tribbles and perishables on a due frame, the Red
     /// Alert's check, and its blink on the advance pass alone, as
     /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
@@ -1658,6 +1690,7 @@ impl Session {
         // the `tractor_hold` module).
         self.hold_player(pass);
         self.ship.gamma_tick(self.mode.jump());
+        self.wrap_player_position();
         self.let_go_of_lost_target();
         if market::junk_step_due(frame) && self.ship.condition != Condition::Destroyed {
             let capacity = self.capacity();
@@ -1694,8 +1727,8 @@ impl Session {
         // After the ship moves, though `_HandlePlayer` runs the approach
         // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
         // the `clearance` module reads as the move, is
-        // `_WrapPlayerPosition` (filed as hud-fidelity-followups' dock
-        // approach phase).
+        // `_WrapPlayerPosition`, in the `player_wrap` module (filed as
+        // hud-fidelity-followups' dock approach phase).
         self.dock_approach();
     }
 
@@ -3345,6 +3378,7 @@ impl Session {
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         Some(self.pilot.system)
     }
 
@@ -3737,7 +3771,7 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let exit = self.hypergate_route(here, to, &catalog.gate_sites());
         let entered = exit.map(|(system, exit)| {
-            self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
+            self.come_out(here, system, &exit, GateKind::Hypergate, catalog, chance);
             let system = self.pilot.system;
             self.space
                 .say(&mut self.out, SimMessage::ExitedHypergate(system));
@@ -3817,15 +3851,18 @@ impl Session {
             return Err(GateRefusal::NoExit);
         };
         let (site, system) = (*exit.site, exit.system);
-        self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
+        self.come_out(here, system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.space
             .say(&mut self.out, SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
-    /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
-    /// [`Session::enter_wormhole`]. Before it enters, the exit decides
+    /// Brings the ship out of `exit`, a gate of `kind`, in `system`, having
+    /// gone in at `entered`: see [`Session::enter_wormhole`]. Each
+    /// `_PrepareAllSprites` runs a stellar pass, the entry's on the exit
+    /// system's stellars, before the frames' reset (see the
+    /// `stellar_passes` module). Before it enters, the exit decides
     /// what becomes of the special ships following the player
     /// ([`Session::exit_gate_slots`]); once it has, the exit's arrivals
     /// pass runs ([`Session::gate_exit_pass`]), those that follow come
@@ -3835,6 +3872,7 @@ impl Session {
     /// @0x674ef).
     fn come_out(
         &mut self,
+        entered: StellarId,
         system: SystemId,
         exit: &GateSite,
         kind: GateKind,
@@ -3849,6 +3887,13 @@ impl Session {
         self.ship.step_cloak_fade(&self.pilot, &self.statics);
         self.space
             .step_fades_at_gate_entry(system, self.pilot.system);
+        // Its stellar pass reads the old ships and the request where the
+        // exit is in the system gone in; otherwise it follows the system's
+        // entry, below, and they reach none of its gates.
+        let exit_elsewhere = system != self.pilot.system;
+        if !exit_elsewhere {
+            self.stellar_pass(StellarPass::Entry, GateHolds::Entered(entered), chance);
+        }
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
@@ -3884,6 +3929,9 @@ impl Session {
             catalog,
             chance,
         );
+        if exit_elsewhere {
+            self.stellar_pass(StellarPass::Entry, GateHolds::Nobody, chance);
+        }
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
@@ -3892,9 +3940,11 @@ impl Session {
         self.reset_stellar_frames((kind == GateKind::Hypergate).then_some(exit.id));
         // `_HandlePlayerDockRequest` @0x6764e, once loop C has led them
         // out, and again after the stellars' visibility (@0x67658): every
-        // NPC's fade steps twice.
+        // NPC's fade steps twice, and every gate.
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         self.prepare_all_sprites();
+        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -4170,8 +4220,9 @@ impl Session {
         // The rest of the tail (see the `dock_tail` module). The
         // original's bar is redrawn before its deselect with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
-        // flight view's `took_off`.
-        self.end_dock_tail();
+        // flight view's `took_off`. A landing left `_gSpeedMult` 0
+        // (@0x6375e-0x63769), so its passes add nothing.
+        self.end_dock_tail(StellarPass::Still, chance);
         Some(stellar)
     }
 
@@ -5230,6 +5281,8 @@ impl Session {
             }
             self.space.call_good_samaritans(&npc);
         }
+        self.space
+            .note_capture_holders(npc.id, self.out.board_line.is_some());
         self.mark_boarded(npc.id);
         self.out.sounds.push(SimSound::Boarded);
         if rule.repels(npc.booty.unwrap_or(0)) {
@@ -5608,13 +5661,16 @@ impl Session {
     /// intact, its armour at half its most, its cloak's fade and direction
     /// zeroed (@0x946e3, @0x946f9), defending no stellar (+0x8c = -1,
     /// @0x9470d, as `_AIShipCapturedByPlayer` writes it too @0x89738),
-    /// holding no order word, as `_AISetup` writes -1 on every capture
-    /// (@0x9478f, @0x7f40c), and then as [`Session::fleet_up`]
-    /// says: a mission's special ship keeps its mark and joins as a
+    /// the ships that held it as it was boarded defending none either
+    /// (@0x896b6-0x89704; see the `stellar_defence` module), holding no
+    /// order word, as `_AISetup` writes -1 on every capture (@0x9478f,
+    /// @0x7f40c), and then as [`Session::fleet_up`] says: a mission's
+    /// special ship keeps its mark and joins as a
     /// mission escort (`_DoPlunderDialog` @0x9459b-0x947cf; see the
     /// `captured_mission_ship` module). Its voice's variant is rolled on
     /// `chance` (see the `voices` module).
     fn join_fleet(&mut self, id: NpcId, chance: &mut dyn Chance) {
+        self.space.free_capture_holders();
         self.space.lose_captured(
             &mut self.pilot,
             id,
@@ -5770,7 +5826,9 @@ impl Session {
     /// `OnCapture` run on `chance`, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
     /// swap (see the `hooks` module). The change of class is applied by
-    /// [`Session::become_class`], with the reserves held.
+    /// [`Session::become_class`], with the reserves held. The player's
+    /// fighters out stay out, and the ships the captured ship leads are
+    /// released (see the `fighter_homes` module).
     ///
     /// The player takes the captured ship's place, velocity and heading
     /// (`_DoShipCapture` @0x416e3-0x41722) and its paint, or none
@@ -5876,11 +5934,7 @@ impl Session {
         self.chart.deselect();
         self.chart.target = None;
         self.ship.secondary = None;
-        for other in self.space.traffic.npcs_mut() {
-            if other.leader == Some(npc.id) {
-                other.leader = None;
-            }
-        }
+        self.space.release_led(npc.id);
         // Use As My Ship loses the person for good (@0x41180), whatever
         // `captured_person` says.
         self.space.lose_captured(&mut self.pilot, npc.id, true);
@@ -6136,7 +6190,7 @@ impl PlayerShip {
         reserves: ReservePolicy,
     ) {
         let hold = reserves == ReservePolicy::Hold;
-        self.fit.hull = statics.arsenal.hull(pilot.ship);
+        self.fit.hull = setup.hull(statics, pilot.ship);
         // No refit writes the exit cursors (+0xc8fe-+0xc905) or the fold
         // set (+0xc8fc): the new armament carries the old's (a change of
         // class resets the fold set after, in `become_class`).
@@ -6725,6 +6779,7 @@ impl Chart {
             &statics.arsenal,
             setup.npc_items(),
         );
+        setup.load_frames(statics, &mut table);
         table
     }
 
@@ -10383,6 +10438,8 @@ pub(super) mod tests {
                 .map(str::to_owned)
                 .to_vec(),
             name_patches: Default::default(),
+            lc_names: Vec::new(),
+            lc_name_patches: Default::default(),
             base_prices: ["75", "350", "750", "900", "200"]
                 .map(str::to_owned)
                 .to_vec(),
@@ -11364,13 +11421,16 @@ pub(super) mod tests {
     }
 
     /// `session`, landed on planet 128 of [`breeding`], buys `tons` of
-    /// each good, a ton a click: it is left on the other reading of
-    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
+    /// each good, a ton a click: it is left on the other readings of
+    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) and, as
+    /// [`breeding`]'s planet sells several `jünk`,
+    /// [`RuleKey::JunkListing`](crate::RuleKey::JunkListing).
     fn buy_goods(session: &mut Session, tons: &[(Good, u32)]) {
         session.setup.rules = session
             .setup
             .rules
-            .with_override(RuleKey::TradeLot, RuleSource::Bible);
+            .with_override(RuleKey::TradeLot, RuleSource::Bible)
+            .with_override(RuleKey::JunkListing, RuleSource::Bible);
         for &(good, tons) in tons {
             for _ in 0..tons {
                 let bought = session.trade(order(session, good, Direction::Buy, Lot::Click));
@@ -28259,14 +28319,16 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_hyper_select_key_cycles_the_listed_systems_and_wraps() {
+    fn the_hyper_select_key_visits_each_con_slot_that_holds_a_link_and_wraps() {
         let mut session = Session::start(&hub()).expect("starts");
-        for expected in [134, 131, 135, 134] {
+        session.take_sounds();
+        for expected in [134, 131, 131, 130, 135, 134] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(
                 session.nav_mode(),
                 NavMode::Hyperspace(Some(SystemId(expected)))
             );
+            assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
             assert_eq!(session.course(), [], "no course plotted");
         }
     }
@@ -28278,7 +28340,8 @@ pub(super) mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.course(), ids(&[131, 132]));
         assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
-        for expected in [135, 134, 131] {
+        // The cue noted slot 1, so the presses step on from there.
+        for expected in [131, 130, 135, 134, 131] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(session.course(), ids(&[131, 132]), "after {expected}");
         }
@@ -28301,7 +28364,9 @@ pub(super) mod tests {
         let catalog = hub();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
-        assert_eq!(session.select_next_system(), Some(SystemId(135)));
+        for expected in [131, 130, 135] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+        }
         fly_out(&mut session, &catalog);
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(135)));
         assert_eq!(

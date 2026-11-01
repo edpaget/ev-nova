@@ -62,8 +62,9 @@
 //! loop. A spawn draws its type first, then its place and velocity
 //! (one axis, then the other), its frame, its spin's size and its sign.
 //! No sound plays in any of these routines. `_HandleSpriteMurkiness`
-//! (@0x36446) is the view's: `nova_view::flight::murk` darkens each
-//! asteroid (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
+//! (@0x36446) is the view's: `nova_view::flight::murk` mixes each
+//! asteroid toward the background
+//! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 //!
 //! Left out:
 //!

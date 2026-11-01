@@ -16,6 +16,9 @@
 //!   autopilot's dock tests it ([`Carrier::reach`](crate::bay::Carrier::reach))
 //!   before this flight, so a fighter that docks is gone before its word
 //!   matters.
+//!   A fighter with no bay for it there gets nothing written (@0x80384)
+//!   and exits to @0x88111, skipping the pull and the word below
+//!   ([`By::unpulled`]).
 //! - **The pull** (@0x87ff9-0x880b8): pull = `_ShipAccelRate` × 10.0
 //!   (double @0xdd0b0, [`FORMATION_NUDGE`]) × `_gSpeedMult` (1.0 a tick
 //!   here). On each axis, towards the carrier: x += pull when carrier.x -
@@ -110,6 +113,10 @@ pub(crate) struct By {
     pub word: RuleSource,
     /// Whether it flies double time's second pass, which writes no word.
     pub second_pass: bool,
+    /// Whether it is within its carrier's reach with no bay for it:
+    /// `_AIAddFighterToParent` writes nothing (@0x80384) and sub 8 exits
+    /// to @0x88111, past the pull and the word.
+    pub unpulled: bool,
 }
 
 /// One tick of `npc` docking with a carrier at `carrier`, inside its dock
@@ -142,8 +149,9 @@ pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: B
             );
         }
         RuleSource::Engine if window => {
-            // +0x34 = 0, then less the pull (@0x87ef8, @0x880c0).
-            npc.owed_burst = (pull > 0.0).then_some(pull);
+            // +0x34 = 0, then less the pull (@0x87ef8, @0x880c0), unless
+            // it exits before the pull.
+            npc.owed_burst = (pull > 0.0 && !by.unpulled).then_some(pull);
             held_burst::step(
                 npc,
                 handling,
@@ -163,17 +171,21 @@ pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: B
                 Word::Keeps { thrust },
             );
             // The preamble's word, less the pull (@0x851e9-0x8520d,
-            // @0x880c0).
-            npc.owed_burst = match npc.owed_burst {
-                Some(owed) => Some(owed + pull),
-                None => (pull > by.top).then_some(pull - by.top),
-            };
+            // @0x880c0), unless it exits before the pull.
+            if !by.unpulled {
+                npc.owed_burst = match npc.owed_burst {
+                    Some(owed) => Some(owed + pull),
+                    None => (pull > by.top).then_some(pull - by.top),
+                };
+            }
         }
         RuleSource::Bible => {
             held_burst::step(npc, handling, controls, by.flight, by.inertia, Word::Writes);
         }
     }
-    npc.state.position = pulled(npc.state.position, carrier.position, pull);
+    if !by.unpulled {
+        npc.state.position = pulled(npc.state.position, carrier.position, pull);
+    }
 }
 
 /// `at` pulled by `pull` towards `to` on each axis, as sub 8 tests it

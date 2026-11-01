@@ -7,8 +7,9 @@
 use super::faked_world::world;
 use super::*;
 use crate::flight::escorts::fighters_abandoned_message;
+use crate::flight::fake_catalog::scripted;
 use crate::flight::jump::{FADE_IN_FOR, FADE_OUT_FOR, JumpEffect, JumpPhase};
-use nova_sim::flight_frame::FlightEvent;
+use nova_sim::flight_frame::{FlightEvent, PassReport};
 use nova_sim::{SessionEvent, SimSound};
 
 /// One tick of flight time on `view`'s clock, as a frame's tick moves it
@@ -522,6 +523,71 @@ pub(super) fn at_the_warps_end(view: &mut Faked, combat: Vec<CombatEvent>) {
     arrived_in_alpha(view);
 }
 
+/// A frame's report of a double-time step, `first` the flight between
+/// its passes.
+fn doubled_from(first: FlightFrame) -> StepReport {
+    let pass = PassReport {
+        double_time: true,
+        ..PassReport::default()
+    };
+    super::stepping::doubled(pass.clone(), pass, first)
+}
+
+#[test]
+fn a_double_time_warp_end_draws_a_frame_before_the_arrival() {
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    view.sim.queue_report(doubled_from(under_way(true)));
+    view.tick(TICK);
+    assert!(!view.drawn().warp_end_due, "drawn before the warp's end");
+    assert!(
+        !sent_but_lines(&view).contains(&FlightCommand::Arrive),
+        "that frame shows the old system"
+    );
+    view.tick(TICK);
+    assert!(
+        !sent_but_lines(&view).contains(&FlightCommand::Arrive),
+        "a tick with no step keeps showing it"
+    );
+    view.sim.queue_report(StepReport {
+        steps: Vec::new(),
+        stopped: true,
+    });
+    view.tick(TICK);
+    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+}
+
+#[test]
+fn a_double_time_warp_end_on_the_first_pass_arrives_on_that_tick() {
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    view.sim.queue_report(doubled_from(FlightFrame {
+        warp_end_due: true,
+        ..under_way(true)
+    }));
+    view.tick(TICK);
+    assert!(
+        sent_but_lines(&view).contains(&FlightCommand::Arrive),
+        "the frame held has reached the end, so none waits for it"
+    );
+    assert_eq!(view.drawn(), &in_alpha(), "laid out, the hold dropped");
+}
+
+#[test]
+fn a_second_pass_that_lights_the_white_starts_the_fade_at_once() {
+    let mut view = warping();
+    view.sim.set_frame(FlightFrame {
+        hyper_gamma: 0.5,
+        ..under_way(true)
+    });
+    view.sim.queue_report(doubled_from(under_way(true)));
+    view.tick(TICK);
+    assert!(matches!(
+        view.jump_effect().map(JumpEffect::phase),
+        Some(JumpPhase::FadeOut(_))
+    ));
+}
+
 #[test]
 fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits_for_the_warps_end()
 {
@@ -644,8 +710,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
     view.say_for(NO_DESTINATION, 360);
     at_the_warps_end(&mut view, Vec::new());
     view.arrival_frame();
-    let text = arrival_message("Alpha Centauri", DATE, false);
-    faked_lasts(&mut view, &text, 240);
+    faked_lasts(&mut view, &alpha_arrival(), 240);
 }
 
 #[test]
@@ -1059,9 +1124,10 @@ fn arriving_with(events: Vec<FlightEvent>) -> Faked {
     view
 }
 
-/// The arrival line in Alpha Centauri on the flight's date.
+/// The arrival line in Alpha Centauri on the flight's date, led by what
+/// the view's chance, which rolls 0, gives.
 fn alpha_arrival() -> String {
-    arrival_message("Alpha Centauri", DATE, false)
+    arrival_message_with(ENTERING, "Alpha Centauri", DATE, false)
 }
 
 #[test]
@@ -1092,6 +1158,49 @@ fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     view.arrival_frame();
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
     assert_eq!(view.message(), Some(said.as_str()));
+}
+
+#[test]
+fn a_jumps_arrival_leads_with_what_a_roll_of_three_gives() {
+    // `Rand(3) + 43` (@0x6c27f-0x6c2ab).
+    for (draw, lead) in [
+        (0, "Entering the"),
+        (1, "Jumping into the"),
+        (2, "Arriving in the"),
+    ] {
+        let mut view = arriving_with(Vec::new());
+        let (script, chance) = scripted(&[draw]);
+        view.words_chance = chance;
+        view.arrival_frame();
+        let said = arrival_message_with(lead, "Alpha Centauri", DATE, false);
+        assert_eq!(view.message(), Some(said.as_str()));
+        assert_eq!(script.borrow().asked, [3], "one roll of three");
+    }
+}
+
+#[test]
+fn a_buoyed_arrival_rolls_no_lead() {
+    let buoy = SimMessage::Buoy(HELLO.to_owned());
+    let mut view = arriving_with(vec![FlightEvent::Message(buoy)]);
+    let (script, chance) = scripted(&[]);
+    view.words_chance = chance;
+    view.arrival_frame();
+    assert_eq!(view.message(), Some(HELLO));
+    assert_eq!(script.borrow().asked, Vec::<u32>::new());
+}
+
+#[test]
+fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
+    // The abandoned count is the arrival line's own tail (@0x6c3c4-0x6c42b).
+    let mut view = arriving_with(vec![
+        FlightEvent::Message(SimMessage::CargoJettisoned),
+        FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
+    ]);
+    view.arrival_frame();
+    let said = view.message().expect("the arrival").to_owned();
+    let tail = format!("{}  {}  ", alpha_arrival(), fighters_abandoned_message(2));
+    assert!(said.starts_with(&tail), "{said}");
+    assert!(said.len() > tail.len(), "the message follows: {said}");
 }
 
 #[test]

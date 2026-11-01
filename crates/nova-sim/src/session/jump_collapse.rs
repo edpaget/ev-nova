@@ -51,6 +51,15 @@
 //! ([`SimSound::JumpCollapsed`], `_PlaySound` @0x68aaf). `begin_jump`
 //! refuses a disabled player, so the jump does not restart.
 //!
+//! **Under the white.** `_screenFaded` rose at the top of this pass if
+//! `_hyperGamma` was above 0 (@0x68404, the pass's `gamma_tick`) and falls
+//! at the top of the next (@0x6841f), and +0x50 has just gone to −1 ahead
+//! of every key block (@0x6a7a2 on). So this is the one pass the dialogs'
+//! guards decide anything. The collapse reports it to the step that ran
+//! it ([`StepRun::lit_collapse`](crate::flight_frame::StepRun::lit_collapse)),
+//! as a one-shot: double time's second pass can have put the white out by
+//! the step's end.
+//!
 //! **Ordering against the original.** `_PlayGame` calls `_HandlePlayer`
 //! (@0x43e19) before `_HandleShot` (@0x44385) and `_HandleShip`
 //! (@0x44483), so a hit that disables the player collapses the jump in
@@ -136,6 +145,7 @@ impl Session {
             speed,
             self.top_speed(),
         );
+        self.out.lit_collapse = self.hyper_gamma() > 0.0;
         self.mode.end_jump();
         self.space.say(&mut self.out, SimMessage::JumpCollapsed);
         self.ship.halt_sounds(&mut self.out, &WARP_UP_HALTS);
@@ -152,10 +162,12 @@ mod tests {
 
     use crate::combat::hull::Condition;
     use crate::flight::{Controls, DISABLED_DRAG};
+    use crate::flight_frame::{StepInput, StepReport};
     use crate::session::JumpRefusal;
+    use crate::session::step::StepCollaborators;
     use crate::session::tests::{DISABLING, OUT, bound_for_131};
     use crate::sound::PLAYER_EXPLOSION_HALTS;
-    use crate::testkit::{Passive, work, work_with};
+    use crate::testkit::{FakePilotCatalog, Passive, work, work_with};
     use crate::testkit::{catalog, fly_out};
 
     // The pure parts.
@@ -430,5 +442,187 @@ mod tests {
         assert_eq!(session.preparing_jump(), Some(SystemId(131)));
         assert_eq!(session.take_messages(), []);
         assert!(!session.take_sounds().contains(&SimSound::JumpCollapsed));
+    }
+
+    // The report of a lit collapse.
+
+    /// A session warping east with stock warp sounds, in double time as
+    /// `double` says, Hyperspace Effects as `effects` says, ticked until
+    /// `done`.
+    fn warping_until(effects: bool, double: bool, done: impl Fn(&Session) -> bool) -> Session {
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
+        session.statics_mut().warp_sounds = [364, 252];
+        session.set_hyperspace_effects(effects);
+        session.set_double_time_key(double);
+        session.begin_jump().expect("jumps");
+        while !done(&session) {
+            work(&mut session, &catalog, Controls::default());
+        }
+        assert!(session.jumping().is_some());
+        session
+    }
+
+    /// [`warping_until`] the warp has lit the white.
+    fn warping_lit(double: bool) -> Session {
+        warping_until(true, double, |session| session.hyper_gamma() > 0.0)
+    }
+
+    /// `count` steps on `session` by rules that keep a disabled player
+    /// disabled, Hyperspace Effects and double time held as given.
+    fn stepped(session: &mut Session, count: u32, effects: bool, double: bool) -> StepReport {
+        stepped_over(session, &catalog(), count, effects, double)
+    }
+
+    /// [`stepped`], over `catalog`.
+    fn stepped_over(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        count: u32,
+        effects: bool,
+        double: bool,
+    ) -> StepReport {
+        let mut report = StepReport::default();
+        let input = StepInput {
+            window_width: 1024,
+            hyperspace_effects: effects,
+            double_time_key: double,
+            ..StepInput::default()
+        };
+        session.step(
+            &input,
+            count,
+            &mut StepCollaborators {
+                catalog,
+                behaviour: &Passive,
+                rules: DISABLING,
+                chance: &mut NeverFires,
+            },
+            &mut report,
+        );
+        report
+    }
+
+    /// Which of `report`'s steps carry a lit collapse.
+    fn lit_steps(report: &StepReport) -> Vec<bool> {
+        report.steps.iter().map(|run| run.lit_collapse).collect()
+    }
+
+    #[test]
+    fn a_step_reports_a_collapse_under_the_white_and_the_next_does_not() {
+        let mut session = warping_lit(false);
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(lit_steps(&stepped(&mut session, 1, true, false)), [true]);
+        assert_eq!(session.jumping(), None, "collapsed");
+        assert_eq!(lit_steps(&stepped(&mut session, 1, true, false)), [false]);
+    }
+
+    #[test]
+    fn a_collapse_before_the_white_is_not_reported() {
+        let mut session = braking(9);
+        session.ship.condition = Condition::Disabled;
+        assert!(session.hyper_gamma() <= 0.0);
+        assert_eq!(lit_steps(&stepped(&mut session, 1, true, false)), [false]);
+        assert_eq!(session.preparing_jump(), None, "collapsed");
+    }
+
+    /// `session`, flying over `catalog`, sent out on a jump to 131 and
+    /// collapsed under the white on a step, its report checked.
+    fn collapsed_lit(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.ship.settle_box(&session.pilot, &session.setup);
+        session.plot_course(SystemId(131)).expect("a route");
+        session.ship.player.position = OUT;
+        session.ship.player.velocity = Vec2::ZERO;
+        session.ship.player.heading = 90.0;
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        while session.hyper_gamma() <= 0.0 {
+            work(session, catalog, Controls::default());
+        }
+        session.ship.condition = Condition::Disabled;
+        let report = stepped_over(session, catalog, 1, true, false);
+        assert_eq!(lit_steps(&report), [true]);
+        assert_eq!(session.jumping(), None, "collapsed");
+        session.take_sounds();
+    }
+
+    #[test]
+    fn plain_p_and_i_act_right_after_a_lit_collapse_as_the_session_keeps_no_note() {
+        use crate::session::mission_screens::tests::{docked, screens, to_mars};
+        let catalog = screens(vec![to_mars(130)], Vec::new());
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(crate::catalog::MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        collapsed_lit(&mut session, &catalog);
+        assert!(session.press_player_info(), "P opens");
+        assert_eq!(session.take_sounds(), [], "with no beep");
+        assert!(
+            matches!(
+                session.press_mission_info(),
+                crate::session::MissionInfoPress::Opens(_)
+            ),
+            "I opens, not refused as the pass's own would be"
+        );
+    }
+
+    #[test]
+    fn plain_y_acts_right_after_a_lit_collapse_as_the_session_keeps_no_note() {
+        use crate::session::hail::tests::{hailable, npc, opening, targeting};
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        collapsed_lit(&mut session, &catalog);
+        // The rules that keep the player disabled disable the target too.
+        npc(&mut session).condition = Condition::Intact;
+        let hailed = session.hail_key(
+            &catalog,
+            &crate::hail::HailOptions::default(),
+            false,
+            &mut crate::testkit::Draws::of(&opening(0)),
+        );
+        assert!(
+            matches!(hailed, Ok(crate::session::Hailed::Comm(_))),
+            "Y opens: {hailed:?}"
+        );
+    }
+
+    #[test]
+    fn a_collapse_with_the_gamma_only_raised_to_0_is_not_reported() {
+        let mut session = warping_until(true, false, |session| session.hyper_gamma() == 0.0);
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(lit_steps(&stepped(&mut session, 1, true, false)), [false]);
+        assert_eq!(session.jumping(), None, "collapsed");
+    }
+
+    #[test]
+    fn with_hyperspace_effects_off_a_collapse_is_never_reported() {
+        let lit_at = warping_lit(false).warp_clock();
+        let mut session = warping_until(false, false, |session| session.warp_clock() == lit_at);
+        assert!(session.hyper_gamma() <= 0.0, "never lit");
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(lit_steps(&stepped(&mut session, 1, false, false)), [false]);
+        assert_eq!(session.jumping(), None, "collapsed");
+    }
+
+    #[test]
+    fn a_lit_collapse_on_double_times_first_pass_is_reported_past_the_steps_end() {
+        let mut session = warping_lit(true);
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(lit_steps(&stepped(&mut session, 1, true, true)), [true]);
+        assert_eq!(session.jumping(), None, "gone by the step's end");
+        assert!(session.hyper_gamma() < 0.0, "and the white out");
+    }
+
+    #[test]
+    fn a_lit_collapse_in_a_step_not_the_calls_last_is_reported_on_that_step() {
+        let mut session = warping_lit(false);
+        session.ship.condition = Condition::Disabled;
+        assert_eq!(
+            lit_steps(&stepped(&mut session, 2, true, false)),
+            [true, false]
+        );
     }
 }

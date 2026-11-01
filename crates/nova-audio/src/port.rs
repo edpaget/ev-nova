@@ -181,6 +181,11 @@ pub enum AudioCommand {
     /// Stops the music at once.
     StopMusic,
     /// Fades the music to silence over the duration, then stops it.
+    ///
+    /// Sent while a fade runs, it replaces that fade's remaining
+    /// duration: the music fades on from the volume it has reached, over
+    /// the new duration. The core re-times the switched-out fade so on a
+    /// switch-in (`UiSound::SwitchedIn`).
     FadeOutMusic(Duration),
     /// Stops every effect playing, the looping one included: sound is off.
     StopEffects,

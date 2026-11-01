@@ -14,8 +14,7 @@
 //!   [`Blend::Or`](crate::draw::Blend::Or) at
 //!   [`lights_tint`](crate::draw::lights_tint)`(`[`EXPLOSION_LEVEL`]`)`,
 //!   murked by where it is as seen from the player
-//!   ([`sprite_murk`](super::murk::sprite_murk),
-//!   [`murk_tint`](super::murk::murk_tint)), as a smoke puff is
+//!   ([`SeenMurk::at`](super::murk::SeenMurk::at)), as a smoke puff is
 //!   ([`smoke`](super::smoke)). `_HandleExplods` murks its sprite
 //!   (`_HandleSpriteMurkiness` @0x2f78b-0x2f7ab), then sets the
 //!   translucency +0xa8 and the channel factors +0xaa/+0xac/+0xae to 0x20
@@ -47,8 +46,6 @@
 //!     (@0x2f629) and the frame step (@0x2f7eb), as the engine has no
 //!     frozen pass
 //!     (rdm:phase/weapons-fidelity-followups/phase-2-left-out-of-weapons-fidelity-47).
-//!     The murk's colour (+0xb4) comes with `murk_tint`
-//!     (rdm:phase/weapons-fidelity-followups/phase-8-murk-mixes-toward-the-background-colour).
 //! - Under the original's caps
 //!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
 //!   reading, [`Scene::caps`]; by default nothing is capped) at most
@@ -157,17 +154,18 @@ use std::collections::BTreeMap;
 
 use nova_sim::combat::ParticleBurst;
 use nova_sim::combat::weapon::Explosion as Blast;
+use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
-use super::murk::{murk_tint, sprite_murk};
-use super::pods::{EscapePods, Pod};
+use super::murk::SeenMurk;
+use super::pods::{EscapePods, Pod, carry_point};
 use super::slot_pool::SlotPool;
 use super::weapons::LOOPED_SOUND;
 use crate::draw::lights_tint;
 use crate::sound::CombatSound;
 use crate::system::camera::Camera;
-use crate::{Color, DrawList, Point};
+use crate::{Blend, Color, DrawList, Point};
 
 /// The level an explosion is added at, on every frame: `_HandleExplods`
 /// sets the translucency and the channel factors to 0x20 on every shown
@@ -693,24 +691,28 @@ impl Effects {
     /// ([`SpriteLayer::Explosions`](nova_sim::sprite_layer::SpriteLayer::Explosions)),
     /// over the ships and their turret shots and under the beams over the
     /// ships. Each is added at full ([`EXPLOSION_LEVEL`], `Blend::Or`) and
-    /// murked as seen from the player's ship at `viewer` in a system of
-    /// effective murk `murk` (see the module docs; `_HandleExplods`
+    /// murked as the player sees them, `seen` (see the module docs;
+    /// `_HandleExplods`
     /// @0x2f78b-0x2f7e2).
     pub fn draw_explosions(
         &self,
         list: &mut DrawList,
         camera: &Camera,
         looks: &Looks,
-        viewer: Vec2,
-        murk: u8,
+        seen: SeenMurk,
     ) {
         for explosion in self.explosions.iter().filter(|e| e.delay <= 0.0) {
             if let Some(Ok(sheet)) = looks.boom(explosion.boom).map(|look| &look.sheet) {
                 let frame = sheet.image.frame(explosion.frame as u16);
                 let at = Vec2::new(explosion.at.x, explosion.at.y);
-                let tint = murk_tint(lights_tint(EXPLOSION_LEVEL), sprite_murk(at, viewer, murk));
                 let size = (sheet.frame_width, sheet.frame_height);
-                list.or_sprite(frame, camera.sprite_centre(explosion.at, size), tint);
+                list.mixed_sprite(
+                    frame,
+                    camera.sprite_centre(explosion.at, size),
+                    lights_tint(EXPLOSION_LEVEL),
+                    Blend::Or,
+                    Some(seen.at(at)),
+                );
             }
         }
     }
@@ -729,18 +731,10 @@ impl Effects {
     }
 
     /// Draws the escape pods adrift, as `looks` says, where `camera` shows
-    /// them, in their place among the sprites, murked as seen from the
-    /// player's ship at `viewer` in a system of effective murk `murk` (see
-    /// [`pods`](super::pods)).
-    pub fn draw_pods(
-        &self,
-        list: &mut DrawList,
-        camera: &Camera,
-        looks: &Looks,
-        viewer: Vec2,
-        murk: u8,
-    ) {
-        self.pods.draw(list, camera, looks, viewer, murk);
+    /// them, in their place among the sprites, murked as the player sees
+    /// them, `seen` (see [`pods`](super::pods)).
+    pub fn draw_pods(&self, list: &mut DrawList, camera: &Camera, looks: &Looks, seen: SeenMurk) {
+        self.pods.draw(list, camera, looks, seen);
     }
 
     /// The escape pods adrift, in slot order.
@@ -765,6 +759,17 @@ impl Effects {
     /// list.
     pub fn take_sounds(&mut self) -> Vec<CombatSound> {
         std::mem::take(&mut self.sounds)
+    }
+
+    /// Carries the explosions within `wrap`'s reach
+    /// (`_WrapPlayerPosition`'s loop of `_explodData` @0x68097-0x68119) and
+    /// the escape pods. The particles stay, as no code in the routine reads
+    /// `_gParticleArray`: they leave the screen.
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for explosion in self.explosions.iter_mut() {
+            carry_point(wrap, &mut explosion.at);
+        }
+        self.pods.carry(wrap);
     }
 
     /// Clears everything: the explosions, the debris, the sounds, the
@@ -899,6 +904,13 @@ mod tests {
     /// The player's ship, where the murk is seen from: at [`PLAYER`].
     const VIEWER: Vec2 = Vec2::ZERO;
 
+    /// No murk to see from [`VIEWER`].
+    const CLEAR: SeenMurk = SeenMurk {
+        viewer: VIEWER,
+        murk: 0,
+        colour: 0,
+    };
+
     fn exploded(effects: &mut Effects, boom: i16, where_: Point) {
         exploded_in(effects, boom, where_, &scene());
     }
@@ -970,13 +982,7 @@ mod tests {
         effects.step(&[], &scene(), &pod_looks(), &mut Script::default());
         assert_eq!(effects.pods()[0].life, life - 1, "it steps with the rest");
         let mut list = DrawList::new();
-        effects.draw_pods(
-            &mut list,
-            &Camera::centred_on(PLAYER),
-            &pod_looks(),
-            Vec2::ZERO,
-            0,
-        );
+        effects.draw_pods(&mut list, &Camera::centred_on(PLAYER), &pod_looks(), CLEAR);
         assert!(
             list.into_iter().any(|command| matches!(
                 command,
@@ -1067,7 +1073,7 @@ mod tests {
         assert_eq!(effects.take_sounds(), [explosion_sound(303, (3, 4))]);
         assert_eq!(frames(&effects), [0.0]);
         let mut list = DrawList::new();
-        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), VIEWER, 0);
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), CLEAR);
         assert_eq!(list, DrawList::new());
         steps(&mut effects, 1);
         assert_eq!(effects.explosions(), [], "past its one frame");
@@ -1104,7 +1110,7 @@ mod tests {
         let slots: Vec<_> = effects.explosions().iter().map(|e| e.boom).collect();
         assert_eq!(slots, [BoomId(128), older.boom], "in slot order");
         let mut list = DrawList::new();
-        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), VIEWER, 0);
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), CLEAR);
         let drawn: Vec<_> = list
             .into_iter()
             .filter_map(|command| match command {
@@ -1236,7 +1242,7 @@ mod tests {
         );
         let list = |effects: &Effects| {
             let mut list = DrawList::new();
-            effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), VIEWER, 0);
+            effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), CLEAR);
             list.iter()
                 .filter(|c| matches!(c, DrawCommand::Sprite { image, .. } if image.id == 401))
                 .count()
@@ -2085,7 +2091,7 @@ mod tests {
         effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         let camera = Camera::centred_on(at(10.0, 20.0));
         let mut list = DrawList::new();
-        effects.draw_explosions(&mut list, &camera, &looks(), VIEWER, 0);
+        effects.draw_explosions(&mut list, &camera, &looks(), CLEAR);
         effects.draw_particles(&mut list, &camera);
         let commands: Vec<DrawCommand> = list.iter().cloned().collect();
         assert_eq!(
@@ -2113,33 +2119,47 @@ mod tests {
         );
     }
 
-    /// The tints of the explosions drawn, seen from `viewer` at `murk`.
-    fn explosion_tints(effects: &Effects, viewer: Vec2, murk: u8) -> Vec<Color> {
+    /// The tints and colorizes of the explosions drawn, seen from `viewer`
+    /// at `murk`.
+    fn explosion_tints(
+        effects: &Effects,
+        viewer: Vec2,
+        murk: u8,
+    ) -> Vec<(Color, Option<crate::Colorize>)> {
         let mut list = DrawList::new();
         let camera = Camera::centred_on(PLAYER);
-        effects.draw_explosions(&mut list, &camera, &looks(), viewer, murk);
+        let seen = SeenMurk {
+            viewer,
+            murk,
+            colour: 0x1081,
+        };
+        effects.draw_explosions(&mut list, &camera, &looks(), seen);
         list.into_iter()
             .filter_map(|command| match command {
-                DrawCommand::Sprite { tint, .. } => Some(*tint),
+                DrawCommand::Sprite { tint, .. } => Some((*tint, None)),
+                DrawCommand::Colorized { tint, colorize, .. } => Some((*tint, Some(*colorize))),
                 _ => None,
             })
             .collect()
     }
 
     #[test]
-    fn a_murky_explosion_is_darkened_by_its_distance_from_the_player() {
+    fn a_murky_explosion_is_mixed_toward_its_colour_by_its_distance_from_the_player() {
         let mut effects = Effects::default();
         exploded(&mut effects, 130, at(0.0, 160.0));
-        let level = sprite_murk(Vec2::new(0.0, 160.0), VIEWER, 100);
+        let level = crate::flight::murk::sprite_murk(Vec2::new(0.0, 160.0), VIEWER, 100);
         assert!(level > 0, "murked at 160 px: {level}");
         assert_eq!(
             explosion_tints(&effects, VIEWER, 100),
-            [murk_tint(lights_tint(EXPLOSION_LEVEL), level)],
+            [(
+                lights_tint(EXPLOSION_LEVEL),
+                Some(crate::Colorize::toward_pixel(level, 0x1081))
+            )],
             "_HandleSpriteMurkiness @0x2f78b-0x2f7ab"
         );
         assert_eq!(
             explosion_tints(&effects, Vec2::new(0.0, 160.0), 100),
-            [lights_tint(EXPLOSION_LEVEL)],
+            [(lights_tint(EXPLOSION_LEVEL), None)],
             "no murk beside the player"
         );
     }
@@ -2154,7 +2174,7 @@ mod tests {
             tints.push(explosion_tints(&effects, VIEWER, 0));
             steps(&mut effects, 1);
         }
-        let full = vec![lights_tint(EXPLOSION_LEVEL)];
+        let full = vec![(lights_tint(EXPLOSION_LEVEL), None)];
         let expected = [
             vec![],
             vec![],
@@ -2209,7 +2229,7 @@ mod tests {
                 &mut Script::default(),
             );
             let mut list = DrawList::new();
-            effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &sized, VIEWER, 0);
+            effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &sized, CLEAR);
             let commands: Vec<DrawCommand> = list.iter().cloned().collect();
             match commands.as_slice() {
                 [
@@ -2234,7 +2254,7 @@ mod tests {
     fn draw_explosions_draws_the_explosions_alone() {
         let effects = exploded_and_debris();
         let mut list = DrawList::new();
-        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), VIEWER, 0);
+        effects.draw_explosions(&mut list, &Camera::centred_on(PLAYER), &looks(), CLEAR);
         let commands: Vec<DrawCommand> = list.iter().cloned().collect();
         assert_eq!(commands.len(), 1);
         assert!(

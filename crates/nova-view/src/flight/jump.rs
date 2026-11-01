@@ -85,6 +85,15 @@
 //! - `_PlayerEnterHypergate` @0x63c25-0x63c40 uses the same asynchronous
 //!   `_FadeWhiteOut`, so a gate's fade-in takes input too.
 //!
+//! `_screenFaded`, which `_DoSystemMap` and the other dialogs test, refuses
+//! a key on one pass only. It is up for about 26 passes of a jump, but
+//! each opener's own +0x50 gate refuses first on all of them, and the next
+//! pass's top clears it after the arrival (@0x6841f). So a guard decides
+//! only on the pass a lit jump collapses, +0x50 falling ahead of every key
+//! block (@0x689ea). That pass is the `faded_keys` module's, which
+//! [`JumpEffect::faded`] isn't the test for: it is true on the arrival's
+//! frame too, where a press acts.
+//!
 //! The preference: `Keys.nib` binds the Hyperspace Effects check box to the
 //! `HyperspaceEffects` default through `NSNegateBoolean`, so a set default
 //! (settings+0x14) means "skip the effects", and a fresh install has them

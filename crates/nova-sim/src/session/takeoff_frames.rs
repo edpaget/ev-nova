@@ -19,7 +19,10 @@
 //! other stellar's frames, kept or shown. The view settles it in the
 //! catch-up that follows the take-off or the exit, before the first frame
 //! is drawn, so the original's order (the reset before the rebuild) needs
-//! nothing more. The reset plays no sound.
+//! nothing more. A gate entry's stellar pass comes before the reset and
+//! the tail's two after it (see the `stellar_passes` module): the reset
+//! keeps each timer, so the passes around it add up, and the exit gate
+//! opened here takes the tail's two. The reset plays no sound.
 
 use super::{Session, SessionEvent, Space};
 use crate::catalog::StellarId;
@@ -135,10 +138,13 @@ mod tests {
         );
         let exit = StellarId(310);
         let site = *session.chart.gate_site(exit).expect("shown");
-        assert_eq!(
-            session.space.gate_sprites.get(&exit),
-            Some(&GateSprite::exit_gate(&GateAnimation::of(&site)))
-        );
+        // Then the tail's two stellar passes (see the `stellar_passes`
+        // module).
+        let anim = GateAnimation::of(&site);
+        let mut opened = GateSprite::exit_gate(&anim);
+        opened.step(&anim, false, false, &mut NeverFires);
+        opened.step(&anim, false, false, &mut NeverFires);
+        assert_eq!(session.space.gate_sprites.get(&exit), Some(&opened));
         assert_eq!(session.gate_frame(exit), Some(5), "frames - 1");
         assert_eq!(session.space.gate_sprites[&KEPT], reset(stepped()));
         assert_eq!(resets_told(&mut session), 1);

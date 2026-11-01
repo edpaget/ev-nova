@@ -9,7 +9,9 @@
 //! `FramesPer` (+0xa06, 0 read as 36), as `_LoadExtendedShipSprites`
 //! loads them (@0x22735-0x22b1e). The `ShipAnimations` preference, which
 //! sets `BaseSets` and `AltSetCount` to 1 when off (prefs +0xe,
-//! @0x22ac3-0x22b1e), is taken as on, its default.
+//! @0x22ac3-0x22b1e), and `RunningLights`, which drops the lights sprite,
+//! apply on top of that ([`FrameSpec::loaded`], see
+//! [`sprite_load`](super::sprite_load)).
 //!
 //! **The set** ([`ShipFrames::step`], @0x2b7d8-0x2bc2e). A hull whose
 //! sprite holds no more frames than `FramesPer` draws set 0 and moves no

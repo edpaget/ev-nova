@@ -22,10 +22,15 @@
 //!   @0x2019c-), both before the Red Alert icon (@0x20304): over every
 //!   ship, the nav brackets under the ship brackets, both under the icon.
 //!
-//! The original centres them on whole pixels (nav @0x2fdab: the stellar's
-//! position less the player's truncated; ship @0x3005d: the difference
-//! truncated). Ours centres them where the sprite is drawn, interpolated,
-//! so they stay on the art; the difference is under a pixel.
+//! **Centre.** Both are on whole pixels, placed by the caller from the
+//! camera: the nav brackets at the stellar's position less the player
+//! truncated alone
+//! ([`Camera::nav_centre`](crate::system::camera::Camera::nav_centre),
+//! @0x2fdab-0x2fddb), which can be a pixel from the stellar's own offset;
+//! the ship brackets at the difference truncated, with no size in it
+//! ([`Camera::whole_point`](crate::system::camera::Camera::whole_point),
+//! @0x30060-0x30085), so an odd-sized ship's are half a pixel up and left
+//! of its sprite's middle.
 
 pub use nova_sim::brackets::Standing;
 

@@ -72,6 +72,11 @@ impl<T> SlotPool<T> {
         self.slots.iter().flatten()
     }
 
+    /// The items kept, in slot order, to change in place.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.slots.iter_mut().flatten()
+    }
+
     /// How many items are kept.
     pub fn len(&self) -> usize {
         self.iter().count()

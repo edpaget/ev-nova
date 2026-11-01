@@ -6,7 +6,9 @@
 //! (@0x444d2), so each gate steps after the ships have moved, reading them
 //! as this frame left them: at the end of the pass's ship loop
 //! ([`Session::ship_loop`]), before the frame is drawn. It steps whenever the ship is not docked, while a
-//! jump plays too, as the original's stellars animate then.
+//! jump plays too, as the original's stellars animate then. Outside the
+//! play frame each `_PrepareAllSprites`, and game entry, runs the same walk
+//! at its own gain and holds (see the `stellar_passes` module).
 //!
 //! The gates are those of the stellars shown. A gate keeps its sprite
 //! across systems, as the original keeps a gate's frame, next frame and
@@ -17,16 +19,19 @@
 //! (`_HandlePlayerDockRequest` @0x675ce-0x67646; see the `takeoff_frames`
 //! module, rdm:phase/play-feel-4/phase-14-takeoff-stellar-frame-reset).
 //! While not shown it stands still,
-//! as the sprite tick walks only the slots shown (@0x2e713-0x2e73e). It
+//! as the sprite tick and every pass walk only the slots shown
+//! (@0x2e713-0x2e73e). It
 //! starts closed only the first time a flight shows it, with next 0 once
 //! a take-off or a gate's exit has reset the frames: `Space` is not
 //! saved, so a load, a resumed pilot and a new pilot start every gate
 //! closed (stellar-fidelity phase 12).
 
+use super::stellar_passes::GateHolds;
 use super::stellars::NO_SPRITE_SIDE;
 use super::{Chart, Session, Setup, Space, Statics};
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
+use crate::clearance::{CLEARED, DockRequest};
 use crate::gate::HYPERGATE;
 use crate::gate_sprite::{GateAnimation, approach_reach, held_open};
 
@@ -80,8 +85,30 @@ impl Session {
     /// frame), grown by
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.step_gates_by(1, GateHolds::AsTheyStand, chance);
+    }
+
+    /// One pass of every hypergate shown at `gain` ticks, held as `holds`
+    /// says: the walk the play frame and each stellar pass share (see
+    /// [`Session::step_gate_sprites`] and the `stellar_passes` module).
+    pub(super) fn step_gates_by(
+        &mut self,
+        gain: u8,
+        holds: GateHolds,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         self.keep_gate_sprites();
-        let dock = self.port.dock;
+        let (dock, npcs) = match holds {
+            GateHolds::AsTheyStand => (self.port.dock, self.space.traffic.npcs()),
+            GateHolds::Entered(stellar) => (
+                Some(DockRequest {
+                    stellar,
+                    permission: CLEARED,
+                }),
+                self.space.traffic.npcs(),
+            ),
+            GateHolds::Nobody => (None, [].as_slice()),
+        };
         for site in self.chart.sites.iter().filter(|site| is_hypergate(site)) {
             let width = self
                 .space
@@ -89,8 +116,8 @@ impl Session {
             let anim = GateAnimation::of(site);
             if let Some(sprite) = self.space.gate_sprites.get_mut(&site.id) {
                 let reach = approach_reach(width, sprite.is_open(&anim));
-                let held = held_open(site, reach, dock, self.space.traffic.npcs());
-                sprite.step(&anim, site.destroyed, held, chance);
+                let held = held_open(site, reach, dock, npcs);
+                sprite.step_by(gain, &anim, site.destroyed, held, chance);
             }
         }
     }

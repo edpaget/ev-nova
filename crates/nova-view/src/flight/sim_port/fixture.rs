@@ -14,8 +14,8 @@ use nova_sim::brackets::{NavBrackets, TargetBrackets};
 use nova_sim::catalog::SystemId;
 use nova_sim::flight_frame::{
     Answer, DrawnBoxes, FlightCommand, FlightEvent, FlightFrame, FlightOpening, FloatingLinks,
-    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, Gates, MapKey, MarksFrom,
-    Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
+    FrameAsteroid, FrameBeam, FrameBox, FrameHud, FrameShip, GateEntry, Gates, KeyFades, MapKey,
+    MarksFrom, Names, PortShops, ScreenAnswer, ScreenAsk, StepInput, StepReport, StepRun,
 };
 use nova_sim::navigation::NavMode;
 use nova_sim::status_cargo::StatusCargo;
@@ -70,8 +70,8 @@ use crate::devtools::{DevDesk, EditRefusal, PilotEdit};
 /// answers the message line's commands ([`FlightCommand::CommShown`],
 /// [`FlightCommand::CommAcknowledged`] and [`FlightCommand::CommTicked`])
 /// and the settings ([`FlightCommand::SetWindowWidth`],
-/// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`])
-/// done without taking an answer from the queue, as these follow-ups
+/// [`FlightCommand::SetDoubleTimeKey`], [`FlightCommand::SetSoundQuiet`],
+/// [`FlightCommand::SetSpriteLoad`]) done without taking an answer from the queue, as these follow-ups
 /// ride along with the commands a test is about. Told to fail
 /// ([`FakeFlight::fail`]), its opening says why ([`FakeFlight::opening`]),
 /// it refuses every command but a description's load, still recording
@@ -87,7 +87,7 @@ pub struct FakeFlight {
     applied: Vec<FlightCommand>,
     answers: VecDeque<(Answer, Option<FlightFrame>, Vec<FlightEvent>)>,
     events: Vec<FlightEvent>,
-    reports: VecDeque<StepReport>,
+    reports: VecDeque<(StepReport, Option<FlightFrame>)>,
     stepped: Vec<(StepInput, u32)>,
     refused: Vec<PlayerCommand>,
     asks: Vec<FlightCommand>,
@@ -225,7 +225,13 @@ impl FakeFlight {
     /// Reports `report` for the next call of [`FlightSim::step`] not yet
     /// reported, whatever its step count.
     pub fn queue_report(&mut self, report: StepReport) {
-        self.reports.push_back(report);
+        self.reports.push_back((report, None));
+    }
+
+    /// Reports `report` as [`FakeFlight::queue_report`] does, and shows
+    /// `frame` from then on, as a step that changes the flight leaves it.
+    pub fn queue_report_showing(&mut self, report: StepReport, frame: FlightFrame) {
+        self.reports.push_back((report, Some(frame)));
     }
 
     /// The commands applied, in the order sent.
@@ -350,7 +356,12 @@ impl FlightSim for FakeFlight {
     fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
         self.stepped.push((*input, steps));
         match self.reports.pop_front() {
-            Some(report) => into.clone_from(&report),
+            Some((report, frame)) => {
+                into.clone_from(&report);
+                if let Some(frame) = frame {
+                    self.frame = frame;
+                }
+            }
             None => into.clear(),
         }
     }
@@ -367,6 +378,7 @@ impl FlightSim for FakeFlight {
                 | FlightCommand::SetWindowWidth(_)
                 | FlightCommand::SetDoubleTimeKey(_)
                 | FlightCommand::SetSoundQuiet(_)
+                | FlightCommand::SetSpriteLoad(_)
         );
         self.applied.push(command);
         if self.failure.is_some() {
@@ -517,6 +529,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         jump_readiness,
         texts_queued,
         gates,
+        key_fades,
         map_key,
         ships,
         drawn,
@@ -529,6 +542,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         effective_murk,
         system_murk,
         system_background,
+        murk_colour,
         double_time,
         hyper_gamma,
         traffic_ships,
@@ -578,6 +592,11 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         } else {
             Gates::EVERY
         },
+        key_fades: if *key_fades == KeyFades::EVERY {
+            KeyFades::NONE
+        } else {
+            KeyFades::EVERY
+        },
         map_key: MapKey {
             system: if map_key.system == other_system {
                 SystemId(other_system.0 - 1)
@@ -621,6 +640,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         } else {
             Some(0)
         },
+        murk_colour: murk_colour.wrapping_add(1),
         double_time: !double_time,
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
@@ -1996,6 +2016,28 @@ mod tests {
     }
 
     #[test]
+    fn the_fake_shows_a_frame_queued_with_a_report_from_that_step_on() {
+        let mut fake = FakeFlight::new();
+        let shown = FlightFrame {
+            texts_queued: 7,
+            ..FlightFrame::default()
+        };
+        fake.queue_report_showing(StepReport::default(), shown.clone());
+        fake.queue_report(StepReport::default());
+        let filled = |fake: &FakeFlight| {
+            let mut frame = FlightFrame::default();
+            fake.frame(&mut frame);
+            frame
+        };
+        assert_eq!(filled(&fake), FlightFrame::default(), "before the step");
+        let mut report = StepReport::default();
+        fake.step(&StepInput::default(), 1, &mut report);
+        assert_eq!(filled(&fake), shown, "after it");
+        fake.step(&StepInput::default(), 1, &mut report);
+        assert_eq!(filled(&fake), shown, "a report with none keeps it");
+    }
+
+    #[test]
     fn the_fake_takes_every_gate_but_those_refused() {
         let mut fake = FakeFlight::new();
         let gates = |fake: &FakeFlight| {
@@ -2911,6 +2953,7 @@ mod tests {
             stellars: vec![record::stellar(StellarId(130))],
             effective_murk: u8::MAX,
             system_background: Some(0x10),
+            murk_colour: 0x0421,
             double_time: true,
             traffic_ships: vec![ShipId(130)],
             system: SystemId(i16::MAX),
@@ -2928,6 +2971,7 @@ mod tests {
             jump_readiness: JumpReadiness::Underway,
             texts_queued: u64::MAX,
             gates: Gates::EVERY.refusing(PlayerCommand::Map),
+            key_fades: KeyFades::EVERY.with_unbidden(),
             death_descs: vec![130],
             player_ship_name: Some("Kestrel".to_owned()),
             long_date: "June 23rd, 1177 NC".to_owned(),
@@ -2962,6 +3006,7 @@ mod tests {
                 jump_readiness,
                 texts_queued,
                 gates,
+                key_fades,
                 map_key,
                 ships,
                 drawn,
@@ -2974,6 +3019,7 @@ mod tests {
                 effective_murk,
                 system_murk,
                 system_background,
+                murk_colour,
                 double_time,
                 hyper_gamma,
                 traffic_ships,
@@ -2998,6 +3044,7 @@ mod tests {
             assert_ne!(other.effective_murk, *effective_murk);
             assert_ne!(other.system_murk, *system_murk);
             assert_ne!(other.system_background, *system_background);
+            assert_ne!(other.murk_colour, *murk_colour);
             assert_ne!(other.double_time, *double_time);
             assert_ne!(other.hyper_gamma.to_bits(), hyper_gamma.to_bits());
             assert_ne!(other.traffic_ships, *traffic_ships);
@@ -3017,6 +3064,7 @@ mod tests {
             assert_ne!(other.jump_readiness, *jump_readiness);
             assert_ne!(other.texts_queued, *texts_queued);
             assert_ne!(other.gates, *gates);
+            assert_ne!(other.key_fades, *key_fades);
             assert_ne!(other.death_descs, *death_descs);
             assert_ne!(other.player_ship_name, *player_ship_name);
             assert_ne!(other.long_date, *long_date);

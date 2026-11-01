@@ -47,11 +47,12 @@
 //!   stellar's current and next frames to 0, as the original's dock
 //!   request does (see the `takeoff_frames` module), told after that
 //!   entry's other events: the flight view resets the frames of every
-//!   stellar it shows and keeps before it lays out or draws the scene
-//!   again. Only a refused hypergate tells nothing.
+//!   stellar it shows and keeps once it has laid the scene out, between
+//!   the entry's stellar pass and the rest (see the `stellar_passes`
+//!   module). Only a refused hypergate tells nothing.
 //!
 //! The session's other one-shot outputs (its sounds, messages, pay notes,
-//! fighter notes and the rest, each with its own `take_*`) are drained
+//! fighter notes, stellar passes and the rest, each with its own `take_*`) are drained
 //! with these in one stream of `FlightEvent`s
 //! ([`Session::drain_events`]; see the `flight_events` module), each
 //! event as [`FlightEvent::Session`](crate::flight_frame::FlightEvent::Session).

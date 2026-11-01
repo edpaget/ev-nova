@@ -85,9 +85,28 @@ impl SelfDestruct {
         self.count
     }
 
+    /// A countdown with `count` ticks left, for tests that start from a
+    /// pass of it.
+    #[cfg(any(test, feature = "fixture"))]
+    #[must_use]
+    pub fn at(count: u32) -> Self {
+        Self { count: Some(count) }
+    }
+
     /// `_ResetPlayer`'s part (@0x1d764): the count idles.
     pub fn reset(&mut self) {
         self.count = None;
+    }
+
+    /// Whether a pass with the chord held sets `_keyPressedThisFrame`:
+    /// the start (@0x6fe02) and the destruct (@0x701ca), and none of the
+    /// passes between them. `dying` is as [`SelfDestruct::step`] reads it.
+    #[must_use]
+    pub fn chord_fades(&self, dying: bool) -> bool {
+        match self.count {
+            None => !dying,
+            Some(count) => count - 1 <= END,
+        }
     }
 
     /// One tick of block Z, with the chord `held` and the player `dying`
@@ -229,6 +248,38 @@ mod tests {
             assert_eq!(destruct.step(true, true), None);
         }
         assert_eq!(destruct.count(), None);
+    }
+
+    #[test]
+    fn the_chord_fades_the_cursor_exactly_on_the_passes_that_start_or_destruct() {
+        let mut running = SelfDestruct::default();
+        hold(&mut running, 10);
+        for count in [
+            SelfDestruct::default(),
+            running,
+            SelfDestruct::at(END + 1),
+            SelfDestruct::at(END + 2),
+        ] {
+            for dying in [false, true] {
+                let beat = { count }.step(true, dying);
+                assert_eq!(
+                    count.chord_fades(dying),
+                    matches!(beat, Some(Beat::Started | Beat::Destruct)),
+                    "{count:?} dying {dying}"
+                );
+            }
+        }
+        assert!(SelfDestruct::default().chord_fades(false), "the start");
+        assert!(!SelfDestruct::default().chord_fades(true), "a dying start");
+        assert!(SelfDestruct::at(END + 1).chord_fades(true), "the destruct");
+        assert!(!running.chord_fades(false), "running");
+    }
+
+    #[test]
+    fn at_sets_the_count_a_step_reads() {
+        let mut destruct = SelfDestruct::at(END + 1);
+        assert_eq!(destruct.count(), Some(END + 1));
+        assert_eq!(destruct.step(true, false), Some(Beat::Destruct));
     }
 
     #[test]

@@ -8,14 +8,20 @@
 //!
 //! - a frame where the mouse moved, or its button is down
 //!   (@0x3801c-0x3803b), sets it to 32 and stamps the time
-//!   (@0x38053-0x38069); here a pointer move or button press does
-//!   ([`HoverCursor::pointer`]). A button held down without moving shows
-//!   it only at its press;
+//!   (@0x38053-0x38069); here a pointer move does
+//!   ([`HoverCursor::pointer`]), and each step does while a button is
+//!   down ([`HoverCursor::button`]). Ours is told of a button rather than
+//!   reading `_Button` live, so a release that won't reach flight ends the
+//!   hold where it is lost: at [`HoverCursor::left`] outside the window,
+//!   and at `FlightView::let_go_of_input` when flight gives up its input;
 //! - at the end of each frame (@0x38427-0x3844d) it drops a level once a
 //!   second (60 `_TickCount`s) has passed since that stamp, or on any frame
-//!   the player used a flight key (the byte at `0x3b5550`, which
-//!   `_PlayGame` clears each frame @0x45b33 and `_HandlePlayer` sets on
-//!   its key checks).
+//!   the byte at `0x3b5550` is set, `_keyPressedThisFrame`, which
+//!   `_PlayGame` clears each frame @0x45b3b and `_HandlePlayer` sets past
+//!   each key block's gates, and on its own through a jump. Those gates are
+//!   [`nova_sim::key_fade`]'s, which the view reads before a frame's steps
+//!   (`FlightView::cursor_keyed`, `FlightView::step_cursor`) and at a key's
+//!   press (`FlightView::key_fades_cursor`, [`HoverCursor::key`]).
 //!
 //! The cursor is hidden, and nothing else happens that frame, when the
 //! sprite failed to load (`0x3b5128`), when the game is switched out
@@ -66,8 +72,10 @@ pub struct HoverCursor {
     stepped_at: u64,
     /// The time now, in `_TickCount`s.
     clock: u64,
-    /// Whether a key was pressed in flight since the last step.
+    /// Whether a key that fades was pressed in flight since the last step.
     keyed: bool,
+    /// Whether a mouse button is down.
+    button: bool,
 }
 
 impl HoverCursor {
@@ -79,16 +87,23 @@ impl HoverCursor {
         self.moved_at = self.clock;
     }
 
-    /// A key was pressed in flight: the next step fades the cursor a
-    /// level.
+    /// A key that fades was pressed in flight: the next step fades the
+    /// cursor a level, however short the press.
     pub fn key(&mut self) {
         self.keyed = true;
     }
 
+    /// A mouse button went down or came up: while one is down, each step
+    /// shows the cursor whole and counts as the mouse moving.
+    pub fn button(&mut self, down: bool) {
+        self.button = down;
+    }
+
     /// The pointer left the window: the cursor is hidden until it comes
-    /// back.
+    /// back, and any button counts as let go, as its release won't come.
     pub fn left(&mut self) {
         self.at = None;
+        self.button = false;
     }
 
     /// Where the pointer is while the cursor shows: `None` when it is
@@ -112,13 +127,19 @@ impl HoverCursor {
 
     /// One flight step: whether the pointer is over something targetable
     /// (`hovering`), how many frames the cursor's sheet holds (`None` when
-    /// it could not be read, and the cursor does nothing) and whether the
-    /// player holds a flight key (`held`), which fades it as a key pressed
-    /// since the last step ([`HoverCursor::key`]) does. See the module
-    /// docs.
-    pub fn step(&mut self, hovering: bool, frames: Option<NonZeroU16>, held: bool) {
+    /// it could not be read) and whether this frame's pass set the byte
+    /// (`keyed`), which fades it as a key pressed since the last step
+    /// ([`HoverCursor::key`]) does. A held button's stamp runs first,
+    /// whatever `frames` says, as `_HandleMouse`'s head comes before its
+    /// return for a sprite that failed to load; with `None` the step does
+    /// nothing more. See the module docs.
+    pub fn step(&mut self, hovering: bool, frames: Option<NonZeroU16>, keyed: bool) {
         self.clock += SIXTIETHS_PER_STEP;
-        let keyed = std::mem::take(&mut self.keyed) || held;
+        let keyed = std::mem::take(&mut self.keyed) || keyed;
+        if self.button {
+            self.fade = FADE_LEVELS;
+            self.moved_at = self.clock;
+        }
         let Some(frames) = frames else {
             return;
         };
@@ -282,6 +303,78 @@ mod tests {
         cursor.step(false, FOUR, false);
         cursor.step(false, FOUR, false);
         assert_eq!(cursor.fade(), 31);
+    }
+
+    #[test]
+    fn a_button_held_keeps_it_whole_however_long_the_mouse_rests() {
+        let mut cursor = moved();
+        cursor.button(true);
+        for _ in 0..40 {
+            cursor.step(false, FOUR, false);
+            assert_eq!(cursor.fade(), 32);
+        }
+    }
+
+    #[test]
+    fn a_button_held_restamps_it_each_step_so_a_key_fades_it_only_one_level() {
+        let mut cursor = moved();
+        cursor.button(true);
+        for _ in 0..3 {
+            cursor.step(false, FOUR, true);
+            assert_eq!(cursor.fade(), 31);
+        }
+    }
+
+    #[test]
+    fn a_button_held_brings_a_faded_out_cursor_back() {
+        let mut cursor = moved();
+        for _ in 0..32 {
+            cursor.step(false, FOUR, true);
+        }
+        assert_eq!(cursor.shown_at(), None);
+        cursor.button(true);
+        cursor.step(false, FOUR, false);
+        assert_eq!(cursor.fade(), 32);
+    }
+
+    #[test]
+    fn with_no_sheet_a_button_held_still_stamps_the_mouse_as_moved() {
+        let mut cursor = moved();
+        cursor.button(true);
+        for _ in 0..40 {
+            cursor.step(false, None, false);
+        }
+        cursor.button(false);
+        cursor.step(false, FOUR, false);
+        assert_eq!(cursor.fade(), 32, "it moved a step ago");
+    }
+
+    #[test]
+    fn released_it_goes_idle_a_second_after_the_last_step_the_button_was_down() {
+        let mut cursor = moved();
+        cursor.button(true);
+        for _ in 0..40 {
+            cursor.step(false, FOUR, false);
+        }
+        cursor.button(false);
+        for _ in 0..30 {
+            cursor.step(false, FOUR, false);
+        }
+        assert_eq!(cursor.fade(), 32, "a second: not past it");
+        cursor.step(false, FOUR, false);
+        assert_eq!(cursor.fade(), 31);
+    }
+
+    #[test]
+    fn leaving_the_window_lets_go_of_the_button() {
+        let mut cursor = moved();
+        cursor.button(true);
+        cursor.left();
+        cursor.pointer(at());
+        for _ in 0..32 {
+            cursor.step(false, FOUR, true);
+        }
+        assert_eq!(cursor.fade(), 0, "no hold came back with the pointer");
     }
 
     #[test]

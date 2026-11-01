@@ -99,10 +99,13 @@ impl Session {
     /// none, @0x5a044-0x5a04c), when nothing opens and nothing changes,
     /// the session resets (@0x5a06a; see the `precalced` module), then
     /// gives what the screen shows ([`Session::player_info`]), so the
-    /// screen shows the cargo trimmed. The dialog's other guards, the
-    /// screen faded out (`_screenFaded`, @0x5a013) and a fade pending
-    /// (`_fadePending`, @0x5a052-0x5a064), are the screens' state, which
-    /// the session does not hold.
+    /// screen shows the cargo trimmed. The dialog's guard on the screen
+    /// faded out (`_screenFaded`, @0x5a013) can decide only on the pass a
+    /// jump collapses under the white, which never reaches here: that
+    /// press is [`FlightCommand::PressFaded`](crate::flight_frame::FlightCommand::PressFaded),
+    /// refused in `session/apply/faded.rs`. A fade pending (`_fadePending`,
+    /// @0x5a052-0x5a064) is the screens' state, which the session does
+    /// not hold.
     pub(crate) fn open_player_info(
         &mut self,
         catalog: &(impl PilotCatalog + ?Sized),

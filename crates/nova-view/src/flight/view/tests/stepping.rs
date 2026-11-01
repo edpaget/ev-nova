@@ -11,12 +11,13 @@ use nova_sim::flight_frame::ShipPlace;
 use nova_sim::flight_frame::{
     FlightEvent, FrameShip, FrameShot, PassReport, RaisedLine, StepInput, StepReport, StepRun,
 };
+use nova_sim::player_wrap::{PlayerWrap, WRAP_EDGE, WRAP_SHIFT};
 use nova_sim::{CommNote, FireSound, Gauge, PersonQuote};
 
 use super::faked_travel::{faked_lasts, shown_to_flight};
 
 use crate::flight::stars::Star;
-use crate::system::camera::Anchor;
+use crate::system::camera::{Anchor, Camera};
 
 use super::*;
 
@@ -71,6 +72,18 @@ fn step(passes: Vec<PassReport>) -> StepRun {
         before: vec![(ShipRef::Player, ShipPlace::default())],
         passes,
         ..StepRun::default()
+    }
+}
+
+/// A frame of one double-time step of passes `first` and `second`, with
+/// `between` the flight as it stood between them.
+pub(super) fn doubled(first: PassReport, second: PassReport, between: FlightFrame) -> StepReport {
+    StepReport {
+        steps: vec![StepRun {
+            between_passes: Some(Box::new(between)),
+            ..step(vec![first, second])
+        }],
+        stopped: false,
     }
 }
 
@@ -540,20 +553,262 @@ fn double_times_second_pass_ages_the_effects_again() {
     let mut twice = detonated();
     frame(&mut twice, one_step(vec![fight(vec![])]));
     frame(&mut twice, one_step(vec![fight(vec![])]));
-    let mut doubled = detonated();
-    frame(&mut doubled, one_step(vec![fight(vec![]), fight(vec![])]));
-    assert_eq!(doubled.effects.explosions()[0].frame, 2.0);
-    assert_eq!(doubled.effects, twice.effects);
+    let mut both = detonated();
+    let report = doubled(fight(vec![]), fight(vec![]), sol());
+    frame(&mut both, report);
+    frame(&mut both, stopped());
+    assert_eq!(both.effects.explosions()[0].frame, 2.0);
+    assert_eq!(both.effects, twice.effects);
 }
 
 #[test]
-fn a_detonation_on_the_second_pass_is_shown_that_frame() {
+fn a_detonation_on_the_second_pass_is_shown_the_frame_after() {
     let mut view = stepping(armed(1, &[BLASTER]));
-    frame(
-        &mut view,
-        one_step(vec![fight(vec![]), fight(vec![detonation()])]),
-    );
+    let report = doubled(fight(vec![]), fight(vec![detonation()]), sol());
+    frame(&mut view, report);
+    assert_eq!(view.effects.explosions().len(), 0, "held with its pass");
+    frame(&mut view, one_step(vec![fight(vec![])]));
     assert_eq!(view.effects.explosions().len(), 1);
+}
+
+// A double-time frame, drawn between its passes.
+
+/// A frame whose stepping stopped before its first step.
+fn stopped() -> StepReport {
+    StepReport {
+        steps: vec![],
+        stopped: true,
+    }
+}
+
+/// `sol()` with the player's ship at `x`.
+fn sol_at(x: f32) -> FlightFrame {
+    let mut frame = sol();
+    frame.ships[0].position = Vec2::new(x, 0.0);
+    frame
+}
+
+/// A view over a flight whose double-time step left the ship at 20, the
+/// first pass having left it at 10: what it holds, and the flight now.
+fn held() -> (Faked, FlightFrame, FlightFrame) {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let (first, now) = (sol_at(10.0), sol_at(20.0));
+    view.sim.set_frame(now.clone());
+    let report = doubled(fight(vec![]), fight(vec![]), first.clone());
+    frame(&mut view, report);
+    (view, first, now)
+}
+
+#[test]
+fn a_double_time_frame_is_drawn_on_the_first_passs_state() {
+    let (view, first, now) = held();
+    assert_eq!(view.drawn(), &first);
+    assert_eq!(view.frame, now, "the kept frame is the flight as it stands");
+    view.check_frame_kept();
+}
+
+#[test]
+fn the_first_passs_state_stays_drawn_on_a_frame_with_no_step() {
+    let (mut view, first, _) = held();
+    view.step_frame(0, anchor());
+    assert_eq!(view.drawn(), &first);
+}
+
+#[test]
+fn a_command_leaves_the_first_passs_state_drawn() {
+    let (mut view, first, _) = held();
+    view.send(FlightCommand::Jump);
+    assert_eq!(view.drawn(), &first);
+}
+
+#[test]
+fn the_next_step_replaces_it() {
+    let (mut view, _, now) = held();
+    frame(&mut view, one_step(vec![fight(vec![])]));
+    assert_eq!(view.drawn(), &now);
+}
+
+#[test]
+fn a_stop_with_no_step_releases_it() {
+    let (mut view, _, now) = held();
+    frame(&mut view, stopped());
+    assert_eq!(view.drawn(), &now);
+}
+
+#[test]
+fn a_step_with_no_second_pass_replays_its_one_pass_on_its_frame() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let mut report = one_step(vec![fight(vec![detonation()])]);
+    report.steps[0].between_passes = Some(Box::new(sol()));
+    frame(&mut view, report);
+    assert_eq!(view.effects.explosions().len(), 1, "only a second is held");
+}
+
+#[test]
+fn a_single_time_step_draws_the_frame_as_it_stands() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let now = sol_at(20.0);
+    view.sim.set_frame(now.clone());
+    frame(&mut view, one_step(vec![fight(vec![])]));
+    assert_eq!(view.drawn(), &now);
+}
+
+#[test]
+fn a_layout_a_placing_a_takeover_a_landing_and_the_holds_expiry_drop_it() {
+    let (mut view, ..) = held();
+    super::faked_screen::warp_ends(&mut view);
+    view.arrive();
+    assert_eq!(view.drawn(), &in_alpha(), "laid out afresh");
+
+    let (mut view, _, now) = held();
+    view.place_ship();
+    assert_eq!(view.drawn(), &now, "placed");
+    assert_eq!(view.previous, now.player().place());
+
+    let (mut view, ..) = held();
+    let taken = sol_at(40.0);
+    view.sim
+        .queue_answer_showing(Answer::Assigned(Assigned::MyShip), taken.clone());
+    view.assign(Assignment::MyShip);
+    assert_eq!(view.drawn(), &taken, "taken over");
+
+    let (mut view, ..) = held();
+    let landed = FlightFrame {
+        landed: Some(StellarId(128)),
+        ..sol_at(20.0)
+    };
+    view.sim.set_frame(landed.clone());
+    view.refresh_frame();
+    assert_eq!(view.drawn(), &landed, "landed");
+
+    let (mut view, ..) = held();
+    let expired = FlightFrame {
+        hold_expired: true,
+        ..sol_at(20.0)
+    };
+    view.sim.set_frame(expired.clone());
+    view.refresh_frame();
+    assert_eq!(view.drawn(), &expired, "the hold run out");
+}
+
+#[test]
+fn a_many_step_frame_holds_its_last_step_and_replays_the_others_in_full() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let run = |between: &FlightFrame| StepRun {
+        between_passes: Some(Box::new(between.clone())),
+        ..step(vec![fight(vec![]), fight(vec![detonation()])])
+    };
+    let last = sol_at(30.0);
+    let report = StepReport {
+        steps: vec![run(&sol_at(10.0)), run(&last)],
+        stopped: false,
+    };
+    view.sim.set_frame(sol_at(40.0));
+    frame(&mut view, report);
+    assert_eq!(view.drawn(), &last);
+    assert_eq!(view.effects.explosions().len(), 1, "the earlier step's");
+    frame(&mut view, stopped());
+    assert_eq!(view.effects.explosions().len(), 2, "the last one's too");
+}
+
+#[test]
+fn a_double_time_frame_smooths_over_two_passes() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let mut first = sol_at(10.0);
+    first.ships[0].heading = 10.0;
+    first.ships.push(the_npc(Vec2::new(110.0, -100.0)));
+    view.sim.set_frame(sol_at(20.0));
+    let mut report = doubled(fight(vec![]), fight(vec![]), first);
+    report.steps[0].before = vec![
+        (ShipRef::Player, place(Vec2::ZERO)),
+        (NPC, place(Vec2::new(100.0, -100.0))),
+    ];
+    frame(&mut view, report);
+    for (alpha, x, heading) in [(0.0, -10.0, 350.0), (0.5, 0.0, 0.0), (1.0, 10.0, 10.0)] {
+        view.alpha = alpha;
+        assert_eq!(view.shown_position(), Point::new(x, 0.0), "{alpha}");
+        assert_eq!(view.shown_heading(), heading, "{alpha}");
+        let npc = view.drawn().ships[1];
+        let (at, _) = view.shown_npc(&npc);
+        assert_eq!(at, Point::new(100.0 + x, -100.0), "{alpha}");
+    }
+    assert_eq!(view.alpha(), 1.0, "the display's own stays raw");
+}
+
+#[test]
+fn a_double_time_frame_steps_shots_boxes_and_asteroids_back_two_passes() {
+    let (at, velocity) = (Vec2::new(100.0, 50.0), Vec2::new(8.0, -4.0));
+    let first = FlightFrame {
+        shots: vec![FrameShot {
+            weapon: WeaponId(9999),
+            position: at,
+            velocity,
+            ..record::shot()
+        }],
+        cargo_boxes: vec![nova_sim::flight_frame::FrameBox {
+            velocity,
+            ..super::faked_world::box_at(at)
+        }],
+        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+            velocity,
+            ..super::faked_world::asteroid_at(at)
+        }],
+        ..sol()
+    };
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.sim.set_frame(sol());
+    let report = doubled(fight(vec![]), fight(vec![]), first);
+    frame(&mut view, report);
+    let camera = Camera::centred_on_in(Point::new(0.0, 0.0), VIEW_SIZE);
+    for (alpha, back) in [(1.0, 0.0), (0.5, 1.0), (0.0, 2.0)] {
+        view.alpha = alpha;
+        let drawn = camera.whole_point(Point::new(100.0 - 8.0 * back, 50.0 + 4.0 * back));
+        assert_eq!(view.shown_shots(&camera)[0].at, drawn, "{alpha}");
+        assert_eq!(view.shown_boxes(&camera)[0].at, drawn, "{alpha}");
+        assert_eq!(view.shown_asteroids(&camera)[0].at, drawn, "{alpha}");
+    }
+}
+
+/// [`held`] with a detonation and a wrap on the second pass, for a
+/// re-seating to drop.
+fn held_a_blast_and_a_wrap() -> Faked {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.sim.set_frame(sol_at(20.0));
+    let second = PassReport {
+        combat: vec![detonation()],
+        ..wrapping(STOOD + SHIFT + MOVE, Some(wrap()))
+    };
+    frame(&mut view, doubled(fight(vec![]), second, sol_at(10.0)));
+    view
+}
+
+/// Asserts the held pass that [`held_a_blast_and_a_wrap`] scripted reached
+/// nothing, on the frame after too, the ship seated at `seat`.
+fn dropped_unreplayed(view: &mut Faked, seat: ShipPlace) {
+    let check = |view: &Faked| {
+        assert_eq!(view.effects.explosions().len(), 0, "no blast");
+        assert_eq!(view.previous, seat, "no wrap carried");
+    };
+    check(view);
+    frame(view, stopped());
+    check(view);
+}
+
+#[test]
+fn a_placing_drops_the_held_pass_unreplayed() {
+    let mut view = held_a_blast_and_a_wrap();
+    view.place_ship();
+    dropped_unreplayed(&mut view, sol_at(20.0).player().place());
+}
+
+#[test]
+fn a_takeover_drops_the_held_pass_unreplayed() {
+    let mut view = held_a_blast_and_a_wrap();
+    let taken = sol_at(40.0);
+    view.sim
+        .queue_answer_showing(Answer::Assigned(Assigned::MyShip), taken.clone());
+    view.assign(Assignment::MyShip);
+    dropped_unreplayed(&mut view, taken.player().place());
 }
 
 // The shots' looks.
@@ -670,13 +925,18 @@ impl Chance for Middling {
 /// A view of the stars' sheet, its stars scattered about the origin on a
 /// [`Middling`] chance.
 fn starry_stepping() -> Faked {
+    starry_about(Vec2::ZERO)
+}
+
+/// [`starry_stepping`], its stars scattered about `ship`.
+fn starry_about(ship: Vec2) -> Faked {
     let catalog = starry();
     let mut view = stepping(catalog);
     view.looks = Looks::read(&starry(), []);
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Middling::default()));
     view.effects_chance = SharedChance::new(chance);
     let surroundings =
-        super::super::stars::surroundings_at((Vec2::ZERO, 0), VIEW_SIZE, anchor(), &view.looks);
+        super::super::stars::surroundings_at((ship, 0), VIEW_SIZE, anchor(), &view.looks);
     super::super::stars::reset(
         &mut view.stars,
         &surroundings,
@@ -805,6 +1065,324 @@ fn a_star_of_factor_0_stays_fixed_in_world_units() {
 }
 
 // The comm and the quotes.
+
+// The player's wrap: what the view carries as it reaches the pass that ran
+// it (see the `stepping` module).
+
+/// Where the ship stood as it wrapped.
+const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 40.0);
+
+/// What the wrap added.
+const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
+
+/// The ship's move a pass.
+const MOVE: Vec2 = Vec2::new(8.0, -4.0);
+
+fn wrap() -> PlayerWrap {
+    PlayerWrap::of(STOOD).expect("past the edge")
+}
+
+/// A pass that ended with the ship at `at`, `wrap` run at its head.
+fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
+    PassReport {
+        ships: vec![the_player(at)],
+        player_position: at,
+        wrap,
+        ..PassReport::default()
+    }
+}
+
+/// The ship's place before a step, at `at`.
+fn place(at: Vec2) -> ShipPlace {
+    ShipPlace {
+        position: at,
+        ..ShipPlace::default()
+    }
+}
+
+/// The frame after a wrap on a step's one pass: the ship [`MOVE`]d on past
+/// where it landed, and [`NPC`], from `npc` before the step to `npc_now`,
+/// in the frame.
+fn after_a_wrap(view: &mut Faked, npc: Vec2, npc_now: Vec2) {
+    let at = STOOD + SHIFT + MOVE;
+    let mut flown = in_sol();
+    flown.ships = vec![the_player(at), the_npc(npc_now)];
+    view.sim.set_frame(flown);
+    let run = StepRun {
+        before: vec![(ShipRef::Player, place(STOOD)), (NPC, place(npc))],
+        passes: vec![wrapping(at, Some(wrap()))],
+        ..StepRun::default()
+    };
+    frame(
+        view,
+        StepReport {
+            steps: vec![run],
+            stopped: false,
+        },
+    );
+}
+
+fn close(a: Point, b: Point, within: f32) -> bool {
+    (a.x - b.x).hypot(a.y - b.y) <= within
+}
+
+#[test]
+fn across_a_wrap_the_ships_and_the_camera_are_drawn_within_a_passs_move_of_the_frame() {
+    let mut view = stepping(catalog());
+    let near = STOOD + Vec2::new(-100.0, 30.0);
+    after_a_wrap(&mut view, near, near + SHIFT + MOVE);
+    let (player, npc) = (view.frame.ships[0], view.frame.ships[1]);
+    let step = MOVE.length();
+    for alpha in [0.0, 0.25, 0.5, 1.0] {
+        view.alpha = alpha;
+        let frame_at = |ship: &FrameShip| Point::new(ship.position.x, ship.position.y);
+        let shown = view.shown_position();
+        assert!(close(shown, frame_at(&player), step), "{alpha}: {shown:?}");
+        let (shown, _) = view.shown_npc(&npc);
+        assert!(close(shown, frame_at(&npc), step), "{alpha}: {shown:?}");
+        let camera = view.camera();
+        let (ship, screen) = (frame_at(&player), camera.world_to_screen(frame_at(&player)));
+        let drawn = camera.world_to_screen(view.shown_position());
+        assert!(close(drawn, camera.anchor(), 1e-3), "{alpha}: {ship:?}");
+        assert!(close(screen, drawn, step + 1.0), "{alpha}: {screen:?}");
+    }
+}
+
+#[test]
+fn an_npc_the_wrap_left_is_drawn_where_the_frame_has_it() {
+    let mut view = stepping(catalog());
+    let far = STOOD - Vec2::new(WRAP_EDGE * 2.0, 0.0);
+    after_a_wrap(&mut view, far, far);
+    let npc = view.frame.ships[1];
+    for alpha in [0.0, 0.5, 1.0] {
+        view.alpha = alpha;
+        assert_eq!(view.shown_npc(&npc).0, Point::new(far.x, far.y), "{alpha}");
+    }
+}
+
+/// A frame of one step of `passes` whose ship stood at `from`.
+fn step_from(view: &mut Faked, from: Vec2, passes: Vec<PassReport>) {
+    let run = StepRun {
+        before: vec![(ShipRef::Player, place(from))],
+        passes,
+        ..StepRun::default()
+    };
+    let report = StepReport {
+        steps: vec![run],
+        stopped: false,
+    };
+    frame(view, report);
+}
+
+/// Asserts each of the stars moved `by` the ship's move, its factor's.
+fn scrolled_by(view: &Faked, before: &[Star; 20], by: Vec2) {
+    let mut scrolled = 0;
+    for (star, was) in stars_now(view).iter().zip(before) {
+        if was.factor > 0.0 {
+            scrolled += 1;
+        }
+        assert_eq!(star.x, was.x - was.factor * by.x);
+        assert_eq!(star.y, was.y - was.factor * by.y);
+    }
+    assert!(scrolled > 0, "some star has a factor");
+}
+
+#[test]
+fn a_first_pass_wrap_scrolls_the_stars_by_the_ships_move_and_not_the_shift() {
+    let mut view = starry_stepping();
+    let before = stars_now(&view);
+    let at = STOOD + SHIFT + MOVE;
+    step_from(&mut view, STOOD, vec![wrapping(at, Some(wrap()))]);
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE);
+}
+
+#[test]
+fn a_second_pass_wrap_leaves_the_first_passs_scroll_alone() {
+    let (start, first) = (STOOD - MOVE - MOVE, STOOD - MOVE);
+    let mut view = starry_about(first);
+    let before = stars_now(&view);
+    let passes = vec![
+        PassReport {
+            double_time: true,
+            ..wrapping(first, None)
+        },
+        PassReport {
+            double_time: true,
+            ..wrapping(STOOD + SHIFT + MOVE, Some(wrap()))
+        },
+    ];
+    step_from(&mut view, start, passes);
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
+    assert_eq!(view.previous.position, start + SHIFT);
+}
+
+/// A double-time step from `start` to the ship past the wrap, its first
+/// pass leaving it at `first`, that pass's frame held.
+fn wrapped_on_the_second_pass(start: Vec2, first: Vec2) -> StepReport {
+    let pass = |pass: PassReport| PassReport {
+        double_time: true,
+        ..pass
+    };
+    StepReport {
+        steps: vec![StepRun {
+            before: vec![(ShipRef::Player, place(start))],
+            between_passes: Some(Box::new(sol_at(first.x))),
+            passes: vec![
+                pass(wrapping(first, None)),
+                pass(wrapping(STOOD + SHIFT + MOVE, Some(wrap()))),
+            ],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    }
+}
+
+#[test]
+fn a_second_pass_wrap_is_carried_on_the_frame_after() {
+    let (start, first) = (STOOD - MOVE - MOVE, STOOD - MOVE);
+    let mut view = stepping(armed(1, &[BLASTER]));
+    let near = PassReport {
+        combat: vec![CombatEvent::Exploded {
+            at: first + Vec2::new(-100.0, 0.0),
+            explosion: Explosion {
+                boom: BoomId(128),
+                extra: false,
+            },
+            size: 0.0,
+        }],
+        ..wrapping(first, None)
+    };
+    frame(&mut view, one_step(vec![near]));
+    let boom = view.effects.explosions()[0].at;
+    frame(&mut view, wrapped_on_the_second_pass(start, first));
+    assert_eq!(view.previous.position, start, "uncarried while it shows");
+    assert_eq!(view.effects.explosions()[0].at, boom);
+    frame(&mut view, stopped());
+    assert_eq!(view.previous.position, start + SHIFT);
+    let carried = Point::new(boom.x + SHIFT.x, boom.y + SHIFT.y);
+    assert_eq!(view.effects.explosions()[0].at, carried);
+}
+
+#[test]
+fn a_held_second_pass_wrap_leaves_the_first_passs_scroll_alone() {
+    let (start, first) = (STOOD - MOVE - MOVE, STOOD - MOVE);
+    let mut view = starry_about(first);
+    let before = stars_now(&view);
+    frame(&mut view, wrapped_on_the_second_pass(start, first));
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
+    frame(&mut view, stopped());
+    scrolled_by(&view, &before, Vec2::ZERO - MOVE * 2.0);
+}
+
+#[test]
+fn a_wrap_marks_the_stars_so_none_streaks_across_it() {
+    let mut view = starry_stepping();
+    frame(&mut view, one_step(vec![wrapping(Vec2::ZERO, None)]));
+    let at = STOOD + SHIFT + MOVE;
+    step_from(&mut view, STOOD, vec![wrapping(at, Some(wrap()))]);
+    // Drawn at its placement at any alpha, as a jumped star is.
+    let list = |view: &Faked, alpha: f32| {
+        let mut view_list = DrawList::new();
+        let sheet = view.looks.star_sheet().expect("the stars' sheet");
+        view.stars.draw(&mut view_list, sheet, alpha);
+        view_list
+    };
+    assert_eq!(list(&view, 0.0), list(&view, 1.0));
+}
+
+/// Effects at `near` and `far` of [`STOOD`]: an explosion, a pod and a puff
+/// each, and particles at `near`.
+fn effects_about(view: &mut Faked, near: Vec2, far: Vec2) {
+    let shot_at = |id, at| FrameShot {
+        id: ShotId(id),
+        weapon: BLASTER,
+        position: at,
+        ..record::shot()
+    };
+    let exploded = |at| CombatEvent::Exploded {
+        at,
+        explosion: Explosion {
+            boom: BoomId(128),
+            extra: false,
+        },
+        size: 0.0,
+    };
+    let podded = |at| CombatEvent::PodEjected {
+        ship: NPC,
+        at,
+        velocity: Vec2::ZERO,
+    };
+    let burst = CombatEvent::Particles(nova_sim::combat::ParticleBurst {
+        at: near,
+        speed: 0.0,
+        variation: 0,
+        life: (300, 300),
+        color: 0x00FF_8000,
+        count: 1,
+        spread: 0.0,
+    });
+    let pass = PassReport {
+        shots: vec![shot_at(1, near), shot_at(2, far)],
+        smoke_frame: true,
+        combat: vec![
+            exploded(near),
+            exploded(far),
+            podded(near),
+            podded(far),
+            burst,
+        ],
+        ..wrapping(STOOD, None)
+    };
+    frame(view, one_step(vec![pass]));
+}
+
+/// [`effects_about`]'s places, as lists of where each explosion, pod and
+/// puff is and each particle.
+fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
+    (
+        view.effects
+            .explosions()
+            .iter()
+            .map(|boom| boom.at)
+            .collect(),
+        view.effects.pods().iter().map(|pod| pod.at).collect(),
+        view.shot_looks
+            .smoke()
+            .puffs()
+            .iter()
+            .map(|puff| puff.at)
+            .collect(),
+        view.effects.particles()[0].at,
+    )
+}
+
+#[test]
+fn explosions_pods_and_smoke_near_the_ship_keep_their_place_on_screen_and_those_far_stay() {
+    let catalog = blaster_looking(|look| {
+        look.flags = crate::flight::smoke::SMALL_SMOKE;
+        look.smoke_set = 1;
+    });
+    let mut view = stepping(catalog);
+    let (near, far) = (
+        STOOD + Vec2::new(-100.0, 0.0),
+        STOOD - Vec2::new(WRAP_EDGE * 2.0, 0.0),
+    );
+    effects_about(&mut view, near, far);
+    let (booms, pods, puffs, particle) = places(&view);
+    assert_eq!((booms.len(), pods.len(), puffs.len()), (2, 2, 2));
+    let drift = view.effects.pods()[0].velocity.x;
+    frame(
+        &mut view,
+        one_step(vec![wrapping(STOOD + SHIFT, Some(wrap()))]),
+    );
+    let shifted = |at: Point| Point::new(at.x + SHIFT.x, at.y + SHIFT.y);
+    let (now_booms, now_pods, now_puffs, now_particle) = places(&view);
+    assert_eq!(now_booms, [shifted(booms[0]), booms[1]]);
+    assert!((now_pods[0].x - (shifted(pods[0]).x + drift)).abs() < 1e-2);
+    assert!((now_pods[1].x - (pods[1].x + drift)).abs() < 1e-2);
+    assert_eq!(now_puffs, [puffs[0] + SHIFT, puffs[1]]);
+    assert_eq!(now_particle.x, particle.x, "the particles aren't carried");
+}
 
 /// A note of NPC 0's repairs.
 fn repaired() -> CommNote {

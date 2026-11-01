@@ -8,7 +8,7 @@
 //! `nova_sim::Session::haggle_bribe`).
 
 use nova_sim::escort_dialog::{EscortButton, EscortDialogView};
-use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
 use nova_sim::planet_comm::{PlanetCommItem, PlanetCommView};
 use nova_sim::{Haggle, HailView, Hailed, VenueOffer};
 
@@ -31,18 +31,40 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// flight's, drained with its sounds.
     pub(super) fn hail(&mut self) {
         let option = self.held.contains(&Key::Alt);
-        match self.send_gated(FlightCommand::Hail { option }) {
+        let answer = self.send_gated(FlightCommand::Hail { option });
+        self.take_hail_answer(answer);
+    }
+
+    /// The comm key read on the pass a jump collapsed under the white
+    /// ([`FadedPress::Hail`]): whether it latched the keys after it, the
+    /// dialog's guard refusing it (`_SetAllKeyCmdFlags` after it, letting
+    /// go of the latched keys) or an offer opening. A refusal and an
+    /// offer are answered as [`FlightView::hail`]'s.
+    pub(super) fn hail_faded(&mut self) -> bool {
+        let option = self.held.contains(&Key::Alt);
+        let answer = self.send_gated(FlightCommand::PressFaded(FadedPress::Hail { option }));
+        let faded = answer == Answer::Hailed(Hailed::Faded);
+        if faded {
+            self.keep_unlatched_keys();
+        }
+        self.take_hail_answer(answer);
+        faded || self.hail_opened()
+    }
+
+    /// Holds what a hail's `answer` opened, or says why it was refused.
+    fn take_hail_answer(&mut self, answer: Answer) {
+        match answer {
             Answer::Hailed(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::Hailed(Hailed::Escort(view)) => {
                 self.pending_escort_dialog = Some(view);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::Hailed(Hailed::Stellar(view)) => {
                 self.pending_planet_comm = Some(view);
-                self.held.clear();
+                self.let_go_of_input();
             }
             Answer::Hailed(Hailed::Offer(offer)) => self.hold_offer(offer),
             Answer::HailRefused(refusal) => {
@@ -55,6 +77,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Whether a hail left a dialog for the router, whichever kind: the
+    /// keys were let go ([`FlightView::hail`]) and the dialog takes Y's
+    /// release, so Y mustn't be tracked as held behind it.
+    pub(super) fn hail_opened(&self) -> bool {
+        self.pending_hail.is_some()
+            || self.pending_escort_dialog.is_some()
+            || self.pending_planet_comm.is_some()
+            || self.pending_offer.is_some()
+    }
+
     /// Holds `offer`'s prompt for the router, letting go of the flight
     /// keys; a mission accepted at once shows nothing here, its texts
     /// queued in the flight, its before-movie first, for the router to
@@ -62,7 +94,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
-            self.held.clear();
+            self.let_go_of_input();
         }
     }
 

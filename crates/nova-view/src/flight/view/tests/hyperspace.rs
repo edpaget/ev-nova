@@ -37,7 +37,6 @@ fn the_keys_a_jump_takes_are_the_originals_ungated_ones() {
         NEAREST_KEY,
         SELECT_KEY,
         BOARD_KEY,
-        HAIL_KEY,
         JETTISON_KEY,
         MENU_KEY,
         MENU_CLOSE_KEY,
@@ -67,6 +66,7 @@ fn the_keys_a_jump_takes_are_the_originals_ungated_ones() {
     let never = [
         LAND_KEY,
         MAP_KEY,
+        HAIL_KEY,
         JUMP_KEY,
         MISSION_INFO_KEY,
         PLAYER_INFO_KEY,

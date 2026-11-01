@@ -19,7 +19,10 @@
 //!   mid-input and mid-tick too: the gates a key is taken under
 //!   ([`FlightFrame::gates`](nova_sim::flight_frame::FlightFrame::gates)),
 //!   the nav mode, docked, the jump, the death `dësc`s. It never fills a
-//!   fresh frame to read one fact.
+//!   fresh frame to read one fact. Drawing reads `FlightView::drawn`: the
+//!   kept frame, or a double-time step's frame between its passes
+//!   ([`StepRun::between_passes`](nova_sim::flight_frame::StepRun::between_passes)),
+//!   which the view holds until the next step and no draw fills.
 //! - **Every change fills it afresh where it is made**: after each
 //!   command (`FlightView::send`), each frame's steps, a catch-up's
 //!   drain, and each change behind the port, which goes through
@@ -30,7 +33,8 @@
 //! - **A read made at every draw or every frame is a frame field**: the
 //!   floating map's places, which its draw centres on
 //!   ([`FlightFrame::floating`](nova_sim::flight_frame::FlightFrame::floating)),
-//!   the readouts, the HUD.
+//!   the readouts, the HUD, and what fades the cursor
+//!   ([`FlightFrame::key_fades`](nova_sim::flight_frame::FlightFrame::key_fades)).
 //! - **A question a screen asks as it opens or as its input changes is a
 //!   screen's ask** ([`ScreenAsk`], answered by the [`ScreenAnswer`] of its
 //!   kind through [`FlightSim::screen`]): the course map's galaxy, its
@@ -125,7 +129,11 @@
 //!   pair, answered in `session/screen.rs` or a module under
 //!   `session/screen/`, pinned there, and sampled in
 //!   `fixture::sample_screen_asks`.
-//! - **The step's order** lives in `session/step.rs`.
+//! - **The step's order** lives in `session/step.rs`, and what a step
+//!   reports for the view to draw from is a
+//!   [`StepRun`](nova_sim::flight_frame::StepRun) or
+//!   [`PassReport`](nova_sim::flight_frame::PassReport) field, such as the
+//!   frame between double time's passes.
 //!
 //! New sim-side code for the port goes in those modules, not in
 //! `session.rs`. What the edge alone needs goes on the adapter, not the

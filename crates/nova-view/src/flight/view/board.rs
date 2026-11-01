@@ -60,7 +60,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match boarding {
             Boarding::Opened(_) => {
                 self.pending_boarding = true;
-                self.held.clear();
+                self.let_go_of_input();
                 if let Some(granted) = self.grant_drained() {
                     let (name, plural) = self.names.outfit_lc(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
@@ -129,19 +129,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// What the plunder dialog shows while it is open:
     /// [`FlightView::boarding`] with its cargo's good and its ammunition's
-    /// outfit named by the flight's opening ([`FlightView::names`]), as
-    /// [`FlightView::plunder`]'s messages name them.
+    /// outfit named in lower case by the flight's opening
+    /// ([`FlightView::names`]).
     pub fn plunder_shown(&mut self) -> Option<PlunderShown> {
         let view = self.boarding()?;
-        let (good, outfit) = names(
-            &self.names,
-            view.cargo.map(|(good, _)| good),
-            view.ammo.and_then(|ammo| ammo.named),
-        );
+        let good = view.cargo.and_then(|(good, _)| self.names.good_lc(good));
+        let outfit = view
+            .ammo
+            .and_then(|ammo| self.names.outfit_lc(ammo.named?))
+            .map(|(name, plural)| (name.to_owned(), plural.to_owned()));
         Some(PlunderShown {
             view,
             good: good.map(str::to_owned),
-            outfit: outfit.map(str::to_owned),
+            outfit,
         })
     }
 

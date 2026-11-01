@@ -7,7 +7,9 @@
 //!
 //! **One call a frame, replayed after it.** The flight runs the frame's
 //! steps in one call (`nova_sim::Session::step`), and the view then
-//! replays its report pass by pass. Nothing the view does between passes
+//! replays its report pass by pass, but for a double-time frame's second
+//! pass, held for the frame after with what is drawn (see the
+//! `between_passes` module). Nothing the view does between passes
 //! feeds back into the flight: its effects, glows, shot looks and stars
 //! are its own, drawn on its own chance, so stepping them after the call
 //! gives what stepping them between the passes gave. Before the first
@@ -29,12 +31,33 @@
 //! read ([`Presentation`]) are the view's own, held from the rulebook the
 //! view is built with and as its rules change.
 //!
+//! **The player's wrap** (`_WrapPlayerPosition`, `nova_sim`'s
+//! [`PlayerWrap`]). The view keeps some tables the routine moves, and the
+//! places each step began from, so it carries them as it reaches the pass
+//! that wrapped ([`PassReport::wrap`]), before that pass's effects:
+//! [`StepRun::before`]'s places, each NPC's by the wrap's test, so the
+//! drawing moves on from them; the explosions, pods and smoke; and the
+//! stars are marked as moved, so none streaks across the 25,000. As the
+//! scroll reads the ship's place after the carry, a wrap on the first pass
+//! scrolls by the ship's own move, and one on double time's second leaves
+//! the first's alone, as the original's second-pass write of
+//! `_lastFramePlayerPos` (@0x6836b-0x68386) is overwritten unread.
+//!
+//! An NPC's place is tested as the step began where the session tests it
+//! at the wrap. They can disagree only for one within a pass's flight of
+//! 15,000 from the player on double time's second pass, whose drawn path
+//! then runs 15,000 to 40,000 from the player, off screen, so the report
+//! names no NPCs.
+//!
 //! **The frame after the steps.** Once the report is replayed the kept
 //! frame is filled afresh ([`FlightView::refresh_frame`]), so the frame's
 //! ships are where the steps left them, the places each step began from
-//! ([`StepRun::before`]) being where the drawing moves them from.
+//! ([`StepRun::before`]) being where the drawing moves them from. A
+//! double-time frame is drawn from the frame its last step reported
+//! between its passes ([`StepRun::between_passes`]) instead.
 
 use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
+use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
 
 use crate::Key;
@@ -44,6 +67,7 @@ use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
 
+use super::between_passes::{self, BetweenPasses};
 use super::{
     AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
     LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point, show_combat,
@@ -174,7 +198,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Runs the frame's `steps` through the flight, the ship drawn at
     /// `anchor` (see the module docs), steps the view's effects after each
     /// pass reported, relays the comm and quotes they raised and fills the
-    /// kept frame afresh. Whether the escape pod's rescue ended the
+    /// kept frame afresh. A step or a stop first lets go what the last
+    /// double-time frame held, and a double-time last step holds its
+    /// frame and its second pass, whose quotes it says now (see the
+    /// `between_passes` module). Whether the escape pod's rescue ended the
     /// stepping.
     pub(super) fn step_frame(&mut self, steps: u32, anchor: Anchor) -> bool {
         let input = self.step_input(anchor);
@@ -188,12 +215,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if report.steps.iter().any(|run| !run.passes.is_empty()) {
             quotes.extend(self.inbox.take_quotes());
         }
+        if !report.steps.is_empty() || report.stopped {
+            self.release_between_passes(anchor);
+        }
+        let held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
         let mut rescued = false;
         for run in &report.steps {
             notes.extend(run.comm.iter().cloned());
             self.keep_before(run);
             for (at, pass) in run.passes.iter().enumerate() {
                 quotes.extend(pass.quotes.iter().cloned());
+                if let Some(wrap) = pass.wrap {
+                    self.carry_wrap(&wrap);
+                }
                 let first = (at == 0).then_some(self.previous.position);
                 self.step_effects(pass, first, anchor);
             }
@@ -202,6 +236,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 rescued = true;
             }
         }
+        quotes.extend(held.iter().flat_map(BetweenPasses::quotes).cloned());
+        self.between_passes = held.or_else(|| self.between_passes.take());
         self.step_report = report;
         self.relay_comm_and_quotes(&notes, quotes);
         self.refresh_frame();
@@ -220,11 +256,23 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Carries what the view keeps by `wrap`, as the pass that ran it is
+    /// reached (see the module docs).
+    pub(super) fn carry_wrap(&mut self, wrap: &PlayerWrap) {
+        self.previous.position = wrap.carried(self.previous.position);
+        for (_, place) in &mut self.npc_previous {
+            wrap.carry(&mut place.position);
+        }
+        self.effects.carry(wrap);
+        self.shot_looks.carry(wrap);
+        self.stars.mark_jumped();
+    }
+
     /// Steps the view's effects, flashes, glows, shot looks and stars
     /// after `pass`, as the view stepped them after each pass: `first`
     /// the ship's position before the step on its first pass, the ship
     /// drawn at `anchor`.
-    fn step_effects(&mut self, pass: &PassReport, first: Option<Vec2>, anchor: Anchor) {
+    pub(super) fn step_effects(&mut self, pass: &PassReport, first: Option<Vec2>, anchor: Anchor) {
         let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
         let chance = &mut self.effects_chance;
         let scene = self.presentation.scene(pass.player_position);
@@ -275,9 +323,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// nothing in common, and both are set before the frame is drawn.
     pub(super) fn run_steps(&mut self, steps: u32) {
         let rescued = self.step_frame(steps, self.anchor());
+        let drawn = between_passes::drawn(self.between_passes.as_ref(), &self.frame);
         if let Some(scene) = &mut self.scene {
-            show_frozen_frames(scene, &self.frame);
-            show_gate_frames(scene, &self.frame);
+            show_frozen_frames(scene, drawn);
+            show_gate_frames(scene, drawn);
         }
         if rescued {
             // Laid out in the system the rescue took the pod to, from where

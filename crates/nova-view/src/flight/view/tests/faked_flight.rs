@@ -40,9 +40,10 @@ pub(super) fn tick_to(view: &mut Faked, now: Option<FrameShip>) {
     if let Some(now) = now {
         view.sim.frame_mut().ships[0] = now;
     }
+    let keyed = view.cursor_keyed();
     view.step_frame(1, view.anchor());
     view.alpha = 0.0;
-    view.step_cursor(1);
+    view.step_cursor(1, keyed);
     view.advance_hud();
 }
 

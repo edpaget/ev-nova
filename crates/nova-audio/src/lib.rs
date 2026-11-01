@@ -42,7 +42,7 @@ pub mod settings;
 pub mod table;
 pub mod voices;
 
-pub use crate::core::{AudioCore, music_fade};
+pub use crate::core::{AudioCore, music_fade, music_fade_left, switched_out_music_fade};
 pub use crate::file::FileSettings;
 pub use crate::kira::{KiraAudio, OpenError, SoundBank};
 pub use port::{Audio, AudioCommand, Priority, Volume};

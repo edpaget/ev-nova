@@ -9,6 +9,7 @@ use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepR
 
 use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
+use crate::Colorize;
 use crate::flight::weapons::SPINS;
 use crate::system::camera::Anchor;
 
@@ -267,20 +268,56 @@ fn a_translucent_shot_with_a_falloff_is_opaque_before_its_window_by_the_engine_o
     assert_eq!(draws[0], Some((crate::draw::lights_tint(32), true)));
 }
 
+/// Each frame's draw of the blaster's shot over `ticks` ticks from the
+/// tick it is fired: its tint and its colorize, none when it is drawn
+/// plainly, or no draw at all.
+fn one_shot_colorize(view: &mut Faked, ticks: u32) -> Vec<Option<(Color, Option<Colorize>)>> {
+    (0..ticks)
+        .map(|tick| {
+            pass_with(view, vec![blaster_shot(tick)], false, Vec::new());
+            let list = super::faked_world::world_list(view);
+            list.iter().find_map(|command| match *command {
+                DrawCommand::Sprite {
+                    image, tint, blend, ..
+                } if image.id == 3500 => {
+                    assert_eq!(blend, crate::draw::Blend::Normal);
+                    Some((tint, None))
+                }
+                DrawCommand::Colorized {
+                    image,
+                    tint,
+                    blend,
+                    colorize,
+                    ..
+                } if image.id == 3500 => {
+                    assert_eq!(blend, crate::draw::Blend::Normal);
+                    Some((tint, Some(colorize)))
+                }
+                _ => None,
+            })
+        })
+        .collect()
+}
+
 #[test]
-fn a_shot_far_from_the_player_in_a_murky_system_is_darkened() {
+fn a_shot_far_from_the_player_in_a_murky_system_is_mixed_toward_its_colour() {
     let mut view = shooting(armed(0, &[BLASTER]));
     view.sim.frame_mut().effective_murk = 100;
+    view.sim.frame_mut().murk_colour = 0x1081;
     view.refresh_frame();
-    let draws = one_shot_draws(&mut view, 8, 30);
+    let draws = one_shot_colorize(&mut view, 8);
     let shot = blaster_shot(7);
     let level = crate::flight::murk::sprite_murk(shot.position, Vec2::ZERO, 100);
     assert!(level > 0, "{shot:?}");
     assert_eq!(
         draws[7],
-        Some((crate::flight::murk::murk_tint(Color::WHITE, level), false))
+        Some((Color::WHITE, Some(Colorize::toward_pixel(level, 0x1081))))
     );
-    assert_eq!(draws[0], Some((Color::WHITE, false)), "beside the player");
+    assert_eq!(
+        draws[0],
+        Some((Color::WHITE, None)),
+        "beside the player, a plain sprite"
+    );
 }
 
 /// The puffs drawn from smoke set 1's `cicn`s.
@@ -387,7 +424,7 @@ fn turning_smoke_trails_off_stops_new_smoke_and_the_puffs_left_age_out() {
 
 /// The weapon glow layers drawn: each one's frame, tint and whether it
 /// is drawn by OR.
-fn glow_layers(view: &Faked, image: i16) -> Vec<(u16, Color, bool)> {
+fn glow_layers(view: &Faked, image: i16) -> Vec<(u16, Color, bool, Option<Colorize>)> {
     super::faked_world::world_list(view)
         .iter()
         .filter_map(|command| match *command {
@@ -396,7 +433,19 @@ fn glow_layers(view: &Faked, image: i16) -> Vec<(u16, Color, bool)> {
                 tint,
                 blend,
                 ..
-            } if key.id == image => Some((key.frame, tint, blend == crate::draw::Blend::Or)),
+            } if key.id == image => Some((key.frame, tint, blend == crate::draw::Blend::Or, None)),
+            DrawCommand::Colorized {
+                image: key,
+                tint,
+                blend,
+                colorize,
+                ..
+            } if key.id == image => Some((
+                key.frame,
+                tint,
+                blend == crate::draw::Blend::Or,
+                Some(colorize),
+            )),
             _ => None,
         })
         .collect()
@@ -428,13 +477,13 @@ fn a_firing_ships_weapon_glow_is_added_at_32_then_falls_by_its_decay() {
     let frame = view.frame().expect("a sheet") % 36;
     assert_eq!(
         glow_layers(&view, 2300),
-        [(frame, crate::draw::lights_tint(32), true)],
+        [(frame, crate::draw::lights_tint(32), true, None)],
         "the frame it fired"
     );
     pass_with(&mut view, Vec::new(), false, Vec::new());
     assert_eq!(
         glow_layers(&view, 2300),
-        [(frame, crate::draw::lights_tint(30), true)],
+        [(frame, crate::draw::lights_tint(30), true, None)],
         "32 less 6 × 0.333"
     );
     for _ in 0..20 {
@@ -452,6 +501,7 @@ fn beside_an_npc(murk: u8) -> Faked {
     ];
     let mut frame = in_sol_with(ships);
     frame.effective_murk = murk;
+    frame.murk_colour = 0x1081;
     world(trafficked(&[130], 1, 129, 3), frame)
 }
 
@@ -487,10 +537,15 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         assert_eq!(level, sprite_murk, "murk {murk}");
         view.glows.step(&[(npc.ship, false)], |_| Some(1.0));
         let capped = crate::flight::weapon_glow::npc_glow_level(32, level);
-        let tint = crate::flight::murk::murk_tint(crate::draw::lights_tint(capped), level);
+        let tint = crate::draw::lights_tint(capped);
+        let colorize = (level > 0).then(|| Colorize::toward_pixel(level, 0x1081));
         let layers = glow_layers(&view, 2301);
         assert_eq!(layers.len(), 1, "murk {murk}");
-        assert_eq!((layers[0].1, layers[0].2), (tint, true), "murk {murk}");
+        assert_eq!(
+            (layers[0].1, layers[0].2, layers[0].3),
+            (tint, true, colorize),
+            "murk {murk}"
+        );
         let frame = rotation_frame(npc.heading, NonZeroU16::new(72).expect("non-zero"));
         assert_eq!(layers[0].0, frame % 72, "the hull's frame");
         if murk == 0 {

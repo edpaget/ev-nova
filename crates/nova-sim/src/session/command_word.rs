@@ -253,6 +253,9 @@ mod tests {
         for (npc, &word) in fleet_ids(&session).iter().zip(words) {
             session.space.npc_mut(*npc).expect("there").order_word = OrderWord(word);
         }
+        // Unmarked, as every ship placed starts: the other reading's record
+        // seed marks the ships of a class it keeps an order for.
+        session.space.escorts.commanded.clear();
         session.take_sounds();
         session
     }

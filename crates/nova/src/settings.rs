@@ -3,7 +3,8 @@
 //! - [`GameSettings`]: the sound settings ([`AudioSettings`]), whether
 //!   hyperspace jumps play their white fades, whether `dësc` movies play,
 //!   whether shots trail and smoke, whether ships show their weapon glow,
-//!   whether the stars get their own parallax factors, whether the game runs fullscreen, and how ([`FullscreenSetting`]),
+//!   whether they animate, glow and show their running lights, whether
+//!   the stars get their own parallax factors, whether the game runs fullscreen, and how ([`FullscreenSetting`]),
 //!   and the Scaling chosen ([`ScalingSetting`]).
 //! - [`SettingsKeeper`]: the rules. It reads the settings through a
 //!   [`SettingsStore`] (falling back to the defaults when there are none
@@ -14,12 +15,21 @@
 //!
 //! The file is JSON, with the keys `sound`, `music`, `effects_volume`,
 //! `music_volume`, `hyperspace_effects`, `quicktime_movies`,
-//! `smoke_trails`, `weapon_effects`, `parallax_starfield`,
-//! `show_map_borders`, `fullscreen`, `fullscreen_kind`, `frame_upscaler`
-//! and `nova_files`; files saved before the last ten existed load
-//! unchanged, with the hyperspace effects, the movies, the smoke trails,
-//! the weapon effects, the parallax starfield and the map's borders on, the game windowed and, when fullscreen, borderless, the
-//! world drawn natively, and no `Nova Files` remembered.
+//! `smoke_trails`, `weapon_effects`, `ship_animations`, `engine_glows`,
+//! `running_lights`, `parallax_starfield`, `show_map_borders`,
+//! `fullscreen`, `fullscreen_kind`, `frame_upscaler` and `nova_files`;
+//! files saved before the last thirteen existed load unchanged, with the
+//! hyperspace effects, the movies, the smoke trails, the weapon effects,
+//! the ship animations, the engine glows, the running lights, the
+//! parallax starfield and the map's borders on, the game windowed and,
+//! when fullscreen, borderless, the world drawn natively, and no `Nova
+//! Files` remembered.
+//!
+//! `ship_animations`, `engine_glows` and `running_lights` are the
+//! original's `ShipAnimations`, `EngineGlows` and `RunningLights`, each
+//! true when on and on when absent, as `_LoadPrefs` registers them YES.
+//! Like `weapon_effects`, a change is saved at once, though the game may
+//! apply it only at the next launch (`crate::app::screen`).
 //!
 //! `smoke_trails` is true when trails are drawn, the Preferences box's
 //! sense. The original's own `SmokeTrails` key is inverted, an "off"
@@ -160,6 +170,15 @@ pub struct GameSettings {
     /// Whether ships show their weapon glow: the original's Weapon Effects
     /// preference.
     pub weapon_effects: bool,
+    /// Whether ships bank, fold and animate through their sets: the
+    /// original's Ship Animations preference.
+    pub ship_animations: bool,
+    /// Whether ships draw their engine glow: the original's Engine Glows
+    /// preference.
+    pub engine_glows: bool,
+    /// Whether ships show their running lights: the original's Running
+    /// Lights preference.
+    pub running_lights: bool,
     /// Whether each scattering of the stars gives them their own parallax
     /// factors: the original's Parallax Starfield preference.
     pub parallax_starfield: bool,
@@ -176,8 +195,9 @@ pub struct GameSettings {
 
 impl Default for GameSettings {
     /// The default sound settings, with the hyperspace effects, the
-    /// movies, the smoke trails, the weapon effects, the parallax
-    /// starfield and the map's borders on, in a window, the world drawn natively.
+    /// movies, the smoke trails, the weapon effects, the ship animations,
+    /// the engine glows, the running lights, the parallax starfield and
+    /// the map's borders on, in a window, the world drawn natively.
     fn default() -> Self {
         Self {
             audio: AudioSettings::default(),
@@ -187,6 +207,9 @@ impl Default for GameSettings {
             quicktime_movies: true,
             smoke_trails: true,
             weapon_effects: true,
+            ship_animations: true,
+            engine_glows: true,
+            running_lights: true,
             parallax_starfield: true,
             map_borders: true,
             frame_upscaler: ScalingSetting::default(),
@@ -207,6 +230,9 @@ impl GameSettings {
             quicktime_movies: self.quicktime_movies,
             smoke_trails: self.smoke_trails,
             weapon_effects: self.weapon_effects,
+            ship_animations: self.ship_animations,
+            engine_glows: self.engine_glows,
+            running_lights: self.running_lights,
             parallax_starfield: self.parallax_starfield,
             fullscreen: self.fullscreen_kind.kind(),
             scaling: self.frame_upscaler.known().unwrap_or_default(),
@@ -228,6 +254,9 @@ impl GameSettings {
             quicktime_movies: prefs.quicktime_movies,
             smoke_trails: prefs.smoke_trails,
             weapon_effects: prefs.weapon_effects,
+            ship_animations: prefs.ship_animations,
+            engine_glows: prefs.engine_glows,
+            running_lights: prefs.running_lights,
             parallax_starfield: prefs.parallax_starfield,
             ..self
         }
@@ -252,6 +281,9 @@ struct Saved {
     quicktime_movies: bool,
     smoke_trails: bool,
     weapon_effects: bool,
+    ship_animations: bool,
+    engine_glows: bool,
+    running_lights: bool,
     parallax_starfield: bool,
     show_map_borders: bool,
     frame_upscaler: String,
@@ -333,6 +365,9 @@ impl From<GameSettings> for Saved {
             quicktime_movies: settings.quicktime_movies,
             smoke_trails: settings.smoke_trails,
             weapon_effects: settings.weapon_effects,
+            ship_animations: settings.ship_animations,
+            engine_glows: settings.engine_glows,
+            running_lights: settings.running_lights,
             parallax_starfield: settings.parallax_starfield,
             show_map_borders: settings.map_borders,
             frame_upscaler: settings.frame_upscaler.0,
@@ -365,6 +400,9 @@ impl From<Saved> for GameSettings {
             quicktime_movies: saved.quicktime_movies,
             smoke_trails: saved.smoke_trails,
             weapon_effects: saved.weapon_effects,
+            ship_animations: saved.ship_animations,
+            engine_glows: saved.engine_glows,
+            running_lights: saved.running_lights,
             parallax_starfield: saved.parallax_starfield,
             map_borders: saved.show_map_borders,
             frame_upscaler: ScalingSetting(saved.frame_upscaler),
@@ -518,6 +556,9 @@ mod tests {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            ship_animations: true,
+            engine_glows: true,
+            running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,
@@ -541,6 +582,9 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                ship_animations: true,
+                engine_glows: true,
+                running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
@@ -614,6 +658,9 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                ship_animations: true,
+                engine_glows: true,
+                running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
@@ -642,6 +689,9 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                ship_animations: true,
+                engine_glows: true,
+                running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
@@ -931,6 +981,105 @@ mod tests {
             .expect("saves");
         assert_eq!(json(&store)["sound"], false, "the audio kept");
         assert_eq!(json(&store)["smoke_trails"], true);
+    }
+
+    /// The three ship-drawing settings' keys, and each one's setting off.
+    fn ship_drawing_off() -> [(&'static str, GameSettings); 3] {
+        [
+            (
+                "ship_animations",
+                GameSettings {
+                    ship_animations: false,
+                    ..GameSettings::default()
+                },
+            ),
+            (
+                "engine_glows",
+                GameSettings {
+                    engine_glows: false,
+                    ..GameSettings::default()
+                },
+            ),
+            (
+                "running_lights",
+                GameSettings {
+                    running_lights: false,
+                    ..GameSettings::default()
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn the_ship_drawing_settings_start_on_and_a_file_without_them_has_them_on() {
+        let defaults = GameSettings::default();
+        assert!(defaults.ship_animations && defaults.engine_glows && defaults.running_lights);
+        let (keeper, warning) =
+            SettingsKeeper::open(MemorySettings::holding(r#"{"hyperspace_effects": false}"#));
+        assert_eq!(warning, None);
+        let read = keeper.settings();
+        assert!(
+            read.ship_animations && read.engine_glows && read.running_lights,
+            "ShipAnimations', EngineGlows' and RunningLights' default, YES"
+        );
+    }
+
+    #[test]
+    fn each_ship_drawing_setting_off_is_saved_and_read_back() {
+        for (key, settings) in ship_drawing_off() {
+            let store = MemorySettings::new();
+            let (mut keeper, _) = SettingsKeeper::open(store.clone());
+            keeper.change(settings.clone()).expect("saves");
+            let saved = json(&store);
+            for (other, _) in ship_drawing_off() {
+                assert_eq!(saved[other], other != key, "{key}: {other}");
+            }
+            let (restarted, warning) = SettingsKeeper::open(store);
+            assert_eq!((restarted.settings(), warning), (settings, None), "{key}");
+            let text = format!(r#"{{"{key}": false}}"#);
+            let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(&text));
+            assert_eq!(warning, None);
+            assert_eq!(
+                keeper.settings().prefs(),
+                restarted.settings().prefs(),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prefs_carry_the_ship_drawing_settings_both_ways() {
+        let off = GameSettings {
+            ship_animations: false,
+            engine_glows: false,
+            running_lights: false,
+            ..GameSettings::default()
+        };
+        let prefs = off.prefs();
+        assert!(!prefs.ship_animations && !prefs.engine_glows && !prefs.running_lights);
+        for (key, one_off) in ship_drawing_off() {
+            let chosen = off.clone().with_prefs(one_off.prefs());
+            assert_eq!(chosen, one_off, "{key}");
+        }
+    }
+
+    #[test]
+    fn saving_an_audio_change_keeps_the_ship_drawing_settings() {
+        let store = MemorySettings::holding(
+            r#"{"ship_animations": false, "engine_glows": false, "running_lights": false}"#,
+        );
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper
+            .change(GameSettings {
+                audio: quiet(),
+                ..keeper.settings()
+            })
+            .expect("saves");
+        let saved = json(&store);
+        for (key, _) in ship_drawing_off() {
+            assert_eq!(saved[key], false, "{key}");
+        }
+        assert_eq!(saved["sound"], false);
     }
 
     #[test]
@@ -1285,6 +1434,9 @@ mod tests {
                 "quicktime_movies": true,
                 "smoke_trails": true,
                 "weapon_effects": true,
+                "ship_animations": true,
+                "engine_glows": true,
+                "running_lights": true,
                 "parallax_starfield": true,
                 "show_map_borders": true,
                 "frame_upscaler": "native",
@@ -1350,6 +1502,9 @@ mod tests {
                 map_borders: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                ship_animations: true,
+                engine_glows: true,
+                running_lights: true,
                 parallax_starfield: true,
                 frame_upscaler: ScalingSetting::default(),
                 nova_files: None,
@@ -1404,6 +1559,9 @@ mod tests {
                 quicktime_movies: true,
                 smoke_trails: true,
                 weapon_effects: true,
+                ship_animations: true,
+                engine_glows: true,
+                running_lights: true,
                 parallax_starfield: true,
                 fullscreen: FullscreenKind::Borderless,
                 scaling: Scaling::Native,
@@ -1478,6 +1636,9 @@ mod tests {
             map_borders: true,
             smoke_trails: true,
             weapon_effects: true,
+            ship_animations: true,
+            engine_glows: true,
+            running_lights: true,
             parallax_starfield: true,
             frame_upscaler: ScalingSetting::default(),
             nova_files: None,

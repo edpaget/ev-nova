@@ -1,9 +1,11 @@
 //! How a session is set up: the rule set and the strategy ports the
-//! `with_*` builders set, which only those builders and
-//! [`Session::set_sound_quiet`](super::Session::set_sound_quiet) write.
+//! `with_*` builders set, which only those builders,
+//! [`Session::set_sound_quiet`](super::Session::set_sound_quiet) and
+//! [`Session::set_sprite_load`](super::Session::set_sprite_load) write.
 
 use std::rc::Rc;
 
+use crate::combat::SpriteLoad;
 use crate::combat::hull::DisableRule;
 use crate::control::{ControlBits, NovaBits};
 use crate::gate::{GateArrivalRule, WormholeRule};
@@ -39,6 +41,10 @@ pub(super) struct Setup {
     /// [`RuleKey::AlertBlink`](crate::rulebook::RuleKey::AlertBlink)'s engine reading blinks the Red Alert's
     /// icon; set by the view from the player's preferences, never saved.
     pub(super) sound_quiet: bool,
+    /// What of each ship's sprites loads, which every hull taken into
+    /// play is loaded by (see the `sprite_load` module); set by the view
+    /// from the player's preferences, never saved.
+    pub(super) sprite_load: SpriteLoad,
     /// What sees each set operator `run_set` hands to `apply_op`: none
     /// outside tests (see `control::SetOpObserver`).
     pub(super) op_observer: Option<hire::Shared<dyn control::SetOpObserver>>,
@@ -61,8 +67,8 @@ pub(super) struct Setup {
 impl Default for Setup {
     /// What a session starts with: each rule's default, Nova's hire terms,
     /// control bits, persons and disable rule, no set-op observer, no
-    /// string lists, the default rule set, sound effects not quiet, and the
-    /// `l33t` mode off.
+    /// string lists, the default rule set, sound effects not quiet, every
+    /// sprite loaded, and the `l33t` mode off.
     fn default() -> Self {
         Self {
             multi_jump: MultiJumpRule::default(),
@@ -74,6 +80,7 @@ impl Default for Setup {
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
             sound_quiet: false,
+            sprite_load: SpriteLoad::default(),
             op_observer: None,
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             disable_rule: Session::nova_disable(),

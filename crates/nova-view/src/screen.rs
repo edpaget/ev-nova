@@ -128,11 +128,11 @@ pub trait Screen {
     fn draw(&self, list: &mut DrawList);
     /// Abandons any pointer gesture in progress (a held button, a drag)
     /// without completing it: what follows is not a click or a drop. Called
-    /// when the screen stops receiving input, such as when the app hides it,
-    /// since the button's release will then go elsewhere, and when the
-    /// primary button is let go of outside the game (in a letterbox bar or
-    /// off the window), where the release has no point to reach the screen
-    /// at. Does nothing by default.
+    /// when the screen stops receiving input (the app hides it, or the
+    /// window loses focus), since the button's release will then go
+    /// elsewhere, and when the primary button is let go of outside the game
+    /// (in a letterbox bar or off the window), where the release has no
+    /// point to reach the screen at. Does nothing by default.
     fn cancel_pointer(&mut self) {}
     /// Forgets every key it holds as down, as if each had been released.
     /// Called when the screen stops receiving input (the app hides it, or
@@ -144,11 +144,22 @@ pub trait Screen {
     /// activate event, which runs `_SwitchedIn` (@0x513cc-0x513dc). Called
     /// on the screen shown, and on any screen held under it that keeps
     /// time across the switch. Does nothing by default.
+    ///
+    /// The pause in the background is the screen router's
+    /// (`nova::app`'s): it holds back the ticks and the input of the
+    /// screens it routes to while the app is away, and tells the main
+    /// menu to idle there through its ticks
+    /// ([`MainMenu::idle_in_background`](crate::menu::MainMenu::idle_in_background)).
+    /// The first tick after this one still counts as background time.
     fn focus_gained(&mut self) {}
     /// The window has gone to the background: the original's suspend
     /// event, which runs `_SwitchedOut` (@0x4f381). Called on the screen
     /// shown, and on any screen held under it that keeps sounds of its
     /// own. Does nothing by default.
+    ///
+    /// Until [`Screen::focus_gained`], the screen router (`nova::app`'s)
+    /// pauses the screens it routes to, as the original's `_inBackground`
+    /// does: a screen sees no tick and no input from it meanwhile.
     fn focus_lost(&mut self) {}
     /// The audio side is not waiting on a keyed click: its button-down
     /// sound has ended and its button-up sound has started, or there was

@@ -90,10 +90,12 @@ pub enum Blend {
     ///
     /// # The tint
     ///
-    /// The tint's colour multiplies the source (white, or a murk's
-    /// darkening), and its alpha is the opacity: `k = round(a × 32 / 255)`,
-    /// exact for [`lights_tint`]`(k)` and every alpha a fade gives, as the
-    /// renderer stores it in 32nds.
+    /// The tint's colour multiplies the source (a shot's plain fade and a
+    /// pod's tint), and its alpha is the opacity: `k = round(a × 32 /
+    /// 255)`, exact for [`lights_tint`]`(k)` and every alpha a fade gives,
+    /// as the renderer stores it in 32nds. A [`DrawCommand::Colorized`]
+    /// mixes the texel `t` first, as `_BlitPixieRLETranslucent` does in
+    /// every path (@0xc1140-0xc11ca, then @0xc11cc-0xc1275).
     ///
     /// # The bit depth
     ///
@@ -129,6 +131,8 @@ pub enum Blend {
     /// Its colour channels are the source factors and its alpha the
     /// destination factor, each in 32nds: `n_c = round(c × 32 / 255)`,
     /// `m = round(a × 32 / 255)`, exact for [`translucent_tint`].
+    /// A [`DrawCommand::Colorized`] mixes the texel first, as with
+    /// [`Blend::OrCrossfade`].
     ///
     /// # The bit depth
     ///
@@ -530,6 +534,29 @@ impl DrawList {
             blend,
             colorize,
         })
+    }
+
+    /// Appends `image` at `center` at `tint`, combined by `blend`: a
+    /// [`DrawCommand::Colorized`] when `colorize` mixes, otherwise a plain
+    /// [`DrawCommand::Sprite`], as most of a murky system's sprites by the
+    /// player are.
+    pub fn mixed_sprite(
+        &mut self,
+        image: ImageKey,
+        center: Point,
+        tint: Color,
+        blend: Blend,
+        colorize: Option<Colorize>,
+    ) -> &mut Self {
+        match colorize.filter(|colorize| colorize.mixes()) {
+            Some(colorize) => self.colorized_sprite(image, center, tint, blend, colorize),
+            None => self.push(DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                blend,
+            }),
+        }
     }
 
     /// Appends a [`DrawCommand::Picture`].
@@ -1056,6 +1083,46 @@ mod tests {
                 tint,
                 blend: Blend::Or,
             }]
+        );
+    }
+
+    #[test]
+    fn a_mixed_sprite_is_colorized_only_when_it_mixes() {
+        let tint = lights_tint(10);
+        let image = ImageKey::sprite(202, 5);
+        let plain = DrawCommand::Sprite {
+            image,
+            center: at(50.0, 60.0),
+            tint,
+            blend: Blend::Or,
+        };
+        let murk = Colorize {
+            level: 16,
+            rgb5: [4, 4, 1],
+        };
+        let mut list = DrawList::new();
+        list.mixed_sprite(image, at(50.0, 60.0), tint, Blend::Or, None)
+            .mixed_sprite(
+                image,
+                at(50.0, 60.0),
+                tint,
+                Blend::Or,
+                Some(Colorize { level: 0, ..murk }),
+            )
+            .mixed_sprite(image, at(50.0, 60.0), tint, Blend::Or, Some(murk));
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                plain.clone(),
+                plain,
+                DrawCommand::Colorized {
+                    image,
+                    center: at(50.0, 60.0),
+                    tint,
+                    blend: Blend::Or,
+                    colorize: murk,
+                },
+            ]
         );
     }
 

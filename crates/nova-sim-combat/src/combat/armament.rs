@@ -70,7 +70,9 @@
 //!   is a fighter, launched as a [`Launch`] the fight turns into a sortie. A fighter docking
 //!   goes back aboard ([`Armament::stow`], `_AIAddFighterToParent`
 //!   @0x802a5): a round to the bay of lowest weapon ID launching its type,
-//!   with no cap; a bay whose slot held exactly none restarts its reload.
+//!   else its sprite base ([`Armament::dock_bay`]), with no cap; a bay
+//!   whose slot held exactly none restarts its reload. With neither,
+//!   nothing changes.
 //! - Point defence ([`Armament::fire_point_defence`]) fires, each tick,
 //!   only the ready point-defence weapon the ship can pay for with the
 //!   lowest weapon ID, and only at a missile it picks, as
@@ -1346,10 +1348,10 @@ impl Armament {
             .min()
     }
 
-    /// The bay a fighter of ship type `ship` docks into: the one of lowest
-    /// weapon ID that launches it, as `_AIAddFighterToParent` walks the
-    /// parent's weapons by index (@0x802f8-0x80326); none when no bay
-    /// does.
+    /// The bay of lowest weapon ID that launches ship type `ship` exactly,
+    /// as `_AIAddFighterToParent`'s first walk (@0x802f8-0x80326) and
+    /// `_PlayerHasFightersOfOutfitType` (@0x8089) read it; none when no
+    /// bay does.
     #[must_use]
     pub fn bay_of(&self, ship: ShipId) -> Option<WeaponId> {
         self.mounts
@@ -1359,11 +1361,45 @@ impl Armament {
             .min()
     }
 
-    /// Takes a fighter of ship type `ship` aboard, a round of the bay of
-    /// lowest ID that launches it, into `rounds` (see the module docs), and
-    /// says whether one did; with none, nothing changes.
-    pub fn stow(&mut self, ship: ShipId, rounds: &mut dyn Rounds) -> bool {
-        let bay = self.bay_of(ship);
+    /// The bay a fighter of ship type `ship`, drawing the sprites of
+    /// `base`, docks into: the lowest launching `ship`, else the lowest
+    /// launching `base`, as `_AIAddFighterToParent` walks the parent's
+    /// weapons twice by index (@0x802f8-0x80326, @0x80328-0x80382); none
+    /// when neither has one, and the fighter stays out (@0x80384).
+    #[must_use]
+    pub fn dock_bay(&self, ship: ShipId, base: ShipId) -> Option<WeaponId> {
+        self.bay_of(ship).or_else(|| self.bay_of(base))
+    }
+
+    /// The bay `_CanBuyFighter(type, -1, -1)` reads for a boarded ship of
+    /// type `ship`: the lowest launching `ship` (@0x5ad1-0x5b04, breaking
+    /// @0x5b7e), else the lowest whose carried ship shares `ship`'s sprite
+    /// base by `base_of` (@0x5b0d-0x5b75), wider than [`Armament::dock_bay`],
+    /// which needs a bay carrying the base itself.
+    #[must_use]
+    pub fn room_bay(
+        &self,
+        ship: ShipId,
+        base_of: impl Fn(ShipId) -> ShipId,
+    ) -> Option<&WeaponSpec> {
+        let base = base_of(ship);
+        let shares_base = |mount: &&Mount| mount.spec.carried.is_some_and(|c| base_of(c) == base);
+        let bay = self.bay_of(ship).or_else(|| {
+            let sharing = self.mounts.iter().filter(shares_base);
+            sharing.map(|mount| mount.spec.id).min()
+        })?;
+        self.mounts
+            .iter()
+            .map(|mount| &mount.spec)
+            .find(|spec| spec.id == bay)
+    }
+
+    /// Takes a fighter of ship type `ship`, drawing the sprites of `base`,
+    /// aboard, a round of its [`Armament::dock_bay`], into `rounds` (see
+    /// the module docs), and says whether one did; with none, nothing
+    /// changes.
+    pub fn stow(&mut self, ship: ShipId, base: ShipId, rounds: &mut dyn Rounds) -> bool {
+        let bay = self.dock_bay(ship, base);
         let Some(mount) = self
             .mounts
             .iter_mut()
@@ -1579,6 +1615,13 @@ impl Arsenal {
                 ..HullSpec::new(record)
             })
             .unwrap_or_default()
+    }
+
+    /// The ship whose sprites ship type `ship` draws
+    /// ([`HullRecord::sprite_base`]); `ship` itself with no record.
+    #[must_use]
+    pub fn sprite_base(&self, ship: ShipId) -> ShipId {
+        self.hulls.get(&ship).map_or(ship, |hull| hull.sprite_base)
     }
 
     /// How far ship class `ship`'s stock weapons reach (see
@@ -5496,7 +5539,7 @@ mod tests {
             (WeaponSpec::new(&bay(149, 144, 60)), 1),
         ]);
         let mut rounds = LauncherRounds::from([(WeaponId(151), 1)]);
-        assert!(armament.stow(ShipId(144), &mut rounds));
+        assert!(armament.stow(ShipId(144), ShipId(144), &mut rounds));
         assert_eq!(
             rounds,
             LauncherRounds::from([(WeaponId(149), 1), (WeaponId(151), 1)]),
@@ -5510,12 +5553,15 @@ mod tests {
             [0.0, 0.0, 0.0, 60.0],
             "an empty bay restarts its reload"
         );
-        assert!(armament.stow(ShipId(144), &mut rounds), "with no cap");
+        assert!(
+            armament.stow(ShipId(144), ShipId(144), &mut rounds),
+            "with no cap"
+        );
         assert_eq!(rounds.slot(WeaponId(149)), 2);
         assert_eq!(reloads(&armament), [0.0, 0.0, 0.0, 60.0]);
         let mut owing = Armament::new([(WeaponSpec::new(&bay(149, 144, 60)), 1)]);
         let mut below = LauncherRounds::from([(WeaponId(149), -1)]);
-        assert!(owing.stow(ShipId(144), &mut below));
+        assert!(owing.stow(ShipId(144), ShipId(144), &mut below));
         assert_eq!(below.slot(WeaponId(149)), 0);
         assert_eq!(
             owing.mounts()[0].reload,
@@ -5525,14 +5571,17 @@ mod tests {
         let mut armament = Armament::new([(WeaponSpec::new(&bay(151, 144, 80)), 1)]);
         armament.mounts[0].reload = 90.0;
         let mut empty = LauncherRounds::default();
-        assert!(armament.stow(ShipId(144), &mut empty));
+        assert!(armament.stow(ShipId(144), ShipId(144), &mut empty));
         assert_eq!(armament.mounts()[0].reload, 90.0, "a longer timer is kept");
         armament.mounts[0].reload = 5.0;
-        assert!(armament.stow(ShipId(144), &mut empty));
+        assert!(armament.stow(ShipId(144), ShipId(144), &mut empty));
         assert_eq!(armament.mounts()[0].reload, 5.0, "it held rounds");
         let before = armament.clone();
         let mut none = LauncherRounds::default();
-        assert!(!armament.stow(ShipId(146), &mut none), "no bay launches it");
+        assert!(
+            !armament.stow(ShipId(146), ShipId(146), &mut none),
+            "no bay launches it"
+        );
         assert_eq!(armament, before);
         assert_eq!(none, LauncherRounds::default());
     }
@@ -5548,6 +5597,75 @@ mod tests {
         assert_eq!(armament.bay_of(ShipId(144)), Some(WeaponId(149)));
         assert_eq!(armament.bay_of(ShipId(145)), Some(WeaponId(150)));
         assert_eq!(armament.bay_of(ShipId(146)), None, "no bay launches it");
+    }
+
+    #[test]
+    fn a_fighter_docks_into_the_exact_bay_else_the_bay_of_its_sprite_base() {
+        let armament = Armament::new([
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+            (WeaponSpec::new(&bay(153, 144, 80)), 1),
+            (WeaponSpec::new(&bay(152, 144, 70)), 1),
+            (WeaponSpec::new(&bay(160, 223, 60)), 1),
+            (WeaponSpec::new(&bay(161, 223, 60)), 1),
+        ]);
+        let dock = |ship, base| armament.dock_bay(ShipId(ship), ShipId(base));
+        assert_eq!(dock(223, 144), Some(WeaponId(160)), "exact wins, lowest");
+        assert_eq!(dock(224, 144), Some(WeaponId(152)), "the base's, lowest");
+        assert_eq!(dock(144, 144), Some(WeaponId(152)));
+        assert_eq!(dock(225, 145), None, "a bay of neither type");
+    }
+
+    #[test]
+    fn a_boarded_ship_reads_its_exact_bay_else_the_lowest_sharing_its_sprite_base() {
+        let armament = Armament::new([
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+            (WeaponSpec::new(&bay(153, 224, 80)), 1),
+            (WeaponSpec::new(&bay(152, 223, 70)), 1),
+            (WeaponSpec::new(&bay(151, 225, 60)), 1),
+        ]);
+        let base = |ship: ShipId| match ship.0 {
+            223 | 224 => ShipId(144),
+            225 => ShipId(145),
+            other => ShipId(other),
+        };
+        let read = |ship| armament.room_bay(ShipId(ship), base).map(|bay| bay.id.0);
+        assert_eq!(read(224), Some(153), "exact, though 152 shares its base");
+        assert_eq!(read(144), Some(152), "the lowest of its base");
+        assert_eq!(read(146), None, "neither");
+    }
+
+    #[test]
+    fn a_variants_stow_puts_its_round_in_the_bay_of_its_sprite_base() {
+        let mut armament = Armament::new([(WeaponSpec::new(&bay(149, 144, 60)), 1)]);
+        let mut rounds = LauncherRounds::default();
+        assert!(armament.stow(ShipId(223), ShipId(144), &mut rounds));
+        assert_eq!(rounds, LauncherRounds::from([(WeaponId(149), 1)]));
+        assert_eq!(
+            armament.mounts()[0].reload,
+            60.0,
+            "an empty bay restarts its reload (@0x803a4-0x803c0)"
+        );
+        let before = armament.clone();
+        assert!(!armament.stow(ShipId(225), ShipId(145), &mut rounds));
+        assert_eq!(armament, before, "no bay: nothing changes");
+        assert_eq!(rounds.slot(WeaponId(149)), 1);
+    }
+
+    #[test]
+    fn a_ship_type_reads_its_sprite_base_or_itself_with_no_record() {
+        let arsenal = Arsenal::new(
+            &[],
+            vec![
+                hull(144),
+                HullRecord {
+                    sprite_base: ShipId(144),
+                    ..hull(223)
+                },
+            ],
+        );
+        assert_eq!(arsenal.sprite_base(ShipId(223)), ShipId(144));
+        assert_eq!(arsenal.sprite_base(ShipId(144)), ShipId(144));
+        assert_eq!(arsenal.sprite_base(ShipId(500)), ShipId(500), "no record");
     }
 
     #[test]

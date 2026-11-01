@@ -23,28 +23,32 @@
 //! the user's decision of 2026-10-28. The `dialog_focus_ring` rule's engine
 //! reading ([`FocusRing::Off`]) gives the original's dialogs.
 //!
-//! Two screens' filters do map Tab: the exchange's (`_TradeFilter`
-//! @0x4e184, Shift stepping back) and the mission computer's
-//! (`_MissionFilter` @0x9f8cc) step their list's selection. There the
-//! ring keeps Tab under [`FocusRing::Tab`], and the screen's row step
-//! takes it under [`FocusRing::Off`] (see
-//! [`TradeScreen`](crate::spaceport::trade::TradeScreen) and
-//! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)).
+//! Three screens' filters do map Tab: the exchange's (`_TradeFilter`
+//! @0x4e184, Shift stepping back), the mission computer's
+//! (`_MissionFilter` @0x9f8cc) and the mission info screen's
+//! (`_MissionInfoFilter` @0x9d778, no Shift test) step their list's
+//! selection. There the ring keeps Tab under [`FocusRing::Tab`], and the
+//! screen's row step takes it under [`FocusRing::Off`] (see
+//! [`TradeScreen`](crate::spaceport::trade::TradeScreen),
+//! [`MissionComputerScreen`](crate::spaceport::missions::MissionComputerScreen)
+//! and [`MissionInfoScreen`](crate::spaceport::missions::MissionInfoScreen)).
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use nova_sim::{RuleKey, RuleSource, Rulebook};
 
 use crate::color::Color;
-use crate::draw::{DrawList, fill_rect};
+use crate::draw::{DrawCommand, DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, MouseButton};
 use crate::text::TextMetrics;
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
-use super::scroll_text::ScrollText;
+use super::scroll_arrows::{ArrowHold, ScrollArrow};
+use super::scroll_text::{ScrollText, TextRow};
 use super::slice::{Axis, three_slice};
 
 /// The logical screen dialogs are placed on: Nova's 1024 x 768.
@@ -109,7 +113,7 @@ pub enum Placement {
 /// | 0x95ee8 | `_DoCommDialog` | 1007 |
 /// | 0x96eaf | `_DoPlanetCommDialog` | 1009 |
 /// | 0x9e243 | `_DoMissionInfoDialog` | 1012 |
-/// | 0xa23fd | `_OfferOneMission` | 1020, 1016 |
+/// | 0xa23fd | `_OfferOneMission` | 1020, 1016 (shrunk after the call, `SizeWindow` @0xa25d1, `MoveWindow` @0xa2640) |
 /// | 0xa39de | `_DoMissionDialog` | 1006 |
 ///
 /// The other `GetNewDialog` callers (`_EVNoteAlert`'s 3000,
@@ -259,6 +263,10 @@ pub enum Role {
         /// text straight on whatever is below.
         backing: Option<TextBacking>,
     },
+    /// One of a text dialog's scroll arrows, over the dialog's first
+    /// scrolling text. It is enabled whatever the template says, as the
+    /// original's filter hit-tests the arrows itself.
+    ScrollArrow(ScrollArrow),
     /// Not there at all: not drawn, not hit-tested and never focused, as
     /// if it were outside the dialog. Any kind of item can be hidden.
     Hidden,
@@ -290,13 +298,16 @@ impl TextBacking {
     };
 }
 
-/// A dialog's frame: three pictures stacked top to bottom over its bounds,
-/// the middle one stretched.
+/// A dialog's frame: three pictures stacked top to bottom over its bounds.
+/// The middle one keeps its size and is cut to the band between the caps,
+/// as `_SingleMissionDialogUpdate` (@0x989bf-0x98a89, @0x98b44-0x98b94) and
+/// `_TextDialogUpdate` (@0x51ba7-0x51d61) draw it at its natural size and
+/// then the caps over it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DialogFrame {
     /// The top cap.
     pub top: ImageKey,
-    /// The middle, stretched to fill the height.
+    /// The middle, at its own size, cut to the band between the caps.
     pub middle: ImageKey,
     /// The bottom cap.
     pub bottom: ImageKey,
@@ -326,6 +337,8 @@ enum Widget {
     },
     /// A picture stretched over the item.
     Picture(ImageKey),
+    /// A scroll arrow, drawn from the first scrolling text's flags.
+    ScrollArrow(ScrollArrow),
     /// Laid out and hit-tested, but not drawn.
     Blank,
 }
@@ -414,6 +427,8 @@ pub struct Dialog {
     tracker: ButtonTracker,
     /// The button held drawn pressed, by index ([`Dialog::hold_pressed`]).
     held: Option<usize>,
+    /// The press held on a scroll arrow, if any.
+    hold: Option<ArrowHold>,
 }
 
 impl std::fmt::Debug for Dialog {
@@ -470,12 +485,17 @@ impl Dialog {
                     && local.min.x < width
                     && local.max.y > 0.0
                     && local.min.y < height;
-                let enabled = item.enabled && role != Some(&Role::Greyed);
+                let template_enabled = item.enabled
+                    || matches!(
+                        (&item.kind, role),
+                        (ItemSpec::User, Some(Role::ScrollArrow(_)))
+                    );
+                let enabled = template_enabled && role != Some(&Role::Greyed);
                 let bounds = local.offset(origin);
                 Item {
                     bounds,
                     enabled,
-                    template_enabled: item.enabled,
+                    template_enabled,
                     shown,
                     drawn: true,
                     widget: widget(&item.kind, role, bounds, enabled, &metrics),
@@ -496,6 +516,7 @@ impl Dialog {
             tracked: None,
             tracker: ButtonTracker::default(),
             held: None,
+            hold: None,
         }
     }
 
@@ -559,6 +580,16 @@ impl Dialog {
         }
     }
 
+    /// The dialog with its first scrolling text scrolled by pixels
+    /// ([`ScrollText::pixel_scrolled`]).
+    #[must_use]
+    pub fn with_pixel_scroll(mut self) -> Self {
+        if let Some(text) = self.scroll_text_mut() {
+            *text = text.clone().pixel_scrolled();
+        }
+        self
+    }
+
     /// Greys item `item` (from 1), as [`Role::Greyed`] does, or ungreys it
     /// back to what its template says. No such item, nothing changes.
     pub fn set_greyed(&mut self, item: usize, greyed: bool) {
@@ -601,6 +632,21 @@ impl Dialog {
         };
         if let Widget::Text { text: shown, .. } = &mut found.widget {
             *shown = shown.rewrapped(text, &self.metrics);
+        }
+    }
+
+    /// Replaces the text of item `item` (from 1) with `rows`, in its font,
+    /// size and box and shown from the first row. An item that is not text,
+    /// or no such item, changes nothing.
+    pub fn set_rows(&mut self, item: usize, rows: Vec<TextRow>) {
+        let Some(found) = item
+            .checked_sub(1)
+            .and_then(|index| self.items.get_mut(index))
+        else {
+            return;
+        };
+        if let Widget::Text { text: shown, .. } = &mut found.widget {
+            *shown = shown.with_rows(rows);
         }
     }
 
@@ -696,12 +742,19 @@ impl Dialog {
     /// and pointer events outside it do nothing.
     ///
     /// - A click (press and release, tracked as a button tracks it) on an
-    ///   enabled, shown item activates it.
+    ///   enabled, shown item activates it, except a scroll arrow.
+    /// - A left press on a [`Role::ScrollArrow`] whose flag is set scrolls
+    ///   its text, and goes on doing so in [`Self::tick`] until let go. Any
+    ///   other press on one is tracked as a button's is, and its click is
+    ///   one step of [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS), while
+    ///   its flag is set. An arrow reports no item.
     /// - Return activates the default item, and Escape the cancel item.
     /// - Under [`FocusRing::Tab`], the default, Tab moves the focus to the
     ///   next enabled button, and Space activates the focused one. Under
     ///   [`FocusRing::Off`], the original's reading, they do nothing.
-    /// - Up and Down, repeats included, scroll the first scrolling text.
+    /// - Up and Down, repeats included, scroll the first scrolling text: a
+    ///   line, or [`ARROW_UNITS`](super::scroll_text::ARROW_UNITS) when it
+    ///   is pixel-scrolled.
     /// - A wheel or trackpad scroll inside the dialog scrolls the scrolling
     ///   text under the pointer, if any; static text ignores it, and a
     ///   click in progress stays armed.
@@ -778,12 +831,49 @@ impl Dialog {
     /// tracker (`_TrackTextButtons` @0x26c4c and its kin) and in the
     /// Dialog Manager: a press on an edge two items share goes to the
     /// right or lower one.
+    ///
+    /// A scroll arrow goes as `_TextDialogFilter` takes it. A left press
+    /// on one whose flag is set starts a hold and takes its first step at
+    /// once (@0x52172-0x5237f). That hold reads only the button, so moves
+    /// do nothing and only a left release ends it, or a left press, which
+    /// makes up for a release that never came. Any other press on an arrow
+    /// is tracked like a button's, and its click is one gated step
+    /// (@0x5b0af-0x5b130), which reports no item.
     fn pointer(&mut self, input: &Input) -> Option<DialogEvent> {
+        if self.hold.is_some() {
+            match *input {
+                Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: true,
+                    ..
+                } => {}
+                Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                } => {
+                    self.hold = None;
+                    return None;
+                }
+                _ => return None,
+            }
+        }
         if let Input::PointerButton {
-            pressed: true, at, ..
+            button,
+            pressed: true,
+            at,
         } = *input
         {
             self.cancel_pointer();
+            if button == MouseButton::Left
+                && let Some(arrow) = self.arrow_to_hold(at)
+            {
+                self.hold = Some(ArrowHold::new(arrow));
+                if let Some(text) = self.scroll_text_mut() {
+                    text.scroll_units(arrow.step());
+                }
+                return None;
+            }
             self.tracked = self
                 .items
                 .iter()
@@ -802,7 +892,32 @@ impl Dialog {
         if !self.tracker.armed() {
             self.tracked = None;
         }
-        activated.then_some(DialogEvent::Item(index + 1))
+        if !activated {
+            return None;
+        }
+        if let Widget::ScrollArrow(arrow) = self.items[index].widget {
+            if let Some(text) = self.scroll_text_mut() {
+                text.scroll_arrow(arrow);
+            }
+            return None;
+        }
+        Some(DialogEvent::Item(index + 1))
+    }
+
+    /// The scroll arrow a left press at `at` holds: the one there whose
+    /// flag is set, item 5 before item 6, as the filter tests them.
+    fn arrow_to_hold(&self, at: Point) -> Option<ScrollArrow> {
+        let text = self.scroll_text()?;
+        self.items.iter().find_map(|item| match item.widget {
+            Widget::ScrollArrow(arrow)
+                if item.active()
+                    && arrow.can_scroll(text)
+                    && self.hit_area(item).contains_half_open(at) =>
+            {
+                Some(arrow)
+            }
+            _ => None,
+        })
     }
 
     /// Where `item` takes clicks: the part of it inside the dialog, since
@@ -838,10 +953,28 @@ impl Dialog {
         self.held.map(|index| index + 1)
     }
 
-    /// Abandons any click in progress without activating anything.
+    /// Advances a press held on a scroll arrow: one step for each Mac tick,
+    /// each taken alone, so the text's sticky flag goes as the original's
+    /// loop leaves it (@0x52172-0x5237f). It runs on past the ends, as
+    /// that loop does.
+    pub fn tick(&mut self, dt: Duration) {
+        let Some(hold) = &mut self.hold else {
+            return;
+        };
+        let (arrow, steps) = (hold.arrow(), hold.advance(dt));
+        if let Some(text) = self.scroll_text_mut() {
+            for _ in 0..steps {
+                text.scroll_units(arrow.step());
+            }
+        }
+    }
+
+    /// Abandons any click in progress without activating anything, and any
+    /// press held on a scroll arrow.
     pub fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
         self.tracked = None;
+        self.hold = None;
     }
 
     /// Draws the frame, if there is one, then each shown and drawn item in
@@ -857,8 +990,15 @@ impl Dialog {
             for (piece, at) in pieces {
                 let image = match piece {
                     super::slice::Piece::Start => frame.top,
-                    super::slice::Piece::Middle => frame.middle,
                     super::slice::Piece::End => frame.bottom,
+                    super::slice::Piece::Middle => {
+                        let middle = DrawCommand::Picture {
+                            image: frame.middle,
+                            top_left: at.min,
+                        };
+                        list.clipped(at, middle);
+                        continue;
+                    }
                 };
                 list.stretched_picture(image, at.min, at.width(), at.height());
             }
@@ -867,10 +1007,10 @@ impl Dialog {
             if !(item.shown && item.drawn) {
                 continue;
             }
+            let tracked = self.tracked == Some(index) && self.tracker.pressed();
             match &item.widget {
                 Widget::Button(button) => {
-                    let pressed = (self.tracked == Some(index) && self.tracker.pressed())
-                        || self.held == Some(index);
+                    let pressed = tracked || self.held == Some(index);
                     button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
                     if self.focus == Some(index) {
                         outline(list, item.bounds, self.style.up);
@@ -885,6 +1025,16 @@ impl Dialog {
                 Widget::Picture(image) => {
                     let at = item.bounds;
                     list.stretched_picture(*image, at.min, at.width(), at.height());
+                }
+                Widget::ScrollArrow(arrow) => {
+                    let button = self
+                        .scroll_text()
+                        .and_then(|text| arrow.button(item.bounds, text));
+                    let held = self.hold.is_some_and(|hold| hold.arrow() == *arrow);
+                    if let Some(button) = button {
+                        let pressed = tracked || held;
+                        button.draw(pressed, &self.skin, &self.style, &self.metrics, list);
+                    }
                 }
                 Widget::Blank => {}
             }
@@ -923,6 +1073,7 @@ fn widget(
             fill: None,
         },
         (ItemSpec::User, Some(Role::Button(label))) => button(label),
+        (ItemSpec::User, Some(Role::ScrollArrow(arrow))) => Widget::ScrollArrow(*arrow),
         (
             ItemSpec::User,
             Some(Role::ScrollText {
@@ -968,9 +1119,10 @@ pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::draw::{DrawCommand, fill_command};
+    use crate::draw::fill_command;
     use crate::input::{MouseButton, ScrollDelta};
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::scroll_text::{ARROW_UNITS, TextRun};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -1873,6 +2025,42 @@ mod tests {
     }
 
     #[test]
+    fn set_rows_replaces_a_text_items_rows_from_the_first_and_nothing_else() {
+        let rows = |labels: &[&str]| -> Vec<TextRow> {
+            labels
+                .iter()
+                .zip(1..)
+                .map(|(label, row)| TextRow {
+                    baseline: row as f32 * 12.0,
+                    runs: vec![TextRun {
+                        x: 0.0,
+                        text: (*label).to_owned(),
+                        color: Color::WHITE,
+                    }],
+                })
+                .collect()
+        };
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        dialog.input(&key(Key::Down));
+        dialog.set_rows(3, rows(&["a", "b", "c", "d"]));
+        let text = dialog.scroll_text().expect("scrolling text");
+        assert_eq!(text.first(), 0);
+        assert_eq!(text.lines(), ["a", "b", "c", "d"]);
+        assert_eq!(text.rect(), rect(10.0, 10.0, 40.0, 36.0));
+        dialog.input(&key(Key::Down));
+        assert_eq!(
+            dialog.scroll_text().expect("scrolling text").first(),
+            1,
+            "it still scrolls"
+        );
+        let before = drawn(&dialog);
+        for other in [0, 1, 2, 4, 99] {
+            dialog.set_rows(other, rows(&["other"]));
+        }
+        assert_eq!(drawn(&dialog), before, "only text items change");
+    }
+
+    #[test]
     fn up_and_down_reach_the_scroll_text_with_repeats() {
         let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
         assert_eq!(dialog.input(&key(Key::Down)), None);
@@ -1889,6 +2077,32 @@ mod tests {
         };
         dialog.input(&release);
         assert_eq!(dialog.scroll_text().expect("text").first(), 1);
+    }
+
+    #[test]
+    fn with_pixel_scroll_the_scrolling_text_moves_by_pixels_and_without_by_lines() {
+        let text = |dialog: &Dialog| dialog.scroll_text().expect("text").offset();
+        let mut pixels =
+            dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4")).with_pixel_scroll();
+        pixels.input(&key(Key::Down));
+        assert_eq!(text(&pixels), ARROW_UNITS);
+        let mut lines = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        lines.input(&key(Key::Down));
+        assert_eq!(text(&lines), 12.0);
+    }
+
+    #[test]
+    fn with_pixel_scroll_a_dialog_with_no_scrolling_text_is_unchanged() {
+        let dialog = dialog(&yes_no(), &[]).with_pixel_scroll();
+        assert!(dialog.scroll_text().is_none());
+    }
+
+    #[test]
+    fn set_text_keeps_a_dialogs_pixel_scroll() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0")).with_pixel_scroll();
+        dialog.set_text(3, "l0\rl1\rl2\rl3\rl4");
+        dialog.input(&key(Key::Down));
+        assert_eq!(dialog.scroll_text().expect("text").offset(), ARROW_UNITS);
     }
 
     fn wheel(at: Point) -> Input {
@@ -2304,7 +2518,13 @@ mod tests {
             commands[..3],
             [
                 piece(frame.top, 329.0, 9.0),
-                piece(frame.middle, 338.0, 60.0),
+                DrawCommand::Clipped {
+                    clip: Bounds::at(at(334.0, 338.0), 355.0, 60.0),
+                    command: Box::new(DrawCommand::Picture {
+                        image: frame.middle,
+                        top_left: at(334.0, 338.0),
+                    }),
+                },
                 piece(frame.bottom, 398.0, 40.0),
             ]
         );

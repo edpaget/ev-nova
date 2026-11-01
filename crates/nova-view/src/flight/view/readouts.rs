@@ -197,9 +197,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.retake_reserves();
     }
 
-    /// Takes the gauges' snapshot afresh, from the kept frame.
+    /// Takes the gauges' snapshot afresh, from the frame drawn.
     pub(super) fn retake_reserves(&mut self) {
-        self.reserves_scene = Some(self.reserves());
+        self.reserves_scene = Some(self.drawn().hud.reserves);
     }
 
     /// Takes the radar's snapshot afresh, and nothing else: what the
@@ -213,11 +213,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// its last change (`_EvalSetExp` @0x156c7 → `_RedrawStatus(1)`
     /// @0x739bd, [`FlightView::after_outfit_order`]).
     ///
-    /// It reads the kept frame, which the commands of the docked and
-    /// travel code that calls it, directly or through
-    /// [`FlightView::redraw_whole`], have just filled afresh.
+    /// It reads the frame drawn: the kept one, which the commands of the
+    /// docked and travel code that calls it, directly or through
+    /// [`FlightView::redraw_whole`], have just filled afresh, but for a
+    /// double-time frame in flight ([`FlightView::drawn`]).
     pub(super) fn retake_radar(&mut self) {
-        self.radar_scene = Some(self.radar_now(&self.frame));
+        self.radar_scene = Some(self.radar_now(self.drawn()));
     }
 
     /// What the target panel is drawn for in `frame`: the target, its ship
@@ -260,12 +261,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
         })
     }
 
-    /// Takes the target panel's snapshot afresh, from the kept frame.
+    /// Takes the target panel's snapshot afresh, from the frame drawn.
     pub(super) fn retake_target(&mut self) {
-        self.target_scene = Some((
-            Self::target_drawn(&self.frame),
-            self.target_now(&self.frame),
-        ));
+        let frame = self.drawn();
+        self.target_scene = Some((Self::target_drawn(frame), self.target_now(frame)));
     }
 
     /// What the target panel shows this frame, of `frame`'s target: by
@@ -314,7 +313,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// tick, which changes no decision the player can see.
     pub(super) fn advance_hud(&mut self) {
         self.radar_static =
-            radar::static_frame(self.frame.hud.interference, &mut self.effects_chance);
+            radar::static_frame(self.drawn().hud.interference, &mut self.effects_chance);
         let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
         let refresh = self.hud_cadence.advance(now);
         if refresh.radar {
@@ -327,7 +326,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             self.retake_nav();
         }
         let shown = self.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
-        let now = Self::target_drawn(&self.frame);
+        let now = Self::target_drawn(self.drawn());
         if self.target_scene.is_none() || retake_target(shown.as_ref(), now.as_ref(), refresh) {
             self.retake_target();
         }
@@ -430,7 +429,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the session had queued then.
     pub(super) fn retake_nav(&mut self) {
         self.nav_marked = false;
-        self.nav_scene = Some((self.nav_mode(), self.nav_now()));
+        self.nav_scene = Some((self.nav_frame().nav_mode, self.nav_now()));
         self.nav_texts = self.frame.texts_queued;
     }
 
@@ -440,10 +439,26 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame.nav_mode
     }
 
-    /// What the HUD's nav area shows now, for the session's nav mode
+    /// The frame the nav area reads: the frame drawn
+    /// ([`FlightView::drawn`]), but the kept one while the course map is
+    /// open. No step runs under the map, so a double-time frame stays
+    /// held, and the map's selection and Clear Route redraw the nav area
+    /// at once (`_DrawStatus` @0x12dba, @0x13fb2-0x1406e). As the map
+    /// closes the area goes back to the frame drawn, which shows what the
+    /// map changed from the next step, as a command does.
+    fn nav_frame(&self) -> &FlightFrame {
+        if self.map_open {
+            &self.frame
+        } else {
+            self.drawn()
+        }
+    }
+
+    /// What the HUD's nav area shows now, for the nav mode of the frame
+    /// it reads (`FlightView::nav_frame`)
     /// ([`FlightView::nav_display`]).
     pub(super) fn nav_now(&self) -> NavDisplay {
-        self.nav_display(self.nav_mode())
+        self.nav_display(self.nav_frame().nav_mode)
     }
 
     /// What the HUD's nav area shows for nav mode `mode` (see
@@ -456,7 +471,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// for none), with whether the ship can jump there now; with the nav
     /// system off, "Nav System Off". Each read from what the flight gave:
     /// the opening's names ([`Names::stellar`](nova_sim::flight_frame::Names::stellar))
-    /// and the kept frame
+    /// and the frame it reads (`FlightView::nav_frame`)
     /// ([`FlightFrame::has_explored`](nova_sim::flight_frame::FlightFrame::has_explored),
     /// [`FlightFrame::jump_readiness`](nova_sim::flight_frame::FlightFrame::jump_readiness)).
     /// `mode` may be held or noted from before (a take-off's, a text's, an
@@ -475,7 +490,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             })),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {
-                    self.frame
+                    self.nav_frame()
                         .has_explored(next)
                         .then(|| self.map.model().system(next))
                         .flatten()
@@ -483,15 +498,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
                             NavDestination::Named(system.entry.name.clone())
                         })
                 }),
-                readiness: self.frame.jump_readiness,
+                readiness: self.nav_frame().jump_readiness,
             },
         }
     }
 
-    /// Whether the nav area's snapshot was taken for the nav mode the
-    /// player is in now.
+    /// Whether the nav area's snapshot was taken for the nav mode of the
+    /// frame it reads now (`FlightView::nav_frame`).
     fn nav_mode_shown(&self) -> bool {
-        let mode = self.nav_mode();
+        let mode = self.nav_frame().nav_mode;
         self.nav_scene
             .as_ref()
             .is_some_and(|(shown, _)| *shown == mode)

@@ -74,8 +74,6 @@
 //!   @0xd173-0xd17b, @0xd259-0xd261), and needs the stellar active (+0x44
 //!   @0xd1b2): player-death phase 9, whose rebuild point (@0x69135) runs
 //!   the rewrite through the session's rebuild.
-//! - A load's rewrite reads the default rule, not the pilot's: task
-//!   load-reads-rules-before-fly.
 //! - The debug key's rebuild (@0x6dad1) has no counterpart.
 
 use crate::catalog::SystemId;

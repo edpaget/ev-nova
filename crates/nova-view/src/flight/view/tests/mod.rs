@@ -69,6 +69,7 @@ use nova_sim::{GLOW_CRUISE, glow_level};
 use nova_sim::{RuleKey, RuleSource};
 
 mod anchor;
+mod between_passes;
 mod boarding;
 mod cloak;
 mod combat;
@@ -76,6 +77,7 @@ mod comm_line;
 mod controls;
 mod dialog_map;
 mod escorts;
+mod faded_keys;
 mod faked_board;
 mod faked_combat;
 mod faked_desk;
@@ -101,6 +103,7 @@ mod frame_rate;
 mod frames;
 mod hyperspace;
 mod kept_frame;
+mod key_fades;
 mod landing;
 mod layers;
 mod map_borders;
@@ -117,6 +120,7 @@ mod ship_drawing;
 mod shots;
 mod stars;
 mod stellar_looks;
+mod stellar_passes;
 mod stellars;
 mod stepping;
 mod whole_pixels;
@@ -696,7 +700,13 @@ fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
 }
 
 fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
-    move |command| matches!(unclipped(command), DrawCommand::Sprite { image, .. } if image.id == id)
+    move |command| {
+        matches!(
+            unclipped(command),
+            DrawCommand::Sprite { image, .. } | DrawCommand::Colorized { image, .. }
+                if image.id == id
+        )
+    }
 }
 
 /// Whether `command` is the escort menu's border's top edge, the first

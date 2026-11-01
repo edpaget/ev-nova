@@ -4,28 +4,30 @@
 //!
 //! - A box is a frame of its graphic's sheet, `spïn` 500 + graphic (the
 //!   box masters `_InitSprites` loads; a jettisoned box is graphic 0, an
-//!   asteroid's 1-4),
-//!   centred on where it is (@0x2e1c2-0x2e250). Its frame is the
-//!   simulation's, `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the
-//!   sheet's frames.
+//!   asteroid's 1-4), its bottom right on the box's position at whole
+//!   pixels from the player, the whole size taken off, not half
+//!   ([`Camera::box_centre`](crate::system::camera::Camera::box_centre),
+//!   @0x2e1c2-0x2e250). The scoop reads the same rect, up and left of the
+//!   point (`nova_sim::scoop::touches`). Its frame is the simulation's,
+//!   `trunc(frame)` (@0x2e1ae-0x2e1bd), taken round the sheet's frames.
 //! - Over its last 32 ticks it fades: its blend level `n`, 0 to 31
 //!   ([`CargoBox::fade`](nova_sim::cargo_box::CargoBox::fade)), draws it
 //!   `n`/32 transparent, white at alpha `(32 − n)/32`.
-//! - A box whose sheet was not read is the shots' crossed box.
+//! - A box whose sheet was not read is the shots' crossed box, on the
+//!   whole point of its position.
 //! - Boxes draw in `_boxLayer`, over the stellars and under the ships and
 //!   the shots.
 //! - A box is murked at its position, seen from the player's ship
 //!   ([`murk`](super::murk); `_HandleSpriteMurkiness` @0x2e15e-0x2e181,
-//!   rdm:phase/play-feel-4/phase-17-murk-other-sprites). The murk darkens
+//!   rdm:phase/play-feel-4/phase-17-murk-other-sprites). The murk mixes
 //!   it and the fade keeps its alpha, as the original's murk writes the
 //!   sprite's +0xb0/+0xb4 and its fade +0xa8.
 
 use super::catalog::Looks;
-use super::murk::murk_tint;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, Point};
+use crate::{Blend, Color, Colorize, DrawList, Point};
 
 /// The levels of a box's fade: a level of 32 would be fully transparent.
 pub const FADE_LEVELS: u8 = 32;
@@ -39,8 +41,8 @@ pub struct BoxShown {
     pub frame: u16,
     /// How faded it is, 0 to 31.
     pub fade: u8,
-    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
-    pub murk: u8,
+    /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
+    pub colorize: Colorize,
     /// Its graphic, `spïn` 500 + graphic.
     pub graphic: u16,
 }
@@ -52,8 +54,9 @@ pub fn draw_boxes(list: &mut DrawList, boxes: &[BoxShown], looks: &Looks) {
         match looks.box_sheet(shown.graphic) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                let tint = murk_tint(fade_tint(shown.fade), shown.murk);
-                list.sprite(sheet.image.frame(frame), shown.at, tint);
+                let image = sheet.image.frame(frame);
+                let tint = fade_tint(shown.fade);
+                list.mixed_sprite(image, shown.at, tint, Blend::Normal, Some(shown.colorize));
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -77,6 +80,9 @@ mod tests {
     use super::*;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
+
+    /// A stock system's murk colour.
+    const COLOUR: u16 = 0x1081;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -103,7 +109,7 @@ mod tests {
             at: at(x, 5.0),
             frame,
             fade,
-            murk: 0,
+            colorize: Colorize::default(),
             graphic: 0,
         }
     }
@@ -179,24 +185,22 @@ mod tests {
     }
 
     #[test]
-    fn a_murky_box_is_darkened_by_its_murk_and_keeps_its_fades_alpha() {
+    fn a_murky_box_is_mixed_toward_its_colour_and_keeps_its_fades_alpha() {
+        let murk = Colorize::toward_pixel(16, COLOUR);
         let murky = BoxShown {
-            murk: 16,
+            colorize: murk,
             ..shown(1.0, 3, 0)
         };
         let both = BoxShown {
-            murk: 16,
+            colorize: murk,
             ..shown(2.0, 3, 8)
         };
         let mut list = DrawList::new();
         draw_boxes(&mut list, &[murky, both], &looks(Ok(sheet(36))));
         let mut expected = DrawList::new();
-        let darkened = murk_tint(Color::WHITE, 16);
-        assert_eq!(darkened, Color::rgba(127, 127, 127, 255));
-        expected.sprite(ImageKey::sprite(600, 3), at(1.0, 5.0), darkened);
-        let faded = murk_tint(fade_tint(8), 16);
-        assert_eq!(faded.a, fade_tint(8).a, "the fade's alpha");
-        expected.sprite(ImageKey::sprite(600, 3), at(2.0, 5.0), faded);
+        let image = ImageKey::sprite(600, 3);
+        expected.colorized_sprite(image, at(1.0, 5.0), Color::WHITE, Blend::Normal, murk);
+        expected.colorized_sprite(image, at(2.0, 5.0), fade_tint(8), Blend::Normal, murk);
         assert_eq!(list, expected);
     }
 

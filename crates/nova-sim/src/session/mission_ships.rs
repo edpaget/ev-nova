@@ -801,14 +801,11 @@ impl Session {
         let Some(dude) = record.ships.dude else {
             return 0;
         };
-        let items = self.setup.npc_items();
-        self.space.traffic.table_mut().add_mission_dudes(
+        self.setup.add_dudes(
+            &self.statics,
+            self.space.traffic.table_mut(),
             catalog,
             &[dude],
-            &self.statics.ships,
-            &self.statics.outfits,
-            &self.statics.arsenal,
-            items,
         );
         let nav = Vec::new();
         let preset = self.uniform_preset_kept(slot, record, kept, None, chance);
@@ -900,14 +897,11 @@ impl Session {
             .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
             .unwrap_or_default();
         let swapped = swapped_ship_type(record.flags, &dude_ships, person_ship);
-        let items = self.setup.npc_items();
-        self.space.traffic.table_mut().add_mission_dudes(
+        self.setup.add_dudes(
+            &self.statics,
+            self.space.traffic.table_mut(),
             catalog,
             &[dude],
-            &self.statics.ships,
-            &self.statics.outfits,
-            &self.statics.arsenal,
-            items,
         );
         // `_MissionDudeSpawn` finds its slot (@0x3cd50) before it hands the
         // slot the person's type (@0x3cd7e) or draws one (@0x3cdea): with

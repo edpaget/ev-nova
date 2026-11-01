@@ -54,11 +54,18 @@
 //! `held_gate_burst` it bursts along its heading at that pull, its burst
 //! word +0x34 written 0 less the pull, and by the other it thrusts
 //! (`nova_sim_ai::traffic::dock_flight`). Within the carrier's sprite
-//! width on both axes ([`Carrier::reach`]) it docks
-//! (`_AIAddFighterToParent` @0x802a5): a round goes to the carrier's
-//! first bay launching its type, with no cap, an empty bay restarting
-//! its reload; the player's round goes to the first ammunition outfit of
-//! that bay by ascending outfit ID. A fighter no bay launches is lost.
+//! width on both axes ([`Carrier::reach`], which the original reads live,
+//! @0x87f0b-0x87f21) it docks (`_AIAddFighterToParent` @0x802a5): a round
+//! goes to the carrier's first bay launching its type, else its first bay
+//! launching its sprite base ([`Armament::dock_bay`](crate::combat::armament::Armament::dock_bay),
+//! ship class +0xa08, the lowest-ID ship of its `shän`'s `BaseImage`), with
+//! no cap (the dock's `_CanBuyFighter` test @0x87fbb-0x87fe3 is for slot 0,
+//! where no fighter sits), an empty bay restarting its reload; the
+//! player's round goes to the first ammunition outfit of that bay by
+//! ascending outfit ID. A fighter with no bay writes nothing (@0x80384):
+//! it stays out at its carrier, steering and thrusting at it unpulled
+//! (@0x88111), and retries, or is lost by the other reading of
+//! [`RuleKey::FighterNoBay`](crate::RuleKey::FighterNoBay).
 //!
 //! **Capacity** ([`capacity`], `_CanBuyFighter` @0x5a82): `MaxAmmo` ×
 //! the bays carried when `MaxAmmo` is above none, else the fighter

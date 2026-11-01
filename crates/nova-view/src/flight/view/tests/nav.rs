@@ -178,6 +178,20 @@ fn no_nav_brackets_are_drawn_without_the_flights_and_its_are_drawn_round_the_ste
 }
 
 #[test]
+fn nav_brackets_are_centred_on_the_stellar_less_the_player_truncated_alone() {
+    let mut frame = in_sol_with(vec![the_player_at(Vec2::new(0.25, -0.5), 0.0)]);
+    frame.nav_mode = NavMode::Stellar(None);
+    let mut view = super::faked_world::world(catalog(), frame);
+    view.previous = view.frame.player().place();
+    // (300, -200) less (0, 0) from the anchor (415, 384). The difference
+    // truncated would give (714, 185).
+    assert_eq!(
+        faked_nav_icons(&mut view, Some(nav_at(129, (300.0, -200.0), 0.0))),
+        corners_at(10000, at(715.0, 184.0), 10.0)
+    );
+}
+
+#[test]
 fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
     let unreadable = StellarContents {
         sprite: Err("no rlëD".to_owned()),

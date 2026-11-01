@@ -29,6 +29,10 @@
 //! - [`player_turn`]: the player's turn block, `_HandlePlayer`'s: the
 //!   whole-degree turn, the auto-turn toward an aim that holds the turn
 //!   keys off, and the aims reverse and the jump's brake take.
+//! - [`player_wrap`]: the player's wrap, `_WrapPlayerPosition`:
+//!   [`PlayerWrap`](player_wrap::PlayerWrap), when a ship past the edge of
+//!   the system is carried back, and whether what stands near it comes
+//!   along.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
 //! - [`rule_values`]: the rules whose setting is a number, each a
@@ -68,6 +72,7 @@ pub mod handling;
 pub mod inertialess;
 pub mod ionization;
 pub mod player_turn;
+pub mod player_wrap;
 pub mod reserves;
 pub mod rule_values;
 pub mod rulebook;

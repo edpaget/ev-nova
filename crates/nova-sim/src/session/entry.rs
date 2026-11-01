@@ -1094,7 +1094,7 @@ impl Session {
                     .traffic
                     .set_reused_slot_voice(self.setup.rules.source_for(RuleKey::ReusedSlotVoice));
                 self.space.traffic.keep_berths(kept);
-                self.space.set_first_class(&self.statics);
+                self.space.set_first_class(&self.statics, &self.setup);
                 self.space.traffic_due = true;
                 self.space.escorts.fleet.clear();
                 self.run.story.watched.clear();

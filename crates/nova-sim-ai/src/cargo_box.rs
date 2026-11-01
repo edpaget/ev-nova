@@ -54,13 +54,15 @@
 //! [`mine_flight`](crate::traffic::mine_flight)'s; their sprite murk
 //! (`_HandleSpriteMurkiness` @0x2e181) is the view's
 //! (`nova_view::flight::murk`,
-//! rdm:phase/play-feel-4/phase-17-murk-other-sprites). Left out: the
-//! player's wrap shift; and the table's first-free slots, as the boxes
-//! are kept in spawn order (rdm:task/cargo-box-slot-order).
+//! rdm:phase/play-feel-4/phase-17-murk-other-sprites); the player's wrap
+//! moves them ([`CargoBoxes::carry`]). Left out: the table's first-free
+//! slots, as the boxes are kept in spawn order
+//! (rdm:task/cargo-box-slot-order).
 
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
+use crate::player_wrap::PlayerWrap;
 use crate::scoop::{BoxFrames, touches};
 
 /// The most boxes in space at once: the table's 64 slots.
@@ -181,6 +183,14 @@ pub struct CargoBoxes {
 }
 
 impl CargoBoxes {
+    /// Carries each box within `wrap`'s reach: `_WrapPlayerPosition`'s loop
+    /// of `_boxData` (@0x6811f-0x681a1), which leaves its velocity.
+    pub fn carry(&mut self, wrap: &PlayerWrap) {
+        for cargo in &mut self.boxes {
+            wrap.carry(&mut cargo.position);
+        }
+    }
+
     /// The boxes in space.
     #[must_use]
     pub fn boxes(&self) -> &[CargoBox] {
@@ -377,6 +387,31 @@ mod tests {
         assert_eq!(escort_share(0, 50, 150), 0.0);
         assert_eq!(escort_share(30, -50, 150), -10.0, "a negative Holds too");
         assert_eq!(escort_share(30, 50, 0), 0.0, "no fleet holds, no share");
+    }
+
+    #[test]
+    fn a_wrap_carries_the_boxes_within_its_reach_and_leaves_their_velocities() {
+        use crate::player_wrap::{WRAP_EDGE, WRAP_SHIFT};
+        let player = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+        let wrap = PlayerWrap::of(player).expect("past the edge");
+        let near = player + Vec2::new(-100.0, 40.0);
+        let far = player + Vec2::new(-WRAP_EDGE * 2.0, 0.0);
+        let at = |position| CargoBox {
+            position,
+            velocity: Vec2::new(0.5, -1.5),
+            life: 10.0,
+            frame: 0,
+            spin: 0,
+            graphic: 0,
+            scoopable: false,
+            contents: None,
+        };
+        let mut boxes = CargoBoxes {
+            boxes: vec![at(near), at(far)],
+        };
+        boxes.carry(&wrap);
+        let moved = at(near + Vec2::new(-WRAP_SHIFT, 0.0));
+        assert_eq!(boxes.boxes(), [moved, at(far)]);
     }
 
     fn heading(heading: f32) -> ShipState {
@@ -663,9 +698,10 @@ mod tests {
 
     #[test]
     fn a_disc_touches_a_box_by_its_graphics_frame() {
-        // Graphic 1 is 40 across: the box at 45 is 25 from its edge.
+        // Graphic 1 is 40 across, drawn up and left of the box's point: the
+        // box at 65 is 25 from its frame's left edge.
         let frames = BoxFrames::new([None, Some((40, 40)), None, None, None]);
-        let mut boxes = with_scoopable(&[(45.0, 0.0)], &[3]);
+        let mut boxes = with_scoopable(&[(65.0, 0.0)], &[3]);
         assert_eq!(boxes.take_touching(Vec2::ZERO, 24.0, &frames), None);
         assert!(boxes.take_touching(Vec2::ZERO, 25.0, &frames).is_some());
     }

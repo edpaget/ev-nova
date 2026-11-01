@@ -1,7 +1,8 @@
 //! The edge's own real checks (rdm:phase/view-sim-seam/phase-13-lifecycle-at-the-edge):
-//! a flight built by [`open_flight`] hands its session each part of the
-//! setup, after the view's opening read, and the run's history comes back
-//! through the adapter's one read (`SessionFlight::carry_over`). The
+//! a flight built by [`open_flight`] hands its session the setup's rulebook
+//! before the view's opening read and each other part of the setup after
+//! it, and the run's history comes back through the adapter's one read
+//! (`SessionFlight::carry_over`). The
 //! setup's nova-sim side is `nova_sim::Session::set_up`'s tests; the
 //! adapter's forward is `sim_adapter`'s. They sit beside the build, out of
 //! the component tests' tree, so that tree knows only `FakeFlight`
@@ -459,6 +460,60 @@ fn a_loaded_flight_reads_the_rules_it_is_given() {
         systems.push(expected.system());
     }
     assert_ne!(systems[0], systems[1], "the readings differ here");
+}
+
+// The opening's links.
+
+/// [`catalog`] with Alpha Reborn (133) at Alpha Centauri's place, Sol
+/// listing it too: the place's two systems link differently by
+/// `RuleKey::ColocatedResolution`, as Reborn lists no links of its own.
+fn sharing_a_place() -> FakeCatalog {
+    FakeCatalog {
+        reborn: true,
+        sol_lists_reborn: true,
+        ..catalog()
+    }
+}
+
+/// The links `view`'s course map shows.
+fn map_links(view: &View) -> Vec<(SystemId, SystemId)> {
+    view.course_map().model().links().to_vec()
+}
+
+/// A flight opened at the edge shows its rules' links on the course map
+/// from its opening read, with no catch-up and no tick, however it
+/// starts. Which links each reading has is nova-sim's.
+#[test]
+fn every_start_opens_with_its_rules_links_on_the_course_map() {
+    let pilot = Pilot::new(&sharing_a_place(), "Ada").expect("a pilot");
+    let as_before = map_links(&test_flight::new(sharing_a_place()));
+    for start in [
+        FlightStart::New,
+        FlightStart::Pilot(pilot.clone()),
+        FlightStart::Loaded(pilot),
+    ] {
+        let opened = RuleSource::ALL.map(|source| {
+            let view = open_flight(
+                sharing_a_place(),
+                start.clone(),
+                SessionSetup {
+                    rules: Rulebook::default().with_override(RuleKey::ColocatedResolution, source),
+                    ..SessionSetup::default()
+                },
+                Collaborators::default(),
+            );
+            let links = map_links(&view);
+            assert_eq!(
+                links,
+                view.session().expect("flying").star_map().links(),
+                "{start:?} by {source:?}"
+            );
+            links
+        });
+        let [engine, other] = opened;
+        assert_ne!(engine, other, "the readings differ here: {start:?}");
+        assert_eq!(engine, as_before, "the opening map stands: {start:?}");
+    }
 }
 
 // The hypergate map's borders over a real flight.

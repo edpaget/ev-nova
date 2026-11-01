@@ -13,6 +13,8 @@
 //!   on again.
 //! - L, L over a hypergate opens flight's map as the hypergate map, and a
 //!   pick on it and M bring the ship into the linked system.
+//! - A left release off the window, or the focus lost, ends a drag on
+//!   flight's map.
 //!
 //! How a course is plotted, when a jump is allowed, its fuel, its fades,
 //! its messages and its sounds' order are nova-sim's and nova-view's,
@@ -585,6 +587,80 @@ fn escape_closes_flights_map_and_then_leaves_flight() {
     assert_eq!(harness.showing(), Showing::Flight);
     harness.press(Key::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
+}
+
+impl Harness {
+    /// Flying, with M's map open and a press on item 3's empty corner
+    /// dragged a little: the drag starts at once, as no system is hit.
+    /// Returns the harness and the scroll the drag left.
+    fn dragging_the_map() -> (Self, (i32, i32)) {
+        let mut harness = Self::flying();
+        harness.frame();
+        harness.press(Key::Char('m'));
+        assert_eq!(harness.showing(), Showing::FlightMap);
+        let before = harness.map_scroll();
+        let corner = map_area().grown(-12.0).min;
+        harness.pointer_to(corner.x, corner.y);
+        harness.button(true);
+        harness.pointer_to(corner.x + 20.0, corner.y + 20.0);
+        let dragged = harness.map_scroll();
+        assert_ne!(dragged, before, "the drag scrolled the map");
+        (harness, dragged)
+    }
+
+    fn map_scroll(&self) -> (i32, i32) {
+        self.flight()
+            .course_map()
+            .place()
+            .expect("an in-flight map")
+            .scroll()
+    }
+
+    /// Moves the pointer to (`x`, `y`) (window pixels are logical units).
+    fn pointer_to(&mut self, x: f32, y: f32) {
+        self.send(WindowEvent::PointerMoved {
+            px: (f64::from(x), f64::from(y)),
+        });
+    }
+
+    fn button(&mut self, pressed: bool) {
+        self.send(WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+        });
+    }
+}
+
+/// A left release off the window ends the player's map's drag: moves
+/// back over the game scroll nothing, however far from the press.
+#[test]
+fn a_release_off_the_window_ends_the_maps_drag() {
+    let (mut harness, dragged) = Harness::dragging_the_map();
+    harness.send(WindowEvent::PointerLeft);
+    harness.button(false);
+    let area = map_area().grown(-12.0);
+    harness.pointer_to(area.max.x, area.max.y);
+    assert_eq!(harness.map_scroll(), dragged, "the move back");
+    harness.pointer_to(area.min.x + 60.0, area.min.y + 40.0);
+    assert_eq!(harness.map_scroll(), dragged, "and the moves after");
+}
+
+/// So does losing the focus. While the app is away moves never reach
+/// the screen, so only the moves after the focus returns can bite.
+#[test]
+fn a_press_lost_with_the_focus_scrolls_the_map_no_further() {
+    let (mut harness, dragged) = Harness::dragging_the_map();
+    let area = map_area().grown(-12.0);
+    harness.send(WindowEvent::FocusLost);
+    assert_eq!(harness.map_scroll(), dragged, "the focus going");
+    harness.button(false);
+    assert_eq!(harness.map_scroll(), dragged, "the release away");
+    harness.pointer_to(area.max.x, area.max.y);
+    assert_eq!(harness.map_scroll(), dragged, "a move away");
+    harness.send(WindowEvent::FocusGained);
+    assert_eq!(harness.map_scroll(), dragged, "the focus back");
+    harness.pointer_to(area.min.x + 60.0, area.min.y + 40.0);
+    assert_eq!(harness.map_scroll(), dragged, "a move after it");
 }
 
 #[test]

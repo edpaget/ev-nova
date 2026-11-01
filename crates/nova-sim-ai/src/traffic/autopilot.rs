@@ -126,7 +126,10 @@
 //!   reading of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
 //!   bursts along its heading at its pull ([`FORMATION_NUDGE`] ticks'
 //!   acceleration) where by the other it thrusts; and each axis at least
-//!   the pull off is pulled that much towards the carrier.
+//!   the pull off is pulled that much towards the carrier. Within reach
+//!   with no bay for it ([`Beside::no_bay`]), it goes on steering and
+//!   thrusting at the carrier, with no pull and no burst, and retries next
+//!   tick.
 //! - [`Goal::Attack`], [`Goal::Snipe`] and [`Goal::Flee`]: it flies the
 //!   last body of its frame ([`pursuit::frame_of`]), reading whether its
 //!   target is disabled, as that body's thrust, cap and heading win
@@ -432,6 +435,10 @@ pub struct Beside {
     /// `_LowLevelAIHandler` (`je 0x44350` @0x4402a), so no
     /// `_AIMaintainFormation` ([`formation_flight::maintain`]).
     pub second_pass: bool,
+    /// Whether a [`Goal::Dock`] fighter's carrier has no bay for it: within
+    /// the carrier's reach it stays out, steering and thrusting at the
+    /// carrier unpulled, and retries next tick.
+    pub no_bay: bool,
 }
 
 /// No swarm lead, no guard, its leader seen, no asteroid or box, on the
@@ -445,6 +452,7 @@ impl Default for Beside {
             rock: None,
             scoop_box: None,
             second_pass: false,
+            no_bay: false,
         }
     }
 }
@@ -679,6 +687,7 @@ fn fly_mobile(
                 top: speeds.own,
                 word: readings.held_burst,
                 second_pass: beside.second_pass,
+                unpulled: false,
             };
             match dock(npc, other, beside, &handling, by) {
                 Ok(controls) => controls,
@@ -859,7 +868,8 @@ fn formation(
 /// sight of it and its swarm lead (see the module docs), as `by` says:
 /// the flight outside its dock window, or its carrier unseen, or braking
 /// with no carrier there; or, inside it, what became of it, having flown
-/// sub 8 ([`dock_flight::fly`]).
+/// sub 8 ([`dock_flight::fly`]). Within reach with no bay for it
+/// ([`Beside::no_bay`]) it stays out, flying sub 8 unpulled.
 ///
 /// The brake with no carrier stands in for one tick: goal 5's block reads
 /// the carrier's record unchecked (no +0xb8 test in @0x8ebd7-0x8ed15), so
@@ -904,13 +914,22 @@ fn dock(
         }
         FormationFlight::Earlier => {}
     }
-    if within(dock.reach) {
+    let inside = within(dock.reach);
+    if inside && !beside.no_bay {
         return Err(Outcome::Docked {
             carrier: dock.ship,
             ship: npc.ship,
         });
     }
-    dock_flight::fly(npc, carrier, handling, by);
+    dock_flight::fly(
+        npc,
+        carrier,
+        handling,
+        dock_flight::By {
+            unpulled: inside,
+            ..by
+        },
+    );
     Err(Outcome::Flying)
 }
 
@@ -4817,6 +4836,83 @@ mod tests {
                 "({x}, {y})"
             );
         }
+    }
+
+    #[test]
+    fn a_fighter_with_no_bay_stays_out_within_reach_steering_and_thrusting_unpulled() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // 30 above the carrier, within its 40, aimed at it (bearing 180).
+        let start = at(0.0, -30.0, 0.0, 0.0, 180.0);
+        let flown = |no_bay: bool, start: ShipState| {
+            let mut ship = docking(FAST, start);
+            let weapons = crate::ai::fixture::records_of([&ship]);
+            let speeds = TopSpeeds::own_of(&ship);
+            let outcome = super::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                Some(&carrier),
+                false,
+                Beside {
+                    no_bay,
+                    ..Beside::default()
+                },
+                speeds,
+                FlightRules::default(),
+                Readings::default(),
+                &weapons,
+                &mut Draws::of(&[]),
+            );
+            (outcome, ship.state)
+        };
+        let (outcome, aimed) = flown(true, start);
+        assert_eq!(outcome, Outcome::Flying, "@0x80384");
+        assert!(aimed.velocity.y > 0.0, "thrusting at it: {aimed:?}");
+        let accel = ShipStats::new(FAST, &[]).handling.accel;
+        assert!(
+            aimed.position.y > -30.0 && aimed.position.y < -30.0 + accel * 2.0,
+            "moved by its own thrust alone, not pulled: {aimed:?}"
+        );
+        let (_, aside) = flown(true, at(30.0, 0.0, 0.0, 0.0, 0.0));
+        assert_ne!(aside.heading, 0.0, "turning at it");
+        assert_eq!(aside.velocity, Vec2::ZERO, "too far off its bearing");
+        assert_eq!(aside.position, Vec2::new(30.0, 0.0), "and not pulled");
+        assert_eq!(
+            flown(false, start).0,
+            Outcome::Docked {
+                carrier: ShipRef::Player,
+                ship: crate::catalog::ShipId(144)
+            },
+            "with a bay it docks"
+        );
+    }
+
+    #[test]
+    fn a_fighter_with_no_bay_flies_in_as_any_other_outside_the_carriers_reach() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let flown = |no_bay: bool| {
+            let mut ship = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0));
+            let weapons = crate::ai::fixture::records_of([&ship]);
+            let speeds = TopSpeeds::own_of(&ship);
+            super::fly(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                Some(&carrier),
+                false,
+                Beside {
+                    no_bay,
+                    ..Beside::default()
+                },
+                speeds,
+                FlightRules::default(),
+                Readings::default(),
+                &weapons,
+                &mut Draws::of(&[]),
+            );
+            ship.state
+        };
+        assert_eq!(flown(true), flown(false), "pulled in, as sub 8 pulls it");
     }
 
     #[test]
