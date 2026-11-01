@@ -165,7 +165,6 @@ fn far_off_a_repairer_closes_on_the_player_through_sub_0xb() {
         speeds,
         FlightRules::default(),
         None,
-        &mut Scripted::default(),
     );
     let recording = Recording::default();
     for _ in 0..3 {

@@ -113,10 +113,13 @@
 //!    @0x8fcaa), which cloaks or uncloaks it; then each escape pod's wait
 //!    counted down, a pod whose wait ran out freed
 //!    ([`pod_flight::count_down`], `Outcome::Freed`); then each ship's high
-//!    level holding its warp to its goal and turning a fighter that can't
-//!    follow its leader's jump back, and its low level's leaves: its own
-//!    jump-out and a fighter's dock ([`dispatch_leave`]), each recorded
-//!    gone and taken out of the traffic at its slot. Steps 1 to 5 are the
+//!    level holding its warp to its goal, turning a fighter that can't
+//!    follow its leader's jump back, and stopping a gate entrant in its
+//!    gate's box, its followers released to enter the gate on their own
+//!    ([`gate_entry`]); and its low level's work: a pirate's dock started,
+//!    boarding the victim, and its leaves, its own jump-out and a
+//!    fighter's dock ([`dispatch_leave`]), each recorded gone and taken
+//!    out of the traffic at its slot. Steps 1 to 5 are the
 //!    tick's think half, `_DoPlayGameWork`'s advance-pass AI
 //!    (`_EnterMoreShips` @0x44237, `_AIDispatch` @0x4429d): steps 1 to 3
 //!    once ([`Traffic::open_think`]), and steps 4 and 5 one run a slot, its
@@ -132,13 +135,12 @@
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter flying in to its
 //!    carrier, a jumping ship turning and warping out,
-//!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
-//!    started boarding the victim, a repairer's dock done repairing the
+//!    a pirate docking with its victim ([`plunder::fly_docking`]), a
+//!    repairer's dock done repairing the
 //!    player ([`PirateEvent::PlayerRepaired`]) or an NPC
-//!    ([`PirateEvent::NpcRepaired`]), and a tick off each flying ship's AI
-//!    wait, a pirate's count wait's included ([`plunder::count_down`]);
-//!    then each NPC that reached its gate's box this tick releases the
-//!    ships it leads to enter the gate on their own ([`gate_entry`]);
+//!    ([`PirateEvent::NpcRepaired`]), a gate entrant counting its entry
+//!    down, and a tick off each flying ship's AI wait, a pirate's count
+//!    wait's included ([`plunder::count_down`]);
 //! 7. the removal of those that entered a gate, each in
 //!    [`Traffic::departed`] with how it left, the pods freed and the ships
 //!    that jumped out or docked in step 5 after them (the docked fighters
@@ -947,6 +949,9 @@ pub struct Traffic {
     /// they left ([`dispatch_leave`]), which the fly half's followers and
     /// lower slots still read.
     left_in_dispatch: Vec<Npc>,
+    /// The ships whose dock started at their slot this tick
+    /// ([`dispatch_leave`]), whose flight then only moves on.
+    started_in_dispatch: BTreeSet<NpcId>,
     /// Each ship's warp as the tick's think opened, which a follower below
     /// its leader reads ([`dispatch_leave`]).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
@@ -1026,12 +1031,10 @@ pub struct Traffic {
     defences: stellar_defence::StellarDefences,
 }
 
-/// The docks the ships started and the repairs they completed in one
-/// tick's flight ([`fly_pass`]).
+/// The repairs the ships completed in one tick's flight ([`fly_pass`]);
+/// the docks start at their slot ([`dispatch_leave`]).
 #[derive(Clone, Debug, Default)]
 struct DockNotes {
-    /// Each dock started, as (pirate, victim).
-    docked: Vec<(NpcId, ShipRef)>,
     /// Each repair completed, as (helper, its ship type, the ship
     /// repaired).
     repaired: Vec<(NpcId, ShipId, ShipRef)>,
@@ -1090,6 +1093,7 @@ impl Traffic {
             departed: Vec::new(),
             freed: Vec::new(),
             left_in_dispatch: Vec::new(),
+            started_in_dispatch: BTreeSet::new(),
             open_leaders: BTreeMap::new(),
             gone: GoneShips::default(),
             vacated: VacatedBerths::default(),
@@ -1172,6 +1176,7 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.left_in_dispatch.clear();
+        self.started_in_dispatch.clear();
         self.gone.clear();
         self.vacated.clear();
         self.on_line.clear();
@@ -1292,6 +1297,7 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.left_in_dispatch.clear();
+        self.started_in_dispatch.clear();
         self.gone.clear();
         self.vacated.clear();
         self.on_line.clear();
@@ -1539,7 +1545,7 @@ impl Traffic {
         self.think_cloaks(&world, &picked);
         let freed = pod_flight::count_down(&mut self.npcs, &picks);
         self.freed.extend(freed);
-        self.leave_in_dispatch(&world, &picks, no_bay)
+        self.leave_in_dispatch(&world, &picks, no_bay, chance)
     }
 
     /// The end of a tick's think: the ships gone are forgotten, as the
@@ -1767,23 +1773,6 @@ impl Traffic {
         self.escort_strength(&world, draw.world.gate(), chance);
     }
 
-    /// Each dock a pirate started this tick, `docked` as (pirate, victim):
-    /// the victim is boarded (+0xb9 = 1, `_LowLevelAIHandler` @0x86fc7), the
-    /// player too, which its session holds ([`PirateEvent::PlayerDockedWith`],
-    /// queued at the pirate's berth).
-    fn dock_starts(&mut self, docked: &[(NpcId, ShipRef)]) {
-        for &(pirate, victim) in docked {
-            match victim {
-                ShipRef::Player => self.queue_pirate(PirateEvent::PlayerDockedWith { pirate }),
-                ShipRef::Npc(id) => {
-                    if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
-                        npc.boarded = true;
-                    }
-                }
-            }
-        }
-    }
-
     /// Runs the `plunders` the decisions made, in berth order, in `world`,
     /// rolling on `chance` ([`plunder::resolve`]), queueing what happened
     /// on the line at each pirate's berth ([`on_line`]); a captured ship's
@@ -1847,9 +1836,8 @@ impl Traffic {
         self.on_line.take_pirate_events()
     }
 
-    /// Releases the followers of each NPC that `reached` its gate's box
-    /// this tick, not entering one as the tick began, with that gate and
-    /// its AI type (see
+    /// Releases the followers of `lead`, which reached `gate`'s box this
+    /// tick, of AI type `ai_type` (see
     /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
     /// loses its lead, its carrier and its target, its travel stellar the
     /// lead's, the gate (@0x8dd30), its provocation -1
@@ -1861,22 +1849,19 @@ impl Traffic {
     /// fighter so freed decides by its own AI type, as the original's AI
     /// type 5 becomes at most 3.
     ///
-    /// The original releases them in the same pass as the lead's think, so
-    /// its later slots start for the gate that tick; here they start on
-    /// the next (filed in
-    /// rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
-    fn release_followers(&mut self, reached: &[(NpcId, StellarId, AiType)]) {
-        for &(lead, gate, ai_type) in reached {
-            for follower in self.npcs.iter_mut().filter(|npc| npc.leader == Some(lead)) {
-                follower.leader = None;
-                follower.leave_carrier();
-                follower.ai_type = gate_entry::released_ai_type(ai_type);
-                follower.overwrite_bribe();
-                follower.target = None;
-                follower.travel = Some(gate);
-                follower.provoked = gate_entry::RELEASED_PROVOCATION;
-                follower.goal = Goal::EnterGate(gate);
-            }
+    /// It runs at the lead's own slot of the AI loop, as the original's
+    /// lead releases them in its own dispatch ([`dispatch_leave`]), so a
+    /// follower in a later slot starts for the gate that tick.
+    fn release_followers(&mut self, lead: NpcId, gate: StellarId, ai_type: AiType) {
+        for follower in self.npcs.iter_mut().filter(|npc| npc.leader == Some(lead)) {
+            follower.leader = None;
+            follower.leave_carrier();
+            follower.ai_type = gate_entry::released_ai_type(ai_type);
+            follower.overwrite_bribe();
+            follower.target = None;
+            follower.travel = Some(gate);
+            follower.provoked = gate_entry::RELEASED_PROVOCATION;
+            follower.goal = Goal::EnterGate(gate);
         }
     }
 
@@ -4790,7 +4775,13 @@ mod tests {
             assert_eq!(follower.provoked, -1.0, "+0x96 -1 (@0x8dd14)");
             assert_eq!(follower.goal, Goal::EnterGate(GATE));
             assert_eq!(follower.ai_type, AiType::Warship, "an interceptor's");
-            assert_eq!(follower.mode, Mode::Flying, "it enters on its own");
+            // Released at slot 1, it enters on its own: in the box too, at
+            // its own higher slot that tick (@0x8dc5a-0x8dc94).
+            assert!(
+                matches!(follower.mode, Mode::EnteringGate { .. }),
+                "{:?}",
+                follower.mode
+            );
         }
         assert_eq!(
             traffic.npcs[2].reserves.armor.max, 45.0,

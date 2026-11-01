@@ -56,8 +56,12 @@ fn entering(fields: ShipFields, (dx, dy): (f32, f32), (vx, vy): (f32, f32), head
 }
 
 /// Flies `npc` a tick toward the gate under `flight`, by `reading` of
-/// `npc_landing`.
+/// `npc_landing`, its high level's gate block at its slot of the AI loop
+/// first ([`autopilot::reach_gate_box`]).
 fn fly_by(npc: &mut Npc, flight: FlightRules, reading: RuleSource) -> Outcome {
+    if npc.mode == Mode::Flying {
+        autopilot::reach_gate_box(npc, &[gate()], &BTreeMap::new());
+    }
     let speeds = TopSpeeds::own_of(npc);
     autopilot::fly(
         npc,

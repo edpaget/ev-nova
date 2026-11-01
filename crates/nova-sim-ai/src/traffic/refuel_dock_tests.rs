@@ -94,7 +94,6 @@ fn docked_by_hand(npc: &Npc, sub: DockSub) -> Npc {
         speeds,
         FlightRules::default(),
         None,
-        &mut Scripted::default(),
     );
     flown
 }

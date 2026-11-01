@@ -23,8 +23,10 @@
 //!   flights of lower slots, whose low level came before it left, and a
 //!   follower reads its leader's warp as the tick opened when its slot is
 //!   below the leader's (see [`dispatch_leave`](super::dispatch_leave)).
-//!   The warp clocks, the high level's hold and turn-back, a ship's own
-//!   jump-out and a fighter's dock are the AI loop's, at each ship's slot.
+//!   The warp clocks, the high level's hold, turn-back, gate box and
+//!   release, a pirate's dock start, a ship's own jump-out and a fighter's
+//!   dock are the AI loop's, at each ship's slot; a dock started there that
+//!   tick only moves on, completing nothing.
 //! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
 //!   its spawn's display rolls, then flies its jump, its docking flight
 //!   or its autopilot step from its own state as it stands, so a push an
@@ -38,9 +40,8 @@
 //!   @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
 //!   reading leaves as it lands ([`land_flight::leaves`]).
-//! - **End** starts the pirates' docks, queues the repairs completed on
-//!   the line, counts the AI waits down, releases the followers of each
-//!   lead that reached its gate's box, and regenerates the fuel; on the
+//! - **End** queues the repairs completed on the line, counts the AI waits
+//!   down, and regenerates the fuel; on the
 //!   advance pass the pods the think half freed join the departures, the
 //!   ships left behind are let go, and the tick is counted on the AI
 //!   timer.
@@ -56,7 +57,7 @@ use super::autopilot::{self, Beside, Outcome, TopSpeeds};
 use super::gone::Freed;
 use super::held_burst;
 use super::inertialess::Inertia;
-use super::npc::{AiType, Mode, Npc, NpcId};
+use super::npc::{Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
 use super::{
@@ -66,7 +67,6 @@ use super::{
 use crate::ai::Goal;
 use crate::ai::mine_orders;
 use crate::ai::swarm::{self, SwarmLead};
-use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
@@ -104,8 +104,10 @@ pub struct FlyPass {
     speeds: BTreeMap<NpcId, TopSpeeds>,
     /// The NPCs disabled as the half began.
     disabled: BTreeSet<NpcId>,
-    /// The NPCs entering a gate as the half began.
-    entering: BTreeSet<NpcId>,
+    /// The NPCs whose dock started at their slot of the AI loop this tick,
+    /// whose dock flight only moves on, completing nothing (see the
+    /// traffic's `dispatch_leave`).
+    started: BTreeSet<NpcId>,
     /// The NPCs in the traffic's order as the half began.
     order: Vec<NpcId>,
     /// Each leader's warp as the half began, after every slot's step of
@@ -136,10 +138,8 @@ pub struct FlyPass {
     paused: BTreeSet<NpcId>,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,
-    /// Each dock started and each repair completed.
+    /// Each repair completed.
     docks: DockNotes,
-    /// Each lead that reached its gate's box, its gate and AI type.
-    reached: Vec<(NpcId, StellarId, AiType)>,
 }
 
 impl FlyPass {
@@ -191,12 +191,11 @@ impl Traffic {
             // `_HandleShip` (@0x442b0-0x44336; see `odds_cache`).
             self.refresh_odds(world);
         }
-        let entering = self
-            .npcs
-            .iter()
-            .filter(|npc| npc.entering_gate())
-            .map(|npc| npc.id)
-            .collect();
+        let started = if think {
+            self.started_in_dispatch.clone()
+        } else {
+            BTreeSet::new()
+        };
         let speeds = self
             .npcs
             .iter()
@@ -260,7 +259,7 @@ impl Traffic {
             states,
             speeds,
             disabled,
-            entering,
+            started,
             order,
             leaders,
             open_leaders,
@@ -272,7 +271,6 @@ impl Traffic {
             paused,
             first: self.first_class,
             docks: DockNotes::default(),
-            reached: Vec::new(),
         }
     }
 
@@ -294,11 +292,6 @@ impl Traffic {
         let speeds = *pass.speeds.get(&id)?;
         let npc = &mut self.npcs[index];
         let outcome = fly_one(pass, npc, speeds, world, chance);
-        if let Mode::EnteringGate { gate, .. } = npc.mode
-            && !pass.entering.contains(&id)
-        {
-            pass.reached.push((id, gate, npc.ai_type));
-        }
         if ends(&self.npcs[index], outcome, world) {
             if let Some(freed) = Freed::by(outcome) {
                 self.left_the_system(self.npcs[index].clone(), freed);
@@ -329,13 +322,7 @@ impl Traffic {
 
     /// Ends the fly half `pass` (see the module docs).
     pub fn end_fly(&mut self, pass: FlyPass) {
-        let FlyPass {
-            half,
-            docks,
-            reached,
-            ..
-        } = pass;
-        self.dock_starts(&docks.docked);
+        let FlyPass { half, docks, .. } = pass;
         for (helper, ship, nav) in docks.repaired {
             self.queue_pirate(match nav {
                 ShipRef::Player => PirateEvent::PlayerRepaired { helper, ship },
@@ -346,7 +333,6 @@ impl Traffic {
             });
         }
         plunder::count_down(&mut self.npcs);
-        self.release_followers(&reached);
         self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
         if half == FlyHalf::Advance {
             self.departed.extend(std::mem::take(&mut self.freed));
@@ -549,19 +535,10 @@ fn fly_steered(
     if let Some(outcome) = warp_out::fly_jump(npc, leaders, world, pass.think, paused) {
         return outcome;
     }
-    match plunder::fly_docking(
-        npc,
-        other.as_ref(),
-        speeds,
-        world.flight,
-        beside.swarm,
-        &mut *chance,
-    ) {
-        Some(DockOutcome::Started { victim, .. }) => {
-            pass.docks.docked.push((npc.id, victim));
-            return Outcome::Flying;
-        }
-        Some(DockOutcome::Repaired) => {
+    match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, beside.swarm) {
+        // A dock started at its slot this tick completes nothing in the
+        // same frame: the low level read its wait before it was set.
+        Some(DockOutcome::Repaired) if !pass.started.contains(&npc.id) => {
             // Its nav, the ship it repaired, before the completion
             // clears it (@0x86d84, @0x86f31).
             let nav = npc.docking.map_or(ShipRef::Player, |docking| docking.ship);
@@ -603,12 +580,14 @@ fn fly_steered(
 mod tests {
     use super::*;
     use crate::bay::Carrier;
+    use crate::catalog::StellarId;
     use crate::catalog::{LandingSite, ShipId};
     use crate::chance::NeverFires;
     use crate::geometry::Vec2;
     use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
+    use crate::traffic::npc::{AiType, Mode};
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use nova_sim_base::fixture::FAST;
     use nova_sim_catalog::fixture::planet;
@@ -649,17 +628,22 @@ mod tests {
         fighter
     }
 
-    /// A traffic whose fly half lands one NPC, starts a pirate's dock with
-    /// a ship, takes a lead into its gate's box (releasing its follower)
-    /// and holds one still: 0 lands on planet 140 and stays there; 3 docks
-    /// with 2 to plunder it; 4 enters the gate, 5 following it; 6 flies
-    /// on, short of fuel and regenerating half a unit a tick. A fighter's
-    /// dock and a jump-out are its AI loop's ([`dispatch_leave`](super::super::dispatch_leave)),
-    /// so none of it leaves here.
+    /// A traffic whose fly half lands one NPC, flies a pirate's dock with a
+    /// ship, counts a lead into its gate and holds one still: 0 lands on
+    /// planet 140 and stays there; 3 docks with 2 to plunder it; 4 enters
+    /// the gate, 5, its follower, released into it; 6 flies on, short of
+    /// fuel and regenerating half a unit a tick. The AI loop did its part
+    /// at each slot ([`dispatch_leave`](super::super::dispatch_leave)): 3's
+    /// dock started, its wait 100 (`Rand(80)` drew 0) and 2 boarded; 4
+    /// stopped in its gate's box on its wait of 16, and released 5. A
+    /// fighter's dock and a jump-out are that loop's too, so none of it
+    /// leaves here.
     fn busy() -> Traffic {
         let mut lander = at(0, 0.0, 0.0);
         lander.goal = Goal::Land(StellarId(140));
         let carrier = NpcId(2);
+        let mut boarded = at(2, 500.0, 0.0);
+        boarded.boarded = true;
         let mut pirate = at(3, 501.0, 1.0);
         pirate.goal = Goal::Plunder {
             ship: ShipRef::Npc(carrier),
@@ -670,22 +654,23 @@ mod tests {
             ship: ShipRef::Npc(carrier),
             sub: DockSub::Dock,
         });
+        pirate.ai_wait = crate::traffic::plunder_dock::DOCK_WAIT;
         let mut lead = at(4, 1.0, 0.0);
         lead.ai_type = AiType::Interceptor;
         lead.goal = Goal::EnterGate(GATE);
-        let mut follower = at(5, 2.0, 0.0);
-        follower.leader = Some(NpcId(4));
-        follower.goal = Goal::Follow {
-            lead: NpcId(4),
-            guard: None,
+        lead.mode = Mode::EnteringGate {
+            gate: GATE,
+            ticks_left: crate::traffic::gate_entry::ENTRY_TICKS,
         };
+        let mut follower = at(5, 2.0, 0.0);
+        follower.goal = Goal::EnterGate(GATE);
         let mut flier = at(6, -300.0, 0.0);
         flier.state.velocity = Vec2::new(1.0, 0.0);
         flier.goal = Goal::JumpOut;
         flier.reserves.fuel.now = 100.0;
         flier.stats.fuel_regen = 0.5;
         Traffic {
-            npcs: vec![lander, at(2, 500.0, 0.0), pirate, lead, follower, flier],
+            npcs: vec![lander, boarded, pirate, lead, follower, flier],
             ..Traffic::default()
         }
     }

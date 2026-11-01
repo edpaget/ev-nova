@@ -51,9 +51,11 @@ use std::collections::BTreeSet;
 
 use super::gone::Freed;
 use super::npc::{Mode, Npc, NpcId};
+use super::plunder::PirateEvent;
 use super::warp_out::{self, WarpGoal};
-use super::{Outcome, Traffic, World, autopilot, jump_with_leader, launch_room};
+use super::{Outcome, Traffic, World, autopilot, jump_with_leader, launch_room, plunder_dock};
 use crate::ai::Goal;
+use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 
@@ -68,18 +70,23 @@ impl Traffic {
         }
         self.open_leaders = warp_out::leaders(&self.npcs);
         self.left_in_dispatch.clear();
+        self.started_in_dispatch.clear();
     }
 
-    /// The low level's leaves of each NPC `picks` picks, in berth order, in
-    /// `world` (see the module docs): its own jump-out, and a fighter's
-    /// dock with its carrier unless `no_bay` names it. Each leaver is
-    /// recorded among the ships gone, freed in the AI loop, and taken out
-    /// of the traffic at once. The ships that left, and how, in order.
+    /// The high level's and low level's work at the slot of each NPC
+    /// `picks` picks, in berth order, in `world`, rolling on `chance` (see
+    /// the module docs): its warp's hold and a fighter's turn-back, a gate
+    /// entrant's box and release, a pirate's dock start, and its leaves,
+    /// its own jump-out and a fighter's dock with its carrier unless
+    /// `no_bay` names it. Each leaver is recorded among the ships gone,
+    /// freed in the AI loop, and taken out of the traffic at once. The
+    /// ships that left, and how, in order.
     pub(super) fn leave_in_dispatch(
         &mut self,
         world: &World,
         picks: &impl Fn(&Npc) -> bool,
         no_bay: &NoBay,
+        chance: &mut (impl Chance + ?Sized),
     ) -> Vec<(NpcId, Outcome)> {
         let order: Vec<NpcId> = launch_room::berth_order(&self.npcs)
             .into_iter()
@@ -92,6 +99,8 @@ impl Traffic {
                 continue;
             };
             self.hold_and_turn_back(index, world);
+            self.enter_gate_box(index, world);
+            self.start_dock(index, world, chance);
             let Some(outcome) = self.leaves(index, world, no_bay) else {
                 continue;
             };
@@ -131,6 +140,59 @@ impl Traffic {
         let npc = &mut self.npcs[index];
         warp_out::hold_stage(npc);
         jump_with_leader::turn_back(npc, world.npc_jump_fuel, carrier_slot);
+    }
+
+    /// The high level's gate block for the NPC at `index` in `world`
+    /// (state 1's hand-off @0x8d8b8-0x8d8fe, goal 0x14 @0x8dc5a-0x8dd4d;
+    /// [`autopilot::reach_gate_box`]): flying and intact, its high level
+    /// running, inside the gate's box it stops and takes its 16-count wait
+    /// (`_HandleShip` takes the frame's first count in the fly half), and
+    /// releases the ships it leads to enter the gate on their own
+    /// (@0x8dc94-0x8dd43), so a follower in a higher slot starts for it
+    /// that tick.
+    fn enter_gate_box(&mut self, index: usize, world: &World) {
+        let npc = &mut self.npcs[index];
+        if npc.mode != Mode::Flying || npc.condition != Condition::Intact || npc.high_level_waits()
+        {
+            return;
+        }
+        let sites = world.flown_among(npc.goal);
+        let Some(gate) = autopilot::reach_gate_box(npc, sites, world.type_widths) else {
+            return;
+        };
+        let (lead, ai_type) = (npc.id, npc.ai_type);
+        self.release_followers(lead, gate, ai_type);
+    }
+
+    /// The low level's dock start for the NPC at `index` in `world`,
+    /// rolling its wait on `chance` (sub 0xf @0x86f98-0x8700a,
+    /// [`plunder_dock::starts`]): the victim is boarded (+0xb9 = 1,
+    /// @0x86fc7), an NPC at once and the player by the session, as the
+    /// pirate's line work ([`PirateEvent::PlayerDockedWith`]) settles at
+    /// its slot; its flight that tick only moves on.
+    fn start_dock(&mut self, index: usize, world: &World, chance: &mut (impl Chance + ?Sized)) {
+        let npc = &self.npcs[index];
+        let Some(docking) = npc.docking else {
+            return;
+        };
+        let victim = match docking.ship {
+            ShipRef::Player => world.player.map(|player| player.state),
+            ShipRef::Npc(id) => self.npcs.iter().find(|n| n.id == id).map(|n| n.state),
+        };
+        let Some(victim) = victim.filter(|victim| plunder_dock::starts(npc, victim)) else {
+            return;
+        };
+        let pirate = npc.id;
+        plunder_dock::start(&mut self.npcs[index], &victim, chance);
+        self.started_in_dispatch.insert(pirate);
+        match docking.ship {
+            ShipRef::Player => self.queue_pirate(PirateEvent::PlayerDockedWith { pirate }),
+            ShipRef::Npc(id) => {
+                if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
+                    npc.boarded = true;
+                }
+            }
+        }
     }
 
     /// How the NPC at `index` leaves at its slot in `world`, if it does:
@@ -384,6 +446,138 @@ mod tests {
         assert_eq!(watch.seen(above).0, [runner], "that tick's");
         traffic.tick_in(&watch, world(), &[], &mut NeverFires);
         assert_eq!(watch.seen(above).0, [], "the next tick's");
+    }
+
+    // The high level's gate release and the low level's dock start, at
+    // the slot.
+
+    /// Every ship keeps its goal; each think records its own goal and
+    /// whether `watched` reads as boarded.
+    #[derive(Debug)]
+    struct Reads {
+        watched: NpcId,
+        seen: RefCell<BTreeMap<NpcId, (Goal, bool)>>,
+    }
+
+    impl Reads {
+        fn of(watched: NpcId) -> Self {
+            Self {
+                watched,
+                seen: RefCell::default(),
+            }
+        }
+
+        fn seen(&self, id: NpcId) -> (Goal, bool) {
+            self.seen.borrow()[&id]
+        }
+    }
+
+    impl Behaviour for Reads {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            let boarded = around.npc(self.watched).is_some_and(|npc| npc.boarded);
+            self.seen.borrow_mut().insert(npc.id, (npc.goal, boarded));
+            npc.goal
+        }
+    }
+
+    /// Hypergate 300 at the centre.
+    const GATE: crate::catalog::StellarId = crate::catalog::StellarId(300);
+
+    fn gate_sites() -> [crate::catalog::LandingSite; 1] {
+        [crate::catalog::LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..nova_sim_catalog::fixture::planet(300, 0.0, 0.0)
+        }]
+    }
+
+    /// A lead in slot 3 in its gate's box, entering it.
+    fn entrant(traffic: &mut Traffic) -> NpcId {
+        let mut lead = ship(0, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        lead.goal = Goal::EnterGate(GATE);
+        traffic.add_npc_at(lead, 3)
+    }
+
+    #[test]
+    fn a_gate_entrants_follower_above_it_heads_for_the_gate_on_that_tick_and_one_below_on_the_next()
+    {
+        // Goal 0x14's release runs in the lead's own dispatch
+        // (@0x8dc94-0x8dd43), before the higher slots' thinks.
+        let sites = gate_sites();
+        let mut traffic = Traffic::with_interval(1);
+        let lead = entrant(&mut traffic);
+        let follower = |traffic: &mut Traffic, berth| {
+            let mut ship = ship(0, TRADERS, AiType::Warship, 50.0, 0.0);
+            ship.leader = Some(lead);
+            ship.goal = Goal::Follow { lead, guard: None };
+            traffic.add_npc_at(ship, berth)
+        };
+        let (below, above) = (follower(&mut traffic, 2), follower(&mut traffic, 4));
+        let reads = Reads::of(lead);
+        traffic.think_holding(&reads, World::new(&sites), &[], &mut NeverFires);
+        let entering = Goal::EnterGate(GATE);
+        assert_eq!(reads.seen(above).0, entering, "released at slot 3");
+        assert!(matches!(reads.seen(below).0, Goal::Follow { .. }), "before");
+        assert_eq!(of(&traffic, below).expect("there").goal, entering);
+        let mode = of(&traffic, lead).expect("there").mode;
+        assert_eq!(
+            mode,
+            crate::traffic::npc::Mode::EnteringGate {
+                gate: GATE,
+                ticks_left: crate::traffic::gate_entry::ENTRY_TICKS
+            },
+            "stopped with its wait of 16 (@0x8dc5a-0x8dc94)"
+        );
+    }
+
+    #[test]
+    fn a_ship_that_reaches_its_gates_box_enters_after_sixteen_counts_as_before() {
+        // Counted down once on the tick it reaches the box, and gone on
+        // the 16th (@0x2c066-0x2c07f).
+        let sites = gate_sites();
+        let mut traffic = Traffic::with_interval(1);
+        let lead = entrant(&mut traffic);
+        let world = World::new(&sites);
+        let ticks = (1..=40).find(|_| {
+            traffic.tick_in(&Reads::of(lead), world, &[], &mut NeverFires);
+            !traffic.departed().is_empty()
+        });
+        assert_eq!(ticks, Some(16));
+        assert_eq!(traffic.departed(), [(lead, Outcome::EnteredGate(GATE))]);
+    }
+
+    #[test]
+    fn a_higher_slots_think_reads_a_victim_a_lower_pirate_docked_with_as_boarded() {
+        // The dock start's +0xb9 = 1 is the pirate's own low level's
+        // (@0x86fc7).
+        use crate::combat::hull::Condition;
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let mut traffic = Traffic::with_interval(1);
+        let below = traffic.add_npc_at(ship(0, TRADERS, AiType::Warship, -500.0, 0.0), 1);
+        let mut pirate = ship(0, PIRATES, AiType::Warship, 100.0, 0.0);
+        let mut victim = ship(0, TRADERS, AiType::WimpyTrader, 100.0, 0.0);
+        victim.condition = Condition::Disabled;
+        let victim = traffic.add_npc_at(victim, 5);
+        pirate.goal = Goal::Plunder {
+            ship: ShipRef::Npc(victim),
+            hopeless: false,
+        };
+        pirate.target = Some(ShipRef::Npc(victim));
+        pirate.hull.class_turn = 3.0;
+        pirate.docking = Some(Docking {
+            ship: ShipRef::Npc(victim),
+            sub: DockSub::Dock,
+        });
+        let pirate = traffic.add_npc_at(pirate, 2);
+        let above = traffic.add_npc_at(ship(0, TRADERS, AiType::Warship, -500.0, 0.0), 6);
+        let reads = Reads::of(victim);
+        traffic.think_holding(&reads, World::new(&[]), &[], &mut Draws::of(&[0; 8]));
+        assert!(!reads.seen(below).1, "its run came first");
+        assert!(reads.seen(above).1, "boarded at slot 2");
+        let npc = of(&traffic, pirate).expect("there");
+        assert!(
+            npc.ai_wait >= crate::traffic::plunder_dock::DOCK_WAIT,
+            "its wait"
+        );
     }
 
     use std::collections::BTreeSet;

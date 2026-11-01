@@ -251,16 +251,15 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
 
 /// Flies `npc`'s docking one tick at `victim` (none when that ship is gone,
 /// which drops the docking), at `speeds` under `flight`, with `swarm` its
-/// swarm lead, its dock's wait rolled on `chance` ([`plunder_dock::fly`]): what became of it, or none when it has
-/// no docking to fly, is not intact or not flying, for the autopilot to
-/// fly it instead.
+/// swarm lead ([`plunder_dock::fly`]): what became of it, or none when it
+/// has no docking to fly, is not intact or not flying, for the autopilot
+/// to fly it instead.
 pub fn fly_docking(
     npc: &mut Npc,
     victim: Option<&ShipState>,
     speeds: TopSpeeds,
     flight: FlightRules,
     swarm: Option<SwarmLead>,
-    chance: &mut (impl Chance + ?Sized),
 ) -> Option<DockOutcome> {
     npc.docking?;
     if npc.condition != Condition::Intact || npc.mode != crate::traffic::npc::Mode::Flying {
@@ -271,9 +270,7 @@ pub fn fly_docking(
         return None;
     };
     let handling = npc.flying_handling(speeds.own, flight);
-    Some(plunder_dock::fly(
-        npc, victim, &handling, flight, swarm, chance,
-    ))
+    Some(plunder_dock::fly(npc, victim, &handling, flight, swarm))
 }
 
 /// A tick off each AI wait among `npcs` that has any left (`_HandleShip`
@@ -1073,8 +1070,7 @@ mod tests {
                 Some(&victim),
                 speeds,
                 FlightRules::default(),
-                None,
-                &mut Draws::of(&[])
+                None
             ),
             Some(DockOutcome::Flying)
         );
@@ -1099,8 +1095,7 @@ mod tests {
                     Some(&victim),
                     speeds,
                     FlightRules::default(),
-                    None,
-                    &mut Draws::of(&[])
+                    None
                 ),
                 None,
                 "{condition:?} {mode:?}"
@@ -1108,14 +1103,7 @@ mod tests {
         }
         let mut lost = far.clone();
         assert_eq!(
-            fly_docking(
-                &mut lost,
-                None,
-                speeds,
-                FlightRules::default(),
-                None,
-                &mut Draws::of(&[])
-            ),
+            fly_docking(&mut lost, None, speeds, FlightRules::default(), None),
             None
         );
         assert_eq!(lost.docking, None, "its victim gone");

@@ -103,11 +103,11 @@
 //!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
 //!   `_DamageShip` settles it at the landing; the fight clears its leader
 //!   at the landing, which is all the later visits read.
-//! - **Filed.** What the fly half settles, where `_LowLevelAIHandler`
-//!   makes it in the AI loop (a dock, a repair, a jump-out), a higher
-//!   slot's think reads a drawn frame late; and the passes the think opens
-//!   with run before the first slot (see [`Session::dispatch_npcs`],
-//!   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
+//! - **Filed.** What the fly half still settles, where the high and low
+//!   level make it in the AI loop (a dock's completion, a repair, goal
+//!   0xb's check), a higher slot's think reads a drawn frame late (see
+//!   [`Session::dispatch_npcs`],
+//!   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
 //! session ([`Session::with_fighters`]): the player, then every NPC, each

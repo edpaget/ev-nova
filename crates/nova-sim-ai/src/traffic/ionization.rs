@@ -356,14 +356,7 @@ mod tests {
                 sub: DockSub::Approach,
             });
             let speeds = TopSpeeds::own_of(ship);
-            let flown = fly_docking(
-                ship,
-                Some(&victim),
-                speeds,
-                FlightRules::default(),
-                None,
-                &mut nova_sim_base::fixture::Draws::of(&[]),
-            );
+            let flown = fly_docking(ship, Some(&victim), speeds, FlightRules::default(), None);
             assert!(flown.is_some());
         };
         // Approaching the victim straight up the screen.

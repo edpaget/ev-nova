@@ -411,14 +411,7 @@ fn a_released_refueller_on_its_stop_bursts_out() {
     });
     let accel = npc.stats.handling.accel;
     let speeds = TopSpeeds::own_of(&npc);
-    plunder::fly_docking(
-        &mut npc,
-        Some(&FAR),
-        speeds,
-        FlightRules::default(),
-        None,
-        &mut NeverFires,
-    );
+    plunder::fly_docking(&mut npc, Some(&FAR), speeds, FlightRules::default(), None);
     assert!(
         close(npc.state.velocity, facing(270.0) * 30.0),
         "{:?}",

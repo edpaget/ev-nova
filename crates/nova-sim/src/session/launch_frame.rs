@@ -101,14 +101,18 @@ impl Session {
     ///   order ([`Space::answer_voice_cues`](super::Space::answer_voice_cues)).
     ///   They speak on the voice channel and raise no line, so no slot's
     ///   call reads them.
-    /// - What the fly half settles (the boarded flag, a gate entrant's
-    ///   followers), a lag across a drawn frame for a higher slot, filed
-    ///   in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6.
+    /// - The rest of the low and high level's work the fly half still runs
+    ///   (a dock's completion and a repair's armour, the creep and velocity
+    ///   match, goal 0xb's check and its push of the leader), a lag across
+    ///   a drawn frame for a higher slot, filed in
+    ///   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9.
     ///
     /// The head of each ship's dispatch (its warp cancel, its jump's
     /// cancels, a leader's orders, the regroup draws and the disabled
     /// reset) runs at its own slot, inside its run
-    /// (`nova_sim::traffic::dispatch_head`).
+    /// (`nova_sim::traffic::dispatch_head`), and so do the high level's
+    /// hold, turn-back and gate box, a pirate's dock start, a ship's own
+    /// jump-out and a fighter's dock (`nova_sim::traffic::dispatch_leave`).
     pub(super) fn dispatch_npcs(
         &mut self,
         thought: bool,

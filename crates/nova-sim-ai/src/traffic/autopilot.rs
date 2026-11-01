@@ -727,7 +727,10 @@ fn land(
 
 /// State 1's hand-off (@0x8d8b8-0x8d8fe): a landing goal whose stellar
 /// among `sites` is a hypergate or wormhole becomes [`Goal::EnterGate`].
-fn hand_off(npc: &mut Npc, sites: &[LandingSite]) {
+/// The high level runs it at the ship's slot of the AI loop (the
+/// traffic's `dispatch_leave`); the flight runs it again for a ship that
+/// loop didn't reach.
+pub(crate) fn hand_off(npc: &mut Npc, sites: &[LandingSite]) {
     if let Goal::Land(stellar) = npc.goal
         && sites
             .iter()
@@ -737,13 +740,43 @@ fn hand_off(npc: &mut Npc, sites: &[LandingSite]) {
     }
 }
 
+/// The high level's gate block for `npc` among `sites`, of the widths
+/// `type_widths` gives (state 1's hand-off @0x8d8b8-0x8d8fe, goal 0x14
+/// @0x8dc5a-0x8dc94), run at its slot of the AI loop: a landing goal at a
+/// gate becomes the gate's entry ([`hand_off`]), and inside the gate's box
+/// it stops and takes its wait of [`ENTRY_TICKS`], which the flight then
+/// counts down ([`Mode::EnteringGate`]). The gate it reached, if it did,
+/// for its caller to release its followers.
+pub(crate) fn reach_gate_box(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    type_widths: &BTreeMap<StellarId, TypeWidth>,
+) -> Option<StellarId> {
+    hand_off(npc, sites);
+    let Goal::EnterGate(gate) = npc.goal else {
+        return None;
+    };
+    let site = sites.iter().find(|site| site.id == gate)?;
+    let reach = gate_entry::gate_reach(site, type_widths);
+    if !gate_entry::inside(site.position, npc.state.position, reach) {
+        return None;
+    }
+    npc.state.velocity = Vec2::ZERO;
+    npc.mode = Mode::EnteringGate {
+        gate,
+        ticks_left: ENTRY_TICKS,
+    };
+    Some(gate)
+}
+
 /// How `npc` flies into `gate` among `sites`, of the widths
 /// `type_widths` gives, as its inertia says, by a reading of
 /// [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding) (`by`; see the
 /// module docs): outside its box, sub 2 by the engine's
 /// ([`gate_entry::approach`]) or the port's earlier [`approach`] by the
-/// other, or braking with no gate there; inside it, stopped and entering
-/// it.
+/// other, or braking with no gate there; inside it, stopped. Its entry,
+/// the 16-count wait and the release of its followers, is its high
+/// level's, at its slot of the AI loop (the traffic's `dispatch_leave`).
 fn enter_box(
     npc: &mut Npc,
     sites: &[LandingSite],
@@ -763,10 +796,6 @@ fn enter_box(
         });
     }
     npc.state.velocity = Vec2::ZERO;
-    npc.mode = Mode::EnteringGate {
-        gate,
-        ticks_left: ENTRY_TICKS - 1,
-    };
     Err(Outcome::Flying)
 }
 
@@ -1790,12 +1819,23 @@ mod tests {
     }
 
     /// Flies `npc` at `speeds`, any wait it draws its longest.
+    /// The high level's gate block at `npc`'s slot of the AI loop, before
+    /// its flight ([`reach_gate_box`], as the traffic's `dispatch_leave`
+    /// runs it), among `sites` of the widths `widths`.
+    fn at_its_slot(npc: &mut Npc, sites: &[LandingSite], widths: &BTreeMap<StellarId, TypeWidth>) {
+        if npc.mode == Mode::Flying && npc.condition == Condition::Intact && !npc.high_level_waits()
+        {
+            reach_gate_box(npc, sites, widths);
+        }
+    }
+
     fn fly_at(
         npc: &mut Npc,
         sites: &[LandingSite],
         other: Option<&ShipState>,
         speeds: TopSpeeds,
     ) -> Outcome {
+        at_its_slot(npc, sites, &BTreeMap::new());
         let weapons = crate::ai::fixture::records_of([&*npc]);
         super::fly(
             npc,
@@ -1829,6 +1869,7 @@ mod tests {
         other: Option<&ShipState>,
         readings: Readings,
     ) -> Outcome {
+        at_its_slot(npc, sites, &BTreeMap::new());
         let weapons = crate::ai::fixture::records_of([&*npc]);
         let speeds = TopSpeeds::own_of(npc);
         super::fly(
@@ -3408,6 +3449,7 @@ mod tests {
         sites: &[LandingSite],
         widths: &BTreeMap<StellarId, TypeWidth>,
     ) -> Outcome {
+        at_its_slot(npc, sites, widths);
         let speeds = TopSpeeds::own_of(npc);
         super::fly(
             npc,

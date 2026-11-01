@@ -86,9 +86,10 @@
 //! started. All of it comes after `_HandlePlayer`'s part of the frame (the
 //! propulsion repair, the sabotage, and the eject in the player's display
 //! step), so their lines come before every call, as the original's do, and
-//! the scans' law is at hand. [`Session::settle_line_queue`] settles what
-//! is left after the loop, and again after the ship loop for the docks and
-//! repairs the fly half made:
+//! the scans' law is at hand; a pirate's dock with the player starts at
+//! its slot too (the traffic's `dispatch_leave`). [`Session::settle_line_queue`]
+//! settles what is left after the loop, and again after the ship loop for
+//! the repairs the fly half completed:
 //!
 //! - an earlier slot's attack quote, scan line, stolen line, refuel or
 //!   repair note keeps a later slot's distress call and pre-scan hail
@@ -219,17 +220,19 @@ impl Session {
 
     /// Settles the frame's work on the message line left after
     /// `_AIDispatch`'s loop ([`Session::settle_line_through`] of it all):
-    /// what the thinks' runs did not settle, and the fly half's docks and
-    /// repairs. Then the reinforcement clock's tick held behind them runs,
-    /// if one was (see the `reinforcements` module), as
-    /// `_HandleReinforcements` comes after the loop (@0x44504). Nothing
-    /// settles while the player is landed.
+    /// what the thinks' runs did not settle, and the fly half's repairs.
+    /// Then the reinforcement clock's tick held behind them runs, if one
+    /// was (see the `reinforcements` module), as `_HandleReinforcements`
+    /// comes after the loop (@0x44504). Nothing settles while the player
+    /// is landed.
     ///
-    /// *Ordering against the original.* The repair's armour, and the
-    /// dock's line, settle here, after the ship loop, where the original
-    /// carries them out inside the AI loop's low level. All of it is later
-    /// in the pass than the loop, but before the frame's drawing and any
-    /// dialog, landing, jump or save, so no boundary is crossed.
+    /// *Ordering against the original.* The repair's armour and its note
+    /// settle here, after the ship loop, where the original carries them
+    /// out inside the AI loop's low level (@0x86ef4). All of it is later in
+    /// the pass than the loop, but before the frame's drawing and any
+    /// dialog, landing, jump or save; a higher slot's think reading the
+    /// repaired armour a frame late is filed in
+    /// rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9.
     pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
         if self.mode.landed().is_some() {
             return;
