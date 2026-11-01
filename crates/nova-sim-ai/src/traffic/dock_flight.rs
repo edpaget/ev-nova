@@ -279,6 +279,18 @@ mod tests {
     /// Flies `npc` a tick at the carrier ([`carrier`]) by `readings`,
     /// beside `beside`, under `rules`, at its own top speed.
     fn fly_by(npc: &mut Npc, readings: Readings, beside: Beside, rules: FlightRules) -> Outcome {
+        let speeds = TopSpeeds::own_of(npc);
+        fly_at(npc, speeds, readings, beside, rules)
+    }
+
+    /// [`fly_by`] at `speeds`.
+    fn fly_at(
+        npc: &mut Npc,
+        speeds: TopSpeeds,
+        readings: Readings,
+        beside: Beside,
+        rules: FlightRules,
+    ) -> Outcome {
         autopilot::fly(
             npc,
             &[],
@@ -286,7 +298,7 @@ mod tests {
             Some(&carrier()),
             false,
             beside,
-            TopSpeeds::own_of(npc),
+            speeds,
             rules,
             readings,
             &crate::ai::NO_WEAPONS,
@@ -407,6 +419,29 @@ mod tests {
         let mut ship = docking(EVEN, away, None);
         assert_eq!(pull_of(&ship), ship.stats.handling.max_speed);
         fly(&mut ship);
+        assert_eq!(ship.owed_burst, None);
+    }
+
+    #[test]
+    fn outside_its_window_the_word_reads_its_own_top_speed_not_its_leads() {
+        // The preamble's word is `_ShipMaxSpeed` (@0x851e9-0x8520d), its own:
+        // a pull of 1.8 under its own 6.0 owes nothing, though its lead's
+        // 1.0, and so its burst cap, is below the pull.
+        let mut ship = docking(FAST, at(0.0, -60.0, 0.0, 0.0, 0.0), None);
+        let speeds = TopSpeeds {
+            own: ship.stats.handling.max_speed,
+            lead: Some(1.0),
+        };
+        let pull = pull_of(&ship);
+        assert!(speeds.burst_cap() < pull && pull < speeds.own);
+        let rules = FlightRules::default();
+        fly_at(
+            &mut ship,
+            speeds,
+            Readings::default(),
+            Beside::default(),
+            rules,
+        );
         assert_eq!(ship.owed_burst, None);
     }
 
