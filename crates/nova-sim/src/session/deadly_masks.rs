@@ -392,6 +392,48 @@ mod tests {
     }
 
     #[test]
+    fn a_deadly_hypergate_touches_by_the_frame_the_gate_shows() {
+        use crate::catalog::SiteAnimation;
+        use crate::gate::HYPERGATE;
+        use crate::gate_sprite::{GateAnimation, GateSprite};
+        // Two frames, its open frame 1, stepping only every 1000 ticks.
+        let gate = LandingSite {
+            flags2: DEADLY_STELLAR | HYPERGATE,
+            animation: SiteAnimation {
+                delay: 1000,
+                type_frames: 2,
+                ..SiteAnimation::default()
+            },
+            ..on_the_npc()
+        };
+        // The NPC in the hole lives by a ring frame and dies by a full one.
+        let holed = square(SIDE, ring, false);
+        let full = square(SIDE, |_, _| true, false);
+        for (frames, open, survives) in [
+            ([holed.clone(), full.clone()], false, true),
+            ([holed.clone(), full.clone()], true, false),
+            ([full.clone(), holed.clone()], false, false),
+            ([full.clone(), holed.clone()], true, true),
+        ] {
+            let catalog = holding(vec![
+                (MaskSheet::Stellar(3), sheet_of(&frames)),
+                (NPC_SHIP, solid(10)),
+            ]);
+            let mut session = among(&catalog, &[gate], 180, Rulebook::default());
+            // Open, it shows its last frame, 1, through the pass.
+            let sprite = if open {
+                GateSprite::exit_gate(&GateAnimation::of(&gate))
+            } else {
+                GateSprite::new()
+            };
+            session.space.gate_sprites.insert(gate.id, sprite);
+            assert_eq!(session.gate_frame(gate.id), Some(u16::from(open)));
+            assert_eq!(lives(&mut session, &catalog), survives, "open: {open}");
+            assert_eq!(session.gate_frame(gate.id), Some(u16::from(open)));
+        }
+    }
+
+    #[test]
     fn a_stale_slot_touches_by_its_owners_mask_or_graphic_type_0s_at_its_ghost() {
         // H, deadly, hidden after the first rebuild point.
         let hidden = LandingSite {
