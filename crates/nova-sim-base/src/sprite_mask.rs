@@ -603,6 +603,15 @@ mod tests {
         assert!(!touch(&left, (0, 0), &left, (1, 0), MaskWalk::Drawn));
         // Nor the mirror at the left edge, the second's pixel outside it.
         assert!(!touch(&left, (1, 0), &left, (0, 0), MaskWalk::Original));
+        // The second read from its own left, left of the overlap: its pixel
+        // outside the overlap is two away from the first's.
+        let far = sheet(&[&["#..."]]);
+        for walk in BOTH {
+            assert!(
+                !touch(&sheet(&[&[".#."]]), (1, 0), &far, (0, 0), walk),
+                "{walk:?}"
+            );
+        }
         // Not at its right edge, the first's rect reaching left of it.
         let end = sheet(&[&["..#"]]);
         assert!(!touch(&end, (0, 0), &end, (1, 0), MaskWalk::Original));
