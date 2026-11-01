@@ -254,6 +254,37 @@ mod tests {
         assert!(view.take_outfitter_closed());
     }
 
+    /// The alert closed by the keys a cancelled press on its Done held
+    /// back, run as the spaceport ticks.
+    #[test]
+    fn an_outfitter_left_with_nothing_listed_closes_as_a_tick_closes_its_alert() {
+        for (on, movie) in [(false, None), (true, after("After.mov"))] {
+            let (mut view, player) = alerted(on, movie);
+            view.outfit_ordered(Reselection::Leave);
+            let done = view
+                .open_outfitter()
+                .and_then(|open| open.alert_dialog())
+                .and_then(|alert| alert.dialog().item_bounds(crate::ui::desc::DONE_ITEM))
+                .expect("Done")
+                .center();
+            view.input(&crate::input::Input::PointerButton {
+                button: crate::input::MouseButton::Left,
+                pressed: true,
+                at: done,
+            });
+            view.input(&key(Key::Enter));
+            view.cancel_pointer();
+            assert!(view.open_outfitter().is_some(), "the alert waits");
+            view.tick(ms(0));
+            if on {
+                assert_eq!(started(&player), ["After.mov"], "its movie first");
+                play_out(&mut view);
+            }
+            assert!(view.open_outfitter().is_none(), "movies {on}");
+            assert!(view.take_outfitter_closed());
+        }
+    }
+
     #[test]
     fn an_alert_that_cannot_open_keeps_no_movie() {
         let (mut view, player) = playing(shopping, true);

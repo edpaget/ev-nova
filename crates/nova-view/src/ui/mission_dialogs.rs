@@ -96,8 +96,8 @@ impl DescShown {
 enum Stage {
     /// A `dësc`'s movie.
     Movie(MovieStage),
-    /// A text in "Desc Dialog".
-    Text(DescDialog),
+    /// A text in "Desc Dialog", boxed as it is far bigger than the rest.
+    Text(Box<DescDialog>),
     /// An empty text: no dialog, but on a faded screen a fade-in
     /// (@0x5a7bf-0x5a874).
     Empty,
@@ -309,9 +309,9 @@ impl MissionDialogs {
             self.style,
             Rc::clone(&self.metrics),
         ) {
-            self.texts.push_back(Stage::Text(
+            self.texts.push_back(Stage::Text(Box::new(
                 dialog.with_map(map).with_focus_ring(self.focus_ring),
-            ));
+            )));
         }
         if let Some(after) = movie(true) {
             self.queue_movie(after);
@@ -406,10 +406,7 @@ impl MissionDialogs {
             Some(Stage::Text(text)) => {
                 text.input(input);
                 self.sounds.extend(text.take_sounds());
-                if text.closed() {
-                    self.texts.pop_front();
-                    self.ready_front();
-                }
+                self.drop_closed_text();
             }
             Some(Stage::Closed | Stage::Empty) => {}
             None => {
@@ -421,6 +418,25 @@ impl MissionDialogs {
                     }
                 }
             }
+        }
+    }
+
+    /// Drops the text in front if it has closed, handing what its replay
+    /// queued after the closing key to what shows next
+    /// ([`DescDialog::take_unclaimed`]), unless that is another text, whose
+    /// `_ShowTextDialog` flushes it as it opens (@0x5ae67).
+    fn drop_closed_text(&mut self) {
+        let Some(Stage::Text(text)) = self.texts.front_mut() else {
+            return;
+        };
+        if !text.closed() {
+            return;
+        }
+        let rest = text.take_unclaimed();
+        self.texts.pop_front();
+        self.ready_front();
+        if !matches!(self.texts.front(), Some(Stage::Text(_))) {
+            self.pass_on(rest);
         }
     }
 
@@ -506,7 +522,7 @@ impl MissionDialogs {
     #[must_use]
     pub fn text(&self) -> Option<&DescDialog> {
         match self.texts.front() {
-            Some(Stage::Text(text)) => Some(text),
+            Some(Stage::Text(text)) => Some(text.as_ref()),
             _ => None,
         }
     }
@@ -587,7 +603,9 @@ impl Screen for MissionDialogs {
     }
 
     /// The movie shown, the front text's fade-in, or a press held on the
-    /// text shown's scroll arrow moves on; the rest wait on input. Once
+    /// text shown's scroll arrow moves on; the rest wait on input. The keys
+    /// a cancelled press held back run on the text, which may close it,
+    /// and it is dropped as an input's close drops it. Once
     /// the fade-in ends, what was pressed during it reaches the text, and
     /// an empty text is done.
     fn tick(&mut self, dt: Duration) {
@@ -605,7 +623,12 @@ impl Screen for MissionDialogs {
                 movie.tick(dt);
                 self.settle();
             }
-            Some(Stage::Text(text)) => text.tick(dt),
+            Some(Stage::Text(text)) => {
+                text.tick(dt);
+                self.sounds.extend(text.take_sounds());
+                self.drop_closed_text();
+                self.settle();
+            }
             Some(Stage::Empty | Stage::Closed) | None => {}
         }
     }
@@ -632,6 +655,14 @@ impl Screen for MissionDialogs {
                     info.cancel_pointer();
                 }
             }
+        }
+    }
+
+    /// Lets go of the keys the text shown holds back, which runs them on
+    /// the next tick ([`DescDialog`]'s `Screen::release_keys`).
+    fn release_keys(&mut self) {
+        if let Some(Stage::Text(text)) = self.texts.front_mut() {
+            text.release_keys();
         }
     }
 
@@ -927,6 +958,114 @@ mod tests {
         dialogs.tick(Duration::from_secs(1) / 30);
         assert_eq!(at(&dialogs), 3.0);
         assert_eq!(dialogs.take_sounds(), [], "silent");
+    }
+
+    // Keys held back by a click on Done wait for its release
+    // (`ui::held_keys`), and what a replay queued after the closing key goes
+    // to what shows next.
+
+    fn left(pressed: bool, at: Point) -> Input {
+        Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        }
+    }
+
+    fn done_at(dialogs: &MissionDialogs) -> Point {
+        dialogs
+            .text()
+            .expect("open")
+            .dialog()
+            .item_bounds(DONE_ITEM)
+            .expect("Done")
+            .center()
+    }
+
+    #[test]
+    fn a_return_held_back_by_a_click_closes_the_text_at_the_release() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "one"), brief(129, "two")]);
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        dialogs.input(&key(Key::Enter));
+        assert_eq!(shown(&dialogs).as_deref(), Some("one"), "it waits");
+        dialogs.input(&left(false, Point::new(0.0, 0.0)));
+        assert_eq!(shown(&dialogs).as_deref(), Some("two"));
+        assert_eq!(dialogs.take_texts_closed(), 1);
+    }
+
+    #[test]
+    fn a_close_from_a_ticks_replay_pops_the_text() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "one")]);
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        dialogs.input(&key(Key::Enter));
+        dialogs.cancel_pointer();
+        assert!(dialogs.is_open());
+        dialogs.tick(Duration::ZERO);
+        assert!(!dialogs.is_open(), "closed by the tick");
+        assert_eq!(dialogs.take_texts_closed(), 1);
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_during_a_click_is_a_cancel() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "one")]);
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        dialogs.input(&key(Key::Enter));
+        dialogs.release_keys();
+        dialogs.tick(Duration::ZERO);
+        assert!(!dialogs.is_open());
+    }
+
+    /// The next text's `_ShowTextDialog` flushes the queue as it opens
+    /// (@0x5ae67).
+    #[test]
+    fn the_next_text_flushes_what_was_queued_after_the_closing_key() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "one"), brief(129, "two")]);
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&left(false, Point::new(0.0, 0.0)));
+        assert_eq!(
+            shown(&dialogs).as_deref(),
+            Some("two"),
+            "the second Return went"
+        );
+        assert_eq!(dialogs.take_unclaimed(), []);
+    }
+
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507).
+    #[test]
+    fn with_no_text_next_what_was_queued_after_the_close_is_left_for_beneath() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "one")]);
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Char('b')));
+        dialogs.input(&left(false, Point::new(0.0, 0.0)));
+        assert!(!dialogs.is_open());
+        assert_eq!(dialogs.take_unclaimed(), [key(Key::Char('b'))]);
+    }
+
+    #[test]
+    fn what_was_queued_after_the_close_reaches_the_mission_info_beneath() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        dialogs.show_texts(vec![brief(128, "one")]);
+        let at = done_at(&dialogs);
+        dialogs.input(&left(true, at));
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&key(Key::Enter));
+        dialogs.input(&left(false, Point::new(0.0, 0.0)));
+        assert!(dialogs.info().is_none(), "the second Return closed it");
+        assert_eq!(dialogs.take_unclaimed(), []);
     }
 
     #[test]

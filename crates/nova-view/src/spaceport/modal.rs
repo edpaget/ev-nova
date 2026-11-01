@@ -26,6 +26,12 @@ pub trait Modal: Screen {
 
     /// What the player chose, once.
     fn take_outcome(&mut self) -> Option<Self::Outcome>;
+
+    /// What the dialog left, once it has closed, for the screen beneath
+    /// to take as its own input. None by default.
+    fn take_unclaimed(&mut self) -> Vec<Input> {
+        Vec::new()
+    }
 }
 
 impl<P: Confirm> Modal for EditDialog<P> {
@@ -44,6 +50,12 @@ impl Modal for DescDialog {
     fn take_outcome(&mut self) -> Option<()> {
         DescDialog::take_done(self)
     }
+
+    /// What its replay queued after the key that closed it
+    /// ([`DescDialog::take_unclaimed`]).
+    fn take_unclaimed(&mut self) -> Vec<Input> {
+        DescDialog::take_unclaimed(self)
+    }
 }
 
 /// A dialog `D` open over a screen, and the payload `T` it was opened
@@ -51,12 +63,17 @@ impl Modal for DescDialog {
 #[derive(Clone, Debug)]
 pub struct ModalHost<T, D> {
     open: Option<(T, D)>,
+    /// What the dialog left as it closed, until taken.
+    unclaimed: Vec<Input>,
 }
 
 impl<T, D> Default for ModalHost<T, D> {
     /// Nothing open.
     fn default() -> Self {
-        Self { open: None }
+        Self {
+            open: None,
+            unclaimed: Vec::new(),
+        }
     }
 }
 
@@ -86,9 +103,23 @@ impl<T, D: Modal> ModalHost<T, D> {
         let (_, dialog) = self.open.as_mut()?;
         dialog.input(input);
         sounds.extend(dialog.take_sounds());
+        self.close_on_outcome()
+    }
+
+    /// Closes once the dialog reports an outcome, keeping what it left
+    /// ([`Self::take_unclaimed`]), and gives `(payload, outcome)`.
+    fn close_on_outcome(&mut self) -> Option<(T, D::Outcome)> {
+        let (_, dialog) = self.open.as_mut()?;
         let outcome = dialog.take_outcome()?;
-        let (payload, _) = self.open.take()?;
+        let (payload, mut dialog) = self.open.take()?;
+        self.unclaimed.append(&mut dialog.take_unclaimed());
         Some((payload, outcome))
+    }
+
+    /// What the dialog left as it closed ([`Modal::take_unclaimed`]),
+    /// once: the screen beneath runs it through its own input.
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
     }
 
     /// Draws the open dialog: call it last, over the screen.
@@ -98,11 +129,13 @@ impl<T, D: Modal> ModalHost<T, D> {
         }
     }
 
-    /// Advances the open dialog.
-    pub fn tick(&mut self, dt: Duration) {
-        if let Some((_, dialog)) = &mut self.open {
-            dialog.tick(dt);
-        }
+    /// Advances the open dialog, which can report an outcome as it ticks
+    /// (a key it held back, run then): the host then closes and gives
+    /// `(payload, outcome)`, as [`Self::input`] does.
+    pub fn tick(&mut self, dt: Duration) -> Option<(T, D::Outcome)> {
+        let (_, dialog) = self.open.as_mut()?;
+        dialog.tick(dt);
+        self.close_on_outcome()
     }
 
     /// Forwards to the open dialog. Returns whether one was open, so the
@@ -426,6 +459,50 @@ mod tests {
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
+    }
+
+    fn left(pressed: bool, at: Point) -> Input {
+        Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        }
+    }
+
+    /// A Return held back by a click on Done, then let go of by a cancel.
+    fn cancelled_with_a_return<T>(host: &mut ModalHost<T, DescDialog>) {
+        let done = host
+            .dialog()
+            .and_then(|dialog| dialog.dialog().item_bounds(DONE_ITEM))
+            .expect("Done")
+            .center();
+        host.input(&left(true, done), &mut Vec::new());
+        host.input(&key(Key::Enter), &mut Vec::new());
+        host.input(&key(Key::Char('b')), &mut Vec::new());
+        host.cancel_pointer();
+    }
+
+    #[test]
+    fn a_close_from_a_ticks_replay_gives_the_outcome() {
+        let mut host = ModalHost::default();
+        host.open(7, desc());
+        cancelled_with_a_return(&mut host);
+        assert!(host.is_open());
+        assert_eq!(host.tick(Duration::ZERO), Some((7, ())));
+        assert!(!host.is_open());
+        assert_eq!(host.tick(Duration::ZERO), None, "once");
+    }
+
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507),
+    /// so what was queued after the closing key goes to the screen beneath.
+    #[test]
+    fn what_was_queued_after_the_close_is_left_for_the_screen_beneath() {
+        let mut host = ModalHost::default();
+        host.open((), desc());
+        cancelled_with_a_return(&mut host);
+        host.tick(Duration::ZERO);
+        assert_eq!(host.take_unclaimed(), [key(Key::Char('b'))]);
+        assert_eq!(host.take_unclaimed(), [], "once");
     }
 
     #[test]

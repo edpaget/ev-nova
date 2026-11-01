@@ -256,6 +256,9 @@ pub struct OfferDialog {
     picture: Option<i16>,
     /// The movie played before the dialog, until it ends.
     before: Option<MovieStage>,
+    /// What a replay queued after the key that answered it, until taken
+    /// ([`OfferDialog::take_unclaimed`]).
+    unclaimed: Vec<Input>,
 }
 
 impl OfferDialog {
@@ -319,7 +322,8 @@ impl OfferDialog {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(None)
                 .with_cancel(None)
-                .with_pixel_scroll();
+                .with_pixel_scroll()
+                .with_held_keys();
             if picture.is_some() {
                 dialog
             } else {
@@ -334,6 +338,7 @@ impl OfferDialog {
             asks: OfferAsks::default(),
             picture,
             before: None,
+            unclaimed: Vec::new(),
         }
     }
 
@@ -389,6 +394,49 @@ impl OfferDialog {
             self.before = None;
             for input in &replay {
                 self.dialog_input(input);
+            }
+            self.run_replay();
+        }
+    }
+
+    /// What a replay queued after the key that answered the offer, once:
+    /// its holder gives it to what shows next, as the answer's
+    /// `FlushEvents` calls flush only mouse events (event codes passed as
+    /// masks, @0xa2da2-0xa2dde, @0xa2f70-0xa2fac; the refusal flushes
+    /// nothing). A text the answer shows flushes it as it opens (@0x5ae67).
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
+    }
+
+    /// Whether a key has asked for the map, player info or mission info,
+    /// and not been taken.
+    fn asked(&self) -> bool {
+        let asks = self.asks;
+        asks.map || asks.player_info || asks.mission_info
+    }
+
+    /// Runs what the dialog held back through [`Self::dialog_input`], in
+    /// order, until a key answers the offer, whose rest is left for what
+    /// shows next ([`Self::take_unclaimed`]), or asks for the map, player
+    /// info or mission info, whose rest that screen's flush drops
+    /// (`_DoSystemMap` @0x1257b, `_DoPlayerInfoDialog` @0x5a544,
+    /// `_DoMissionInfoDialog` @0x9e287).
+    fn run_replay(&mut self) {
+        let asked = self.asked();
+        let Ok(dialog) = &mut self.laid else {
+            return;
+        };
+        let mut replay = dialog.take_replay().into_iter();
+        while let Some(input) = replay.next() {
+            // A click's release can answer before the keys it held back.
+            if self.answered {
+                self.unclaimed.push(input);
+                self.unclaimed.extend(replay);
+                return;
+            }
+            self.dialog_input(&input);
+            if self.asked() && !asked {
+                return;
             }
         }
     }
@@ -474,10 +522,19 @@ impl OfferDialog {
 }
 
 impl OfferDialog {
-    /// The dialog's input: Return, Enter and the labels' letters choose;
-    /// everything else goes to the dialog. Once answered it takes nothing.
+    /// The dialog's input, its replay aside: Return, Enter and the labels'
+    /// letters choose; everything else goes to the dialog. While the dialog
+    /// holds its keys, everything goes straight to it. Once answered it
+    /// takes nothing.
     fn dialog_input(&mut self, input: &Input) {
         if self.answered {
+            return;
+        }
+        if let Ok(dialog) = &mut self.laid
+            && dialog.holds()
+        {
+            let event = dialog.input(input);
+            self.choose_from(event);
             return;
         }
         if is_map_press(input) {
@@ -512,6 +569,11 @@ impl OfferDialog {
             return;
         }
         let event = dialog.input(input);
+        self.choose_from(event);
+    }
+
+    /// Chooses what the dialog's `event` activated, if anything.
+    fn choose_from(&mut self, event: Option<DialogEvent>) {
         match event {
             Some(DialogEvent::Item(ACCEPT_ITEM | SINGLE_ITEM)) => self.choose(OfferChoice::Accept),
             Some(DialogEvent::Item(REFUSE_ITEM)) => self.choose(OfferChoice::Refuse),
@@ -524,6 +586,16 @@ impl Screen for OfferDialog {
     /// The movie before the dialog takes every input until it ends.
     /// Then Return, Enter and the labels' letters choose; everything else
     /// goes to the dialog. Once answered it takes nothing. It never quits.
+    ///
+    /// While a press is held on an arrow or a click tracked on a button or
+    /// an arrow, keys wait for the release, as `_SingleMissionFilter`'s held
+    /// loops and `_TrackSingleMissionButtons` read no events
+    /// (@0x99060-0x991e6, @0x28188): the map, player info and mission info
+    /// keys, the labels' letters and the page keys too. The release runs
+    /// them in order, within the same input, so a key that answers answers
+    /// by the input that let go; what they queued after it is left for what
+    /// shows next ([`OfferDialog::take_unclaimed`]). See the `held_keys`
+    /// module.
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.begin_movie();
         if let Some(stage) = &mut self.before {
@@ -531,6 +603,7 @@ impl Screen for OfferDialog {
             self.settle_movie();
         } else {
             self.dialog_input(input);
+            self.run_replay();
         }
         ScreenAction::None
     }
@@ -545,6 +618,7 @@ impl Screen for OfferDialog {
             self.settle_movie();
         } else if let Ok(dialog) = &mut self.laid {
             dialog.tick(dt);
+            self.run_replay();
         }
     }
 
@@ -586,11 +660,22 @@ impl Screen for OfferDialog {
         }
     }
 
+    /// Abandons a press, whose held keys run on the next tick.
     fn cancel_pointer(&mut self) {
         if self.before.is_some() {
             return;
         }
         if let Ok(dialog) = &mut self.laid {
+            dialog.cancel_pointer();
+        }
+    }
+
+    /// Letting go of the keys while a press holds them abandons the press,
+    /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
+    fn release_keys(&mut self) {
+        if let Ok(dialog) = &mut self.laid
+            && dialog.holds()
+        {
             dialog.cancel_pointer();
         }
     }
@@ -628,6 +713,9 @@ pub(crate) struct VenueOffers {
     /// Whether the timer restarted since this was last taken, and wants
     /// a new gap.
     restarted: bool,
+    /// What the answered dialog's replay queued after its answering key
+    /// ([`OfferDialog::take_unclaimed`]), until taken.
+    unclaimed: Vec<Input>,
 }
 
 impl VenueOffers {
@@ -647,6 +735,7 @@ impl VenueOffers {
             focus_ring: FocusRing::default(),
             since_ask: Duration::ZERO,
             restarted: false,
+            unclaimed: Vec::new(),
         }
     }
 
@@ -808,12 +897,27 @@ impl VenueOffers {
         self.sounds.extend(dialog.take_sounds());
         if let Some(choice) = dialog.take_choice() {
             self.choice = Some((dialog.prompt().mission, choice));
+            self.unclaimed = dialog.take_unclaimed();
             let hidden = choice == OfferChoice::Accept && dialog.prompt().labels.refuse.is_some();
             let answered = self.dialog.take();
             if !hidden {
                 self.answered = answered;
             }
         }
+    }
+
+    /// What the answered dialog's replay queued after the key that answered
+    /// it, once its choice has been taken, and so acted on: the venue runs
+    /// it through its own input on its next tick while nothing covers it,
+    /// and drops it under the texts the answer shows, whose
+    /// `_ShowTextDialog` flushes it as it opens (@0x5ae67). The answer's own
+    /// `FlushEvents` flush only mouse events (@0xa2da2-0xa2dde). Nothing
+    /// while the choice waits to be taken.
+    pub(crate) fn take_unclaimed(&mut self) -> Vec<Input> {
+        if self.choice.is_some() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.unclaimed)
     }
 
     /// Lets go of the offer dialog answered and left drawn, if any: its

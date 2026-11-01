@@ -15,6 +15,8 @@
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time, or a pixel at a time.
 //! - [`scroll_arrows`]: a text dialog's scroll arrows.
+//! - `held_keys`: the keys a dialog holds back while a press is held, until
+//!   its release.
 //! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
 //!   line clipped to the box. The news, exchange, flight message,
 //!   shipyard weapons, player info and shop descriptions draw through it.
@@ -80,6 +82,7 @@ pub mod dialog;
 pub mod edit_dialog;
 pub mod escort_dialog;
 pub mod faded_texts;
+mod held_keys;
 pub mod mission_dialogs;
 pub mod mission_info;
 pub mod mode_picker;

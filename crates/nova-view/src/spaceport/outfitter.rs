@@ -780,9 +780,25 @@ impl OutfitterScreen {
         }
     }
 
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
+        }
+    }
+
     /// Ticks only its offers' timer, as covered: something is open over
     /// the outfitter.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.take_unclaimed();
+        }
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -903,6 +919,16 @@ impl OutfitterScreen {
     #[must_use]
     pub fn alt_held(&self) -> bool {
         self.quantity.alt_held()
+    }
+
+    /// Runs what the alert's replay queued after the key that closed it
+    /// through the outfitter's own input, as `_ShowTextDialog` flushes
+    /// nothing as it closes (@0x5b353-0x5b507) and the outfitter's loop
+    /// reads those events next.
+    fn pass_alerts_unclaimed(&mut self) {
+        for input in self.alert.take_unclaimed() {
+            self.input(&input);
+        }
     }
 
     /// The alert, while it is open.
@@ -1286,6 +1312,7 @@ impl Screen for OutfitterScreen {
         if self.alert.is_open() {
             self.quantity.follow_alt(input);
             self.alert.input(input, &mut self.sounds);
+            self.pass_alerts_unclaimed();
             return ScreenAction::None;
         }
         if self.quantity.is_open() {
@@ -1346,13 +1373,17 @@ impl Screen for OutfitterScreen {
     }
 
     /// The wait for the next offer runs down, the quantity dialog or the
-    /// alert covering the outfitter while either is open.
+    /// alert covering the outfitter while either is open. The alert ticks,
+    /// and the keys it held back for a cancelled press can close it.
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         let covered = self.quantity.is_open() || self.alert.is_open();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);
         }
-        self.alert.tick(dt);
+        if self.alert.tick(dt).is_some() {
+            self.pass_alerts_unclaimed();
+        }
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -4869,6 +4900,58 @@ mod tests {
         });
         assert_eq!(screen.take_sounds(), []);
         assert!(screen.alert_dialog().is_none());
+    }
+
+    /// A Return held back by a press on the alert's Done, then a cancel:
+    /// the alert closes on the next tick.
+    fn cancelled_with(screen: &mut OutfitterScreen, keys: &[Key]) {
+        let done = alert_item(screen, crate::ui::desc::DONE_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: done,
+        });
+        for &k in keys {
+            press(screen, k);
+        }
+        screen.cancel_pointer();
+    }
+
+    #[test]
+    fn the_alert_closed_by_a_ticks_replay_lets_a_leaving_outfitter_close() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        screen.reselect(Reselection::Leave);
+        cancelled_with(&mut screen, &[Key::Enter]);
+        assert!(!screen.closed(), "the alert first");
+        screen.tick(Duration::ZERO);
+        assert!(screen.alert_dialog().is_none());
+        assert!(screen.closed());
+    }
+
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507),
+    /// so a key queued after the alert's closing key reaches the outfitter.
+    #[test]
+    fn a_key_queued_after_the_alerts_closing_key_reaches_the_outfitter() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        cancelled_with(&mut screen, &[Key::Enter, Key::Escape]);
+        screen.tick(Duration::ZERO);
+        assert!(screen.alert_dialog().is_none());
+        assert!(screen.closed(), "the queued Escape closed the outfitter");
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: done,
+        });
+        press(&mut screen, Key::Enter);
+        press(&mut screen, Key::Escape);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: Point::new(0.0, 0.0),
+        });
+        assert!(screen.closed(), "and at a release, within that input");
     }
 
     #[test]

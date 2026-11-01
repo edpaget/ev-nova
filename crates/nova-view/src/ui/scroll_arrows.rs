@@ -644,6 +644,136 @@ mod tests {
         assert_eq!(offset(&dialog), 5.0 + ARROW_UNITS);
     }
 
+    // Keys wait for the release (`ui::held_keys`): the held loops read no
+    // events (@0x52242, @0x99060-0x991e6).
+
+    fn key(key: Key, pressed: bool, repeat: bool) -> Input {
+        Input::Key {
+            key,
+            pressed,
+            repeat,
+        }
+    }
+
+    /// [`tall`], its keys waiting for a held press's release.
+    fn tall_holding_keys() -> Dialog {
+        tall().with_held_keys()
+    }
+
+    /// Runs `replay` through `dialog`, as a host runs it through its own
+    /// input path: the events it gives.
+    fn run(dialog: &mut Dialog, replay: &[Input]) -> Vec<DialogEvent> {
+        replay
+            .iter()
+            .filter_map(|input| dialog.input(input))
+            .collect()
+    }
+
+    #[test]
+    fn a_down_press_during_a_hold_waits_for_the_release_then_scrolls_ten_pixels() {
+        let mut dialog = tall_holding_keys();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        assert!(dialog.holds());
+        dialog.input(&key(Key::Down, true, false));
+        assert_eq!(offset(&dialog), 1.0, "it waits");
+        assert_eq!(dialog.take_replay(), [], "nothing until the release");
+        dialog.input(&left(false, at));
+        assert!(!dialog.holds());
+        let replay = dialog.take_replay();
+        assert_eq!(replay, [key(Key::Down, true, false)]);
+        run(&mut dialog, &replay);
+        assert_eq!(offset(&dialog), 1.0 + ARROW_UNITS);
+        assert_eq!(dialog.take_replay(), [], "taken once");
+    }
+
+    #[test]
+    fn return_queued_during_a_hold_activates_the_default_item_at_the_release() {
+        let mut dialog = tall_holding_keys();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        assert_eq!(dialog.input(&key(Key::Enter, true, false)), None);
+        dialog.input(&left(false, at));
+        let replay = dialog.take_replay();
+        assert_eq!(run(&mut dialog, &replay), [DialogEvent::Item(1)]);
+    }
+
+    #[test]
+    fn a_queued_keys_presses_repeats_releases_and_text_replay_in_order() {
+        let mut dialog = tall_holding_keys();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        let queued = [
+            key(Key::Down, true, false),
+            Input::Text('x'),
+            key(Key::Down, true, true),
+            key(Key::Down, false, false),
+        ];
+        for input in &queued {
+            dialog.input(input);
+        }
+        dialog.input(&left(false, at));
+        assert_eq!(dialog.take_replay(), queued);
+    }
+
+    #[test]
+    fn a_left_press_during_a_hold_replays_the_queue_and_then_the_press() {
+        let mut dialog = tall_holding_keys();
+        let arrow = down_at(&dialog);
+        let okay = dialog.item_bounds(1).expect("Okay").center();
+        dialog.input(&left(true, arrow));
+        dialog.input(&key(Key::Down, true, false));
+        assert_eq!(dialog.input(&left(true, okay)), None);
+        assert!(!dialog.holds(), "the hold is over");
+        let replay = dialog.take_replay();
+        assert_eq!(replay, [key(Key::Down, true, false), left(true, okay)]);
+        run(&mut dialog, &replay);
+        assert_eq!(offset(&dialog), 1.0 + ARROW_UNITS, "the key acts first");
+        assert_eq!(dialog.pressed_item(), Some(1), "then the press");
+        assert_eq!(dialog.input(&left(false, okay)), Some(DialogEvent::Item(1)));
+    }
+
+    /// The wheel is the engine's own addition: the original has none.
+    #[test]
+    fn a_wheel_during_a_hold_scrolls_at_once() {
+        let mut dialog = tall_holding_keys();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.input(&Input::Scroll {
+            delta: ScrollDelta::Units(20.0),
+            at: dialog.item_bounds(3).expect("the text").center(),
+        });
+        assert_eq!(offset(&dialog), 21.0);
+    }
+
+    #[test]
+    fn after_a_cancel_the_queue_replays_on_the_next_tick() {
+        let mut dialog = tall_holding_keys();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        dialog.input(&key(Key::Enter, true, false));
+        dialog.cancel_pointer();
+        assert!(!dialog.holds());
+        assert_eq!(dialog.take_replay(), [], "pending until the tick");
+        dialog.tick(TICK);
+        assert_eq!(offset(&dialog), 1.0, "no hold left to step");
+        assert_eq!(dialog.take_replay(), [key(Key::Enter, true, false)]);
+    }
+
+    #[test]
+    fn without_held_keys_a_key_acts_during_a_hold_at_once() {
+        let mut dialog = tall();
+        let at = down_at(&dialog);
+        dialog.input(&left(true, at));
+        assert!(!dialog.holds());
+        dialog.input(&key(Key::Down, true, false));
+        assert_eq!(offset(&dialog), 1.0 + ARROW_UNITS);
+        assert_eq!(
+            dialog.input(&key(Key::Enter, true, false)),
+            Some(DialogEvent::Item(1))
+        );
+    }
+
     #[test]
     fn a_tracked_arrow_released_off_it_does_nothing() {
         let mut dialog = at_offset(5.0);

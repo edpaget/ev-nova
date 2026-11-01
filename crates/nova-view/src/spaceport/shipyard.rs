@@ -1252,11 +1252,27 @@ impl ShipyardScreen {
         }
     }
 
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
+        }
+    }
+
     /// Ticks only its offers' timer, as covered: something is open over
     /// the shipyard. The time since the last press on the grid runs on
     /// too, as `_ShipyardFilter` measures it by the event's clock, and so
     /// does its ship movie's time base, unserviced.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.take_unclaimed();
+        }
         self.grid.advance(dt);
         self.movie.covered(dt);
         if let Some(offering) = &mut self.offering {
@@ -1747,6 +1763,7 @@ impl Screen for ShipyardScreen {
     /// `_ShipyardFilter` services it (@0x6046e); covered, it holds its
     /// frame while its time runs on ([`ShipMovie::covered`]).
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         self.grid.advance(dt);
         let covered = self.panel.is_some() || self.naming.is_open();
         if covered || self.offer_dialog().is_some() {

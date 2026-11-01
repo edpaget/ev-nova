@@ -212,6 +212,9 @@ pub struct DescDialog {
     map_requested: bool,
     closed: bool,
     reported: bool,
+    /// What a replay queued after the key that closed it, until taken
+    /// ([`DescDialog::take_unclaimed`]).
+    unclaimed: Vec<Input>,
 }
 
 impl DescDialog {
@@ -288,7 +291,8 @@ impl DescDialog {
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(DONE_ITEM))
             .with_cancel(Some(DONE_ITEM))
-            .with_pixel_scroll();
+            .with_pixel_scroll()
+            .with_held_keys();
         Self {
             dialog,
             picture: None,
@@ -296,6 +300,7 @@ impl DescDialog {
             map_requested: false,
             closed: false,
             reported: false,
+            unclaimed: Vec::new(),
         }
     }
 
@@ -342,6 +347,60 @@ impl DescDialog {
         }
         self.reported = true;
         Some(())
+    }
+
+    /// What a replay queued after the key that closed the dialog, once:
+    /// its host gives it to what shows next, as `_ShowTextDialog` flushes
+    /// nothing as it closes (@0x5b353-0x5b507). A text dialog shown next
+    /// flushes it as it opens (@0x5ae67).
+    pub fn take_unclaimed(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.unclaimed)
+    }
+
+    /// One input through the dialog's own path, its replay aside: the map
+    /// key, the page keys, then the dialog, which closes on Done. While
+    /// the dialog holds its keys, everything goes straight to it.
+    fn own_input(&mut self, input: &Input) {
+        if !self.dialog.holds() {
+            if is_map_press(input) {
+                self.map_requested = self.map.is_some();
+                if self.map_requested {
+                    self.dialog.cancel_pointer();
+                }
+                return;
+            }
+            if self
+                .dialog
+                .scroll_text_mut()
+                .is_some_and(|text| page_key(text, input))
+            {
+                return;
+            }
+        }
+        if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
+            self.closed = true;
+        }
+    }
+
+    /// Runs what the dialog held back through [`Self::own_input`], in
+    /// order, until a key closes it, whose rest is left for what shows next
+    /// ([`Self::take_unclaimed`]), or opens the map, whose rest the map's
+    /// flush drops (`_DoSystemMap` @0x1257b).
+    fn run_replay(&mut self) {
+        let mut replay = self.dialog.take_replay().into_iter();
+        while let Some(input) = replay.next() {
+            // A click's release on Okay can close it before the keys it
+            // held back.
+            if self.closed {
+                self.unclaimed.push(input);
+                self.unclaimed.extend(replay);
+                return;
+            }
+            self.own_input(&input);
+            if self.map_requested {
+                return;
+            }
+        }
     }
 
     /// The first line of the description shown, perhaps partly above the
@@ -408,37 +467,31 @@ impl Screen for DescDialog {
     /// press or repeat (@0x5b0af-0x5b130).
     ///
     /// A press on an arrow scrolls the text as `_TextDialogFilter` and
-    /// `_ShowTextDialog` do (see [`Dialog::input`]). Keys and a wheel work
-    /// during a hold, where the original's held loops read no events and
-    /// a key waits for the release (@0x52242).
+    /// `_ShowTextDialog` do (see [`Dialog::input`]).
+    ///
+    /// While a press is held on an arrow or a click tracked on Okay or an
+    /// arrow, keys wait for the release, as the original's held loops and
+    /// `_TrackTextButtons` read no events (@0x52242, @0x26bb0): the map key
+    /// and the page keys too. The release runs them in order, within the
+    /// same input, so a closing key closes the dialog by the input that let
+    /// go; what they queued after it is left for what shows next
+    /// ([`DescDialog::take_unclaimed`]). The wheel works during a hold. See
+    /// the `held_keys` module.
     ///
     /// Every other event goes to the dialog, and activating Done closes
     /// it. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if is_map_press(input) {
-            self.map_requested = self.map.is_some();
-            if self.map_requested {
-                self.dialog.cancel_pointer();
-            }
-            return ScreenAction::None;
-        }
-        if self
-            .dialog
-            .scroll_text_mut()
-            .is_some_and(|text| page_key(text, input))
-        {
-            return ScreenAction::None;
-        }
-        if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
-            self.closed = true;
-        }
+        self.own_input(input);
+        self.run_replay();
         ScreenAction::None
     }
 
     /// Only a press held on an arrow moves anything: one pixel a Mac tick,
-    /// as `_TextDialogFilter`'s loops do (@0x52172-0x5237f).
+    /// as `_TextDialogFilter`'s loops do (@0x52172-0x5237f). The keys an
+    /// abandoned press held back run then, so a tick can close the dialog.
     fn tick(&mut self, dt: Duration) {
         self.dialog.tick(dt);
+        self.run_replay();
     }
 
     /// The plain dialog draws its frame under its items. The picture
@@ -456,8 +509,17 @@ impl Screen for DescDialog {
             .draw_picture_in(list, DESC_PICTURE_ITEM, graphic);
     }
 
+    /// Abandons a press, whose held keys run on the next tick.
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
+    }
+
+    /// Letting go of the keys while a press holds them abandons the press,
+    /// as [`Screen::cancel_pointer`] does; otherwise nothing is held here.
+    fn release_keys(&mut self) {
+        if self.dialog.holds() {
+            self.dialog.cancel_pointer();
+        }
     }
 }
 
@@ -1451,51 +1513,155 @@ mod tests {
         assert_eq!(desc.take_sounds(), []);
     }
 
-    /// `_TextDialogFilter`'s held loops read no events, so the original's
-    /// key waits for the release (@0x52242). Here it acts at once.
+    // Keys wait for the release: `_TextDialogFilter`'s held loops and
+    // `_TrackTextButtons` read no events (@0x52242, @0x26bb0).
+
+    fn marks() -> MapMarks {
+        MapMarks {
+            green: None,
+            multi_arrows: false,
+        }
+    }
+
+    fn released(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: false,
+            repeat: false,
+        }
+    }
+
     #[test]
-    fn a_key_pressed_during_a_hold_acts_at_once_and_the_hold_carries_on() {
+    fn a_key_pressed_during_a_hold_acts_at_the_release() {
         let mut desc = long_stock_desc();
         press_on(&mut desc, SCROLL_DOWN_ITEM);
         desc.input(&key(Key::Down));
-        assert_eq!(desc.scroll_offset(), 1.0 + ARROW_UNITS);
+        assert_eq!(desc.scroll_offset(), 1.0, "it waits");
         desc.tick(TICK);
+        assert_eq!(desc.scroll_offset(), 2.0, "the hold carries on");
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
         assert_eq!(desc.scroll_offset(), 2.0 + ARROW_UNITS);
-        desc.input(&key(Key::Home));
-        assert_eq!(desc.scroll_offset(), 0.0);
-        desc.tick(TICK);
-        assert_eq!(desc.scroll_offset(), 1.0);
-    }
-
-    /// The map opens over the dialog and takes the release, and the
-    /// original's held loop never gets as far as opening it.
-    #[test]
-    fn the_map_opening_during_a_hold_ends_it() {
-        let marks = MapMarks {
-            green: None,
-            multi_arrows: false,
-        };
-        let mut desc = long_stock_desc().with_map(Some(marks));
-        press_on(&mut desc, SCROLL_DOWN_ITEM);
-        desc.input(&key(crate::flight::view::MAP_KEY));
-        desc.tick(TICK * 3);
-        assert_eq!(desc.scroll_offset(), 1.0);
     }
 
     #[test]
-    fn the_map_key_that_opens_no_map_leaves_a_hold_running() {
-        let mut desc = long_stock_desc();
-        press_on(&mut desc, SCROLL_DOWN_ITEM);
-        desc.input(&key(crate::flight::view::MAP_KEY));
-        desc.tick(TICK * 3);
-        assert_eq!(desc.scroll_offset(), 4.0);
-    }
-
-    #[test]
-    fn a_key_that_closes_the_dialog_closes_it_during_a_hold() {
+    fn return_during_a_hold_closes_it_at_the_release() {
         let mut desc = long_stock_desc();
         press_on(&mut desc, SCROLL_DOWN_ITEM);
         desc.input(&key(Key::Enter));
+        assert!(!desc.closed(), "it waits");
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert!(desc.closed(), "closed by the input that let go");
+    }
+
+    #[test]
+    fn return_during_a_click_on_okay_waits_for_its_release_too() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, DONE_ITEM);
+        desc.input(&key(Key::Enter));
+        assert!(!desc.closed());
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert!(
+            desc.closed(),
+            "released off Okay, the queued Return closes it"
+        );
+    }
+
+    #[test]
+    fn the_page_keys_wait_for_the_release() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(Key::End));
+        assert_eq!(desc.scroll_offset(), 1.0);
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert_eq!(desc.scroll_offset(), 98.0, "End, at the release");
+    }
+
+    #[test]
+    fn the_map_key_waits_for_the_release() {
+        let mut desc = long_stock_desc().with_map(Some(marks()));
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(crate::flight::view::MAP_KEY));
+        assert_eq!(desc.take_map_request(), None, "it waits");
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 4.0, "the hold carries on");
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert_eq!(desc.take_map_request(), Some(marks()));
+    }
+
+    #[test]
+    fn a_cancelled_hold_closes_on_the_next_tick() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(Key::Enter));
+        desc.cancel_pointer();
+        assert!(!desc.closed());
+        desc.tick(Duration::ZERO);
+        assert!(desc.closed());
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_during_a_hold_is_a_cancel() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        desc.input(&key(Key::Enter));
+        desc.release_keys();
+        desc.tick(TICK * 3);
+        assert_eq!(desc.scroll_offset(), 1.0, "the hold is over");
+        assert!(desc.closed(), "and its key replayed");
+    }
+
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507),
+    /// so what was queued after the closing key goes to what shows next.
+    #[test]
+    fn what_the_replay_queued_after_its_close_is_left_for_what_shows_next() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        for input in [key(Key::Enter), released(Key::Enter), key(Key::Down)] {
+            desc.input(&input);
+        }
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert!(desc.closed());
+        assert_eq!(desc.scroll_offset(), 1.0, "the Down reached nothing here");
+        assert_eq!(
+            desc.take_unclaimed(),
+            [released(Key::Enter), key(Key::Down)]
+        );
+        assert_eq!(desc.take_unclaimed(), [], "once");
+    }
+
+    #[test]
+    fn what_a_click_on_okay_held_back_is_left_for_what_shows_next() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, DONE_ITEM);
+        desc.input(&key(Key::Down));
+        release_on(&mut desc, DONE_ITEM);
+        assert!(desc.closed());
+        assert_eq!(desc.scroll_offset(), 0.0);
+        assert_eq!(desc.take_unclaimed(), [key(Key::Down)]);
+    }
+
+    /// `_DoSystemMap` flushes the queue as it opens (@0x1257b).
+    #[test]
+    fn what_the_replay_queued_after_the_map_key_is_dropped() {
+        let mut desc = long_stock_desc().with_map(Some(marks()));
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        for input in [key(crate::flight::view::MAP_KEY), key(Key::Enter)] {
+            desc.input(&input);
+        }
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
+        assert_eq!(desc.take_map_request(), Some(marks()));
+        assert!(!desc.closed(), "the Return went with the flush");
+        assert_eq!(desc.take_unclaimed(), []);
+    }
+
+    #[test]
+    fn a_map_key_that_opens_no_map_lets_the_replay_run_on() {
+        let mut desc = long_stock_desc();
+        press_on(&mut desc, SCROLL_DOWN_ITEM);
+        for input in [key(crate::flight::view::MAP_KEY), key(Key::Enter)] {
+            desc.input(&input);
+        }
+        release_on(&mut desc, SCROLL_DOWN_ITEM);
         assert!(desc.closed());
     }
 

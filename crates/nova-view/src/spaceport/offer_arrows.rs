@@ -362,6 +362,163 @@ mod tests {
         }
     }
 
+    // Keys wait for the release (`ui::held_keys`): `_SingleMissionFilter`'s
+    // held loops and `_TrackSingleMissionButtons` read no events
+    // (@0x99060-0x991e6, @0x28188).
+
+    /// A long offer in 1016, a hundred lines, with a press held on its
+    /// down arrow.
+    fn held() -> (OfferDialog, Point) {
+        let mut offer = offer_of(fixture::stock_1016(), &lines(100), None);
+        let at = item_at(&offer, SCROLL_DOWN_ITEM);
+        offer.input(&left(true, at));
+        (offer, at)
+    }
+
+    #[test]
+    fn a_labels_letter_during_a_hold_chooses_at_the_release() {
+        use crate::spaceport::offer::OfferChoice;
+        for (letter, choice) in [('y', OfferChoice::Accept), ('n', OfferChoice::Refuse)] {
+            let (mut offer, at) = held();
+            offer.input(&key(Key::Char(letter), false));
+            assert_eq!(offer.take_choice(), None, "it waits");
+            offer.input(&left(false, at));
+            assert_eq!(offer.take_choice(), Some(choice));
+        }
+    }
+
+    #[test]
+    fn return_during_a_click_on_a_button_waits_for_its_release() {
+        use crate::spaceport::offer::{OfferChoice, REFUSE_ITEM};
+        let mut offer = offer_of(fixture::stock_1016(), &lines(40), None);
+        let refuse = item_at(&offer, REFUSE_ITEM);
+        offer.input(&left(true, refuse));
+        offer.input(&key(Key::Enter, false));
+        assert!(!offer.answered());
+        offer.input(&left(false, refuse));
+        assert_eq!(
+            offer.take_choice(),
+            Some(OfferChoice::Refuse),
+            "the click first"
+        );
+    }
+
+    #[test]
+    fn m_i_and_p_during_a_hold_ask_at_the_release() {
+        let map = crate::flight::view::MAP_KEY;
+        let info = crate::ui::mission_info::MISSION_INFO_KEY;
+        let player = crate::ui::player_info::PLAYER_INFO_KEY;
+        let (mut offer, at) = held();
+        offer.input(&key(map, false));
+        assert!(!offer.take_map_request(), "it waits");
+        offer.input(&left(false, at));
+        assert!(offer.take_map_request());
+        let (mut offer, at) = held();
+        offer.input(&key(info, false));
+        offer.input(&left(false, at));
+        assert!(offer.take_info_request());
+        let (mut offer, at) = held();
+        offer.input(&key(player, false));
+        offer.input(&left(false, at));
+        assert!(offer.take_player_info_request());
+    }
+
+    #[test]
+    fn the_page_keys_wait_for_the_release() {
+        let (mut offer, at) = held();
+        offer.input(&key(Key::PageDown, false));
+        assert_eq!(offset(&offer), 1.0);
+        offer.input(&left(false, at));
+        assert_eq!(offset(&offer), 1.0 + PAGE_UNITS);
+    }
+
+    #[test]
+    fn a_cancelled_hold_chooses_on_the_next_tick() {
+        use crate::spaceport::offer::OfferChoice;
+        let (mut offer, _) = held();
+        offer.input(&key(Key::Enter, false));
+        offer.cancel_pointer();
+        assert!(!offer.answered());
+        offer.tick(Duration::ZERO);
+        assert_eq!(offer.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_during_a_hold_is_a_cancel() {
+        let (mut offer, _) = held();
+        offer.input(&key(Key::Enter, false));
+        offer.release_keys();
+        offer.tick(TICK * 3);
+        assert_eq!(offset(&offer), 1.0, "the hold is over");
+        assert!(offer.answered());
+    }
+
+    /// The answer's `FlushEvents` calls pass event codes where it takes
+    /// masks, so they flush only mouse events (@0xa2da2-0xa2dde): a key
+    /// queued after the answering key is left for what shows next.
+    #[test]
+    fn a_key_queued_after_the_answering_key_is_left_for_what_shows_next() {
+        let (mut offer, at) = held();
+        for k in [Key::Enter, Key::Char('b')] {
+            offer.input(&key(k, false));
+        }
+        offer.input(&left(false, at));
+        assert!(offer.answered());
+        assert_eq!(offer.take_unclaimed(), [key(Key::Char('b'), false)]);
+        assert_eq!(offer.take_unclaimed(), [], "once");
+    }
+
+    /// `_DoSystemMap`, `_DoPlayerInfoDialog` and `_DoMissionInfoDialog`
+    /// flush the queue as they open (@0x1257b, @0x5a544, @0x9e287).
+    #[test]
+    fn a_key_queued_after_m_i_or_p_is_dropped() {
+        for asking in [
+            crate::flight::view::MAP_KEY,
+            crate::ui::mission_info::MISSION_INFO_KEY,
+            crate::ui::player_info::PLAYER_INFO_KEY,
+        ] {
+            let (mut offer, at) = held();
+            for k in [asking, Key::Enter] {
+                offer.input(&key(k, false));
+            }
+            offer.input(&left(false, at));
+            assert!(
+                !offer.answered(),
+                "{asking:?}: the Return went with the flush"
+            );
+            assert_eq!(offer.take_unclaimed(), []);
+        }
+    }
+
+    #[test]
+    fn the_venue_hears_the_choice_after_the_release_and_after_a_ticks_replay() {
+        use crate::spaceport::offer::{OfferChoice, VenueOffers};
+        for cancelled in [false, true] {
+            let mut offers = VenueOffers::asking(crate::spaceport::offer::OfferTemplates {
+                plain: Ok(fixture::stock_1016()),
+                picture: Err("none".to_owned()),
+            });
+            let mut prompt = fixture::prompt();
+            prompt.text = lines(40);
+            offers.open(prompt, Rc::new(MonoMetrics), ButtonStyle::STOCK);
+            let at = item_at(offers.dialog().expect("open"), SCROLL_DOWN_ITEM);
+            offers.input(&left(true, at), &mut Vec::new());
+            offers.input(&key(Key::Enter, false), &mut Vec::new());
+            assert_eq!(offers.take_choice(), None);
+            if cancelled {
+                offers.cancel_pointer();
+                offers.tick_dialog(Duration::ZERO);
+            } else {
+                offers.input(&left(false, at), &mut Vec::new());
+            }
+            assert_eq!(
+                offers.take_choice(),
+                Some((MissionId(141), OfferChoice::Accept)),
+                "cancelled {cancelled}"
+            );
+        }
+    }
+
     #[test]
     fn the_venues_offer_ticks_its_dialog_under_tick_dialog() {
         use crate::spaceport::offer::VenueOffers;

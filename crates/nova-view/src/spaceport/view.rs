@@ -2465,6 +2465,18 @@ impl SpaceportView {
         self.dispose_answered_offer();
         self.close_alerted_outfitter();
         let open_covered = self.mission_dialogs_open() || self.player_info.is_some();
+        // What the spaceport's offer's answer left reaches the spaceport,
+        // or goes with the flush of a text the answer shows (@0x5ae67).
+        let unclaimed = self
+            .missioning
+            .as_mut()
+            .map(|missioning| missioning.landing.take_unclaimed())
+            .unwrap_or_default();
+        if !open_covered {
+            for input in &unclaimed {
+                self.route_input(input);
+            }
+        }
         if let Some(missioning) = &mut self.missioning
             && !open_covered
         {
@@ -2475,6 +2487,10 @@ impl SpaceportView {
                 open.tick_covered(dt);
             } else {
                 open.screen_mut().tick(dt);
+                // The outfitter's alert can close as it ticks, running the
+                // keys a cancelled press held back.
+                self.play_alert_after();
+                self.close_alerted_outfitter();
             }
         }
     }

@@ -482,9 +482,25 @@ impl TradeScreen {
         }
     }
 
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
+        }
+    }
+
     /// Ticks only its offers' timer, as covered: something is open over
     /// the trade center.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.take_unclaimed();
+        }
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, true);
         }
@@ -885,6 +901,7 @@ impl Screen for TradeScreen {
     /// The wait for the next offer runs down, the quantity dialog
     /// covering the trade center while it is open.
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         let covered = self.quantity.is_open();
         if let Some(offering) = &mut self.offering {
             offering.tick(dt, covered);

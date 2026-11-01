@@ -644,11 +644,27 @@ impl BarScreen {
             .is_some_and(VenueOffers::take_restart)
     }
 
+    /// Runs what the offer's answer left ([`VenueOffers::take_unclaimed`])
+    /// through the venue's own input.
+    fn pass_offers_unclaimed(&mut self) {
+        let unclaimed = self
+            .offering
+            .as_mut()
+            .map(VenueOffers::take_unclaimed)
+            .unwrap_or_default();
+        for input in &unclaimed {
+            self.input(input);
+        }
+    }
+
     /// Ticks only its offers' timer, as covered: something is open over
     /// the bar. The hire screen's time runs on too, the gap between two
     /// presses on its grid measured by the clock, and its ship movie's
     /// time base, unserviced.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.take_unclaimed();
+        }
         if let Some(hire) = &mut self.hire {
             hire.tick_covered(dt);
         }
@@ -962,6 +978,7 @@ impl Screen for BarScreen {
     /// the next offer runs down, the hire screen or the news covering the
     /// bar while either is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
+        self.pass_offers_unclaimed();
         if let Some(hire) = &mut self.hire {
             hire.tick(dt);
         }
@@ -2177,6 +2194,53 @@ mod tests {
             Some((MissionId(141), OfferChoice::Refuse))
         );
         assert_eq!(screen.take_offer_choice(), None, "once");
+    }
+
+    /// An offer over the bar accepted by a click on its accept button, an
+    /// Escape held back by the click.
+    fn accepted_with_an_escape_queued() -> BarScreen {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let accept = screen
+            .offer_dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(1))
+            .expect("accept")
+            .center();
+        let left = |pressed| Input::PointerButton {
+            button: crate::input::MouseButton::Left,
+            pressed,
+            at: accept,
+        };
+        screen.input(&left(true));
+        screen.input(&key(Key::Escape, false));
+        screen.input(&left(false));
+        assert!(screen.offer_dialog().is_none(), "answered");
+        assert!(!screen.closed(), "the Escape waits for what shows next");
+        screen
+    }
+
+    /// The answer flushes only mouse events (@0xa2da2-0xa2dde), so the
+    /// Escape reaches the bar once the answer is taken and nothing shows
+    /// over it, on its next tick.
+    #[test]
+    fn a_key_queued_after_the_offers_answer_reaches_the_bar_on_its_next_tick() {
+        let mut screen = accepted_with_an_escape_queued();
+        screen.tick(ms(0));
+        assert!(!screen.closed(), "not before the answer is taken");
+        assert!(screen.take_offer_choice().is_some());
+        screen.tick(ms(0));
+        assert!(screen.closed());
+    }
+
+    /// A text the answer shows flushes it as it opens (@0x5ae67).
+    #[test]
+    fn a_key_queued_after_the_offers_answer_is_dropped_under_a_text() {
+        let mut screen = accepted_with_an_escape_queued();
+        assert!(screen.take_offer_choice().is_some());
+        screen.tick_covered(ms(0));
+        screen.tick(ms(0));
+        assert!(!screen.closed());
     }
 
     #[test]
