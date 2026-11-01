@@ -955,6 +955,53 @@ mod tests {
         assert_eq!(decided(&[waiting, neutral], 0, &[]), Goal::Attack(n(2)));
     }
 
+    /// The decision of an interceptor provoked by NPC 2 while in `goal`,
+    /// NPC 2 being `provoker`, the player in view of record -10; and the
+    /// draws asked.
+    fn provoked_in(goal: Goal, provoker: Npc) -> (Decision, Vec<u32>) {
+        let mut cop = police();
+        cop.goal = goal;
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        let npcs = [cop, provoker];
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let mut chance = Draws::of(&[0]);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut chance);
+        (decision, chance.asked)
+    }
+
+    #[test]
+    fn a_provoked_waiting_or_held_interceptor_whose_provoker_it_cant_destroy_goes_idle() {
+        // The provoked branch writes goal 4 over a wait (6) or a hold
+        // (0xa), excluding only goals 3, 7, 9 and 0xf (@0x8cbf6-0x8cc31);
+        // the gate then skips the search for goal 4 (@0x8cc6d-0x8cc7d), and
+        // the disabled drop takes a disabled target with no destroying
+        // weapon: goal 0, +0x70 -1 (@0x8d2fa-0x8d33a).
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.condition = Condition::Disabled;
+        for goal in [Goal::Wait, Goal::Hold] {
+            let (decision, asked) = provoked_in(goal, pirate.clone());
+            assert_eq!(decision.goal, Goal::Idle, "{goal:?}");
+            assert!(decision.clears_target, "{goal:?}");
+            assert!(asked.is_empty(), "{goal:?}: no search that think");
+        }
+    }
+
+    #[test]
+    fn a_provoked_waiting_or_held_interceptor_whose_provoker_it_spares_goes_idle() {
+        // Goal 4, written over the wait or hold (@0x8cbf6-0x8cc31), meets
+        // the ally drop: goal 0 (@0x8e277-0x8e2d2), with no search that
+        // think (@0x8cc6d-0x8cc7d).
+        let ally = ship(2, TRADERS, AiType::Warship, 0.0, 300.0);
+        for goal in [Goal::Wait, Goal::Hold] {
+            let (decision, asked) = provoked_in(goal, ally.clone());
+            assert_eq!(decision.goal, Goal::Idle, "{goal:?}");
+            assert!(asked.is_empty(), "{goal:?}: no search that think");
+        }
+    }
+
     #[test]
     fn a_waiting_interceptor_short_of_ammo_goes_idle() {
         // State 6 to 3 to 0 (@0x8d391, @0x8e228).
