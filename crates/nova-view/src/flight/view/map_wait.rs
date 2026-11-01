@@ -202,22 +202,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Tracks `input`'s key as held if it is one flight goes on reading
     /// live across the map ([`UNLATCHED_KEYS`]). A latched flight key
-    /// isn't held, but its fresh press is noted as latched and its release
-    /// lets go of it, so the close leaves latched exactly those still down
-    /// ([`FlightView::latched_down`]): a gate's movie starts with the keys
-    /// flight held, which its come-out sorts (`FlightView::came_through`).
+    /// isn't held, but its press or repeat is noted as latched and its
+    /// release lets go of it, so the close leaves latched exactly those
+    /// still down ([`FlightView::latched_down`]), however they went down:
+    /// `_SetAllKeyCmdFlags` (@0x6a898) latches every key down at the
+    /// close, so one first seen here by a repeat, its press gone
+    /// elsewhere, is latched as a pressed one is. A gate's movie starts
+    /// with the keys flight held, which its come-out sorts
+    /// (`FlightView::came_through`).
     pub(super) fn track_unlatched(&mut self, input: &Input) {
-        let Input::Key {
-            key,
-            pressed,
-            repeat,
-        } = *input
-        else {
+        let Input::Key { key, pressed, .. } = *input else {
             return;
         };
         if UNLATCHED_KEYS.contains(&key) || !pressed {
             self.track_held(input);
-        } else if !repeat {
+        } else {
             self.latch_held_keys([key]);
         }
     }

@@ -4,6 +4,7 @@
 //! movies off leaves out. Kept apart from `tests/mod.rs`, which is large.
 
 use super::faked_landing::{arrived, at_gate, came_out_in_alpha};
+use super::faked_screen::{sent_count, sent_since};
 use super::*;
 use crate::Color;
 use crate::draw::fill_rect;
@@ -567,6 +568,40 @@ fn a_jump_key_let_go_under_the_gates_movie_is_tracked_afresh_after_the_come_out(
         view.held.contains(&JUMP_KEY),
         "a first sight: {:?}",
         view.held
+    );
+}
+
+#[test]
+fn a_jump_key_first_seen_under_a_gates_movie_by_a_repeat_ignores_its_repeats_after_the_come_out() {
+    // The latch after the movie (@0x6429c) takes every key down, however
+    // it went down: its press went elsewhere.
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&held(JUMP_KEY));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    view.take_movie_replay();
+    let from = sent_count(&view);
+    for _ in 0..3 {
+        view.input(&held(JUMP_KEY));
+        view.tick(TICK);
+    }
+    assert!(
+        !sent_since(&view, from).contains(&FlightCommand::Jump),
+        "{:?}",
+        sent_since(&view, from)
+    );
+    assert!(!view.held.contains(&JUMP_KEY), "latched: {:?}", view.held);
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(
+        sent_since(&view, from).contains(&FlightCommand::Jump),
+        "let go and pressed afresh"
     );
 }
 

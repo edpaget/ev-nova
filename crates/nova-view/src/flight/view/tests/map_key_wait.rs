@@ -352,6 +352,23 @@ fn a_jump_key_held_from_before_m_ignores_its_repeats_after_the_close() {
 }
 
 #[test]
+fn a_jump_key_first_seen_on_ms_map_by_a_repeat_ignores_its_repeats_until_let_go() {
+    // `_SetAllKeyCmdFlags` (@0x6a898) latches every key down at the
+    // close, however it went down: its press went elsewhere.
+    let mut view = faked_m_open();
+    view.input(&held(JUMP_KEY));
+    tap(&mut view, MAP);
+    assert!(!view.map_open());
+    let from = sent_count(&view);
+    repeats(&mut view, JUMP_KEY);
+    assert!(!jumped_since(&view, from), "{:?}", sent_since(&view, from));
+    assert!(!view.held.contains(&JUMP_KEY));
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "let go and pressed afresh");
+}
+
+#[test]
 fn a_latched_key_let_go_on_the_map_is_tracked_afresh_after_the_close() {
     let mut view = faked_sol(in_sol());
     view.input(&key(JUMP_KEY, true));
