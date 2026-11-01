@@ -786,7 +786,11 @@ pub struct FlightOverlays {
 /// H, `\`, \` and J act again when held across a jump's end, a release
 /// of Option or a repair, and B once a target is taken or the cloak drops,
 /// as the original polls them with a latch each
-/// ([`FlightView::held_keys_frame`]); the original's
+/// ([`FlightView::held_keys_frame`]). Held across a dialog or map that
+/// `_SetAllKeyCmdFlags` (@0x61e6d) follows, a latched key stays out of
+/// `held`, its OS repeats too, until its release
+/// ([`FlightView::latched_down`]); which keys have no latch is the
+/// `map_wait` module's `UNLATCHED_KEYS`. The original's
 /// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
 /// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
@@ -1414,6 +1418,13 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// and its close gets back those `_HandlePlayer` polls with no latch
     /// that are still down ([`FlightView::take_back_live_input`]).
     held: HashSet<Key>,
+    /// The latched flight keys a `_SetAllKeyCmdFlags` (@0x61e6d) site
+    /// latched while they were down, and that haven't been let go since:
+    /// their latches (`_jumpTryFlag`, `_navModeSelectFlag` and the rest,
+    /// see the `map_wait` module) wait for a release `_HandlePlayer` reads
+    /// from `GetKeys`, so their OS repeats are no presses and stay out of
+    /// `held` (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
+    latched_down: HashSet<Key>,
     /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
     /// Hyperspace Mode block and Option-\` share: set as one of them acts,
     /// so a key held acts once; cleared on a frame neither \` without

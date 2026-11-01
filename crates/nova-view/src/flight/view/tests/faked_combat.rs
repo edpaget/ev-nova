@@ -180,7 +180,10 @@ fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
 }
 
 #[test]
-fn s_pressed_while_the_map_is_open_does_nothing_once_it_closes() {
+fn s_pressed_while_the_map_is_open_and_still_down_reads_held_once_it_closes() {
+    // Weapon Safety has no latch: `_HandlePlayer` reads it on every pass
+    // it is down (@0x6adc2-0x6addf), M's map's `_SetAllKeyCmdFlags`
+    // (@0x6a898) included.
     let mut view = in_flight();
     tap(&mut view, MAP);
     assert!(view.map_open());
@@ -188,7 +191,7 @@ fn s_pressed_while_the_map_is_open_does_nothing_once_it_closes() {
     view.input(&key(DESELECT_KEY, true));
     tap(&mut view, MAP);
     assert!(!view.map_open());
-    assert!(!held_in_the_next_step(&mut view).1, "no safety held");
+    assert!(held_in_the_next_step(&mut view).1, "the safety held");
     assert_eq!(
         sent_since(&view, from),
         [FlightCommand::CueCourse],
@@ -219,8 +222,8 @@ fn the_combat_keys_do_nothing_while_the_map_is_open() {
     );
     assert_eq!(
         held_in_the_next_step(&mut view),
-        ((true, true), false),
-        "the fire keys read down as the map closes, and the safety's waits for its release"
+        ((true, true), true),
+        "the fire keys and the safety, none latched, read down as the map closes"
     );
 }
 

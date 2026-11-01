@@ -139,7 +139,8 @@ impl<
     /// Plays `effect` for the ship having come out of a gate, `combat` the
     /// fight's events its arrival left pending, caught up with as an
     /// arrival is ([`FlightView::arrived`]). The latched flight keys are
-    /// let go and the unlatched ones kept, as `_PlayerEnterHypergate` and
+    /// let go, their repeats dropped until their release, and the
+    /// unlatched ones kept, as `_PlayerEnterHypergate` and
     /// `_PlayerEnterWormhole` set every latch after their movie
     /// (`_SetAllKeyCmdFlags` @0x639f2, @0x6429c) and `_HandlePlayer` polls
     /// the rest: neither touches the jump counter +0x50 its keys test.

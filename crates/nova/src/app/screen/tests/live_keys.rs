@@ -224,6 +224,32 @@ fn a_latched_key_held_across_the_offers_close_acts_only_once_pressed_again() {
 }
 
 #[test]
+fn a_latched_key_held_across_the_offers_close_ignores_its_repeats_until_let_go() {
+    // `_HandlePlayer` polls `GetKeys` (`_QuickKeyCheckHandler` @0x43e01)
+    // and drops queued keys (`_IterateInGameEventLoop` @0x56a6b), so an
+    // OS repeat never clears the latch `_SetAllKeyCmdFlags` (@0x622ac)
+    // set.
+    let mut screen = offered_over_flight();
+    let target = |screen: &AppScreen| flight(screen).session().expect("flying").nav_target();
+    screen.input(&key(Key::Char('1'), true));
+    refuse(&mut screen);
+    for _ in 0..4 {
+        screen.tick(TICK * 2);
+        screen.input(&Input::Key {
+            key: Key::Char('1'),
+            pressed: true,
+            repeat: true,
+        });
+    }
+    screen.tick(TICK * 8);
+    assert_eq!(target(&screen), None, "repeats: still latched");
+    screen.input(&key(Key::Char('1'), false));
+    screen.input(&key(Key::Char('1'), true));
+    screen.tick(TICK * 8);
+    assert_ne!(target(&screen), None, "pressed afresh");
+}
+
+#[test]
 fn thrust_held_through_the_player_info_thrusts_after_its_close() {
     // `_HandlePlayer` @0x70393.
     let mut screen = with_dialogs(data());

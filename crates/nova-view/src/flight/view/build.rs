@@ -619,6 +619,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             alpha: 0.0,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
+            latched_down: HashSet::new(),
             nav_latch: false,
             select_latch: false,
             slot_block: super::slot_block::SlotBlock::default(),

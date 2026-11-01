@@ -18,8 +18,10 @@
 //!   down, before the wait and before the map opened too. So over flight
 //!   the view keeps [`UNLATCHED_KEYS`] held across the map, presses and
 //!   releases, and everything else is let go as the map opens. The latched
-//!   keys wait for their release: `_HandlePlayer` sets all 23 latches after
-//!   M's map (`_SetAllKeyCmdFlags` @0x61e6d, called @0x6a898). The same
+//!   keys wait for their release, their OS repeats included, which the
+//!   poll never sees ([`FlightView::latched_down`]): `_HandlePlayer` sets
+//!   its 22 latches and the escort menu's 5 after M's map
+//!   (`_SetAllKeyCmdFlags` @0x61e6d, called @0x6a898). The same
 //!   poll reads them after every other dialog over flight, which takes
 //!   flight's input from the router instead: the router keeps what is
 //!   physically down under it and hands it back as the last one closes
@@ -52,7 +54,10 @@
 //!   @0x55429).
 
 use super::dialog_map::MapOpening;
-use super::{AFTERBURNER_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView, MAP_KEY, SECONDARY_KEY};
+use super::{
+    AFTERBURNER_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS, FlightView,
+    JETTISON_KEY, MAP_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
+};
 use crate::flight::sim_port::FlightSim;
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
@@ -62,9 +67,25 @@ use crate::{Input, Key};
 /// latch to wait on, so the map keeps them held: thrust +0x2a (@0x6cb71),
 /// turn +0x26 and +0x28 (@0x6c9cc), reverse +0x2c (@0x6c72f), face-target
 /// +0xe (@0x6aec6), afterburner +0x30 (@0x6cadf), primary +0x4 (@0x6ab06),
-/// secondary +0x6 (@0x6ab87), and raw Option, Command and Shift (0x3a,
-/// 0x37, 0x38).
-const UNLATCHED_KEYS: [Key; 11] = [
+/// secondary +0x6 (@0x6ab87), weapon safety +0x2 (@0x6adc2-0x6addf), the
+/// eject chord +0x22 (@0x6f29e-0x6f2c1), the self-destruct chord +0x24
+/// (@0x6fdb4-0x6fdfc), jettison +0x1e (@0x6fd54-0x6fda1), and raw Option,
+/// Command and Shift (0x3a, 0x37, 0x38).
+///
+/// Every other flight key has a latch `_SetAllKeyCmdFlags` (@0x61e6d)
+/// sets: `_navModeSelectFlag` \` and H (0xdee04), `_navTargetSelectFlag`
+/// `\` (0xdee48), `_navDefaultSelectFlag` the stellar slot keys (0xdede0),
+/// `_weapTargetSelectFlag` Tab (0xdede8), `_mapTryFlag` M (0xdedf8),
+/// `_weapCloseTargFlag` R (0xdee50), `_weapSelectFlag` W (0xdee54),
+/// `_jumpTryFlag` J (0xdee44), `_ackCommFlag` Return (0xdedf4),
+/// `_playerInfoFlag` P (0xdedd4), `_commTryFlag` Y (0xdee0c),
+/// `_missionInfoFlag` I (0xdee00) and `_cloakFlag` U (0xdedfc). B and L
+/// have latches of their own that it doesn't set, `_boardTryFlag`
+/// (0xdee18) and `_dockTryFlag` (0xdee34), set as they act, so one that
+/// acted before a close waits for its release all the same. One first
+/// pressed under the dialog, and the latched keys' reads that skip their
+/// latch, are rdm:phase/play-feel-8/phase-20-latched-keys-read-past-their-latches.
+pub(super) const UNLATCHED_KEYS: [Key; 15] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -73,6 +94,10 @@ const UNLATCHED_KEYS: [Key; 11] = [
     AFTERBURNER_KEY,
     FIRE_KEY,
     SECONDARY_KEY,
+    DESELECT_KEY,
+    EJECT_KEY,
+    SELF_DESTRUCT_KEY,
+    JETTISON_KEY,
     Key::Alt,
     Key::Command,
     Key::Shift,
@@ -151,18 +176,49 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Keeps of the keys held only those flight goes on reading live
-    /// across the map ([`UNLATCHED_KEYS`]).
+    /// across the map ([`UNLATCHED_KEYS`]), as every path that calls it
+    /// runs `_SetAllKeyCmdFlags`: the latched keys it lets go of wait for
+    /// their release ([`FlightView::latched_down`]), repeats and all.
     pub(super) fn keep_unlatched_keys(&mut self) {
+        let latched: Vec<Key> = self
+            .held
+            .iter()
+            .copied()
+            .filter(|key| !UNLATCHED_KEYS.contains(key))
+            .collect();
         self.held.retain(|key| UNLATCHED_KEYS.contains(key));
+        self.latch_held_keys(latched);
+    }
+
+    /// Notes `keys` down as latched, those flight reads with a latch
+    /// `_SetAllKeyCmdFlags` sets: the flight keys beyond
+    /// [`UNLATCHED_KEYS`].
+    fn latch_held_keys(&mut self, keys: impl IntoIterator<Item = Key>) {
+        let latched = keys
+            .into_iter()
+            .filter(|key| FLIGHT_KEYS.contains(key) && !UNLATCHED_KEYS.contains(key));
+        self.latched_down.extend(latched);
     }
 
     /// Tracks `input`'s key as held if it is one flight goes on reading
-    /// live across the map ([`UNLATCHED_KEYS`]).
+    /// live across the map ([`UNLATCHED_KEYS`]). A latched flight key
+    /// isn't held, but its fresh press is noted as latched and its release
+    /// lets go of it, so the close leaves latched exactly those still down
+    /// ([`FlightView::latched_down`]): a gate's movie starts with the keys
+    /// flight held, which its come-out sorts (`FlightView::came_through`).
     pub(super) fn track_unlatched(&mut self, input: &Input) {
-        if let Input::Key { key, .. } = *input
-            && UNLATCHED_KEYS.contains(&key)
-        {
+        let Input::Key {
+            key,
+            pressed,
+            repeat,
+        } = *input
+        else {
+            return;
+        };
+        if UNLATCHED_KEYS.contains(&key) || !pressed {
             self.track_held(input);
+        } else if !repeat {
+            self.latch_held_keys([key]);
         }
     }
 
@@ -183,16 +239,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `_SetAllKeyCmdFlags` (@0x61e6d) latches the rest. The unlatched
     /// keys held become exactly those of `down` ([`UNLATCHED_KEYS`]); no
     /// latched key is taken from `down`, as its latch waits for its
-    /// release, and none flight holds is let go. A button still down keeps
-    /// the cursor whole.
-    ///
-    /// `down` names every key down, latched ones too, for the latch's
-    /// own bookkeeping (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
+    /// release, and none flight holds is let go. The latched keys of
+    /// `down` become exactly those whose repeats flight drops until their
+    /// release ([`FlightView::latched_down`]), as `down` is the whole of
+    /// what is down. A button still down keeps the cursor whole.
     pub fn take_back_live_input(&mut self, down: impl IntoIterator<Item = Key>, button: bool) {
         self.held.retain(|key| !UNLATCHED_KEYS.contains(key));
-        for key in down {
+        self.latched_down.clear();
+        let down: Vec<Key> = down.into_iter().collect();
+        for &key in &down {
             self.hold_live_key(key);
         }
+        self.latch_held_keys(down);
         self.cursor.button(button);
     }
 

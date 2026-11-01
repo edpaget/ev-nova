@@ -96,3 +96,126 @@ fn a_button_let_go_under_the_dialog_fades_the_cursor_after_the_close() {
     view.take_back_live_input([], false);
     fades_with_no_release(&mut view);
 }
+
+// A latched key held across the close: `_SetAllKeyCmdFlags` latches it,
+// and `_HandlePlayer`, polling `GetKeys` (`_QuickKeyCheckHandler`
+// @0x43e01) and dropping queued keys (`_IterateInGameEventLoop` @0x56a6b,
+// @0x56cec), never sees its OS repeats: it acts again only once let go.
+
+/// Whether `view` sent [`FlightCommand::Jump`] since `from` of its
+/// commands.
+fn jumped_since(view: &Faked, from: usize) -> bool {
+    sent(view)[from..].contains(&FlightCommand::Jump)
+}
+
+/// Repeats of `k` on `view`, a tick after each.
+fn repeats(view: &mut Faked, k: Key) {
+    for _ in 0..3 {
+        view.input(&held(k));
+        view.tick(TICK);
+    }
+}
+
+#[test]
+fn a_jump_key_held_across_a_dialogs_close_ignores_its_repeats_until_let_go() {
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    view.take_back_live_input([JUMP_KEY], false);
+    let from = sent(&view).len();
+    repeats(&mut view, JUMP_KEY);
+    assert!(
+        !jumped_since(&view, from),
+        "no jump: {:?}",
+        &sent(&view)[from..]
+    );
+    assert!(!view.held.contains(&JUMP_KEY), "J not held");
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "let go and pressed afresh");
+}
+
+#[test]
+fn every_latched_key_held_across_the_close_ignores_its_repeats() {
+    let latched = FLIGHT_KEYS
+        .into_iter()
+        .filter(|k| !super::super::map_wait::UNLATCHED_KEYS.contains(k));
+    for k in latched {
+        let mut view = in_flight();
+        dialog_opens(&mut view);
+        view.take_back_live_input([k], false);
+        view.input(&held(k));
+        assert!(!view.held.contains(&k), "{k:?} not held");
+    }
+}
+
+#[test]
+fn a_fresh_press_of_a_latched_key_after_the_close_acts_though_its_release_was_missed() {
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    view.take_back_live_input([JUMP_KEY], false);
+    let from = sent(&view).len();
+    // Its release went elsewhere: the OS sends a fresh press only after
+    // one, so the latch has cleared.
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from));
+    assert!(view.held.contains(&JUMP_KEY));
+}
+
+#[test]
+fn an_unlatched_key_repeated_after_the_close_stays_held() {
+    let mut view = at_rest(catalog());
+    dialog_opens(&mut view);
+    view.take_back_live_input([Key::Up], false);
+    view.input(&held(Key::Up));
+    assert!(view.held.contains(&Key::Up));
+    ticked(&mut view, 1);
+    assert!(last_controls(&view).thrust);
+}
+
+#[test]
+fn a_dialog_opening_forgets_the_latched_keys() {
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    view.take_back_live_input([JUMP_KEY], false);
+    // The next dialog, or a focus loss, takes the releases elsewhere.
+    dialog_opens(&mut view);
+    view.input(&held(JUMP_KEY));
+    assert!(view.held.contains(&JUMP_KEY), "a first sight, as before");
+}
+
+#[test]
+fn the_close_hands_back_a_latched_key_set_whole() {
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    view.take_back_live_input([JUMP_KEY], false);
+    // J let go under the next dialog, which hands back nothing of it.
+    view.take_back_live_input([], false);
+    view.input(&held(JUMP_KEY));
+    assert!(view.held.contains(&JUMP_KEY), "no longer latched");
+}
+
+#[test]
+fn the_keys_no_latch_guards_read_down_after_the_close() {
+    // Weapon Safety reads every pass held (@0x6adc2-0x6addf), the eject
+    // and self-destruct chords run with no latch (@0x6f29e-0x6f2c1,
+    // @0x6fdb4-0x6fdfc), and Command-K jettisons on every pass held
+    // (@0x6fd54-0x6fda1).
+    let mut view = at_rest(catalog());
+    dialog_opens(&mut view);
+    let down = [
+        DESELECT_KEY,
+        EJECT_KEY,
+        SELF_DESTRUCT_KEY,
+        JETTISON_KEY,
+        Key::Command,
+    ];
+    view.take_back_live_input(down, false);
+    for k in down {
+        assert!(view.held.contains(&k), "{k:?} reads down");
+    }
+    ticked(&mut view, 1);
+    let step = view.sim.inputs().last().copied().expect("a step");
+    assert!(step.weapon_safety, "S");
+    assert!(step.eject, "Command-X");
+    assert!(step.self_destruct, "Command--");
+}

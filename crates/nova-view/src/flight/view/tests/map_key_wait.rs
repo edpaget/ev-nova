@@ -307,6 +307,74 @@ fn a_latched_key_held_past_the_close_waits_for_its_release() {
     }
 }
 
+/// Whether `view` sent [`FlightCommand::Jump`] since `from` of its
+/// commands.
+fn jumped_since(view: &Faked, from: usize) -> bool {
+    sent_since(view, from).contains(&FlightCommand::Jump)
+}
+
+/// Repeats of `k` on `view`, a tick after each.
+fn repeats(view: &mut Faked, k: Key) {
+    for _ in 0..3 {
+        view.input(&held(k));
+        view.tick(TICK);
+    }
+}
+
+#[test]
+fn a_jump_key_pressed_on_ms_map_and_held_past_its_close_ignores_its_repeats_until_let_go() {
+    // `_HandlePlayer` polls `GetKeys` and never sees a repeat, so the
+    // latch M's map set (@0x6a898) holds until J reads up.
+    let mut view = faked_m_open();
+    view.input(&key(MAP, true));
+    view.input(&key(JUMP_KEY, true));
+    view.input(&key(MAP, false));
+    let from = sent_count(&view);
+    repeats(&mut view, JUMP_KEY);
+    assert!(!jumped_since(&view, from), "{:?}", sent_since(&view, from));
+    assert!(!view.held.contains(&JUMP_KEY));
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "let go and pressed afresh");
+}
+
+#[test]
+fn a_jump_key_held_from_before_m_ignores_its_repeats_after_the_close() {
+    let mut view = faked_sol(in_sol());
+    view.input(&key(JUMP_KEY, true));
+    tap(&mut view, MAP);
+    tap(&mut view, MAP);
+    assert!(!view.map_open());
+    let from = sent_count(&view);
+    repeats(&mut view, JUMP_KEY);
+    assert!(!jumped_since(&view, from), "{:?}", sent_since(&view, from));
+    assert!(!view.held.contains(&JUMP_KEY));
+}
+
+#[test]
+fn a_latched_key_let_go_on_the_map_is_tracked_afresh_after_the_close() {
+    let mut view = faked_sol(in_sol());
+    view.input(&key(JUMP_KEY, true));
+    tap(&mut view, MAP);
+    view.input(&key(JUMP_KEY, false));
+    tap(&mut view, MAP);
+    // A repeat is a first sight of a key whose press went elsewhere.
+    view.input(&held(JUMP_KEY));
+    assert!(view.held.contains(&JUMP_KEY));
+}
+
+#[test]
+fn a_jump_key_held_across_a_faded_refusal_ignores_its_repeats() {
+    // `_DoPlayerInfoDialog`'s guard refuses, and `_SetAllKeyCmdFlags`
+    // follows (@0x70393).
+    let mut view = faked_sol(in_sol());
+    view.held.insert(JUMP_KEY);
+    view.sim.queue_answer(Answer::PlayerInfoFaded);
+    assert!(view.press_faded_player_info());
+    view.input(&held(JUMP_KEY));
+    assert!(!view.held.contains(&JUMP_KEY));
+}
+
 #[test]
 fn a_latched_key_held_as_the_map_opens_is_let_go() {
     let mut view = faked_sol(in_sol());

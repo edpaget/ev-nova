@@ -418,9 +418,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Tracks a flight key `input` presses or lets go of as held. A repeat
-    /// of L or I is no fresh down: they act on being held (the
-    /// `faded_keys` module), so one taken for a press would read again
-    /// once a refusal let go of the key.
+    /// holds a key too, as a repeat is the first flight sees of a key
+    /// whose press went elsewhere, such as one down as focus comes back:
+    /// the original polls `GetKeys` and reads such a key down. Two
+    /// exceptions:
+    ///
+    /// - A repeat of L or I is no fresh down: they act on being held (the
+    ///   `faded_keys` module), so one taken for a press would read again
+    ///   once a refusal let go of the key.
+    /// - A repeat of a key a `_SetAllKeyCmdFlags` site latched while it
+    ///   was down ([`FlightView::latched_down`]) is dropped: its latch
+    ///   waits for the release. That release, or a fresh press, which the
+    ///   OS sends only after a release, ends the wait.
     pub(super) fn track_held(&mut self, input: &Input) {
         if let Input::Key {
             key,
@@ -430,6 +439,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
             && FLIGHT_KEYS.contains(&key)
             && !(repeat && matches!(key, LAND_KEY | MISSION_INFO_KEY))
         {
+            if repeat {
+                if self.latched_down.contains(&key) {
+                    return;
+                }
+            } else {
+                self.latched_down.remove(&key);
+            }
             if pressed {
                 self.held.insert(key);
             } else {
@@ -452,9 +468,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// screen) let go of `held` alone, as their releases still come here,
     /// and the course map opened in flight and a gate's exit keep the
     /// keys read with no latch ([`FlightView::open_map_as`],
-    /// `FlightView::came_through`).
+    /// `FlightView::came_through`). The latched keys flight saw down are
+    /// forgotten too, as their releases go elsewhere: the next hand-back
+    /// says again which are down.
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
+        self.latched_down.clear();
         self.faded_keys.forget();
         self.cursor.button(false);
     }
