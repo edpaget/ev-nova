@@ -10,8 +10,8 @@ use nova_sim::flight_frame::{FrameShip, FrameShot, PassReport, StepReport, StepR
 use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
 use crate::Colorize;
-use crate::flight::weapons::SPINS;
 use crate::system::camera::Anchor;
+use nova_sim::combat::shot_frame::{SPINS, shot_frame};
 
 /// The blaster's look set by `edit`, in [`armed`]'s catalog.
 fn with_blaster(edit: impl FnOnce(&mut WeaponLook)) -> FakeCatalog {
@@ -128,38 +128,30 @@ fn a_shot_draws_with_the_look_of_a_weapon_the_flight_lists() {
 }
 
 #[test]
-fn a_spinning_shot_starts_on_the_index_drawn_on_the_effects_chance() {
+fn a_spinning_shot_is_drawn_from_the_start_the_frame_gives_drawing_nothing() {
+    // The start is the simulation's (nova-sim-combat's
+    // `a_spinning_shot_draws_its_start_as_it_is_launched_and_no_other_draws_one`):
+    // the view draws from the start the frame carries.
     let catalog = with_blaster(|look| {
         look.flags = SPINS;
         look.beam_width = 1;
     });
-    let (effects, effects_chance) = scripted(&[20]);
+    let (effects, effects_chance) = scripted(&[]);
     let mut view = shooting(catalog);
     view.effects_chance = effects_chance;
-    pass_with(&mut view, vec![blaster_shot(0)], false, Vec::new());
-    assert_eq!(effects.borrow().asked, [36], "Rand(36), once");
+    let started = |tick| FrameShot {
+        spin_start: 20,
+        ..blaster_shot(tick)
+    };
+    pass_with(&mut view, vec![started(0)], false, Vec::new());
     assert_eq!(
         blaster_frames(&view),
         [20],
         "its first pass shows its start"
     );
-    pass_with(&mut view, vec![blaster_shot(1)], false, Vec::new());
+    pass_with(&mut view, vec![started(1)], false, Vec::new());
     assert_eq!(blaster_frames(&view), [21], "then a frame a tick");
-    assert_eq!(effects.borrow().asked, [36], "drawn once a shot");
-}
-
-#[test]
-fn a_spinning_shot_of_flags_0x0004_starts_on_its_first_frame() {
-    let catalog = with_blaster(|look| {
-        look.flags = SPINS | crate::flight::spin::FIRST_FRAME_START;
-        look.beam_width = 1;
-    });
-    let (effects, effects_chance) = scripted(&[20]);
-    let mut view = shooting(catalog);
-    view.effects_chance = effects_chance;
-    pass_with(&mut view, vec![blaster_shot(0)], false, Vec::new());
-    assert_eq!(blaster_frames(&view), [0]);
-    assert_eq!(effects.borrow().asked, Vec::<u32>::new());
+    assert_eq!(effects.borrow().asked, Vec::<u32>::new(), "no draw");
 }
 
 #[test]
@@ -167,9 +159,10 @@ fn a_spinning_shot_is_drawn_stepping_on_the_spin_timer_its_frame_gives() {
     // The blaster spins from its first frame, a step every 4 passes. The
     // timer a shot's slot left it is the session's
     // (nova-sim-combat's `a_spinning_shot_runs_its_slots_spin_timer_and_the_next_shot_there_starts_on_it`):
-    // the view steps it from the timer the frame gives.
+    // the view steps it from the timer the frame gives, by the
+    // simulation's rule.
     let look = WeaponLook {
-        flags: SPINS | crate::flight::spin::FIRST_FRAME_START,
+        flags: SPINS,
         beam_width: 4,
         ..WeaponLook::default()
     };
@@ -180,6 +173,7 @@ fn a_spinning_shot_is_drawn_stepping_on_the_spin_timer_its_frame_gives() {
     let mut view = shooting(catalog);
     let frames = NonZeroU16::new(36).expect("non-zero");
     let timer = 3;
+    let rule = look.frame_rule();
     let (mut shown, mut expected, mut from_0) = (Vec::new(), Vec::new(), Vec::new());
     for tick in 0..6 {
         let shot = FrameShot {
@@ -189,8 +183,8 @@ fn a_spinning_shot_is_drawn_stepping_on_the_spin_timer_its_frame_gives() {
         };
         pass_with(&mut view, vec![shot], false, Vec::new());
         shown.extend(blaster_frames(&view));
-        expected.push(weapons::shot_frame(90.0, shot.age, frames, &look, 0, timer));
-        from_0.push(weapons::shot_frame(90.0, shot.age, frames, &look, 0, 0));
+        expected.push(shot_frame(90.0, shot.age, frames, rule, 0, timer));
+        from_0.push(shot_frame(90.0, shot.age, frames, rule, 0, 0));
     }
     assert_eq!(shown, expected, "from timer {timer}");
     assert_ne!(shown, from_0, "not as from 0");

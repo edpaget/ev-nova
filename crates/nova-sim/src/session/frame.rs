@@ -289,6 +289,7 @@ pub(super) mod tests {
                 heading: 9.0,
                 age: 9,
                 spin_timer: 9,
+                spin_start: 9,
                 layer: ShotLayer::OverShips,
             }],
             beams: vec![FrameBeam {

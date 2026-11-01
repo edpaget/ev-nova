@@ -792,6 +792,7 @@ pub mod record {
             heading: 0.0,
             age: 0,
             spin_timer: 0,
+            spin_start: 0,
             layer: nova_sim::combat::shot_layer::ShotLayer::Shots,
         }
     }

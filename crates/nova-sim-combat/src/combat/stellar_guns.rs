@@ -16,6 +16,7 @@ use super::armament::{self, Arsenal};
 use super::jamming;
 use super::phases::Arena;
 use super::projectile::{Jam, Shot, ShotId, ShotLayer, Source};
+use super::shot_frame::{self, FrameRule};
 use super::weapon::{Guidance, WeaponSpec};
 use super::{Combat, CombatEvent, Fighter, FireSound, STELLAR_GUN_PRIORITY, ShipRef};
 
@@ -340,7 +341,9 @@ impl Combat {
     /// - its velocity `_Accel(trunc(heading), Speed)` from rest
     ///   (@0x2f3ce-0x2f3fe);
     /// - its jamming rolls drawn ([`jamming::roll`], @0x2f40c-0x2f454),
-    ///   with no sensor-interference roll: it is never interfered;
+    ///   with no sensor-interference roll: it is never interfered; and a
+    ///   spinning shot's spin start, as `_SpawnShot` draws it
+    ///   (@0x2f23e-0x2f259, [`shot_frame::spin_start`]);
     /// - its disable-only and durability its weapon's;
     /// - in the shot layer whatever its guidance (@0x2f46f);
     /// - seated as [`Combat::seat`] seats it, writing no miss roll and,
@@ -392,6 +395,7 @@ impl Combat {
             moved_from: None,
             slot: 0,
             spin_timer: 0,
+            spin_start: shot_frame::spin_start(FrameRule::of(&spec), chance),
             firer_slot: None,
         };
         let Some(taken) = self.seat(&mut shot) else {
@@ -1028,6 +1032,26 @@ mod tests {
         assert_eq!(shot.heading, 357.0, "2 + 5 - 10, wrapped");
         assert_eq!(shot.velocity, trig::accel(357, 10.0));
         assert_eq!(chance.times_asked(20), 1);
+    }
+
+    #[test]
+    fn a_spinning_shot_draws_its_start_as_spawn_shot_does() {
+        use crate::combat::shot_frame::{FIRST_FRAME_START, SPIN_STARTS, SPINS};
+        let target = [pirate(1, 100.0, 0.0)];
+        let spinning = WeaponRecord {
+            flags: SPINS,
+            ..turret()
+        };
+        let mut chance = Draws::of(&[]).keyed(SPIN_STARTS, 30);
+        assert_eq!(one_shot(spinning, &target, &mut chance).spin_start, 30);
+        let first = WeaponRecord {
+            flags: SPINS | FIRST_FRAME_START,
+            ..turret()
+        };
+        let mut chance = Draws::of(&[]).keyed(SPIN_STARTS, 30);
+        assert_eq!(one_shot(first, &target, &mut chance).spin_start, 0);
+        assert_eq!(one_shot(turret(), &target, &mut chance).spin_start, 0);
+        assert_eq!(chance.times_asked(SPIN_STARTS), 0);
     }
 
     #[test]

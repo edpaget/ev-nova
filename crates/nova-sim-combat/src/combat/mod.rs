@@ -427,6 +427,7 @@ pub mod script_explosions;
 pub mod ship_frames;
 pub mod ship_lights;
 pub mod shockwave;
+pub mod shot_frame;
 pub mod shot_layer;
 pub mod shot_slots;
 pub mod sides;
@@ -3713,6 +3714,7 @@ mod tests {
     mod rock_blasts;
     mod shot_slots;
     mod shot_visits;
+    mod spin_starts;
     mod stellar_guns;
     mod stellar_hazards;
     mod strike_terms;

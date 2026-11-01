@@ -1881,6 +1881,9 @@ pub struct FrameShot {
     pub age: u32,
     /// Its spin's timer (`Shot::spin_timer`).
     pub spin_timer: u32,
+    /// The index its spin started on (`Shot::spin_start`), which its frame
+    /// counts from (`nova_sim::combat::shot_frame`).
+    pub spin_start: u8,
     /// The sprite layer it is drawn in.
     pub layer: ShotLayer,
 }
@@ -1897,6 +1900,7 @@ impl FrameShot {
             heading: shot.heading,
             age: shot.age,
             spin_timer: shot.spin_timer,
+            spin_start: shot.spin_start,
             layer: shot.layer,
         }
     }

@@ -841,24 +841,6 @@ fn shooting(id: u32, smoke_frame: bool) -> PassReport {
 }
 
 #[test]
-fn a_spinning_shot_draws_its_start_once_on_the_effects_chance() {
-    let catalog = blaster_looking(|look| {
-        look.flags = crate::flight::weapons::SPINS;
-        look.beam_width = 1;
-    });
-    let (effects, effects_chance) = scripted(&[20, 13]);
-    let mut view = stepping(catalog);
-    view.effects_chance = effects_chance;
-    // It lives only through the first pass of a double-time step.
-    frame(&mut view, one_step(vec![shooting(7, false), fight(vec![])]));
-    assert_eq!(effects.borrow().asked, [36], "Rand(36), once");
-    frame(&mut view, one_step(vec![shooting(8, false)]));
-    assert_eq!(view.shot_looks.spin_starts.start(ShotId(8)), 13);
-    frame(&mut view, one_step(vec![shooting(8, false)]));
-    assert_eq!(effects.borrow().asked, [36, 36], "drawn once a shot");
-}
-
-#[test]
 fn a_shot_in_flight_trails_each_pass_and_smokes_on_a_smoke_frame() {
     let catalog = blaster_looking(|look| {
         look.flags = crate::flight::smoke::SMALL_SMOKE;

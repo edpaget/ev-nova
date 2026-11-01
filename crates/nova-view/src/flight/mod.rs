@@ -96,7 +96,6 @@ pub mod sim_port;
 pub(crate) mod slot_pool;
 pub mod smoke;
 pub mod solid_runs;
-pub mod spin;
 pub mod sprite;
 pub mod stars;
 pub mod target;

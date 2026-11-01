@@ -959,6 +959,7 @@ mod tests {
                 heading: shot.heading,
                 age: shot.age,
                 spin_timer: shot.spin_timer,
+                spin_start: shot.spin_start,
                 layer: shot.layer,
             })
             .collect();

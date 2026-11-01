@@ -2,16 +2,11 @@
 //! @0x3586a-0x359af, `_BeamDrawCallback` @0x37952 and `_DrawBeam`
 //! @0xc3b3c in the `EV Nova` executable).
 //!
-//! - A shot is a frame of its weapon's sheet, `spïn` 3000 + `Graphic`
-//!   ([`shot_frame`]): the frame for its heading, `trunc(n x heading /
-//!   360)`, or, for a spinning weapon (`Flags` 0x0001), one frame every
-//!   `BeamWidth` ticks of its age from the index its spin started on, the
-//!   first coming early on the spin timer its shot slot's last spinning
-//!   shot left (`nova_sim::combat::spin_timer`), wrapping, or holding the
-//!   last (`Flags2` 0x0002), and frame 0 while
-//!   its age is below `ProxSafety` (`Flags2` 0x0001). A shot's spin starts
-//!   on a random index, `Rand(36)`, unless its weapon has `Flags` 0x0004
-//!   ([`spin`](super::spin)).
+//! - A shot is a frame of its weapon's sheet, `spïn` 3000 + `Graphic`: the
+//!   simulation's frame rule ([`shot_frame`]) on the sheet's frame count,
+//!   from the index its spin started on and the timer it started on, both
+//!   the simulation's, as the frame carries them. The contact passes touch
+//!   by the same frame.
 //! - A shot is placed at whole pixels from the player, half its frame's
 //!   width off both axes: `_HandleShot` never asks its height
 //!   ([`Camera::shot_centre`](crate::system::camera::Camera::shot_centre),
@@ -37,8 +32,6 @@
 //! - A beam whose weapon sets `Flags2` 0x2000 is drawn under the ships,
 //!   and every other beam over them.
 
-use std::num::NonZeroU16;
-
 use super::catalog::{Looks, WeaponId, WeaponLook};
 use super::lightning::{self, StepRolls};
 use super::shot_fade::{ShotShade, shot_shade};
@@ -46,18 +39,12 @@ use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Blend, Color, Colorize, DrawList, Point};
 use nova_sim::combat::projectile::ShotId;
-use nova_sim::combat::spin_timer;
+use nova_sim::combat::shot_frame::shot_frame;
 use nova_sim::sprite_layer::SpriteLayer;
 use nova_sim::{Chance, RuleSource};
 
-/// `Flags`: the shot's frames spin with its age, not its heading.
-pub const SPINS: u16 = 0x0001;
 /// `Flags`: the firing sound loops while the beam lasts.
 pub const LOOPED_SOUND: u16 = 0x0010;
-/// `Flags2`: the shot shows frame 0 until its age reaches `ProxSafety`.
-pub const STILL_UNTIL_SAFE: u16 = 0x0001;
-/// `Flags2`: a spinning shot holds its last frame instead of wrapping.
-pub const HOLDS_LAST_FRAME: u16 = 0x0002;
 /// `Flags2`: the beam is drawn under the ships.
 pub const BEAM_UNDER_SHIPS: u16 = 0x2000;
 /// `Flags3`: the shot is translucent, added to what is under it (see
@@ -76,76 +63,6 @@ const CORONA_START: i32 = 16;
 /// A beam corona's lines stop once their alpha is this many 32nds or
 /// less.
 const CORONA_END: i32 = 2;
-
-/// The frame of a shot heading `heading` degrees, `age` ticks old, on a
-/// sheet of `frames` frames, of a weapon that looks as `look` says, whose
-/// spin started on index `start` ([`SpinStarts`](super::spin::SpinStarts))
-/// and timer `timer`
-/// ([`Shot::spin_timer`](nova_sim::combat::projectile::Shot::spin_timer)).
-///
-/// A shot that does not spin shows its heading's frame. A spinning one
-/// (`Flags` 0x0001) shows the index `_HandleShot` holds before its
-/// tick's step (@0x35894), clamped to the sheet (@0x35956-0x3596c): the
-/// shot drawn at `age` is on its `age`-th pass (the session moves it,
-/// and ages it, once a pass), so it has stepped on each pass before at
-/// which its spin timer, from `timer`, reached `BeamWidth`, every pass
-/// for a `BeamWidth` of 1 or less (@0x35884-0x358c4;
-/// [`spin_timer::steps`](nova_sim::combat::spin_timer::steps)): its first
-/// step comes early on a timer its slot's last spinning shot left. A step
-/// past the last frame wraps to 0, or holds
-/// the last under `Flags2` 0x0002 (@0x358cb-0x358f6). So a start below
-/// the frame count runs from the start; one at or past it shows the last
-/// frame until the first step, then runs from 0 (or holds the last).
-/// Under `Flags2` 0x0001 the shot shows frame 0 while its age is below
-/// `ProxSafety`, the index running on beneath; with 0x0002 too, the index
-/// is put back to 0 on each of those passes (@0x35914-0x35932).
-#[must_use]
-pub fn shot_frame(
-    heading: f32,
-    age: u32,
-    frames: NonZeroU16,
-    look: &WeaponLook,
-    start: u8,
-    timer: u32,
-) -> u16 {
-    let count = u32::from(frames.get());
-    let last = count - 1;
-    if look.flags & SPINS == 0 {
-        // `(frames × heading)` in `f32`, over 360.0 in doubles, truncated
-        // toward 0 and clamped to the sheet (`_HandleShot`
-        // @0x3593a-0x3596c), so a bomb's unwrapped heading below 0 or past
-        // 360 shows an end frame.
-        let turned = f64::from(f32::from(frames.get()) * heading) / 360.0;
-        return (turned as i64).clamp(0, i64::from(last)) as u16;
-    }
-    let holds = look.flags2 & HOLDS_LAST_FRAME != 0;
-    let safety = if look.flags2 & STILL_UNTIL_SAFE == 0 {
-        0
-    } else {
-        u32::try_from(look.prox_safety).unwrap_or(0)
-    };
-    if age < safety {
-        return 0;
-    }
-    // The steps made on passes `from` to `to`.
-    let steps = |from: u32, to: u32| spin_timer::steps(timer, look.beam_width, from, to);
-    let before = age.saturating_sub(1);
-    let index = if holds && safety > 1 {
-        // Put back to 0 on every pass below the safety; the timer runs on.
-        steps(safety, before).min(last)
-    } else {
-        let stepped = steps(1, before);
-        let start = u32::from(start);
-        match (start < count, holds) {
-            (true, false) => (start + stepped) % count,
-            (true, true) => (start + stepped).min(last),
-            (false, _) if stepped == 0 => last,
-            (false, false) => (stepped - 1) % count,
-            (false, true) => last,
-        }
-    };
-    u16::try_from(index).unwrap_or(u16::MAX)
-}
 
 /// The lines that draw a beam from `start` to `end` of a weapon that
 /// looks as `look` says, `fade` ticks into its fade
@@ -229,7 +146,8 @@ pub struct ShotShown {
     /// The layer it is drawn in among the ships
     /// ([`nova_sim::sprite_layer`]).
     pub layer: SpriteLayer,
-    /// The index its spin started on ([`SpinStarts`](super::spin::SpinStarts)).
+    /// The index its spin started on
+    /// ([`Shot::spin_start`](nova_sim::combat::projectile::Shot::spin_start)).
     pub spin_start: u8,
     /// The spin timer it started on, its slot's leftover
     /// ([`Shot::spin_timer`](nova_sim::combat::projectile::Shot::spin_timer)).
@@ -246,7 +164,8 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
     }
 }
 
-/// Draws `shot` as its weapon's frame ([`shot_frame`]), shaded as it
+/// Draws `shot` as its weapon's frame, the simulation's rule
+/// ([`shot_frame`]) on its sheet's frames, shaded as it
 /// fades ([`shot_shade`], by `fade`'s reading of
 /// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
 /// opaque; translucent by t, crossfaded by OR,
@@ -266,7 +185,8 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
         Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         Some(Ok(sheet)) => {
             let spin = (shot.spin_start, shot.spin_timer);
-            let frame = shot_frame(shot.heading, shot.age, sheet.frames, look, spin.0, spin.1);
+            let rule = look.frame_rule();
+            let frame = shot_frame(shot.heading, shot.age, sheet.frames, rule, spin.0, spin.1);
             let image = sheet.image.frame(frame);
             let (tint, blend) = match shot_shade(look, shot.age, fade) {
                 ShotShade::Opaque => (Color::WHITE, Blend::Normal),
@@ -352,10 +272,6 @@ mod tests {
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
 
-    fn n(frames: u16) -> NonZeroU16 {
-        NonZeroU16::new(frames).expect("non-zero")
-    }
-
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
     }
@@ -369,211 +285,6 @@ mod tests {
             fade,
             (RuleSource::Engine, &mut StepRolls::default()),
         )
-    }
-
-    #[test]
-    fn a_shot_shows_the_frame_its_heading_truncates_to() {
-        let plain = WeaponLook::default();
-        let frame = |heading, frames| shot_frame(heading, 1, n(frames), &plain, 0, 0);
-        let frames: Vec<u16> = [0.0, 9.9, 10.0, 185.0, 359.9]
-            .into_iter()
-            .map(|heading| frame(heading, 36))
-            .collect();
-        assert_eq!(frames, [0, 0, 1, 18, 35]);
-        // `_HandleShot` truncates toward 0 and clamps to the sheet
-        // (@0x3593a-0x3596c): an unwrapped bomb past 360 or below 0 shows
-        // an end frame.
-        assert_eq!(frame(360.0, 36), 35, "clamped");
-        assert_eq!(frame(360.5, 36), 35);
-        assert_eq!(frame(-10.0, 36), 0, "clamped");
-        assert_eq!(frame(-1.5, 36), 0);
-        assert_eq!(frame(-0.000_001, 36), 0);
-        assert_eq!(frame(200.0, 1), 0);
-        assert_eq!(frame(100.0, 2), 0);
-        assert_eq!(frame(190.0, 2), 1);
-        assert_eq!(
-            shot_frame(185.0, 9, n(36), &plain, 20, 3),
-            18,
-            "a shot that does not spin ignores its start and its timer"
-        );
-    }
-
-    fn spinning(beam_width: i16, flags2: u16, prox_safety: i16) -> WeaponLook {
-        WeaponLook {
-            flags: SPINS,
-            flags2,
-            beam_width,
-            prox_safety,
-            ..WeaponLook::default()
-        }
-    }
-
-    /// The frames shown at `ages` of a shot of `look` on a sheet of
-    /// `frames`, started on index `start`. A shot is drawn at age `k` on
-    /// its `k`-th pass, from age 1.
-    fn ages_from(
-        look: &WeaponLook,
-        frames: u16,
-        start: u8,
-        ages: std::ops::Range<u32>,
-    ) -> Vec<u16> {
-        timed(look, frames, (start, 0), ages)
-    }
-
-    /// [`ages_from`] for a shot that started on spin timer `timer`.
-    fn timed(
-        look: &WeaponLook,
-        frames: u16,
-        (start, timer): (u8, u32),
-        ages: std::ops::Range<u32>,
-    ) -> Vec<u16> {
-        ages.map(|age| shot_frame(90.0, age, n(frames), look, start, timer))
-            .collect()
-    }
-
-    fn ages(look: &WeaponLook, frames: u16, ages: std::ops::Range<u32>) -> Vec<u16> {
-        ages_from(look, frames, 0, ages)
-    }
-
-    #[test]
-    fn a_spinning_shot_turns_a_frame_every_beam_width_ticks_and_wraps() {
-        assert_eq!(ages(&spinning(2, 0, 0), 3, 1..9), [0, 0, 1, 1, 2, 2, 0, 0]);
-        assert_eq!(
-            ages(&spinning(0, 0, 0), 3, 1..5),
-            [0, 1, 2, 0],
-            "every tick"
-        );
-        assert_eq!(ages(&spinning(-1, 0, 0), 3, 1..5), [0, 1, 2, 0]);
-        assert_eq!(ages(&spinning(1, 0, 0), 3, 1..5), [0, 1, 2, 0]);
-        assert_eq!(
-            ages(&spinning(1, 0, 0), 3, 0..2),
-            [0, 0],
-            "its first pass shows its start, before any step"
-        );
-    }
-
-    #[test]
-    fn a_spinning_shot_may_hold_its_last_frame() {
-        assert_eq!(
-            ages(&spinning(1, HOLDS_LAST_FRAME, 0), 3, 1..7),
-            [0, 1, 2, 2, 2, 2]
-        );
-    }
-
-    #[test]
-    fn a_spinning_shot_runs_on_from_its_start() {
-        // Start 3 on 8 frames, a step every 2 passes.
-        assert_eq!(
-            ages_from(&spinning(2, 0, 0), 8, 3, 1..13),
-            [3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 0, 0]
-        );
-        assert_eq!(
-            ages_from(&spinning(2, HOLDS_LAST_FRAME, 0), 8, 3, 1..13),
-            [3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 7, 7]
-        );
-    }
-
-    #[test]
-    fn a_start_past_the_sheet_shows_the_last_frame_until_the_first_step() {
-        // Start 20 on 8 frames: clamped to 7 until the first step, which
-        // wraps it to 0 (@0x358cb-0x358f6).
-        assert_eq!(
-            ages_from(&spinning(2, 0, 0), 8, 20, 1..21),
-            [7, 7, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 0, 0]
-        );
-        assert_eq!(
-            ages_from(&spinning(2, HOLDS_LAST_FRAME, 0), 8, 20, 1..7),
-            [7, 7, 7, 7, 7, 7],
-            "or holds the last"
-        );
-        assert_eq!(
-            ages_from(&spinning(1, 0, 0), 8, 8, 1..4),
-            [7, 0, 1],
-            "a start of the frame count is past the sheet"
-        );
-    }
-
-    #[test]
-    fn a_spinning_shot_steps_first_when_the_timer_it_started_on_runs_out() {
-        // A timer of 2 at `BeamWidth` 4 steps on pass 2, shown from age 3,
-        // then every 4; from 0, on pass 4, shown from age 5.
-        let look = spinning(4, 0, 0);
-        assert_eq!(timed(&look, 8, (0, 2), 1..8), [0, 0, 1, 1, 1, 1, 2]);
-        assert_eq!(timed(&look, 8, (0, 0), 1..8), [0, 0, 0, 0, 1, 1, 1]);
-        assert_eq!(
-            timed(&spinning(3, 0, 0), 8, (0, 5), 1..6),
-            [0, 1, 1, 1, 2],
-            "a timer past BeamWidth steps on the first pass"
-        );
-        assert_eq!(
-            timed(&spinning(4, 0, 0), 8, (6, 3), 1..4),
-            [6, 7, 7],
-            "from its start"
-        );
-    }
-
-    #[test]
-    fn put_back_below_its_prox_safety_a_shot_counts_steps_from_its_timer() {
-        // `BeamWidth` 2 and a timer of 1: steps on passes 1, 3, 5 and 7,
-        // the index put back to 0 below the safety of 4.
-        assert_eq!(
-            timed(
-                &spinning(2, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 4),
-                8,
-                (20, 1),
-                1..10
-            ),
-            [0, 0, 0, 0, 0, 1, 1, 2, 2]
-        );
-    }
-
-    #[test]
-    fn a_spinning_shot_may_wait_for_its_prox_safety() {
-        // Frame 0 below the safety, its index running on beneath it.
-        assert_eq!(
-            ages(&spinning(1, STILL_UNTIL_SAFE, 3), 4, 1..9),
-            [0, 0, 2, 3, 0, 1, 2, 3]
-        );
-        assert_eq!(
-            ages_from(&spinning(1, STILL_UNTIL_SAFE, 3), 4, 1, 1..6),
-            [0, 0, 3, 0, 1],
-            "from its start"
-        );
-        assert_eq!(
-            ages(&spinning(1, 0, 3), 4, 1..4),
-            [0, 1, 2],
-            "only with the flag"
-        );
-        // With 0x0002 too, the index is put back to 0 on the passes below
-        // the safety, so it runs from 0 at it.
-        assert_eq!(
-            ages(
-                &spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 3),
-                3,
-                1..8
-            ),
-            [0, 0, 0, 1, 2, 2, 2]
-        );
-        assert_eq!(
-            ages_from(
-                &spinning(2, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 4),
-                8,
-                20,
-                1..10
-            ),
-            [0, 0, 0, 0, 1, 1, 2, 2, 3],
-            "its start forgotten; the timer runs on: steps on passes 4, 6 and 8"
-        );
-        assert_eq!(
-            ages_from(
-                &spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 1),
-                4,
-                2,
-                1..4
-            ),
-            [2, 3, 3],
-            "a safety of 1 puts nothing back"
-        );
     }
 
     fn beam(beam_width: i16, falloff: i16) -> WeaponLook {
@@ -786,7 +497,7 @@ mod tests {
             frame_width: 0,
             frame_height: 0,
             image: crate::SheetImage::Rled(image_id),
-            frames: n(frames),
+            frames: std::num::NonZeroU16::new(frames).expect("non-zero"),
         }
     }
 

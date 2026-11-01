@@ -587,6 +587,10 @@ pub struct Shot {
     /// The view counts its frame steps from it
     /// ([`spin_timer::steps`](super::spin_timer::steps)).
     pub spin_timer: u32,
+    /// The index its spin started on (the original's +0x34): drawn as it
+    /// is launched for a spinning shot, 0 for any other
+    /// ([`shot_frame::spin_start`](super::shot_frame::spin_start)).
+    pub spin_start: u8,
     /// The ship slot its firer fired from, which a sub-munition takes from
     /// its parent (the original's source slot, shot +0x2c): none for a
     /// shot no ship fired. As it spawns, a sub-munition reads whatever
@@ -747,6 +751,7 @@ impl Shot {
             moved_from: None,
             slot: 0,
             spin_timer: 0,
+            spin_start: 0,
             firer_slot: None,
         }
     }
@@ -1024,8 +1029,12 @@ impl Shot {
     /// @0x3f051-0x3f0a7), and for a homing shot of `Seeker` 0x0008
     /// ([`SENSOR_INTERFERENCE`]) whether it is [`Jam::Interfered`]:
     /// `below(`[`INTERFERENCE_ROLL`]`) + 1` at most the `interference`
-    /// (@0x3eab2-0x3eb66). A sub-munition rolls its own weapon's.
+    /// (@0x3eab2-0x3eb66); and a spinning shot's spin start
+    /// ([`shot_frame::spin_start`](super::shot_frame::spin_start),
+    /// @0x3e96e-0x3e9b4). A sub-munition rolls its own weapon's.
     pub fn roll_at_launch(&mut self, interference: i16, chance: &mut dyn Chance) {
+        let rule = super::shot_frame::FrameRule::of(&self.weapon);
+        self.spin_start = super::shot_frame::spin_start(rule, chance);
         if self.weapon.guidance == Guidance::Homing && self.weapon.seeks(SENSOR_INTERFERENCE) {
             let roll = i64::from(chance.below(INTERFERENCE_ROLL)) + 1;
             if roll <= i64::from(interference) {

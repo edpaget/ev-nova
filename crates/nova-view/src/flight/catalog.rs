@@ -373,6 +373,21 @@ pub struct WeaponLook {
     pub sound_ticks: Option<u32>,
 }
 
+impl WeaponLook {
+    /// What the simulation's frame rule reads of it
+    /// ([`FrameRule`](nova_sim::combat::shot_frame::FrameRule)): its
+    /// `ProxSafety` none below none, as the simulation loads it.
+    #[must_use]
+    pub fn frame_rule(&self) -> nova_sim::combat::shot_frame::FrameRule {
+        nova_sim::combat::shot_frame::FrameRule {
+            flags: self.flags,
+            flags2: self.flags2,
+            prox_safety: u32::try_from(self.prox_safety).unwrap_or(0),
+            beam_width: self.beam_width,
+        }
+    }
+}
+
 /// How an explosion type is shown and heard: its `bööm`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoomLook {

@@ -587,8 +587,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightFrame::shots`](nova_sim::flight_frame::FlightFrame::shots)),
     /// each where it is drawn: `alpha` of the way from where it was a step
     /// ago, as the ships are, placed from that point by its sheet's width
-    /// ([`FlightView::shot_placed`]); each with the index its spin started on
-    /// ([`SpinStarts`](crate::flight::spin::SpinStarts)) and its murk where
+    /// ([`FlightView::shot_placed`]); each with the index its spin started on,
+    /// as the frame carries it, and its murk where
     /// the frame holds it, seen from the player's ship as the frame holds
     /// it ([`FlightView::seen_murk`]), as `_HandleShot` murks it once a
     /// pass after it moves (@0x35c48).
@@ -600,7 +600,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .iter()
             .map(|shot| ShotShown {
                 id: shot.id,
-                spin_start: self.shot_looks.spin_starts.start(shot.id),
+                spin_start: shot.spin_start,
                 spin_timer: shot.spin_timer,
                 colorize: seen.at(shot.position),
                 at: self.shot_placed(
