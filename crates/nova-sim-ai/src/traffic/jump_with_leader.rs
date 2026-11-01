@@ -27,7 +27,7 @@
 //! with +0x4c above 0 and a goal other than 0xa and 0xe, the high level
 //! returns at once ([`Npc::high_level_waits`]): no hold
 //! ([`warp_out::hold_stage`]), fighter turn-back, goal 0xb check
-//! ([`warp_out::follow_check`]) or push ([`warp_out::send_leaders_out`]).
+//! ([`warp_out::follow_check`]) or push ([`warp_out::pushes_leader`]).
 //! So through sub 0xd's 180 wait (@0x85bc3) a follower keeps sub 0xd, and
 //! a stage it starts runs past 30.0 to the detach (@0x85a8f).
 //!
@@ -485,18 +485,20 @@ mod tests {
     // A leader's leave by its substate.
 
     /// Whether a follower of a lead that `setup` set, at rest 3000 out
-    /// east, keeps following it through a tick.
+    /// east, keeps following it through a tick. The follower's slot is
+    /// below the lead's, so its goal 0xb check reads the lead as the tick
+    /// began, before the lead's own goal block.
     fn keeps_following(setup: impl Fn(&mut Npc)) -> bool {
         let mut traffic = Traffic::with_interval(1);
         let mut lead = far(0);
         setup(&mut lead);
-        let lead = traffic.add_npc(lead);
+        let lead = traffic.add_npc_at(lead, 2);
         let mut follower = far(0);
         follower.state.position = Vec2::new(3000.0, 100.0);
         follower.leader = Some(lead);
         follower.goal = Goal::Follow { lead, guard: None };
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-        let follower = traffic.add_npc(follower);
+        let follower = traffic.add_npc_at(follower, 1);
         traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
         of(&traffic, follower).warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead)))
     }

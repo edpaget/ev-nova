@@ -395,6 +395,15 @@ mod tests {
         think_by(traffic, RuleSource::Engine, RuleSource::Engine);
     }
 
+    /// `traffic`'s passes before the first slot's dispatch, the marking
+    /// pass's succession among them (@0x44101), by the engine: what the
+    /// succession wrote, before any ship's own goal block reads it.
+    fn succeed(traffic: &mut Traffic) {
+        let mut world = World::new(&[]);
+        world.warp.durations = [600, 600];
+        traffic.open_think(&Keep, world, &[], &mut NeverFires);
+    }
+
     const DISABLED: Condition = Condition::Disabled;
 
     #[test]
@@ -582,7 +591,7 @@ mod tests {
     fn under_its_leads_government_the_successor_takes_over_the_leads_job() {
         let mut traffic = taking_over(REBELS, Goal::Attack(ShipRef::Npc(NpcId(9))));
         let lead = of(&traffic, 0).clone();
-        think(&mut traffic);
+        succeed(&mut traffic);
         let taker = of(&traffic, 1);
         assert_eq!(taker.goal, Goal::Attack(ShipRef::Npc(NpcId(9))));
         assert_eq!(taker.target, lead.target);
@@ -603,7 +612,7 @@ mod tests {
         let lead = of_mut(&mut traffic, 0);
         lead.travel = None;
         lead.emerges_from = Some(crate::catalog::StellarId(129));
-        think(&mut traffic);
+        succeed(&mut traffic);
         assert_eq!(of(&traffic, 1).travel, Some(crate::catalog::StellarId(129)));
     }
 
@@ -613,11 +622,11 @@ mod tests {
         use crate::catalog::StellarId;
         // @0x893b0-0x893e1 copies the number, whatever it names.
         let mut traffic = taking_over(REBELS, Goal::Land(StellarId(133)));
-        think(&mut traffic);
+        succeed(&mut traffic);
         assert_eq!(of(&traffic, 1).travel, Some(StellarId(133)), "bound for it");
         let mut traffic = taking_over(REBELS, Goal::Hold);
         of_mut(&mut traffic, 0).travel = Some(travel::of_slot(6));
-        think(&mut traffic);
+        succeed(&mut traffic);
         assert_eq!(
             of(&traffic, 1).travel,
             Some(travel::of_slot(6)),
@@ -644,7 +653,11 @@ mod tests {
         lead.target = Some(PLAYER);
         lead.travel = Some(crate::catalog::StellarId(150));
         lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(far)));
-        traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
+        // A warp sound 600 Mac ticks long, so its own jump, begun at its
+        // slot, doesn't end there.
+        let mut world = World::new(&[]);
+        world.warp.durations = [600, 600];
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
         let taker = of(&traffic, 1);
         assert_eq!(taker.leader, None);
         assert_eq!(taker.warp.goal, Some(WarpGoal::Own));
@@ -724,7 +737,7 @@ mod tests {
             Goal::Formation { guard: None },
         ] {
             let mut traffic = taking_over(REBELS, goal);
-            think(&mut traffic);
+            succeed(&mut traffic);
             assert_eq!(of(&traffic, 1).goal, Goal::Hold, "{goal:?}");
         }
     }
@@ -946,7 +959,7 @@ mod tests {
             DISABLED,
             vec![follower(FEDS, 300), jumping, under_way],
         );
-        think(&mut traffic);
+        succeed(&mut traffic);
         let jumping = of(&traffic, 2);
         assert_eq!(
             jumping.warp.goal,

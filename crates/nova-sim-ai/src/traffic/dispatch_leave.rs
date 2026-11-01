@@ -44,8 +44,10 @@
 //! the leader's +0x50 live in its own low level (sub 0xd @0x859c5-0x85c5f):
 //! one below its leader reads it as the tick began, one above after the
 //! leader's own step. On the leader's departure tick, one above reads the
-//! freed record: +0x50 0, sub 4 kept. The fly half reads each follower's
-//! leader so ([`FlyPass`](super::FlyPass)'s two views).
+//! freed record: +0x50 0, sub 4 kept. Goal 0xb's block and sub 0xd run at
+//! the follower's slot ([`dispatch_follow`](super::dispatch_follow)),
+//! before its own sub 4 here, which a ship that detached there doesn't run
+//! that frame.
 
 use std::collections::BTreeSet;
 
@@ -75,6 +77,7 @@ impl Traffic {
             .collect();
         self.left_in_dispatch.clear();
         self.dock_flights.clear();
+        self.followed.clear();
     }
 
     /// The high level's and low level's work at the slot of each NPC
@@ -105,7 +108,14 @@ impl Traffic {
             };
             self.hold_and_turn_back(index, world);
             self.enter_gate_box(index, world);
+            // Goal 0xb's block (@0x8de63) comes after goal 0x14's (@0x8dc5a),
+            // and sub 0xd (@0x859c5) after sub 4 (@0x8585b): a ship that
+            // detaches there runs no sub 4 that frame.
+            let detached = self.follow_in_dispatch(index, world, false);
             self.dock_in_dispatch(index, world, chance);
+            if detached {
+                continue;
+            }
             let Some(outcome) = self.leaves(index, world, no_bay) else {
                 continue;
             };

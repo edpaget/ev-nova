@@ -43,8 +43,9 @@
 //! [`leave_flight`](crate::traffic::leave_flight)): [`Npc::begin_own_jump`].
 //!
 //! **Goal 0xb, its leader's jump** (`_HighLevelAIHandler`
-//! @0x8de63-0x8df75; [`follow_check`]), each advance pass before the low
-//! level, by its leader +0x9a (@0x8de71-0x8de7c), not the ship its
+//! @0x8de63-0x8df75; [`goal_block`], [`follow_check`]), at the follower's
+//! own slot of `_AIDispatch`'s loop before its low level (the traffic's
+//! `dispatch_follow`), by its leader +0x9a (@0x8de71-0x8de7c), not the ship its
 //! sub-goal names: with no leader it jumps on its own (goal 2, sub-goal
 //! 4); led by the player, it follows (sub-goal 0xd) while the player's
 //! +0x50 is above 0, else it gives up (goal 0); led by an NPC, the leader
@@ -58,8 +59,10 @@
 //! (@0x8df18-0x8df22, [`travel`](crate::ai::travel)). The NPC-parent test reads the
 //! leader's substate ([`jump_with_leader::leaves_by_substate`]): its own
 //! jump or goal 2's brake. The push of the leader onto goal 2
-//! ([`send_leaders_out`]) skips a follower whose high level waits and a
-//! leader the player leads. `_MakeEscortsHyperWithParent`
+//! ([`pushes_leader`]) skips a follower whose high level waits and a
+//! leader the player leads; it writes the leader live, so a leader above
+//! the follower thinks that tick on goal 2, and one below on the next.
+//! `_MakeEscortsHyperWithParent`
 //! (@0x3fd54-0x3fdea) puts the ships the player leads on it each
 //! warp-stage frame of the player ([`Npc::follow_player_jump`]); before
 //! that, from the player's brake on, `_EscortAI`'s entry does, and it puts
@@ -67,8 +70,12 @@
 //! [`jump_with_leader`]). A paused ship (goal 0x13) runs no goal 0xb
 //! check, and its warp-out zeroes any stage its sub 0xd starts.
 //!
-//! **Sub-goal 0xd, following** (@0x859c5-0x85c5f; [`follow_jump`]): its
-//! +0x68 is its leader's whole-degree heading. While the leader's +0x50
+//! **Sub-goal 0xd, following** (@0x859c5-0x85c5f; [`follow_jump`]), at the
+//! follower's own slot of the AI loop, reading its leader live: as the
+//! tick began for a leader in a higher slot, after its own step for one in
+//! a lower slot, and, on the leader's departure tick, the freed slot's
+//! record (+0x50 0, sub 4 kept, @0x859ae-0x859bf) for a follower above it.
+//! Its +0x68 is its leader's whole-degree heading. While the leader's +0x50
 //! is 1.0 or below it takes the leader's velocity and keeps formation
 //! (`_AIMaintainFormation` @0x85a28) and copies its glow. Otherwise, after
 //! the clock guard: past 30.0, a ship an NPC leads leaves it and jumps on
@@ -540,48 +547,107 @@ pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Ine
     }
 }
 
-/// What each of `npcs` shows its followers of its warp, as the tick's
-/// passes begin.
+/// What `npc` shows its followers of its warp now.
 #[must_use]
-pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
-    npcs.iter()
-        .map(|npc| {
-            let view = LeaderWarp {
-                stage: npc.warp.stage,
-                since: npc.warp.since,
-                factor: npc.stats.warp_factor,
-                heading: npc.state.heading,
-                aim: npc.warp.aim,
-                velocity: npc.state.velocity,
-                leaving: jump_with_leader::leaves_by_substate(npc),
-                glow: npc.display.glow,
-                travel: travel::held(npc),
-            };
-            (npc.id, view)
-        })
-        .collect()
+pub fn view(npc: &Npc) -> LeaderWarp {
+    LeaderWarp {
+        stage: npc.warp.stage,
+        since: npc.warp.since,
+        factor: npc.stats.warp_factor,
+        heading: npc.state.heading,
+        aim: npc.warp.aim,
+        velocity: npc.state.velocity,
+        leaving: jump_with_leader::leaves_by_substate(npc),
+        glow: npc.display.glow,
+        travel: travel::held(npc),
+    }
 }
 
-/// Goal 0xb's push of an NPC leader onto its own jump (goal 2,
-/// @0x8dedf-0x8defa): each leader of a ship in `npcs` that follows its
-/// jump, is intact and whose high level runs ([`Npc::high_level_waits`])
-/// is set to jump out. A leader the player leads is not: the original
-/// pushes it too, but its own next hold puts it back on goal 0xb
-/// (@0x8d542-0x8d54c), as it is under way only on the player's jump.
-pub fn send_leaders_out(npcs: &mut [Npc]) {
-    let sent: Vec<NpcId> = npcs
-        .iter()
-        .filter(|npc| npc.condition == Condition::Intact && !npc.high_level_waits())
-        .filter_map(|npc| match npc.warp.goal {
-            Some(WarpGoal::Follow(ShipRef::Npc(leader))) => Some(leader),
-            _ => None,
-        })
-        .collect();
-    for npc in npcs
-        .iter_mut()
-        .filter(|npc| sent.contains(&npc.id) && !npc.escorts_player())
-    {
-        npc.goal = Goal::JumpOut;
+/// What each of `npcs` shows its followers of its warp, as the tick's
+/// passes begin ([`view`]).
+#[must_use]
+pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
+    npcs.iter().map(|npc| (npc.id, view(npc))).collect()
+}
+
+/// The NPC leader goal 0xb's block of `npc`, in the regroup pause when
+/// `paused`, pushes onto its own jump (goal 2, @0x8dedf-0x8defa): its
+/// leader (+0x9a) when it is an NPC, and `npc` follows a jump, flies
+/// intact and runs its high level ([`Npc::high_level_waits`]; goal 0x13
+/// has no block). The push comes before the test of the leader's
+/// substate, whatever that finds, and writes the leader's slot whether or
+/// not it is active (@0x8def0). Its caller writes it, but on a leader the
+/// player leads: the original pushes it too, but its own next hold puts it
+/// back on goal 0xb (@0x8d542-0x8d54c), as it is under way only on the
+/// player's jump.
+#[must_use]
+pub fn pushes_leader(npc: &Npc, paused: bool) -> Option<NpcId> {
+    let runs = npc.mode == Mode::Flying
+        && npc.condition == Condition::Intact
+        && !paused
+        && !npc.high_level_waits();
+    match npc.warp.goal {
+        Some(WarpGoal::Follow(ShipRef::Npc(_))) if runs => npc.leader,
+        _ => None,
+    }
+}
+
+/// Goal 0xb's block (`_HighLevelAIHandler` @0x8de63-0x8df75) of `npc`, a
+/// follower of `leader` (none when it has none, +0x9a = -1; else whether
+/// it is the player, and its warp as `npc`'s slot reads it), in the regroup
+/// pause when `paused` (see the module docs), at `npc`'s own slot of
+/// `_AIDispatch`'s loop: the leader sub-goal 0xd then follows
+/// ([`follow_jump`]), and whether it is the player. None for a ship not
+/// flying intact or not following a jump, and for one that jumps on its
+/// own or gives up. While its high level waits, or in the pause, the
+/// check is skipped and sub 0xd flies on. The push of an NPC leader is
+/// its caller's ([`pushes_leader`]).
+pub fn goal_block(
+    npc: &mut Npc,
+    leader: Option<(bool, LeaderWarp)>,
+    paused: bool,
+) -> Option<(bool, LeaderWarp)> {
+    if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
+        return None;
+    }
+    if !matches!(npc.warp.goal, Some(WarpGoal::Follow(_))) {
+        return None;
+    }
+    // The high level's wait skips goal 0xb's check: the low level flies
+    // sub 0xd on (@0x8d4b9-0x8d4d2).
+    let skipped = paused || npc.high_level_waits();
+    let check = if skipped {
+        FollowCheck::Follow
+    } else {
+        follow_check(leader)
+    };
+    match check {
+        FollowCheck::Own => {
+            // +0x70 and +0x6c -1 (@0x8df57, @0x8df5d).
+            npc.target = None;
+            npc.travel = None;
+            npc.begin_own_jump();
+            None
+        }
+        FollowCheck::GiveUp => {
+            // Goal 0, sub 0, target and +0x6c -1 (@0x8deb9-0x8ded1,
+            // @0x8df31-0x8df49).
+            npc.goal = Goal::Idle;
+            npc.target = None;
+            npc.travel = None;
+            npc.warp.goal = None;
+            None
+        }
+        FollowCheck::Follow => {
+            let (player, view) = leader?;
+            if !skipped {
+                // +0x70 -1 and +0x6c its leader's: the player's
+                // (@0x8de9d-0x8deb0) or an NPC's (@0x8df18-0x8df22).
+                npc.target = None;
+                npc.travel = view.travel;
+            }
+            Some((player, view))
+        }
     }
 }
 
@@ -611,93 +677,58 @@ pub fn settle(
     }
 }
 
-/// Flies `npc` one pass of its jump, the advance pass when `think`, among
-/// `leaders`, in `world` at `speeds`: goal 0xb's check and its low level's
-/// sub-goal 0xd ([`follow_check`], [`follow_jump`]) on the advance pass,
-/// then its flight ([`fly`]) and its warp-out ([`warp_block`]). Sub-goal
-/// 4's step ([`own_jump`]) runs at the ship's slot of the AI loop, before
-/// this (the traffic's `dispatch_leave`). None when it is not jumping, or follows a leader not
-/// yet in its warp stage: the autopilot flies it as its goal says. It
-/// takes no thrust, so its top speed plays no part.
-///
-/// A ship `paused` in the regroup pause (goal 0x13, its sub 0xd kept) runs
-/// no goal block (`_HighLevelAIHandler` has none for 0x13), so no goal
-/// 0xb check, and its low level flies sub 0xd on its successor; as
-/// `_AIIsShipJumping` reads goal 0x13, the warp-out zeroes any stage it
-/// starts.
-pub fn fly_jump(
-    npc: &mut Npc,
+/// The leader `npc`'s goal 0xb reads among `leaders` and in `world`: the
+/// player, for a follow of the player's jump; its leader +0x9a
+/// (@0x8de71-0x8de7c), not the ship its sub-goal names, for a follow of
+/// an NPC's (one with none jumps on its own; every path that writes an
+/// NPC's follow writes that leader too); none on its own jump.
+#[must_use]
+pub fn leader_of(
+    npc: &Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
-    world: &World,
-    think: bool,
-    paused: bool,
-) -> Option<Outcome> {
-    if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
-        return None;
-    }
-    let goal = npc.warp.goal?;
-    // The check reads +0x9a, its leader (@0x8de71-0x8de7c), not the ship
-    // its sub-goal names: one with none jumps on its own. Every path that
-    // writes an NPC's follow writes that leader too.
-    let leader = match goal {
-        WarpGoal::Follow(ShipRef::Player) => Some((true, world.warp.player)),
+    world: &WarpWorld,
+) -> Option<(bool, LeaderWarp)> {
+    match npc.warp.goal? {
+        WarpGoal::Follow(ShipRef::Player) => Some((true, world.player)),
         WarpGoal::Follow(ShipRef::Npc(_)) => npc
             .leader
             .and_then(|lead| leaders.get(&lead))
             .map(|&leader| (false, leader)),
         WarpGoal::Own => None,
-    };
-    if think {
-        match goal {
-            WarpGoal::Follow(_) => {
-                // The high level's wait skips goal 0xb's check: the low
-                // level flies sub 0xd on (@0x8d4b9-0x8d4d2).
-                let skipped = paused || npc.high_level_waits();
-                let check = if skipped {
-                    FollowCheck::Follow
-                } else {
-                    follow_check(leader)
-                };
-                match check {
-                    FollowCheck::Own => {
-                        // +0x70 and +0x6c -1 (@0x8df57, @0x8df5d).
-                        npc.target = None;
-                        npc.travel = None;
-                        npc.begin_own_jump();
-                    }
-                    FollowCheck::GiveUp => {
-                        // Goal 0, sub 0, target and +0x6c -1
-                        // (@0x8deb9-0x8ded1, @0x8df31-0x8df49).
-                        npc.goal = Goal::Idle;
-                        npc.target = None;
-                        npc.travel = None;
-                        npc.warp.goal = None;
-                        return None;
-                    }
-                    FollowCheck::Follow => {
-                        if let Some((player, leader)) = leader {
-                            if !skipped {
-                                // +0x70 -1 and +0x6c its leader's: the
-                                // player's (@0x8de9d-0x8deb0) or an NPC's
-                                // (@0x8df18-0x8df22).
-                                npc.target = None;
-                                npc.travel = leader.travel;
-                            }
-                            if follow_jump(npc, leader, player) == FollowStep::Formation {
-                                return None;
-                            }
-                        }
-                    }
-                }
-            }
-            // Sub 4's step ran at its slot of the AI loop
-            // (`dispatch_leave`); its flight is all that is left.
-            WarpGoal::Own => {}
-        }
-    } else if leader.is_some_and(|(_, leader)| leader.stage <= 1.0) {
+    }
+}
+
+/// Flies `npc` one pass of its jump, among `leaders` as the pass began, in
+/// `world`: its flight ([`fly`]) and its warp-out ([`warp_block`]), which
+/// are `_HandleShip`'s. Goal 0xb's block, its push and sub-goal 0xd's
+/// step ([`goal_block`], [`follow_jump`]) and sub-goal 4's ([`own_jump`])
+/// run at the ship's slot of the AI loop, before this (the traffic's
+/// `dispatch_follow` and `dispatch_leave`). None when it is not jumping,
+/// or follows a leader not yet in its warp stage: the autopilot flies it
+/// as its goal says, whether sub 0xd kept formation at its slot on the
+/// advance pass when `formation` says, by its leader's stage otherwise
+/// (double time's second pass, which runs no low level). It takes no
+/// thrust, so its top speed plays no part.
+///
+/// A ship `paused` in the regroup pause (goal 0x13, its sub 0xd kept) runs
+/// no goal block (`_HighLevelAIHandler` has none for 0x13), and its low
+/// level flies sub 0xd on its successor; as `_AIIsShipJumping` reads goal
+/// 0x13, the warp-out zeroes any stage it starts.
+pub fn fly_jump(
+    npc: &mut Npc,
+    leaders: &BTreeMap<NpcId, LeaderWarp>,
+    world: &World,
+    formation: Option<bool>,
+    paused: bool,
+) -> Option<Outcome> {
+    if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
         return None;
     }
-    if !npc.jumping() {
+    npc.warp.goal?;
+    let formation = formation.unwrap_or_else(|| {
+        leader_of(npc, leaders, &world.warp).is_some_and(|(_, leader)| leader.stage <= 1.0)
+    });
+    if formation || !npc.jumping() {
         return None;
     }
     let jumping = !paused;
@@ -750,14 +781,35 @@ mod tests {
         warp_block(npc, led, world, jumping);
     }
 
-    /// [`fly_jump`] for `npc` not in the regroup pause.
+    /// [`fly_jump`] for `npc` not in the regroup pause, on the advance
+    /// pass when `think` ([`fly_jump_paused`]).
     fn fly_jump_by(
         npc: &mut Npc,
         leaders: &BTreeMap<NpcId, LeaderWarp>,
         world: &World,
         think: bool,
     ) -> Option<Outcome> {
-        fly_jump(npc, leaders, world, think, false)
+        fly_jump_paused(npc, leaders, world, think, false)
+    }
+
+    /// [`fly_jump`] for `npc` among `leaders`, in the regroup pause when
+    /// `paused`: on the advance pass when `think`, after its slot's goal
+    /// 0xb block and sub 0xd ([`goal_block`], [`follow_jump`]), which read
+    /// the same `leaders`.
+    fn fly_jump_paused(
+        npc: &mut Npc,
+        leaders: &BTreeMap<NpcId, LeaderWarp>,
+        world: &World,
+        think: bool,
+        paused: bool,
+    ) -> Option<Outcome> {
+        let formation = think.then(|| {
+            let leader = leader_of(npc, leaders, &world.warp);
+            goal_block(npc, leader, paused).is_some_and(|(player, leader)| {
+                follow_jump(npc, leader, player) == FollowStep::Formation
+            })
+        });
+        fly_jump(npc, leaders, world, formation, paused)
     }
 
     /// d 364 out of double time, the player at rest in no warp.
@@ -1335,56 +1387,41 @@ mod tests {
     }
 
     #[test]
-    fn goal_0xb_sends_an_intact_followers_npc_leader_out() {
-        let lead = crate::traffic::npc::NpcId(2);
-        let mut follower = ship();
-        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-        let mut leader = ship();
-        leader.id = lead;
-        let mut other = ship();
-        other.id = crate::traffic::npc::NpcId(3);
-        let mut ships = [follower.clone(), leader, other];
-        send_leaders_out(&mut ships);
-        assert_eq!(ships[1].goal, Goal::JumpOut, "goal 2 (@0x8def0)");
-        assert_eq!(ships[2].goal, Goal::Idle, "not a leader");
-        let mut disabled = follower;
-        disabled.condition = Condition::Disabled;
-        let mut leader = ship();
-        leader.id = lead;
-        let mut ships = [disabled, leader];
-        send_leaders_out(&mut ships);
-        assert_eq!(ships[1].goal, Goal::Idle, "a disabled follower sends none");
-        let mut own = ship();
-        own.begin_own_jump();
-        let mut leader = ship();
-        leader.id = lead;
-        let mut ships = [own, leader];
-        send_leaders_out(&mut ships);
-        assert_eq!(ships[1].goal, Goal::Idle, "an own jump follows no one");
-    }
-
-    #[test]
-    fn goal_0xb_sends_no_leader_out_for_a_waiting_follower_nor_one_the_player_leads() {
+    fn goal_0xb_pushes_an_intact_followers_npc_leader_out() {
+        // +0x9a's slot gets goal 2 (@0x8def0).
         let lead = NpcId(2);
-        let pushed = |wait: u32, escorts_player: bool| {
+        let follower = || {
             let mut follower = ship();
+            follower.leader = Some(lead);
             follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
-            follower.ai_wait = wait;
-            let mut leader = ship();
-            leader.id = lead;
-            if escorts_player {
-                leader.escort = Some(crate::escort::EscortDuty {
-                    formation: crate::escort::FormationSlot::default(),
-                    order: None,
-                });
-            }
-            let mut ships = [follower, leader];
-            send_leaders_out(&mut ships);
-            ships[1].goal == Goal::JumpOut
+            follower
         };
-        assert!(pushed(0, false));
-        assert!(!pushed(5, false), "its high level waits (@0x8d4b9)");
-        assert!(!pushed(0, true), "held back by its own hold (@0x8d542)");
+        assert_eq!(pushes_leader(&follower(), false), Some(lead));
+        let pushes = |change: &dyn Fn(&mut Npc)| {
+            let mut follower = follower();
+            change(&mut follower);
+            pushes_leader(&follower, false).is_some()
+        };
+        assert!(
+            !pushes(&|npc| npc.condition = Condition::Disabled),
+            "disabled"
+        );
+        assert!(!pushes(&|npc| npc.mode = Mode::Coasting { ticks_left: 3 }));
+        assert!(!pushes(&Npc::begin_own_jump), "an own jump follows no one");
+        assert!(
+            !pushes(&|npc| npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player))),
+            "the player's: no push"
+        );
+        assert!(!pushes(&|npc| npc.leader = None), "+0x9a -1: its own jump");
+        assert!(
+            !pushes(&|npc| npc.ai_wait = 5),
+            "its high level waits (@0x8d4b9)"
+        );
+        assert_eq!(
+            pushes_leader(&follower(), true),
+            None,
+            "goal 0x13 has no block"
+        );
     }
 
     #[test]
@@ -1671,7 +1708,7 @@ mod tests {
                 "the wait skips the check"
             );
             let mut paused = following_lead(!set);
-            fly_jump(&mut paused, &views_of(set), &world, true, true);
+            fly_jump_paused(&mut paused, &views_of(set), &world, true, true);
             assert_eq!(
                 paused.travel,
                 (!set).then_some(OWN_STELLAR),
@@ -1831,7 +1868,7 @@ mod tests {
         assert_eq!(waiting.target, Some(QUARRY));
         let mut paused = following_lead(false);
         paused.target = Some(QUARRY);
-        fly_jump(&mut paused, &views_of(false), &world, true, true);
+        fly_jump_paused(&mut paused, &views_of(false), &world, true, true);
         assert_eq!(paused.target, Some(QUARRY));
     }
 
@@ -1953,7 +1990,10 @@ mod tests {
             ship
         };
         let mut paused = following();
-        assert_eq!(fly_jump(&mut paused, &views, &world, true, true), None);
+        assert_eq!(
+            fly_jump_paused(&mut paused, &views, &world, true, true),
+            None
+        );
         assert_eq!(
             paused.warp.goal,
             Some(WarpGoal::Follow(ShipRef::Npc(lead))),
@@ -1961,7 +2001,7 @@ mod tests {
         );
         assert_eq!(paused.state.velocity, still.velocity, "sub 0xd's copy");
         let mut free = following();
-        fly_jump(&mut free, &views, &world, true, false);
+        fly_jump_paused(&mut free, &views, &world, true, false);
         assert_eq!(free.warp.goal, None, "goal 0xb gives up");
     }
 
@@ -1977,7 +2017,7 @@ mod tests {
             ship.goal = Goal::Follow { lead, guard: None };
             ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
             assert_eq!(
-                fly_jump(&mut ship, &views, &world, true, paused),
+                fly_jump_paused(&mut ship, &views, &world, true, paused),
                 Some(Outcome::Flying)
             );
             ship.warp.stage

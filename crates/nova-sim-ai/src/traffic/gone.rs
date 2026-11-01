@@ -197,6 +197,15 @@ impl GoneShips {
     pub fn ships(&self) -> &[GoneShip] {
         &self.0
     }
+
+    /// The record of NPC `id`, if its slot still holds it, to write as the
+    /// original writes a freed slot (goal 0xb's push, the traffic's
+    /// `dispatch_follow`).
+    pub fn ship_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
+        (self.0.iter_mut())
+            .find(|gone| gone.ship.id == id)
+            .map(|gone| &mut gone.ship)
+    }
 }
 
 impl Traffic {

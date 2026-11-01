@@ -11,8 +11,8 @@
 //!   `_HandleShip`; see [`odds_cache`](super::odds_cache)); notes which
 //!   ships are entering a gate; and snapshots what each flight reads of
 //!   the others: every ship's state before any moves, the player's, the
-//!   top speeds, the disabled ships, the leaders' warps (sending each
-//!   leader out on the advance pass), the tractors' holders, each
+//!   top speeds, the disabled ships, the leaders' warps, the tractors'
+//!   holders, each
 //!   swarmer's lead and the ships that don't see their leader. The
 //!   original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
@@ -116,12 +116,14 @@ pub struct FlyPass {
     order: Vec<NpcId>,
     /// Each leader's warp as the half began, after every slot's step of
     /// the AI loop, the ships that left in it as their records hold it:
-    /// what a follower above its leader reads, and every follower on
-    /// double time's second pass.
+    /// what `_HandleShip`'s warp-out reads (a led ship takes its leader's
+    /// +0x68, @0x34796-0x347ba, after the whole AI loop), and the glow
+    /// copy of a follower above its leader.
     leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
     /// Each leader's warp as the tick's think opened, before any slot's
-    /// step: what a follower below its leader reads on the advance pass
-    /// (see the traffic's `dispatch_leave`).
+    /// step: what close formation's glow copy of a follower below its
+    /// leader reads on the advance pass, as that low level came first
+    /// (@0x87dce-0x87deb).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
     /// Each leader's slot, the ships that left in the AI loop among them.
     leader_berths: BTreeMap<NpcId, u32>,
@@ -132,6 +134,11 @@ pub struct FlyPass {
     /// gate entrant's stop, its leave). None on double time's second pass,
     /// which has no AI loop.
     opened: BTreeMap<NpcId, (u32, ShipState)>,
+    /// Each follower whose sub 0xd ran at its slot of the AI loop this
+    /// tick (the traffic's `dispatch_follow`), and whether it kept
+    /// formation, so its goal's flight flies it: none on double time's
+    /// second pass, whose followers are flown by their leader's stage.
+    followed: BTreeMap<NpcId, bool>,
     /// The ships a tractor's hold may name, as the half began.
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
@@ -165,9 +172,12 @@ impl FlyPass {
         &self.order
     }
 
-    /// The leaders' warps `npc` reads: as the tick's think opened for a
-    /// follower below its leader on the advance pass, as the half began
-    /// otherwise (see [`FlyPass::leaders`]).
+    /// The leaders' warps close formation's glow copy of `npc` reads, a
+    /// low level's read (@0x87dce-0x87deb): as the tick's think opened for
+    /// a follower below its leader on the advance pass, as the half began
+    /// otherwise (see [`FlyPass::leaders`]). Goal 0xb and sub 0xd read
+    /// theirs at the follower's slot (the traffic's `dispatch_follow`), and
+    /// the warp-out reads the leader as the half began.
     fn leaders_for(&self, npc: &Npc) -> &BTreeMap<NpcId, warp_out::LeaderWarp> {
         let below = npc
             .leader
@@ -231,9 +241,11 @@ impl Traffic {
         for npc in left_in_dispatch {
             opened.entry(npc.id).or_insert((npc.berth, npc.state));
         }
-        if think {
-            warp_out::send_leaders_out(&mut self.npcs);
-        }
+        let followed = if think {
+            self.followed.clone()
+        } else {
+            BTreeMap::new()
+        };
         let holders = tractor_hold::Holders::of(world, &self.npcs);
         let disabled = self
             .npcs
@@ -281,6 +293,7 @@ impl Traffic {
             open_leaders,
             leader_berths,
             opened,
+            followed,
             holders,
             leads,
             unseen,
@@ -561,8 +574,10 @@ fn fly_steered(
 ) -> Outcome {
     // The goal it holds, not the one it flies (see `fly_one`).
     let paused = pass.paused.contains(&npc.id);
-    let leaders = pass.leaders_for(npc);
-    if let Some(outcome) = warp_out::fly_jump(npc, leaders, world, pass.think, paused) {
+    // Goal 0xb's block and sub 0xd ran at its slot of the AI loop (the
+    // traffic's `dispatch_follow`).
+    let formation = pass.followed.get(&npc.id).copied();
+    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, formation, paused) {
         return outcome;
     }
     // A docking ship flies what its low level left at its slot of the AI
@@ -602,7 +617,7 @@ fn fly_steered(
         &mut *chance,
     );
     let jumping = npc.jumping() && !paused;
-    warp_out::settle(npc, pass.leaders_for(npc), &world.warp, jumping);
+    warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
     outcome
 }
 

@@ -249,9 +249,15 @@ mod tests {
     fn a_follower_above_its_leader_cancels_its_jump_on_the_tick_the_leader_turns_to_attack_and_one_below_on_the_next()
      {
         // The cancel reads the lead's goal as the lower slots left it
-        // (@0x90125-0x9019c).
+        // (@0x90125-0x9019c). The lead brakes for its jump as the tick
+        // begins (goal 2, sub 1), so the follower below finds it leaving at
+        // its goal 0xb check (@0x8defc-0x8df13).
         let mut traffic = traffic();
-        let leader = traffic.add_npc_at(ship(), 2);
+        let mut lead = ship();
+        lead.goal = Goal::JumpOut;
+        lead.state.position = Vec2::new(3000.0, 0.0);
+        lead.state.velocity = Vec2::new(2.0, 0.0);
+        let leader = traffic.add_npc_at(lead, 2);
         let below = following(&mut traffic, leader, 1);
         let above = following(&mut traffic, leader, 3);
         let watch = Watch {

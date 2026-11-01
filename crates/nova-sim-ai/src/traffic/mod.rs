@@ -204,6 +204,7 @@ mod count_wait_turn_tests;
 pub mod destination;
 pub mod disabled_reset;
 pub mod dispatch_dock;
+pub mod dispatch_follow;
 pub mod dispatch_head;
 pub mod dispatch_leave;
 #[cfg(test)]
@@ -956,6 +957,10 @@ pub struct Traffic {
     /// slot this tick ([`dispatch_dock`]), which both of double time's
     /// passes fly.
     dock_flights: BTreeMap<NpcId, plunder_dock::DockFlight>,
+    /// Each follower whose sub 0xd ran at its slot this tick
+    /// ([`dispatch_follow`]), and whether it kept formation, so the
+    /// autopilot flies it.
+    followed: BTreeMap<NpcId, bool>,
     /// Each ship's warp as the tick's think opened, which a follower below
     /// its leader reads ([`dispatch_leave`]).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
@@ -1100,6 +1105,7 @@ impl Traffic {
             freed: Vec::new(),
             left_in_dispatch: Vec::new(),
             dock_flights: BTreeMap::new(),
+            followed: BTreeMap::new(),
             open_leaders: BTreeMap::new(),
             open_states: BTreeMap::new(),
             gone: GoneShips::default(),
@@ -1186,6 +1192,7 @@ impl Traffic {
         self.freed.clear();
         self.left_in_dispatch.clear();
         self.dock_flights.clear();
+        self.followed.clear();
         self.open_states.clear();
         self.gone.clear();
         self.skipped = skipped_high_level::SkippedReads::default();
@@ -1309,6 +1316,7 @@ impl Traffic {
         self.freed.clear();
         self.left_in_dispatch.clear();
         self.dock_flights.clear();
+        self.followed.clear();
         self.open_states.clear();
         self.gone.clear();
         self.skipped = skipped_high_level::SkippedReads::default();
