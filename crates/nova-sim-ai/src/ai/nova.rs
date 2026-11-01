@@ -380,8 +380,8 @@ impl Behaviour for NovaAi {
     /// from a ship gone from its slot ends with its provocation
     /// ([`provocation::with_flight_end`], @0x8d4e4-0x8d50d →
     /// @0x8e228-0x8e23d) for a ship the hunt left alone, and its flee
-    /// drop ([`flee_drop::with_flee_drop`]), its drop of an attack on a
-    /// ship breaking up ([`attack_drop::with_attack_drop`]) and its call
+    /// drop ([`flee_drop::with_flee_drop`]), its state-4 block
+    /// ([`attack_drop::attack_block`]) and its call
     /// for reinforcements end the think
     /// ([`reinforcements::with_high_level_call`]), whatever type decided,
     /// as the handler runs after every type's think (`_AIDispatch`
@@ -422,7 +422,7 @@ impl Behaviour for NovaAi {
             decision
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
-        let decision = attack_drop::with_attack_drop(decision, around);
+        let decision = attack_drop::attack_block(npc, decision, around, self.led_ally);
         reinforcements::with_high_level_call(npc, decision, around)
     }
 
@@ -1587,11 +1587,13 @@ mod tests {
     }
 
     #[test]
-    fn a_captured_ship_behav_0_mission_escort_still_hunts_the_player() {
+    fn a_captured_ship_behav_0_mission_escort_turns_on_the_player_and_is_dropped() {
         // A captured mission ship keeps its mark and flies as a mission
         // escort; `_HighLevelAIHandler` runs after `_EscortAI` (@0x901e5)
         // and attacks the player for a `ShipBehav` 0 slot in formation
-        // (@0x8d628-0x8d6ea), with no test on the leader (@0x89c3e).
+        // (@0x8d628-0x8d6ea), with no test on the leader (@0x89c3e). Its
+        // +0x9a is the player, so the attack block drops that attack in the
+        // same pass (@0x8e306 → @0x8e381), the turn kept.
         let mark = Marked::new(7);
         let ai = NovaAi::default().with_escorts(mark.clone());
         let mut captured = mission_ship(of(1, AiType::Warship), 0);
@@ -1602,11 +1604,10 @@ mod tests {
         assert!(captured.mission_escort());
         let npcs = [captured];
         let around = with_player(&npcs, Condition::Intact);
-        assert_eq!(
-            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
-            Goal::Attack(ShipRef::Player)
-        );
-        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+        let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Idle, "@0x8e381");
+        assert!(decision.turns_on_player, "@0x8d6b7 came first");
+        assert!(decision.clears_target, "target -1 (@0x8e393)");
         let mut unmarked = npcs[0].clone();
         unmarked.mission = None;
         unmarked.escort = Some(crate::escort::EscortDuty {

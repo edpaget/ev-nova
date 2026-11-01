@@ -234,7 +234,7 @@ mod tests {
 
     mod in_traffic {
         use super::*;
-        use crate::ai::fixture::{PIRATES, TRADERS, player, ship};
+        use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, player, ship};
         use crate::ai::{CommCall, Goal, NovaAi};
         use crate::traffic::fixture::calls_on_line;
         use crate::traffic::npc::AiType;
@@ -321,9 +321,11 @@ mod tests {
          {
             // A wimpy trader provoked by the player far off runs out,
             // begins its warp out on its first tick (see `leave_flight`)
-            // and is gone once its warp stage ends (see `warp_out`).
+            // and is gone once its warp stage ends (see `warp_out`). It is
+            // of no ally's government, or the attack block's ally drop
+            // would take the trader's attack first (@0x8e277-0x8e2e4).
             let mut traffic = Traffic::new();
-            let mut runner = ship(0, TRADERS, AiType::WimpyTrader, 0.0, -1001.0);
+            let mut runner = ship(0, NEUTRAL, AiType::WimpyTrader, 0.0, -1001.0);
             runner.goal = Goal::Flee(ShipRef::Player);
             runner.provoked = 10.0;
             runner.target = Some(ShipRef::Player);

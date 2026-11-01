@@ -90,7 +90,10 @@ fn a_players_escort_held_at_its_gate_ends_its_hold_at_its_first_defend_attack_or
         assert!(!thought.wait_running(), "{order:?}");
         assert_eq!(thought.owed_burst, Some(30.0), "{order:?}: its burst");
         if order.is_some() {
-            assert_eq!(thought.goal, Goal::Attack(ShipRef::Player), "{order:?}");
+            // The think keeps the hit's attack on the player, and the
+            // attack block drops it the same frame: its +0x9a is the
+            // player (@0x8e306 → @0x8e381).
+            assert_eq!((thought.goal, thought.target), (Goal::Idle, None));
         } else {
             assert!(
                 matches!(thought.goal, Goal::Formation { .. }),
