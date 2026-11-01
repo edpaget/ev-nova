@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::catalog::{
-    BoomId, CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
-    NavDefSlots, NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, SoundId,
-    StellarId, StellarLife, SystemId, SystemVisibility, WeaponId,
+    BoomId, CronRecord, DateAffixes, DudeId, LandingSite, ListedStellar, MissionId, MissionRecord,
+    MissionTexts, NavDefSlots, NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord,
+    ShipRecord, SoundId, StellarId, StellarLife, SystemId, SystemVisibility, WeaponId,
 };
 use crate::combat::armament::Arsenal;
 use crate::geometry::Vec2;
@@ -131,6 +131,12 @@ pub(super) struct Statics {
     /// when the session starts: what a `Y`'s explosion sounds (see the
     /// `y_explosion` module).
     pub(super) boom_sounds: BTreeMap<BoomId, SoundId>,
+    /// The landing sites of the stellars of IDs 128 to 191 that can be
+    /// read, whichever system holds them, read when the session starts:
+    /// what a ship's or a Con's slot names as a stellar (the traffic's
+    /// `slot_stellars` module), which the traffic flies a goal naming one
+    /// the system doesn't list among.
+    pub(super) slot_stellars: Vec<LandingSite>,
 }
 
 impl Statics {
@@ -205,6 +211,29 @@ mod tests {
         assert_eq!(session.weapon_ids(), [WeaponId(128), WeaponId(130)]);
         let unarmed = Session::start(&crate::testkit::catalog()).expect("starts");
         assert_eq!(unarmed.weapon_ids(), [], "an unarmed catalog lists none");
+    }
+
+    #[test]
+    fn the_slot_stellars_are_ids_128_to_191() {
+        use crate::catalog::SystemId;
+        use crate::testkit::planet;
+        let mut catalog = crate::testkit::catalog();
+        catalog.sites.push((
+            SystemId(132),
+            vec![planet(191, 0.0, 0.0), planet(192, 0.0, 0.0)],
+        ));
+        let session = Session::start(&catalog).expect("starts");
+        let ids: Vec<StellarId> = session
+            .statics
+            .slot_stellars
+            .iter()
+            .map(|site| site.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [128, 129, 140, 191].map(StellarId),
+            "every system's, 192 past the last slot"
+        );
     }
 
     #[test]

@@ -1312,6 +1312,9 @@ impl Session {
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             stellar_weapons: catalog.stellar_weapons().into_iter().collect(),
             boom_sounds: catalog.boom_sounds().into_iter().collect(),
+            slot_stellars: crate::traffic::slot_stellars::ids()
+                .filter_map(|id| catalog.landing_site(id))
+                .collect(),
         };
         let mut session = Self {
             mode: Mode::Flying,
@@ -2171,6 +2174,7 @@ impl Session {
             npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
             landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
+            slot_stellars: &self.statics.slot_stellars,
         };
         let stepped = f(&mut self.space.traffic, world);
         self.lend_defence_ships();
@@ -2270,6 +2274,7 @@ impl Session {
             npc_landing: self.setup.rules.source_for(RuleKey::NpcLanding),
             landed_leaves: self.setup.rules.source_for(RuleKey::LandedLeaves),
             destroyable: &self.statics.destroyable,
+            slot_stellars: &self.statics.slot_stellars,
         }
     }
 

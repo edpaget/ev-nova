@@ -2079,6 +2079,14 @@ pub trait PilotCatalog {
     /// The stellars of system `id` that can be read, in its `nav_def`
     /// order; none for a system that cannot be read.
     fn landing_sites(&self, system: SystemId) -> Vec<LandingSite>;
+    /// Stellar `id` as a landing site, of whichever system holds it, when
+    /// it can be read: what a ship's +0x6c names read as a stellar's
+    /// table index (`_MinerAI`'s read and goal 1's, @0x8d8d7-0x8d8e8),
+    /// which may be another system's. None by default.
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        let _ = id;
+        None
+    }
     /// Every system that can be read, by ascending ID, with its map
     /// position and hyperlinks.
     fn star_map(&self) -> Vec<StarSystem>;
@@ -2278,6 +2286,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).landing_sites(system)
     }
 
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        (**self).landing_site(id)
+    }
+
     fn star_map(&self) -> Vec<StarSystem> {
         (**self).star_map()
     }
@@ -2436,6 +2448,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
         (**self).landing_sites(system)
+    }
+
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        (**self).landing_site(id)
     }
 
     fn star_map(&self) -> Vec<StarSystem> {

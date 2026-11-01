@@ -15,8 +15,11 @@
 //! 1. **The guard** (@0x8d8b8-0x8d8d1): the block runs for goal +0xc8c8 ==
 //!    1 with a travel stellar +0x6c ≠ −1; with −1 it does nothing and
 //!    keeps its sub-goal. A [`Goal::Land`] always names its stellar, so
-//!    the engine can't reach that branch; one whose stellar is not among
-//!    the system's brakes (the autopilot's).
+//!    the engine can't reach that branch. A stellar the system doesn't
+//!    list, as a slot names, is flown among the slot stellars
+//!    ([`slot_stellars`](crate::traffic::slot_stellars)): to its record's
+//!    place, in whichever system it is; one with no record brakes (the
+//!    autopilot's).
 //! 2. **The gate hand-off** (@0x8d8d7-0x8d8fe): a stellar whose `Flags2`
 //!    (record +0x34, 0x498-byte records at *0x3b5010) has 0x3000, a
 //!    hypergate or wormhole, turns the goal to 0x14 and runs state 20 in

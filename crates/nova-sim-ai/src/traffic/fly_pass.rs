@@ -539,9 +539,12 @@ fn fly_steered(
         Some(_) => return Outcome::Flying,
         None => {}
     }
+    // A goal naming a stellar the system doesn't list, as a slot does, is
+    // flown among the slot stellars (see `slot_stellars`).
+    let flown_among = world.flown_among(npc.goal);
     let outcome = autopilot::fly(
         npc,
-        world.listed,
+        flown_among,
         world.type_widths,
         other.as_ref(),
         other_disabled,

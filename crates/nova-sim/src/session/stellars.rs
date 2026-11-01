@@ -314,11 +314,20 @@ impl Session {
     /// A gate the player's system does not hold ([`Chart::held_here`]),
     /// such as one it lists but another visible system owns, which an NPC
     /// may enter (see the `npc_destinations` module), reads the unloaded
-    /// width, 150, as the owner test comes first (@0xacb9-0xacc1).
+    /// width, 150, as the owner test comes first (@0xacb9-0xacc1). So does
+    /// a gate a slot names that the system doesn't list
+    /// ([`Statics::slot_stellars`](super::Statics), the traffic's
+    /// `slot_stellars` module), which another system owns.
     pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
-        self.chart
-            .listed
+        let listed = &self.chart.listed;
+        let unlisted = self
+            .statics
+            .slot_stellars
             .iter()
+            .filter(|slot| !listed.iter().any(|site| site.id == slot.id));
+        listed
+            .iter()
+            .chain(unlisted)
             .filter(|site| GateKind::of(site.flags2).is_some())
             .map(|site| {
                 let held = self.chart.held_here(&self.pilot, &self.statics, site.id);

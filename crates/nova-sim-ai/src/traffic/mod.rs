@@ -270,6 +270,9 @@ pub mod ship_display;
 pub mod skill;
 #[cfg(test)]
 mod skill_rolls;
+#[cfg(test)]
+mod slot_stellar_tests;
+pub mod slot_stellars;
 pub mod snipe;
 pub mod spawn;
 pub mod stellar_attack;
@@ -756,6 +759,11 @@ pub struct World<'a> {
     /// The stellars shots can shoot down ([`Surroundings::destroyable`]),
     /// among which a stellar attacker picks its quarry.
     pub destroyable: &'a BTreeSet<StellarId>,
+    /// The stellars of IDs 128 to 191, whichever system holds them: what a
+    /// ship's or a Con's slot names as a stellar, flown when a goal names
+    /// one the system doesn't list ([`World::flown_among`], see
+    /// [`slot_stellars`]). [`World::new`] gives none.
+    pub slot_stellars: &'a [LandingSite],
 }
 
 /// Nova's disable rule, a world's default.
@@ -827,6 +835,7 @@ impl<'a> World<'a> {
             npc_landing: RuleSource::Engine,
             landed_leaves: RuleSource::Engine,
             destroyable: bare.destroyable,
+            slot_stellars: &[],
         }
     }
 
@@ -888,6 +897,7 @@ impl<'a> World<'a> {
             gone: &[],
             player_warp_stage: self.warp.player.stage,
             destroyable: self.destroyable,
+            slot_stellars: self.slot_stellars,
         }
     }
 }

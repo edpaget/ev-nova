@@ -757,6 +757,11 @@ pub struct Surroundings<'a> {
     /// (`nova_sim::story::wreck::destroyable`), among which a stellar
     /// attacker picks its quarry ([`death_star`]).
     pub destroyable: &'a BTreeSet<StellarId>,
+    /// The stellars of IDs 128 to 191, whichever system holds them
+    /// ([`World::slot_stellars`](crate::traffic::World::slot_stellars)):
+    /// a goal naming one the system doesn't list is still flown
+    /// ([`kept`]). [`Surroundings::new`] gives none.
+    pub slot_stellars: &'a [LandingSite],
 }
 
 /// No government marked by an IFF scrambler.
@@ -806,6 +811,7 @@ impl<'a> Surroundings<'a> {
             gone: &[],
             player_warp_stage: 0.0,
             destroyable: &NO_DESTROYABLE,
+            slot_stellars: &[],
         }
     }
 
@@ -1301,8 +1307,14 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
         Goal::Land(stellar) => around
             .listed
             .iter()
-            .any(|site| site.id == stellar && landable(site)),
-        Goal::EnterGate(gate) => around.listed.iter().any(|site| site.id == gate),
+            .chain(around.slot_stellars)
+            .find(|site| site.id == stellar)
+            .is_some_and(landable),
+        Goal::EnterGate(gate) => around
+            .listed
+            .iter()
+            .chain(around.slot_stellars)
+            .any(|site| site.id == gate),
         Goal::JumpOut | Goal::Hold | Goal::Wait | Goal::Drift => true,
         _ => false,
     }
@@ -1827,6 +1839,43 @@ mod tests {
                 Trigger::default()
             );
         }
+    }
+
+    #[test]
+    fn a_trader_keeps_flying_a_slot_stellar() {
+        // A successor copying a `Land` its lead took from a slot keeps
+        // flying it: states 1 and 20 read the record by +0x6c whatever the
+        // system lists (@0x8d8d7, @0x8db8a).
+        let mut lander = npc(1, AiType::WimpyTrader);
+        lander.goal = Goal::Land(StellarId(140));
+        let gate = LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..planet(141, 0.0, 0.0)
+        };
+        let slots = [planet(140, 500.0, 0.0), gate];
+        let listed = sites();
+        let npcs = [lander.clone()];
+        let around = Surroundings {
+            slot_stellars: &slots,
+            ..Surroundings::new(&listed, &npcs)
+        };
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&lander, &around, &mut chance), lander.goal);
+        let entering = Npc {
+            goal: Goal::EnterGate(StellarId(141)),
+            ..lander.clone()
+        };
+        assert_eq!(idle(&entering, &around, &mut chance), entering.goal);
+        assert!(chance.asked.is_empty(), "no new pick");
+        let lost = Npc {
+            goal: Goal::Land(StellarId(150)),
+            ..lander
+        };
+        assert_ne!(
+            idle(&lost, &around, &mut Draws::of(&[0])),
+            lost.goal,
+            "a stellar in neither"
+        );
     }
 
     #[test]

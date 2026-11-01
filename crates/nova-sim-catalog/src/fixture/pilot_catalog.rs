@@ -318,6 +318,16 @@ impl PilotCatalog for FakePilotCatalog {
             .map_or_else(Vec::new, |(_, sites)| sites.clone())
     }
 
+    /// The first of [`FakePilotCatalog::sites`]' sites of `id`, of any
+    /// system.
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        self.sites
+            .iter()
+            .flat_map(|(_, sites)| sites)
+            .find(|site| site.id == id)
+            .copied()
+    }
+
     fn star_map(&self) -> Vec<StarSystem> {
         *self.star_map_reads.borrow_mut() += 1;
         self.star_map.clone()
