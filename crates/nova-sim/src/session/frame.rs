@@ -53,6 +53,7 @@ impl Session {
             effective_murk,
             system_murk,
             system_background,
+            murk_colour,
             double_time,
             hyper_gamma,
             traffic_ships,
@@ -99,6 +100,7 @@ impl Session {
         *effective_murk = self.effective_murk();
         *system_murk = self.system_murk();
         *system_background = self.system_background();
+        *murk_colour = self.murk_colour();
         *double_time = self.double_time();
         *hyper_gamma = self.hyper_gamma();
         *traffic_ships = self.traffic_ships();
@@ -273,14 +275,7 @@ pub(super) mod tests {
             // Only the cloak taken: no state of the player's gives it.
             gates: Gates::from_fn(|command| command == PlayerCommand::Cloak),
             key_fades: crate::key_fade::KeyFades::EVERY,
-            map_key: MapKey {
-                system: SystemId(999),
-                explored: vec![SystemId(997)],
-                charted: vec![SystemId(997)],
-                known: BTreeSet::from([SystemId(996)]),
-                course: vec![SystemId(995)],
-                nav: NavMode::Hyperspace(Some(SystemId(999))),
-            },
+            map_key: stale_map_key(),
             ships: vec![stale_ship(); 3],
             drawn: vec![(
                 ShipRef::Npc(crate::traffic::npc::NpcId(999)),
@@ -336,6 +331,7 @@ pub(super) mod tests {
             effective_murk: 99,
             system_murk: 99,
             system_background: Some(0x99),
+            murk_colour: 0x99,
             double_time: true,
             hyper_gamma: 9.0,
             traffic_ships: vec![ShipId(999)],
@@ -355,6 +351,18 @@ pub(super) mod tests {
                 current: Vec2::new(-999.0, 999.0),
                 links: vec![(SystemId(999), Vec2::new(9.0, 9.0)); 17],
             },
+        }
+    }
+
+    /// A map key unlike any a test session fills, in every field.
+    fn stale_map_key() -> MapKey {
+        MapKey {
+            system: SystemId(999),
+            explored: vec![SystemId(997)],
+            charted: vec![SystemId(997)],
+            known: BTreeSet::from([SystemId(996)]),
+            course: vec![SystemId(995)],
+            nav: NavMode::Hyperspace(Some(SystemId(999))),
         }
     }
 
@@ -834,6 +842,13 @@ pub(super) mod tests {
         assert!(!frame.traffic_ships.is_empty(), "the system's traffic");
     }
 
+    #[test]
+    fn a_fill_writes_the_murk_colour() {
+        let catalog = crate::session::tests::armed();
+        let session = crate::session::tests::facing_an_npc(&catalog, 0);
+        assert_eq!(filled(&session).murk_colour, session.murk_colour());
+    }
+
     // The gates (rdm:phase/view-sim-seam/phase-20-view-frame-fills-per-tick).
 
     /// Breaks the player up, as a ship whose armour has gone does.
@@ -1118,6 +1133,7 @@ pub(super) mod tests {
         assert!(frame.shots.is_empty() && frame.stellars.is_empty());
         assert_eq!(frame.effective_murk, 0);
         assert_eq!(frame.system_background, None);
+        assert_eq!(frame.murk_colour, 0);
         assert_eq!(frame.player_ship_name, None);
         assert_eq!(frame.long_date, "");
         assert!(frame.explored.is_empty(), "every system unexplored");

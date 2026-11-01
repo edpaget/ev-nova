@@ -74,13 +74,20 @@ fn colorized(t: vec4<f32>, colorize: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(widened(colorized5(s5, colorize)), t.a);
 }
 
+// The texel `P` a sprite's factors apply to: colorized when its colorize
+// mixes, and otherwise itself (`_BlitPixieTranslucentCopy` mixes first,
+// @0xc1140-0xc11ca, then scales, @0xc11cc-0xc1275).
+fn texel_mixed(t: vec4<f32>, colorize: vec4<f32>) -> vec4<f32> {
+    if mixes(colorize) {
+        return colorized(t, colorize);
+    }
+    return t;
+}
+
 @fragment
 fn sprite_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     let t = textureSample(page, page_sampler, in.uv);
-    if mixes(in.colorize) {
-        return colorized(t, in.colorize) * in.tint;
-    }
-    return t * in.tint;
+    return texel_mixed(t, in.colorize) * in.tint;
 }
 
 // A max batch's colour, premultiplied by its alpha so a transparent texel
@@ -132,9 +139,9 @@ fn or_fill_fs(in: SpriteOut) -> @location(0) vec4<f32> {
 
 // Crossfades the texel with the backdrop by OR, in 5 bits: the original's
 // `((src_c * k) >> 5) | ((dst_c * (32 - k)) >> 5)`, k the tint's alpha in
-// 32nds and the tint's colour a multiplier on the source. A transparent
-// texel or k = 0 leaves the backdrop as it is. The arithmetic and why are
-// on `Blend::OrCrossfade`.
+// 32nds and the tint's colour a multiplier on the source, which a colorize
+// has mixed first. A transparent texel or k = 0 leaves the backdrop as it
+// is. The arithmetic and why are on `Blend::OrCrossfade`.
 @fragment
 fn crossfade_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     let t = textureSampleLevel(page, page_sampler, in.uv, 0.0);
@@ -143,7 +150,8 @@ fn crossfade_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     if (t.a == 0.0 || k == 0u) {
         return d;
     }
-    let s5 = vec3<u32>(round(t.rgb * in.tint.rgb * 255.0)) >> vec3<u32>(3u);
+    let p = texel_mixed(t, in.colorize);
+    let s5 = vec3<u32>(round(p.rgb * in.tint.rgb * 255.0)) >> vec3<u32>(3u);
     let d5 = vec3<u32>(round(d.rgb * 255.0)) >> vec3<u32>(3u);
     let c5 = ((s5 * k) >> vec3<u32>(5u)) | ((d5 * (32u - k)) >> vec3<u32>(5u));
     let c8 = (c5 << vec3<u32>(3u)) | (c5 >> vec3<u32>(2u));
@@ -152,9 +160,9 @@ fn crossfade_fs(in: SpriteOut) -> @location(0) vec4<f32> {
 
 // The original's translucent copy with its factors set apart:
 // `((src_c * n_c) >> 5) | ((dst_c * m) >> 5)`, the tint's colour the source
-// factors n_c and its alpha the destination factor m, each in 32nds. A
-// transparent texel leaves the backdrop as it is. The arithmetic and why
-// are on `Blend::OrTranslucent`.
+// factors n_c and its alpha the destination factor m, each in 32nds, the
+// source mixed by a colorize first. A transparent texel leaves the
+// backdrop as it is. The arithmetic and why are on `Blend::OrTranslucent`.
 @fragment
 fn translucent_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     let t = textureSampleLevel(page, page_sampler, in.uv, 0.0);
@@ -164,7 +172,8 @@ fn translucent_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     }
     let n = vec3<u32>(round(in.tint.rgb * 32.0));
     let m = u32(round(in.tint.a * 32.0));
-    let s5 = vec3<u32>(round(t.rgb * 255.0)) >> vec3<u32>(3u);
+    let p = texel_mixed(t, in.colorize);
+    let s5 = vec3<u32>(round(p.rgb * 255.0)) >> vec3<u32>(3u);
     let d5 = vec3<u32>(round(d.rgb * 255.0)) >> vec3<u32>(3u);
     let c5 = ((s5 * n) >> vec3<u32>(5u)) | ((d5 * m) >> vec3<u32>(5u));
     let c8 = (c5 << vec3<u32>(3u)) | (c5 >> vec3<u32>(2u));

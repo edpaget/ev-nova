@@ -284,6 +284,40 @@ fn clear_route_redraws_item_3_by_c_or_its_button() {
     }
 }
 
+#[test]
+fn over_a_held_frame_the_map_shows_what_it_changed_in_the_nav_area_with_no_step() {
+    use crate::flight::hud::{NavDestination, NavDisplay};
+    let frame = |nav| FlightFrame {
+        nav_mode: NavMode::Hyperspace(nav),
+        ..in_sol()
+    };
+    let cases = [
+        (Key::Char('c'), Some(SystemId(131)), None),
+        (Key::Tab, None, Some(SystemId(131))),
+    ];
+    for (k, was, then) in cases {
+        let mut view = faked_sol(frame(was));
+        let pass = nova_sim::flight_frame::PassReport::default();
+        view.sim
+            .queue_report(super::stepping::doubled(pass.clone(), pass, frame(was)));
+        view.step_frame(1, view.anchor());
+        view.open_map();
+        let stepped = view.sim.steps();
+        view.sim.queue_answer_showing(Answer::Done, frame(then));
+        faked_map_tap(&mut view, k);
+        let destination = |nav: Option<SystemId>| {
+            nav.map_or(NavDestination::None, |_| NavDestination::Unexplored)
+        };
+        let shown = NavDisplay::Hyperspace {
+            destination: destination(then),
+            readiness: view.frame.jump_readiness,
+        };
+        assert_eq!(view.nav_shown(view.drawn()), shown, "{k:?}");
+        assert_eq!(view.nav_now(), shown, "{k:?}");
+        assert_eq!(view.sim.steps(), stepped, "{k:?}: no step ran");
+    }
+}
+
 // The course map's nebulae by `RuleKey::NebulaPicture`.
 
 /// The `PICT` each nebula `list`'s open course map draws is drawn from,
@@ -639,6 +673,23 @@ pub(super) fn alpha_of(view: &Faked) -> Option<u8> {
             DrawCommand::Line { color, .. } => color.a,
             _ => unreachable!(),
         })
+}
+
+#[test]
+fn a_held_frame_centres_the_floating_map_on_its_own_place() {
+    let frame = sol();
+    let mut view = floating_in(frame);
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    let drawn = floating_dots(&floating_drawn(&view));
+    let first = view.frame.clone();
+    let mut now = first.clone();
+    now.floating.current = Vec2::new(40.0, 30.0);
+    view.sim.set_frame(now);
+    let pass = nova_sim::flight_frame::PassReport::default();
+    view.sim
+        .queue_report(super::stepping::doubled(pass.clone(), pass, first));
+    view.step_frame(1, view.anchor());
+    assert_eq!(floating_dots(&floating_drawn(&view)), drawn);
 }
 
 #[test]

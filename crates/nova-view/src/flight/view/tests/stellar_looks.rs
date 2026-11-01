@@ -774,6 +774,45 @@ fn a_gate_frozen_keeps_the_frame_it_showed_before_its_gate_frame_changes() {
     }
 }
 
+#[test]
+fn a_held_frames_gate_frames_and_frozen_looks_show_until_it_goes() {
+    // The Moon (129) stops stepping once a frozen look reaches the scene,
+    // and the gate draws the frame its record gives.
+    let gate = |frame| FrameStellar {
+        gate_frame: Some(frame),
+        ..looking(141, DrawnSheet::Dead, true)
+    };
+    let mut flight = showing(130, sol());
+    flight.stellars.push(gate(0));
+    let mut view = faked_from(uncounted_gate(), flight.clone());
+    let mut first = flight.clone();
+    first.stellars[1].frozen = true;
+    first.stellars[2] = gate(1);
+    let mut now = flight;
+    now.stellars[2] = gate(3);
+    view.sim.set_frame(now);
+    let pass = nova_sim::flight_frame::PassReport::default();
+    let report = super::stepping::doubled(pass.clone(), pass, first);
+    view.sim.queue_report(report);
+    view.tick(TICK);
+    assert_eq!(
+        gate_on(&view),
+        [ImageKey::sprite(2141, 1)],
+        "the first pass's"
+    );
+    let moon = moon_on(&view);
+    view.tick(TICK);
+    assert_eq!(moon_on(&view), moon, "the Moon frozen, as that frame says");
+    view.sim.queue_report(nova_sim::flight_frame::StepReport {
+        steps: Vec::new(),
+        stopped: true,
+    });
+    view.tick(TICK);
+    assert_eq!(gate_on(&view), [ImageKey::sprite(2141, 3)], "the flight's");
+    view.tick(TICK);
+    assert_ne!(moon_on(&view), moon, "stepping again");
+}
+
 /// The Moon's frames over 3 ticks of a flight in Sol whose Moon (129), of
 /// 4 frames a tick, has `flags2`, its effects drawn on `draws`: those
 /// frames, and what the effects' chance was asked.

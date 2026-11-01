@@ -285,6 +285,7 @@ pub fn hull(id: i16) -> HullRecord {
         exits: None,
         display: None,
         escort_class: EscortClass::Freighter,
+        sprite_base: ShipId(id),
     }
 }
 

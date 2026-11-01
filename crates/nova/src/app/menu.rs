@@ -8,7 +8,8 @@
 //! (the viewport refitted, the audio fed, the warnings kept, and an exit
 //! when the screen quits). It skips the developer overlay: a menu command
 //! is not a key, and the overlay never sees the key equivalents the menu
-//! bar takes. Check for Updates… arrives as
+//! bar takes. With the app in the background it asks for one redraw too,
+//! to show what the command opened. Check for Updates… arrives as
 //! [`WindowEvent::CheckForUpdates`], which asks the updater to check now
 //! and never reaches the screen.
 //!
@@ -29,7 +30,7 @@
 use nova_render::ImageSource;
 use nova_view::{MenuCommand, Screen};
 
-use super::{App, Control, WindowEvent};
+use super::{App, Control, WindowEvent, WindowPort};
 
 /// One item of the menu bar the game handles, as the adapter forwards a
 /// pick of it and is told whether to offer it.
@@ -118,9 +119,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// A menu bar pick: the screen's answer to `command`, then what follows
-    /// an input's (see the module docs).
-    pub(super) fn route_menu(&mut self, command: MenuCommand) -> Control {
+    /// an input's, and a redraw in the background (see the module docs).
+    pub(super) fn route_menu(
+        &mut self,
+        command: MenuCommand,
+        window: &mut impl WindowPort,
+    ) -> Control {
         let action = self.screen.menu_command(command);
+        if self.background {
+            window.request_redraw();
+        }
         self.after_input(action)
     }
 }

@@ -31,6 +31,20 @@ fn escorted() -> Faked {
     faked(fleet_of(&[EscortClass::Warship]))
 }
 
+#[test]
+fn a_held_frame_draws_its_escort_rows() {
+    let first = fleet_of(&[EscortClass::Warship]);
+    let mut view = faked(first.clone());
+    press(&mut view, MENU_KEY);
+    let drawn = world_list(&view);
+    view.sim.set_frame(fleet_of(&[]));
+    let pass = nova_sim::flight_frame::PassReport::default();
+    view.sim
+        .queue_report(super::stepping::doubled(pass.clone(), pass, first));
+    view.step_frame(1, view.anchor());
+    assert_eq!(world_list(&view), drawn);
+}
+
 /// Presses `k` as an escort key, saying whether it was one.
 fn press(view: &mut Faked, k: Key) -> bool {
     view.escort_key(k)

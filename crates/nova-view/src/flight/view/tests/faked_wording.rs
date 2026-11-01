@@ -103,6 +103,11 @@ fn naming_with(change: impl FnOnce(&mut Names)) -> FakeFlight {
     fake
 }
 
+/// [`arrival_lead`] of `message`, no jump's roll wanted.
+fn lead_of(message: &SimMessage) -> Option<&'static str> {
+    arrival_lead(message, &mut nova_sim::NeverFires)
+}
+
 #[test]
 fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
     let names = FakeFlight::new();
@@ -134,7 +139,7 @@ fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
             fine: 0,
         },
     ] {
-        assert_eq!(arrival_lead(&message), None, "{message:?}");
+        assert_eq!(lead_of(&message), None, "{message:?}");
     }
 }
 
@@ -152,7 +157,7 @@ fn a_former_escort_rejoining_says_escort_or_fighter_repaired() {
         Some(FIGHTER_REPAIRED)
     );
     for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
-        assert_eq!(arrival_lead(&message), None, "{message:?}");
+        assert_eq!(lead_of(&message), None, "{message:?}");
     }
 }
 
@@ -164,7 +169,7 @@ fn fighter_captured_says_the_originals_words() {
         text(&SimMessage::FighterCaptured, &FakeFlight::new()).as_deref(),
         Some(FIGHTER_CAPTURED)
     );
-    assert_eq!(arrival_lead(&SimMessage::FighterCaptured), None);
+    assert_eq!(lead_of(&SimMessage::FighterCaptured), None);
 }
 
 #[test]
@@ -185,7 +190,7 @@ fn a_sabotage_notice_names_the_outfit_for_its_count() {
         text(&sabotaged(false), &names).as_deref(),
         Some("Your bombs have exploded!")
     );
-    assert_eq!(arrival_lead(&sabotaged(true)), None);
+    assert_eq!(lead_of(&sabotaged(true)), None);
 }
 
 #[test]
@@ -208,7 +213,7 @@ fn a_bomb_notice_names_the_outfit_with_no_empty_name_check() {
         Some("Your  has exploded!"),
         "an empty name is spelled out as it is"
     );
-    assert_eq!(arrival_lead(&exploded(275, true)), None);
+    assert_eq!(lead_of(&exploded(275, true)), None);
 }
 
 #[test]
@@ -217,7 +222,7 @@ fn the_leet_sabotage_notice_says_someone_set_up_the_bomb() {
         text(&SimMessage::BombSetUp, &FakeFlight::new()).as_deref(),
         Some("Someone set up us the bomb!")
     );
-    assert_eq!(arrival_lead(&SimMessage::BombSetUp), None);
+    assert_eq!(lead_of(&SimMessage::BombSetUp), None);
 }
 
 #[test]
@@ -243,7 +248,7 @@ fn a_collapsed_jump_says_the_hyperspace_field_collapsed() {
         JUMP_COLLAPSED,
         "Ship disabled - hyperspace field collapsed."
     );
-    assert_eq!(arrival_lead(&SimMessage::JumpCollapsed), None);
+    assert_eq!(lead_of(&SimMessage::JumpCollapsed), None);
 }
 
 #[test]
@@ -253,7 +258,7 @@ fn the_players_repair_droids_say_propulsion_systems_repaired() {
         Some("Propulsion systems repaired.")
     );
     assert_eq!(PROPULSION_REPAIRED, "Propulsion systems repaired.");
-    assert_eq!(arrival_lead(&SimMessage::PropulsionRepaired), None);
+    assert_eq!(lead_of(&SimMessage::PropulsionRepaired), None);
 }
 
 #[test]
@@ -270,7 +275,7 @@ fn the_escape_ship_says_escaping_in_its_long_name() {
         Some("Escaping in ."),
         "a class with no long name"
     );
-    assert_eq!(arrival_lead(&escaping(129)), None);
+    assert_eq!(lead_of(&escaping(129)), None);
 }
 
 #[test]
@@ -320,14 +325,14 @@ fn a_mission_ship_lost_says_str_2002_284() {
         text(&SimMessage::MissionShipLost, &FakeFlight::new()).as_deref(),
         Some(MISSION_FAILED)
     );
-    assert_eq!(arrival_lead(&SimMessage::MissionShipLost), None);
+    assert_eq!(lead_of(&SimMessage::MissionShipLost), None);
 }
 
 #[test]
 fn a_fleets_arrival_quote_says_its_line() {
     let quote = SimMessage::FleetArrivalQuote("Hail 9".to_owned());
     assert_eq!(text(&quote, &FakeFlight::new()).as_deref(), Some("Hail 9"));
-    assert_eq!(arrival_lead(&quote), None);
+    assert_eq!(lead_of(&quote), None);
 }
 
 #[test]
@@ -347,7 +352,7 @@ fn a_distress_call_a_pre_scan_hail_reinforcements_and_wait_for_me_say_their_text
         ),
     ] {
         assert_eq!(text(&message, &names).as_deref(), Some(said));
-        assert_eq!(arrival_lead(&message), None);
+        assert_eq!(lead_of(&message), None);
     }
 }
 
@@ -360,7 +365,7 @@ fn the_players_downed_lines_are_str_2002_287_288_and_284() {
         (SimMessage::DownedMissionFailed, "Mission failed."),
     ] {
         assert_eq!(text(&message, &names).as_deref(), Some(said), "{message:?}");
-        assert_eq!(arrival_lead(&message), None, "{message:?}");
+        assert_eq!(lead_of(&message), None, "{message:?}");
     }
 }
 
@@ -370,7 +375,7 @@ fn the_no_active_missions_message_is_str_2002_354() {
         text(&SimMessage::NoActiveMissions, &FakeFlight::new()).as_deref(),
         Some(NO_ACTIVE_MISSIONS)
     );
-    assert_eq!(arrival_lead(&SimMessage::NoActiveMissions), None);
+    assert_eq!(lead_of(&SimMessage::NoActiveMissions), None);
 }
 
 #[test]
@@ -379,7 +384,7 @@ fn the_deadline_message_is_str_2002_285() {
         text(&SimMessage::DeadlineMissed, &FakeFlight::new()).as_deref(),
         Some(TIME_LIMIT_EXCEEDED)
     );
-    assert_eq!(arrival_lead(&SimMessage::DeadlineMissed), None);
+    assert_eq!(lead_of(&SimMessage::DeadlineMissed), None);
     assert_eq!(TIME_LIMIT_EXCEEDED, "Time limit exceeded - mission failed.");
 }
 
@@ -427,8 +432,8 @@ fn a_contraband_notice_reads_its_names_from_the_flight() {
         Some(illegal_junk_message("Ace", "Kestrel", "", 0)),
         "no name"
     );
-    assert_eq!(arrival_lead(&junk(150)), None);
-    assert_eq!(arrival_lead(&outfit(None)), None);
+    assert_eq!(lead_of(&junk(150)), None);
+    assert_eq!(lead_of(&outfit(None)), None);
 }
 
 /// The found mission's drawn ship name names the scanner when it has
@@ -477,7 +482,7 @@ fn a_plunders_lines_are_its_cargo_and_its_stolen_ship() {
         text(&SimMessage::ShipStolen { fighter: true }, &names).as_deref(),
         Some("Fighter stolen!")
     );
-    assert_eq!(arrival_lead(&stolen), None);
+    assert_eq!(lead_of(&stolen), None);
 }
 
 #[test]
@@ -530,7 +535,7 @@ fn the_self_destructs_lines_say_its_stock_words() {
         SimMessage::SelfDestruct(SelfDestructLine::Cancelled),
         SimMessage::SelfDestruct(SelfDestructLine::NiceDay),
     ] {
-        assert_eq!(arrival_lead(&message), None, "{message:?}");
+        assert_eq!(lead_of(&message), None, "{message:?}");
     }
 }
 

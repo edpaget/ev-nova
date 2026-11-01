@@ -2,7 +2,7 @@
 //! pointer tracking that follows the Mac's `TrackControl`.
 
 use crate::color::Color;
-use crate::draw::DrawList;
+use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
@@ -10,6 +10,7 @@ use crate::input::{Input, MouseButton};
 use crate::sound::UiSound;
 use crate::text::TextMetrics;
 
+use super::button_glyph;
 use super::slice::{Axis, Piece, three_slice};
 
 /// One state's three pictures: left cap, middle and right cap.
@@ -129,10 +130,23 @@ impl Button {
         self.rect.contains_half_open(point)
     }
 
-    /// Draws the button into `list`: its three pictures for its state
-    /// (disabled, else `pressed` or normal) stretched over its rectangle,
-    /// so any width and height work, then its label centred on it in the
-    /// state's colour.
+    /// Draws the button into `list` as `_DrawButton` @0x25ea8 does: its
+    /// pictures for its state (disabled, else `pressed` or normal), then
+    /// its label in the state's colour. A rectangle with no drawable size
+    /// draws nothing.
+    ///
+    /// The caps keep their width and take the rectangle's height, with the
+    /// middle stretched between them, so any width and height work. A
+    /// rectangle narrower than two caps has no middle, and its right cap
+    /// overlaps its left (@0x26042-0x26215).
+    ///
+    /// A label starting with `^`, `&`, `+` or `-` draws its pen glyph (see
+    /// `button_glyph`). Any other is centred text.
+    ///
+    /// Two of `_DrawButton`'s states aren't here. State −2 draws no face
+    /// and no label, so a caller that wants it draws no button. State −3,
+    /// a picture in place of a button (@0x25ed7-0x25f61), has no constant
+    /// caller, and nothing on the engine's paths reaches it.
     pub fn draw(
         &self,
         pressed: bool,
@@ -141,6 +155,11 @@ impl Button {
         metrics: &impl TextMetrics,
         list: &mut DrawList,
     ) {
+        let (width, height) = (self.rect.width(), self.rect.height());
+        let drawable = |side: f32| side.is_finite() && side > 0.0;
+        if !(drawable(width) && drawable(height)) {
+            return;
+        }
         let (images, color) = if !self.enabled {
             (&skin.disabled, style.grey)
         } else if pressed {
@@ -148,8 +167,21 @@ impl Button {
         } else {
             (&skin.normal, style.up)
         };
-        for (piece, at) in three_slice(self.rect, Axis::Horizontal, skin.cap, skin.cap) {
-            list.stretched_picture(images.piece(piece), at.min, at.width(), at.height());
+        if width < 2.0 * skin.cap {
+            let (min, max) = (self.rect.min, self.rect.max);
+            list.stretched_picture(images.left, min, skin.cap, height);
+            let right = Point::new(max.x - skin.cap, min.y);
+            list.stretched_picture(images.right, right, skin.cap, height);
+        } else {
+            for (piece, at) in three_slice(self.rect, Axis::Horizontal, skin.cap, skin.cap) {
+                list.stretched_picture(images.piece(piece), at.min, at.width(), at.height());
+            }
+        }
+        if let Some(strokes) = button_glyph::strokes(&self.label, width, height) {
+            for stroke in strokes {
+                fill_rect(list, stroke.offset(self.rect.min), color);
+            }
+            return;
         }
         if self.label.is_empty() {
             return;
@@ -396,15 +428,25 @@ mod tests {
         }
     }
 
+    /// `_DrawButton` keeps each cap's width and draws no middle
+    /// (@0x26042-0x26215), so narrow caps overlap.
     #[test]
-    fn a_narrow_button_halves_its_caps_and_any_height_works() {
+    fn a_narrow_buttons_caps_keep_their_width_and_overlap_and_any_height_works() {
         let button = Button::new(Bounds::at(at(0.0, 0.0), 20.0, 40.0), "");
         let normal = ButtonSkin::NOVA.normal;
         assert_eq!(
             drawn(&button, false),
             [
-                picture(normal.left, 0.0, 0.0, 10.0, 40.0),
-                picture(normal.right, 10.0, 0.0, 10.0, 40.0),
+                picture(normal.left, 0.0, 0.0, 13.0, 40.0),
+                picture(normal.right, 7.0, 0.0, 13.0, 40.0),
+            ]
+        );
+        let arrow = Button::new(Bounds::at(at(330.0, 282.0), 23.0, 23.0), "");
+        assert_eq!(
+            drawn(&arrow, false),
+            [
+                picture(normal.left, 330.0, 282.0, 13.0, 23.0),
+                picture(normal.right, 340.0, 282.0, 13.0, 23.0),
             ]
         );
         let exact = Button::new(Bounds::at(at(0.0, 0.0), 26.0, 25.0), "");
@@ -415,6 +457,86 @@ mod tests {
                 picture(normal.right, 13.0, 0.0, 13.0, 25.0),
             ]
         );
+    }
+
+    #[test]
+    fn a_button_with_no_drawable_size_draws_nothing() {
+        for (width, height) in [
+            (0.0, 25.0),
+            (23.0, 0.0),
+            (-5.0, 25.0),
+            (23.0, f32::NAN),
+            (f32::INFINITY, 25.0),
+        ] {
+            for label in ["", "^", "Okay"] {
+                let rect = Bounds::at(at(10.0, 10.0), width, height);
+                let button = Button::new(rect, label);
+                assert_eq!(drawn(&button, false), [], "{width} x {height} {label:?}");
+            }
+        }
+    }
+
+    /// One of the 2 x 2 squares a pen glyph's diagonal paints, as
+    /// [`fill_rect`] draws it.
+    fn square(x: f32, y: f32, color: Color) -> DrawCommand {
+        let mut list = DrawList::new();
+        fill_rect(&mut list, Bounds::at(at(x, y), 2.0, 2.0), color);
+        list.iter().next().expect("a fill").clone()
+    }
+
+    fn arrow(label: &str) -> Button {
+        Button::new(Bounds::at(at(330.0, 282.0), 23.0, 23.0), label)
+    }
+
+    /// The caps, then the squares of `_DrawButton`'s `^` arm
+    /// (@0x26239-0x262f4), in each state's colour and with no text.
+    #[test]
+    fn an_up_arrow_label_is_its_pen_glyph_in_the_states_colour() {
+        let style = ButtonStyle::STOCK;
+        let disabled = Button {
+            enabled: false,
+            ..arrow("^")
+        };
+        for (commands, images, color) in [
+            (drawn(&arrow("^"), false), ButtonSkin::NOVA.normal, style.up),
+            (
+                drawn(&arrow("^"), true),
+                ButtonSkin::NOVA.pressed,
+                style.down,
+            ),
+            (
+                drawn(&disabled, true),
+                ButtonSkin::NOVA.disabled,
+                style.grey,
+            ),
+        ] {
+            let mut expected = vec![
+                picture(images.left, 330.0, 282.0, 13.0, 23.0),
+                picture(images.right, 340.0, 282.0, 13.0, 23.0),
+                square(341.0, 291.0, color),
+            ];
+            for (x, y) in [(1.0, 1.0), (2.0, 2.0), (3.0, 3.0), (4.0, 4.0)] {
+                expected.push(square(341.0 - x, 291.0 + y, color));
+                expected.push(square(341.0 + x, 291.0 + y, color));
+            }
+            assert_eq!(commands, expected);
+        }
+    }
+
+    /// `_DrawButton` picks its glyph on the label's first character.
+    #[test]
+    fn only_a_labels_first_character_picks_a_glyph() {
+        let is_text = |label: &str| {
+            drawn(&arrow(label), false)
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Text { .. }))
+        };
+        for glyph in ["^", "&", "+", "-", "^ up", "-5"] {
+            assert!(!is_text(glyph), "{glyph:?}");
+        }
+        for text in ["A^", "Okay", "a-b", " +"] {
+            assert!(is_text(text), "{text:?}");
+        }
     }
 
     #[test]

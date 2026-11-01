@@ -75,8 +75,9 @@
 //! [`RuleKey::BeamConeQuirks`](crate::RuleKey::BeamConeQuirks)'s
 //! ([`ConeAngle`]): by the engine's reading ([`ConeAngle::Plain`]) by ship
 //! slot k's distance, the fight's last note of that slot's position
-//! (`Combat::note_slots`); by the other, the default, by the asteroid's
-//! own. The angle test reads the same [`ConeAngle`]. By the other reading
+//! (`Combat::note_slots`), which the player's wrap carries as it moves an
+//! empty slot ([`wrap_carry`](super::wrap_carry)); by the other, the
+//! default, by the asteroid's own. The angle test reads the same [`ConeAngle`]. By the other reading
 //! of [`RuleKey::BeamHitTest`](crate::RuleKey::BeamHitTest)
 //! ([`BeamHitTest::Segment`]) the beam takes the first asteroid its segment
 //! meets, within its hit circle ([`AsteroidType::radius`]), and ends there,
@@ -89,10 +90,6 @@
 //!   a slot no ship has held is uninitialised memory, which can't be
 //!   replicated: such a slot weighs its asteroid by the asteroid's own
 //!   distance.
-//! - **Empty slots moved by `_WrapPlayerPosition`.** It shifts every NPC
-//!   slot within 15,000 pixels, live or empty (@0x67f93-0x6800e), and so
-//!   the kept positions the engine's nearest reads; the engine has no port
-//!   of the wrap (rdm:task/port-wrap-player-position).
 //! - **A pull whose firer has left the fight** reads the original's stale
 //!   slot (beam +0x16); here a firer no longer among the fighters takes the
 //!   push, as a beam of no firer does (@0x31ab7 → @0x31d00), so the

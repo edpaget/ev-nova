@@ -347,6 +347,22 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_faded_hail_of_a_fleet_escort_opens_nothing_and_stays_silent() {
+        let catalog = upgradable();
+        let mut session = escorting(&catalog);
+        session.take_sounds();
+        let before = session.clone();
+        let hailed = session.hail_key_faded(
+            &catalog,
+            &HailOptions::default(),
+            false,
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(hailed, Ok(Hailed::Faded));
+        assert_eq!(session, before, "no dialog, no beep");
+    }
+
+    #[test]
     fn a_carried_fighter_and_a_mission_escort_keep_the_comm_dialog() {
         let catalog = upgradable();
         let mut fighter = escorting(&catalog);

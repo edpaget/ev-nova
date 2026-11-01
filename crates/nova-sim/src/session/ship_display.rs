@@ -384,9 +384,10 @@ impl PlayerShip {
 impl Space {
     /// Tells the traffic the first class, ID 128, which a spawn of most
     /// origins rolls its animation on
-    /// (`nova_sim::traffic::ship_display::FirstClass`).
-    pub(super) fn set_first_class(&mut self, statics: &Statics) {
-        let first = statics.arsenal.hull(crate::catalog::ShipId(128)).frames;
+    /// (`nova_sim::traffic::ship_display::FirstClass`), its frames as
+    /// `setup` loads them (see the `sprite_load` module).
+    pub(super) fn set_first_class(&mut self, statics: &Statics, setup: &Setup) {
+        let first = setup.frames_of(statics, crate::catalog::ShipId(128));
         self.traffic.set_first_class(first);
     }
 }

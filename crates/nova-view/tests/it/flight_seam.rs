@@ -624,7 +624,7 @@ fn a_real_jump_arrives_in_the_next_system() {
     assert_eq!(view.session().expect("flying").system(), SystemId(129));
     assert_eq!(view.course_map().current(), Some(MapSystemId(129)));
     let line = view.message().expect("the arrival line");
-    assert!(line.starts_with("Jumping into the Beta system"), "{line:?}");
+    assert!(line.contains(" the Beta system on "), "{line:?}");
     let date = view.session().expect("flying").long_date_text();
     assert!(line.contains(&date), "on the session's date: {line:?}");
 }

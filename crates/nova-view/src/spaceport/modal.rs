@@ -9,6 +9,8 @@
 //! dialog reports what the player chose, closes and gives the payload
 //! back with it. Whatever the outcome means is the screen's own rule.
 
+use std::time::Duration;
+
 use crate::draw::DrawList;
 use crate::input::Input;
 use crate::screen::Screen;
@@ -96,6 +98,13 @@ impl<T, D: Modal> ModalHost<T, D> {
         }
     }
 
+    /// Advances the open dialog.
+    pub fn tick(&mut self, dt: Duration) {
+        if let Some((_, dialog)) = &mut self.open {
+            dialog.tick(dt);
+        }
+    }
+
     /// Forwards to the open dialog. Returns whether one was open, so the
     /// screen cancels its own dialog's pointer only otherwise.
     pub fn cancel_pointer(&mut self) -> bool {
@@ -143,6 +152,7 @@ mod tests {
         inputs: Vec<Input>,
         cancels: usize,
         releases: usize,
+        ticks: Vec<Duration>,
     }
 
     /// A dialog answering each input from a script: the outcome it then
@@ -198,7 +208,9 @@ mod tests {
             ScreenAction::None
         }
 
-        fn tick(&mut self, _dt: Duration) {}
+        fn tick(&mut self, dt: Duration) {
+            self.log.borrow_mut().ticks.push(dt);
+        }
 
         fn draw(&self, list: &mut DrawList) {
             fill_rect(list, marker_bounds(), Color::WHITE);
@@ -393,6 +405,18 @@ mod tests {
                 item(rect(10.0, 10.0, 60.0, 36.0), false, ItemSpec::User),
             ],
         }
+    }
+
+    #[test]
+    fn ticks_reach_the_open_dialog_alone() {
+        let mut host: ModalHost<(), FakeDialog<()>> = ModalHost::default();
+        host.tick(Duration::from_secs(1));
+        let (fake, log) = FakeDialog::<()>::new([]);
+        host.open((), fake);
+        let dt = Duration::from_millis(16);
+        host.tick(dt);
+        host.tick(dt);
+        assert_eq!(log.borrow().ticks, [dt, dt]);
     }
 
     fn desc() -> DescDialog {

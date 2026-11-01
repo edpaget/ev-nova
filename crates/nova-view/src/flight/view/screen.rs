@@ -36,7 +36,8 @@ impl<
 > Screen for FlightView<C, S>
 {
     /// Never quits: Escape is the router's. While a jump is under way,
-    /// the pre-jump stage included, P is refused with its beep, and a press
+    /// the pre-jump stage included, M, L, P, Y and I are kept for the pass
+    /// that reads them (the `faded_keys` module), and any other press
     /// goes on only when [`FlightView::taken_during_jump`] takes it; a
     /// click in space selects nothing then, as [`Session::select_stellar`](nova_sim::Session::select_stellar)
     /// refuses during a jump (@0x6a145, @0x6a5ef). Otherwise, and of the
@@ -52,7 +53,8 @@ impl<
     /// itself, P with its beep among them. The flight keys are still
     /// tracked as held, so one held at arrival acts on the next tick, as
     /// the original reads them live, H, \`, `\` and J as their latches
-    /// let them ([`FlightView::held_keys_frame`]; see the module docs).
+    /// let them ([`FlightView::held_keys_frame`]; see the module docs), L
+    /// and I too ([`FlightView::faded_keys_frame`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.take_input(input)
     }
@@ -70,7 +72,9 @@ impl<
     /// fades to white from the first step the session's `_hyperGamma` is
     /// above 0 ([`FlightFrame::hyper_gamma`](nova_sim::flight_frame::FlightFrame::hyper_gamma)), and the ship arrives on the step
     /// the session says the warp has ended ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due)),
-    /// whose steps stop there, before the frame is drawn. From then on the
+    /// whose steps stop there, before the frame is drawn, or, on a
+    /// double time second pass, on the next step, after the frame between
+    /// its passes is drawn ([`FlightView::holding_between_passes`]). From then on the
     /// rest of the effect, the fade-in or the white flash, plays over the
     /// new system; that plays on with the map open too, as the original's
     /// display fade does. A jump the session gave up instead is settled at
@@ -84,6 +88,11 @@ impl<
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
     /// before the frame is drawn.
+    ///
+    /// The keys kept through a jump are read at the head of the keys'
+    /// frame and right after the steps (the `faded_keys` module): a key
+    /// read at the head that opens something ends the tick, as no step
+    /// runs under it.
     fn tick(&mut self, dt: Duration) {
         self.tick_then(dt);
     }
@@ -131,11 +140,13 @@ impl<
     /// M's release closes ([`FlightView::close_map`]): ours can't read the
     /// keys unfocused, as `_KeyCheck` reads `GetKeys` live
     /// (@0xa19b-0xa1dc), so losing them counts as the release. So it does
-    /// for a mouse button, which `_Button` reads live (@0x3803b).
+    /// for a mouse button, which `_Button` reads live (@0x3803b). What the
+    /// wait queued goes with them (the `map_wait` module).
     fn release_keys(&mut self) {
         self.let_go_of_input();
         self.map.release_keys();
         self.map_key_held = false;
+        self.wait_keys.clear();
         if self.map_closing {
             self.close_map();
         }
@@ -230,11 +241,16 @@ impl<
             return;
         }
         self.step_stellars(dt);
+        if self.faded_keys_frame() {
+            return;
+        }
         self.held_keys_frame();
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         let keyed = self.cursor_keyed();
+        let jumping = self.jump_under_way();
         self.run_steps(steps);
+        self.settle_faded_keys(jumping);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
         self.frame_rate_frame();
@@ -251,7 +267,7 @@ impl<
 
     /// `press`, if a jump under way lets it through and the flight takes
     /// its command.
-    fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
+    pub(super) fn press_taken(&self, press: Option<Key>, jumping: bool) -> Option<Key> {
         let press = if jumping {
             let option = self.held.contains(&Key::Alt);
             let menu_open = self.escort_menu.is_open();
@@ -282,15 +298,13 @@ impl<
             _ => None,
         };
         let jumping = self.jump_under_way();
-        if jumping && press == Some(PLAYER_INFO_KEY) {
-            let action = self.refuse_player_info();
-            if !self.map_open {
-                // Refused or not, it is down: @0x702d8 has no gate.
-                self.track_held(input);
-            }
-            return action;
+        if jumping && self.stop_during_jump(press, input) {
+            return ScreenAction::None;
         }
         if self.map_open {
+            if self.plain_map_open() {
+                self.track_unlatched(input);
+            }
             // M types into Find while it is open.
             if press == Some(MAP_KEY) && !self.map.finding() {
                 // M's own close reads M held, so it waits for the release.
@@ -313,7 +327,13 @@ impl<
             self.click_in_space(at);
         }
         match self.press_taken(press, jumping) {
-            Some(LAND_KEY) => self.land(),
+            Some(LAND_KEY) => {
+                self.press_land();
+                // The hypergate's map takes its release, as M's does.
+                if self.map_open {
+                    return ScreenAction::None;
+                }
+            }
             Some(BOARD_KEY) => {
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
@@ -339,7 +359,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => {
-                self.ask_mission_info();
+                self.press_mission_info();
                 if self.pending_mission_info.is_some() {
                     return ScreenAction::None;
                 }

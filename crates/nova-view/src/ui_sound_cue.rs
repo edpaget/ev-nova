@@ -32,7 +32,8 @@ impl UiSound {
     /// [`UiSound::ButtonDown`] then [`UiSound::ButtonUp`]); the alert, the
     /// system's `SysBeep` (as the Text Input dialog refuses a name too long,
     /// `_EVTextInputDialog` @0x554a9-0x554e7), which no stock `snd ` holds;
-    /// the halts; and the switch-out, which stops the music.
+    /// the halts; and the switch-out and the switch-in, which fade the
+    /// music.
     ///
     /// Every variant has its arm, with no wildcard: a new sound decides
     /// here what it plays.
@@ -47,7 +48,8 @@ impl UiSound {
             | Self::PortAmbientHalted(_)
             | Self::IntroPictureHalted(_)
             | Self::MainScreenSoundsHalted
-            | Self::SwitchedOut => return None,
+            | Self::SwitchedOut
+            | Self::SwitchedIn { .. } => return None,
             // `_MainScreenAnimIdle` as a slide steps from its first frame
             // (@0x188fc) and as it reaches its count (@0x18932).
             Self::RowSlideStart => SoundCue::new(MAIN_SCREEN_SOUNDS[2], ROW_SLIDE_PRIORITY),
@@ -254,6 +256,13 @@ mod tests {
             (UiSound::IntroPictureHalted(SoundId(30_003)), None, "a halt"),
             (UiSound::MainScreenSoundsHalted, None, "a halt"),
             (UiSound::SwitchedOut, None, "the music's stop"),
+            (
+                UiSound::SwitchedIn {
+                    away: std::time::Duration::from_secs(3),
+                },
+                None,
+                "the music's re-fade",
+            ),
         ];
         for (sound, cue, source) in pinned {
             assert_eq!(sound.cue(), cue, "{sound:?}: {source}");

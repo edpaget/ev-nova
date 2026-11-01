@@ -10,17 +10,20 @@
 //! - [`slice`](mod@slice): three-slice geometry, shared by buttons and dialog frames.
 //! - [`button`]: buttons drawn with Nova's button graphics at any size,
 //!   and `TrackControl`-style pointer tracking.
+//! - `button_glyph`: the pen glyphs `_DrawButton` draws in place of a
+//!   label.
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
-//!   time.
+//!   time, or a pixel at a time.
+//! - [`scroll_arrows`]: a text dialog's scroll arrows.
 //! - [`text_box`]: a static text box, as `TETextBox` draws one: its last
 //!   line clipped to the box. The news, exchange, flight message,
 //!   shipyard weapons, player info and shop descriptions draw through it.
 //! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
-//!   selected by a click or the arrow keys.
+//!   selected by a click or a wrapping step.
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in
-//!   a scrolling box with a Done button.
+//!   a scrolling box with a Done button and scroll arrows.
 //! - [`note`]: the note alert ([`NoteDialog`], `DLOG` 3000): a line of
 //!   text and an OK button.
 //! - [`yes_no`]: the Yes/No dialog ([`YesNoDialog`], `DLOG` 3002): a
@@ -68,6 +71,7 @@
 //!   `GameData`.
 
 pub mod button;
+mod button_glyph;
 pub mod catalog;
 pub mod comm;
 pub mod data;
@@ -89,6 +93,7 @@ pub mod plunder;
 pub mod prefs;
 pub mod quantity;
 pub mod row_list;
+pub mod scroll_arrows;
 pub mod scroll_text;
 pub mod slice;
 pub mod text_box;

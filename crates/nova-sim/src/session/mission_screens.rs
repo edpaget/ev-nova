@@ -279,6 +279,9 @@ pub enum MissionInfoPress {
     NoActiveMissions,
     /// Taken: the mission info screen opens on this.
     Opens(MissionInfo),
+    /// Taken, with a mission to show, and refused in silence as the
+    /// screen is faded ([`Session::press_faded_mission_info`]).
+    Faded,
 }
 
 impl Session {
@@ -323,6 +326,18 @@ impl Session {
             return MissionInfoPress::NoActiveMissions;
         }
         MissionInfoPress::Opens(info)
+    }
+
+    /// The mission info key read on the pass a jump collapsed under the
+    /// white: as [`Session::press_mission_info`], but what would open
+    /// `_DoMissionInfoDialog` is refused by its `_screenFaded` guard
+    /// (@0x9e1ac to @0x9e796). The no-missions path never reaches the
+    /// dialog, so no guard touches its beep and #354 (@0x7052e).
+    pub(crate) fn press_faded_mission_info(&mut self) -> MissionInfoPress {
+        match self.press_mission_info() {
+            MissionInfoPress::Opens(_) => MissionInfoPress::Faded,
+            press => press,
+        }
     }
 
     /// What the screens show of mission `id`, as the session read it as
@@ -906,7 +921,7 @@ impl MissionRun {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{
         DateAffixes, DescMovie, MissionRecord, PlaceNames, StellarId, SystemId, TextGraphics,
@@ -940,7 +955,10 @@ mod tests {
 
     /// [`catalog`], named, with 131 linked back to 130, `missions` and
     /// `texts`.
-    fn screens(missions: Vec<MissionRecord>, texts: Vec<MissionTexts>) -> FakePilotCatalog {
+    pub(in crate::session) fn screens(
+        missions: Vec<MissionRecord>,
+        texts: Vec<MissionTexts>,
+    ) -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.star_map[1].links.push(SystemId(130));
         catalog.place_names = names();
@@ -954,7 +972,7 @@ mod tests {
     }
 
     /// A session of `catalog` landed on 128 and settled, every roll 1.
-    fn docked(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn docked(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, catalog);
@@ -962,7 +980,7 @@ mod tests {
     }
 
     /// Mission `id`, offered at the mission computer, to Mars for 900.
-    fn to_mars(id: i16) -> MissionRecord {
+    pub(in crate::session) fn to_mars(id: i16) -> MissionRecord {
         MissionRecord {
             travel_stel: 140,
             pay_val: 900,
@@ -3220,6 +3238,41 @@ mod tests {
         let _ = session.take_messages();
         assert_eq!(
             session.press_mission_info(),
+            MissionInfoPress::NoActiveMissions
+        );
+        assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);
+        assert_eq!(
+            session.take_messages(),
+            [crate::SimMessage::NoActiveMissions]
+        );
+    }
+
+    #[test]
+    fn a_faded_press_with_a_shown_mission_is_refused_in_silence() {
+        let catalog = screens(vec![to_mars(130)], Vec::new());
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let _ = session.take_sounds();
+        let _ = session.take_messages();
+        assert_eq!(session.press_faded_mission_info(), MissionInfoPress::Faded);
+        assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.take_messages(), []);
+        assert!(
+            matches!(session.press_mission_info(), MissionInfoPress::Opens(_)),
+            "and a plain press after it opens"
+        );
+    }
+
+    #[test]
+    fn a_faded_press_with_no_mission_shown_beeps_and_says_so_as_ever() {
+        let catalog = screens(vec![to_mars(130)], Vec::new());
+        let mut session = docked(&catalog);
+        let _ = session.take_sounds();
+        let _ = session.take_messages();
+        assert_eq!(
+            session.press_faded_mission_info(),
             MissionInfoPress::NoActiveMissions
         );
         assert_eq!(session.take_sounds(), [crate::SimSound::Refused]);

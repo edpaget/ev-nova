@@ -106,7 +106,11 @@ impl Session {
     /// *Ordering against the original.* The positions tested are those at
     /// this point of the pass, before this pass's player move and after
     /// the last traffic tick; a pass's difference in when an overlap is
-    /// caught crosses no boundary the player sees. The player tests before
+    /// caught crosses no boundary the player sees. On the player's wrap's
+    /// pass the test reads the moved places where the original's reads the
+    /// last pass's sprites: only a miner and a box either side of the
+    /// wrap's reach differ, 15,000 pixels off screen, and they then stand
+    /// apart in both. The player tests before
     /// the NPCs and each box is taken once, where the original's order
     /// follows `SpriteWorld`'s layer history. There is no sound and no
     /// message, and the HUD's cargo area is drawn afresh each frame, so
@@ -580,9 +584,10 @@ mod tests {
         assert!(session.cargo_boxes().is_empty());
     }
 
-    /// Graphic 1's frame is 40 by 40, so the scoop reaches 20 past the
-    /// hull's hit radius along an axis: a box 15 past it is taken, one 25
-    /// past it is left.
+    /// Graphic 1's frame is 40 by 40, up and left of the box's point, so
+    /// a box to the right is reached by its frame's left edge and one to
+    /// the left only by its point: one 15 past the hull's hit radius to
+    /// the right is taken, one 25 past it to the left is left.
     #[test]
     fn the_scoop_reaches_the_edge_of_a_boxs_frame_and_no_farther() {
         let mut catalog = scoopable();
@@ -785,8 +790,8 @@ mod tests {
         npc
     }
 
-    /// [`scoopable`] with box graphic 1 40 by 40, so a disc reaches 20
-    /// past its radius along an axis.
+    /// [`scoopable`] with box graphic 1 40 by 40, so a frame runs 40 up
+    /// and left of its box's point.
     fn framed() -> FakePilotCatalog {
         let mut catalog = scoopable();
         catalog.box_frames[1] = Some((40, 40));
@@ -800,9 +805,9 @@ mod tests {
         let at = Vec2::new(300.0, 0.0);
         let id = session.space.traffic.add_npc(scooping_npc(at));
         let boxes = &mut session.space.boxes;
-        // 25 off on x: within 10 and 20, the box's half frame.
+        // 25 right: the box's frame, 40 left of it, is over the NPC.
         boxes.spawn_scoopable(at + Vec2::new(25.0, 0.0), Some(2), 1, &mut NeverFires);
-        // 35 off on x: beyond them.
+        // 35 left: its frame runs away from the NPC, beyond its disc.
         boxes.spawn_scoopable(at - Vec2::new(35.0, 0.0), Some(3), 1, &mut NeverFires);
         // On the player, which owns no scoop: no NPC's.
         boxes.spawn_scoopable(Vec2::ZERO, Some(4), 1, &mut NeverFires);

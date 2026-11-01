@@ -35,6 +35,9 @@
 //! comes on the next tick after. While the menu waits unseen behind the
 //! router's fade ([`MainMenu::wait`]), nothing moves, but the logo's and
 //! the slides' time counts, as their timers were set before the fade.
+//! While the app is in the background ([`MainMenu::idle_in_background`]),
+//! the logo and the slides wait the same way and the rollover shows its
+//! none frame in full.
 //!
 //! **Without the art** (plug-in data, or test data that has none), the
 //! menu draws a stand-in: the game's name, the pilot panel centred on the
@@ -427,6 +430,20 @@ impl MainMenu {
             layout.logo.wait(dt);
             layout.slides.wait(dt);
         }
+    }
+
+    /// `dt` passes with the app in the background, as
+    /// `_MainScreenAnimIdle` runs while `_inBackground` is set: the logo
+    /// doesn't pick (@0x18845) and the slides don't step (@0x18891), but
+    /// their time counts, as their timers aren't touched, so what came due
+    /// comes on the first tick after ([`MainMenu::wait`]); the rollover
+    /// shows the none frame in full ([`Rollover::switched_out`]). The
+    /// stand-in has nothing to idle.
+    pub fn idle_in_background(&mut self, dt: Duration) {
+        if let Layout::Art(layout) = &mut self.layout {
+            layout.rollover.switched_out();
+        }
+        self.wait(dt);
     }
 
     /// Whether row `row`'s buttons show: its slide has finished; always
@@ -1634,6 +1651,56 @@ mod tests {
         menu.wait(mac_ticks(4));
         menu.tick(Duration::ZERO);
         assert_eq!(menu.logo_frame(), Some(4), "the logo's 5 ticks start again");
+    }
+
+    // In the background.
+
+    #[test]
+    fn in_the_background_the_rollover_over_a_button_shows_the_none_frame_in_full() {
+        let mut menu = with_art();
+        menu.input(&Input::PointerMoved(menu.press_point(MenuChoice::Quit)));
+        menu.tick(mac_ticks(3));
+        assert_eq!(menu.rollover(), Some((2, 12)));
+        menu.idle_in_background(mac_ticks(1));
+        assert_eq!(menu.rollover(), Some((6, 32)));
+        assert_eq!(drawn_rollover(&menu), Some((6, 32)), "drawn so");
+    }
+
+    #[test]
+    fn in_the_background_the_slides_dont_step_and_play_nothing() {
+        let mut menu = appearing();
+        menu.idle_in_background(mac_ticks(10));
+        assert_eq!(drawn_slides(&menu), [], "still below frame 0");
+        assert_eq!(menu.take_sounds(), [], "no 602 or 603");
+        assert_eq!(menu.rollover(), Some((6, 32)), "not held clear");
+        menu.tick(Duration::ZERO);
+        assert_eq!(
+            drawn_slides(&menu),
+            [(8030, 0, slide_clip(0))],
+            "one step due after"
+        );
+    }
+
+    #[test]
+    fn in_the_background_the_logo_doesnt_pick_but_its_time_counts() {
+        let (mut menu, rolls) = rolling(&[3]);
+        menu.idle_in_background(mac_ticks(5));
+        assert_eq!(drawn_logo_frame(&menu), 0);
+        assert!(rolls.borrow().sides.is_empty(), "no pick while away");
+        menu.tick(Duration::from_millis(1));
+        assert_eq!(drawn_logo_frame(&menu), 4, "the pick due comes at once");
+    }
+
+    #[test]
+    fn in_the_background_the_stand_in_is_unchanged() {
+        let mut menu = stand_in();
+        let mut before = DrawList::new();
+        menu.draw(&mut before);
+        menu.idle_in_background(mac_ticks(30));
+        let mut after = DrawList::new();
+        menu.draw(&mut after);
+        assert_eq!(after, before);
+        assert_eq!(menu.rollover(), None);
     }
 
     // The stand-in.

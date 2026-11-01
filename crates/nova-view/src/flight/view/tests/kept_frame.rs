@@ -272,6 +272,22 @@ fn a_change_of_sound_preferences_is_sent_and_fills_the_kept_frame() {
 }
 
 #[test]
+fn a_change_of_sprite_load_is_sent_and_fills_the_kept_frame() {
+    let still = nova_sim::combat::SpriteLoad {
+        ship_animations: false,
+        running_lights: true,
+    };
+    let mut view = faked(player_at(5.0));
+    view.sim.set_frame(player_at(9.0));
+    view.set_sprite_load(still);
+    assert_eq!(
+        sent(&view).last(),
+        Some(&FlightCommand::SetSpriteLoad(still))
+    );
+    assert_eq!(view.frame.player().position.x, 9.0);
+}
+
+#[test]
 fn a_port_screen_maps_close_sends_its_restore_and_fills_the_kept_frame() {
     let docked = |x| FlightFrame {
         landed: Some(StellarId(128)),

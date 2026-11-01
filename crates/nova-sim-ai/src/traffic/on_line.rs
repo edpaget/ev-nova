@@ -1,10 +1,18 @@
 //! The frame's work on the message line in slot order: each think's
-//! calls, then its scan of the player, then what its pirate or repairer
-//! did and its refuel note, one slot after another (`_DoPlayGameWork`
-//! @0x44270-0x442ae walks slots 1 to 63 in ascending order, the slot
-//! [`Npc::berth`](crate::traffic::npc::Npc::berth) models).
+//! attack quote, then its calls, then its scan of the player, then what
+//! its pirate or repairer did and its refuel note, one slot after another
+//! (`_DoPlayGameWork` @0x44270-0x442ae walks slots 1 to 63 in ascending
+//! order, the slot [`Npc::berth`](crate::traffic::npc::Npc::berth) models).
 //!
-//! Within a slot, `_AIDispatch` runs the type AI (whose calls are
+//! Within a slot, a ship's attack quote comes first: its target pick calls
+//! `_AIMakeShipAttackPlayer` @0x89c3e (`_ShowPersonHailQuote` @0x89ce1)
+//! ahead of anything else on the line, and its calls can't follow one, as
+//! a person never calls for help and an interceptor that quotes has a
+//! target, which its pre-scan hail needs to lack (@0x8ccee, @0x8cda0). A
+//! quote raised outside the thinks isn't queued here
+//! ([`Traffic::take_attack_quotes`](crate::traffic::Traffic::take_attack_quotes)).
+//!
+//! `_AIDispatch` runs the type AI (whose calls are
 //! `_AICallForHelp` @0x82ffb, `_InterceptorAI`'s pre-scan hail
 //! @0x8ce4b-0x8cff5 and `_AICallForReinforcements`) before
 //! `_HighLevelAIHandler` @0x901e5 (whose `_ScanPlayer` runs from
@@ -40,6 +48,10 @@ use nova_sim_catalog::catalog::ShipId;
 /// One piece of a think's work on the message line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OnLine {
+    /// The think turned the NPC on the player and its person's quote gate
+    /// let it through: its person says its hail quote. Queued at the gate,
+    /// before the think's calls and scan.
+    AttackQuote(NpcId),
     /// A call the think made ([`CommCall`]), with the odds against the
     /// caller its think read.
     Call(NpcId, CommCall, f32),
@@ -240,6 +252,31 @@ mod tests {
                 call(A),
                 plunder,
                 OnLine::Call(A, CommCall::PreScan, ODDS),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_attack_quote_sorts_by_berth_ahead_of_what_its_berth_queues_after_it() {
+        let quote = OnLine::AttackQuote(B);
+        let later_frames = OnLine::AttackQuote(A);
+        let mut queue = LineQueue::default();
+        queue.next_frame();
+        queue.push_think(4, C, [CommCall::Distress], ODDS, false);
+        queue.push(2, quote);
+        queue.push_think(2, B, [CommCall::PreScan], ODDS, true);
+        queue.push_think(1, A, [CommCall::Distress], ODDS, false);
+        queue.next_frame();
+        queue.push(1, later_frames);
+        assert_eq!(
+            queue.take_all(),
+            [
+                call(A),
+                quote,
+                OnLine::Call(B, CommCall::PreScan, ODDS),
+                OnLine::Scan(B),
+                call(C),
+                later_frames,
             ]
         );
     }

@@ -242,9 +242,12 @@ impl Session {
     }
 
     /// Begins the traffic's fly half of `half`, the NPCs in `still`
-    /// keeping their place, in the world it flies in.
+    /// keeping their place, in the world it flies in, each fighter with
+    /// no bay staying out (see the `fighter_homes` module): asked after
+    /// the half has begun, whose turn-back sends a fighter home.
     fn begin_fly(&mut self, still: &BTreeSet<NpcId>, half: FlyHalf) -> FlyPass {
-        self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half))
+        let pass = self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half));
+        pass.with_no_bay(self.fighters_staying_out())
     }
 }
 
@@ -277,7 +280,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::rulebook::RuleSource;
     use crate::session::Session;
-    use crate::session::fighters::tests::carrier_npc;
+    use crate::session::fighters::tests::{VIPER, carrier_npc};
     use crate::session::tests::{FIRE, armed, blaster, facing_an_npc};
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, FakePilotCatalog, npc};
@@ -709,6 +712,8 @@ mod tests {
         let at = state(&session, bay).position;
         let leaving = place(&mut session, 3, at, Vec2::ZERO);
         let fighter = session.space.npc_mut(leaving).expect("there");
+        // A Viper, which the carrier's bay carries (`RuleKey::FighterNoBay`).
+        fighter.ship = VIPER;
         fighter.goal = Goal::Dock(ShipRef::Npc(bay));
         fighter.carrier = Some(Carrier {
             ship: ShipRef::Npc(bay),

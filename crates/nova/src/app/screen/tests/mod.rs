@@ -91,6 +91,7 @@ use std::collections::VecDeque;
 
 mod about_movies;
 mod appear;
+mod background;
 mod capture_naming;
 mod christening;
 mod death;
@@ -104,6 +105,7 @@ mod jump_white;
 mod landing_texts_after_movie;
 mod launch;
 mod map_find;
+mod map_wait_keys;
 mod menu;
 mod menu_commands;
 mod missions;
@@ -336,6 +338,7 @@ fn game_data_fork(
         stellar[0x06..0x0A].copy_from_slice(&0x2000_0043_u32.to_be_bytes());
         fork = fork
             .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
+            .resource(StrList::TYPE, 4001, None, &str_list(&["food"]))
             .resource(StrList::TYPE, 4004, None, &str_list(&["75"]));
     }
     if outfitting {
@@ -1112,8 +1115,11 @@ fn yes_no_template() -> DialogTemplate {
 
 /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
 /// (1), the Scaling list's row (2), the effects volume (4 to 7), the
-/// Music (8) and Sound (20) check boxes, Key Settings (16), a greyed
-/// check box (9) and the Hyperspace Effects check box (21).
+/// Music (8) and Sound (20) check boxes, Key Settings (16), the
+/// QuickTime Movies (9), Smoke Trails (10), Ship Animations (12), Engine
+/// Glows (13), Running Lights (14), Weapon Effects (15) and Parallax
+/// Starfield (18) check boxes down the left column, and the Hyperspace
+/// Effects check box (21).
 fn prefs_template() -> DialogTemplate {
     let item = |x, y, w, h, kind| ItemTemplate {
         bounds: Bounds::at(Point::new(x, y), w, h),
@@ -1169,6 +1175,14 @@ fn prefs_template() -> DialogTemplate {
         18.0,
         ItemSpec::CheckBox("Weapon Effects".into()),
     );
+    for (index, y, title) in [
+        (11, 80.0, "Ship Animations"),
+        (12, 100.0, "Engine Glows"),
+        (13, 120.0, "Running Lights"),
+        (17, 140.0, "Parallax Starfield"),
+    ] {
+        items[index] = item(10.0, y, 100.0, 18.0, ItemSpec::CheckBox(title.into()));
+    }
     items[15] = item(
         20.0,
         230.0,

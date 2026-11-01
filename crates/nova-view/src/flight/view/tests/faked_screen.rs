@@ -70,6 +70,7 @@ pub(super) fn sent_since(view: &Faked, from: usize) -> Vec<FlightCommand> {
                     | FlightCommand::SetWindowWidth(_)
                     | FlightCommand::SetDoubleTimeKey(_)
                     | FlightCommand::SetSoundQuiet(_)
+                    | FlightCommand::SetSpriteLoad(_)
             )
         })
         .cloned()
@@ -84,7 +85,7 @@ pub(super) fn sent_count(view: &Faked) -> usize {
 // The course map.
 
 #[test]
-fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
+fn m_opens_the_map_over_everything_and_keeps_the_live_flight_keys() {
     let mut view = in_flight();
     view.input(&key(Key::Up, true));
     assert_eq!(view.input(&key(MAP, true)), ScreenAction::None);
@@ -107,7 +108,7 @@ fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
     view.input(&key(MAP, false));
     assert!(!view.map_open());
     view.tick(TICK);
-    assert_eq!(last_controls(&view), Controls::default(), "Up was let go");
+    assert!(last_controls(&view).thrust, "Up reads down still");
 }
 
 #[test]
@@ -143,8 +144,8 @@ fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
     view.tick(TICK);
     assert_eq!(
         last_controls(&view).turn,
-        Controls::default().turn,
-        "Left went to the map"
+        Turn::Left,
+        "Left scrolled the map, and flight reads it down as the map closes"
     );
 }
 
@@ -369,6 +370,12 @@ fn hail_is_refused_silently_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
         tap(&mut view, HAIL_KEY);
+        assert_eq!(sent_since(&view, from), [], "{stage}: kept for its pass");
+        view.sim.queue_report(StepReport {
+            steps: vec![nova_sim::flight_frame::StepRun::default()],
+            stopped: false,
+        });
+        view.tick(TICK);
         assert_eq!(
             sent_since(&view, from),
             [FlightCommand::Hail { option: false }],
@@ -1326,6 +1333,32 @@ fn the_sound_prefs_reach_the_session_when_set() {
             FlightCommand::SetSoundQuiet(true),
             FlightCommand::SetSoundQuiet(true),
             FlightCommand::SetSoundQuiet(false),
+        ],
+        "each told the flight"
+    );
+}
+
+#[test]
+fn the_sprite_load_reaches_the_session_as_the_flight_is_built_and_when_set() {
+    use nova_sim::combat::SpriteLoad;
+    let still = SpriteLoad {
+        ship_animations: false,
+        running_lights: true,
+    };
+    let view = in_flight();
+    assert_eq!(view.sprite_load(), SpriteLoad::default(), "all until told");
+    assert_eq!(view.sim.applied(), [], "nothing sent");
+    let mut view = in_flight().with_sprite_load(still);
+    assert_eq!(view.sprite_load(), still);
+    assert_eq!(view.sim.applied(), [FlightCommand::SetSpriteLoad(still)]);
+    assert_eq!(sent_since(&view, 0), [], "a setting");
+    view.set_sprite_load(SpriteLoad::default());
+    assert_eq!(view.sprite_load(), SpriteLoad::default());
+    assert_eq!(
+        view.sim.applied(),
+        [
+            FlightCommand::SetSpriteLoad(still),
+            FlightCommand::SetSpriteLoad(SpriteLoad::default()),
         ],
         "each told the flight"
     );

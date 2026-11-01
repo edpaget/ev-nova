@@ -192,6 +192,16 @@ pub enum UiSound {
     /// `_StopIntroMusic(1)` (@0x61e5f), the faded stop, ending the thread.
     /// Whatever the sound setting.
     SwitchedOut,
+    /// The app came back to the front after `away` in the background:
+    /// `_SwitchedIn` (@0x513c4) clears `_inBackground`, so a faded stop
+    /// the switch-out started steps a tick at a time again instead of 30
+    /// (`_StopIntroMusic` @0x61cfa-0x61d23). Raised by the first tick
+    /// after the switch-in, whose time is background time. Whatever the
+    /// sound setting.
+    SwitchedIn {
+        /// How long the app was in the background.
+        away: std::time::Duration,
+    },
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

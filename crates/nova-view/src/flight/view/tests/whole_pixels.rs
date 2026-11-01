@@ -1,14 +1,19 @@
-//! The ships drawn, and boxed, at whole pixels from the player, as
-//! `_HandleShipDisplay` places each sprite (@0x2cd17-0x2d083; rdm
-//! play-feel-4 phase 12). The rule is the camera's
-//! ([`Camera::sprite_top_left`](crate::system::camera::Camera::sprite_top_left),
-//! pinned in its own tests); these pin the wiring: every ship sprite goes
-//! through it, and the click and hover box is the rect the hull is drawn
-//! in, in the same frame.
+//! The flight's world drawn at whole pixels from the player: the ships,
+//! and their boxes, as `_HandleShipDisplay` places each sprite
+//! (@0x2cd17-0x2d083; rdm play-feel-4 phase 12), and the shots, asteroids,
+//! cargo boxes and ship brackets as their own routines do, from the
+//! positions as drawn between steps (rdm play-feel-6 phase 8). The rules
+//! are the camera's
+//! ([`Camera::sprite_top_left`](crate::system::camera::Camera::sprite_top_left)
+//! and its neighbours, pinned in its own tests); these pin the wiring:
+//! every sprite goes through its rule, by its own sheet's size, and the
+//! click and hover box is the rect the hull is drawn in, in the same frame.
 
-use super::faked_world::{shows, world_list};
+use super::faked_world::{asteroid_at, box_at, shot_of, shows, world, world_list};
+use super::missions::rocky;
 use super::ship_drawing::{NPC_0, display, flying_with, npc_sheet, redrawn, shown};
 use super::*;
+use crate::flight::catalog::EffectSheet;
 use nova_sim::DrawnShips;
 use nova_sim::hover::in_box;
 use nova_sim::navigation::SpriteRect;
@@ -273,5 +278,207 @@ fn a_held_alt_layer_stays_at_the_whole_pixel_place_it_was_drawn_at() {
         top_left_of(&world_list(&view), 2401, (31, 29)),
         live,
         "held"
+    );
+}
+
+// The other sprites between steps: the player's last step (-10, 6) and now
+// (0, 0), alpha 0.5, so the camera is on (-5, 3); the sprite at
+// (100.25, 50.5) moving (8, -4), drawn at (96.25, 52.5), so offset (101, 49)
+// from the anchor (415, 384): (516, 433).
+
+/// Where the moving sprite is in the frame.
+const SPRITE: Vec2 = Vec2::new(100.25, 50.5);
+/// How far it moves a step.
+const SPRITE_MOVES: Vec2 = Vec2::new(8.0, -4.0);
+
+/// `view` half way from the player's step at (-10, 6), to its frame's.
+fn half_way(mut view: Faked) -> Faked {
+    view.previous = nova_sim::flight_frame::ShipPlace {
+        position: Vec2::new(-10.0, 6.0),
+        heading: 0.0,
+    };
+    view.alpha = 0.5;
+    view
+}
+
+/// `sheet` with frames of `size`.
+fn resized(sheet: &mut EffectSheet, (frame_width, frame_height): (u32, u32)) {
+    sheet.frame_width = frame_width;
+    sheet.frame_height = frame_height;
+}
+
+/// A flight showing a moving [`BLASTER`] shot, or `weapon`'s, half way.
+fn a_shot_of(weapon: WeaponId) -> Faked {
+    let shot = nova_sim::flight_frame::FrameShot {
+        velocity: SPRITE_MOVES,
+        ..shot_of(0, weapon, SPRITE, 0.0)
+    };
+    let frame = FlightFrame {
+        shots: vec![shot],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    half_way(world(armed(0, &[weapon]), frame))
+}
+
+/// A flight showing a moving asteroid of kind 0, half way.
+fn an_asteroid() -> Faked {
+    let frame = FlightFrame {
+        asteroids: vec![nova_sim::flight_frame::FrameAsteroid {
+            velocity: SPRITE_MOVES,
+            ..asteroid_at(SPRITE)
+        }],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    half_way(world(rocky(trading()), frame))
+}
+
+/// A flight showing a moving cargo box of graphic 0, half way.
+fn a_box() -> Faked {
+    let frame = FlightFrame {
+        cargo_boxes: vec![nova_sim::flight_frame::FrameBox {
+            velocity: SPRITE_MOVES,
+            ..box_at(SPRITE)
+        }],
+        ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0)])
+    };
+    half_way(world(trading(), frame))
+}
+
+/// Where the one sprite of `rlëD` `image` is centred in `view`'s world.
+fn centre_of(view: &Faked, image: i16) -> Point {
+    let found: Vec<Point> = sprites(&world_list(view))
+        .into_iter()
+        .filter(|(key, _)| key.id == image)
+        .map(|(_, at)| at)
+        .collect();
+    let [centre] = found[..] else {
+        panic!("one sprite of {image}: {found:?}");
+    };
+    centre
+}
+
+/// Asserts `view` draws a shot-sized crossed box centred on `centre`.
+fn assert_crossed_box_on(view: &Faked, centre: Point) {
+    let mut boxed = DrawList::new();
+    crate::draw::crossed_box(
+        &mut boxed,
+        centre,
+        crate::flight::weapons::SHOT_PLACEHOLDER_SIZE,
+        crate::system::scene::PLACEHOLDER,
+    );
+    let drawn = world_list(view);
+    let commands: Vec<_> = drawn.iter().cloned().collect();
+    let expected: Vec<_> = boxed.iter().cloned().collect();
+    assert!(
+        commands.windows(expected.len()).any(|run| run == expected),
+        "{commands:?}"
+    );
+}
+
+/// `view`'s [`BLASTER`] shots' sheet, sized `size`.
+fn with_shots_of(mut view: Faked, size: (u32, u32)) -> Faked {
+    let look = view.looks.weapons.get_mut(&BLASTER).expect("the look");
+    let look = look.as_mut().expect("read");
+    let sheet = look.sheet.as_mut().expect("a graphic");
+    resized(sheet.as_mut().expect("read"), size);
+    view
+}
+
+#[test]
+fn a_shot_is_placed_by_its_width_on_both_axes_from_the_drawn_positions() {
+    let tall = with_shots_of(a_shot_of(BLASTER), (7, 12));
+    // Top left (513, 430): 7 halved on both axes.
+    assert_eq!(centre_of(&tall, 3500), at(516.5, 436.0));
+    let wide = with_shots_of(a_shot_of(BLASTER), (12, 7));
+    // Top left (510, 427): 12 halved on both axes.
+    assert_eq!(centre_of(&wide, 3500), at(516.0, 430.5));
+}
+
+#[test]
+fn an_asteroid_is_placed_by_its_own_sides_with_its_odd_pixel_right_and_below() {
+    let mut view = an_asteroid();
+    let sheet = view.looks.asteroids.get_mut(&0).expect("the type");
+    resized(sheet.as_mut().expect("read"), (7, 5));
+    // Top left (513, 431).
+    assert_eq!(centre_of(&view, 1800), at(516.5, 433.5));
+}
+
+#[test]
+fn a_box_is_drawn_up_and_left_of_its_point() {
+    let mut view = a_box();
+    let sheet = view.looks.boxes.get_mut(&0).expect("the graphic");
+    resized(sheet.as_mut().expect("read"), (7, 5));
+    // Top left (509, 428), so its bottom right is the box's point.
+    assert_eq!(centre_of(&view, 500), at(512.5, 430.5));
+}
+
+#[test]
+fn a_kind_with_no_sheet_is_a_crossed_box_on_its_whole_point() {
+    assert_crossed_box_on(&a_shot_of(UNSEEN), at(516.0, 433.0));
+    let mut asteroid = an_asteroid();
+    asteroid.looks.asteroids.insert(0, Err("unread".to_owned()));
+    assert_crossed_box_on(&asteroid, at(516.0, 433.0));
+    let mut cargo_box = a_box();
+    cargo_box.looks.boxes.insert(0, Err("unread".to_owned()));
+    assert_crossed_box_on(&cargo_box, at(516.0, 433.0));
+}
+
+/// The ship bracket corners `view` draws, targeting NPC 0, from now on:
+/// (`cïcn`, top left), neutral, so from 10012.
+fn ship_corners(view: &mut Faked) -> Vec<(i16, Point)> {
+    let mut frame = view.frame.clone();
+    frame.hud = super::faked_world::targeting(0);
+    shows(view, frame);
+    world_list(view)
+        .iter()
+        .filter_map(|command| match command {
+            DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
+                Some((image.id, *top_left))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_targets_brackets_are_centred_on_its_truncated_offset_with_no_size_in_it() {
+    let size = (41, 40);
+    let mut view = placed(npc_of(size), Vec2::new(10.7, -20.3));
+    // (10.7, -20.3) truncates to (10, -20), with nothing taken off for the
+    // odd side; half 20 by the larger side, the art 16 outside it.
+    let corners = ship_corners(&mut view);
+    assert_eq!(corners, corners_at(10012, at(425.0, 364.0), 20.0));
+    assert_eq!(corners[0].1, at(389.0, 328.0));
+}
+
+#[test]
+fn a_targets_brackets_keep_to_its_hull_between_steps() {
+    let size = (41, 40);
+    let mut view = placed(npc_of(size), Vec2::new(10.7, -20.3));
+    view.npc_previous = vec![(
+        NPC_0,
+        nova_sim::flight_frame::ShipPlace {
+            position: PLAYER + Vec2::new(4.6, -11.9),
+            heading: 0.0,
+        },
+    )];
+    view.alpha = 0.5;
+    let corners = ship_corners(&mut view);
+    let hull = top_left_of(&world_list(&view), 2001, size);
+    assert_eq!(
+        corners,
+        corners_at(10012, at(hull.x + 20.0, hull.y + 20.0), 20.0)
+    );
+}
+
+#[test]
+fn a_targets_brackets_are_sized_by_the_frames_its_slot_holds() {
+    // Which frames is nova-sim's (`a_hidden_ship_is_framed_by_its_berths_last_shown_type`).
+    let mut view = placed(npc_of((41, 40)), Vec2::new(10.7, -20.3));
+    redrawn(&mut view, 1, |npc| npc.framed = Some(ShipId(131)));
+    // Ship 131 is 100 wide.
+    assert_eq!(
+        ship_corners(&mut view),
+        corners_at(10012, at(425.0, 364.0), 50.0)
     );
 }

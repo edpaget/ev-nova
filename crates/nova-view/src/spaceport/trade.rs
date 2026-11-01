@@ -46,8 +46,10 @@
 //! user's decision of 2026-10-23). By default ([`FocusRing::Tab`]) Tab
 //! moves the dialog's button focus instead and the selection stays.
 //! The original has one row a
-//! slot; the engine can list more than one `jünk` a side, whose extra rows
-//! follow their slot, and the list then scrolls with the selection. Buy and Sell, clicked or with B and S (key repeats too, so
+//! slot, and so does the default. By the other reading of
+//! [`RuleKey::JunkListing`](nova_sim::RuleKey::JunkListing) a side can list
+//! several `jünk`, whose extra rows follow their slot, and the list then
+//! scrolls with the selection. Buy and Sell, clicked or with B and S (key repeats too, so
 //! holding a key keeps trading), ask for a plain trade of the selected
 //! good ([`Lot::Click`]), which moves up to 10 tons by the engine; Shift,
 //! Command and Control change nothing, as the original tests Option alone
@@ -217,7 +219,9 @@ pub trait ListLooks {
 
 /// The list positions of `market`'s rows, slot by slot from 0 to 7: each
 /// row in that slot, in the rows' order, or `None` for an empty slot.
-/// The original has one row a slot; extra `jünk` rows of a side follow
+/// The original has one row a slot, as the default does. Extra `jünk` rows
+/// of a side, which only the other reading of
+/// [`RuleKey::JunkListing`](nova_sim::RuleKey::JunkListing) lists, follow
 /// their slot.
 fn positions(market: &Market) -> Vec<Option<usize>> {
     let slots = u8::try_from(ROWS).unwrap_or(u8::MAX);
@@ -504,8 +508,10 @@ impl TradeScreen {
         (self.selected < self.market.rows.len()).then_some(self.selected)
     }
 
-    /// The list position shown first: slot 0 and up, extra `jünk` rows
-    /// counted (see the module docs).
+    /// The list position shown first: slot 0 and up, counting the extra
+    /// `jünk` rows of the other reading of
+    /// [`RuleKey::JunkListing`](nova_sim::RuleKey::JunkListing) (see the
+    /// module docs). By the default it is 0.
     #[must_use]
     pub fn top(&self) -> usize {
         self.top

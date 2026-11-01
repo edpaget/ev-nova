@@ -126,6 +126,11 @@
 //! window coming back to the front tells every flight held
 //! ([`Screen::focus_gained`](nova_view::Screen::focus_gained)).
 //!
+//! While the app is in the background, the game pauses, as the
+//! original's `_inBackground` makes it (see `background`): flight and the
+//! dialogs don't tick, input is dropped but for the pointer's last move,
+//! and the main menu idles there, its rollover on its none frame.
+//!
 //! L in flight requests clearance at a stellar, and a second L, over it,
 //! lands and shows its spaceport ([`SpaceportView`]), laid out by the
 //! interface file's "Spaceport" dialog when the router has dialogs;
@@ -295,12 +300,15 @@
 //! reported once through [`Screen::take_prefs`](nova_view::Screen::take_prefs) for the app to play
 //! and save. Flight follows the Hyperspace Effects and Smoke Trails
 //! preferences: it is built with them, and a change reaches a flight
-//! already built. Weapon Effects, as in the original, takes effect at the
-//! next launch: every flight is built with the value the game launched
-//! with, and the dialog draws the original's relaunch notice while the box
-//! differs from it; by `nova_sim::RuleKey::WeaponEffectsNextLaunch`'s other
-//! reading it follows the box at once, as Smoke Trails does. OK, Return or
-//! Escape closes it.
+//! already built. Weapon Effects, Engine Glows, Ship Animations and
+//! Running Lights ([`LaunchPrefs`]), as in the original, take effect at the
+//! next launch: every flight is built with the values the game launched
+//! with (the last two as the session's sprite load,
+//! `nova_sim::combat::SpriteLoad`), and the dialog draws the original's
+//! relaunch notice while any of their boxes differs from them; by
+//! `nova_sim::RuleKey::WeaponEffectsNextLaunch`'s other reading each
+//! follows its box at once, as Smoke Trails does. OK, Return or Escape
+//! closes it.
 //! Its close redraws nothing of the status bar, as the original's menu
 //! command `pref` calls `_DoPrefsDialog` alone (@0xcccf1); only the `pref`
 //! Apple Event's handler redraws (@0x56195).
@@ -361,10 +369,11 @@ use nova_view::ui::{
     AssignmentDialog, CommDialog, DialogResources, HaggleDialog, PlunderDialog, PrefsDialog,
     YesNoDialog,
 };
-use nova_view::{Color, Input, Key, MenuCommand, Navigator, Point, Prefs, Sound};
+use nova_view::{Color, Input, Key, LaunchPrefs, MenuCommand, Navigator, Point, Prefs, Sound};
 use nova_view::{FullscreenKind, Scaling};
 
 mod appear;
+mod background;
 mod build;
 mod capture_naming;
 mod christening;
@@ -374,6 +383,7 @@ mod flight;
 mod game;
 mod jump_white;
 mod launch;
+mod map_wait_keys;
 mod menu;
 mod menu_commands;
 mod overlays;
@@ -575,12 +585,13 @@ pub struct AppScreen {
     sounds: Vec<Sound>,
     /// The player's preferences, as last chosen.
     prefs: Prefs,
-    /// The Weapon Effects the game launched with, the one every flight
-    /// takes while a change waits for the next launch
-    /// (`nova_sim::RuleKey::WeaponEffectsNextLaunch`'s engine reading):
-    /// set by [`AppScreen::with_prefs`], which `main` calls once at
+    /// The preferences the original reads only at launch, as the game
+    /// launched with them: the ones every flight takes while a change
+    /// waits for the next launch
+    /// (`nova_sim::RuleKey::WeaponEffectsNextLaunch`'s engine reading).
+    /// Set by [`AppScreen::with_prefs`], which `main` calls once at
     /// startup.
-    launch_weapon_effects: bool,
+    launch: LaunchPrefs,
     /// The Preferences dialog, while it is open.
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.
@@ -734,6 +745,9 @@ pub struct AppScreen {
     /// The main menu is told it before each of its ticks, wherever the
     /// moves went meanwhile ([`AppScreen::tell_menu_pointer`]).
     pointer: Option<Point>,
+    /// The app in the background, the original's `_inBackground`, or
+    /// back from it until its first tick (see `background`).
+    away: Option<background::Away>,
 }
 
 /// Nova's own 1024 x 768, which every screen but flight draws in.

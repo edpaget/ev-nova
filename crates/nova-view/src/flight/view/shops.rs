@@ -470,6 +470,7 @@ impl<C: StatusBars, S: FlightSim> FlightView<C, S> {
         if assigned == Assigned::MyShip {
             // Where the new ship is, in the frame the assignment leaves,
             // before the catch-up that follows it.
+            self.between_passes = None;
             self.previous = self.player_place();
             self.alpha = 0.0;
         }

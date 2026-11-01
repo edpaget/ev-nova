@@ -282,11 +282,12 @@ fn a_ship_held_at_its_gate_is_drawn_plain_on_the_frame_it_is_held() {
 }
 
 #[test]
-fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_that_frame() {
+fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_the_next_frame() {
     // Double time's second pass answers the hit too (`_HandleShot`
     // @0x44385 runs on both): the session's (nova-sim's
     // `session::step::tests::a_step_runs_a_second_pass_only_in_double_time`).
-    // The frame after the step's two passes is drawn.
+    // The frame between the step's two passes is drawn, so it shows on
+    // the next (`_PlayGame` @0x45d96-0x45f31).
     let mut view = world(
         volleying(),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
@@ -301,12 +302,20 @@ fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_that_frame() {
     let mut waiting = held.clone();
     waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
     view.sim.set_frame(held.clone());
+    view.sim.queue_report(super::stepping::doubled(
+        pass(&waiting),
+        pass(&held),
+        waiting.clone(),
+    ));
+    view.step_frame(1, view.anchor());
+    assert_eq!(
+        npc_tints(&world_list(&view)),
+        [],
+        "still waiting that frame"
+    );
     view.sim.queue_report(StepReport {
-        steps: vec![StepRun {
-            passes: vec![pass(&waiting), pass(&held)],
-            ..StepRun::default()
-        }],
-        stopped: false,
+        steps: Vec::new(),
+        stopped: true,
     });
     view.step_frame(1, view.anchor());
     assert_eq!(npc_tints(&world_list(&view)), [Color::WHITE], "seen");
@@ -333,13 +342,11 @@ fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
         quotes,
         ..PassReport::default()
     };
-    view.sim.queue_report(StepReport {
-        steps: vec![StepRun {
-            passes: vec![pass(Vec::new()), pass(vec![quote])],
-            ..StepRun::default()
-        }],
-        stopped: false,
-    });
+    view.sim.queue_report(super::stepping::doubled(
+        pass(Vec::new()),
+        pass(vec![quote]),
+        frame.clone(),
+    ));
     view.step_frame(1, view.anchor());
     assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
 }
@@ -656,6 +663,7 @@ fn firing_at_an_npc_with_murk(catalog: FakeCatalog, murk: u8) -> Faked {
         ..in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc_at(npc, 180.0)])
     };
     frame.effective_murk = murk;
+    frame.murk_colour = 0x1081;
     let mut view = world(catalog, frame);
     super::faked_world::raise(&mut view, &[exploding_at(npc)]);
     view
@@ -720,16 +728,21 @@ fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
     assert!(level > 0, "murked where it went off: {boom:?}");
     let list = world_list(&view);
     let explosion = first(&list, sprite_of(400));
-    let DrawCommand::Sprite { tint, blend, .. } =
-        list.iter().nth(explosion).cloned().expect("drawn")
+    let DrawCommand::Colorized {
+        tint,
+        blend,
+        colorize,
+        ..
+    } = list.iter().nth(explosion).cloned().expect("drawn")
     else {
-        panic!("a sprite")
+        panic!("a colorized sprite")
     };
     assert_eq!(
-        (blend, tint),
+        (blend, tint, colorize),
         (
             Blend::Or,
-            crate::flight::murk::murk_tint(lights_tint(32), level)
+            lights_tint(32),
+            crate::Colorize::toward_pixel(level, 0x1081)
         )
     );
 }
@@ -759,11 +772,7 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
         .find(|(image, _)| image.id == 3500)
         .expect("the shot");
     assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "heading 45");
-    let expected = view.camera().world_to_screen(shown);
-    assert!(
-        (drawn_at.1.x - expected.x).abs() < 1e-3 && (drawn_at.1.y - expected.y).abs() < 1e-3,
-        "{drawn_at:?} {expected:?}"
-    );
+    assert_eq!(drawn_at.1, view.camera().shot_centre(shown, (0, 0)));
 }
 
 #[test]
@@ -894,7 +903,7 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     view.alpha = 0.5;
     let list = world_list(&view);
     let camera = view.camera();
-    let player = camera.world_to_screen(view.shown_position());
+    let player = camera.pixel_centre(view.shown_position());
     let over = beam_starts(&list, Color::rgba(0, 255, 0, 255));
     assert!(!over.is_empty());
     assert!(
@@ -904,12 +913,9 @@ fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
     let (npc_shown, _) = view.shown_npc(&npc_record(&view, NpcId(0)));
     let under = beam_starts(&list, Color::rgba(0, 0, 255, 255));
     assert!(!under.is_empty());
-    let expected = camera.world_to_screen(npc_shown);
+    let expected = camera.pixel_centre(npc_shown);
     assert!(
-        under
-            .iter()
-            .all(|start| (start.x - expected.x).abs() < 1e-3
-                && (start.y - expected.y).abs() < 1e-3),
+        under.iter().all(|&start| start == expected),
         "the NPC's, from the NPC as drawn: {under:?} {expected:?}"
     );
 }
@@ -1022,7 +1028,7 @@ fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
     // A whole step on, it is drawn a step behind, where it left.
     assert_eq!(view.alpha(), 0.0);
     let left = shot.position - shot.velocity;
-    let centre = view.camera().world_to_screen(at(left.x, left.y));
+    let centre = view.camera().whole_point(at(left.x, left.y));
     crossed_box(
         &mut boxed,
         centre,

@@ -7,10 +7,14 @@
 use super::faked_world::{asteroid_at, box_at, raise, world, world_list};
 use super::missions::rocky;
 use super::*;
-use crate::flight::murk::{murk_tint, sprite_murk};
+use crate::Colorize;
+use crate::flight::murk::sprite_murk;
 
 /// The murk the frames are in: the most there is.
 const MURK: u8 = 100;
+
+/// The colour the frames murk toward.
+const MURK_COLOUR: u16 = 0x1081;
 
 /// Where the sprites are put, far enough from the player to murk.
 const FAR: Vec2 = Vec2::new(150.0, -100.0);
@@ -25,6 +29,22 @@ fn tint_of(list: &DrawList, id: i16) -> Color {
         .unwrap_or_else(|| panic!("{id} not drawn: {list:?}"))
 }
 
+/// The tint and colorize of the first mixed sprite of `rlëD`/`spïn` `id`
+/// drawn in `list`.
+fn mixed_of(list: &DrawList, id: i16) -> (Color, Colorize) {
+    list.iter()
+        .find_map(|command| match unclipped(command) {
+            DrawCommand::Colorized {
+                image,
+                tint,
+                colorize,
+                ..
+            } if image.id == id => Some((*tint, *colorize)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{id} not mixed: {list:?}"))
+}
+
 /// A frame in Sol in [`MURK`], the player at `player`, a cargo box and an
 /// asteroid at `at`.
 fn murky(player: Vec2, at: Vec2) -> FlightFrame {
@@ -32,6 +52,7 @@ fn murky(player: Vec2, at: Vec2) -> FlightFrame {
         asteroids: vec![asteroid_at(at)],
         cargo_boxes: vec![box_at(at)],
         effective_murk: MURK,
+        murk_colour: MURK_COLOUR,
         ..in_sol_with(vec![the_player_at(player, 0.0)])
     }
 }
@@ -50,35 +71,36 @@ fn view_of(player: Vec2, at: Vec2) -> Faked {
     view
 }
 
-/// The darkening a sprite at `at` has seen from `player` in [`MURK`].
-fn murked(at: Vec2, player: Vec2) -> Color {
+/// How a sprite at `at` is drawn seen from `player` in [`MURK`]: at its
+/// unmurked white, mixed toward [`MURK_COLOUR`].
+fn murked(at: Vec2, player: Vec2) -> (Color, Colorize) {
     let level = sprite_murk(at, player, MURK);
     assert!(level > 0, "{at:?} is murky from {player:?}");
-    murk_tint(Color::WHITE, level)
+    (Color::WHITE, Colorize::toward_pixel(level, MURK_COLOUR))
 }
 
 #[test]
-fn a_murky_cargo_box_far_from_the_player_is_darkened_and_one_beside_it_is_not() {
+fn a_murky_cargo_box_far_from_the_player_is_mixed_and_one_beside_it_is_not() {
     let list = world_list(&view_of(Vec2::ZERO, FAR));
-    assert_eq!(tint_of(&list, 500), murked(FAR, Vec2::ZERO));
+    assert_eq!(mixed_of(&list, 500), murked(FAR, Vec2::ZERO));
     let beside = world_list(&view_of(FAR, FAR));
     assert_eq!(tint_of(&beside, 500), Color::WHITE);
 }
 
 #[test]
-fn a_murky_asteroid_far_from_the_player_is_darkened_and_one_beside_it_is_not() {
+fn a_murky_asteroid_far_from_the_player_is_mixed_and_one_beside_it_is_not() {
     let list = world_list(&view_of(Vec2::ZERO, FAR));
-    assert_eq!(tint_of(&list, 1800), murked(FAR, Vec2::ZERO));
+    assert_eq!(mixed_of(&list, 1800), murked(FAR, Vec2::ZERO));
     let beside = world_list(&view_of(FAR, FAR));
     assert_eq!(tint_of(&beside, 1800), Color::WHITE);
 }
 
 #[test]
-fn a_murky_escape_pod_far_from_the_player_is_darkened_and_one_beside_it_is_not() {
+fn a_murky_escape_pod_far_from_the_player_is_mixed_and_one_beside_it_is_not() {
     let view = view_of(Vec2::ZERO, FAR);
     let pod = view.effects.pods()[0];
     let at = Vec2::new(pod.at.x, pod.at.y);
-    assert_eq!(tint_of(&world_list(&view), 1095), murked(at, Vec2::ZERO));
+    assert_eq!(mixed_of(&world_list(&view), 1095), murked(at, Vec2::ZERO));
     let beside = view_of(at, FAR);
     let pod = beside.effects.pods()[0];
     let level = sprite_murk(Vec2::new(pod.at.x, pod.at.y), at, MURK);
@@ -87,7 +109,7 @@ fn a_murky_escape_pod_far_from_the_player_is_darkened_and_one_beside_it_is_not()
 }
 
 #[test]
-fn a_murky_stellar_sprite_far_from_the_player_is_darkened_and_one_beside_it_is_not() {
+fn a_murky_stellar_sprite_far_from_the_player_is_mixed_and_one_beside_it_is_not() {
     let view = view_of(Vec2::ZERO, FAR);
     let scene = view.scene().expect("a scene");
     let (stellar, image) = scene
@@ -106,12 +128,19 @@ fn a_murky_stellar_sprite_far_from_the_player_is_darkened_and_one_beside_it_is_n
             .find_map(|command| match unclipped(command) {
                 DrawCommand::Sprite {
                     image: drawn, tint, ..
-                } if *drawn == image => Some(*tint),
+                } if *drawn == image => Some((*tint, None)),
+                DrawCommand::Colorized {
+                    image: drawn,
+                    tint,
+                    colorize,
+                    ..
+                } if *drawn == image => Some((*tint, Some(*colorize))),
                 _ => None,
             })
             .expect("the stellar drawn")
     };
     let player = Vec2::new(at.x + 300.0, at.y);
-    assert_eq!(shown(player), murked(at, player));
-    assert_eq!(shown(at), Color::WHITE, "beside the player");
+    let (tint, colorize) = murked(at, player);
+    assert_eq!(shown(player), (tint, Some(colorize)));
+    assert_eq!(shown(at), (Color::WHITE, None), "beside the player");
 }

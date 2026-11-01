@@ -17,7 +17,9 @@ use nova_data::{GameData, InterfaceData, Record};
 use nova_view::Prefs;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
-use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
+use nova_view::ui::desc::{
+    ARROW_UNITS, DESC_DIALOG, DONE_ITEM, FRAME, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM, TEXT_ITEM,
+};
 use nova_view::ui::new_pilot::{
     CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NICKNAME_ITEM, NewPilotDialog,
     NewPilotOutcome, OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
@@ -232,13 +234,37 @@ fn the_about_text_scrolls_in_desc_dialog_and_return_closes_it() {
         assert!(lines.iter().all(|at| text_box.contains(*at)), "{lines:?}");
 
         assert_eq!(desc.input(&key(Key::Down)), nova_view::ScreenAction::None);
-        assert_eq!(desc.first_line(), 1);
+        assert_eq!(desc.scroll_offset(), ARROW_UNITS);
+        // The line Down took part of off the top is cut at the box.
+        assert!(
+            drawn(&desc).iter().any(|command| matches!(
+                command,
+                DrawCommand::Clipped { clip, .. } if *clip == text_box
+            )),
+            "a partial line, clipped to item 3"
+        );
         // `_TextDialogFilter`'s End and Home reach either end of it.
         desc.input(&key(Key::End));
-        let last = desc.lines().len() - desc.dialog().scroll_text().expect("text").visible();
-        assert_eq!(desc.first_line(), last);
+        let scroll = desc.dialog().scroll_text().expect("text");
+        assert_eq!(desc.scroll_offset(), scroll.max_offset());
+        assert!(desc.scroll_offset() > 0.0);
         desc.input(&key(Key::Home));
-        assert_eq!(desc.first_line(), 0);
+        assert_eq!(desc.scroll_offset(), 0.0);
+        // Items 5 and 6: up disabled at the start, down normal.
+        let dialog = desc.dialog();
+        let up = dialog.item_bounds(SCROLL_UP_ITEM).expect("up");
+        let down = dialog.item_bounds(SCROLL_DOWN_ITEM).expect("down");
+        assert_eq!(up, rect(330.0, 282.0, 23.0, 23.0).offset(origin));
+        assert_eq!(down, rect(363.0, 282.0, 23.0, 23.0).offset(origin));
+        let commands = drawn(&desc);
+        let cap = |image, at: Bounds, height| DrawCommand::StretchedPicture {
+            image,
+            top_left: at.min,
+            width: 13.0,
+            height,
+        };
+        assert!(commands.contains(&cap(ButtonSkin::NOVA.disabled.left, up, 23.0)));
+        assert!(commands.contains(&cap(normal.left, down, 23.0)));
         desc.input(&key(Key::Enter));
         assert!(desc.closed());
     }
@@ -468,16 +494,19 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         .expect("builds");
         let dialog = prefs.dialog();
         let music = prefs.music_volume().rects().bounds();
-        assert_eq!(prefs.hyperspace_effects().label(), HYPERSPACE_EFFECTS_LABEL);
-        assert!(prefs.hyperspace_effects().enabled(), "{}", path.display());
-        assert_eq!(prefs.quicktime_movies().label(), "QuickTime Movies");
-        assert!(prefs.quicktime_movies().enabled(), "{}", path.display());
-        assert_eq!(prefs.smoke_trails().label(), "Smoke Trails");
-        assert!(prefs.smoke_trails().enabled(), "{}", path.display());
-        assert_eq!(prefs.weapon_effects().label(), "Weapon Effects");
-        assert!(prefs.weapon_effects().enabled(), "{}", path.display());
-        assert_eq!(prefs.parallax_starfield().label(), "Parallax Starfield");
-        assert!(prefs.parallax_starfield().enabled(), "{}", path.display());
+        for (toggle, label) in [
+            (prefs.hyperspace_effects(), HYPERSPACE_EFFECTS_LABEL),
+            (prefs.quicktime_movies(), "QuickTime Movies"),
+            (prefs.smoke_trails(), "Smoke Trails"),
+            (prefs.weapon_effects(), "Weapon Effects"),
+            (prefs.ship_animations(), "Ship Animations"),
+            (prefs.engine_glows(), "Engine Glows"),
+            (prefs.running_lights(), "Running Lights"),
+            (prefs.parallax_starfield(), "Parallax Starfield"),
+        ] {
+            assert_eq!(toggle.label(), label);
+            assert!(toggle.enabled(), "{}: {label}", path.display());
+        }
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -493,6 +522,9 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             prefs.quicktime_movies(),
             prefs.smoke_trails(),
             prefs.weapon_effects(),
+            prefs.ship_animations(),
+            prefs.engine_glows(),
+            prefs.running_lights(),
             prefs.parallax_starfield(),
         ]) {
             let rect = toggle.rect();
@@ -504,10 +536,11 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         }
         assert_eq!(
             prefs.inert().len(),
-            4,
-            "{name}: QuickTime Movies, Smoke Trails, Weapon Effects and Parallax Starfield \
-             work, Run in a \
-             window is the display picker and Share Processor Time the Scaling list"
+            1,
+            "{name}: only Check For Updates is greyed: QuickTime Movies, Smoke Trails, \
+             Weapon Effects, Ship Animations, Engine Glows, Running Lights and Parallax \
+             Starfield work, Run in a window is the display picker and Share Processor \
+             Time the Scaling list"
         );
         assert!(
             prefs.inert().iter().all(|toggle| {
@@ -535,6 +568,9 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.ship_animations(),
+                prefs.engine_glows(),
+                prefs.running_lights(),
                 prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
@@ -597,6 +633,9 @@ fn the_preferences_dialogs_scaling_list_fills_share_processor_times_row() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.ship_animations(),
+                prefs.engine_glows(),
+                prefs.running_lights(),
                 prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
@@ -653,6 +692,9 @@ fn the_preferences_dialogs_relaunch_notice_has_its_area_to_itself() {
                 prefs.quicktime_movies(),
                 prefs.smoke_trails(),
                 prefs.weapon_effects(),
+                prefs.ship_animations(),
+                prefs.engine_glows(),
+                prefs.running_lights(),
                 prefs.parallax_starfield(),
             ])
             .map(nova_view::ui::toggle::Toggle::rect)
@@ -1010,6 +1052,142 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
             dialog.take_choice(),
             Some(OfferChoice::Refuse),
             "the stock refuse button, enabled"
+        );
+    }
+}
+
+/// An offer of `text` labelled `accept` and `refuse`, in stock mono metrics.
+fn offer_of(
+    template: nova_view::ui::dialog::DialogTemplate,
+    text: &str,
+    graphic: Option<i16>,
+    (accept, refuse): (&str, &str),
+) -> nova_view::spaceport::offer::OfferDialog {
+    use nova_sim::mission::OfferLabels;
+    use nova_sim::{MissionId, OfferPrompt};
+    nova_view::spaceport::offer::OfferDialog::new(
+        Ok((template, mono())),
+        OfferPrompt {
+            mission: MissionId(128),
+            text: text.to_owned(),
+            graphic,
+            labels: OfferLabels {
+                accept: accept.to_owned(),
+                refuse: Some(refuse.to_owned()),
+            },
+            movie: None,
+        },
+        ButtonStyle::STOCK,
+    )
+}
+
+#[test]
+fn a_short_offer_shrinks_1016_and_leaves_its_arrows_outside() {
+    use nova_view::spaceport::offer::{OFFER_DIALOG, REFUSE_ITEM, TEXT_ITEM as OFFER_TEXT_ITEM};
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(OFFER_DIALOG)
+            .expect("converts");
+        let dialog = offer_of(template, "Go.", None, ("Yes", "No"));
+        let laid = dialog.dialog().expect("laid out");
+        let origin = Point::new(292.0, 286.0);
+        assert_eq!(laid.bounds(), Bounds::at(origin, 441.0, 114.0));
+        assert_eq!(
+            laid.item_bounds(REFUSE_ITEM),
+            Some(rect(116.0, 82.0, 100.0, 25.0).offset(origin))
+        );
+        assert_eq!(
+            laid.item_bounds(OFFER_TEXT_ITEM),
+            Some(rect(12.0, 9.0, 415.0, 64.0).offset(origin))
+        );
+        assert_eq!(
+            laid.item_bounds(9),
+            Some(rect(340.0, 287.0, 23.0, 23.0).offset(origin)),
+            "the arrow stays where the template has it"
+        );
+        assert!(!laid.item_shown(9), "wholly outside");
+    }
+}
+
+#[test]
+fn the_offers_buttons_widen_to_their_labels_on_the_stock_templates() {
+    use nova_view::spaceport::offer::{
+        ACCEPT_ITEM as OFFER_ACCEPT_ITEM, OFFER_DIALOG, OfferDialog, PICTURE_OFFER_DIALOG,
+        REFUSE_ITEM, SINGLE_ITEM,
+    };
+    let item = |dialog: &OfferDialog, number| {
+        dialog
+            .dialog()
+            .and_then(|laid| {
+                let at = laid.item_bounds(number)?;
+                Some(at.offset(Point::new(-laid.bounds().min.x, -laid.bounds().min.y)))
+            })
+            .expect("an item")
+    };
+    for (_, path) in builds() {
+        let ui = interface(&path);
+        let plain = || ui.dialog_template(OFFER_DIALOG).expect("converts");
+        let picture = || ui.dialog_template(PICTURE_OFFER_DIALOG).expect("converts");
+        let long_text = "line\r".repeat(40);
+
+        let floor = offer_of(plain(), &long_text, None, ("Yes", "No"));
+        assert_eq!(
+            item(&floor, OFFER_ACCEPT_ITEM),
+            rect(225.0, 285.0, 100.0, 25.0)
+        );
+        assert_eq!(item(&floor, REFUSE_ITEM), rect(116.0, 285.0, 100.0, 25.0));
+        assert_eq!(item(&floor, SINGLE_ITEM), rect(172.0, 285.0, 100.0, 25.0));
+        let floor = offer_of(picture(), "Go.", Some(5005), ("Yes", "No"));
+        assert_eq!(
+            item(&floor, OFFER_ACCEPT_ITEM),
+            rect(221.0, 213.0, 100.0, 25.0)
+        );
+        assert_eq!(item(&floor, REFUSE_ITEM), rect(114.0, 213.0, 100.0, 25.0));
+        assert_eq!(item(&floor, SINGLE_ITEM), rect(169.0, 213.0, 100.0, 25.0));
+
+        let longest = "I need more time";
+        let wide = mono().width(nova_view::Font::Charcoal, 12.0, longest) + 40.0;
+        for dialog in [
+            offer_of(plain(), "Go.", None, ("I'm in", longest)),
+            offer_of(picture(), "Go.", Some(5005), ("I'm in", longest)),
+        ] {
+            assert_eq!(item(&dialog, OFFER_ACCEPT_ITEM).width(), wide);
+            assert_eq!(item(&dialog, REFUSE_ITEM).width(), wide);
+        }
+    }
+}
+
+#[test]
+fn a_short_pictured_offer_keeps_1020_at_its_stock_size() {
+    use nova_view::spaceport::offer::{PICTURE_OFFER_DIALOG, TEXT_ITEM as OFFER_TEXT_ITEM};
+    use nova_view::text::wrap;
+    use nova_view::ui::catalog::DescriptionGraphics;
+    use nova_view::ui::desc::{BODY_FONT, BODY_SIZE};
+    /// `mïsn` 685's offer: a text short enough to shrink, with a picture.
+    const SHORT_PICTURED: i16 = 4557;
+    for (dir, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PICTURE_OFFER_DIALOG)
+            .expect("converts");
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let text = data.description(SHORT_PICTURED).expect("the offer's text");
+        assert_eq!(data.description_graphic(SHORT_PICTURED), Some(5005));
+        let lines = wrap(
+            &mono(),
+            BODY_FONT,
+            BODY_SIZE,
+            &text,
+            template.items[OFFER_TEXT_ITEM - 1].bounds.width(),
+        );
+        let high = lines.len() as f32 * mono().line_height(BODY_FONT, BODY_SIZE);
+        assert!(high < 200.0, "short enough to shrink: {high}");
+
+        let dialog = offer_of(template, &text, Some(5005), ("Yes", "No"));
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds(), rect(187.0, 262.0, 651.0, 244.0));
+        assert_eq!(
+            laid.item_bounds(OFFER_TEXT_ITEM).map(|item| item.height()),
+            Some(200.0)
         );
     }
 }
@@ -1453,6 +1631,8 @@ fn str_150_holds_the_bars_gamble_and_the_races_labels() {
     use nova_view::spaceport::bar::GAMBLE_LABEL;
     use nova_view::spaceport::layout::DONE_LABEL;
     use nova_view::spaceport::race::{CANCEL_LABEL, HELP_LABEL};
+    use nova_view::ui::desc::OKAY_LABEL;
+    use nova_view::ui::scroll_arrows::ScrollArrow;
     let Some(dir) = common::nova_data() else {
         return;
     };
@@ -1467,6 +1647,9 @@ fn str_150_holds_the_bars_gamble_and_the_races_labels() {
     assert_eq!(list.strings[33].as_str(), CANCEL_LABEL, "#34");
     assert_eq!(list.strings[4].as_str(), DONE_LABEL, "#5");
     assert_eq!(list.strings[57].as_str(), HELP_LABEL, "#58");
+    assert_eq!(list.strings[18].as_str(), ScrollArrow::Up.label(), "#19");
+    assert_eq!(list.strings[19].as_str(), ScrollArrow::Down.label(), "#20");
+    assert_eq!(list.strings[26].as_str(), OKAY_LABEL, "#27");
 }
 
 /// The `DLOG`s `_CenterWindow` moves are placed as it places them: the

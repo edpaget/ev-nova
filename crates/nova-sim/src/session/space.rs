@@ -157,6 +157,9 @@ pub(super) struct Space {
 pub(super) struct Escorts {
     /// The boarding under way, if any.
     pub(super) aboard: Option<Aboard>,
+    /// The ships holding the last ship boarded, whom a capture of it stops
+    /// defending (see the `stellar_defence` module).
+    pub(super) capture_holders: Vec<NpcId>,
     /// The hail under way, if any.
     pub(super) talk: Option<hail::Talk>,
     /// The escort dialog open, if any (see the `escort_dialog` module).
@@ -250,6 +253,7 @@ impl Space {
             stellar_sprites: StellarSpritePool::default(),
             escorts: Escorts {
                 aboard: None,
+                capture_holders: Vec::new(),
                 talk: None,
                 dialog: None,
                 release_comm_escort: false,

@@ -2,11 +2,13 @@
 //! which of them the menu bar offers.
 //!
 //! - **Quit and Preferences…** are their Command chords
-//!   ([`menu_chord`]): the command feeds the chord through
-//!   [`Screen::input`] exactly as its keys arrive, so every gate and hold
-//!   the keys meet applies to it unchanged (Quit's delay, the entry's and
-//!   the appear's held chords, a keyed click's hold, the overlays, the
-//!   spaceport and a map's Find). With Command already held (the chord's
+//!   ([`menu_chord`]): the command feeds the chord to the router exactly
+//!   as its keys arrive, so every gate and hold the keys meet applies to
+//!   it unchanged (Quit's delay, the entry's and the appear's held
+//!   chords, a keyed click's hold, the overlays, the spaceport and a
+//!   map's Find), but the background's: a command isn't a key, and works
+//!   with the app away, Quit at once whatever would hold it (see
+//!   `background`). With Command already held (the chord's
 //!   key equivalent was typed: the window saw Command go down, and the menu
 //!   bar took the chord's press) it feeds the chord's press and release;
 //!   picked with the mouse, Command's press and release around them. The
@@ -31,13 +33,16 @@
 //! Command-comma and opens nothing); About likewise, and also while
 //! anything holds input.
 
-use nova_view::{Input, Key, MenuCommand, Screen, ScreenAction};
+use nova_view::{Input, Key, MenuCommand, ScreenAction};
 
 use super::{AppScreen, menu_chord};
 
 impl AppScreen {
     /// `command`, picked from the menu bar: see the module docs.
     pub(super) fn run_menu_command(&mut self, command: MenuCommand) -> ScreenAction {
+        if command == MenuCommand::Quit && self.is_away() {
+            return ScreenAction::Quit;
+        }
         let Some(chord) = menu_chord(command) else {
             if self.menu_enabled_now(command) {
                 self.open_about();
@@ -66,7 +71,7 @@ impl AppScreen {
         // The app quits at the first input that asks, as it would for the
         // keys.
         for input in &inputs {
-            if self.input(input) == ScreenAction::Quit {
+            if self.input_past_away(input) == ScreenAction::Quit {
                 return ScreenAction::Quit;
             }
         }

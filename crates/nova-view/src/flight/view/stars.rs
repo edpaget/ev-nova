@@ -23,6 +23,10 @@
 //!   pass, doubled in double time (`_ScrollStarfield` @0x45d59-0x45d96);
 //!   in double time the second pass (`_DoPlayGameWork(0)` @0x45f31) wraps
 //!   and places them again, undrawn until the next step's snapshot.
+//!   The player's wrap (`_WrapPlayerPosition`) moves no star, so they black
+//!   out until each has stepped back, a wrap's worth a pass, and the view
+//!   marks them as moved so none streaks (see the `stepping` module); the
+//!   ship's move is read after the view's carry, so the scroll is its own.
 //! - **Drawing.** First in the world, under the message line and the
 //!   stellars; without the stars' sheet, none.
 //!

@@ -108,8 +108,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// - Option-\` ([`NAV_OFF_KEY`] with Option, @0x69a17-0x69a90), which
     ///   lets go of the ship target;
     /// - Board, B ([`BOARD_KEY`], @0x6a98b-0x6a9a8);
-    /// - Hail, Y ([`HAIL_KEY`], @0x703cc-0x70405), which the session then
-    ///   refuses, as `_HandlePlayerCommunication` does (@0x61f87);
     /// - Jettison, Command-K and Command-Option-K ([`JETTISON_KEY`],
     ///   @0x6fd54-0x6fdaf);
     /// - the escort menu's keys: E, Return, F, D, V and C, and 1-5 while the
@@ -123,22 +121,23 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 and
     /// Command-5 with the menu shut, F1-F4 and F5 (@0x69d2e; held through
     /// the jump's end, one pressed during it acts after it, see
-    /// [`FlightView::slot_keys_frame`]), M (@0x6a7a2), L (@0x6a8df), I
-    /// (@0x70424), and J, which changes nothing during a jump
-    /// (@0x6b0da-0x6b10d). P is refused apart
-    /// ([`FlightView::refuse_player_info`]); the flight keys are tracked
-    /// as held whatever this says, so H, \` and `\` dropped here act after
-    /// the jump as their latches let them, and J, whose latch the jump
-    /// sets, does not ([`FlightView::held_keys_frame`]). A click on the
+    /// [`FlightView::slot_keys_frame`]), and J, which changes nothing
+    /// during a jump (@0x6b0da-0x6b10d). M, L, P, Y and I never get here:
+    /// each press is kept for the pass that reads it, so P's and Y's
+    /// refusals land on the pass, not on the press, and L and I held wait
+    /// past the jump (the `faded_keys` module). The flight keys are
+    /// tracked as held whatever this says, so H, \` and `\` dropped here
+    /// act after the jump as their latches let them, and J, whose latch
+    /// the jump sets, does not ([`FlightView::held_keys_frame`]). A click on the
     /// escort menu is no key press, so this filter never sees it: the menu
     /// takes it during a jump too, as its branch reads no +0x50
     /// (@0x6a000-0x6a12b, [`FlightView::click_escort_menu`]).
     pub(super) fn taken_during_jump(key: Key, option: bool, menu_open: bool) -> bool {
         match key {
-            TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY | JETTISON_KEY
-            | MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY
-            | ESCORT_HOLD_KEY | ESCORT_RECALL_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY
-            | ZOOM_IN_KEYPAD_KEY | FRAME_RATE_KEY => true,
+            TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | JETTISON_KEY | MENU_KEY
+            | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
+            | ESCORT_RECALL_KEY | ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY
+            | FRAME_RATE_KEY => true,
             NAV_OFF_KEY => option,
             _ => menu_open && GROUP_KEYS.contains(&key),
         }
@@ -418,10 +417,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
 /// commands through it, so any
 /// flight drives them, a scripted one in the component tests.
 impl<C, S: FlightSim> FlightView<C, S> {
-    /// Tracks a flight key `input` presses or lets go of as held.
+    /// Tracks a flight key `input` presses or lets go of as held. A repeat
+    /// of L or I is no fresh down: they act on being held (the
+    /// `faded_keys` module), so one taken for a press would read again
+    /// once a refusal let go of the key.
     pub(super) fn track_held(&mut self, input: &Input) {
-        if let Input::Key { key, pressed, .. } = *input
+        if let Input::Key {
+            key,
+            pressed,
+            repeat,
+        } = *input
             && FLIGHT_KEYS.contains(&key)
+            && !(repeat && matches!(key, LAND_KEY | MISSION_INFO_KEY))
         {
             if pressed {
                 self.held.insert(key);
@@ -437,10 +444,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// releases will never reach it. The one place that does: the
     /// original reads both live (`_KeyCheck` @0xa19b-0xa1dc, `_Button`
     /// @0x3803b), and ours has only the events flight is given. The
-    /// paths that keep the input in flight (the course map, a gate's
-    /// exit) clear `held` alone, as their releases still come here.
+    /// paths that keep the input in flight (a gate's exit, the course map
+    /// opened over a screen) clear `held` alone, as their releases still
+    /// come here, and the course map opened in flight keeps the keys read
+    /// with no latch ([`FlightView::open_map_as`]).
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
+        self.faded_keys.forget();
         self.cursor.button(false);
     }
 
@@ -809,7 +819,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Some(picture) = &self.floating_picture else {
             return;
         };
-        let current = self.frame.floating.current;
+        let current = self.drawn().floating.current;
         let at = Point::new(current.x, current.y);
         let frame = floating::frame(self.view);
         let transform = floating::transform(frame, at, self.floating.zoom());

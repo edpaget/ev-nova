@@ -643,7 +643,7 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     // at k = 0, and two solid lit squares crossfaded at k = 16 over the
     // clear, (14..18, 14..18) then (16..20, 14..18), the second over half
     // the first. Beside them, a hull square at (24..28, 14..18) with the
-    // sheet crossfaded over it by 8 at a murk of 16, its colour halved.
+    // sheet crossfaded over it by 8, its colour halved by the tint.
     // White at (32 - t) 32nds of full alpha: a shot translucent by t.
     let translucent_by = |t: u8| match t {
         8 => Color::rgba(255, 255, 255, 191),
@@ -670,7 +670,7 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
         .crossfade_sprite(
             ImageKey::sprite(7, 0),
             Point::new(26.0, 16.0),
-            // Translucent by 8, its colour halved by a murk of 16.
+            // Translucent by 8, its colour halved.
             Color::rgba(127, 127, 127, 191),
         )
         .crossfade_sprite(
@@ -728,12 +728,12 @@ fn a_translucent_sprite_crossfades_by_or_like_the_originals_translucent_copy() {
     assert_area(&pixels, (14, 14), (16, 18), first, 0);
     assert_area(&pixels, (16, 14), (18, 18), both, 0);
     assert_area(&pixels, (18, 14), (20, 18), first, 0);
-    // A darkened tint scales the source's colour before the crossfade:
-    // at a murk of 16, by 16/32.
-    let murked = w555(original_crossfade_555(LIT_555.map(|c| c / 2), HULL_555, 24));
-    assert_eq!(murked, [49, 24, 8, 255]);
-    assert_ne!(murked, lit_24, "the crossfade ignoring the tint's colour");
-    assert_area(&pixels, (26, 14), (28, 18), murked, 0);
+    // A dimmed tint scales the source's colour before the crossfade: by
+    // 16/32.
+    let dimmed = w555(original_crossfade_555(LIT_555.map(|c| c / 2), HULL_555, 24));
+    assert_eq!(dimmed, [49, 24, 8, 255]);
+    assert_ne!(dimmed, lit_24, "the crossfade ignoring the tint's colour");
+    assert_area(&pixels, (26, 14), (28, 18), dimmed, 0);
 }
 
 /// The original's 16-bit translucent copy with its factors set apart, as
@@ -833,6 +833,74 @@ fn a_colorized_sprite_mixes_each_5_bit_channel_like_the_originals_blit() {
     assert_area(&pixels, (14, 4), (18, 8), LIT, 0);
     let deep = w555(Colorize { level: 26, ..blue }.mix(LIT_555));
     assert_area(&pixels, (24, 4), (28, 8), deep, 0);
+}
+
+#[test]
+fn a_murked_sprite_mixes_toward_its_colour_before_every_blend() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // The solid sheet, mixed at level 16 toward a stock murk colour: over
+    // the black clear at (6, 6), then over hull squares OR-ed in at
+    // (16, 6), crossfaded at (26, 6) and translucent at (6, 16), and
+    // crossfaded at level 0, which doesn't mix, at (16, 16). The original
+    // mixes first and applies the sprite's factors to the mixed texel
+    // (`_BlitPixieTranslucentCopy` @0xc1140-0xc11ca, then @0xc11cc-0xc1275).
+    let solid = ImageKey::sprite(9, 0);
+    let murk = Colorize {
+        level: 16,
+        rgb5: [4, 4, 1],
+    };
+    let mixed = murk.mix(LIT_555);
+    assert_eq!(mixed, [10, 7, 2]);
+    let hull = w555(HULL_555);
+    let at_16 = Color::rgba(255, 255, 255, 128);
+    let or_spot = Point::new(16.0, 6.0);
+    let crossfade_spot = Point::new(26.0, 6.0);
+    let translucent_spot = Point::new(6.0, 16.0);
+    let unmixed_spot = Point::new(16.0, 16.0);
+    let mut list = DrawList::new();
+    for spot in [or_spot, crossfade_spot, translucent_spot, unmixed_spot] {
+        list.sprite(ImageKey::sprite(2, 0), spot, tint(hull));
+    }
+    list.colorized_sprite(
+        solid,
+        Point::new(6.0, 6.0),
+        Color::WHITE,
+        Blend::Normal,
+        murk,
+    )
+    .colorized_sprite(solid, or_spot, Color::WHITE, Blend::Or, murk)
+    .colorized_sprite(solid, crossfade_spot, at_16, Blend::OrCrossfade, murk)
+    .colorized_sprite(
+        solid,
+        translucent_spot,
+        nova_view::draw::translucent_tint(16, 8),
+        Blend::OrTranslucent,
+        murk,
+    )
+    .colorized_sprite(
+        solid,
+        unmixed_spot,
+        at_16,
+        Blend::OrCrossfade,
+        Colorize { level: 0, ..murk },
+    );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    assert_area(&pixels, (4, 4), (8, 8), w555(mixed), 0);
+    let ored = w555(original_lights_555(mixed, HULL_555, 32));
+    assert_area(&pixels, (14, 4), (18, 8), ored, 0);
+    let faded = w555(original_crossfade_555(mixed, HULL_555, 16));
+    assert_area(&pixels, (24, 4), (28, 8), faded, 0);
+    let see_through = w555(original_translucent_555(mixed, HULL_555, 16, 8));
+    assert_area(&pixels, (4, 14), (8, 18), see_through, 0);
+    let unmixed = w555(original_crossfade_555(LIT_555, HULL_555, 16));
+    assert_area(&pixels, (14, 14), (18, 18), unmixed, 0);
 }
 
 #[test]

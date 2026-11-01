@@ -8,7 +8,7 @@
 //! ([`KeptPanel`]).
 
 use nova_sim::PlayerCommand;
-use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
+use nova_sim::flight_frame::{Answer, FadedPress, FlightCommand, ScreenAnswer, ScreenAsk};
 use nova_sim::{PlayerInfo, pilot_panel::PilotPanel};
 
 use crate::ScreenAction;
@@ -65,9 +65,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `nova_sim::Session::open_player_info`): the flight resets first, so
     /// the screen it gives shows the cargo trimmed; none in a jump or
     /// while the ship breaks up, when nothing opens, or for a flight that
-    /// refuses it, one that failed. It is marked with the cheats setting.
-    /// The router opens the screen on it, from flight and from the
-    /// spaceport alike.
+    /// refuses it, one that failed. The screen faded out is the session's
+    /// on the one pass it can matter ([`FlightCommand::PressFaded`]; see
+    /// the `faded_keys` module), so no press reaches here then. It is
+    /// marked with the cheats setting. The router opens the screen on it,
+    /// from flight and from the spaceport alike.
     pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
         match self.send(FlightCommand::OpenPlayerInfo) {
             Answer::PlayerInfo(Some(info)) => Some(self.marked(*info)),
@@ -115,13 +117,27 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// A press of [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
-    /// during a jump: outside the map, the flight refuses it with its beep
-    /// ([`FlightView::press_player_info`], @0x702f7, @0x7039a-0x703bd),
-    /// when the player's fate takes it.
-    pub(super) fn refuse_player_info(&mut self) -> ScreenAction {
-        if !self.map_open && self.takes(PlayerCommand::PlayerInfo) {
+    /// read on a pass with a jump under way: the flight refuses it with
+    /// its beep ([`FlightView::press_player_info`], @0x702f7,
+    /// @0x7039a-0x703bd), when the player's fate takes it.
+    pub(super) fn refuse_player_info(&mut self) {
+        if self.takes(PlayerCommand::PlayerInfo) {
             let _ = self.press_player_info();
         }
-        ScreenAction::None
+    }
+
+    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) read
+    /// on the pass a jump collapsed under the white
+    /// ([`FadedPress::PlayerInfo`]): whether `_DoPlayerInfoDialog`'s guard
+    /// refused it (@0x5a024), which lets go of the latched keys
+    /// (`_SetAllKeyCmdFlags` @0x70393). A dying player's beep is the
+    /// flight's own, and lets go of nothing.
+    pub(super) fn press_faded_player_info(&mut self) -> bool {
+        let answer = self.send(FlightCommand::PressFaded(FadedPress::PlayerInfo));
+        let faded = answer == Answer::PlayerInfoFaded;
+        if faded {
+            self.keep_unlatched_keys();
+        }
+        faded
     }
 }

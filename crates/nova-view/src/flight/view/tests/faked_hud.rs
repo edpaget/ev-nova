@@ -400,6 +400,33 @@ fn the_port_bar_draws_the_kept_frame_a_change_behind_the_port_refilled() {
     assert!(texts(&bar).contains(&"777".to_owned()), "{:?}", texts(&bar));
 }
 
+#[test]
+fn a_double_time_frame_draws_the_first_passs_hud_and_takes_the_radar_from_it() {
+    let mut view = barred(armed(1, &[]), among(Vec::new()));
+    let mut first = view.frame.clone();
+    first.hud.cargo.cash = 111;
+    first.hud.radar_gear.iff = true;
+    let mut now = view.frame.clone();
+    now.hud.cargo.cash = 222;
+    view.sim.set_frame(now);
+    let pass = nova_sim::flight_frame::PassReport {
+        ships: first.ships.clone(),
+        double_time: true,
+        ..nova_sim::flight_frame::PassReport::default()
+    };
+    view.sim
+        .queue_report(super::stepping::doubled(pass.clone(), pass, first));
+    view.step_frame(1, view.anchor());
+    let list = texts(&flown(&view));
+    assert!(list.contains(&"111".to_owned()), "{list:?}");
+    assert!(!list.contains(&"222".to_owned()), "{list:?}");
+    view.radar_scene = None;
+    for _ in 0..30 {
+        hud_tick(&mut view);
+    }
+    assert!(view.radar_scene.as_ref().is_some_and(|radar| radar.iff));
+}
+
 // The target layer.
 
 #[test]

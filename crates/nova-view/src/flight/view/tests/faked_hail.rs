@@ -21,7 +21,7 @@ fn sol() -> Faked {
 }
 
 /// The comm dialog of a hail of NPC 0, a ship 129, saying `reply`.
-fn hail_view(reply: &str) -> HailView {
+pub(super) fn hail_view(reply: &str) -> HailView {
     HailView {
         npc: NpcId(0),
         ship: ShipId(129),
@@ -55,7 +55,7 @@ fn escort_view(mark: Option<nova_sim::fleet::EscortMark>) -> EscortDialogView {
 }
 
 /// Mission 130's offer, its text `text`.
-fn prompt(text: &str) -> OfferPrompt {
+pub(super) fn prompt(text: &str) -> OfferPrompt {
     OfferPrompt {
         mission: MissionId(130),
         text: text.to_owned(),

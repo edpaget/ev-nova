@@ -88,12 +88,21 @@ impl Session {
     }
 
     /// NPC `id`'s armour goes to [`repaired_armor`] and its condition is
-    /// decided again at once: disabled while it is held disabled
-    /// ([`Session::held_disabled`]) or `disable` still disables it, intact
-    /// otherwise. The self-repair (`_HandleShip` @0x33a4e-0x33ad4) and the
-    /// boarding repair (`_HandlePlayerBoardAttempt` @0x65bf2-0x65c66; see
-    /// the `board_repair` module) both repair so.
+    /// decided again at once ([`Session::decide_condition`]). The
+    /// self-repair (`_HandleShip` @0x33a4e-0x33ad4) and the boarding repair
+    /// (`_HandlePlayerBoardAttempt` @0x65bf2-0x65c66; see the
+    /// `board_repair` module) both repair so.
     pub(super) fn repair_hull(&mut self, id: NpcId, disable: &dyn DisableRule) {
+        if let Some(npc) = self.space.npc_mut(id) {
+            npc.reserves.armor.now = repaired_armor(npc.reserves.armor.max, npc.hull.tough);
+        }
+        self.decide_condition(id, disable);
+    }
+
+    /// NPC `id`'s condition is decided again by its armour as it stands:
+    /// disabled while it is held disabled ([`Session::held_disabled`]) or
+    /// `disable` still disables it, intact otherwise.
+    pub(super) fn decide_condition(&mut self, id: NpcId, disable: &dyn DisableRule) {
         let held = self
             .space
             .npc(id)
@@ -101,7 +110,6 @@ impl Session {
         let Some(npc) = self.space.npc_mut(id) else {
             return;
         };
-        npc.reserves.armor.now = repaired_armor(npc.reserves.armor.max, npc.hull.tough);
         let still = held || disable.disabled(npc.reserves.armor, &npc.hull);
         npc.condition = if still {
             Condition::Disabled

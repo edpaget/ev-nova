@@ -2,10 +2,13 @@
 //! Nova` executable) shows it.
 //!
 //! - An asteroid is a frame of its type's master sprite, `spïn` 800 +
-//!   type (`_LoadSprites` @0x20bb7), centred on where it is (@0x364df).
-//!   Its frame is the simulation's whole frame (@0x363f6), taken round
-//!   the sheet's frames.
-//! - An asteroid whose sheet was not read is the shots' crossed box.
+//!   type (`_LoadSprites` @0x20bb7), placed at whole pixels from the
+//!   player by its own sides
+//!   ([`Camera::sprite_centre`](crate::system::camera::Camera::sprite_centre),
+//!   @0x36459-0x364df). Its frame is the simulation's whole frame
+//!   (@0x363f6), taken round the sheet's frames.
+//! - An asteroid whose sheet was not read is the shots' crossed box, on
+//!   the whole point of its position.
 //! - Asteroids draw in their own layer, over the stellars and under the
 //!   disabled ships and the cargo boxes (`_SetupSpriteWorld`
 //!   @0x21d0c-0x21d74).
@@ -14,11 +17,10 @@
 //!   rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use super::catalog::Looks;
-use super::murk::murk_tint;
 use super::weapons::SHOT_PLACEHOLDER_SIZE;
 use crate::draw::crossed_box;
 use crate::system::scene::PLACEHOLDER;
-use crate::{Color, DrawList, Point};
+use crate::{Blend, Color, Colorize, DrawList, Point};
 
 /// An asteroid to draw.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,8 +31,8 @@ pub struct AsteroidShown {
     pub frame: u16,
     /// Its type, `spïn` 800 + `kind`.
     pub kind: u8,
-    /// How murky it is, out of 32 ([`sprite_murk`](super::murk::sprite_murk)).
-    pub murk: u8,
+    /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
+    pub colorize: Colorize,
 }
 
 /// Draws each of `asteroids` as its type's frame, murked as it says; a
@@ -40,8 +42,9 @@ pub fn draw_asteroids(list: &mut DrawList, asteroids: &[AsteroidShown], looks: &
         match looks.asteroid_sheet(shown.kind) {
             Some(sheet) => {
                 let frame = shown.frame % sheet.frames.get();
-                let tint = murk_tint(Color::WHITE, shown.murk);
-                list.sprite(sheet.image.frame(frame), shown.at, tint);
+                let image = sheet.image.frame(frame);
+                let colorize = Some(shown.colorize);
+                list.mixed_sprite(image, shown.at, Color::WHITE, Blend::Normal, colorize);
             }
             None => crossed_box(list, shown.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         }
@@ -56,6 +59,9 @@ mod tests {
     use super::*;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
+
+    /// A stock system's murk colour.
+    const COLOUR: u16 = 0x1081;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -88,7 +94,7 @@ mod tests {
             at: at(x, 5.0),
             frame,
             kind,
-            murk: 0,
+            colorize: Colorize::default(),
         }
     }
 
@@ -117,19 +123,19 @@ mod tests {
     }
 
     #[test]
-    fn a_murky_asteroid_is_darkened_by_its_murk() {
+    fn a_murky_asteroid_is_mixed_toward_its_colour() {
+        let murk = Colorize::toward_pixel(16, COLOUR);
         let murky = AsteroidShown {
-            murk: 16,
+            colorize: murk,
             ..shown(1.0, 0, 0)
         };
         let mut list = DrawList::new();
         draw_asteroids(&mut list, &[murky, shown(2.0, 0, 0)], &looks());
         let mut expected = DrawList::new();
-        let darkened = murk_tint(Color::WHITE, 16);
-        assert_eq!(darkened, Color::rgba(127, 127, 127, 255));
-        expected.sprite(ImageKey::sprite(1800, 0), at(1.0, 5.0), darkened);
-        expected.sprite(ImageKey::sprite(1800, 0), at(2.0, 5.0), Color::WHITE);
-        assert_eq!(list, expected, "murk 0 is white");
+        let image = ImageKey::sprite(1800, 0);
+        expected.colorized_sprite(image, at(1.0, 5.0), Color::WHITE, Blend::Normal, murk);
+        expected.sprite(image, at(2.0, 5.0), Color::WHITE);
+        assert_eq!(list, expected, "no murk draws plainly");
     }
 
     #[test]

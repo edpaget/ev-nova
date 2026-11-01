@@ -550,3 +550,22 @@ fn a_dialogs_map_draws_flights_fade_over_the_map() {
     assert!(at > 0, "the map under it");
     assert_eq!(at, over.len() - 1, "the last thing drawn");
 }
+
+#[test]
+fn a_dialogs_map_gives_the_keys_of_its_wait_at_the_close() {
+    for frame in [
+        in_sol(),
+        FlightFrame {
+            landed: Some(StellarId(128)),
+            ..in_sol()
+        },
+    ] {
+        let mut view = faked_dialogs(frame, MapMarks::NONE, MOON);
+        view.open_dialog_map(MapOpener::Offer(MissionId(130)));
+        view.port_map_input(&key(MAP, true));
+        view.port_map_input(&key(Key::Enter, true));
+        assert_eq!(view.take_map_replay(), [], "not before the close");
+        view.port_map_input(&key(MAP, false));
+        assert_eq!(view.take_map_replay(), [key(Key::Enter, true)]);
+    }
+}

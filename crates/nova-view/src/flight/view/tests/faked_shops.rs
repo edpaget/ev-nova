@@ -1229,10 +1229,13 @@ fn a_jettisons_boxes_are_drawn_back_along_their_drift_under_the_ship_and_it_soun
         .map(|made| {
             (
                 ImageKey::sprite(500, made.frame),
-                camera.world_to_screen(Point::new(
-                    made.velocity.x.mul_add(-0.75, made.position.x),
-                    made.velocity.y.mul_add(-0.75, made.position.y),
-                )),
+                camera.box_centre(
+                    Point::new(
+                        made.velocity.x.mul_add(-0.75, made.position.x),
+                        made.velocity.y.mul_add(-0.75, made.position.y),
+                    ),
+                    (0, 0),
+                ),
             )
         })
         .collect();
