@@ -429,6 +429,86 @@ fn the_players_hit_on_a_docked_repairer_turns_it_without_repairing_and_it_leaves
     assert_eq!(traffic.take_pirate_events(), []);
 }
 
+#[test]
+fn a_miner_docked_with_the_player_that_drops_the_help_creeps_on_through_its_dock_wait() {
+    // `_MinerAI` writes the sub only in its disabled reset (@0x8b229), and
+    // its goal 0x10 leaves the nav alone (@0x8b2ba): while the dock's wait
+    // skips goal 0x10's high level (@0x8d4b9-0x8d4d2), sub 0xf goes on
+    // matching the player's velocity and creeping at it, then that high
+    // level runs and drops it. A ship in goal 0xf thinks on every tick
+    // (@0x8fdf4-0x8fe1e) before its high level, so one that is a
+    // leaderless miner when it takes the help drops it before it docks:
+    // the dock is set up here as a start leaves it.
+    let mut traffic = repairing(2.0, 0.0);
+    let miner = &mut traffic.npcs[0];
+    miner.miner = crate::ai::miner::MINES;
+    miner.docking = Some(Docking {
+        ship: ShipRef::Player,
+        sub: DockSub::Dock,
+    });
+    miner.ai_wait = 150;
+    let rock = nova_sim_combat::asteroid::Asteroid {
+        position: Vec2::new(200.0, 200.0),
+        velocity: Vec2::ZERO,
+        frame: 0.0,
+        spin: 0.0,
+        strength: 30,
+        kind: 0,
+    };
+    let drifting = |step: u32| {
+        let mut world = world(Condition::Disabled);
+        let sign = if step.is_multiple_of(2) { 1.0 } else { -1.0 };
+        if let Some(player) = world.player.as_mut() {
+            player.state.velocity = Vec2::new(0.2 * sign, 0.5);
+        }
+        crate::traffic::World {
+            mining_rock: Some(rock),
+            ..world
+        }
+    };
+    let mut step = 0;
+    while helper(&traffic).ai_wait > 0 {
+        let world = drifting(step);
+        let velocity = world.player.as_ref().expect("here").state.velocity;
+        traffic.tick_in(
+            &crate::ai::miner::MinerAi,
+            world,
+            &[],
+            &mut Scripted::default(),
+        );
+        let mining = helper(&traffic);
+        assert_eq!(mining.goal, Goal::Mine, "step {step}");
+        assert_eq!(
+            mining.docking,
+            Some(Docking {
+                ship: ShipRef::Player,
+                sub: DockSub::Dock
+            }),
+            "step {step}"
+        );
+        assert_eq!(mining.state.velocity, velocity, "step {step}");
+        // The player stays at the centre: the creep holds it near.
+        let off = mining.state.position;
+        let near = crate::traffic::plunder_dock::DOCKED_BOX + 1.0;
+        assert!(
+            off.x.abs() <= near && off.y.abs() <= near,
+            "step {step}: {off:?}"
+        );
+        step += 1;
+    }
+    assert_eq!(step, 150);
+    traffic.tick_in(
+        &crate::ai::miner::MinerAi,
+        drifting(step),
+        &[],
+        &mut Scripted::default(),
+    );
+    let after = helper(&traffic);
+    assert_eq!(after.goal, Goal::Mine);
+    assert_eq!(after.docking, None, "goal 0x10's high level drops it");
+    assert_eq!(traffic.take_pirate_events(), [], "no repair");
+}
+
 /// Traffic of NPC 1 in slot `berth` repairing NPC 2, disabled at the
 /// centre in slot 2, from (`x`, 0), its first tick flown: closing from
 /// afar, or docked and its wait rolled 0 near.
