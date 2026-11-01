@@ -386,8 +386,9 @@ pub struct Readings {
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
     pub jump_fuel: RuleSource,
     /// Whether a ship whose hold at its gate runs out owes its gate burst
-    /// ([`Npc::end_wait`],
-    /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)).
+    /// ([`Npc::end_wait`]), and whether a docking fighter flies sub 8's
+    /// burst word ([`dock_flight`])
+    /// ([`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)).
     pub held_burst: RuleSource,
     /// How a landing ship lands: in `_HighLevelAIHandler` state 1's box by
     /// the engine ([`land_flight`]), within

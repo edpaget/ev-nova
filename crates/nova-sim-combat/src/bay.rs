@@ -47,10 +47,13 @@
 //! it flies sub 0xb at the carrier, and it stops (sub 1) wherever it is
 //! while it can't see the carrier, inside the window too
 //! (`nova_sim_ai::traffic::return_flight`); inside, it steers at the
-//! carrier, thrusting within its turn rate + [`DOCK_TURN_SLACK`] degrees
-//! of it, and is pulled on each axis by
+//! carrier and is pulled on each axis by
 //! `nova_sim::escort::FORMATION_NUDGE` ticks of its
-//! acceleration (`Accel` × 10.0 @0xdd0b0). Within the carrier's sprite
+//! acceleration (`Accel` × 10.0 @0xdd0b0). Within its turn rate +
+//! [`DOCK_TURN_SLACK`] degrees of the carrier, by the engine's reading of
+//! `held_gate_burst` it bursts along its heading at that pull, its burst
+//! word +0x34 written 0 less the pull, and by the other it thrusts
+//! (`nova_sim_ai::traffic::dock_flight`). Within the carrier's sprite
 //! width on both axes ([`Carrier::reach`]) it docks
 //! (`_AIAddFighterToParent` @0x802a5): a round goes to the carrier's
 //! first bay launching its type, with no cap, an empty bay restarting

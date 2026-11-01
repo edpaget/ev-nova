@@ -9,8 +9,9 @@
 //!
 //! - **The substate** ([`sub`]): measured from the carrier, nav = +0x9a.
 //!   Within its dock window ([`dock_window`](crate::bay::dock_window)) on
-//!   both axes, inclusive (`jb` @0x8ec84, @0x8ecc5), it takes sub 8,
-//!   the [`autopilot`](crate::traffic::autopilot)'s dock, otherwise sub
+//!   both axes, inclusive (`jb` @0x8ec84, @0x8ecc5), it takes sub 8
+//!   ([`dock_flight`](crate::traffic::dock_flight)), past the
+//!   [`autopilot`](crate::traffic::autopilot)'s dock test, otherwise sub
 //!   0xb. Then, not seeing its carrier (`_ShipVisibleToShip(carrier,
 //!   fighter)` @0x8ed00), it takes sub 1 **over both**, so an unseen
 //!   carrier stops a fighter inside its window too, and it never docks
