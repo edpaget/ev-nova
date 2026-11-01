@@ -110,12 +110,14 @@ impl Traffic {
             self.enter_gate_box(index, world);
             // Goal 0xb's block (@0x8de63) comes after goal 0x14's (@0x8dc5a),
             // and sub 0xd (@0x859c5) after sub 4 (@0x8585b): a ship that
-            // detaches there runs no sub 4 that frame.
-            let detached = self.follow_in_dispatch(index, world, false);
-            self.dock_in_dispatch(index, world, chance);
-            if detached {
+            // detaches there runs no sub 4 that frame. A ship a test holds
+            // still runs no low level.
+            let still = self.held_still.contains(&id);
+            let detached = self.follow_in_dispatch(index, world, still);
+            if still || detached {
                 continue;
             }
+            self.dock_in_dispatch(index, world, chance);
             let Some(outcome) = self.leaves(index, world, no_bay) else {
                 continue;
             };
@@ -519,6 +521,56 @@ mod tests {
         let follower = of(&traffic, below).expect("there");
         assert_eq!(follower.warp.goal, follows);
         assert_eq!(follower.warp.stage, 2.0, "it read 3.0: its stage begun");
+    }
+
+    #[test]
+    fn a_held_still_npc_neither_jumps_out_nor_docks_at_its_slot() {
+        // The test device holds the slot's low level too: its leaves, its
+        // docking's writes and its follow's step.
+        use crate::combat::hull::Condition;
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let tick = |traffic: &mut Traffic, still: NpcId| {
+            let still = BTreeSet::from([still]);
+            traffic.tick_holding(&Watch::default(), world(), &[], &still, &mut NeverFires);
+        };
+        let mut traffic = Traffic::with_interval(1);
+        let runner = warping_out(&mut traffic, 3);
+        tick(&mut traffic, runner);
+        let npc = of(&traffic, runner).expect("still there");
+        assert_eq!(npc.warp.stage, 3.0, "no sub 4 step");
+        let mut traffic = Traffic::with_interval(1);
+        let (fighter, _) = docking(&mut traffic, 3, 8);
+        tick(&mut traffic, fighter);
+        assert!(of(&traffic, fighter).is_some(), "not aboard");
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = ship(0, TRADERS, AiType::Warship, 0.0, 0.0);
+        lead.goal = Goal::JumpOut;
+        lead.begin_own_jump();
+        lead.state.velocity = Vec2::new(3.0, 0.0);
+        let leader = traffic.add_npc_at(lead, 5);
+        let follower = following(&mut traffic, leader, 2);
+        tick(&mut traffic, follower);
+        let npc = of(&traffic, follower).expect("there");
+        assert_eq!(npc.state.velocity, Vec2::ZERO, "no sub 0xd copy");
+        let mut traffic = Traffic::with_interval(1);
+        let mut victim = ship(0, TRADERS, AiType::WimpyTrader, 100.0, 0.0);
+        victim.condition = Condition::Disabled;
+        let victim = traffic.add_npc_at(victim, 5);
+        let mut pirate = ship(0, PIRATES, AiType::Warship, 100.0, 10.0);
+        pirate.goal = Goal::Plunder {
+            ship: ShipRef::Npc(victim),
+            hopeless: false,
+        };
+        pirate.target = Some(ShipRef::Npc(victim));
+        pirate.hull.class_turn = 3.0;
+        pirate.docking = Some(Docking {
+            ship: ShipRef::Npc(victim),
+            sub: DockSub::Dock,
+        });
+        let pirate = traffic.add_npc_at(pirate, 2);
+        tick(&mut traffic, pirate);
+        let npc = of(&traffic, pirate).expect("there");
+        assert_eq!(npc.state.position, Vec2::new(100.0, 10.0), "no creep");
     }
 
     #[test]

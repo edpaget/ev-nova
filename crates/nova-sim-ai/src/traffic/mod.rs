@@ -961,6 +961,10 @@ pub struct Traffic {
     /// ([`dispatch_follow`]), and whether it kept formation, so the
     /// autopilot flies it.
     followed: BTreeMap<NpcId, bool>,
+    /// The NPCs a test's tick holds still ([`Traffic::tick_holding`]),
+    /// whose slot's low level its think half holds too
+    /// ([`dispatch_leave`]): none outside that tick.
+    held_still: BTreeSet<NpcId>,
     /// Each ship's warp as the tick's think opened, which a follower below
     /// its leader reads ([`dispatch_leave`]).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
@@ -1106,6 +1110,7 @@ impl Traffic {
             left_in_dispatch: Vec::new(),
             dock_flights: BTreeMap::new(),
             followed: BTreeMap::new(),
+            held_still: BTreeSet::new(),
             open_leaders: BTreeMap::new(),
             open_states: BTreeMap::new(),
             gone: GoneShips::default(),
@@ -1355,8 +1360,10 @@ impl Traffic {
     /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
     /// the NPCs in `still`, which decide, aim and cloak as the others do
     /// and keep their place: none of them moves but by a drift in its
-    /// think ([`plunder::drift`]), lands or jumps out. It
-    /// is its think half ([`Traffic::think_holding`]) then its fly half
+    /// think ([`plunder::drift`]), lands or jumps out, nor runs its slot's
+    /// low level (its leaves, its docking's writes, its follow's step;
+    /// [`dispatch_leave`]). It is its think half
+    /// ([`Traffic::think_holding`]) then its fly half
     /// ([`Traffic::fly_holding`]).
     pub fn tick_holding(
         &mut self,
@@ -1366,7 +1373,9 @@ impl Traffic {
         still: &BTreeSet<NpcId>,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.held_still.clone_from(still);
         self.think_holding(behaviour, world, strikes, chance);
+        self.held_still.clear();
         self.fly_holding(world, still, chance);
     }
 
