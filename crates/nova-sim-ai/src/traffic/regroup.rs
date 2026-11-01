@@ -8,9 +8,10 @@
 //! `Rand(trunc(100.0 / _gSpeedMult))` (doubles 0xdd0e0 = 100.0, 0xdd118 =
 //! 0.0): [`RELEASE_DRAW`], as the engine's speed factor is always 1. At 0
 //! its goal becomes 0 ([`Goal::Idle`]), its substate kept, and the dispatch
-//! goes on: it thinks in the same tick. The think half runs the draws
-//! after the leaders' orders and before the disabled reset, as the
-//! dispatch does (@0x8fdb3, @0x8fe73, @0x8fece).
+//! goes on: it thinks in the same tick. Each ship draws at the head of its
+//! own slot's run, after the leaders' orders and before the disabled
+//! reset, as the dispatch does (@0x8fdb3, @0x8fe73, @0x8fece; see
+//! [`dispatch_head`](super::dispatch_head)).
 //!
 //! **What it skips.** Held, a ship skips the disabled reset, the type
 //! think and `_HighLevelAIHandler` (@0x9002d → @0x900c6 → @0x901ea): in
@@ -40,14 +41,19 @@ use crate::chance::Chance;
 pub const RELEASE_DRAW: u32 = 100;
 
 impl Traffic {
-    /// Each NPC in the regroup pause that passes the dispatch's gates draws
-    /// its release, rolling on `chance`: released, it idles (see the module
-    /// docs); held, its fight's frame is worked out afresh.
-    pub(crate) fn release_regroups(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        for npc in self
-            .npcs
-            .iter_mut()
-            .filter(|npc| paused(npc) && dispatch_gate::reaches_think(npc))
+    /// Each NPC `picked` picks (one flag an NPC) in the regroup pause that
+    /// passes the dispatch's gates draws its release, rolling on `chance`:
+    /// released, it idles (see the module docs); held, its fight's frame is
+    /// worked out afresh.
+    pub(crate) fn release_regroups(
+        &mut self,
+        picked: &[bool],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        for (npc, _) in
+            self.npcs.iter_mut().zip(picked).filter(|(npc, picked)| {
+                **picked && paused(npc) && dispatch_gate::reaches_think(npc)
+            })
         {
             if chance.below(RELEASE_DRAW) == 0 {
                 npc.goal = Goal::Idle;
@@ -217,7 +223,7 @@ mod tests {
         ship.pursuit.frame = Some(frame);
         let id = traffic.add_npc(ship);
         let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, draw);
-        traffic.release_regroups(&mut chance);
+        traffic.release_regroups(&[true], &mut chance);
         assert_eq!(chance.times_asked(RELEASE_DRAW), 1);
         of(&traffic, id).pursuit.frame
     }

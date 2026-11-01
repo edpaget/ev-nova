@@ -232,7 +232,16 @@ fn an_npcs_fighter_ends_its_glide_at_its_first_think_and_attacks_once_its_carrie
     }
     let fighter = session.space.npc(id).expect("there");
     assert_eq!(fighter.order_word, crate::fleet::OrderWord(2));
-    assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player), "the same tick");
+    // The carrier issues at its own dispatch (@0x8fdb3-0x8fde9), after the
+    // fighter's in a lower slot, so the fighter attacks on the next tick.
+    assert!(
+        matches!(fighter.goal, Goal::Follow { .. }),
+        "{:?}",
+        fighter.goal
+    );
+    fight(&mut session, &catalog, &raiding_ai());
+    let fighter = session.space.npc(id).expect("there");
+    assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player), "the next tick");
 }
 
 #[test]

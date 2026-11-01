@@ -12,10 +12,11 @@
 //! @0x900d5-0x901a3), each to goal 0, sub 0, target and travel stellar -1
 //! and +0x50 -1.0: a follower of the player's jump while the player is
 //! disabled, and a follower of an NPC's whose lead, there and not
-//! disabled, attacks while the follower's stage is 1.0 or below. The
-//! think half runs them after the disabled reset. The swarm check comes
-//! after the jump path too, so a ship on a jump runs none. No sound, no
-//! draw.
+//! disabled, attacks while the follower's stage is 1.0 or below. Each ship
+//! runs them at the head of its own slot's run, after its warp cancel
+//! ([`dispatch_head`](crate::traffic::dispatch_head)), and one they cancel
+//! still makes no type's think that tick. The swarm check comes after the
+//! jump path too, so a ship on a jump runs none. No sound, no draw.
 //!
 //! **Goal 0xb** is a ship following its leader's jump
 //! ([`Npc::follows_leaders_jump`]): sub 0xd's warp goal
@@ -207,24 +208,26 @@ pub fn leaves_by_substate(npc: &Npc) -> bool {
 
 impl Traffic {
     /// `_AIDispatch`'s cancels on the jump path (@0x900d5-0x901a3), in
-    /// `world`: each ship there in goal 0xb is put back to goal 0 when its
-    /// leader can no longer take it along ([`cancelled`]). It loses its
-    /// goal, substate, target, travel stellar (@0x90118, @0x90196) and
-    /// jump, and gives up its stage (+0x50 = -1.0).
+    /// `world`, for the ships `picked` picks (one flag an NPC): each ship
+    /// there in goal 0xb is put back to goal 0 when its leader can no
+    /// longer take it along ([`cancelled`]). It loses its goal, substate,
+    /// target, travel stellar (@0x90118, @0x90196) and jump, and gives up
+    /// its stage (+0x50 = -1.0).
     ///
     /// The original cancels inside each ship's dispatch, reading its lead's
-    /// goal as the frame's lower slots left it; here the cancels read the
-    /// ships as the think half found them, so a lead that turns to attack
-    /// this tick cancels its escorts on the next. And a ship cancelled
-    /// here makes its type's think in the same tick, where the original's
-    /// jump path had already skipped it (filed in
-    /// rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
-    pub(crate) fn cancel_jump_follows(&mut self, world: &World) {
+    /// goal as the frame's lower slots left it, and so does the engine, at
+    /// the head of each slot's run
+    /// ([`dispatch_head`](crate::traffic::dispatch_head)): a lead that
+    /// turns to attack cancels a follower above it that tick, and one
+    /// below on the next. A ship cancelled makes no type's think that
+    /// tick, as the jump path has skipped it.
+    pub(crate) fn cancel_jump_follows(&mut self, world: &World, picked: &[bool]) {
         let player = world.player.map(|player| player.condition);
         let cancels: Vec<bool> = self
             .npcs
             .iter()
-            .map(|npc| cancelled(npc, &self.npcs, player))
+            .zip(picked)
+            .map(|(npc, &picked)| picked && cancelled(npc, &self.npcs, player))
             .collect();
         for (npc, cancels) in self.npcs.iter_mut().zip(cancels) {
             if cancels {
@@ -289,13 +292,15 @@ pub fn turn_back(npc: &mut Npc, reading: RuleSource, carrier_slot: Option<u32>) 
 }
 
 /// Whether each of `npcs`, whose think is `due`, makes its type's think:
-/// none on the jump path, sub 4 or 0xd (see the module docs). Its high
-/// level, its board wait's lapse, its plunder drift and its fresh trigger
-/// still read `due`, as `_AIDispatch` runs the high level on the jump path.
-pub(super) fn deciding(npcs: &[Npc], due: &[bool]) -> Vec<bool> {
-    npcs.iter()
-        .zip(due)
-        .map(|(npc, &due)| due && npc.warp.goal.is_none())
+/// none that took the jump path, sub 4 or 0xd, at its dispatch's head
+/// (`jump_path`, one flag an NPC), its cancels having put it back to goal
+/// 0 or not (see the module docs). Its high level, its board wait's
+/// lapse, its plunder drift and its fresh trigger still read `due`, as
+/// `_AIDispatch` runs the high level on the jump path.
+pub(super) fn deciding(due: &[bool], jump_path: &[bool]) -> Vec<bool> {
+    due.iter()
+        .zip(jump_path)
+        .map(|(&due, &jump_path)| due && !jump_path)
         .collect()
 }
 
@@ -983,7 +988,8 @@ mod tests {
                 player: Some(player),
                 ..jumping_world(0.0)
             };
-            traffic.cancel_jump_follows(&world);
+            let picked = vec![true; traffic.npcs().len()];
+            traffic.cancel_jump_follows(&world, &picked);
             let escort = of(&traffic, NpcId(1));
             assert_eq!(escort.goal, Goal::Idle, "{leader:?}");
             assert!(!escort.travel_set(), "{leader:?}");

@@ -4,18 +4,14 @@
 //! by that ship's class
 //! ([`Npc::order_word`](super::npc::Npc::order_word)), whatever the led
 //! ship's condition or mode, as `_AIIssueEscortOrders` tests neither
-//! (@0x89b10-0x89b84). The think half of a tick runs it before the
-//! decisions ([`Traffic::think_holding`]).
+//! (@0x89b10-0x89b84). Each leader issues at the head of its own slot's
+//! run, before its decision ([`dispatch_head`](super::dispatch_head)).
 //!
 //! **Ordering.** The original issues at each leader's own `_AIDispatch`,
 //! in slot order, so a ship in a lower slot than its leader thinks on the
-//! old word that frame and flies the new one the next. Here every leader
-//! issues before any decision of the tick: such an escort flies the new
-//! order a tick earlier than in the original, and a fleeing leader's leg
-//! is read from its state now, not from its last high level. Both are
-//! one-tick differences across a drawn frame, as
-//! [`fleet_escort`](crate::ai::fleet_escort)'s docs note for the lead's
-//! goal (filed in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
+//! old word that frame and flies the new one the next, and so does the
+//! engine. A fleeing leader's leg is read from its state as its slot
+//! comes, as the original reads its last high level's substate.
 
 use super::{Traffic, World};
 use crate::ai::Surroundings;
@@ -23,15 +19,15 @@ use crate::ai::candidates::has_escorts;
 use crate::ai::escort_orders::{for_class, issues, issues_on, orders};
 
 impl Traffic {
-    /// Each leader due on `world`'s frame issues its escorts' orders (see
-    /// the module docs). A leader reads the ships gone since the last
-    /// think closed by their records, leaving them for the tick's thinks
-    /// to read.
+    /// Each leader `picked` picks (one flag an NPC) that is due on
+    /// `world`'s frame issues its escorts' orders (see the module docs). A
+    /// leader reads the ships gone since the last think closed by their
+    /// records, leaving them for the tick's thinks to read.
     ///
     /// Every due leader's table is worked out, then written: the leaders
     /// read the NPCs while the writes need them mutably. No table reads an
     /// order word, so the order of the two makes no difference.
-    pub(crate) fn issue_escort_orders(&mut self, world: &World) {
+    pub(crate) fn issue_escort_orders(&mut self, world: &World, picked: &[bool]) {
         let around = Surroundings {
             gone: self.gone.ships(),
             ..world.around(&self.npcs)
@@ -39,6 +35,9 @@ impl Traffic {
         let tables: Vec<_> = self
             .npcs
             .iter()
+            .zip(picked)
+            .filter(|&(_, &picked)| picked)
+            .map(|(leader, _)| leader)
             .filter(|leader| {
                 issues_on(world.frame, leader.berth)
                     && issues(leader)
@@ -110,12 +109,21 @@ mod tests {
         traffic.npcs().iter().map(|npc| npc.order_word.0).collect()
     }
 
-    /// `traffic` issuing on `frame`.
+    /// `traffic` issuing on `frame`, every NPC picked.
     fn issue(traffic: &mut Traffic, frame: i16) {
-        traffic.issue_escort_orders(&World {
+        let picked = vec![true; traffic.npcs().len()];
+        let world = World {
             frame,
             ..World::new(&[])
-        });
+        };
+        traffic.issue_escort_orders(&world, &picked);
+    }
+
+    #[test]
+    fn a_leader_not_picked_issues_nothing() {
+        let mut traffic = traffic([leader(), led(EscortClass::Fighter)]);
+        traffic.issue_escort_orders(&World::new(&[]), &[false, true]);
+        assert_eq!(words(&traffic), [-1, -1]);
     }
 
     #[test]

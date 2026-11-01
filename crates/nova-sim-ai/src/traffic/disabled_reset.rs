@@ -46,10 +46,10 @@
 //! frame the ship is disabled: the leader is gone for good.
 //!
 //! **Ordering.** The original runs each step per ship in slot order, the
-//! cancel and the reset inside each dispatch; the engine runs each over
-//! all ships after the regroup pause's draws, so a lower slot's think
-//! reads a higher slot's reset a tick early (filed in
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6). The reset drops a disabled follower's leader after the formation
+//! cancel and the reset inside each dispatch, and so does the engine, at
+//! the head of each slot's run ([`dispatch_head`](super::dispatch_head)):
+//! a lower slot's think reads a higher slot's ship as the tick began, and
+//! a higher slot's reads it reset. The reset drops a disabled follower's leader after the formation
 //! pass has numbered it ([`fleet_formation`](super::fleet_formation)), so
 //! for that one tick its fleet's slots still count it, as the original's
 //! do (it numbers disabled followers too, and the parent's slot
@@ -66,12 +66,20 @@ use crate::ai::{Goal, dispatch_gate};
 use crate::rulebook::RuleSource;
 
 impl Traffic {
-    /// Each disabled NPC's warp cancelled and its AI reset, by `reading` of
+    /// Each disabled NPC's warp cancelled, of those `picked` picks (one
+    /// flag an NPC; see the module docs).
+    pub(crate) fn cancel_warps(&mut self, picked: &[bool]) {
+        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(_, p)| **p) {
+            cancel_warp(npc);
+        }
+    }
+
+    /// Each disabled NPC's AI reset, of those `picked` picks (one flag an
+    /// NPC), by `reading` of
     /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
     /// docs).
-    pub(crate) fn reset_disabled(&mut self, reading: RuleSource) {
-        for npc in &mut self.npcs {
-            cancel_warp(npc);
+    pub(crate) fn reset_disabled(&mut self, reading: RuleSource, picked: &[bool]) {
+        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(_, p)| **p) {
             if resets(npc) {
                 reset(npc, reading);
             }

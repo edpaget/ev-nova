@@ -426,8 +426,8 @@ impl Session {
     /// from the next; otherwise the session's work before the AI and the
     /// traffic's think up to the first slot's
     /// ([`Traffic::open_think`]: the arrivals, as `_EnterMoreShips` comes
-    /// before the loop, @0x44237, and the passes of `_AIDispatch` it runs
-    /// for every ship), and the fleets it brings said
+    /// before the loop, @0x44237, and the succession and formations, whose
+    /// marking pass runs before every dispatch), and the fleets it brings said
     /// (`Space::announce_fleets`). Each slot's think comes in
     /// [`Session::dispatch_npcs`]. What its motion is read against, when
     /// it opened.

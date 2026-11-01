@@ -94,13 +94,14 @@ impl Session {
     ///   They speak on the voice channel and raise no line, so no slot's
     ///   call reads them.
     /// - What the fly half settles (a dock, a jump-out, the boarded flag, a
-    ///   gate entrant's followers), and the passes [`Traffic::open_think`]
-    ///   runs before the first slot.
+    ///   gate entrant's followers), a lag across a drawn frame for a
+    ///   higher slot, filed in
+    ///   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6.
     ///
-    /// Each of those is a lag across a drawn frame for a higher slot, all
-    /// filed in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6.
-    ///
-    /// [`Traffic::open_think`]: crate::traffic::Traffic::open_think
+    /// The head of each ship's dispatch (its warp cancel, its jump's
+    /// cancels, a leader's orders, the regroup draws and the disabled
+    /// reset) runs at its own slot, inside its run
+    /// (`nova_sim::traffic::dispatch_head`).
     pub(super) fn dispatch_npcs(
         &mut self,
         thought: bool,

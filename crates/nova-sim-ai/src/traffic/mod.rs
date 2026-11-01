@@ -66,13 +66,16 @@
 //!    ([`Traffic::answer`]), so this step answers only those left;
 //! 3. by the engine's reading of [`World::npc_escort_ai`], each ship whose
 //!    NPC lead is lost takes a new lead, leads, or is left alone
-//!    ([`succession`]); each ship led by an NPC takes its slot in that
-//!    NPC's formation ([`fleet_formation`]); each fleet's leader due on the
-//!    frame issues its orders ([`escort_orders`]); each ship in the regroup
-//!    pause draws its release ([`regroup`]); and each disabled ship's warp
-//!    is cancelled and, past the dispatch's gates and not paused, its AI
-//!    reset, its provocation with it ([`disabled_reset`]);
-//! 4. the decisions due on the AI timer, never for an escape pod
+//!    ([`succession`]); and each ship led by an NPC takes its slot in that
+//!    NPC's formation ([`fleet_formation`]);
+//! 4. at the head of each ship's dispatch ([`dispatch_head`]): a disabled
+//!    ship's warp cancelled; a ship on its leader's jump cancelled when
+//!    its leader can no longer take it ([`jump_with_leader`]); a fleet's
+//!    leader due on the frame issuing its orders ([`escort_orders`]); a
+//!    ship in the regroup pause drawing its release ([`regroup`]); and,
+//!    past the dispatch's gates and not paused, a disabled ship's AI
+//!    reset, its provocation with it ([`disabled_reset`]); then the
+//!    decisions due on the AI timer, never for an escape pod
 //!    ([`pod_flight`]), nor for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
 //!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
@@ -112,7 +115,8 @@
 //!    ([`pod_flight::count_down`], `Outcome::Freed`). Steps 1 to 5 are the
 //!    tick's think half, `_DoPlayGameWork`'s advance-pass AI
 //!    (`_EnterMoreShips` @0x44237, `_AIDispatch` @0x4429d): steps 1 to 3
-//!    once ([`Traffic::open_think`]), and steps 4 and 5 one run a slot, in
+//!    once ([`Traffic::open_think`]), and steps 4 and 5 one run a slot, its
+//!    ships' dispatch heads first, in
 //!    ascending order ([`Traffic::think_run`]), so each slot reads what
 //!    the slots below it wrote this tick, the run's own fight between
 //!    them in the session (`nova_sim::Session::dispatch_npcs`) and none in
@@ -190,6 +194,7 @@ mod comm_call_tests;
 mod count_wait_turn_tests;
 pub mod destination;
 pub mod disabled_reset;
+pub mod dispatch_head;
 #[cfg(test)]
 mod display_tests;
 pub mod docked;
@@ -1350,11 +1355,10 @@ impl Traffic {
     /// The part of a tick's think in `world` before the first slot's
     /// (steps 1 to 3 of the module docs): the arrivals pass
     /// (`_EnterMoreShips` @0x44237), the answers to the `strikes` left, the
-    /// lost leads' succession ([`succession`]), the NPC formations
-    /// ([`fleet_formation`]), the fleet leaders' orders
-    /// ([`escort_orders`]), the regroup pause's draws ([`regroup`]), the
-    /// disabled ships' reset ([`disabled_reset`]) and the jump cancels
-    /// ([`jump_with_leader`]), rolling on `chance`.
+    /// lost leads' succession ([`succession`]) and the NPC formations
+    /// ([`fleet_formation`]), whose marking pass runs before every
+    /// dispatch (@0x4405e-0x441f7), rolling on `chance`. The rest of each
+    /// ship's dispatch head runs at its own slot ([`dispatch_head`]).
     pub fn open_think(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1367,15 +1371,14 @@ impl Traffic {
         self.react(behaviour, &world, strikes);
         let dropped = self.succeed_leaders(&world);
         self.form_fleets(&world, &dropped);
-        self.issue_escort_orders(&world);
-        self.release_regroups(chance);
-        self.reset_disabled(world.npc_escort_ai);
-        self.cancel_jump_follows(&world);
     }
 
     /// One run of `_AIDispatch`'s loop (@0x4429d) in `world`, the think of
     /// each NPC `picks` picks, deciding as `behaviour` says, rolling on
-    /// `chance` (steps 4 and 5 of the module docs): the decisions, the
+    /// `chance` (steps 4 and 5 of the module docs): the head of each
+    /// picked ship's dispatch ([`dispatch_head`]: its warp cancel, its jump
+    /// path's cancels, a leader's orders, the regroup draws and the
+    /// disabled reset), the decisions, the
     /// board waits, the comm calls and the quote gate, the plunders, the
     /// goals, pursuit, the fire commands and targets, the gate waits, each
     /// flying NPC's cloak think (`_AIHandleCloaking` @0x8fcaa) and each
@@ -1399,6 +1402,8 @@ impl Traffic {
     ) {
         let mut room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let picked: Vec<bool> = self.npcs.iter().map(&picks).collect();
+        // The head of each picked ship's dispatch ([`dispatch_head`]).
+        let jump_path = self.dispatch_heads(&world, &picked, chance);
         let due = self.thinks_due(&picked);
         // The decisions can read a gone ship's slot, and every run of the
         // tick does ([`gone`], [`Traffic::close_think`]).
@@ -1407,7 +1412,7 @@ impl Traffic {
             ..world.around(&self.npcs)
         };
         // The jump path skips the type think (`jump_with_leader`).
-        let decides = jump_with_leader::deciding(&self.npcs, &due);
+        let decides = jump_with_leader::deciding(&due, &jump_path);
         let mut decisions: Vec<Option<Decision>> = self
             .npcs
             .iter()
@@ -1447,17 +1452,7 @@ impl Traffic {
         jump_with_leader::enter(&mut self.npcs, &entering, world.flight);
         board_wait::lapse(&mut self.npcs, &due);
         self.plunder(plunders, &world, chance);
-        // `_AIDispatch`'s swarm check (@0x8ff26-0x8ff35) comes before the
-        // type AI, reading the targets the frame's lower slots have just
-        // written. Each slot's run comes after theirs, so this reads them
-        // too; a ship's own target is the one the commands below wrote on
-        // the last tick, as the swarm check reads it before its own think.
-        swarm::pass(&mut self.npcs, |npc| {
-            picks(npc)
-                && !regroup::paused(npc)
-                && npc.warp.goal.is_none()
-                && decision_due(self.ticks, npc.id, self.interval)
-        });
+        self.swarm_checks(&picks, &jump_path);
         let high_levels: Vec<bool> = self
             .high_levels_due(&due)
             .into_iter()
