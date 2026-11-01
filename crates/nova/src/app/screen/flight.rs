@@ -224,8 +224,9 @@ impl AppScreen {
     /// rescue (`_LoadDescription` @0x68e90, before the missions ended), so
     /// it is not loaded again here. One that could not be read is a
     /// warning, saying why as the catalog reads it. The rescue settled
-    /// before it, and flight goes on once it closes: no fade follows,
-    /// unlike the death's.
+    /// before it, and flight gives it once the rescue's screen has faded
+    /// out and shown black; the screen fades out again once it closes
+    /// (the `rescue_fades` module).
     fn show_rescue_desc(&mut self, desc: LoadedDesc) {
         let id = desc.id;
         if let Some(text) = desc.text {

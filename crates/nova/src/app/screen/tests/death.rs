@@ -236,13 +236,70 @@ fn ejected_from(
     screen
 }
 
+/// How long the rescue's fades take before its `dësc` shows: the fade
+/// out, then the black faded in onto (`_HandlePlayer` @0x68de3-0x68e37).
+const RESCUE_DESC_AFTER: Duration = Duration::from_secs(2);
+
+/// How long each of the rescue's other fades takes: its second fade out
+/// (@0x68eef), a text's fade in and its closing fade in (@0x692c9).
+const RESCUE_FADE: Duration = Duration::from_secs(1);
+
+/// Ticks `screen` until the escape pod's rescue: the tick the pod's
+/// countdown runs out.
+fn until_rescued(screen: &mut AppScreen) {
+    tick_until(screen, nova_sim::POD_TICKS + 1, |screen| {
+        fate(screen) == nova_sim::PlayerFate::Flying
+    });
+}
+
+/// Ticks `screen` until the rescue's `dësc` shows over flight, its fades
+/// included.
+fn until_rescue_text(screen: &mut AppScreen) {
+    until_rescued(screen);
+    tick_for(screen, RESCUE_DESC_AFTER);
+    assert_eq!(screen.showing(), Showing::MissionText, "the rescue's text");
+}
+
+/// Ticks `screen` for `time`, a sim tick at a time, the last one short.
+fn tick_for(screen: &mut AppScreen, time: Duration) {
+    let mut left = time;
+    while !left.is_zero() {
+        let dt = left.min(TICK);
+        screen.tick(dt);
+        left -= dt;
+    }
+}
+
+/// Whether `screen` covers the whole view in solid black somewhere.
+#[allow(clippy::float_cmp)] // The screen's height, exactly as drawn.
+fn drawn_black(screen: &AppScreen) -> bool {
+    drawn(screen).iter().any(|command| {
+        matches!(command, DrawCommand::Line { width, color, .. }
+            if *width == 768.0 && *color == nova_view::Color::BLACK)
+    })
+}
+
+/// One millisecond.
+const MS: Duration = Duration::from_millis(1);
+
+/// Whether flight flies on under `screen`: Up held for a few ticks moves
+/// the ship.
+fn flies_on(screen: &mut AppScreen) -> bool {
+    let at = ship(screen).position;
+    screen.input(&key(Key::Up, true));
+    for _ in 0..3 {
+        screen.tick(TICK);
+    }
+    screen.input(&key(Key::Up, false));
+    ship(screen).position != at
+}
+
 #[test]
 fn a_rescue_desc_that_cannot_be_read_is_skipped_with_a_warning() {
     let store = MemoryPilots::new();
     let mut screen = ejected(&store, None);
-    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
-        fate(screen) == nova_sim::PlayerFate::Flying
-    });
+    until_rescued(&mut screen);
+    tick_for(&mut screen, RESCUE_DESC_AFTER);
     assert_eq!(screen.showing(), Showing::Flight);
     assert_eq!(
         screen.take_warnings(),
@@ -251,13 +308,46 @@ fn a_rescue_desc_that_cannot_be_read_is_skipped_with_a_warning() {
 }
 
 #[test]
+fn the_rescues_text_opens_over_black_after_two_seconds_of_fades_the_pointer_shown() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, Some(RESCUE_TEXT));
+    until_rescued(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight, "the fade out");
+    tick_for(&mut screen, RESCUE_DESC_AFTER.saturating_sub(MS));
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_eq!(black_over(&screen), Some(255), "black");
+    tick_for(&mut screen, MS);
+    assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
+    assert!(drawn_black(&screen), "over black");
+    assert!(!screen.hides_pointer(), "_ShowTheCursor (@0x68e3c)");
+}
+
+#[test]
+fn with_no_abort_text_flight_flies_on_after_a_second_of_black_and_a_fade_in() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, Some(RESCUE_TEXT));
+    until_rescue_text(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.showing(), Showing::Flight);
+    tick_for(&mut screen, RESCUE_FADE);
+    assert_eq!(black_over(&screen), Some(255), "the second fade (@0x68eef)");
+    tick_for(&mut screen, RESCUE_FADE / 2);
+    assert_eq!(
+        black_over(&screen),
+        Some(128),
+        "the closing fade (@0x692c9)"
+    );
+    assert!(!screen.hides_pointer());
+    tick_for(&mut screen, RESCUE_FADE / 2);
+    assert_eq!(black_over(&screen), None);
+    assert!(flies_on(&mut screen), "flying on");
+}
+
+#[test]
 fn the_rescue_shows_its_desc_over_flight_and_stops_stepping() {
     let store = MemoryPilots::new();
     let mut screen = ejected(&store, Some(RESCUE_TEXT));
-    let ticks = tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
-        screen.showing() == Showing::MissionText
-    });
-    assert_eq!(ticks, nova_sim::POD_TICKS, "on the countdown's last tick");
+    until_rescue_text(&mut screen);
     assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
     assert_eq!(
         shown_picture(&screen),
@@ -286,7 +376,8 @@ fn the_rescues_desc_plays_its_movie_over_flight() {
     let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
     let mut screen = ejected_from(&store, screen, create);
     assert!(reeled(&reel).is_empty());
-    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+    until_rescued(&mut screen);
+    tick_until(&mut screen, 61, |screen| {
         screen.showing() != Showing::Flight
     });
     assert_eq!(screen.showing(), Showing::Movie, "before its text");
@@ -308,9 +399,7 @@ fn the_rescues_desc_plays_its_movie_over_flight() {
 fn the_rescue_desc_reads_its_conditional_text_through_flight() {
     let store = MemoryPilots::new();
     let mut screen = ejected(&store, Some("Rescued, {G \"sir\" \"ma'am\"}."));
-    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
-        screen.showing() == Showing::MissionText
-    });
+    until_rescue_text(&mut screen);
     assert_eq!(
         shown_text(&screen).as_deref(),
         Some("Rescued, sir."),
@@ -323,6 +412,11 @@ fn the_rescue_desc_reads_its_conditional_text_through_flight() {
 /// starts, its `OnAbort` starting mission 131, briefed "Briefed." (`dësc`
 /// 5000), its after-movie "Brief.mov".
 fn aborting_pod_data() -> Rc<GameData> {
+    aborting_pod_data_briefed(&filmed_desc_of("Briefed.", "Brief.mov", 0x0001))
+}
+
+/// [`aborting_pod_data`], mission 131 briefed by `dësc` 5000 `brief`.
+fn aborting_pod_data_briefed(brief: &[u8]) -> Rc<GameData> {
     let held = |on_abort: &[u8], brief: i16| {
         let mut bytes = venue_mission(0);
         bytes[0x1C..0x20].copy_from_slice(&0_i32.to_be_bytes());
@@ -339,12 +433,7 @@ fn aborting_pod_data() -> Rc<GameData> {
         )
         .resource(Mission::TYPE, 130, Some(b"Held"), &held(b"S131", -1))
         .resource(Mission::TYPE, 131, Some(b"Next"), &held(b"", 5000))
-        .resource(
-            Desc::TYPE,
-            5000,
-            None,
-            &filmed_desc_of("Briefed.", "Brief.mov", 0x0001),
-        )
+        .resource(Desc::TYPE, 5000, None, brief)
         .build();
     let character = built.layout.data_entry(Character::TYPE, 128) + 4;
     built.bytes[character + 0x32..character + 0x36].copy_from_slice(b"S130");
@@ -355,15 +444,14 @@ fn aborting_pod_data() -> Rc<GameData> {
 fn a_rescue_shows_its_desc_before_the_brief_an_on_abort_starts_and_leaves_the_brief_last_loaded() {
     let store = MemoryPilots::new();
     let mut screen = ejected_from(&store, with_dialogs(aborting_pod_data()), create);
-    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
-        screen.showing() == Showing::MissionText
-    });
+    until_rescue_text(&mut screen);
     assert_eq!(
         shown_text(&screen).as_deref(),
         Some(RESCUE_TEXT),
         "shown (@0x68eac) before the missions end (@0x68f0d)"
     );
     screen.input(&key(Key::Enter, true));
+    tick_for(&mut screen, 3 * RESCUE_FADE);
     assert_eq!(shown_text(&screen).as_deref(), Some("Briefed."));
     screen.input(&key(Key::Enter, true));
     assert_eq!(screen.showing(), Showing::Flight, "flying on");
@@ -385,10 +473,10 @@ fn a_strict_pilot_rescued_from_the_pod_is_saved_before_the_rescue_is_drawn() {
     let store = MemoryPilots::new();
     let mut screen = ejected_by(&store, Some(RESCUE_TEXT), create_strict);
     let before = store.writes();
-    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
-        screen.showing() == Showing::MissionText
-    });
+    until_rescued(&mut screen);
     assert_eq!(store.writes(), before + 1, "saved on the rescue's tick");
+    tick_for(&mut screen, RESCUE_DESC_AFTER);
+    assert_eq!(store.writes(), before + 1, "once");
     let saved = saved(&store, "Ada");
     assert_eq!(saved.stellar(), Some(nova_sim::StellarId(128)));
     assert_eq!(saved.system(), nova_sim::SystemId(128));
@@ -399,10 +487,81 @@ fn a_pilot_rescued_from_the_pod_without_strict_play_is_not_saved() {
     let store = MemoryPilots::new();
     let mut screen = ejected_by(&store, Some(RESCUE_TEXT), create);
     let before = store.writes();
-    tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
-        screen.showing() == Showing::MissionText
-    });
+    until_rescue_text(&mut screen);
     assert_eq!(store.writes(), before, "no save on the rescue's tick");
+}
+
+#[test]
+fn a_brief_an_on_abort_shows_under_the_rescue_fades_in_from_black_and_flight_flies_on_unfaded() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected_from(&store, with_dialogs(aborting_pod_data()), create);
+    until_rescue_text(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    tick_for(&mut screen, RESCUE_FADE.saturating_sub(MS));
+    assert_eq!(screen.showing(), Showing::Flight, "the second fade");
+    assert_eq!(black_over(&screen), Some(255));
+    tick_for(&mut screen, MS);
+    assert_eq!(shown_text(&screen).as_deref(), Some("Briefed."));
+    assert_eq!(black_over(&screen), Some(255), "built, then faded in");
+    tick_for(&mut screen, RESCUE_FADE / 2);
+    assert_eq!(black_over(&screen), Some(128), "the fade in (@0x5b038)");
+    tick_for(&mut screen, RESCUE_FADE / 2);
+    assert_eq!(black_over(&screen), None);
+    screen.input(&key(Key::Enter, true));
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK);
+    assert_eq!(black_over(&screen), None, "no closing fade (@0x692c9)");
+    assert!(flies_on(&mut screen), "flying on");
+}
+
+#[test]
+fn an_empty_brief_an_on_abort_shows_under_the_rescue_fades_in_with_no_dialog() {
+    let store = MemoryPilots::new();
+    let data = aborting_pod_data_briefed(&desc_of(""));
+    let mut screen = ejected_from(&store, with_dialogs(data), create);
+    until_rescue_text(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    tick_for(&mut screen, RESCUE_FADE);
+    tick_for(&mut screen, RESCUE_FADE / 2);
+    assert_eq!(shown_text(&screen), None, "no dialog (@0x5a7bf-0x5a874)");
+    assert_eq!(black_over(&screen), Some(128), "fading in");
+    tick_for(&mut screen, RESCUE_FADE / 2);
+    assert_eq!(black_over(&screen), None);
+    screen.tick(TICK);
+    assert_eq!(black_over(&screen), None, "no closing fade");
+    assert!(flies_on(&mut screen), "flying on");
+}
+
+#[test]
+fn the_rescues_black_covers_a_brief_before_movie_playing_under_it() {
+    let store = MemoryPilots::new();
+    let data = aborting_pod_data_briefed(&filmed_desc_of("Briefed.", "Brief.mov", 0));
+    let reel = MockMoviePlayer::playing((160, 120), 3);
+    let screen = with_dialogs(data).with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>);
+    let mut screen = ejected_from(&store, screen, create);
+    until_rescue_text(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    // The rescue's after-movie, then the second fade.
+    tick_until(&mut screen, 60, |_| {
+        reeled(&reel).contains(&Call::Start("Brief.mov".into()))
+    });
+    assert_eq!(screen.showing(), Showing::Movie, "the brief's movie");
+    assert_eq!(black_over(&screen), Some(255), "unseen under the black");
+}
+
+#[test]
+fn a_return_pressed_under_the_rescues_fade_out_reaches_its_text() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, Some(RESCUE_TEXT));
+    until_rescued(&mut screen);
+    screen.input(&key(Key::Enter, true));
+    tick_for(&mut screen, RESCUE_DESC_AFTER);
+    assert_eq!(
+        screen.showing(),
+        Showing::Flight,
+        "the text took it and closed"
+    );
+    assert_eq!(black_over(&screen), Some(255), "the second fade");
 }
 
 /// Draws the last outcome of every roll but the traffic's placement:

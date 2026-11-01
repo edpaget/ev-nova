@@ -168,6 +168,7 @@ impl Screen for AppScreen {
         self.advance_fade_in(dt);
         self.after_flight_tick();
         self.settle_script();
+        self.replay_rescue_input();
         self.save_if_due();
         self.settle_live_input();
     }
@@ -266,7 +267,7 @@ impl Screen for AppScreen {
             dialog.draw(&mut dialogs);
         }
         list.extend_translated(&dialogs, offset);
-        self.draw_white_over_texts(list);
+        self.draw_cover_over_texts(list);
         if let Some(fade) = &self.fade_in {
             fade.draw(list, CLASSIC_VIEW);
         }

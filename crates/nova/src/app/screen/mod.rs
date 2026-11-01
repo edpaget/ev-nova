@@ -392,6 +392,7 @@ mod pilot_panel;
 mod planet_comm;
 mod port_dialogs;
 mod quit_question;
+mod rescue_fades;
 mod routing;
 mod screen_impl;
 mod ship_name_dialog;
