@@ -397,6 +397,50 @@ mod tests {
     }
 
     #[test]
+    fn each_ship_touches_by_the_frame_its_own_display_set_draws() {
+        use crate::combat::hull::Condition;
+        // Two sets of 36: set 0's frames a dot in the hole, set 1's solid.
+        let frames: Vec<Vec<String>> = (0..72)
+            .map(|frame| {
+                if frame < 36 {
+                    square(SIDE, |x, y| x == SIDE / 2 && y == SIDE / 2, false)
+                } else {
+                    square(SIDE, |_, _| true, false)
+                }
+            })
+            .collect();
+        let catalog = holding(vec![
+            (MaskSheet::Stellar(3), ringed()),
+            (MaskSheet::Ship(ShipId(128)), sheet_of(&frames)),
+            (NPC_SHIP, sheet_of(&frames)),
+        ]);
+        // A second ring centred on the player, clear of the NPC.
+        let on_the_player = LandingSite {
+            flags2: DEADLY_STELLAR,
+            graphic: 3,
+            frame_size: Some((SIDE, SIDE)),
+            ..planet(141, 0.0, 0.0)
+        };
+        for (player_set, npc_set) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let mut session = among(
+                &catalog,
+                &[on_the_npc(), on_the_player],
+                180,
+                Rulebook::default(),
+            );
+            session.ship.ship_display.drawn.set = player_set;
+            session.space.traffic.npcs_mut()[0].display.drawn.set = npc_set;
+            let npc_lives = lives(&mut session, &catalog);
+            let player_lives = session.ship.condition != Condition::Destroyed;
+            assert_eq!(
+                (player_lives, npc_lives),
+                (player_set == 0, npc_set == 0),
+                "player on set {player_set}, NPC on set {npc_set}"
+            );
+        }
+    }
+
+    #[test]
     fn a_destroyed_deadly_stellar_touches_by_its_dead_types_mask() {
         let dead = LandingSite {
             destroyed: true,
