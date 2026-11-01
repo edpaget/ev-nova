@@ -41,11 +41,12 @@
 //!   earlier slot's shockwave gave it is in the velocity it moves by,
 //!   banks and glows, and then takes its tractor's release and lapse, as
 //!   `_HandleShip` releases after the turn, thrust and fire that read the
-//!   hold. One whose flight ends it (it entered a gate) leaves
-//!   the traffic at once, as its slot is inactive from its own
-//!   `_HandleShip` on: no later slot's step, fire or shockwave sees it,
-//!   it is recorded among the ships gone ([`Traffic::left_the_system`],
-//!   see [`gone`](super::gone)), and a later slot's hold reads its record. One that landed stays in its slot, waiting
+//!   hold. One whose flight ends it (it entered a gate) leaves the
+//!   traffic at once, as its slot is inactive from its own `_HandleShip`
+//!   on: no later slot's step, fire or shockwave sees it, it is recorded
+//!   among the ships gone ([`Traffic::left_the_system`], see
+//!   [`gone`](super::gone)), and a later slot's hold reads its record.
+//!   One that landed stays in its slot, waiting
 //!   at the stellar, as the original's does (+0xb8 is not cleared,
 //!   @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
