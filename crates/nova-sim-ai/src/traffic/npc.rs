@@ -1121,18 +1121,24 @@ impl Npc {
     }
 
     /// Whether it fights `ship` directly: it is active and not disabled
-    /// ([`Npc::active_not_disabled`]), flying, and
-    /// attacking, sniping at or fleeing from it, or stopped holding it as
-    /// its target ([`Npc::fought`]).
+    /// ([`Npc::active_not_disabled`]), flying, and attacking, sniping at or
+    /// fleeing from it: AI state 3 or 4 on +0x70, as
+    /// `_AIFightEnemyThreatToPlayer`'s inline test reads it (`goal - 3 <=
+    /// 1`, @0x82cda-0x82cef). A stopped or idle ship holding it as its
+    /// target ([`Npc::fought`]) does not, nor does a plunder (goal 0xd).
     ///
     /// This is only the direct-target part of the original's threat
     /// tests: `_ExtendedIsThreatToShip` @0x81a27 also counts a ship
     /// attacking one the asker leads ([`Npc::threatens_npc_among`]), and
     /// `_IsThreatToPlayer` one the player leads
-    /// ([`Npc::threatens_player_among`]).
+    /// ([`Npc::threatens_player_among`]), and both spare fewer states.
     #[must_use]
     pub fn threatens(&self, ship: ShipRef) -> bool {
-        self.active_not_disabled() && self.mode == Mode::Flying && self.fought() == Some(ship)
+        let fights = match self.goal {
+            Goal::Flee(quarry) => Some(quarry),
+            goal => goal.attacking(),
+        };
+        self.active_not_disabled() && self.mode == Mode::Flying && fights == Some(ship)
     }
 
     /// Whether it threatens the NPC `ship`, as `_ExtendedIsThreatToShip`
@@ -2121,14 +2127,23 @@ mod tests {
         for goal in [
             Goal::Inspect(ShipRef::Player),
             Goal::Idle,
+            Goal::Wait,
             Goal::Attack(other),
             Goal::Assist(crate::ai::Help::Refuel),
+            Goal::Plunder {
+                ship: ShipRef::Player,
+                hopeless: false,
+            },
         ] {
             let npc = Npc {
                 goal,
+                target: Some(ShipRef::Player),
                 ..crate::traffic::fixture::npc(1, ShipStats::default())
             };
-            assert!(!npc.threatens_player(), "{goal:?}");
+            assert!(
+                !npc.threatens_player(),
+                "{goal:?}: states 3 and 4 alone (@0x82cda-0x82cef)"
+            );
         }
         let hunter = Npc {
             goal: Goal::Attack(other),
@@ -2271,7 +2286,11 @@ mod tests {
         };
         let on_player = stopped(Some(ShipRef::Player));
         assert!(on_player.threatens_player_or_led(led));
-        assert!(on_player.threatens_player());
+        assert!(
+            !on_player.threatens_player(),
+            "no hail threat: `_AIFightEnemyThreatToPlayer` takes states 3 and 4 \
+             alone (@0x82cda-0x82cef)"
+        );
         assert!(on_player.threatens_player_extended(&[], true));
         assert!(stopped(Some(ShipRef::Npc(escort))).threatens_player_or_led(led));
         assert!(!stopped(None).threatens_player_or_led(led), "no target");
@@ -2285,7 +2304,10 @@ mod tests {
             ..on_player.clone()
         };
         assert!(idle.threatens_player_or_led(led), "goal 0's kept target");
-        assert!(idle.threatens_player());
+        assert!(
+            !idle.threatens_player(),
+            "no hail threat in state 0 (@0x82cda-0x82cef)"
+        );
         assert_eq!(idle.fought(), Some(ShipRef::Player));
         let dropped = Npc {
             target: None,
