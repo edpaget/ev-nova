@@ -250,8 +250,8 @@ pub fn hunt(
         provokes: word_provokes,
     };
     let keep = |ship: ShipRef| match retreat.breaking_up {
-        BreakingUp::Drops => !dropped(npc, ship, around, rules),
-        BreakingUp::LeavesToHighLevel => !let_go(npc, ship, around, rules),
+        BreakingUp::Drops => !dropped(npc, ship, around),
+        BreakingUp::LeavesToHighLevel => !let_go(npc, ship, around),
     };
     // A fresh pick the think drops at once (@0x8bc4e-0x8bca9, @0x8e3ef)
     // leaves the ship with no target: no other candidate is tried.
@@ -676,8 +676,8 @@ mod tests {
         calm.provoked = 5.0;
         assert_eq!(
             decided(&[calm, trader], 0),
-            Goal::Land(StellarId(128)),
-            "provoked by an ally"
+            Goal::Attack(n(3)),
+            "provoked by an ally (@0x8bb0c-0x8bb44 asks no ally)"
         );
     }
 
@@ -713,33 +713,38 @@ mod tests {
     }
 
     #[test]
-    fn a_warship_drops_an_allied_target_or_one_of_its_fleet() {
+    fn a_warship_keeps_an_allied_target_or_one_of_its_fleet_for_the_attack_block() {
+        // `_WarshipAI`'s drop (@0x8bc4e-0x8bcaf) asks no ally or fleet;
+        // the attack block's drops do (`attack_drop`).
         let mut hunter = police();
         hunter.goal = Goal::Attack(n(3));
         let trader = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 500.0);
-        assert_eq!(
-            decided(&[hunter.clone(), trader], 0),
-            Goal::Land(StellarId(128))
-        );
+        assert_eq!(decided(&[hunter.clone(), trader], 0), Goal::Attack(n(3)));
         let mut escort = ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0);
         escort.leader = Some(NpcId(1));
-        assert_eq!(decided(&[hunter, escort], 0), Goal::Land(StellarId(128)));
+        assert_eq!(decided(&[hunter, escort], 0), Goal::Attack(n(3)));
     }
 
     #[test]
-    fn a_warship_never_attacks_its_own_kind_or_an_ally_for_an_ally_or_as_a_threat() {
-        // A stray shot from police NPC 2 provoked the allied trader NPC 3.
+    fn a_warship_attacks_its_own_kind_or_an_ally_for_an_ally_or_as_a_threat() {
+        // A stray shot from police NPC 2 provoked the allied trader NPC 3:
+        // `_SelectWarshipTarget`'s help and threat steps ask no ally
+        // (@0x8a418-0x8a5ca, @0x8adb6).
         let kin = ship(2, POLICE, AiType::Warship, 0.0, 300.0);
         let mut trader = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 500.0);
         trader.goal = Goal::Flee(n(2));
         let npcs = [police(), kin, trader];
-        assert_eq!(decided(&npcs, 0), Goal::Land(StellarId(128)), "fled");
+        assert_eq!(decided(&npcs, 0), Goal::Attack(n(2)), "fled");
         let mut fought = npcs.clone();
         fought[2].goal = Goal::Attack(n(2));
-        assert_eq!(decided(&fought, 0), Goal::Land(StellarId(128)), "fought");
+        assert_eq!(decided(&fought, 0), Goal::Attack(n(2)), "fought");
         let mut at_it = npcs.clone();
         at_it[2].goal = Goal::Attack(n(1));
-        assert_eq!(decided(&at_it, 0), Goal::Land(StellarId(128)), "threat");
+        assert_eq!(
+            decided(&at_it, 0),
+            Goal::Attack(n(1)),
+            "the help against itself (@0x8a454)"
+        );
     }
 
     /// The police warship (with `police_flags`) fighting a pirate of

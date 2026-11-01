@@ -148,7 +148,6 @@ impl NovaAi {
         };
         let led_ally = rulebook.source_for(RuleKey::LedAllyAttack);
         let target = TargetRules {
-            led_ally,
             friend_carry: rulebook.source_for(RuleKey::FriendShieldCarry),
         };
         let warship: Rc<dyn Behaviour> = Rc::new(Warship {

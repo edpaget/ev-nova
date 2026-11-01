@@ -101,10 +101,13 @@
 //!    ship of a government allied with its own (its own included) attacks
 //!    or flees from (goals 3 and 4, @0x8a494-0x8a4a2: never one
 //!    plundering), when its own friend strength times its government's
-//!    `MaxOdds` is no less than T's (@0x8a5ab). T may be the player, but
-//!    never a ship it spares (below), nor the ship itself; it is any ship
-//!    seen (@0x8a538), so a downed or breaking-up T is taken and then
-//!    dropped at once (below). This is how police come to a trader's
+//!    `MaxOdds` is no less than T's (@0x8a5ab). T may be the player (not
+//!    for a ship the player paid off, below), an ally, a fleet-mate, or
+//!    the ship itself (the loop skips only the ally being the ship,
+//!    @0x8a454, and `_ShipVisibleToShip` @0x971c has no self test); it is
+//!    any ship seen (@0x8a538), so a downed or breaking-up T is taken and
+//!    then dropped at once (below). The first ally whose T passes gives
+//!    it (@0x8a5ca), and no later ally is tried. This is how police come to a trader's
 //!    defence. While G blesses the player, an ally whose T is the player
 //!    or a ship the player leads is passed over, and the search goes on to
 //!    the next ally (@0x8a4e4-0x8a50e, then @0x8a5de). It sets the target
@@ -135,15 +138,20 @@
 //!    there is no dying test), but a stellar's defence ship breaking up
 //!    always, as `_IsDisabled` never holds for it (@0x2d6f,
 //!    [`Npc::active_not_disabled`]; the hunt then drops it as breaking
-//!    up), but never one it spares (below; the
-//!    original has no such test, see the note). The candidate pass
+//!    up). An ally or a fleet-mate is one when it is an enemy too:
+//!    `_IsShipMyEnemy` (@0x8196c) asks two different governments and
+//!    `_GovtEnemies` (@0x4f22), whose enemy listing wins over an alliance
+//!    (no stock pair of governments is both). The candidate pass
 //!    ([`candidates`](crate::ai::candidates)) then takes the nearest, of the heaviest class when
 //!    the ship has escorts (@0x8ac24-0x8ad07). A pick of the player turns
 //!    the ship on it (@0x8ad31).
 //! 8. **Threats** (`_ExtendedIsThreatToShip` asked @0x8adb6), only when
 //!    steps 5 and 7 gave none (@0x8ad3c): the nearest NPC attacking,
 //!    sniping at or fleeing from it or a ship it leads
-//!    ([`Npc::threatens_npc_among`]), other than one it spares. The
+//!    ([`Npc::threatens_npc_among`]), an ally or a fleet-mate as much as
+//!    any other, but never one it leads (`_ExtendedIsThreatToShip`
+//!    @0x81a27 leaves out only an inactive or disabled ship and one the
+//!    asker leads, @0x81a5a). The
 //!    player is never one here: the original asks of it while the ship has
 //!    no target, so `_IsThreatToPlayer` of the ship is false, and the
 //!    blessing `_ExtendedIsThreatToShip` reads there (@0x81a89) cannot
@@ -153,26 +161,24 @@
 //!    this function (`_AIDispatch` @0x8ffc2-0x9000a).
 //!
 //! **A target is dropped** ([`dropped`], @0x8bc73, @0x8e3ef) when it is
-//! gone or breaking up; disabled while the ship has no destroying
-//! weapons; or a ship it spares. The hunt drops a fresh pick so too, in
-//! the same think (see [`warship::hunt`](crate::ai::warship::hunt)).
-//! These are the thinks' own drops, which read [`spares`]; every type's
+//! gone or breaking up, or disabled while the ship has no destroying
+//! weapons. The hunt drops a fresh pick so too, in the same think (see
+//! [`warship::hunt`](crate::ai::warship::hunt)). These are the thinks' own
+//! drops (`_WarshipAI` @0x8bc4e-0x8bcaf, `_InterceptorAI`
+//! @0x8d2fd-0x8d33a, [`let_go`]), which ask no ally or fleet; every type's
 //! goal 4 then meets `_HighLevelAIHandler`'s state-4 block
 //! ([`attack_drop`](crate::ai::attack_drop)), whose ally drop is
 //! [`spares_ally`] and whose fleet drops are the literal walk of
-//! @0x8e2e9-0x8e37c, not [`Npc::fleet_among`]. The thinks' reading of
-//! `spares` reaching the block instead is
-//! rdm:phase/escort-fleet-fidelity-followups/phase-22-spared-ships-reach-the-block.
+//! @0x8e2e9-0x8e37c.
 //!
-//! **A ship it spares** ([`spares`]): an NPC of its own fleet, or an ally
-//! as [`TargetRules::led_ally`] reads
-//! [`RuleKey::LedAllyAttack`]. By
-//! the engine, `_HighLevelAIHandler`'s state-4 drop (@0x8e277-0x8e2e4):
-//! an NPC allied with it when it has a government and neither it nor
-//! that NPC is led by the player, so an allied ship the player leads is
-//! attacked on, and a ship of no government spares no ally. By the other
-//! reading, every NPC allied with it, an independent by an independent
-//! too.
+//! **An ally the blocks spare** ([`spares_ally`]), as the attack and
+//! flee blocks read [`RuleKey::LedAllyAttack`]. By the engine,
+//! `_HighLevelAIHandler`'s state-4 drop (@0x8e277-0x8e2e4): an NPC
+//! allied with it when it has a government and neither it nor that NPC
+//! is led by the player, so an allied ship the player leads is attacked
+//! on, and a ship of no government spares no ally. By the other reading,
+//! every NPC allied with it, an independent by an independent too. No
+//! step here reads it.
 //!
 //! **A ship the player paid off** ([`Npc::spared`], see
 //! [`hail`](crate::hail)) spares the player too: no step gives the
@@ -181,14 +187,13 @@
 //! such a ship a wimpy trader that leaves, which never targets the
 //! player unprovoked; this holds for any behaviour that asks here.
 //!
-//! Steps 6, 7 and 8 never give a ship it spares. The original checks
-//! none of them there, and `_ExtendedIsThreatToShip` @0x81a27 excludes
-//! only a ship the asker leads (@0x81a5a), not an ally, so its police,
-//! seeing an allied trader that a stray police shot provoked, turn on
-//! their own kind until the drop at @0x8e2af clears the goal a frame
-//! later, and then take it up again. Here they never do. The engine's
-//! own-fleet sparing is also wider than the original's fleet drops
-//! (@0x8e2e9-0x8e399), which need the attacker to have a leader.
+//! Steps 6, 7 and 8 give an ally or a fleet-mate as they give any ship:
+//! the original checks none of them there. So police, seeing an allied
+//! trader that a stray police shot provoked, turn on their own kind, and
+//! the attack block's ally drop (@0x8e2af) leaves them on goal 0 holding
+//! the target in the same dispatch; their next think takes it up again
+//! (`_WarshipAI` @0x8b843, `_InterceptorAI` @0x8ccc1), so they stop and
+//! drift on sub 0 while the fight lasts.
 //!
 //! **Left out.** The nag ship
 //! (+0xc8d0 = 0x3ff, @0x8a228) has no engine counterpart. The same-system
@@ -227,9 +232,6 @@ pub const ENEMY_CLASS_SIDES: u32 = 50;
 /// The rulebook's entries target selection follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TargetRules {
-    /// Which allies a ship spares ([`RuleKey::LedAllyAttack`], see
-    /// [`spares`]).
-    pub led_ally: RuleSource,
     /// How a friend of no shield capacity counts in a friend strength
     /// ([`RuleKey::FriendShieldCarry`], see
     /// [`odds`](crate::ai::odds)).
@@ -540,9 +542,7 @@ fn pick_by_steps(
     let destroys = fire::destroys(npc);
     let enemies = others()
         .filter(|other| {
-            (other.active_not_disabled() || destroys)
-                && govts.npc_enemies(npc.govt, other.govt)
-                && !spares(npc, ShipRef::Npc(other.id), around, rules)
+            (other.active_not_disabled() || destroys) && govts.npc_enemies(npc.govt, other.govt)
         })
         .map(|other| ShipRef::Npc(other.id));
     let candidates = within_odds(
@@ -565,33 +565,35 @@ fn pick_by_steps(
     if xenophobe_pick.is_some() || threats == Threats::Skipped {
         return xenophobe_pick;
     }
-    nearest_threat(npc, others(), around, rules).map(kept)
+    nearest_threat(npc, others(), around).map(kept)
 }
 
 /// Step 8, threats (see the module docs): the nearest of `others` among
-/// `around` threatening `npc` or a ship it leads, other than one it spares
-/// by `rules`.
+/// `around` threatening `npc` or a ship it leads, an ally or a fleet-mate
+/// as much as any other, but never one it leads
+/// ([`Npc::threatens_npc_among`], `_ExtendedIsThreatToShip` @0x81a5a).
 fn nearest_threat<'a>(
     npc: &Npc,
     others: impl Iterator<Item = &'a Npc>,
     around: &Surroundings,
-    rules: TargetRules,
 ) -> Option<ShipRef> {
     let threats = others
         .filter(|other| other.threatens_npc_among(npc.id, around.npcs))
         .map(|other| ShipRef::Npc(other.id))
-        .filter(|&ship| !spares(npc, ship, around, rules))
         .collect::<Vec<_>>();
     nearest(npc, &threats, around, false)
 }
 
 /// Step 6, help allies (see the module docs): the quarry of the first
 /// ally fighting whom `npc` is strong enough to take on, among `around`
-/// by `rules`.
+/// by `rules`: an ally, a fleet-mate or `npc` itself as much as any other
+/// (@0x8a454, @0x8a5b0-0x8a5ca).
 fn helped(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRef> {
     let govts = around.govts;
     let me = ShipRef::Npc(npc.id);
     let carry = rules.friend_carry;
+    // The ally loop skips only the ally being the ship (@0x8a454): its
+    // quarry may be the ship itself.
     let own = friend_strength(me, around, carry) * govts.max_odds(npc.govt);
     let blessed = around.blessed(npc.govt);
     around
@@ -617,11 +619,10 @@ fn helped(npc: &Npc, around: &Surroundings, rules: TargetRules) -> Option<ShipRe
             if blessed && leads_or_is_player(foe, around) {
                 return None;
             }
-            (foe != me
-                && seen(npc, foe, around)
-                && !spares(npc, foe, around, rules)
-                && own >= friend_strength(foe, around, carry))
-            .then_some(foe)
+            // A ship the player paid off helps no ally against it.
+            let paid_off = foe == ShipRef::Player && npc.spared;
+            (!paid_off && seen(npc, foe, around) && own >= friend_strength(foe, around, carry))
+                .then_some(foe)
         })
 }
 
@@ -631,22 +632,6 @@ fn leads_or_is_player(ship: ShipRef, around: &Surroundings) -> bool {
     match ship {
         ShipRef::Player => true,
         ShipRef::Npc(id) => around.npc(id).is_some_and(Npc::escorts_player),
-    }
-}
-
-/// Whether `npc` spares `ship` among `around` by `rules`: the player once
-/// it has paid to be spared, or an NPC of its own fleet (the root of its
-/// chain of leads, [`Npc::fleet_among`], so a carrier's fighter and its
-/// carrier's lead's other escorts spare each other) or an ally it spares
-/// (see the module docs).
-#[must_use]
-pub fn spares(npc: &Npc, ship: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
-    match ship {
-        ShipRef::Player => npc.spared,
-        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
-            other.fleet_among(around.npcs) == npc.fleet_among(around.npcs)
-                || spares_ally(npc, other, around, rules.led_ally)
-        }),
     }
 }
 
@@ -669,8 +654,8 @@ pub fn spares_ally(npc: &Npc, other: &Npc, around: &Surroundings, led_ally: Rule
 /// Whether `npc` drops `target` among `around` by `rules` (see the module
 /// docs).
 #[must_use]
-pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
-    around.breaking_up(target) || let_go(npc, target, around, rules)
+pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
+    around.breaking_up(target) || let_go(npc, target, around)
 }
 
 /// [`dropped`] with no `_IsDying` test, as an interceptor's think lets a
@@ -681,14 +666,10 @@ pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetR
 /// level
 /// ([`attack_drop`](crate::ai::attack_drop)).
 #[must_use]
-pub fn let_go(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> bool {
-    if !around.active(target) {
-        return true;
-    }
-    if around.condition_of(target) == Some(Condition::Disabled) && !fire::destroys(npc) {
-        return true;
-    }
-    spares(npc, target, around, rules)
+pub fn let_go(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
+    !around.active(target)
+        || (around.condition_of(target) == Some(Condition::Disabled) && !fire::destroys(npc))
+        || (target == ShipRef::Player && npc.spared)
 }
 
 #[cfg(test)]
@@ -718,7 +699,7 @@ mod tests {
 
     /// [`dropped`] by the engine's rules.
     fn drops(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-        dropped(npc, target, around, TargetRules::default())
+        dropped(npc, target, around)
     }
     use crate::ai::fixture::{blessing_of, cloaked, scanning};
     use crate::ai::{Goal, PlayerSide};
@@ -1310,9 +1291,14 @@ mod tests {
         let mut fleet = xeno.clone();
         fleet[1].leader = Some(NpcId(1));
         assert_eq!(
-            chosen(0, &fleet, None, 0, (0.0, -1000.0)),
-            Some(n(3)),
-            "not its own fleet"
+            chosen_pick(0, &fleet, None, 0, (0.0, -1000.0)),
+            Some(Pick {
+                ship: n(2),
+                turns_on_player: false,
+                attacks: false,
+            }),
+            "not its own fleet in step 5, whose nearest is NPC 3, so no call; \
+             but step 7 asks no fleet (@0x8aa5e-0x8aade)"
         );
     }
 
@@ -1414,19 +1400,15 @@ mod tests {
         gone_foe[1].mode = Mode::Flying;
         gone_foe[1].goal = Goal::Attack(n(9));
         assert_eq!(chosen(0, &gone_foe, None, 0, NEAR), None);
-        let mut at_me = gone_foe;
-        at_me[1].goal = Goal::Attack(n(1));
-        assert_eq!(
-            chosen(0, &at_me, None, 0, NEAR),
-            None,
-            "no help against itself, and an ally is no threat"
-        );
+        assert_eq!(chosen(0, &gone_foe, None, 0, NEAR), None, "a gone foe");
     }
 
     #[test]
-    fn a_ship_never_helps_an_ally_against_its_own_kind_an_ally_or_its_fleet() {
+    fn a_ship_helps_its_first_ally_against_its_own_kind_an_ally_or_its_fleet() {
         // NPC 2, an allied trader, flees from or fights NPC 3; NPC 4, a
-        // later ally, fights the pirate NPC 5.
+        // later ally, fights the pirate NPC 5. The first ally whose quarry
+        // passes sight and strength gives it (@0x8a5b0-0x8a5ca): the
+        // original tests no ally or fleet of the quarry.
         let mut trader = ship(2, ALLY, 1000.0, 0.0);
         trader.goal = Goal::Flee(n(3));
         let foe = ship(3, ME, 2000.0, 0.0);
@@ -1436,39 +1418,74 @@ mod tests {
         let npcs = [me(), trader, foe, later, pirate];
         assert_eq!(
             chosen(0, &npcs, None, 0, NEAR),
-            Some(n(5)),
-            "not its own kind, but the next ally's foe"
+            Some(n(3)),
+            "its own kind, not the next ally's foe"
         );
         let mut fought = npcs.clone();
         fought[1].goal = Goal::Attack(n(3));
-        assert_eq!(chosen(0, &fought, None, 0, NEAR), Some(n(5)), "fought");
+        assert_eq!(chosen(0, &fought, None, 0, NEAR), Some(n(3)), "fought");
         let mut allied = npcs.clone();
         allied[1].govt = Some(ME);
         allied[2].govt = Some(ALLY);
-        assert_eq!(chosen(0, &allied, None, 0, NEAR), Some(n(5)), "an ally");
+        assert_eq!(chosen(0, &allied, None, 0, NEAR), Some(n(3)), "an ally");
         let mut escort = npcs.clone();
         escort[2].govt = Some(NEUTRAL);
         escort[2].leader = Some(NpcId(1));
-        assert_eq!(chosen(0, &escort, None, 0, NEAR), Some(n(5)), "its fleet");
-        let mut alone = npcs.clone();
-        alone[3].goal = Goal::Idle;
-        assert_eq!(chosen(0, &alone, None, 0, NEAR), None, "nothing else");
+        assert_eq!(chosen(0, &escort, None, 0, NEAR), Some(n(3)), "its fleet");
+        let mut lead = npcs.clone();
+        lead[0].leader = Some(NpcId(3));
+        assert_eq!(chosen(0, &lead, None, 0, NEAR), Some(n(3)), "its lead");
     }
 
     #[test]
-    fn an_ally_or_its_fleet_fighting_the_ship_is_no_threat_to_turn_on() {
-        let mut ally = ship(2, ALLY, 10.0, 0.0);
+    fn a_ship_helps_an_ally_against_the_ship_itself() {
+        // The ally loop skips only the ally being the ship (@0x8a454), and
+        // `_ShipVisibleToShip` has no self test (@0x971c).
+        let mut ally = ship(2, ALLY, 1000.0, 0.0);
+        ally.goal = Goal::Attack(n(1));
+        let pirate = ship(3, NEUTRAL, 3000.0, 0.0);
+        let npcs = [me(), ally, pirate];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(1)), "attacked");
+        let mut fled = npcs.clone();
+        fled[1].goal = Goal::Flee(n(1));
+        assert_eq!(chosen(0, &fled, None, 0, NEAR), Some(n(1)), "fled");
+    }
+
+    #[test]
+    fn an_ally_fighting_the_ship_is_a_threat_to_turn_on_but_not_one_it_leads() {
+        // `_ExtendedIsThreatToShip` leaves out only an inactive or disabled
+        // ship and one the asker leads (@0x81a5a). Below even odds the
+        // ship helps no ally against itself (@0x8a5ab), so the threat step
+        // runs.
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                max_odds: 50,
+                ..govt(140)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                ..govt(141)
+            },
+        ]);
+        let mut ally = ship(2, ALLY, 30.0, 0.0);
         ally.goal = Goal::Attack(n(1));
         let mut kin = ship(3, ME, 20.0, 0.0);
         kin.goal = Goal::Flee(n(1));
-        let mut escort = ship(4, NEUTRAL, 30.0, 0.0);
+        let mut escort = ship(4, ALLY, 10.0, 0.0);
         escort.leader = Some(NpcId(1));
         escort.goal = Goal::Snipe(n(1));
-        let mut stranger = ship(5, NEUTRAL, 900.0, 0.0);
-        stranger.goal = Goal::Attack(n(1));
-        let npcs = [me(), ally, kin, escort, stranger];
-        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(5)));
-        assert_eq!(chosen(0, &npcs[..4], None, 0, NEAR), None);
+        let npcs = [me(), ally, kin, escort];
+        let around = Surroundings {
+            player: Some(player(0.0, -5000.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            select(&npcs[0], None, &around),
+            Some(n(3)),
+            "the nearest it doesn't lead"
+        );
     }
 
     #[test]
@@ -1914,7 +1931,11 @@ mod tests {
     }
 
     #[test]
-    fn a_target_is_dropped_once_gone_downed_harmlessly_allied_or_of_the_fleet() {
+    fn a_target_is_dropped_once_gone_or_downed_harmlessly_but_never_for_being_allied_or_of_the_fleet()
+     {
+        // `_WarshipAI`'s drop (@0x8bc4e-0x8bcaf) and `_InterceptorAI`'s
+        // (@0x8d2fd-0x8d33a) ask no ally or fleet test: the attack block's
+        // drops do (`attack_drop`).
         fn around<'a>(npcs: &'a [Npc], govts: &'a Governments) -> Surroundings<'a> {
             Surroundings {
                 player: Some(player(0.0, -100.0)),
@@ -1935,23 +1956,40 @@ mod tests {
         let mut escort = ship(6, NEUTRAL, 100.0, 0.0);
         escort.leader = Some(NpcId(1));
         let enemy = ship(7, ENEMY, 100.0, 0.0);
-        let mut npcs = vec![me(), wreck, dying, ally, kin, escort, enemy];
-        for (target, drop) in [
-            (n(2), true),
-            (n(3), true),
-            (n(4), true),
-            (n(5), true),
-            (n(6), true),
-            (n(7), false),
-            (n(9), true),
-            (P, false),
+        let lead = ship(8, NEUTRAL, 100.0, 0.0);
+        let mut fighter = ship(10, RIVAL, 100.0, 0.0);
+        fighter.leader = Some(NpcId(6));
+        let mut follower = me();
+        follower.leader = Some(NpcId(8));
+        let mut npcs = vec![
+            follower, wreck, dying, ally, kin, escort, enemy, lead, fighter,
+        ];
+        for (target, drop, lets_go) in [
+            (n(2), true, true),
+            (n(3), true, false),
+            (n(4), false, false),
+            (n(5), false, false),
+            (n(6), false, false),
+            (n(7), false, false),
+            (n(8), false, false),
+            (n(10), false, false),
+            (n(9), true, true),
+            (P, false, false),
         ] {
+            let around = around(&npcs, &govts);
+            assert_eq!(drops(&npcs[0], target, &around), drop, "{target:?}");
             assert_eq!(
-                drops(&npcs[0], target, &around(&npcs, &govts)),
-                drop,
-                "{target:?}"
+                let_go(&npcs[0], target, &around),
+                lets_go,
+                "{target:?}, no dying test"
             );
         }
+        let mut spared = npcs.clone();
+        spared[0].spared = true;
+        assert!(
+            drops(&spared[0], P, &around(&spared, &govts)),
+            "a paid-off ship drops the player still"
+        );
         npcs[0].armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
                 mass_dmg: 1,
@@ -2617,14 +2655,25 @@ mod tests {
         let mut escort = ship(3, ENEMY, 60.0, 0.0);
         escort.leader = Some(NpcId(1));
         let ally = ship(4, ME, 70.0, 0.0);
-        let others = [disabled, escort, ally];
+        let others = [disabled.clone(), escort, ally.clone()];
         assert_eq!(
-            xenophobe_among(&others, far, |p| p, none).map(|pick| pick.ship),
+            xenophobe_among(&others, far, |p| p, none),
+            Some(Pick {
+                ship: n(3),
+                turns_on_player: true,
+                attacks: true,
+            }),
+            "step 5 takes none of them, so the player far off and its call; step 7, \
+             which asks no fleet (@0x8aa5e-0x8aade), its escort"
+        );
+        let unled = [disabled, ally];
+        assert_eq!(
+            xenophobe_among(&unled, far, |p| p, none).map(|pick| pick.ship),
             Some(P),
             "none of them, so the player far off"
         );
         let enemy = ship(5, ENEMY, 900.0, 0.0);
-        let mut more = others.to_vec();
+        let mut more = unled.to_vec();
         more.push(enemy);
         assert_eq!(
             xenophobe_among(&more, far, |p| p, none).map(|pick| pick.ship),
@@ -2993,44 +3042,39 @@ mod tests {
     }
 
     #[test]
-    fn the_hunt_never_takes_a_ship_it_spares() {
-        // An enemy government's ship the ship leads.
+    fn the_hunt_takes_an_enemy_of_its_fleet() {
+        // An enemy government's ship the ship leads: `_IsShipMyEnemy`
+        // (@0x8196c) asks no fleet (@0x8aa5e-0x8aade).
         let mut escort = ship(2, ENEMY, 100.0, 0.0);
         escort.leader = Some(NpcId(1));
         let npcs = [me(), escort, ship(3, RIVAL, 900.0, 0.0)];
-        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(3)));
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(2)));
     }
 
     #[test]
-    fn a_carriers_fighter_spares_its_fleet_leads_other_escorts_and_they_it() {
-        // Ship 1 leads carrier 2 and escort 3; carrier 2 leads fighter 4.
-        // The fighter's government (145) is allied with none of the others'
-        // (140, 142), so only the fleet spares. The fleet is the root of
-        // the leads (`_ShipsShareParent`).
-        let mut carrier = ship(2, ENEMY, 100.0, 0.0);
-        carrier.leader = Some(NpcId(1));
-        let mut escort = ship(3, ENEMY, 200.0, 0.0);
-        escort.leader = Some(NpcId(1));
-        let mut fighter = ship(4, RIVAL, 300.0, 0.0);
-        fighter.leader = Some(NpcId(2));
-        let npcs = [me(), carrier, escort, fighter, ship(5, ENEMY, 400.0, 0.0)];
-        let govts = govts(0);
+    fn the_hunt_takes_an_allied_ship_its_government_also_lists_as_an_enemy() {
+        // `_GovtEnemies` (@0x4f22) wins over an alliance, and the hunt asks
+        // no ally (@0x8aa5e-0x8aade). No stock pair of governments is both.
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..govt(140)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                enemies: [1, -1, -1, -1],
+                classes: [2, -1, -1, -1],
+                ..govt(141)
+            },
+        ]);
+        let npcs = [me(), ship(2, ALLY, 100.0, 0.0)];
         let around = Surroundings {
-            player: Some(player(0.0, -100.0)),
+            player: Some(player(0.0, -5000.0)),
             govts: &govts,
             ..Surroundings::new(&[], &npcs)
         };
-        let rules = TargetRules::default();
-        assert!(
-            spares(&npcs[3], n(3), &around, rules),
-            "the fighter, escort 3"
-        );
-        assert!(
-            spares(&npcs[2], n(4), &around, rules),
-            "escort 3, the fighter"
-        );
-        assert!(spares(&npcs[3], n(1), &around, rules), "its fleet's lead");
-        assert!(!spares(&npcs[3], n(5), &around, rules), "a stranger");
+        assert!(govts.allies(Some(ME), Some(ALLY)), "allied");
+        assert_eq!(select(&npcs[0], None, &around), Some(n(2)));
     }
 
     #[test]
@@ -3049,9 +3093,11 @@ mod tests {
         assert_eq!(chosen(0, &downed, None, 0, NEAR), Some(n(3)));
     }
 
-    // Allies the player leads (`led_ally_attack`).
+    // Allies the player leads (`led_ally_attack`), as the attack and flee
+    // blocks spare them.
 
-    /// Whether ship 1 of govt 140 drops `target` (NPC 2) by `led_ally`.
+    /// Whether ship 1 of govt 140 spares `target` (NPC 2) as an ally by
+    /// `led_ally`.
     fn drops_ally(npc: &Npc, target: &Npc, led_ally: RuleSource) -> bool {
         let govts = govts(0);
         let npcs = [npc.clone(), target.clone()];
@@ -3060,11 +3106,7 @@ mod tests {
             govts: &govts,
             ..Surroundings::new(&[], &npcs)
         };
-        let rules = TargetRules {
-            led_ally,
-            ..TargetRules::default()
-        };
-        dropped(&npcs[0], n(2), &around, rules)
+        spares_ally(&npcs[0], &npcs[1], &around, led_ally)
     }
 
     fn player_led(mut npc: Npc) -> Npc {
@@ -3102,36 +3144,6 @@ mod tests {
         other.govt = None;
         assert!(!drops_ally(&independent, &other, RuleSource::Engine));
         assert!(drops_ally(&independent, &other, RuleSource::Bible));
-        let mut kin = other.clone();
-        kin.leader = Some(NpcId(1));
-        assert!(
-            drops_ally(&independent, &kin, RuleSource::Engine),
-            "its own fleet still"
-        );
-    }
-
-    #[test]
-    fn by_default_help_comes_against_an_allied_ship_the_player_leads() {
-        let mut trader = ship(2, ALLY, 1000.0, 0.0);
-        trader.goal = Goal::Attack(n(3));
-        let escort = player_led(ship(3, ALLY, 3000.0, 0.0));
-        let npcs = [me(), trader, escort];
-        let govts = govts(0);
-        let around = Surroundings {
-            player: Some(player(0.0, -100.0)),
-            govts: &govts,
-            system_govt: Some(ME),
-            ..Surroundings::new(&[], &npcs)
-        };
-        let by = |led_ally| {
-            let rules = TargetRules {
-                led_ally,
-                ..TargetRules::default()
-            };
-            select_target(&npcs[0], None, &around, rules, &mut Draws::of(&[]))
-        };
-        assert_eq!(by(RuleSource::Engine), Some(n(3)));
-        assert_eq!(by(RuleSource::Bible), None);
     }
 
     #[test]
