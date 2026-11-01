@@ -18,6 +18,15 @@
 //!   ship breaking up ([`let_go`]): goal 4 goes on to the high level, which
 //!   ends it ([`attack_drop`](crate::ai::attack_drop)), unless the wait
 //!   runs or it can't see the ship.
+//! - Idle or travelling ([`Goal::Land`], [`Goal::EnterGate`]) with no AI
+//!   wait running, it searches for no target while it holds one (+0x70,
+//!   [`held_target`](crate::ai::held_target)): provoked by an active one it
+//!   attacks it; otherwise it keeps its goal holding the target, with no
+//!   inspection and no patrol (@0x8cc93 → @0x8d13f → @0x8d14d), an ally or
+//!   a fleet-mate as much as any. A target its think lets go ([`let_go`],
+//!   @0x8d2fd-0x8d33a), held, provoker, the word's or a fresh pick, leaves
+//!   it in [`Goal::Idle`] with no target and no patrol. Its out-of-ammo
+//!   flight still runs on either.
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
 //!   ship picked at random among the others in the system (the player
 //!   first, then the NPCs in order), but not the one it last inspected
@@ -93,10 +102,11 @@
 //!   scan if it is the player.
 
 use crate::ai::fire::FireRules;
+use crate::ai::held_target::HeldTarget;
 #[cfg(doc)]
 use crate::ai::target::let_go;
 use crate::ai::target::{TargetRules, re_pick_target};
-use crate::ai::warship::{BreakingUp, Retreat, hunt};
+use crate::ai::warship::{BreakingUp, Hunt, HuntTarget, Retreat, hunt};
 use crate::ai::{
     Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
     lost_sight, out_of_ammo, react,
@@ -153,6 +163,7 @@ pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
     out_of_ammo: true,
     searches_waiting: false,
     breaking_up: BreakingUp::LeavesToHighLevel,
+    held_target: HeldTarget::Holds,
 };
 
 /// Nova's interceptor (see the module docs).
@@ -204,6 +215,24 @@ impl Behaviour for Interceptor {
         );
         let mut comm_call = None;
         let mut stops = false;
+        // A held target kept on its goal, or a target its think dropped,
+        // leaves no fight of its own: its out-of-ammo flight still runs on
+        // the goal (@0x8d343-0x8d391), and a stop there leaves no target.
+        let hunt = match (hunt.target, hunt.goal) {
+            (HuntTarget::Holds(_) | HuntTarget::Cleared, Some(goal)) => {
+                stops = out_of_ammo::stops(npc, goal);
+                Hunt {
+                    goal: Some(out_of_ammo::after_patrol(npc, goal)),
+                    target: if stops {
+                        HuntTarget::Cleared
+                    } else {
+                        hunt.target
+                    },
+                    ..hunt
+                }
+            }
+            _ => hunt,
+        };
         let decision = hunt.or(|| {
             let (goal, call) = self.patrol(npc, around, chance);
             comm_call = call;
@@ -1204,19 +1233,22 @@ mod tests {
             turned(Goal::Attack(P)),
             "its government's word (@0x8cb8f)"
         );
+        // The word writes state 4, and the drop (@0x8d2fd-0x8d33a) lets a
+        // disabled player go: state 0, no target, past the patrol.
+        let dropped = Decision {
+            clears_target: true,
+            ..turned(Goal::Idle)
+        };
         assert_eq!(
             decision_by(ALWAYS, &[busy, pirate], Condition::Disabled, 0, &[0]),
-            Decision {
-                comm_call: Some(CommCall::PreScan),
-                ..turned(Goal::Inspect(P))
-            },
-            "the word lets a disabled player go: on to an inspection"
+            dropped,
+            "the word lets a disabled player go: no inspection"
         );
         let mut held = police();
         held.goal = Goal::Hold;
         assert_eq!(
             decision_by(ALWAYS, &[held], Condition::Disabled, 0, &[]),
-            turned(Goal::Hold),
+            dropped,
             "held, the word lets a disabled player go"
         );
         assert_eq!(

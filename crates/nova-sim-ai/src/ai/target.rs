@@ -192,8 +192,9 @@
 //! trader that a stray police shot provoked, turn on their own kind, and
 //! the attack block's ally drop (@0x8e2af) leaves them on goal 0 holding
 //! the target in the same dispatch; their next think takes it up again
-//! (`_WarshipAI` @0x8b843, `_InterceptorAI` @0x8ccc1), so they stop and
-//! drift on sub 0 while the fight lasts.
+//! (`_WarshipAI` @0x8b843, `_InterceptorAI` @0x8ccc1; see
+//! [`held_target`](crate::ai::held_target)), so they stop and drift on sub
+//! 0 while the fight lasts.
 //!
 //! **Left out.** The nag ship
 //! (+0xc8d0 = 0x3ff, @0x8a228) has no engine counterpart. The same-system

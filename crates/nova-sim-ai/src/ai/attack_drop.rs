@@ -22,7 +22,10 @@
 //!    ally ([`spares_ally`], by [`RuleKey::LedAllyAttack`]): its own
 //!    government not -1, neither it nor the target led by the player, and
 //!    `_GovtAllies`. Goal and sub 0, then @0x8fb47: +0x70 and +0x96 stay,
-//!    so a dying ally keeps both. The player is never an ally: its +0x98 is
+//!    so a dying ally keeps both. A warship's or an interceptor's next
+//!    think reads the target held and takes it again
+//!    ([`held_target`](crate::ai::held_target)), as their thinks spare no
+//!    ally, so it stays on goal 0 while the ally lasts. The player is never an ally: its +0x98 is
 //!    -1 (`_ResetPlayer` @0x1d46f), which `_GovtAllies` turns down
 //!    (@0x4e5e-0x4e69).
 //! 3. **The fleet drops** (@0x8e2e9-0x8e37c, [`fleet_drop`]), with P the

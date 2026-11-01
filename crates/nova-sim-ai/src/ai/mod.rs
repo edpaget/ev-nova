@@ -35,7 +35,9 @@
 //!   next.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
-//!   NPC to the one for its type.
+//!   NPC to the one for its type; [`held_target`], what a warship's and an
+//!   interceptor's think do with the target they hold and the one they
+//!   drop.
 //! - [`escort`]: [`EscortAi`], how the player's escorts fly and fight by
 //!   their standing orders; [`NovaAi`] routes every escort to it.
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
@@ -62,6 +64,7 @@ pub(crate) mod fixture;
 pub mod flee_drop;
 pub mod fleet_escort;
 pub mod handler_head;
+pub mod held_target;
 pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
@@ -1068,7 +1071,10 @@ pub struct Decision {
     /// ally drop write goal 0 alone (@0x8e26d → @0x8e731, @0x8e2d2;
     /// [`attack_drop`]). The traffic writes it over
     /// [`Behaviour::target`]'s answer, so the threat tests read it
-    /// ([`Npc::fought`]) and the next think finds it.
+    /// ([`Npc::fought`]) and the next think finds it: a warship attacks it
+    /// again and an interceptor holds it ([`held_target`]). An
+    /// interceptor's think writes it too, for the target it holds
+    /// unprovoked on its goal.
     pub holds_target: Option<ShipRef>,
     /// Whether its flight is the attack block's hopeless chase for a ship
     /// of AI type 2 or below: goal 3, sub 5 (@0x8e625-0x8e62e), which flies
