@@ -428,9 +428,10 @@ impl Goal {
 
     /// This goal with `ship` as its ship, as a new target (+0x70) leaves
     /// the goal number as it was: an attack, snipe, flight, inspection or
-    /// plunder moves to it, and a goal of no such ship is kept. The
-    /// original's goals hold no ship, so whichever ship +0x70 names is the
-    /// one they are about.
+    /// plunder moves to it, and so does the regroup pause's kept substate
+    /// ([`Kept::with_quarry`](regroup::Kept::with_quarry)); a goal of no
+    /// such ship is kept. The original's goals hold no ship, so whichever
+    /// ship +0x70 names is the one they are about.
     #[must_use]
     pub fn with_quarry(self, ship: ShipRef) -> Self {
         match self {
@@ -439,6 +440,9 @@ impl Goal {
             Self::Flee(_) => Self::Flee(ship),
             Self::Inspect(_) => Self::Inspect(ship),
             Self::Plunder { hopeless, .. } => Self::Plunder { ship, hopeless },
+            Self::Regroup { kept } => Self::Regroup {
+                kept: kept.with_quarry(ship),
+            },
             other => other,
         }
     }

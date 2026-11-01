@@ -125,6 +125,38 @@ impl Goal {
             Kept::Snipe(ship) => Self::Snipe(ship),
         }
     }
+
+    /// The ship the regroup pause's kept substate names, the original's
+    /// +0x70 that its low level reads: a kept fight's, or a kept
+    /// formation's guard (subs 9 and 0xb steer at +0x70 while it is set,
+    /// @0x876a8-0x876e3); none for any other goal or substate.
+    #[must_use]
+    pub fn kept_quarry(self) -> Option<ShipRef> {
+        match self {
+            Self::Regroup {
+                kept: Kept::Attack(ship) | Kept::Snipe(ship),
+            } => Some(ship),
+            Self::Regroup {
+                kept: Kept::Formation { guard },
+            } => guard,
+            _ => None,
+        }
+    }
+}
+
+impl Kept {
+    /// This substate with `ship` as the ship it names, as a new +0x70
+    /// leaves the substate as it was: a kept fight moves to it, and so
+    /// does a kept formation's guard; a coast or a stop names none.
+    #[must_use]
+    pub fn with_quarry(self, ship: ShipRef) -> Self {
+        match self {
+            Self::Attack(_) => Self::Attack(ship),
+            Self::Snipe(_) => Self::Snipe(ship),
+            Self::Formation { guard: Some(_) } => Self::Formation { guard: Some(ship) },
+            other => other,
+        }
+    }
 }
 
 impl Npc {
@@ -225,6 +257,37 @@ mod tests {
         for goal in [Goal::Idle, Goal::Attack(T), Goal::Hold] {
             assert_eq!(goal.flown(Some(LEAD)), goal);
         }
+    }
+
+    #[test]
+    fn the_pause_names_its_kept_fights_ship_and_its_formations_guard_and_moves_them() {
+        let regroup = |kept| Goal::Regroup { kept };
+        let new = ShipRef::Npc(NpcId(8));
+        for (kept, quarry, moved) in [
+            (Kept::Attack(T), Some(T), Kept::Attack(new)),
+            (Kept::Snipe(T), Some(T), Kept::Snipe(new)),
+            (
+                Kept::Formation { guard: Some(T) },
+                Some(T),
+                Kept::Formation { guard: Some(new) },
+            ),
+            (
+                Kept::Formation { guard: None },
+                None,
+                Kept::Formation { guard: None },
+            ),
+            (Kept::Coast, None, Kept::Coast),
+            (Kept::Stop, None, Kept::Stop),
+        ] {
+            assert_eq!(regroup(kept).kept_quarry(), quarry, "{kept:?}");
+            assert_eq!(kept.with_quarry(new), moved, "{kept:?}");
+            assert_eq!(
+                regroup(kept).with_quarry(new),
+                regroup(moved),
+                "{kept:?}: +0x70 moves the pause's substate"
+            );
+        }
+        assert_eq!(Goal::Attack(T).kept_quarry(), None, "not paused");
     }
 
     #[test]

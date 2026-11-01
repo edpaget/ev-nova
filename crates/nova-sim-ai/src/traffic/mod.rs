@@ -964,6 +964,10 @@ pub struct Traffic {
     /// The gone ships the ships whose high level was skipped held at this
     /// tick's thinks, for the fly half ([`skipped_high_level`]).
     skipped: skipped_high_level::SkippedReads,
+    /// Whether the session's ship loop runs ([`Traffic::set_ship_loop`]):
+    /// a slot taken in it passes to every holder whose step hasn't come,
+    /// and a wreck displayed in it holds no berth ([`gone`]).
+    ship_loop: bool,
     /// The last ship of each berth whose slot lost only its active flag,
     /// until a ship takes the berth or the system is left ([`vacated`]).
     vacated: VacatedBerths,
@@ -1103,6 +1107,7 @@ impl Traffic {
             open_leaders: BTreeMap::new(),
             gone: GoneShips::default(),
             skipped: skipped_high_level::SkippedReads::default(),
+            ship_loop: false,
             vacated: VacatedBerths::default(),
             on_line: LineQueue::default(),
             quotes: Vec::new(),
@@ -2461,7 +2466,8 @@ impl Traffic {
     /// `skip` does not hold: `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
     /// takes the first slot whose active flag is clear, with no test of
     /// the system. It has no bound: a spawn that leaves slots free takes
-    /// [`Traffic::free_berth`] instead.
+    /// [`Traffic::free_berth`] instead. In the ship loop a wreck whose
+    /// display ran holds none (@0x2dee0, [`Traffic::set_ship_loop`]).
     pub(crate) fn next_berth_skipping(&self, skip: &BTreeSet<u32>) -> u32 {
         let held: BTreeSet<u32> = self
             .left_behind
@@ -2469,12 +2475,16 @@ impl Traffic {
             .flatten()
             .map(|left| left.npc.berth)
             .collect();
+        let holds = |npc: &Npc| !(self.ship_loop && npc.condition == Condition::Destroyed);
         (1..=u32::MAX)
             .find(|berth| {
                 !self.reserved.contains(berth)
                     && !skip.contains(berth)
                     && !held.contains(berth)
-                    && self.npcs.iter().all(|npc| npc.berth != *berth)
+                    && self
+                        .npcs
+                        .iter()
+                        .all(|npc| npc.berth != *berth || !holds(npc))
             })
             .unwrap_or(u32::MAX)
     }
@@ -2512,9 +2522,13 @@ impl Traffic {
     /// Takes NPC `id`, destroyed, out of the system, if it is there: its
     /// slot freed as its last explosion ends (`_HandleShipDisplay`
     /// @0x2dee0), its record kept for the thinks that still read it
-    /// ([`gone`], [`Freed::InShipPass`]).
+    /// ([`gone`], [`Freed::InShipPass`]), unless a ship launched later in
+    /// the loop took its berth and rewrote the record
+    /// ([`Traffic::set_ship_loop`]).
     pub fn remove_destroyed(&mut self, id: NpcId) {
-        if let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) {
+        if let Some(npc) = self.npcs.iter().find(|npc| npc.id == id)
+            && !(self.npcs.iter()).any(|other| other.berth == npc.berth && other.id != id)
+        {
             self.gone.record(npc.clone(), Freed::InShipPass);
         }
         self.remove(id);

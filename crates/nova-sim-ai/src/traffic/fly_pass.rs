@@ -138,9 +138,14 @@ pub struct FlyPass {
     /// the pause's (see [`warp_out::fly_jump`]).
     paused: BTreeSet<NpcId>,
     /// The gone ship each ship whose high level was skipped held at its
-    /// think, by its record ([`skipped_high_level`](super::skipped_high_level)): none on double
+    /// think, by its record
+    /// ([`skipped_high_level`](super::skipped_high_level)): none on double
     /// time's second pass, which has no think.
     skipped: SkippedReads,
+    /// Each freed slot's record as the half began ([`gone`](super::gone)),
+    /// which a docking's nav (+0x6c) still reads: no slot test clears it
+    /// (see [`repair_dock`](super::repair_dock)).
+    records: BTreeMap<NpcId, ShipState>,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,
     /// Each repair completed.
@@ -250,6 +255,9 @@ impl Traffic {
             .collect();
         self.departed.clear();
         let skipped = std::mem::take(&mut self.skipped);
+        let records = (self.gone.ships().iter())
+            .map(|gone| (gone.ship.id, gone.ship.state))
+            .collect();
         FlyPass {
             half,
             think,
@@ -272,6 +280,7 @@ impl Traffic {
             unseen,
             paused,
             skipped,
+            records,
             first: self.first_class,
             docks: DockNotes::default(),
         }
@@ -436,20 +445,33 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
 
 /// The ship `npc`'s flight is about (the one it docks with, follows,
 /// escorts, fights or inspects), where the fly half `pass` found it, and
-/// whether it was disabled then.
+/// whether it was disabled then. A docking's ship gone from the system is
+/// read by its slot's record, as the nav (+0x6c) still names the slot
+/// (@0x86a19-0x86a51; see [`repair_dock`](super::repair_dock)).
 fn other_of(pass: &FlyPass, npc: &Npc) -> (Option<ShipState>, bool) {
+    if let Some(docking) = npc.docking {
+        let state = state_of(pass, docking.ship, npc).or_else(|| match docking.ship {
+            ShipRef::Npc(id) => pass.records.get(&id).copied(),
+            ShipRef::Player => None,
+        });
+        return (state, disabled_in(pass, docking.ship));
+    }
     let other = match npc.goal {
-        _ if npc.docking.is_some() => npc.docking.map(|docking| docking.ship),
         Goal::Follow { lead, .. } => Some(ShipRef::Npc(lead)),
         Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
         Goal::Dock(carrier) => Some(carrier),
         goal => goal.quarry().or(goal.inspecting()),
     };
-    let disabled = other.is_some_and(|ship| match ship {
+    let disabled = other.is_some_and(|ship| disabled_in(pass, ship));
+    (other.and_then(|ship| state_of(pass, ship, npc)), disabled)
+}
+
+/// Whether `ship` was disabled as the fly half `pass` began.
+fn disabled_in(pass: &FlyPass, ship: ShipRef) -> bool {
+    match ship {
         ShipRef::Player => pass.player_disabled,
         ShipRef::Npc(id) => pass.disabled.contains(&id),
-    });
-    (other.and_then(|ship| state_of(pass, ship, npc)), disabled)
+    }
 }
 
 /// `npc`'s flight in the fly half `pass` at `speeds`, in `world`, rolling

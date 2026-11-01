@@ -1110,6 +1110,56 @@ mod tests {
     }
 
     #[test]
+    fn a_plunder_whose_victims_slot_went_docks_with_the_record() {
+        // Its dock wait skips the high level (@0x8d4b9-0x8d4d2), so goal
+        // 0xd keeps sub 0xf and its nav, which no slot test clears: it
+        // matches the record's velocity and creeps to its place
+        // (@0x86a3f-0x86a51, @0x8702d). Its think keeps its goal: what a
+        // type think makes of the gone victim is the decisions' own
+        // matter.
+        #[derive(Debug)]
+        struct Keeps;
+        impl crate::ai::Behaviour for Keeps {
+            fn decide(
+                &self,
+                npc: &Npc,
+                _: &Surroundings,
+                _: &mut dyn crate::chance::Chance,
+            ) -> Goal {
+                npc.goal
+            }
+        }
+        let mut docked = pirate(1);
+        docked.goal = Goal::Plunder {
+            ship: ShipRef::Npc(VICTIM),
+            hopeless: false,
+        };
+        docked.ai_wait = 150;
+        docked.docking = Some(Docking {
+            ship: ShipRef::Npc(VICTIM),
+            sub: DockSub::Dock,
+        });
+        let mut drifting = victim();
+        drifting.state.position = Vec2::new(10.0, 0.0);
+        drifting.state.velocity = Vec2::new(0.25, 0.0);
+        docked.state.velocity = Vec2::new(0.25, 0.0);
+        let mut traffic = traffic_of(vec![docked, drifting]);
+        traffic.remove_destroyed(VICTIM);
+        traffic.tick_in(&Keeps, World::new(&[]), &[], &mut Draws::of(&[0; 8]));
+        let pirate = ship(&traffic, PIRATE);
+        assert_eq!(
+            pirate.docking,
+            Some(Docking {
+                ship: ShipRef::Npc(VICTIM),
+                sub: DockSub::Dock
+            }),
+            "kept on the record"
+        );
+        assert_eq!(pirate.state.velocity, Vec2::new(0.25, 0.0));
+        assert!(pirate.state.position.x > 0.25, "crept toward it");
+    }
+
+    #[test]
     fn a_docked_pirate_holds_with_its_victim_whatever_ship_it_targets() {
         // Waiting its dock, its goal an attack on another ship: it moves
         // with the victim it docked with.

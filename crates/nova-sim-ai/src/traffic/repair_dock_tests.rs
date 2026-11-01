@@ -428,3 +428,117 @@ fn the_players_hit_on_a_docked_repairer_turns_it_without_repairing_and_it_leaves
     );
     assert_eq!(traffic.take_pirate_events(), []);
 }
+
+/// Traffic of NPC 1 in slot `berth` repairing NPC 2, disabled at the
+/// centre in slot 2, from (`x`, 0), its first tick flown: closing from
+/// afar, or docked and its wait rolled 0 near.
+fn repairing_npc(x: f32, berth: u32) -> (Traffic, Recording) {
+    let mut traffic = repairing(x, 0.0);
+    traffic.npcs[0].berth = berth;
+    traffic.npcs[0].target = Some(ShipRef::Npc(NpcId(2)));
+    traffic.npcs.push(other(0.0, 0.0, Condition::Disabled));
+    let recording = Recording::default();
+    tick(&mut traffic, &recording, Condition::Intact, &[0]);
+    (traffic, recording)
+}
+
+#[test]
+fn a_repair_whose_patients_slot_went_keeps_goal_0xf_and_its_docking() {
+    // The high level's slot test makes +0x70 -1 (@0x8d4e4-0x8d50d), so
+    // goal 0xf skips its block (@0x8f6e9-0x8f6ed), keeping its goal, sub
+    // and nav: a slot above the patient let go at its step, one below
+    // reads the freed slot at its next think. Neither gives up (@0x8f702).
+    for berth in [1, 3] {
+        let (mut traffic, recording) = repairing_npc(1000.0, berth);
+        let docking = helper(&traffic).docking;
+        assert_eq!(docking.map(|docking| docking.sub), Some(DockSub::Close));
+        traffic.remove_destroyed(NpcId(2));
+        if berth > 2 {
+            traffic.let_go_at_step(HELPER, true);
+        }
+        tick(&mut traffic, &recording, Condition::Intact, &[]);
+        let after = helper(&traffic);
+        assert_eq!(after.goal, Goal::Assist(Help::Repair), "{berth}");
+        assert_eq!(after.target, None, "{berth}");
+        assert_eq!(after.docking, docking, "{berth}");
+        assert!(after.travel_set(), "{berth}: its nav kept");
+    }
+}
+
+#[test]
+fn a_repairer_closes_and_docks_on_its_gone_patients_record() {
+    // Its sub 0xb closes on the nav's record (@0x87345-0x87351), its high
+    // level never writing sub 0xf now; docked, sub 0xf matches the
+    // record's velocity and completes on it (@0x86a19-0x86a51,
+    // @0x86d54-0x86f37), then it drifts as after any repair
+    // (@0x86f09-0x86f31). The armour lands on the record, never drawn.
+    let (mut there, recording) = repairing_npc(1000.0, 1);
+    let (mut closing, _) = repairing_npc(1000.0, 1);
+    closing.remove_destroyed(NpcId(2));
+    for _ in 0..30 {
+        tick(&mut there, &recording, Condition::Intact, &[]);
+        tick(&mut closing, &recording, Condition::Intact, &[]);
+    }
+    let after = helper(&closing);
+    assert!(
+        after.state.position.x < 1000.0,
+        "{:?}",
+        after.state.position
+    );
+    assert_eq!(after.state, helper(&there).state, "as on the ship itself");
+    assert_eq!(
+        after.docking.map(|docking| docking.sub),
+        Some(DockSub::Close),
+        "no high level docks it"
+    );
+    let (mut docked, recording) = repairing_npc(2.0, 1);
+    assert_eq!(helper(&docked).ai_wait, 99, "its dock started");
+    docked.remove_destroyed(NpcId(2));
+    tick(&mut docked, &recording, Condition::Intact, &[]);
+    assert_eq!(
+        docked.take_pirate_events(),
+        [PirateEvent::NpcRepaired {
+            helper: HELPER,
+            ship: NpcId(2)
+        }],
+        "on the record"
+    );
+    let done = helper(&docked);
+    assert_eq!(done.goal, Goal::Drift);
+    assert_eq!((done.target, done.docking), (None, None));
+}
+
+#[test]
+fn a_repairer_starts_its_dock_on_its_gone_patients_record() {
+    // Sub 0xf's dock start reads the nav's record (@0x86f98-0x8700a).
+    let mut traffic = repairing(2.0, 0.0);
+    traffic.npcs[0].docking = Some(Docking {
+        ship: ShipRef::Npc(NpcId(2)),
+        sub: DockSub::Dock,
+    });
+    traffic.npcs.push(other(0.0, 0.0, Condition::Disabled));
+    traffic.remove_destroyed(NpcId(2));
+    traffic.npcs[0].target = None;
+    tick(&mut traffic, &Recording::default(), Condition::Intact, &[0]);
+    assert_eq!(
+        helper(&traffic).ai_wait,
+        99,
+        "Rand(80) of 0 + 100, a tick off"
+    );
+}
+
+#[test]
+fn a_slot_taken_again_moves_a_repairers_dock_onto_the_newcomer() {
+    // A spawn rewrites the slot (@0x3c8b1-0x3c90b), and subs 0xb and 0xf
+    // go on reading the nav +0x6c (@0x86a19-0x86a51): the repairer closes
+    // on, docks with and completes against the new ship.
+    let (mut traffic, recording) = repairing_npc(1000.0, 1);
+    traffic.remove_destroyed(NpcId(2));
+    tick(&mut traffic, &recording, Condition::Intact, &[]);
+    let newcomer = traffic.add_npc_at(other(500.0, 0.0, Condition::Intact), 2);
+    assert_eq!(
+        helper(&traffic).docking.map(|docking| docking.ship),
+        Some(ShipRef::Npc(newcomer))
+    );
+    assert_eq!(helper(&traffic).target, None, "+0x70 was -1");
+}

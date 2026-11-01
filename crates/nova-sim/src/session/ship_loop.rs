@@ -50,7 +50,12 @@
 //!   ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)), takes
 //!   its step and is displayed, so it is drawn on its launch frame. One
 //!   launched below waits for the next pass. Its carrier's display comes
-//!   after the launch, so a final explosion on that tick reaches it.
+//!   after the launch, so a final explosion on that tick reaches it. A
+//!   wreck whose display ran earlier in the loop has freed its slot
+//!   (@0x2dee0), though the take-out comes after the loop, so the launch
+//!   may take it (@0x3c8c6-0x3c8e9); every ship whose step hasn't come and
+//!   whose target names the old ship then fights the newcomer
+//!   ([`Traffic::set_ship_loop`](crate::traffic::Traffic::set_ship_loop)).
 //!
 //! Each flight steers by the other ships where the pass found them, as the
 //! original's steering is `_AIDispatch`'s (`_LowLevelAIHandler`), before
@@ -147,6 +152,9 @@ impl Session {
         };
         let mut shown = vec![ShipRef::Player];
         let mut after = None;
+        // A wreck frees its slot at its display, and an escape ship's
+        // launch later in the loop may take it (see the module docs).
+        self.space.traffic.set_ship_loop(true);
         while let Some((berth, id)) = self.space.next_in_loop(after) {
             after = Some(berth);
             // `_HandleShip`'s slot test (@0x33865) comes before its move
@@ -199,6 +207,7 @@ impl Session {
                 },
             );
         }
+        self.space.traffic.set_ship_loop(false);
         if let Some(fly) = fly {
             self.space.traffic.end_fly(fly);
         }

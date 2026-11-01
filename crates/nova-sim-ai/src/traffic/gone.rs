@@ -247,30 +247,73 @@ impl Traffic {
         self.gone.record(ship, freed);
     }
 
-    /// The ship `id` takes slot `berth`: every ship still holding a record
-    /// of that slot ([`GoneShip::held_by`]) finds it active at its next
-    /// slot test, so its target is now the new ship, friend or not, and a
-    /// fight on the old ship moves to it
-    /// ([`Goal::with_quarry`](crate::ai::Goal::with_quarry)). A spawn
-    /// rewrites the slot and leaves every other ship's +0x70
+    /// The session's ship loop opens (`running`) or closes: a slot taken
+    /// while it runs (an escape ship's `_LaunchFighter` @0x354ea) passes
+    /// on as [`Traffic::slot_taken`] says, and a wreck whose display has
+    /// run ([`Condition::Destroyed`](crate::combat::hull::Condition::Destroyed))
+    /// no longer holds its berth (@0x2dee0), though the take-out comes
+    /// after the loop.
+    pub fn set_ship_loop(&mut self, running: bool) {
+        self.ship_loop = running;
+    }
+
+    /// The ship `id` takes slot `berth`: every ship still holding that slot
+    /// finds it active at its next slot test, so its target is now the new
+    /// ship, friend or not, and a fight on the old ship moves to it
+    /// ([`Goal::with_quarry`](crate::ai::Goal::with_quarry)), a fight or
+    /// a guard the regroup pause keeps too
+    /// ([`Goal::kept_quarry`](crate::ai::Goal::kept_quarry)). A spawn
+    /// rewrites the slot and leaves every other ship's +0x70 and +0x6c
     /// (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), and the engine's
     /// numbers, unlike the slots, are never used again.
     ///
-    /// A record freed in the AI loop ([`Freed::InDispatch`]) passes nothing:
-    /// every holder's `_HandleShip` runs before the next spawn, and the
-    /// record stands only for that frame's dispatch.
+    /// Who still holds the slot turns on where the spawn runs:
+    ///
+    /// - **Outside the ship loop** (the arrivals pass, a launch in the AI
+    ///   loop), each holder of its record ([`GoneShip::held_by`]). A record
+    ///   freed in the AI loop ([`Freed::InDispatch`]) passes nothing there:
+    ///   the launch into a slot a dock or jump-out freed that loop is
+    ///   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9's.
+    /// - **In the ship loop** ([`Traffic::set_ship_loop`]), every ship
+    ///   whose target names the old ship: those whose `_HandleShip` hasn't
+    ///   come hold it still, and those whose has have let go
+    ///   ([`Traffic::let_go_at_step`]). The old ship is the record's, or a
+    ///   wreck freed at its display this loop and not yet taken out.
+    ///
+    /// A docking (its nav, +0x6c, which no slot test clears) on the old
+    /// ship moves to the new one wherever the spawn runs (see
+    /// [`repair_dock`](crate::traffic::repair_dock)).
     pub(super) fn slot_taken(&mut self, berth: u32, id: NpcId) {
         let new = ShipRef::Npc(id);
-        let records = self.gone.ships().iter();
-        for gone in records.filter(|gone| gone.ship.berth == berth) {
-            if gone.freed == Freed::InDispatch {
-                continue;
+        let in_loop = self.ship_loop;
+        let mut olds: Vec<(NpcId, Option<GoneShip>)> = (self.gone.ships().iter())
+            .filter(|gone| gone.ship.berth == berth)
+            .map(|gone| (gone.ship.id, Some(gone.clone())))
+            .collect();
+        if in_loop {
+            olds.extend(
+                (self.npcs.iter())
+                    .filter(|npc| npc.berth == berth && npc.id != id && !npc.condition.active())
+                    .map(|npc| (npc.id, None)),
+            );
+        }
+        for (old_id, record) in olds {
+            let old = ShipRef::Npc(old_id);
+            for npc in &mut self.npcs {
+                if let Some(docking) = npc.docking.as_mut().filter(|d| d.ship == old) {
+                    docking.ship = new;
+                }
             }
-            let old = Some(ShipRef::Npc(gone.ship.id));
-            for npc in self.npcs.iter_mut().filter(|npc| gone.held_by(npc)) {
+            let holds = |npc: &Npc| match (&record, in_loop) {
+                (_, true) => npc.target == Some(old),
+                (Some(gone), false) => gone.freed != Freed::InDispatch && gone.held_by(npc),
+                (None, false) => false,
+            };
+            for npc in self.npcs.iter_mut().filter(|npc| holds(npc)) {
                 npc.target = Some(new);
-                if npc.goal.quarry() == old || npc.goal.inspecting() == old {
-                    npc.goal = npc.goal.with_quarry(new);
+                let goal = npc.goal;
+                if [goal.quarry(), goal.inspecting(), goal.kept_quarry()].contains(&Some(old)) {
+                    npc.goal = goal.with_quarry(new);
                 }
             }
         }
@@ -938,6 +981,90 @@ mod tests {
             traffic.remove_destroyed(wreck);
             traffic.retarget(SpawnTable::default(), &BTreeSet::new(), Leave::Dropped);
             assert_eq!(traffic.gone.ships(), []);
+        }
+
+        #[test]
+        fn a_slot_taken_again_moves_a_paused_fight_onto_the_newcomer() {
+            // The pause keeps its substate and +0x70 (@0x9002d → @0x901ea),
+            // which a spawn leaves (@0x3c8b1-0x3c90b): its low level now
+            // reads the newcomer, a kept formation's guard too
+            // (@0x876a8-0x876e3).
+            use crate::ai::regroup::Kept;
+            let old = ShipRef::Npc(NpcId(0));
+            for kept in [
+                Kept::Attack(old),
+                Kept::Snipe(old),
+                Kept::Formation { guard: Some(old) },
+            ] {
+                let mut traffic = Traffic::new();
+                let wreck = in_slot(&mut traffic, 4);
+                let holder = aiming_at(&mut traffic, 2, old);
+                traffic.npcs[1].goal = Goal::Regroup { kept };
+                traffic.remove_destroyed(wreck);
+                let new = ShipRef::Npc(in_slot(&mut traffic, 4));
+                let after = trader_of(&traffic, holder);
+                assert_eq!(after.target, Some(new), "{kept:?}");
+                assert_eq!(
+                    after.goal,
+                    Goal::Regroup {
+                        kept: kept.with_quarry(new)
+                    },
+                    "{kept:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_slot_taken_in_the_ship_loop_passes_to_every_holder_whose_step_has_not_come() {
+            // In the ship loop every holder whose `_HandleShip` hasn't run
+            // still holds +0x70 (@0x33865-0x33888): those below the freed
+            // slot, and those above the launch's step. One between let go
+            // at its step. So does a slot freed in the AI loop that frame.
+            for freed in [Freed::InShipPass, Freed::AfterShipLoop, Freed::InDispatch] {
+                let mut traffic = Traffic::new();
+                let gone = in_slot(&mut traffic, 4);
+                let aim = ShipRef::Npc(gone);
+                let below = aiming_at(&mut traffic, 2, aim);
+                let between = aiming_at(&mut traffic, 5, aim);
+                let above = aiming_at(&mut traffic, 8, aim);
+                let record = traffic.npcs[0].clone();
+                traffic.remove(gone);
+                traffic.gone.record(record, freed);
+                traffic.set_ship_loop(true);
+                traffic.let_go_at_step(between, true);
+                // A launch at step 6 takes the slot.
+                let new = ShipRef::Npc(in_slot(&mut traffic, 4));
+                traffic.set_ship_loop(false);
+                for (holder, passed) in [(below, true), (between, false), (above, true)] {
+                    let after = trader_of(&traffic, holder);
+                    let want = if passed { Some(new) } else { None };
+                    assert_eq!(after.target, want, "{freed:?} {holder:?}");
+                    if passed {
+                        assert_eq!(after.goal, Goal::Attack(new), "{freed:?}");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn in_the_ship_loop_a_launch_takes_a_wrecks_berth_freed_at_its_display() {
+            // A final explosion frees the slot at its display (@0x2dee0),
+            // before the take-out; a launch later in the loop searches the
+            // slots from 1 (@0x3c8c6-0x3c8e9). The wreck's record is the
+            // newcomer's now, so the take-out records nothing.
+            let mut traffic = Traffic::new();
+            let wreck = in_slot(&mut traffic, 1);
+            let holder = aiming_at(&mut traffic, 3, ShipRef::Npc(wreck));
+            traffic.npcs[0].condition = Condition::Destroyed;
+            assert_eq!(traffic.free_berth(0), Some(2), "outside the loop");
+            traffic.set_ship_loop(true);
+            assert_eq!(traffic.free_berth(0), Some(1));
+            let new = traffic.add_npc_at(ship(0, TRADERS, AiType::Warship, 0.0, 0.0), 1);
+            traffic.set_ship_loop(false);
+            assert_eq!(target_of(&traffic, holder), Some(ShipRef::Npc(new)));
+            traffic.remove_destroyed(wreck);
+            assert_eq!(traffic.gone.ships(), [], "rewritten by the newcomer");
+            assert!(traffic.npcs().iter().any(|npc| npc.id == new));
         }
 
         #[test]

@@ -7,12 +7,30 @@
 //!
 //! - **The high level** ([`high_level`]), on each think while its AI wait
 //!   is out (@0x8d4b9-0x8d4d2 returns for every goal but 10 and 0xe while
-//!   it runs). With no target nothing changes (@0x8f6e9). Its target is
+//!   it runs). With no target nothing changes (@0x8f6e9), nor with one
+//!   whose slot went, which the high level's slot test has made -1
+//!   (@0x8d4e4-0x8d50d). Its target is
 //!   any ship: the player it was asked to repair, or the NPC an NPC's hit
-//!   turned it on (`_DamageShip` @0x3bcf6). With that ship gone or not
+//!   turned it on (`_DamageShip` @0x3bcf6). With that ship not
 //!   disabled (@0x8f702-0x8f715, `_IsDisabled`: disabled or breaking up)
 //!   it gives up: goal 0, sub 0, target and nav -1 (@0x8f717-0x8f732), so
-//!   a hit by an intact ship ends the help. Otherwise nav = the target
+//!   a hit by an intact ship ends the help. The +0xb8 test at @0x8f702
+//!   never fails: the slot test came first.
+//! - **A patient gone.** The type AIs return at once for goal 0xf (see
+//!   [`assist_think`](crate::traffic::assist_think)), so a repairer whose
+//!   patient's slot went keeps its goal, its sub and its nav (+0x6c,
+//!   [`Npc::docking`]), which no slot test clears: closing (sub 0xb), it
+//!   closes on the freed slot's record and holds there, no high level
+//!   writing sub 0xf; docking (sub 0xf), it matches the record's velocity,
+//!   starts its dock and completes on it, then drifts. The armour and the
+//!   boarded flag land on the record, which nothing reads before a spawn
+//!   rewrites it (+0xb9 @0x3c981). A spawn into the slot hands the
+//!   docking to the newcomer, as the nav names the slot
+//!   ([`Traffic::slot_taken`](crate::traffic::Traffic::slot_taken)). The
+//!   dock's completion, creep and velocity match are read where the fly
+//!   half decides them today;
+//!   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9
+//!   moves them to the slot. Otherwise nav = the target
 //!   (@0x8f74c) and, within [`repair_box`] of it on both axes,
 //!   inclusive, it docks (sub 0xf, @0x8f815); otherwise it closes (sub 0xb,
 //!   @0x8f823). There is no approach (sub 9): the box is 2-way, not the
@@ -57,6 +75,7 @@
 //! that never lets the ship fly still ends.
 
 use crate::ai::{Goal, Surroundings};
+use crate::combat::ShipRef;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::hail::Help;
 use crate::inertialess::InertialDampener;
@@ -87,14 +106,27 @@ pub fn repair_box(class_turn: f32) -> i32 {
 }
 
 /// The high level of `npc`'s repair of the ship it targets among `around`
-/// (see the module docs): none when it is no repair or has no target. A
-/// dampener counts toward its inertialess box as `rule` says.
+/// (see the module docs): none when it is no repair or has no target, nor
+/// when its target's slot is inactive, which the high level's slot test
+/// makes -1 first (@0x8d4e4-0x8d50d), so the block is skipped
+/// (@0x8f6e9) and the goal, sub and nav kept (the traffic's
+/// `dispatch_leave` runs the test itself). A dampener counts toward its
+/// inertialess box as `rule` says.
 #[must_use]
 pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> Option<DockStep> {
     if npc.goal != Goal::Assist(Help::Repair) {
         return None;
     }
     let ship = npc.target?;
+    // The player's slot is active while the AI loop runs in its system,
+    // so the block reads it whatever the world shows of it.
+    let gone = match ship {
+        ShipRef::Npc(_) => !around.condition_of(ship).is_some_and(Condition::active),
+        ShipRef::Player => false,
+    };
+    if gone {
+        return None;
+    }
     let Some(at) = around
         .state_of(ship)
         .filter(|_| around.condition_of(ship).is_some_and(Condition::disabled))
@@ -293,10 +325,15 @@ mod tests {
             step_at_npc(&ship, 0.0, 0.0, Condition::Intact),
             Some(DockStep::GiveUp)
         );
-        assert_eq!(
-            step_at_npc(&ship, 0.0, 0.0, Condition::Destroyed),
-            Some(DockStep::GiveUp)
-        );
+    }
+
+    #[test]
+    fn a_repair_whose_target_slot_went_skips_its_block() {
+        // The slot test makes +0x70 -1 first (@0x8d4e4-0x8d50d), so the
+        // block is skipped (@0x8f6e9): +0xb8's test at @0x8f702 is never
+        // reached by a gone slot.
+        let ship = repairer(0.0, 0.0);
+        assert_eq!(step_at_npc(&ship, 0.0, 0.0, Condition::Destroyed), None);
         let mut gone = ship;
         gone.target = Some(ShipRef::Npc(NpcId(7)));
         let world = World {
@@ -306,8 +343,8 @@ mod tests {
         let npcs = [gone];
         assert_eq!(
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly),
-            Some(DockStep::GiveUp),
-            "a ship gone, @0x8f702"
+            None,
+            "a ship gone"
         );
     }
 

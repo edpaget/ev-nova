@@ -185,9 +185,14 @@ impl Traffic {
         let Some(docking) = npc.docking else {
             return;
         };
+        // A ship gone is read by its slot's record, which the nav still
+        // names (see `repair_dock`).
         let victim = match docking.ship {
             ShipRef::Player => world.player.map(|player| player.state),
-            ShipRef::Npc(id) => self.npcs.iter().find(|n| n.id == id).map(|n| n.state),
+            ShipRef::Npc(id) => (self.npcs.iter())
+                .chain(self.gone.ships().iter().map(|gone| &gone.ship))
+                .find(|n| n.id == id)
+                .map(|n| n.state),
         };
         let Some(victim) = victim.filter(|victim| plunder_dock::starts(npc, victim)) else {
             return;
