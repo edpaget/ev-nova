@@ -52,14 +52,22 @@
 //! the next frame.
 //!
 //! **A slot taken again** ([`Traffic::slot_taken`]) leaves every other
-//! ship's +0x70 as it was, so a ship still holding the slot finds it active
-//! at its next test and now fights the newcomer, friend or not. It changes
-//! what is drawn and breaks no stock mission, so it has no rulebook key.
+//! ship's +0x70 and +0x6c as they were, so a ship still holding the slot
+//! finds it active at its next test and now fights the newcomer, friend
+//! or not, a paused fight or guard too, and a docking flies at it. In the
+//! ship loop ([`Traffic::set_ship_loop`]) a wreck displayed earlier in the
+//! loop holds no berth, and every holder whose step hasn't come passes. It
+//! changes what is drawn and breaks no stock mission, so it has no rulebook
+//! key.
 //!
-//! The reads of a stale +0x70 not built here (a cloak's think, a skipped
-//! high level, goal 2's write, goal 0xf, the slots taken that
-//! [`Traffic::slot_taken`] can't see and the frees in a dialog) are
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-11-left-out-of-phase-7's.
+//! **The other readers of a stale +0x70**, each where the original reads
+//! it: the cloak think at the dispatch's head, on goal 4
+//! ([`cloak_situation::pressed`](crate::traffic::cloak_situation::pressed));
+//! the high level's own slot test before its hold writes goal 2 or 3 (the
+//! traffic's `dispatch_leave`); and a think after a dialog's free
+//! ([`Freed::InDialog`]). The launch in the AI loop into a slot a dock or
+//! jump-out freed that loop is
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9's.
 //!
 //! A ship that lands is not recorded: the original keeps a landed ship in
 //! its slot, waiting at the stellar (`_HighLevelAIHandler`
@@ -96,6 +104,15 @@ pub enum Freed {
     /// `_HandleShipDisplay`. No `_HandleShip` runs before the next frame's
     /// thinks, so every other slot reads it there.
     AfterShipLoop,
+    /// In a dialog in space: a person swapped for its mission ship on the
+    /// hail (`_HandlePlayerCommunication` @0x62520, [`Traffic::vacate`]).
+    /// No `_HandleShip` runs between the dialog and the next think, so it
+    /// reads as [`Freed::AfterShipLoop`] does. The frees while landed
+    /// (@0x403fb, @0x40250, @0x5eda5, @0x99b24) are not recorded: the
+    /// take-off wipes every slot first (`_SetupShipsInSystem`'s
+    /// `_DeleteAllComputerShips` @0x42b92) and respawns the escorts it
+    /// keeps, each spawn writing +0x70 -1 (@0x3c9d9).
+    InDialog,
 }
 
 impl Freed {
@@ -128,14 +145,14 @@ impl GoneShip {
     /// the ship, and its slot comes after the gone one's when that was
     /// freed in the AI loop ([`Freed::InDispatch`]), before it when in the
     /// ship loop ([`Freed::InShipPass`]), and is any other when after it
-    /// ([`Freed::AfterShipLoop`]).
+    /// or in a dialog ([`Freed::AfterShipLoop`], [`Freed::InDialog`]).
     #[must_use]
     pub fn held_by(&self, reader: &Npc) -> bool {
         reader.target == Some(ShipRef::Npc(self.ship.id))
             && match self.freed {
                 Freed::InDispatch => reader.berth > self.ship.berth,
                 Freed::InShipPass => reader.berth < self.ship.berth,
-                Freed::AfterShipLoop => reader.berth != self.ship.berth,
+                Freed::AfterShipLoop | Freed::InDialog => reader.berth != self.ship.berth,
             }
     }
 }

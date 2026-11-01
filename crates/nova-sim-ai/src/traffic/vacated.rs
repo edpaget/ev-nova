@@ -22,6 +22,11 @@
 //! [`Traffic::vacate`] keeps such a ship's record here, at its berth, and
 //! the battle-help pick reads it
 //! ([`RuleKey::BattleHelpGoneSlots`](crate::RuleKey::BattleHelpGoneSlots)).
+//! It also records the ship among the ships gone
+//! ([`Freed::InDialog`](crate::traffic::gone::Freed::InDialog)), whose
+//! slot every other slot's next think still reads through +0x70, as no
+//! `_HandleShip` runs between the dialog and that think (see the traffic's
+//! `gone`).
 //!
 //! The docked fighter and the debug "remove target" key (`_HandlePlayer`
 //! @0x6e855-0x6e871) also clear only +0xb8. A docked fighter never passes,
@@ -32,6 +37,7 @@
 //! back before the next wipe.
 
 use crate::traffic::Traffic;
+use crate::traffic::gone::Freed;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// The last ship of each berth whose slot lost only its active flag, one
@@ -69,9 +75,15 @@ impl Traffic {
     /// as its berth's vacated ship: a person swapped for its mission ship,
     /// whose slot loses only its active flag (@0x62520, see [the module
     /// docs](self)).
+    ///
+    /// It is recorded among the ships gone too ([`Freed::InDialog`]): no
+    /// `_HandleShip` runs between the dialog and the next think, so every
+    /// other slot's think still reads it, and a ship taking the slot takes
+    /// its holders (see [`gone`](super::gone)).
     pub fn vacate(&mut self, id: NpcId) {
-        if let Some(npc) = self.npcs().iter().find(|npc| npc.id == id) {
+        if let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) {
             self.vacated.record(npc.clone());
+            self.gone.record(npc.clone(), Freed::InDialog);
         }
         self.remove(id);
     }
@@ -139,6 +151,66 @@ mod tests {
         let berth = traffic.npcs().iter().find(|npc| npc.id == came).unwrap();
         assert_eq!(berth.berth, 1, "the first free berth");
         assert_eq!(vacated_berths(&traffic), []);
+    }
+
+    /// A brave trader at the centre, berth `trader_berth`, provoked by a
+    /// person's warship at (100, 0) in berth `person_berth` and fleeing
+    /// it, the person swapped out on the hail: the traffic and the trader.
+    fn fleeing_a_swapped_person(trader_berth: u32, person_berth: u32) -> (Traffic, NpcId) {
+        use crate::ai::fixture::{PIRATES, TRADERS, ship};
+        let mut traffic = Traffic::with_interval(1);
+        let person = ship(0, PIRATES, AiType::Warship, 100.0, 0.0);
+        let person = traffic.add_npc_at(person, person_berth);
+        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+        trader.provoked = 10.0;
+        trader.target = Some(ShipRef::Npc(person));
+        trader.goal = Goal::Flee(ShipRef::Npc(person));
+        let trader = traffic.add_npc_at(trader, trader_berth);
+        traffic.vacate(person);
+        (traffic, trader)
+    }
+
+    #[test]
+    fn a_brave_trader_reads_where_a_person_swapped_out_on_the_hail_was() {
+        // The hail frees the slot in a dialog (@0x62520), and no
+        // `_HandleShip` runs before the next think, so every other slot
+        // reads its record: within 1250 the trader attacks it, calling for
+        // help on a warship (@0x8b616-0x8b68d, @0x8b6e3-0x8b71c), and the
+        // high level ends the fight keeping its provocation (@0x8e731).
+        for (trader_berth, person_berth) in [(1, 2), (3, 2)] {
+            let (mut traffic, trader) = fleeing_a_swapped_person(trader_berth, person_berth);
+            let world = World {
+                player: Some(crate::ai::fixture::player(0.0, -5000.0)),
+                ..World::new(&[])
+            };
+            traffic.tick_in(
+                &crate::ai::NovaAi::default(),
+                world,
+                &[],
+                &mut Draws::of(&[]),
+            );
+            let after = traffic.npcs().iter().find(|npc| npc.id == trader).unwrap();
+            assert_eq!(after.goal, Goal::Idle, "{trader_berth}");
+            assert!(after.provoked > 9.5, "{trader_berth}: read near");
+            let calls = crate::traffic::fixture::calls_on_line(&traffic.take_on_line());
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|&(id, call, _)| (id, call))
+                    .collect::<Vec<_>>(),
+                [(trader, crate::ai::CommCall::Distress)],
+                "{trader_berth}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_taken_after_a_hail_swap_passes_its_holders_on() {
+        let (mut traffic, trader) = fleeing_a_swapped_person(1, 2);
+        let came = traffic.add_npc_at(npc(0, ShipStats::default()), 2);
+        let after = traffic.npcs().iter().find(|npc| npc.id == trader).unwrap();
+        assert_eq!(after.target, Some(ShipRef::Npc(came)));
+        assert_eq!(after.goal, Goal::Flee(ShipRef::Npc(came)));
     }
 
     #[test]
