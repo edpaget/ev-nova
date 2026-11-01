@@ -155,6 +155,11 @@ pub struct Drive {
     pub thrust: Thrust,
     /// Whose glow it copied before its step.
     pub glow: GlowCopy,
+    /// Whether it burst on a word it owed
+    /// ([`held_burst`](crate::traffic::held_burst)), which the burst's end
+    /// reads ([`held_burst::settle`](crate::traffic::held_burst::settle)).
+    /// The fly pass clears it before each flight.
+    pub burst: bool,
 }
 
 /// Whose glow a flight copies before `_HandleShip` steps its own (see the
@@ -619,7 +624,7 @@ mod tests {
         ship.display.drive = Drive {
             turn,
             thrust,
-            glow: GlowCopy::None,
+            ..Drive::default()
         };
         bank_and_glow(ship, false, false, None);
     }
@@ -707,7 +712,7 @@ mod tests {
         ship.display.drive = Drive {
             turn: -1,
             thrust: Thrust::Rush,
-            glow: GlowCopy::None,
+            ..Drive::default()
         };
         bank_and_glow(&mut ship, true, false, None);
         assert_eq!(
@@ -851,7 +856,7 @@ mod tests {
             Drive {
                 turn: 1,
                 thrust: Thrust::Plain,
-                glow: GlowCopy::None
+                ..Drive::default()
             }
         );
         let rushing = Handling {

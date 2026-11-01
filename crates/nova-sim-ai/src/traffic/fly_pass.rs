@@ -476,7 +476,7 @@ fn fly_flown(
         scoop_box: mine_orders::nearest_box(npc.state.position, world.boxes),
         ..beside_of(pass, npc)
     };
-    // What its flight flies by, and what it owed of a gate burst before it.
+    // What its flight flies by, which the end of a burst reads too.
     let inertia = Inertia::of(npc, other.as_ref(), beside.leader_seen, world.flight);
     // The sub-goal this flight picks, stored for the next frame's sight and
     // cloak think (`_HighLevelAIHandler` writes +0xc8ca).
@@ -494,9 +494,10 @@ fn fly_flown(
     let outcome = if let Some(outcome) = jump {
         outcome
     } else {
-        // Read after the jump: it bursts nothing, and sub 0xd's word over a
-        // higher one is no burst lowering it (@0x34a84).
-        let owed = npc.owed_burst;
+        // Whether its flight bursts, which alone ends a burst: a word
+        // changed with no burst, as sub 0xd's 1.0 in the jump above or sub
+        // 8's word outside its window, does not (@0x34a84).
+        npc.display.drive.burst = false;
         let outcome = fly_steered(
             npc,
             pass,
@@ -505,7 +506,8 @@ fn fly_flown(
             speeds,
             &mut *chance,
         );
-        held_burst::settle(npc, owed, speeds, inertia, &mut *chance);
+        let burst = npc.display.drive.burst;
+        held_burst::settle(npc, burst, speeds, inertia, &mut *chance);
         outcome
     };
     ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
