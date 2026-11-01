@@ -70,6 +70,7 @@ use crate::ai::leave::{self, Leg};
 use crate::ai::{Goal, fire};
 use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
+use crate::hail::Help;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
@@ -198,6 +199,18 @@ pub(crate) fn stop(
 pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
     let (controls, flown) = stop(npc, handling, inertia, false);
     Flight::stop(controls, &flown, inertia)
+}
+
+/// Substate 1 for `npc` on `handling`, as `inertia` says, while its AI
+/// wait runs with sub 1 stored ([`Npc::stopping`]): the high level writes
+/// no sub under +0x4c (@0x8d4b9-0x8d4d2) and the low level runs sub 1 on
+/// its kept value, whose cuts ([`stop_wanting`]) stand though
+/// `_HandleShip` skips its turn and thrust (@0x34a54-0x34a72). A refuel,
+/// the original's goal 9 (+0xc8c8 @0x85595), is cut off its retro heading
+/// too. Its settle below 0.35 stores sub 0, ending it (@0x85624).
+pub(crate) fn stop_under_wait(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
+    let refuelling = matches!(npc.goal, Goal::Assist(Help::Refuel));
+    stop_wanting(npc, handling, inertia, refuelling);
 }
 
 /// Substate 1 for `npc` on `handling`, as `inertia` says, before

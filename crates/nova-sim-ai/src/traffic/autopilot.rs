@@ -175,7 +175,12 @@
 //!   as `_HandleShip` skips them while +0x4c runs (@0x34a54-0x34a72) but
 //!   for goal 0x16 (@0x3443f-0x34454); a drift
 //!   ([`Goal::Drift`]) so too, its 0.7 a tick along its heading being the
-//!   high level's (see [`plunder`](crate::traffic::plunder)).
+//!   high level's (see [`plunder`](crate::traffic::plunder)). A ship that
+//!   took the wait with sub 1 stored ([`Npc::stopping`]) keeps it, the
+//!   high level writing no sub (@0x8d4d2), and sub 1's cuts stand
+//!   ([`leave_flight::stop_under_wait`]): × 0.94 on the soft brake within
+//!   its retro heading (and off it for a refuel, goal 9), and below 0.35
+//!   × 0.95, which ends it.
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
 //!   either axis, truncated (its frame has no body): beyond 1000 and able
 //!   to jump ([`leave::can_jump`](crate::ai::leave::can_jump), by
@@ -586,7 +591,11 @@ fn fly_mobile(
         // goal 0x16 is exempt (`_AIIsShipDoingCountWait`, @0x3443f-0x34454)
         // and brakes below. The high level's wait gate returns before
         // state 1 runs (@0x8d4b9-0x8d4d2), so a landing ship keeps its goal
-        // through the wait and hands a gate off only after it.
+        // through the wait and hands a gate off only after it, and a sub 1
+        // it stored stands, the low level cutting it as ever.
+        if npc.stopping {
+            leave_flight::stop_under_wait(npc, &handling, inertia);
+        }
         position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }

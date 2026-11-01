@@ -758,14 +758,14 @@ pub struct Npc {
     /// that goal 0xb's test reads (@0x8defc-0x8df13), whichever goal wrote
     /// it. The stop's brake sets it, moving 0.35 or more on an axis; the
     /// stop's settle doesn't, as it writes sub 0 (@0x85624). Goal 0 flies
-    /// no sub 1 in the original (@0x8fb09-0x8fb13), so the engine's stop
-    /// there is not one ([`leave_flight::stop_wanting`]). Each flight
-    /// clears it, but while a wait runs: the high level writes no sub
-    /// (@0x8d4b9-0x8d4d2), so sub 1 stands until its low level reads it
-    /// below 0.35. An NPC held still keeps it. It starts `false`. Never
-    /// saved.
+    /// sub 0 (@0x8fb09-0x8fb13), so it never sets it. Each flight clears
+    /// it, but while a wait runs: the high level writes no sub
+    /// (@0x8d4b9-0x8d4d2), so sub 1 stands, and under an AI wait the low
+    /// level's sub 1 cuts the ship as it moves and settles it below 0.35,
+    /// which ends it ([`leave_flight::stop_under_wait`]). An NPC held
+    /// still keeps it. It starts `false`. Never saved.
     ///
-    /// [`leave_flight::stop_wanting`]: crate::traffic::leave_flight
+    /// [`leave_flight::stop_under_wait`]: crate::traffic::leave_flight
     pub stopping: bool,
 }
 

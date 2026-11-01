@@ -483,8 +483,10 @@ fn fly_flown(
     npc.close_form = npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
     // The stop's own flight sets it again. While a wait runs the high level
     // writes no sub (@0x8d4b9-0x8d4d2), and the low level's settle alone
-    // ends a sub 1 (@0x85624).
-    if !npc.wait_running() || !inertialess::moving(npc.state.velocity) {
+    // ends a sub 1 (@0x85624): under an AI wait the autopilot's wait flight
+    // runs that settle itself, so it reads the bit first.
+    let wait_flies_sub_1 = npc.ai_wait > 0 && !npc.count_wait();
+    if !npc.wait_running() || (!inertialess::moving(npc.state.velocity) && !wait_flies_sub_1) {
         npc.stopping = false;
     }
     // The goal it holds, not the one it flies (see `fly_one`).
