@@ -160,10 +160,22 @@ impl Kept {
 }
 
 impl Npc {
-    /// The goal its flight flies ([`Goal::flown`] under its leader).
+    /// The goal its flight flies ([`Goal::flown`] under its leader). A kept
+    /// fight flies at its target (+0x70), which the low level's fight subs
+    /// read (sub 5 @0x85cd9), should a hit have turned it on another ship;
+    /// with none, at the kept ship, which the fly half finds gone, so it
+    /// coasts (see the traffic's `skipped_high_level`).
     #[must_use]
     pub fn flown_goal(&self) -> Goal {
-        self.goal.flown(self.leader)
+        match (self.goal.flown(self.leader), self.target) {
+            (Goal::Attack(_), Some(target)) if self.goal.kept_quarry().is_some() => {
+                Goal::Attack(target)
+            }
+            (Goal::Snipe(_), Some(target)) if self.goal.kept_quarry().is_some() => {
+                Goal::Snipe(target)
+            }
+            (flown, _) => flown,
+        }
     }
 
     /// Runs `fly` on it with its goal the one it flies
@@ -288,6 +300,25 @@ mod tests {
             );
         }
         assert_eq!(Goal::Attack(T).kept_quarry(), None, "not paused");
+    }
+
+    #[test]
+    fn a_kept_fight_flies_at_its_target_or_with_none_at_its_kept_ship() {
+        let mut npc = crate::traffic::fixture::npc(1, crate::stats::ShipStats::default());
+        let other = ShipRef::Npc(NpcId(9));
+        for (kept, at) in [
+            (Kept::Attack(T), Goal::Attack(other)),
+            (Kept::Snipe(T), Goal::Snipe(other)),
+        ] {
+            npc.goal = Goal::Regroup { kept };
+            npc.target = Some(other);
+            assert_eq!(npc.flown_goal(), at, "{kept:?}: +0x70");
+            npc.target = None;
+            assert_eq!(npc.flown_goal(), Goal::Regroup { kept }.flown(None));
+        }
+        npc.goal = Goal::Attack(T);
+        npc.target = Some(other);
+        assert_eq!(npc.flown_goal(), Goal::Attack(T), "not paused");
     }
 
     #[test]
