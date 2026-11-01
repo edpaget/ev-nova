@@ -91,11 +91,16 @@
 //! turret at the guard, with its point defence. A gun-only escort fires
 //! nothing, keeping its gun find as its pick. Attacking, it fires as any
 //! ship does ([`fire::trigger`]), launching its fighters (the high level's
-//! launch is every type's); holding, it runs its point defence alone.
+//! launch is every type's); holding, it runs its point defence alone. Idle
+//! (goal 0: its lead lost, or an attack the high level dropped), sub 0
+//! fires [`escort::unprovoked`] at the target the frame ends with
+//! (@0x8521e-0x85236): an ally drop keeps its target, so it fires its
+//! turret at that ally, where a fleet or gone-target drop clears it first.
 //!
 //! **Its target** is what it attacks, or its guard unless
 //! [`escort::unprovoked`] drops it; holding or docking, none; a kept goal
-//! or the lost-parent branch writes none, so it keeps the one it had. In
+//! or the lost-parent branch writes none, so it keeps the one it had,
+//! unless idle sub 0's [`escort::unprovoked`] drops it. In
 //! its gate it fires unprovoked ([`escort::fire_unprovoked`], substate 0,
 //! @0x85236), and a hit makes it take its attacker as any ship does
 //! ([`react::victim`]), which its next think keeps by its order as any
@@ -311,8 +316,8 @@ impl Behaviour for FleetEscortAi {
     /// on the same guard) kept as its pick, and the low level's
     /// [`escort::unprovoked`] fired, with its point defence; a disabled
     /// escort runs no think (`_AIDispatch` @0x8fece-0x8ff13). Holding, its
-    /// point defence (`_AIFireTurret` with no target, @0x83e74). Anything
-    /// else, nothing.
+    /// point defence (`_AIFireTurret` with no target, @0x83e74). Idle, sub
+    /// 0's [`escort::unprovoked`] at its target. Anything else, nothing.
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
             Goal::Attack(_) | Goal::Snipe(_) => fire::trigger(npc, around, self.fire),
@@ -334,22 +339,28 @@ impl Behaviour for FleetEscortAi {
                 }
             }
             Goal::Wait => escort::hold_trigger(npc),
+            // Goal 0's sub 0 calls it every frame on the target the frame
+            // ends with (@0x8521e-0x85236).
+            Goal::Idle => escort::unprovoked(npc, npc.target, around, self.fire).trigger,
             _ => Trigger::default(),
         }
     }
 
-    /// What it attacks; in formation its guard, unless
-    /// [`escort::unprovoked`] drops it (+0x70 = -1, @0x80e9d); holding,
-    /// docking or keeping formation with no guard, none; idle (its lead
-    /// lost) or keeping a count wait or an assist, the target it has, as
-    /// those branches write none.
+    /// What it attacks; in formation its guard, and idle the target it has
+    /// (the lost-parent branch writes none), unless [`escort::unprovoked`]
+    /// drops it (+0x70 = -1, @0x80e9d); holding, docking or keeping
+    /// formation with no guard, none; keeping a count wait or an assist,
+    /// the target it has, as those branches write none.
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
             Goal::Attack(ship) | Goal::Snipe(ship) => Some(ship),
             Goal::Follow { guard, .. } => {
                 guard.filter(|_| !escort::unprovoked(npc, guard, around, self.fire).drops_target)
             }
-            Goal::Idle | Goal::CountWait | Goal::Assist(_) => npc.target,
+            Goal::Idle => npc
+                .target
+                .filter(|_| !escort::unprovoked(npc, npc.target, around, self.fire).drops_target),
+            Goal::CountWait | Goal::Assist(_) => npc.target,
             _ => None,
         }
     }
@@ -1526,7 +1537,7 @@ mod tests {
     }
 
     #[test]
-    fn holding_it_runs_its_point_defence_and_docking_or_idle_nothing() {
+    fn holding_it_runs_its_point_defence_and_docking_nothing() {
         let npcs = [
             lead(Goal::Idle),
             targeting(escort(), n(3)),
@@ -1535,13 +1546,37 @@ mod tests {
         assert_eq!(command(&npcs, Goal::Wait), (DEFENCE, None));
         assert_eq!(command(&npcs, Goal::Dock(n(1))), (Trigger::default(), None));
         assert_eq!(
-            command(&npcs, Goal::Idle),
-            (Trigger::default(), Some(n(3))),
-            "the lost-parent branch writes no target"
-        );
-        assert_eq!(
             command(&npcs, Goal::CountWait),
             (Trigger::default(), Some(n(3)))
+        );
+    }
+
+    #[test]
+    fn idle_it_fires_unprovoked_at_its_target_on_sub_0_keeping_it() {
+        // Goal 0's sub 0 calls `_AIEscortFireUnprovoked` every frame
+        // (@0x8521e-0x85236); the lost-parent branch writes no target.
+        let npcs = [
+            lead(Goal::Idle),
+            targeting(escort(), n(3)),
+            raider(3, 0.0, -50.0, n(1)),
+        ];
+        assert_eq!(command(&npcs, Goal::Idle), (fired(140), Some(n(3))));
+    }
+
+    #[test]
+    fn idle_it_drops_a_target_disabled_or_gone_and_fires_nothing() {
+        // +0x70 = -1 (@0x80e9d).
+        let mut down = raider(3, 0.0, -50.0, n(1));
+        down.condition = Condition::Disabled;
+        let npcs = [lead(Goal::Idle), targeting(escort(), n(3)), down];
+        assert_eq!(command(&npcs, Goal::Idle), (Trigger::default(), None));
+        let npcs = [lead(Goal::Idle), targeting(escort(), n(3))];
+        assert_eq!(command(&npcs, Goal::Idle), (Trigger::default(), None));
+        let npcs = [lead(Goal::Idle), escort(), raider(3, 0.0, -50.0, n(1))];
+        assert_eq!(
+            command(&npcs, Goal::Idle),
+            (Trigger::default(), None),
+            "no target"
         );
     }
 

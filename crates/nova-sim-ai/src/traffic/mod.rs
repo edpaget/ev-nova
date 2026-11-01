@@ -205,9 +205,12 @@ pub mod fleet_formation;
 pub mod fly_pass;
 pub mod formation_flight;
 pub mod formation_places;
+mod frame_target;
 #[cfg(test)]
 mod gate_approach_tests;
 pub mod gate_entry;
+#[cfg(test)]
+mod goal_0_fire_tests;
 #[cfg(test)]
 mod goal_0_tests;
 pub mod gone;
@@ -329,6 +332,7 @@ use berth_search::BerthSearch;
 use berth_voices::BerthVoices;
 pub use fly_pass::{FlyHalf, FlyPass};
 use formation_places::BerthPlaces;
+use frame_target::held_trigger;
 use gone::{Freed, GoneShips};
 use launch_room::LaunchRoom;
 use nova_sim_combat::asteroid::Asteroid;
@@ -1475,7 +1479,7 @@ impl Traffic {
             around.fighter_room = room.any();
             let (trigger, target) = if decides[index] {
                 (
-                    behaviour.trigger(npc, &around),
+                    held_trigger(behaviour, npc, last_words[index].flatten(), &around),
                     // A cleared or held target is the frame's last word: a
                     // target step that works its answer out afresh (a
                     // defender's think, a mission hunt) would refill it.

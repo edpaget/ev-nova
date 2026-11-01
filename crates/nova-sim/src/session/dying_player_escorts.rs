@@ -397,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mission_escort_is_let_go_idling_keeping_its_target_and_its_mark() {
+    fn a_mission_escort_is_let_go_idling_keeping_its_mark() {
         for (name, tick) in NOVA_TICKS {
             let (mut fleet, catalog) = fleet();
             dying(&mut fleet.session, true);
@@ -410,7 +410,10 @@ mod tests {
                 "{name}: its mark stays, as +0xc92e does"
             );
             assert_eq!(mission.goal, Goal::Idle, "{name}");
-            assert_eq!(mission.target, Some(ShipRef::Player), "{name}");
+            // The lost parent keeps its target, and goal 0's sub 0 then
+            // drops a target breaking up (`_AIEscortFireUnprovoked`,
+            // @0x80e9d).
+            assert_eq!(mission.target, None, "{name}");
             assert_eq!(mission.ai_type, AiType::WimpyTrader, "{name}");
         }
     }

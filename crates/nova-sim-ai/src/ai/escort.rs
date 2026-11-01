@@ -81,6 +81,14 @@
 //! mission's still, as the dispatch leads it again each frame
 //! (@0x8fbcd-0x8fc22).
 //!
+//! Idle (goal 0: the lost parent, or an attack the high level dropped),
+//! sub 0 fires [`unprovoked`] at the target the frame ends with every
+//! frame (@0x8521e-0x85236), its best turret and its point defence, and
+//! drops a target disabled, breaking up or gone: a mission escort let go
+//! that targets the player breaking up drops it in that frame. The fleet
+//! drop of an attack on the player or a fellow escort clears the target
+//! first, so it fires nothing.
+//!
 //! **The order word** ([`think_word`], [`Npc::order_word`]). Every think
 //! past the lost parent rewrites the word (@0x83ae4-0x83bda), the jump's
 //! block too, and the word is what the rest of the think flies and what
@@ -268,6 +276,9 @@ impl Behaviour for EscortAi {
             Goal::Formation { guard: Some(guard) } => {
                 unprovoked(npc, Some(guard), around, self.fire).trigger
             }
+            // Goal 0's sub 0 calls it every frame on the target the frame
+            // ends with (@0x8521e-0x85236).
+            Goal::Idle => unprovoked(npc, npc.target, around, self.fire).trigger,
             Goal::Wait => hold_trigger(npc),
             // Return to Hangar calls no turret (@0x83e79-0x83ea3).
             _ => Trigger::default(),
@@ -277,10 +288,12 @@ impl Behaviour for EscortAi {
     /// Keeping formation, its guard, unless [`unprovoked`] drops it
     /// (+0x70 = -1, @0x80e9d), so its next think draws again; idle, which
     /// it decides only under a player breaking up, the target it has, as
-    /// the lost parent writes none.
+    /// the lost parent writes none, unless sub 0's [`unprovoked`] drops it.
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
-            Goal::Idle => npc.target,
+            Goal::Idle => npc
+                .target
+                .filter(|_| !unprovoked(npc, npc.target, around, self.fire).drops_target),
             Goal::Attack(target) | Goal::Snipe(target) => Some(target),
             Goal::Formation { guard } => {
                 guard.filter(|_| !unprovoked(npc, guard, around, self.fire).drops_target)
@@ -1895,6 +1908,61 @@ mod tests {
             waiting(&ENGINE, &[disabled, pirate(2, 10.0, 0.0)]),
             GateWait::default()
         );
+    }
+
+    /// What `ENGINE` fires for `npcs[0]` flying among `npcs`, and the
+    /// target it keeps.
+    fn idle_fire(npcs: &[Npc]) -> (Trigger, Option<ShipRef>) {
+        let govts = govts(0, 0);
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], npcs)
+        };
+        (
+            ENGINE.trigger(&npcs[0], &around),
+            ENGINE.target(&npcs[0], &around),
+        )
+    }
+
+    #[test]
+    fn an_idle_escort_fires_unprovoked_at_its_target_on_sub_0() {
+        // Goal 0's sub 0 calls `_AIEscortFireUnprovoked` every frame
+        // (@0x8521e-0x85236): its turret pick and point defence at the
+        // target the frame keeps, which stays.
+        for npc in [escort(None), fighter(None)] {
+            let npcs = [having(npc, Goal::Idle, Some(n(2))), pirate(2, 0.0, -100.0)];
+            let (trigger, target) = idle_fire(&npcs);
+            assert_eq!(
+                trigger,
+                Trigger {
+                    only: Some(WeaponId(140)),
+                    keep: Some(WeaponId(140)),
+                    ..POINT_DEFENCE.trigger
+                }
+            );
+            assert_eq!(target, Some(n(2)), "kept");
+        }
+    }
+
+    #[test]
+    fn an_idle_escort_drops_a_target_down_or_gone_and_fires_nothing() {
+        // `_AIEscortFireUnprovoked` sets +0x70 to -1 (@0x80e9d).
+        let idle = having(escort(None), Goal::Idle, Some(n(2)));
+        let mut down = pirate(2, 0.0, -100.0);
+        down.condition = Condition::Disabled;
+        for npcs in [vec![idle.clone(), down], vec![idle]] {
+            assert_eq!(idle_fire(&npcs), (Trigger::default(), None));
+        }
+    }
+
+    #[test]
+    fn an_idle_escort_with_no_target_fires_nothing() {
+        let npcs = [
+            having(escort(None), Goal::Idle, None),
+            pirate(2, 0.0, -100.0),
+        ];
+        assert_eq!(idle_fire(&npcs), (Trigger::default(), None));
     }
 
     /// How the escort, `npcs[0]`, answers `strike` among `npcs`, the
