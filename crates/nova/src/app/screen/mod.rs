@@ -383,6 +383,7 @@ mod flight;
 mod game;
 mod jump_white;
 mod launch;
+mod live_input;
 mod map_wait_keys;
 mod menu;
 mod menu_commands;
@@ -713,6 +714,10 @@ pub struct AppScreen {
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
     command_held: bool,
+    /// What is physically down while flight's input is away, for flight
+    /// as it gets it back (see `live_input`): the router's, as only it
+    /// sees the input while a dialog or the spaceport takes flight's.
+    live: live_input::LiveInput,
     /// Whether the physical S, L and E keys are held: O does nothing
     /// while S or L is (`_KeyCheck(0x01)`, `_KeyCheck(0x25)`
     /// @0x1abd3-0x1abf5), and E waits for E's release.

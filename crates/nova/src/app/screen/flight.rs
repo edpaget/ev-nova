@@ -584,7 +584,8 @@ impl AppScreen {
     /// Queues what `show` queues on the mission dialogs over flight, first
     /// cancelling flight's pointer gesture and letting go of its keys
     /// (their releases will go to the dialogs), as any dialog over flight
-    /// does. Without dialogs nothing is queued.
+    /// does: the last one's close hands back what is still down (see
+    /// `live_input`). Without dialogs nothing is queued.
     fn over_flight(&mut self, show: impl FnOnce(&mut MissionDialogs)) {
         if self.flight_missions().is_none() {
             return;

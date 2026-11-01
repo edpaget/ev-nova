@@ -100,11 +100,16 @@ impl Screen for AppScreen {
     /// While the app is in the background, every input stops at the
     /// router: the pointer's last move or leave is kept for the app's
     /// return, and the rest is dropped (see `background`).
+    ///
+    /// What is physically down is noted as it arrives, and handed back
+    /// to flight as its input comes back from a dialog or the spaceport
+    /// (see `live_input`).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.away_takes_input(input) {
             return ScreenAction::None;
         }
-        self.input_past_away(input)
+        self.live.note(input);
+        self.settled_input(input)
     }
 
     /// Only the side shown ticks; a hidden one is paused. The main menu is
@@ -164,6 +169,7 @@ impl Screen for AppScreen {
         self.after_flight_tick();
         self.settle_script();
         self.save_if_due();
+        self.settle_live_input();
     }
 
     /// The side shown, then the hint (not over flight, which has its own
@@ -291,36 +297,11 @@ impl Screen for AppScreen {
         }
     }
 
-    /// While the main menu appears unseen or waits, the letting go waits
-    /// too, in its place among the inputs; while E's wait holds, it
-    /// counts as E's release.
+    /// What is physically down is forgotten (see `live_input`), then the
+    /// keys are let go ([`AppScreen::let_go_of_keys`]).
     fn release_keys(&mut self) {
-        if self.entry_release_keys() {
-            return;
-        }
-        if self.appear_release_keys() {
-            return;
-        }
-        if let Some(hold) = self.menu_hold {
-            self.held.push(Held::ReleaseKeys);
-            if hold == MenuHold::EHeld {
-                self.e_released();
-            }
-            return;
-        }
-        self.command_held = false;
-        self.keys_held = MenuKeys::default();
-        // A mission dialog's map over flight sits among the overlays, in
-        // front of the dialog it opened from, so flight lets go too: its
-        // map waiting for M's release closes
-        // ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)).
-        if self.flight_dialog_map_open() {
-            self.flight.as_mut().expect(ENTERED).release_keys();
-        }
-        match self.overlay_mut() {
-            Some(overlay) => overlay.release_keys(),
-            None => self.shown_mut().release_keys(),
-        }
+        self.live.forget();
+        self.let_go_of_keys();
     }
 
     /// The window went to the background: `_SwitchedOut` (@0x4f381) runs
@@ -379,10 +360,11 @@ impl Screen for AppScreen {
                     }
                 }
                 Held::CancelPointer => self.cancel_pointer(),
-                Held::ReleaseKeys => self.release_keys(),
+                Held::ReleaseKeys => self.let_go_of_keys(),
                 Held::Close => self.replay_close(),
             }
         }
+        self.settle_live_input();
     }
 
     /// Whether Quit's delay has run out, a replayed input quit, or the
@@ -572,7 +554,9 @@ impl Screen for AppScreen {
     /// About text where nothing holds input or is in front (see
     /// `menu_commands`).
     fn menu_command(&mut self, command: MenuCommand) -> ScreenAction {
-        self.run_menu_command(command)
+        let action = self.run_menu_command(command);
+        self.settle_live_input();
+        action
     }
 
     /// Quit always; Preferences… and About where the command would do
@@ -583,6 +567,60 @@ impl Screen for AppScreen {
 }
 
 impl AppScreen {
+    /// Lets go of the keys of what takes the input, not forgetting what
+    /// is physically down: [`Screen::release_keys`]'s work, and how the
+    /// router lets go of the screen below a dialog it opens, whose
+    /// releases will go to the dialog. While the main menu appears unseen
+    /// or waits, the letting go waits too, in its place among the inputs;
+    /// while E's wait holds, it counts as E's release.
+    pub(super) fn let_go_of_keys(&mut self) {
+        if self.entry_release_keys() {
+            return;
+        }
+        if self.appear_release_keys() {
+            return;
+        }
+        if let Some(hold) = self.menu_hold {
+            self.held.push(Held::ReleaseKeys);
+            if hold == MenuHold::EHeld {
+                self.e_released();
+            }
+            return;
+        }
+        self.command_held = false;
+        self.keys_held = MenuKeys::default();
+        // A mission dialog's map over flight sits among the overlays, in
+        // front of the dialog it opened from, so flight lets go too: its
+        // map waiting for M's release closes
+        // ([`FlightView::close_map`](nova_view::flight::FlightView::close_map)).
+        if self.flight_dialog_map_open() {
+            self.flight.as_mut().expect(ENTERED).release_keys();
+        }
+        match self.overlay_mut() {
+            Some(overlay) => overlay.release_keys(),
+            None => self.shown_mut().release_keys(),
+        }
+    }
+
+    /// `input` as [`Screen::input`] takes it, not noted as physically
+    /// down: what the main menu's appear held, replayed as it ends, went
+    /// down or up as it arrived (see `live_input`).
+    pub(super) fn replay_input(&mut self, input: &Input) -> ScreenAction {
+        if self.away_takes_input(input) {
+            return ScreenAction::None;
+        }
+        self.settled_input(input)
+    }
+
+    /// `input` taken past the background's gate
+    /// ([`AppScreen::input_past_away`]), then what is down handed back to
+    /// flight if its input has come back ([`AppScreen::settle_live_input`]).
+    fn settled_input(&mut self, input: &Input) -> ScreenAction {
+        let action = self.input_past_away(input);
+        self.settle_live_input();
+        action
+    }
+
     /// `input` as [`Screen::input`] takes it once past the background's
     /// gate: Quit's delay, the entry, the appear and a keyed click's hold
     /// each stop it or hold it first, and otherwise it is routed.

@@ -449,7 +449,7 @@ impl AppScreen {
 
     /// The overlay open in front, if any: the one [`AppScreen::route`]
     /// gives every input to.
-    fn overlay_in_front(&self) -> Option<Overlay> {
+    pub(super) fn overlay_in_front(&self) -> Option<Overlay> {
         self.overlays_open()
             .into_iter()
             .find_map(|(is_open, overlay)| is_open.then_some(overlay))

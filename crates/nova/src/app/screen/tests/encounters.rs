@@ -206,7 +206,7 @@ fn as_strs(strings: &[String]) -> Vec<&str> {
 
 /// `screen` over [`boarding_data`], its trader under the player,
 /// idling and disabled at once.
-fn boardable(screen: AppScreen) -> AppScreen {
+pub(super) fn boardable(screen: AppScreen) -> AppScreen {
     screen
         .with_chance(under_the_player())
         .with_behaviour(Rc::new(Idle))
@@ -652,7 +652,7 @@ impl HailOption for Sell {
 
 /// `screen` over [`boarding_data`], its trader under the player,
 /// idling and intact, and Nova's options with [`Sell`].
-fn hailable(screen: AppScreen) -> AppScreen {
+pub(super) fn hailable(screen: AppScreen) -> AppScreen {
     screen
         .with_chance(under_the_player())
         .with_behaviour(Rc::new(Idle))

@@ -29,7 +29,7 @@ fn end_the_wait(screen: &mut AppScreen) {
 }
 
 /// A person's offer of mission 130.
-fn job() -> nova_sim::OfferPrompt {
+pub(super) fn job() -> nova_sim::OfferPrompt {
     nova_sim::OfferPrompt {
         mission: MissionId(130),
         text: "Job.".to_owned(),
@@ -40,7 +40,7 @@ fn job() -> nova_sim::OfferPrompt {
 }
 
 /// Flight with a person's offer open over it, laid out.
-fn offered_over_flight() -> AppScreen {
+pub(super) fn offered_over_flight() -> AppScreen {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(game_data_fork_loaded())
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
@@ -52,7 +52,7 @@ fn offered_over_flight() -> AppScreen {
     screen
 }
 
-fn game_data_fork_loaded() -> Rc<GameData> {
+pub(super) fn game_data_fork_loaded() -> Rc<GameData> {
     loaded(&game_data_fork(true, true, true, 100, b"", b"", None))
 }
 

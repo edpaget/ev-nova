@@ -504,7 +504,7 @@ impl AppScreen {
                 && let Some(offer) = self.offer.as_ref().filter(|offer| !offer.answered())
             {
                 flight.reload_offer_desc(offer.prompt().mission);
-                self.release_keys();
+                self.let_go_of_keys();
             }
         }
         if let Some(missions) = &mut self.missions
@@ -571,7 +571,7 @@ impl AppScreen {
             .map(|template| (template, Rc::clone(&dialogs.metrics)));
         let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
         self.cancel_pointer();
-        self.release_keys();
+        self.let_go_of_keys();
         self.player_info = Some(
             PlayerInfoScreen::new(
                 layout,
@@ -600,7 +600,7 @@ impl AppScreen {
         }
         if closed {
             self.player_info = None;
-            self.release_keys();
+            self.let_go_of_keys();
             if laid_out && let Some(flight) = &mut self.flight {
                 flight.refresh_status();
             }
@@ -630,8 +630,9 @@ impl AppScreen {
     /// `_HandlePlayerBoardAttempt` hide its sprite (@0x6225a, @0x658d6).
     /// Only the pointer is cancelled here: flight's `hold_offer` has
     /// already let go of its keys. The original keeps reading them live
-    /// over the offer's close
-    /// (rdm:phase/play-feel-7-fidelity/phase-2-flight-keys-still-down-after-a-dialog).
+    /// over the offer's close, so the router hands back what is still
+    /// down as the last dialog over flight closes (see `live_input`,
+    /// rdm:phase/play-feel-8/phase-3-keys-live-across-a-dialog).
     pub(super) fn open_offer(&mut self, prompt: OfferPrompt) {
         if let Some(flight) = &mut self.flight {
             flight.cancel_pointer();
@@ -740,7 +741,7 @@ impl AppScreen {
         if let Some(dialog) = &mut self.offer {
             dialog.cancel_pointer();
         }
-        self.release_keys();
+        self.let_go_of_keys();
         if let Some(missions) = self.flight_missions() {
             missions.open_info_with_map(info, false);
         }
@@ -753,7 +754,7 @@ impl AppScreen {
     /// the keys held let go. Its input goes to the map before them
     /// ([`AppScreen::flight_dialog_map_input`]).
     fn open_flight_dialog_map(&mut self, opener: MapOpener) {
-        self.release_keys();
+        self.let_go_of_keys();
         if let Some(flight) = &mut self.flight {
             flight.open_dialog_map(opener);
         }

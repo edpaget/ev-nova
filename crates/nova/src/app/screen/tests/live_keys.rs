@@ -1,0 +1,255 @@
+use super::encounters::{boardable, boarding_data, hailable};
+use super::map_wait_keys::{game_data_fork_loaded, job, offered_over_flight};
+use super::*;
+use nova_view::ui::player_info::PLAYER_INFO_KEY;
+
+// The keys and the button down under a dialog over flight, handed back as
+// the last one closes (the `live_input` module): `_HandlePlayer` polls its
+// unlatched keys past `_SetAllKeyCmdFlags` (@0x61e6d), which latches the
+// rest. Wiring through the real router and flight: which keys flight
+// reads live, and how, is nova-view's (`flight::view::tests::live_keys`).
+
+/// Presses and lets go of `k`.
+fn tap(screen: &mut AppScreen, k: Key) {
+    screen.input(&key(k, true));
+    screen.input(&key(k, false));
+}
+
+/// How fast the player's ship goes.
+fn speed(screen: &AppScreen) -> f32 {
+    ship(screen).velocity.length()
+}
+
+/// Flight in Sol with Up held, then a person's offer opened over it as
+/// its hail opens it: flight lets go of its keys first, as their releases
+/// go to the offer.
+fn offered_thrusting() -> AppScreen {
+    let store = MemoryPilots::new();
+    let mut screen = AppScreen::new(game_data_fork_loaded())
+        .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create(&mut screen, "Ada");
+    screen.input(&key(Key::Up, true));
+    offer_as_a_hail_would(&mut screen);
+    screen
+}
+
+/// Opens a person's offer over flight as its hail does: flight lets go
+/// of its keys and the button (`FlightView::hold_offer`), then the router
+/// opens it; a tick over it follows, as the original's next frame does.
+fn offer_as_a_hail_would(screen: &mut AppScreen) {
+    flight_mut(screen).cancel_pointer();
+    flight_mut(screen).release_keys();
+    screen.open_offer(job());
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Offer);
+}
+
+/// Refuses the offer open over flight, which closes back to flight.
+fn refuse(screen: &mut AppScreen) {
+    tap(screen, Key::Char('n'));
+    assert_eq!(screen.showing(), Showing::Flight, "closed");
+}
+
+#[test]
+fn thrust_held_through_a_persons_offer_thrusts_after_its_close() {
+    let mut screen = offered_thrusting();
+    refuse(&mut screen);
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) > closed, "thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn thrust_pressed_during_the_offer_and_still_down_at_its_close_thrusts() {
+    let mut screen = offered_over_flight();
+    let still = ship(&screen);
+    screen.input(&key(Key::Up, true));
+    refuse(&mut screen);
+    screen.tick(TICK * 3);
+    assert_ne!(ship(&screen), still, "thrust");
+}
+
+#[test]
+fn thrust_let_go_during_the_offer_doesnt() {
+    let mut screen = offered_thrusting();
+    screen.input(&key(Key::Up, false));
+    refuse(&mut screen);
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) <= closed, "no thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn a_thrust_key_let_go_after_the_close_stops_thrusting() {
+    let mut screen = offered_thrusting();
+    refuse(&mut screen);
+    screen.tick(TICK);
+    screen.input(&key(Key::Up, false));
+    let let_go = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) <= let_go, "its release came live");
+}
+
+#[test]
+fn a_focus_loss_under_a_dialog_forgets_the_keys_down() {
+    // Ours can't read the keys unfocused (`Screen::release_keys`).
+    let mut screen = offered_thrusting();
+    screen.cancel_pointer();
+    screen.release_keys();
+    screen.focus_lost();
+    screen.focus_gained();
+    screen.tick(TICK);
+    refuse(&mut screen);
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) <= closed, "forgotten: {:?}", ship(&screen));
+}
+
+#[test]
+fn an_internal_let_go_under_a_dialog_keeps_the_keys_down() {
+    // P over the offer opens the player info, the router letting go of
+    // what is below it, whose releases go to the screen.
+    let mut screen = offered_thrusting();
+    tap(&mut screen, PLAYER_INFO_KEY);
+    assert_eq!(screen.showing(), Showing::PlayerInfo, "over the offer");
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Offer, "back to the offer");
+    refuse(&mut screen);
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) > closed, "thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn a_replayed_press_doesnt_bring_back_a_key_let_go() {
+    // The map's wait over the offer queues Up's tap and N, which the
+    // router replays to the offer at the wait's end, after Up's live
+    // release.
+    let mut screen = offered_thrusting();
+    screen.input(&key(MAP, true));
+    tap(&mut screen, Key::Escape);
+    assert!(flight(&screen).map_waiting(), "waiting");
+    screen.input(&key(Key::Up, false));
+    tap(&mut screen, Key::Up);
+    tap(&mut screen, Key::Char('n'));
+    screen.input(&key(MAP, false));
+    assert_eq!(screen.showing(), Showing::Flight, "refused");
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) <= closed, "no thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn a_click_held_past_the_offers_close_keeps_flights_cursor_whole() {
+    for held in [true, false] {
+        let mut screen = offered_over_flight();
+        let at = Point::new(300.0, 300.0);
+        screen.input(&Input::PointerMoved(at));
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        });
+        if !held {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed: false,
+                at,
+            });
+        }
+        refuse(&mut screen);
+        // The app tells flight where the pointer is as it shows again.
+        screen.input(&Input::PointerMoved(at));
+        for _ in 0..90 {
+            screen.tick(TICK);
+        }
+        assert_eq!(
+            flight(&screen).cursor_at().is_some(),
+            held,
+            "whole while held, faded once let go: held {held}"
+        );
+    }
+}
+
+#[test]
+fn thrust_held_through_the_comm_dialog_thrusts_after_its_close() {
+    // `_HandlePlayerCommunication` @0x625ee.
+    let mut screen = hailable(with_dialogs(boarding_data()));
+    fly(&mut screen);
+    screen.input(&key(Key::Up, true));
+    hail(&mut screen);
+    assert_eq!(screen.showing(), Showing::Comm);
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight, "the channel closed");
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) > closed, "thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn thrust_held_through_the_plunder_dialog_thrusts_after_its_close() {
+    // `_HandlePlayerBoardAttempt` @0x659f1.
+    let mut screen = boardable(with_dialogs(boarding_data()));
+    fly(&mut screen);
+    screen.tick(TICK);
+    tap(&mut screen, Key::Tab);
+    screen.input(&key(Key::Up, true));
+    tap(&mut screen, Key::Char('b'));
+    assert_eq!(screen.showing(), Showing::Plunder);
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight, "aborted");
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) > closed, "thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn a_latched_key_held_across_the_offers_close_acts_only_once_pressed_again() {
+    // The stellar slot key 1 selects on a frame it is held with its
+    // latch clear, and `_SetAllKeyCmdFlags` (@0x622ac) sets the latch at
+    // the close.
+    let mut screen = offered_over_flight();
+    let target = |screen: &AppScreen| flight(screen).session().expect("flying").nav_target();
+    assert_eq!(target(&screen), None);
+    screen.input(&key(Key::Char('1'), true));
+    refuse(&mut screen);
+    screen.tick(TICK * 8);
+    assert_eq!(target(&screen), None, "held across the close: latched");
+    screen.input(&key(Key::Char('1'), false));
+    screen.input(&key(Key::Char('1'), true));
+    screen.tick(TICK * 8);
+    assert_ne!(target(&screen), None, "pressed afresh");
+}
+
+#[test]
+fn thrust_held_through_the_player_info_thrusts_after_its_close() {
+    // `_HandlePlayer` @0x70393.
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    screen.input(&key(Key::Up, true));
+    tap(&mut screen, PLAYER_INFO_KEY);
+    assert_eq!(screen.showing(), Showing::PlayerInfo);
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight);
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) > closed, "thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn thrust_held_through_the_spaceport_thrusts_after_the_take_off() {
+    // `_PlayerLandOnStellar` @0x63583: the take-off grace holds off only
+    // M, P and I.
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    screen.input(&key(Key::Up, true));
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Flight, "took off");
+    screen.tick(TICK * 3);
+    assert_ne!(
+        ship(&screen).velocity,
+        nova_sim::ShipState::default().velocity
+    );
+}

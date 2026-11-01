@@ -104,6 +104,7 @@ mod game;
 mod jump_white;
 mod landing_texts_after_movie;
 mod launch;
+mod live_keys;
 mod map_find;
 mod map_wait_keys;
 mod menu;

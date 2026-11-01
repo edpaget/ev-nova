@@ -118,6 +118,7 @@ impl AppScreen {
             button_down: false,
             player_info: None,
             command_held: false,
+            live: super::live_input::LiveInput::default(),
             keys_held: MenuKeys::default(),
             menu_hold: None,
             held: Vec::new(),

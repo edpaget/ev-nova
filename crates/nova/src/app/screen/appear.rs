@@ -21,7 +21,7 @@
 
 use nova_sim::{RuleKey, RuleSource};
 use nova_view::menu::appear::{Appear, Deferred, Verdict};
-use nova_view::{Input, Screen, ScreenAction};
+use nova_view::{Input, ScreenAction};
 
 use super::{AppScreen, MenuKeys, Side};
 
@@ -127,12 +127,12 @@ impl AppScreen {
         for deferred in held.into_iter().flatten() {
             match deferred {
                 Deferred::Input(input) => {
-                    if self.input(&input) == ScreenAction::Quit {
+                    if self.replay_input(&input) == ScreenAction::Quit {
                         self.quit_due = true;
                     }
                 }
                 Deferred::Close => self.replay_close(),
-                Deferred::ReleaseKeys => self.release_keys(),
+                Deferred::ReleaseKeys => self.let_go_of_keys(),
             }
         }
     }
