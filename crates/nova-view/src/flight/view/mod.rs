@@ -1469,6 +1469,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The escape pod's rescue on screen while it shows: flight steps no
     /// more until it is over (see the `rescue` module).
     rescue: Option<super::rescue_screen::RescueScreen>,
+    /// The repaint under the rescue's first text, when a text queued
+    /// after `_ResetPlayer` reads it, until the screen is black (see the
+    /// `rescue` module).
+    rescue_later: Option<rescue::LaterRepaint>,
     /// What was pressed under the rescue, until the router takes it
     /// ([`FlightView::take_rescue_replay`]).
     rescue_replay: Vec<crate::Input>,

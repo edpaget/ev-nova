@@ -28,17 +28,28 @@
 //!    and the days passed under the flag (@0x68efa-0x6912a). The texts
 //!    they queued are due, and the first takes `_ShowTextDialog`'s faded
 //!    branch: its repaint, `_RefreshSAT` and `_RedrawStatus(1)`, is drawn
-//!    under it, the space area in the pod's system's `BkgndColor`, empty
-//!    (every sprite hidden since stage 2), and the bar as the pod's last
-//!    frame drew it, then it fades in from black (@0x5af96-0x5b038; an
-//!    empty one with no dialog, @0x5a7bf-0x5a874), which clears the flag
-//!    ([`RescueScreen::faded_in`]). The stage ends on the next tick, the
-//!    original's return from the last text.
+//!    under it, then it fades in from black (@0x5af96-0x5b038; an empty
+//!    one with no dialog, @0x5a7bf-0x5a874), which clears the flag
+//!    ([`RescueScreen::faded_in`]). The repaint reads the state where the
+//!    rescue was as that text was queued ([`FirstText`]): the space area
+//!    in a system's `BkgndColor`, empty (every sprite hidden since stage
+//!    2), the comm line and the floaters over it, and the bar. The stage
+//!    ends on the next tick, the original's return from the last text.
 //! 6. [`RescueStage::Closing`]: the window painted black, the space area
-//!    in the new system's `BkgndColor`, and the bar and comm redrawn
-//!    (@0x691cb-0x69253), then `_FadeScreenIn` (@0x692c9): 1.0 s from
-//!    black while the flag is still set, else nothing, the repaint
-//!    overdrawn by the next pass's frame at once.
+//!    in the new system's `BkgndColor`, the floaters, and the bar and
+//!    comm redrawn (@0x691cb-0x69253), then `_FadeScreenIn` (@0x692c9):
+//!    1.0 s from black while the flag is still set, else nothing, the
+//!    repaint overdrawn by the next pass's frame at once.
+//!
+//! Each repaint ([`Repaint`]) is `_RefreshSAT`'s (@0x6b59): the space
+//! area, then `_RedrawComm` and `_FloaterDrawCallback` (@0x6c12-0x6c6b,
+//! @0x6daf-0x6dc6), which draw the message while `_commCount` is above 0
+//! and the escort menu while it shows, then the bar. `_ResetPlayer` sets
+//! `_commCount` to 0 (@0x1d904), so only a repaint before it shows a
+//! message, and the closing's `_RedrawComm(0)` (@0x69225) draws none.
+//! The floating map is in none of them: its level counts `TickCount`
+//! (@0x38ba0-0x38bce), 0 from 150 ticks after its last show, and stages
+//! 1, 2 and 4 alone take 180.
 //!
 //! The fades are each the 1.0 s of `_FadeScreenOut` and `_FadeScreenIn`
 //! ([`RESCUE_FADE_FOR`]). None of the range plays a sound
@@ -63,27 +74,17 @@
 //!
 //! - stage 1 draws the frame the pod showed last, not the rescued layout;
 //! - stages 2 to 4 draw black;
-//! - stage 5 draws the pod's system's background and the bar as the pod
-//!   last drew it;
-//! - only stage 6 draws the new system.
+//! - stage 5 draws the repaint as it stood when its text was queued: the
+//!   pod's system, bar and message line for an `OnAbort`'s text, the
+//!   pod's system and radar with the reset ship's bar for the
+//!   `OnPurchase`'s, the new system for the days';
+//! - stage 6 draws the new system.
 //!
 //! The Strict Play save is made on the rescue's tick, where the original
 //! makes it at @0x692c4, after every text. The state saved is the same,
 //! and a quit under a text doesn't skip the original's save either (the
 //! phase's step 1 findings), so no boundary the player sees or keeps is
 //! crossed.
-//!
-//! # Left out
-//!
-//! - `_RefreshSAT`'s and `_RedrawComm(0)`'s comm line and floaters under
-//!   the first faded text and at the closing repaint (@0x6c0d-0x6dc6,
-//!   @0x69225) are not drawn.
-//! - A first faded text queued after `_ResetPlayer` (@0x68f2f), by
-//!   `OnPurchase` (@0x68f55) or the days (@0x6912a), shows over the pod's
-//!   bar, where the original repaints the bar of the reset ship, and for
-//!   the days the new system's background and ships.
-//!
-//! Both are rdm:phase/play-feel-8-fidelity/phase-6-rescue-screen-repaint-left-outs.
 
 use std::time::Duration;
 
@@ -92,6 +93,7 @@ use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view};
 use crate::geometry::Bounds;
 use crate::input::Input;
 use crate::{Color, DrawList, Point};
+use nova_sim::flight_frame::RescueTexts;
 
 /// How long each of the rescue's fades, and the black between the first
 /// two, lasts: the 1.0 s of `_FadeScreenOut` (@0x5399) and
@@ -117,23 +119,65 @@ pub enum RescueStage {
     Done,
 }
 
-/// What a repaint of the rescue draws: the space area's colour, and the
-/// bar over it.
+/// What a repaint of the rescue draws, `_RefreshSAT` (@0x6b59) then
+/// `_RedrawStatus(1)`: the space area's colour, the comm line and the
+/// floaters over it, and the bar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Repaint {
     /// The space area's colour: a system's `BkgndColor`.
     pub background: Color,
+    /// The comm line and the floaters, as `_RefreshSAT`'s `_RedrawComm`
+    /// and `_FloaterDrawCallback` draw them (@0x6c12-0x6c6b,
+    /// @0x6daf-0x6dc6): the message while one shows, and the escort menu
+    /// while it does.
+    pub floaters: DrawList,
     /// The status bar, drawn over the black window.
     pub bar: DrawList,
 }
 
 impl Repaint {
     /// Paints the window black, the space area `space` in the background
-    /// colour, then the bar, over a view `view` in size.
+    /// colour, the floaters, then the bar, over a view `view` in size.
     fn draw(&self, list: &mut DrawList, view: (f32, f32), space: Bounds) {
         fill_rect(list, whole_view(view), Color::BLACK);
         fill_rect(list, space, self.background);
+        list.extend_translated(&self.floaters, Point::new(0.0, 0.0));
         list.extend_translated(&self.bar, Point::new(0.0, 0.0));
+    }
+}
+
+/// Where the rescue was as the first text it shows was queued: what the
+/// repaint under it reads, as `_ShowTextDialog`'s faded branch repaints
+/// the live state (`_RefreshSAT`, `_RedrawStatus(1)`, @0x5af96-0x5b038).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstText {
+    /// Queued by an `OnAbort` (@0x68f0d), before `_ResetPlayer`: the
+    /// pod's system, its bar and its message line as the pod last drew
+    /// them.
+    BeforeReset,
+    /// Queued by ship 128's `OnPurchase` (@0x68f55), after `_ResetPlayer`
+    /// (@0x68f2f) and before the move (`_DeleteAllComputerShips`
+    /// @0x68f69): the pod's system and its radar, the reset ship's bar,
+    /// and no message, `_commCount` being 0 (@0x1d904).
+    AfterReset,
+    /// Queued by the days (@0x6912a), after the move: the new system,
+    /// its ships on the radar (their sprites hidden still), the reset
+    /// ship's bar, and no message.
+    AfterMove,
+}
+
+impl FirstText {
+    /// Where a first text whose place among the texts is `texts`
+    /// ([`TextBar::texts`](nova_sim::TextBar::texts)) was queued, by the
+    /// counts `at` the rescue noted; none at all reads as before the
+    /// reset, as nothing is shown over the repaint then.
+    #[must_use]
+    pub fn of(texts: Option<u64>, at: RescueTexts) -> Self {
+        match texts {
+            Some(texts) if texts > at.moved => Self::AfterMove,
+            Some(texts) if texts > at.reset => Self::AfterReset,
+            _ => Self::BeforeReset,
+        }
     }
 }
 
@@ -171,6 +215,12 @@ impl RescueScreen {
             held: Vec::new(),
             replay: Vec::new(),
         }
+    }
+
+    /// `under` is the repaint under the first faded text instead: the
+    /// one a text queued after `_ResetPlayer` reads ([`FirstText`]).
+    pub fn repaint_under(&mut self, under: Repaint) {
+        self.under = under;
     }
 
     /// The stage it is in.
@@ -357,10 +407,13 @@ mod tests {
     }
 
     fn under() -> Repaint {
+        let mut floaters = DrawList::new();
+        floaters.dot(Point::new(20.0, 700.0), 2.0, Color::WHITE);
         let mut bar = DrawList::new();
         bar.dot(Point::new(900.0, 10.0), 2.0, Color::WHITE);
         Repaint {
             background: Color::rgba(0, 0, 0x10, 255),
+            floaters,
             bar,
         }
     }
@@ -369,10 +422,16 @@ mod tests {
         RescueScreen::new(pod(), under())
     }
 
-    /// A fresh screen moved on to `stage` by whole seconds, and by an
-    /// empty tick out of the stages that wait for one.
+    /// A fresh screen moved on to `stage` ([`advance`]).
     fn at(stage: RescueStage) -> RescueScreen {
         let mut screen = screen();
+        advance(&mut screen, stage);
+        screen
+    }
+
+    /// Moves `screen` on to `stage` by whole seconds, and by an empty
+    /// tick out of the stages that wait for one.
+    fn advance(screen: &mut RescueScreen, stage: RescueStage) {
         while screen.stage() < stage {
             let dt = if matches!(screen.stage(), RescueStage::Text | RescueStage::UnderTexts) {
                 Duration::ZERO
@@ -382,7 +441,6 @@ mod tests {
             screen.tick(dt);
         }
         assert_eq!(screen.stage(), stage);
-        screen
     }
 
     const VIEW: (f32, f32) = (1365.0, 768.0);
@@ -410,10 +468,13 @@ mod tests {
         list
     }
 
+    /// `repaint` as drawn: the window black, the space area in its
+    /// background, its floaters, then its bar.
     fn painted(repaint: &Repaint) -> DrawList {
         let mut list = DrawList::new();
         fill_rect(&mut list, whole_view(VIEW), Color::BLACK);
         fill_rect(&mut list, space(), repaint.background);
+        list.extend_translated(&repaint.floaters, Point::new(0.0, 0.0));
         list.extend_translated(&repaint.bar, Point::new(0.0, 0.0));
         list
     }
@@ -426,6 +487,7 @@ mod tests {
     fn new_system() -> Repaint {
         Repaint {
             background: Color::rgba(0x10, 0, 0, 255),
+            floaters: DrawList::new(),
             bar: DrawList::new(),
         }
     }
@@ -577,6 +639,50 @@ mod tests {
         );
         screen.faded_in();
         assert_eq!(drawn(&screen, new_system()), painted(&under()));
+    }
+
+    #[test]
+    fn a_repaint_draws_its_floaters_over_the_space_area_and_under_the_bar() {
+        let mut screen = at(RescueStage::UnderTexts);
+        screen.faded_in();
+        let repaint = under();
+        let mut expected = DrawList::new();
+        fill_rect(&mut expected, whole_view(VIEW), Color::BLACK);
+        fill_rect(&mut expected, space(), repaint.background);
+        expected.dot(Point::new(20.0, 700.0), 2.0, Color::WHITE);
+        expected.dot(Point::new(900.0, 10.0), 2.0, Color::WHITE);
+        assert_eq!(drawn(&screen, new_system()), expected);
+    }
+
+    #[test]
+    fn a_repaint_given_for_the_texts_replaces_the_pods() {
+        let mut screen = at(RescueStage::Black);
+        screen.repaint_under(new_system());
+        advance(&mut screen, RescueStage::UnderTexts);
+        screen.faded_in();
+        assert_eq!(drawn(&screen, under()), painted(&new_system()));
+    }
+
+    fn marks() -> RescueTexts {
+        RescueTexts { reset: 3, moved: 5 }
+    }
+
+    #[test]
+    fn a_text_queued_by_the_abort_scripts_comes_before_the_reset() {
+        assert_eq!(FirstText::of(Some(1), marks()), FirstText::BeforeReset);
+        assert_eq!(FirstText::of(Some(3), marks()), FirstText::BeforeReset);
+        assert_eq!(FirstText::of(None, marks()), FirstText::BeforeReset, "none");
+    }
+
+    #[test]
+    fn a_text_queued_by_the_on_purchase_comes_after_the_reset_before_the_move() {
+        assert_eq!(FirstText::of(Some(4), marks()), FirstText::AfterReset);
+        assert_eq!(FirstText::of(Some(5), marks()), FirstText::AfterReset);
+    }
+
+    #[test]
+    fn a_text_queued_by_the_days_comes_after_the_move() {
+        assert_eq!(FirstText::of(Some(6), marks()), FirstText::AfterMove);
     }
 
     #[test]

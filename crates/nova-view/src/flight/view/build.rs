@@ -632,6 +632,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             movie: None,
             movie_replay: Vec::new(),
             rescue: None,
+            rescue_later: None,
             rescue_replay: Vec::new(),
             message: None,
             overlays: FlightOverlays::default(),

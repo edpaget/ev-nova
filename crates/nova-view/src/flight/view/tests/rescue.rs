@@ -10,8 +10,8 @@ use std::time::Duration;
 use super::faked_hud::barred;
 use super::*;
 use crate::flight::rescue_screen::RESCUE_FADE_FOR;
-use nova_sim::flight_frame::{FlightEvent, ShipPlace, StepReport, StepRun};
-use nova_sim::{MissionTextKind, PlayerFate, SessionEvent};
+use nova_sim::flight_frame::{FlightEvent, RescueTexts, ShipPlace, StepReport, StepRun};
+use nova_sim::{MissionTextKind, PlayerFate, SessionEvent, TextBar};
 
 /// The pod's system's `BkgndColor`.
 const POD_BACKGROUND: u32 = 0x0000_0010;
@@ -59,6 +59,17 @@ fn briefed() -> MissionShown {
 /// Ticks `view` through the step that rescues its pod, the rescue
 /// queueing `texts`.
 fn rescue_with(view: &mut Faked, texts: Vec<MissionShown>) {
+    let texts = texts.into_iter().map(|shown| (shown, None)).collect();
+    rescue_noting(view, texts, None);
+}
+
+/// Ticks `view` through the step that rescues its pod, the rescue
+/// queueing `texts`, each with the bar it noted, and noting `marks`.
+fn rescue_noting(
+    view: &mut Faked,
+    texts: Vec<(MissionShown, Option<TextBar>)>,
+    marks: Option<RescueTexts>,
+) {
     let mut events = vec![
         FlightEvent::Session(SessionEvent::SystemChanged),
         FlightEvent::RescueDesc(rescued(13999)),
@@ -66,7 +77,7 @@ fn rescue_with(view: &mut Faked, texts: Vec<MissionShown>) {
     events.extend(
         texts
             .into_iter()
-            .map(|shown| FlightEvent::MissionShown { shown, bar: None }),
+            .map(|(shown, bar)| FlightEvent::MissionShown { shown, bar }),
     );
     view.sim.queue_report_telling(
         StepReport {
@@ -75,6 +86,7 @@ fn rescue_with(view: &mut Faked, texts: Vec<MissionShown>) {
                     position: Vec2::new(50.0, 50.0),
                     heading: 90.0,
                 }),
+                rescue_texts: marks,
                 ..StepRun::default()
             }],
             stopped: true,
@@ -83,6 +95,47 @@ fn rescue_with(view: &mut Faked, texts: Vec<MissionShown>) {
         events,
     );
     view.tick(TICK);
+}
+
+/// The reserves the texts below note: unlike the pod's or the rescued
+/// frame's.
+fn noted_reserves() -> nova_sim::Reserves {
+    let mut reserves = sol().hud.reserves;
+    reserves.fuel.now += 50.0;
+    reserves.fuel.max += 100.0;
+    reserves
+}
+
+/// [`briefed`], the third text the session queued, noting
+/// [`noted_reserves`] and the nav off.
+fn briefed_third() -> (MissionShown, Option<TextBar>) {
+    let bar = TextBar {
+        texts: 3,
+        nav: nova_sim::NavMode::Off,
+        reserves: noted_reserves(),
+    };
+    (briefed(), Some(bar))
+}
+
+/// The bar a view of `frame` draws, its reserves [`noted_reserves`] and
+/// its nav off: what `_RedrawStatus(1)` draws of a text's bar.
+fn bar_noted_over(frame: FlightFrame) -> DrawList {
+    let mut frame = frame;
+    frame.hud.reserves = noted_reserves();
+    frame.nav_mode = nova_sim::NavMode::Off;
+    let view = barred(catalog(), frame);
+    let mut bar = DrawList::new();
+    view.draw_bar_or_why(&mut bar);
+    bar
+}
+
+/// What `view` draws under its first text once it has faded in.
+fn under_the_first_text(view: &mut Faked) -> DrawList {
+    ticks(view, 2 * RESCUE_FADE_FOR);
+    ticks(view, RESCUE_FADE_FOR);
+    assert_eq!(view.take_mission_texts().len(), 1, "the texts are due");
+    view.screen_faded_in();
+    drawn(view)
 }
 
 /// [`rescue_with`] no texts.
@@ -220,6 +273,100 @@ fn under_the_texts_the_pods_system_and_bar_are_repainted() {
     expected.push(space_painted(&view, POD_BACKGROUND));
     expected.extend_translated(&bar, Point::new(0.0, 0.0));
     assert_eq!(list, expected, "empty, in the pod's colour, the pod's bar");
+}
+
+#[test]
+fn under_an_abort_text_the_pods_message_line_is_repainted_then_none_shows() {
+    let mut view = in_the_pod();
+    view.say_for("Hello", 600);
+    view.tick(TICK);
+    rescue_with(&mut view, vec![briefed()]);
+    assert_eq!(view.message(), None, "_ResetPlayer (@0x1d904)");
+    let list = under_the_first_text(&mut view);
+    let text = first(&list, |command| *command == message_drawn("Hello"));
+    let space = first(&list, |command| {
+        *command == space_painted(&view, POD_BACKGROUND)
+    });
+    assert!(
+        space < text,
+        "_RefreshSAT's _RedrawComm (@0x6daf) over the space"
+    );
+}
+
+#[test]
+fn neither_the_closing_nor_flight_after_it_shows_the_pods_message() {
+    let mut view = in_the_pod();
+    view.say_for("Hello", 600);
+    view.tick(TICK);
+    rescue(&mut view);
+    ticks(&mut view, 3 * RESCUE_FADE_FOR);
+    ticks(&mut view, RESCUE_FADE_FOR / 2);
+    assert!(view.rescue.is_some(), "the closing fade");
+    assert!(!texts(&drawn(&view)).contains(&"Hello".to_owned()));
+    ticks(&mut view, RESCUE_FADE_FOR);
+    assert!(view.rescue.is_none(), "flying on");
+    assert!(!texts(&drawn(&view)).contains(&"Hello".to_owned()));
+}
+
+#[test]
+fn the_escort_menu_up_in_the_pod_is_repainted_and_its_floating_map_is_not() {
+    let mut view = in_the_pod();
+    let mut rows = view.frame.hud.escort_rows;
+    rows[0].present = true;
+    view.escort_menu.toggle(view.elapsed, &rows);
+    view.sim.queue_screen(floating_shown(sol_drawing(), None));
+    view.hyperspace_key(HYPERSPACE_MODE_KEY);
+    view.tick(TICK);
+    assert!(
+        !floating_border(&drawn(&view)).is_empty(),
+        "shown in the pod"
+    );
+    rescue_with(&mut view, vec![briefed()]);
+    let list = under_the_first_text(&mut view);
+    assert!(
+        list.iter().any(escort_menu_top),
+        "_FloaterDrawCallback (@0x38c0f)"
+    );
+    assert!(
+        floating_border(&list).is_empty(),
+        "its 150 ticks run out under the rescue's fades (@0x38ba0)"
+    );
+}
+
+#[test]
+fn a_first_text_the_on_purchase_queued_shows_over_the_pods_system_and_the_reset_bar() {
+    let mut view = in_the_pod();
+    view.tick(TICK);
+    let marks = RescueTexts { reset: 2, moved: 3 };
+    rescue_noting(&mut view, vec![briefed_third()], Some(marks));
+    let list = under_the_first_text(&mut view);
+    let mut expected = black(255);
+    expected.push(space_painted(&view, POD_BACKGROUND));
+    // The rescued frame's bar, but the pod's ships and stellars about the
+    // pod on the radar: deleted only after the `OnPurchase` (@0x68f69).
+    let reset = FlightFrame {
+        ships: sol().ships,
+        radar_stellars: sol().radar_stellars,
+        ..rescued_frame()
+    };
+    expected.extend_translated(&bar_noted_over(reset), Point::new(0.0, 0.0));
+    assert_eq!(
+        list, expected,
+        "the pod's radar, the text's gauges and nav (@0x5af96-0x5b038)"
+    );
+}
+
+#[test]
+fn a_first_text_the_days_queued_shows_over_the_new_system_and_its_bar() {
+    let mut view = in_the_pod();
+    view.tick(TICK);
+    let marks = RescueTexts { reset: 1, moved: 2 };
+    rescue_noting(&mut view, vec![briefed_third()], Some(marks));
+    let list = under_the_first_text(&mut view);
+    let mut expected = black(255);
+    expected.push(space_painted(&view, NEW_BACKGROUND));
+    expected.extend_translated(&bar_noted_over(rescued_frame()), Point::new(0.0, 0.0));
+    assert_eq!(list, expected, "after the move (@0x6912a)");
 }
 
 #[test]

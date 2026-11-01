@@ -15,8 +15,10 @@ use crate::flight::escorts::{
     EscortMenu, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled, escort_command_message,
 };
 use crate::flight::floating::{self, Hit};
+use crate::flight::hud::NavDisplay;
 use crate::flight::hud::{self, HudState, StatusBar};
-use crate::flight::target::{self};
+use crate::flight::radar::RadarScene;
+use crate::flight::target::{self, TargetPanel};
 
 use crate::flight::sim_port::FlightSim;
 use crate::galaxy::MapMarks;
@@ -340,8 +342,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.frame.hud.escort_rows
     }
 
-    /// Draws the status bar's target panel ([`FlightView::target_shown`])
-    /// and secondary weapon line, of `frame`'s target and secondary
+    /// Draws the status bar's target panel, showing `shown`, and the
+    /// secondary weapon line, of `frame`'s secondary
     /// ([`FrameHud::secondary`](nova_sim::flight_frame::FrameHud::secondary), [`FrameHud::secondary_line_count`](nova_sim::flight_frame::FrameHud::secondary_line_count)). The
     /// weapon line follows every frame: the original redraws it
     /// (`_statusRedraw[3]`) on every event that changes it, so drawing it
@@ -350,12 +352,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
         &self,
         list: &mut DrawList,
         (bar, view_width): (&StatusBar, f32),
-        frame: &FlightFrame,
+        (frame, shown): (&FlightFrame, Option<&TargetPanel>),
     ) {
         let origin = hud::bar_origin(bar, view_width);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        let shown = self.target_shown(frame);
-        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
+        target::draw_target_panel(list, &bar.layout, origin, shown, metrics);
         let line = frame.hud.secondary.map(|id| {
             let look = self.looks.weapon(id);
             let name = look.map_or_else(|| format!("wëap {}", id.0), |look| look.name.clone());
@@ -389,26 +390,62 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
     /// [`FlightView::nav_shown`]), the cargo area
     /// ([`FrameHud::cargo`](nova_sim::flight_frame::FrameHud::cargo)), the fuel gauge left out while the player is
-    /// disabled, then the target panel and the secondary weapon's line.
+    /// disabled, then the target panel as shown
+    /// ([`FlightView::target_shown`]) and the secondary weapon's line.
     pub(super) fn draw_bar(
         &self,
         list: &mut DrawList,
         (bar, view_width): (&StatusBar, f32),
         frame: &FlightFrame,
     ) {
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let radar = self.radar_shown(frame);
-        let state = HudState {
+        let target = self.target_shown(frame);
+        let parts = BarParts {
             radar: &radar,
-            blink_on: self.hud_cadence.blink_on(),
             reserves: self.reserves_shown(frame),
             nav: self.nav_shown(frame),
+            target: target.as_ref().as_ref(),
+        };
+        self.draw_bar_of(list, (bar, view_width), frame, parts);
+    }
+
+    /// Draws `bar` against the right edge of a view `view_width` wide,
+    /// showing `parts` and the rest of `frame`'s HUD: the cargo area, the
+    /// fuel gauge left out while the player is disabled, and the
+    /// secondary weapon's line.
+    pub(super) fn draw_bar_of(
+        &self,
+        list: &mut DrawList,
+        (bar, view_width): (&StatusBar, f32),
+        frame: &FlightFrame,
+        parts: BarParts<'_>,
+    ) {
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        let state = HudState {
+            radar: parts.radar,
+            blink_on: self.hud_cadence.blink_on(),
+            reserves: parts.reserves,
+            nav: parts.nav,
             cargo: Some(&frame.hud.cargo),
             disabled: frame.player().condition == Condition::Disabled,
         };
         hud::draw(list, bar, &state, metrics, view_width);
-        self.draw_combat_hud(list, (bar, view_width), frame);
+        self.draw_combat_hud(list, (bar, view_width), (frame, parts.target));
     }
+}
+
+/// What a status bar shows that is read apart from the frame it draws
+/// ([`FlightView::draw_bar_of`]): the radar, the gauges, the nav area and
+/// the target panel.
+pub(super) struct BarParts<'a> {
+    /// What the radar shows.
+    pub(super) radar: &'a RadarScene,
+    /// The shield, armour and fuel.
+    pub(super) reserves: Reserves,
+    /// What the nav area shows.
+    pub(super) nav: NavDisplay,
+    /// What the target panel shows, if anything.
+    pub(super) target: Option<&'a TargetPanel>,
 }
 
 /// The nav keys, the stellar slot keys and the floating map, over the
