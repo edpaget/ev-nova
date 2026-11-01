@@ -50,9 +50,12 @@ use crate::chance::Chance;
 impl Traffic {
     /// The head of the dispatch of each NPC `picked` picks (one flag an
     /// NPC), in `world`, rolling on `chance`, pass by pass in the
-    /// original's order (see the module docs). Whether each took the jump
-    /// path, as its dispatch's head found it: those make no type's think
-    /// this tick, cancelled or not.
+    /// original's order (see the module docs). A ship that took the jump
+    /// path runs its cancels and none of the passes after them, cancelled
+    /// or not, as the path's branch goes from the cancels to the high
+    /// level (@0x900d5-0x901e2). Whether each took the jump path, as its
+    /// dispatch's head found it: those make no type's think this tick
+    /// either.
     pub(super) fn dispatch_heads(
         &mut self,
         world: &World,
@@ -67,9 +70,14 @@ impl Traffic {
             .map(|(npc, &picked)| picked && dispatch_gate::takes_jump_path(npc))
             .collect();
         self.cancel_jump_follows(world, picked);
-        self.issue_escort_orders(world, picked);
-        self.release_regroups(picked, chance);
-        self.reset_disabled(world.npc_escort_ai, picked);
+        let rest: Vec<bool> = picked
+            .iter()
+            .zip(&jump_path)
+            .map(|(&picked, &jump_path)| picked && !jump_path)
+            .collect();
+        self.issue_escort_orders(world, &rest);
+        self.release_regroups(&rest, chance);
+        self.reset_disabled(world.npc_escort_ai, &rest);
         jump_path
     }
 
@@ -251,6 +259,58 @@ mod tests {
         assert_eq!(of(&traffic, below).warp.goal, held, "its head came first");
         think(&mut traffic, &watch, &[]);
         assert_eq!(of(&traffic, below).warp.goal, None, "the next tick");
+    }
+
+    #[test]
+    fn a_disabled_follower_its_jumps_cancel_puts_back_is_reset_only_on_the_next_tick() {
+        // The jump path's branch goes from the cancels (@0x900d5-0x9019c)
+        // to the high level, past the disabled reset (@0x8fece-0x8ff13).
+        let mut traffic = traffic();
+        let leader = traffic.add_npc_at(ship(), 2);
+        let follower = following(&mut traffic, leader, 3);
+        traffic.npcs_mut()[1].condition = Condition::Disabled;
+        let watch = Watch {
+            turns: Some((leader, Goal::Attack(ShipRef::Npc(NpcId(9))))),
+            ..Watch::default()
+        };
+        think(&mut traffic, &watch, &[]);
+        let npc = of(&traffic, follower);
+        assert_eq!(npc.warp.goal, None, "cancelled");
+        assert_eq!(npc.leader, Some(leader), "not reset that tick");
+        assert!(!npc.kept_escort_ai);
+        think(&mut traffic, &watch, &[]);
+        let npc = of(&traffic, follower);
+        assert_eq!(npc.leader, None, "reset on the next");
+        assert!(npc.kept_escort_ai);
+    }
+
+    #[test]
+    fn a_leader_its_jumps_cancel_puts_back_issues_no_orders_that_tick() {
+        // The jump path's branch goes past the escort orders
+        // (@0x8fdb3-0x8fde9). Frame 0 is the order frame of berth 3.
+        let mut traffic = traffic();
+        let lead = traffic.add_npc_at(ship(), 2);
+        let leader = following(&mut traffic, lead, 3);
+        traffic.npcs_mut()[1].ai_type = AiType::Warship;
+        let mut escort = ship();
+        escort.ai_type = AiType::Warship;
+        escort.class = EscortClass::Fighter;
+        escort.leader = Some(leader);
+        escort.state.position = Vec2::new(0.0, 100.0);
+        let escort = traffic.add_npc_at(escort, 4);
+        let watch = Watch {
+            turns: Some((lead, Goal::Attack(ShipRef::Npc(NpcId(9))))),
+            ..Watch::default()
+        };
+        think(&mut traffic, &watch, &[]);
+        assert_eq!(of(&traffic, leader).warp.goal, None, "cancelled");
+        assert_eq!(
+            of(&traffic, escort).order_word,
+            OrderWord(-1),
+            "none issued"
+        );
+        think(&mut traffic, &watch, &[]);
+        assert_ne!(of(&traffic, escort).order_word, OrderWord(-1), "the next");
     }
 
     #[test]
