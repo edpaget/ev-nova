@@ -1005,8 +1005,8 @@ pub struct Traffic {
     /// it on every caller, and handed on across a traffic Reset
     /// ([`Traffic::take_defences`]; see [`stellar_defence`]).
     defences: stellar_defence::StellarDefences,
-    /// The ships this pass's dispatch turned out of their gate waits,
-    /// until its fly half ends ([`last_wait_frame`]).
+    /// The ships the last dispatch turned out of their gate waits, until
+    /// the next ([`last_wait_frame`]).
     turned_out: last_wait_frame::TurnedOut,
 }
 

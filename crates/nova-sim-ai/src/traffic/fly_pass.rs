@@ -333,7 +333,6 @@ impl Traffic {
             });
         }
         plunder::count_down(&mut self.npcs);
-        self.forget_turned_out();
         self.release_followers(&reached);
         self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
         if half == FlyHalf::Advance {

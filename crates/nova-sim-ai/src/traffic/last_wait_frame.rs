@@ -28,7 +28,11 @@
 //! **Here.** The think half notes each ship at that frame as its
 //! dispatch turns it out ([`Traffic::turn_out_of_waits`]), and the answer
 //! to a strike holds a ship at that frame that is not among them
-//! ([`in_turn`](super::in_turn)). The fly half's end forgets them.
+//! ([`in_turn`](super::in_turn)). They are kept until the next dispatch,
+//! as their goal 8 is: by then the fly half has burst each on but one held
+//! still, whose goal 8 a later hit finds too. Double time's second pass,
+//! which a ship whose wait ran out in the advance pass's ship loop meets
+//! at tick 0, finds no such ship among them.
 //!
 //! The first tick of a ship so held drifts (the one-tick
 //! [`Mode::HeldAtGate`] of [`Npc::leaves_gate_goal`]) where the original
@@ -64,15 +68,9 @@ impl Traffic {
         );
     }
 
-    /// Whether this pass's dispatch turned NPC `id` out of its gate wait
+    /// Whether the last dispatch turned NPC `id` out of its gate wait
     /// ([`Traffic::turn_out_of_waits`]).
     pub(super) fn turned_out(&self, id: NpcId) -> bool {
         self.turned_out.0.contains(&id)
-    }
-
-    /// Forgets the ships the pass's dispatch turned out, as its fly half
-    /// ends.
-    pub(super) fn forget_turned_out(&mut self) {
-        self.turned_out = TurnedOut::default();
     }
 }
