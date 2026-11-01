@@ -577,6 +577,8 @@ mod owners_unset;
 mod pd_parent;
 mod person_offers;
 mod persons;
+#[cfg(test)]
+mod pick_at_breakup;
 mod pilot_panel;
 mod pirate_plunder;
 mod planet_comm;
