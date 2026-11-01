@@ -157,7 +157,11 @@ pub const fn of_slot(slot: u32) -> StellarId {
 
 /// The slot of `ship` as +0x6c holds it ([`of_slot`]): the player's 0, an
 /// NPC's berth, among the system's ships or those gone from it; none for a
-/// ship in neither.
+/// ship in neither. A gone ship's record is found by its id whatever tick
+/// freed it, as it stands until a ship takes its berth: what is read is
+/// only the slot's number, which the original copies from +0x70 the same
+/// however long ago the slot was freed (@0x8f74c, @0x8e8c9). Its callers
+/// pass a ship in the system or one the reader's target still holds.
 #[must_use]
 pub fn slot_of(ship: ShipRef, around: &Surroundings) -> Option<StellarId> {
     match ship {

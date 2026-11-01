@@ -111,6 +111,9 @@ impl Traffic {
         }
         let before = self.npcs.clone();
         for lead in lost {
+            // A gone lead is read by its record whatever tick freed it:
+            // the check reads the parent's slot (+0x9a), which no slot
+            // test clears, and the record stands until a ship takes it.
             let record = before
                 .iter()
                 .find(|npc| npc.id == lead)

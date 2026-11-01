@@ -285,7 +285,7 @@ impl Session {
     /// the fleets are said, then for each slot in turn the NPC thinks, its
     /// point defence fires and its fighters launch, each put in the system
     /// as its slot's turn ends, and its work on the line settles
-    /// ([`Session::dispatch_npcs`]), the think closes, then what is left
+    /// ([`Session::dispatch_npcs`]), then what is left
     /// on the line settles ([`Session::settle_line_queue`]), all before
     /// the shots, and the ship loop's traffic flies its fly half, its
     /// reinforcement clock included ([`Session::traffic_tail`]); without

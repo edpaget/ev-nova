@@ -143,8 +143,10 @@ pub struct FlyPass {
     /// time's second pass, which has no think.
     skipped: SkippedReads,
     /// Each freed slot's record as the half began ([`gone`](super::gone)),
-    /// which a docking's nav (+0x6c) still reads: no slot test clears it
-    /// (see [`repair_dock`](super::repair_dock)).
+    /// which a docking's nav (+0x6c) still reads by the ship's id whatever
+    /// tick freed it: no slot test clears the nav, and a record stands
+    /// until a ship takes its berth, when the docking moves to that ship
+    /// (see [`repair_dock`](super::repair_dock)). Nothing else reads it.
     records: BTreeMap<NpcId, ShipState>,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,

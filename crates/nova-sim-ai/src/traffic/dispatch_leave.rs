@@ -130,7 +130,11 @@ impl Traffic {
     /// comes first (@0x8d4e4-0x8d50d): a target whose slot is inactive is
     /// none, which the hold's goal reads ([`Traffic::slot_test`]). A ship
     /// in the regroup pause runs no high level (@0x9002d → @0x901ea), so
-    /// no slot test.
+    /// no slot test. The carrier's slot is found among the ships gone by
+    /// its id, whatever tick freed it: the turn-back copies the carrier's
+    /// slot number, its parent (+0x9a), which no slot test clears, into
+    /// +0x6c (@0x8d61a-0x8d621), and a record stands until a ship takes
+    /// its berth.
     fn hold_and_turn_back(&mut self, index: usize, world: &World) {
         let npc = &self.npcs[index];
         if npc.condition != Condition::Intact || npc.high_level_waits() {
@@ -186,7 +190,9 @@ impl Traffic {
             return;
         };
         // A ship gone is read by its slot's record, which the nav still
-        // names (see `repair_dock`).
+        // names whatever tick freed it: no slot test clears the nav, and
+        // the record stands until a ship takes the berth, when the
+        // docking moves to that ship (see `repair_dock`).
         let victim = match docking.ship {
             ShipRef::Player => world.player.map(|player| player.state),
             ShipRef::Npc(id) => (self.npcs.iter())
