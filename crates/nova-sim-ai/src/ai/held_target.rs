@@ -260,6 +260,41 @@ mod tests {
     }
 
     #[test]
+    fn an_unprovoked_interceptor_whose_held_target_is_gone_keeps_its_goal_with_no_target() {
+        // The slot test clears a freed slot's +0x70 after the think
+        // (@0x8d4e4-0x8d50d).
+        let goal = Goal::Land(StellarId(128));
+        let (decision, asked) = interceptor(&[holding(AiType::Interceptor, goal, 9)]);
+        assert_eq!(
+            (decision.goal, decision.clears_target, decision.holds_target),
+            (goal, true, None)
+        );
+        assert_eq!(asked, Vec::<u32>::new(), "no inspection, no patrol");
+    }
+
+    #[test]
+    fn an_interceptor_out_of_ammunition_holding_a_target_stops_and_lets_it_go() {
+        // The out-of-ammo flight (@0x8d343-0x8d391) runs on the goal it
+        // keeps; with no ship to flee it stops, state 3 to 0, its
+        // provocation zeroed (@0x8e228-0x8e23d).
+        let dry = crate::ai::fixture::short_of_ammo(
+            holding(AiType::Interceptor, Goal::Land(StellarId(128)), 3),
+            crate::ai::fire::AmmoLeft::OnlyUnlimited,
+            true,
+        );
+        let (decision, _) = interceptor(&[dry, trader()]);
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.holds_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, true, None, true)
+        );
+    }
+
+    #[test]
     fn an_unprovoked_interceptor_holding_an_ally_keeps_it_and_inspects_nothing() {
         // +0x70 not -1 searches nothing and jumps past the inspection and
         // the patrol (@0x8cc93 → @0x8d13f → @0x8d14d).
