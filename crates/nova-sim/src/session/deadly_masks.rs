@@ -347,6 +347,33 @@ mod tests {
     }
 
     #[test]
+    fn the_player_in_a_rings_hole_lives_by_its_own_mask_and_on_the_ring_dies() {
+        use crate::combat::hull::Condition;
+        // The ring centred on the player, its disc taking in the player's
+        // and leaving the NPC's clear; the player's class 128's sheet a
+        // 10-pixel square.
+        let on_the_player = LandingSite {
+            position: Vec2::ZERO,
+            ..on_the_npc()
+        };
+        let player_dies = |catalog: &FakePilotCatalog, x: f32| {
+            let mut session = among(catalog, &[on_the_player], 180, Rulebook::default());
+            session.ship.player.position = Vec2::new(x, 0.0);
+            work(&mut session, catalog, Controls::default());
+            assert_eq!(session.npcs().len(), 1, "the NPC is clear");
+            session.ship.condition == Condition::Destroyed
+        };
+        let masks = holding(vec![
+            (MaskSheet::Stellar(3), ringed()),
+            (MaskSheet::Ship(ShipId(128)), solid(10)),
+        ]);
+        assert!(!player_dies(&masks, 0.0), "its pixels miss the ring");
+        assert!(player_dies(&masks, 15.0), "its pixels on the ring");
+        // With no masks, the discs decide: the player in the hole dies.
+        assert!(player_dies(&armed(), 0.0));
+    }
+
+    #[test]
     fn a_ship_touches_by_the_frame_its_heading_draws() {
         // Rotations 9 to 27 of 36 (90° to 280°) cover the whole frame; the
         // rest only a dot in the hole.
