@@ -44,11 +44,14 @@
 //!
 //! **Goal 0xb, its leader's jump** (`_HighLevelAIHandler`
 //! @0x8de63-0x8df75; [`follow_check`]), each advance pass before the low
-//! level: with no leader it jumps on its own (goal 2, sub-goal 4); led by
-//! the player, it follows (sub-goal 0xd) while the player's +0x50 is
-//! above 0, else it gives up (goal 0); led by an NPC, the leader is put
-//! on goal 2, and it follows while the leader's sub-goal is 1 or 4, else
-//! gives up (goal 0, its target dropped). Its travel stellar, +0x6c, is
+//! level, by its leader +0x9a (@0x8de71-0x8de7c), not the ship its
+//! sub-goal names: with no leader it jumps on its own (goal 2, sub-goal
+//! 4); led by the player, it follows (sub-goal 0xd) while the player's
+//! +0x50 is above 0, else it gives up (goal 0); led by an NPC, the leader
+//! is put on goal 2, and it follows while the leader's sub-goal is 1 or
+//! 4, else gives up (goal 0). Every branch drops its target (+0x70 = -1:
+//! @0x8dea1, @0x8debc, @0x8df1c, @0x8df34, @0x8df57), so a follower hit
+//! on the jump takes goal 2, not 3, at the next hold. Its travel stellar, +0x6c, is
 //! -1 for a jump alone or a give-up (@0x8df5d, @0x8dec2, @0x8df3a), and
 //! its leader's for a follow, the player's (@0x8de9d-0x8deb0, the
 //! selection it holds, [`LeaderWarp::travel`]) or an NPC's
@@ -629,9 +632,15 @@ pub fn fly_jump(
         return None;
     }
     let goal = npc.warp.goal?;
+    // The check reads +0x9a, its leader (@0x8de71-0x8de7c), not the ship
+    // its sub-goal names: one with none jumps on its own. Every path that
+    // writes an NPC's follow writes that leader too.
     let leader = match goal {
         WarpGoal::Follow(ShipRef::Player) => Some((true, world.warp.player)),
-        WarpGoal::Follow(ShipRef::Npc(id)) => leaders.get(&id).map(|&leader| (false, leader)),
+        WarpGoal::Follow(ShipRef::Npc(_)) => npc
+            .leader
+            .and_then(|lead| leaders.get(&lead))
+            .map(|&leader| (false, leader)),
         WarpGoal::Own => None,
     };
     if think {
@@ -647,7 +656,8 @@ pub fn fly_jump(
                 };
                 match check {
                     FollowCheck::Own => {
-                        // +0x6c -1 (@0x8df5d).
+                        // +0x70 and +0x6c -1 (@0x8df57, @0x8df5d).
+                        npc.target = None;
                         npc.travel = None;
                         npc.begin_own_jump();
                     }
@@ -663,9 +673,10 @@ pub fn fly_jump(
                     FollowCheck::Follow => {
                         if let Some((player, leader)) = leader {
                             if !skipped {
-                                // +0x6c its leader's: the player's
-                                // (@0x8de9d-0x8deb0) or an NPC's
+                                // +0x70 -1 and +0x6c its leader's: the
+                                // player's (@0x8de9d-0x8deb0) or an NPC's
                                 // (@0x8df18-0x8df22).
+                                npc.target = None;
                                 npc.travel = leader.travel;
                             }
                             if follow_jump(npc, leader, player) == FollowStep::Formation {
@@ -1517,6 +1528,7 @@ mod tests {
         views.insert(lead, LeaderWarp::default());
         let mut follower = ship();
         follower.goal = Goal::Follow { lead, guard: None };
+        follower.leader = Some(lead);
         follower.target = Some(ShipRef::Player);
         follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
         assert_eq!(fly_jump_by(&mut follower, &views, &world, true), None);
@@ -1730,6 +1742,92 @@ mod tests {
             assert_eq!(follow_jump(&mut ship, view, false), step);
             assert!(!ship.travel_set(), "{step:?}");
         }
+    }
+
+    // Goal 0xb's target and +0x9a.
+
+    /// The target a follower holds as goal 0xb's check finds it.
+    const QUARRY: ShipRef = ShipRef::Npc(NpcId(9));
+
+    #[test]
+    fn goal_0xb_drops_its_target_while_following_the_player_or_an_npc() {
+        // +0x70 = -1 under the player (@0x8dea1) and an NPC (@0x8df1c).
+        let mut warp = world();
+        warp.player = LeaderWarp {
+            stage: 4.0,
+            heading: 90.0,
+            aim: 90,
+            ..LeaderWarp::default()
+        };
+        let world = in_world(warp);
+        let mut ship = following_lead(false);
+        ship.target = Some(QUARRY);
+        fly_jump_by(&mut ship, &views_of(false), &world, true);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(LEAD))));
+        assert_eq!(ship.target, None, "an NPC's");
+        let mut led = following_lead(false);
+        led.leader = None;
+        led.target = Some(QUARRY);
+        led.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        fly_jump_by(&mut led, &BTreeMap::new(), &world, true);
+        assert_eq!(led.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
+        assert_eq!(led.target, None, "the player's");
+    }
+
+    #[test]
+    fn a_follower_hit_on_its_leads_jump_takes_goal_2_once_its_check_dropped_the_target() {
+        // `hold_stage`'s 2-or-3 choice reads +0x70 (@0x8d557-0x8d56b), which
+        // the check wrote -1 on the pass before (@0x8df1c).
+        let world = in_world(world());
+        let mut ship = following_lead(false);
+        ship.target = Some(QUARRY);
+        fly_jump_by(&mut ship, &views_of(false), &world, true);
+        ship.warp.stage = 2.0;
+        hold_stage(&mut ship);
+        assert_eq!(ship.goal, Goal::JumpOut, "goal 2, not 3");
+    }
+
+    #[test]
+    fn a_ship_in_its_wait_or_the_pause_keeps_its_target() {
+        // The high level's wait skips goal 0xb's check (@0x8d4b9-0x8d4d2),
+        // and goal 0x13 runs none.
+        let world = in_world(world());
+        let mut waiting = following_lead(false);
+        waiting.target = Some(QUARRY);
+        waiting.ai_wait = 1;
+        fly_jump_by(&mut waiting, &views_of(false), &world, true);
+        assert_eq!(waiting.target, Some(QUARRY));
+        let mut paused = following_lead(false);
+        paused.target = Some(QUARRY);
+        fly_jump(&mut paused, &views_of(false), &world, true, true);
+        assert_eq!(paused.target, Some(QUARRY));
+    }
+
+    #[test]
+    fn a_ship_in_goal_0xb_with_no_leader_jumps_on_its_own_and_loses_its_target() {
+        // +0x9a -1 (@0x8de71-0x8de7c): +0x70 and +0x6c -1, goal 2, sub 4
+        // (@0x8df54-0x8df6c).
+        let world = in_world(world());
+        let mut ship = following_lead(true);
+        ship.leader = None;
+        ship.target = Some(QUARRY);
+        fly_jump_by(&mut ship, &views_of(false), &world, true);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own));
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert_eq!((ship.target, ship.travel), (None, None));
+    }
+
+    #[test]
+    fn whichever_ship_its_sub_goal_names() {
+        // The check reads +0x9a, not the ship the sub-goal follows: a ship
+        // with no leader takes its own jump though its lead is there and
+        // on its way out.
+        let world = in_world(world());
+        let mut ship = following_lead(false);
+        ship.leader = None;
+        fly_jump_by(&mut ship, &views_of(true), &world, true);
+        assert_eq!(ship.warp.goal, Some(WarpGoal::Own));
+        assert_eq!(ship.travel, None, "not the lead's");
     }
 
     #[test]

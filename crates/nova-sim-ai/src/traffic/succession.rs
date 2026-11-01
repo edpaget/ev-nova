@@ -618,6 +618,33 @@ mod tests {
     }
 
     #[test]
+    fn a_successor_of_a_lead_on_a_follow_jumps_on_its_own_losing_its_target() {
+        // The take-over copies goal 0xb and its sub-goal (@0x893c6-0x893e1),
+        // then +0x9a = -1 (@0x8946b): its next high level takes the
+        // leaderless branch, +0x70 and +0x6c -1, goal 2 sub 4
+        // (@0x8df54-0x8df6c).
+        let mut traffic = fleet(REBELS, DISABLED, vec![follower(REBELS, 300)]);
+        let mut far = ship(REBELS, 900);
+        far.begin_own_jump();
+        let far = traffic.add_npc_at(far, 5);
+        let lead = of_mut(&mut traffic, 0);
+        lead.leader = Some(far);
+        lead.goal = Goal::Follow {
+            lead: far,
+            guard: None,
+        };
+        lead.target = Some(PLAYER);
+        lead.travel = Some(crate::catalog::StellarId(150));
+        lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(far)));
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
+        let taker = of(&traffic, 1);
+        assert_eq!(taker.leader, None);
+        assert_eq!(taker.warp.goal, Some(WarpGoal::Own));
+        assert_eq!(taker.goal, Goal::JumpOut);
+        assert_eq!((taker.target, taker.travel), (None, None));
+    }
+
+    #[test]
     fn under_another_government_a_successor_keeps_its_own() {
         for own in [false, true] {
             let mut traffic = taking_over(FEDS, Goal::Hold);
