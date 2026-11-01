@@ -37,13 +37,16 @@
 //! (`_IncrementGameTime` @0x40849), by [`RuleKey::StayDays`], then pays a
 //! day's wages (`_DoEscortPayment(1)` @0x4085a), by
 //! [`RuleKey::TakeOffPay`], all still inside `_DoPortDialog` with the
-//! spaceport up. So [`Session::land_escorts`] runs them too, once a
-//! leave (`Port::escorts_landed`): the days before the pay, as the
-//! salaries and the tribute they pay change the cash the pay reads. An
-//! escort that defects is told through the pay notes, so whoever shows
-//! the spaceport shows its dialog over it, unfaded. The router calls it
-//! before either leave; [`Session::take_off`] calls it on every other
-//! leave and runs no tail twice. It first completes a docked move's
+//! spaceport up. So [`Session::land_escorts`] runs them too, and the
+//! settling before them, once a leave (`Port::escorts_landed`), as the
+//! original runs `_DoEscortLand` once a leave: the days before the pay,
+//! as the salaries and the tribute they pay change the cash the pay
+//! reads. An escort that defects is told through the pay notes, so
+//! whoever shows the spaceport shows its dialog over it, unfaded. The
+//! router calls it before either leave; [`Session::take_off`] calls it
+//! on every other leave, and a second call in one leave settles nothing,
+//! not even a mark a salary on the escort days has since covered. It
+//! first completes a docked move's
 //! entry still owed, then opens the take-off's window (see the
 //! `take_off_moves` module) before the days: `_playerIsLanded` stays set
 //! across `_DoPortDialog`, so a move on an escort day is a take-off's
@@ -65,14 +68,16 @@ use crate::landing::StellarFlags;
 use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
-    /// `_DoEscortLand` as the ship leaves the stellar it is landed at:
-    /// settles the escorts' marks (see the module docs), drawing an
-    /// upgraded escort's new NPC's rolls on `chance`, then, once a leave,
-    /// its tail: the escort days, then a day's pay (see the module docs'
-    /// "The tail"). Gives the report to show; none when nothing was sold
-    /// or upgraded, and nothing at all happens in flight. A second call
-    /// settles only what a first left: marks the cash didn't cover, which
-    /// it still doesn't.
+    /// `_DoEscortLand` as the ship leaves the stellar it is landed at,
+    /// once a leave (`Port::escorts_landed`), as the original runs it once
+    /// per `_DoPortDialog` leave: settles the escorts' marks (see the
+    /// module docs), drawing an upgraded escort's new NPC's rolls on
+    /// `chance`, then its tail: the escort days, then a day's pay (see the
+    /// module docs' "The tail"). Gives the report to show; none when
+    /// nothing was sold or upgraded, and nothing at all happens in flight.
+    /// A second call on the same leave changes nothing and gives none:
+    /// a mark the cash didn't cover stays for the next shipyard, though a
+    /// salary on the escort days has covered it since.
     ///
     /// **Ordering.** The original shows the report before the days and
     /// the pay (@0x407e8, @0x407ed-0x4085a); here they run before whoever
@@ -88,18 +93,19 @@ impl Session {
         // A docked move's entry still owed comes before the take-off's
         // window opens (see the `operator_moves` module).
         self.settle_pending_move(catalog, catalog, chance);
+        if std::mem::replace(&mut self.port.escorts_landed, true) {
+            return None;
+        }
         let report = self.settle_escort_marks(&mut &mut *chance);
-        if !std::mem::replace(&mut self.port.escorts_landed, true) {
-            // `_playerIsLanded` stays set across `_DoPortDialog`: a move
-            // on an escort day is a take-off's landed move (see the
-            // `take_off_moves` module).
-            self.chart.open_take_off_window();
-            if self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine {
-                self.pass_days(self.port.stay.escort_days(), chance);
-            }
-            if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
-                self.pay_escorts(1);
-            }
+        // `_playerIsLanded` stays set across `_DoPortDialog`: a move on an
+        // escort day is a take-off's landed move (see the
+        // `take_off_moves` module).
+        self.chart.open_take_off_window();
+        if self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine {
+            self.pass_days(self.port.stay.escort_days(), chance);
+        }
+        if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
+            self.pay_escorts(1);
         }
         report
     }
@@ -361,6 +367,60 @@ mod tests {
         assert_eq!(session.pilot.escorts[0].ship, ShipId(129));
         assert_eq!(session.pilot.escorts[0].mark, Some(EscortMark::Upgrade));
         assert_eq!(session.pilot.cash, 5_999);
+    }
+
+    #[test]
+    fn a_salary_on_the_escort_day_does_not_settle_the_mark_on_the_take_off() {
+        // `_DoEscortLand` runs once a leave: a mark the cash didn't cover
+        // at the router's settling stays, though the escort day's salary
+        // covers it by the take-off.
+        let mut catalog = yards();
+        catalog.ranks = vec![crate::catalog::RankRecord {
+            salary: 1_000,
+            ..crate::testkit::rank(200)
+        }];
+        let salaried = |marked: bool| {
+            let mut session = landed_with(&catalog, &[129], &[], 5_999);
+            session.run_set(
+                &crate::control::SetExpr::parse("K200").expect("parses"),
+                &mut NeverFires,
+            );
+            session.pilot.cash = 5_999;
+            session.port.stay.escorts_changed = 2;
+            if marked {
+                mark(&mut session, 0, EscortMark::Upgrade);
+            }
+            session
+        };
+        let mut session = salaried(true);
+        let landed = session.pilot.date;
+        assert_eq!(session.land_escorts(&catalog, &mut NeverFires), None);
+        assert_eq!(session.pilot.date, landed.next_day(), "the escort day");
+        let paid = session.pilot.cash;
+        assert!(paid >= 6_000, "the salary covers the upgrade: {paid}");
+        assert_eq!(
+            session.land_escorts(&catalog, &mut NeverFires),
+            None,
+            "a second settling settles nothing"
+        );
+        assert_eq!(session.pilot.cash, paid);
+        assert_eq!(session.pilot.date, landed.next_day(), "no second day");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(session.pilot.escorts[0].ship, ShipId(129));
+        assert_eq!(session.pilot.escorts[0].mark, Some(EscortMark::Upgrade));
+        // The same leave with no mark: only the salaries and the pay.
+        let mut unmarked = salaried(false);
+        let _ = unmarked.land_escorts(&catalog, &mut NeverFires);
+        unmarked
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(
+            session.pilot.cash, unmarked.pilot.cash,
+            "no upgrade charged"
+        );
+        assert_eq!(session.pilot.date, unmarked.pilot.date);
     }
 
     #[test]

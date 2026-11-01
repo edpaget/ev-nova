@@ -333,3 +333,66 @@ fn an_arrivals_own_text_fades_in_first_and_the_defection_follows_unfaded() {
     assert_eq!(black(&screen), None, "unfaded");
     assert_eq!(white(&screen), None, "no white");
 }
+
+// Once a leave.
+
+/// [`port_fork`] with the `Q`'s leave text, `STR#` 25048, and ship 128
+/// upgrading to itself for 1,000,000 credits: more than Ada holds.
+fn dear_upgrade() -> nova_rsrc::fixture::BuiltFork {
+    let mut built = port_fork()
+        .resource(StrList::TYPE, 25048, None, &str_list(&["Off you go."]))
+        .build();
+    let ship = built.layout.data_entry(Ship::TYPE, 128) + 4;
+    built.bytes[ship + 0x728..ship + 0x72A].copy_from_slice(&128_i16.to_be_bytes());
+    built.bytes[ship + 0x72A..ship + 0x72E].copy_from_slice(&1_000_000_i32.to_be_bytes());
+    built
+}
+
+#[test]
+fn a_q_leave_settles_the_escorts_once_though_the_cash_covers_a_mark_left() {
+    // `_DoEscortLand` runs once a leave (@0x601a0): the cash rising under
+    // the report, as an escort day's salary raises it, settles nothing
+    // more when the held leave goes on.
+    let kit = |ada: &mut nova_sim::Pilot| {
+        ada.escorts = vec![hired(); 2];
+        for escort in &mut ada.escorts {
+            escort.wage = None;
+        }
+        ada.escorts[0].mark = Some(nova_sim::fleet::EscortMark::Sell);
+        ada.escorts[1].mark = Some(nova_sim::fleet::EscortMark::Upgrade);
+        ada.cash = 0;
+    };
+    let (mut screen, _) = empty_shops_built(kept_wage(), Prefs::default(), dear_upgrade(), kit);
+    flight_mut(&mut screen).change_sim(|sim| {
+        sim.session_mut().expect("landed").run_set(
+            &nova_sim::control::SetExpr::parse("Q25048").expect("parses"),
+            &mut nova_sim::chance::NeverFires,
+        );
+    });
+    screen.tick(Duration::from_millis(16));
+    assert_eq!(screen.showing(), Showing::Spaceport, "held");
+    let report = port_text(&screen).expect("the report");
+    assert!(report.contains("sold"), "{report}");
+    assert!(!report.contains("upgraded"), "{report}");
+    flight_mut(&mut screen).change_sim(|sim| {
+        sim.session_mut().expect("landed").set_credits(10_000_000);
+    });
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    for _ in 0..600 {
+        if screen.showing() == Showing::Flight {
+            break;
+        }
+        assert_eq!(port_text(&screen), None, "no second report");
+        screen.tick(Duration::from_millis(16));
+    }
+    assert_eq!(screen.showing(), Showing::Flight);
+    let escorts = pilot(&screen).escorts();
+    assert_eq!(escorts.len(), 1);
+    assert_eq!(
+        escorts[0].mark,
+        Some(nova_sim::fleet::EscortMark::Upgrade),
+        "the mark stays for the next shipyard"
+    );
+    assert_eq!(pilot(&screen).cash, 10_000_000, "no upgrade charged");
+}

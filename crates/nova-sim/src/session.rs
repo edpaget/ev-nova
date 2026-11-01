@@ -4116,8 +4116,8 @@ impl Session {
         // on the leave before the port's days (`_DoPortDialog` @0x601a0;
         // see the `escort_land` module). The router settles them first, to
         // show the report and any defection over the spaceport; this
-        // settles them on every other leave, and runs the days and pay
-        // once.
+        // settles them on every other leave. Either way they settle once a
+        // leave: after the router's, this changes nothing.
         self.land_escorts(catalog, chance);
         let stellar = self.mode.take_landed()?;
         self.port.escorts_landed = false;
