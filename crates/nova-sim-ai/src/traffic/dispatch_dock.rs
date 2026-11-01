@@ -44,7 +44,9 @@
 //! ([`DockFlight`]), which flies it ([`plunder_dock::handle_ship`]) and
 //! decides nothing. Double time's second pass runs no `_AIDispatch`
 //! (@0x44350), so it matches and creeps nothing: it flies the same flight
-//! again, as `_HandleShip` reads the words the low level left.
+//! again, as `_HandleShip` reads the words the low level left, thrusting
+//! by the advance pass's +0x30. Each pass turns by its own turn rate,
+//! read at its step after its own ion block.
 //!
 //! The plunder's completion ([`DockOutcome::Completed`], @0x86f3c-0x86f93)
 //! plunders the nav at the slot ([`plunder::plunder`]): goal 0xe, its wait
@@ -434,6 +436,81 @@ mod tests {
             seen(below)
         );
         assert_eq!(seen(above), Some(Goal::Drift));
+    }
+
+    /// A disabled victim 2000 up the screen in slot 5, and a pirate at the
+    /// centre in slot 3 approaching it (sub 9), heading `heading`, at rest,
+    /// of `IonizeMax` 400 and `Deionize` 100 a tick, charged 300: the
+    /// pirate.
+    fn approaching_ionized(traffic: &mut Traffic, heading: f32) -> NpcId {
+        let mut victim = ship(0, TRADERS, AiType::WimpyTrader, 0.0, -2000.0);
+        victim.condition = Condition::Disabled;
+        let victim = traffic.add_npc_at(victim, 5);
+        let mut pirate = ship(0, PIRATES, AiType::Warship, 0.0, 0.0);
+        pirate.state.heading = heading;
+        pirate.goal = Goal::Plunder {
+            ship: ShipRef::Npc(victim),
+            hopeless: false,
+        };
+        pirate.target = Some(ShipRef::Npc(victim));
+        pirate.hull.class_turn = 3.0;
+        pirate.docking = Some(Docking {
+            ship: ShipRef::Npc(victim),
+            sub: DockSub::Approach,
+        });
+        pirate.stats.ion.class_capacity = 400.0;
+        pirate.stats.ion.class_rate = 100.0;
+        pirate.ion.charge = 300.0;
+        traffic.add_npc_at(pirate, 3)
+    }
+
+    /// `pirate` as it flies charged `charge`.
+    fn charged(pirate: &Npc, charge: f32) -> crate::handling::Handling {
+        let mut ship = pirate.clone();
+        ship.ion.charge = charge;
+        let top = ship.stats.handling.max_speed;
+        ship.flying_handling(top, crate::flight::FlightRules::default())
+    }
+
+    #[test]
+    fn on_both_passes_a_docking_ships_turn_reads_its_turn_rate_after_that_passs_shed() {
+        // `_HandleShip` turns by `_ShipTurnRate` at its step (@0x344b0),
+        // after each pass's ion block (@0x342b2-0x34421): 300 sheds to 200
+        // on the advance pass, to 100 on the second.
+        let mut traffic = Traffic::with_interval(1);
+        let pirate = approaching_ionized(&mut traffic, 90.0);
+        let reads = Reads::of(pirate);
+        traffic.tick_in(&reads, World::new(&[]), &[], &mut NeverFires);
+        let ship = of(&traffic, pirate).clone();
+        assert_eq!(ship.ion.charge, 200.0);
+        let advance = charged(&ship, 200.0).turn_rate;
+        assert!(advance > charged(&ship, 300.0).turn_rate);
+        assert_eq!(ship.state.heading, 90.0 - advance);
+        traffic.move_in(World::new(&[]), &mut NeverFires);
+        let again = of(&traffic, pirate);
+        assert_eq!(again.ion.charge, 100.0);
+        let second = charged(&ship, 100.0).turn_rate;
+        assert_eq!(again.state.heading, 90.0 - advance - second);
+    }
+
+    #[test]
+    fn on_both_passes_a_docking_ships_thrust_reads_the_accel_its_low_level_read_before_the_advance_passs_shed()
+     {
+        // Its thrust reads the +0x30 its low level wrote at its slot
+        // (@0x878dc-0x878eb), and double time's second pass runs no low
+        // level (@0x44350): both passes thrust by the slot's, charged 300.
+        let mut traffic = Traffic::with_interval(1);
+        let pirate = approaching_ionized(&mut traffic, 0.0);
+        let reads = Reads::of(pirate);
+        let slot = charged(of(&traffic, pirate), 300.0).accel;
+        traffic.tick_in(&reads, World::new(&[]), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, pirate).state.velocity, Vec2::new(0.0, -slot));
+        traffic.move_in(World::new(&[]), &mut NeverFires);
+        assert_eq!(
+            of(&traffic, pirate).state.velocity,
+            Vec2::new(0.0, -slot - slot),
+            "not by either pass's shed"
+        );
     }
 
     #[test]

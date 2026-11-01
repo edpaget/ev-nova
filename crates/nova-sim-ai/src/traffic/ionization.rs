@@ -28,9 +28,14 @@
 //! @0x335a1/@0x335c8 return before it): disabled, warping, waiting and
 //! immobile ships all shed. The engine runs it at the start of each NPC's
 //! flight, before the next move, which makes the same sequence of moves
-//! and pulls; the charge it leaves is what the turn and thrust that follow
-//! read, as in the original. The pull's cap is the NPC's own
-//! `_ShipMaxSpeed`. None of this plays a sound.
+//! and pulls; the charge it leaves is what the turn that follows reads, as
+//! in the original. `_HandleShip`'s thrust reads no `_ShipAccelRate` but
+//! the +0x30 the low level wrote at its slot, before the shed: a docking
+//! ship's flight thrusts so ([`plunder_dock`](super::plunder_dock)); the
+//! autopilot reads its thrust after the shed, which is left out (see
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-17-left-out-of-phase-15-handle-ship).
+//! The pull's cap is the NPC's own `_ShipMaxSpeed`. None of this plays a
+//! sound.
 
 use crate::flight::{FlightRules, Flyer};
 use crate::handling::Handling;

@@ -321,7 +321,8 @@ pub(crate) fn fly_docking(
 ) -> Option<DockOutcome> {
     let chance = &mut crate::chance::NeverFires;
     let (flown, outcome) = dock_low_level(npc, victim, speeds.own, flight, swarm, chance)?;
-    plunder_dock::handle_ship(npc, &flown, flight);
+    let at_step = plunder_dock::AtStep::of(&npc.flying_handling(speeds.own, flight));
+    plunder_dock::handle_ship(npc, &flown, at_step, flight);
     Some(outcome)
 }
 

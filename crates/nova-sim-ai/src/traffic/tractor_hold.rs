@@ -43,7 +43,8 @@
 //! newcomer. A launch into a berth since the pass began (an escape ship's
 //! `_LaunchFighter` @0x354ea) is read as it stands ([`Holders::launched`]).
 //! The player's hold on a taken berth is `_HandlePlayer`'s
-//! (@0x68436-0x684b7), not built here.
+//! (@0x68436-0x684b7), left out (see
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-17-left-out-of-phase-15-handle-ship).
 //!
 //! The player's
 //! hold releases first and isn't pulled on the frame it is released
@@ -588,6 +589,32 @@ mod tests {
             assert_eq!(plain_turn, 9.0);
             assert!((held_turn - 9.0 * 0.333).abs() < 1e-4, "{held_turn}");
         }
+    }
+
+    #[test]
+    fn a_docking_ship_released_on_a_pass_turns_held_on_that_pass() {
+        // The docking flight turns by `_ShipTurnRate` at `_HandleShip`'s
+        // step (@0x344b0), which still reads the lock the release lets go
+        // of after it (@0x353ba-0x35421).
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let turned = |holder: Option<ShipRef>| {
+            let mut traffic = running_out(holder, 90.0, true);
+            traffic.npcs[0].goal = crate::ai::Goal::Idle;
+            traffic.npcs[0].docking = Some(Docking {
+                ship: ShipRef::Npc(NpcId(3)),
+                sub: DockSub::Approach,
+            });
+            let mut victim = moving(3, Vec2::ZERO);
+            victim.state.position = Vec2::new(0.0, -2100.0);
+            traffic.npcs.push(victim);
+            traffic.dock_in_dispatch(0, &pulling(0.5), &mut crate::chance::NeverFires);
+            speed_and_turn(traffic, |traffic| again(traffic, &pulling(0.5)))
+        };
+        let (_, plain, _) = turned(None);
+        let (_, held, kept) = turned(Some(ShipRef::Npc(HOLDER)));
+        assert_eq!(plain, 9.0);
+        assert!((held - 9.0 * 0.333).abs() < 1e-4, "{held}");
+        assert!(!kept, "released after the flight");
     }
 
     #[test]
