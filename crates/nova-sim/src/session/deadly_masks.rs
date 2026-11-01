@@ -374,6 +374,26 @@ mod tests {
     }
 
     #[test]
+    fn a_ships_sheet_is_its_sprite_bases_not_its_own_classs() {
+        // Class 129 draws class 128's sprites; only 128's sheet is held.
+        let mut catalog = holding(vec![
+            (MaskSheet::Stellar(3), ringed()),
+            (MaskSheet::Ship(ShipId(128)), solid(10)),
+        ]);
+        let npc_hull = catalog
+            .hulls
+            .iter_mut()
+            .find(|hull| hull.id == ShipId(129))
+            .expect("class 129's hull");
+        npc_hull.sprite_base = ShipId(128);
+        let mut session = among(&catalog, &[on_the_npc()], 180, Rulebook::default());
+        assert!(lives(&mut session, &catalog), "in the hole by 128's mask");
+        let asked = catalog.rle_sheets_asked.borrow().clone();
+        assert!(asked.contains(&MaskSheet::Ship(ShipId(128))), "{asked:?}");
+        assert!(!asked.contains(&NPC_SHIP), "{asked:?}");
+    }
+
+    #[test]
     fn a_ship_touches_by_the_frame_its_heading_draws() {
         // Rotations 9 to 27 of 36 (90° to 280°) cover the whole frame; the
         // rest only a dot in the hole.
