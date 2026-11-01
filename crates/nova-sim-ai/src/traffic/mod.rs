@@ -2634,6 +2634,13 @@ impl Traffic {
         self.on_line.take_all()
     }
 
+    /// The work [`Traffic::take_on_line`] would take, up to slot `berth`
+    /// of the frame now being queued ([`LineQueue::take_through`]): what
+    /// the session settles as that slot's run ends.
+    pub fn take_on_line_through(&mut self, berth: u32) -> Vec<OnLine> {
+        self.on_line.take_through(berth)
+    }
+
     /// Whether any work is queued on the line, not yet taken.
     #[must_use]
     pub fn holds_line_work(&self) -> bool {

@@ -28,21 +28,20 @@
 //!    (`_CalculateTargetedDamage` @0x44223), the arrivals
 //!    (`_EnterMoreShips` @0x44237) and the passes run for every ship
 //!    before the first slot, the fleets announced and the arrivals of a
-//!    Derelict government held, then `_AIDispatch`'s loop
-//!    ([`Session::dispatch_npcs`]): for each occupied slot in turn, its
-//!    think, the refuel it gave landed, its point defence and fighter
+//!    Derelict government held; the attack quotes from before the loop
+//!    said ([`Session::say_quotes_before_the_line`]); then `_AIDispatch`'s
+//!    loop ([`Session::dispatch_npcs`]): for each occupied slot in turn,
+//!    its think, the refuel it gave landed, its point defence and fighter
 //!    launches (`_AIFireTurret` @0x80b0d, `_AILaunchFighter` @0x8e6fa and
-//!    @0x8732f; [`Combat::defend_npcs`]) and each fighter it launched put
-//!    in the system (`_LaunchFighter`, see the `fighters` module), so a
-//!    fighter above its carrier is reached as its slot comes; then the
-//!    thinks' voice cues answered in berth order; then the attack quotes
-//!    from before the loop said
-//!    ([`Session::say_quotes_before_the_line`]), and the frame's work on
-//!    the line, every think's attack quote, calls, scan, plunders and
-//!    refuel note, the launched fighters' among them, settled in slot
-//!    order ([`Session::settle_line_queue`], see the `comm_calls` module).
-//!    All before `_HandleShot`, so the fighters move on their launch
-//!    frame.
+//!    @0x8732f; [`Combat::defend_npcs`]), each fighter it launched put in
+//!    the system (`_LaunchFighter`, see the `fighters` module), so a
+//!    fighter above its carrier is reached as its slot comes, and its work
+//!    on the line, its attack quote, calls, scan, plunders and refuel
+//!    note, settled ([`Session::settle_line_through`], see the
+//!    `comm_calls` module); then the thinks' voice cues answered in berth
+//!    order, and what is left on the line settled
+//!    ([`Session::settle_line_queue`]). All before `_HandleShot`, so the
+//!    fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit,
 //!    their hits settled and answered.
@@ -104,13 +103,10 @@
 //!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
 //!   `_DamageShip` settles it at the landing; the fight clears its leader
 //!   at the landing, which is all the later visits read.
-//! - **Filed.** Every think's work on the line settles after the whole
-//!   loop, in slot order, where each slot's `_AIDispatch` says its own, so
-//!   the lines keep their order but a higher slot's think reads what they
-//!   write a drawn frame late; so does what the fly half settles, where
-//!   `_LowLevelAIHandler` makes it in the AI loop (a dock, a repair, a
-//!   jump-out); and the passes the think opens with run before the first
-//!   slot (see [`Session::dispatch_npcs`],
+//! - **Filed.** What the fly half settles, where `_LowLevelAIHandler`
+//!   makes it in the AI loop (a dock, a repair, a jump-out), a higher
+//!   slot's think reads a drawn frame late; and the passes the think opens
+//!   with run before the first slot (see [`Session::dispatch_npcs`],
 //!   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
@@ -288,9 +284,9 @@ impl Session {
     /// argument, this branches on `ai`: with it, the arrivals come and
     /// the fleets are said, then for each slot in turn the NPC thinks, its
     /// point defence fires and its fighters launch, each put in the system
-    /// as its slot's turn ends ([`Session::dispatch_npcs`]), the think
-    /// closes, then the frame's work on the line settles in slot order
-    /// ([`Session::settle_line_queue`]), all before
+    /// as its slot's turn ends, and its work on the line settles
+    /// ([`Session::dispatch_npcs`]), the think closes, then what is left
+    /// on the line settles ([`Session::settle_line_queue`]), all before
     /// the shots, and the ship loop's traffic flies its fly half, its
     /// reinforcement clock included ([`Session::traffic_tail`]); without
     /// it, the traffic only moves, and the reinforcement clock
@@ -319,26 +315,26 @@ impl Session {
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.space.hold_derelicts(&self.statics);
-            // `_AIDispatch`'s loop (@0x44270-0x442ae), each slot's think
-            // and turn in the fight. `_LaunchFighter` marks each fighter's
-            // slot active in it (@0x3c90b, @0x3d680), so the rest of the
-            // loop, `_HandleShot` and its own `_HandleShip` see it that
-            // frame.
+            // The quotes from before the loop, ahead of the first slot's
+            // line work (see the `comm_calls` module).
+            self.say_quotes_before_the_line(chance);
+            #[cfg(test)]
+            for event in std::mem::take(&mut self.space.queued_in_frame) {
+                self.space.traffic.queue_pirate_event(event);
+            }
+            // `_AIDispatch`'s loop (@0x44270-0x442ae), each slot's think,
+            // turn in the fight and work on the line. `_LaunchFighter`
+            // marks each fighter's slot active in it (@0x3c90b, @0x3d680),
+            // so the rest of the loop, `_HandleShot` and its own
+            // `_HandleShip` see it that frame.
             self.dispatch_npcs(marks.is_some(), pass, behaviour, rules, chance);
             if marks.is_some() {
                 self.space.traffic.close_think();
             }
             // `_EscortAI`'s variants and target calls, in berth order.
             self.space.answer_voice_cues(&self.statics, &mut *chance);
-            #[cfg(test)]
-            for event in std::mem::take(&mut self.space.queued_in_frame) {
-                self.space.traffic.queue_pirate_event(event);
-            }
-            // The quotes from before the loop, ahead of the frame's line
-            // work (see the `comm_calls` module).
-            self.say_quotes_before_the_line(chance);
-            // Every think's work on the line, the launched fighters'
-            // among it, in slot order (see `Session::dispatch_npcs`).
+            // What the slots' runs left on the line, and the reinforcement
+            // clock's tick held behind it.
             self.settle_line_queue(rules.law, chance);
             Some(marks)
         } else {

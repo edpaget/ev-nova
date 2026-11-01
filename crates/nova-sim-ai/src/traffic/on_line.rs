@@ -25,7 +25,8 @@
 //!
 //! Each line sets `_commCount` at once (`_DisplayComm` @0x9024b), so a
 //! later slot's call reads it (≤ 0 free @0x8308c, < 0 idle @0x8cecd). The
-//! session settles everything queued in the pass, after the AI loop
+//! session settles each slot's work as that slot's run of the AI loop ends
+//! ([`LineQueue::take_through`]), and what is left after it
 //! ([`LineQueue::take_all`]).
 //!
 //! The engine's NPCs are kept in the order they came, not by slot, so the
@@ -117,6 +118,19 @@ impl LineQueue {
             .into_iter()
             .map(|(_, _, work)| work)
             .collect()
+    }
+
+    /// Everything queued up to `berth` of the frame now being queued, in
+    /// order, taken: the work held from earlier frames, then this frame's
+    /// at `berth` and below. The rest stays queued, a gone ship's included
+    /// (queued after the frame's other work). The session settles each
+    /// slot's work so, as its slot's run ends.
+    pub fn take_through(&mut self, berth: u32) -> Vec<OnLine> {
+        let key = (self.frame, berth);
+        let at = self
+            .work
+            .partition_point(|&(frame, other, _)| (frame, other) <= key);
+        self.work.drain(..at).map(|(_, _, work)| work).collect()
     }
 
     /// The pirate events queued, in order, taken; the rest stays queued.
@@ -291,6 +305,43 @@ mod tests {
         queue.push(2, OnLine::Pirate(docked));
         assert_eq!(queue.take_pirate_events(), [docked, plunder]);
         assert_eq!(queue.take_all(), [call(A)], "the rest kept");
+    }
+
+    #[test]
+    fn taking_through_a_berth_takes_the_frames_work_up_to_it_and_leaves_the_rest() {
+        let gone = OnLine::Scan(NpcId(9));
+        let mut queue = LineQueue::default();
+        queue.next_frame();
+        queue.push(7, call(C));
+        queue.next_frame();
+        queue.push(4, call(B));
+        queue.push(2, call(A));
+        queue.push(2, OnLine::Scan(A));
+        queue.push(u32::MAX, gone);
+        assert_eq!(
+            queue.take_through(2),
+            [call(C), call(A), OnLine::Scan(A)],
+            "a held frame's work, then this frame's at berths up to 2"
+        );
+        assert_eq!(queue.take_through(3), [], "nothing at 3");
+        queue.push(3, OnLine::Scan(C));
+        assert_eq!(queue.take_through(4), [OnLine::Scan(C), call(B)]);
+        assert_eq!(queue.take_through(63), [], "a gone ship's work stays");
+        assert_eq!(queue.take_all(), [gone]);
+    }
+
+    #[test]
+    fn the_traffic_takes_its_work_through_a_slot() {
+        use crate::stats::ShipStats;
+        use crate::traffic::Traffic;
+        use crate::traffic::fixture::npc;
+        let mut traffic = Traffic::new();
+        let low = traffic.add_npc_at(npc(0, ShipStats::default()), 2);
+        let high = traffic.add_npc_at(npc(0, ShipStats::default()), 5);
+        traffic.queue_on_line(high, OnLine::Scan(high));
+        traffic.queue_on_line(low, OnLine::Scan(low));
+        assert_eq!(traffic.take_on_line_through(4), [OnLine::Scan(low)]);
+        assert_eq!(traffic.take_on_line(), [OnLine::Scan(high)]);
     }
 
     #[test]

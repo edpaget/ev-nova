@@ -399,6 +399,75 @@ fn announced() -> Vec<SimMessage> {
     )]
 }
 
+/// [`Calling`], each watcher's think recording whether it reads a fleet
+/// on its way.
+#[derive(Debug)]
+struct Watching {
+    calls: Calling,
+    watchers: Vec<NpcId>,
+    seen: std::cell::RefCell<BTreeMap<NpcId, bool>>,
+}
+
+impl Behaviour for Watching {
+    fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        self.decision(npc, around, chance).goal
+    }
+
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        if self.watchers.contains(&npc.id) {
+            let coming = around.reinforcements.is_some();
+            self.seen.borrow_mut().insert(npc.id, coming);
+        }
+        self.calls.decision(npc, around, chance)
+    }
+}
+
+#[test]
+fn a_higher_slots_think_reads_the_reinforcement_clock_a_lower_slots_call_started_that_pass() {
+    // `_AICallForReinforcements` (@0x7f5a1) starts the clock inside the
+    // caller's own `_AIDispatch`, before the higher slots' run; its tick,
+    // `_HandleReinforcements` (@0x44504), still comes after the loop.
+    let catalog = reinforced();
+    let mut session = flying(&catalog);
+    let watcher = |session: &mut Session, berth| {
+        let mut ship = npc(0, session.stats());
+        ship.govt = Some(FED);
+        session.space.traffic.add_npc_at(ship, berth)
+    };
+    let below = watcher(&mut session, 1);
+    let warship = fight(&mut session, FED, 100.0);
+    let above = watcher(&mut session, 9);
+    let berth = |session: &Session, id| {
+        let npc = session.npcs().iter().find(|npc| npc.id == id);
+        npc.expect("there").berth
+    };
+    assert!(berth(&session, below) < berth(&session, warship));
+    assert!(berth(&session, warship) < berth(&session, above));
+    let watching = Watching {
+        calls: Calling(vec![warship]),
+        watchers: vec![below, above],
+        seen: std::cell::RefCell::default(),
+    };
+    for _ in 0..20 {
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &watching,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        if timer(&session) > 0 {
+            break;
+        }
+        watching.seen.borrow_mut().clear();
+    }
+    assert_eq!(timer(&session), i32::from(TIME) - 1, "called this pass");
+    let seen = watching.seen.into_inner();
+    assert!(!seen[&below], "its run came before the call");
+    assert!(seen[&above], "the call settled at the caller's turn");
+}
+
 #[test]
 fn a_think_that_calls_starts_the_timer_and_the_clock_ticks_on_the_same_frame() {
     let catalog = reinforced();

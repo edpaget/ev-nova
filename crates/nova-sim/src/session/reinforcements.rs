@@ -10,7 +10,7 @@
 //!
 //! | Original | Engine |
 //! |---|---|
-//! | `_BraveTraderAI` @0x8b6dc, `_HighLevelAIHandler` @0x8e0d7 and @0x8e70d, in each think | the think's [`Decision::calls_reinforcements`](crate::ai::Decision::calls_reinforcements), answered in slot order with the frame's other calls ([`Session::settle_line_queue`]), unforced, at the odds its think read |
+//! | `_BraveTraderAI` @0x8b6dc, `_HighLevelAIHandler` @0x8e0d7 and @0x8e70d, in each think | the think's [`Decision::calls_reinforcements`](crate::ai::Decision::calls_reinforcements), answered in slot order with the frame's other calls as its slot's run ends ([`Session::settle_line_through`]), unforced, at the odds its think read |
 //! | `_DoCommDialog` @0x9636d, battle help | the hail's Defend, forced (`Session::act`), at the ship's cached odds |
 //! | `_AICallForReinforcements`' reads of +0xc914 (@0x7f60d, @0x7f69b) | the caller's cached odds ([`Npc::odds`](crate::traffic::npc::Npc::odds)) by the engine's reading of [`RuleKey::OddsCache`], worked out fresh by the other |
 //! | `_HandleReinforcements` @0x44504, on both passes of `_DoPlayGameWork` | [`Session::tick_reinforcements`]: in the advance pass's traffic tail after the frame's calls, on every pass in flight, a jump's included, or held behind calls held behind a scan into the line's settling (see the `comm_calls` module); and in double time's second pass ([`Session::tick_again`]), after its asteroids and before its beams |

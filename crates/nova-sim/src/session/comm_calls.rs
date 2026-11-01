@@ -79,13 +79,15 @@
 //! later slot's line replaces an earlier one's. The traffic queues all of
 //! it at each ship's berth (see `nova_sim::traffic::on_line`), the
 //! refuel note among it (see `nova_sim::traffic::refuel_dock`), and
-//! [`Session::settle_line_queue`] settles it after `_HandlePlayer`'s part
-//! of the frame (the propulsion repair, the sabotage, and the eject in
-//! the player's display step), so their lines come before every call, as
-//! the original's do, and the scans' law is at hand: in
-//! [`Session::game_work`] after `_AIDispatch`'s loop
-//! (`Session::dispatch_npcs`), the fighters launched in it among the
-//! slots, each at its own, and again after the ship loop for the docks and
+//! [`Session::settle_line_through`] settles each slot's work as that
+//! slot's run of `_AIDispatch`'s loop ends (`Session::dispatch_npcs`), a
+//! fighter launched in it at its own slot, so the next slot's think reads
+//! the legal record its scan wrote and the reinforcement clock its call
+//! started. All of it comes after `_HandlePlayer`'s part of the frame (the
+//! propulsion repair, the sabotage, and the eject in the player's display
+//! step), so their lines come before every call, as the original's do, and
+//! the scans' law is at hand. [`Session::settle_line_queue`] settles what
+//! is left after the loop, and again after the ship loop for the docks and
 //! repairs the fly half made:
 //!
 //! - an earlier slot's attack quote, scan line, stolen line, refuel or
@@ -98,7 +100,7 @@
 //! - The reinforcement clock ticks after the frame's calls, as
 //!   `_HandleReinforcements` (@0x44504) runs after the `_AIDispatch` loop
 //!   (@0x4429d), so on a frame whose line work is queued its tick is held
-//!   too, and runs right after it settles: a `ReinfTime` 1 call's fleet
+//!   too, and runs right after the loop's last settles: a `ReinfTime` 1 call's fleet
 //!   still arrives in its frame, and the frame's announcement still
 //!   follows its calls and refuel note.
 //!
@@ -215,38 +217,65 @@ impl Session {
         }
     }
 
-    /// Settles the frame's work on the message line
-    /// ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)),
-    /// in slot order: each think's attack quote
-    /// ([`Session::say_attack_quote`]); each scan of the player
-    /// ([`Session::scanned_by`]), convicting by `law`; each call; each
-    /// pirate's or repairer's deed
-    /// ([`Session::answer_pirate`]); and each refuel's note, drawing on
-    /// `chance`, so an earlier slot's line keeps a later slot's call off
-    /// as the original's does (see the module docs). Then the
-    /// reinforcement clock's tick held behind them runs, if one was (see
-    /// the `reinforcements` module). Nothing settles while the player is
-    /// landed.
+    /// Settles the frame's work on the message line left after
+    /// `_AIDispatch`'s loop ([`Session::settle_line_through`] of it all):
+    /// what the thinks' runs did not settle, and the fly half's docks and
+    /// repairs. Then the reinforcement clock's tick held behind them runs,
+    /// if one was (see the `reinforcements` module), as
+    /// `_HandleReinforcements` comes after the loop (@0x44504). Nothing
+    /// settles while the player is landed.
     ///
-    /// *Ordering against the original.* The plunder's cargo, credits and
-    /// mission failures and the repair's armour settle here, after the
-    /// loop, where the original carries them out inside it. All of it is
-    /// later in the pass than the loop, but before the shots, the frame's
-    /// drawing and any dialog, landing, jump or save, so no boundary is
-    /// crossed.
-    ///
-    /// The pass settles it jumping or not; each scan is held past the
-    /// warp's lead-in by `_ScanPlayer`'s jump-timing check
-    /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
-    /// the think that queued it to its pass's settling, so it settles
-    /// before the frame is drawn. The session runs through the whole warp,
-    /// and the arrival comes after its last step, so work queued on any
-    /// pass of the warp settles in that pass, before the arrival.
+    /// *Ordering against the original.* The repair's armour, and the
+    /// dock's line, settle here, after the ship loop, where the original
+    /// carries them out inside the AI loop's low level. All of it is later
+    /// in the pass than the loop, but before the frame's drawing and any
+    /// dialog, landing, jump or save, so no boundary is crossed.
     pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
         if self.mode.landed().is_some() {
             return;
         }
-        for work in self.space.traffic.take_on_line() {
+        self.settle_line_through(None, law, chance);
+        if std::mem::take(&mut self.space.reinforcements_held) {
+            self.tick_reinforcements(chance);
+        }
+    }
+
+    /// Settles the frame's work on the message line up to slot `through`
+    /// (all of it with none;
+    /// [`Traffic::take_on_line_through`](crate::traffic::Traffic::take_on_line_through)),
+    /// in slot order: each think's attack quote
+    /// ([`Session::say_attack_quote`]); each scan of the player
+    /// ([`Session::scanned_by`]), convicting by `law`; each call; each
+    /// pirate's or repairer's deed ([`Session::answer_pirate`]); and each
+    /// refuel's note, drawing on `chance`, so an earlier slot's line keeps
+    /// a later slot's call off as the original's does (see the module
+    /// docs). [`Session::dispatch_npcs`] runs it as each slot's run ends,
+    /// so the next slot's think reads the legal record a scan wrote and
+    /// the reinforcement clock a call started, as the original's do inside
+    /// the slot's `_AIDispatch`. Nothing settles while the player is
+    /// landed.
+    ///
+    /// The pass settles it jumping or not; each scan is held past the
+    /// warp's lead-in by `_ScanPlayer`'s jump-timing check
+    /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
+    /// the think that queued it to its slot's settling, so it settles
+    /// before the frame is drawn. The session runs through the whole warp,
+    /// and the arrival comes after its last step, so work queued on any
+    /// pass of the warp settles in that pass, before the arrival.
+    pub(super) fn settle_line_through(
+        &mut self,
+        through: Option<u32>,
+        law: &dyn LegalCode,
+        chance: &mut dyn Chance,
+    ) {
+        if self.mode.landed().is_some() {
+            return;
+        }
+        let work = match through {
+            Some(berth) => self.space.traffic.take_on_line_through(berth),
+            None => self.space.traffic.take_on_line(),
+        };
+        for work in work {
             match work {
                 OnLine::AttackQuote(id) => self.say_attack_quote(id, chance),
                 OnLine::Scan(id) => self.scanned_by(id, law, chance),
@@ -266,9 +295,6 @@ impl Session {
                     );
                 }
             }
-        }
-        if std::mem::take(&mut self.space.reinforcements_held) {
-            self.tick_reinforcements(chance);
         }
     }
 

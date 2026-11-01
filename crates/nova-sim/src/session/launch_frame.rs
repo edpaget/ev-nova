@@ -68,7 +68,12 @@ impl Session {
     /// refuel it gave landed, its point defence and launches
     /// ([`Combat::defend_npcs`](crate::combat::Combat::defend_npcs)) and
     /// its fighters put in the system at once
-    /// ([`Session::launch_fighters`]). The next slot is read from the live
+    /// ([`Session::launch_fighters`]), and its work on the line settled
+    /// ([`Session::settle_line_through`]): its calls, its scan, its
+    /// plunder of the player and its refuel note, as the original says
+    /// each inside its own `_AIDispatch`, so a higher slot's think reads
+    /// the legal record a scan wrote and the reinforcement clock a call
+    /// started. The next slot is read from the live
     /// table, so a fighter in a slot above is reached as its slot comes,
     /// and one below has been passed. On a pass that set a system up (not
     /// `thought`) no NPC thinks, and only a fighter launched in it does.
@@ -84,14 +89,10 @@ impl Session {
     /// - Within a slot the point defence comes after the whole think,
     ///   where `_AIFireTurret` runs in the low level. It is the ship's own
     ///   turn, so no other slot reads the difference.
-    /// - Every think's work on the line (its calls, its scan, its plunder
-    ///   of the player) is queued at its berth and settled after this
-    ///   loop in slot order ([`Session::settle_line_queue`]), where the
-    ///   original says each in its own slot's `_AIDispatch`. So the lines,
-    ///   their sounds and their order stand, and are said before the frame
-    ///   is drawn; but a higher slot's think reads the legal record and
-    ///   the reinforcement clock a lower slot's scan or call changes only
-    ///   the next frame.
+    /// - The thinks' voice cues are answered after the loop, in berth
+    ///   order ([`Space::answer_voice_cues`](super::Space::answer_voice_cues)).
+    ///   They speak on the voice channel and raise no line, so no slot's
+    ///   call reads them.
     /// - What the fly half settles (a dock, a jump-out, the boarded flag, a
     ///   gate entrant's followers), and the passes [`Traffic::open_think`]
     ///   runs before the first slot.
@@ -134,6 +135,9 @@ impl Session {
             });
             let sorties = self.space.combat.take_sorties();
             launched.extend(self.launch_fighters(&sorties, chance));
+            // The slot's work on the line, so the next slot's think reads
+            // what it wrote.
+            self.settle_line_through(through, rules.law, chance);
             let Some(slot) = through else {
                 return;
             };

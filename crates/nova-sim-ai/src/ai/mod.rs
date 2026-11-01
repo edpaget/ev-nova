@@ -1035,8 +1035,8 @@ pub struct Decision {
     /// The call the think makes on the message line, if any: a distress
     /// call (`_AICallForHelp`) or a pre-scan hail (see
     /// [`call_for_help`]). The session answers it in slot order with the
-    /// frame's other work on the line, after `_HandlePlayer`'s part of the
-    /// frame (`Session::settle_line_queue`; see [`crate::traffic::on_line`]).
+    /// frame's other work on the line, as its slot's run ends
+    /// (`Session::settle_line_through`; see [`crate::traffic::on_line`]).
     pub comm_call: Option<CommCall>,
     /// Whether the think calls for its system's reinforcement fleet
     /// (`_AICallForReinforcements(ship, 0)`, see [`reinforcements`]): a

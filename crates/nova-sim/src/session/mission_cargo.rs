@@ -1799,6 +1799,63 @@ mod tests {
         );
     }
 
+    /// [`LookedOver`], each watcher's think recording the player's legal
+    /// record it reads.
+    #[derive(Debug, Default)]
+    struct Watching {
+        watchers: Vec<NpcId>,
+        seen: std::cell::RefCell<std::collections::BTreeMap<NpcId, i16>>,
+    }
+
+    impl Behaviour for Watching {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            if self.watchers.contains(&npc.id) {
+                self.seen.borrow_mut().insert(npc.id, around.record);
+            }
+            Goal::Idle
+        }
+    }
+
+    #[test]
+    fn a_higher_slots_think_reads_the_record_a_lower_slots_scan_wrote_that_pass() {
+        // `_ScanPlayer` convicts inside the scanner's own `_AIDispatch`
+        // (from @0x8f38a), before the higher slots' run; the lower slots'
+        // came before it.
+        let mut catalog = contraband_catalog(500);
+        for system in &mut catalog.star_map {
+            system.govt = Some(GovtId(128));
+        }
+        let mut session = smuggler(&catalog, 2, 0, 1200);
+        let scanner = police(&mut session).clone();
+        session.space.traffic.remove(scanner.id);
+        session.space.traffic.add_npc_at(scanner, 3);
+        let watcher = |session: &mut Session, berth| {
+            let mut ship = npc(0, session.stats());
+            ship.state.position = Vec2::new(-2000.0, 0.0);
+            session.space.traffic.add_npc_at(ship, berth)
+        };
+        let (below, above) = (watcher(&mut session, 2), watcher(&mut session, 5));
+        let before = session.pilot().system_record(SystemId(130));
+        let watching = Watching {
+            watchers: vec![below, above],
+            ..Watching::default()
+        };
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &watching,
+            Rules::default(),
+            &mut Draws::of(&[0]),
+        );
+        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        let after = session.pilot().system_record(SystemId(130));
+        assert_eq!(after, before - 5, "convicted");
+        let seen = watching.seen.into_inner();
+        assert_eq!(seen[&below], before, "its run came before the scan");
+        assert_eq!(seen[&above], after, "the scan settled at slot 3's turn");
+    }
+
     #[test]
     fn a_junk_conviction_stops_junk_scans_until_a_reset_and_lets_the_outfits_be_scanned() {
         let catalog = contraband_catalog(500);
