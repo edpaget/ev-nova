@@ -964,9 +964,10 @@ pub fn gun_find(
 /// the missile doesn't. The high level drops a goal-4 target breaking up
 /// ([`attack_drop`](crate::ai::attack_drop)), so three kinds of ship reach
 /// the passes with one: a flight, whose goal isn't 4, and a running wait
-/// and the regroup pause, which never reach that drop. This is the AI's
-/// pick alone: combat's `ai_dispatch::standing` doesn't yet aim at such a
-/// target (rdm:phase/escort-fleet-fidelity-followups/phase-15-fire-at-a-ship-breaking-up).
+/// and the regroup pause, which never reach that drop. Combat aims the
+/// pick at such a target too, as `_FireAIShipWeapon` reads no `_IsDying`
+/// (@0x8873d-0x89269): its pick resolves any target whose slot is active
+/// (combat's `ai_dispatch::active`).
 fn sight_of<'a>(
     npc: &'a Npc,
     ship: ShipRef,
