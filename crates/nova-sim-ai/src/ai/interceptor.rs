@@ -835,6 +835,53 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_closes_on_every_goal_above_1_but_0x14_and_opens_on_the_rest() {
+        // The search, inspection and patrol run for goal 1 or below, or
+        // 0x14, alone (@0x8cc6d-0x8cc7d). The engine's follow and
+        // formation stay open too; an inspection's hold has its own tests.
+        let closed = [
+            Goal::Wait,
+            Goal::Hold,
+            Goal::JumpOut,
+            PLUNDER,
+            Goal::Drift,
+            Goal::CountWait,
+            Goal::Mine,
+            Goal::Scoop,
+            Goal::AttackStellar(StellarId(128)),
+            Goal::Dock(P),
+            Goal::Assist(crate::ai::Help::Refuel),
+            Goal::Regroup {
+                kept: crate::ai::regroup::Kept::Coast,
+            },
+        ];
+        let open = [
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
+            Goal::Attack(P),
+            Goal::Snipe(P),
+            Goal::Flee(P),
+            Goal::Follow {
+                lead: crate::traffic::npc::NpcId(2),
+                guard: None,
+            },
+            Goal::Formation { guard: None },
+        ];
+        let sites = sites();
+        let govts = govts(0, 0);
+        for (goals, shut) in [(&closed[..], true), (&open[..], false)] {
+            for &goal in goals {
+                let mut cop = police();
+                cop.goal = goal;
+                let npcs = [cop];
+                let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+                assert_eq!(gate_closed(&npcs[0], &around), shut, "{goal:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_provoked_interceptor_holding_a_plunder_attacks_its_provoker_or_drops_one_it_cant_destroy()
     {
         // The provoked branch writes goal 4 (@0x8cbf3-0x8cc31), the gate
