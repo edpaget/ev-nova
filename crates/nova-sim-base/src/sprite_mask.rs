@@ -601,6 +601,11 @@ mod tests {
         // At the overlap's left edge too, the first's pixel outside it.
         assert!(touch(&left, (0, 0), &left, (1, 0), MaskWalk::Original));
         assert!(!touch(&left, (0, 0), &left, (1, 0), MaskWalk::Drawn));
+        // Nor the mirror at the left edge, the second's pixel outside it.
+        assert!(!touch(&left, (1, 0), &left, (0, 0), MaskWalk::Original));
+        // Not at its right edge, the first's rect reaching left of it.
+        let end = sheet(&[&["..#"]]);
+        assert!(!touch(&end, (0, 0), &end, (1, 0), MaskWalk::Original));
         // Not at its right edge, the second's pixel outside it.
         assert!(!touch(
             &right,
@@ -666,6 +671,143 @@ mod tests {
         let first = sheet8(&[&["##.."]]);
         assert!(touch(&first, (0, 0), &byte, (0, 0), MaskWalk::Original));
         assert!(!touch(&first, (0, 0), &byte, (0, 0), MaskWalk::Drawn));
+    }
+
+    #[test]
+    fn a_lower_row_is_reached_past_the_lines_above_it() {
+        let both = sheet(&[&["##", "##"]]);
+        for walk in BOTH {
+            assert!(
+                touch(&both, (0, 0), &sheet(&[&["..", "##"]]), (0, 0), walk),
+                "{walk:?}"
+            );
+            // Each frame's lines above the overlap skipped by their counts.
+            assert!(touch(&both, (0, -1), &sheet(&[&["##"]]), (0, 0), walk));
+            assert!(touch(&sheet(&[&["##"]]), (0, 0), &both, (0, -1), walk));
+        }
+    }
+
+    /// One 6-pixel row: pixels 0 and 1, whose data word reads as a skip of
+    /// 40 bytes, a skip of 2, then pixels 4 and 5.
+    fn data_like_a_skip() -> RleSheet {
+        RleSheet {
+            width: 6,
+            height: 1,
+            shift: 1,
+            words: vec![
+                token(LINE_START, 24),
+                token(PIXELS, 4),
+                token(SKIP, 40),
+                token(SKIP, 4),
+                token(PIXELS, 4),
+                0x7FFF_7FFF,
+                0,
+            ],
+            starts: vec![Some(0)],
+        }
+    }
+
+    #[test]
+    fn a_pixels_data_is_skipped_not_read_as_tokens() {
+        let tricky = data_like_a_skip();
+        let last = sheet(&[&["....##"]]);
+        for walk in BOTH {
+            assert!(touch(&tricky, (0, 0), &last, (0, 0), walk), "{walk:?}");
+            assert!(touch(&last, (0, 0), &tricky, (0, 0), walk), "{walk:?}");
+        }
+        // A pixel after a skip on its line, as drawn.
+        let gap = sheet(&[&["#.#"]]);
+        assert!(touch(
+            &gap,
+            (0, 0),
+            &sheet(&[&["..#"]]),
+            (0, 0),
+            MaskWalk::Drawn
+        ));
+        assert!(!touch(
+            &gap,
+            (0, 0),
+            &sheet(&[&[".#."]]),
+            (0, 0),
+            MaskWalk::Drawn
+        ));
+    }
+
+    #[test]
+    fn a_frame_end_at_a_rows_line_start_touches_nothing_whatever_follows() {
+        // One line, then a frame end, then pixels no line starts.
+        let ended = RleSheet {
+            width: 2,
+            height: 2,
+            shift: 1,
+            words: vec![
+                token(LINE_START, 8),
+                token(PIXELS, 4),
+                0x7FFF_7FFF,
+                0,
+                token(PIXELS, 4),
+                0x7FFF_7FFF,
+            ],
+            starts: vec![Some(0)],
+        };
+        let rows = sheet(&[&["..", "##"]]);
+        let rect = MaskRect::placed((0, 0), (2, 2));
+        for walk in BOTH {
+            let (a, b) = (
+                ended.frame(0).expect("a frame"),
+                rows.frame(0).expect("a frame"),
+            );
+            assert!(!rle_collision(a, rect, b, rect, walk), "{walk:?}");
+            assert!(!rle_collision(b, rect, a, rect, walk), "{walk:?}");
+        }
+    }
+
+    #[test]
+    fn rows_below_the_overlap_are_not_compared_though_the_frames_hold_them() {
+        let two = sheet(&[&["..", "##"]]);
+        let three = sheet(&[&["..", "..", "##"]]);
+        let (a, b) = (
+            two.frame(0).expect("a frame"),
+            three.frame(0).expect("a frame"),
+        );
+        let short = MaskRect::placed((0, 1), (2, 1));
+        let tall = MaskRect::placed((0, 0), (2, 3));
+        for walk in BOTH {
+            assert!(!rle_collision(a, short, b, tall, walk), "{walk:?}");
+        }
+    }
+
+    #[test]
+    fn each_frame_is_read_from_its_own_left_as_drawn() {
+        let drawn = MaskWalk::Drawn;
+        assert!(touch(
+            &sheet(&[&["#."]]),
+            (1, 0),
+            &sheet(&[&[".#"]]),
+            (0, 0),
+            drawn
+        ));
+        assert!(touch(
+            &sheet(&[&["#."]]),
+            (1, 0),
+            &sheet(&[&["##"]]),
+            (0, 0),
+            drawn
+        ));
+        assert!(!touch(
+            &sheet(&[&["##."]]),
+            (0, 0),
+            &sheet(&[&[".#"]]),
+            (1, 0),
+            drawn
+        ));
+        assert!(!touch(
+            &sheet(&[&[".#"]]),
+            (1, 0),
+            &sheet(&[&["##."]]),
+            (0, 0),
+            drawn
+        ));
     }
 
     #[test]

@@ -701,4 +701,19 @@ exclude_re = [
     # contour as closed whether or not the path closes it, so dropping the
     # close changes no coverage.
     "nova-render/src/glyph_raster\\.rs:[0-9]+:[0-9]+: replace <impl OutlinePen for Path>::close with \\(\\)$",
+    # A run-length token's op shifted into the top byte and its count
+    # masked to the 24 below: their bits are disjoint, so `^` packs the
+    # same word.
+    "nova-data/src/graphics/rle_words\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in token$",
+    "nova-sim-base/src/fixture/rle\\.rs:[0-9]+:[0-9]+: replace \\| with \\^ in token$",
+    # `_SWRLECollision`'s overlap test, kept as the original's early
+    # return: over an empty or inverted overlap neither walk can read both
+    # sides drawing (no row, or the first's width at or below 0 holds the
+    # side ahead still), so loosening it touches nothing more.
+    "nova-sim-base/src/sprite_mask\\.rs:[0-9]+:[0-9]+: replace (&& with \\|\\||< with <=) in MaskRect::overlap$",
+    # The merge's end of a row once either side read the next line start
+    # (@0xc0e79-0xc0e88): that side stands at the width, not drawing, so
+    # going on only walks the other to the width; the walk of each later
+    # row starts from its line start either way.
+    "nova-sim-base/src/sprite_mask\\.rs:[0-9]+:[0-9]+: replace \\|\\| with && in original_walk$",
 ]
