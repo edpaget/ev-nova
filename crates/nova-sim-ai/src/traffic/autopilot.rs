@@ -199,7 +199,8 @@
 //!   while it moves 0.35 or more on an axis and settling × 0.95 a tick
 //!   below that, so it comes to rest from any speed.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
-//!   [`glide_speed`] a tick, with no steering, and flies on at that speed
+//!   [`glide_speed`] a tick (from what it owes, for a ship that carries a
+//!   word, [`Npc::burst_speed`]), with no steering, and flies on at that speed
 //!   once the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]), as it does bursting out of a gate (see
 //!   below). A ship disabled or breaking up glides on too, along the
@@ -221,8 +222,10 @@
 //!   (@0x3aa7d).
 //!   Then ([`Mode::LeavingGate`]) it bursts out along its heading at
 //!   [`exit_speed`], from 30, or from 15 for a ship
-//!   [`led_out`](Npc::led_out) of the gate by the player, 1.165 slower
-//!   each tick (sub-goal 0xa, as the glide in),
+//!   [`led_out`](Npc::led_out) of the gate by the player, or from its own
+//!   word for a successor that waited where it was
+//!   ([`Npc::bursts_own_word`]), 1.165 slower each tick (sub-goal 0xa, as
+//!   the glide in),
 //!   with no steering, and flies on at that speed once
 //!   the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]: the lower of its own top speed and its
