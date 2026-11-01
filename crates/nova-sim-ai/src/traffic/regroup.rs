@@ -380,6 +380,99 @@ mod tests {
         assert!(of(&traffic, id).state.velocity.x < 2.0);
     }
 
+    /// Keeps every goal and target.
+    #[derive(Debug)]
+    struct Keeps;
+
+    impl Behaviour for Keeps {
+        fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+    }
+
+    /// A fight paused in slot 2 at the centre, heading 90.6 and moving
+    /// east, at a ship 1000 north in slot 4, which it targets: the
+    /// traffic, the fighter and its target.
+    fn paused_fight() -> (Traffic, NpcId, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let target = traffic.add_npc_at(ship(0.0, -1000.0), 4);
+        let mut fighter = paused_with(Kept::Attack(ShipRef::Npc(target)));
+        fighter.target = Some(ShipRef::Npc(target));
+        fighter.state.heading = 90.6;
+        fighter.state.velocity = Vec2::new(1.0, 0.0);
+        let fighter = traffic.add_npc_at(fighter, 2);
+        (traffic, fighter, target)
+    }
+
+    #[test]
+    fn a_paused_fight_steers_at_its_gone_targets_record_on_the_tick_after_it_went() {
+        // No high level clears +0x70 in the pause (@0x9002d → @0x900c6 →
+        // @0x901ea), so sub 5 steers at the freed slot's record
+        // (@0x85c70-0x85cfb), with no AI wait to hold its turn and thrust.
+        // Its `_HandleShip` came before the target's display, so it holds
+        // the slot at its next think.
+        let (mut there, fighter, _) = paused_fight();
+        ticked(&mut there, &Keeps, 1);
+        let (mut gone, fighter_gone, target) = paused_fight();
+        gone.remove_destroyed(target);
+        ticked(&mut gone, &Keeps, 1);
+        assert_eq!(fighter, fighter_gone);
+        let flown = of(&gone, fighter).state;
+        assert_eq!(flown, of(&there, fighter).state, "as at the ship itself");
+        let (mut unrecorded, _, target) = paused_fight();
+        unrecorded.remove(target);
+        ticked(&mut unrecorded, &Keeps, 1);
+        assert_ne!(flown, of(&unrecorded, fighter).state, "with no record");
+    }
+
+    #[test]
+    fn a_paused_formation_approaches_its_gone_guards_record_on_the_tick_after_it_went() {
+        // Subs 9 and 0xb steer at +0x70 while it is set (@0x876a8-0x876e3),
+        // the kept formation's guard, read by the record in the pause.
+        let paused_formation = || {
+            let mut traffic = Traffic::with_interval(1);
+            let lead = traffic.add_npc_at(ship(0.0, 0.0), 1);
+            // East of it, where its lead is north: it turns either way.
+            let guard = traffic.add_npc_at(ship(2000.0, 3000.0), 5);
+            let mut follower = paused_with(Kept::Formation {
+                guard: Some(ShipRef::Npc(guard)),
+            });
+            follower.leader = Some(lead);
+            follower.target = Some(ShipRef::Npc(guard));
+            follower.state.position = Vec2::new(0.0, 3000.0);
+            follower.state.heading = 45.0;
+            let follower = traffic.add_npc_at(follower, 3);
+            (traffic, follower, guard)
+        };
+        let (mut there, follower, _) = paused_formation();
+        ticked(&mut there, &Keeps, 1);
+        let (mut gone, _, guard) = paused_formation();
+        gone.remove_destroyed(guard);
+        ticked(&mut gone, &Keeps, 1);
+        let flown = of(&gone, follower).state;
+        assert_eq!(flown, of(&there, follower).state, "as at the guard itself");
+        let (mut unrecorded, _, guard) = paused_formation();
+        unrecorded.remove(guard);
+        ticked(&mut unrecorded, &Keeps, 1);
+        assert_ne!(flown, of(&unrecorded, follower).state, "at its lead");
+    }
+
+    #[test]
+    fn a_paused_fight_with_no_target_coasts_its_heading_truncated() {
+        // After `_HandleShip`'s let-go, +0x70 -1: sub 5 skips its block
+        // (@0x85c70), its thrust zeroed (@0x851f1) and its wanted heading
+        // its whole heading (@0x8522d).
+        let (mut traffic, fighter, target) = paused_fight();
+        traffic.remove_destroyed(target);
+        traffic.let_go_at_step(fighter, true);
+        ticked(&mut traffic, &Keeps, 1);
+        let after = of(&traffic, fighter);
+        assert!(paused(after), "still a fight's pause");
+        assert_eq!(after.state.velocity, Vec2::new(1.0, 0.0), "no thrust");
+        assert_eq!(after.state.heading, 90.0);
+        assert_eq!(after.state.position, Vec2::new(1.0, 0.0));
+    }
+
     #[test]
     fn a_kept_attack_closes_on_its_target() {
         let mut traffic = Traffic::with_interval(1);

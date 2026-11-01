@@ -36,7 +36,9 @@
 //!   ship flies the same either way: a flight steers by the ship its goal
 //!   names and reads no target (+0x70), and the fly half's own reads of it
 //!   ([`Traffic::begin_fly`](crate::traffic::Traffic::begin_fly)) come
-//!   before every slot's test.
+//!   before every slot's test. A ship whose high level was skipped steers
+//!   at a gone target's record by the note its think took, which the
+//!   let-go doesn't clear (the traffic's `skipped_high_level`).
 //! - **A ship whose flight ends it** (it enters a gate, or a mission ship
 //!   leaves as it lands) leaves at once: its slot takes no step, and no
 //!   later slot's fire or shockwave sees it.

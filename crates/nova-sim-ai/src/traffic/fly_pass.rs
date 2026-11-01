@@ -4,8 +4,9 @@
 //! before and after it: [`Traffic::begin_fly`], then
 //! [`Traffic::fly_npc`] for each NPC, then [`Traffic::end_fly`].
 //!
-//! - **Begin** holds every NPC's cloak; on the advance pass moves each NPC's fire clock on, holds its fold to
-//!   its dispatch, and runs the odds pass
+//! - **Begin** holds every NPC's cloak; on the advance pass moves each
+//!   NPC's fire clock on, holds its fold to its dispatch, and runs the
+//!   odds pass
 //!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
 //!   `_HandleShip`; see [`odds_cache`](super::odds_cache)); notes which
 //!   ships are entering a gate; and snapshots what each flight reads of
@@ -20,7 +21,9 @@
 //!   flights of lower slots, whose low level came before it left, and a
 //!   follower reads its leader's warp as the tick opened when its slot is
 //!   below the leader's (see [`dispatch_leave`](super::dispatch_leave)).
-//!   The warp clocks, the high level's hold, turn-back, gate box and
+//!   A gone ship is there, by its record, for a ship whose high level its
+//!   think skipped and that held it then (see
+//!   [`skipped_high_level`](super::skipped_high_level)). The warp clocks, the high level's hold, turn-back, gate box and
 //!   release, a pirate's dock start, a ship's own jump-out and a fighter's
 //!   dock are the AI loop's, at each ship's slot; a dock started there that
 //!   tick only moves on, completing nothing.
@@ -57,6 +60,7 @@ use super::inertialess::Inertia;
 use super::npc::{Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
+use super::skipped_high_level::SkippedReads;
 use super::{
     DockNotes, Traffic, World, ionization, land_flight, plunder, regroup, repair_dock,
     ship_display, tractor_hold, warp_out,
@@ -133,6 +137,10 @@ pub struct FlyPass {
     /// flies another goal ([`Npc::fly_as_flown`]) but whose warp-out reads
     /// the pause's (see [`warp_out::fly_jump`]).
     paused: BTreeSet<NpcId>,
+    /// The gone ship each ship whose high level was skipped held at its
+    /// think, by its record ([`skipped_high_level`](super::skipped_high_level)): none on double
+    /// time's second pass, which has no think.
+    skipped: SkippedReads,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,
     /// Each repair completed.
@@ -241,6 +249,7 @@ impl Traffic {
             .map(|npc| npc.id)
             .collect();
         self.departed.clear();
+        let skipped = std::mem::take(&mut self.skipped);
         FlyPass {
             half,
             think,
@@ -262,6 +271,7 @@ impl Traffic {
             leads,
             unseen,
             paused,
+            skipped,
             first: self.first_class,
             docks: DockNotes::default(),
         }
@@ -375,14 +385,21 @@ fn ends(npc: &Npc, outcome: Outcome, world: &World) -> bool {
 
 /// Where the fly half `pass` found `ship` for `reader`, if it is there:
 /// a ship that left at its slot of the AI loop is there for a reader in a
-/// lower slot, whose low level came before it left.
+/// lower slot, whose low level came before it left; a gone ship is there,
+/// by its record, for a reader whose high level was skipped and that held
+/// it at its think ([`skipped_high_level`](super::skipped_high_level)).
 fn state_of(pass: &FlyPass, ship: ShipRef, reader: &Npc) -> Option<ShipState> {
     match ship {
         ShipRef::Player => pass.player,
-        ShipRef::Npc(id) => pass.states.get(&id).copied().or_else(|| {
-            let &(berth, state) = pass.left.get(&id)?;
-            (reader.berth < berth).then_some(state)
-        }),
+        ShipRef::Npc(id) => pass
+            .states
+            .get(&id)
+            .copied()
+            .or_else(|| {
+                let &(berth, state) = pass.left.get(&id)?;
+                (reader.berth < berth).then_some(state)
+            })
+            .or_else(|| pass.skipped.state_of(reader.id, id)),
     }
 }
 
@@ -412,6 +429,7 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
         swarm: pass.leads.get(&npc.id).copied(),
         guard: guard.and_then(|guard| state_of(pass, guard, npc)),
         leader_seen,
+        paused: pass.paused.contains(&npc.id),
         ..Beside::default()
     }
 }

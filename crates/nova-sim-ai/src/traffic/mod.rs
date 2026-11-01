@@ -290,6 +290,7 @@ pub mod ship_display;
 pub mod skill;
 #[cfg(test)]
 mod skill_rolls;
+pub mod skipped_high_level;
 #[cfg(test)]
 mod slot_stellar_tests;
 pub mod slot_stellars;
@@ -957,9 +958,12 @@ pub struct Traffic {
     /// Each ship's warp as the tick's think opened, which a follower below
     /// its leader reads ([`dispatch_leave`]).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
-    /// The ships gone since the last think closed whose slots a think may
-    /// still read ([`gone`]).
+    /// The records of the freed slots not taken again, which a think or a
+    /// flight may still read ([`gone`]).
     gone: GoneShips,
+    /// The gone ships the ships whose high level was skipped held at this
+    /// tick's thinks, for the fly half ([`skipped_high_level`]).
+    skipped: skipped_high_level::SkippedReads,
     /// The last ship of each berth whose slot lost only its active flag,
     /// until a ship takes the berth or the system is left ([`vacated`]).
     vacated: VacatedBerths,
@@ -1098,6 +1102,7 @@ impl Traffic {
             started_in_dispatch: BTreeSet::new(),
             open_leaders: BTreeMap::new(),
             gone: GoneShips::default(),
+            skipped: skipped_high_level::SkippedReads::default(),
             vacated: VacatedBerths::default(),
             on_line: LineQueue::default(),
             quotes: Vec::new(),
@@ -1180,6 +1185,7 @@ impl Traffic {
         self.left_in_dispatch.clear();
         self.started_in_dispatch.clear();
         self.gone.clear();
+        self.skipped = skipped_high_level::SkippedReads::default();
         self.vacated.clear();
         self.on_line.clear();
         self.quotes.clear();
@@ -1301,6 +1307,7 @@ impl Traffic {
         self.left_in_dispatch.clear();
         self.started_in_dispatch.clear();
         self.gone.clear();
+        self.skipped = skipped_high_level::SkippedReads::default();
         self.vacated.clear();
         self.on_line.clear();
         self.quotes.clear();
@@ -1541,6 +1548,9 @@ impl Traffic {
             }
         }
         self.take_gate_waits(behaviour, &world, &picked);
+        // What the low level of a ship whose high level was skipped reads
+        // of a gone ship (`skipped_high_level`).
+        self.skipped.note(&self.npcs, &picked, self.gone.ships());
         let freed = pod_flight::count_down(&mut self.npcs, &picks);
         self.freed.extend(freed);
         self.leave_in_dispatch(&world, &picks, no_bay, chance)

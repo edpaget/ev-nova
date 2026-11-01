@@ -389,9 +389,14 @@ pub struct Beside {
     /// ([`mine_orders::nearest_box`](crate::ai::mine_orders::nearest_box)),
     /// if any ([`mine_flight`]).
     pub scoop_box: Option<Vec2>,
+    /// Whether it is in the regroup pause, flying its kept substate: a
+    /// kept fight whose target is not there coasts, as sub 5 with +0x70 -1
+    /// skips its block (@0x85c70; see the traffic's `skipped_high_level`).
+    pub paused: bool,
 }
 
-/// No swarm lead, no guard, its leader seen, and no asteroid or box.
+/// No swarm lead, no guard, its leader seen, no asteroid or box, and not
+/// paused.
 impl Default for Beside {
     fn default() -> Self {
         Self {
@@ -400,6 +405,7 @@ impl Default for Beside {
             leader_seen: true,
             rock: None,
             scoop_box: None,
+            paused: false,
         }
     }
 }
@@ -598,6 +604,12 @@ fn fly_mobile(
             // A sniper whose target is gone coasts ([`snipe::fly`]).
             None if matches!(npc.goal, Goal::Snipe(_)) => {
                 snipe::fly(npc, None, &handling, snipe_lead, weapons).into()
+            }
+            // A paused fight with +0x70 -1 skips sub 5's block (@0x85c70):
+            // no thrust (@0x851f1), its heading truncated (@0x8522d).
+            None if beside.paused => {
+                flight::turn_to_own(&mut npc.state);
+                Controls::default().into()
             }
             None => braking(npc, &handling, inertia),
         },
