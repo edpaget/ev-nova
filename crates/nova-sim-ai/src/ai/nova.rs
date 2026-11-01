@@ -81,6 +81,7 @@ use crate::combat::{ShipRef, Strike};
 use crate::govt::PLUNDERS;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::{AiType, Npc};
+use crate::traffic::provocation;
 
 /// Nova's combat AI (see the module docs).
 #[derive(Clone, Debug)]
@@ -377,8 +378,8 @@ impl Behaviour for NovaAi {
     /// Unless that search or give-up ended the handler
     /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), a flight
     /// from a ship gone from its slot ends with its provocation
-    /// ([`flight_ended`](crate::traffic::provocation::flight_ended),
-    /// @0x8d4e4-0x8d50d → @0x8e228-0x8e23d), and its flee
+    /// ([`provocation::with_flight_end`], @0x8d4e4-0x8d50d →
+    /// @0x8e228-0x8e23d) for a ship the hunt left alone, and its flee
     /// drop ([`flee_drop::with_flee_drop`]), its drop of an attack on a
     /// ship breaking up ([`attack_drop::with_attack_drop`]) and its call
     /// for reinforcements end the think
@@ -391,7 +392,8 @@ impl Behaviour for NovaAi {
             return think;
         }
         let decision = handler_head::slot_test(think, around);
-        let decision = match self.mission_hunt(npc, around) {
+        let hunt = self.mission_hunt(npc, around);
+        let decision = match hunt {
             Some(true) => Decision {
                 goal: Goal::Attack(ShipRef::Player),
                 turns_on_player: true,
@@ -412,13 +414,12 @@ impl Behaviour for NovaAi {
         if lost_sight::ends_high_level(&decision) {
             return decision;
         }
-        // A think that clears its target has ended its fight itself, so
-        // the high level finds no flight of the old goal's to end.
-        let decision = Decision {
-            forgets_provocation: decision.forgets_provocation
-                || (!decision.clears_target
-                    && crate::traffic::provocation::flight_ended(npc, decision.goal, around)),
-            ..decision
+        // A hunted ship's goal is 4 or 2, so it never reaches the flee
+        // block (@0x8dff6).
+        let decision = if hunt.is_none() {
+            provocation::with_flight_end(npc, decision, around)
+        } else {
+            decision
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
         let decision = attack_drop::with_attack_drop(decision, around);
@@ -2603,6 +2604,52 @@ mod tests {
                 "{:?}",
                 npc.id
             );
+        }
+    }
+
+    #[test]
+    fn a_flight_from_a_ship_gone_ends_on_goal_0_whoever_thought() {
+        // Goal 3 on target -1 is goal 0, +0x96 0 (@0x8dff6 →
+        // @0x8e228-0x8e23d), after every type's think.
+        let flight = worded(Goal::Flee(ShipRef::Npc(NpcId(9))));
+        let npcs = [of(1, AiType::Warship)];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            thinking(flight).decision(&npcs[0], &around, &mut Draws::of(&[])),
+            Decision {
+                goal: Goal::Idle,
+                clears_target: true,
+                forgets_provocation: true,
+                provokes: false,
+                ..flight
+            }
+        );
+    }
+
+    #[test]
+    fn a_hunter_keeps_its_provocation_whatever_flight_its_think_left() {
+        // The hunt writes goal 4 or 2 (@0x8d6b7, @0x8d6be), so the flee
+        // block (@0x8dff6) never runs and +0x96 stays, whether the think
+        // fled a ship gone or let that flight go.
+        let gone = ShipRef::Npc(NpcId(9));
+        for player in [Condition::Intact, Condition::Disabled] {
+            for (last, think) in [
+                (Goal::Idle, Goal::Flee(gone)),
+                (Goal::Flee(gone), Goal::Idle),
+            ] {
+                let hunter = Npc {
+                    goal: last,
+                    ..mission_ship(of(1, AiType::Warship), 0)
+                };
+                let npcs = [hunter];
+                let around = with_player(&npcs, player);
+                let decision =
+                    thinking(of_goal(think)).decision(&npcs[0], &around, &mut Draws::of(&[]));
+                assert!(
+                    !decision.forgets_provocation,
+                    "{player:?}, {last:?} then {think:?}: {decision:?}"
+                );
+            }
         }
     }
 

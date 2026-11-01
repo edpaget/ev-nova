@@ -103,6 +103,33 @@ pub(crate) fn flight_ended(npc: &Npc, decided: Goal, around: &Surroundings) -> b
     }
 }
 
+/// `decision`, `npc`'s, through the high level's flee block among
+/// `around`: a flight it finds from a ship gone from its slot
+/// ([`flight_ended`]) ends (@0x8dff6 → @0x8e228-0x8e23d). The think's own
+/// flight goes to goal 0 with no target, its provocation zeroed after any
+/// word's 1; a think that let the flight go stands for the original's,
+/// which kept goal 3, and forgets its provocation alone. A decision that
+/// clears its target is left alone, its fight ended already.
+#[must_use]
+pub(crate) fn with_flight_end(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
+    if decision.clears_target || !flight_ended(npc, decision.goal, around) {
+        return decision;
+    }
+    match decision.goal {
+        Goal::Flee(_) => Decision {
+            goal: Goal::Idle,
+            clears_target: true,
+            forgets_provocation: true,
+            provokes: false,
+            ..decision
+        },
+        _ => Decision {
+            forgets_provocation: true,
+            ..decision
+        },
+    }
+}
+
 /// What the high level makes of a think that `decided` to fight a ship
 /// gone from its slot, read at its last place among `around`'s gone ships
 /// ([`Surroundings::held_gone`]): its slot test makes the target -1
@@ -487,6 +514,79 @@ mod tests {
         for goal in [Goal::Flee(n(7)), Goal::Attack(n(7))] {
             assert_eq!(fight_on_gone(goal, &around), None, "{goal:?}");
         }
+    }
+
+    /// `decision` of `npc` through the flee block, NPC 2 a foe in its slot.
+    fn flight_end(npc: &Npc, decision: Decision) -> Decision {
+        let (sites, govts) = (sites(), govts(0, 0));
+        let npcs = [npc.clone(), ship(2, PIRATES, AiType::Warship, 100.0, 0.0)];
+        with_flight_end(
+            npc,
+            decision,
+            &around(&sites, &npcs, &govts, (0.0, -500.0), 0),
+        )
+    }
+
+    fn of(goal: Goal) -> Decision {
+        Decision {
+            goal,
+            ..Decision::default()
+        }
+    }
+
+    #[test]
+    fn a_flight_from_a_ship_gone_ends_on_goal_0_zeroing_the_provocation() {
+        // The slot test made the target -1 (@0x8d4e4-0x8d50d); goal 3 with
+        // none is goal 0, +0x96 0 (@0x8dff6 → @0x8e228-0x8e23d).
+        let npc = provoked(Goal::Idle);
+        let worded = Decision {
+            provokes: true,
+            comm_call: Some(crate::ai::CommCall::Distress),
+            calls_reinforcements: true,
+            ..of(Goal::Flee(n(9)))
+        };
+        assert_eq!(
+            flight_end(&npc, worded),
+            Decision {
+                goal: Goal::Idle,
+                clears_target: true,
+                forgets_provocation: true,
+                provokes: false,
+                ..worded
+            },
+            "its 0 comes after the word's 1"
+        );
+        let there = of(Goal::Flee(n(2)));
+        assert_eq!(flight_end(&npc, there), there, "a flight from a ship there");
+    }
+
+    #[test]
+    fn a_think_that_let_a_flight_from_a_gone_ship_go_forgets_its_provocation() {
+        // The original's think keeps goal 3 on +0x70, which the block ends.
+        let npc = provoked(Goal::Flee(n(9)));
+        assert_eq!(
+            flight_end(&npc, of(Goal::Idle)),
+            Decision {
+                forgets_provocation: true,
+                ..of(Goal::Idle)
+            }
+        );
+        let other = of(Goal::Attack(n(2)));
+        assert_eq!(flight_end(&npc, other), other, "a fight on another");
+    }
+
+    #[test]
+    fn a_decision_that_clears_its_target_is_left_alone() {
+        let cleared = Decision {
+            clears_target: true,
+            ..of(Goal::Flee(n(9)))
+        };
+        assert_eq!(flight_end(&provoked(Goal::Idle), cleared), cleared);
+        let let_go = Decision {
+            clears_target: true,
+            ..of(Goal::Idle)
+        };
+        assert_eq!(flight_end(&provoked(Goal::Flee(n(9))), let_go), let_go);
     }
 
     #[test]
