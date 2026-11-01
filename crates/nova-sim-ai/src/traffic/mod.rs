@@ -227,6 +227,9 @@ pub mod kept_berths;
 pub mod land_flight;
 #[cfg(test)]
 mod landed_stay_tests;
+mod last_wait_frame;
+#[cfg(test)]
+mod last_wait_frame_tests;
 mod launch_room;
 mod launch_think;
 pub mod leave_flight;
@@ -1002,6 +1005,9 @@ pub struct Traffic {
     /// it on every caller, and handed on across a traffic Reset
     /// ([`Traffic::take_defences`]; see [`stellar_defence`]).
     defences: stellar_defence::StellarDefences,
+    /// The ships this pass's dispatch turned out of their gate waits,
+    /// until its fly half ends ([`last_wait_frame`]).
+    turned_out: last_wait_frame::TurnedOut,
 }
 
 /// The docks the ships started and the repairs they completed in one
@@ -1088,6 +1094,7 @@ impl Traffic {
             fuel_given: 0.0,
             voice_cues: Vec::new(),
             defences: stellar_defence::StellarDefences::default(),
+            turned_out: last_wait_frame::TurnedOut::default(),
         }
     }
 
@@ -1352,6 +1359,7 @@ impl Traffic {
         self.issue_escort_orders(&world);
         self.release_regroups(chance);
         self.reset_disabled(world.npc_escort_ai);
+        self.turn_out_of_waits();
         self.cancel_jump_follows(&world);
         let room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let left = self.think_npcs(behaviour, &world, room, |_| true, chance);
@@ -5680,10 +5688,11 @@ mod tests {
     #[test]
     fn a_ship_the_player_hits_gliding_in_or_bursting_out_keeps_its_mode_and_goal() {
         // `_AIDispatch` puts goal 8 and sub-goal 0xa back every frame
-        // while +0x50 < -900 (@0x8fcf5-0x8fd18): the goal 4 is undone.
+        // while +0x50 < -900 (@0x8fcf5-0x8fd18): the goal 4 is undone. The
+        // wait's last frame, its goal 0x15 still, is `last_wait_frame_tests`'.
         let mut traffic = populated(2, 1);
         traffic.npcs[0].mode = Mode::JumpingIn { tick: 0 };
-        traffic.npcs[1].mode = Mode::LeavingGate { tick: 0 };
+        traffic.npcs[1].mode = Mode::LeavingGate { tick: 1 };
         traffic.npcs[1].emerges_from = Some(GATE);
         traffic.tick_in(
             &Turning,
@@ -5693,7 +5702,7 @@ mod tests {
         );
         for (npc, (mode, provoked)) in traffic.npcs().iter().zip([
             (Mode::JumpingIn { tick: 1 }, 3.0),
-            (Mode::LeavingGate { tick: 1 }, 4.0),
+            (Mode::LeavingGate { tick: 2 }, 4.0),
         ]) {
             assert_eq!(npc.target, Some(ShipRef::Player), "{:?}", npc.id);
             assert_eq!(npc.provoked, provoked, "{:?}", npc.id);

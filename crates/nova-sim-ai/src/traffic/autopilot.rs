@@ -566,7 +566,7 @@ fn fly_mobile(
         held_burst::step(npc, &handling, controls, flight, inertia, Word::Writes);
         return Outcome::Flying;
     }
-    let unsteered_by = (speeds, flight, readings.held_burst);
+    let unsteered_by = (speeds, flight, readings.held_burst, beside.second_pass);
     if let Some(outcome) = unsteered(npc, &handling, unsteered_by, inertia, chance) {
         return outcome;
     }
@@ -1109,15 +1109,22 @@ fn glide(
 /// What became of it, if it did. A disabled or breaking-up ship's speed
 /// along its heading slows with its velocity, inertialess or not
 /// (@0x3398f-0x339a1).
+///
+/// On double time's `second_pass` a ship whose wait has just run out
+/// ([`Mode::LeavingGate`] at tick 0) drifts as in its wait and doesn't
+/// start its burst: the pass runs no dispatch (@0x4402a), so its goal is
+/// still 0x15, which the next advance pass's dispatch turns into goal 8
+/// (@0x8dd61-0x8dd93; see the `last_wait_frame` module).
 fn unsteered(
     npc: &mut Npc,
     handling: &Handling,
-    (speeds, flight, held_burst): (TopSpeeds, FlightRules, RuleSource),
+    (speeds, flight, held_burst, second_pass): (TopSpeeds, FlightRules, RuleSource, bool),
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
     let flown = Flown { handling, inertia };
     match (npc.mode, npc.active_not_disabled()) {
+        (Mode::LeavingGate { tick: 0 }, _) if second_pass => drift_in_wait(npc, flown),
         (Mode::EnteringGate { gate, ticks_left }, _) => {
             return Some(enter_gate(npc, gate, ticks_left, flown));
         }

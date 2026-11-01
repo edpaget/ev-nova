@@ -1556,9 +1556,16 @@ impl Npc {
     /// sets goal 4, target the player and travel stellar +0x6c = -1
     /// (@0x89d3e-0x89d4d), keeping sub-goal 0 and the burst word +0x34
     /// its emerge set, which it owes as the hold ends ([`Npc::end_wait`]).
+    /// A ship whose wait has just run out, its goal still 0x15
+    /// ([`Mode::LeavingGate`] at tick 0), is held too, for the one tick
+    /// [`Npc::leaves_gate_goal`] gives it; its caller holds it only before
+    /// the pass's dispatch turns it out (see the `last_wait_frame` module).
     /// A ship not waiting in a gate is left as it is.
     pub fn hold_at_gate(&mut self) {
-        if matches!(self.mode, Mode::Emerging { .. }) {
+        if matches!(
+            self.mode,
+            Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 }
+        ) {
             self.leaves_gate_goal();
             self.goal = Goal::Attack(ShipRef::Player);
         }
@@ -1573,7 +1580,11 @@ impl Npc {
     /// disabled reset ([`disabled_reset`](super::disabled_reset)) make such
     /// a write. On the frame its wait ran out ([`Mode::LeavingGate`] at
     /// tick 0, goal 0x15 still) it is held one tick, which the fly half's
-    /// step ends at once ([`Npc::end_wait`]). Any other ship is left.
+    /// step ends at once ([`Npc::end_wait`]); the player's hit reaches it
+    /// there before the pass's dispatch, or in double time's second pass
+    /// (see the `last_wait_frame` module). That tick it drifts where the
+    /// original steers from the dispatch, a one-tick lag no player sees.
+    /// Any other ship is left.
     pub fn leaves_gate_goal(&mut self) {
         match self.mode {
             Mode::Emerging { ticks_left } => self.mode = Mode::HeldAtGate { ticks_left },
