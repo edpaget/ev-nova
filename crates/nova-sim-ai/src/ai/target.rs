@@ -652,8 +652,11 @@ pub fn spares_ally(npc: &Npc, other: &Npc, around: &Surroundings, led_ally: Rule
     }
 }
 
-/// Whether `npc` drops `target` among `around` by `rules` (see the module
-/// docs).
+/// Whether `npc` drops `target` among `around` (see the module docs): gone,
+/// breaking up, or disabled while it has no destroying weapons, or the
+/// player it was paid to spare. The think's drop asks no ally or fleet
+/// (`_WarshipAI` @0x8bc4e-0x8bcaf); the attack block's drops do
+/// ([`attack_drop`](crate::ai::attack_drop)).
 #[must_use]
 pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
     around.breaking_up(target) || let_go(npc, target, around)
