@@ -57,13 +57,15 @@
 
 use std::collections::BTreeSet;
 
-use super::Session;
-use crate::ai::Behaviour;
+use super::{Session, Space, player_led};
+use crate::ai::{Behaviour, fire};
 use crate::chance::Chance;
-use crate::combat::{GamePass, Rules};
+use crate::combat::plunder::Plunderer;
+use crate::combat::{GamePass, Rules, ShipRef, SlotShip};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_layer::Slot;
 use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::plunder_dock::DockSub;
 
 impl Session {
     /// `_AIDispatch`'s loop on `pass` by `rules`, the NPCs thinking as
@@ -149,10 +151,17 @@ impl Session {
             // The fuel a refueller gave, so the next slot reads the tank
             // it left.
             self.space.take_refuel(&mut self.pilot);
-            self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-                let (after, through) = (after.map(Slot::Berth), through.map(Slot::Berth));
-                combat.defend_npcs(fighters, arena, after, through, chance);
-            });
+            // A run whose triggers, as its thinks just wrote them, ask
+            // nothing of the fight's loop launches and defends nothing:
+            // only its notes are written, without the fighters' assembly.
+            if self.space.dispatch_run_acts(after, through) {
+                self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+                    let (after, through) = (after.map(Slot::Berth), through.map(Slot::Berth));
+                    combat.defend_npcs(fighters, arena, after, through, chance);
+                });
+            } else {
+                self.note_idle_run(pass);
+            }
             let sorties = self.space.combat.take_sorties();
             launched.extend(self.launch_fighters(&sorties, chance));
             // The slot's work on the line, so the next slot's think reads
@@ -163,6 +172,67 @@ impl Session {
             };
             after = Some(slot);
         }
+    }
+
+    /// What the fight's loop would leave of a run on `pass` in which no
+    /// NPC acts ([`Space::dispatch_run_acts`]): the field, and each ship's
+    /// slot record, the player's and every NPC's, as
+    /// [`Combat::note_idle_run`](crate::combat::Combat::note_idle_run)
+    /// writes them. A ship that leaves in a later run of the loop keeps
+    /// the record it had here, as when the run is fought.
+    pub(super) fn note_idle_run(&mut self, pass: GamePass) {
+        let player = SlotShip {
+            class: self.pilot.ship,
+            plunderer: Plunderer {
+                target: self.chart.target.map(ShipRef::Npc),
+                ..Plunderer::default()
+            },
+            position: self.ship.player.position,
+        };
+        let npcs = self.space.traffic.npcs().iter().map(|npc| {
+            let ship = SlotShip {
+                class: npc.ship,
+                plunderer: npc_plunderer(npc),
+                position: npc.state.position,
+            };
+            (player_led::slot_of(npc), ship)
+        });
+        let ships: Vec<(Slot, SlotShip)> = std::iter::once((Slot::Player, player))
+            .chain(npcs)
+            .collect();
+        let field = self.field();
+        self.space.combat.note_idle_run(pass, field, ships);
+    }
+}
+
+impl Space {
+    /// Whether any NPC in the slots above `after` and up to `through`,
+    /// each bound open with none, asks anything of the fight's loop
+    /// ([`Trigger::acts_in_dispatch`](crate::combat::armament::Trigger::acts_in_dispatch)),
+    /// its trigger as the fight takes it ([`fire::gated`]). The fight
+    /// takes the same ships ([`Combat::defend_npcs`](crate::combat::Combat::defend_npcs)),
+    /// whether or not they thought.
+    pub(super) fn dispatch_run_acts(&self, after: Option<u32>, through: Option<u32>) -> bool {
+        self.traffic.npcs().iter().any(|npc| {
+            after.is_none_or(|after| npc.berth > after)
+                && through.is_none_or(|through| npc.berth <= through)
+                && fire::gated(npc).acts_in_dispatch()
+        })
+    }
+}
+
+/// `npc` as its shots' plunder reads it (see the fight's `plunder`): an
+/// NPC, plundering in goal 0xd, docked with its victim in goal 4 with
+/// sub 0xf (`_AIShipIsPlunderingShip` @0x83f6e), and its target.
+pub(super) fn npc_plunderer(npc: &Npc) -> Plunderer {
+    Plunderer {
+        npc: true,
+        plundering: npc.goal.plundering().is_some(),
+        docked: npc.goal.attacking().is_some()
+            && npc
+                .docking
+                .is_some_and(|docking| docking.sub == DockSub::Dock),
+        target: npc.target,
     }
 }
 
@@ -344,11 +414,21 @@ mod tests {
         source: RuleSource,
         carrier_berth: u32,
     ) -> (Session, NpcId, NpcId) {
+        raid_at(catalog, source, carrier_berth, 20)
+    }
+
+    /// [`raid`], the raider at `raider_berth`.
+    fn raid_at(
+        catalog: &FakePilotCatalog,
+        source: RuleSource,
+        carrier_berth: u32,
+        raider_berth: u32,
+    ) -> (Session, NpcId, NpcId) {
         let mut session = session(catalog, source);
         let mut raider = crate::testkit::npc(0, crate::stats::ShipStats::default());
         raider.state.position = Vec2::new(1000.0, 1100.0);
         raider.hull.pd_target = true;
-        let raider = session.space.traffic.add_npc_at(raider, 20);
+        let raider = session.space.traffic.add_npc_at(raider, raider_berth);
         let carrier = carrier_at(&mut session, carrier_berth, raider);
         let npc = session.space.npc_mut(raider).expect("there");
         npc.goal = Goal::Attack(ShipRef::Npc(carrier));
@@ -504,10 +584,20 @@ mod tests {
     /// Over two passes, with point defence of the Quad on the low and
     /// high defenders near (1000, 1000) by `source`, and a carrier
     /// launching a Viper at the low one: the Viper's berth, and on each
-    /// pass which defenders fired at it.
-    fn defended_against(source: RuleSource, berths: &Berths) -> (u32, [Vec<&'static str>; 2]) {
+    /// pass which defenders fired at it. A plain ship asking nothing of
+    /// the fight sits at each of `idle`.
+    fn defended_against(
+        source: RuleSource,
+        berths: &Berths,
+        idle: &[u32],
+    ) -> (u32, [Vec<&'static str>; 2]) {
         let catalog = catalog();
         let mut session = session(&catalog, source);
+        for &berth in idle {
+            let mut plain = crate::testkit::npc(0, crate::stats::ShipStats::default());
+            plain.state.position = Vec2::new(-1000.0, -1000.0);
+            session.space.traffic.add_npc_at(plain, berth);
+        }
         let low = session
             .space
             .traffic
@@ -545,7 +635,7 @@ mod tests {
             carrier: 2,
             high: 6,
         };
-        let (berth, fired) = defended_against(RuleSource::Engine, &above);
+        let (berth, fired) = defended_against(RuleSource::Engine, &above, &[]);
         assert_eq!(berth, 3);
         // The low defender first fires the next tick, the high's Quad
         // reloading then.
@@ -555,7 +645,7 @@ mod tests {
             carrier: 4,
             high: 6,
         };
-        let (berth, fired) = defended_against(RuleSource::Engine, &below);
+        let (berth, fired) = defended_against(RuleSource::Engine, &below, &[]);
         assert_eq!(berth, 1);
         // Below its carrier it thinks first the next tick: it launched with
         // goal 0 (`_AISetup` @0x7f3e8), fighting no one, so neither
@@ -570,7 +660,7 @@ mod tests {
             carrier: 2,
             high: 6,
         };
-        let (_, [launch, next]) = defended_against(RuleSource::Bible, &above);
+        let (_, [launch, next]) = defended_against(RuleSource::Bible, &above, &[]);
         assert_eq!(launch, Vec::<&str>::new());
         assert_eq!(next, ["low", "high"]);
     }
@@ -1318,5 +1408,123 @@ mod tests {
         game_pass(&mut session, &catalog, &script);
         assert!(session.space.npc(fighter).is_none(), "aboard");
         assert_eq!(vipers(&session).len(), 2, "both rounds launched");
+    }
+
+    // A run in which no NPC asks anything of the fight's loop is skipped
+    // (rdm combat-ai-fidelity-cross-roadmap phase 10): it would launch and
+    // defend nothing, so only its notes are written.
+
+    /// An NPC of the plain test ship, its trigger `trigger`.
+    fn triggered(trigger: Trigger) -> Npc {
+        let mut npc = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        npc.trigger = trigger;
+        npc
+    }
+
+    #[test]
+    fn a_run_acts_only_when_a_ship_in_it_asks_for_a_launch_or_point_defence() {
+        let catalog = catalog();
+        let mut session = session(&catalog, RuleSource::Engine);
+        let traffic = &mut session.space.traffic;
+        traffic.add_npc_at(triggered(GUNNING), 2);
+        traffic.add_npc_at(triggered(DEFENDING), 4);
+        let snipe = Trigger {
+            bays_after: true,
+            ..Trigger::default()
+        };
+        traffic.add_npc_at(triggered(snipe), 6);
+        let goal_four = Trigger {
+            bays: true,
+            ..Trigger::default()
+        };
+        traffic.add_npc_at(triggered(goal_four), 8);
+        let acts = |after, through| session.space.dispatch_run_acts(after, through);
+        assert!(!acts(None, Some(2)), "a pick fires in the ship loop");
+        assert!(acts(Some(2), Some(4)), "point defence");
+        assert!(!acts(Some(4), Some(5)), "an empty run");
+        assert!(acts(Some(5), Some(6)), "the snipe's launch");
+        assert!(acts(Some(6), Some(8)), "goal 4's launch");
+        assert!(!acts(Some(8), None), "none above");
+        assert!(acts(None, None), "the batch");
+    }
+
+    #[test]
+    fn a_skipped_runs_notes_leave_the_fight_as_its_loop_would() {
+        let catalog = catalog();
+        let mut session = session(&catalog, RuleSource::Engine);
+        let mut plain = triggered(Trigger::default());
+        plain.state.position = Vec2::new(10.0, 20.0);
+        plain.target = Some(ShipRef::Player);
+        let plain = session.space.traffic.add_npc_at(plain, 3);
+        let mut plunderer = triggered(Trigger::default());
+        plunderer.goal = Goal::Plunder {
+            ship: ShipRef::Npc(plain),
+            hopeless: false,
+        };
+        plunderer.target = Some(ShipRef::Npc(plain));
+        session.space.traffic.add_npc_at(plunderer, 5);
+        let mut docked = triggered(Trigger::default());
+        docked.goal = Goal::Attack(ShipRef::Npc(plain));
+        docked.target = Some(ShipRef::Npc(plain));
+        docked.docking = Some(crate::traffic::plunder_dock::Docking {
+            ship: ShipRef::Npc(plain),
+            sub: crate::traffic::plunder_dock::DockSub::Dock,
+        });
+        session.space.traffic.add_npc_at(docked, 7);
+        session.chart.target = Some(plain);
+        session.space.pass_frame = 9;
+        for pass in [GamePass::Advance { double_time: false }, GamePass::Again] {
+            let mut looped = session.clone();
+            looped.with_fighters(
+                pass,
+                Rules::default(),
+                &mut NeverFires,
+                |combat, fighters, arena, chance| {
+                    combat.defend_npcs(fighters, arena, None, None, chance);
+                },
+            );
+            let mut noted = session.clone();
+            noted.note_idle_run(pass);
+            assert_eq!(noted.space.combat, looped.space.combat, "{pass:?}");
+            let wrote = looped.space.combat != session.space.combat;
+            assert_eq!(wrote, pass != GamePass::Again, "{pass:?}");
+        }
+    }
+
+    #[test]
+    fn a_carrier_and_a_defender_after_idle_runs_still_launch_and_fire_on_the_launch_tick() {
+        // The idle ships at 2 and 5 ask nothing of the loop, so their runs
+        // are skipped; the carrier's and the high defender's are not.
+        let above = Berths {
+            low: 1,
+            carrier: 3,
+            high: 7,
+        };
+        let (berth, fired) = defended_against(RuleSource::Engine, &above, &[2, 5]);
+        assert_eq!(berth, 4);
+        assert_eq!(fired, [["high"], ["low"]]);
+    }
+
+    #[test]
+    fn an_npc_idle_in_its_own_run_is_still_a_later_slots_point_defence_candidate() {
+        // The raider at 2 attacks the carrier at 1 and asks nothing of the
+        // loop: its run is skipped, and the Viper launched into slot 3
+        // fires at it on its launch tick.
+        let catalog = catalog();
+        let (mut session, carrier, raider) = raid_at(&catalog, RuleSource::Engine, 1, 2);
+        let script = Scripted {
+            carrier,
+            twice: false,
+            defenders: Vec::new(),
+            fighter: DEFENDING,
+        };
+        game_pass(&mut session, &catalog, &script);
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1, "one launch");
+        assert_eq!(launched[0].berth, 3);
+        let events = session.take_combat_events();
+        assert!(firing(&events, QUAD).contains(&ShipRef::Npc(launched[0].id)));
+        let npc = session.space.npc(raider).expect("there");
+        assert!(!npc.trigger.acts_in_dispatch(), "idle in its own run");
     }
 }

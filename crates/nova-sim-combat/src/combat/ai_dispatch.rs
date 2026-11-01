@@ -43,7 +43,10 @@
 
 use super::defence::Candidate;
 use super::projectile::Target;
-use super::{BAY_LAUNCH_PRIORITY, Combat, Fighter, FireSound, PointDefenceRule, ShipRef, aim};
+use super::{
+    BAY_LAUNCH_PRIORITY, Combat, Field, Fighter, FireSound, GamePass, PointDefenceRule, ShipRef,
+    SlotShip, aim,
+};
 use crate::chance::Chance;
 use crate::govt::Governments;
 use crate::rulebook::RuleSource;
@@ -56,7 +59,11 @@ impl Combat {
     /// defence ([`Combat::defend_ship`]) at the ships as they were when
     /// the run began, then the snipe's launch, aimed among `targets`,
     /// point defence asking `rule` as [`Combat::defend_ship`] does,
-    /// drawing on `chance`.
+    /// drawing on `chance`. A ship whose trigger asks nothing of the loop
+    /// ([`Trigger::acts_in_dispatch`](super::armament::Trigger::acts_in_dispatch))
+    /// is passed over, as it would enter
+    /// none of the three; the session skips a run of only such ships by
+    /// the same test (`nova_sim::Session::dispatch_npcs`).
     pub(super) fn dispatch_npcs(
         &mut self,
         fighters: &mut [Fighter],
@@ -71,6 +78,7 @@ impl Combat {
             .filter(|&index| fighters[index].ship != ShipRef::Player)
             .filter(|&index| after.is_none_or(|after| fighters[index].slot > after))
             .filter(|&index| through.is_none_or(|through| fighters[index].slot <= through))
+            .filter(|&index| fighters[index].trigger.acts_in_dispatch())
             .collect();
         order.sort_by_key(|&index| fighters[index].slot);
         for index in order {
@@ -86,6 +94,27 @@ impl Combat {
                 self.launch_bay(fighter, targets, chance);
             }
         }
+    }
+
+    /// What [`Combat::defend_npcs`] leaves of a run in which no NPC's
+    /// trigger asks anything of the loop
+    /// ([`Trigger::acts_in_dispatch`](super::armament::Trigger::acts_in_dispatch)):
+    /// on `pass`, when it is not double time's second, the fight's `field`,
+    /// and each of `ships` in its slot's record, as
+    /// [`Combat::defend_npcs`] notes every fighter. So a session that
+    /// skips such a run's fighters leaves the fight as the run would have,
+    /// noting the ships it holds, the player too, in its own terms.
+    pub fn note_idle_run(
+        &mut self,
+        pass: GamePass,
+        field: Field,
+        ships: impl IntoIterator<Item = (Slot, SlotShip)>,
+    ) {
+        if pass == GamePass::Again {
+            return;
+        }
+        self.field = field;
+        self.slot_ships.extend(ships);
     }
 
     /// One `_AILaunchFighter` of `fighter`'s

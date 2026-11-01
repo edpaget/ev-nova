@@ -851,12 +851,9 @@ impl FightTerms {
         let fleet = self.fleet;
         let leader = npc.leader_ref();
         let attacking = npc.goal.attacking();
-        let plundering = npc.goal.plundering().is_some();
-        // Goal 4 with sub 0xf (`_AIShipIsPlunderingShip` @0x83f6e).
-        let docked = npc.goal.attacking().is_some()
-            && npc
-                .docking
-                .is_some_and(|docking| docking.sub == crate::traffic::plunder_dock::DockSub::Dock);
+        let crate::combat::plunder::Plunderer {
+            plundering, docked, ..
+        } = launch_frame::npc_plunderer(npc);
         let emerging = npc.emerging();
         let jumping_in = npc.jumping_in();
         let cloak_scanner = npc.cloak_gear.scanner.on_screen;

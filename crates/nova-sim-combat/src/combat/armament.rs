@@ -289,6 +289,17 @@ impl Trigger {
     pub fn launches(self) -> bool {
         self.bays || self.bays_after
     }
+
+    /// Whether it asks anything of `_AIDispatch`'s loop
+    /// ([`Combat::defend_npcs`](super::Combat::defend_npcs)): a goal-4
+    /// launch, point defence or the snipe's launch. Without one, the
+    /// loop does nothing for the ship. It leaves aside a jump under way,
+    /// which holds point defence back, so it may say a ship acts that in
+    /// fact does nothing, and never the other way.
+    #[must_use]
+    pub fn acts_in_dispatch(self) -> bool {
+        self.bays || self.point_defence || self.bays_after
+    }
 }
 
 /// The ship paying for a shot, as `_WeaponHasAmmo` asks of it (see
@@ -5438,6 +5449,34 @@ mod tests {
         assert!(with(true, false).launches(), "the high level's (@0x8e6fa)");
         assert!(with(false, true).launches(), "the snipe's (@0x8732f)");
         assert!(with(true, true).launches());
+    }
+
+    #[test]
+    fn a_trigger_acts_in_the_dispatch_loop_on_a_bay_call_or_point_defence_alone() {
+        let with = |bays, point_defence, bays_after| Trigger {
+            bays,
+            bays_after,
+            point_defence,
+            ..Trigger::default()
+        };
+        assert!(!with(false, false, false).acts_in_dispatch());
+        assert!(
+            with(true, false, false).acts_in_dispatch(),
+            "goal 4's launch"
+        );
+        assert!(with(false, true, false).acts_in_dispatch(), "point defence");
+        assert!(with(false, false, true).acts_in_dispatch(), "the snipe's");
+        let firing = Trigger {
+            primary: true,
+            secondary: Some(WeaponId(130)),
+            only: Some(WeaponId(128)),
+            keep: Some(WeaponId(129)),
+            ..Trigger::default()
+        };
+        assert!(
+            !firing.acts_in_dispatch(),
+            "the picks fire in the ship loop"
+        );
     }
 
     /// Two ready bays, 149 and 150, mounted 150 first, of `rounds` each.

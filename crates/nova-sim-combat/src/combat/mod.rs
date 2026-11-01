@@ -472,6 +472,7 @@ use projectile::{
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
+pub use source_slot::SlotShip;
 pub use sprite_load::SpriteLoad;
 use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};

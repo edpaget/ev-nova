@@ -364,3 +364,56 @@ fn on_double_times_second_pass_a_run_does_nothing() {
     combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
     assert_eq!(combat.take_sorties(), []);
 }
+
+#[test]
+fn a_run_in_which_no_npc_acts_notes_what_the_loop_leaves_of_it() {
+    // A run of ships whose triggers ask nothing of the loop writes only the
+    // field and each ship's slot record (`Combat::defend_npcs`), so the
+    // session can skip the fight's assembly and note them from its ships.
+    let idle = |ship: Ship| Ship {
+        trigger: Trigger::default(),
+        ..ship
+    };
+    let mut ships = [
+        idle(Ship::at(1, 0.0, 0.0).targeting(B)),
+        Ship {
+            plundering: true,
+            docked: true,
+            ..idle(Ship::at(2, 50.0, 20.0).targeting(A))
+        },
+    ];
+    let field = Field {
+        frame: 7,
+        interference: 3,
+        ..Field::default()
+    };
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    for pass in [GamePass::Advance { double_time: false }, GamePass::Again] {
+        let arena = Arena {
+            pass,
+            arsenal: &arsenal,
+            govts: &govts,
+            rules: Rules::default(),
+            field,
+        };
+        let mut looped = Combat::default();
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        looped.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
+        let records: Vec<(Slot, SlotShip)> = fighters
+            .iter()
+            .map(|fighter| {
+                let ship = SlotShip {
+                    class: fighter.ship_type,
+                    plunderer: plunder::Plunderer::of(fighter),
+                    position: fighter.state.position,
+                };
+                (fighter.slot, ship)
+            })
+            .collect();
+        let mut noted = Combat::default();
+        noted.note_idle_run(pass, field, records);
+        assert_eq!(noted, looped, "{pass:?}");
+        let wrote = pass != GamePass::Again;
+        assert_eq!(looped != Combat::default(), wrote, "{pass:?}");
+    }
+}
