@@ -21,9 +21,29 @@
 //! it (F7). [`Space::fleet_berths`] places the records with no NPC in the
 //! order [`packing_order`] gives. A record from an older save holds none,
 //! and takes its berth after every record with one, in fleet order.
+//!
+//! A saved ship whose class has no record is dropped as the pilot loads
+//! ([`drop_unknown_classes`]), as `_LoadPilotData` spawns none for it, and
+//! the load counts as repaired
+//! ([`Session::load_repaired`](super::Session::load_repaired)).
 
 use super::{Pilot, Space};
+use crate::catalog::ShipRecord;
 use crate::fleet::Escort;
+
+/// Drops each of `pilot`'s escorts and fighters whose class `ships` has
+/// no record of: whether it dropped any. `_LoadPilotData` skips a saved
+/// escort (@0x759f9-0x75a15) or fighter (@0x75b02-0x75b1e) whose `shïp`
+/// entry holds the no-record mark, -9999 at +0xa, spawning none, so the
+/// ship is gone from the fleet and its next save; the skip sets the
+/// load's warning flag, on which it returns -46 (@0x7648b-0x76498).
+pub(super) fn drop_unknown_classes(pilot: &mut Pilot, ships: &[ShipRecord]) -> bool {
+    let before = pilot.escorts.len();
+    pilot
+        .escorts
+        .retain(|escort| ships.iter().any(|record| record.id == escort.ship));
+    pilot.escorts.len() < before
+}
 
 /// The fleet indices of `unplaced` in the order they take the free
 /// berths: by the berth each was saved at, lowest first, as
@@ -87,6 +107,31 @@ mod tests {
             .iter()
             .map(|npc| (npc.ship, npc.berth))
             .collect()
+    }
+
+    #[test]
+    fn a_saved_escort_or_fighter_of_no_class_is_dropped_and_the_load_repaired() {
+        let fighter = Escort {
+            carried: true,
+            ..saved(ShipId(998), Some(1))
+        };
+        let session = loaded(vec![
+            saved(ShipId(999), Some(2)),
+            saved(MEDIUM, Some(5)),
+            fighter,
+            saved(MEDIUM_EVEN, Some(3)),
+        ]);
+        assert!(session.load_repaired());
+        let ships: Vec<ShipId> = session.pilot.escorts.iter().map(|e| e.ship).collect();
+        assert_eq!(ships, [MEDIUM, MEDIUM_EVEN]);
+        assert_eq!(berths(&session), [(MEDIUM, 2), (MEDIUM_EVEN, 1)], "no gap");
+    }
+
+    #[test]
+    fn a_fleet_whose_classes_all_have_records_loads_unrepaired() {
+        let session = loaded(vec![saved(MEDIUM, Some(5)), saved(VIPER, None)]);
+        assert!(!session.load_repaired());
+        assert_eq!(session.pilot.escorts.len(), 2);
     }
 
     #[test]

@@ -1319,6 +1319,15 @@ pub(super) mod tests {
         weapon, work_with,
     };
 
+    /// [`catalog`] with a record of ship 128, the class [`defended`]'s
+    /// escorts fly, so a load keeps them.
+    fn defended_catalog() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ship_records: vec![ship(128, FAST)],
+            ..catalog()
+        }
+    }
+
     /// A pilot whose fleet is two escorts, both defending the player.
     fn defended(catalog: &FakePilotCatalog) -> Pilot {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
@@ -1370,7 +1379,7 @@ pub(super) mod tests {
     /// saved, loaded and flown again; each time the save holding the
     /// order given before.
     fn after_each_entry(source: RuleSource) -> [Vec<Option<EscortOrder>>; 3] {
-        let catalog = catalog();
+        let catalog = defended_catalog();
         let mut session = Session::fly(&catalog, defended(&catalog))
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
@@ -1433,7 +1442,7 @@ pub(super) mod tests {
 
     #[test]
     fn the_orders_stand_until_the_next_entry() {
-        let catalog = catalog();
+        let catalog = defended_catalog();
         let mut session = Session::fly(&catalog, defended(&catalog)).expect("flies");
         tick(&mut session, &catalog);
         defend_all(&mut session);
@@ -1678,26 +1687,29 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_escort_whose_ship_type_has_no_record_is_kept_but_not_placed() {
+    fn a_loaded_escort_whose_ship_type_has_no_record_is_dropped_and_the_rest_pack() {
+        // `_LoadPilotData` spawns none for it (@0x759f9-0x75a15).
         let catalog = fleeted();
         let mut pilot = escorted(&catalog);
         pilot.escorts.insert(0, escort(ShipId(999), worn(), None));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(session.load_repaired());
         tick(&mut session, &catalog);
-        assert_eq!(session.pilot().escorts().len(), 3);
-        assert_eq!(session.space.escorts.fleet.len(), 3);
-        assert_eq!(session.space.escorts.fleet[0], None);
+        let ships: Vec<ShipId> = session.pilot().escorts().iter().map(|e| e.ship).collect();
+        assert_eq!(ships, [WARSHIP, FREIGHTER]);
+        assert_eq!(session.space.escorts.fleet.len(), 2);
         let placed = escort_npcs(&session);
         assert_eq!(
             placed
                 .iter()
-                .map(|npc| npc
-                    .escort
-                    .map(|duty| (duty.formation.slot, duty.formation.ships)))
+                .map(|npc| (
+                    npc.berth,
+                    npc.escort
+                        .map(|duty| (duty.formation.slot, duty.formation.ships))
+                ))
                 .collect::<Vec<_>>(),
-            [Some((2, 3)), Some((3, 3))]
+            [(1, Some((2, 3))), (2, Some((3, 3)))]
         );
-        assert_eq!(session.pilot().escorts()[0].reserves, worn(), "as it was");
     }
 
     /// A tick of the player under `controls`, then of Nova's traffic, then

@@ -1154,6 +1154,11 @@ impl Session {
     ///   the system from the stellar alone; the engine's saved system is
     ///   its own, and refusing the pilot would strand one a removed
     ///   plug-in's system held.
+    /// - An escort or carried fighter whose ship class has no record is
+    ///   dropped from the fleet, as `_LoadPilotData` spawns none for it and
+    ///   sets the flag (@0x759f9-0x75a15, @0x75b02-0x75b1e), so the next
+    ///   save leaves it out (see the `loaded_berths` module, which also
+    ///   packs the rest into berths in their saved order).
     ///
     /// A pilot saved with a course flies as [`RuleKey::LoadedCourse`]
     /// reads: by the engine with none, by the other reading with the
@@ -1264,6 +1269,8 @@ impl Session {
         let stock = arsenal.stock_outfits(ship, &outfits);
         let ships = catalog.ships();
         fill_in(&mut pilot, &defaults, &stock, &ships);
+        // A saved escort of no class spawns none (see `loaded_berths`).
+        load_repaired |= loaded_berths::drop_unknown_classes(&mut pilot, &ships);
         let lives: BTreeMap<StellarId, crate::catalog::StellarLife> = catalog
             .stellar_lives()
             .into_iter()
@@ -1392,8 +1399,9 @@ impl Session {
     }
 
     /// Whether the load had to fall back because the save references data
-    /// the catalog lacks: a stellar no system lists, or a system that no
-    /// longer exists (see [`Session::load`]). It stands for
+    /// the catalog lacks: a stellar no system lists, a system that no
+    /// longer exists, or an escort's ship class with no record (see
+    /// [`Session::load`]). It stands for
     /// `_LoadPilotData`'s -0x2e result (@0x7648b-0x76498), on which
     /// `_MainScreenChoice` shows `STR#` 140 #52 (@0x1a840-0x1a85b).
     #[must_use]
