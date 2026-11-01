@@ -2878,6 +2878,7 @@ impl Traffic {
                 no_ai: false,
                 kept_escort_ai: false,
                 mission_let_go: false,
+                mission_dropped: false,
                 defends: None,
             };
             npc.join_govt(ship.govt, govts);

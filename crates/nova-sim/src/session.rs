@@ -470,6 +470,7 @@ mod crons;
 mod deadly_stellars;
 mod derelicts;
 mod description;
+mod disabled_mission_escorts;
 mod display_step;
 mod dock_tail;
 mod dominated_stellars;
@@ -2526,8 +2527,11 @@ impl Session {
     /// [`Fate::Destroyed`] for it and counting it lost when it is a
     /// mission's special ship, drawing on `chance` (see the
     /// `mission_ships` module), as it goes. A mission escort among them
-    /// has already left the formation, and the rest re-formed, as it
-    /// started to break up ([`Session::lose_dying_mission_escorts`]).
+    /// has already left the formation as its dispatch's reset or its
+    /// dying branch dropped it (see the `disabled_mission_escorts` module);
+    /// one destroyed with neither between, its slot inactive, leaves the
+    /// rest to re-form at the next pass's head
+    /// ([`Session::reform_on_swarm_change`]).
     fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
         let destroyed: Vec<NpcId> = self
             .space

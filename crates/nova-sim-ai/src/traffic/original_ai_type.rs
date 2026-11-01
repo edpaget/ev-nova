@@ -43,6 +43,14 @@
 //! ([`Npc::kept_escort_ai`], see
 //! [`disabled_reset`](super::disabled_reset)), and
 //! [`Npc::settle_original_ai_type`] clears the mark at that first think.
+//! A `ShipBehav` 2 mission ship keeps it for its stay too, as
+//! `_DeathStarAI` thinks in the type think's place and writes no +0x88
+//! (@0x8ff3a).
+//!
+//! **The disabled mission escort.** The same reset drops a `ShipBehav` 1
+//! mission escort's parent while it is disabled ([`Npc::mission_dropped`])
+//! and leaves the re-lead's 6 (@0x8fc19), so it reads 6 as a stranger;
+//! one let go first ([`Npc::mission_let_go`]) keeps its `InherentAI`.
 //!
 //! **The readers.** The hail's bribe and plunder class
 //! (`_DoCommDialog` @0x95790, @0x9585b) and escort shortcut (@0x962ee,
@@ -91,7 +99,9 @@ impl Npc {
     /// lost parent writes it (@0x83c4a), the dispatch's 6 lasting only
     /// inside its own dispatch; for the player's escort, its
     /// launched fighter [`FIGHTER_AI`] and any other [`ESCORT_AI`] (a
-    /// capture writes 6 over an earlier bribe); a bribed ship its own
+    /// capture writes 6 over an earlier bribe); a mission escort the
+    /// disabled reset dropped ([`Npc::mission_dropped`]) [`ESCORT_AI`], the
+    /// re-lead's word (@0x8fc19); a bribed ship its own
     /// type's word, [`BRIBED_AI`] until a later write, ahead of a leader
     /// or carrier it keeps; a carried fighter [`FIGHTER_AI`]; a ship
     /// with an NPC leader, or a former escort that keeps its word,
@@ -108,6 +118,8 @@ impl Npc {
             } else {
                 ESCORT_AI
             }
+        } else if self.mission_dropped {
+            ESCORT_AI
         } else if self.spared {
             self.ai_type.raw()
         } else if self.carrier.is_some() {
@@ -137,7 +149,8 @@ impl Npc {
     /// once it thinks whole, where `_EscortAI`'s lost parent writes its
     /// class's `InherentAI` (@0x83c4a); kept while it is disabled, and for
     /// its stay if it thinks as a miner ([`miner::thinks_for`],
-    /// @0x8ff76-0x8ff8d), which never reaches that write.
+    /// @0x8ff76-0x8ff8d) or as `_DeathStarAI` ([`Npc::attacks_stellars`],
+    /// @0x8ff3a), neither of which reaches that write.
     ///
     /// **Ordering.** The original clears it inside the ship's own
     /// dispatch, in slot order; the traffic's tick settles it after the
@@ -146,7 +159,7 @@ impl Npc {
     /// whole falls in that tick, whose distress call is drawn on the
     /// message line. Filed in `play-feel-5-followups`.
     pub fn settle_original_ai_type(&mut self) {
-        if !self.condition.disabled() && !miner::thinks_for(self) {
+        if !self.condition.disabled() && !miner::thinks_for(self) && !self.attacks_stellars() {
             self.kept_escort_ai = false;
         }
     }

@@ -8,8 +8,11 @@
 //! [`fly_npc`](crate::traffic::Traffic::fly_npc)), then takes its step:
 //! its reloads, regeneration (@0x34424), fire (@0x34ffd) and death timer
 //! (@0x35083); then, for a dying NPC, `_HandleShip`'s dying block
-//! (@0x35080-0x3557b): its escape pods and escape-ship roll (see the
-//! `npc_escape` module); then its display, which may make its final
+//! (@0x35080-0x3557b): its dying branch, which takes a mission escort it
+//! still is out of the formation once its timer is set
+//! ([`Session::lose_dying_mission_escort`], @0x350a8-0x35134), then its
+//! escape pods and escape-ship roll (see the `npc_escape` module); then
+//! its display, which may make its final
 //! explosion ([`Combat::handle_npc`]; for a dying NPC
 //! [`Combat::step_npc`], the dying block, then [`Combat::display_npc`]).
 //! So:
@@ -163,6 +166,8 @@ impl Session {
                 },
             );
             self.step_stray_words(chance);
+            // Its dying branch (@0x350a8-0x35134), before its pods.
+            self.lose_dying_mission_escort(id, was);
             self.npc_escape(was, at_step, chance);
             self.land_phase(
                 behaviour,

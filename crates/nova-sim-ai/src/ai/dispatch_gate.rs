@@ -27,9 +27,10 @@
 //!
 //! A ship waiting in its gate (goal 0x15) passes them: its skip comes
 //! after the reset (@0x8ff18). So does a disabled ship. Past them,
-//! `_EscortAI` is reached out of goals 0x15 and 0x16 alone
-//! ([`reaches_escort_think`]). Nothing here plays a sound or draws a
-//! random number.
+//! `_EscortAI` is reached out of goals 0x15 and 0x16 alone, and not by a
+//! disabled ship, whose reset jumps past the type think (@0x8ff13 →
+//! @0x90032; [`reaches_escort_think`]). Nothing here plays a sound or
+//! draws a random number.
 
 use crate::traffic::ShipBehav;
 use crate::traffic::npc::{Mode, Npc};
@@ -43,12 +44,14 @@ pub fn reaches_think(npc: &Npc) -> bool {
 
 /// Whether `npc`'s dispatch reaches `_EscortAI`, which frees a ship whose
 /// parent is dying (@0x83917-0x8397b): past the gates ([`reaches_think`]),
-/// out of goal 0x15 (@0x8ff18, [`Npc::emerging`]) and out of goal 0x16
-/// (@0x838ef, [`Npc::count_wait`]). Goals 9 and 0xf return there too, but
-/// only under an NPC parent (@0x838e4-0x83911).
+/// not `_IsDisabled` ([`Npc::is_disabled`]: the disabled reset jumps past
+/// the type think, @0x8ff13 → @0x90032), out of goal 0x15 (@0x8ff18,
+/// [`Npc::emerging`]) and out of goal 0x16 (@0x838ef, [`Npc::count_wait`]).
+/// Goals 9 and 0xf return there too, but only under an NPC parent
+/// (@0x838e4-0x83911).
 #[must_use]
 pub fn reaches_escort_think(npc: &Npc) -> bool {
-    reaches_think(npc) && !npc.emerging() && !npc.count_wait()
+    reaches_think(npc) && !npc.is_disabled() && !npc.emerging() && !npc.count_wait()
 }
 
 /// Whether the dispatch leads `npc` again each frame (@0x8fc03-0x8fc22): a
@@ -206,6 +209,25 @@ mod tests {
             ..ship()
         };
         assert!(!reaches_escort_think(&counting));
+    }
+
+    #[test]
+    fn a_disabled_or_breaking_up_ship_reaches_no_escort_think_until_it_is_whole() {
+        // The reset jumps past the type think (@0x8ff13 → @0x90032).
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 9,
+                starting: false,
+            },
+        ] {
+            let mut ship = ship();
+            ship.condition = condition;
+            assert!(reaches_think(&ship), "{condition:?}");
+            assert!(!reaches_escort_think(&ship), "{condition:?}");
+            ship.condition = Condition::Intact;
+            assert!(reaches_escort_think(&ship), "{condition:?} whole");
+        }
     }
 
     /// A ship marked by a mission of `behav`, in the player's formation as

@@ -552,6 +552,15 @@ pub struct Npc {
     /// escort ([`Npc::thinks_as_escort`]). See `nova_sim`'s
     /// `dying_player_escorts` module. Never saved.
     pub mission_let_go: bool,
+    /// Whether it is a `ShipBehav` 1 mission escort whose parent the
+    /// disabled reset dropped: its +0x9a of -1 from its first dispatch
+    /// disabled (`_AIDispatch` @0x8feda) to its first dispatch whole, which
+    /// leads it again (@0x8fc03-0x8fc22, skipped for a disabled ship
+    /// @0x8fc0c), so it reads as a stranger ([`Npc::mission_escort`]) and
+    /// as the re-lead's AI type 6 ([`Npc::original_ai_type`]). Never let
+    /// go at once. See [`disabled_reset`](super::disabled_reset) and
+    /// `nova_sim`'s `disabled_mission_escorts` module. Never saved.
+    pub mission_dropped: bool,
     /// Whether it has an afterburner (the original's +0xbd), rolled as it
     /// spawns or launches (see [`afterburner`](crate::ai::afterburner)):
     /// with one it rushes its target ([`pursuit`](crate::ai::pursuit)).
@@ -935,11 +944,14 @@ impl Npc {
 
     /// Whether it is a mission escort: a mission's special ship that has
     /// joined the player's formation ([`MissionMark::formation`]), a
-    /// `ShipBehav` 1 ship or one captured for an escort, and not let go
-    /// while the player breaks up ([`Npc::mission_let_go`]).
+    /// `ShipBehav` 1 ship or one captured for an escort, not let go while
+    /// the player breaks up ([`Npc::mission_let_go`]) and not dropped by
+    /// the disabled reset while it is disabled ([`Npc::mission_dropped`]).
     #[must_use]
     pub fn mission_escort(&self) -> bool {
-        self.mission.is_some_and(|mark| mark.formation.is_some()) && !self.mission_let_go
+        self.mission.is_some_and(|mark| mark.formation.is_some())
+            && !self.mission_let_go
+            && !self.mission_dropped
     }
 
     /// Whether its think is an escort's: it

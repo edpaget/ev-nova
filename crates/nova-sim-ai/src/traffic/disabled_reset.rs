@@ -36,7 +36,23 @@
 //!   the original's AI type 6 meanwhile ([`Npc::original_ai_type`]),
 //!   which +0x88 keeps until that think, or for its stay if it thinks as
 //!   a miner ([`Npc::settle_original_ai_type`]);
-//! - by the other reading it keeps its leader, as the port had it.
+//! - by the other reading it keeps its leader, as the port had it;
+//! - by either reading, a mission's ship in the player's formation loses
+//!   the player as its parent, as the key is about NPC parents: a
+//!   `ShipBehav` 1 one ([`dispatch_gate::led_again`]) is dropped
+//!   ([`Npc::mission_dropped`]) until its first dispatch whole leads it
+//!   again (@0x8fc03-0x8fc22, which skips a disabled ship @0x8fc0c; the
+//!   session's), reading the re-lead's AI type 6 meanwhile, unless it is
+//!   let go already ([`Npc::mission_let_go`]), as the reset writes no
+//!   +0x88; one of any other `ShipBehav`, which no re-lead takes
+//!   (@0x8fc07 → @0x8fc2d), is out of the formation for good, its mark
+//!   kept, taking its class's `InherentAI` and reading 6 until its first
+//!   think whole ([`Npc::kept_escort_ai`]), or, for `ShipBehav` 2, whose
+//!   `_DeathStarAI` writes no +0x88 (@0x8ff3a), for its stay.
+//!
+//! A disabled ship's dispatch then jumps past its type's think
+//! (@0x8ff13 → @0x90032), so `_EscortAI` never frees it while it is
+//! disabled ([`dispatch_gate::reaches_escort_think`]).
 //!
 //! The reset precedes goal 0x15's skip (@0x8ff18), so a ship disabled in
 //! its gate is reset too. Its goal 0 ends goal 0x15 where its wait runs on
@@ -104,6 +120,7 @@ pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.goal = Goal::Idle;
     npc.pursuit = Pursuit::default();
     npc.docking = None;
+    drop_mission_parent(npc);
     if reading == RuleSource::Engine && npc.leader.is_some() {
         if npc.carrier.is_some() {
             npc.leader = None;
@@ -111,6 +128,25 @@ pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
             npc.leave_fleet();
             npc.kept_escort_ai = true;
         }
+    }
+}
+
+/// The reset's parent -1 for `npc`, a mission's ship in the player's
+/// formation, by either reading (see the module docs): a `ShipBehav` 1
+/// one, which the next dispatch whole leads again
+/// ([`dispatch_gate::led_again`]), is dropped until then, unless it is let
+/// go already; one of any other `ShipBehav` is out of the formation for
+/// good, its mark kept, reading 6 until its first think whole (for
+/// `ShipBehav` 2, for its stay).
+fn drop_mission_parent(npc: &mut Npc) {
+    if dispatch_gate::led_again(npc) {
+        npc.mission_dropped = !npc.mission_let_go;
+    } else if let Some(mark) = &mut npc.mission
+        && mark.formation.is_some()
+    {
+        mark.formation = None;
+        npc.leave_fleet();
+        npc.kept_escort_ai = true;
     }
 }
 
@@ -125,13 +161,14 @@ mod tests {
     use crate::chance::{Chance, NeverFires};
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
+    use crate::escort::FormationSlot;
     use crate::stats::ShipStats;
-    use crate::traffic::World;
     use crate::traffic::fixture::npc;
-    use crate::traffic::npc::{AiType, Mode, NpcId};
+    use crate::traffic::npc::{AiType, MissionMark, Mode, NpcId};
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use crate::traffic::regroup::RELEASE_DRAW;
     use crate::traffic::warp_out::{GIVEN_UP_STAGE, WarpGoal};
+    use crate::traffic::{ShipBehav, World};
     use nova_sim_base::fixture::{Draws, FAST};
 
     /// Every ship keeps its goal.
@@ -498,6 +535,124 @@ mod tests {
                 after,
                 "{condition:?} {stage} {no_ai}"
             );
+        }
+    }
+
+    /// The player's place in its formation that a mission escort holds.
+    const PLACE: FormationSlot = FormationSlot {
+        slot: 2,
+        ships: 3,
+        spacing: 40.0,
+    };
+
+    /// A mission's ship of `behav` in the player's formation, in
+    /// `condition`, of a warship's class (`InherentAI` 3) flying as a
+    /// trader, and its NPC.
+    fn mission_escort(behav: ShipBehav, condition: Condition) -> (Traffic, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = npc(0, ShipStats::new(FAST, &[]));
+        ship.condition = condition;
+        ship.hull.inherent_ai = 3;
+        ship.goal = Goal::Formation { guard: None };
+        ship.mission = Some(MissionMark {
+            slot: 1,
+            behav,
+            formation: Some(PLACE),
+            order: None,
+        });
+        let id = traffic.add_npc(ship);
+        (traffic, id)
+    }
+
+    #[test]
+    fn the_reset_drops_a_disabled_behav_1_mission_escorts_parent_by_either_reading() {
+        // +0x9a = -1 (@0x8feda), +0x88 left at the re-lead's 6.
+        for reading in RuleSource::ALL {
+            let (mut traffic, id) = mission_escort(ShipBehav::EscortPlayer, Condition::Disabled);
+            ticked(&mut traffic, reading, &mut NeverFires);
+            let dropped = of(&traffic, id);
+            assert!(dropped.mission_dropped, "{reading:?}");
+            assert!(!dropped.mission_escort(), "{reading:?}");
+            assert!(!dropped.escorts_player(), "{reading:?}");
+            assert_eq!(dropped.leader_ref(), None, "{reading:?}");
+            assert_eq!(
+                dropped.mission.map(|mark| mark.formation),
+                Some(Some(PLACE)),
+                "{reading:?}: its mark and its slot kept"
+            );
+            assert_eq!(dropped.original_ai_type(), 6, "{reading:?}");
+            assert_eq!(dropped.ai_type, AiType::WimpyTrader, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_and_then_disabled_stays_let_go() {
+        // The reset writes no +0x88: its `InherentAI` stands.
+        let (mut traffic, id) = mission_escort(ShipBehav::EscortPlayer, Condition::Disabled);
+        traffic.npcs_mut()[0].mission_let_go = true;
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let let_go = of(&traffic, id);
+        assert!(let_go.mission_let_go);
+        assert!(!let_go.mission_dropped);
+        assert_eq!(let_go.original_ai_type(), 3);
+    }
+
+    #[test]
+    fn a_disabled_captured_mission_ship_of_another_behav_is_out_of_the_formation_for_good() {
+        // No re-lead's (@0x8fc07 → @0x8fc2d): +0x9a -1 for good, +0x88 6
+        // until its first think whole.
+        for behav in [ShipBehav::Own, ShipBehav::AttackPlayer] {
+            for reading in RuleSource::ALL {
+                let (mut traffic, id) = mission_escort(behav, Condition::Disabled);
+                ticked(&mut traffic, reading, &mut NeverFires);
+                let dropped = of(&traffic, id);
+                let mark = dropped.mission.expect("its mark kept");
+                assert_eq!(mark.formation, None, "{behav:?} {reading:?}");
+                assert!(!dropped.mission_dropped, "{behav:?} {reading:?}");
+                assert!(!dropped.mission_escort(), "{behav:?} {reading:?}");
+                assert_eq!(dropped.ai_type, AiType::Warship, "{behav:?} {reading:?}");
+                assert_eq!(dropped.original_ai_type(), 6, "{behav:?} {reading:?}");
+                traffic.npcs_mut()[0].condition = Condition::Intact;
+                traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+                let whole = of(&traffic, id);
+                assert_eq!(whole.original_ai_type(), 3, "{behav:?} {reading:?}");
+                assert!(!whole.mission_escort(), "{behav:?} {reading:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_disabled_behav_2_mission_escort_reads_six_for_its_stay() {
+        // `_DeathStarAI` writes no +0x88 (@0x8ff3a).
+        let (mut traffic, id) = mission_escort(ShipBehav::AttackStellars, Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let dropped = of(&traffic, id);
+        assert_eq!(dropped.mission.and_then(|mark| mark.formation), None);
+        assert_eq!(dropped.original_ai_type(), 6);
+        traffic.npcs_mut()[0].condition = Condition::Intact;
+        traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, id).original_ai_type(), 6);
+    }
+
+    #[test]
+    fn an_intact_mission_escort_or_one_on_the_jump_or_glide_path_is_not_dropped() {
+        let jumping = |npc: &mut Npc| npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        let gliding = |npc: &mut Npc| npc.mode = Mode::JumpingIn { tick: 0 };
+        let intact = |npc: &mut Npc| npc.condition = Condition::Intact;
+        let cases: [(&str, Setup); 3] = [
+            ("jumping", &jumping),
+            ("gliding", &gliding),
+            ("intact", &intact),
+        ];
+        for (name, setup) in cases {
+            for behav in [ShipBehav::EscortPlayer, ShipBehav::Own] {
+                let (mut traffic, id) = mission_escort(behav, Condition::Disabled);
+                setup(&mut traffic.npcs_mut()[0]);
+                ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+                let led = of(&traffic, id);
+                assert!(led.mission_escort(), "{name} {behav:?}");
+                assert!(!led.mission_dropped, "{name} {behav:?}");
+            }
         }
     }
 

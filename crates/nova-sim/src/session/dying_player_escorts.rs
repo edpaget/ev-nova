@@ -45,14 +45,21 @@
 //! ([`EscortAi`](crate::ai::EscortAi)). Each traffic tick here is that
 //! dispatch: once the player is whole, it is led again and the formation
 //! re-forms, the hired ships perhaps gone. A ship not intact isn't led
-//! again (@0x8fc0c). Its +0xc92e and the player's +0xc2 have no reader
+//! again (@0x8fc0c), and its dispatch's reset drops a disabled one's
+//! parent and never reaches `_EscortAI` (@0x8feda, @0x8ff13 → @0x90032), so
+//! one disabled while the player breaks up is a stranger but not let go
+//! until it is whole, led again and then let go (see the
+//! [`disabled_mission_escorts`](super::disabled_mission_escorts) module).
+//! Its +0xc92e and the player's +0xc2 have no reader
 //! here (@0x440d8, @0x6f1cb): it flies sub 0, and no other ship keeps the
 //! player's formation.
 //!
 //! **A captured mission ship.** One of another `ShipBehav` is no re-lead's
 //! (@0x8fc07 → @0x8fc2d), so `_EscortAI` frees it for good
-//! ([`dispatch_gate::not_led_again`]). One of `ShipBehav` 2 runs
-//! `_DeathStarAI` in `_EscortAI`'s place (@0x8ff3a), and stays led.
+//! ([`dispatch_gate::not_led_again`]); a disabled one is out of the
+//! formation already, by its reset, reading 6 until its think whole. One
+//! of `ShipBehav` 2 runs `_DeathStarAI` in `_EscortAI`'s place (@0x8ff3a),
+//! and stays led while it is whole.
 //!
 //! Nothing here plays a sound or draws a random number.
 
@@ -107,11 +114,14 @@ impl Session {
 
 impl Space {
     /// Each intact `ShipBehav` 1 ship is led again, as the dispatch leads
-    /// it ([`dispatch_gate::led_again`]), and let go again if the player is
-    /// `dying` and its think reaches `_EscortAI`. One not intact isn't led
-    /// again (@0x8fc0c), so a let go stands. One that rejoins takes its slot
-    /// from the same pass's [`Session::reform_on_swarm_change`], the hired
-    /// ships perhaps gone meanwhile.
+    /// it ([`dispatch_gate::led_again`]): the disabled reset's drop ends
+    /// ([`Npc::mission_dropped`](crate::traffic::npc::Npc::mission_dropped),
+    /// see the `disabled_mission_escorts` module), and it is let go again
+    /// if the player is `dying` and its think reaches `_EscortAI`. One not
+    /// intact isn't led again (@0x8fc0c), so a drop or a let go stands.
+    /// One that rejoins takes its slot from the same pass's
+    /// [`Session::reform_on_swarm_change`], the hired ships perhaps gone
+    /// meanwhile.
     pub(super) fn let_go_of_mission_escorts(&mut self, dying: bool) {
         for npc in self
             .traffic
@@ -119,6 +129,7 @@ impl Space {
             .iter_mut()
             .filter(|npc| npc.condition == Condition::Intact)
         {
+            npc.mission_dropped = false;
             npc.mission_let_go =
                 dying && dispatch_gate::led_again(npc) && dispatch_gate::reaches_escort_think(npc);
         }
@@ -468,21 +479,30 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_mission_escort_stays_led_through_the_players_death() {
-        // Not re-led, so not let go here: its +0x9a is
-        // rdm:phase/escort-fleet-fidelity-followups/phase-16-disabled-mission-escort-parent's.
+    fn a_disabled_mission_escort_is_dropped_through_the_players_death_and_let_go_once_whole() {
+        // Its reset's +0x9a -1 (@0x8feda), no `_EscortAI` while disabled
+        // (@0x8ff13 → @0x90032); whole, the re-lead and then the let go.
         let (mut fleet, catalog) = fleet();
         let session = &mut fleet.session;
         let mission = session.space.npc_mut(fleet.mission).expect("here");
         mission.condition = Condition::Disabled;
+        mission.reserves.armor.now = 1.0;
         dying(session, true);
         traffic_tick(session, &catalog);
+        let dropped = session.space.npc(fleet.mission).expect("here");
+        assert!(!dropped.escorts_player(), "no longer led");
         assert!(!let_go(session, fleet.mission));
+        let mission = session.space.npc_mut(fleet.mission).expect("here");
+        mission.condition = Condition::Intact;
+        mission.reserves.armor.now = mission.reserves.armor.max;
+        traffic_tick(session, &catalog);
+        assert!(let_go(session, fleet.mission), "led again, then let go");
     }
 
     #[test]
     fn a_mission_ending_while_let_go_clears_only_the_mark() {
-        // With +0x9a -1 the slot-freed branch leaves the ship (@0x8fc3a-0x8fc4b).
+        // With +0x9a -1 the slot-freed branch clears only the mark: no
+        // leave (@0x8fc3a-0x8fc4b).
         let (mut fleet, catalog) = fleet();
         dying(&mut fleet.session, true);
         nova_traffic_tick(&mut fleet.session, &catalog);
