@@ -103,17 +103,19 @@ pub fn drop_when_dry(npc: &Npc, goal: Goal) -> Goal {
 }
 
 /// The goal of an interceptor `npc` that, with nothing to fight, has
-/// decided on `goal` by its patrol, inspection or hold, after its
-/// out-of-ammo retreat (see the module docs): retreating, it flees the
-/// ship it inspects, and stops ([`Goal::Idle`]) otherwise, but leaving by
-/// hyperspace ([`Goal::JumpOut`], state 2) it leaves.
+/// decided on `goal` by its patrol, inspection or hold, or kept behind its
+/// gate, after its out-of-ammo retreat (see the module docs): retreating,
+/// it flees the ship it inspects or plunders (+0x70, a plunder kept
+/// behind the gate, @0x8d343-0x8d391), and stops ([`Goal::Idle`])
+/// otherwise, but leaving by hyperspace ([`Goal::JumpOut`], state 2) it
+/// leaves.
 #[must_use]
 pub fn after_patrol(npc: &Npc, goal: Goal) -> Goal {
     if !retreats(npc) {
         return goal;
     }
     match goal {
-        Goal::Inspect(ship) => Goal::Flee(ship),
+        Goal::Inspect(ship) | Goal::Plunder { ship, .. } => Goal::Flee(ship),
         Goal::JumpOut => goal,
         _ => Goal::Idle,
     }
@@ -125,7 +127,11 @@ pub fn after_patrol(npc: &Npc, goal: Goal) -> Goal {
 /// once, its provocation zeroed (@0x8dff6 → @0x8e228-0x8e23d).
 #[must_use]
 pub fn stops(npc: &Npc, goal: Goal) -> bool {
-    retreats(npc) && !matches!(goal, Goal::Inspect(_) | Goal::JumpOut)
+    retreats(npc)
+        && !matches!(
+            goal,
+            Goal::Inspect(_) | Goal::Plunder { .. } | Goal::JumpOut
+        )
 }
 
 #[cfg(test)]

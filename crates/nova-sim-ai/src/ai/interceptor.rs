@@ -59,10 +59,18 @@
 //!   jump.
 //! - Waiting (state 6) it inspects nothing, looks for no target and
 //!   patrols nowhere: those blocks need a goal of 1 or below, or 0x14
-//!   (@0x8cc6d-0x8cc7d). Only provocation (@0x8cbf6-0x8cc28) or its
-//!   government's word lifts the wait. Short of ammunition, a waiting
-//!   interceptor goes idle as a stopped one does (state 6 to 3 to 0,
-//!   @0x8d391 and @0x8e228; see [`out_of_ammo`]).
+//!   (@0x8cc6d-0x8cc7d, [`gate_closed`]). So does one holding, leaving
+//!   (goal 2), plundering (0xd), drifting (0xe), mining or scooping: it
+//!   keeps the goal, a lost lead's that the succession copied included,
+//!   with a hostile player in view though it is. Only provocation
+//!   (@0x8cbf6-0x8cc28) or its government's word lifts it: provoked, it
+//!   takes goal 4 on its target, which goal 4's drops end at once, with no
+//!   search that think, when the target is gone, breaking up, disabled
+//!   with no destroying weapon (@0x8d2fa-0x8d33a) or spared (@0x8e277).
+//!   Short of ammunition, a waiting interceptor goes idle as a stopped
+//!   one does (state 6 to 3 to 0, @0x8d391 and @0x8e228; see
+//!   [`out_of_ammo`]), and a plundering one flees its ship. In its count
+//!   wait (goal 0x16) it returns at once (@0x8c8be).
 //! - Inspecting a ship it no longer sees (`_ShipVisibleToShip`, see
 //!   [`sight`](super::sight)), it drops it: target -1, state 0
 //!   (@0x8d39a-0x8d3ee, [`lost_sight::after_inspection`]), and its
@@ -91,8 +99,8 @@ use crate::ai::odds::state4_attack;
 use crate::ai::target::{TargetRules, dropped, re_pick_target};
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{
-    Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
-    lost_sight, out_of_ammo, react,
+    Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle_block, lost_sight,
+    out_of_ammo, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -131,6 +139,47 @@ pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
         .is_some_and(|state| !within_reach(state.position - npc.state.position))
 }
 
+/// Whether `npc`'s goal is behind `_InterceptorAI`'s gate among `around`:
+/// its search, inspection and patrol run for a goal of 1 or below, or
+/// 0x14, read from the goal in hand (@0x8cc6d-0x8cc7d), so not for a wait
+/// (6), a hold (0xa), a jump out (2), a plunder (0xd), a drift (0xe), a
+/// count wait (0x16), a mine, scoop or stellar attack (0x10-0x12), a
+/// fighter's return (5), a help (9, 0xf), the regroup pause (0x13), or an
+/// inspection that holds ([`inspection_holds`]). An attack, snipe or
+/// flight keeps the hunt's own path: its pick keeps a live ship it fights
+/// as the gate's skip does, and a fight on a ship gone is ended by the
+/// high level that frame (@0x8e263, @0x8dff6), so the next think's search
+/// is taken in this one. An inspection this think ends, and a follow or
+/// formation (the other reading of
+/// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)'s led ship), stay
+/// open too.
+#[must_use]
+pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
+    match npc.goal {
+        Goal::Inspect(_) => inspection_holds(npc, around),
+        Goal::Wait
+        | Goal::Hold
+        | Goal::JumpOut
+        | Goal::Plunder { .. }
+        | Goal::Drift
+        | Goal::CountWait
+        | Goal::Mine
+        | Goal::Scoop
+        | Goal::AttackStellar(_)
+        | Goal::Dock(_)
+        | Goal::Assist(_)
+        | Goal::Regroup { .. } => true,
+        Goal::Idle
+        | Goal::Land(_)
+        | Goal::EnterGate(_)
+        | Goal::Attack(_)
+        | Goal::Snipe(_)
+        | Goal::Flee(_)
+        | Goal::Follow { .. }
+        | Goal::Formation { .. } => false,
+    }
+}
+
 /// An interceptor's retreat: when outnumbered, by `Flags` 0x0100, and
 /// out of ammunition, by its hull's `Flags2` 0x0080.
 pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
@@ -138,7 +187,7 @@ pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
     shields: false,
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
-    searches_waiting: false,
+    search_gate: true,
 };
 
 /// Nova's interceptor (see the module docs).
@@ -175,6 +224,13 @@ impl Behaviour for Interceptor {
     /// ([`attack_breaking_up`]: `_InterceptorAI` has no drop of its own,
     /// so goal 4 reaches @0x8e714).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        if npc.goal == Goal::CountWait {
+            // It returns for goal 0x16 at once (@0x8c8be).
+            return Decision {
+                goal: npc.goal,
+                ..Decision::default()
+            };
+        }
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..INTERCEPTOR_RETREAT
@@ -205,7 +261,9 @@ impl Behaviour for Interceptor {
         );
         let decision = re_pick(npc, decision, around, self.target, chance);
         Decision {
-            forgets_provocation: stops || attack_breaking_up(npc, decision.goal, around),
+            forgets_provocation: decision.forgets_provocation
+                || stops
+                || attack_breaking_up(npc, decision.goal, around),
             ..decision
         }
     }
@@ -237,11 +295,12 @@ impl Interceptor {
         if inspection_holds(npc, around) {
             return (npc.goal, None);
         }
-        if matches!(npc.goal, Goal::Hold | Goal::Wait) {
+        if gate_closed(npc, around) {
             // The patrol and inspect block needs goal 1 or below, or
             // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
-            // holds, and a waiting one (state 6) waits.
-            return (idle(npc, around, chance), None);
+            // holds, a waiting one (state 6) waits, and a leaving,
+            // plundering or drifting one keeps at it.
+            return (super::kept(npc, around).unwrap_or(npc.goal), None);
         }
         match inspect(npc, around, chance) {
             Some(goal) => {
@@ -737,6 +796,96 @@ mod tests {
             assert_eq!(goal, Goal::Wait, "{:?}", npcs[0].govt);
             assert!(asked.is_empty(), "no pick");
         }
+    }
+
+    /// The plunder of the trader, NPC 2.
+    const PLUNDER: Goal = Goal::Plunder {
+        ship: ShipRef::Npc(crate::traffic::npc::NpcId(2)),
+        hopeless: false,
+    };
+
+    #[test]
+    fn an_unprovoked_interceptor_holding_a_plunder_a_jump_out_or_a_drift_keeps_it_by_a_hostile_player()
+     {
+        // The search, inspection and patrol run for goal 1 or below, or
+        // 0x14, alone (@0x8cc6d-0x8cc7d): a held goal 0xd, 2 or 0xe is
+        // kept, the player in view of record -10 though it is.
+        for goal in [PLUNDER, Goal::JumpOut, Goal::Drift] {
+            let mut cop = police();
+            cop.goal = goal;
+            cop.target = goal.quarry();
+            let npcs = [cop, ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0)];
+            let (decided, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -300.0), -10, &[0]);
+            assert_eq!(decided, goal, "{goal:?}");
+            assert!(asked.is_empty(), "{goal:?}: no pick");
+        }
+    }
+
+    #[test]
+    fn a_provoked_interceptor_holding_a_plunder_attacks_its_provoker_or_drops_one_it_cant_destroy()
+    {
+        // The provoked branch writes goal 4 (@0x8cbf3-0x8cc31), the gate
+        // then skips the search (@0x8cc6d), and the disabled drop takes a
+        // disabled target with no destroying weapon: goal 0, +0x70 -1
+        // (@0x8d2fa-0x8d33a).
+        let mut cop = police();
+        cop.goal = PLUNDER;
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let sites = sites();
+        let govts = govts(0, 0);
+        let npcs = [cop.clone(), pirate.clone()];
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Attack(n(2)));
+        let mut ally = npcs.clone();
+        ally[1].govt = Some(TRADERS);
+        let around = crate::ai::fixture::around(&sites, &ally, &govts, (0.0, -300.0), -10);
+        let decision = Interceptor::default().decision(&ally[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(
+            (decision.goal, decision.clears_target),
+            (Goal::Idle, true),
+            "an ally it spares (@0x8e277)"
+        );
+        pirate.condition = Condition::Disabled;
+        let npcs = [cop, pirate];
+        let around = crate::ai::fixture::around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let mut chance = Draws::of(&[0]);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut chance);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+        assert!(chance.asked.is_empty(), "no search that think");
+    }
+
+    #[test]
+    fn a_dry_interceptor_of_flags2_0x0080_holding_a_plunder_flees_its_ship() {
+        // Any goal but 2, 3 and 0xb becomes goal 3 on +0x70 (@0x8d343-0x8d391).
+        let mut cop = short_of_ammo(police(), AmmoLeft::Dry, true);
+        cop.goal = PLUNDER;
+        cop.target = Some(n(2));
+        let npcs = [cop, ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0)];
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.forgets_provocation, "it flees a ship");
+    }
+
+    #[test]
+    fn an_interceptor_in_its_count_wait_keeps_it_provoked_or_not() {
+        // It returns for goal 0x16 at once (@0x8c8be).
+        let mut cop = police();
+        cop.goal = Goal::CountWait;
+        let npcs = [cop.clone(), ship(2, PIRATES, AiType::Warship, 0.0, 300.0)];
+        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -300.0), -10, &[0]);
+        assert_eq!(goal, Goal::CountWait);
+        assert!(asked.is_empty());
+        cop.provoked = 2.0;
+        cop.target = Some(n(2));
+        let npcs = [cop, ship(2, PIRATES, AiType::Warship, 0.0, 300.0)];
+        assert_eq!(decided(&npcs, -10, &[0]), Goal::CountWait, "provoked");
     }
 
     #[test]

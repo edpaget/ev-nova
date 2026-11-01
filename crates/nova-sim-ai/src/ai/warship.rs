@@ -140,7 +140,7 @@
 //! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
-use crate::ai::interceptor::inspection_holds;
+use crate::ai::interceptor::{gate_closed, inspection_holds};
 use crate::ai::odds::{cached_odds, state4_attack};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
@@ -185,12 +185,16 @@ pub struct Retreat {
     /// Whether it retreats when its weapons run out of ammunition, by its
     /// hull's `Flags2` 0x0080 ([`out_of_ammo::retreats`]).
     pub out_of_ammo: bool,
-    /// Whether it looks for a target while it waits ([`Goal::Wait`], state
-    /// 6): a warship does (`_SelectWarshipTarget` @0x8bbc2), an interceptor
-    /// doesn't, as its search needs a goal of 1 or below, or 0x14
-    /// (`_InterceptorAI` @0x8cc6d-0x8cc7d). One that doesn't still answers
-    /// its attacker, as a held ship does.
-    pub searches_waiting: bool,
+    /// Whether it looks for a target only from a goal of 1 or below, or
+    /// 0x14: an interceptor's search, inspection and patrol need one
+    /// (`_InterceptorAI` @0x8cc6d-0x8cc7d,
+    /// [`gate_closed`](super::interceptor::gate_closed)), so one waiting,
+    /// leaving, plundering or drifting searches nothing. Its provoked
+    /// branch comes first (@0x8cbf3-0x8cc31): provoked, it takes goal 4
+    /// on its target, which the drops then end. A warship's own gates
+    /// (`_SelectWarshipTarget` for goals 0, 1, 2, 6 and 0x14) are not this:
+    /// it searches waiting (@0x8bbc2) and holds only its hold.
+    pub search_gate: bool,
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
@@ -237,6 +241,8 @@ pub fn hunt(
         turns_on_player,
         dropped_target,
         provokes: word_provokes,
+        clears_target: false,
+        forgets_provocation: false,
     };
     let keep = |ship: ShipRef| !dropped(npc, ship, around, rules);
     // A fresh pick the think drops at once (@0x8bc4e-0x8bca9, @0x8e3ef)
@@ -266,17 +272,43 @@ pub fn hunt(
             let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
             let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
             let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && held(ship));
-            // Held, inspecting (an interceptor's state 7: its search needs
-            // state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; its re-pick
-            // comes after, see `interceptor`), or waiting without a
-            // search, it answers only its provoker. An inspection this
-            // think ends (within reach or gone) leaves it the search.
-            if npc.goal == Goal::Hold
-                || inspection_holds(npc, around)
-                || (npc.goal == Goal::Wait && !retreat.searches_waiting)
-            {
+            // Held or inspecting (an interceptor's state 7: its search
+            // needs state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; its
+            // re-pick comes after, see `interceptor`), it answers only its
+            // provoker. An inspection this think ends (within reach or
+            // gone) leaves it the search.
+            if inspection_holds(npc, around) || (npc.goal == Goal::Hold && !retreat.search_gate) {
                 return Hunt {
                     goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
+                    ..nothing(false)
+                };
+            }
+            // Behind an interceptor's gate the provoked branch writes goal
+            // 4 on +0x70 first (@0x8cbf3-0x8cc31), whose drops then end
+            // it: a target gone or breaking up (@0x8e263, @0x8e3ef), one
+            // disabled with no destroying weapon (@0x8d2fa-0x8d33a) or
+            // spared (@0x8e277). Unprovoked it searches nothing.
+            if retreat.search_gate && gate_closed(npc, around) {
+                let Some(ship) = npc.target.filter(|_| npc.provoked > 0.0) else {
+                    return nothing(false);
+                };
+                if !held(ship) {
+                    return Hunt {
+                        goal: Some(Goal::Idle),
+                        clears_target: true,
+                        forgets_provocation: matches!(
+                            around.condition_of(ship),
+                            Some(crate::combat::hull::Condition::Dying { .. })
+                        ),
+                        ..nothing(false)
+                    };
+                }
+                let judged = Npc {
+                    goal: Goal::Attack(ship),
+                    ..npc.clone()
+                };
+                return Hunt {
+                    goal: Some(hunted(&judged, ship, around, retreat)),
                     ..nothing(false)
                 };
             }
@@ -304,6 +336,8 @@ pub fn hunt(
         turns_on_player,
         dropped_target,
         provokes: word_provokes,
+        clears_target: false,
+        forgets_provocation: false,
     }
 }
 
@@ -329,6 +363,8 @@ fn releases_blessed(
 }
 
 /// What a hunter's think gives ([`hunt`]).
+// Each flag is its own write or call of the original's think.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Hunt {
     /// Its goal, or none when it has nothing to fight.
@@ -342,6 +378,14 @@ pub struct Hunt {
     /// Whether the government's 0x0004 word set its provocation to 1
     /// ([`Decision::provokes`](crate::ai::Decision::provokes)).
     pub provokes: bool,
+    /// Whether goal 4's drops ended the attack behind an interceptor's
+    /// gate, its target -1
+    /// ([`Decision::clears_target`](crate::ai::Decision::clears_target)).
+    pub clears_target: bool,
+    /// Whether that drop was of a ship breaking up, which zeroes its
+    /// provocation (@0x8e714-0x8e726,
+    /// [`Decision::forgets_provocation`](crate::ai::Decision::forgets_provocation)).
+    pub forgets_provocation: bool,
 }
 
 impl Hunt {
@@ -361,11 +405,11 @@ impl Hunt {
             turns_on_player: self.turns_on_player,
             dropped_target: self.dropped_target,
             provokes: self.provokes,
-            forgets_provocation: false,
+            forgets_provocation: self.forgets_provocation,
             comm_call: None,
             calls_reinforcements: false,
             board_wait: None,
-            clears_target: false,
+            clears_target: self.clears_target,
             keeps_pursuit: false,
             writes_sub: false,
             plunders: None,
@@ -519,7 +563,7 @@ pub const WARSHIP_RETREAT: Retreat = Retreat {
     shields: true,
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
-    searches_waiting: true,
+    search_gate: false,
 };
 
 impl Behaviour for Warship {
