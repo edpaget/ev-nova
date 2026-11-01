@@ -300,6 +300,11 @@ impl AppScreen {
     /// shows the spaceport (@0x5faff), then runs `_MissionLandCheck`
     /// (@0x5fbeb) and `_OfferMissionFromPort` (@0x5fc37) before its own
     /// loop: the replayed keys reach the first text.
+    ///
+    /// The router's own handlers ran on each input as it came, before
+    /// the movie held it, so the replay goes past them
+    /// ([`AppScreen::rerouted_input`]): a Caps Lock pressed under the
+    /// movie toggles double time once.
     pub(super) fn settle_flight_movie(&mut self) {
         let Some(flight) = self.flight.as_mut().filter(|flight| !flight.playing()) else {
             return;
@@ -310,7 +315,7 @@ impl AppScreen {
             self.settle_script();
         }
         for input in replay {
-            let _ = self.routed_input(&input);
+            let _ = self.rerouted_input(&input);
         }
     }
 
