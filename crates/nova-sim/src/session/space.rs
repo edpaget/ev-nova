@@ -143,6 +143,9 @@ pub(super) struct Space {
     /// last place (see the `stale_sprites` module); never saved, as it
     /// lives as long as the original's process.
     pub(super) stellar_sprites: StellarSpritePool,
+    /// The sheets the deadly-stellar touch reads, each asked once per
+    /// session (see the `deadly_masks` module); never saved.
+    pub(super) sprite_masks: super::deadly_masks::SpriteMasks,
     /// The escorts' and encounters' state.
     pub(super) escorts: Escorts,
     /// The one voice channel the escorts speak through: the message
@@ -251,6 +254,7 @@ impl Space {
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
             stellar_sprites: StellarSpritePool::default(),
+            sprite_masks: super::deadly_masks::SpriteMasks::default(),
             escorts: Escorts {
                 aboard: None,
                 capture_holders: Vec::new(),

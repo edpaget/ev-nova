@@ -665,7 +665,7 @@ mod tests {
                 combat.fly_shots_in(fighters, arena, &spots, chance);
             },
         );
-        session.beams_phase(&ai, pass, rules, chance);
+        session.beams_phase(&ai, None, pass, rules, chance);
     }
 
     /// Works `catalog`'s `session` a pass at a time until its NPC's fire

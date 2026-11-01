@@ -236,7 +236,15 @@ impl Session {
         if self.rescue_if_due(catalog, chance) {
             return true;
         }
-        self.pass_after_move(&start, pass, Some(catalog), behaviour, rules, chance);
+        self.pass_after_move(
+            &start,
+            pass,
+            Some(catalog),
+            Some(catalog),
+            behaviour,
+            rules,
+            chance,
+        );
         false
     }
 
@@ -298,11 +306,18 @@ impl Session {
     /// it, the traffic only moves, and the reinforcement clock
     /// (`_HandleReinforcements` @0x44504) ticks after the asteroids and
     /// before the beams (see [`Session::ship_loop`]).
+    ///
+    /// `sheets` is the advance pass's catalog too, which the deadly
+    /// stellars' masks are asked of before the beams' phase reads them
+    /// (see [`Session::beams_phase`]); the second pass has none and reads
+    /// those the first kept.
+    #[allow(clippy::too_many_arguments)] // the pass's two catalog views, one per port
     pub(super) fn pass_after_move(
         &mut self,
         start: &PassStart,
         pass: GamePass,
         ai: Option<&dyn TrafficCatalog>,
+        sheets: Option<&dyn PilotCatalog>,
         behaviour: &(impl Behaviour + ?Sized),
         rules: Rules,
         chance: &mut dyn Chance,
@@ -379,7 +394,7 @@ impl Session {
         }
         // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
         // what the pass leaves.
-        self.beams_phase(behaviour, pass, rules, chance);
+        self.beams_phase(behaviour, sheets, pass, rules, chance);
         self.fight_tail(rules, chance);
     }
 
@@ -638,13 +653,21 @@ impl Session {
     /// tractor its asteroids, destroying each at once; the boxes of each
     /// one destroyed are spawned after it (see the `asteroid_beams`
     /// module).
+    ///
+    /// With `sheets`, the advance pass's catalog, it first asks it for the
+    /// sheets the deadly stellars touch by that the session hasn't asked
+    /// for ([`Session::load_sprite_masks`]).
     pub(super) fn beams_phase(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
+        sheets: Option<&dyn PilotCatalog>,
         pass: GamePass,
         rules: Rules,
         chance: &mut dyn Chance,
     ) {
+        if let Some(catalog) = sheets {
+            self.load_sprite_masks(catalog);
+        }
         let hazards = self.stellar_hazards();
         let mut stellars = self.stellar_targets();
         let was = self.space.npcs_before();

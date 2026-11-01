@@ -214,7 +214,7 @@ impl Session {
             return;
         }
         // `_AIDispatch` runs on the advance pass alone (@0x4402a).
-        self.pass_after_move(&start, pass, None, behaviour, rules, chance);
+        self.pass_after_move(&start, pass, None, None, behaviour, rules, chance);
     }
 }
 

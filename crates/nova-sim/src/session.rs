@@ -467,6 +467,7 @@ mod comm_calls;
 mod control;
 mod course;
 mod crons;
+mod deadly_masks;
 mod deadly_stellars;
 mod derelicts;
 mod description;

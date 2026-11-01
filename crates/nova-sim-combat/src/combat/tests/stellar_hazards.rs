@@ -6,8 +6,9 @@
 
 use super::*;
 use crate::combat::stellar_hazards::{
-    DeadlyDisc, GravitySource, HazardResistance, StellarHazards, StellarKill,
+    DeadlyDisc, DeadlySprite, GravitySource, HazardResistance, StellarHazards, StellarKill,
 };
+use crate::sprite_mask::{MaskRect, MaskWalk, PlacedMask};
 
 /// The stellar hazards among `ships` ([`Combat::hazards`]), each shove
 /// set on its ship as the session sets it: every shove made.
@@ -28,19 +29,24 @@ fn hazards_among(combat: &mut Combat, ships: &mut [Ship], hazards: &StellarHazar
 fn pulling(at: Vec2, gravity: i16) -> StellarHazards {
     StellarHazards {
         gravity: vec![GravitySource { at, gravity }],
-        deadly: Vec::new(),
+        ..StellarHazards::default()
     }
 }
 
-/// Deadly discs alone, each at its place of `radius`.
+/// Deadly discs alone, each at its place of `radius`, with no mask.
 fn deadly(discs: &[(Vec2, f32)]) -> StellarHazards {
     StellarHazards {
-        gravity: Vec::new(),
         deadly: discs
             .iter()
-            .map(|&(at, radius)| DeadlyDisc { at, radius })
+            .map(|&(at, radius)| disc_only(DeadlyDisc { at, radius }))
             .collect(),
+        ..StellarHazards::default()
     }
+}
+
+/// A deadly sprite of `disc` with no mask: the disc fallback's.
+fn disc_only(disc: DeadlyDisc) -> DeadlySprite {
+    DeadlySprite { disc, mask: None }
 }
 
 /// An explosion to go off as a ship dies.
@@ -103,7 +109,7 @@ fn each_source_pulls_in_turn_adding_to_the_velocity() {
     };
     let hazards = StellarHazards {
         gravity: vec![east, west],
-        deadly: Vec::new(),
+        ..StellarHazards::default()
     };
     let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     let once = Vec2::new(1.0, 2.0) + crate::gravity::pull(Vec2::ZERO, east.at, 40, 1.0);
@@ -125,10 +131,11 @@ fn a_resisting_fighter_is_neither_pulled_nor_killed() {
             at: Vec2::new(500.0, 0.0),
             gravity: 300,
         }],
-        deadly: vec![DeadlyDisc {
+        deadly: vec![disc_only(DeadlyDisc {
             at: Vec2::ZERO,
             radius: 50.0,
-        }],
+        })],
+        ..StellarHazards::default()
     };
     let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(shoves, []);
@@ -166,10 +173,11 @@ fn a_destroyed_fighter_is_not_pulled_and_a_dying_one_is_pulled_but_not_killed() 
             at: Vec2::new(2000.0, 0.0),
             gravity: 40,
         }],
-        deadly: vec![DeadlyDisc {
+        deadly: vec![disc_only(DeadlyDisc {
             at: Vec2::ZERO,
             radius: 50.0,
-        }],
+        })],
+        ..StellarHazards::default()
     };
     let shoves = hazards_among(&mut combat, &mut ships, &hazards);
     assert_eq!(shoves_on(&shoves, A), [], "destroyed");
@@ -329,4 +337,99 @@ fn a_stellar_kill_makes_no_shockwave() {
     assert_eq!(left(&ships[1]), (100.0, 300.0));
     assert_eq!(combat.take_strikes(), []);
     assert_eq!(ships[0].condition, Condition::Destroyed);
+}
+
+/// Frame 0 of the sheet of `rows`, its top left at `top_left`.
+fn placed(rows: &[&str], top_left: (i32, i32)) -> PlacedMask {
+    let sheet = nova_sim_base::fixture::rle::sheet(&[rows]);
+    let size = (sheet.width, sheet.height);
+    PlacedMask {
+        sheet: std::rc::Rc::new(sheet),
+        frame: 0,
+        rect: MaskRect::placed(top_left, size),
+    }
+}
+
+/// A 5-pixel ring, its hole 3 across, centred on the player.
+fn ring() -> PlacedMask {
+    placed(&["#####", "#...#", "#...#", "#...#", "#####"], (-2, -2))
+}
+
+/// A deadly sprite of `mask` whose disc, 50 across the centre, covers
+/// every ship at the centre.
+fn covering(mask: Option<PlacedMask>) -> DeadlySprite {
+    DeadlySprite {
+        disc: DeadlyDisc {
+            at: Vec2::ZERO,
+            radius: 50.0,
+        },
+        mask,
+    }
+}
+
+#[test]
+fn a_fighter_whose_mask_misses_the_stellars_is_spared_and_one_whose_mask_touches_is_killed() {
+    let mut combat = Combat::default();
+    let mut ships = [exploding(1, 0.0, 0.0), exploding(2, 0.0, 0.0)];
+    let hazards = StellarHazards {
+        deadly: vec![covering(Some(ring()))],
+        ships: vec![(A, placed(&["#"], (0, 0))), (B, placed(&["#"], (-2, -2)))],
+        ..StellarHazards::default()
+    };
+    hazards_among(&mut combat, &mut ships, &hazards);
+    assert_eq!(ships[0].condition, Condition::Intact, "in the hole");
+    assert_eq!(ships[1].condition, Condition::Destroyed, "on the ring");
+    let killed: Vec<ShipRef> = combat.take_stellar_kills().iter().map(|k| k.ship).collect();
+    assert_eq!(killed, [B]);
+}
+
+#[test]
+fn with_either_mask_missing_or_unreadable_the_disc_decides() {
+    let hole = placed(&["#"], (0, 0));
+    let mut unread = ring();
+    let mut gone = (*unread.sheet).clone();
+    gone.starts[0] = None;
+    unread.sheet = std::rc::Rc::new(gone);
+    for (stellar, ship) in [
+        (Some(ring()), None),
+        (None, Some(hole.clone())),
+        (Some(unread), Some(hole.clone())),
+    ] {
+        let mut combat = Combat::default();
+        let mut ships = [exploding(1, 0.0, 0.0), exploding(2, 200.0, 0.0)];
+        let hazards = StellarHazards {
+            deadly: vec![covering(stellar.clone())],
+            ships: ship
+                .iter()
+                .flat_map(|mask| [(A, mask.clone()), (B, mask.clone())])
+                .collect(),
+            ..StellarHazards::default()
+        };
+        hazards_among(&mut combat, &mut ships, &hazards);
+        assert_eq!(
+            (ships[0].condition, ships[1].condition),
+            (Condition::Destroyed, Condition::Intact),
+            "{stellar:?} {ship:?}"
+        );
+    }
+}
+
+#[test]
+fn the_walk_reads_as_the_hazards_say() {
+    for (walk, killed) in [(MaskWalk::Original, false), (MaskWalk::Drawn, true)] {
+        let mut combat = Combat::default();
+        let mut ships = [exploding(1, 0.0, 0.0)];
+        let hazards = StellarHazards {
+            deadly: vec![covering(Some(placed(&["rrr"], (-1, 0))))],
+            ships: vec![(A, placed(&["#"], (0, 0)))],
+            walk,
+            ..StellarHazards::default()
+        };
+        hazards_among(&mut combat, &mut ships, &hazards);
+        assert_eq!(
+            ships[0].condition == Condition::Destroyed,
+            killed,
+            "{walk:?}: only a run's pixels"
+        );
+    }
 }

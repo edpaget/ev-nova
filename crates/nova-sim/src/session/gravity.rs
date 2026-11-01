@@ -42,6 +42,7 @@ use crate::flight::{Flyer, ShipState};
 use crate::gravity::pull;
 use crate::gravity::{GravityAfterburner, resists_gravity};
 use crate::rulebook::RuleKey;
+use crate::sprite_mask::MaskWalk;
 use crate::traffic::npc::Npc;
 
 impl Session {
@@ -83,13 +84,23 @@ impl Session {
     /// The stellar hazards of a game-work pass, for the fight's tick to
     /// apply between its shots and its beams (see
     /// [`stellar_hazards`](crate::combat::stellar_hazards)): gravity's
-    /// sources (`_HandleGravity`), then the deadly stellars' discs
-    /// (`_HandleDeadlyStellars`; see the `deadly_stellars` module), as
+    /// sources (`_HandleGravity`), then the deadly stellars' sprites and
+    /// the ships' masks they touch by, walked by
+    /// [`RuleKey::RleCollisionWalk`] (`_HandleDeadlyStellars`; see the
+    /// `deadly_stellars` and `deadly_masks` modules), as
     /// `_DoPlayGameWork` calls them (@0x44509, @0x4450e).
     pub(super) fn stellar_hazards(&self) -> StellarHazards {
+        let deadly = self.deadly_sprites();
+        let ships = if deadly.is_empty() {
+            Vec::new()
+        } else {
+            self.ship_masks()
+        };
         StellarHazards {
             gravity: self.chart.gravity_sources(),
-            deadly: self.deadly_discs(),
+            deadly,
+            ships,
+            walk: MaskWalk::from(self.setup.rules.source_for(RuleKey::RleCollisionWalk)),
         }
     }
 

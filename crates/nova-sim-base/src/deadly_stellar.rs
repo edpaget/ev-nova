@@ -22,14 +22,16 @@
 //!   `ModVal` (cached in `_playerResistsDeadlyStellars` 0x231764, reset
 //!   @0xc430). Unlike gravity, inertialess flight does not resist. A
 //!   disabled, cloaked or jumping ship is tested.
-//! - **Touching** ([`touches`]): the original compares the two sprites'
-//!   pixel masks (`_SWRLECollision` @0x39d97). The engine has no masks, so
-//!   it tests discs, as a shot at a stellar or an asteroid does: a ship is
-//!   its hull's hit radius, and a stellar's sprite half the larger side of
-//!   the frame it holds ([`sprite_radius`]), centred on its rect. Which
-//!   frame that is is the session's: the one the stellar is drawn with, or
-//!   graphic type 0's for an unowned slot (`nova_sim::Session`'s
-//!   deadly-stellar discs). A sprite with no frame touches nothing.
+//! - **Touching**: the original compares the two sprites' pixel masks
+//!   (`_SWRLECollision` @0x39d97), the stellar's first, as
+//!   [`sprite_mask`](crate::sprite_mask) walks them. Where either sheet's
+//!   tokens can't be read, the engine falls back to discs ([`touches`]),
+//!   as a shot at a stellar or an asteroid does: a ship is its hull's hit
+//!   radius, and a stellar's sprite half the larger side of the frame it
+//!   holds ([`sprite_radius`]), centred on its rect. Which frame that is is
+//!   the session's: the one the stellar is drawn with, or graphic type 0's
+//!   for an unowned slot (`nova_sim::Session`'s deadly-stellar sprites). A
+//!   sprite with no frame touches nothing.
 //!
 //! What a kill does to the ship is the session's (`nova_sim::Session`'s
 //! deadly-stellar step), under [`RuleKey::DeadlyStellarKill`]

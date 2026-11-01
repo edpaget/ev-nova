@@ -674,21 +674,41 @@ impl Space {
         site: &LandingSite,
         player: Vec2,
     ) -> Option<SpriteRect> {
+        let layout = self.slot_layout(statics, setup, site, player)?;
+        // A screen offset is far within an `f32`'s whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let (dx, dy) = (layout.top_left.0 as f32, layout.top_left.1 as f32);
+        Some(SpriteRect {
+            left: player.x + dx,
+            top: player.y + dy,
+            width: layout.size.0,
+            height: layout.size.1,
+        })
+    }
+
+    /// Where `site`'s sprite slot is laid out with the player at `player`,
+    /// as [`Space::click_rect`] reads it and the deadly-stellar touch
+    /// places its mask (see the `deadly_masks` module): none for a slot
+    /// showing no frame; else the sheet drawn, the frame drawn's size (the
+    /// [`PLACEHOLDER_FRAME`] when no sheet is) and its top left from the
+    /// player, placed by the slot size [`Space::slot_sprite_size`] gives.
+    pub(super) fn slot_layout(
+        &self,
+        statics: &Statics,
+        setup: &Setup,
+        site: &LandingSite,
+        player: Vec2,
+    ) -> Option<SlotLayout> {
         let sheet = self.site_sheet(statics, setup, site);
         if sheet == DrawnSheet::NoFrame {
             return None;
         }
         let frame = sheet_frame_size(sheet, statics, site).unwrap_or(PLACEHOLDER_FRAME);
         let placed_as = self.slot_sprite_size(statics, setup, site).unwrap_or(frame);
-        let (dx, dy) = sprite_pool::offset(site.position, player, placed_as);
-        // A screen offset is far within an `f32`'s whole numbers.
-        #[allow(clippy::cast_precision_loss)]
-        let (dx, dy) = (dx as f32, dy as f32);
-        Some(SpriteRect {
-            left: player.x + dx,
-            top: player.y + dy,
-            width: frame.0,
-            height: frame.1,
+        Some(SlotLayout {
+            sheet,
+            size: frame,
+            top_left: sprite_pool::offset(site.position, player, placed_as),
         })
     }
 
@@ -767,6 +787,17 @@ impl Space {
             setup.rules.source_for(RuleKey::LandingDistance),
         )
     }
+}
+
+/// Where a stellar's sprite slot is laid out ([`Space::slot_layout`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SlotLayout {
+    /// The sheet it draws: never [`DrawnSheet::NoFrame`].
+    pub(super) sheet: DrawnSheet,
+    /// The frame drawn's size.
+    pub(super) size: (u32, u32),
+    /// Its top left's offset from the player, in whole pixels.
+    pub(super) top_left: (i32, i32),
 }
 
 /// The 64-pixel placeholder the views draw for a stellar with no sheet to
