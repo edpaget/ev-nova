@@ -20,7 +20,8 @@ use crate::ai::call_for_help::brave_call;
 use crate::ai::fire::FireRules;
 use crate::ai::odds::hopeless_chase;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, lost_sight, provoked_by, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block, lost_sight,
+    provoked_by, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -101,7 +102,10 @@ impl Behaviour for BraveTrader {
     /// so the high level ends it (@0x8e3ef → @0x8e714-0x8e726: goal 0,
     /// target -1, +0x96 0), after the think's call. A fight on a ship gone
     /// from its slot ends with its target, and a flight with its
-    /// provocation too ([`fight_on_gone`]), after the think's calls.
+    /// provocation too ([`fight_on_gone`]), after the think's calls. Its
+    /// idle block's pick is written to its travel stellar
+    /// ([`idle_block::pick_write`] of the think's goal, before an ended fight
+    /// maps to goal 0; @0x8b53b, @0x8b559).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
         let on_gone = fight_on_gone(thought, around);
@@ -116,6 +120,7 @@ impl Behaviour for BraveTrader {
             forgets_provocation: on_gone.unwrap_or(false)
                 || attack_breaking_up(npc, thought, around),
             clears_target: ended,
+            travel: idle_block::pick_write(npc, around, thought),
             ..Decision::default()
         }
     }
@@ -152,6 +157,23 @@ mod tests {
     use crate::traffic::npc::AiType;
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
+
+    #[test]
+    fn its_decision_clears_the_travel_stellar_when_its_pick_fails() {
+        // @0x8b53b, @0x8b559: the pick's -1.
+        let govts = govts(0, 0);
+        let unlandable: Vec<_> = sites()
+            .into_iter()
+            .map(|site| crate::catalog::LandingSite { flags: 0, ..site })
+            .collect();
+        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+        trader.travel = Some(StellarId(150));
+        let npcs = [trader];
+        let around = around(&unlandable, &npcs, &govts, (0.0, -100.0), 0);
+        let decision = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::JumpOut);
+        assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Clear);
+    }
 
     /// A provoked brave trader at (200, 100) and its attacker (`x`, `y`)
     /// from it.

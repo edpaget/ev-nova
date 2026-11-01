@@ -111,7 +111,8 @@
 //!   jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its band
 //!   instead (see [`stand_off`](super::stand_off)).
 //! - **Fully dry** (@0x8c0e7-0x8c117), an attack or snipe is dropped: it
-//!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
+//!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]), its
+//!   target and travel stellar -1 (@0x8c111, @0x8c117).
 //! - With no target it goes about its business ([`idle`](super::idle)),
 //!   short of ammunition or not: the out-of-ammo retreat needs a target.
 //!   Once it has visited a stellar of the system, it leaves, or stops and
@@ -123,7 +124,8 @@
 //! - **Leaving with no way to jump** (@0x8bf8c-0x8c0de), last: a warship
 //!   whose think ends in leaving ([`Goal::JumpOut`], state 2) but cannot
 //!   jump ([`leave::can_jump`]) lands on or enters a stellar picked at
-//!   random, or stops and waits with none ([`grounded`]). The other types keep
+//!   random, or stops and waits with none ([`grounded`]), its travel
+//!   stellar -1 with none (@0x8c00c, @0x8c02a). The other types keep
 //!   leaving (see [`idle`](super::idle)).
 //!
 //! A held ship ([`Goal::Hold`], the original's goal 10 with no leader)
@@ -144,9 +146,10 @@ use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
 use crate::ai::target::{Pick, TargetRules, dropped, pick_target};
+use crate::ai::travel::TravelWrite;
 use crate::ai::{
-    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, out_of_ammo,
-    react, wait,
+    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block, leave,
+    out_of_ammo, react, wait,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -470,12 +473,25 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
 /// none (@0x8c0de). The
 /// original tests the fuel again before it stops (@0x8c058-0x8c0b2), which
 /// cannot pass after the first test failed, so its leave there
-/// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands.
-fn grounded(npc: &Npc, goal: Goal, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+/// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands, writing no
+/// travel stellar.
+///
+/// Its +0x6c: -1 before the pick (@0x8c00c) and the pick's result
+/// (@0x8c02a), so `Clear` with none; a pick writes none of its own, as
+/// [`travel::take`](super::travel::take) writes the goal's stellar.
+fn grounded(
+    npc: &Npc,
+    goal: Goal,
+    around: &Surroundings,
+    chance: &mut dyn Chance,
+) -> (Goal, Option<TravelWrite>) {
     if goal != Goal::JumpOut || leave::can_jump(npc, around.jump_fuel) {
-        return goal;
+        return (goal, None);
     }
-    super::random_stellar(npc, around, chance, Admit::All).unwrap_or(Goal::Wait)
+    match super::random_stellar(npc, around, chance, Admit::All) {
+        Some(pick) => (pick, Some(TravelWrite::Keep)),
+        None => (Goal::Wait, Some(TravelWrite::Clear)),
+    }
 }
 
 /// Nova's warship (see the module docs).
@@ -515,29 +531,47 @@ impl Behaviour for Warship {
     /// ([`wait::warship_waits`]), the hunt's call on the player kept
     /// either way; an attack fully dry is dropped
     /// ([`out_of_ammo::drop_when_dry`]).
+    ///
+    /// Its travel stellar: the idle block's pick ([`idle_block::pick_write`],
+    /// standing for both copies, @0x8b8ed-0x8b90b and @0x8ba31-0x8ba4f), then
+    /// the pick of a leave with no way to jump ([`grounded`]), then the
+    /// fully-dry drop's -1 (@0x8c117), each over the one before.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..WARSHIP_RETREAT
         };
-        let decision = hunt(
+        let hunt = hunt(
             npc,
             around,
             retreat,
             self.always_attacks,
             self.target,
             chance,
-        )
-        .or(|| {
+        );
+        let idles = hunt.goal.is_none() && npc.goal != Goal::Wait;
+        let decision = hunt.or(|| {
             if npc.goal == Goal::Wait {
                 wait::warship_waits(npc, around)
             } else {
                 idle(npc, around, chance)
             }
         });
-        let goal = grounded(npc, decision.goal, around, chance);
+        let picked = if idles {
+            idle_block::pick_write(npc, around, decision.goal)
+        } else {
+            decision.travel
+        };
+        let (goal, grounded_write) = grounded(npc, decision.goal, around, chance);
+        let dropped = out_of_ammo::drop_when_dry(npc, goal);
+        let travel = if dropped == goal {
+            grounded_write.unwrap_or(picked)
+        } else {
+            TravelWrite::Clear
+        };
         Decision {
-            goal: out_of_ammo::drop_when_dry(npc, goal),
+            goal: dropped,
+            travel,
             ..decision
         }
     }
@@ -2094,8 +2128,11 @@ mod tests {
         let npcs = [short(Goal::Attack(n(2)), DRY, false), pirate()];
         assert_eq!(
             worded_decision(ALWAYS, &npcs, Condition::Intact, 0.0),
-            turning(Goal::Idle, true),
-            "fully dry without 0x0080, it drops the player at once"
+            Decision {
+                travel: TravelWrite::Clear,
+                ..turning(Goal::Idle, true)
+            },
+            "fully dry without 0x0080, it drops the player at once, +0x6c -1 (@0x8c117)"
         );
     }
 
@@ -2135,6 +2172,87 @@ mod tests {
             leaving(99, &[gate], &mut Draws::of(&[0])),
             Goal::EnterGate(StellarId(300))
         );
+    }
+
+    // Its +0x6c.
+
+    /// A stellar held before the think.
+    const HELD: Option<StellarId> = Some(StellarId(150));
+
+    #[test]
+    fn its_decision_clears_the_travel_stellar_when_its_pick_fails() {
+        // The idle block's -1 (@0x8b8ed, @0x8b90b).
+        let unlandable = [LandingSite {
+            flags: 0,
+            ..planet(128, 0.0, 0.0)
+        }];
+        let govts = govts(0, 0);
+        let warship = Npc {
+            travel: HELD,
+            ..police()
+        };
+        let npcs = [warship.clone()];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&unlandable, &npcs)
+        };
+        let decision = Warship::default().decision(&warship, &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::JumpOut);
+        assert_eq!(decision.travel, TravelWrite::Clear);
+        let sites = sites();
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let decision = Warship::default().decision(&warship, &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, IDLE);
+        assert_eq!(decision.travel, TravelWrite::Keep, "the pick's, as taken");
+    }
+
+    #[test]
+    fn leaving_with_no_way_to_jump_and_no_pick_clears_it() {
+        // -1 (@0x8c00c), then the failed pick's -1 (@0x8c02a).
+        let govts = govts(0, 0);
+        let decide = |sites: &[LandingSite], chance: &mut Draws| {
+            let warship = Npc {
+                goal: Goal::JumpOut,
+                class_fuel: 0,
+                travel: HELD,
+                ..police()
+            };
+            let npcs = [warship.clone()];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(sites, &npcs)
+            };
+            Warship::default().decision(&warship, &around, chance)
+        };
+        let decision = decide(&[], &mut Draws::of(&[]));
+        assert_eq!(
+            (decision.goal, decision.travel),
+            (Goal::Wait, TravelWrite::Clear)
+        );
+        let one = [planet(128, -300.0, -300.0)];
+        let decision = decide(&one, &mut Draws::of(&[0]));
+        assert_eq!(
+            (decision.goal, decision.travel),
+            (Goal::Land(StellarId(128)), TravelWrite::Keep),
+            "a pick writes none of its own"
+        );
+    }
+
+    #[test]
+    fn the_fully_dry_drop_clears_it() {
+        // State 0, target and +0x6c -1 (@0x8c0ff-0x8c117).
+        let mut dry = short(Goal::Attack(n(2)), DRY, false);
+        dry.travel = HELD;
+        let decision = worded_decision(0, &[dry, pirate()], Condition::Intact, 0.0);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert_eq!(decision.travel, TravelWrite::Clear);
+        let mut armed = short(Goal::Attack(n(2)), ONLY_UNLIMITED, false);
+        armed.travel = HELD;
+        let decision = worded_decision(0, &[armed, pirate()], Condition::Intact, 0.0);
+        assert_eq!(decision.travel, TravelWrite::Keep, "an attack writes none");
     }
 
     #[test]

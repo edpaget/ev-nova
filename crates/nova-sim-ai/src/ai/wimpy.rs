@@ -10,7 +10,8 @@
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, lost_sight, provoked_by, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block, lost_sight,
+    provoked_by, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -29,12 +30,14 @@ pub struct WimpyTrader {
 
 impl Behaviour for WimpyTrader {
     /// Its [`decide`](Self::decide) goal, with a distress call fleeing
-    /// ([`when_fleeing`]).
+    /// ([`when_fleeing`]), and its idle block's pick written to its travel
+    /// stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let goal = self.decide(npc, around, chance);
         Decision {
             goal,
             comm_call: when_fleeing(goal),
+            travel: idle_block::pick_write(npc, around, goal),
             ..Decision::default()
         }
     }
@@ -110,6 +113,23 @@ mod tests {
         trader.target = Some(n(2));
         let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
         assert_eq!(decided(&trader, &npcs), Goal::Flee(n(2)), "@0x8b1ac");
+    }
+
+    #[test]
+    fn its_decision_clears_the_travel_stellar_when_its_pick_fails() {
+        // @0x8b0d1, @0x8b0ef: the pick's -1.
+        let govts = govts(0, 0);
+        let unlandable: Vec<_> = sites()
+            .into_iter()
+            .map(|site| crate::catalog::LandingSite { flags: 0, ..site })
+            .collect();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.travel = Some(StellarId(150));
+        let npcs = [trader];
+        let around = around(&unlandable, &npcs, &govts, (0.0, -100.0), 0);
+        let decision = WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::JumpOut);
+        assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Clear);
     }
 
     #[test]
