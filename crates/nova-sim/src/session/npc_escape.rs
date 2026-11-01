@@ -688,6 +688,41 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_the_cut_lands_on_the_escape_ship_in_a_wrecks_berth_1_not_the_wreck() {
+        // The escape ship takes berth 1, which a wreck displayed earlier in
+        // the loop freed (@0x2dee0) and still lies in until the take-out.
+        // The cut lands on what slot 1 holds now: the escape ship.
+        let catalog = escaping(0);
+        let (mut session, id) = carrier(&catalog, RuleSource::Engine, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        assert!(session.space.npc(wreck).is_none(), "taken out");
+        let fighter = vipers(&session).remove(0);
+        assert_eq!(fighter.berth, 1, "the wreck's slot");
+        let from = at_escape(&session, id);
+        let pushed = crate::bay::launch_velocity(from.velocity, from.heading, 4.0, 6.0);
+        assert_eq!(fighter.state.velocity, pushed * ESCAPE_CUT_VELOCITY, "cut");
+        assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(66)");
+        assert!(chance.asked.contains(&66), "its own shield rolled below");
+        let held = session.space.npc(id).expect("dying");
+        assert_eq!(held.reserves.shield.now, 40.0, "the carrier uncut");
+    }
+
+    #[test]
     fn an_escape_ship_takes_the_berth_a_lower_wreck_freed_at_its_display_that_loop() {
         // The wreck's slot frees at its own display (@0x2dee0), so the
         // escape ship's `_LaunchFighter` (@0x354ea) finds it first
