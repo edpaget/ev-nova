@@ -26,7 +26,10 @@
 //! (@0x8fd38-0x8fd7e), on the jump path, or in goal 0x16 (@0x838ef), so a
 //! ship the player leads in any of those is freed at the think it next
 //! makes. A ship on the player's jump is cancelled (@0x900e3-0x9011e) and
-//! freed the frame after, which the gate gives for free.
+//! freed the frame after, which the gate gives for free: the cancel reads
+//! the player's `_IsDisabled`, for slot 0 its armour line alone
+//! (@0x2d79-0x2e00), which every dying player meets, its armour gone by a
+//! hit or self-destruct's -1.0, while the free reads `_IsDying`.
 //!
 //! **A mission escort let go**
 //! ([`Npc::mission_let_go`](crate::traffic::npc::Npc::mission_let_go)).
@@ -602,6 +605,48 @@ mod tests {
             assert!(!hired.escorts_player(), "{name}");
             assert_eq!(hired.ai_type, AiType::Warship, "{name}");
             assert!(let_go(session, fleet.mission), "{name}");
+        }
+    }
+
+    #[test]
+    fn ships_on_the_players_jump_are_cancelled_and_freed_the_tick_after() {
+        // The cancel reads the player's `_IsDisabled`, its armour line for
+        // slot 0 (@0x900e3-0x9011e, @0x2d79-0x2e00); the free its
+        // `_IsDying` (@0x253d). The tick's goal 0xb flight gives up a
+        // follower of a player who isn't leaving too, so the free here
+        // holds whichever of the two runs first; the cancel's own reading
+        // is the traffic's `jump_with_leader`'s to pin. A player destroyed
+        // with its armour above the line cancels no one, and what its
+        // followers then fly is goal 0xb's own.
+        type Breaks = fn(&mut Session);
+        let cases: [(&str, Breaks); 3] = [
+            ("timer", |session| dying(session, true)),
+            ("armour 0", |session| dying(session, false)),
+            ("destroyed, armour gone", |session| {
+                session.ship.condition = Condition::Destroyed;
+                session.pilot.reserves.armor.now = 0.0;
+            }),
+        ];
+        for (name, breaks) in cases {
+            let (mut fleet, catalog) = fleet();
+            let session = &mut fleet.session;
+            for id in [fleet.escort, fleet.mission] {
+                let npc = session.space.npc_mut(id).expect("here");
+                npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+            }
+            breaks(session);
+            traffic_tick(session, &catalog);
+            for id in [fleet.escort, fleet.mission] {
+                let npc = session.space.npc(id).expect("here");
+                assert!(npc.escorts_player(), "{name}: {id:?} led on the jump path");
+            }
+            traffic_tick(session, &catalog);
+            let hired = session.space.npc(fleet.escort).expect("here");
+            assert!(!hired.escorts_player(), "{name}: the hired escort freed");
+            assert!(
+                let_go(session, fleet.mission),
+                "{name}: the mission escort let go"
+            );
         }
     }
 

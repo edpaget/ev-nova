@@ -85,7 +85,7 @@ use crate::ai::leave::{self, Leg};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::{Goal, dispatch_gate, sight};
 use crate::combat::ShipRef;
-use crate::combat::hull::Condition;
+use crate::combat::hull::under_armour_line;
 use crate::flight::FlightRules;
 use crate::rulebook::RuleSource;
 #[cfg(doc)]
@@ -273,7 +273,10 @@ impl Traffic {
     /// jump path had already skipped it. Each is a one-tick lag that
     /// crosses no boundary the player sees.
     pub(crate) fn cancel_jump_follows(&mut self, world: &World) {
-        let player = world.player.map(|player| player.condition);
+        let player = world.player.as_ref().is_some_and(|player| {
+            player.condition.disabled()
+                || under_armour_line(player.reserves.armor, &player.hull, world.disable, false)
+        });
         let cancels: Vec<bool> = self
             .npcs
             .iter()
@@ -291,21 +294,30 @@ impl Traffic {
     }
 }
 
-/// Whether `npc`'s jump is cancelled among `npcs`, the player in
-/// `player`'s condition when it is there: on the jump path in goal 0xb,
-/// following the player while the player is `_IsDisabled`
-/// (@0x900e3-0x9011e); or led by an NPC there and not `_IsDisabled` that
-/// attacks (goal 4, [`Goal::attacking`]) while its own stage is 1.0 or
-/// below (@0x90125-0x9019c). Its `_IsDisabled` reads ([`Condition::disabled`])
-/// never meet a stellar's defence ship breaking up: the lead is the player
-/// or a ship this one follows, and a defence ship leads none, spawning
-/// alone (`_SpawnStellarDefenseShip` @0x3d387, leader -1).
-fn cancelled(npc: &Npc, npcs: &[Npc], player: Option<Condition>) -> bool {
+/// Whether `npc`'s jump is cancelled among `npcs`, the player
+/// `player_disabled` or not: on the jump path in goal 0xb, following the
+/// player while the player is `_IsDisabled` (@0x900e3-0x9011e); or led by
+/// an NPC there and not `_IsDisabled` that attacks (goal 4,
+/// [`Goal::attacking`]) while its own stage is 1.0 or below
+/// (@0x90125-0x9019c).
+///
+/// The player's `_IsDisabled` skips branches 2 and 3 for slot 0 (+0x86 0,
+/// @0x2d1a-0x2d22 → @0x2d79), and branch 1, a Derelict government's hold
+/// (@0x2cf1-0x2d14), never holds the player, so branch 4 reads it alone:
+/// its armour line ([`under_armour_line`], @0x2d79-0x2e00), which armour 0
+/// meets while its condition is still intact, and so does a player
+/// destroyed with its armour gone; its caller reads the line or a
+/// disabled condition. The lead's read
+/// ([`Condition::disabled`](crate::combat::hull::Condition::disabled)) never
+/// meets a stellar's defence ship breaking up: the lead is a ship this one
+/// follows, and a defence ship leads none, spawning alone
+/// (`_SpawnStellarDefenseShip` @0x3d387, leader -1).
+fn cancelled(npc: &Npc, npcs: &[Npc], player_disabled: bool) -> bool {
     if !dispatch_gate::takes_jump_path(npc) || !npc.follows_leaders_jump() {
         return false;
     }
     if npc.warp.goal == Some(WarpGoal::Follow(ShipRef::Player)) {
-        return player.is_some_and(Condition::disabled);
+        return player_disabled;
     }
     npc.warp.stage <= 1.0
         && npc
@@ -351,6 +363,7 @@ mod tests {
     use crate::ai::{Behaviour, Surroundings};
     use crate::chance::{Chance, NeverFires};
     use crate::combat::ShipRef;
+    use crate::combat::hull::Condition;
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
@@ -1806,22 +1819,43 @@ mod tests {
 
     #[test]
     fn a_follower_of_the_players_jump_is_cancelled_while_the_player_is_disabled() {
+        // `_IsDisabled` of slot 0 reads its armour line alone (branch 4,
+        // @0x2d79-0x2e00): armour 0 counts while still intact, and so does
+        // a player destroyed with its armour gone (@0x900e3-0x9011e).
         use crate::combat::hull::Condition;
-        let npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
-        for (player, cancels) in [
-            (Some(Condition::Disabled), true),
-            (
-                Some(Condition::Dying {
-                    ticks_left: 3,
-                    starting: false,
-                }),
-                true,
-            ),
-            (Some(Condition::Intact), false),
-            (None, false),
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        for (condition, armor, cancels) in [
+            (Condition::Disabled, 100.0, true),
+            (dying, 0.0, true),
+            (Condition::Intact, 0.0, true),
+            (Condition::Destroyed, 0.0, true),
+            (Condition::Destroyed, 100.0, false),
+            (Condition::Intact, 100.0, false),
         ] {
-            assert_eq!(cancelled(&npcs[1], &npcs, player), cancels, "{player:?}");
+            let mut player = crate::ai::fixture::player(0.0, 0.0);
+            player.condition = condition;
+            player.reserves.armor.now = armor;
+            let mut traffic = Traffic::with_interval(1);
+            traffic.npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
+            let world = World {
+                player: Some(player),
+                ..World::new(&[])
+            };
+            traffic.cancel_jump_follows(&world);
+            let follower = &traffic.npcs[1];
+            assert_eq!(
+                follower.warp.goal.is_none(),
+                cancels,
+                "{condition:?} {armor}"
+            );
         }
+        let mut traffic = Traffic::with_interval(1);
+        traffic.npcs = on_leaders_jump(ShipRef::Player, 5.0, Goal::Idle, Condition::Intact);
+        traffic.cancel_jump_follows(&World::new(&[]));
+        assert!(traffic.npcs[1].warp.goal.is_some(), "no player here");
     }
 
     #[test]
@@ -1831,27 +1865,27 @@ mod tests {
         let attacking = Goal::Attack(ShipRef::Player);
         for (stage, cancels) in [(-1.0, true), (0.0, true), (1.0, true), (1.5, false)] {
             let npcs = on_leaders_jump(lead, stage, attacking, Condition::Intact);
-            assert_eq!(cancelled(&npcs[1], &npcs, None), cancels, "{stage}");
+            assert_eq!(cancelled(&npcs[1], &npcs, false), cancels, "{stage}");
         }
         let npcs = on_leaders_jump(lead, 0.0, Goal::Snipe(ShipRef::Player), Condition::Intact);
-        assert!(cancelled(&npcs[1], &npcs, None), "goal 4 standing off");
+        assert!(cancelled(&npcs[1], &npcs, false), "goal 4 standing off");
         let npcs = on_leaders_jump(lead, 0.0, Goal::JumpOut, Condition::Intact);
-        assert!(!cancelled(&npcs[1], &npcs, None), "not attacking");
+        assert!(!cancelled(&npcs[1], &npcs, false), "not attacking");
         let npcs = on_leaders_jump(lead, 0.0, attacking, Condition::Disabled);
         assert!(
-            !cancelled(&npcs[1], &npcs, None),
+            !cancelled(&npcs[1], &npcs, false),
             "a disabled lead (@0x9015b)"
         );
         let npcs = on_leaders_jump(lead, 0.0, attacking, Condition::Intact);
-        assert!(!cancelled(&npcs[1], &npcs[1..], None), "a lead not there");
+        assert!(!cancelled(&npcs[1], &npcs[1..], false), "a lead not there");
         let mut paused = npcs.clone();
         paused[1].goal = Goal::Regroup {
             kept: crate::ai::regroup::Kept::FollowsJump,
         };
-        assert!(!cancelled(&paused[1], &paused, None), "not goal 0xb");
+        assert!(!cancelled(&paused[1], &paused, false), "not goal 0xb");
         let mut hulk = npcs;
         hulk[1].no_ai = true;
-        assert!(!cancelled(&hulk[1], &hulk, None), "no jump path");
+        assert!(!cancelled(&hulk[1], &hulk, true), "no jump path");
     }
 
     #[test]
