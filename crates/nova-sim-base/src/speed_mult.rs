@@ -56,6 +56,10 @@
 //!   @0x6375e-0x63769 (after `_DoPortDialog`), `_HandlePlayer` after the
 //!   player and mission info dialogs (@0x70357, @0x704e8), and the escort,
 //!   comm and planet comm dialogs' closes (@0x95693, @0x9690e, @0x97af2).
+//! - [`TimeAdjustment::zero_unheld`]: the same `_HandlePlayer` writes
+//!   after an info dialog whose own guard returned at once (the screen
+//!   faded, a jump, breaking up): no dialog lasted, so the next frame's
+//!   `new` is about 1.0 and it ramps from 0.0 to 0.25.
 //! - [`TimeAdjustment::entered`]: game entry finds the gain the last game
 //!   left, as no `_HandleTimeAdjustment` runs before `_PlayGame`'s loop.
 //!
@@ -213,6 +217,14 @@ impl TimeAdjustment {
         self.held = true;
     }
 
+    /// Sets the gain to 0.0 and leaves the next frame unheld: a press a
+    /// dialog's own guard refused before anything opened, so only a
+    /// frame's time passes before the next frame, which ramps from 0.0. A
+    /// hold already set (a gap before the press) stays.
+    pub fn zero_unheld(&mut self) {
+        self.gain = SpeedMult::ZERO;
+    }
+
     /// Sets the gain to 1.0 and holds the next frame: `_SwitchedIn`, after
     /// the app was in the background.
     pub fn switched_in(&mut self) {
@@ -254,6 +266,22 @@ mod tests {
         let mut time = TimeAdjustment::default();
         time.zero();
         assert_eq!(frames(&mut time, 3), vec![0.0, 0.25, 0.4375]);
+    }
+
+    #[test]
+    fn the_frame_after_an_unheld_zero_ramps_from_it() {
+        let mut time = TimeAdjustment::default();
+        time.zero_unheld();
+        assert_eq!(time.gain(), SpeedMult::ZERO);
+        assert_eq!(frames(&mut time, 3), vec![0.25, 0.4375, 0.578_125]);
+    }
+
+    #[test]
+    fn an_unheld_zero_keeps_a_gap_already_held() {
+        let mut time = TimeAdjustment::default();
+        time.hold();
+        time.zero_unheld();
+        assert_eq!(frames(&mut time, 2), vec![0.0, 0.25]);
     }
 
     #[test]

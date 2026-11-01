@@ -213,9 +213,14 @@ mod tests {
 
     #[test]
     fn a_mission_info_press_that_reaches_the_dialog_zeroes_the_gain_faded_or_not() {
-        for command in [
-            FlightCommand::PressMissionInfo,
-            FlightCommand::PressFaded(crate::flight_frame::FadedPress::MissionInfo),
+        // The opened dialog lasts, so the next frame holds at 0.0; the
+        // faded one's guard returns at once, so it ramps from 0.0.
+        for (command, next) in [
+            (FlightCommand::PressMissionInfo, 0.0),
+            (
+                FlightCommand::PressFaded(crate::flight_frame::FadedPress::MissionInfo),
+                0.25,
+            ),
         ] {
             let catalog = errands();
             let mut session = docked(&catalog);
@@ -232,8 +237,12 @@ mod tests {
             // Out of the take-off's grace.
             crate::testkit::fly_out(&mut session, &catalog);
             session.switch_in();
+            // The switch-in's held frame, so no hold is pending.
+            let frame_gains = crate::session::time_adjustment::tests::frame_gains;
+            assert_eq!(frame_gains(&mut session, 1), [1.0]);
             apply(&mut session, command.clone());
             assert_eq!(session.speed_mult(), crate::SpeedMult::ZERO, "{command:?}");
+            assert_eq!(frame_gains(&mut session, 1), [next], "{command:?}");
         }
     }
 

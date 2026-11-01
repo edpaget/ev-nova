@@ -33,9 +33,9 @@ impl Session {
             FadedPress::PlayerInfo => {
                 if self.press_player_info() {
                     // The write after `_DoPlayerInfoDialog`, whose guard
-                    // refused it (@0x70357; see the `time_adjustment`
-                    // module).
-                    self.zero_speed_mult();
+                    // refused it at once, so the next frame isn't held
+                    // (@0x70357; see the `time_adjustment` module).
+                    self.zero_speed_mult_unheld();
                     Answer::PlayerInfoFaded
                 } else {
                     Answer::PlayerInfoPressed(false)

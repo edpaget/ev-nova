@@ -104,8 +104,8 @@ mod tests {
             "nothing opens in a jump"
         );
         // `_HandlePlayer` zeroes the gain once the refusing dialog returns
-        // (@0x70357).
-        before.time.zero();
+        // (@0x70357), at once, so no frame is held.
+        before.time.zero_unheld();
         assert_eq!(jumping, before, "and nothing changes but the gain");
     }
 

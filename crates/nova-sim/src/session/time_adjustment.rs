@@ -15,10 +15,15 @@
 //!   (`_HandlePlayer` @0x70357, @0x704e8), at the press the dialog's own
 //!   guard refuses as well as one it opens, as the write follows the call
 //!   whatever it did. The session zeroes at the opening, not the close:
-//!   no step runs under the dialog, so the next frame sees the same. A
-//!   press `_HandlePlayer` refuses before the call (in a jump, in the
-//!   take-off's grace, breaking up, or no active missions) leaves the
-//!   gain.
+//!   no step runs under the dialog, so the next frame sees the same. An
+//!   opened dialog holds the next frame, as the player spent 334 ms or
+//!   more in it. A press the dialog's own guard refuses (the screen faded,
+//!   `_DoPlayerInfoDialog` @0x5a013 and `_DoMissionInfoDialog`; a jump or
+//!   breaking up, @0x5a02a-0x5a04c) returns at once, so only a frame's
+//!   time passes and the next frame ramps from 0.0 to 0.25
+//!   ([`Session::zero_speed_mult_unheld`]). A press `_HandlePlayer`
+//!   refuses before the call (in a jump, in the take-off's grace,
+//!   breaking up, or no active missions) leaves the gain.
 //! - **The switch-in** ([`Session::switch_in`]): `_SwitchedIn`'s 1.0
 //!   (@0x513e1-0x513ec).
 //! - **A gap** ([`Session::hold_time`]): the view's 334 ms or more without
@@ -72,6 +77,15 @@ impl Session {
     pub(super) fn zero_speed_mult(&mut self) {
         if self.ramps() {
             self.time.zero();
+        }
+    }
+
+    /// Zeroes the gain without holding the next frame, by the engine's
+    /// reading: an info dialog's own guard refused the press before
+    /// anything opened (see the module docs).
+    pub(super) fn zero_speed_mult_unheld(&mut self) {
+        if self.ramps() {
+            self.time.zero_unheld();
         }
     }
 
@@ -280,14 +294,36 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_faded_info_press_zeroes_the_gain_too() {
+    fn a_faded_info_press_zeroes_the_gain_and_ramps_from_it_at_once() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         apply(
             &mut session,
             FlightCommand::PressFaded(FadedPress::PlayerInfo),
         );
-        assert_eq!(frame_gains(&mut session, 2), RAMP[..2]);
+        assert_eq!(session.speed_mult(), SpeedMult::ZERO);
+        assert_eq!(frame_gains(&mut session, 2), RAMP[1..3], "no dialog lasted");
+    }
+
+    #[test]
+    fn by_the_earlier_reading_a_faded_info_press_leaves_the_gain() {
+        let catalog = catalog();
+        let rules = Rulebook::default().with_override(RuleKey::SpeedMultRamp, RuleSource::Bible);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        apply(
+            &mut session,
+            FlightCommand::PressFaded(FadedPress::PlayerInfo),
+        );
+        assert_eq!(session.speed_mult(), SpeedMult::FULL);
+    }
+
+    #[test]
+    fn a_player_info_its_own_guard_refuses_ramps_from_zero_at_once() {
+        let catalog = catalog();
+        let mut session = jumping();
+        assert_eq!(session.open_player_info(&catalog), None);
+        assert_eq!(session.speed_mult(), SpeedMult::ZERO);
+        assert_eq!(frame_gains(&mut session, 2), RAMP[1..3]);
     }
 
     #[test]

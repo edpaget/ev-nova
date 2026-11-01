@@ -315,6 +315,22 @@ impl Session {
     /// ([`SimMessage::NoActiveMissions`](crate::SimMessage::NoActiveMissions),
     /// @0x7055c-0x705a8).
     pub(crate) fn press_mission_info(&mut self) -> MissionInfoPress {
+        self.reach_mission_info(false)
+    }
+
+    /// The mission info key read on the pass a jump collapsed under the
+    /// white: as [`Session::press_mission_info`], but what would open
+    /// `_DoMissionInfoDialog` is refused by its `_screenFaded` guard
+    /// (@0x9e1ac to @0x9e796), at once, so the gain's zero holds no frame.
+    /// The no-missions path never reaches the dialog, so no guard touches
+    /// its beep and #354 (@0x7052e).
+    pub(crate) fn press_faded_mission_info(&mut self) -> MissionInfoPress {
+        self.reach_mission_info(true)
+    }
+
+    /// [`Session::press_mission_info`], the dialog's guard refusing it
+    /// when the screen is `faded`.
+    fn reach_mission_info(&mut self, faded: bool) -> MissionInfoPress {
         if self.mode.jump().is_some() || !self.takes(PlayerCommand::MissionInfo) {
             return MissionInfoPress::Refused;
         }
@@ -327,24 +343,21 @@ impl Session {
         }
         // In flight, `_HandlePlayer` zeroes the gain once
         // `_DoMissionInfoDialog` returns, whatever its guard did
-        // (@0x704e3-0x704f3; see the `time_adjustment` module); the
+        // (@0x704e3-0x704f3; see the `time_adjustment` module): held
+        // after the dialog, not after the guard's refusal. The
         // no-missions path skips both (@0x704ba). The port's is
         // `_DoPortDialog`'s, which writes none.
         if self.mode.landed().is_none() {
-            self.zero_speed_mult();
+            if faded {
+                self.zero_speed_mult_unheld();
+            } else {
+                self.zero_speed_mult();
+            }
         }
-        MissionInfoPress::Opens(info)
-    }
-
-    /// The mission info key read on the pass a jump collapsed under the
-    /// white: as [`Session::press_mission_info`], but what would open
-    /// `_DoMissionInfoDialog` is refused by its `_screenFaded` guard
-    /// (@0x9e1ac to @0x9e796). The no-missions path never reaches the
-    /// dialog, so no guard touches its beep and #354 (@0x7052e).
-    pub(crate) fn press_faded_mission_info(&mut self) -> MissionInfoPress {
-        match self.press_mission_info() {
-            MissionInfoPress::Opens(_) => MissionInfoPress::Faded,
-            press => press,
+        if faded {
+            MissionInfoPress::Faded
+        } else {
+            MissionInfoPress::Opens(info)
         }
     }
 

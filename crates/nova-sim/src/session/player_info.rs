@@ -107,16 +107,24 @@ impl Session {
     /// @0x5a052-0x5a064) is the screens' state, which the session does
     /// not hold. Either way, in flight, `_HandlePlayer` zeroes the gain
     /// once the dialog returns (@0x70357; see the `time_adjustment`
-    /// module): zeroed here, as no step runs under the dialog. The
-    /// spaceport's opening is `_DoPortDialog`'s, which writes no gain.
+    /// module): zeroed here, as no step runs under the dialog, the next
+    /// frame held after an opening and not after the guard's refusal,
+    /// which returns at once. The spaceport's opening is
+    /// `_DoPortDialog`'s, which writes no gain.
     pub(crate) fn open_player_info(
         &mut self,
         catalog: &(impl PilotCatalog + ?Sized),
     ) -> Option<PlayerInfo> {
+        let refused =
+            self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. });
         if self.mode.landed().is_none() {
-            self.zero_speed_mult();
+            if refused {
+                self.zero_speed_mult_unheld();
+            } else {
+                self.zero_speed_mult();
+            }
         }
-        if self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
+        if refused {
             return None;
         }
         // `_ShipStatsToSystemInfo` @0x5a06a (see the `stock_fold` module).
