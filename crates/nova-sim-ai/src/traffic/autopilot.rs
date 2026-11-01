@@ -119,13 +119,14 @@
 //!   ([`return_flight`]); by the port's earlier flight
 //!   ([`FormationFlight::Earlier`]), which reads no sight, it closes on
 //!   the carrier as an escort on its slot, at full speed beyond
-//!   [`APPROACH_FORMATION`]. Inside, it turns to the carrier's table bearing
-//!   (`_CalcInterceptAngle`, as `_HandleShip` turns it,
-//!   [`flight::turn_to`]), thrusting while off it by less than its turn
-//!   rate and [`DOCK_TURN_SLACK`], whole degrees, strictly, and each axis more than
-//!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
-//!   towards it. Within the carrier's reach on both axes it docks, and
-//!   leaves the system ([`Outcome::Docked`]).
+//!   [`APPROACH_FORMATION`]. Within the carrier's reach on both axes it
+//!   docks, and leaves the system ([`Outcome::Docked`]). Otherwise, inside,
+//!   it flies sub 8 ([`dock_flight`]): it turns to the carrier's table
+//!   bearing and, within its turn rate and a degree of it, by the engine's
+//!   reading of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
+//!   bursts along its heading at its pull ([`FORMATION_NUDGE`] ticks'
+//!   acceleration) where by the other it thrusts; and each axis at least
+//!   the pull off is pulled that much towards the carrier.
 //! - [`Goal::Attack`], [`Goal::Snipe`] and [`Goal::Flee`]: it flies the
 //!   last body of its frame ([`pursuit::frame_of`]), reading whether its
 //!   target is disabled, as that body's thrust, cap and heading win
@@ -305,7 +306,6 @@ use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
 use crate::ai::swarm::SwarmLead;
 use crate::ai::{Goal, fire, fire::Manoeuvre};
-use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -323,6 +323,7 @@ use crate::handling::Handling;
 use crate::landing::TypeWidth;
 use crate::landing::{self, LANDING_SPEED};
 use crate::rulebook::RuleSource;
+use crate::traffic::dock_flight;
 #[cfg(any(test, doc))]
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::formation_flight;
@@ -670,10 +671,19 @@ fn fly_mobile(
                 Err(outcome) => return outcome,
             }
         }
-        Goal::Dock(_) => match dock(npc, other, beside, &handling, flight, inertia) {
-            Ok(controls) => controls,
-            Err(outcome) => return outcome,
-        },
+        Goal::Dock(_) => {
+            let by = dock_flight::By {
+                flight,
+                inertia,
+                top: speeds.own,
+                word: readings.held_burst,
+                second_pass: beside.second_pass,
+            };
+            match dock(npc, other, beside, &handling, by) {
+                Ok(controls) => controls,
+                Err(outcome) => return outcome,
+            }
+        }
         // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
         // is a wait (state 6, @0x8f101). The regroup pause flies its kept
         // substate's goal in its place (`Npc::fly_as_flown`, which the fly
@@ -845,9 +855,10 @@ fn formation(
 }
 
 /// How `npc` flies back to its carrier at `carrier`, with `beside` its
-/// sight of it and its swarm lead (see the module docs), under `flight`:
+/// sight of it and its swarm lead (see the module docs), as `by` says:
 /// the flight outside its dock window, or its carrier unseen, or braking
-/// with no carrier there; or, inside it, what became of it, having flown.
+/// with no carrier there; or, inside it, what became of it, having flown
+/// sub 8 ([`dock_flight::fly`]).
 ///
 /// The brake with no carrier stands in for one tick: goal 5's block reads
 /// the carrier's record unchecked (no +0xb8 test in @0x8ebd7-0x8ed15), so
@@ -860,9 +871,9 @@ fn dock(
     carrier: Option<&ShipState>,
     beside: Beside,
     handling: &Handling,
-    flight: FlightRules,
-    inertia: Inertia,
+    by: dock_flight::By,
 ) -> Result<Flight, Outcome> {
+    let (flight, inertia) = (by.flight, by.inertia);
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
         return Ok(braking(npc, handling, inertia));
     };
@@ -898,7 +909,7 @@ fn dock(
             ship: npc.ship,
         });
     }
-    dock_in(npc, carrier, handling, flight, inertia);
+    dock_flight::fly(npc, carrier, handling, by);
     Err(Outcome::Flying)
 }
 
@@ -924,49 +935,6 @@ fn rejoin(
             inertia,
         )
     }
-}
-
-/// One tick of `npc` docking with a carrier at `carrier`, inside its dock
-/// window (see the module docs): it turns to the carrier's table bearing
-/// as `_HandleShip` turns it ([`flight::turn_to`]), thrusting while off
-/// it by less than its turn rate and [`DOCK_TURN_SLACK`], whole degrees,
-/// strictly, by its heading before the turn, flies, and is
-/// pulled towards it on each axis farther off than
-/// [`FORMATION_NUDGE`] ticks' acceleration, under `flight`, as `inertia`
-/// says.
-fn dock_in(
-    npc: &mut Npc,
-    carrier: &ShipState,
-    handling: &Handling,
-    flight: FlightRules,
-    inertia: Inertia,
-) {
-    // +0x68, the table's bearing of the carrier (@0x87e81-0x87e9d).
-    let wanted = trig::intercept_angle(npc.state.position, carrier.position);
-    // Off it by less than a turn and the slack, strictly, by its heading
-    // before `_HandleShip` turns it (@0x87ea9-0x87ee4).
-    let thrust = fire::off_by(npc.state.heading, wanted) < handling.turn_rate + DOCK_TURN_SLACK;
-    let controls = Controls {
-        thrust,
-        turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
-        reverse: false,
-        ..Controls::default()
-    };
-    held_burst::step(npc, handling, controls, flight, inertia, Word::Writes);
-    let pull = handling.accel * FORMATION_NUDGE;
-    let towards = |at: f32, to: f32| {
-        let off = to - at;
-        if off.abs() > pull {
-            at + off.signum() * pull
-        } else {
-            at
-        }
-    };
-    let at = npc.state.position;
-    npc.state.position = Vec2::new(
-        towards(at.x, carrier.position.x),
-        towards(at.y, carrier.position.y),
-    );
 }
 
 /// Flies one tick of `npc`'s fight at a target at `target` on
@@ -4804,75 +4772,6 @@ mod tests {
             fly_earlier(&mut ship, Some(&carrier));
             assert!(ship.state.velocity.y > 0.0, "{distance}: {:?}", ship.state);
         }
-    }
-
-    #[test]
-    fn inside_its_window_a_fighter_turns_at_the_carrier_and_thrusts_within_a_turn_and_a_degree() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        // 60 above the carrier, facing away: it turns, and only turns.
-        let mut away = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, 0.0));
-        fly(&mut away, &[], Some(&carrier));
-        assert_ne!(away.state.heading, 0.0, "turning");
-        assert_eq!(away.state.velocity, Vec2::ZERO, "no thrust");
-        // Less than a turn (1) and 1.0 off the bearing (180), in whole
-        // degrees, strictly: it thrusts.
-        for heading in [179.0, 181.0, 180.0] {
-            let mut aimed = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
-            fly(&mut aimed, &[], Some(&carrier));
-            assert!(aimed.state.velocity.length() > 0.0, "{heading}");
-        }
-        for heading in [178.0, 182.0, 177.0, 183.0] {
-            let mut aside = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
-            fly(&mut aside, &[], Some(&carrier));
-            assert_eq!(aside.state.velocity, Vec2::ZERO, "{heading}");
-        }
-        assert_eq!(DOCK_TURN_SLACK, 1.0);
-    }
-
-    #[test]
-    fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_thrust_on_each_axis_beyond_it() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        // At rest, facing away from the carrier at (-70, 1.5): FAST pulls
-        // 0.18 x 10 = 1.8 a tick, and y is within that.
-        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
-        let mut ship = docking(FAST, at(-70.0, 1.5, 0.0, 0.0, 270.0));
-        fly(&mut ship, &[], Some(&carrier));
-        assert!(
-            near(ship.state.position, Vec2::new(-68.2, 1.5)),
-            "{:?}",
-            ship.state
-        );
-        let mut both = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0));
-        fly(&mut both, &[], Some(&carrier));
-        assert!(
-            near(both.state.position, Vec2::new(48.2, 58.2)),
-            "{:?}",
-            both.state
-        );
-        // An axis exactly the pull off is within it, and stays.
-        let pull = ShipStats::new(FAST, &[]).handling.accel * FORMATION_NUDGE;
-        let mut edge = docking(FAST, at(-pull, 60.0, 0.0, 0.0, 135.0));
-        fly(&mut edge, &[], Some(&carrier));
-        assert_eq!(edge.state.position.x, -pull, "not farther than the pull");
-        assert_eq!(edge.state.position.y, 60.0 - pull);
-    }
-
-    #[test]
-    fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_of_its_rules_thrust() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
-        let pulled = |start: ShipState, rules: FlightRules| {
-            let mut ship = docking(FAST, start);
-            fly_own_under(&mut ship, Some(&carrier), rules);
-            ship.state.position
-        };
-        // FAST's 900 / 3000 is 0.3 a tick, ten ticks' 3; y's 1.5 within it.
-        let quicker = pulled(at(-70.0, 1.5, 0.0, 0.0, 270.0), thrust_over(3000));
-        assert!(near(quicker, Vec2::new(-67.0, 1.5)), "{quicker:?}");
-        let both = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), thrust_over(3000));
-        assert!(near(both, Vec2::new(47.0, 57.0)), "{both:?}");
-        let original = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), FlightRules::default());
-        assert!(near(original, Vec2::new(48.2, 58.2)), "{original:?}");
     }
 
     #[test]

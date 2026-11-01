@@ -678,15 +678,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn inside_its_dock_window_an_inertialess_fighter_thrusts_its_speed() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        // 60 above the carrier, at rest and facing it.
-        let mut ship = docking(at(0.0, -60.0, 0.0, 0.0, 180.0), 0.0);
-        assert_eq!(fly(&mut ship, &[], Some(&carrier)), Outcome::Flying);
-        assert!((ship.speed - 0.18).abs() < 1e-6, "{}", ship.speed);
-        assert!(near(ship.state.velocity, Vec2::new(0.0, 0.18)), "{ship:?}");
-    }
+    // Inside its dock window it bursts at its pull by the engine's reading
+    // of `held_gate_burst` (see `traffic::dock_flight`).
 
     #[test]
     fn an_inertialess_fighter_docks_with_its_carrier() {

@@ -191,6 +191,7 @@ mod disabled_burst_tests;
 pub mod disabled_reset;
 #[cfg(test)]
 mod display_tests;
+pub mod dock_flight;
 pub mod docked;
 pub mod emerge;
 pub mod escort_orders;
