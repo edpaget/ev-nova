@@ -153,6 +153,14 @@ pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
 /// formation (the other reading of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)'s led ship), stay
 /// open too.
+///
+/// Inside the gate the original skips the search and patrol for a ship
+/// mid-jump (+0x50 above 0, @0x8cc9d, @0x8ccf8). The high level's hold
+/// zeroes +0x50 every frame for goals 0, 1 and 0x14 (@0x8d513-0x8d56b),
+/// so only a goal 0 written between the hold and the think meets it: a
+/// pirate's announced capture dropping a fleeing interceptor mid-jump in a
+/// higher slot (@0x8484a-0x848b1). The engine searches in that think, and
+/// the original in the next: a one-think lag, not filed.
 #[must_use]
 pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
