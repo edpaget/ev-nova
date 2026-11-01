@@ -1643,6 +1643,9 @@ pub struct StepRun {
     /// The player's ship where the escape pod's rescue put it, when the
     /// rescue settled on this step and ended the stepping.
     pub rescued: Option<ShipPlace>,
+    /// Where the texts that rescue queued fell against its writes
+    /// ([`RescueTexts`]), with [`StepRun::rescued`].
+    pub rescue_texts: Option<RescueTexts>,
     /// The line the step raised last, whatever its kind: what
     /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
     /// when it raised none.
@@ -1835,6 +1838,25 @@ impl FrameShip {
             heading: self.heading,
         }
     }
+}
+
+/// Where the escape pod's rescue's texts fell against its writes, by
+/// the session's count of texts queued
+/// ([`Session::texts_queued`](crate::Session::texts_queued)), which a
+/// text's [`TextBar::texts`] compares with: the first text the rescue
+/// shows takes `_ShowTextDialog`'s faded branch, whose repaint reads the
+/// state as it was queued (`nova_view::flight::rescue_screen`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RescueTexts {
+    /// The count as `_ResetPlayer(0)` ran (@0x68f2f): a text at or below
+    /// it was queued by an `OnAbort` (@0x68f0d), before the reset.
+    pub reset: u64,
+    /// The count as the pod was moved (`_DeleteAllComputerShips`
+    /// @0x68f69): a text above [`RescueTexts::reset`] and at or below
+    /// this was queued by ship 128's `OnPurchase` (@0x68f55), in the
+    /// pod's system after the reset; one above it by the days
+    /// (@0x6912a), in the new system.
+    pub moved: u64,
 }
 
 /// Where a ship is and which way it faces: what the view draws a ship

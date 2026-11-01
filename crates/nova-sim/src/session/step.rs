@@ -166,6 +166,7 @@ impl Session {
         run.comm = self.take_comm();
         if rescued {
             run.rescued = Some(ShipPlace::from(*self.player()));
+            run.rescue_texts = self.ship.fate.rescue_texts.take();
             self.take_step_ends(&mut run);
             return run;
         }
@@ -192,6 +193,7 @@ impl Session {
             run.between_passes = None;
             run.comm.extend(self.take_comm());
             run.rescued = Some(ShipPlace::from(*self.player()));
+            run.rescue_texts = self.ship.fate.rescue_texts.take();
             self.take_step_ends(&mut run);
             return run;
         }
@@ -312,7 +314,13 @@ mod tests {
 
     /// What a step took by hand: its comm, each pass's takes, the line it
     /// raised last, and whether it cleared a class's kept order.
-    type StepTook = (Vec<CommNote>, Vec<Took>, Option<RaisedLine>, bool);
+    type StepTook = (
+        Vec<CommNote>,
+        Vec<Took>,
+        Option<RaisedLine>,
+        bool,
+        Option<crate::flight_frame::RescueTexts>,
+    );
 
     /// The frame's calls made by hand, in the order the view made them,
     /// on the same collaborators: each step's comm, then each pass's
@@ -383,16 +391,18 @@ mod tests {
     }
 
     /// What a step took by hand, its `comm` and its `passes`' takes: then
-    /// the line it raised last and whether it cleared a class.
+    /// the line it raised last, whether it cleared a class and where a
+    /// rescue's texts fell.
     fn step_took(session: &mut Session, comm: Vec<CommNote>, passes: Vec<Took>) -> StepTook {
         let line = session.out.last_line.take();
         let cleared = std::mem::take(&mut session.out.class_orders_cleared);
-        (comm, passes, line, cleared)
+        let rescue_texts = session.ship.fate.rescue_texts.take();
+        (comm, passes, line, cleared, rescue_texts)
     }
 
     /// What `report` took: each step's comm, then each pass's quotes and
-    /// fight events, the line it raised last, and whether it cleared a
-    /// class.
+    /// fight events, the line it raised last, whether it cleared a class
+    /// and where a rescue's texts fell.
     fn took(report: &StepReport) -> Vec<StepTook> {
         report
             .steps
@@ -408,6 +418,7 @@ mod tests {
                     passes,
                     run.last_line.clone(),
                     run.class_orders_cleared,
+                    run.rescue_texts,
                 )
             })
             .collect()

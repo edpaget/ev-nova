@@ -186,6 +186,10 @@ pub(super) struct Fate {
     /// The rescue's dësc, loaded and still to show (see the `rescue`
     /// module); never saved.
     pub(super) rescue_desc: Option<crate::flight_frame::LoadedDesc>,
+    /// Where the rescue's texts fell against its reset and its move,
+    /// still to report with its step (see the `rescue` module); never
+    /// saved.
+    pub(super) rescue_texts: Option<crate::flight_frame::RescueTexts>,
     /// Whether the player holds the eject chord, Command and the eject
     /// key together (see the `eject` module); never saved.
     pub(super) eject_held: bool,
@@ -284,6 +288,7 @@ impl PlayerShip {
                 pod_zeroed: false,
                 rescue_due: false,
                 rescue_desc: None,
+                rescue_texts: None,
                 eject_held: false,
                 self_destruct: crate::self_destruct::SelfDestruct::default(),
                 self_destruct_held: false,

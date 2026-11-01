@@ -30,7 +30,9 @@
 //!    is cleared (`_playerPaint`); the Red Alert forgets its threat and
 //!    its icon (`_playerThreatened`, `_oldPlayerThreatened`,
 //!    `_alertSpritePending`); the rank last activated is forgotten
-//!    (`_recentActivatedRank`, @0x1db44); the self-destruct countdown
+//!    (`_recentActivatedRank`, @0x1db44); the message line's count is 0
+//!    (`_commCount`, @0x1d904; see the `comm_line` module); the
+//!    self-destruct countdown
 //!    idles (`_destructCount` = -1.0, @0x1d764; see the `self_destruct`
 //!    module); the system died in has its
 //!    reinforcement timer cancelled and its countdown cleared
@@ -42,6 +44,13 @@
 //!    The credits, the records, the exploration, the persons and the
 //!    escort orders are kept: argument 0 skips their block (@0x1d97e).
 //! 3. **`OnPurchase`** of `shïp` 128 (@0x68f34-0x68f55).
+//!
+//!    The count of texts queued as the reset runs and as the move
+//!    begins is reported with the rescue's step
+//!    ([`StepRun::rescue_texts`](crate::flight_frame::StepRun::rescue_texts)):
+//!    the first text the rescue shows takes `_ShowTextDialog`'s faded
+//!    branch, whose repaint reads the state as it was queued, so the view
+//!    tells an `OnAbort`'s, the `OnPurchase`'s and the days' apart.
 //! 4. **Relocation.** The system the pod is taken to (below), entered as
 //!    the rescue's way in: at (50, 50) at rest, heading 0, not landed,
 //!    the system explored and set up afresh, the scene and the offers'
@@ -88,7 +97,7 @@
 //! (`_bribeRandom`), the advice roll (`_adviceRandom`), the docking globals
 //! (`_dockTarget`, `_dockPermission`: the engine's clearance is its nav
 //! target, which the entry lets go), `_antiEscortDelay`,
-//! `_greenMissionSyst`, `_newbieFlag`, `_commCount`, `_fadePending`,
+//! `_greenMissionSyst`, `_newbieFlag`, `_fadePending`,
 //! the scan flags (`_weapLawFlag`, `_smuggleFlag`), the explosion and
 //! smoke tables (the view's effects, which a system change clears) and
 //! the ship and outfit shop rolls (+0xa2a/+0xa2c, +0x1e), which the days
@@ -126,7 +135,7 @@ use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::escape::{EscapeMap, RESCUE_DESC, escape_stellar, qualifies};
 use crate::flight::ShipState;
-use crate::flight_frame::LoadedDesc;
+use crate::flight_frame::{LoadedDesc, RescueTexts};
 use crate::geometry::Vec2;
 use crate::red_alert::RedAlert;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -220,12 +229,14 @@ impl Session {
         // before the `OnAbort`s, and it is the last loaded as they run.
         let desc = self.load_rescue_desc(catalog, &mut &mut *chance);
         self.end_every_mission_for_rescue(&mut &mut *chance);
+        let reset = self.texts_queued();
         // The escape search starts from +0x74 as the `OnAbort`s left it
         // (@0x68f24), before `_ResetPlayer` and the `OnPurchase`, whose
         // move the search's own write then supersedes (@0x68f7f, @0x68f9e).
         let from = self.pilot.system;
         self.reset_player_for_rescue();
         self.ship_hook(RESCUE_SHIP, ShipHook::Purchase, &mut &mut *chance);
+        let moved = self.texts_queued();
         let system = self.escape_destination(from, catalog);
         let arrival = Arrival {
             system,
@@ -259,6 +270,7 @@ impl Session {
         self.out.save_due = save_due;
         self.strict_play_save(catalog);
         self.ship.fate.rescue_desc = Some(desc);
+        self.ship.fate.rescue_texts = Some(RescueTexts { reset, moved });
         true
     }
 
@@ -365,6 +377,9 @@ impl Session {
         self.space.reset_reinforcements_here(&mut self.pilot);
         // The bribe roll forgotten (@0x1d7ae; see the `planet_comm` module).
         self.chart.forget_bribe_roll();
+        // The message line's count (`_commCount` @0x1d8ff-0x1d904; see the
+        // `comm_line` module).
+        self.space.reset_comm_line();
         self.reset_precalced();
     }
 
@@ -1495,6 +1510,44 @@ mod tests {
             session.take_rescue_desc().and_then(|desc| desc.text),
             Some("clear".to_owned())
         );
+    }
+
+    #[test]
+    fn the_rescue_sets_the_message_lines_count_to_0() {
+        let catalog = rescuing();
+        let mut session = due(&catalog);
+        session.space.comm_line.show(250);
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(
+            session.comm_line(),
+            crate::comm_line::CommLine::default(),
+            "_ResetPlayer @0x1d904"
+        );
+    }
+
+    #[test]
+    fn the_rescue_notes_the_texts_queued_at_its_reset_and_at_its_move() {
+        for (on_abort, on_purchase, reset, moved) in [("S141", "b21", 1, 1), ("b22", "S141", 0, 1)]
+        {
+            let mut catalog = rescuing_with(Some("Rescued."), on_abort, 0);
+            catalog.ship_records[0].on_purchase = Script::parse(on_purchase);
+            let mut session = due_holding(&catalog);
+            let before = session.texts_queued();
+            assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+            assert_eq!(
+                session.texts_queued(),
+                before + 1,
+                "{on_abort} {on_purchase}"
+            );
+            assert_eq!(
+                session.ship.fate.rescue_texts,
+                Some(crate::flight_frame::RescueTexts {
+                    reset: before + reset,
+                    moved: before + moved,
+                }),
+                "{on_abort} {on_purchase}"
+            );
+        }
     }
 
     #[test]

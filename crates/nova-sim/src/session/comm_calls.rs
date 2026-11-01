@@ -375,8 +375,8 @@ impl Space {
         self.comm_line.tick();
     }
 
-    /// A landing sets the line's count to 0 (`_HandlePlayerDockRequest`
-    /// @0x66d7f).
+    /// A landing (`_HandlePlayerDockRequest` @0x66d7f) and the escape
+    /// pod's rescue (`_ResetPlayer` @0x1d904) set the line's count to 0.
     pub(super) fn reset_comm_line(&mut self) {
         self.comm_line.reset();
     }
