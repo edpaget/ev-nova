@@ -82,6 +82,7 @@ pub mod rules;
 pub mod skill;
 pub mod speed_cap;
 pub mod sprite_mask;
+pub mod sprite_place;
 pub mod trig;
 
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};

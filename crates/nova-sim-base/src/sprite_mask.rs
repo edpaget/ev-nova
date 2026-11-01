@@ -152,6 +152,21 @@ impl MaskRect {
         }
     }
 
+    /// Its width, right less left, in whole pixels.
+    #[must_use]
+    pub fn width(self) -> i64 {
+        i64::from(self.right) - i64::from(self.left)
+    }
+
+    /// Whether it overlaps `other`, both ways strictly, as
+    /// `_SWCollideSpriteLayer` tests two sprites' rects before their proc
+    /// (@0xacc30-0xacc81) and `_SWRLECollision` again (@0xac020-0xac088):
+    /// rects that share only an edge do not.
+    #[must_use]
+    pub fn overlaps(self, other: Self) -> bool {
+        self.overlap(other).is_some()
+    }
+
     /// Where it overlaps `other`, if they overlap, both ways strictly
     /// (@0xac020-0xac088).
     fn overlap(self, other: Self) -> Option<Self> {
@@ -493,6 +508,19 @@ mod tests {
                 right: 5,
             }
         );
+    }
+
+    #[test]
+    fn rects_overlap_only_strictly_on_both_axes() {
+        let a = MaskRect::placed((0, 0), (4, 4));
+        assert!(a.overlaps(MaskRect::placed((3, 3), (4, 4))));
+        assert!(!a.overlaps(MaskRect::placed((4, 0), (4, 4))), "an edge");
+        assert!(!a.overlaps(MaskRect::placed((0, 4), (4, 4))), "an edge");
+        assert!(!a.overlaps(MaskRect::placed((0, -4), (4, 4))), "above");
+        assert!(!a.overlaps(MaskRect::placed((-4, 0), (4, 4))), "left");
+        assert!(a.overlaps(MaskRect::placed((-3, -3), (4, 4))));
+        assert!(!a.overlaps(MaskRect::placed((1, 1), (0, 2))), "no width");
+        assert_eq!(MaskRect::placed((3, 1), (9, 2)).width(), 9);
     }
 
     #[test]
