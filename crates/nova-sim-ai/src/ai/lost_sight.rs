@@ -8,9 +8,9 @@
 //! It runs after the type's think (`_AIDispatch` @0x901e5) and the
 //! `ShipBehav` 0 mission hunt (@0x8d628-0x8d6e9), on the goal they leave:
 //! an attack or snipe (state 4) or a plunder (0xd), with a target. Like
-//! the rest of the handler it is skipped while the ship's AI wait runs
-//! ([`Npc::wait_running`], @0x8d4b9-0x8d4d2), unless the think ended the
-//! wait first ([`Decision::ends_wait`]). It asks whether the ship sees
+//! the rest of the handler it is never reached by a ship that waits out at
+//! the handler's head ([`handler_head::skips`](crate::ai::handler_head::skips),
+//! @0x8d4b9-0x8d4d2), which `NovaAi` asks first. It asks whether the ship sees
 //! its target ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8d738).
 //!
 //! - Seen, the search timer (+0xc90c, [`Npc::lost_sight`]) is cleared
@@ -132,9 +132,6 @@ pub fn after_think(
     around: &Surroundings,
     chance: &mut dyn Chance,
 ) -> Decision {
-    if npc.wait_running() && !decision.ends_wait {
-        return decision;
-    }
     let Some(target) = decision
         .goal
         .attacking()
@@ -256,7 +253,7 @@ mod tests {
     use crate::bay::Carrier;
     use crate::combat::ShipRef;
     use crate::rulebook::RuleSource;
-    use crate::traffic::npc::{AiType, Mode, NpcId};
+    use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::Draws;
 
     /// NPC 1 of `ai_type` at the centre, its timer `timer`.
@@ -388,38 +385,6 @@ mod tests {
             let decision = lost(&warship, of(goal), &mut Draws::of(&[]));
             assert_eq!(decision, of(goal), "{goal:?}");
         }
-    }
-
-    #[test]
-    fn a_ship_whose_ai_wait_runs_skips_the_block() {
-        let mut warship = hunter(AiType::Warship, SearchTimer::Searching(5));
-        warship.ai_wait = 3;
-        let decision = lost(&warship, of(Goal::Attack(n(2))), &mut Draws::of(&[]));
-        assert_eq!(decision, of(Goal::Attack(n(2))), "@0x8d4b9-0x8d4d2");
-    }
-
-    #[test]
-    fn a_ship_whose_wait_is_kept_in_its_gate_mode_skips_the_block() {
-        // +0x4c runs through the hold, though the engine keeps it in the
-        // mode's count ([`Npc::wait_running`]).
-        let mut held = hunter(AiType::Warship, SearchTimer::Searching(5));
-        held.mode = Mode::HeldAtGate { ticks_left: 20 };
-        let decision = lost(&held, of(Goal::Attack(n(2))), &mut Draws::of(&[]));
-        assert_eq!(decision, of(Goal::Attack(n(2))), "@0x8d4b9-0x8d4d2");
-    }
-
-    #[test]
-    fn a_think_that_ended_the_wait_reaches_the_block() {
-        // The think wrote +0x4c 0 first (@0x83d62, @0x7f90d), so the
-        // handler's test at its head finds no wait.
-        let mut waiting = hunter(AiType::Warship, SearchTimer::Searching(5));
-        waiting.ai_wait = 3;
-        let ended = Decision {
-            ends_wait: true,
-            ..of(Goal::Attack(n(2)))
-        };
-        let decision = lost(&waiting, ended, &mut Draws::of(&[]));
-        assert_eq!(decision.lost_sight, Some(LostSight::Searching(4)));
     }
 
     #[test]

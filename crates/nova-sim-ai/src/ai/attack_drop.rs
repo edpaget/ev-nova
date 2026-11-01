@@ -47,21 +47,17 @@
 //! sound and no draw.
 
 use crate::ai::{Decision, Goal, Surroundings};
+#[cfg(doc)]
 use crate::traffic::npc::Npc;
-
-/// Whether the block drops an attack `goal` of `npc` among `around` (see
-/// the module docs); `ends_wait` as [`Decision::ends_wait`].
-fn drops(npc: &Npc, goal: Goal, ends_wait: bool, around: &Surroundings) -> bool {
-    (!npc.wait_running() || ends_wait)
-        && goal
-            .attacking()
-            .is_some_and(|ship| around.breaking_up(ship))
-}
 
 /// `decision` with the block's drop applied (see the module docs).
 #[must_use]
-pub fn with_attack_drop(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
-    if !drops(npc, decision.goal, decision.ends_wait, around) {
+pub fn with_attack_drop(decision: Decision, around: &Surroundings) -> Decision {
+    if !decision
+        .goal
+        .attacking()
+        .is_some_and(|ship| around.breaking_up(ship))
+    {
         return decision;
     }
     Decision {
@@ -81,7 +77,7 @@ mod tests {
     use crate::ai::{CommCall, Help};
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
-    use crate::traffic::npc::{AiType, Mode};
+    use crate::traffic::npc::AiType;
 
     const DYING: Condition = Condition::Dying {
         ticks_left: 3,
@@ -90,16 +86,15 @@ mod tests {
 
     /// `decision`, of a ship at the centre, after the block, NPC 2 in
     /// `condition` and the player 500 up.
-    fn after(wait: u32, decision: Decision, condition: Condition) -> Decision {
-        let mut attacker = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
-        attacker.ai_wait = wait;
+    fn after(decision: Decision, condition: Condition) -> Decision {
+        let attacker = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
         let mut other = ship(2, TRADERS, AiType::Warship, 100.0, 0.0);
         other.condition = condition;
         let npcs = [attacker, other];
         let govts = govts(0, 0);
         let sites = sites();
         let around = around(&sites, &npcs, &govts, (0.0, -500.0), 0);
-        with_attack_drop(&npcs[0], decision, &around)
+        with_attack_drop(decision, &around)
     }
 
     fn of(goal: Goal) -> Decision {
@@ -113,7 +108,7 @@ mod tests {
     fn an_attack_or_snipe_on_a_ship_breaking_up_ends_keeping_its_substate() {
         for goal in [Goal::Attack(n(2)), Goal::Snipe(n(2))] {
             assert_eq!(
-                after(0, of(goal), DYING),
+                after(of(goal), DYING),
                 Decision {
                     goal: Goal::Idle,
                     clears_target: true,
@@ -135,7 +130,7 @@ mod tests {
             calls_reinforcements: true,
             ..of(Goal::Attack(n(2)))
         };
-        let dropped = after(0, thought, DYING);
+        let dropped = after(thought, DYING);
         assert_eq!(dropped.goal, Goal::Idle);
         assert_eq!(
             (dropped.turns_on_player, dropped.comm_call),
@@ -152,20 +147,19 @@ mod tests {
             provokes: true,
             ..of(Goal::Attack(n(2)))
         };
-        assert!(!after(0, worded, DYING).provokes, "@0x8e71d");
-        assert!(after(3, worded, DYING).provokes, "the block never ran");
+        assert!(!after(worded, DYING).provokes, "@0x8e71d");
     }
 
     #[test]
     fn a_target_not_breaking_up_is_kept() {
         for condition in [Condition::Intact, Condition::Disabled, Condition::Destroyed] {
             let attack = of(Goal::Attack(n(2)));
-            assert_eq!(after(0, attack, condition), attack, "{condition:?}");
+            assert_eq!(after(attack, condition), attack, "{condition:?}");
         }
         let gone = of(Goal::Attack(n(9)));
-        assert_eq!(after(0, gone, DYING), gone, "@0x8e731's");
+        assert_eq!(after(gone, DYING), gone, "@0x8e731's");
         let player = of(Goal::Attack(ShipRef::Player));
-        assert_eq!(after(0, player, DYING), player, "the player stands");
+        assert_eq!(after(player, DYING), player, "the player stands");
     }
 
     #[test]
@@ -180,33 +174,7 @@ mod tests {
                 hopeless: false,
             },
         ] {
-            assert_eq!(after(0, of(goal), DYING), of(goal), "{goal:?}");
+            assert_eq!(after(of(goal), DYING), of(goal), "{goal:?}");
         }
-    }
-
-    #[test]
-    fn a_running_ai_wait_skips_the_handler_unless_the_think_ended_it() {
-        let attack = of(Goal::Attack(n(2)));
-        assert_eq!(after(3, attack, DYING), attack, "@0x8d4d2");
-        let ended = Decision {
-            ends_wait: true,
-            ..attack
-        };
-        assert_eq!(after(3, ended, DYING).goal, Goal::Idle, "@0x83d62 first");
-    }
-
-    #[test]
-    fn a_wait_kept_in_the_gate_hold_skips_the_handler_unless_the_think_ended_it() {
-        let mut held = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
-        held.mode = Mode::HeldAtGate { ticks_left: 20 };
-        let mut other = ship(2, TRADERS, AiType::Warship, 100.0, 0.0);
-        other.condition = DYING;
-        let npcs = [held, other];
-        let govts = govts(0, 0);
-        let sites = sites();
-        let around = around(&sites, &npcs, &govts, (0.0, -500.0), 0);
-        let attack = Goal::Attack(n(2));
-        assert!(!drops(&npcs[0], attack, false, &around), "@0x8d4d2");
-        assert!(drops(&npcs[0], attack, true, &around), "@0x83d62 first");
     }
 }
