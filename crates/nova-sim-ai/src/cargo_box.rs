@@ -63,7 +63,7 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
 use crate::player_wrap::PlayerWrap;
-use crate::scoop::{BoxFrames, touches};
+use crate::scoop::{BoxFrames, Scooping};
 
 /// The most boxes in space at once: the table's 64 slots.
 pub const MAX_BOXES: usize = 64;
@@ -298,24 +298,19 @@ impl CargoBoxes {
         any_scoopable(&self.boxes)
     }
 
-    /// Takes the first scoopable box, in table order, that a ship's disc,
-    /// `radius` about `at`, touches by its graphic's frame in `frames`
-    /// ([`touches`]); none when no scoopable box does. A jettisoned box is
-    /// never taken.
+    /// Takes the first scoopable box, in table order, that `scooping`
+    /// touches, the boxes' graphics' frames `frames`
+    /// ([`Scooping::touches`]); none when no scoopable box does. A
+    /// jettisoned box is never taken.
     ///
     /// The box leaves the table at once. The original sets its life to −1
     /// and hides its sprite (@0x37119-0x3712e), and the next
     /// `_HandleBoxes` kills it, so no frame is drawn with it either way.
-    pub fn take_touching(&mut self, at: Vec2, radius: f32, frames: &BoxFrames) -> Option<CargoBox> {
-        let index = self.boxes.iter().position(|cargo_box| {
-            cargo_box.scoopable
-                && touches(
-                    at,
-                    radius,
-                    cargo_box.position,
-                    frames.half(cargo_box.graphic),
-                )
-        })?;
+    pub fn take_touching(&mut self, scooping: &Scooping, frames: &BoxFrames) -> Option<CargoBox> {
+        let index = self
+            .boxes
+            .iter()
+            .position(|cargo_box| cargo_box.scoopable && scooping.touches(cargo_box, frames))?;
         Some(self.boxes.remove(index))
     }
 
@@ -679,7 +674,7 @@ mod tests {
     fn a_disc_takes_the_first_scoopable_box_it_touches_and_leaves_the_rest() {
         let frames = BoxFrames::default();
         let mut boxes = with_scoopable(&[(90.0, 0.0), (5.0, 0.0), (-5.0, 0.0)], &[0, 1, 2]);
-        let taken = boxes.take_touching(Vec2::ZERO, 10.0, &frames);
+        let taken = boxes.take_touching(&Scooping::disc(Vec2::ZERO, 10.0), &frames);
         assert_eq!(taken.map(|made| made.contents), Some(Some(1)));
         assert_eq!(
             boxes
@@ -690,9 +685,12 @@ mod tests {
             [None, Some(0), Some(2)],
             "the jettisoned box under the disc is left, and the order kept"
         );
-        let taken = boxes.take_touching(Vec2::ZERO, 10.0, &frames);
+        let taken = boxes.take_touching(&Scooping::disc(Vec2::ZERO, 10.0), &frames);
         assert_eq!(taken.map(|made| made.contents), Some(Some(2)));
-        assert_eq!(boxes.take_touching(Vec2::ZERO, 10.0, &frames), None);
+        assert_eq!(
+            boxes.take_touching(&Scooping::disc(Vec2::ZERO, 10.0), &frames),
+            None
+        );
         assert_eq!(boxes.boxes().len(), 2);
     }
 
@@ -702,8 +700,15 @@ mod tests {
         // box at 65 is 25 from its frame's left edge.
         let frames = BoxFrames::new([None, Some((40, 40)), None, None, None]);
         let mut boxes = with_scoopable(&[(65.0, 0.0)], &[3]);
-        assert_eq!(boxes.take_touching(Vec2::ZERO, 24.0, &frames), None);
-        assert!(boxes.take_touching(Vec2::ZERO, 25.0, &frames).is_some());
+        assert_eq!(
+            boxes.take_touching(&Scooping::disc(Vec2::ZERO, 24.0), &frames),
+            None
+        );
+        assert!(
+            boxes
+                .take_touching(&Scooping::disc(Vec2::ZERO, 25.0), &frames)
+                .is_some()
+        );
     }
 
     #[test]

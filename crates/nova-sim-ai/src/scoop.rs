@@ -30,9 +30,11 @@
 //!   [`Goal::Scoop`](crate::ai::Goal::Scoop); see [`Npc::is_scooping`]),
 //!   with no +0xc3 test (@0x370cb-0x370d5). The
 //!   box must be scoopable (@0x370fb) and must pass `_SWRLECollision`
-//!   (@0x3710c) over the two sprites' placed rects, the box's up and left
-//!   of its point as `_HandleBoxes` places it (@0x2e1c2-0x2e250), which
-//!   the engine stands in for with [`touches`], on that same rect. Then the
+//!   (@0x3710c) over the two sprites' placed masks, the ship's first, the
+//!   box's up and left of its point as `_HandleBoxes` places it
+//!   (@0x2e1c2-0x2e250; [`Scooping::touches`]). Where either mask can't
+//!   be laid out (a sheet that wasn't read, which no stock sheet is), the
+//!   ship's disc against that rect stands in ([`touches`]). Then the
 //!   box's life becomes −1 and its sprite is hidden (@0x37119-0x3712e);
 //!   contents 0-5 add a ton of that commodity to the ship's own hold
 //!   (@0x3713a-0x37158); otherwise an NPC stops there (@0x3715f); for the
@@ -54,12 +56,15 @@
 //! (rdm:phase/play-feel-4/phase-17-murk-other-sprites).
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
-use crate::cargo_box::CargoBoxes;
+use crate::cargo_box::{CargoBox, CargoBoxes};
 use crate::catalog::outfit_mods;
 use crate::catalog::{BOX_GRAPHICS, JunkId, OutfitId, OutfitRecord};
 use crate::geometry::Vec2;
 use crate::ship_layer::{ShipLayer, disabled};
+use crate::sprite_mask::{MaskWalk, PlacedMask, RleSheet};
+use crate::sprite_place::Placement;
 use crate::traffic::npc::{Npc, NpcHold};
 
 /// The `ModType` of an asteroid scoop.
@@ -171,8 +176,8 @@ impl BoxFrames {
 /// placed, pixel by pixel. So the frame's centre is `box_at − half`, not
 /// the box's point, which is the rectangle's corner: a ship on the point
 /// still touches, as a miner flying at it (`_MinerAI` reads the position)
-/// must. The disc is the engine's approximation of the pixels; the engine
-/// has no pixel masks, as `nova_sim::story` approximates it for stellars.
+/// must. The disc is the fallback where no mask can be laid out
+/// ([`Scooping::touches`]).
 #[must_use]
 pub fn touches(ship_at: Vec2, radius: f32, box_at: Vec2, half: Vec2) -> bool {
     let off = ship_at - (box_at - half);
@@ -181,6 +186,83 @@ pub fn touches(ship_at: Vec2, radius: f32, box_at: Vec2, half: Vec2) -> bool {
         (off.y.abs() - half.y).max(0.0),
     );
     outside.length() <= radius
+}
+
+/// Each box graphic's sheet, `spïn` 500 + graphic, where the session read
+/// it: what a box's mask is drawn from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BoxSheets(pub [Option<Rc<RleSheet>>; BOX_GRAPHICS]);
+
+/// A scooping ship as the scoop branch tests it against a box (see the
+/// module docs): its placed mask, where its sheet was read, the sheets
+/// the boxes are drawn from, where the player stood, whose place every
+/// rect is laid out from, and how the masks are walked; and its disc, the
+/// fallback where a mask can't be laid out.
+#[derive(Clone, Copy, Debug)]
+pub struct Scooping<'a> {
+    /// Where it is.
+    pub at: Vec2,
+    /// Its hit radius, the fallback disc's.
+    pub radius: f32,
+    /// Its placed mask, from the player at `camera`.
+    pub mask: Option<&'a PlacedMask>,
+    /// The boxes' sheets.
+    pub sheets: Option<&'a BoxSheets>,
+    /// Where the player stood, which the rects are laid out from.
+    pub camera: Vec2,
+    /// How the masks are walked, by
+    /// [`RuleKey::RleCollisionWalk`](crate::RuleKey::RleCollisionWalk).
+    pub walk: MaskWalk,
+}
+
+impl Scooping<'_> {
+    /// A ship that scoops by its disc alone, `radius` about `at`.
+    #[must_use]
+    pub fn disc(at: Vec2, radius: f32) -> Self {
+        Self {
+            at,
+            radius,
+            mask: None,
+            sheets: None,
+            camera: Vec2::ZERO,
+            walk: MaskWalk::default(),
+        }
+    }
+
+    /// Whether it touches `cargo_box`, whose graphics' frames are
+    /// `frames`: `_SWRLECollision(ship, box)` (@0x3710c) over its mask and
+    /// the box's, placed by the box rule ([`Placement::CargoBox`]) at its
+    /// frame, the ship's first; else, where either mask can't be laid out,
+    /// its disc ([`touches`]).
+    #[must_use]
+    pub fn touches(&self, cargo_box: &CargoBox, frames: &BoxFrames) -> bool {
+        self.mask_touches(cargo_box).unwrap_or_else(|| {
+            touches(
+                self.at,
+                self.radius,
+                cargo_box.position,
+                frames.half(cargo_box.graphic),
+            )
+        })
+    }
+
+    /// Whether its mask touches `cargo_box`'s, none where either can't be
+    /// laid out.
+    fn mask_touches(&self, cargo_box: &CargoBox) -> Option<bool> {
+        let ship = self.mask?;
+        let sheet = self
+            .sheets?
+            .0
+            .get(usize::from(cargo_box.graphic))?
+            .as_ref()?;
+        let offset = cargo_box.position - self.camera;
+        let held = PlacedMask {
+            sheet: Rc::clone(sheet),
+            frame: cargo_box.frame,
+            rect: Placement::CargoBox.rect(offset, (sheet.width, sheet.height)),
+        };
+        ship.touches(&held, self.walk)
+    }
 }
 
 /// Whether `npc` is in the ship layer `*0x3b541c`, the one boxes collide
@@ -196,19 +278,18 @@ pub fn npc_in_ship_layer(npc: &Npc) -> bool {
     ) == ShipLayer::Ships
 }
 
-/// The NPC side of the scoop branch: a scooping NPC's disc, `radius`
-/// about `at`, takes every scoopable box in `boxes` it touches (by their
+/// The NPC side of the scoop branch: a `scooping` NPC takes every
+/// scoopable box in `boxes` it touches ([`Scooping::touches`], by their
 /// `frames`), each commodity box adding a ton of its commodity to `hold`
 /// and any other box used up for nothing ([`haul`]). There is no
 /// hold-space test: the NPC branch has none.
 pub fn npc_scoop(
     boxes: &mut CargoBoxes,
     frames: &BoxFrames,
-    at: Vec2,
-    radius: f32,
+    scooping: &Scooping,
     hold: &mut NpcHold,
 ) {
-    while let Some(taken) = boxes.take_touching(at, radius, frames) {
+    while let Some(taken) = boxes.take_touching(scooping, frames) {
         if let Haul::Commodity(commodity) = haul(taken.contents, Scooper::Npc) {
             hold.add(commodity, 1);
         }
@@ -412,8 +493,7 @@ mod tests {
         npc_scoop(
             &mut boxes,
             &BoxFrames::default(),
-            Vec2::ZERO,
-            16.0,
+            &Scooping::disc(Vec2::ZERO, 16.0),
             &mut hold,
         );
         assert_eq!(hold.held().collect::<Vec<_>>(), [(Good::Commodity(2), 1)]);
@@ -428,8 +508,7 @@ mod tests {
             npc_scoop(
                 &mut boxes,
                 &BoxFrames::default(),
-                Vec2::ZERO,
-                16.0,
+                &Scooping::disc(Vec2::ZERO, 16.0),
                 &mut hold,
             );
             assert_eq!(hold, NpcHold::default(), "{contents:?}");
@@ -444,8 +523,7 @@ mod tests {
         npc_scoop(
             &mut boxes,
             &BoxFrames::default(),
-            Vec2::ZERO,
-            16.0,
+            &Scooping::disc(Vec2::ZERO, 16.0),
             &mut hold,
         );
         assert_eq!(
@@ -464,9 +542,93 @@ mod tests {
         // Graphic 1 is 10 across, up and left of the box: the box at 30
         // is 20 from its edge.
         let frames = BoxFrames::new([None, Some((10, 10)), None, None, None]);
-        npc_scoop(&mut boxes, &frames, Vec2::ZERO, 16.0, &mut hold);
+        npc_scoop(
+            &mut boxes,
+            &frames,
+            &Scooping::disc(Vec2::ZERO, 16.0),
+            &mut hold,
+        );
         assert_eq!((hold.tons(0), hold.tons(4)), (2, 1));
         assert_eq!(boxes.boxes().len(), 1);
         assert_eq!(boxes.boxes()[0].position, Vec2::new(30.0, 0.0));
+    }
+
+    /// A frame `side` square drawn where `drawn` says.
+    fn square(side: usize, drawn: impl Fn(usize, usize) -> bool) -> Rc<RleSheet> {
+        let rows: Vec<String> = (0..side)
+            .map(|y| {
+                (0..side)
+                    .map(|x| if drawn(x, y) { '#' } else { '.' })
+                    .collect()
+            })
+            .collect();
+        let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+        Rc::new(nova_sim_base::fixture::rle::sheet(&[&rows]))
+    }
+
+    /// A 10-square solid ship mask, its top left at `at` from the player.
+    fn ship_mask(at: (i32, i32)) -> PlacedMask {
+        PlacedMask {
+            sheet: square(10, |_, _| true),
+            frame: 0,
+            rect: crate::sprite_mask::MaskRect::placed(at, (10, 10)),
+        }
+    }
+
+    /// Box graphic 1's sheet, 8 square, drawn where `drawn` says.
+    fn box_sheets(drawn: impl Fn(usize, usize) -> bool) -> BoxSheets {
+        BoxSheets([None, Some(square(8, drawn)), None, None, None])
+    }
+
+    /// Whether a ship of `mask` takes a box of graphic 1 at (20, 20),
+    /// the box drawn from `sheets`, the player at the centre.
+    fn takes(mask: Option<&PlacedMask>, sheets: Option<&BoxSheets>) -> bool {
+        let mut boxes = CargoBoxes::default();
+        boxes.spawn_scoopable(Vec2::new(20.0, 20.0), Some(1), 1, &mut NeverFires);
+        let scooping = Scooping {
+            mask,
+            sheets,
+            ..Scooping::disc(Vec2::new(22.0, 22.0), 4.0)
+        };
+        let frames = BoxFrames::new([None, Some((8, 8)), None, None, None]);
+        boxes.take_touching(&scooping, &frames).is_some()
+    }
+
+    #[test]
+    fn a_scooping_ship_takes_a_box_only_where_their_masks_touch() {
+        // The box's rect is 8 up and left of its point, 12 to 20; it draws
+        // only its top-left quarter, 12 to 16.
+        let corner = box_sheets(|x, y| x < 4 && y < 4);
+        assert!(
+            !takes(Some(&ship_mask((17, 17))), Some(&corner)),
+            "the rects overlap only over clear pixels"
+        );
+        assert!(takes(Some(&ship_mask((13, 13))), Some(&corner)));
+    }
+
+    #[test]
+    fn a_ship_on_the_boxs_point_takes_a_box_drawn_at_its_bottom_right() {
+        let on_point = ship_mask((15, 15));
+        assert!(takes(
+            Some(&on_point),
+            Some(&box_sheets(|x, y| x >= 4 && y >= 4))
+        ));
+        assert!(!takes(
+            Some(&ship_mask((16, 16))),
+            Some(&box_sheets(|x, y| x < 4 && y < 4))
+        ));
+    }
+
+    #[test]
+    fn with_no_mask_for_either_the_disc_decides() {
+        // The disc, 4 about (22, 22), is 2.83 from the frame's corner.
+        let clear = box_sheets(|_, _| false);
+        assert!(!takes(Some(&ship_mask((15, 15))), Some(&clear)), "masks");
+        assert!(takes(None, Some(&clear)), "no ship mask");
+        assert!(takes(Some(&ship_mask((15, 15))), None), "no box sheets");
+        assert!(
+            takes(Some(&ship_mask((15, 15))), Some(&BoxSheets::default())),
+            "no sheet for graphic 1"
+        );
     }
 }

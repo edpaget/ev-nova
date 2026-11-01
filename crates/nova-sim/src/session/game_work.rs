@@ -227,10 +227,15 @@ impl Session {
             double_time: self.ship.warp.double_time,
         };
         self.before_move(frame, pass);
+        let stood = self.ship.player.position;
         self.ship.fate.player_exploded_this_tick = false;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
+        // The sheets the pass's contacts read, before the scoop, the first
+        // (see the `sprite_sheets` module).
+        self.load_sprite_masks(catalog);
+        self.scoop_after_turn(stood);
         // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565).
         self.warn_fighters_left_behind(chance);
         if self.rescue_if_due(catalog, chance) {
@@ -691,7 +696,9 @@ impl Session {
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
     /// `chance` ([`Combat::test_hits`]), among the stellars shown that
-    /// shots can hit and the asteroid field, lent whole, then their
+    /// shots can hit and the asteroid field, lent whole, the shots touching
+    /// by the masks the session holds (see the `contact_masks` module),
+    /// then their
     /// settling: the hits' ([`Session::settle_landed`]), each stellar shot
     /// down running its `OnDestroy` (see the `stellars` module), and the
     /// boxes of each asteroid the shots destroyed (see the `asteroid_hits`
@@ -704,6 +711,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let mut stellars = self.stellar_targets();
+        let sprites = self.contact_sprites();
         let was = self.space.npcs_before();
         let player_was = self.ship.condition;
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
@@ -716,7 +724,7 @@ impl Session {
                     types: &types,
                 }),
                 hazards: None,
-                contact: None,
+                contact: Some(&sprites),
             };
             combat.test_hits(fighters, arena, scenery, chance);
         });

@@ -4,13 +4,9 @@
 //! frame it shows and where its rect is placed, all in screen pixels from
 //! the player, so the test does not depend on the window's size.
 //!
-//! **The sheets** ([`SpriteMasks`]). The run-length tokens of each sheet
-//! come from the catalog ([`PilotCatalog::rle_sheet`]), asked once per
-//! session and kept, an unreadable one too
-//! ([`Session::load_sprite_masks`]). The advance pass asks before its
-//! stellar hazards, so a ship spawned that pass is asked for, and only
-//! while the system lists a deadly stellar, so stock never asks. Double
-//! time's second pass has no catalog and reads what the first kept.
+//! **The sheets** are the session's shared cache (see the `sprite_sheets`
+//! module), which asks for the stellars' only while the system lists a
+//! deadly stellar, so stock never asks for them.
 //!
 //! **A stellar's mask** ([`Session::deadly_stellar_mask`]). Its slot is
 //! laid out as a click reads it ([`Space::slot_layout`]): the sheet drawn
@@ -24,94 +20,21 @@
 //! files. An unowned stale slot is graphic type 0's frame 0 at its ghost's
 //! top left ([`Space::ghost_mask`]), and an owned one its owner's.
 //!
-//! **A ship's mask** ([`Session::ship_masks`]). Its sheet is its sprite
-//! base's base image (`HullRecord::sprite_base`), its frame
-//! `FrameSpec::index` of the set its last display drew and its heading
-//! after this pass's move, and its rect the sheet's frame size placed by
-//! `sprite_pool::offset`, as `_HandleShipDisplay` lays a ship out: the
-//! player at (−w/2, −h/2). The original's display steps each ship's set
-//! before the collision passes and `_HandleDeadlyStellars`; here the set
-//! steps after the beams (`Session::display_ships`), so the touch reads
-//! the set the last pass drew, a divergence rdm:phase/play-feel-8/phase-18-ship-frames-stepped-at-each-display
-//! files.
+//! **A ship's mask** ([`Session::ship_masks`]) is its sprite as the
+//! `sprite_sheets` module lays it out, at its place after this pass's
+//! move, the frame set its last display drew (a divergence
+//! rdm:phase/play-feel-8/phase-18-ship-frames-stepped-at-each-display
+//! files).
 //!
 //! Where either mask can't be read, the touch falls back to discs (see
 //! `nova_sim::combat::stellar_hazards`). None of this plays a sound.
 
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
 use super::{Session, Space, Statics};
-use crate::catalog::{LandingSite, MaskSheet, PilotCatalog, ShipId};
+use crate::catalog::{LandingSite, MaskSheet};
 use crate::combat::ShipRef;
-use crate::combat::ship_frames::FrameSpec;
-use crate::deadly_stellar::is_deadly;
-use crate::flight::ShipState;
 use crate::geometry::Vec2;
-use crate::sprite_mask::{MaskRect, PlacedMask, RleSheet};
+use crate::sprite_mask::PlacedMask;
 use crate::story::DrawnSheet;
-use crate::story::sprite_pool::offset;
-#[cfg(doc)]
-use crate::{catalog::HullRecord, story::sprite_pool};
-
-/// The sheets the deadly-stellar touch reads, each asked of the catalog
-/// once per session and kept, an unreadable one as none (see the module
-/// docs). It belongs to the system's contents ([`Space`]), as the
-/// session's masks; never saved.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct SpriteMasks {
-    sheets: BTreeMap<MaskSheet, Option<Rc<RleSheet>>>,
-}
-
-impl SpriteMasks {
-    /// Asks `catalog` for `sheet`, unless it was asked before.
-    fn load(&mut self, catalog: &dyn PilotCatalog, sheet: MaskSheet) {
-        self.sheets
-            .entry(sheet)
-            .or_insert_with(|| catalog.rle_sheet(sheet).map(Rc::new));
-    }
-
-    /// `sheet`'s tokens, if asked for and read.
-    fn sheet(&self, sheet: MaskSheet) -> Option<&Rc<RleSheet>> {
-        self.sheets.get(&sheet)?.as_ref()
-    }
-
-    /// Frame `frame` of `sheet`, of `size`, its top left at `top_left`
-    /// from the player; none when the sheet isn't read.
-    fn placed(
-        &self,
-        sheet: MaskSheet,
-        frame: u16,
-        top_left: (i32, i32),
-        size: (u32, u32),
-    ) -> Option<PlacedMask> {
-        Some(PlacedMask {
-            sheet: Rc::clone(self.sheet(sheet)?),
-            frame,
-            rect: MaskRect::placed(top_left, size),
-        })
-    }
-
-    /// The mask of a ship of sprite base `base`, of class display
-    /// `frames`, drawn on set `set` in `state`, the player at `player` (see
-    /// the module docs).
-    fn ship(
-        &self,
-        base: ShipId,
-        frames: &FrameSpec,
-        set: u16,
-        state: &ShipState,
-        player: Vec2,
-    ) -> Option<PlacedMask> {
-        let sheet = MaskSheet::Ship(base);
-        let size = {
-            let rle = self.sheet(sheet)?;
-            (rle.width, rle.height)
-        };
-        let top_left = offset(state.position, player, size);
-        self.placed(sheet, frames.index(set, state.heading), top_left, size)
-    }
-}
 
 impl Space {
     /// The mask of `site`, one of the stellars shown, showing `frame`, the
@@ -150,32 +73,6 @@ impl Space {
 }
 
 impl Session {
-    /// Asks `catalog` for each sheet the deadly-stellar touch may read and
-    /// the session hasn't asked for (see the module docs): the player's
-    /// and each NPC's sprite base, each stellar shown's `Type` and
-    /// `DeadType`, and graphic type 0's. Nothing unless the system lists a
-    /// deadly stellar.
-    pub(super) fn load_sprite_masks(&mut self, catalog: &dyn PilotCatalog) {
-        if !self.chart.listed.iter().any(|site| is_deadly(site.flags2)) {
-            return;
-        }
-        let arsenal = &self.statics.arsenal;
-        let ships = std::iter::once(self.pilot.ship)
-            .chain(self.npcs().iter().map(|npc| npc.ship))
-            .map(|ship| MaskSheet::Ship(arsenal.sprite_base(ship)));
-        let stellars = self
-            .chart
-            .sites
-            .iter()
-            .flat_map(|site| std::iter::once(site.graphic).chain(site.dead_graphic))
-            .chain([0])
-            .map(MaskSheet::Stellar);
-        let wanted: Vec<MaskSheet> = ships.chain(stellars).collect();
-        for sheet in wanted {
-            self.space.sprite_masks.load(catalog, sheet);
-        }
-    }
-
     /// The mask of `site`, one of the stellars shown, as it is drawn now
     /// (see the module docs): a hypergate's frame, else frame 0.
     pub(super) fn deadly_stellar_mask(&self, site: &LandingSite) -> Option<PlacedMask> {
@@ -223,12 +120,14 @@ mod tests {
     use nova_sim_base::fixture::rle::sheet;
 
     use super::*;
+    use crate::catalog::ShipId;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
     use crate::deadly_stellar::DEADLY_STELLAR;
     use crate::flight::Controls;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::tests::{armed, facing_an_npc};
+    use crate::sprite_mask::RleSheet;
     use crate::story::sprite_pool::SlotSprite;
     use crate::testkit::{FakePilotCatalog, Passive, planet, work};
 
@@ -618,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn with_no_deadly_stellar_listed_no_sheet_is_asked() {
+    fn with_no_deadly_stellar_listed_no_stellar_sheet_is_asked() {
         let catalog = ring_and_square();
         let harmless = LandingSite {
             flags2: 0,
@@ -626,7 +525,14 @@ mod tests {
         };
         let mut session = among(&catalog, &[harmless], 180, Rulebook::default());
         assert!(lives(&mut session, &catalog));
-        assert_eq!(*catalog.rle_sheets_asked.borrow(), []);
+        let asked = catalog.rle_sheets_asked.borrow().clone();
+        assert!(
+            !asked
+                .iter()
+                .any(|sheet| matches!(sheet, MaskSheet::Stellar(_))),
+            "{asked:?}"
+        );
+        assert!(asked.contains(&NPC_SHIP), "the contacts' own: {asked:?}");
     }
 
     #[test]

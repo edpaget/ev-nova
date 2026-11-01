@@ -207,9 +207,11 @@ impl Session {
         let chance: &mut dyn Chance = &mut source;
         let pass = GamePass::Again;
         self.before_move(self.space.pass_frame, pass);
+        let stood = self.ship.player.position;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
+        self.scoop_after_turn(stood);
         if self.ship.fate.rescue_due {
             return;
         }

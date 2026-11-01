@@ -464,6 +464,7 @@ mod cloaks;
 mod collision_order;
 mod combat_rating;
 mod comm_calls;
+mod contact_masks;
 mod control;
 mod course;
 mod crons;
@@ -632,6 +633,7 @@ mod smoke_frame;
 mod space;
 mod spawn_availability;
 mod sprite_load;
+mod sprite_sheets;
 mod stale_sprites;
 mod statics;
 mod status_cargo;
@@ -1661,7 +1663,8 @@ impl Session {
     /// module), then the tribbles and perishables on a due frame, the Red
     /// Alert's check, and its blink on the advance pass alone, as
     /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
-    /// target brackets, and the cargo boxes scooped and aged.
+    /// target brackets. The cargo boxes are scooped and aged after the
+    /// move ([`Session::scoop_after_turn`]).
     fn before_move(&mut self, frame: i16, pass: GamePass) {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
@@ -1686,8 +1689,6 @@ impl Session {
         }
         self.tutorial_tick(frame);
         self.chart.brackets_tick();
-        self.scoop_boxes();
-        self.space.boxes_tick();
     }
 
     /// `_HandlePlayer`'s move under `controls` on `pass`: the escape pod's
