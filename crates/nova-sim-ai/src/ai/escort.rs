@@ -254,7 +254,8 @@ impl Behaviour for EscortAi {
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
-            Goal::Attack(_) => fire::trigger(npc, around, self.fire),
+            // Goal 4, an attack or the state-4 block's snipe (@0x8e614).
+            Goal::Attack(_) | Goal::Snipe(_) => fire::trigger(npc, around, self.fire),
             // Keeping formation, `_LowLevelAIHandler`'s substates 1, 9,
             // 0xb and 0xc call `_AIEscortFireUnprovoked` on the guard the
             // think left in +0x70 (@0x85633, @0x878f4, @0x87692,
@@ -275,7 +276,7 @@ impl Behaviour for EscortAi {
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         match npc.goal {
             Goal::Idle => npc.target,
-            Goal::Attack(target) => Some(target),
+            Goal::Attack(target) | Goal::Snipe(target) => Some(target),
             Goal::Formation { guard } => {
                 guard.filter(|_| !unprovoked(npc, guard, around, self.fire).drops_target)
             }
@@ -653,6 +654,28 @@ mod tests {
             ..Surroundings::new(&[], npcs)
         };
         (ai.trigger(&npcs[0], &around), ai.target(&npcs[0], &around))
+    }
+
+    #[test]
+    fn an_escort_sniping_fires_and_targets_as_it_does_attacking() {
+        // The state-4 block can snipe for any type above 2 (@0x8e614):
+        // goal 4 either way, whose low level fires at +0x70.
+        let gun = WeaponSpec::new(&crate::catalog::WeaponRecord {
+            speed: 1000,
+            count: 20,
+            ..weapon(128)
+        });
+        let armed = |goal: Goal| {
+            let mut npc = having(escort(Some(EscortOrder::Attack)), goal, Some(n(2)));
+            npc.armament = crate::combat::armament::Armament::new([(gun, 1)]);
+            npc
+        };
+        let pirate = pirate(2, 0.0, -300.0);
+        let attacking = command(ENGINE, &[armed(Goal::Attack(n(2))), pirate.clone()]);
+        let sniping = command(ENGINE, &[armed(Goal::Snipe(n(2))), pirate]);
+        assert_eq!(sniping.1, Some(n(2)));
+        assert_ne!(sniping.0, Trigger::default());
+        assert_eq!(sniping.1, attacking.1);
     }
 
     /// What a formation escort holds firing `weapon`, `_AIFireTurret`'s
