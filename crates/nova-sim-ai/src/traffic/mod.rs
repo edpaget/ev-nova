@@ -310,6 +310,8 @@ pub mod stellar_defence;
 mod stop_tests;
 pub mod strength;
 pub mod succession;
+#[cfg(test)]
+mod successor_plunder_tests;
 mod swarm_low_level;
 #[cfg(test)]
 mod swarm_tests;
