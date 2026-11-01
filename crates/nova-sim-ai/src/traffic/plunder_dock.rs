@@ -1463,7 +1463,8 @@ mod tests {
         // match (%edi 0, @0x86b45, @0x86c02) write +0x34 = 0, so
         // `_HandleShip` caps the thrust by `_ShipMaxSpeed` at its step
         // (@0x34a8a-0x34aab), which a lock laid since the slot lowers.
-        // Sub 0xb within 100 writes half the slot's (@0x8765d-0x8767b).
+        // Sub 0xb within 100 writes half the slot's (@0x8765d-0x8767b), and
+        // sub 1 leaves the slot's as it was.
         let flight = FlightRules::default();
         let chance = &mut nova_sim_base::chance::NeverFires;
         let mut thrust = |ship: Npc, victim: ShipState, top_speed: f32| {
@@ -1506,6 +1507,24 @@ mod tests {
             thrust(pirate(matching, DockSub::Dock), victim, 2.0),
             damped,
             "above its step's top speed"
+        );
+        // Sub 1 keeps the head's +0x34, its slot's `_ShipMaxSpeed`
+        // (@0x85200-0x8520d). An inertial brake thrusts against its
+        // velocity, which the soft cap never stops, so an inertialess
+        // one shows it: braking from 3 by half a tick's thrust, under its
+        // slot's 4 and above its step's 2.
+        let mut ship = inertialess(pirate(at(500.0, 0.0, 0.0, 3.0, 0.0), DockSub::Stop));
+        ship.speed = 3.0;
+        let (flown, _) = low_level(&mut ship, &far, &HANDLING, flight, None, chance);
+        let at_step = AtStep {
+            top_speed: 2.0,
+            ..AtStep::of(&HANDLING)
+        };
+        handle_ship(&mut ship, &flown, at_step, flight);
+        assert_eq!(
+            ship.speed,
+            crate::inertialess::BRAKE.mul_add(HANDLING.accel, 3.0),
+            "sub 1: capped by its slot's 4, not its step's 2"
         );
     }
 
