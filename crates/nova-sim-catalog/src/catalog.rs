@@ -2082,6 +2082,12 @@ pub enum MaskSheet {
     /// Graphic type `t`'s sheet, `spïn` 1000 + `t`, as a stellar's `Type`
     /// or `DeadType` names it.
     Stellar(i16),
+    /// A shot's sheet, `spïn` 3000 + its weapon's `Graphic`.
+    Shot(i16),
+    /// Asteroid kind `k`'s sheet, `spïn` 800 + `k`.
+    Asteroid(u8),
+    /// Box graphic `g`'s sheet, `spïn` 500 + `g`.
+    CargoBox(u16),
 }
 
 /// The game data a flight session starts from.

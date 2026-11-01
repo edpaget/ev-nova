@@ -84,6 +84,23 @@ mod tests {
     }
 
     #[test]
+    fn the_fake_holds_and_misses_each_kind_of_sheet_by_the_contract() {
+        let kinds = [
+            MaskSheet::Shot(4),
+            MaskSheet::Asteroid(2),
+            MaskSheet::CargoBox(1),
+        ];
+        let mut fake = catalog();
+        fake.rle_sheets = kinds.iter().map(|&kind| (kind, sheet(&[&["#"]]))).collect();
+        let missing = [
+            MaskSheet::Shot(5),
+            MaskSheet::Asteroid(3),
+            MaskSheet::CargoBox(2),
+        ];
+        assert_eq!(check_contract(&fake, &kinds, &missing), Ok(()));
+    }
+
+    #[test]
     fn a_sheet_out_of_its_terms_breaks_it() {
         let good = sheet(&[&["#"]]);
         assert!(
