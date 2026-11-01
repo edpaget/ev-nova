@@ -311,6 +311,7 @@ use crate::handling::Handling;
 use crate::landing::TypeWidth;
 use crate::landing::{self, LANDING_SPEED};
 use crate::rulebook::RuleSource;
+#[cfg(any(test, doc))]
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::formation_flight;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
@@ -324,6 +325,7 @@ use crate::traffic::pod_flight;
 use crate::traffic::return_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
+#[cfg(any(test, doc))]
 use crate::traffic::spawn::glide_speed;
 use crate::traffic::stellar_attack;
 use crate::trig;
@@ -1062,7 +1064,9 @@ fn fight(
 }
 
 /// Tick `tick` of `npc`'s glide in from hyperspace: along its heading at
-/// [`glide_speed`], ending as [`burst`] says.
+/// [`Npc::burst_speed`], from [`glide_speed`]'s top or from what it owes
+/// (see [`burst_word`](crate::traffic::burst_word)), ending as [`burst`]
+/// says.
 ///
 /// `_HandleShip` runs the glide (+0x34 set to -50.0 and +0x30 to -1.165 by
 /// low mode 10, @0x88114-0x88136) through the same negative-speed path as
@@ -1077,14 +1081,8 @@ fn glide(
     flown: Flown,
     chance: &mut (impl Chance + ?Sized),
 ) {
-    if !burst(
-        npc,
-        glide_speed(tick),
-        glide_speed(tick + 1),
-        speeds,
-        flown,
-        chance,
-    ) {
+    let (speed, next) = (npc.burst_speed(tick), npc.burst_speed(tick + 1));
+    if !burst(npc, speed, next, speeds, flown, chance) {
         npc.mode = Mode::JumpingIn { tick: tick + 1 };
     }
 }
@@ -1243,7 +1241,10 @@ fn hold_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown, burst: RuleSource)
 }
 
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
-/// [`exit_speed`], ending as [`burst`] says. On its first tick it is out
+/// [`Npc::burst_speed`], from its emerge's [`exit_speed`] or, for a ship
+/// carrying its own word, from what it owes or 50 (see
+/// [`burst_word`](crate::traffic::burst_word)), ending as [`burst`] says.
+/// On its first tick it is out
 /// of its gate ([`Npc::emerges_from`] cleared, @0x8dd8a-0x8dd93).
 fn leave_gate(
     npc: &mut Npc,
@@ -1257,14 +1258,8 @@ fn leave_gate(
         // (`_HighLevelAIHandler` @0x8dd8a-0x8dd93).
         npc.emerges_from = None;
     }
-    if !burst(
-        npc,
-        exit_speed(npc.led_out, tick),
-        exit_speed(npc.led_out, tick + 1),
-        speeds,
-        flown,
-        chance,
-    ) {
+    let (speed, next) = (npc.burst_speed(tick), npc.burst_speed(tick + 1));
+    if !burst(npc, speed, next, speeds, flown, chance) {
         npc.mode = Mode::LeavingGate { tick: tick + 1 };
     }
 }
@@ -1327,7 +1322,10 @@ pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inert
 /// `npc`'s velocity zeroed, as `inertia` says; with a lead (`speeds.lead`)
 /// it flies on, and with none it holds its course for
 /// [`POST_BURST_WAIT`] + `Rand(`[`POST_BURST_SPREAD`]`)` ticks, rolled on
-/// `chance` ([`Mode::Coasting`]), its trigger released.
+/// `chance` ([`Mode::Coasting`]), its trigger released. The word it burst
+/// from is spent (`_AIMakeShipStopJumping`'s +0x34 = 0, @0x82eb0): it owes
+/// nothing ([`Npc::owed_burst`]) and carries no word of its own
+/// ([`Npc::bursts_own_word`]).
 pub(crate) fn after_burst(
     npc: &mut Npc,
     speeds: TopSpeeds,
@@ -1337,6 +1335,8 @@ pub(crate) fn after_burst(
     if let Inertia::Inertialess { .. } = inertia {
         npc.state.velocity = Vec2::ZERO;
     }
+    npc.owed_burst = None;
+    npc.bursts_own_word = false;
     npc.mode = if speeds.lead.is_some() {
         Mode::Flying
     } else {

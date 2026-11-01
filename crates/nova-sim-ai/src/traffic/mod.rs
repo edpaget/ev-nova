@@ -177,6 +177,7 @@ pub mod berth_picks;
 pub mod berth_search;
 pub mod berth_voices;
 pub mod board_wait;
+pub mod burst_word;
 pub mod cloak_situation;
 #[cfg(test)]
 mod cloak_think_tests;
@@ -2871,6 +2872,7 @@ impl Traffic {
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
                 owed_burst: None,
+                bursts_own_word: false,
                 fires_on_burst_end: false,
                 close_form: false,
                 stopping: false,

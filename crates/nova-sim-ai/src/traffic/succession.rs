@@ -62,10 +62,18 @@
 //!    the frame it is lost a lead in its gate still holds goal 0x15, a lead
 //!    the player hit there goal 4 ([`Npc::hold_at_gate`]). So the copy may
 //!    be any of these:
-//!    - goal 0x15 ([`Npc::emerging`]): the successor stays in or goes back
-//!      to its gate, or starts a glide from the top; goal 8 a glide or
-//!      burst goes on under, as the high level turns 0x15 to 8 at once
-//!      ([`Npc::takes_gate_goal`], @0x893d0, @0x8dd61-0x8dd93);
+//!    - goal 0x15 ([`Npc::emerging`], [`Npc::takes_gate_goal`], @0x893d0,
+//!      @0x8dd61-0x8dd93): the successor stays in or goes back to its gate;
+//!      flying with no wait it starts a glide, from what it owes or else
+//!      from 50 (sub 0xa keeps a negative +0x34, @0x8811e-0x8812c,
+//!      [`burst_word`](super::burst_word)); a glide or burst goes on under
+//!      goal 8, as the high level turns 0x15 to 8 at once; and flying under
+//!      a wait or holding its course it hides where it is, holding its
+//!      lead's gate open, until the wait is out, then bursts from its own
+//!      word ([`Npc::bursts_own_word`]). The turn-out's +0x70 = -1
+//!      (@0x8dd7b) drops the target copied from the lead, at once for a
+//!      ship flying with no wait, gliding or bursting, and at its own
+//!      turn-out for one that waits;
 //!    - goal 8 (the lead glides in or bursts out, [`Npc::jumping_in`]): at
 //!      -1.0 it is goal 0 (@0x8fda0-0x8fdaa), then sub 0 (@0x8fb09-0x8fb13);
 //!    - goal 0xb (the lead followed a jump of its own lead): with no parent
@@ -114,9 +122,7 @@
 
 use std::collections::BTreeSet;
 
-use super::emerge::exit_speed;
 use super::npc::{AiType, Mode, Npc, NpcId};
-use super::spawn::glide_speed;
 use super::warp_out::WarpGoal;
 use super::{Traffic, World};
 use crate::ai::Goal;
@@ -124,6 +130,7 @@ use crate::ai::pursuit::Pursuit;
 use crate::ai::regroup::Kept;
 use crate::catalog::StellarId;
 use crate::combat::ShipRef;
+use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 
@@ -252,47 +259,70 @@ impl Npc {
     /// goal ([`Npc::leaves_gate_goal`]), and any glide or burst, as the
     /// -1.0 over -999.0 ends the glide path (@0x8fcf5) and the sub written
     /// ends sub 0xa. It then flies, at once, its +0x34 left negative: it
-    /// owes the rest of its burst ([`Npc::owed_burst`]) by `burst`'s reading
+    /// owes the rest of its burst, from the word it started from
+    /// ([`Npc::burst_speed`]), ([`Npc::owed_burst`]) by `burst`'s reading
     /// of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst), as a
     /// ship held at its gate does. The player's warp stage does the same
     /// ([`Npc::follow_player_jump`]).
     pub(crate) fn leaves_arrival(&mut self, burst: RuleSource) {
         self.leaves_gate_goal();
-        let speed = match self.mode {
-            Mode::JumpingIn { tick } => glide_speed(tick),
-            Mode::LeavingGate { tick } => exit_speed(self.led_out, tick),
-            _ => return,
+        let (Mode::JumpingIn { tick } | Mode::LeavingGate { tick }) = self.mode else {
+            return;
         };
+        let speed = self.burst_speed(tick);
         self.mode = Mode::Flying;
-        if burst == RuleSource::Engine {
-            self.owed_burst = Some(speed);
-        }
+        self.owed_burst = (burst == RuleSource::Engine).then_some(speed);
+        self.bursts_own_word = false;
     }
 
     /// It takes its lead's goal 0x15 (@0x893c8-0x893d0), the gate its
     /// lead's `gate` (+0x6c, @0x893bd-0x893c2), and goal 0 as any burst ends
-    /// (`_AIMakeShipStopJumping` @0x82e96). In its gate it waits on; held at
-    /// its gate it hides again, its wait and its emerge's +0x34 running on;
-    /// gliding or bursting it turns back to goal 8 at once (@0x8dd8a), so
-    /// flies on. Flying with no wait, the high level turns it to goal 8 in
-    /// the same dispatch, +0x6c gone, and sub 0xa starts its glide from the
-    /// top (@0x8811e-0x8812c). Under a wait it would hide, then glide, which
-    /// [`Mode::Emerging`] can't end in, so it is left to fly on, its goal 0
-    /// taken (rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession
-    /// records this and the other modes left).
-    fn takes_gate_goal(&mut self, gate: Option<StellarId>) {
+    /// (`_AIMakeShipStopJumping` @0x82e96), by its mode:
+    ///
+    /// - **In its gate** it waits on, its emerge's word kept; **held at its
+    ///   gate** it hides again, its wait and its emerge's +0x34 running on.
+    /// - **Gliding or bursting** it turns back to goal 8 at once (@0x8dd8a),
+    ///   so flies on.
+    /// - **Flying with no wait** the high level turns it to goal 8 in the
+    ///   same dispatch, +0x6c gone, and sub 0xa starts its glide from what
+    ///   it owes, else from 50 (@0x8811e-0x8812c, [`Npc::burst_speed`]).
+    /// - **Flying under a wait** ([`Npc::ai_wait`]) **or holding its
+    ///   course** ([`Mode::Coasting`]) its dispatch skips the type think and
+    ///   its high level returns at the wait gate (@0x8ff18 → @0x9001f,
+    ///   @0x8d4b9-0x8d4d2), so it keeps goal 0x15 while the wait runs:
+    ///   hidden where it is, holding the gate open from there, moving on its
+    ///   velocity ([`Mode::Emerging`] for what is left of the wait), its
+    ///   trigger released. It then bursts from its own word
+    ///   ([`Npc::bursts_own_word`]): what it owes, else 50.
+    ///
+    /// Whether the turn-out's +0x70 = -1 (@0x8dd7b) reaches it in this
+    /// dispatch, as it does unless it waits: the caller drops its target
+    /// then. A ship entering a gate or adrift is never led (see the module
+    /// docs), so is left.
+    fn takes_gate_goal(&mut self, gate: Option<StellarId>) -> bool {
         self.goal = Goal::Idle;
         match self.mode {
             Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 } => {}
             Mode::HeldAtGate { ticks_left } => self.mode = Mode::Emerging { ticks_left },
             Mode::Flying if self.ai_wait == 0 => {
                 self.mode = Mode::JumpingIn { tick: 0 };
-                self.owed_burst = None;
-                return;
+                return true;
             }
-            _ => return,
+            Mode::Flying | Mode::Coasting { .. } => {
+                let ticks_left = match self.mode {
+                    Mode::Coasting { ticks_left } => ticks_left,
+                    _ => self.ai_wait,
+                };
+                self.ai_wait = 0;
+                self.mode = Mode::Emerging { ticks_left };
+                self.trigger = Trigger::default();
+                self.bursts_own_word = true;
+            }
+            Mode::JumpingIn { .. } | Mode::LeavingGate { .. } => return true,
+            Mode::EnteringGate { .. } | Mode::Adrift { .. } => return false,
         }
         self.emerges_from = gate;
+        false
     }
 
     /// It leads its lost lead's fleet, the lead's `record` read when there
@@ -316,8 +346,12 @@ impl Npc {
                 self.docking = None;
                 return;
             }
+            self.target = lead.target;
             if lead.emerging() {
-                self.takes_gate_goal(lead.emerges_from);
+                if self.takes_gate_goal(lead.emerges_from) {
+                    // The turn-out in the same dispatch (@0x8dd7b).
+                    self.target = None;
+                }
             } else {
                 self.leaves_arrival(world.held_burst);
                 self.goal = match lead.goal {
@@ -327,7 +361,6 @@ impl Npc {
                     goal => goal,
                 };
             }
-            self.target = lead.target;
             self.travel_set = lead.travel_set;
             self.warp.goal = lead.warp.goal;
             self.stopping = lead.stopping;
@@ -371,11 +404,14 @@ mod tests {
     use crate::escort::FormationSlot;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
+    use crate::traffic::autopilot::TopSpeeds;
+    use crate::traffic::emerge::exit_speed;
     use crate::traffic::fixture::npc;
     use crate::traffic::gone::Freed;
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use crate::traffic::regroup::RELEASE_DRAW;
-    use crate::traffic::warp_out::GIVEN_UP_STAGE;
+    use crate::traffic::spawn::{JUMP_IN_SLOWING, JUMP_IN_SPEED, glide_speed};
+    use crate::traffic::warp_out::{FOLLOW_BURST, GIVEN_UP_STAGE};
     use nova_sim_base::fixture::{Draws, FAST};
 
     /// Every ship keeps its goal and target.
@@ -1050,41 +1086,248 @@ mod tests {
         assert_eq!(leads.target, None, "the lead's");
     }
 
+    /// The lead's target in [`with_lead_target`].
+    const LEADS_TARGET: Option<ShipRef> = Some(ShipRef::Npc(NpcId(9)));
+
+    /// `traffic` with its lead holding [`LEADS_TARGET`].
+    fn with_lead_target(mut traffic: Traffic) -> Traffic {
+        of_mut(&mut traffic, 0).target = LEADS_TARGET;
+        traffic
+    }
+
+    /// How far NPC 1 moves in each of `traffic`'s next ticks by the engine,
+    /// while `going` holds for it after the tick, and its state then.
+    fn moves_while(traffic: &mut Traffic, going: impl Fn(&Npc) -> bool) -> (Vec<f32>, Npc) {
+        let mut moves = Vec::new();
+        loop {
+            let at = of(traffic, 1).state.position;
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
+            let now = of(traffic, 1);
+            moves.push((now.state.position - at).length());
+            if !going(now) || moves.len() > 200 {
+                return (moves, now.clone());
+            }
+        }
+    }
+
+    /// Whether `npc` is still waiting in its gate, its wait not yet out.
+    fn waiting_in_gate(npc: &Npc) -> bool {
+        matches!(npc.mode, Mode::Emerging { .. })
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
     #[test]
-    fn a_flying_successor_takes_goal_0x15_and_glides_from_the_top_of_a_glide() {
+    fn a_flying_successor_takes_goal_0x15_and_glides_from_what_it_owes() {
         // No wait: its high level makes it goal 8 in the same dispatch
-        // (@0x8dd81-0x8dd8a), and sub 0xa starts a +0x34 at or above 0 at
-        // -50.0 (@0x8811e-0x8812c). A negative word stands there, which the
-        // engine's glide has no way to start from.
-        let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
+        // (@0x8dd81-0x8dd8a), and sub 0xa keeps a negative +0x34
+        // (@0x8811e-0x8812c): it glides from what it owes, down to its cap.
+        let mut traffic = with_lead_target(under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
             ship.owed_burst = Some(12.0);
-        });
+        }));
         think(&mut traffic);
         let leads = of(&traffic, 1);
         assert_eq!(leads.mode, Mode::JumpingIn { tick: 0 });
         assert_eq!(leads.goal, Goal::Idle);
         assert_eq!(leads.emerges_from, None, "+0x6c -1 (@0x8dd93)");
-        assert_eq!(leads.owed_burst, None);
-        let at = leads.state.position;
-        traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
-        let moved = (of(&traffic, 1).state.position - at).length();
-        assert!((moved - glide_speed(0)).abs() < 1e-3, "{moved}");
+        assert_eq!(
+            leads.target, None,
+            "+0x70 -1 in the same dispatch (@0x8dd7b)"
+        );
+        let (moves, after) = moves_while(&mut traffic, |npc| {
+            matches!(npc.mode, Mode::JumpingIn { .. })
+        });
+        for (tick, moved) in (0u16..).zip(&moves) {
+            let speed = JUMP_IN_SLOWING.mul_add(-f32::from(tick), 12.0);
+            assert!(close(*moved, speed), "tick {tick}: {moved} for {speed}");
+        }
+        let cap = TopSpeeds::own_of(&after).burst_cap();
+        let last = moves.last().copied().unwrap_or_default();
+        assert!(last > cap && last - JUMP_IN_SLOWING <= cap, "{moves:?}");
+        assert!(matches!(after.mode, Mode::Coasting { .. }), "no lead");
+        assert_eq!((after.goal, after.owed_burst), (Goal::Idle, None));
     }
 
     #[test]
-    fn a_successor_flying_or_coasting_under_a_wait_keeps_its_mode() {
-        // Recorded in the phase: `Mode::Emerging` can't end in a glide.
-        let waiting = |setup: fn(&mut Npc)| {
-            let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, setup);
-            think(&mut traffic);
-            of(&traffic, 1).clone()
+    fn a_flying_successor_owing_nothing_glides_from_the_top() {
+        // Sub 0xa writes -50.0 over a +0x34 at or above 0 (@0x8811e-0x8812c).
+        let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |_| {});
+        let (moves, _) = moves_while(&mut traffic, |_| false);
+        assert!(close(moves[0], glide_speed(0)), "{moves:?}");
+    }
+
+    #[test]
+    fn by_the_other_reading_of_the_held_burst_a_successor_owes_nothing_and_glides_from_the_top() {
+        // Its glide cut short owes none by the other reading, so nothing
+        // stands in +0x34 for sub 0xa to keep.
+        let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
+            ship.mode = Mode::JumpingIn { tick: 3 };
+            ship.leaves_arrival(RuleSource::Bible);
+        });
+        assert_eq!(of(&traffic, 1).owed_burst, None);
+        let world = World {
+            held_burst: RuleSource::Bible,
+            ..World::new(&[])
         };
-        let flying = waiting(|ship| ship.ai_wait = 5);
-        assert_eq!((flying.mode, flying.goal), (Mode::Flying, Goal::Idle));
-        assert_eq!(flying.emerges_from, None);
-        let coasting = waiting(|ship| ship.mode = Mode::Coasting { ticks_left: 5 });
-        assert_eq!(coasting.mode, Mode::Coasting { ticks_left: 5 });
-        assert_eq!(coasting.goal, Goal::Idle);
+        let at = of(&traffic, 1).state.position;
+        traffic.tick_in(&Keep, world, &[], &mut NeverFires);
+        let moved = (of(&traffic, 1).state.position - at).length();
+        assert!(close(moved, glide_speed(0)), "{moved}");
+    }
+
+    #[test]
+    fn a_successor_owing_sub_0xds_word_ends_its_glide_at_once() {
+        // -1.0 (@0x85c53): one tick at 1.0, the next below any cap.
+        let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
+            ship.owed_burst = Some(FOLLOW_BURST);
+        });
+        let (moves, after) = moves_while(&mut traffic, |_| false);
+        assert!(close(moves[0], FOLLOW_BURST), "{moves:?}");
+        assert!(
+            matches!(after.mode, Mode::Coasting { .. }),
+            "{:?}",
+            after.mode
+        );
+        assert_eq!(after.owed_burst, None);
+    }
+
+    /// A wait set on a ship.
+    type Wait = fn(&mut Npc);
+
+    /// The ways a successor runs a wait as it takes goal 0x15: flying in its
+    /// AI wait, or holding its course.
+    fn under_a_wait() -> [(&'static str, Wait); 2] {
+        [
+            ("flying", |ship| ship.ai_wait = 5),
+            ("coasting", |ship| {
+                ship.mode = Mode::Coasting { ticks_left: 5 }
+            }),
+        ]
+    }
+
+    /// A successor far from its lead's gate, drifting right, under the wait
+    /// `wait` sets, owing `owed`, its trigger held, once it has taken over.
+    fn taken_over_under(wait: Wait, owed: Option<f32>) -> Traffic {
+        let mut traffic = with_lead_target(under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
+            wait(ship);
+            ship.owed_burst = owed;
+            ship.state.position = Vec2::new(5000.0, 0.0);
+            ship.state.velocity = Vec2::new(1.0, 0.0);
+            ship.trigger.primary = true;
+        }));
+        think(&mut traffic);
+        traffic
+    }
+
+    #[test]
+    fn a_successor_flying_or_coasting_under_a_wait_hides_where_it_is_and_holds_the_gate_open() {
+        // Goal 0x15 copied over a +0x4c above 0 (@0x893c8-0x893d0): its high
+        // level returns at the wait gate, so it keeps the goal while the
+        // wait runs, hidden (@0x972d), holding its lead's gate (+0x6c,
+        // @0x893bd-0x893c2) open from wherever it is (@0x2e8a3-0x2e8d7).
+        for (name, wait) in under_a_wait() {
+            let traffic = taken_over_under(wait, None);
+            let leads = of(&traffic, 1);
+            assert_eq!(leads.mode, Mode::Emerging { ticks_left: 5 }, "{name}");
+            assert_eq!(leads.ai_wait, 0, "{name}: its wait is the mode's");
+            assert_eq!(leads.goal, Goal::Idle, "{name}");
+            assert!(leads.emerging(), "{name}: unseen");
+            assert_eq!(leads.emerges_from, LEADS_GATE, "{name}");
+            assert!(leads.holds_gate_open(StellarId(311)), "{name}");
+            assert_eq!(leads.trigger, Trigger::default(), "{name}");
+            assert_eq!(leads.target, LEADS_TARGET, "{name}: until its turn-out");
+            assert_eq!(leads.leader, None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_successor_under_a_wait_drifts_through_it_then_bursts_from_the_top() {
+        // At its turn-out goal 0x15's block and sub 0xa (@0x8dd61-0x8dd93,
+        // @0x8811e-0x8812c): from 50, not the emerge's 30 or 15.
+        for (name, wait) in under_a_wait() {
+            let mut traffic = taken_over_under(wait, None);
+            let (drifts, out) = moves_while(&mut traffic, waiting_in_gate);
+            assert!(
+                drifts.iter().all(|&moved| close(moved, 1.0)),
+                "{name}: {drifts:?}"
+            );
+            assert_eq!(out.mode, Mode::LeavingGate { tick: 0 }, "{name}");
+            assert_eq!(out.target, LEADS_TARGET, "{name}: before the turn-out");
+            let (moves, bursting) = moves_while(&mut traffic, |_| false);
+            assert!(close(moves[0], JUMP_IN_SPEED), "{name}: {moves:?}");
+            assert_eq!(bursting.target, None, "{name}: the turn-out drops it");
+            assert_eq!(bursting.mode, Mode::LeavingGate { tick: 1 }, "{name}");
+            let (moves, after) = moves_while(&mut traffic, |npc| {
+                matches!(npc.mode, Mode::LeavingGate { .. })
+            });
+            assert!(close(moves[0], JUMP_IN_SPEED - JUMP_IN_SLOWING), "{name}");
+            assert!(matches!(after.mode, Mode::Coasting { .. }), "{name}");
+            assert_eq!(after.owed_burst, None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_successor_under_a_wait_owing_a_burst_bursts_from_what_it_owes() {
+        for (name, wait) in under_a_wait() {
+            let mut traffic = taken_over_under(wait, Some(12.0));
+            moves_while(&mut traffic, waiting_in_gate);
+            let (moves, _) = moves_while(&mut traffic, |_| false);
+            assert!(close(moves[0], 12.0), "{name}: {moves:?}");
+        }
+    }
+
+    #[test]
+    fn a_successor_the_player_holds_under_its_wait_owes_its_own_word_as_the_hold_ends() {
+        // Goal 4 over its goal 0x15 (@0x89d3e): no sub 0xa has run, so its
+        // +0x34 is what it owed, or nothing; not the emerge's 30 or 15.
+        for (name, wait) in under_a_wait() {
+            for owed in [None, Some(12.0)] {
+                for (burst, after) in [(RuleSource::Engine, owed), (RuleSource::Bible, None)] {
+                    let mut traffic = taken_over_under(wait, owed);
+                    of_mut(&mut traffic, 1).hold_at_gate();
+                    let world = World {
+                        held_burst: burst,
+                        ..World::new(&[])
+                    };
+                    for _ in 0..10 {
+                        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+                    }
+                    let held = of(&traffic, 1);
+                    assert_eq!(held.mode, Mode::Flying, "{name} {owed:?} {burst:?}");
+                    assert_eq!(held.owed_burst, after, "{name} {owed:?} {burst:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_successor_flying_gliding_or_bursting_drops_its_leads_target_and_one_in_its_gate_keeps_it()
+    {
+        // +0x70 = -1 at the turn-out (@0x8dd7b), the successor's first
+        // dispatch with +0x4c at or below 0: at once for a ship flying with
+        // no wait, gliding or bursting (goal 8, its +0x50 -1.0 by the
+        // check, @0x8937c), at its own turn-out for one in its gate.
+        for mode in [
+            Mode::Flying,
+            Mode::JumpingIn { tick: 3 },
+            Mode::LeavingGate { tick: 2 },
+        ] {
+            let mut traffic =
+                with_lead_target(under_a_lead_in(LEAD_WAITING, FEDS, |ship| ship.mode = mode));
+            think(&mut traffic);
+            assert_eq!(of(&traffic, 1).target, None, "{mode:?}");
+        }
+        let mut traffic = with_lead_target(under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
+            in_its_gate(ship, Mode::Emerging { ticks_left: 2 });
+        }));
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).target, LEADS_TARGET, "in its gate");
+        let (_, out) = moves_while(&mut traffic, waiting_in_gate);
+        assert_eq!(out.target, LEADS_TARGET, "to its turn-out");
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).target, None, "at it");
     }
 
     #[test]
@@ -1092,13 +1335,57 @@ mod tests {
         // Goal 0x15 turns back into goal 8 at once (@0x8dd8a), at -999.0
         // (@0x8f3d2), its +0x34 kept.
         for mode in [Mode::JumpingIn { tick: 3 }, Mode::LeavingGate { tick: 2 }] {
-            let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| ship.mode = mode);
+            let mut traffic =
+                with_lead_target(under_a_lead_in(LEAD_WAITING, FEDS, |ship| ship.mode = mode));
             think(&mut traffic);
             let leads = of(&traffic, 1);
             assert_eq!(leads.mode, mode);
             assert_eq!(leads.goal, Goal::Idle, "{mode:?}");
             assert_eq!(leads.owed_burst, None, "{mode:?}");
+            assert_eq!(leads.target, None, "{mode:?}: @0x8dd7b");
         }
+    }
+
+    #[test]
+    fn a_glide_from_its_own_word_cut_short_owes_the_rest_of_that_word() {
+        // The -1.0 over -999.0 (@0x8937c) leaves +0x34 where the glide had
+        // it, from the word sub 0xa kept.
+        let mut traffic = under_a_lead_in(LEAD_WAITING, FEDS, |ship| {
+            ship.owed_burst = Some(12.0);
+        });
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut NeverFires);
+        let mut gliding = of(&traffic, 1).clone();
+        assert_eq!(gliding.mode, Mode::JumpingIn { tick: 1 });
+        gliding.leaves_arrival(RuleSource::Engine);
+        assert_eq!(gliding.mode, Mode::Flying);
+        let owed = gliding.owed_burst.expect("owed");
+        assert!(close(owed, 12.0 - JUMP_IN_SLOWING), "{owed}");
+        let mut traffic = taken_over_under(under_a_wait()[0].1, Some(12.0));
+        moves_while(&mut traffic, waiting_in_gate);
+        moves_while(&mut traffic, |_| false);
+        moves_while(&mut traffic, |_| false);
+        let mut bursting = of(&traffic, 1).clone();
+        assert_eq!(bursting.mode, Mode::LeavingGate { tick: 2 });
+        bursting.leaves_arrival(RuleSource::Engine);
+        let owed = bursting.owed_burst.expect("owed");
+        assert!(close(owed, 12.0 - 2.0 * JUMP_IN_SLOWING), "{owed}");
+    }
+
+    #[test]
+    fn a_successor_of_a_lead_paused_on_sub_0xd_follows_the_jump_its_lead_followed() {
+        // The original's sub 0xd reads ship -1 (@0x859df-0x85c5f), outside
+        // the ship table; the engine keeps the copied pause and follow.
+        let jump = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(7))));
+        let paused = Goal::Regroup {
+            kept: Kept::FollowsJump,
+        };
+        let mut traffic = taking_over(REBELS, paused);
+        of_mut(&mut traffic, 0).warp.goal = jump;
+        think(&mut traffic);
+        let taker = of(&traffic, 1);
+        assert_eq!(taker.goal, paused);
+        assert_eq!(taker.warp.goal, jump);
+        assert_eq!(taker.leader, None);
     }
 
     #[test]

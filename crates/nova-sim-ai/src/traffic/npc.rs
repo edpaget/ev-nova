@@ -77,9 +77,12 @@ impl AiType {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Gliding in from hyperspace, on this tick of the glide (from 0), at
-    /// [`glide_speed`](crate::traffic::spawn::glide_speed): no steering
-    /// and no decisions. Its goal is 8, or 0 before its first dispatch
-    /// (@0x8fd08), so `_ShipVisibleToShip` sees it (@0x972d).
+    /// [`Npc::burst_speed`]: from 50, as
+    /// [`glide_speed`](crate::traffic::spawn::glide_speed), or from the
+    /// word it carries ([`Npc::owed_burst`]), which a successor that took
+    /// goal 0x15 in flight may (see [`burst_word`](crate::traffic::burst_word)):
+    /// no steering and no decisions. Its goal is 8, or 0 before its first
+    /// dispatch (@0x8fd08), so `_ShipVisibleToShip` sees it (@0x972d).
     JumpingIn {
         /// The tick of the glide.
         tick: u32,
@@ -106,6 +109,14 @@ pub enum Mode {
     /// @0x3aa7d): it drifts on that velocity as it waits, as
     /// `_HandleShip` moves every ship (@0x34274-0x342aa). A hit by the
     /// player holds it here instead ([`Mode::HeldAtGate`]).
+    ///
+    /// A successor that took its lost lead's goal 0x15 under a wait waits
+    /// so too, but where it is, not at a gate's centre, holding its lead's
+    /// gate open from there (`_HandleStellarSprites` tests no distance,
+    /// @0x2e8a3-0x2e8d7), drawn as a ship in its gate is, and moving on its
+    /// velocity; its burst then starts from its own word, what it owes or
+    /// else 50, not the emerge's 30 or 15 ([`Npc::bursts_own_word`], see
+    /// [`succession`](crate::traffic::succession)).
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -137,8 +148,10 @@ pub enum Mode {
         ticks_left: u32,
     },
     /// Bursting out of the gate along its heading, on this tick of the
-    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed)
-    /// from 30, or from 15 when [`led_out`](Npc::led_out): no steering and
+    /// burst (from 0), at [`Npc::burst_speed`]: as
+    /// [`exit_speed`](crate::traffic::emerge::exit_speed) from 30, or from
+    /// 15 when [`led_out`](Npc::led_out), or from its own word for a ship
+    /// [carrying one](Npc::bursts_own_word): no steering and
     /// no decisions. Tick 0 is the frame its wait runs out, its goal still
     /// 0x15, so it still holds the gate's sprite open and no ship sees it
     /// ([`Npc::emerging`]); from its first moving tick it has goal 8 and is
@@ -701,7 +714,23 @@ pub struct Npc {
     /// that writes +0x34, by a dogfight's speed cap, by the burst's end and
     /// by a new emerge (see [`held_burst`](crate::traffic::held_burst)).
     /// None at every spawn. Never saved.
+    ///
+    /// A glide in starts from it too, and so does the gate burst of a ship
+    /// [carrying its own word](Npc::bursts_own_word) (see
+    /// [`burst_word`](crate::traffic::burst_word)); a glide or burst keeps
+    /// it as its start until it ends.
     pub owed_burst: Option<f32>,
+    /// Whether its wait in a gate and the burst after it carry its own
+    /// burst word ([`Npc::owed_burst`], else 50) rather than the emerge's
+    /// 30 or 15: a successor that took its lost lead's goal 0x15 under a
+    /// wait ([`succession`](crate::traffic::succession), @0x893c8-0x893d0),
+    /// whose +0x34 no emerge wrote (see
+    /// [`burst_word`](crate::traffic::burst_word)). Set only there; cleared
+    /// as its burst ends ([`autopilot::after_burst`](crate::traffic::autopilot)),
+    /// as a hold or a cut ends its wait or burst ([`Npc::end_wait`],
+    /// [`Npc::leaves_arrival`]), and by a new emerge. `false` at every
+    /// spawn. Never saved.
+    pub bursts_own_word: bool,
     /// Whether its burst ended this tick in a wait
     /// ([`held_burst::settle`](crate::traffic::held_burst::settle)), so
     /// this tick's fire step still runs: `_HandleShip` tested the wait
@@ -1495,8 +1524,10 @@ impl Npc {
         self.visited = Self::gate_visit(gate, self.reserves.fuel.max);
         self.target = None;
         self.trigger = Trigger::default();
-        // Its own burst is the one `Mode::LeavingGate` flies.
+        // Its own burst is the one `Mode::LeavingGate` flies, from the
+        // emerge's word.
         self.owed_burst = None;
+        self.bursts_own_word = false;
     }
 
     /// The stellar a ship whose tank holds `fuel_capacity` has visited as it
@@ -1622,7 +1653,9 @@ impl Npc {
     /// reading of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
     /// it still owes its emerge's burst ([`Npc::owed_burst`]): 30, or 15
     /// when the player led it out (@0x895aa-0x895bd), the burst word +0x34
-    /// the hold left; by the other it owes none. `_EscortAI`'s Defend,
+    /// the hold left ([`Npc::burst_word`]); a ship carrying its own word
+    /// ([`Npc::bursts_own_word`]) owes what it owed, or none, as no sub 0xa
+    /// has run. By the other reading it owes none. `_EscortAI`'s Defend,
     /// Attack and formation blocks write it (@0x83c73, @0x83d6a, @0x83eb0,
     /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)), as do
     /// `_AIMakeShipRefuelPlayer` and `_AIMakeShipRepairPlayer` (@0x82de9,
@@ -1632,10 +1665,10 @@ impl Npc {
     pub fn end_wait(&mut self, burst: RuleSource) {
         self.ai_wait = 0;
         if matches!(self.mode, Mode::HeldAtGate { .. }) {
+            let word = self.burst_word();
             self.mode = Mode::Flying;
-            if burst == RuleSource::Engine {
-                self.owed_burst = Some(crate::traffic::emerge::exit_speed(self.led_out, 0));
-            }
+            self.owed_burst = word.filter(|_| burst == RuleSource::Engine);
+            self.bursts_own_word = false;
         }
     }
 

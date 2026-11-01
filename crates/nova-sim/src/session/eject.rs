@@ -541,6 +541,7 @@ impl PlayerShip {
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             owed_burst: None,
+            bursts_own_word: false,
             fires_on_burst_end: false,
             close_form: false,
             stopping: false,
