@@ -543,7 +543,7 @@ fn fly_flown(
     let derelict = world.govts.derelict(npc.govt);
     // Its ion block, the move's other side (see the `ionization` module).
     ionization::deionize(npc, speeds.own);
-    tractor_hold::hold(npc, &pass.holders, world.tractor_step, pass.think);
+    tractor_hold::pull(npc, &pass.holders, world.tractor_step);
     ship_display::settle_spawn(npc, derelict, &pass.first, &mut *chance);
     let held = ship_display::held(npc);
     let beside = Beside {
@@ -567,6 +567,9 @@ fn fly_flown(
     );
     held_burst::settle(npc, owed, speeds, inertia, &mut *chance);
     ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
+    // The release and lapse come after the turn, thrust, glow and fire,
+    // which read the hold (@0x353ba-0x35449, see `tractor_hold`).
+    tractor_hold::release(npc, &pass.holders, pass.think);
     outcome
 }
 

@@ -3,13 +3,22 @@
 //! `_HandleShip` does with its lock each frame, and the third of its
 //! speed, turn and thrust while another ship holds it.
 //!
-//! **The frame's hold** ([`hold`], `_HandleShip` @0x33fc0-0x3413d and
-//! @0x353ba-0x35449): its velocity pulled toward its holder's by the
-//! world's [`tractor_step`](super::World::tractor_step), then released
-//! when its holder is gone, disabled or dying, then aged and lapsed. It
-//! runs for every NPC the flight reaches, on both passes, aging on the
-//! advance pass alone, before the ship moves and after its ion block. A
-//! ship held by a holder that left at its slot of the frame's AI loop is
+//! **The frame's hold**, for every NPC the flight reaches, on both passes:
+//!
+//! - **The pull** ([`pull`], `_HandleShip` @0x33fc0-0x3413d), after its
+//!   ion block and before it moves: its velocity pulled toward its
+//!   holder's by the world's [`tractor_step`](super::World::tractor_step).
+//! - **The release and lapse** ([`release`], @0x353ba-0x35449), after its
+//!   turn (@0x34460-0x3458e), thrust (@0x34a54-0x34d93), glow's rush test
+//!   (@0x34f57) and fire (@0x34ffd): released when its holder is gone,
+//!   disabled or dying, then aged, on the advance pass alone, and lapsed.
+//!   `_ShipTurnRate`, `_ShipAccelRate` and `_ShipMaxSpeed` read the lock
+//!   (+0xc8dc), so a ship released or lapsed on a pass turns, thrusts and
+//!   glows held on that pass. Only the two early exits for a ship type
+//!   above 0x2ff and type +0xa 0xd8f1 (@0x33594-0x335c8) skip both, and
+//!   no path between them leaves `_HandleShip`.
+//!
+//! A ship held by a holder that left at its slot of the frame's AI loop is
 //! pulled by the holder's record, then released ([`Holders::and_left`]),
 //! at any slot: the pull reads the slot with no active test. The player's
 //! hold releases first and isn't pulled on the frame it is released
@@ -17,13 +26,10 @@
 //! [`player_pass`](crate::combat::tractor_hold::player_pass)), so a
 //! holder gone that way pulls the player not at all.
 //!
-//! Two ordering notes, neither crossing a boundary the player sees. The
-//! hold reads its holder's velocity as the pass began, where the original
-//! reads the holder's slot live, so a holder of a lower slot has already
-//! moved this frame: a one-pass lag settled before the frame is drawn.
-//! And the release and lapse run before the move rather than after it;
-//! the pull still comes before both, so the ship is pulled on as many
-//! frames as the original's.
+//! The hold reads its holder's velocity as the pass began, where the
+//! original reads the holder's slot live, so a holder of a lower slot has
+//! already moved this frame: a one-pass lag settled before the frame is
+//! drawn, crossing no boundary the player sees.
 //!
 //! **The held handling** ([`Npc::own_handling`]): every reader of an
 //! NPC's `_ShipMaxSpeed`, `_ShipTurnRate` and `_ShipAccelRate` reads it,
@@ -37,7 +43,7 @@ use std::collections::BTreeMap;
 use super::World;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::combat::tractor_hold::{Holder, held_by_other, held_handling, npc_pass};
+use crate::combat::tractor_hold::{Holder, held_by_other, held_handling, npc_pull, npc_release};
 use crate::handling::Handling;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -121,18 +127,20 @@ impl Holders {
     }
 }
 
-/// `npc`'s frame's hold among `holders` at the pull's `step`, aging on an
-/// `advance` pass alone (see the module docs).
-pub fn hold(npc: &mut Npc, holders: &Holders, step: f32, advance: bool) {
+/// `npc`'s frame's pull among `holders` at the pull's `step` ([`npc_pull`],
+/// see the module docs), before its move.
+pub fn pull(npc: &mut Npc, holders: &Holders, step: f32) {
     let me = ShipRef::Npc(npc.id);
-    npc_pass(
-        &mut npc.tractor,
-        me,
-        &mut npc.state.velocity,
-        |ship| holders.holder(ship),
-        step,
-        advance,
-    );
+    let holder = |ship| holders.holder(ship);
+    npc_pull(npc.tractor, me, &mut npc.state.velocity, holder, step);
+}
+
+/// `npc`'s frame's release among `holders` and lapse, aging on an
+/// `advance` pass alone ([`npc_release`], see the module docs), after its
+/// flight.
+pub fn release(npc: &mut Npc, holders: &Holders, advance: bool) {
+    let me = ShipRef::Npc(npc.id);
+    npc_release(&mut npc.tractor, me, |ship| holders.holder(ship), advance);
 }
 
 #[cfg(test)]
@@ -148,6 +156,7 @@ mod tests {
     use nova_sim_base::fixture::{Draws, FAST};
 
     const HOLDER: NpcId = NpcId(2);
+    const LAPSE: u32 = crate::combat::tractor_hold::LAPSE_TICKS;
 
     /// NPC `id` moving at `velocity`.
     fn moving(id: u32, velocity: Vec2) -> Npc {
@@ -452,6 +461,90 @@ mod tests {
         assert!((held_turn - 9.0 * 0.333).abs() < 1e-4, "{held_turn}");
         let (self_speed, _) = flown(Some(ShipRef::Npc(NpcId(1))), 0.0);
         assert_eq!(self_speed, plain_speed, "a self-held ship isn't slowed");
+    }
+
+    /// NPC 1 running out up the screen from (0, -100), heading `heading`,
+    /// at rest, its class turning 9° a tick, held by `holder` if any; NPC 2
+    /// at rest, intact or disabled as `holder_disabled` says.
+    fn running_out(holder: Option<ShipRef>, heading: f32, holder_disabled: bool) -> Traffic {
+        let mut ship = holding(holder);
+        ship.stats.handling.turn_rate = 9.0;
+        ship.state.position = Vec2::new(0.0, -100.0);
+        ship.state.heading = heading;
+        ship.goal = crate::ai::Goal::JumpOut;
+        let mut other = moving(2, Vec2::ZERO);
+        other.state.position = Vec2::new(500.0, 500.0);
+        if holder_disabled {
+            other.condition = Condition::Disabled;
+        }
+        traffic_of(vec![ship, other])
+    }
+
+    /// NPC 1's speed and the degrees it turned after `fly` flew `traffic`.
+    fn speed_and_turn(mut traffic: Traffic, fly: impl Fn(&mut Traffic)) -> (f32, f32, bool) {
+        let heading = traffic.npcs[0].state.heading;
+        fly(&mut traffic);
+        let ship = &traffic.npcs[0];
+        let turned = crate::flight::shortest_turn(heading, ship.state.heading).abs();
+        (ship.state.velocity.length(), turned, ship.tractor.is_some())
+    }
+
+    #[test]
+    fn a_ship_released_on_a_pass_turns_and_thrusts_held_on_that_pass() {
+        // `_HandleShip` releases (@0x353ba-0x35421) after its turn
+        // (@0x34460-0x3458e) and thrust (@0x34a54-0x34d93), whose
+        // `_ShipTurnRate` and `_ShipAccelRate` read +0xc8dc: so the pass
+        // that lets go of a disabled holder still flies held.
+        let other = Some(ShipRef::Npc(HOLDER));
+        for fly in [
+            (|traffic: &mut Traffic| again(traffic, &pulling(0.5))) as fn(&mut Traffic),
+            |traffic| {
+                traffic.fly_holding(
+                    pulling(0.5),
+                    &std::collections::BTreeSet::new(),
+                    &mut Draws::of(&[]),
+                );
+            },
+        ] {
+            let (plain_speed, ..) = speed_and_turn(running_out(None, 0.0, true), fly);
+            let (held_speed, _, kept) = speed_and_turn(running_out(other, 0.0, true), fly);
+            assert!(plain_speed > 0.0);
+            assert!(
+                (held_speed - plain_speed * 0.1665).abs() < 1e-6,
+                "{held_speed} of {plain_speed}"
+            );
+            assert!(!kept, "released after the flight");
+            let (_, plain_turn, _) = speed_and_turn(running_out(None, 90.0, true), fly);
+            let (_, held_turn, _) = speed_and_turn(running_out(other, 90.0, true), fly);
+            assert_eq!(plain_turn, 9.0);
+            assert!((held_turn - 9.0 * 0.333).abs() < 1e-4, "{held_turn}");
+        }
+    }
+
+    #[test]
+    fn a_lapsed_hold_still_slows_the_pass_it_lapses_on() {
+        // The lapse (@0x3542b-0x35440) comes after the thrust too.
+        let lapsing = |holder| {
+            let mut traffic = running_out(holder, 0.0, false);
+            if let Some(lock) = traffic.npcs[0].tractor.as_mut() {
+                lock.ticks_since_touch = LAPSE - 1;
+            }
+            traffic
+        };
+        let advance = |traffic: &mut Traffic| {
+            traffic.fly_holding(
+                pulling(0.5),
+                &std::collections::BTreeSet::new(),
+                &mut Draws::of(&[]),
+            );
+        };
+        let (plain_speed, ..) = speed_and_turn(lapsing(None), advance);
+        let (held_speed, _, kept) = speed_and_turn(lapsing(Some(ShipRef::Npc(HOLDER))), advance);
+        assert!(!kept, "lapsed");
+        assert!(
+            (held_speed - plain_speed * 0.1665).abs() < 1e-6,
+            "{held_speed} of {plain_speed}"
+        );
     }
 
     #[test]
