@@ -350,14 +350,18 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
 /// How `npc` flies an attack on `target` among `around`, as
 /// `_HighLevelAIHandler`'s state-4 block takes it: it asks
 /// `_AIEvalHopelessChase` of every state-4 target, past a stand-off hull
-/// (@0x8e48e), and snipes in a hopeless chase ([`hopeless_chase`]);
-/// otherwise it attacks.
+/// (@0x8e48e). In a hopeless chase ([`hopeless_chase`]) a ship of AI type
+/// above 2 ([`Npc::original_ai_type`]) snipes (sub 0xe), and one of 2 or
+/// below, a trader, flees (goal 3, sub 5; @0x8e60a-0x8e62e); otherwise it
+/// attacks.
 #[must_use]
 pub fn state4_attack(npc: &Npc, target: ShipRef, around: &Surroundings) -> Goal {
-    if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
+    if npc.hull.stands_off || !hopeless_chase(npc, target, around) {
+        Goal::Attack(target)
+    } else if npc.original_ai_type() > 2 {
         Goal::Snipe(target)
     } else {
-        Goal::Attack(target)
+        Goal::Flee(target)
     }
 }
 
@@ -1007,6 +1011,40 @@ mod tests {
         target.hull.class_speed = 5.9;
         target.handling.max_speed = 50.0;
         assert!(!hopeless(&chaser, target), "the chaser's class is faster");
+    }
+
+    /// `chaser`'s state-4 goal on the player, `target`.
+    fn state4(chaser: &Npc, target: &PlayerSide) -> Goal {
+        let npcs = [chaser.clone()];
+        let around = Surroundings {
+            player: Some(*target),
+            ..Surroundings::new(&[], &npcs)
+        };
+        state4_attack(chaser, ShipRef::Player, &around)
+    }
+
+    #[test]
+    fn a_hopeless_chase_snipes_above_ai_type_2_and_flees_at_or_below_it() {
+        // Sub 0xe for +0x88 > 2, goal 3 with sub 5 otherwise
+        // (@0x8e60a-0x8e62e).
+        use crate::traffic::npc::AiType;
+        let (mut chaser, target) = chase(1.0);
+        for (ai_type, goal) in [
+            (AiType::WimpyTrader, Goal::Flee(ShipRef::Player)),
+            (AiType::BraveTrader, Goal::Flee(ShipRef::Player)),
+            (AiType::Warship, Goal::Snipe(ShipRef::Player)),
+            (AiType::Interceptor, Goal::Snipe(ShipRef::Player)),
+        ] {
+            chaser.ai_type = ai_type;
+            assert_eq!(state4(&chaser, &target), goal, "{ai_type:?}");
+        }
+        chaser.ai_type = AiType::WimpyTrader;
+        chaser.hull.stands_off = true;
+        assert_eq!(
+            state4(&chaser, &target),
+            Goal::Attack(ShipRef::Player),
+            "a stand-off hull never asks (@0x8e48e)"
+        );
     }
 
     #[test]
