@@ -9,11 +9,13 @@
 //! `TrafficCatalog` wrapper until the populate gives 54 (the setup holds at
 //! most 55: 64 slots less the spawn reserve of 8, less the player's).
 //!
-//! The test here is `#[ignore]`d, so CI never runs it; it only reads the
-//! clock and prints, asserting the flow but never a time. Run it by hand in
-//! release, in a target directory of its own outside the worktree, with no
-//! other build running. It runs for minutes, past nextest's 120-second
-//! terminate (`.config/nextest.toml`), so run it through `cargo test`:
+//! The tests here are `#[ignore]`d, so CI never runs them; they only read
+//! the clock and print, asserting the flow but never a time. Run them by
+//! hand in release, in a target directory of its own outside the worktree,
+//! with no other build running. The scan and timings take about 40 seconds
+//! on a quiet machine, and a loaded one can push them past nextest's
+//! 120-second terminate (`.config/nextest.toml`), so run them through
+//! `cargo test`:
 //!
 //! ```text
 //! NOVA_DATA=".../Nova Files" CARGO_PROFILE_RELEASE_DEBUG=line-tables-only CARGO_TARGET_DIR=<a directory outside the worktree> cargo test --release -j 6 -p nova-sim --test it -- --ignored --nocapture --test-threads 1 stock_slot_loop_cost::
