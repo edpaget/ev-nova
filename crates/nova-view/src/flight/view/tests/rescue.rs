@@ -71,6 +71,16 @@ fn rescue_noting(
     texts: Vec<(MissionShown, Option<TextBar>)>,
     marks: Option<RescueTexts>,
 ) {
+    rescue_into(view, (texts, marks), rescued_frame());
+}
+
+/// [`rescue_noting`] the texts and marks of `noted`, the rescue leaving
+/// `frame`.
+fn rescue_into(
+    view: &mut Faked,
+    (texts, marks): (Vec<(MissionShown, Option<TextBar>)>, Option<RescueTexts>),
+    frame: FlightFrame,
+) {
     let mut events = vec![
         FlightEvent::Session(SessionEvent::SystemChanged),
         FlightEvent::RescueDesc(rescued(13999)),
@@ -92,7 +102,7 @@ fn rescue_noting(
             }],
             stopped: true,
         },
-        rescued_frame(),
+        frame,
         events,
     );
     view.tick(TICK);
@@ -119,12 +129,14 @@ fn briefed_third() -> (MissionShown, Option<TextBar>) {
 }
 
 /// The bar a view of `frame` draws, its reserves [`noted_reserves`] and
-/// its nav off: what `_RedrawStatus(1)` draws of a text's bar.
-fn bar_noted_over(frame: FlightFrame) -> DrawList {
+/// its nav off, blinking as `like` does: what `_RedrawStatus(1)` draws of
+/// a text's bar.
+fn bar_noted_over(frame: FlightFrame, like: &Faked) -> DrawList {
     let mut frame = frame;
     frame.hud.reserves = noted_reserves();
     frame.nav_mode = nova_sim::NavMode::Off;
-    let view = barred(catalog(), frame);
+    let mut view = barred(catalog(), frame);
+    view.hud_cadence = like.hud_cadence;
     let mut bar = DrawList::new();
     view.draw_bar_or_why(&mut bar);
     bar
@@ -350,11 +362,59 @@ fn a_first_text_the_on_purchase_queued_shows_over_the_pods_system_and_the_reset_
         radar_stellars: sol().radar_stellars,
         ..rescued_frame()
     };
-    expected.extend_translated(&bar_noted_over(reset), Point::new(0.0, 0.0));
+    expected.extend_translated(&bar_noted_over(reset, &view), Point::new(0.0, 0.0));
     assert_eq!(
         list, expected,
         "the pod's radar, the text's gauges and nav (@0x5af96-0x5b038)"
     );
+}
+
+#[test]
+fn the_reset_bars_radar_drops_the_pods_target_and_reads_the_reset_ships_gear_and_the_texts_nav() {
+    let mut pod = FlightFrame {
+        fate: PlayerFate::Ejected { ticks_left: 1 },
+        system_background: Some(POD_BACKGROUND),
+        nav_mode: nova_sim::NavMode::Hyperspace(None),
+        ..in_sol_with(vec![
+            // Far enough out for the radar's centre arrow, which the nav's
+            // hyperspace mode hides (@0x49cf5).
+            the_player_at(Vec2::new(3000.0, 0.0), 0.0),
+            // Heavy, a square under a density scanner (@0x49bb8).
+            FrameShip {
+                mass: 200.0,
+                on_radar: true,
+                ..npc_129(0, Vec2::new(3100.0, 0.0), 0.0)
+            },
+        ])
+    };
+    pod.target = Some(nova_sim::flight_frame::FrameTarget {
+        npc: NpcId(0),
+        name: "Ace".to_owned(),
+        subtitle: None,
+        status: nova_sim::TargetStatus::Disabled,
+        tag: None,
+    });
+    let mut view = barred(catalog(), pod.clone());
+    view.tick(TICK);
+    let mut rescued = rescued_frame();
+    rescued.hud.radar_gear.iff = true;
+    rescued.hud.radar_gear.density_scanner = true;
+    let marks = RescueTexts { reset: 2, moved: 3 };
+    rescue_into(
+        &mut view,
+        (vec![briefed_third()], Some(marks)),
+        rescued.clone(),
+    );
+    let list = under_the_first_text(&mut view);
+    let reset = FlightFrame {
+        ships: pod.ships,
+        radar_stellars: pod.radar_stellars,
+        ..rescued
+    };
+    let mut expected = black(255);
+    expected.push(space_painted(&view, POD_BACKGROUND));
+    expected.extend_translated(&bar_noted_over(reset, &view), Point::new(0.0, 0.0));
+    assert_eq!(list, expected, "_ResetPlayer drops the targets");
 }
 
 #[test]
@@ -366,7 +426,10 @@ fn a_first_text_the_days_queued_shows_over_the_new_system_and_its_bar() {
     let list = under_the_first_text(&mut view);
     let mut expected = black(255);
     expected.push(space_painted(&view, NEW_BACKGROUND));
-    expected.extend_translated(&bar_noted_over(rescued_frame()), Point::new(0.0, 0.0));
+    expected.extend_translated(
+        &bar_noted_over(rescued_frame(), &view),
+        Point::new(0.0, 0.0),
+    );
     assert_eq!(list, expected, "after the move (@0x6912a)");
 }
 
