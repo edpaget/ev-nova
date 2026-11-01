@@ -24415,23 +24415,30 @@ pub(super) mod tests {
                 Some(ShipRef::Player)),
             "its target is the player, but it inspects"
         );
-        // The escort clause (@0x81cdd-0x81dcc).
+        // The escort clause (@0x81cdd-0x81dcc). The NPC it targets is in
+        // the system, so its high level's slot test keeps it (@0x8d4e4).
         assert!(
             fires(Goal::Idle, |s| {
-                s.space.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(NpcId(9)));
                 let wing = Npc {
                     leader: Some(NpcId(0)),
                     goal: Goal::Attack(ShipRef::Player),
                     target: None,
                     ..s.space.traffic.npcs()[0].clone()
                 };
-                s.space.traffic.add_npc(wing);
+                let wing = s.space.traffic.add_npc(wing);
+                s.space.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(wing));
             }),
             "its escort attacks the player"
         );
         assert!(
             !fires(Goal::Idle, |s| {
-                s.space.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(NpcId(9)));
+                let other = Npc {
+                    goal: Goal::Idle,
+                    target: None,
+                    ..s.space.traffic.npcs()[0].clone()
+                };
+                let other = s.space.traffic.add_npc(other);
+                s.space.traffic.npcs_mut()[0].target = Some(ShipRef::Npc(other));
             }),
             "it targets an NPC, with no escort"
         );

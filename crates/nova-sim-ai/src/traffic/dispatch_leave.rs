@@ -53,7 +53,9 @@ use super::gone::Freed;
 use super::npc::{Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::warp_out::{self, WarpGoal};
-use super::{Outcome, Traffic, World, autopilot, jump_with_leader, launch_room, plunder_dock};
+use super::{
+    Outcome, Traffic, World, autopilot, jump_with_leader, launch_room, plunder_dock, regroup,
+};
 use crate::ai::Goal;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -124,12 +126,20 @@ impl Traffic {
     /// disabled ship, nor past its AI wait (see `jump_with_leader`). A
     /// stellar's defence ship breaking up is not disabled (@0x2d6f), but it
     /// holds no warp and no carrier, so neither changes it. A fighter
-    /// turning back reads its carrier's slot.
+    /// turning back reads its carrier's slot. The high level's slot test
+    /// comes first (@0x8d4e4-0x8d50d): a target whose slot is inactive is
+    /// none, which the hold's goal reads ([`Traffic::slot_test`]). A ship
+    /// in the regroup pause runs no high level (@0x9002d → @0x901ea), so
+    /// no slot test.
     fn hold_and_turn_back(&mut self, index: usize, world: &World) {
         let npc = &self.npcs[index];
         if npc.condition != Condition::Intact || npc.high_level_waits() {
             return;
         }
+        if !regroup::paused(npc) {
+            self.slot_test(index);
+        }
+        let npc = &self.npcs[index];
         let carrier_slot = npc.carrier.and_then(|carrier| match carrier.ship {
             ShipRef::Player => Some(0),
             ShipRef::Npc(id) => (self.npcs.iter())
@@ -303,6 +313,50 @@ mod tests {
     /// One tick's think of `traffic`, as `watch` decides.
     fn think(traffic: &mut Traffic, watch: &Watch) {
         traffic.think_holding(watch, world(), &[], &mut Draws::of(&[]));
+    }
+
+    #[test]
+    fn a_ship_fleeing_a_gone_ship_under_way_takes_goal_2_and_holds_it() {
+        // The high level's slot test makes +0x70 -1 (@0x8d4e4-0x8d50d)
+        // before its hold writes goal 2 + (+0x70 != -1) (@0x8d55d-0x8d568),
+        // on the jump path too; goal 3 with no target would end in goal 0
+        // on its next pass (@0x8e228-0x8e234).
+        let mut traffic = Traffic::with_interval(1);
+        let attacker = idle(&mut traffic, 3);
+        let aim = ShipRef::Npc(attacker);
+        let mut runner = ship(1, TRADERS, AiType::WimpyTrader, 2000.0, 0.0);
+        runner.goal = Goal::Flee(aim);
+        runner.target = Some(aim);
+        runner.begin_own_jump();
+        runner.warp.stage = 1.0;
+        let runner = traffic.add_npc_at(runner, 1);
+        traffic.remove_destroyed(attacker);
+        for tick in 0..2 {
+            traffic.tick_in(&Watch::default(), world(), &[], &mut NeverFires);
+            let npc = of(&traffic, runner).expect("still under way");
+            assert!(npc.warp.under_way(), "tick {tick}");
+            assert_eq!((npc.goal, npc.target), (Goal::JumpOut, None), "tick {tick}");
+        }
+    }
+
+    #[test]
+    fn a_ship_under_way_keeps_a_target_whose_slot_is_active() {
+        let mut traffic = Traffic::with_interval(1);
+        let attacker = idle(&mut traffic, 3);
+        let aim = ShipRef::Npc(attacker);
+        let mut runner = ship(1, TRADERS, AiType::WimpyTrader, 2000.0, 0.0);
+        runner.goal = Goal::JumpOut;
+        runner.target = Some(aim);
+        runner.begin_own_jump();
+        runner.warp.stage = 1.0;
+        let runner = traffic.add_npc_at(runner, 1);
+        traffic.tick_in(&Watch::default(), world(), &[], &mut NeverFires);
+        let npc = of(&traffic, runner).expect("still under way");
+        assert_eq!(
+            (npc.goal, npc.target),
+            (Goal::Flee(aim), Some(aim)),
+            "goal 3"
+        );
     }
 
     #[test]

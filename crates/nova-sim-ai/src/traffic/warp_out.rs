@@ -360,8 +360,11 @@ pub fn own_jump(npc: &mut Npc, duration: u32) -> bool {
 /// 0xb: [`Goal::JumpOut`], [`Goal::Flee`], or following its leader's)
 /// ends its stage, +0x50 = 0; a ship the player leads whose stage is
 /// under way is held to the player's jump, goal 0xb. Any other ship
-/// under way keeps goal 2 or 3, by whether it holds a target, which the
-/// engine's jump-out and flee goals already are.
+/// under way takes goal 2 + (+0x70 != -1) (@0x8d55d-0x8d56b): a
+/// jump-out with no target, a flight from the ship its target names
+/// otherwise, whichever of the three it held. The high level's slot test
+/// has cleared a target whose slot is inactive before this
+/// (@0x8d4e4-0x8d50d, see the traffic's `dispatch_leave`).
 ///
 /// Such a ship drops its own jump too, sub-goal 4. The hold writes only
 /// +0x50, but each goal's state in `_HighLevelAIHandler` writes its own
@@ -381,8 +384,8 @@ pub fn hold_stage(npc: &mut Npc) {
     if npc.warp.under_way() {
         if npc.escorts_player() {
             npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
-        } else if npc.follows_leaders_jump()
-            && matches!(npc.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(_))))
+        } else if leaves(npc.goal)
+            || matches!(npc.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(_))))
         {
             npc.goal = npc.target.map_or(Goal::JumpOut, Goal::Flee);
         }
@@ -892,17 +895,42 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_already_in_goal_2_or_3_keeps_it_whatever_its_target() {
-        // The 2/3 swap by target for these (@0x8d557-0x8d56b) is left out;
-        // only goal 0xb takes it.
+    fn a_ship_in_goal_2_or_3_under_way_takes_goal_2_or_3_by_its_target() {
+        // Every ship under way not led by the player takes goal 2 +
+        // (+0x70 != -1) (@0x8d55d-0x8d56b), its goal 2 or 3 or not.
         let target = ShipRef::Npc(NpcId(9));
+        let held = |goal, target: Option<ShipRef>, stage| {
+            let mut ship = ship();
+            ship.begin_own_jump();
+            ship.goal = goal;
+            ship.target = target;
+            ship.warp.stage = stage;
+            hold_stage(&mut ship);
+            ship.goal
+        };
+        let other = ShipRef::Npc(NpcId(8));
+        assert_eq!(held(Goal::JumpOut, Some(target), 3.0), Goal::Flee(target));
+        assert_eq!(held(Goal::Flee(other), None, 3.0), Goal::JumpOut);
+        assert_eq!(
+            held(Goal::Flee(other), Some(target), 3.0),
+            Goal::Flee(target)
+        );
+        assert_eq!(held(Goal::JumpOut, None, 3.0), Goal::JumpOut);
+        assert_eq!(
+            held(Goal::JumpOut, Some(target), 0.0),
+            Goal::JumpOut,
+            "not under way"
+        );
         let mut leaving = ship();
         leaving.goal = Goal::JumpOut;
         leaving.target = Some(target);
         leaving.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(5))));
         leaving.warp.stage = 3.0;
         hold_stage(&mut leaving);
-        assert_eq!((leaving.goal, leaving.warp.goal), (Goal::JumpOut, None));
+        assert_eq!(
+            (leaving.goal, leaving.warp.goal),
+            (Goal::Flee(target), None)
+        );
         let mut released = ship();
         released.goal = Goal::Formation { guard: None };
         released.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));

@@ -222,6 +222,26 @@ impl Traffic {
         }
     }
 
+    /// `_HighLevelAIHandler`'s slot test on the NPC at `index`, in the AI
+    /// loop (@0x8d4e4-0x8d50d): an NPC target whose slot is inactive is
+    /// none. In the AI loop a ship left behind by a move still holds its
+    /// slot, as its display comes later; a ship that left at its slot of the
+    /// loop, or that is out of the system, does not. A target of the
+    /// player is kept: the player's slot is active while the AI loop runs
+    /// in its system.
+    pub(super) fn slot_test(&mut self, index: usize) {
+        let Some(ShipRef::Npc(ship)) = self.npcs[index].target else {
+            return;
+        };
+        let active = match self.npcs.iter().find(|npc| npc.id == ship) {
+            Some(npc) => npc.condition.active(),
+            None => (self.left_behind.values().flatten()).any(|left| left.npc.id == ship),
+        };
+        if !active {
+            self.npcs[index].target = None;
+        }
+    }
+
     /// `ship`, gone out of the system as `freed` says, is recorded.
     pub(super) fn left_the_system(&mut self, ship: Npc, freed: Freed) {
         self.gone.record(ship, freed);
@@ -601,6 +621,43 @@ mod tests {
         }
 
         #[test]
+        fn the_high_levels_slot_test_lets_go_of_a_slot_inactive_in_the_ai_loop() {
+            // @0x8d4e4-0x8d50d: +0x70 -1 when its slot's +0xb8 is clear. A
+            // ship left behind keeps its slot until its display, after the
+            // AI loop, whichever slot reads it.
+            let mut traffic = Traffic::new();
+            let live = in_slot(&mut traffic, 5);
+            let wreck = in_slot(&mut traffic, 6);
+            traffic.npcs[1].condition = Condition::Destroyed;
+            let left = NpcId(99);
+            traffic.left_behind.insert(
+                SystemId(130),
+                vec![LeftShip {
+                    npc: Npc {
+                        id: left,
+                        ..at_berth(99, 1)
+                    },
+                    person: None,
+                }],
+            );
+            for (aim, kept) in [
+                (ShipRef::Npc(live), true),
+                (ShipRef::Npc(wreck), false),
+                (ShipRef::Npc(left), true),
+                (ShipRef::Npc(NpcId(98)), false),
+                (ShipRef::Player, true),
+            ] {
+                let holder = aiming_at(&mut traffic, 3, aim);
+                let index = traffic.npcs.iter().position(|npc| npc.id == holder);
+                traffic.slot_test(index.expect("there"));
+                let after = trader_of(&traffic, holder);
+                assert_eq!(after.target, kept.then_some(aim), "{aim:?}");
+                assert_eq!(after.goal, Goal::Attack(aim), "+0x70 alone");
+                traffic.remove(holder);
+            }
+        }
+
+        #[test]
         fn a_target_left_behind_is_let_go_by_a_later_slot_and_kept_by_an_earlier() {
             // Its slot is freed at its own display (@0x2b7e0 -> @0x2dee0),
             // so a later slot finds it inactive, an earlier one active.
@@ -725,7 +782,9 @@ mod tests {
         fn a_jump_out_or_dock_at_its_slot_is_let_go_by_every_slot_at_its_step() {
             // The original frees these in the AI loop (@0x859b8, @0x80404),
             // before the `_HandleShip` of every slot, which lets go
-            // (@0x33865-0x33888), an earlier slot's too.
+            // (@0x33865-0x33888), an earlier slot's too. A later slot's
+            // high level, after the free, has let go already
+            // (@0x8d4e4-0x8d50d).
             for dock in [false, true] {
                 let mut traffic = Traffic::with_interval(1);
                 let leaving = if dock {
@@ -742,8 +801,9 @@ mod tests {
                     traffic.npcs().iter().all(|npc| npc.id != leaving),
                     "{dock}: it left at its slot"
                 );
+                assert_eq!(target_of(&traffic, earlier), Some(aim), "{dock}");
+                assert_eq!(target_of(&traffic, later), None, "{dock}: its high level");
                 for holder in [earlier, later] {
-                    assert_eq!(target_of(&traffic, holder), Some(aim), "{dock}");
                     traffic.let_go_at_step(holder, true);
                     assert_eq!(target_of(&traffic, holder), None, "{dock}: its step");
                     assert_eq!(

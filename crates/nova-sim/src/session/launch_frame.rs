@@ -535,16 +535,23 @@ mod tests {
         // A launch takes the first free slot in the AI loop
         // (@0x3c8c6-0x3c8e9) and leaves every other ship's +0x70, so the
         // earlier slot's test finds its target active again: the fighter,
-        // friend or not.
+        // friend or not. An earlier slot whose high level runs has let go
+        // at its slot test (@0x8d4e4-0x8d50d), before the launch; one in
+        // its AI wait skips it (@0x8d4b9-0x8d4d2) and still holds it.
         let catalog = catalog();
         let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 5);
         let plain = || crate::testkit::npc(0, crate::stats::ShipStats::default());
-        let wreck = session.space.traffic.add_npc_at(plain(), 2);
+        let wreck = session.space.traffic.add_npc_at(plain(), 3);
         let aim = ShipRef::Npc(wreck);
-        let mut holding = plain();
-        holding.goal = Goal::Attack(aim);
-        holding.target = Some(aim);
-        let holding = session.space.traffic.add_npc_at(holding, 1);
+        let holder = |ai_wait| {
+            let mut holding = plain();
+            holding.goal = Goal::Attack(aim);
+            holding.target = Some(aim);
+            holding.ai_wait = ai_wait;
+            holding
+        };
+        let holding = session.space.traffic.add_npc_at(holder(50), 1);
+        let thinking = session.space.traffic.add_npc_at(holder(0), 2);
         session.space.traffic.remove_destroyed(wreck);
         let script = Scripted {
             carrier,
@@ -554,10 +561,12 @@ mod tests {
         };
         game_pass(&mut session, &catalog, &script);
         let viper = vipers(&session).remove(0);
-        assert_eq!(viper.berth, 2, "the wreck's slot");
+        assert_eq!(viper.berth, 3, "the wreck's slot");
         let npc = session.space.npc(holding).expect("there");
         assert_eq!(npc.target, Some(ShipRef::Npc(viper.id)));
         assert_eq!(npc.goal, Goal::Attack(ShipRef::Npc(viper.id)));
+        let npc = session.space.npc(thinking).expect("there");
+        assert_ne!(npc.target, Some(ShipRef::Npc(viper.id)), "let go first");
     }
 
     #[test]

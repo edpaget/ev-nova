@@ -542,7 +542,8 @@ mod tests {
 
     // The successor leads.
 
-    /// The lead of `govt`, disabled, attacking NPC 9 with a travel
+    /// The lead of `govt`, disabled, targeting the player (a slot the
+    /// successor's high level finds active, @0x8d4e4) with a travel
     /// stellar, a rush kept and a docking, its warp following the player's
     /// jump, its goal `goal`; and its one follower, a warship of the
     /// rebels, a fighter of the lead, idle, with its own rush and docking.
@@ -560,7 +561,7 @@ mod tests {
         let mut traffic = fleet(govt, DISABLED, vec![taker]);
         let lead = of_mut(&mut traffic, 0);
         lead.goal = goal;
-        lead.target = Some(ShipRef::Npc(NpcId(9)));
+        lead.target = Some(PLAYER);
         lead.travel = Some(crate::catalog::StellarId(150));
         lead.warp.goal = Some(WarpGoal::Follow(PLAYER));
         lead.pursuit = Pursuit {
