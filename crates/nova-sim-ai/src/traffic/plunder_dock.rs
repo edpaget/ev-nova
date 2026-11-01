@@ -174,9 +174,10 @@ pub struct Docking {
 /// under a fight, a plunder or an assist, whose high level then decides
 /// it; under any other goal only while the AI wait skips the high level
 /// that goal's state would rewrite the sub in (@0x8d4b9-0x8d4d2,
-/// [`Npc::high_level_waits_under`]), its wait not ended by the think,
-/// as sub 0xf and the nav fly on at the ship docked with whatever the
-/// think writes. A think that writes the sub itself
+/// [`Npc::high_level_waits_under`]), as sub 0xf and the nav fly on at the
+/// ship docked with whatever the think writes. A think that ends its wait
+/// ([`Decision::ends_wait`]) is left to that tick's high level, which then
+/// runs and drops it. A think that writes the sub itself
 /// ([`Decision::writes_sub`]) ends it either way.
 #[must_use]
 pub fn kept_by(npc: &Npc, decision: &Decision) -> bool {
@@ -187,7 +188,7 @@ pub fn kept_by(npc: &Npc, decision: &Decision) -> bool {
     matches!(
         goal,
         Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } | Goal::Assist(_)
-    ) || (!decision.ends_wait && npc.high_level_waits_under(goal))
+    ) || npc.high_level_waits_under(goal)
 }
 
 /// A docking's substate.

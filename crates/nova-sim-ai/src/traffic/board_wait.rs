@@ -287,8 +287,8 @@ mod tests {
         assert!(!waited.calls_reinforcements, "@0x8d4b9-0x8d4d2");
         assert!(waited.turns_on_player, "made before the loop");
         assert!(
-            waited.clears_target && !waited.keeps_pursuit,
-            "target -1, sub 0"
+            waited.clears_target && !waited.keeps_pursuit && waited.writes_sub,
+            "target -1, sub 0 (@0x8c6fe)"
         );
         assert_eq!(waited.travel, TravelWrite::Clear, "+0x6c -1, @0x8c70d");
         let lone = [ship(1, 1, Goal::Idle), victim()];
