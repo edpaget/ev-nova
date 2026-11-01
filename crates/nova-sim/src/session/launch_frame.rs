@@ -1492,6 +1492,54 @@ mod tests {
     }
 
     #[test]
+    fn a_dispatch_of_skipped_runs_leaves_the_fights_notes_as_a_fought_run_would() {
+        // Every run here asks nothing of the loop, so each is skipped and
+        // noted by `note_idle_run`; the fight must end as one fought run
+        // over the same ships leaves it: the field and every slot record.
+        let catalog = catalog();
+        let mut session = session(&catalog, RuleSource::Engine);
+        let mut plain = triggered(Trigger::default());
+        plain.state.position = Vec2::new(10.0, 20.0);
+        plain.target = Some(ShipRef::Player);
+        let plain = session.space.traffic.add_npc_at(plain, 2);
+        let mut plunderer = triggered(Trigger::default());
+        plunderer.state.position = Vec2::new(-40.0, 5.0);
+        plunderer.goal = Goal::Plunder {
+            ship: ShipRef::Npc(plain),
+            hopeless: false,
+        };
+        plunderer.target = Some(ShipRef::Npc(plain));
+        session.space.traffic.add_npc_at(plunderer, 4);
+        session.chart.target = Some(plain);
+        session.space.pass_frame = 9;
+        let was = session.space.combat.clone();
+        let script = Scripted {
+            carrier: NpcId(999),
+            twice: false,
+            defenders: Vec::new(),
+            fighter: Trigger::default(),
+        };
+        let pass = GamePass::Advance { double_time: false };
+        session.dispatch_npcs(true, pass, &script, Rules::default(), &mut NeverFires);
+        assert!(
+            !session.space.dispatch_run_acts(None, None),
+            "every run was idle"
+        );
+        let mut fought = session.clone();
+        fought.space.combat = was.clone();
+        fought.with_fighters(
+            pass,
+            Rules::default(),
+            &mut NeverFires,
+            |combat, fighters, arena, chance| {
+                combat.defend_npcs(fighters, arena, None, None, chance);
+            },
+        );
+        assert_eq!(session.space.combat, fought.space.combat);
+        assert_ne!(session.space.combat, was, "the runs wrote their notes");
+    }
+
+    #[test]
     fn a_carrier_and_a_defender_after_idle_runs_still_launch_and_fire_on_the_launch_tick() {
         // The idle ships at 2 and 5 ask nothing of the loop, so their runs
         // are skipped; the carrier's and the high defender's are not.
