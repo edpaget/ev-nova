@@ -113,6 +113,41 @@
 //! its slot, so its successor takes the other government's branch
 //! (rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-1-landed-lead-keeps-its-fleet).
 //!
+//! **No gate entry meets the check.** No ship entering a gate (sub 0x17,
+//! [`Mode::EnteringGate`], `_AIShipIsEnteringHypergate` @0x89502) has an
+//! NPC parent at the marking pass, so the check's writes never end an
+//! entry, and the engine builds none:
+//!
+//! - sub 0x17 is written only in goal 0x14's box (@0x8dc5a-0x8dc94), and
+//!   goal 0x14 comes only from goal 1 (@0x8d8f5) or from the box's release
+//!   (@0x8dd37), which writes parent -1;
+//! - goal 1 comes only from the thinks of AI types 1 to 4 (`_WimpyTraderAI`
+//!   @0x8b0fd, `_BraveTraderAI` @0x8b567, `_WarshipAI`
+//!   @0x8b919/@0x8ba5d/@0x8c038, `_PirateWarshipAI` @0x8c4a3,
+//!   `_InterceptorAI` @0x8d136), `_MinerAI` (@0x8b3a5, run only with
+//!   parent -1, @0x8ff80) and `_DefenseShipAI` (@0x7f968, run only with
+//!   +0x8c set, @0x8ff4d); AI types 5 and 6 think `_EscortAI` (@0x90016),
+//!   which writes neither goal;
+//! - the writers of an NPC parent (`_LaunchFighter` @0x3d870,
+//!   `_HyperSpawnFleet` @0x421ef, `_AIPlunderShipContents` @0x8496e on a
+//!   disabled ship the reset holds in sub 0, and @0x89488 on a ship
+//!   already led) never meet such a ship, and a bribed follower (AI type
+//!   1, which keeps its parent and may take goal 1) is skipped by the
+//!   marking pass (@0x440d8-0x440e0);
+//! - the check's own copy of a lead's sub (@0x893e1) writes parent -1
+//!   (@0x8946b).
+//!
+//! Nor is a lead entering a gate lost with followers: the release runs in
+//! the pass that writes sub 0x17 (@0x8dc94-0x8dd58,
+//! `Traffic::release_followers` at the same tick's end), and no fighter is
+//! launched to follow it while it fades, as `_AILaunchFighter` runs only in
+//! a sub block sub 0x17 lacks (@0x8732f) or past the wait gate (@0x8e6fa),
+//! and a breaking-up ship's escape craft (`_HandleShip` @0x354ea) come
+//! after the disabled reset has ended its entry
+//! ([`disabled_reset`](super::disabled_reset)). So a successor in
+//! [`Mode::EnteringGate`] or [`Mode::Adrift`] (an escape pod has no
+//! parent) never takes goal 0x15 either.
+//!
 //! **Ordering.** The original checks per ship in slot order. Every check
 //! here reads the ships as the pass began, which the checks of one lost
 //! lead's fleet don't write; in a chain of lost leads a lower slot's check
@@ -329,6 +364,18 @@ impl Npc {
     /// is one, a repairer by `world`'s reading of
     /// [`RuleKey::SuccessorRepairer`](crate::RuleKey::SuccessorRepairer)
     /// (see the module docs).
+    ///
+    /// A lead paused keeping sub 0xd ([`Kept::FollowsJump`]) hands its
+    /// successor goal 0x13 and sub 0xd (@0x893c8-0x893e1) with parent -1
+    /// (@0x8946b). Its dispatch takes the jump path (@0x8fd83-0x8fd9a),
+    /// whose cancels test goal 0xb alone (@0x900d5, @0x90125), so it never
+    /// draws the pause's release (@0x8fe73), and sub 0xd (@0x859c5-0x85c5f)
+    /// then reads its parent's record at -1 × 0xc940 from the ship table,
+    /// the memory before it (@0x859df-0x85a1a, @0x85a42, @0x85af8-0x85b8e).
+    /// Every branch it takes hangs on that read, which can't be replicated.
+    /// The engine's stand-in: the successor keeps the copied pause and its
+    /// lead's [`WarpGoal::Follow`], so it follows the jump of the ship its
+    /// lost lead followed.
     fn take_over(&mut self, record: Option<&Npc>, world: &World) {
         // Its goal word is 0x15 or 8, whatever the engine keeps beside it.
         let arriving = self.emerging() || self.jumping_in();
