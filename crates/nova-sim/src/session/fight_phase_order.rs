@@ -33,7 +33,7 @@ const MISSILE: WeaponId = WeaponId(134);
 
 /// The Quad Light Blaster Turret: point defence firing every 5 ticks, 20
 /// pixels a tick for 12, doing 1 mass and 4 energy damage.
-fn quad() -> WeaponRecord {
+pub(super) fn quad() -> WeaponRecord {
     WeaponRecord {
         id: QUAD,
         guidance: 9,
@@ -91,7 +91,7 @@ fn pass(
 }
 
 /// Whether `ship` fired `weapon` among `events`.
-fn fired(events: &[CombatEvent], ship: ShipRef, weapon: WeaponId) -> bool {
+pub(super) fn fired(events: &[CombatEvent], ship: ShipRef, weapon: WeaponId) -> bool {
     events.iter().any(|event| {
         matches!(event, CombatEvent::Fired { ship: s, weapon: w, .. } if *s == ship && *w == weapon)
     })

@@ -3,8 +3,9 @@
 //! is the carrier or a ship the carrier leads (@0x3dd0f-0x3dd47), goal 0
 //! (`_AISetup` @0x7f3e8), gliding its bay's `Count` until a think ends it
 //! (@0x3d843-0x3d85b), and still of its carrier's lead's side for hits,
-//! sparing and point defence (`_ShipsShareParent` @0x7926-0x79c1); the
-//! player's fighters glide too. A player's fighter never launches under
+//! sparing and `Allegiance` (`_ShipsShareParent` @0x7926-0x79c1), though
+//! its point defence defends its carrier (`pd_parent`); the player's
+//! fighters glide too. A player's fighter never launches under
 //! Return to Hangar, which a joiner's class order drops (`_EscortAI`
 //! @0x83b18), so only its Hold glide is pinned.
 
@@ -14,8 +15,8 @@ use std::rc::Rc;
 
 use super::Session;
 use super::fighters::tests::{
-    BAY, VIPER, carrier_npc, carrying, fight, fleet_npcs, flying_by, launch, pilot, pirate, raided,
-    raiding_ai, vipers,
+    BAY, VIPER, carrier_npc, carrying, earlier_escorts, earlier_raiding_ai, fight, fleet_npcs,
+    flying_by, launch, pilot, pirate, raided, raiding_ai, vipers,
 };
 use crate::ai::{Behaviour, Goal, NovaAi, Surroundings};
 use crate::chance::Chance;
@@ -157,11 +158,12 @@ fn shots_between_the_fighter_and_its_carriers_leads_other_escort_still_miss() {
     );
 }
 
-/// [`raided`], its carrier in berth 5: its fighter launches into a free
-/// berth below the carrier's, which its launch frame's AI loop has passed,
-/// so it thinks first in the next frame (see the `launch_frame` module).
-fn raided_below(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
-    let rules = Rulebook::default().with_override(RuleKey::FighterLaunch, RuleSource::Engine);
+/// [`raided`] by `rules`, its carrier in berth 5: its fighter launches into
+/// a free berth below the carrier's, which its launch frame's AI loop has
+/// passed, so it thinks first in the next frame (see the `launch_frame`
+/// module).
+fn raided_below(catalog: &FakePilotCatalog, rules: Rulebook) -> (Session, NpcId, NpcId) {
+    let rules = rules.with_override(RuleKey::FighterLaunch, RuleSource::Engine);
     let mut session = flying_by(catalog, pilot(catalog, 0, Vec::new()), rules);
     let lead = pirate(&mut session, 2000.0, 2000.0);
     let npc = session.space.npc_mut(lead).expect("there");
@@ -171,11 +173,15 @@ fn raided_below(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId) {
     (session, raider, lead)
 }
 
-/// The fighter of [`raided_below`]'s carrier launched by a pass of
-/// [`raiding_ai`]: the session, the fighter, the carrier and its lead.
-fn npc_launched(catalog: &FakePilotCatalog) -> (Session, NpcId, NpcId, NpcId) {
-    let (mut session, raider, lead) = raided_below(catalog);
-    fight(&mut session, catalog, &raiding_ai());
+/// The fighter of [`raided_below`]'s carrier by `rules`, launched by a pass
+/// of `ai`: the session, the fighter, the carrier and its lead.
+fn npc_launched(
+    catalog: &FakePilotCatalog,
+    rules: Rulebook,
+    ai: &NovaAi,
+) -> (Session, NpcId, NpcId, NpcId) {
+    let (mut session, raider, lead) = raided_below(catalog, rules);
+    fight(&mut session, catalog, ai);
     let launched = vipers(&session);
     assert_eq!(launched.len(), 1, "one launched");
     let fighter = &launched[0];
@@ -215,7 +221,7 @@ fn an_npcs_fighter_ends_its_glide_at_its_first_think_and_attacks_once_its_carrie
     // carrier's next order frame gives it Attack, its carrier attacking
     // with its shield full (`_AIIssueEscortOrders` @0x89a3c-0x89a53).
     let catalog = carrying();
-    let (mut session, id, raider, _) = npc_launched(&catalog);
+    let (mut session, id, raider, _) = npc_launched(&catalog, Rulebook::default(), &raiding_ai());
     fight(&mut session, &catalog, &raiding_ai());
     let fighter = session.space.npc(id).expect("there");
     assert_eq!(fighter.ai_wait, 0, "its formation block ends it");
@@ -241,7 +247,8 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
     // carrier has issued it Return, whose block leaves +0x4c
     // (@0x83e79-0x83ea3); an idle carrier issues Return again.
     let catalog = carrying();
-    let (mut session, id, raider, lead) = npc_launched(&catalog);
+    let (mut session, id, raider, lead) =
+        npc_launched(&catalog, Rulebook::default(), &raiding_ai());
     for ship in [lead, raider] {
         let npc = session.space.npc_mut(ship).expect("there");
         npc.goal = Goal::Idle;
@@ -261,6 +268,34 @@ fn an_npcs_fighter_told_to_return_coasts_its_glide_out() {
     assert_eq!(session.space.npc(id).expect("there").ai_wait, 0);
     let (held, _) = coasts(&mut session, &catalog, &ai, id, 5);
     assert!(!held, "it flies home once its glide is out");
+}
+
+#[test]
+fn by_the_other_reading_an_npcs_fighter_attacking_ends_its_glide_and_one_docking_coasts_it_out() {
+    // The Attack block writes +0x4c = -1.0 (@0x83d62-0x83d6a); the Return
+    // block leaves it (@0x83e79-0x83ea3).
+    let catalog = carrying();
+    let ai = earlier_raiding_ai();
+    let (mut session, id, _, _) = npc_launched(&catalog, earlier_escorts(), &ai);
+    fight(&mut session, &catalog, &ai);
+    let fighter = session.space.npc(id).expect("there");
+    assert_eq!(fighter.ai_wait, 0, "its first think ends it");
+    assert_eq!(fighter.goal, Goal::Attack(ShipRef::Player));
+    let (held, _) = coasts(&mut session, &catalog, &ai, id, 5);
+    assert!(!held, "it flies at once");
+
+    let (mut session, id, raider, lead) = npc_launched(&catalog, earlier_escorts(), &ai);
+    for ship in [lead, raider] {
+        session.space.npc_mut(ship).expect("there").goal = Goal::Idle;
+    }
+    // The launch frame counted one (see `npc_launched`).
+    let (held, left) = coasts(&mut session, &catalog, &ai, id, GLIDE - 2);
+    assert!(held, "no turn or thrust while it glides");
+    assert_eq!(left, 1);
+    assert_eq!(
+        session.space.npc(id).expect("there").goal,
+        Goal::Dock(ShipRef::Npc(raider))
+    );
 }
 
 /// The player's session of [`carrying`], two Vipers aboard, one launched

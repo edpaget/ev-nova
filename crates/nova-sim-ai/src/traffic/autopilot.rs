@@ -76,7 +76,17 @@
 //!   [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation); by the
 //!   other, it keeps within [`FOLLOW_DISTANCE`] of its lead, matching its
 //!   lead's velocity there, as [`Goal::Inspect`] keeps with the ship it
-//!   inspects.
+//!   inspects by the port's earlier flight.
+//! - [`Goal::Inspect`]: by the original's flight
+//!   ([`FormationFlight::Original`]), it flies sub 9 at the ship it
+//!   inspects (`_HighLevelAIHandler` @0x8f1ed, the low level
+//!   @0x8769a-0x878f4; [`formation_flight::steer`]); its think ends the
+//!   inspection within reach ([`interceptor`](crate::ai::interceptor)). By
+//!   the port's earlier one ([`FormationFlight::Earlier`]), it keeps
+//!   within [`FOLLOW_DISTANCE`] of it, matching its velocity there. With
+//!   the ship gone it coasts as [`Goal::Idle`] does by the original's
+//!   flight, as goal 7's let-go writes goal 0 (@0x8f3a5-0x8f3ae), and
+//!   brakes by the earlier one.
 //! - [`Goal::Assist`]: its docking flies it
 //!   ([`repair_dock`](crate::traffic::repair_dock),
 //!   [`refuel_dock`](crate::traffic::refuel_dock)); holding none (with no
@@ -104,17 +114,22 @@
 //! - [`Goal::Dock`]: a fighter flies back to its
 //!   [`Carrier`](crate::bay::Carrier)
 //!   (`_LowLevelAIHandler` sub 8 and 0xb, see [`bay`](crate::bay)).
-//!   Outside its dock window on either axis it closes on the carrier as
-//!   an escort on its slot, at full speed beyond [`APPROACH_FORMATION`];
-//!   inside, it turns to the carrier's table bearing
-//!   (`_CalcInterceptAngle`, as `_HandleShip` turns it,
-//!   [`flight::turn_to`]), thrusting while off it by less than its turn
-//!   rate and [`DOCK_TURN_SLACK`], whole degrees, strictly, and each axis more than
-//!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
-//!   towards it. Within the carrier's reach on both axes it docks, and
-//!   leaves the system ([`Outcome::Docked`]); or, with no bay for it
-//!   ([`Beside::no_bay`]), it goes on steering and thrusting at the carrier
-//!   unpulled and retries next tick.
+//!   Outside its dock window on either axis it flies sub 0xb at the
+//!   carrier, and it stops wherever it is while it can't see the carrier
+//!   ([`return_flight`]); by the port's earlier flight
+//!   ([`FormationFlight::Earlier`]), which reads no sight, it closes on
+//!   the carrier as an escort on its slot, at full speed beyond
+//!   [`APPROACH_FORMATION`]. Within the carrier's reach on both axes it
+//!   docks, and leaves the system ([`Outcome::Docked`]). Otherwise, inside,
+//!   it flies sub 8 ([`dock_flight`]): it turns to the carrier's table
+//!   bearing and, within its turn rate and a degree of it, by the engine's
+//!   reading of [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)
+//!   bursts along its heading at its pull ([`FORMATION_NUDGE`] ticks'
+//!   acceleration) where by the other it thrusts; and each axis at least
+//!   the pull off is pulled that much towards the carrier. Within reach
+//!   with no bay for it ([`Beside::no_bay`]), it goes on steering and
+//!   thrusting at the carrier, with no pull and no burst, and retries next
+//!   tick.
 //! - [`Goal::Attack`], [`Goal::Snipe`] and [`Goal::Flee`]: it flies the
 //!   last body of its frame ([`pursuit::frame_of`]), reading whether its
 //!   target is disabled, as that body's thrust, cap and heading win
@@ -136,7 +151,9 @@
 //!   [`BREAK_THRUST`] times its acceleration; rushing, at [`RUSH_THRUST`]
 //!   times it, up to [`RUSH_SPEED`] times its top speed. Sniping, it
 //!   flies as [`snipe::fly`] says (below). With its target gone an
-//!   attacker brakes and a sniper coasts.
+//!   attacker, a fleeing ship or a plunderer coasts as [`Goal::Idle`]
+//!   does, as each block writes goal 0 and the tail sub 0 (@0x8e228,
+//!   @0x8e714, @0x8e731, @0x8eb3c, @0x8eb5f), and a sniper coasts too.
 //! - Sniping, as [`snipe::fly`] says: moving 0.35 or more on an axis it
 //!   brakes, turning to its retro heading (or, with a last gun and by the
 //!   engine, its target's lead) and thrusting within its turn rate and
@@ -162,19 +179,25 @@
 //!   as `_HandleShip` skips them while +0x4c runs (@0x34a54-0x34a72) but
 //!   for goal 0x16 (@0x3443f-0x34454); a drift
 //!   ([`Goal::Drift`]) so too, its 0.7 a tick along its heading being the
-//!   high level's (see [`plunder`](crate::traffic::plunder)).
+//!   high level's (see [`plunder`](crate::traffic::plunder)). A ship that
+//!   took the wait with sub 1 stored ([`Npc::stopping`]) keeps it, the
+//!   high level writing no sub (@0x8d4d2), and sub 1's cuts stand
+//!   ([`leave_flight::stop_under_wait`]): × 0.94 on the soft brake within
+//!   its retro heading (and off it for a refuel, goal 9), and below 0.35
+//!   × 0.95, which ends it.
 //! - [`Goal::Flee`] beyond [`pursuit::FLEE_REACH`] of its attacker on
 //!   either axis, truncated (its frame has no body): beyond 1000 and able
 //!   to jump ([`leave::can_jump`](crate::ai::leave::can_jump), by
 //!   [`Readings::jump_fuel`]) it leaves as a leaving ship does; otherwise
 //!   it runs out (state 3's far branch, @0x8e0e1-0x8e21a;
 //!   [`leave::flee_leg`](crate::ai::leave::flee_leg)).
-//! - [`Goal::Hold`]: no thrust, and no heading but its own truncated
-//!   (`_LowLevelAIHandler` zeroes the thrust @0x851f1, defaults +0x68
-//!   @0x8522d, and has no handler for state 0): it coasts on
-//!   the velocity it has, unclamped (under
+//! - [`Goal::Idle`] (goal 0, which the high level's tail gives sub 0,
+//!   @0x8fb09-0x8fb13) and [`Goal::Hold`]: no thrust, and no heading but
+//!   its own truncated (`_LowLevelAIHandler` zeroes the thrust @0x851f1,
+//!   defaults +0x68 @0x8522d, and has no handler for sub 0; [`sub_0`]):
+//!   it coasts on the velocity it has, unclamped (under
 //!   [`RuleKey::SpeedCap`](crate::RuleKey::SpeedCap)'s circle, capped at
-//!   its top speed).
+//!   its top speed), keeping what it owes of a burst unburst.
 //! - [`Goal::AttackStellar`]: by its band from its stellar, closing in,
 //!   running out, braking or aiming ([`stellar_attack`]).
 //! - [`Goal::Mine`] and [`Goal::Scoop`], as [`mine_flight`] flies them:
@@ -182,21 +205,25 @@
 //!   ([`Beside::rock`]), and 0x15's steer to the nearest scoopable box
 //!   ([`Beside::scoop_box`]); with slot 0 empty a mining ship flies order
 //!   1 and brakes to a stop (@0x8f879).
-//! - [`Goal::Idle`], [`Goal::Wait`] (state 6, a stop, @0x8f101),
+//! - [`Goal::Wait`] (state 6, a stop, @0x8f101),
 //!   [`Goal::CountWait`] (sub 1, a stop, @0x8d48c, its AI wait running),
-//!   or a
-//!   goal it cannot fly (a stellar, lead, player or carrier that is not
+//!   or a goal it cannot fly (a stellar, lead or carrier that is not
 //!   there): it flies sub 1, a stop ([`leave_flight::stop`]), braking
 //!   while it moves 0.35 or more on an axis and settling × 0.95 a tick
 //!   below that, so it comes to rest from any speed.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
-//!   [`glide_speed`] a tick, with no steering, and flies on at that speed
+//!   [`glide_speed`] a tick (from what it owes, for a ship that carries a
+//!   word, [`Npc::burst_speed`]), with no steering, and flies on at that speed
 //!   once the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]), as it does bursting out of a gate (see
-//!   below). A disabled ship glides on too: `_AIDispatch`
-//!   cancels a disabled ship's jump out but lets its jump in run
-//!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
-//!   comes in ends its glide in the system.
+//!   below). A ship disabled or breaking up glides on too, along the
+//!   heading it had, each move dragged ([`burst_motion`]): `_AIDispatch`
+//!   cancels a disabled ship's jump out but lets its jump in run, as its
+//!   -999.0 is no stage above 0 (@0x8fcd2-0x8fce9) and takes the -900 test
+//!   past the reset (@0x8fcf5, @0x8fece), and `_HandleShip`'s burst block
+//!   has no disabled test (@0x34424 → @0x34679 → @0x34a54 → @0x34bc0). So a
+//!   rescue mission's ship held disabled as it comes in ends its glide in
+//!   the system.
 //! - While it waits at the gate it comes out of ([`Mode::Emerging`]) it
 //!   moves on its velocity, at rest where it was put unless a hit pushed
 //!   it, a disabled one dragged first, its wait counting down whatever its
@@ -208,20 +235,28 @@
 //!   (@0x3aa7d).
 //!   Then ([`Mode::LeavingGate`]) it bursts out along its heading at
 //!   [`exit_speed`], from 30, or from 15 for a ship
-//!   [`led_out`](Npc::led_out) of the gate by the player, 1.165 slower
-//!   each tick (sub-goal 0xa, as the glide in),
+//!   [`led_out`](Npc::led_out) of the gate by the player, or from its own
+//!   word for a successor that waited where it was
+//!   ([`Npc::bursts_own_word`]), 1.165 slower each tick (sub-goal 0xa, as
+//!   the glide in),
 //!   with no steering, and flies on at that speed once
 //!   the next tick's would be at or below its cap
 //!   ([`TopSpeeds::burst_cap`]: the lower of its own top speed and its
 //!   lead's, the player's for a ship the player leads; see
-//!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship not
-//!   intact by then drifts instead of bursting, flying from there on.
-//!   It is out of its gate ([`Npc::emerges_from`] cleared) from its first
+//!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship
+//!   disabled in its gate is held there, the disabled reset having ended
+//!   its goal 0x15 ([`Npc::leaves_gate_goal`]), so only a hit since its
+//!   last dispatch, whose high level had written goal 8, finds it about to
+//!   burst. One disabled or breaking up from there on keeps bursting, as
+//!   the glide does: its -999.0 and sub 0xa stand (@0x8f3c8-0x8f3d9,
+//!   @0x88114-0x8813d), it skips its turn (@0x34424), and each move is
+//!   dragged ([`burst_motion`]) down to its cap, where the reset takes it
+//!   on its next dispatch. It is out of
+//!   its gate ([`Npc::emerges_from`] cleared) from its first
 //!   burst tick, as `_HighLevelAIHandler` sets its travel stellar (+0x6c)
 //!   to -1 in the pass that starts the burst (@0x8dd93), and
 //!   `_AIMakeShipStopJumping` sets it to -1 again as the burst ends
-//!   (@0x82eaa); a ship not intact drifts out still carrying it, cleared
-//!   as it flies. While it waits it holds the gate's sprite open
+//!   (@0x82eaa). While it waits it holds the gate's sprite open
 //!   (`nova_sim::gate_sprite`). Hit while it waits and
 //!   answering the hit, its wait is cut to at most [`HIT_WAIT`] ticks; its
 //!   trigger, which may hold its point defence through the wait, is
@@ -264,7 +299,8 @@
 //!   at most [`HIT_WAIT`] ticks.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
-//!   never lands or jumps. A stellar's defence ship breaking up is not
+//!   never lands or jumps. Only a destroyed ship drifts out of a glide or
+//!   burst, its slot inactive. A stellar's defence ship breaking up is not
 //!   disabled (@0x2d6f), and `_HandleShip`'s drift reads `_IsDisabled`
 //!   (@0x33846, @0x34424), so it steers on. A disabled or breaking-up one also slows by
 //!   [`flight::DISABLED_DRAG`] each tick before it moves (0x33950-0x339a1).
@@ -273,11 +309,11 @@ use crate::ai::lost_sight;
 use crate::ai::pursuit::{self, BREAK_THRUST, Body, RUSH_SPEED, RUSH_THRUST};
 use crate::ai::swarm::SwarmLead;
 use crate::ai::{Goal, fire, fire::Manoeuvre};
-use crate::bay::DOCK_TURN_SLACK;
 use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::{Arsenal, Trigger};
+#[cfg(any(doc, test))]
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{
@@ -290,6 +326,8 @@ use crate::handling::Handling;
 use crate::landing::TypeWidth;
 use crate::landing::{self, LANDING_SPEED};
 use crate::rulebook::RuleSource;
+use crate::traffic::dock_flight;
+#[cfg(any(test, doc))]
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::formation_flight;
 use crate::traffic::gate_entry::{self, ENTRY_TICKS};
@@ -300,8 +338,10 @@ use crate::traffic::leave_flight;
 use crate::traffic::mine_flight;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::pod_flight;
+use crate::traffic::return_flight;
 use crate::traffic::ship_display::{self, GlowCopy};
 use crate::traffic::snipe;
+#[cfg(any(test, doc))]
 use crate::traffic::spawn::glide_speed;
 use crate::traffic::stellar_attack;
 use crate::trig;
@@ -349,8 +389,9 @@ pub struct Readings {
     /// [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel)).
     pub jump_fuel: RuleSource,
     /// Whether a ship whose hold at its gate runs out owes its gate burst
-    /// ([`Npc::end_wait`],
-    /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)).
+    /// ([`Npc::end_wait`]), and whether a docking fighter flies sub 8's
+    /// burst word ([`dock_flight`])
+    /// ([`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)).
     pub held_burst: RuleSource,
     /// How a landing ship lands: in `_HighLevelAIHandler` state 1's box by
     /// the engine ([`land_flight`]), within
@@ -376,9 +417,11 @@ pub struct Beside {
     /// its approach steers at it ([`formation_flight`]).
     pub guard: Option<ShipState>,
     /// Whether a [`Goal::Formation`] or [`Goal::Follow`] escort sees its
-    /// leader (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): with its
-    /// leader unseen it brakes near it ([`formation_flight`]) and is not
-    /// in close formation ([`Npc::keeps_close_formation`]).
+    /// leader (`_ShipVisibleToShip(leader, ship)` @0x8ed5f), or a
+    /// [`Goal::Dock`] fighter its carrier (@0x8ed00): with its leader
+    /// unseen it brakes near it ([`formation_flight`]) and is not in close
+    /// formation ([`Npc::keeps_close_formation`]); with its carrier unseen
+    /// it stops ([`return_flight`]).
     pub leader_seen: bool,
     /// Asteroid slot 0, while it is live, which a [`Goal::Mine`] miner
     /// chases and holds by ([`mine_flight`]).
@@ -388,13 +431,18 @@ pub struct Beside {
     /// ([`mine_orders::nearest_box`](crate::ai::mine_orders::nearest_box)),
     /// if any ([`mine_flight`]).
     pub scoop_box: Option<Vec2>,
+    /// Whether it flies double time's second pass, which runs no
+    /// `_LowLevelAIHandler` (`je 0x44350` @0x4402a), so no
+    /// `_AIMaintainFormation` ([`formation_flight::maintain`]).
+    pub second_pass: bool,
     /// Whether a [`Goal::Dock`] fighter's carrier has no bay for it: within
     /// the carrier's reach it stays out, steering and thrusting at the
     /// carrier unpulled, and retries next tick.
     pub no_bay: bool,
 }
 
-/// No swarm lead, no guard, its leader seen, and no asteroid or box.
+/// No swarm lead, no guard, its leader seen, no asteroid or box, on the
+/// advance pass.
 impl Default for Beside {
     fn default() -> Self {
         Self {
@@ -403,6 +451,7 @@ impl Default for Beside {
             leader_seen: true,
             rock: None,
             scoop_box: None,
+            second_pass: false,
             no_bay: false,
         }
     }
@@ -541,18 +590,22 @@ fn fly_mobile(
         held_burst::step(npc, &handling, controls, flight, inertia, Word::Writes);
         return Outcome::Flying;
     }
-    let unsteered_by = (speeds, flight, readings.held_burst);
+    let unsteered_by = (speeds, flight, readings.held_burst, beside.second_pass);
     if let Some(outcome) = unsteered(npc, &handling, unsteered_by, inertia, chance) {
         return outcome;
     }
-    if npc.ai_wait > 0 && !npc.count_wait() {
+    if npc.ai_wait_flies() {
         // `_HandleShip` skips its turn and thrust while +0x4c runs
         // (@0x34a54-0x34a72) and moves it first (@0x34274-0x342aa), an
         // inertialess ship's velocity following its speed (@0x3425f);
         // goal 0x16 is exempt (`_AIIsShipDoingCountWait`, @0x3443f-0x34454)
         // and brakes below. The high level's wait gate returns before
         // state 1 runs (@0x8d4b9-0x8d4d2), so a landing ship keeps its goal
-        // through the wait and hands a gate off only after it.
+        // through the wait and hands a gate off only after it, and a sub 1
+        // it stored stands, the low level cutting it as ever.
+        if npc.stopping {
+            leave_flight::stop_under_wait(npc, &handling, inertia);
+        }
         position_step(npc, &handling, inertia);
         return Outcome::Flying;
     }
@@ -576,7 +629,13 @@ fn fly_mobile(
         Goal::AttackStellar(_) => {
             return stellar_attack::fly(npc, sites, weapons, &handling, (flight, inertia));
         }
-        Goal::Inspect(_) => follow_or_brake(npc, &handling, other, inertia),
+        Goal::Inspect(_) => match (other, flight.formation_flight) {
+            (Some(target), FormationFlight::Original) => inspect(npc, target, &handling),
+            // Goal 7's gone let-go writes goal 0, then the tail sub 0
+            // (@0x8f158 → @0x8f3a5-0x8f3ae, @0x8fb09-0x8fb13).
+            (None, FormationFlight::Original) => sub_0(npc),
+            (_, FormationFlight::Earlier) => follow_or_brake(npc, &handling, other, inertia),
+        },
         // By the earlier follow, a fleet escort follows its lead as an
         // inspector does; by the original's, it keeps formation below.
         Goal::Follow { .. } if flight.npc_formation == NpcFormation::Earlier => {
@@ -603,7 +662,11 @@ fn fly_mobile(
             None if matches!(npc.goal, Goal::Snipe(_)) => {
                 snipe::fly(npc, None, &handling, snipe_lead, weapons).into()
             }
-            None => braking(npc, &handling, inertia),
+            // The flee block's -1 (@0x8dff6 → @0x8e228), the attack block's
+            // gone target and slot test (@0x8e714, @0x8e731) and goal 0xd's
+            // (@0x8eb3c, @0x8eb5f) write goal 0, and the tail sub 0
+            // (@0x8fb09-0x8fb13): it coasts.
+            None => sub_0(npc),
         },
         Goal::Formation { .. } | Goal::Follow { .. }
             if flight.formation_flight == FormationFlight::Original =>
@@ -617,10 +680,20 @@ fn fly_mobile(
                 Err(outcome) => return outcome,
             }
         }
-        Goal::Dock(_) => match dock(npc, other, beside.no_bay, &handling, flight, inertia) {
-            Ok(controls) => controls,
-            Err(outcome) => return outcome,
-        },
+        Goal::Dock(_) => {
+            let by = dock_flight::By {
+                flight,
+                inertia,
+                top: speeds.own,
+                word: readings.held_burst,
+                second_pass: beside.second_pass,
+                unpulled: false,
+            };
+            match dock(npc, other, beside, &handling, by) {
+                Ok(controls) => controls,
+                Err(outcome) => return outcome,
+            }
+        }
         // A count wait is sub 1, a stop (`_HighLevelAIHandler` @0x8d48c), as
         // is a wait (state 6, @0x8f101). The regroup pause flies its kept
         // substate's goal in its place (`Npc::fly_as_flown`, which the fly
@@ -630,17 +703,12 @@ fn fly_mobile(
         Goal::Mine => mine_flight::mine(npc, beside.rock.as_ref(), &handling, weapons)
             .unwrap_or_else(|| braking(npc, &handling, inertia)),
         Goal::Scoop => mine_flight::scoop(npc, beside.scoop_box, &handling),
-        Goal::Idle | Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => {
-            braking(npc, &handling, inertia)
-        }
-        // A drift moves on with no turn or thrust (its wait above), as
+        Goal::Wait | Goal::CountWait | Goal::Regroup { .. } => braking(npc, &handling, inertia),
+        // Goal 0 flies sub 0 (the high level's tail, @0x8fb09-0x8fb13). A
+        // drift moves on with no turn or thrust (its wait above), as
         // does an assister its docking doesn't fly: sub 0xb with no target
-        // does nothing (@0x87345-0x87351). +0x68 is the low level's
-        // default, so its heading is truncated (@0x8522d).
-        Goal::Hold | Goal::Drift | Goal::Assist(_) => {
-            flight::turn_to_own(&mut npc.state);
-            Controls::default().into()
-        }
+        // does nothing (@0x87345-0x87351).
+        Goal::Idle | Goal::Hold | Goal::Drift | Goal::Assist(_) => sub_0(npc),
     };
     let flown = chosen.flown.unwrap_or(handling);
     held_burst::step(npc, &flown, chosen.controls, flight, inertia, chosen.word);
@@ -796,44 +864,72 @@ fn formation(
     Ok(rejoin(&mut npc.state, handling, slot, leader.velocity, inertia).into())
 }
 
-/// How `npc` flies back to its carrier at `carrier` (see the module
-/// docs), under `flight`: the controls to fly outside its dock window, or
-/// braking with no carrier there; or, inside it, what became of it,
-/// having flown. Within reach with `no_bay` it stays out, unpulled.
+/// How `npc` flies back to its carrier at `carrier`, with `beside` its
+/// sight of it and its swarm lead (see the module docs), as `by` says:
+/// the flight outside its dock window, or its carrier unseen, or braking
+/// with no carrier there; or, inside it, what became of it, having flown
+/// sub 8 ([`dock_flight::fly`]). Within reach with no bay for it
+/// ([`Beside::no_bay`]) it stays out, flying sub 8 unpulled.
+///
+/// The brake with no carrier stands in for one tick: goal 5's block reads
+/// the carrier's record unchecked (no +0xb8 test in @0x8ebd7-0x8ed15), so
+/// with its slot just freed the original flies sub 0xb or 8 at the freed
+/// record's place until the next frame's parent check. The fly pass reads
+/// no gone record, so it brakes that tick instead: a lag of one tick's
+/// motion that crosses no boundary the player sees.
 fn dock(
     npc: &mut Npc,
     carrier: Option<&ShipState>,
-    no_bay: bool,
+    beside: Beside,
     handling: &Handling,
-    flight: FlightRules,
-    inertia: Inertia,
+    by: dock_flight::By,
 ) -> Result<Flight, Outcome> {
+    let (flight, inertia) = (by.flight, by.inertia);
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
         return Ok(braking(npc, handling, inertia));
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
-    if !within(dock.window) {
-        return Ok(rejoin(
-            &mut npc.state,
-            handling,
-            carrier.position,
-            carrier.velocity,
-            inertia,
-        )
-        .into());
+    match flight.formation_flight {
+        FormationFlight::Original => {
+            let at = npc.state.position;
+            let seen = beside.leader_seen;
+            match return_flight::sub(at, carrier.position, dock.window, seen) {
+                return_flight::Sub::Stop => return Ok(braking(npc, handling, inertia)),
+                return_flight::Sub::Close => {
+                    return Ok(return_flight::close(npc, carrier, beside, handling));
+                }
+                return_flight::Sub::Dock => {}
+            }
+        }
+        FormationFlight::Earlier if !within(dock.window) => {
+            return Ok(rejoin(
+                &mut npc.state,
+                handling,
+                carrier.position,
+                carrier.velocity,
+                inertia,
+            )
+            .into());
+        }
+        FormationFlight::Earlier => {}
     }
     let inside = within(dock.reach);
-    if inside && !no_bay {
+    if inside && !beside.no_bay {
         return Err(Outcome::Docked {
             carrier: dock.ship,
             ship: npc.ship,
         });
     }
-    dock_in(npc, carrier, handling, flight, inertia);
-    if !inside {
-        pull_in(npc, carrier, handling);
-    }
+    dock_flight::fly(
+        npc,
+        carrier,
+        handling,
+        dock_flight::By {
+            unpulled: inside,
+            ..by
+        },
+    );
     Err(Outcome::Flying)
 }
 
@@ -859,54 +955,6 @@ fn rejoin(
             inertia,
         )
     }
-}
-
-/// One tick of `npc` docking with a carrier at `carrier`, inside its dock
-/// window (see the module docs): it turns to the carrier's table bearing
-/// as `_HandleShip` turns it ([`flight::turn_to`]), thrusting while off
-/// it by less than its turn rate and [`DOCK_TURN_SLACK`], whole degrees,
-/// strictly, by its heading before the turn, and flies, under `flight`,
-/// as `inertia` says.
-fn dock_in(
-    npc: &mut Npc,
-    carrier: &ShipState,
-    handling: &Handling,
-    flight: FlightRules,
-    inertia: Inertia,
-) {
-    // +0x68, the table's bearing of the carrier (@0x87e81-0x87e9d).
-    let wanted = trig::intercept_angle(npc.state.position, carrier.position);
-    // Off it by less than a turn and the slack, strictly, by its heading
-    // before `_HandleShip` turns it (@0x87ea9-0x87ee4).
-    let thrust = fire::off_by(npc.state.heading, wanted) < handling.turn_rate + DOCK_TURN_SLACK;
-    let controls = Controls {
-        thrust,
-        turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
-        reverse: false,
-        ..Controls::default()
-    };
-    held_burst::step(npc, handling, controls, flight, inertia, Word::Writes);
-}
-
-/// `npc`, docking, is pulled towards a carrier at `carrier` on each axis
-/// farther off than [`FORMATION_NUDGE`] ticks' acceleration
-/// (@0x87ff9 onward): none for a fighter with no bay within its carrier's
-/// reach, whose call skips it (@0x88111).
-fn pull_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling) {
-    let pull = handling.accel * FORMATION_NUDGE;
-    let towards = |at: f32, to: f32| {
-        let off = to - at;
-        if off.abs() > pull {
-            at + off.signum() * pull
-        } else {
-            at
-        }
-    };
-    let at = npc.state.position;
-    npc.state.position = Vec2::new(
-        towards(at.x, carrier.position.x),
-        towards(at.y, carrier.position.y),
-    );
 }
 
 /// Flies one tick of `npc`'s fight at a target at `target` on
@@ -1020,7 +1068,9 @@ fn fight(
 }
 
 /// Tick `tick` of `npc`'s glide in from hyperspace: along its heading at
-/// [`glide_speed`], ending as [`burst`] says.
+/// [`Npc::burst_speed`], from [`glide_speed`]'s top or from what it owes
+/// (see [`burst_word`](crate::traffic::burst_word)), ending as [`burst`]
+/// says.
 ///
 /// `_HandleShip` runs the glide (+0x34 set to -50.0 and +0x30 to -1.165 by
 /// low mode 10, @0x88114-0x88136) through the same negative-speed path as
@@ -1035,14 +1085,8 @@ fn glide(
     flown: Flown,
     chance: &mut (impl Chance + ?Sized),
 ) {
-    if !burst(
-        npc,
-        glide_speed(tick),
-        glide_speed(tick + 1),
-        speeds,
-        flown,
-        chance,
-    ) {
+    let (speed, next) = (npc.burst_speed(tick), npc.burst_speed(tick + 1));
+    if !burst(npc, speed, next, speeds, flown, chance) {
         npc.mode = Mode::JumpingIn { tick: tick + 1 };
     }
 }
@@ -1052,7 +1096,8 @@ fn glide(
 /// destroyed (`_HandleShip` reads `_IsDisabled` once, @0x33846, for its
 /// drag @0x33950 and its drift @0x34424, so a stellar's defence ship
 /// breaking up still steers, [`Npc::active_not_disabled`]), gliding in from
-/// hyperspace (intact or disabled), bursting out of a gate, or holding
+/// hyperspace or bursting out of a gate (`_IsDisabled` or not, as the
+/// burst block has no disabled test, @0x34a54 → @0x34bc0), or holding
 /// its course after either (see the module docs), on `handling` under
 /// `flight`, as `inertia` says, its burst ending at `speeds`'
 /// [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on `chance`;
@@ -1066,15 +1111,22 @@ fn glide(
 /// What became of it, if it did. A disabled or breaking-up ship's speed
 /// along its heading slows with its velocity, inertialess or not
 /// (@0x3398f-0x339a1).
+///
+/// On double time's `second_pass` a ship whose wait has just run out
+/// ([`Mode::LeavingGate`] at tick 0) drifts as in its wait and doesn't
+/// start its burst: the pass runs no dispatch (@0x4402a), so its goal is
+/// still 0x15, which the next advance pass's dispatch turns into goal 8
+/// (@0x8dd61-0x8dd93; see the `last_wait_frame` module).
 fn unsteered(
     npc: &mut Npc,
     handling: &Handling,
-    (speeds, flight, held_burst): (TopSpeeds, FlightRules, RuleSource),
+    (speeds, flight, held_burst, second_pass): (TopSpeeds, FlightRules, RuleSource, bool),
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<Outcome> {
     let flown = Flown { handling, inertia };
     match (npc.mode, npc.active_not_disabled()) {
+        (Mode::LeavingGate { tick: 0 }, _) if second_pass => drift_in_wait(npc, flown),
         (Mode::EnteringGate { gate, ticks_left }, _) => {
             return Some(enter_gate(npc, gate, ticks_left, flown));
         }
@@ -1082,8 +1134,11 @@ fn unsteered(
         (Mode::HeldAtGate { ticks_left }, _) => {
             hold_at_gate(npc, ticks_left, flown, held_burst);
         }
-        (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
+        (Mode::JumpingIn { tick }, false) if npc.is_disabled() => {
             glide(npc, tick, speeds, flown, chance);
+        }
+        (Mode::LeavingGate { tick }, false) if npc.is_disabled() => {
+            leave_gate(npc, tick, speeds, flown, chance);
         }
         (mode, false) => {
             match mode {
@@ -1117,7 +1172,9 @@ fn unsteered(
 /// One tick of `npc` entering `gate`, `ticks_left` of its wait left
 /// (see [`gate_entry`]): still, whatever its condition and goal, as
 /// `_HandleShip` counts +0x4c down for every ship and the fade reads only
-/// the sub-goal; and gone once the wait is out. An inertialess ship's
+/// the sub-goal; and gone once the wait is out. That holds for the fly
+/// half: a ship disabled by the think half's dispatch has had its entry
+/// ended by the reset first ([`Npc::ends_gate_entry`]). An inertialess ship's
 /// velocity follows its speed meanwhile, as `flown` says
 /// ([`inertialess::drift`]).
 fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> Outcome {
@@ -1190,7 +1247,10 @@ fn hold_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown, burst: RuleSource)
 }
 
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
-/// [`exit_speed`], ending as [`burst`] says. On its first tick it is out
+/// [`Npc::burst_speed`], from its emerge's [`exit_speed`] or, for a ship
+/// carrying its own word, from what it owes or 50 (see
+/// [`burst_word`](crate::traffic::burst_word)), ending as [`burst`] says.
+/// On its first tick it is out
 /// of its gate ([`Npc::emerges_from`] cleared, @0x8dd8a-0x8dd93).
 fn leave_gate(
     npc: &mut Npc,
@@ -1204,14 +1264,8 @@ fn leave_gate(
         // (`_HighLevelAIHandler` @0x8dd8a-0x8dd93).
         npc.emerges_from = None;
     }
-    if !burst(
-        npc,
-        exit_speed(npc.led_out, tick),
-        exit_speed(npc.led_out, tick + 1),
-        speeds,
-        flown,
-        chance,
-    ) {
+    let (speed, next) = (npc.burst_speed(tick), npc.burst_speed(tick + 1));
+    if !burst(npc, speed, next, speeds, flown, chance) {
         npc.mode = Mode::LeavingGate { tick: tick + 1 };
     }
 }
@@ -1251,14 +1305,22 @@ fn burst(
 /// heading at `speed`; an inertialess one, as `inertia` says, takes
 /// `speed` as its speed along its heading after its velocity has followed
 /// the last tick's at `handling`'s rate and it has moved
-/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0).
+/// ([`inertialess::drift`], @0x34250-0x342aa, @0x34bdf-0x34bf0). A ship
+/// disabled or breaking up ([`disabled_drag`]) is dragged before its move
+/// (@0x33950-0x339a1), which the burst block doesn't test, and the block
+/// overwrites the dragged velocity after it: each move is its speed ×
+/// [`flight::DISABLED_DRAG`], its velocity left at its full speed.
 pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inertia: Inertia) {
     if let Inertia::Inertialess { .. } = inertia {
+        disabled_drag(npc);
         inertialess::drift(npc, handling);
         npc.speed = speed;
     } else {
-        npc.state.velocity = flight::facing(npc.state.heading) * speed;
+        let velocity = flight::facing(npc.state.heading) * speed;
+        npc.state.velocity = velocity;
+        disabled_drag(npc);
         npc.state.position = npc.state.position + npc.state.velocity;
+        npc.state.velocity = velocity;
     }
 }
 
@@ -1266,7 +1328,10 @@ pub(crate) fn burst_motion(npc: &mut Npc, speed: f32, handling: &Handling, inert
 /// `npc`'s velocity zeroed, as `inertia` says; with a lead (`speeds.lead`)
 /// it flies on, and with none it holds its course for
 /// [`POST_BURST_WAIT`] + `Rand(`[`POST_BURST_SPREAD`]`)` ticks, rolled on
-/// `chance` ([`Mode::Coasting`]), its trigger released.
+/// `chance` ([`Mode::Coasting`]), its trigger released. The word it burst
+/// from is spent (`_AIMakeShipStopJumping`'s +0x34 = 0, @0x82eb0): it owes
+/// nothing ([`Npc::owed_burst`]) and carries no word of its own
+/// ([`Npc::bursts_own_word`]).
 pub(crate) fn after_burst(
     npc: &mut Npc,
     speeds: TopSpeeds,
@@ -1276,6 +1341,8 @@ pub(crate) fn after_burst(
     if let Inertia::Inertialess { .. } = inertia {
         npc.state.velocity = Vec2::ZERO;
     }
+    npc.owed_burst = None;
+    npc.bursts_own_word = false;
     npc.mode = if speeds.lead.is_some() {
         Mode::Flying
     } else {
@@ -1517,6 +1584,29 @@ fn braking(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
     leave_flight::stop_flight(npc, handling, inertia)
 }
 
+/// Sub 0 of `npc`, which the low level's head alone flies
+/// (`_LowLevelAIHandler` @0x851da-0x8522d, no sub-0 block in its chain):
+/// no thrust, as +0x30 stays 0 (@0x851f1), so `_HandleShip` neither
+/// thrusts nor bursts what it owes (@0x34a84); and its own whole heading,
+/// the default +0x68 = trunc(+0x44) (@0x85228-0x8522d). It moves on at its
+/// velocity.
+pub(crate) fn sub_0(npc: &mut Npc) -> Flight {
+    flight::turn_to_own(&mut npc.state);
+    Controls::default().into()
+}
+
+/// Sub 9 of `npc` inspecting the ship at `target` on `handling`
+/// (`_HighLevelAIHandler` @0x8f1ed, see the module docs): it writes +0x34
+/// as it thrusts (@0x878e4), so an owed burst drops.
+fn inspect(npc: &mut Npc, target: &ShipState, handling: &Handling) -> Flight {
+    let (controls, flown) = formation_flight::steer(npc, target, false, None, None, handling);
+    Flight {
+        controls,
+        word: Word::Writes,
+        flown: Some(flown),
+    }
+}
+
 /// [`follow`]s a lead at `lead`, or brakes with none there
 /// ([`braking`]).
 fn follow_or_brake(
@@ -1681,7 +1771,7 @@ mod tests {
 
     fn braking(state: &ShipState, handling: &Handling) -> Flight {
         super::braking(
-            &mut npc(FAST, Goal::Idle, *state),
+            &mut npc(FAST, Goal::Wait, *state),
             handling,
             Inertia::Inertial,
         )
@@ -2154,10 +2244,10 @@ mod tests {
         let start = at(0.0, 0.0, 0.0, 2.0, 180.0);
         let mut slotless = fleet_escort(start, None);
         fly_earlier(&mut slotless, Some(&leader));
-        let mut idle = npc(FAST, Goal::Idle, start);
-        fly_earlier(&mut idle, Some(&leader));
-        assert_ne!(idle.state.heading, 180.0, "it turns to brake");
-        assert_eq!(slotless.state, idle.state, "as an idle ship brakes");
+        let mut waiting = npc(FAST, Goal::Wait, start);
+        fly_earlier(&mut waiting, Some(&leader));
+        assert_ne!(waiting.state.heading, 180.0, "it turns to brake");
+        assert_eq!(slotless.state, waiting.state, "as a waiting ship brakes");
     }
 
     #[test]
@@ -2490,21 +2580,13 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_breaking_up_or_destroyed_jumping_in_drifts_with_no_glide() {
-        for condition in [
-            Condition::Dying {
-                ticks_left: 4,
-                starting: false,
-            },
-            Condition::Destroyed,
-        ] {
-            let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
-            jumper.condition = condition;
-            jumper.mode = Mode::JumpingIn { tick: 3 };
-            assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
-            assert_eq!(jumper.state, drifted(condition), "drifting");
-            assert_eq!(jumper.mode, Mode::JumpingIn { tick: 3 }, "no glide");
-        }
+    fn a_destroyed_ship_jumping_in_drifts_with_no_glide() {
+        let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+        jumper.condition = Condition::Destroyed;
+        jumper.mode = Mode::JumpingIn { tick: 3 };
+        assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
+        assert_eq!(jumper.state, drifted(Condition::Destroyed), "drifting");
+        assert_eq!(jumper.mode, Mode::JumpingIn { tick: 3 }, "no glide");
     }
 
     /// A ship of `fields` coming out of a gate at (100, -200), heading 90°,
@@ -2531,12 +2613,15 @@ mod tests {
         }
         fly(&mut ship, &sites, None);
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
-        assert!(!ship.emerging());
+        assert!(ship.emerging(), "its goal is still 0x15");
         assert_eq!(
             ship.state,
             at(100.0, -200.0, 0.0, 0.0, 90.0),
             "not yet moving"
         );
+        fly(&mut ship, &sites, None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 1 });
+        assert!(!ship.emerging(), "goal 8");
     }
 
     /// The last tick of a burst out of a gate, flown at `speeds`.
@@ -2710,7 +2795,9 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_not_intact_still_waits_out_its_gate_but_drifts_instead_of_bursting() {
+    fn a_ship_not_intact_still_waits_out_its_gate_and_bursts_from_its_first_tick_dragged() {
+        // The think would hold it (`Npc::leaves_gate_goal`): this is a hit
+        // after its dispatch, whose high level had written goal 8.
         let mut ship = emerging(AVERAGE, 2);
         ship.condition = Condition::Disabled;
         ship.emerges_from = Some(StellarId(129));
@@ -2720,9 +2807,15 @@ mod tests {
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
         assert_eq!(ship.emerges_from, Some(StellarId(129)));
         fly(&mut ship, &[], None);
-        assert_eq!(ship.mode, Mode::Flying, "no burst");
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 1 }, "it bursts");
         assert_eq!(ship.emerges_from, None, "out of the gate");
-        assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "drifting");
+        let speed = exit_speed(false, 0);
+        let moved = flight::facing(90.0) * (speed * flight::DISABLED_DRAG);
+        assert!(
+            (ship.state.position - (Vec2::new(100.0, -200.0) + moved)).length() < 1e-3,
+            "{:?}",
+            ship.state
+        );
     }
 
     #[test]
@@ -3049,7 +3142,8 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_ship_jumping_in_glides_in_as_an_intact_one_does() {
+    fn a_disabled_ship_jumping_in_glides_in_on_an_intact_ones_modes_and_heading_each_move_dragged()
+    {
         let speeds = TopSpeeds {
             own: 6.0,
             lead: Some(9.0),
@@ -3057,10 +3151,18 @@ mod tests {
         let mut intact = jumping_in(AVERAGE);
         let mut disabled = intact.clone();
         disabled.condition = Condition::Disabled;
+        let mut position = disabled.state.position;
+        let mut ticks = 0;
         while intact.mode != Mode::Flying {
+            ticks += 1;
+            assert!(ticks < 100, "never ended");
+            let before = intact.state.position;
             assert_eq!(fly_at(&mut disabled, &[], None, speeds), Outcome::Flying);
             fly_at(&mut intact, &[], None, speeds);
-            assert_eq!(disabled.state, intact.state);
+            position = position + (intact.state.position - before) * flight::DISABLED_DRAG;
+            assert!((disabled.state.position - position).length() < 1e-2);
+            assert_eq!(disabled.state.heading, intact.state.heading);
+            assert_eq!(disabled.state.velocity, intact.state.velocity, "undragged");
             assert_eq!(disabled.mode, intact.mode);
         }
         assert_eq!(disabled.condition, Condition::Disabled);
@@ -3712,9 +3814,8 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_ship_or_one_whose_target_is_gone_brakes_to_a_stop() {
+    fn a_ship_whose_stellar_or_lead_is_gone_brakes_to_a_stop() {
         for goal in [
-            Goal::Idle,
             Goal::Land(StellarId(999)),
             Goal::Follow {
                 lead: NpcId(9),
@@ -3738,11 +3839,11 @@ mod tests {
         // `_HighLevelAIHandler` flies state 6 as +0x50 = 0, sub 1 (@0x8f101).
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         let mut waiting = npc(FAST, Goal::Wait, start);
-        let mut idle = npc(FAST, Goal::Idle, start);
+        let mut stopping = npc(FAST, Goal::Land(StellarId(999)), start);
         for _ in 0..200 {
             assert_eq!(fly(&mut waiting, &[], None), Outcome::Flying);
-            fly(&mut idle, &[], None);
-            assert_eq!(waiting.state, idle.state, "the idle ship's brake");
+            fly(&mut stopping, &[], None);
+            assert_eq!(waiting.state, stopping.state, "the autopilot's brake");
         }
         assert!(waiting.state.velocity.length() < 0.5, "{:?}", waiting.state);
     }
@@ -3751,11 +3852,11 @@ mod tests {
     fn a_mining_ship_brakes_to_a_stop_as_order_1_does() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         let mut miner = npc(FAST, Goal::Mine, start);
-        let mut idle = npc(FAST, Goal::Idle, start);
+        let mut waiting = npc(FAST, Goal::Wait, start);
         for _ in 0..200 {
             assert_eq!(fly(&mut miner, &[], None), Outcome::Flying);
-            fly(&mut idle, &[], None);
-            assert_eq!(miner.state, idle.state, "the idle ship's brake");
+            fly(&mut waiting, &[], None);
+            assert_eq!(miner.state, waiting.state, "the waiting ship's brake");
         }
         assert!(miner.state.velocity.length() < 0.5, "{:?}", miner.state);
     }
@@ -3904,6 +4005,7 @@ mod tests {
         };
         for _ in 0..600 {
             lead.position = lead.position + lead.velocity;
+            ship.slot_place = Some(slot.position(&lead));
             assert_eq!(fly(&mut ship, &[], Some(&lead)), Outcome::Flying);
         }
         assert_eq!(ship.state.velocity, lead.velocity, "{:?}", ship.state);
@@ -3982,7 +4084,7 @@ mod tests {
         let brake_at = |speed: f32, heading: f32| {
             let state = at(0.0, 0.0, 0.0, -speed, heading);
             let flight = braking(&state, &handling);
-            let mut braked = npc(FAST, Goal::Idle, state);
+            let mut braked = npc(FAST, Goal::Wait, state);
             super::braking(&mut braked, &handling, Inertia::Inertial);
             (flight, braked.state)
         };
@@ -4028,18 +4130,18 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_ship_on_sub_1s_soft_brake_thrusts_half_its_thrust() {
+    fn a_waiting_ship_on_sub_1s_soft_brake_thrusts_half_its_thrust() {
         let handling = fast();
-        let mut idle = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, -1.0, 180.0));
-        fly(&mut idle, &[], None);
+        let mut waiting = npc(FAST, Goal::Wait, at(0.0, 0.0, 0.0, -1.0, 180.0));
+        fly(&mut waiting, &[], None);
         // × 0.94, then half a tick's thrust down, facing 180.
         #[allow(clippy::cast_possible_truncation)]
         let cut = (f64::from(-1.0_f32) * 0.94) as f32;
         let expected = cut + handling.accel * 0.5;
         assert!(
-            (idle.state.velocity.y - expected).abs() < 1e-5,
+            (waiting.state.velocity.y - expected).abs() < 1e-5,
             "{:?} {expected}",
-            idle.state
+            waiting.state
         );
     }
 
@@ -4440,11 +4542,11 @@ mod tests {
     }
 
     #[test]
-    fn inspecting_it_closes_in_and_keeps_alongside() {
+    fn by_the_earlier_formation_inspecting_it_closes_in_and_keeps_alongside() {
         let target = at(400.0, 0.0, 0.0, 0.0, 0.0);
         let mut inspector = fighter(Goal::Inspect(FOE), 0.0);
         for _ in 0..600 {
-            fly(&mut inspector, &[], Some(&target));
+            fly_earlier(&mut inspector, Some(&target));
         }
         let apart = (inspector.state.position - target.position).length();
         assert!(
@@ -4534,21 +4636,6 @@ mod tests {
         assert_eq!(ship.state.position, Vec2::new(0.2 * 0.95, 0.0));
     }
 
-    #[test]
-    fn a_fight_whose_ship_is_gone_brakes() {
-        for goal in [Goal::Attack(FOE), Goal::Flee(FOE), Goal::Inspect(FOE)] {
-            let mut ship = npc(FAST, goal, at(0.0, 0.0, 4.0, -3.0, 10.0));
-            for _ in 0..200 {
-                assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
-            }
-            assert!(
-                ship.state.velocity.length() < 0.5,
-                "{goal:?}: {:?}",
-                ship.state
-            );
-        }
-    }
-
     /// `npc` flown `ticks` ticks at a target at `other`, disabled as
     /// `disabled` says: where it ends up.
     fn flown_for(mut npc: Npc, other: &ShipState, disabled: bool, ticks: u32) -> ShipState {
@@ -4598,7 +4685,7 @@ mod tests {
             };
             assert_eq!(
                 flown_for(npc(FAST, plunder, start), &victim, true, 300),
-                flown_for(npc(FAST, Goal::Idle, start), &victim, true, 300)
+                flown_for(npc(FAST, Goal::Wait, start), &victim, true, 300)
             );
             assert_ne!(
                 flown_for(npc(FAST, plunder, start), &victim, true, 300),
@@ -4650,7 +4737,7 @@ mod tests {
     }
 
     #[test]
-    fn a_count_wait_brakes_as_an_idle_ship_does() {
+    fn a_count_wait_brakes_as_a_waiting_ship_does() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         for ticks_left in [0, 1, 120] {
             let waiting = Npc {
@@ -4659,7 +4746,7 @@ mod tests {
             };
             assert_eq!(
                 flown_for(waiting, &start, false, 40),
-                flown_for(npc(FAST, Goal::Idle, start), &start, false, 40),
+                flown_for(npc(FAST, Goal::Wait, start), &start, false, 40),
                 "{ticks_left}"
             );
         }
@@ -4682,14 +4769,15 @@ mod tests {
     }
 
     #[test]
-    fn a_fighter_outside_its_dock_window_closes_as_on_a_slot_and_far_off_at_full_speed() {
+    fn by_the_earlier_formation_a_fighter_outside_its_dock_window_closes_as_on_a_slot_and_far_off_at_full_speed()
+     {
         let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
         // At full speed (3) straight down at the carrier from above.
         let mut near = docking(AVERAGE, at(0.0, -400.0, 0.0, 3.0, 180.0));
         let mut far = docking(AVERAGE, at(0.0, -700.0, 0.0, 3.0, 180.0));
         let before = (near.state, far.state);
-        assert_eq!(fly(&mut near, &[], Some(&carrier)), Outcome::Flying);
-        fly(&mut far, &[], Some(&carrier));
+        assert_eq!(fly_earlier(&mut near, Some(&carrier)), Outcome::Flying);
+        fly_earlier(&mut far, Some(&carrier));
         assert_ne!(
             near.state.heading, before.0.heading,
             "400 off, it turns to slow down"
@@ -4701,82 +4789,13 @@ mod tests {
         assert_eq!(far.state.velocity, before.1.velocity);
         for distance in [101.0, 400.0, 700.0] {
             let mut ship = docking(AVERAGE, at(0.0, -distance, 0.0, 0.0, 180.0));
-            fly(&mut ship, &[], Some(&carrier));
+            fly_earlier(&mut ship, Some(&carrier));
             assert!(ship.state.velocity.y > 0.0, "{distance}: {:?}", ship.state);
         }
     }
 
     #[test]
-    fn inside_its_window_a_fighter_turns_at_the_carrier_and_thrusts_within_a_turn_and_a_degree() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        // 60 above the carrier, facing away: it turns, and only turns.
-        let mut away = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, 0.0));
-        fly(&mut away, &[], Some(&carrier));
-        assert_ne!(away.state.heading, 0.0, "turning");
-        assert_eq!(away.state.velocity, Vec2::ZERO, "no thrust");
-        // Less than a turn (1) and 1.0 off the bearing (180), in whole
-        // degrees, strictly: it thrusts.
-        for heading in [179.0, 181.0, 180.0] {
-            let mut aimed = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
-            fly(&mut aimed, &[], Some(&carrier));
-            assert!(aimed.state.velocity.length() > 0.0, "{heading}");
-        }
-        for heading in [178.0, 182.0, 177.0, 183.0] {
-            let mut aside = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
-            fly(&mut aside, &[], Some(&carrier));
-            assert_eq!(aside.state.velocity, Vec2::ZERO, "{heading}");
-        }
-        assert_eq!(DOCK_TURN_SLACK, 1.0);
-    }
-
-    #[test]
-    fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_thrust_on_each_axis_beyond_it() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        // At rest, facing away from the carrier at (-70, 1.5): FAST pulls
-        // 0.18 x 10 = 1.8 a tick, and y is within that.
-        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
-        let mut ship = docking(FAST, at(-70.0, 1.5, 0.0, 0.0, 270.0));
-        fly(&mut ship, &[], Some(&carrier));
-        assert!(
-            near(ship.state.position, Vec2::new(-68.2, 1.5)),
-            "{:?}",
-            ship.state
-        );
-        let mut both = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0));
-        fly(&mut both, &[], Some(&carrier));
-        assert!(
-            near(both.state.position, Vec2::new(48.2, 58.2)),
-            "{:?}",
-            both.state
-        );
-        // An axis exactly the pull off is within it, and stays.
-        let pull = ShipStats::new(FAST, &[]).handling.accel * FORMATION_NUDGE;
-        let mut edge = docking(FAST, at(-pull, 60.0, 0.0, 0.0, 135.0));
-        fly(&mut edge, &[], Some(&carrier));
-        assert_eq!(edge.state.position.x, -pull, "not farther than the pull");
-        assert_eq!(edge.state.position.y, 60.0 - pull);
-    }
-
-    #[test]
-    fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_of_its_rules_thrust() {
-        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        let near = |a: Vec2, b: Vec2| (a - b).length() < 1e-4;
-        let pulled = |start: ShipState, rules: FlightRules| {
-            let mut ship = docking(FAST, start);
-            fly_own_under(&mut ship, Some(&carrier), rules);
-            ship.state.position
-        };
-        // FAST's 900 / 3000 is 0.3 a tick, ten ticks' 3; y's 1.5 within it.
-        let quicker = pulled(at(-70.0, 1.5, 0.0, 0.0, 270.0), thrust_over(3000));
-        assert!(near(quicker, Vec2::new(-67.0, 1.5)), "{quicker:?}");
-        let both = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), thrust_over(3000));
-        assert!(near(both, Vec2::new(47.0, 57.0)), "{both:?}");
-        let original = pulled(at(50.0, 60.0, 0.0, 0.0, 135.0), FlightRules::default());
-        assert!(near(original, Vec2::new(48.2, 58.2)), "{original:?}");
-    }
-
-    #[test]
-    fn a_sluggish_fighter_far_off_on_one_axis_flies_at_full_speed() {
+    fn by_the_earlier_formation_a_sluggish_fighter_far_off_on_one_axis_flies_at_full_speed() {
         // 0.01 of acceleration and half a degree a tick: it could not
         // brake from its top speed within 700.
         const SLUGGISH: ShipFields = ShipFields {
@@ -4787,11 +4806,11 @@ mod tests {
         let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let start = at(0.0, -700.0, 0.0, 3.0, 180.0);
         let mut far = docking(SLUGGISH, start);
-        fly(&mut far, &[], Some(&carrier));
+        fly_earlier(&mut far, Some(&carrier));
         assert_eq!(far.state.heading, 180.0, "700 off on y, it keeps going");
         assert_eq!(far.state.velocity, start.velocity);
         let mut near = docking(SLUGGISH, at(0.0, -500.0, 0.0, 3.0, 180.0));
-        fly(&mut near, &[], Some(&carrier));
+        fly_earlier(&mut near, Some(&carrier));
         assert_ne!(near.state.heading, 180.0, "500 off, it turns to brake");
     }
 

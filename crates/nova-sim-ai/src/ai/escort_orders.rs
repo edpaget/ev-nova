@@ -637,7 +637,7 @@ mod tests {
     fn a_leader_in_the_regroup_pause_issues_its_banded_table_not_all_return() {
         // Goal 0x13 is exempt from the override (@0x89aa9-0x89aad).
         use crate::ai::regroup::Kept;
-        for kept in [Kept::Coast, Kept::Stop, Kept::Formation { guard: None }] {
+        for kept in [Kept::Coast, Kept::FollowsJump, Kept::OwnJump] {
             let paused = leader(Goal::Regroup { kept }, 100.0);
             for reach in RuleSource::ALL {
                 assert_eq!(

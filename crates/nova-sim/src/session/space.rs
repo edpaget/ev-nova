@@ -204,9 +204,12 @@ pub(super) struct Escorts {
     /// placed: the original's +0xc4 (set by `_IssueNewEscortCommand`
     /// @0x66190, cleared by every placement, @0x3c6ff, @0x3d546, @0x3d9c2),
     /// which the class orders' bookkeeping reads (see the `class_orders`
-    /// module). Kept by number: every placement, respawn and launch makes
-    /// a new NPC, so it starts unmarked, and a capture or a release keeps
-    /// the number, as the original keeps the slot's byte. Never saved.
+    /// module). `_AIIssueEscortOrders` sets the same byte (@0x89b71), which
+    /// the traffic keeps as [`Npc::ordered_by_lead`](crate::Npc::ordered_by_lead),
+    /// as it can't reach this set. Kept by number: every placement, respawn
+    /// and launch makes a new NPC, so it starts unmarked, and a capture or a
+    /// release keeps the number, as the original keeps the slot's byte.
+    /// Never saved.
     pub(super) commanded: BTreeSet<NpcId>,
     /// The hail quotes' clock.
     pub(super) quote_clock: persons::QuoteClock,

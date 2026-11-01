@@ -242,6 +242,8 @@ impl Session {
                     wage: Some(wage),
                     person: None,
                     mark: None,
+                    voice: None,
+                    berth: None,
                 });
             }
         });
@@ -339,7 +341,7 @@ impl Chart {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::ai::{Goal, Peaceful};
     use crate::board::MAX_ESCORTS;
@@ -366,7 +368,7 @@ mod tests {
 
     /// The bar's stellar, 128, at the centre, under the ship as it
     /// starts.
-    const BAR_AT: StellarId = StellarId(128);
+    pub(in crate::session) const BAR_AT: StellarId = StellarId(128);
 
     /// [`catalog`] with planet 128 a bar of tech level 7 and these ships
     /// besides the player's own (ship 128, never for hire).
@@ -808,6 +810,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -893,6 +897,8 @@ mod tests {
                 wage: Some(100),
                 person: None,
                 mark: None,
+                voice: None,
+                berth: Some(1),
             }]
         );
         assert!(session.take_save_due());
@@ -1206,7 +1212,7 @@ mod tests {
 
     /// [`barred`] with ship 129 of `Cost` 10,000 and 130 of 30,000, both
     /// for hire, and outfit 300 adding a day to each jump.
-    fn paying() -> FakePilotCatalog {
+    pub(in crate::session) fn paying() -> FakePilotCatalog {
         let mut catalog = barred(vec![
             hireable(129, 100),
             ShipRecord {
@@ -1219,7 +1225,7 @@ mod tests {
     }
 
     /// An escort of `ship` at `wage`, `carried` or not.
-    fn paid(ship: i16, wage: Option<i64>, carried: bool) -> Escort {
+    pub(in crate::session) fn paid(ship: i16, wage: Option<i64>, carried: bool) -> Escort {
         Escort {
             ship: ShipId(ship),
             wage,
@@ -1631,7 +1637,10 @@ mod tests {
     /// A pilot who hired ship 129 (`Cost` 10,000, so a wage of 100) and
     /// was saved and loaded, flying with `catalog`, where its ship
     /// type's record may have changed, by `rule`; and its escort's NPC,
-    /// none when its ship type has no record.
+    /// none when its ship type has no record. The load drops an escort
+    /// whose type has no record (see the `loaded_berths` module), so the
+    /// session is handed its fleet after the load, as a session built in
+    /// place holds it, to reach the pay's fallback for one.
     fn rehired(catalog: &FakePilotCatalog, rule: RuleSource) -> (Session, Option<crate::NpcId>) {
         let original = barred(vec![hireable(129, 100)]);
         let mut session = landed(&original, 25_000);
@@ -1640,9 +1649,11 @@ mod tests {
         let mut pilot = crate::save::decode(&saved).expect("loads");
         pilot.cash = 1000;
         pilot.stellar = None;
+        let fleet = pilot.escorts.clone();
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::EscortWage, rule));
+        session.pilot.escorts = fleet;
         assert_eq!(session.rules().source_for(RuleKey::EscortWage), rule);
         work_with(
             &mut session,

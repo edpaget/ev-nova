@@ -8,7 +8,9 @@
 #![allow(clippy::float_cmp)]
 
 use super::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
-use super::npc::{Mode, Npc};
+use super::jump_with_leader;
+use super::npc::{Mode, Npc, NpcId};
+use super::warp_out::{FOLLOW_BURST, GIVEN_UP_STAGE, WarpGoal};
 use super::{Traffic, World};
 use crate::ai::Goal;
 use crate::ai::fire::Manoeuvre;
@@ -18,6 +20,7 @@ use crate::ai::swarm::SwarmLead;
 use crate::catalog::GovtId;
 use crate::chance::{Chance, NeverFires};
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{FlightRules, ShipState, facing};
 use crate::geometry::Vec2;
@@ -655,4 +658,356 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
         traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
         assert_eq!(traffic.npcs[0].mode, Mode::Coasting { ticks_left: left });
     }
+}
+
+// Sub 0xd's burst word (@0x85bcf-0x85c53).
+
+/// A world by `reading` of `held_burst`, the player far above, the warp
+/// sound's durations set.
+fn world_by(reading: RuleSource) -> World<'static> {
+    let mut world = World {
+        player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
+        held_burst: reading,
+        ..World::new(&[])
+    };
+    world.warp.durations = [364, 252];
+    world
+}
+
+/// A lead 3000 out west on its own jump, its stage at 5.0, facing and
+/// wanting 90°, to be held still; and a follower 3000 out east, facing the
+/// same way, its stage not started: sub 0xd's stage branch, this once, as
+/// the high level's hold takes an NPC's follower under way to goal 2
+/// (@0x8d557-0x8d56b).
+fn following() -> (Traffic, BTreeSet<NpcId>) {
+    let ship = || crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
+    let mut traffic = Traffic::with_interval(1);
+    let mut lead = ship();
+    lead.state = at(-3000.0, 0.0, 0.0, 0.0, 90.0);
+    lead.goal = Goal::JumpOut;
+    lead.warp.goal = Some(WarpGoal::Own);
+    lead.warp.stage = 5.0;
+    lead.warp.aim = 90;
+    let lead = traffic.add_npc(lead);
+    let mut follower = ship();
+    follower.state = at(3000.0, 0.0, 0.0, 0.0, 90.0);
+    follower.leader = Some(lead);
+    follower.goal = Goal::Follow { lead, guard: None };
+    follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+    follower.warp.aim = 90;
+    traffic.add_npc(follower);
+    (traffic, BTreeSet::from([lead]))
+}
+
+#[test]
+fn a_follower_on_its_stage_owes_1_by_the_engine_only_over_anything_it_owed() {
+    assert_eq!(FOLLOW_BURST, 1.0);
+    for (reading, owed, now) in [
+        (RuleSource::Engine, None, Some(1.0)),
+        (RuleSource::Engine, Some(30.0), Some(1.0)),
+        (RuleSource::Bible, None, None),
+    ] {
+        let (mut traffic, lead) = following();
+        traffic.npcs[1].owed_burst = owed;
+        let goal = traffic.npcs[1].goal;
+        traffic.fly_holding(world_by(reading), &lead, &mut NeverFires);
+        let ship = &traffic.npcs[1];
+        assert_eq!(ship.owed_burst, now, "{reading:?} {owed:?}");
+        // The word is no burst: nothing ended (@0x34a84).
+        assert_eq!(ship.goal, goal, "{reading:?} {owed:?}");
+        assert_eq!(ship.mode, Mode::Flying, "{reading:?} {owed:?}");
+        assert_eq!(ship.warp.stage, 2.0, "{reading:?} {owed:?}");
+    }
+}
+
+#[test]
+fn a_ship_the_player_leads_owes_1_every_frame_of_its_stage() {
+    // Held to the player's jump (@0x8d542-0x8d54c), it stays on sub 0xd.
+    let mut ship = crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
+    ship.state = at(3000.0, 0.0, 0.0, 0.0, 90.0);
+    ship.escort = Some(EscortDuty {
+        formation: FormationSlot::default(),
+        order: None,
+    });
+    ship.goal = Goal::Formation { guard: None };
+    ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+    ship.warp.stage = 3.0;
+    let mut traffic = Traffic::with_interval(1);
+    traffic.add_npc(ship);
+    let mut world = world_by(RuleSource::Engine);
+    world.warp.player.stage = 5.0;
+    world.warp.player.heading = 90.0;
+    world.warp.player.aim = 90;
+    for frame in 0..3 {
+        traffic.npcs[0].owed_burst = Some(20.0);
+        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        assert_eq!(traffic.npcs[0].owed_burst, Some(1.0), "frame {frame}");
+        assert_eq!(
+            traffic.npcs[0].goal,
+            Goal::Formation { guard: None },
+            "frame {frame}: no burst ended"
+        );
+    }
+}
+
+#[test]
+fn a_followers_formation_waiting_and_detach_frames_write_no_burst_word() {
+    let lead_at_1: fn(&mut Traffic) = |traffic| traffic.npcs[0].warp.stage = 1.0;
+    let lead_turning: fn(&mut Traffic) = |traffic| traffic.npcs[0].warp.aim = 270;
+    let lead_turning_within_its_turn: fn(&mut Traffic) = |traffic| {
+        traffic.npcs[0].warp.aim = 102;
+        traffic.npcs[1].stats.handling.turn_rate = 20.0;
+    };
+    // Past 30 only under a wait, which skips the hold that would take it to
+    // goal 2.
+    let past_30: fn(&mut Traffic) = |traffic| {
+        traffic.npcs[1].warp.stage = 31.0;
+        traffic.npcs[1].ai_wait = 5;
+    };
+    for (name, setup) in [
+        ("formation", lead_at_1),
+        ("gave up", lead_turning),
+        ("waiting", lead_turning_within_its_turn),
+        ("detach", past_30),
+    ] {
+        for owed in [None, Some(12.0)] {
+            let (mut traffic, lead) = following();
+            setup(&mut traffic);
+            traffic.npcs[1].owed_burst = owed;
+            traffic.fly_holding(world_by(RuleSource::Engine), &lead, &mut NeverFires);
+            assert_eq!(traffic.npcs[1].owed_burst, owed, "{name}");
+            let detached = traffic.npcs[1].warp.goal == Some(WarpGoal::Own);
+            assert_eq!(detached, name == "detach", "{name}");
+        }
+    }
+}
+
+#[test]
+fn every_given_up_jump_keeps_the_word() {
+    // None of these writes +0x34.
+    let world = world_by(RuleSource::Engine);
+    let owing = || {
+        let (mut traffic, lead) = following();
+        traffic.npcs[1].owed_burst = Some(1.0);
+        (traffic, lead)
+    };
+    // Goal 0xb's give-up (@0x8df31-0x8df49): its lead is on no way out.
+    let (mut traffic, lead) = owing();
+    traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
+    traffic.npcs[0].warp.goal = None;
+    traffic.fly_holding(world, &lead, &mut NeverFires);
+    assert_eq!(traffic.npcs[1].goal, Goal::Idle);
+    assert_eq!(traffic.npcs[1].warp.goal, None);
+    assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "goal 0xb's give-up");
+    // `_AIDispatch`'s cancel (@0x90125-0x9019c).
+    let (mut traffic, _) = owing();
+    traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
+    traffic.npcs[1].warp.stage = 1.0;
+    traffic.cancel_jump_follows(&world);
+    assert_eq!(traffic.npcs[1].warp.stage, GIVEN_UP_STAGE);
+    assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the cancel");
+    // Sub 0xd's own give-up while its leader turns (@0x85ba5).
+    let (mut traffic, lead) = owing();
+    traffic.npcs[0].warp.aim = 270;
+    traffic.fly_holding(world, &lead, &mut NeverFires);
+    assert_eq!(traffic.npcs[1].warp.stage, GIVEN_UP_STAGE);
+    assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the turning lead");
+    // The fighter turn-back (@0x8d605-0x8d621).
+    let (mut traffic, _) = owing();
+    let fighter = &mut traffic.npcs[1];
+    fighter.carrier = Some(crate::bay::Carrier {
+        ship: ShipRef::Player,
+        window: 100.0,
+        reach: 40.0,
+    });
+    fighter.class_fuel = 0;
+    jump_with_leader::turn_back(fighter, RuleSource::Engine);
+    assert_eq!(fighter.goal, Goal::Dock(ShipRef::Player));
+    assert_eq!(fighter.owed_burst, Some(1.0), "the turn-back");
+    // An inertialess follower's detach (@0x83c11-0x83c51).
+    let (mut traffic, _) = owing();
+    traffic.npcs[1].stats = ShipStats::new(
+        crate::handling::ShipFields {
+            flags2: INERTIALESS_HULL,
+            ..FAST
+        },
+        &[],
+    );
+    jump_with_leader::enter(&mut traffic.npcs, &[1], FlightRules::default());
+    assert_eq!(traffic.npcs[1].warp.goal, Some(WarpGoal::Own));
+    assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the detach");
+    // The disabled warp cancel (@0x8fce1).
+    let (mut traffic, _) = owing();
+    traffic.npcs[1].condition = Condition::Disabled;
+    traffic.npcs[1].warp.stage = 3.0;
+    traffic.reset_disabled(RuleSource::Engine);
+    assert_eq!(traffic.npcs[1].warp.stage, GIVEN_UP_STAGE);
+    assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the warp cancel");
+}
+
+/// A ship of [`FAST`] with `goal` at `state`, having given a jump up: it
+/// owes 1.0 and its stage is at -1.0.
+fn gave_up(goal: Goal, state: ShipState) -> Npc {
+    let mut npc = crate::traffic::fixture::npc(0, ShipStats::new(FAST, &[]));
+    npc.goal = goal;
+    npc.state = state;
+    npc.speed = state.velocity.length();
+    npc.target = Some(ShipRef::Player);
+    npc.govt = Some(GovtId(128));
+    npc.owed_burst = Some(1.0);
+    npc.warp.stage = GIVEN_UP_STAGE;
+    npc
+}
+
+/// `npc` after a tick of the traffic's fly half, alone with the player
+/// far above.
+fn flown(npc: Npc) -> Npc {
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![npc];
+    traffic.fly_holding(
+        world_by(RuleSource::Engine),
+        &BTreeSet::new(),
+        &mut NeverFires,
+    );
+    traffic.npcs.remove(0)
+}
+
+#[test]
+fn its_next_stop_or_snipe_thrust_bursts_at_1_and_stops_jumping() {
+    for goal in [Goal::Wait, Goal::Snipe(ShipRef::Player)] {
+        let ship = flown(gave_up(goal, at(0.0, 0.0, 2.0, 0.0, 270.0)));
+        assert!(
+            close(ship.state.velocity, facing(270.0) * 1.0),
+            "{goal:?}: {:?}",
+            ship.state
+        );
+        assert_eq!(ship.goal, Goal::Idle, "{goal:?}");
+        assert_eq!(ship.owed_burst, None, "{goal:?}");
+        assert_eq!(ship.warp.stage, 0.0, "{goal:?}: +0x50 = 0 (@0x82eb0)");
+        assert_eq!(ship.warp.goal, None, "{goal:?}");
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 }, "{goal:?}");
+    }
+}
+
+#[test]
+fn its_next_swarm_thrust_bursts_at_1_and_stops_jumping() {
+    let (mut traffic, world) = swarm_pair(RuleSource::Engine);
+    let ship = &mut traffic.npcs[1];
+    ship.mode = Mode::Flying;
+    ship.owed_burst = Some(1.0);
+    ship.warp.stage = GIVEN_UP_STAGE;
+    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    let ship = &traffic.npcs[1];
+    assert!(
+        close(ship.state.velocity, Vec2::new(0.0, -1.0)),
+        "{:?}",
+        ship.state
+    );
+    assert_eq!(ship.goal, Goal::Idle);
+    assert_eq!(ship.warp.stage, 0.0);
+    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
+}
+
+#[test]
+fn with_a_lead_it_flies_on_from_the_burst_at_1() {
+    let (mut traffic, lead) = following();
+    let ship = &mut traffic.npcs[1];
+    ship.goal = Goal::Wait;
+    ship.warp.goal = None;
+    ship.warp.stage = GIVEN_UP_STAGE;
+    ship.owed_burst = Some(1.0);
+    ship.state = at(3000.0, 0.0, 2.0, 0.0, 270.0);
+    traffic.fly_holding(world_by(RuleSource::Engine), &lead, &mut NeverFires);
+    let ship = &traffic.npcs[1];
+    assert!(
+        close(ship.state.velocity, facing(270.0) * 1.0),
+        "{:?}",
+        ship.state
+    );
+    assert_eq!(ship.goal, Goal::Idle);
+    assert_eq!(ship.warp.stage, 0.0);
+    assert_eq!(ship.mode, Mode::Flying);
+}
+
+#[test]
+fn an_inertialess_ship_ends_its_burst_at_1_stopped_dead() {
+    let mut ship = gave_up(Goal::Snipe(ShipRef::Player), at(0.0, 0.0, 2.0, 0.0, 90.0));
+    ship.stats = ShipStats::new(
+        crate::handling::ShipFields {
+            flags2: INERTIALESS_HULL,
+            ..FAST
+        },
+        &[],
+    );
+    let ship = flown(ship);
+    assert_eq!(ship.state.velocity, Vec2::ZERO);
+    assert_eq!(ship.goal, Goal::Idle);
+    assert_eq!(ship.warp.stage, 0.0);
+    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
+}
+
+#[test]
+fn an_assister_keeps_its_goal_through_the_burst_at_1_and_its_stage_still_ends() {
+    let mut ship = gave_up(Goal::Assist(Help::Refuel), at(0.0, 0.0, 2.0, 0.0, 270.0));
+    let docking = Some(Docking {
+        ship: ShipRef::Player,
+        sub: DockSub::Stop,
+    });
+    ship.docking = docking;
+    let ship = flown(ship);
+    assert_eq!(ship.goal, Goal::Assist(Help::Refuel));
+    assert_eq!(ship.docking, docking);
+    assert_eq!(ship.owed_burst, None);
+    assert_eq!(ship.warp.stage, 0.0);
+}
+
+#[test]
+fn a_writing_thrust_drops_the_word() {
+    // The approach, facing its target, writes +0x34 with +0x30.
+    let mut ship = gave_up(Goal::Attack(ShipRef::Player), at(0.0, 0.0, 0.0, 0.0, 0.0));
+    let accel = ship.stats.handling.accel;
+    ship.owed_burst = Some(1.0);
+    let ship = flown(ship);
+    assert_eq!(ship.owed_burst, None);
+    assert!(
+        close(ship.state.velocity, facing(0.0) * accel),
+        "its thrust, no burst: {:?}",
+        ship.state
+    );
+    assert_eq!(ship.goal, Goal::Attack(ShipRef::Player));
+}
+
+#[test]
+fn a_follower_under_way_on_goal_2s_brake_ends_its_stage_with_the_burst() {
+    // The hold puts it in goal 2, whose block picks sub 1 beyond 1000 while
+    // it moves 0.35 or more (@0x8ddeb-0x8de49); sub 1 leaves +0x34.
+    let mut ship = gave_up(Goal::JumpOut, at(2000.0, 0.0, 2.0, 0.0, 270.0));
+    ship.warp.stage = 5.0;
+    ship.target = None;
+    let ship = flown(ship);
+    assert!(
+        close(ship.state.velocity, facing(270.0) * 1.0),
+        "{:?}",
+        ship.state
+    );
+    assert_eq!(ship.warp.stage, 0.0);
+    assert_eq!(ship.goal, Goal::Idle);
+    assert_eq!(ship.owed_burst, None);
+}
+
+#[test]
+fn goal_0s_stand_in_keeps_what_it_owes_with_no_burst() {
+    // Goal 0 flies sub 0, which writes no +0x30 (@0x34a84): the engine's
+    // stop must not burst.
+    let start = at(0.0, 0.0, 2.0, 0.0, 270.0);
+    let mut plain = gave_up(Goal::Idle, start);
+    plain.owed_burst = None;
+    let plain = flown(plain);
+    let ship = flown(gave_up(Goal::Idle, start));
+    assert_eq!(ship.owed_burst, Some(1.0));
+    assert_eq!(ship.state, plain.state, "it flies as it would owing none");
+    assert_eq!(ship.goal, Goal::Idle);
+    assert_eq!(ship.mode, Mode::Flying, "no burst ended it");
+    // Its controls are the stop's, recorded as ever.
+    assert_eq!(ship.display.drive, plain.display.drive);
 }

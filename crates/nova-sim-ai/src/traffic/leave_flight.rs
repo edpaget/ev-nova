@@ -66,10 +66,11 @@
 //!   next pass and departs it ([`Outcome::JumpedOut`]) once its stage is
 //!   done.
 
-use crate::ai::fire;
 use crate::ai::leave::{self, Leg};
+use crate::ai::{Goal, fire};
 use crate::flight::{self, Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
+use crate::hail::Help;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
@@ -113,7 +114,22 @@ pub fn fly(
             npc.begin_own_jump();
             return Outcome::Flying;
         }
-        Leg::RunOut => (*handling, Flight::from(run_out(&mut npc.state, handling))),
+        Leg::RunOut => {
+            let mut controls = run_out(&mut npc.state, handling);
+            if npc.warp.under_way() {
+                // Sub 3 writes +0x68 and, inside its thrust window, +0x34 = 0
+                // (@0x85845-0x85858): `_HandleShip` skips the thrust of a
+                // ship under way with no burst word (@0x34a96), and its
+                // warp-out test reads that bearing, so the stage ends as it
+                // faces out (@0x346f2-0x34741).
+                npc.warp.aim = trig::intercept_angle(Vec2::ZERO, npc.state.position);
+                if controls.thrust {
+                    npc.owed_burst = None;
+                }
+                controls.thrust = false;
+            }
+            (*handling, Flight::from(controls))
+        }
         // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
         Leg::Brake => {
             let chosen = stop_flight(npc, handling, inertia);
@@ -167,6 +183,11 @@ pub(crate) fn stop(
     refuelling: bool,
 ) -> (Controls, Handling) {
     let (controls, flown, wanted) = stop_wanting(npc, handling, inertia, refuelling);
+    if npc.warp.under_way() && npc.goal == Goal::JumpOut {
+        // Its +0x68, which the warp-out's test reads (@0x346f2-0x34741):
+        // goal 2's is the one stop still under way past the hold.
+        npc.warp.aim = wanted;
+    }
     let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
     (Controls { turn, ..controls }, flown)
 }
@@ -178,6 +199,18 @@ pub(crate) fn stop(
 pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
     let (controls, flown) = stop(npc, handling, inertia, false);
     Flight::stop(controls, &flown, inertia)
+}
+
+/// Substate 1 for `npc` on `handling`, as `inertia` says, while its AI
+/// wait runs with sub 1 stored ([`Npc::stopping`]): the high level writes
+/// no sub under +0x4c (@0x8d4b9-0x8d4d2) and the low level runs sub 1 on
+/// its kept value, whose cuts ([`stop_wanting`]) stand though
+/// `_HandleShip` skips its turn and thrust (@0x34a54-0x34a72). A refuel,
+/// the original's goal 9 (+0xc8c8 @0x85595), is cut off its retro heading
+/// too. Its settle below 0.35 stores sub 0, ending it (@0x85624).
+pub(crate) fn stop_under_wait(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
+    let refuelling = matches!(npc.goal, Goal::Assist(Help::Refuel));
+    stop_wanting(npc, handling, inertia, refuelling);
 }
 
 /// Substate 1 for `npc` on `handling`, as `inertia` says, before
@@ -195,13 +228,19 @@ pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) 
 /// ([`Npc::drag_in_doubles`]), with no thrust (@0x855e3-0x8561f). Neither of those writes
 /// +0x68, so it wants its own whole heading, the low level's default
 /// (@0x8522d).
+///
+/// Every sub 1 flight passes here, so it notes what stays stored of it
+/// ([`Npc::stopping`]): sub 1 while it brakes, and sub 0 from the settle
+/// (@0x85624).
 pub(crate) fn stop_wanting(
     npc: &mut Npc,
     handling: &Handling,
     inertia: Inertia,
     refuelling: bool,
 ) -> (Controls, Handling, i16) {
-    if !inertialess::moving(npc.state.velocity) {
+    let moving = inertialess::moving(npc.state.velocity);
+    npc.stopping = moving;
+    if !moving {
         // Velocity and +0x48, in doubles, back to floats (@0x855e3-0x8561f).
         npc.drag_in_doubles(SETTLE);
         return (
@@ -556,6 +595,28 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_leaves_sub_1_stored_while_it_brakes_but_not_once_it_settles() {
+        let stored = |vy: f32, inertia: Inertia, refuelling: bool| {
+            let mut npc = npc_at(braking(0.0, vy, 180.0), inertia);
+            npc.goal = Goal::Wait;
+            stop(&mut npc, &HANDLING, inertia, refuelling);
+            npc.stopping
+        };
+        let inertialess = Inertia::Inertialess { speed: 3.0 };
+        for (inertia, refuelling) in [
+            (Inertia::Inertial, false),
+            (Inertia::Inertial, true),
+            (inertialess, false),
+        ] {
+            assert!(stored(-3.0, inertia, refuelling), "{inertia:?}");
+            assert!(
+                !stored(-0.2, inertia, refuelling),
+                "the settle writes sub 0 (@0x85624): {inertia:?}"
+            );
+        }
+    }
+
+    #[test]
     fn on_the_soft_brake_an_inertial_ships_speed_is_cut_to_0_94_with_its_velocity() {
         // An inertial fighter launched by an inertialess carrier holds its
         // carrier's +0x48 (`_LaunchFighter` @0x3d6da-0x3d6e0); the soft
@@ -727,9 +788,96 @@ mod tests {
         );
     }
 
+    // A stage still under way.
+
+    #[test]
+    fn running_out_under_way_inside_its_thrust_window_drops_what_it_owes_with_no_thrust() {
+        // Sub 3 writes +0x34 inside its window whatever `_HandleShip` then
+        // skips (@0x85845-0x85858, @0x34a96).
+        let mut inside = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::JumpOut,
+            at(500.0, 0.0, 90.0),
+        );
+        inside.warp.stage = 3.0;
+        inside.owed_burst = Some(1.0);
+        let rules = FlightRules::default();
+        fly(
+            &mut inside,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(inside.owed_burst, None);
+        assert_eq!(inside.state.velocity, Vec2::ZERO, "no thrust");
+        // Outside it, off the bearing by its turn and 3 degrees, sub 3
+        // writes nothing.
+        let off = 90.0 + HANDLING.turn_rate + RUN_OUT_THRUST;
+        let mut outside = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::JumpOut,
+            at(500.0, 0.0, off),
+        );
+        outside.warp.stage = 3.0;
+        outside.owed_burst = Some(1.0);
+        fly(
+            &mut outside,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(outside.owed_burst, Some(1.0));
+    }
+
+    #[test]
+    fn running_out_under_way_it_takes_no_thrust_and_reads_its_out_bearing_until_its_stage_ends() {
+        // Sub 3 writes +0x68 and +0x34 = 0, so `_HandleShip` skips its
+        // thrust (@0x34a96-0x34a9a) and turns its warp-out test on that
+        // bearing (@0x346f2-0x34741).
+        let start = at(500.0, 0.0, 90.0);
+        let mut runner = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        runner.warp.stage = 3.0;
+        runner.warp.aim = 300;
+        let rules = FlightRules::default();
+        fly(
+            &mut runner,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(runner.state.velocity, Vec2::ZERO, "no thrust");
+        assert_eq!(runner.warp.aim, 90, "out from the centre");
+        runner.warp.stage = 0.0;
+        fly(
+            &mut runner,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert!(runner.state.velocity.x > 0.0, "it thrusts the tick after");
+    }
+
+    #[test]
+    fn a_stop_under_way_reads_the_heading_it_wants_as_its_aim() {
+        // Sub 1's +0x68 is what the warp-out's test reads (@0x346f2-0x34741).
+        let stopped = |stage: f32, vy: f32| {
+            let mut npc = npc_at(braking(0.0, vy, 90.0), Inertia::Inertial);
+            npc.warp.stage = stage;
+            npc.warp.aim = 300;
+            stop(&mut npc, &HANDLING, Inertia::Inertial, false);
+            npc.warp.aim
+        };
+        assert_eq!(stopped(3.0, -3.0), 180, "its retro heading");
+        assert_eq!(stopped(3.0, -0.2), 90, "settling, its own whole heading");
+        assert_eq!(stopped(0.0, -3.0), 300, "no stage, none read");
+    }
+
     // The leave flown through the autopilot.
 
-    use crate::ai::Goal;
     use crate::combat::ShipRef;
     use crate::flight::FlightRules;
     use crate::fuel::OutfitMod;

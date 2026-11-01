@@ -11,8 +11,9 @@
 //!   [`Npc::owed_burst`] as the hold ends, by the engine's reading of
 //!   [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst); by the
 //!   other it owes none.
-//! - **What drops it** (F8): every substate's thrust but three writes
-//!   +0x34 with +0x30 (subs 2, 3, 5, 6, 7, 8, 9, 0xb, 0xc's
+//! - **What drops it** (F8): every substate's thrust but those of subs 1,
+//!   0xe and 0x12 (below) and sub 8 (its own word, below) writes +0x34
+//!   with +0x30 (subs 2, 3, 5, 6, 7, 9, 0xb, 0xc's
 //!   counter-thrust, 0xf, 0x10, 0x11), so the first such thrust drops it
 //!   ([`Word::Writes`], [`step`]; what thrusts is [`writes_thrust`]). An
 //!   inertialess dogfighter matching its target's speed writes +0x34
@@ -34,23 +35,65 @@
 //!   speed +0x48 set to it, @0x34bdf-0x34bf0) in place of its thrust,
 //!   and +0x34 rises by |+0x30| (@0x34c2f-0x34c63): it slows by that
 //!   frame's thrust, not by the gate burst's 1.165.
-//! - **The end** (F2, F3, [`settle`]): once +0x34 is at or above minus
-//!   the cap ([`TopSpeeds::burst_cap`], @0x34c68-0x34d2a),
+//! - **The end** (F2, F3, [`settle`]): in a frame that bursts, however
+//!   its word was written, once +0x34 is at or above minus the cap
+//!   ([`TopSpeeds::burst_cap`], @0x34c68-0x34d2a),
 //!   `_AIMakeShipStopJumping` (@0x82e77-0x82eba) sets goal and sub-goal 0
 //!   unless the goal is 9 or 0xf (@0x82e7d-0x82e9f), its travel stellar
-//!   +0x6c to -1 and +0x30 = +0x34 = 0, keeping its target +0x70; an
-//!   inertialess ship's velocity is zeroed (@0x34d37-0x34d59); and a ship
-//!   with no leader waits Rand(30) + 30 (@0x34d5c-0x34d8b), as after a
-//!   gate's own burst ([`autopilot::after_burst`]). Its glow falls on the
-//!   end frame, as +0x30 is zeroed before the glow reads it (F4,
-//!   @0x34eec-0x34fc4).
+//!   +0x6c to -1, its stage +0x50 to 0 and +0x30 = +0x34 = 0, keeping its
+//!   target +0x70; an inertialess ship's velocity is zeroed
+//!   (@0x34d37-0x34d59); and a ship with no leader waits Rand(30) + 30
+//!   (@0x34d5c-0x34d8b), as after a gate's own burst
+//!   ([`autopilot::after_burst`]). Its glow falls on the end frame, as
+//!   +0x30 is zeroed before the glow reads it (F4, @0x34eec-0x34fc4).
+//! - **The last frame fires**: `_HandleShip` tests the wait once, before
+//!   the burst block (@0x34a54-0x34a72), and its fire step runs after the
+//!   end and reads only the low level's flag and pick (@0x34fcb-0x35018).
+//!   So a ship with no leader fires what its low level flagged that frame,
+//!   a swarmer's missile (@0x85343-0x85357) say, and nothing through the
+//!   wait after ([`Npc::fires_on_burst_end`]).
+//! - **Sub 0xd's word**: a follower's stage writes +0x30 = 0 and
+//!   +0x34 = -1.0 every frame it gets there, over any word it held
+//!   (@0x85bcf-0x85c5a; [`FOLLOW_BURST`], by the engine's reading of
+//!   [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst)). With
+//!   +0x30 at 0 that frame doesn't burst (@0x34a84). No jump given up
+//!   writes +0x34, so its next thrust of sub 1, 0xe or 0x12 bursts at 1.0
+//!   and, for any ship of top speed above 1.0 less that thrust, ends at
+//!   once. Sub 3 writes it inside its thrust window even under way, where
+//!   `_HandleShip` then skips the thrust (@0x85845-0x85858, @0x34a96). A
+//!   jump completed keeps nothing: a ship gone is gone, and a player's
+//!   escort comes back through `_RespawnEscort` (@0x3d4f1), which zeroes
+//!   the word, as `Session::place_escort` builds a new ship.
+//! - **Sub 8's word** ([`dock_flight`](crate::traffic::dock_flight)): a
+//!   docking fighter lowers +0x34 by its pull, 10 × its acceleration,
+//!   every frame past its dock test (@0x880c0-0x880c9). Inside its thrust
+//!   window it first writes +0x30 = its acceleration and +0x34 = 0
+//!   (@0x87ef8), so its thrust always bursts at the pull, over whatever it
+//!   owed, and leaves it owing 9 × its acceleration ([`Word::Keeps`]).
+//!   The burst ends that frame once that is within its cap, its lead
+//!   sparing it the wait. Outside the window the word is lowered with no
+//!   burst, which [`settle`] doesn't end. Double time's second pass writes
+//!   no word and bursts on what the advance pass left.
+//! - **Goal 0 keeps it**: sub 0 writes no +0x30, so a ship that gave up to
+//!   goal 0 bursts nothing on its own (@0x34a84). The engine's
+//!   [`Goal::Idle`] flies sub 0 itself ([`autopilot::sub_0`]), keeping
+//!   what it owes.
+//! - **A ship disabled keeps it**: its +0x50 is -1.0, so it takes the
+//!   ordinary path and the disabled reset, goal 0 every frame
+//!   (@0x8fece-0x8ff13). Subs 1, 0xe and 0x12 all test not disabled
+//!   (@0x85378, @0x870b3, @0x85252), so it writes no +0x30, the burst block
+//!   is skipped (@0x34a84) and the preamble keeps the word. The autopilot's
+//!   drift flies no [`step`], so it drifts dragged, and once repaired its
+//!   next such thrust bursts out what is left, with no lead by then as the
+//!   reset cleared +0x9a. A ship disabled in a gate's own burst or a glide
+//!   is another matter: that block runs on
+//!   ([`autopilot::burst_motion`]).
 //!
 //! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. The
-//! fire on the burst's last frame (F4), sub 0xd's -1.0, the inspection
-//! hold's `_Accel` and a ship disabled during its burst are
-//! rdm:phase/escort-fleet-fidelity-followups/phase-13-left-out-of-held-ship-burst's;
-//! the mining orders' thrusts are
-//! rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-2-mining-orders-burst-an-owed-burst's.
+//! mining orders' thrusts are
+//! rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-2-mining-orders-burst-an-owed-burst's;
+//! sub 0xc's inspection hold is dead code on any data
+//! (rdm:phase/escort-fleet-fidelity-followups/phase-2-left-out-of-formation-flight).
 //!
 //! The engine sets the burst's velocity and moves the ship in the tick
 //! its flight thrusts, where the original's move comes first in the next
@@ -66,6 +109,8 @@ use crate::traffic::autopilot::{self, TopSpeeds};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::Npc;
 use crate::traffic::ship_display::{self, Thrust};
+#[cfg(doc)]
+use crate::traffic::warp_out::FOLLOW_BURST;
 
 /// What a flight's substate does this tick to the burst word +0x34 beside
 /// its thrust word +0x30 (see the module docs).
@@ -152,7 +197,8 @@ impl From<Controls> for Flight {
 /// Flies `npc` one tick under `controls` on `handling` under `flight`, as
 /// `inertia` says, its substate doing `word` to +0x34 (see the module
 /// docs): owing a burst under a [`Word::Keeps`] that thrusts, it bursts
-/// ([`burst`]); under one that doesn't, it flies keeping what it owes
+/// ([`burst`]), marking that it did
+/// ([`Drive::burst`](ship_display::Drive::burst)); under one that doesn't, it flies keeping what it owes
 /// ([`autopilot::plain_step`]); under [`Word::Writes`] it flies as ever,
 /// its thrust ([`writes_thrust`]) dropping what it owes (F8).
 pub(crate) fn step(
@@ -194,45 +240,60 @@ fn burst(
     npc.state.heading = flight::turned(npc.state.heading, controls.turn, handling.turn_rate);
     autopilot::burst_motion(npc, speed, handling, inertia);
     npc.owed_burst = Some(speed - thrust);
+    npc.display.drive.burst = true;
 }
 
-/// Ends `npc`'s burst after its flight this tick, `owed` what it owed
-/// before the flight (F2): once a burst has lowered what it owes to at or
+/// Ends `npc`'s burst after its flight this tick, `burst` whether a burst
+/// ran in it ([`Drive::burst`](ship_display::Drive::burst)), as
+/// `_HandleShip` tests the end inside its burst block (@0x34d10-0x34d2a),
+/// however the word it burst on was written (F2). A word changed with no
+/// burst, as sub 8 lowers it outside its window or sub 0xd writes its 1.0,
+/// doesn't end. Once a burst has left what it owes at or
 /// below its cap at `speeds` ([`TopSpeeds::burst_cap`]), it stops jumping
 /// ([`stop_jumping`]), its glow falls (F4), and, as `inertia` says, it
 /// ends as a gate's own burst does ([`autopilot::after_burst`]: an
 /// inertialess ship's velocity zeroed, and a ship with no lead waiting
-/// its Rand(30) + 30, rolled on `chance`).
+/// its Rand(30) + 30, rolled on `chance`). This tick's fire step still
+/// runs, as it tests no wait: a ship now waiting keeps the trigger
+/// [`autopilot::after_burst`] released, marked
+/// ([`Npc::fires_on_burst_end`]). A ship with a lead takes no wait.
 pub(crate) fn settle(
     npc: &mut Npc,
-    owed: Option<f32>,
+    burst: bool,
     speeds: TopSpeeds,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
 ) {
-    let (Some(before), Some(now)) = (owed, npc.owed_burst) else {
+    let Some(now) = npc.owed_burst.filter(|_| burst) else {
         return;
     };
-    if now >= before || now > speeds.burst_cap() {
+    if now > speeds.burst_cap() {
         return;
     }
     stop_jumping(npc);
     npc.display.drive.thrust = Thrust::None;
+    let trigger = npc.trigger;
     autopilot::after_burst(npc, speeds, inertia, chance);
+    if npc.wait_running() {
+        npc.trigger = trigger;
+        npc.fires_on_burst_end = true;
+    }
 }
 
 /// `_AIMakeShipStopJumping` (@0x82e77-0x82eba, F3): goal and sub-goal 0
-/// ([`Goal::Idle`], its kept pursuit and docking dropped) unless it
-/// assists the player (goal 9 or 0xf, @0x82e96); its travel stellar
-/// cleared (+0x6c = -1) and its burst gone (+0x34 = 0). Its target is
-/// kept.
+/// ([`Goal::Idle`], its kept pursuit, docking and any sub 4 or 0xd
+/// dropped) unless it assists the player (goal 9 or 0xf, @0x82e96); its
+/// travel stellar cleared (+0x6c = -1), its stage ended (+0x50 = 0,
+/// @0x82eb0) and its burst gone (+0x34 = 0). Its target is kept.
 fn stop_jumping(npc: &mut Npc) {
     if !matches!(npc.goal, Goal::Assist(_)) {
         npc.goal = Goal::Idle;
         npc.pursuit.kept = None;
         npc.docking = None;
+        npc.warp.goal = None;
     }
     npc.travel_set = false;
+    npc.warp.stage = 0.0;
     npc.owed_burst = None;
 }
 
@@ -241,13 +302,16 @@ fn stop_jumping(npc: &mut Npc) {
 mod tests {
     use super::*;
     use crate::ai::pursuit::Kept;
+    use crate::catalog::WeaponId;
     use crate::combat::ShipRef;
+    use crate::combat::armament::Trigger;
     use crate::flight::{ShipState, Turn, facing};
     use crate::geometry::Vec2;
     use crate::hail::Help;
     use crate::stats::ShipStats;
     use crate::traffic::npc::Mode;
     use crate::traffic::plunder_dock::{DockSub, Docking};
+    use crate::traffic::warp_out::WarpGoal;
     use nova_sim_base::fixture::{Draws, FAST};
 
     const INERTIALESS: Inertia = Inertia::Inertialess { speed: 2.0 };
@@ -498,12 +562,12 @@ mod tests {
         );
     }
 
-    /// A ship that owed `before` and now owes `now`, attacking the player
-    /// with a pursuit kept and a docking, its travel stellar set and its
-    /// drive thrusting.
+    /// A ship that now owes `now`, having burst this tick as `burst` says,
+    /// attacking the player with a pursuit kept and a docking, its travel
+    /// stellar set and its drive thrusting.
     fn settled(
-        before: f32,
         now: f32,
+        burst: bool,
         speeds: TopSpeeds,
         inertia: Inertia,
         draws: &mut Draws,
@@ -518,7 +582,7 @@ mod tests {
         });
         npc.travel_set = true;
         npc.display.drive.thrust = Thrust::Plain;
-        settle(&mut npc, Some(before), speeds, inertia, draws);
+        settle(&mut npc, burst, speeds, inertia, draws);
         npc
     }
 
@@ -529,7 +593,7 @@ mod tests {
             lead: None,
         };
         let mut draws = Draws::of(&[7]);
-        let ended = settled(6.2, 6.0, own, Inertia::Inertial, &mut draws);
+        let ended = settled(6.0, true, own, Inertia::Inertial, &mut draws);
         assert_eq!(ended.goal, Goal::Idle, "goal 0");
         assert_eq!(
             (ended.pursuit.kept, ended.docking),
@@ -544,7 +608,7 @@ mod tests {
         assert_eq!(draws.asked, [30], "Rand(30)");
         assert!(close(ended.state.velocity, Vec2::new(2.0, 0.0)), "kept");
         // An inertialess ship's velocity is zeroed.
-        let ended = settled(6.2, 6.0, own, INERTIALESS, &mut Draws::of(&[0]));
+        let ended = settled(6.0, true, own, INERTIALESS, &mut Draws::of(&[0]));
         assert_eq!(ended.state.velocity, Vec2::ZERO);
         // With a lead it flies on, its cap the lower top speed.
         let led = TopSpeeds {
@@ -552,40 +616,167 @@ mod tests {
             lead: Some(6.0),
         };
         let mut draws = Draws::of(&[]);
-        let ended = settled(6.2, 5.9, led, Inertia::Inertial, &mut draws);
+        let ended = settled(5.9, true, led, Inertia::Inertial, &mut draws);
         assert_eq!((ended.mode, ended.owed_burst), (Mode::Flying, None));
         assert_eq!(draws.asked, Vec::<u32>::new());
     }
 
     #[test]
-    fn a_burst_above_its_cap_or_not_lowered_this_tick_goes_on() {
+    fn a_burst_ending_in_a_wait_keeps_its_trigger_for_this_ticks_fire_and_is_marked() {
+        // `_HandleShip`'s fire step comes after the end and tests no wait
+        // (@0x34d32-0x34d8b, @0x34fcb-0x35018).
+        let held = Trigger {
+            only: Some(WeaponId(131)),
+            keep: Some(WeaponId(131)),
+            point_defence: true,
+            ..Trigger::default()
+        };
         let own = TopSpeeds {
             own: 6.0,
             lead: None,
         };
-        for (before, now) in [(6.3, 6.1), (5.0, 5.0)] {
+        let mut npc = owing(Some(6.0));
+        npc.trigger = held;
+        settle(&mut npc, true, own, Inertia::Inertial, &mut Draws::of(&[0]));
+        assert!(matches!(npc.mode, Mode::Coasting { .. }));
+        assert_eq!(npc.trigger, held);
+        assert!(npc.fires_on_burst_end);
+    }
+
+    #[test]
+    fn a_burst_ending_with_a_lead_takes_no_wait_and_needs_no_mark() {
+        let held = Trigger {
+            only: Some(WeaponId(131)),
+            ..Trigger::default()
+        };
+        let led = TopSpeeds {
+            own: 6.0,
+            lead: Some(6.0),
+        };
+        let mut npc = owing(Some(6.0));
+        npc.trigger = held;
+        settle(&mut npc, true, led, Inertia::Inertial, &mut Draws::of(&[]));
+        assert_eq!(npc.mode, Mode::Flying);
+        assert_eq!(npc.trigger, held);
+        assert!(!npc.fires_on_burst_end);
+    }
+
+    #[test]
+    fn a_burst_going_on_is_not_marked() {
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        let mut npc = owing(Some(7.0));
+        settle(&mut npc, true, own, Inertia::Inertial, &mut Draws::of(&[]));
+        assert!(!npc.fires_on_burst_end);
+    }
+
+    #[test]
+    fn a_burst_above_its_cap_or_a_word_changed_with_no_burst_goes_on() {
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        // Above its cap after a burst; at or below it with no burst this
+        // tick, as sub 8 lowers the word outside its window or sub 0xd
+        // writes its 1.0 (@0x34a84).
+        for (now, burst) in [(6.1, true), (5.0, false), (1.0, false)] {
             let mut draws = Draws::of(&[]);
-            let going = settled(before, now, own, Inertia::Inertial, &mut draws);
-            assert_eq!(going.owed_burst, Some(now), "{before} {now}");
+            let going = settled(now, burst, own, Inertia::Inertial, &mut draws);
+            assert_eq!(going.owed_burst, Some(now), "{now} {burst}");
             assert_eq!(going.goal, Goal::Attack(ShipRef::Player));
             assert_eq!(going.mode, Mode::Flying);
             assert!(going.travel_set);
             assert!(draws.asked.is_empty());
         }
-        // Nothing owed before, or nothing now: no burst ran.
-        let mut npc = owing(Some(3.0));
-        settle(&mut npc, None, own, Inertia::Inertial, &mut Draws::of(&[]));
-        assert_eq!(npc.owed_burst, Some(3.0));
+        // Nothing owed now: no burst to end.
         let mut npc = owing(None);
         npc.goal = Goal::Attack(ShipRef::Player);
-        settle(
-            &mut npc,
-            Some(9.0),
-            own,
-            Inertia::Inertial,
-            &mut Draws::of(&[]),
-        );
+        settle(&mut npc, true, own, Inertia::Inertial, &mut Draws::of(&[]));
         assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_burst_on_a_word_written_this_tick_ends_at_its_cap_whatever_it_owed_before() {
+        // Sub 8 writes +0x34 = 0 less its pull (@0x87ef8, @0x880c0) over
+        // nothing owed, and `_HandleShip`'s end test runs inside the burst
+        // block (@0x34d10-0x34d2a).
+        let led = TopSpeeds {
+            own: 6.0,
+            lead: Some(6.0),
+        };
+        let mut npc = owing(None);
+        npc.goal = Goal::Dock(ShipRef::Player);
+        let flown = handling(&npc);
+        npc.owed_burst = Some(1.8);
+        let controls = Controls {
+            thrust: true,
+            ..Controls::default()
+        };
+        let keeps = Word::Keeps { thrust: 0.18 };
+        step(
+            &mut npc,
+            &flown,
+            controls,
+            FlightRules::default(),
+            Inertia::Inertial,
+            keeps,
+        );
+        assert!(npc.display.drive.burst, "it burst");
+        let burst = npc.display.drive.burst;
+        settle(&mut npc, burst, led, Inertia::Inertial, &mut Draws::of(&[]));
+        assert_eq!((npc.goal, npc.owed_burst), (Goal::Idle, None));
+        assert_eq!(npc.mode, Mode::Flying, "with a lead, no wait");
+    }
+
+    #[test]
+    fn only_a_burst_marks_that_it_burst() {
+        let thrust = Controls {
+            thrust: true,
+            ..Controls::default()
+        };
+        for (owed, word) in [
+            (None, Word::Keeps { thrust: 0.18 }),
+            (Some(30.0), Word::Keeps { thrust: 0.0 }),
+            (Some(30.0), Word::Writes),
+        ] {
+            let mut npc = owing(owed);
+            let flown = handling(&npc);
+            step(
+                &mut npc,
+                &flown,
+                thrust,
+                FlightRules::default(),
+                Inertia::Inertial,
+                word,
+            );
+            assert!(!npc.display.drive.burst, "{owed:?} {word:?}");
+        }
+    }
+
+    #[test]
+    fn the_end_of_a_burst_zeroes_its_stage_and_drops_its_jump_with_its_sub() {
+        // +0x50 = 0 in every case (@0x82eb0); sub 0 where goal 0 is written
+        // (@0x82e9f).
+        let own = TopSpeeds {
+            own: 6.0,
+            lead: None,
+        };
+        for (goal, sub) in [
+            (Goal::Idle, None),
+            (Goal::Assist(Help::Refuel), Some(WarpGoal::Own)),
+        ] {
+            for stage in [-1.0, 5.0] {
+                let mut npc = owing(Some(6.0));
+                npc.goal = goal;
+                npc.warp.stage = stage;
+                npc.warp.goal = Some(WarpGoal::Own);
+                settle(&mut npc, true, own, Inertia::Inertial, &mut Draws::of(&[0]));
+                assert_eq!(npc.warp.stage, 0.0, "{goal:?} {stage}");
+                assert_eq!(npc.warp.goal, sub, "{goal:?} {stage}");
+            }
+        }
     }
 
     #[test]
@@ -603,13 +794,7 @@ mod tests {
             own: 6.0,
             lead: None,
         };
-        settle(
-            &mut npc,
-            Some(6.5),
-            own,
-            Inertia::Inertial,
-            &mut Draws::of(&[0]),
-        );
+        settle(&mut npc, true, own, Inertia::Inertial, &mut Draws::of(&[0]));
         assert_eq!(
             (npc.goal, npc.docking),
             (Goal::Assist(Help::Refuel), docking)

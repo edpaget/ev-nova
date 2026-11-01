@@ -262,15 +262,15 @@ fn a_ship_holding_or_assisting_with_no_docking_has_its_heading_truncated() {
 // follow fly by (the inspector, below). Each wants a whole-degree heading
 // and `_HandleShip` turns it.
 
-/// A ship of `fields` idling at the centre, moving at `velocity` and
-/// facing `heading`, turning `rate` degrees a tick: its heading after a
-/// tick's brake.
+/// A ship of `fields` waiting at the centre (state 6, sub 1), moving at
+/// `velocity` and facing `heading`, turning `rate` degrees a tick: its
+/// heading after a tick's brake.
 fn braked(fields: ShipFields, velocity: Vec2, heading: f32, rate: f32) -> f32 {
     let start = at(0.0, 0.0, velocity.x, velocity.y, heading);
-    let mut idle = ship(fields, Goal::Idle, start, velocity.length());
-    idle.stats.handling.turn_rate = rate;
-    assert_eq!(fly(&mut idle, None), Outcome::Flying);
-    idle.state.heading
+    let mut waiting = ship(fields, Goal::Wait, start, velocity.length());
+    waiting.stats.handling.turn_rate = rate;
+    assert_eq!(fly(&mut waiting, None), Outcome::Flying);
+    waiting.state.heading
 }
 
 #[test]
@@ -298,25 +298,25 @@ fn a_ship_braking_at_rest_or_inertialess_has_its_heading_truncated() {
 
 #[test]
 fn a_ship_braking_from_3_comes_to_rest_on_a_whole_degree() {
-    let mut idle = ship(FAST, Goal::Idle, at(0.0, 0.0, 0.0, -3.0, 0.0), 0.0);
+    let mut waiting = ship(FAST, Goal::Wait, at(0.0, 0.0, 0.0, -3.0, 0.0), 0.0);
     for _ in 0..200 {
-        fly(&mut idle, None);
+        fly(&mut waiting, None);
     }
     // Sub 1's rest test, then its settle down to the engine's rest.
     assert!(
-        !super::inertialess::moving(idle.state.velocity),
+        !super::inertialess::moving(waiting.state.velocity),
         "{:?}",
-        idle.state
+        waiting.state
     );
     for _ in 0..200 {
-        fly(&mut idle, None);
+        fly(&mut waiting, None);
     }
     assert!(
-        idle.state.velocity.length() <= AT_REST_SPEED,
+        waiting.state.velocity.length() <= AT_REST_SPEED,
         "{:?}",
-        idle.state
+        waiting.state
     );
-    assert_eq!(idle.state.heading, idle.state.heading.trunc());
+    assert_eq!(waiting.state.heading, waiting.state.heading.trunc());
 }
 
 /// A ship of `fields` landing on a planet far off at `planet`, at rest
@@ -458,7 +458,7 @@ type Case<'a> = (
 fn every_flight_of_the_autopilot_turns_as_handle_ship_does() {
     // A ship facing 88.6, 2 whole degrees off 90, is put on 90 by every
     // flight that wants 90 (a brake moving west, a match of a velocity
-    // east), and on 88 by one that wants no heading.
+    // east), and on 88 by one that wants no heading (sub 0, a coast).
     let original = FlightRules::default();
     let earlier_follow = FlightRules {
         npc_formation: NpcFormation::Earlier,
@@ -484,15 +484,16 @@ fn every_flight_of_the_autopilot_turns_as_handle_ship_does() {
         hopeless: false,
     };
     #[rustfmt::skip]
-    let cases: [Case; 18] = [
+    let cases: [Case; 20] = [
         ("landing, its stellar gone", Goal::Land(StellarId(140)), braking, &[], (None, false), original, 90.0),
         ("entering a gate", Goal::EnterGate(StellarId(300)), still, &[gate], (None, false), original, 90.0),
         ("entering a gate gone", Goal::EnterGate(StellarId(300)), braking, &[], (None, false), original, 90.0),
         ("inspecting", Goal::Inspect(player), still, &[], (Some(&east), false), original, 90.0),
-        ("inspecting nothing", Goal::Inspect(player), braking, &[], (None, false), original, 90.0),
+        ("inspecting nothing", Goal::Inspect(player), braking, &[], (None, false), original, 88.0),
+        ("inspecting nothing by the earlier", Goal::Inspect(player), braking, &[], (None, false), earlier, 90.0),
         ("following by the earlier follow", follow, still, &[], (Some(&east), false), earlier_follow, 90.0),
         ("following nothing by the earlier follow", follow, braking, &[], (None, false), earlier_follow, 90.0),
-        ("attacking nothing", Goal::Attack(player), braking, &[], (None, false), original, 90.0),
+        ("attacking nothing", Goal::Attack(player), braking, &[], (None, false), original, 88.0),
         ("plundering a disabled ship", plunder, braking, &[], (Some(&east), true), original, 90.0),
         ("sniping nothing", Goal::Snipe(player), braking, &[], (None, false), original, 88.0),
         ("mining with no rock", Goal::Mine, braking, &[], (None, false), original, 90.0),
@@ -503,6 +504,7 @@ fn every_flight_of_the_autopilot_turns_as_handle_ship_does() {
         ("waiting", Goal::Wait, braking, &[], (None, false), original, 90.0),
         ("count waiting", Goal::CountWait, braking, &[], (None, false), original, 90.0),
         ("idle at rest", Goal::Idle, still, &[], (None, false), original, 88.0),
+        ("idle moving", Goal::Idle, braking, &[], (None, false), original, 88.0),
     ];
     for (name, goal, start, sites, other, rules, wanted) in cases {
         let mut npc = match goal {

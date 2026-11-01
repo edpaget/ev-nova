@@ -323,7 +323,7 @@ fn an_npcs_hit_on_a_closing_repairer_makes_it_give_up_and_go_idle_still_provoked
         "it never thought"
     );
     // The wimpy trader's next think reads target -1 as unprovoked
-    // (`provoked_by` needs a live ship): no flight.
+    // (`provoked_by` needs a ship in its slot): no flight.
     tick(&mut traffic, &recording, Condition::Disabled, &[]);
     let next = helper(&traffic).goal;
     tick_struck(

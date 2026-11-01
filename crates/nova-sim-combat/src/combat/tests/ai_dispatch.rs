@@ -94,9 +94,10 @@ fn an_npcs_launch_comes_after_a_lower_slots_point_defence_and_before_a_higher_sl
         bays: true,
         ..Trigger::default()
     };
-    // C flies in A's fleet, so defends against a missile aimed at A.
+    // C follows A, so defends against a missile aimed at A.
     let mut wing = defender(3, -30.0);
     wing.fleet = A;
+    wing.leader = Some(A);
     let mut ships = [
         carrying(2, 30.0, launching),
         wing,
@@ -272,6 +273,7 @@ fn launch_between_defenders(combat: &mut Combat) -> [Ship; 4] {
     };
     let mut wing = defender(3, -30.0);
     wing.fleet = A;
+    wing.leader = Some(A);
     let mut ships = [
         defender(1, 0.0),
         carrying(2, 30.0, launching),
@@ -387,4 +389,30 @@ fn on_double_times_second_pass_a_run_does_nothing_and_reaches_the_end() {
     let stopped = combat.defend_npcs(&mut fighters, arena, None, true, &mut NeverFires);
     assert_eq!(stopped, None);
     assert_eq!(combat.take_sorties(), []);
+}
+
+/// B as the fight sees it, in `condition`.
+fn b_in(condition: Condition) -> Target {
+    let mut ship = Ship::at(2, 0.0, 0.0);
+    ship.condition = condition;
+    ship.fighter().as_target()
+}
+
+#[test]
+fn a_pick_finds_its_target_while_its_slot_is_active_breaking_up_included() {
+    use crate::combat::ai_dispatch::active;
+    let breaking_up = Condition::Dying {
+        ticks_left: 9,
+        starting: false,
+    };
+    for condition in [Condition::Intact, Condition::Disabled, breaking_up] {
+        let targets = [b_in(condition)];
+        let found = active(Some(B), &targets);
+        assert_eq!(found.map(|target| target.ship), Some(B), "{condition:?}");
+    }
+    let destroyed = [b_in(Condition::Destroyed)];
+    assert_eq!(active(Some(B), &destroyed), None);
+    let others = [b_in(Condition::Intact)];
+    assert_eq!(active(Some(C), &others), None);
+    assert_eq!(active(None, &others), None);
 }

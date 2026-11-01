@@ -16,6 +16,10 @@
 //!   government's word alone.
 //! - Only the escape pod (`shïp` 895) holds no shield, and no xenophobe,
 //!   a Pirate (137) for one, takes a player in it.
+//! - The Auroran Empire (129) is allied with Family Moash (131) and
+//!   Family Vella (133), which are at war: its warship helps a Moash ship
+//!   against a Vella one, and the attack block's ally drop leaves it on
+//!   goal 0 holding the Vella ship (see `nova_sim::ai::held_target`).
 
 use crate::common;
 
@@ -24,7 +28,7 @@ use std::collections::BTreeSet;
 use nova_data::GameData;
 use nova_sim::ai::odds::friend_strength;
 use nova_sim::ai::target::{TargetRules, select_target};
-use nova_sim::ai::{PlayerSide, Surroundings, Warship};
+use nova_sim::ai::{NovaAi, PlayerSide, Surroundings, Warship};
 use nova_sim::combat::armament::Arsenal;
 use nova_sim::flight::ShipState;
 use nova_sim::geometry::Vec2;
@@ -40,6 +44,9 @@ const FEDERATION: GovtId = GovtId(128);
 const REBELLION: GovtId = GovtId(141);
 const BUREAU: GovtId = GovtId(164);
 const PIRATES: GovtId = GovtId(137);
+const AURORAN_EMPIRE: GovtId = GovtId(129);
+const MOASH: GovtId = GovtId(131);
+const VELLA: GovtId = GovtId(133);
 const SHUTTLE: ShipId = ShipId(128);
 const FED_DESTROYER: ShipId = ShipId(141);
 const ESCAPE_POD: ShipId = ShipId(895);
@@ -382,6 +389,46 @@ fn only_the_escape_pod_holds_no_shield_and_no_pirate_takes_a_player_in_it() {
     };
     assert_eq!(pick(SHUTTLE), Some(P));
     assert_eq!(pick(ESCAPE_POD), None, "class 0x2ff (@0x8a0f1)");
+}
+
+#[test]
+fn an_auroran_warship_helps_moash_against_vella_and_the_block_leaves_it_holding_vella() {
+    let Some(data) = opened() else {
+        return;
+    };
+    let arsenal = Arsenal::read(&data);
+    let govts = Governments::read(&data);
+    assert!(govts.allies(Some(AURORAN_EMPIRE), Some(MOASH)));
+    assert!(govts.allies(Some(AURORAN_EMPIRE), Some(VELLA)));
+    assert!(govts.enemies(Some(MOASH), Some(VELLA)));
+    let auroran = stock_warship(&arsenal, 1, FED_DESTROYER, AURORAN_EMPIRE, (0.0, 0.0));
+    let mut moash = stock_warship(&arsenal, 2, SHUTTLE, MOASH, (0.0, 300.0));
+    moash.goal = Goal::Attack(ShipRef::Npc(NpcId(3)));
+    let vella = stock_warship(&arsenal, 3, SHUTTLE, VELLA, (0.0, 600.0));
+    let npcs = [auroran, moash, vella];
+    let around = Surroundings {
+        player: Some(stock_player(&data, &arsenal, SHUTTLE, (0.0, -9000.0))),
+        govts: &govts,
+        ..Surroundings::new(&[], &npcs)
+    };
+    let vella = ShipRef::Npc(NpcId(3));
+    assert_eq!(
+        select_target(
+            &npcs[0],
+            None,
+            &around,
+            TargetRules::default(),
+            &mut Draws::of(&[])
+        ),
+        Some(vella),
+        "the help asks no ally of the quarry (@0x8a418-0x8a5ca)"
+    );
+    let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
+    assert_eq!(
+        (decision.goal, decision.holds_target),
+        (Goal::Idle, Some(vella)),
+        "the attack block's ally drop (@0x8e2d2)"
+    );
 }
 
 /// A small seeded generator (xorshift64*), so the stock traffic rolls the

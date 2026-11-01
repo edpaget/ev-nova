@@ -16,6 +16,11 @@
 //!   [`candidates`], the candidate pass its steps share; and
 //!   [`threatened`], whether a friend is threatened by a ship's enemy.
 //! - [`flee_drop`]: a fleeing ship giving up fleeing an ally it spares.
+//! - [`handler_head`]: `_HighLevelAIHandler`'s head, after every type's
+//!   think: the wait exit and the slot test.
+//! - [`attack_drop`]: its state-4 block, after every type's think: the
+//!   drops of an attack (the wait, an ally, the fleet, a ship gone or
+//!   breaking up), the hopeless chase and the attack.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
 //! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
 //!   weapons' longest reach, and how it flies there.
@@ -30,7 +35,9 @@
 //!   next.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
-//!   NPC to the one for its type.
+//!   NPC to the one for its type; [`held_target`], what a warship's and an
+//!   interceptor's think do with the target they hold and the one they
+//!   drop.
 //! - [`escort`]: [`EscortAi`], how the player's escorts fly and fight by
 //!   their standing orders; [`NovaAi`] routes every escort to it.
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
@@ -40,6 +47,7 @@
 
 pub mod afterburner;
 pub mod answer_flag;
+pub mod attack_drop;
 pub mod brave;
 pub mod call_for_help;
 pub mod candidates;
@@ -55,6 +63,8 @@ pub mod fire_untargeted;
 pub(crate) mod fixture;
 pub mod flee_drop;
 pub mod fleet_escort;
+pub mod handler_head;
+pub mod held_target;
 pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
@@ -250,7 +260,11 @@ fn blessed_slot(govt: GovtId) -> Option<usize> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Goal {
     /// Nothing yet: the original's state 0, which a type's think reads to
-    /// run its idle block (see [`idle`]). It comes to a stop where it is.
+    /// run its idle block (see [`idle`]). It flies sub 0, as the high
+    /// level's tail writes (@0x8fb09-0x8fb13): it moves on at its velocity
+    /// with no thrust, its heading truncated (`_LowLevelAIHandler`
+    /// @0x851da-0x8522d). An escort or fighter fires unprovoked at its
+    /// target (`_AIEscortFireUnprovoked`, @0x85236).
     #[default]
     Idle,
     /// Stop and wait: the original's state 6, which the idle blocks write
@@ -922,21 +936,44 @@ impl<'a> Surroundings<'a> {
         }
     }
 
-    /// Whether `ship` is here to be fought: in the system, intact or
-    /// disabled, and not still jumping in or coming out of a gate (seen by
-    /// no ship while it waits there, `_ShipVisibleToShip` @0x972d, and
-    /// unfought while it bursts out, as during the glide). A ship holding
-    /// its course after its glide or burst ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) is here:
-    /// its goal is 0, which `_ShipVisibleToShip` sees ([`Npc::arrived`]).
-    /// So is one held at its gate ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)),
-    /// its goal 4.
+    /// Whether `ship`'s slot is active (+0xb8): in the system and not
+    /// destroyed, however it arrives, breaking up included
+    /// ([`Condition::active`]). Most of the original's searches and keeps
+    /// read this alone.
+    #[must_use]
+    pub fn active(&self, ship: ShipRef) -> bool {
+        self.condition_of(ship).is_some_and(Condition::active)
+    }
+
+    /// Whether `ship`'s slot is active and it is not breaking up: +0xb8 and
+    /// `_IsDying`, as the attack block reads its target (@0x8e3df,
+    /// @0x8e3ef) ([`Condition::standing`]). No routine that asks reads how
+    /// the ship arrives.
+    #[must_use]
+    pub fn standing(&self, ship: ShipRef) -> bool {
+        self.condition_of(ship).is_some_and(Condition::standing)
+    }
+
+    /// Whether `ship` is breaking up, still in its slot: `_IsDying`, as the
+    /// attack block reads its target (@0x8e3ef).
+    #[must_use]
+    pub fn breaking_up(&self, ship: ShipRef) -> bool {
+        matches!(self.condition_of(ship), Some(Condition::Dying { .. }))
+    }
+
+    /// Whether `ship` is [`standing`](Self::standing) and done arriving
+    /// ([`Npc::arrived`]). None of the original's routines reads this: the
+    /// only arrival they test of another ship is goal 0x15, through
+    /// `_ShipVisibleToShip` (@0x972d). It serves the port's own other
+    /// readings alone, `CarriedAi` ([`carried`]) and
+    /// [`HitFocus`](crate::RuleKey::HitFocus) ([`react`]).
     #[must_use]
     pub fn live(&self, ship: ShipRef) -> bool {
-        let jumping_in = match ship {
+        let arriving = match ship {
             ShipRef::Player => false,
             ShipRef::Npc(id) => self.npc(id).is_some_and(|npc| !npc.arrived()),
         };
-        !jumping_in && self.condition_of(ship).is_some_and(Condition::standing)
+        !arriving && self.standing(ship)
     }
 }
 
@@ -1026,13 +1063,27 @@ pub struct Decision {
     /// Whether the think left the ship with no target (+0x70 = -1) though
     /// its goal is no fight: `_PirateWarshipAI`'s search (@0x8c35d) finding
     /// nothing. The traffic clears [`Npc::target`] as it takes the goal; a
-    /// goal it keeps with a target keeps the target.
+    /// goal it keeps with a target keeps the target. The frame ends with
+    /// none: the traffic writes nothing of [`Behaviour::target`]'s over it,
+    /// so the next think finds no target, whatever its thinker's target
+    /// step works out afresh (the attack block's -1, @0x8e717).
     pub clears_target: bool,
-    /// Whether the think dropped its fight leaving its sub-goal as it was:
-    /// `_PirateWarshipAI`'s disabled-warship drop writes the goal and the
-    /// target alone (@0x8c839-0x8c842), so a kept rush or break-off
-    /// ([`Npc::pursuit`]) carries over to its next fight.
-    pub keeps_pursuit: bool,
+    /// The target the frame ends with on goal 0, when the high level
+    /// dropped the attack keeping it: the attack block's wait test and its
+    /// ally drop write goal 0 alone (@0x8e26d → @0x8e731, @0x8e2d2;
+    /// [`attack_drop`]). The traffic writes it over
+    /// [`Behaviour::target`]'s answer, so the threat tests read it
+    /// ([`Npc::fought`]) and the next think finds it: a warship attacks it
+    /// again and an interceptor holds it ([`held_target`]). An
+    /// interceptor's think writes it too, for the target it holds
+    /// unprovoked on its goal.
+    pub holds_target: Option<ShipRef>,
+    /// Whether its flight is the attack block's hopeless chase for a ship
+    /// of AI type 2 or below: goal 3, sub 5 (@0x8e625-0x8e62e), which flies
+    /// close at any distance and launches and calls as goal 4 does
+    /// (@0x8e6e5-0x8e70d; [`attack_drop`]). The traffic sets
+    /// [`Npc::flees_hopeless`] so as it takes the goal.
+    pub flees_hopeless: bool,
     /// The ship it plunders now: `_PirateWarshipAI`'s plunder
     /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
     /// out, its [`goal`](Self::goal) the drift that follows
@@ -1057,26 +1108,38 @@ pub struct Decision {
     /// (`_InterceptorAI` @0x8d41e, see [`interceptor`]): the state-7
     /// block's reach then reads the new target (@0x8f11e), and a state-4
     /// pick runs no reach at all, so the ship it was inspecting is not
-    /// looked over and the player is not scanned.
+    /// looked over and the player is not scanned. A re-pick already within
+    /// reach is looked over ([`looked_over`](Self::looked_over)).
     pub re_picked: bool,
+    /// The ship an interceptor's think picked, or re-picked, and looked
+    /// over at once, already within reach: goal 7's block runs after the
+    /// think in one dispatch (@0x8f11e-0x8f394), so the pick ends there,
+    /// goal 0 and no target. The traffic records the ship
+    /// ([`Npc::inspected`]) and scans the player when it is the player.
+    pub looked_over: Option<ShipRef>,
     /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
     /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,
     /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) whoever the parent, an NPC
     /// ([`fleet_escort`]) or the player ([`EscortAi`]), so a ship a pirate
     /// took into its fleet ends its
     /// [`CAPTURED_WAIT`](plunder_contents::CAPTURED_WAIT) at its first
-    /// think. The traffic ends the wait as it takes the goal
+    /// think. [`CarriedAi`] sets it as it attacks, by the Attack block
+    /// alone. The traffic ends the wait as it takes the goal
     /// ([`Npc::end_wait`]): [`Npc::ai_wait`] zeroed, and a hold at its gate
     /// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate))
     /// ended, so it flies this tick. It gives up its warp stage, as the blocks write +0x50 = -1.0 with it
     /// (see [`jump_with_leader`](crate::traffic::jump_with_leader)); the
     /// high level's hold zeroes the stage again in the same tick.
     pub ends_wait: bool,
-    /// The order word the think writes to the ship, if any: a fighter of
-    /// the player's escort writes the order it takes from its parent
-    /// (`_EscortAI` @0x83b76, @0x83b7f; [`fleet_escort`]), which its next
-    /// target check, and a stray beam, then read. The traffic sets
-    /// [`Npc::order_word`] as it takes the goal; none leaves it as it was.
+    /// The order word the think writes to the ship, if any: a ship the
+    /// player leads writes its own at every think past its lost parent
+    /// ([`escort::think_word`], @0x83ae4-0x83bda), a fighter of the
+    /// player's escort the order it takes from its parent (`_EscortAI`
+    /// @0x83b76, @0x83b7f; [`fleet_escort`]), and the out-of-ammunition
+    /// fallback its word under any parent (@0x83bc9, @0x83bda). Its next
+    /// target check, the player's next command and a stray beam then read
+    /// it. The traffic sets [`Npc::order_word`] as it takes the goal; none
+    /// leaves it as it was.
     pub order_word: Option<crate::fleet::OrderWord>,
     /// Whether the think takes the ship out of its fleet: `_EscortAI`'s
     /// lost parent (@0x83917-0x8397b, its AI type @0x83c4a), for a ship
@@ -1105,6 +1168,21 @@ pub struct Decision {
     /// [`VoiceCue::Thought`]: crate::escort_voice::VoiceCue::Thought
     /// [`VoiceCue::NewThreat`]: crate::escort_voice::VoiceCue::NewThreat
     pub voice: Option<crate::escort_voice::VoiceCue>,
+}
+
+impl Decision {
+    /// The target the frame ends with whatever the target step answers:
+    /// the one it holds ([`holds_target`](Self::holds_target)), or none
+    /// when it clears its target ([`clears_target`](Self::clears_target));
+    /// `None` when the target step's answer stands.
+    #[must_use]
+    pub fn last_target(&self) -> Option<Option<ShipRef>> {
+        match (self.holds_target, self.clears_target) {
+            (Some(ship), _) => Some(Some(ship)),
+            (None, true) => Some(None),
+            (None, false) => None,
+        }
+    }
 }
 
 /// How NPCs decide what to do.
@@ -1264,11 +1342,15 @@ pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
 }
 
 /// The ship that provoked `npc`, its target since the hit, while it is
-/// provoked and that ship is live among `around`.
+/// provoked and that ship holds its slot among `around`. The traders', the
+/// miner's and the warship's thinks read +0x96 and +0x70 alone
+/// (`_WimpyTraderAI` @0x8b1ac, `_BraveTraderAI` @0x8b616, `_MinerAI`
+/// @0x8b254, `_WarshipAI` @0x8bb0c), and a dead slot's +0x70 is cleared
+/// (@0x8d500), so an attacker arriving or breaking up provokes.
 #[must_use]
 pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
     npc.target
-        .filter(|&attacker| npc.provoked > 0.0 && around.live(attacker))
+        .filter(|&attacker| npc.provoked > 0.0 && around.active(attacker))
 }
 
 /// Whether `npc` can still fly its goal among `around`: a stellar the
@@ -1972,6 +2054,36 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_is_provoked_by_its_target_however_it_arrives_or_breaks_up() {
+        // +0x96 and +0x70 alone (`_WimpyTraderAI` @0x8b1ac, `_BraveTraderAI`
+        // @0x8b616, `_MinerAI` @0x8b254, `_WarshipAI` @0x8bb0c).
+        let mut victim = npc(1, AiType::WimpyTrader);
+        victim.target = Some(ShipRef::Npc(NpcId(2)));
+        victim.provoked = 0.5;
+        let at = |attacker: Npc| {
+            let npcs = [victim.clone(), attacker];
+            provoked_by(&victim, &Surroundings::new(&[], &npcs))
+        };
+        let arriving = |mode| Npc {
+            mode,
+            ..npc(2, AiType::Warship)
+        };
+        let provoker = Some(ShipRef::Npc(NpcId(2)));
+        assert_eq!(at(arriving(Mode::JumpingIn { tick: 1 })), provoker);
+        assert_eq!(at(arriving(Mode::Emerging { ticks_left: 3 })), provoker);
+        let condition = |condition| Npc {
+            condition,
+            ..npc(2, AiType::Warship)
+        };
+        let dying = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        assert_eq!(at(condition(dying)), provoker);
+        assert_eq!(at(condition(Condition::Destroyed)), None);
+    }
+
+    #[test]
     fn a_goal_fights_a_ship_attacking_sniping_or_fleeing() {
         let n = ShipRef::Npc(NpcId(3));
         assert_eq!(Goal::Attack(n).quarry(), Some(n));
@@ -2132,6 +2244,76 @@ mod tests {
         assert_eq!(around.system_govt, None);
         assert_eq!(around.record, 0);
         assert_eq!(*around.govts, Governments::default());
+    }
+
+    /// Ships 1 to 7, each in its mode or condition: flying, gliding in,
+    /// waiting in its gate, on the last frame of that wait, bursting out,
+    /// disabled and breaking up.
+    fn every_arrival() -> Vec<Npc> {
+        let modes = [
+            Mode::Flying,
+            Mode::JumpingIn { tick: 1 },
+            Mode::Emerging { ticks_left: 3 },
+            Mode::LeavingGate { tick: 0 },
+            Mode::LeavingGate { tick: 1 },
+        ];
+        let mut npcs: Vec<Npc> = (1..)
+            .zip(modes)
+            .map(|(id, mode)| Npc {
+                mode,
+                ..npc(id, AiType::Warship)
+            })
+            .collect();
+        for (id, condition) in [
+            (6, Condition::Disabled),
+            (
+                7,
+                Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                },
+            ),
+        ] {
+            npcs.push(Npc {
+                condition,
+                ..npc(id, AiType::Warship)
+            });
+        }
+        npcs
+    }
+
+    #[test]
+    fn an_active_ship_holds_its_slot_however_it_arrives_or_breaks_up() {
+        let npcs = every_arrival();
+        let around = Surroundings::new(&[], &npcs);
+        for id in 1..=7 {
+            assert!(around.active(ShipRef::Npc(NpcId(id))), "{id}");
+        }
+        assert!(!around.active(ShipRef::Npc(NpcId(9))), "not here");
+        assert!(!around.active(P), "no player");
+    }
+
+    #[test]
+    fn a_standing_ship_holds_its_slot_and_is_not_breaking_up() {
+        let npcs = every_arrival();
+        let around = Surroundings::new(&[], &npcs);
+        for id in 1..=6 {
+            assert!(around.standing(ShipRef::Npc(NpcId(id))), "{id}");
+        }
+        assert!(!around.standing(ShipRef::Npc(NpcId(7))), "dying");
+        assert!(!around.standing(ShipRef::Npc(NpcId(9))), "not here");
+        assert!(!around.standing(P), "no player");
+    }
+
+    #[test]
+    fn a_ship_destroyed_where_it_stood_holds_no_slot() {
+        let npcs = [Npc {
+            condition: Condition::Destroyed,
+            ..npc(1, AiType::Warship)
+        }];
+        let around = Surroundings::new(&[], &npcs);
+        assert!(!around.active(ShipRef::Npc(NpcId(1))));
+        assert!(!around.standing(ShipRef::Npc(NpcId(1))));
     }
 
     #[test]

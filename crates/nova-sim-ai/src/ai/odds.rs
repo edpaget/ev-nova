@@ -99,7 +99,7 @@
 //!   original compares the two angles without wrapping them; here they are
 //!   compared the short way round.
 
-use crate::ai::fire::{has_ammo, suitable_missile};
+use crate::ai::fire::{DOGFIGHT_BOX, has_ammo, suitable_missile};
 use crate::ai::threatened::threatened_by_enemy_of;
 use crate::ai::{Goal, Surroundings};
 use crate::combat::ShipRef;
@@ -347,18 +347,16 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
     }
 }
 
-/// How `npc` flies an attack on `target` among `around`, as
-/// `_HighLevelAIHandler`'s state-4 block takes it: it asks
-/// `_AIEvalHopelessChase` of every state-4 target, past a stand-off hull
-/// (@0x8e48e), and snipes in a hopeless chase ([`hopeless_chase`]);
-/// otherwise it attacks.
+/// Whether `target` is outside [`DOGFIGHT_BOX`] of `npc` on either axis,
+/// by float abs, as the state-4 and plunder blocks test it before they
+/// ask the chase (`_HighLevelAIHandler` @0x8e41b-0x8e473, @0x8ea49-0x8eac6);
+/// a ship not in the system is not.
 #[must_use]
-pub fn state4_attack(npc: &Npc, target: ShipRef, around: &Surroundings) -> Goal {
-    if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
-        Goal::Snipe(target)
-    } else {
-        Goal::Attack(target)
-    }
+pub fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
+    around.state_of(target).is_some_and(|at| {
+        let off = at.position - npc.state.position;
+        off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX
+    })
 }
 
 #[cfg(test)]

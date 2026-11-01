@@ -141,7 +141,7 @@ pub fn victory_speaker<'a>(
             npc.condition.active()
                 && ShipRef::Npc(npc.id) != victim
                 && npc.target == Some(victim)
-                && matches!(npc.goal, Goal::Attack(_))
+                && npc.goal.attacking().is_some()
                 && !npc.hull.mute
                 && npc.original_ai_type() > 2
         })
@@ -292,6 +292,16 @@ mod tests {
             attacker(3, 5, VICTIM),
         ];
         assert_eq!(victor(&npcs), Some(NpcId(2)));
+    }
+
+    #[test]
+    fn a_ship_sniping_at_the_victim_says_the_victory_too() {
+        // `_IsShipAttacking` (@0x36ce5) is goal 4, a snipe's included.
+        let sniper = Npc {
+            goal: Goal::Snipe(VICTIM),
+            ..attacker(1, 4, VICTIM)
+        };
+        assert_eq!(victor(&[sniper]), Some(NpcId(1)));
     }
 
     #[test]

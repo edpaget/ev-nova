@@ -889,6 +889,8 @@ mod tests {
         let catalog = catalog();
         let mut session = in_the_pod(&catalog, 2);
         session.space.escorts.class_orders[2] = Some(crate::escort::EscortOrder::Hold);
+        // The system set up, as the bookkeeping waits for it.
+        session.space.traffic_due = false;
         let input = StepInput {
             double_time_key: true,
             ..StepInput::default()

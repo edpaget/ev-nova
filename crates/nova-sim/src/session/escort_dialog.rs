@@ -175,7 +175,10 @@ impl Session {
     ///
     /// `_AIDispatch(ship, 1)` (@0x95664) thinks for it at once; the
     /// engine's next think does, a tick later, which crosses no boundary
-    /// the player sees: no frame is drawn between the two.
+    /// the player sees: no frame is drawn between the two. The part of
+    /// that dispatch a later frame can read runs here: its followers'
+    /// places are written from where it stands, with no AI-type gate
+    /// ([`Traffic::dispatch_places`](crate::traffic::Traffic::dispatch_places)).
     fn release_stale(&mut self, id: NpcId) {
         let Some(ship) = self.space.npc(id).map(|npc| npc.ship) else {
             return;
@@ -194,6 +197,7 @@ impl Session {
             }
             super::hail::make_leave(npc);
         }
+        self.space.traffic.dispatch_places(id);
     }
 }
 
@@ -536,6 +540,36 @@ pub(super) mod tests {
         assert!(released.former.is_some(), "no +0xc8de");
         assert!(session.take_save_due());
         assert!(session.space.escorts.release_comm_escort, "kept set");
+    }
+
+    #[test]
+    fn a_stale_release_rewrites_the_places_of_the_released_escorts_followers() {
+        use crate::traffic::fleet_formation;
+        let catalog = upgradable();
+        let (mut session, _) = after_a_comm_release(&catalog);
+        let follower = crate::traffic::npc::Npc {
+            escort: None,
+            leader: Some(NpcId(0)),
+            ..session.npcs()[0].clone()
+        };
+        let id = session.space.traffic.add_npc(follower);
+        let ship = |session: &Session, id| {
+            let found = session.npcs().iter().find(|npc| npc.id == id);
+            found.expect("there").clone()
+        };
+        let berth = ship(&session, id).berth;
+        assert_eq!(session.space.traffic.berth_place(berth), None, "the scene");
+        opened(&mut session, &catalog);
+        session.press_escort(EscortButton::Close);
+        let (_, slot) = fleet_formation::slots(session.npcs())
+            .into_iter()
+            .find(|&(follower, _)| follower == id)
+            .expect("a slot");
+        assert_eq!(
+            session.space.traffic.berth_place(berth),
+            Some(slot.position(&ship(&session, NpcId(0)).state)),
+            "_AIDispatch(ship, 1) (@0x95664)"
+        );
     }
 
     #[test]

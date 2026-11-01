@@ -36,14 +36,40 @@
 //!   the original's AI type 6 meanwhile ([`Npc::original_ai_type`]),
 //!   which +0x88 keeps until that think, or for its stay if it thinks as
 //!   a miner ([`Npc::settle_original_ai_type`]);
-//! - by the other reading it keeps its leader, as the port had it.
+//! - by the other reading it keeps its leader, as the port had it;
+//! - by either reading, a mission's ship in the player's formation loses
+//!   the player as its parent, as the key is about NPC parents: a
+//!   `ShipBehav` 1 one ([`dispatch_gate::led_again`]) is dropped
+//!   ([`Npc::mission_dropped`]) until its first dispatch whole leads it
+//!   again (@0x8fc03-0x8fc22, which skips a disabled ship @0x8fc0c; the
+//!   session's), reading the re-lead's AI type 6 meanwhile, unless it is
+//!   let go already ([`Npc::mission_let_go`]), as the reset writes no
+//!   +0x88; one of any other `ShipBehav`, which no re-lead takes
+//!   (@0x8fc07 → @0x8fc2d), is out of the formation for good, its mark
+//!   kept, taking its class's `InherentAI` and reading 6 until its first
+//!   think whole ([`Npc::kept_escort_ai`]), or, for `ShipBehav` 2, whose
+//!   `_DeathStarAI` writes no +0x88 (@0x8ff3a), for its stay.
 //!
-//! The reset precedes goal 0x15's skip
-//! (@0x8ff18), so a ship disabled in its gate is reset too; which of its
-//! goals that ship keeps is
-//! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
+//! A disabled ship's dispatch then jumps past its type's think
+//! (@0x8ff13 → @0x90032), so `_EscortAI` never frees it while it is
+//! disabled ([`dispatch_gate::reaches_escort_think`]).
+//!
+//! The reset precedes goal 0x15's skip (@0x8ff18), so a ship disabled in
+//! its gate is reset too. Its goal 0 ends goal 0x15 where its wait runs on
+//! ([`Npc::leaves_gate_goal`], by both readings, as the reset's other
+//! writes are): it is seen and drawn unfaded, drifts there and never
+//! bursts, keeping its burst word (@0x851e9-0x8520d).
 //! Goal 0 is never throttled (@0x8fdee-0x8fe6f), so it repeats every
 //! frame the ship is disabled: the leader is gone for good.
+//!
+//! The reset reaches a ship entering a gate too (sub 0x17): its +0x50 is
+//! 0 (@0x8db8f), so it is off the glide and jump paths. Its sub 0
+//! (@0x8ff0a) ends the entry, which `_HandleShipDisplay` reads by the sub
+//! alone (@0x89502, @0x2bf94-0x2c088): from that dispatch the ship is drawn
+//! unfaded and never freed, and it drifts disabled while its +0x4c counts
+//! down, a ship breaking up exploding where it is
+//! ([`Npc::ends_gate_entry`]). A ship disabled after the dispatch still
+//! fades that frame, and may be freed then, as the fly half has it.
 //!
 //! **Ordering.** The original runs each step per ship in slot order, the
 //! cancel and the reset inside each dispatch; the engine runs each over
@@ -54,6 +80,8 @@
 //! for that one tick its fleet's slots still count it, as the original's
 //! do (it numbers disabled followers too, and the parent's slot
 //! calculation runs in the frame before its reset): a lag no player sees.
+//! The reset's end of a gate entry comes in the think half, before the fly
+//! half's count-down, as `_AIDispatch` comes before `_HandleShipDisplay`.
 //!
 //! Nothing here plays a sound or draws a random number.
 
@@ -95,6 +123,8 @@ fn resets(npc: &Npc) -> bool {
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
 /// docs).
 pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
+    npc.leaves_gate_goal();
+    npc.ends_gate_entry();
     npc.target = None;
     npc.travel_set = false;
     npc.defends = None;
@@ -102,6 +132,7 @@ pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.goal = Goal::Idle;
     npc.pursuit = Pursuit::default();
     npc.docking = None;
+    drop_mission_parent(npc);
     if reading == RuleSource::Engine && npc.leader.is_some() {
         if npc.carrier.is_some() {
             npc.leader = None;
@@ -109,6 +140,25 @@ pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
             npc.leave_fleet();
             npc.kept_escort_ai = true;
         }
+    }
+}
+
+/// The reset's parent -1 for `npc`, a mission's ship in the player's
+/// formation, by either reading (see the module docs): a `ShipBehav` 1
+/// one, which the next dispatch whole leads again
+/// ([`dispatch_gate::led_again`]), is dropped until then, unless it is let
+/// go already; one of any other `ShipBehav` is out of the formation for
+/// good, its mark kept, reading 6 until its first think whole (for
+/// `ShipBehav` 2, for its stay).
+fn drop_mission_parent(npc: &mut Npc) {
+    if dispatch_gate::led_again(npc) {
+        npc.mission_dropped = !npc.mission_let_go;
+    } else if let Some(mark) = &mut npc.mission
+        && mark.formation.is_some()
+    {
+        mark.formation = None;
+        npc.leave_fleet();
+        npc.kept_escort_ai = true;
     }
 }
 
@@ -123,14 +173,17 @@ mod tests {
     use crate::chance::{Chance, NeverFires};
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
+    use crate::escort::FormationSlot;
     use crate::stats::ShipStats;
-    use crate::traffic::World;
+    use crate::traffic::autopilot::Outcome;
     use crate::traffic::fixture::npc;
-    use crate::traffic::npc::{AiType, Mode, NpcId};
+    use crate::traffic::npc::{AiType, MissionMark, Mode, NpcId};
     use crate::traffic::plunder_dock::{DockSub, Docking};
     use crate::traffic::regroup::RELEASE_DRAW;
     use crate::traffic::warp_out::{GIVEN_UP_STAGE, WarpGoal};
+    use crate::traffic::{ShipBehav, World};
     use nova_sim_base::fixture::{Draws, FAST};
+    use std::collections::BTreeSet;
 
     /// Every ship keeps its goal.
     #[derive(Debug)]
@@ -381,9 +434,7 @@ mod tests {
         let gliding = |npc: &mut Npc| npc.mode = Mode::JumpingIn { tick: 0 };
         let jumping = |npc: &mut Npc| npc.warp.goal = Some(WarpGoal::Own);
         let paused = |npc: &mut Npc| {
-            npc.goal = Goal::Regroup {
-                kept: Kept::Attack(ShipRef::Player),
-            };
+            npc.goal = Goal::Regroup { kept: Kept::Coast };
         };
         let cases: [(&str, Setup); 5] = [
             ("pod", &pod),
@@ -402,6 +453,134 @@ mod tests {
             assert_eq!(led.target, Some(ShipRef::Player), "{name}");
             assert!(led.travel_set, "{name}");
         }
+    }
+
+    /// `fleet(condition)` with its led ship in `mode`, in the gate it comes
+    /// out of.
+    fn in_gate(condition: Condition, mode: Mode) -> Traffic {
+        let mut traffic = fleet(condition);
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        let led = led.expect("there");
+        led.mode = mode;
+        led.emerges_from = Some(crate::catalog::StellarId(310));
+        traffic
+    }
+
+    #[test]
+    fn a_ship_disabled_in_its_gate_is_reset_out_of_it_seen_and_never_bursts() {
+        // The reset comes before goal 0x15's skip (@0x8fece, @0x8ff18): its
+        // goal 0 ends goal 0x15, and +0x4c runs on.
+        let dying = Condition::Dying {
+            ticks_left: 90,
+            starting: false,
+        };
+        for condition in [Condition::Disabled, dying] {
+            for reading in RuleSource::ALL {
+                let mut traffic = in_gate(condition, Mode::Emerging { ticks_left: 3 });
+                ticked(&mut traffic, reading, &mut NeverFires);
+                let reset = of(&traffic, LED);
+                assert!(was_reset(reset), "{condition:?} {reading:?}");
+                assert_eq!(reset.mode, Mode::HeldAtGate { ticks_left: 2 });
+                assert_eq!(reset.emerges_from, None, "{condition:?} {reading:?}");
+                assert!(!reset.emerging(), "{condition:?} {reading:?}");
+                ticked(&mut traffic, reading, &mut NeverFires);
+                assert_eq!(of(&traffic, LED).mode, Mode::HeldAtGate { ticks_left: 1 });
+                ticked(&mut traffic, reading, &mut NeverFires);
+                let out = of(&traffic, LED);
+                assert_eq!(out.mode, Mode::Flying, "{condition:?} {reading:?}");
+                assert_eq!(
+                    out.owed_burst,
+                    Some(crate::traffic::emerge::exit_speed(out.led_out, 0)),
+                    "{condition:?} {reading:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_disabled_as_its_wait_runs_out_bursts_no_more() {
+        let mut traffic = in_gate(Condition::Disabled, Mode::LeavingGate { tick: 0 });
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let reset = of(&traffic, LED);
+        assert_eq!(reset.mode, Mode::Flying, "its wait was out");
+        assert_eq!(reset.emerges_from, None);
+        assert!(reset.owed_burst.is_some(), "the burst it still owes");
+    }
+
+    #[test]
+    fn an_intact_ship_in_its_gate_keeps_its_mode() {
+        let mut traffic = in_gate(Condition::Intact, Mode::Emerging { ticks_left: 3 });
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let waiting = of(&traffic, LED);
+        assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2 });
+        assert!(waiting.emerges_from.is_some());
+    }
+
+    /// The gate the led ship enters in [`entering`].
+    const ENTERED: crate::catalog::StellarId = crate::catalog::StellarId(320);
+
+    /// `fleet(condition)` with its led ship entering [`ENTERED`], 9 ticks
+    /// of its wait left.
+    fn entering(condition: Condition) -> Traffic {
+        let mut traffic = fleet(condition);
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        led.expect("there").mode = Mode::EnteringGate {
+            gate: ENTERED,
+            ticks_left: 9,
+        };
+        traffic
+    }
+
+    #[test]
+    fn a_ship_disabled_as_it_enters_a_gate_is_reset_out_of_the_entry_and_stays() {
+        // Its +0x50 is 0 (@0x8db8f), so it is off the glide and jump paths,
+        // and the reset's sub 0 (@0x8ff0a) ends sub 0x17: drawn unfaded,
+        // never freed (@0x2bf94-0x2c088), its +0x4c counting down
+        // (@0x3501f-0x35048).
+        let dying = Condition::Dying {
+            ticks_left: 90,
+            starting: false,
+        };
+        for condition in [Condition::Disabled, dying] {
+            let mut traffic = entering(condition);
+            traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
+            let reset = of(&traffic, LED);
+            assert!(!reset.entering_gate(), "{condition:?}");
+            assert!(reset.arrived(), "{condition:?}");
+            assert_eq!(reset.goal, Goal::Idle, "{condition:?}");
+            traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut NeverFires);
+            assert_eq!(
+                of(&traffic, LED).mode,
+                Mode::Coasting { ticks_left: 8 },
+                "{condition:?}: its wait counts down"
+            );
+            let mut departed = Vec::new();
+            for _ in 0..30 {
+                ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+                departed.extend(traffic.departed().iter().copied());
+            }
+            assert!(
+                departed
+                    .iter()
+                    .all(|&(_, outcome)| outcome != Outcome::EnteredGate(ENTERED)),
+                "{condition:?}: {departed:?}"
+            );
+            assert!(
+                traffic.npcs().iter().any(|npc| npc.id == LED),
+                "{condition:?}: still here"
+            );
+        }
+    }
+
+    #[test]
+    fn an_intact_ship_entering_a_gate_still_leaves() {
+        let mut traffic = entering(Condition::Intact);
+        let mut departed = Vec::new();
+        for _ in 0..9 {
+            ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+            departed.extend(traffic.departed().iter().copied());
+        }
+        assert_eq!(departed, [(LED, Outcome::EnteredGate(ENTERED))]);
     }
 
     #[test]
@@ -437,6 +616,124 @@ mod tests {
                 after,
                 "{condition:?} {stage} {no_ai}"
             );
+        }
+    }
+
+    /// The player's place in its formation that a mission escort holds.
+    const PLACE: FormationSlot = FormationSlot {
+        slot: 2,
+        ships: 3,
+        spacing: 40.0,
+    };
+
+    /// A mission's ship of `behav` in the player's formation, in
+    /// `condition`, of a warship's class (`InherentAI` 3) flying as a
+    /// trader, and its NPC.
+    fn mission_escort(behav: ShipBehav, condition: Condition) -> (Traffic, NpcId) {
+        let mut traffic = Traffic::with_interval(1);
+        let mut ship = npc(0, ShipStats::new(FAST, &[]));
+        ship.condition = condition;
+        ship.hull.inherent_ai = 3;
+        ship.goal = Goal::Formation { guard: None };
+        ship.mission = Some(MissionMark {
+            slot: 1,
+            behav,
+            formation: Some(PLACE),
+            order: None,
+        });
+        let id = traffic.add_npc(ship);
+        (traffic, id)
+    }
+
+    #[test]
+    fn the_reset_drops_a_disabled_behav_1_mission_escorts_parent_by_either_reading() {
+        // +0x9a = -1 (@0x8feda), +0x88 left at the re-lead's 6.
+        for reading in RuleSource::ALL {
+            let (mut traffic, id) = mission_escort(ShipBehav::EscortPlayer, Condition::Disabled);
+            ticked(&mut traffic, reading, &mut NeverFires);
+            let dropped = of(&traffic, id);
+            assert!(dropped.mission_dropped, "{reading:?}");
+            assert!(!dropped.mission_escort(), "{reading:?}");
+            assert!(!dropped.escorts_player(), "{reading:?}");
+            assert_eq!(dropped.leader_ref(), None, "{reading:?}");
+            assert_eq!(
+                dropped.mission.map(|mark| mark.formation),
+                Some(Some(PLACE)),
+                "{reading:?}: its mark and its slot kept"
+            );
+            assert_eq!(dropped.original_ai_type(), 6, "{reading:?}");
+            assert_eq!(dropped.ai_type, AiType::WimpyTrader, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_and_then_disabled_stays_let_go() {
+        // The reset writes no +0x88: its `InherentAI` stands.
+        let (mut traffic, id) = mission_escort(ShipBehav::EscortPlayer, Condition::Disabled);
+        traffic.npcs_mut()[0].mission_let_go = true;
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let let_go = of(&traffic, id);
+        assert!(let_go.mission_let_go);
+        assert!(!let_go.mission_dropped);
+        assert_eq!(let_go.original_ai_type(), 3);
+    }
+
+    #[test]
+    fn a_disabled_captured_mission_ship_of_another_behav_is_out_of_the_formation_for_good() {
+        // No re-lead's (@0x8fc07 → @0x8fc2d): +0x9a -1 for good, +0x88 6
+        // until its first think whole.
+        for behav in [ShipBehav::Own, ShipBehav::AttackPlayer] {
+            for reading in RuleSource::ALL {
+                let (mut traffic, id) = mission_escort(behav, Condition::Disabled);
+                ticked(&mut traffic, reading, &mut NeverFires);
+                let dropped = of(&traffic, id);
+                let mark = dropped.mission.expect("its mark kept");
+                assert_eq!(mark.formation, None, "{behav:?} {reading:?}");
+                assert!(!dropped.mission_dropped, "{behav:?} {reading:?}");
+                assert!(!dropped.mission_escort(), "{behav:?} {reading:?}");
+                assert_eq!(dropped.ai_type, AiType::Warship, "{behav:?} {reading:?}");
+                assert_eq!(dropped.original_ai_type(), 6, "{behav:?} {reading:?}");
+                traffic.npcs_mut()[0].condition = Condition::Intact;
+                traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+                let whole = of(&traffic, id);
+                assert_eq!(whole.original_ai_type(), 3, "{behav:?} {reading:?}");
+                assert!(!whole.mission_escort(), "{behav:?} {reading:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_disabled_behav_2_mission_escort_reads_six_for_its_stay() {
+        // `_DeathStarAI` writes no +0x88 (@0x8ff3a).
+        let (mut traffic, id) = mission_escort(ShipBehav::AttackStellars, Condition::Disabled);
+        ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+        let dropped = of(&traffic, id);
+        assert_eq!(dropped.mission.and_then(|mark| mark.formation), None);
+        assert_eq!(dropped.original_ai_type(), 6);
+        traffic.npcs_mut()[0].condition = Condition::Intact;
+        traffic.tick_in(&NovaAi::default(), World::new(&[]), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, id).original_ai_type(), 6);
+    }
+
+    #[test]
+    fn an_intact_mission_escort_or_one_on_the_jump_or_glide_path_is_not_dropped() {
+        let jumping = |npc: &mut Npc| npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        let gliding = |npc: &mut Npc| npc.mode = Mode::JumpingIn { tick: 0 };
+        let intact = |npc: &mut Npc| npc.condition = Condition::Intact;
+        let cases: [(&str, Setup); 3] = [
+            ("jumping", &jumping),
+            ("gliding", &gliding),
+            ("intact", &intact),
+        ];
+        for (name, setup) in cases {
+            for behav in [ShipBehav::EscortPlayer, ShipBehav::Own] {
+                let (mut traffic, id) = mission_escort(behav, Condition::Disabled);
+                setup(&mut traffic.npcs_mut()[0]);
+                ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+                let led = of(&traffic, id);
+                assert!(led.mission_escort(), "{name} {behav:?}");
+                assert!(!led.mission_dropped, "{name} {behav:?}");
+            }
         }
     }
 

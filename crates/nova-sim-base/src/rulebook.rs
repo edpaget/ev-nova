@@ -244,7 +244,7 @@
 //! | [`SnipeBrakeLead`](RuleKey::SnipeBrakeLead) | `snipe_brake_lead` | a sniper moving 0.35 or more on an axis that has fired a gun turns to its target's lead angle for that gun and thrusts within its turn rate plus 1: toward its target, not a brake (`_LowLevelAIHandler` @0x8716a-0x871b0, @0x871ef-0x87255; see `nova_sim::traffic::snipe`) | it turns to its retro heading and thrusts there, braking, as one that has fired no gun does\* |
 //! | [`ReusedSlotPick`](RuleKey::ReusedSlotPick) | `reused_slot_pick` | a ship brought into a ship-table slot holds the pick (+0x72) the slot's last ship left, as no spawn writes it and only a fired primary (`_HandleShip` @0x35012) and a capture (`_DoShipCapture` @0x41207) clear it: its first gun pass that finds nothing fires that pick if it carries the weapon, and a secondary it doesn't carry is kept, firing nothing (see `nova_sim::traffic::berth_picks`) | every ship starts with no pick\* |
 //! | [`ReusedSlotExits`](RuleKey::ReusedSlotExits) | `reused_slot_exits` | a ship brought into a ship-table slot fires each `ExitType`'s first shot or beam from the exit after the one the slot's last ship used, and the player's turn of exits goes on through a ship change and an eject, as no writer but the exit routines touches +0xc8fe-+0xc905 (`_ModifyShotStartPosition` @0x742c-0x74bc, `_SpawnBeam` @0x450ff-0x4523d; see `nova_sim_ai::traffic::berth_exits`) | every new ship, the player's new ship included, starts each `ExitType` at exit 0\* |
-//! | [`StrayBeamExit`](RuleKey::StrayBeamExit) | `stray_beam_exit` | a beam of `ExitType` -1 steps its ship's fold set (+0xc8fc) and one of `ExitType` 5 steps +0xc908 (an NPC's crew pods left, the player's escape-pod countdown) and one of 6 steps +0xc90a (the order word of a ship the player doesn't lead) as a cursor, as `_SpawnBeam` indexes its cursors with no range check (@0x450fa-0x4523d), and starts at the centre (see `nova_sim::combat::exits::StrayWord`) | a beam of `ExitType` outside 0-3 steps nothing\* |
+//! | [`StrayBeamExit`](RuleKey::StrayBeamExit) | `stray_beam_exit` | a beam of `ExitType` -1 steps its ship's fold set (+0xc8fc) and one of `ExitType` 5 steps +0xc908 (an NPC's crew pods left, the player's escape-pod countdown) and one of 6 steps +0xc90a (the order word of any NPC, the player's stepping nothing) as a cursor, as `_SpawnBeam` indexes its cursors with no range check (@0x450fa-0x4523d), and starts at the centre (see `nova_sim::combat::exits::StrayWord`) | a beam of `ExitType` outside 0-3 steps nothing\* |
 //! | [`SoundVoices`](RuleKey::SoundVoices) | `sound_voices` | 8 voices, kept by priority and loudness: a sound goes before the first voice whose priority and loudness it is each at least, the last voice is evicted when all 8 are taken, and a sound with no place isn't played (`ST_Open(8, 0)` @0x3a136, `ST_PlaySoundParam` @0xe3dc2; see `nova_audio::voices`) | every sound plays and none is evicted: **the default, uncapped like `combat_caps`**†††††††††††††††† |
 //! | [`BombHeadingWrap`](RuleKey::BombHeadingWrap) | `bomb_heading_wrap` | a freefall bomb's heading is never wrapped after it turns ±1.0 into the wind, so one crossing up stops up to a degree and a half short of its bearing, below 0 or past 360, and is drawn on the end frame its frame index is clamped to (`_HandleShotGuidance` @0x32a41-0x32a98, `_HandleShot` @0x3593a-0x3596c; see `nova_sim::combat::projectile`) | the heading is wrapped into 0..360 after each turn\* |
 //! | [`LoopedSoundWait`](RuleKey::LoopedSoundWait) | `looped_sound_wait` | a looped weapon's sound (`Flags` 0x0010) waits while its `snd ` plays on any voice, from any ship (`ST_IsSoundPlaying` @0xe40c0, asked by `_FireAIShipWeapon` @0x88e00-0x88e1d, `_FirePlayerWeapon` @0x62d98-0x62dbf, `_HandleShipPointDefense` @0x39981-0x3999e and `_SpawnShotSubmunitions` @0x3f25b-0x3f26c; see the view's `effects`) | each firer's weapon waits out its own sound's length, so two ships' chainguns are each heard\* |
@@ -259,7 +259,7 @@
 //! | [`MapBorderPace`](RuleKey::MapBorderPace) | `map_border_pace` | the in-flight map's borders run their fine pass's null events back to back, as `_MyModalDialog`'s sleep-0 loop delivers them (@0x59965-0x5997e, @0x126c1), so the map's next tick finishes the pass and redraws (`_MapFilter` @0x1463a-0x1479a; `nova_sim::map_borders`) | one null event a tick, a contributing system each\* |
 //! | [`MapFindBorders`](RuleKey::MapFindBorders) | `map_find_borders` | Find's centring runs no borders pass, so the borders stay drawn from cells worked out for the old scroll (`_DoSystemSearch` @0x1208c-0x120aa; `nova_sim::map_borders`) | Find's centring runs the coarse pass, as Space does\* |
 //! | [`ReinforcementInhibitor`](RuleKey::ReinforcementInhibitor) | `reinforcement_inhibitor` | a `ModType` 44 outfit's inhibitor, set at a reset, holds for the session's whole life, the outfit sold or not, as only `_InitObjects` clears it (`_ResetPlayerPrecalcedValues` @0xc628-0xc68f; @0x1d017, @0x1d064; see `nova_sim`'s `reinforcements` module) | each reset works the inhibitors out afresh from the outfits owned, so selling the outfit lifts it (the Bible: "when the player is in the system") |
-//! | [`LedAllyAttack`](RuleKey::LedAllyAttack) | `led_ally_attack` | a warship or interceptor attacks on, and flees on from, an allied ship the player leads, and a ship of no government spares no ally, as `_HighLevelAIHandler` drops an ally (state 4, @0x8e277-0x8e2e4) and stops fleeing one (state 3, @0x8e077-0x8e0c3) only when neither ship is led by the player and the deciding one has a government (see `nova_sim::ai::target` and `nova_sim::ai::flee_drop`) | every ally is spared and given up fleeing from\* |
+//! | [`LedAllyAttack`](RuleKey::LedAllyAttack) | `led_ally_attack` | a ship of any type attacks on, and flees on from, an allied ship the player leads, and a ship of no government spares no ally, as `_HighLevelAIHandler` drops an ally (state 4, @0x8e277-0x8e2e4) and stops fleeing one (state 3, @0x8e077-0x8e0c3), after every type's think, only when neither ship is led by the player and the deciding one has a government; no think spares an ally (see `nova_sim::ai::attack_drop`, `nova_sim::ai::target` and `nova_sim::ai::flee_drop`) | every ally is spared and given up fleeing from\* |
 //! | [`IffScrambler`](RuleKey::IffScrambler) | `iff_scrambler` | a `ModType` 48 outfit's mark on the governments of its `ModVal` class, set at a reset, holds for the session's whole life, the outfit sold or not, as only `_InitObjects` clears it (`_ResetPlayerPrecalcedValues` @0xc69c-0xc6f1; @0x1d00d; see `nova_sim`'s `iff_scramblers` module) | each reset works the marks out afresh from the outfits owned, so selling the outfit lifts them\* |
 //! | [`FriendShieldCarry`](RuleKey::FriendShieldCarry) | `friend_shield_carry` | a friend with no shield capacity counts in a ship's friend strength at the shield factor of the slot before, as `_AIShipFriendStrength` works the factor out only for a capacity above 0 (@0x8273c-0x82762; see `nova_sim::ai::odds`) | its raw shield, held to 0.25..1\* |
 //! | [`ApproachLead`](RuleKey::ApproachLead) | `approach_lead` | an approaching attacker with a last gun (+0xc8da) leads with its pick (+0x72), by that weapon's guidance, or takes the table bearing with none, as `_LowLevelAIHandler`'s substate 7 passes +0x72 to `_CalcLeadAngle` (@0x86822-0x86858; see `nova_sim::ai::pursuit`) | it leads with its last gun\* |
@@ -295,17 +295,18 @@
 //! | [`NpcJumpFuel`](RuleKey::NpcJumpFuel) | `npc_jump_fuel` | an NPC whose class's `Fuel` is above 99 and that no other ship tractors can jump with an empty tank; only a ship whose person starts with zero fuel (`përs` `Flags2` 0x0001) needs 100 fuel now (`_AIShipHasFuelForJump` @0x7f48f-0x7f500; see `nova_sim::ai::leave`) | every NPC also needs 100 fuel now\* |
 //! | [`OddsCache`](RuleKey::OddsCache) | `odds_cache` | each reader of a ship's odds (the warship's and interceptor's odds retreat, `_WarshipAI` @0x8bd22, `_InterceptorAI` @0x8d1cd; the call for reinforcements, `_AICallForReinforcements` @0x7f60d, @0x7f69b; a fleet leader's orders to its warships, `_AIIssueEscortOrders` @0x89a5d) reads its slot's cached odds (+0xc914): -1 from its spawn until `_DoPlayGameWork`'s odds pass reaches it, refreshing one slot a frame after the thinks (@0x442b0-0x44336, @0x44542-0x44553; see `nova_sim_ai::traffic::odds_cache`) | each reader works the odds out fresh at its read\* |
 //! | [`ReusedSlotSearch`](RuleKey::ReusedSlotSearch) | `reused_slot_search` | a ship brought into a ship-table slot takes the search timer (+0xc90c) the slot's last ship left, in any system, pilot or game since launch, as only `_HighLevelAIHandler`'s lost-sight block writes it and the table is an uncleared `NewPtr` (`_InitArrays` @0x1b7a1): a search broken off is counted down with no roll, and a never-used slot's 0 drops a lost target at once (@0x8d830, @0x8d85f-0x8d8a6; see `nova_sim_ai::traffic::berth_search`) | every ship starts with no timer, its first loss of sight rolling a 100-199 frame search\* |
+//! | [`ReusedSlotVoice`](RuleKey::ReusedSlotVoice) | `reused_slot_voice` | a ship from a spawn that writes no voice holds the variant (+0xc922) the slot's last ship left, in any system, pilot or game since launch, as `_GenericRandomShipSpawn` (@0x3c89f) never writes it, and a never-used slot's 0, the even clips: so `_EscortAI`'s roll (@0x83980-0x839f6) never fires, and a hired escort's government forces no variant (see `nova_sim_ai::traffic::berth_voices`) | such a ship holds no variant, and `_EscortAI`'s roll gives it one at its first think, the variant a government's `VoiceType` forces included |
 //! | [`RefuelCap`](RuleKey::RefuelCap) | `refuel_cap` | a refuelling ship gives a unit a think while its target holds 100 or less, with no cap at the tank, done only above 100, tested before the add (@0x8f548-0x8f57f); the player's per-frame clamp to the tank (@0x6d9c7-0x6d9e1) leaves a tank of 100 or less refuelled for ever (see `nova_sim_ai::traffic::refuel_dock`) | the add stops at the tank, and a full tank is done too\* |
 //! | [`EscapeToMainScreen`](RuleKey::EscapeToMainScreen) | `escape_to_main_screen` | Escape in flight entered from the main screen saves the pilot and returns to the main screen with it still held, so Enter Ship resumes it: the port's own control, as `_PlayGame` is left only by death (`_HandlePlayer` @0x6883d) or Quit | Escape in flight does nothing, as in the original\* |
 //! | [`IntroForReopenedPilot`](RuleKey::IntroForReopenedPilot) | `intro_for_reopened_pilot` | a pilot that hasn't seen the intro screen gets, as it enters play, the intro of the last pilot New Pilot made in this run, and an empty one (no picture, no text, still marked seen) when none has been made since launch, as the intro's IDs are globals that only `_DoNewPilot` fills (`_GetCharResourceIntroIDs` @0x193ad) and `_InitMainScreen` resets at launch (@0x16101-0x1612d; see `nova_view::menu::intro`) | the first `chär`'s intro, made in this run or not ("shown when the player starts a new game with this character") |
 //! | [`CloakOnReload`](RuleKey::CloakOnReload) | `cloak_on_reload` | a ship type of `Flags2` 0x0100 cloaks while any weapon it carries has its reload timer strictly above its `Reload` (`_AIHandleCloaking` @0x8345d-0x834b3; see `nova_sim_combat::cloak`), so a burst reload no longer than `Reload` (the Pulse Laser, 146) never cloaks it | while any weapon it carries that bursts is on its burst reload ("cloak when their weapon goes into burst reload") |
-//! | [`FormationFlight`](RuleKey::FormationFlight) | `formation_flight` | an escort keeping formation (goal 0xa) picks its substate by its distance from its leader, inclusive on each axis: within 300 it closes formation (sub 0xc), counter-thrusting to its leader's velocity until within 0.525 on each axis, then taking it and stepping its heading 1° a frame toward the leader's; within 600 it closes (sub 0xb), beyond it approaches (sub 9), each steering at its guard or else its leader; with its leader unseen, it brakes within 300 (sub 1). Close formation nudges it from 8 off its slot, inclusive, by ten frames' thrust that can carry it past, cut by its ion charge (`_HighLevelAIHandler` @0x8ed15-0x8ef37, `_LowLevelAIHandler` @0x878fc-0x87e01, `_AIMaintainFormation` @0x84f04-0x8503f; see `nova_sim_ai::traffic::formation_flight`) | the port's earlier formation, measured from the slot: within 300 it takes its leader's velocity and heading at once, within 600 it closes at the speed it can brake from, beyond it flies at full speed, and it is nudged back from beyond 8, never past the slot, with no ion cut\* |
+//! | [`FormationFlight`](RuleKey::FormationFlight) | `formation_flight` | an escort keeping formation (goal 0xa) picks its substate by its distance from its leader, inclusive on each axis: within 300 it closes formation (sub 0xc), counter-thrusting to its leader's velocity until within 0.525 on each axis, then taking it and stepping its heading 1° a frame toward the leader's; within 600 it closes (sub 0xb), beyond it approaches (sub 9), each steering at its guard or else its leader; with its leader unseen, it brakes within 300 (sub 1). Close formation nudges it from 8 off its slot, inclusive, by ten frames' thrust that can carry it past, cut by its ion charge (`_HighLevelAIHandler` @0x8ed15-0x8ef37, `_LowLevelAIHandler` @0x878fc-0x87e01, `_AIMaintainFormation` @0x84f04-0x8503f; see `nova_sim_ai::traffic::formation_flight`). A fighter returning to its carrier (goal 5) flies sub 0xb at it outside its dock window, and stops (sub 1) wherever it is while it can't see it, not docking (@0x8ebd7-0x8ed0c; see `nova_sim_ai::traffic::return_flight`); an inspector (goal 7) flies sub 9 at the ship it inspects (@0x8f1ed) | the port's earlier formation, measured from the slot: within 300 it takes its leader's velocity and heading at once, within 600 it closes at the speed it can brake from, beyond it flies at full speed, and it is nudged back from beyond 8, never past the slot, with no ion cut; a returning fighter closes on its carrier the same way, reading no sight of it; an inspector follows its ship within 100, matching its velocity\* |
 //! | [`NpcEscortAi`](RuleKey::NpcEscortAi) | `npc_escort_ai` | a ship with an NPC parent (a fleet's escort, a ship a pirate took into its fleet, an NPC carrier's fighter) flies `_EscortAI` under it: the order its lead last issued it every eighth frame by its class, the lead's shield, target and odds (`_AIIssueEscortOrders` @0x8986d-0x89b8d; see `nova_sim_ai::ai::escort_orders`), Defend and Attack fighting the nearest threat to the lead, formation guarding against a threat drawn among those to the lead, firing its best turret at it, Return docking a fighter (`_EscortAI` @0x838d2-0x83f5d, `_AIFightThreatToParent` @0x81de6, `_FindNearestThreatToParent` @0x83861; see `nova_sim_ai::ai::fleet_escort`); a fleet whose lead is gone, disabled or breaking up is led by its intact follower of greatest class `Mass`, taking over the lead's job under its government, every other following it after the regroup pause (goal 0x13, released on a 1-in-100 draw each frame), a disabled follower with no intact fellow left alone in it (`_AICheckParentExists` @0x8926a-0x89501, `_AIDispatch` @0x8fe73-0x8febb; see `nova_sim_ai::traffic::succession`); a disabled ship's dispatch drops its leader for good (@0x8fece-0x8ff13), and a ship left with none leaves its fleet with goal 0 and its class's `InherentAI` once whole (@0x83917-0x8397b) | the port's earlier routing: a led ship flies by its own AI type following its lead, an NPC carrier's fighter attacks its carrier's quarry or docks, and only a fighter whose carrier is gone leaves its fleet; no lead is succeeded and none pauses, and a disabled escort keeps its lead\* |
 //! | [`FighterCapacity`](RuleKey::FighterCapacity) | `fighter_capacity` | a fighter (AI type 5: launched from a bay, the player's or an NPC carrier's, or rejoined as one) holds 1.333 × its class's shield and armour and recharges its shield 1.333 × as fast, its armour recharge unscaled, until it leaves its carrier (`_ShipShieldCapacity` @0x2a91-0x2aa7, `_ShipArmorCapacity` @0x2cb9-0x2cd2, `_ShipShieldRechargeRate` @0x2b96-0x2bac; see `nova_sim_combat::bay`) | its class's shield, armour and shield recharge, as the `shïp` `Shield`, `Armor` and `ShieldRe` read |
 //! | [`EscortOrderReach`](RuleKey::EscortOrderReach) | `escort_order_reach` | a fleet leader's orders read whether the target attacking it reaches it, and whether it reaches the target, both by `wëap` 129's reach (the stock Medium Blaster's 382), as `_AIIssueEscortOrders` passes `_AIInGunRange` weapon index 1 for both (@0x8991c, @0x89945): the two always agree, so a target that outranges its leader never presses the fleet (see `nova_sim_ai::ai::escort_orders`) | each ship reads its own stock weapons' reach, as every other caller passes weapon -1 (`_EscortAI` @0x83edb), so a target that reaches its leader from beyond the leader's own reach sends the fighters and medium ships in\* |
 //! | [`NpcFormation`](RuleKey::NpcFormation) | `npc_formation` | every ship whose formation parent is an NPC (its leader, or its swarm leader while it attacks with a target) holds a slot in that NPC's formation each frame, 2, 3, … by its berth, spaced by the widest sprite (`_DoPlayGameWork` @0x4415c-0x441de, `_AICalcFormationPositions` @0x85040-0x851d9); a fleet's escort flies goal 0xa's formation flight on its slot (see `formation_flight`) with its lead's sight, copying its lead's glow in close formation, and a fleet that jumps in arrives on its slots, one out of a gate excepted (`_HyperSpawnFleet` @0x425e4-0x42602; see `nova_sim_ai::traffic::fleet_formation`) | the port's earlier follow: a fleet's escort follows within 100 pixels of its lead, never in close formation, and a fleet arrives scattered ±150 about its lead\* |
 //! | [`SuccessorRepairer`](RuleKey::SuccessorRepairer) | `successor_repairer` | a fleet's new lead of a government other than its lost lead's (or independent) that was repairing the player attacks it, as `_AICheckParentExists` attacks a held target in any goal but inspect or refuel (@0x89429-0x8944f; see `nova_sim_ai::traffic::succession`) | it idles, as a refueller does\* |
-//! | [`HeldGateBurst`](RuleKey::HeldGateBurst) | `held_gate_burst` | a ship held at its gate still owes its emerge's burst (30, or 15 when the player leads it) once its hold ends, as the hold leaves the burst word +0x34 negative (@0x895aa-0x895bd, @0x851e9-0x8520d); the first thrust that writes +0x34 drops it, and under the swarm's thrust (sub 0x12) or the brakes of sub 1 and sub 0xe it bursts out along its heading, slowing by that thrust each frame, until it is down to its cap, where `_AIMakeShipStopJumping` sets goal 0 (@0x82e77-0x82eba) and a ship with no leader waits Rand(30) + 30 (`_HandleShip` @0x34bc0-0x34d8b; see `nova_sim_ai::traffic::held_burst`) | it flies its goal from its hold owing no burst\* |
+//! | [`HeldGateBurst`](RuleKey::HeldGateBurst) | `held_gate_burst` | a ship held at its gate still owes its emerge's burst (30, or 15 when the player leads it) once its hold ends, as the hold leaves the burst word +0x34 negative (@0x895aa-0x895bd, @0x851e9-0x8520d); the first thrust that writes +0x34 drops it, and under the swarm's thrust (sub 0x12) or the brakes of sub 1 and sub 0xe it bursts out along its heading, slowing by that thrust each frame, until it is down to its cap, where `_AIMakeShipStopJumping` sets goal 0 (@0x82e77-0x82eba) and a ship with no leader waits Rand(30) + 30 (`_HandleShip` @0x34bc0-0x34d8b; see `nova_sim_ai::traffic::held_burst`); a ship whose glide in or gate burst the loss of its lead or the player's jump cuts short owes the rest of it the same way, as `_AICheckParentExists`'s -1.0 over the glide's -999.0 and its sub over sub 0xa, or `_MakeEscortsHyperWithParent`'s +0x50 and goal 0xb's sub 0xd, leave +0x34 negative (@0x8937c, @0x894ec, @0x8fcf5, @0x3fd9a-0x3fd9e; see `nova_sim_ai::traffic::succession`); a follower owes 1.0 from sub 0xd's stage (@0x85c4c-0x85c53), which it keeps through a jump it gives up; and a docking fighter facing its carrier writes +0x34 = 0 less its pull (`Accel` × 10.0) and bursts at the pull, owing 9 × its acceleration, which ends at `_AIMakeShipStopJumping` once within its cap, while outside its thrust window its word falls by the pull (`_LowLevelAIHandler` sub 8 @0x87ef8, @0x880c0-0x880c9; see `nova_sim_ai::traffic::dock_flight`) | it flies its goal from its hold, or from its glide or burst cut short, owing no burst, sub 0xd's stage owes it none, and a docking fighter thrusts and owes nothing\* |
 //! | [`PlanetBlasts`](RuleKey::PlanetBlasts) | `planet_blasts` | an expiry's or an asteroid hit's blast from a planet-type weapon (`Flags2` 0x0400) reaches no ship, and neither reaches a planet-type ship (`shïp` `Flags` 0x0400), while a shot's on-hit blast reaches every ship (`_HandleShot` @0x35fb9, @0x3602e; `_HandleAsteroidHit` @0x36734, @0x367a8; `_HandleShipHit` @0x36d4b-0x36efb; see `nova_sim::combat::planet_type`) | every blast reaches only the ships whose planet type matches its weapon's: "can only hit planet-type ships or destroyable stellars" |
 //! | [`BeamPlanetFlag`](RuleKey::BeamPlanetFlag) | `beam_planet_flag` | a beam is planet-type by its weapon's `Flags` 0x0400 (the "big smoke" bit), not `Flags2`: one without it never hits a planet-type ship, and one with it hits only planet-type ships (`_HandleBeams` @0x30d34-0x30d82, `_LoadObjectData` @0x793ca-0x793ce; see `nova_sim::combat::planet_type`) | by its `Flags2` 0x0400, the planet-type bit, as a shot is |
 //! | [`BeamStellars`](RuleKey::BeamStellars) | `beam_stellars` | a beam never hits a stellar: `_HandleBeams` (@0x30295-0x31e1f) reads no stellar (see `nova_sim::combat::beam_stellar`) | a planet-type beam (`Flags2` 0x0400) is stopped by a destroyable stellar nearer along it than the ship it hits, and takes its `MassDmg` + `EnergyDmg` a tick off its strength: "can only hit planet-type ships or destroyable stellars" |
@@ -874,6 +875,18 @@ rule_keys! {
     /// the other reading nothing wraps and the ship flies on for ever, the
     /// port's earlier behaviour. The Bible says nothing of it.
     PlayerWrap => "player_wrap",
+    /// What voice variant (+0xc922) a ship holds when its spawn writes
+    /// none. By the engine, the word its ship-table slot's last ship left,
+    /// in any system, pilot or game since launch (see
+    /// `nova_sim_ai::traffic::kept_berths`), and a never-used slot's 0,
+    /// the even clips: `_GenericRandomShipSpawn` (@0x3c89f) never writes
+    /// it, so `_EscortAI`'s roll (@0x83980-0x839f6), which only a value
+    /// above 1 reaches, never fires, and a government's forced variant
+    /// does nothing for a hired escort (see
+    /// `nova_sim_ai::traffic::berth_voices`). By the other reading, the
+    /// Bible's forced `VoiceType`, such a ship holds none, and the roll
+    /// gives it one at its first think, a forced variant included.
+    ReusedSlotVoice => "reused_slot_voice",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
     /// it), and an unmet `Require` only hides the ship when its `Flags3`
@@ -3260,9 +3273,10 @@ rule_keys! {
     /// +0xc908 the same way: an NPC's crew pods left, its class's
     /// `PodCount` raw, or the player's escape-pod countdown, -1 while
     /// flying, so a flying player stepped to 1-3 flies the pod and is
-    /// rescued. One of 6 steps +0xc90a, the order word of a ship an NPC
-    /// leads or of an unled NPC, not of a ship the player leads. Other
-    /// words are recorded in weapons-fidelity phase 31.
+    /// rescued. One of 6 steps +0xc90a, the order word of any NPC, the
+    /// player's stepping nothing (see `nova_sim::Session`'s
+    /// `stray_words` module). Other words are recorded in weapons-fidelity
+    /// phase 31.
     /// Either way the beam starts at the centre (`_HandleBeams` @0x30469-0x3049f). By the other
     /// reading it steps nothing. No stock beam has such an `ExitType`. The
     /// Bible says nothing of it, so the other reading is the intended
@@ -3431,11 +3445,15 @@ rule_keys! {
     /// player is in the system"), each reset works them out afresh from
     /// the outfits then owned, so selling the outfit lifts it.
     ReinforcementInhibitor => "reinforcement_inhibitor",
-    /// Whether a warship or interceptor spares an ally the player leads
-    /// (see `nova_sim::ai::target`). By the engine, as
-    /// `_HighLevelAIHandler` drops an attack on an ally (state 4,
-    /// @0x8e277-0x8e2e4) and stops fleeing one (state 3,
-    /// @0x8e077-0x8e0c3) only when the ship has a government, isn't led
+    /// Whether a ship spares an ally the player leads (see
+    /// `nova_sim::ai::attack_drop` and `nova_sim::ai::flee_drop`). Only
+    /// those blocks read it: no type's think spares an ally, as none of
+    /// `_WarshipAI`, `_InterceptorAI` and `_SelectWarshipTarget` asks
+    /// (see `nova_sim::ai::target`). By the
+    /// engine, as `_HighLevelAIHandler`, which runs after every type's
+    /// think, drops an attack on an ally (state 4, @0x8e277-0x8e2e4) and
+    /// stops fleeing one (state 3, @0x8e077-0x8e0c3) only when the ship
+    /// has a government, isn't led
     /// by the player, and the other ship isn't led by the player either:
     /// an allied ship the player leads is attacked on and fled from, and
     /// a ship of no government spares no ally. By the other reading, the
@@ -3932,10 +3950,15 @@ rule_keys! {
     /// leader's velocity, then takes it and steps its heading a degree a
     /// frame (@0x878fc-0x87e01), and `_AIMaintainFormation` nudges it
     /// toward its slot from 8 off, by a nudge that can pass the slot,
-    /// cut by its ion charge (@0x84f04-0x8503f). By the other reading,
+    /// cut by its ion charge (@0x84f04-0x8503f). A fighter returning to its
+    /// carrier (goal 5) flies sub 0xb at it outside its dock window and sub
+    /// 1 while it can't see it (@0x8ebd7-0x8ed0c), and an inspector (goal
+    /// 7) flies sub 9 (@0x8f1ed). By the other reading,
     /// the port's earlier formation: measured from the slot, it takes its
     /// leader's velocity and heading at once within 300, and is nudged
-    /// back from beyond 8, never past the slot, with no ion cut. The
+    /// back from beyond 8, never past the slot, with no ion cut; a
+    /// returning fighter closes by the port's braking approach, reading no
+    /// sight, and an inspector by the port's follow. The
     /// Bible says nothing of it, so the other reading is the port's
     /// earlier reading, not anything the Bible says.
     FormationFlight => "formation_flight",
@@ -4016,7 +4039,10 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says.
     SuccessorRepairer => "successor_repairer",
     /// Whether a ship held at its gate (the player having hit it there)
-    /// still owes the burst its emerge set up once its hold ends. By the
+    /// still owes the burst its emerge set up once its hold ends, whether a
+    /// ship whose glide in or gate burst the loss of its lead or the
+    /// player's jump cuts short owes the rest of it, and whether a follower
+    /// owes the 1.0 of sub 0xd's stage. By the
     /// engine, as the original: the hold leaves the burst word +0x34 at
     /// the emerge's -30.0 (-15.0 when the player leads it, @0x895aa-0x895bd),
     /// as nothing writes it while +0x4c runs (`_LowLevelAIHandler`
@@ -4027,10 +4053,27 @@ rule_keys! {
     /// slowing by that thrust each frame (`_HandleShip` @0x34bc0-0x34c63),
     /// until it is down to its cap, where `_AIMakeShipStopJumping`
     /// (@0x82e77-0x82eba) ends it and a ship with no leader waits Rand(30)
-    /// + 30 (@0x34d5c-0x34d8b; see `nova_sim_ai::traffic::held_burst`). By
-    /// the other reading it owes none and flies its goal from its hold, as
-    /// the port's earlier reading had it: a stopping ship fired backwards
-    /// at 30 pixels a tick reads as a quirk. The Bible says nothing of it,
+    /// + 30 (@0x34d5c-0x34d8b; see `nova_sim_ai::traffic::held_burst`). A
+    /// glide or burst cut short leaves +0x34 negative the same way, so the
+    /// ship owes the rest of it: `_AICheckParentExists`'s -1.0 over the
+    /// glide's -999.0 (@0x8937c, @0x894ec) ends the glide path (@0x8fcf5),
+    /// and the sub it writes ends sub 0xa (see
+    /// `nova_sim_ai::traffic::succession`), or
+    /// `_MakeEscortsHyperWithParent`'s copy of the player's +0x50 does
+    /// (@0x3fd9a-0x3fd9e) and goal 0xb's sub 0xd. Sub 0xd's stage writes
+    /// +0x34 = -1.0 over any word (@0x85c4c-0x85c53), which a jump given up
+    /// keeps: its next such thrust bursts at 1.0 and ends at once. A
+    /// docking fighter's sub 8 writes +0x34 = 0 inside its thrust window and
+    /// lowers it by its pull, `Accel` × 10.0, every frame (@0x87ef8,
+    /// @0x880c0-0x880c9), so facing its carrier it bursts along its heading
+    /// at the pull, owing 9 × its acceleration, which
+    /// `_AIMakeShipStopJumping` ends once that is within its cap; outside
+    /// the window its word falls by the pull (see
+    /// `nova_sim_ai::traffic::dock_flight`). By the
+    /// other reading none owes any: a held ship flies its goal from its
+    /// hold, as the port's earlier reading had it, and a cut-short one from
+    /// where it was cut short: a stopping ship fired backwards at 30 pixels
+    /// a tick reads as a quirk; and a docking fighter thrusts. The Bible says nothing of it,
     /// so the other reading is the port's earlier reading, not anything
     /// the Bible says.
     HeldGateBurst => "held_gate_burst",
@@ -6784,6 +6827,7 @@ mod tests {
                 RuleKey::FighterRecall,
                 RuleKey::FighterNoBay,
                 RuleKey::PlayerWrap,
+                RuleKey::ReusedSlotVoice,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
@@ -8228,6 +8272,22 @@ mod tests {
             RuleSource::Bible
         );
         assert_eq!(RuleKey::ALL.iter().rev().nth(37), Some(&RuleKey::OddsCache));
+    }
+
+    #[test]
+    fn the_reused_slot_voice_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::ReusedSlotVoice;
+        assert_eq!(rule.key(), "reused_slot_voice");
+        assert_eq!(RuleKey::from_key("reused_slot_voice"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(285), Some(&rule));
     }
 
     #[test]

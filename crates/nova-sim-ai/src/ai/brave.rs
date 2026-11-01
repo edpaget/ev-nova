@@ -3,33 +3,31 @@
 //! stopping to wait ([`Goal::Wait`], state 6) where it can't leave until
 //! provoked, and once provoked it attacks its attacker while it is within
 //! [`STAND_AND_FIGHT`] pixels on both axes (@0x8b616), and flees from it
-//! beyond, or when the chase is hopeless; with the attacker gone from the
+//! beyond; with the attacker gone from the
 //! system it reads the place its freed slot still holds, while its target
 //! names it ([`gone`](crate::traffic::gone)), and decides again once that
 //! is cleared. Fleeing, or fighting a warship or an interceptor, it
 //! calls for help on every think (`_AICallForHelp` @0x8b6cc, @0x8b71c;
 //! see [`call_for_help`](super::call_for_help)), and fleeing it calls
 //! for reinforcements too, after the call for help (@0x8b6dc; see
-//! [`reinforcements`](super::reinforcements)). A stand-off ship (`shïp`
-//! `Flags2` 0x0002) never asks
-//! whether the chase is hopeless: `_HighLevelAIHandler` tests the bit
-//! first and jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its
-//! band instead (see [`stand_off`](super::stand_off)).
+//! [`reinforcements`](super::reinforcements)). The high level then takes
+//! the attack as it takes every type's
+//! ([`attack_drop`](super::attack_drop)): it drops an ally or a ship gone
+//! or breaking up, and flees a hopeless chase outside the dogfight box,
+//! close at any distance; a stand-off ship (`shïp` `Flags2` 0x0002)
+//! never asks whether the chase is hopeless (@0x8e48e).
 
 use crate::ai::call_for_help::brave_call;
 use crate::ai::fire::FireRules;
-use crate::ai::odds::hopeless_chase;
 use crate::ai::{
     Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, lost_sight, provoked_by, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
-use crate::traffic::provocation::{attack_breaking_up, fight_on_gone};
 
 /// How near, in pixels on either axis, a brave trader's attacker must be
 /// for it to fight back (`cmpw $0x4e2`).
@@ -46,16 +44,11 @@ pub struct BraveTrader {
 
 /// What `_BraveTraderAI` writes, before the high level: provoked, it
 /// attacks its attacker within [`STAND_AND_FIGHT`] on both axes
-/// (`setle`, @0x8b616-0x8b68d) unless the chase is hopeless, and flees
-/// it beyond; unprovoked, it goes about its business. The think reads
-/// the place of +0x70's slot whatever its state. An attacker breaking up
-/// is still in its slot, so the think attacks it near, whatever the
-/// chase (the high level's `_IsDying` test, @0x8e3ef, comes before the
-/// hopeless chase's, @0x8e48e), or flees it far. One gone from the
-/// system whose slot the trader's target still names
-/// ([`Surroundings::held_gone`]) is read at its last place, attacked near
-/// whatever the chase (the slot test makes the target -1 before the
-/// hopeless chase's test, @0x8e263) or fled far.
+/// (`setle`, @0x8b616-0x8b68d) and flees it beyond; unprovoked, it goes
+/// about its business. The think reads the place of +0x70's slot
+/// whatever its state: an attacker breaking up is still in its slot, and
+/// one gone from the system whose slot the trader's target still names
+/// ([`Surroundings::held_gone`]) is read at its last place.
 fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     let near = |place: Vec2| {
         let off = place - npc.state.position;
@@ -67,8 +60,7 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
             .is_some_and(|state| near(state.position))
     };
     if let Some(attacker) = provoked_by(npc, around) {
-        let near = near_to(attacker);
-        return if near && (npc.hull.stands_off || !hopeless_chase(npc, attacker, around)) {
+        return if near_to(attacker) {
             Goal::Attack(attacker)
         } else {
             Goal::Flee(attacker)
@@ -82,40 +74,25 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
             Goal::Flee(attacker)
         };
     }
-    let breaking_up = npc.target.filter(|&attacker| {
-        npc.provoked > 0.0 && matches!(around.condition_of(attacker), Some(Condition::Dying { .. }))
-    });
-    match breaking_up {
-        Some(attacker) if near_to(attacker) => Goal::Attack(attacker),
-        Some(attacker) => Goal::Flee(attacker),
-        None => idle(npc, around, chance),
-    }
+    idle(npc, around, chance)
 }
 
 impl Behaviour for BraveTrader {
     /// Its think's goal ([`think`]), with a distress call
     /// fleeing or fighting a warship or interceptor ([`brave_call`]), and a
-    /// call for reinforcements fleeing (state 3, @0x8b6dc). An attack on a
-    /// ship breaking up ends with its provocation and its target
-    /// ([`attack_breaking_up`]): `_BraveTraderAI` has no drop of its own,
-    /// so the high level ends it (@0x8e3ef → @0x8e714-0x8e726: goal 0,
-    /// target -1, +0x96 0), after the think's call. A fight on a ship gone
-    /// from its slot ends with its target, and a flight with its
-    /// provocation too ([`fight_on_gone`]), after the think's calls.
+    /// call for reinforcements fleeing (state 3, @0x8b6dc). `_BraveTraderAI`
+    /// has no drop of its own, so a fight on a ship breaking up or gone
+    /// stands here, and the high level, which `NovaAi` runs, ends it after
+    /// the think's calls: the slot test and the attack block
+    /// ([`handler_head`](crate::ai::handler_head),
+    /// [`attack_drop`](crate::ai::attack_drop)), and the flee block
+    /// ([`with_flight_end`](crate::traffic::provocation::with_flight_end)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
-        let on_gone = fight_on_gone(thought, around);
-        let ended = on_gone.is_some()
-            || thought.attacking().is_some_and(|ship| {
-                matches!(around.condition_of(ship), Some(Condition::Dying { .. }))
-            });
         Decision {
-            goal: if ended { Goal::Idle } else { thought },
+            goal: thought,
             comm_call: brave_call(thought, around),
             calls_reinforcements: matches!(thought, Goal::Flee(_)),
-            forgets_provocation: on_gone.unwrap_or(false)
-                || attack_breaking_up(npc, thought, around),
-            clears_target: ended,
             ..Decision::default()
         }
     }
@@ -142,8 +119,8 @@ impl Behaviour for BraveTrader {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::ai::CommCall;
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
+    use crate::ai::{CommCall, NovaAi};
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
@@ -288,13 +265,30 @@ mod tests {
         assert_eq!(decision.comm_call, None);
     }
 
+    /// The brave trader's whole decision among `npcs` through Nova's AI:
+    /// its think, then the high level.
+    fn flown(npcs: &[Npc]) -> Decision {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
     #[test]
     fn a_brave_trader_flees_a_hopeless_chase() {
+        // The think writes goal 4 within 1250 (@0x8b616); the state-4
+        // block finds the chase hopeless outside the dogfight box and
+        // writes goal 3, sub 5 for AI type 2 (@0x8e625-0x8e62e), then
+        // launches and calls (@0x8e6eb-0x8e70d).
         let mut npcs = provoked(0.0, -300.0);
         npcs[0].hull.mass = 100.0;
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = Vec2::new(0.0, -1.0);
-        assert_eq!(decided(&npcs), Goal::Flee(n(2)));
+        assert_eq!(decided(&npcs), Goal::Attack(n(2)), "the think's");
+        let fled = flown(&npcs);
+        assert_eq!(fled.goal, Goal::Flee(n(2)));
+        assert!(fled.flees_hopeless, "sub 5 at any distance");
+        assert!(fled.calls_reinforcements, "@0x8e70d");
     }
 
     #[test]
@@ -304,10 +298,14 @@ mod tests {
         npcs[0].hull.stands_off = true;
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = Vec2::new(0.0, -1.0);
-        assert_eq!(decided(&npcs), Goal::Attack(n(2)));
+        assert_eq!(flown(&npcs).goal, Goal::Attack(n(2)), "@0x8e48e");
         let mut far = provoked(1251.0, 0.0);
         far[0].hull.stands_off = true;
-        assert_eq!(decided(&far), Goal::Flee(n(2)), "still flees beyond 1250");
+        assert_eq!(
+            flown(&far).goal,
+            Goal::Flee(n(2)),
+            "still flees beyond 1250"
+        );
     }
 
     #[test]
@@ -321,7 +319,8 @@ mod tests {
         );
     }
 
-    /// The brave trader's decision among `npcs`, its attacker breaking up.
+    /// The brave trader's whole decision among `npcs`, its think and the
+    /// high level after it, its attacker breaking up.
     fn decided_on_dying(mut npcs: [Npc; 2]) -> Decision {
         npcs[1].condition = crate::combat::hull::Condition::Dying {
             ticks_left: 10,
@@ -330,7 +329,56 @@ mod tests {
         let govts = govts(0, 0);
         let sites = sites();
         let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
-        BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+        NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn the_think_leaves_an_attack_on_a_ship_breaking_up_for_the_high_level_to_end() {
+        let mut npcs = provoked(100.0, 0.0);
+        npcs[1].condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        let thought = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(
+            thought,
+            Decision {
+                goal: Goal::Attack(n(2)),
+                comm_call: Some(CommCall::Distress),
+                ..Decision::default()
+            }
+        );
+        let dropped = Npc {
+            goal: NovaAi::default()
+                .decision(&npcs[0], &around, &mut Draws::of(&[0]))
+                .goal,
+            ..npcs[0].clone()
+        };
+        assert_eq!(
+            NovaAi::default().target(&dropped, &around),
+            None,
+            "target -1 (@0x8e717)"
+        );
+    }
+
+    #[test]
+    fn a_brave_trader_whose_wait_runs_keeps_its_attack_on_an_attacker_breaking_up() {
+        // The handler jumps out at its head while +0x4c runs (@0x8d4b9
+        // -0x8d4d2 → 0x8fb47), the think having run first (@0x901e5).
+        let mut waiting = provoked(100.0, 0.0);
+        waiting[0].ai_wait = 3;
+        let mut held = provoked(100.0, 0.0);
+        held[0].mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 };
+        for npcs in [waiting, held] {
+            let decision = decided_on_dying(npcs);
+            assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");
+            assert!(!decision.forgets_provocation, "+0x96 stands");
+            assert!(!decision.clears_target, "+0x70 stands");
+            assert_eq!(decision.comm_call, Some(CommCall::Distress), "the think's");
+        }
     }
 
     #[test]
@@ -380,10 +428,15 @@ mod tests {
         );
     }
 
-    /// The brave trader's decision, its attacker (`x`, `y`) from it gone
-    /// from its slot as `freed` says, the trader's slot `berth` and the
-    /// attacker's 2.
-    fn decided_on_gone(x: f32, y: f32, freed: Freed, berth: u32) -> Decision {
+    /// The brave trader's decision by `behaviour`, its attacker (`x`, `y`)
+    /// from it gone from its slot as `freed` says, the trader's slot
+    /// `berth` and the attacker's 2.
+    fn decided_on_gone_by(
+        behaviour: &dyn Behaviour,
+        (x, y): (f32, f32),
+        freed: Freed,
+        berth: u32,
+    ) -> Decision {
         let [mut trader, mut attacker] = provoked(x, y);
         trader.berth = berth;
         attacker.berth = 2;
@@ -398,7 +451,12 @@ mod tests {
             gone: &gone,
             ..around(&sites, &npcs, &govts, (0.0, -5000.0), 0)
         };
-        BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+        behaviour.decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    /// [`decided_on_gone_by`] Nova's AI: the think, then the high level.
+    fn decided_on_gone(x: f32, y: f32, freed: Freed, berth: u32) -> Decision {
+        decided_on_gone_by(&NovaAi::default(), (x, y), freed, berth)
     }
 
     #[test]
@@ -408,6 +466,9 @@ mod tests {
         // 0x8b71c); the high level's slot test makes the target -1
         // (@0x8d4e4-0x8d50d), and goal 4 with target -1 drops to goal 0
         // with no zero (@0x8e263 → @0x8e731), before any hopeless chase.
+        let think = decided_on_gone_by(&BraveTrader::default(), (100.0, 0.0), Freed::InDispatch, 3);
+        assert_eq!(think.goal, Goal::Attack(n(2)), "the think's goal 4");
+        assert!(!think.clears_target, "the slot test's, after it");
         for (x, y) in [(100.0, 0.0), (1250.0, -1250.0), (-1250.0, 1250.0)] {
             let decision = decided_on_gone(x, y, Freed::InDispatch, 3);
             assert_eq!(decision.goal, Goal::Idle, "({x}, {y})");

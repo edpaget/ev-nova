@@ -20,6 +20,7 @@
 //! original's sub-goal does.
 
 use crate::ai::Goal;
+use crate::ai::regroup::Kept;
 use crate::area_cloak;
 use crate::cloak::{self, Cloak, MineOrder};
 use crate::combat::hull::Condition;
@@ -53,8 +54,11 @@ pub struct Around {
 ///   its own jump (sub-goal 4,
 ///   [`WarpGoal::Own`](crate::traffic::warp_out::WarpGoal::Own)) or a
 ///   jump with its parent (goal 0xb,
-///   [`WarpGoal::Follow`](crate::traffic::warp_out::WarpGoal::Follow)) is
-///   [`jumping`](cloak::Situation::jumping).
+///   [`WarpGoal::Follow`](crate::traffic::warp_out::WarpGoal::Follow), or
+///   goal 0xb written under a wait, [`Npc::joins_leaders_jump`]) is
+///   [`jumping`](cloak::Situation::jumping) (@0x834ee-0x83509). The regroup
+///   pause keeping sub 4 is too, as the term reads sub 4 whatever the goal;
+///   keeping sub 0xd it isn't, as goal 0x13 is neither 8 nor 0xb.
 /// - Landing, waiting, entering a gate, inspecting, or flying in form
 ///   (goal 0xa: [`Goal::Follow`], [`Goal::Formation`] or [`Goal::Hold`])
 ///   is [`travelling`](cloak::Situation::travelling).
@@ -83,7 +87,8 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         Mode::LeavingGate { tick } => tick > 0,
         _ => false,
     };
-    let following_jump = matches!(npc.warp.goal, Some(WarpGoal::Follow(_)));
+    let following_jump =
+        matches!(npc.warp.goal, Some(WarpGoal::Follow(_))) || npc.joins_leaders_jump();
     let goal = match npc.mode {
         Mode::JumpingIn { .. } | Mode::LeavingGate { .. } | Mode::Emerging { .. } => None,
         _ if following_jump => None,
@@ -96,7 +101,13 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         retreating: matches!(goal, Some(Goal::Flee(_))),
         attacking: around.attacking.filter(|_| goal.is_some()),
         reloading: npc.armament.reloading(around.cloak_on_reload),
-        jumping: arriving || npc.warp.goal.is_some(),
+        jumping: arriving
+            || npc.joins_leaders_jump()
+            || (npc.warp.goal.is_some()
+                && npc.goal
+                    != Goal::Regroup {
+                        kept: Kept::FollowsJump,
+                    }),
         travelling: matches!(
             goal,
             Some(
@@ -222,6 +233,25 @@ mod tests {
     }
 
     #[test]
+    fn goal_0xb_written_under_a_wait_is_jumping_whatever_substate_stands() {
+        // The term reads goal 0xb (@0x83505), and goal 0xb is no goal of
+        // the travelling or idle terms.
+        for goal in [
+            Goal::Formation { guard: None },
+            Goal::Follow {
+                lead: NpcId(2),
+                guard: None,
+            },
+        ] {
+            let mut joining = npc(goal, FLYING);
+            joining.warp.joining = true;
+            let read = situation(&joining, Around::default());
+            assert!(read.jumping, "{goal:?}");
+            assert!(!read.travelling, "{goal:?}");
+        }
+    }
+
+    #[test]
     fn its_own_jump_and_a_jump_with_its_parent_are_jumping() {
         for warp in [WarpGoal::Own, WarpGoal::Follow(ShipRef::Npc(NpcId(2)))] {
             let jumper = Npc {
@@ -234,6 +264,23 @@ mod tests {
             assert!(situation(&jumper, Around::default()).jumping, "{warp:?}");
         }
         assert!(!of(Goal::JumpOut, FLYING).jumping);
+    }
+
+    #[test]
+    fn of_a_regroup_pause_only_one_keeping_its_own_jump_is_jumping() {
+        // The term is sub 4 whatever the goal, or goal 8 or 0xb
+        // (@0x834ee-0x83509): goal 0x13 keeping sub 0xd is none of them.
+        let paused = |kept, warp| Npc {
+            warp: Warp {
+                goal: Some(warp),
+                ..Warp::default()
+            },
+            ..npc(Goal::Regroup { kept }, FLYING)
+        };
+        let own = paused(Kept::OwnJump, WarpGoal::Own);
+        assert!(situation(&own, Around::default()).jumping);
+        let follows = paused(Kept::FollowsJump, WarpGoal::Follow(ShipRef::Player));
+        assert!(!situation(&follows, Around::default()).jumping);
     }
 
     fn following_jump(goal: Goal) -> Npc {

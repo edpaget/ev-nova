@@ -7,9 +7,9 @@
 //! - **Begin** forgets, on double time's second pass, the ships gone in a
 //!   ship pass (see [`gone`](super::gone)); holds every NPC's cloak; on
 //!   the advance pass moves each
-//!   NPC's warp and fire clocks on (`TickCount`), holds each intact one's
-//!   warp to its goal and turns back a fighter that can't follow its
-//!   leader's jump, unless its high level waits (see
+//!   NPC's warp and fire clocks on (`TickCount`), holds the warp of each one
+//!   intact or on the jump path to its goal and turns back a fighter that
+//!   can't follow its leader's jump, unless its high level waits (see
 //!   [`jump_with_leader`](super::jump_with_leader)), holds its fold to
 //!   its dispatch, and runs the odds pass
 //!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
@@ -18,7 +18,9 @@
 //!   the others: every ship's state before any moves, the player's, the
 //!   top speeds, the disabled ships, the leaders' warps (sending each
 //!   leader out on the advance pass), the tractors' holders, each
-//!   swarmer's lead and the ships that don't see their leader. The
+//!   swarmer's lead and the ships that don't see their leader, or a
+//!   returning fighter its carrier, read after the turn-back, as the
+//!   turn-back comes first in the one high level (@0x8d608, @0x8ed00). The
 //!   original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
 //!   so every flight reads the others where the last tick left them.
@@ -52,7 +54,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::autopilot::{self, Beside, Outcome, TopSpeeds};
 use super::gone::Freed;
 use super::held_burst;
-use super::inertialess::Inertia;
+use super::inertialess::{self, Inertia};
 use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
@@ -111,8 +113,8 @@ pub struct FlyPass {
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
     leads: BTreeMap<NpcId, SwarmLead>,
-    /// The NPCs that don't see their leader, an NPC or the player, as the
-    /// half began.
+    /// The NPCs that don't see their leader, an NPC or the player, or, in
+    /// [`Goal::Dock`], their carrier, as the half began.
     unseen: BTreeSet<NpcId>,
     /// The NPCs in the regroup pause as the half began, whose flight
     /// flies another goal ([`Npc::fly_as_flown`]) but whose warp-out reads
@@ -160,17 +162,25 @@ impl Traffic {
         }
         self.hold_cloaks(world);
         if think {
+            let lost = self.lost_jump_targets(world);
             // `TickCount` moves on between advance passes alone, and the
             // high level holds each ship's warp to its goal.
             for npc in &mut self.npcs {
                 npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
-                // `_AIDispatch` runs no high level for a disabled ship, nor
-                // the high level past its AI wait (`jump_with_leader`). A
-                // stellar's defence ship breaking up is not disabled
-                // (@0x2d6f), but it holds no warp and no carrier, so neither
-                // step below changes it.
-                if npc.condition == Condition::Intact && !npc.high_level_waits() {
+                // `_AIDispatch` runs no high level for a disabled ship off the
+                // jump path: its reset comes first. On the jump path it does,
+                // and the high level has no disabled test (@0x8fd83-0x8fd9a,
+                // @0x901e5). Neither runs past its AI wait
+                // (`jump_with_leader`). A stellar's defence ship breaking up
+                // is not disabled (@0x2d6f), but it holds no warp and no
+                // carrier, so neither step below changes it.
+                let high_level = npc.condition == Condition::Intact
+                    || crate::ai::dispatch_gate::takes_jump_path(npc);
+                if high_level && !npc.high_level_waits() {
+                    if lost.contains(&npc.id) {
+                        npc.target = None;
+                    }
                     warp_out::hold_stage(npc);
                     jump_with_leader::turn_back(npc, world.npc_jump_fuel);
                 }
@@ -212,7 +222,10 @@ impl Traffic {
         let unseen = self
             .npcs
             .iter()
-            .filter(|npc| !around.sees_leader(npc))
+            .filter(|npc| match npc.goal {
+                Goal::Dock(carrier) => !around.sees(npc, carrier),
+                _ => !around.sees_leader(npc),
+            })
             .map(|npc| npc.id)
             .collect();
         let paused = self
@@ -245,6 +258,21 @@ impl Traffic {
             reached: Vec::new(),
             no_bay: BTreeSet::new(),
         }
+    }
+
+    /// The ships under way whose target has left the system: the high
+    /// level's head drops it (@0x8d4eb-0x8d50d), so the hold reads none
+    /// ([`warp_out::hold_stage`]). A ship off a jump keeps what its think
+    /// does (rdm:phase/escort-fleet-fidelity-followups/phase-14-left-out-of-attack-block).
+    fn lost_jump_targets(&self, world: &World) -> BTreeSet<NpcId> {
+        let around = world.around(&self.npcs);
+        self.npcs
+            .iter()
+            .filter(|npc| {
+                npc.warp.under_way() && npc.target.is_some_and(|target| !around.active(target))
+            })
+            .map(|npc| npc.id)
+            .collect()
     }
 
     /// Flies NPC `id` a tick in `world`, in the fly half `pass`, rolling
@@ -374,17 +402,18 @@ fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
 }
 
 /// What `npc`'s flight reads beside the ship it is about, in the fly
-/// half `pass` ([`Beside`]): whether it has no bay to dock in, its swarm
-/// lead, its guard where the half
+/// half `pass` ([`Beside`]): whether the half is double time's second
+/// pass, whether it has no bay to dock in, its swarm lead, its guard where
+/// the half
 /// found it while it keeps formation ([`Goal::Formation`]) or keeps with
 /// a lead ([`Goal::Follow`]), and whether it sees its leader as the half
 /// began (`_ShipVisibleToShip(leader, ship)` @0x8ed5f): a fleet escort
 /// its NPC lead, the player's escort the player
-/// ([`Surroundings::sees_leader`](crate::ai::Surroundings::sees_leader)).
-/// The coast and the inertia
-/// ([`Inertia::of`]) read the same sight.
+/// ([`Surroundings::sees_leader`](crate::ai::Surroundings::sees_leader)),
+/// and a fighter in [`Goal::Dock`] its carrier (@0x8ed00). The coast and
+/// the inertia ([`Inertia::of`]) read the same sight.
 ///
-/// The original reads the sight in the escort's own high level, so a
+/// The original reads the sight in the ship's own high level, so a
 /// cloak its lead (or the player) changed earlier in the same think half
 /// shows here a tick later than there: a one-tick lag settled before the frame is
 /// drawn, crossing no boundary.
@@ -393,12 +422,14 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
         Goal::Formation { guard } | Goal::Follow { guard, .. } => {
             (guard, !pass.unseen.contains(&npc.id))
         }
+        Goal::Dock(_) => (None, !pass.unseen.contains(&npc.id)),
         _ => (None, true),
     };
     Beside {
         swarm: pass.leads.get(&npc.id).copied(),
         guard: guard.and_then(|guard| state_of(pass, guard)),
         leader_seen,
+        second_pass: !pass.think,
         no_bay: pass.no_bay.contains(&npc.id),
         ..Beside::default()
     }
@@ -459,21 +490,40 @@ fn fly_flown(
         scoop_box: mine_orders::nearest_box(npc.state.position, world.boxes),
         ..beside_of(pass, npc)
     };
-    // What its flight flies by, and what it owed of a gate burst before it.
+    // What its flight flies by, which the end of a burst reads too.
     let inertia = Inertia::of(npc, other.as_ref(), beside.leader_seen, world.flight);
     // The sub-goal this flight picks, stored for the next frame's sight and
     // cloak think (`_HighLevelAIHandler` writes +0xc8ca).
     npc.close_form = npc.keeps_close_formation(other.as_ref(), beside.leader_seen, world.flight);
-    let owed = npc.owed_burst;
-    let outcome = fly_steered(
-        npc,
-        pass,
-        world,
-        (other, other_disabled, beside),
-        speeds,
-        &mut *chance,
-    );
-    held_burst::settle(npc, owed, speeds, inertia, &mut *chance);
+    // The stop's own flight sets it again. While a wait runs the high level
+    // writes no sub (@0x8d4b9-0x8d4d2), and the low level's settle alone
+    // ends a sub 1 (@0x85624): under an AI wait the autopilot's wait flight
+    // runs that settle itself, so it reads the bit first.
+    if !npc.wait_running() || (!inertialess::moving(npc.state.velocity) && !npc.ai_wait_flies()) {
+        npc.stopping = false;
+    }
+    // The goal it holds, not the one it flies (see `fly_one`).
+    let paused = pass.paused.contains(&npc.id);
+    let jump = warp_out::fly_jump(npc, &pass.leaders, world, pass.think, paused);
+    let outcome = if let Some(outcome) = jump {
+        outcome
+    } else {
+        // Whether its flight bursts, which alone ends a burst: a word
+        // changed with no burst, as sub 0xd's 1.0 in the jump above or sub
+        // 8's word outside its window, does not (@0x34a84).
+        npc.display.drive.burst = false;
+        let outcome = fly_steered(
+            npc,
+            pass,
+            world,
+            (other, other_disabled, beside),
+            speeds,
+            &mut *chance,
+        );
+        let burst = npc.display.drive.burst;
+        held_burst::settle(npc, burst, speeds, inertia, &mut *chance);
+        outcome
+    };
     ship_display::bank_and_glow(npc, held, derelict, leader_glow(pass, npc, world));
     outcome
 }
@@ -492,8 +542,9 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
     }
 }
 
-/// Flies `npc` a tick in `world` in the fly half `pass`: its jump, its
-/// dock with a ship it plunders or repairs, or its goal, toward `other`,
+/// Flies `npc`, on no jump ([`warp_out::fly_jump`]), a tick in `world` in
+/// the fly half `pass`: its dock with a ship it plunders or repairs, or its
+/// goal, toward `other`,
 /// disabled as `other_disabled` says, with `beside` what it reads beside
 /// it (its swarm lead, a formation escort's guard and sight), at
 /// `speeds`, a dock it starts or a repair it completes noted in the
@@ -510,11 +561,6 @@ fn fly_steered(
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
-    // The goal it holds, not the one it flies (see `fly_one`).
-    let paused = pass.paused.contains(&npc.id);
-    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think, paused) {
-        return outcome;
-    }
     match plunder::fly_docking(
         npc,
         other.as_ref(),
@@ -556,7 +602,8 @@ fn fly_steered(
         world.weapons,
         &mut *chance,
     );
-    let jumping = npc.jumping() && !paused;
+    // The goal it holds, not the one it flies (see `fly_one`).
+    let jumping = npc.jumping() && !pass.paused.contains(&npc.id);
     warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
     outcome
 }
@@ -1208,6 +1255,99 @@ mod tests {
             seen(&mut player_escort(near, false, false), false),
             "uncloaked"
         );
+    }
+
+    /// NPC 5, a fighter returning to `carrier`, 400 off the centre.
+    fn returning_to(carrier: ShipRef) -> Npc {
+        let mut fighter = at(5, 400.0, 0.0);
+        fighter.goal = Goal::Dock(carrier);
+        fighter.carrier = Some(Carrier {
+            ship: carrier,
+            window: 100.0,
+            reach: 30.0,
+        });
+        fighter
+    }
+
+    /// Whether `traffic`'s fighter, NPC 5, sees its carrier as a fly half
+    /// in `world` began.
+    fn fighter_sees(traffic: &mut Traffic, world: &World) -> bool {
+        let pass = traffic.begin_fly(world, &BTreeSet::new(), FlyHalf::Advance);
+        let fighter = traffic.npcs.iter().find(|npc| npc.id == NpcId(5));
+        beside_of(&pass, fighter.expect("there")).leader_seen
+    }
+
+    /// NPC 2, cloaked at the centre, a carrier its fighters can't see.
+    fn cloaked_carrier() -> Npc {
+        let mut carrier = at(2, 0.0, 0.0);
+        carrier.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        carrier
+    }
+
+    #[test]
+    fn a_fighter_reads_its_sight_of_its_carrier_as_the_half_began() {
+        // The player's fighter, its carrier the player, against a cloak.
+        let mut player_fighter = Traffic {
+            npcs: vec![returning_to(ShipRef::Player)],
+            ..Traffic::default()
+        };
+        assert!(!fighter_sees(&mut player_fighter, &with_player(true)));
+        assert!(fighter_sees(&mut player_fighter, &with_player(false)));
+        // An NPC's, led by the carrier.
+        let world = World::new(&[]);
+        let mut npc_fighter = Traffic {
+            npcs: vec![cloaked_carrier(), returning_to(ShipRef::Npc(NpcId(2)))],
+            ..Traffic::default()
+        };
+        npc_fighter.npcs[1].leader = Some(NpcId(2));
+        assert!(!fighter_sees(&mut npc_fighter, &world));
+        // A player's escort's: its carrier is not its leader, the player.
+        let mut escorts = Traffic {
+            npcs: vec![cloaked_carrier(), returning_to(ShipRef::Npc(NpcId(2)))],
+            ..Traffic::default()
+        };
+        escorts.npcs[1].escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        assert_eq!(escorts.npcs[1].leader_ref(), Some(ShipRef::Player));
+        assert!(!fighter_sees(&mut escorts, &with_player(false)));
+        // Another goal reads no carrier.
+        escorts.npcs[1].goal = Goal::JumpOut;
+        assert!(fighter_sees(&mut escorts, &with_player(false)));
+    }
+
+    #[test]
+    fn a_fighter_turned_back_this_tick_reads_its_carriers_sight() {
+        // Following its leader's jump with no fuel for it, it turns back
+        // first (@0x8d608), and the sight (@0x8ed00) reads the carrier.
+        // Read before it, it would be the player's sight, its leader's.
+        let carrier = ShipRef::Npc(NpcId(2));
+        let mut fighter = returning_to(carrier);
+        fighter.goal = Goal::Formation { guard: None };
+        fighter.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 0,
+                ships: 1,
+                spacing: 30.0,
+            },
+            order: None,
+        });
+        fighter.warp.goal = Some(super::warp_out::WarpGoal::Follow(carrier));
+        fighter.class_fuel = 0;
+        let mut traffic = Traffic {
+            npcs: vec![cloaked_carrier(), fighter],
+            ..Traffic::default()
+        };
+        assert!(!fighter_sees(&mut traffic, &with_player(false)));
+        assert_eq!(traffic.npcs[1].goal, Goal::Dock(carrier));
     }
 
     #[test]

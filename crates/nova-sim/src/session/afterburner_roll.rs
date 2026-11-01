@@ -218,6 +218,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }];
         let mut session = Session::fly(catalog, pilot).expect("flies");
         session.pilot.combat_rating = 1000;
