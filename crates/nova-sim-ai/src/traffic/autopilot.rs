@@ -828,9 +828,16 @@ fn formation(
 pub(crate) fn docks_now(npc: &ShipState, carrier: Option<&ShipState>, dock: Carrier) -> bool {
     carrier.is_some_and(|carrier| {
         let off = carrier.position - npc.position;
-        let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
-        within(dock.window) && within(dock.reach)
+        within_reach(off, dock.window) && within_reach(off, dock.reach)
     })
+}
+
+/// Whether a fighter `off` its carrier is within `reach` of it on both
+/// axes, inclusive (@0x87f0b-0x87fb9): the one test of its dock window
+/// and its reach, at its slot ([`docks_now`]) and in its flight
+/// ([`dock`]).
+fn within_reach(off: Vec2, reach: f32) -> bool {
+    off.x.abs() <= reach && off.y.abs() <= reach
 }
 
 /// How `npc` flies back to its carrier at `carrier` (see the module
@@ -850,8 +857,7 @@ fn dock(
         return Ok(braking(npc, handling, inertia));
     };
     let off = carrier.position - npc.state.position;
-    let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
-    if !within(dock.window) {
+    if !within_reach(off, dock.window) {
         return Ok(rejoin(
             &mut npc.state,
             handling,
@@ -862,7 +868,7 @@ fn dock(
         .into());
     }
     dock_in(npc, carrier, handling, flight, inertia);
-    if !within(dock.reach) {
+    if !within_reach(off, dock.reach) {
         pull_in(npc, carrier, handling);
     }
     Err(Outcome::Flying)
@@ -4883,6 +4889,25 @@ mod tests {
         assert_ne!(aside.heading, 0.0, "turning at it");
         assert_eq!(aside.velocity, Vec2::ZERO, "too far off its bearing");
         assert_eq!(aside.position, Vec2::new(30.0, 0.0), "and not pulled");
+    }
+
+    #[test]
+    fn the_slot_and_the_flight_read_one_reach_edge() {
+        // At exactly its reach of 40 the slot docks it, and a fighter still
+        // flying there (one with no bay) is not pulled; a pixel beyond, the
+        // slot docks nothing and the flight pulls it in (@0x87f0b-0x87fb9).
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let read = |x: f32| {
+            let mut ship = docking(FAST, at(x, 0.0, 0.0, 0.0, 0.0));
+            let dock = ship.carrier.expect("a fighter");
+            let docks = docks_now(&ship.state, Some(&carrier), dock);
+            fly(&mut ship, &[], Some(&carrier));
+            (docks, ship.state.position.x)
+        };
+        assert_eq!(read(40.0), (true, 40.0), "inside: docks, unpulled");
+        let (docks, flown) = read(41.0);
+        assert!(!docks, "outside: no dock");
+        assert!(flown < 41.0, "outside: pulled in, {flown}");
     }
 
     #[test]
