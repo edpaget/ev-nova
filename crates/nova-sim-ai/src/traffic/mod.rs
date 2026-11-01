@@ -316,6 +316,8 @@ mod swarm_tests;
 pub mod table;
 #[cfg(test)]
 mod think_run_tests;
+#[cfg(test)]
+mod tractor_freed_tests;
 pub mod tractor_hold;
 pub mod vacated;
 #[cfg(test)]

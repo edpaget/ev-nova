@@ -56,7 +56,9 @@
 //! slot finds it active at its next test and now fights the newcomer,
 //! friend or not, a paused fight or guard too, a docking flies at it, and
 //! a ship whose carrier or lead held the slot now has the newcomer as its
-//! parent ([`parent_slot`](crate::traffic::parent_slot)). In the
+//! parent ([`parent_slot`](crate::traffic::parent_slot)), and a ship whose
+//! tractor holder held it is held by the newcomer
+//! ([`tractor_hold`](crate::traffic::tractor_hold)). In the
 //! ship loop ([`Traffic::set_ship_loop`]) a wreck displayed earlier in the
 //! loop holds no berth, and every holder whose step hasn't come passes. It
 //! changes what is drawn and breaks no stock mission, so it has no rulebook
@@ -343,6 +345,9 @@ impl Traffic {
     /// [`repair_dock`](crate::traffic::repair_dock)), and so does every
     /// parent link, a ship's leader or carrier (+0x9a), by the engine's
     /// reading of the link ([`parent_slot`](crate::traffic::parent_slot)).
+    /// So does every tractor hold (+0xc8dc), whatever that reading
+    /// ([`Traffic::holds_follow_berth`]): a hold on the old ship is one
+    /// whose step hasn't come since its slot was freed.
     pub(super) fn slot_taken(&mut self, newcomer: &Npc) {
         let (berth, id) = (newcomer.berth, newcomer.id);
         let new = ShipRef::Npc(id);
@@ -360,6 +365,7 @@ impl Traffic {
         }
         for (old_id, record) in olds {
             self.parents_follow_berth(old_id, newcomer);
+            self.holds_follow_berth(old_id, id);
             let old = ShipRef::Npc(old_id);
             for npc in &mut self.npcs {
                 if let Some(docking) = npc.docking.as_mut().filter(|d| d.ship == old) {

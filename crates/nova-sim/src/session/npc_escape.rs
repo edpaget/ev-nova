@@ -759,6 +759,45 @@ mod tests {
     }
 
     #[test]
+    fn an_escape_ship_taking_a_wrecks_berth_holds_a_later_slots_hold_on_the_wreck() {
+        // +0xc8dc is a slot (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b
+        // leaves it): a later slot's `_HandleShip` reads the escape ship as
+        // its holder (@0x3401f-0x34032, @0x353e2-0x3540c) and keeps it.
+        use crate::combat::impact::TractorLock;
+        let catalog = escaping(0);
+        let (mut session, _) = carrier(&catalog, RuleSource::Bible, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let mut held = npc(0, ShipStats::new(FAST, &[]));
+        held.condition = crate::combat::hull::Condition::Disabled;
+        held.state.position = Vec2::new(0.0, 900.0);
+        held.tractor = Some(TractorLock::by(ShipRef::Npc(wreck)));
+        let held = session.space.traffic.add_npc_at(held, 3);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        let escape = vipers(&session).remove(0);
+        assert_eq!(escape.berth, 1, "the wreck's slot");
+        let lock = session.space.npc(held).expect("there").tractor;
+        assert_eq!(
+            lock.map(|lock| lock.holder),
+            Some(ShipRef::Npc(escape.id)),
+            "held by the escape ship"
+        );
+    }
+
+    #[test]
     fn an_escape_ship_taking_a_wrecked_leads_berth_leads_its_follower_at_the_next_think() {
         // The lead's +0x9a is a slot (`_AICheckParentExists` @0x89276): the
         // escape ship rewrites it, and the next marking pass finds it

@@ -12,8 +12,8 @@
 //!   ships are entering a gate; and snapshots what each flight reads of
 //!   the others: every ship's state before any moves, the player's, the
 //!   top speeds, the disabled ships, the leaders' warps, the tractors'
-//!   holders (one that left at its slot this tick by its record, see
-//!   [`tractor_hold`]), each swarmer's lead (a freed slot by its record,
+//!   holders (a freed slot by its record, see [`tractor_hold`]), each
+//!   swarmer's lead (a freed slot by its record,
 //!   [`swarm::lead`]) and the ships that don't see their leader (one that
 //!   left at its slot this tick as it left: `_ShipVisibleToShip` tests no
 //!   +0xb8). The original's steering reads come from
@@ -35,15 +35,17 @@
 //!   fighter's dock are the AI loop's, at each ship's slot. A docking ship
 //!   here only flies the heading and thrust its low level left
 //!   ([`plunder_dock::handle_ship`]), on both passes.
-//! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
+//! - **Each NPC** sheds its ion charge, takes its tractor's pull, settles
 //!   its spawn's display rolls, then flies its jump, its docking flight
 //!   or its autopilot step from its own state as it stands, so a push an
-//!   earlier slot's shockwave gave it is in the velocity it moves by, and
-//!   banks and glows. One whose flight ends it (it entered a gate) leaves
+//!   earlier slot's shockwave gave it is in the velocity it moves by,
+//!   banks and glows, and then takes its tractor's release and lapse, as
+//!   `_HandleShip` releases after the turn, thrust and fire that read the
+//!   hold. One whose flight ends it (it entered a gate) leaves
 //!   the traffic at once, as its slot is inactive from its own
 //!   `_HandleShip` on: no later slot's step, fire or shockwave sees it,
-//!   and it is recorded among the ships gone ([`Traffic::left_the_system`],
-//!   see [`gone`](super::gone)). One that landed stays in its slot, waiting
+//!   it is recorded among the ships gone ([`Traffic::left_the_system`],
+//!   see [`gone`](super::gone)), and a later slot's hold reads its record. One that landed stays in its slot, waiting
 //!   at the stellar, as the original's does (+0xb8 is not cleared,
 //!   @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
@@ -141,7 +143,10 @@ pub struct FlyPass {
     /// formation, so its goal's flight flies it: none on double time's
     /// second pass, whose followers are flown by their leader's stage.
     followed: BTreeMap<NpcId, bool>,
-    /// The ships a tractor's hold may name, as the half began.
+    /// The ships a tractor's hold may name, as the half began, each freed
+    /// slot by its record; a ship freed at its step of the half by its
+    /// record from there on, and one launched into a berth since as it
+    /// stands (see [`tractor_hold`]).
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
     leads: BTreeMap<NpcId, SwarmLead>,
@@ -248,7 +253,7 @@ impl Traffic {
         } else {
             BTreeMap::new()
         };
-        let holders = tractor_hold::Holders::of(world, &self.npcs).and_left(left_in_dispatch);
+        let holders = tractor_hold::Holders::of(world, &self.npcs).and_gone(self.gone.ships());
         let disabled = self
             .npcs
             .iter()
@@ -346,10 +351,20 @@ impl Traffic {
     ) -> Option<Outcome> {
         let index = self.npcs.iter().position(|npc| npc.id == id)?;
         let speeds = *pass.speeds.get(&id)?;
+        // A holder launched since the pass began, into the berth of the
+        // ship this one's hold named (`Traffic::slot_taken`), is read as it
+        // stands, as its slot is.
+        if let Some(ShipRef::Npc(holder)) = self.npcs[index].tractor.map(|lock| lock.holder)
+            && let Some(launched) = self.npcs.iter().find(|npc| npc.id == holder)
+        {
+            pass.holders.launched(launched);
+        }
         let npc = &mut self.npcs[index];
         let outcome = fly_one(pass, npc, speeds, world, chance);
         if ends(&self.npcs[index], outcome, world) {
             if let Some(freed) = Freed::by(outcome) {
+                // A later slot's hold reads its freed slot's record.
+                pass.holders.freed(&self.npcs[index]);
                 self.left_the_system(self.npcs[index].clone(), freed);
             }
             self.departed.push((id, outcome));

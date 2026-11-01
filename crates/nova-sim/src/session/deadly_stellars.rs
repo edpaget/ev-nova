@@ -374,6 +374,39 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_ship_held_by_a_ship_a_stellar_killed_is_pulled_by_its_record_at_the_next_pass_then_let_go()
+    {
+        // `_HandleShip`'s pull reads the freed slot (@0x3401f-0x34032) with
+        // no +0xb8 test, and its release (@0x353ba-0x35421) comes after.
+        use crate::combat::impact::TractorLock;
+        use crate::flight::DISABLED_DRAG;
+        let catalog = armed();
+        let mut session = among(&catalog, &[on_the_npc()], 1, Rulebook::default());
+        npc_mut(&mut session).berth = 3;
+        let killed = crate::combat::ShipRef::Npc(session.npcs()[0].id);
+        let mut ship = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        ship.state.position = Vec2::new(900.0, 0.0);
+        ship.state.velocity = Vec2::new(5.0, 0.0);
+        ship.condition = crate::combat::hull::Condition::Disabled;
+        ship.tractor = Some(TractorLock::by(killed));
+        let held = session.space.traffic.add_npc_at(ship, 5);
+        let held_ship = |session: &Session| session.space.npc(held).expect("there").clone();
+        fight(&mut session);
+        assert_eq!(session.npcs().len(), 1, "it vanished");
+        let before = held_ship(&session);
+        assert!(before.tractor.is_some(), "held by it live on its pass");
+        fight(&mut session);
+        let after = held_ship(&session);
+        assert_eq!(after.tractor, None, "let go at the next pass");
+        assert!(
+            after.state.velocity.x < before.state.velocity.x * DISABLED_DRAG,
+            "pulled by the record: {:?} from {:?}",
+            after.state.velocity,
+            before.state.velocity
+        );
+    }
+
+    #[test]
     fn an_npc_touching_a_deadly_stellar_vanishes_in_its_explode2_with_nothing_else() {
         let catalog = armed();
         let mut session = among(&catalog, &[on_the_npc()], 1, Rulebook::default());
