@@ -6,9 +6,12 @@
 //! once a frame, before the arrivals and every dispatch, for each ship
 //! that is active, of AI type above 4 and led by an NPC (@0x440f4-0x44101),
 //! then works out the formation parents (@0x4415c). The think half runs
-//! it after the answers to the last tick's hits and before the formation
-//! pass ([`fleet_formation`](super::fleet_formation)), so a successor's
-//! followers take slots in its formation in the same tick. It runs by the
+//! it after the answers to the last tick's hits (the collision passes',
+//! `_CheckShotProximities` @0x44015) and before the formation pass
+//! ([`fleet_formation`](super::fleet_formation)), so a successor's
+//! followers take slots in its formation in the same tick, and both
+//! before the arrivals (`_EnterMoreShips` @0x44237), so a lost lead's
+//! record is read before an arrival can take its berth. It runs by the
 //! engine's reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
 //! alone; by the other, the session's earlier lost-lead pass stands
 //! (`nova_sim`'s `lost_lead` module).
@@ -1228,6 +1231,76 @@ mod tests {
         assert_eq!(of(&traffic, 1).form_parent, Some(1), "the reset came after");
         think(&mut traffic);
         assert_eq!(of(&traffic, 1).form_parent, None);
+    }
+
+    // A lead's berth taken (+0x9a names the slot, not the ship).
+
+    /// A spawn table whose one arrival, on [`ARRIVAL_DRAWS`], comes into
+    /// the lowest free berth.
+    fn arriving() -> crate::traffic::table::SpawnTable {
+        use crate::catalog::{DudeId, ShipId};
+        use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable};
+        use std::collections::BTreeMap;
+        SpawnTable {
+            avg_ships: 5,
+            dudes: vec![(DudeId(128), 100)],
+            dude_records: BTreeMap::from([(
+                DudeId(128),
+                SpawnDude {
+                    ai_type: 1,
+                    govt: Some(GovtId(130)),
+                    ships: vec![(ShipId(200), 1)],
+                    booty: 0,
+                    info_types: 0,
+                },
+            )]),
+            ships: BTreeMap::from([(
+                ShipId(200),
+                ShipKind {
+                    stats: ShipStats::new(FAST, &[]),
+                    ..ShipKind::default()
+                },
+            )]),
+            ..SpawnTable::default()
+        }
+    }
+
+    /// The draws that bring [`arriving`]'s one arrival.
+    const ARRIVAL_DRAWS: [u32; 6] = [0, 6, 6, 0, 0, 90];
+
+    /// The ship at `berth` of `traffic`.
+    fn at_berth(traffic: &Traffic, berth: u32) -> NpcId {
+        (traffic.npcs().iter())
+            .find(|npc| npc.berth == berth)
+            .map(|npc| npc.id)
+            .expect("a ship at the berth")
+    }
+
+    #[test]
+    fn a_lead_destroyed_last_tick_is_succeeded_from_its_record_before_an_arrival_takes_its_berth() {
+        // The marking pass (@0x4405e-0x441f7, its check @0x44101) runs
+        // before `_EnterMoreShips` (@0x44237): the check reads the lead's
+        // record, which the arrival then rewrites.
+        let mut traffic = fleet(
+            FEDS,
+            Condition::Destroyed,
+            vec![follower(FEDS, 300), follower(FEDS, 100)],
+        );
+        let lead = of_mut(&mut traffic, 0);
+        lead.goal = Goal::Attack(PLAYER);
+        lead.target = Some(PLAYER);
+        traffic.remove_destroyed(LEAD);
+        traffic.table = arriving();
+        let mut world = World::new(&[]);
+        world.warp.durations = [600, 600];
+        let mut draws = nova_sim_base::fixture::Draws::of(&ARRIVAL_DRAWS);
+        traffic.open_think(&Keep, world, &[], &mut draws);
+        let arrival = at_berth(&traffic, 1);
+        assert_ne!(arrival, LEAD, "the arrival takes the lead's berth");
+        let successor = of(&traffic, 1);
+        assert_eq!(successor.goal, Goal::Attack(PLAYER), "the lead's job");
+        assert_eq!(successor.target, Some(PLAYER));
+        assert_eq!(of(&traffic, 2).leader, Some(NpcId(1)), "not the arrival");
     }
 
     #[test]

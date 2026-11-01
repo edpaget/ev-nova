@@ -38,7 +38,25 @@
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
-//! 1. the arrivals pass ([`Traffic::enter_more_ships`], which a gate
+//! 1. each intact NPC answers the fight's strikes since the last tick
+//!    ([`Behaviour::react`]), one still coming in too unless the
+//!    [`World::arrival_hits`] say otherwise: the ship it targets, its
+//!    provocation, and any goal it takes at once; one hit in its gate has
+//!    its wait cut, and the player's hit there holds it at the gate (see
+//!    the traffic's `react`), and the player's hit on a person whose wait
+//!    runs, or that the player can't see, queues its hail quote
+//!    ([`Traffic::take_attack_quotes`], [`Traffic::turn_with_quote`]). A
+//!    flight answers the fight's strikes in the hit's own step instead
+//!    ([`Traffic::answer`]), so this step answers only those left, the
+//!    original's answers to the collision passes (`_CheckShotProximities`
+//!    @0x44015), which come before the marking pass;
+//! 2. by the engine's reading of [`World::npc_escort_ai`], each ship whose
+//!    NPC lead is lost takes a new lead, leads, or is left alone
+//!    ([`succession`]); and each ship led by an NPC takes its slot in that
+//!    NPC's formation ([`fleet_formation`]), the marking pass, before the
+//!    arrivals as the original's comes before `_EnterMoreShips`, so an
+//!    arrival can take a lost lead's berth only after its check;
+//! 3. the arrivals pass ([`Traffic::enter_more_ships`], which a gate
 //!    exit's session also runs once on its own before the first frame):
 //!    the arrival roll, while fewer NPCs than `AvgShips` that are not the
 //!    player's ([`Npc::is_players`]) nor its mission escorts are in the
@@ -54,20 +72,6 @@
 //!    below the [`World`]'s spawn reserve, 8 of the 64 by the engine
 //!    ([`SPAWN_RESERVE`]), and one that finds none does not come: a
 //!    fleet's lead with none brings no escorts and no quote;
-//! 2. each intact NPC answers the fight's strikes since the last tick
-//!    ([`Behaviour::react`]), one still coming in too unless the
-//!    [`World::arrival_hits`] say otherwise: the ship it targets, its
-//!    provocation, and any goal it takes at once; one hit in its gate has
-//!    its wait cut, and the player's hit there holds it at the gate (see
-//!    the traffic's `react`), and the player's hit on a person whose wait
-//!    runs, or that the player can't see, queues its hail quote
-//!    ([`Traffic::take_attack_quotes`], [`Traffic::turn_with_quote`]). A
-//!    flight answers the fight's strikes in the hit's own step instead
-//!    ([`Traffic::answer`]), so this step answers only those left;
-//! 3. by the engine's reading of [`World::npc_escort_ai`], each ship whose
-//!    NPC lead is lost takes a new lead, leads, or is left alone
-//!    ([`succession`]); and each ship led by an NPC takes its slot in that
-//!    NPC's formation ([`fleet_formation`]);
 //! 4. at the head of each ship's dispatch ([`dispatch_head`]): each
 //!    flying NPC's cloak think, its AI wait out ([`cloak`],
 //!    `_AIHandleCloaking` @0x8fcaa), which cloaks or uncloaks it on the
@@ -1414,12 +1418,15 @@ impl Traffic {
     }
 
     /// The part of a tick's think in `world` before the first slot's
-    /// (steps 1 to 3 of the module docs): the arrivals pass
-    /// (`_EnterMoreShips` @0x44237), the answers to the `strikes` left, the
-    /// lost leads' succession ([`succession`]) and the NPC formations
-    /// ([`fleet_formation`]), whose marking pass runs before every
-    /// dispatch (@0x4405e-0x441f7), rolling on `chance`. The rest of each
-    /// ship's dispatch head runs at its own slot ([`dispatch_head`]).
+    /// (steps 1 to 3 of the module docs), in `_DoPlayGameWork`'s order:
+    /// the answers to the `strikes` left (the collision passes' answers,
+    /// `_CheckShotProximities` @0x44015), the lost leads' succession
+    /// ([`succession`]) and the NPC formations ([`fleet_formation`]),
+    /// whose marking pass (@0x4405e-0x441f7) runs before the arrivals
+    /// pass (`_EnterMoreShips` @0x44237), which rolls on `chance`. So an
+    /// arrival takes a lost lead's berth only after the check has read its
+    /// record. The rest of each ship's dispatch head runs at its own slot
+    /// ([`dispatch_head`]).
     pub fn open_think(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -1428,10 +1435,10 @@ impl Traffic {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.on_line.next_frame();
-        self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         let dropped = self.succeed_leaders(&world);
         self.form_fleets(&world, &dropped);
+        self.enter_more_ships(world, chance);
         self.open_dispatch();
     }
 
