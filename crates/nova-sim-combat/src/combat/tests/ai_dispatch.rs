@@ -417,3 +417,51 @@ fn a_run_in_which_no_npc_acts_notes_what_the_loop_leaves_of_it() {
         assert_eq!(looped != Combat::default(), wrote, "{pass:?}");
     }
 }
+
+#[test]
+fn a_jumping_ships_point_defence_acts_in_the_loop_but_fires_nothing() {
+    // `_HandleShipPointDefense` is held back while a jump is under way
+    // (+0x50 above 0), so `Trigger::acts_in_dispatch`, which leaves the
+    // jump aside, says such a ship acts though its run does nothing: the
+    // run leaves the fight as an idle run's notes would.
+    let mut jumping = defender(1, 0.0);
+    jumping.jumping = true;
+    let mut ships = [jumping, missile_firer(2)];
+    let mut combat = Combat::default();
+    missile_flying(&mut combat, &mut ships, B);
+    assert!(ships[0].trigger.acts_in_dispatch(), "point defence asked");
+    let field = Field {
+        frame: 4,
+        ..Field::default()
+    };
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal: &arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field,
+    };
+    let mut idle = combat.clone();
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
+    let records: Vec<(Slot, SlotShip)> = fighters
+        .iter()
+        .map(|fighter| {
+            let ship = SlotShip {
+                class: fighter.ship_type,
+                plunderer: plunder::Plunderer::of(fighter),
+                position: fighter.state.position,
+            };
+            (fighter.slot, ship)
+        })
+        .collect();
+    idle.note_idle_run(arena.pass, field, records);
+    assert_eq!(fired(&combat.take_events()), [], "no point defence");
+    assert_eq!(combat, idle);
+    // Not jumping, the same ship fires at the missile.
+    ships[0].jumping = false;
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
+    assert_eq!(fired(&combat.take_events()), [(A, QUAD, Some(3))]);
+}
