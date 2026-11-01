@@ -2495,13 +2495,18 @@ impl SpaceportView {
         }
     }
 
-    /// Gives what was pressed under the last mission movie to what is
-    /// beneath it, as the original's queued events reach the next filter.
+    /// Gives what was pressed under the last mission movie, and what the
+    /// last text's replay queued after its closing key, to what is beneath
+    /// them, as the original's queued events reach the next filter.
     fn pass_unclaimed(&mut self) {
         let unclaimed = self
             .dialogs
             .as_mut()
-            .map(MissionDialogs::take_unclaimed)
+            .map(|dialogs| {
+                let mut unclaimed = dialogs.take_unclaimed();
+                unclaimed.append(&mut dialogs.take_left());
+                unclaimed
+            })
             .unwrap_or_default();
         for input in &unclaimed {
             self.input(input);
@@ -5327,6 +5332,42 @@ pub(in crate::spaceport) mod tests {
         click(&mut view, at);
         assert!(view.mission_text().is_none());
         assert_eq!(view.take_sounds(), []);
+    }
+
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507),
+    /// so a key held back by a click on its Done, after the closing key,
+    /// reaches the spaceport's filter.
+    #[test]
+    fn a_key_queued_after_a_texts_closing_key_reaches_the_spaceport() {
+        let mut view = missioned();
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: "Done.".to_owned(),
+            graphic: None,
+            movie: None,
+            map: None,
+        }]);
+        let at = view
+            .mission_text()
+            .and_then(|dialog| dialog.dialog().item_bounds(1))
+            .expect("Done")
+            .center();
+        let button = |pressed, at| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        view.input(&button(true, at));
+        view.input(&key(Key::Enter));
+        view.input(&key(crate::ui::mission_info::MISSION_INFO_KEY));
+        assert!(!view.take_mission_info_request(), "it waits");
+        view.input(&button(false, Point::new(0.0, 0.0)));
+        assert!(view.mission_text().is_none(), "closed by the release");
+        assert!(
+            view.take_mission_info_request(),
+            "the I reached the spaceport"
+        );
     }
 
     #[test]

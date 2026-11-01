@@ -136,6 +136,9 @@ pub struct MissionDialogs {
     /// What was pressed under a movie that ended with nothing after it,
     /// for what is beneath, until it is taken.
     unclaimed: Vec<Input>,
+    /// What a closed text's replay queued after its closing key, with
+    /// nothing left open here, until taken ([`MissionDialogs::take_left`]).
+    left: Vec<Input>,
     /// How many mission texts have closed since this was last taken.
     texts_closed: usize,
     /// Whether the screen under them is faded, and the front text's
@@ -177,6 +180,7 @@ impl MissionDialogs {
             info_closed: false,
             info_closed_laid_out: false,
             unclaimed: Vec::new(),
+            left: Vec::new(),
             texts_closed: 0,
             screen: FadedScreen::default(),
         }
@@ -435,9 +439,23 @@ impl MissionDialogs {
         let rest = text.take_unclaimed();
         self.texts.pop_front();
         self.ready_front();
-        if !matches!(self.texts.front(), Some(Stage::Text(_))) {
-            self.pass_on(rest);
+        if matches!(self.texts.front(), Some(Stage::Text(_))) {
+            return;
         }
+        if self.is_open() {
+            self.pass_on(rest);
+        } else {
+            self.left.extend(rest);
+        }
+    }
+
+    /// What the last text's replay queued after the key that closed it,
+    /// with nothing left open here, once: it goes to what is beneath, as
+    /// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507).
+    /// Unlike [`MissionDialogs::take_unclaimed`], it is kept over flight:
+    /// a key-down queued there reaches flight's loop, which latches it.
+    pub fn take_left(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.left)
     }
 
     /// Opens the mission info screen on `info`, laid out by its template,
@@ -1051,7 +1069,9 @@ mod tests {
         dialogs.input(&key(Key::Char('b')));
         dialogs.input(&left(false, Point::new(0.0, 0.0)));
         assert!(!dialogs.is_open());
-        assert_eq!(dialogs.take_unclaimed(), [key(Key::Char('b'))]);
+        assert_eq!(dialogs.take_left(), [key(Key::Char('b'))]);
+        assert_eq!(dialogs.take_left(), [], "once");
+        assert_eq!(dialogs.take_unclaimed(), [], "kept apart from a movie's");
     }
 
     #[test]

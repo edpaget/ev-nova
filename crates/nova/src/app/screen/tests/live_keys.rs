@@ -373,3 +373,39 @@ fn the_flight_offer_closes_from_a_ticks_replay_after_a_release_outside() {
     screen.tick(TICK);
     assert_ne!(screen.showing(), Showing::Offer, "answered by the tick");
 }
+
+/// `_ShowTextDialog` flushes nothing as it closes (@0x5b353-0x5b507), so
+/// an M queued after the closing Return reaches flight's loop, past the
+/// router's own handlers, which ran on it and on Caps Lock live.
+#[test]
+fn an_m_queued_after_the_closing_return_opens_flights_map_and_double_time_toggles_once() {
+    let mut screen = texted_and_held();
+    let before = flight(&screen).double_time();
+    tap(&mut screen, Key::CapsLock);
+    tap(&mut screen, Key::Enter);
+    tap(&mut screen, MAP);
+    assert_eq!(screen.showing(), Showing::MissionText, "it waits");
+    screen.input(&left(false, Point::new(1.0, 1.0)));
+    assert_eq!(screen.showing(), Showing::FlightMap, "the M reached flight");
+    assert_ne!(flight(&screen).double_time(), before, "toggled once");
+}
+
+/// The answer's `FlushEvents` pass event codes for masks and flush only
+/// mouse events (@0xa2da2-0xa2dde), and a refusal flushes nothing, so an
+/// M queued during the click on Refuse reaches flight after it.
+#[test]
+fn an_m_queued_during_a_click_that_refuses_the_flight_offer_opens_flights_map() {
+    let mut screen = offered_over_flight();
+    let offer = screen
+        .offer()
+        .and_then(OfferDialog::dialog)
+        .expect("laid")
+        .clone();
+    let refuse = item_on_screen(&screen, &offer, nova_view::spaceport::offer::REFUSE_ITEM);
+    screen.input(&left(true, refuse));
+    tap(&mut screen, MAP);
+    assert_eq!(screen.showing(), Showing::Offer, "it waits");
+    screen.input(&left(false, refuse));
+    assert!(screen.offer().is_none(), "refused");
+    assert_eq!(screen.showing(), Showing::FlightMap, "the M reached flight");
+}

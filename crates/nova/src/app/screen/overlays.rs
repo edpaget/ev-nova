@@ -488,6 +488,11 @@ impl AppScreen {
     ///
     /// What was pressed under the last movie is dropped: flight reads its
     /// keys as held, and the router lets go of them as the dialogs open.
+    /// What the last text's replay queued after its closing key
+    /// ([`MissionDialogs::take_left`]) goes on to what shows next, the
+    /// offer under them or flight, whose loop latches a key-down it reads:
+    /// past the router's own handlers, which ran on it live
+    /// ([`AppScreen::rerouted_input`]).
     pub(super) fn drop_closed_missions(&mut self) {
         self.tell_faded_in();
         if let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) {
@@ -517,6 +522,7 @@ impl AppScreen {
             && !missions.is_open()
         {
             missions.take_unclaimed();
+            let left = missions.take_left();
             self.sounds.extend(missions.take_sounds());
             self.missions = None;
             // The offer dialog left drawn under them is disposed of
@@ -525,6 +531,9 @@ impl AppScreen {
                 self.offer = None;
             }
             self.fade_once_dialogs_close();
+            for input in &left {
+                let _ = self.rerouted_input(input);
+            }
         }
     }
 
@@ -714,6 +723,7 @@ impl AppScreen {
         };
         let mission = dialog.prompt().mission;
         let two_buttons = dialog.prompt().labels.refuse.is_some();
+        let left = dialog.take_unclaimed();
         self.sounds.extend(dialog.take_sounds());
         let flight = self.flight.as_mut().expect(ENTERED);
         let hidden = match choice {
@@ -731,6 +741,13 @@ impl AppScreen {
         self.show_mission_texts();
         if self.missions.is_none() {
             self.offer = None;
+            // What its replay queued after the answering key reaches
+            // flight, the answer's `FlushEvents` flushing only mouse
+            // events (@0xa2da2-0xa2dde); a text it shows flushes it
+            // (@0x5ae67).
+            for input in &left {
+                let _ = self.rerouted_input(input);
+            }
         }
     }
 
