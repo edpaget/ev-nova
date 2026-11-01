@@ -716,6 +716,7 @@ impl Session {
                     types: &types,
                 }),
                 hazards: None,
+                contact: None,
             };
             combat.test_hits(fighters, arena, scenery, chance);
         });

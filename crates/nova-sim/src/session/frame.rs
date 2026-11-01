@@ -309,7 +309,7 @@ pub(super) mod tests {
             asteroids: vec![FrameAsteroid {
                 position: Vec2::new(9.0, 9.0),
                 velocity: Vec2::new(9.0, 9.0),
-                frame: 9.0,
+                frame: 9,
                 kind: 9,
             }],
             stellars: vec![FrameStellar {
@@ -758,7 +758,7 @@ pub(super) mod tests {
             [FrameAsteroid {
                 position: Vec2::new(10.0, 20.0),
                 velocity: Vec2::new(1.0, -1.0),
-                frame: 3.5,
+                frame: 3,
                 kind: 2,
             }]
         );

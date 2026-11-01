@@ -31,6 +31,7 @@ fn test_amid(
         stellars,
         asteroids: Some(rocks.lend()),
         hazards: None,
+        contact: None,
     };
     let arena = arena(&arsenal, &govts, Rules::default());
     combat.test_hits(&mut fighters, arena, scenery, &mut NeverFires);

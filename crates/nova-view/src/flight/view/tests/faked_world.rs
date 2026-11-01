@@ -115,7 +115,7 @@ pub(super) fn asteroid_at(at: Vec2) -> nova_sim::flight_frame::FrameAsteroid {
     nova_sim::flight_frame::FrameAsteroid {
         position: at,
         velocity: Vec2::ZERO,
-        frame: 0.0,
+        frame: 0,
         kind: 0,
     }
 }

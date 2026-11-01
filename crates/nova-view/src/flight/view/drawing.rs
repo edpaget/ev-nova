@@ -665,7 +665,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// The asteroids in the field, each where it is drawn: `alpha` of the
     /// way from where it was a step ago, as the cargo boxes are, placed by
     /// its own sheet's sides ([`Camera::sprite_centre`], a crossed box at
-    /// its [whole point](Camera::whole_point)), at its whole frame, murked
+    /// its [whole point](Camera::whole_point)), at the frame the simulation
+    /// shows (`nova_sim::asteroid::Asteroid::shown_frame`), murked
     /// as the cargo boxes are (`_HandleAsteroids` @0x36422-0x36446).
     pub(super) fn shown_asteroids(&self, camera: &Camera) -> Vec<AsteroidShown> {
         let behind = 1.0 - self.shown_alpha();
@@ -683,10 +684,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         Some(sheet) => camera.sprite_centre(at, sheet.size()),
                         None => camera.whole_point(at),
                     },
-                    // Its whole part; a frame below 0, which the single wrap
-                    // can leave, shows the first.
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    frame: asteroid.frame as u16,
+                    frame: asteroid.frame,
                     kind: asteroid.kind,
                     colorize: seen.at(asteroid.position),
                 }

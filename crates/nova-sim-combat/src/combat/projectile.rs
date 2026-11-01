@@ -1147,9 +1147,12 @@ impl Shot {
     /// each ship asking [`Shot::touches`]: of two ships a move touches,
     /// the one walked first takes the shot, wherever it is along the move.
     ///
-    /// The engine tests a swept hit radius in place of the original's
-    /// sprite rects and RLE masks (`_SWRadiusCollision`,
-    /// `_SWRLECollision` @0x3700f-0x3704a).
+    /// This is the engine's swept hit radius, which the contact passes
+    /// keep only by the other reading of
+    /// [`RuleKey::ShotContact`](crate::RuleKey::ShotContact) or where no
+    /// sprite rect or mask can be laid out; by the engine's they test the
+    /// original's placed rects (`_SWRadiusCollision`, `_SWRLECollision`
+    /// @0x3700f-0x3704a; see [`contact`](super::contact)).
     #[must_use]
     pub fn touched(&self, was: Vec2, sides: &Sides) -> Option<Meeting> {
         if !self.touches_ships() {
@@ -1159,8 +1162,9 @@ impl Shot {
     }
 
     /// Where on its move here from `was` it touched `target`, within its
-    /// hit radius, whether or not it can hit it: one ship's contact, as
-    /// the contact passes test each ship they walk ([`Shot::touched`]).
+    /// hit radius, whether or not it can hit it: one ship's swept contact,
+    /// as the contact passes' swept reading and fallback test each ship
+    /// they walk ([`Shot::touched`], [`contact`](super::contact)).
     /// None for a shot in point defence's layer, or before its
     /// `ProxSafety`.
     #[must_use]
@@ -1175,7 +1179,7 @@ impl Shot {
     /// Whether it can touch a ship at all: it is not in point defence's
     /// layer, one no ship's collision proc acts on (see
     /// [`Shot::touched`]), and its age has reached its `ProxSafety`.
-    fn touches_ships(&self) -> bool {
+    pub(super) fn touches_ships(&self) -> bool {
         self.layer != ShotLayer::PointDefence && self.age >= self.weapon.prox_safety
     }
 

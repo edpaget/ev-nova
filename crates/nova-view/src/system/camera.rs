@@ -37,6 +37,7 @@
 //!   coordinate truncated)
 
 use nova_sim::navigation::SpriteRect;
+use nova_sim::sprite_place::Placement;
 use nova_sim::{RuleSource, Vec2};
 
 use crate::Point;
@@ -199,7 +200,9 @@ impl Camera {
     /// places one: `trunc(at - center) + anchor - size / 2` on each axis,
     /// the offset truncated toward zero and the half size halved toward
     /// zero, so an odd size's extra pixel falls right and below. The rule
-    /// is `nova_sim::story::sprite_pool::offset`, not forked here.
+    /// is the simulation's standard placement
+    /// ([`Placement::Standard`](nova_sim::sprite_place::Placement::Standard)),
+    /// not forked here.
     ///
     /// `_HandleExplods` places an explosion this way (@0x2f6a1-0x2f73c),
     /// as `_HandleStellarSprites` (@0x2eeab-0x2ef1a) places stellars and
@@ -218,11 +221,15 @@ impl Camera {
     /// rounded is the difference between the two as drawn.
     #[must_use]
     pub fn sprite_top_left(&self, at: Point, size: (u32, u32)) -> Point {
-        let (dx, dy) = nova_sim::story::sprite_pool::offset(
-            Vec2::new(at.x, at.y),
-            Vec2::new(self.center.x, self.center.y),
-            size,
-        );
+        self.placed_top_left(Placement::Standard, at, size)
+    }
+
+    /// Where a sprite whose frame is `size` has its top left when it
+    /// stands at world point `at`, placed by `rule` about its offset from
+    /// the camera's center, the anchor added.
+    fn placed_top_left(&self, rule: Placement, at: Point, size: (u32, u32)) -> Point {
+        let offset = Vec2::new(at.x - self.center.x, at.y - self.center.y);
+        let (dx, dy) = rule.top_left(offset, size);
         let anchor = self.anchor();
         // A screen offset is far within an `f32`'s whole numbers.
         #[allow(clippy::cast_precision_loss)]
@@ -263,27 +270,23 @@ impl Camera {
         self.sprite_top_left(at, (0, 0))
     }
 
-    /// The point a shot whose frame is `size` is centred on: `_HandleShot`
-    /// takes half the frame's width from both axes of its offset and never
-    /// asks its height (@0x35c66-0x35cc0, `_GetSpriteYSize` is not called),
-    /// so a frame taller than wide sits below the standard rule's place,
-    /// one wider than tall above it.
+    /// The point a shot whose frame is `size` is centred on, placed by the
+    /// simulation's shot rule
+    /// ([`Placement::Shot`](nova_sim::sprite_place::Placement::Shot)), the
+    /// one the contact passes touch it by.
     #[must_use]
     pub fn shot_centre(&self, at: Point, size: (u32, u32)) -> Point {
-        Self::centred(self.sprite_top_left(at, (size.0, size.0)), size)
+        Self::centred(self.placed_top_left(Placement::Shot, at, size), size)
     }
 
-    /// The point a cargo box whose frame is `size` is centred on:
-    /// `_HandleBoxes` takes the whole size from its offset, not half
-    /// (@0x2e1c2-0x2e250), so the frame's bottom right is the
+    /// The point a cargo box whose frame is `size` is centred on, placed by
+    /// the simulation's box rule
+    /// ([`Placement::CargoBox`](nova_sim::sprite_place::Placement::CargoBox)),
+    /// the one a scoop touches it by: the frame's bottom right is the
     /// [whole point](Camera::whole_point) of the box's position.
     #[must_use]
     pub fn box_centre(&self, at: Point, size: (u32, u32)) -> Point {
-        let corner = self.whole_point(at);
-        // A sprite's frame is far within an `f32`'s whole numbers.
-        #[allow(clippy::cast_precision_loss)]
-        let top_left = Point::new(corner.x - size.0 as f32, corner.y - size.1 as f32);
-        Self::centred(top_left, size)
+        Self::centred(self.placed_top_left(Placement::CargoBox, at, size), size)
     }
 
     /// The point the nav brackets of a stellar at `at` are centred on:
@@ -333,7 +336,7 @@ impl Camera {
     /// (`nova_sim::HoverPlace::Stale`).
     #[must_use]
     pub fn sprite_rect_from(&self, offset: Vec2, size: (u32, u32)) -> SpriteRect {
-        let (dx, dy) = nova_sim::story::sprite_pool::offset(offset, Vec2::ZERO, size);
+        let (dx, dy) = Placement::Standard.top_left(offset, size);
         let anchor = self.anchor();
         // A screen offset is far within an `f32`'s whole numbers.
         #[allow(clippy::cast_precision_loss)]

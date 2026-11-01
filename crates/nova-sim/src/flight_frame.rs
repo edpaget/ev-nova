@@ -1971,8 +1971,10 @@ pub struct FrameAsteroid {
     pub position: Vec2,
     /// How fast it moves, per step.
     pub velocity: Vec2,
-    /// The frame it is on, whole part drawn.
-    pub frame: f32,
+    /// The frame it shows, its frame's whole part
+    /// ([`Asteroid::shown_frame`]), as the view draws it and the contact
+    /// passes touch it.
+    pub frame: u16,
     /// Its kind.
     pub kind: u8,
 }
@@ -1984,7 +1986,7 @@ impl FrameAsteroid {
         Self {
             position: asteroid.position,
             velocity: asteroid.velocity,
-            frame: asteroid.frame,
+            frame: asteroid.shown_frame(),
             kind: asteroid.kind,
         }
     }

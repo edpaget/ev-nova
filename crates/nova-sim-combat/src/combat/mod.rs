@@ -399,6 +399,7 @@ pub mod asteroid_walk;
 pub mod beam;
 pub mod beam_stellar;
 mod collision;
+pub mod contact;
 pub mod damage;
 pub mod defence;
 mod display;
@@ -791,6 +792,9 @@ pub struct Scenery<'a> {
     /// The stellar hazards ([`stellar_hazards`]): none when there are
     /// none.
     pub hazards: Option<&'a StellarHazards>,
+    /// The masks and readings the contact passes touch by ([`contact`]):
+    /// none for no masks at the engine's speed, by the default readings.
+    pub contact: Option<&'a contact::ContactSprites>,
 }
 
 /// How a strike left the ship it hit.
@@ -2543,7 +2547,10 @@ impl Combat {
             stellars,
             asteroids,
             hazards: _,
+            contact,
         } = scenery;
+        let no_sprites = contact::ContactSprites::default();
+        let sprites = contact.unwrap_or(&no_sprites);
         let mut none = Asteroids::default();
         let mut field = asteroids.unwrap_or(AsteroidField {
             asteroids: &mut none,
@@ -2560,7 +2567,11 @@ impl Combat {
         let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
         let first_strike = self.strikes.len();
         let entry = self.entry_order();
-        let terms = collision::WalkTerms { arsenal, rule };
+        let terms = collision::WalkTerms {
+            arsenal,
+            rule,
+            sprites,
+        };
         self.resolve(
             (fighters, &mut lineup),
             &entry,
@@ -3707,6 +3718,7 @@ mod tests {
     mod ion_lockout_tick;
     mod lineup;
     mod phase;
+    mod placed_contact;
     mod planet_hits;
     mod plunder_fire;
     mod proximity_slots;

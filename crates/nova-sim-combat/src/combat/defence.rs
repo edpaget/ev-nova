@@ -98,6 +98,7 @@ use crate::cloak::{self, Observer};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::sprite_place::Placement;
 use crate::trig;
 
 /// A point-defence turret's engagement range, per pixel of its range.
@@ -377,22 +378,16 @@ impl SpriteBox {
     /// its offset from the camera truncated on each axis, less half its
     /// frame's width, truncated, on both (`_HandleShot` @0x35c48-0x35cc0
     /// reads `_GetSpriteXSize` alone), then its frame's width and height
-    /// on (`_SWSetSpriteLocation` @0xab640, a frame's hot spot 0).
+    /// on (`_SWSetSpriteLocation` @0xab640, a frame's hot spot 0): the
+    /// shot rule ([`Placement::Shot`]).
     #[must_use]
     pub fn of(position: Vec2, frame: FrameSize, camera: Vec2) -> Self {
-        let off = position - camera;
-        // A sprite's offset in whole pixels: far within an `i64`, and
-        // saturated past it.
-        #[allow(clippy::cast_possible_truncation)]
-        let (x, y) = (off.x.trunc() as i64, off.y.trunc() as i64);
-        let (width, height) = (i64::from(frame.width), i64::from(frame.height));
-        let left = x - width / 2;
-        let top = y - width / 2;
+        let rect = Placement::Shot.rect(position - camera, (frame.width, frame.height));
         Self {
-            left,
-            top,
-            right: left + width,
-            bottom: top + height,
+            left: i64::from(rect.left),
+            top: i64::from(rect.top),
+            right: i64::from(rect.right),
+            bottom: i64::from(rect.bottom),
         }
     }
 

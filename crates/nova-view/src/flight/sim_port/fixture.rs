@@ -626,7 +626,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         asteroids: one_or_none(asteroids, || FrameAsteroid {
             position: Vec2::ZERO,
             velocity: Vec2::ZERO,
-            frame: 0.0,
+            frame: 0,
             kind: 0,
         }),
         stellars: one_or_none(stellars, || record::stellar(StellarId(128))),

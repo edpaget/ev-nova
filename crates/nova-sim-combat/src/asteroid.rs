@@ -389,6 +389,20 @@ pub struct Asteroid {
     pub kind: u8,
 }
 
+impl Asteroid {
+    /// The frame it shows, which the view draws and the contact passes
+    /// touch it by: its frame's whole part, one below 0, which the single
+    /// wrap can leave, as the first (`_HandleAsteroids` @0x36422-0x36446),
+    /// its sheet taking it round its frames.
+    #[must_use]
+    pub fn shown_frame(&self) -> u16 {
+        // Its whole part, saturated into a `u16`: below 0 is 0.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let whole = self.frame as u16;
+        whole
+    }
+}
+
 /// What a destroyed asteroid leaves, for the session to put in space
 /// (`_DestroyAsteroid` @0xadc9-0xb028, see [`Asteroids::destroy`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -882,6 +896,22 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::cloak::DEFAULT_PLAY_AREA;
     use nova_sim_base::fixture::Scripted;
+
+    #[test]
+    fn an_asteroid_shows_its_frames_whole_part_and_none_below_0() {
+        let at = |frame| Asteroid {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            frame,
+            spin: 0.0,
+            strength: 1,
+            kind: 0,
+        };
+        assert_eq!(at(7.9).shown_frame(), 7);
+        assert_eq!(at(35.99).shown_frame(), 35);
+        assert_eq!(at(-0.5).shown_frame(), 0);
+        assert_eq!(at(-3.0).shown_frame(), 0);
+    }
 
     /// Every roll its last outcome.
     struct Last;
