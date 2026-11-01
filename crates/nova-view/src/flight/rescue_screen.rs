@@ -36,13 +36,15 @@
 //!    2), the comm line and the floaters over it, and the bar. The stage
 //!    ends on the next tick, the original's return from the last text.
 //! 6. [`RescueStage::Closing`]: the window painted black, the space area
-//!    in the new system's `BkgndColor`, the floaters, and the bar and
+//!    in the new system's `BkgndColor`, its stellars, which
+//!    `_HandleStellarSystemVisibility` (@0x69135) set up and showed again
+//!    after the days (@0x32e54-0x3306b), the floaters, and the bar and
 //!    comm redrawn (@0x691cb-0x69253), then `_FadeScreenIn` (@0x692c9):
 //!    1.0 s from black while the flag is still set, else nothing, the
 //!    repaint overdrawn by the next pass's frame at once.
 //!
 //! Each repaint ([`Repaint`]) is `_RefreshSAT`'s (@0x6b59): the space
-//! area, then `_RedrawComm` and `_FloaterDrawCallback` (@0x6c12-0x6c6b,
+//! area, the sprites shown (@0x6c0d), then `_RedrawComm` and `_FloaterDrawCallback` (@0x6c12-0x6c6b,
 //! @0x6daf-0x6dc6), which draw the message while `_commCount` is above 0
 //! and the escort menu while it shows, then the bar. `_ResetPlayer` sets
 //! `_commCount` to 0 (@0x1d904), so only a repaint before it shows a
@@ -78,7 +80,7 @@
 //!   pod's system, bar and message line for an `OnAbort`'s text, the
 //!   pod's system and radar with the reset ship's bar for the
 //!   `OnPurchase`'s, the new system for the days';
-//! - stage 6 draws the new system.
+//! - stage 6 draws the new system, its stellars and no other sprite.
 //!
 //! The Strict Play save is made on the rescue's tick, where the original
 //! makes it at @0x692c4, after every text. The state saved is the same,
@@ -120,12 +122,17 @@ pub enum RescueStage {
 }
 
 /// What a repaint of the rescue draws, `_RefreshSAT` (@0x6b59) then
-/// `_RedrawStatus(1)`: the space area's colour, the comm line and the
-/// floaters over it, and the bar.
+/// `_RedrawStatus(1)`: the space area's colour, the sprites shown, the
+/// comm line and the floaters over them, and the bar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Repaint {
     /// The space area's colour: a system's `BkgndColor`.
     pub background: Color,
+    /// The sprites `_SWUpdateSpriteWorld` draws (@0x6c0d): none under
+    /// the texts, every sprite hidden since stage 2; at the closing, the
+    /// new system's stellars, which `_HandleStellarSystemVisibility`
+    /// (@0x69135) shows again.
+    pub sprites: DrawList,
     /// The comm line and the floaters, as `_RefreshSAT`'s `_RedrawComm`
     /// and `_FloaterDrawCallback` draw them (@0x6c12-0x6c6b,
     /// @0x6daf-0x6dc6): the message while one shows, and the escort menu
@@ -137,10 +144,12 @@ pub struct Repaint {
 
 impl Repaint {
     /// Paints the window black, the space area `space` in the background
-    /// colour, the floaters, then the bar, over a view `view` in size.
+    /// colour, the sprites, the floaters, then the bar, over a view
+    /// `view` in size.
     fn draw(&self, list: &mut DrawList, view: (f32, f32), space: Bounds) {
         fill_rect(list, whole_view(view), Color::BLACK);
         fill_rect(list, space, self.background);
+        list.extend_translated(&self.sprites, Point::new(0.0, 0.0));
         list.extend_translated(&self.floaters, Point::new(0.0, 0.0));
         list.extend_translated(&self.bar, Point::new(0.0, 0.0));
     }
@@ -407,12 +416,15 @@ mod tests {
     }
 
     fn under() -> Repaint {
+        let mut sprites = DrawList::new();
+        sprites.dot(Point::new(400.0, 300.0), 2.0, Color::WHITE);
         let mut floaters = DrawList::new();
         floaters.dot(Point::new(20.0, 700.0), 2.0, Color::WHITE);
         let mut bar = DrawList::new();
         bar.dot(Point::new(900.0, 10.0), 2.0, Color::WHITE);
         Repaint {
             background: Color::rgba(0, 0, 0x10, 255),
+            sprites,
             floaters,
             bar,
         }
@@ -469,11 +481,12 @@ mod tests {
     }
 
     /// `repaint` as drawn: the window black, the space area in its
-    /// background, its floaters, then its bar.
+    /// background, its sprites, its floaters, then its bar.
     fn painted(repaint: &Repaint) -> DrawList {
         let mut list = DrawList::new();
         fill_rect(&mut list, whole_view(VIEW), Color::BLACK);
         fill_rect(&mut list, space(), repaint.background);
+        list.extend_translated(&repaint.sprites, Point::new(0.0, 0.0));
         list.extend_translated(&repaint.floaters, Point::new(0.0, 0.0));
         list.extend_translated(&repaint.bar, Point::new(0.0, 0.0));
         list
@@ -487,6 +500,7 @@ mod tests {
     fn new_system() -> Repaint {
         Repaint {
             background: Color::rgba(0x10, 0, 0, 255),
+            sprites: DrawList::new(),
             floaters: DrawList::new(),
             bar: DrawList::new(),
         }
@@ -642,13 +656,14 @@ mod tests {
     }
 
     #[test]
-    fn a_repaint_draws_its_floaters_over_the_space_area_and_under_the_bar() {
+    fn a_repaint_draws_its_sprites_and_floaters_over_the_space_area_and_under_the_bar() {
         let mut screen = at(RescueStage::UnderTexts);
         screen.faded_in();
         let repaint = under();
         let mut expected = DrawList::new();
         fill_rect(&mut expected, whole_view(VIEW), Color::BLACK);
         fill_rect(&mut expected, space(), repaint.background);
+        expected.dot(Point::new(400.0, 300.0), 2.0, Color::WHITE);
         expected.dot(Point::new(20.0, 700.0), 2.0, Color::WHITE);
         expected.dot(Point::new(900.0, 10.0), 2.0, Color::WHITE);
         assert_eq!(drawn(&screen, new_system()), expected);

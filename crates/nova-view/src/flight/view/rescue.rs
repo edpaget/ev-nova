@@ -27,6 +27,12 @@
 //!   the secondary weapon, is the rescued frame's, which nothing after the
 //!   reset changes. The repaint is taken once the screen is black, the new
 //!   system laid out.
+//! - **The sprites.** The repaints under the texts draw none, every
+//!   sprite hidden since the black (`_SWHideAllSprites` @0x68e04); the
+//!   closing draws the new system's stellars, which
+//!   `_HandleStellarSystemVisibility` set up and showed after the days
+//!   (@0x69135, @0x32e54-0x3306b). No ship's sprite is shown before the
+//!   next frame's `_HandleShipDisplay`.
 //! - **The floaters.** Each repaint draws the escort menu while it
 //!   shows, at the level it stood at, as `_FloaterDrawCallback` blits it
 //!   (@0x38c0f-0x38c5b): its fade counts flight steps, and none runs.
@@ -72,6 +78,7 @@ use crate::flight::rescue_screen::{FirstText, Repaint, RescueScreen, RescueStage
 use crate::flight::sim_port::FlightSim;
 use crate::input::Input;
 use crate::system::catalog::SystemCatalog;
+use crate::system::scene;
 use crate::{Color, DrawList};
 
 use super::cockpit::BarParts;
@@ -146,7 +153,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The rescue's closing repaint of the frame drawn: its system's
-    /// `BkgndColor`, its floaters and the bar.
+    /// `BkgndColor`, its stellars, its floaters and the bar.
     fn repaint(&self) -> Repaint {
         let mut bar = DrawList::new();
         self.draw_bar_or_why(&mut bar);
@@ -154,9 +161,28 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let background = message_background(frame.system_background);
         Repaint {
             background,
+            sprites: self.repaint_stellars(),
             floaters: self.repaint_floaters(background, &frame.hud.escort_rows),
             bar,
         }
+    }
+
+    /// The stellars of the scene laid out, as flight draws them, each
+    /// clipped to the play area as the sprite world is: what the closing's
+    /// `_SWUpdateSpriteWorld` (@0x6c0d) draws of the sprites
+    /// `_HandleStellarSystemVisibility` showed (@0x32e54-0x3306b). Not
+    /// world, as the repaint's space area is overlay.
+    fn repaint_stellars(&self) -> DrawList {
+        let mut list = DrawList::new();
+        let Some(scene) = &self.scene else {
+            return list;
+        };
+        let mut stellars = DrawList::new();
+        scene::draw_stellars(&mut stellars, scene, &self.camera(), Some(self.seen_murk()));
+        for command in &stellars {
+            list.clipped(self.play_rect(), command.clone());
+        }
+        list
     }
 
     /// The comm line and the floaters a repaint draws over a space area
@@ -193,6 +219,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .unwrap_or_default();
         let under = Repaint {
             background: pod.background,
+            sprites: DrawList::new(),
             floaters: self.repaint_floaters(pod.background, &pod.rows),
             bar: pod.bar,
         };
@@ -252,6 +279,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         Repaint {
             background,
+            sprites: DrawList::new(),
             floaters: self.repaint_floaters(background, &rows),
             bar,
         }

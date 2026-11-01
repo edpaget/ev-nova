@@ -33,11 +33,12 @@ fn in_the_pod() -> Faked {
 }
 
 /// The frame the rescue leaves: the player flying again in system 131,
-/// no stellar on the radar.
+/// by its stellar Proxima (140), none on the radar.
 fn rescued_frame() -> FlightFrame {
     FlightFrame {
         system: SystemId(131),
         ships: vec![the_player_at(Vec2::new(50.0, 50.0), 90.0)],
+        stellars: vec![record::stellar(StellarId(140))],
         radar_stellars: Vec::new(),
         system_background: Some(NEW_BACKGROUND),
         ..sol()
@@ -367,6 +368,50 @@ fn a_first_text_the_days_queued_shows_over_the_new_system_and_its_bar() {
     expected.push(space_painted(&view, NEW_BACKGROUND));
     expected.extend_translated(&bar_noted_over(rescued_frame()), Point::new(0.0, 0.0));
     assert_eq!(list, expected, "after the move (@0x6912a)");
+}
+
+/// The stellars `view`'s scene shows, as flight draws them, each clipped
+/// to the play area: what a repaint draws of them.
+fn stellars_drawn(view: &Faked) -> Vec<DrawCommand> {
+    let scene = view.scene().expect("laid out");
+    let mut stellars = DrawList::new();
+    crate::system::scene::draw_stellars(
+        &mut stellars,
+        scene,
+        &view.camera(),
+        Some(view.seen_murk()),
+    );
+    stellars
+        .iter()
+        .map(|command| DrawCommand::Clipped {
+            clip: view.play_rect(),
+            command: Box::new(command.clone()),
+        })
+        .collect()
+}
+
+#[test]
+fn the_closing_repaints_the_new_systems_stellars_and_the_texts_none() {
+    let mut view = in_the_pod();
+    rescue_with(&mut view, vec![briefed()]);
+    let list = under_the_first_text(&mut view);
+    let stellars = stellars_drawn(&view);
+    assert!(!stellars.is_empty(), "the new system has stellars");
+    assert!(
+        !list.iter().any(|command| stellars.contains(command)),
+        "hidden under the texts (@0x68e04)"
+    );
+    let mut view = under_the_texts(Vec::new());
+    view.tick(TICK);
+    let list = drawn(&view);
+    let space = first(&list, |command| {
+        *command == space_painted(&view, NEW_BACKGROUND)
+    });
+    let at = first(&list, |command| *command == stellars[0]);
+    assert!(space < at, "over the space (@0x6c0d)");
+    for stellar in &stellars {
+        assert!(list.iter().any(|command| command == stellar), "@0x69135");
+    }
 }
 
 #[test]
