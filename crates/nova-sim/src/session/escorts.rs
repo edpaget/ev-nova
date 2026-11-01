@@ -869,7 +869,8 @@ impl Session {
             let placed = self.space.escorts.fleet.get(index).copied().flatten();
             let npc = placed.and_then(|id| self.space.npc(id));
             let word = npc.map_or(OrderWord::of(held), |npc| npc.order_word);
-            let taken = word_change(word, command, carried); // A record with no ship counts as marked, and keeps a Return.
+            let taken = word_change(word, command, carried);
+            // A record with no ship counts as marked, and keeps a Return.
             let keeps_mark = taken.marks || npc.is_none_or(|npc| self.space.marked(npc));
             let order = standing(command, carried, keeps_mark);
             self.pilot.escorts[index].order = order;
