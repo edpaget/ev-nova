@@ -2633,6 +2633,41 @@ mod tests {
         screen().with_offers(offer_templates())
     }
 
+    /// The offer's answer flushes only mouse events (@0xa2da2-0xa2dde),
+    /// so an Escape held back by the click that accepts reaches the
+    /// exchange on its next tick once the answer is taken, and goes with
+    /// the flush of a text the answer shows (@0x5ae67).
+    #[test]
+    fn a_key_queued_after_the_offers_answer_reaches_the_exchange_on_its_next_tick() {
+        for covered in [false, true] {
+            let mut screen = offering();
+            screen.open_offer(prompt());
+            let accept = screen
+                .offer_dialog()
+                .and_then(crate::spaceport::offer::OfferDialog::dialog)
+                .and_then(|dialog| dialog.item_bounds(1))
+                .expect("accept")
+                .center();
+            let left = |pressed| Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: accept,
+            };
+            screen.input(&left(true));
+            screen.input(&key(Key::Escape, true, false));
+            screen.input(&left(false));
+            assert!(screen.offer_dialog().is_none(), "answered");
+            screen.tick(Duration::ZERO);
+            assert!(!screen.closed(), "not before the answer is taken");
+            assert!(screen.take_offer_choice().is_some());
+            if covered {
+                screen.tick_covered(Duration::ZERO);
+            }
+            screen.tick(Duration::ZERO);
+            assert_eq!(screen.closed(), !covered, "covered {covered}");
+        }
+    }
+
     #[test]
     fn the_trade_center_with_offers_asks_for_an_offer_as_it_opens() {
         let mut screen = offering();

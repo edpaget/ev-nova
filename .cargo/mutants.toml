@@ -716,4 +716,12 @@ exclude_re = [
     # going on only walks the other to the width; the walk of each later
     # row starts from its line start either way.
     "nova-sim-base/src/sprite_mask\\.rs:[0-9]+:[0-9]+: replace \\|\\| with && in original_walk$",
+    # The page keys' gates (@0x51ff4, @0x52095, @0x98ef0, @0x98f43): with
+    # "can scroll up" clear the text is at its start, and with "can scroll
+    # down" clear it is at its end (it fits, End cleared it, or a try
+    # failed there), so the scroll the open gate lets through moves
+    # nothing, keeps a wheel's leftover and leaves both flags as they were.
+    "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_key$",
+    # The trait's default, already an empty list.
+    "nova-view/src/spaceport/modal\\.rs:[0-9]+:[0-9]+: replace Modal::take_unclaimed -> Vec<Input> with vec!\\[\\]$",
 ]

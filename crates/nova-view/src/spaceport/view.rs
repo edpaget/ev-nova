@@ -5533,6 +5533,46 @@ pub(in crate::spaceport) mod tests {
         assert!(view.left(), "then the spaceport takes the input");
     }
 
+    /// The answer flushes only mouse events (@0xa2da2-0xa2dde), so an
+    /// Escape held back by the click that accepts the spaceport's offer
+    /// leaves the spaceport on its next tick, unless a text the answer
+    /// shows covers it and flushes it (@0x5ae67).
+    #[test]
+    fn a_key_queued_after_the_spaceports_offer_is_answered_reaches_it_on_a_tick() {
+        for covered in [false, true] {
+            let mut view = missioned();
+            view.open_offer(offered());
+            let at = view
+                .offer_dialog()
+                .and_then(OfferDialog::dialog)
+                .and_then(|dialog| dialog.item_bounds(crate::spaceport::offer::ACCEPT_ITEM))
+                .expect("accept")
+                .center();
+            let button = |pressed| Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            };
+            view.input(&button(true));
+            view.input(&key(Key::Escape));
+            view.input(&button(false));
+            assert!(view.take_offer_choice().is_some(), "accepted");
+            if covered {
+                view.show_mission_texts(vec![MissionText {
+                    kind: MissionTextKind::Brief,
+                    mission: MissionId(141),
+                    text: "Go.".to_owned(),
+                    graphic: None,
+                    movie: None,
+                    map: None,
+                }]);
+            }
+            assert!(!view.left());
+            view.tick(Duration::ZERO);
+            assert_eq!(view.left(), !covered, "covered {covered}");
+        }
+    }
+
     #[test]
     fn the_mission_info_screen_shows_over_the_spaceports_offer() {
         let mut view = missioned();
