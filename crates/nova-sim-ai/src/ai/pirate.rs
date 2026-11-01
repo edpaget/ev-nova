@@ -78,12 +78,12 @@
 //!   ([`AmmoLeft::Dry`]), it drops the fight, its sub-goal too. It comes
 //!   after the wait loop, so a dry pirate waits all the same when another
 //!   ship boards its victim.
-//! - **An attack** it keeps is goal 4's, as `_HighLevelAIHandler` flies it
-//!   in the same frame: it drops a target it spares (the ally drop
-//!   @0x8e277-0x8e2e4, [`spares`]: goal and sub 0, the target kept), then
-//!   one breaking up or gone (@0x8e3ef → @0x8e714: target -1, goal 0),
-//!   and snipes a hopeless chase unless it stands off (as
-//!   [`warship::hunt`](super::warship::hunt)'s hunted ship does).
+//! - **An attack** it keeps is goal 4, which `_HighLevelAIHandler`'s
+//!   state-4 block takes in the same frame, as it takes every type's
+//!   ([`attack_drop`](super::attack_drop)): it drops an ally keeping the
+//!   target, a ship breaking up zeroing +0x96 (so does a fresh pick
+//!   breaking up, @0x8e71d), and snipes a hopeless chase outside the
+//!   dogfight box unless it stands off.
 //!
 //! It takes no government's word, has no odds, shield or out-of-ammunition
 //! retreat, reads no provocation, and plays no sound. A pirate that picks
@@ -112,7 +112,7 @@
 use crate::ai::fire::DOGFIGHT_BOX;
 use crate::ai::fire::{AmmoLeft, FireRules, ammo_left};
 use crate::ai::odds::{hopeless_chase, outside_box};
-use crate::ai::target::{TargetRules, pick_target, spares};
+use crate::ai::target::{TargetRules, pick_target};
 use crate::ai::travel::TravelWrite;
 use crate::ai::{
     Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_target, react,
@@ -218,7 +218,7 @@ pub fn think(
     };
     Decision {
         turns_on_player,
-        ..fought(npc, target, around, rules)
+        ..fought(npc, target, around)
     }
 }
 
@@ -237,10 +237,10 @@ fn search(
     pick_target(npc, None, around, rules, chance).map(|pick| (pick.ship, pick.turns_on_player))
 }
 
-/// What `npc` does about `target` among `around`, by `rules`: the
-/// classification, then the plunder's or the attack's high level, the
-/// disabled-warship drop and the dry drop (see the module docs).
-fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> Decision {
+/// What `npc` does about `target` among `around`: the classification,
+/// then the plunder's high level, the disabled-warship drop and the dry
+/// drop (see the module docs).
+fn fought(npc: &Npc, target: ShipRef, around: &Surroundings) -> Decision {
     let dry = ammo_left(npc) == AmmoLeft::Dry;
     let dropped = Decision {
         clears_target: true,
@@ -296,18 +296,13 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
                 of(Goal::Attack(target))
             }
         },
+        // The think's drops; goal 4's high level then takes the attack
+        // that frame, as it does every type's (`attack_drop`).
         Class::Attack => {
-            // The think's drops, then goal 4's high level in the same
-            // frame: its ally drop (goal and sub 0, the target kept), then
-            // its gone-or-breaking-up drop.
             if drops_disabled_warship(npc, target, around) {
                 dropped
             } else if dry {
                 dry_dropped
-            } else if spares(npc, target, around, rules) {
-                of(Goal::Idle)
-            } else if gone_or_dying(target, around) {
-                dropped
             } else {
                 of(Goal::Attack(target))
             }
@@ -507,12 +502,17 @@ mod tests {
     /// The goal of `npcs[0]` by `govts` through Nova's AI, the pirate its
     /// warships' think: the think, then the high level.
     fn flown_by(govts: &Governments, npcs: &[Npc], side: Option<&PlayerSide>) -> Goal {
+        flown_decision(govts, npcs, side).goal
+    }
+
+    /// [`flown_by`]'s whole decision.
+    fn flown_decision(govts: &Governments, npcs: &[Npc], side: Option<&PlayerSide>) -> Decision {
         let sites = sites();
         let mut seen = around(&sites, npcs, govts, (0.0, 0.0), 0);
         seen.player = side.copied();
         crate::ai::NovaAi::default()
             .with(AiType::Warship, std::rc::Rc::new(PirateWarship::default()))
-            .decide(&npcs[0], &seen, &mut Draws::of(&[0, 0, 0]))
+            .decision(&npcs[0], &seen, &mut Draws::of(&[0, 0, 0]))
     }
 
     /// The decision of `npcs[0]`, the player intact far off with no crew.
@@ -692,7 +692,8 @@ mod tests {
     fn a_warship_class_found_breaking_up_is_dropped_with_destroying_weapons() {
         // The plunder search finds it (`_IsDisabled` counts breaking up),
         // the destroying weapon passes the disabled-warship drop, and goal
-        // 4's high level drops it in the same frame.
+        // 4's high level drops it in the same frame, zeroing +0x96
+        // (@0x8e3ef → @0x8e714-0x8e726).
         let mut armed = pirate();
         armed.armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
@@ -708,9 +709,12 @@ mod tests {
             },
             ..warship_class(2, 300.0)
         };
+        let npcs = [armed.clone(), breaking_up];
+        assert_eq!(decided(&npcs), only(Goal::Attack(n(2))), "the think's");
+        let flown = flown_decision(&govts(0, 0), &npcs, Some(&player(0.0, 3000.0)));
         assert_eq!(
-            decided(&[armed.clone(), breaking_up]),
-            dropped(),
+            (flown.goal, flown.clears_target, flown.forgets_provocation),
+            (Goal::Idle, true, true),
             "goal 4's gone-or-breaking-up drop"
         );
         let downed = Npc {
@@ -1160,10 +1164,12 @@ mod tests {
         assert_eq!(decided(&npcs), plundered(n(2)), "goal 0xd keeps it");
         kin.hull.inherent_ai = 3;
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), kin];
+        assert_eq!(decided(&npcs), only(Goal::Attack(n(2))), "the think's");
+        let dropped = flown_decision(&govts(0, 0), &npcs, Some(&player(0.0, 3000.0)));
         assert_eq!(
-            decided(&npcs),
-            only(Goal::Idle),
-            "goal 4's ally drop: goal and sub 0, the target kept"
+            (dropped.goal, dropped.holds_target),
+            (Goal::Idle, Some(n(2))),
+            "goal 4's ally drop: goal and sub 0, the target kept (@0x8e2d2)"
         );
     }
 
