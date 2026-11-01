@@ -328,14 +328,14 @@ fn seen(npc: &Npc, ship: ShipRef, around: &Surroundings) -> bool {
 /// Whether `npc`, a mission's special ship of `ShipBehav` 0, attacks the
 /// player among `around`: none when it is no such ship or the player is
 /// not in the system; else whether it attacks, which it does unless the
-/// player is disabled or breaking up and it has no destroying weapons
-/// ([`fire::destroys`]).
+/// player is disabled, breaking up or destroyed and it has no destroying
+/// weapons ([`fire::destroys`]).
 ///
 /// The handler gives up (state 2, target -1, @0x8d6be-0x8d6e9) when
 /// `_IsDisabled(player)` holds and `_AIHasDestroyingWeapons` @0x8d693
 /// does not. `_IsDisabled` @0x2ce6 compares the player's armour with a
 /// share of its capacity (@0x2d79-0x2dcc), so it holds of a breaking-up
-/// player too, whose armour is gone. With destroying weapons it goes on
+/// or destroyed player too, whose armour is gone. With destroying weapons it goes on
 /// attacking a breaking-up player: `_ShipVisibleToShip` @0x971c has no
 /// dying test, and `_AIMakeShipAttackPlayer` @0x89c3e reads `_IsDying`
 /// only for a person's attack quote (@0x89ca7).
@@ -361,7 +361,7 @@ pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
     Some(
         !matches!(
             player.condition,
-            Condition::Disabled | Condition::Dying { .. }
+            Condition::Disabled | Condition::Dying { .. } | Condition::Destroyed
         ) || fire::destroys(npc),
     )
 }

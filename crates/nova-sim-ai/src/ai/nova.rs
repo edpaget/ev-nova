@@ -2787,6 +2787,51 @@ mod tests {
     }
 
     #[test]
+    fn a_hunter_on_a_destroyed_player_drops_it_with_its_provocation_or_gives_up() {
+        // `_HandleShipDisplay`'s final explosion clears the player's +0xb8
+        // (@0x2dcfc → @0x2dee0), so the slot test makes a think's target
+        // -1 (@0x8d4e4-0x8d50d, → @0x8e731). The hunt comes after and
+        // writes target 0 again (@0x8d6b7), which meets +0xb8 clear at
+        // @0x8e3e6 → @0x8e714: +0x96 0. `_IsDisabled` holds for a destroyed
+        // player (@0x2d95-0x2dcc), so a hunter with no destroying weapon
+        // gives up (@0x8d684-0x8d6e9).
+        let attack = of_goal(Goal::Attack(ShipRef::Player));
+        let armed = [gunned(mission_ship(of(1, AiType::Warship), 0))];
+        let around = with_player(&armed, Condition::Destroyed);
+        let hunted = thinking(attack).decision(&armed[0], &around, &mut Draws::of(&[]));
+        assert_eq!(
+            (
+                hunted.goal,
+                hunted.clears_target,
+                hunted.forgets_provocation
+            ),
+            (Goal::Idle, true, true),
+            "@0x8e714"
+        );
+        let unarmed = [mission_ship(of(1, AiType::Warship), 0)];
+        let around = with_player(&unarmed, Condition::Destroyed);
+        let gave_up = thinking(attack).decision(&unarmed[0], &around, &mut Draws::of(&[]));
+        assert_eq!(
+            (gave_up.goal, gave_up.clears_target, gave_up.turns_on_player),
+            (Goal::JumpOut, true, false),
+            "@0x8d6be-0x8d6e9"
+        );
+        assert_eq!(thinking(attack).target(&unarmed[0], &around), None);
+        let plain = [of(1, AiType::Warship)];
+        let around = with_player(&plain, Condition::Destroyed);
+        let thought = thinking(attack).decision(&plain[0], &around, &mut Draws::of(&[]));
+        assert_eq!(
+            (
+                thought.goal,
+                thought.clears_target,
+                thought.forgets_provocation
+            ),
+            (Goal::Idle, true, false),
+            "a think's own: @0x8e263 → @0x8e731"
+        );
+    }
+
+    #[test]
     fn a_searching_ship_makes_no_high_level_reinforcement_call() {
         let mark = Marked::attacking(2);
         let ai = NovaAi::default().with(AiType::Warship, mark.clone());
