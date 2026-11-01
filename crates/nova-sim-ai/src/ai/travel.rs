@@ -72,8 +72,11 @@
 //! - `_EscortAI`'s order block, whoever the parent ([`order_block`]);
 //! - `_EscortAI`'s entry into goal 0xb, the lead's copied (@0x83a77-0x83a7c,
 //!   [`copied`], see [`fleet_escort`](super::fleet_escort));
-//! - goal 0xb's check and sub 0xd, copied or cleared
-//!   ([`fly_jump`](crate::traffic::warp_out::fly_jump));
+//! - goal 0xb's check and sub 0xd, copied or cleared, the leader the
+//!   player or an NPC ([`fly_jump`](crate::traffic::warp_out::fly_jump));
+//!   the player's +0x6c is its nav selection, a stellar in mode 2 or a Con
+//!   slot in mode 3 (the session's `Chart::held_selection`), which
+//!   `_EscortAI`'s entry copies too ([`copying`]);
 //! - the cancels of a follow, -1 (@0x90118, @0x90196), and a fighter's
 //!   turn-back, its carrier's slot (@0x8d621;
 //!   [`jump_with_leader`](crate::traffic::jump_with_leader));
@@ -94,10 +97,32 @@
 //! `_AIFightThreatToParent`'s writes (@0x81f59, @0x81f8a) aren't modelled:
 //! its one caller overwrites them (@0x83ef4, @0x83f09).
 //!
-//! Left out (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-8-left-out-of-phase-4):
-//! a lead of another AI type's own +0x6c, and the player's own copied onto
-//! a follower of its jump. And the session's writes that replace a `Land`
-//! goal without a decision, which [`take`] never sees.
+//! **The other AI types'.** A successor under its lead's government reads
+//! whatever the lead's think left, so each type writes its own:
+//!
+//! - the idle block of the traders and the warship, -1 then the pick
+//!   ([`idle_block::pick_write`]); the warship's leave with no way to jump
+//!   (@0x8c00c, @0x8c02a) and its fully-dry drop (@0x8c117);
+//! - `_MinerAI`'s, which reads the number too (see
+//!   [`miner`](super::miner)): -1 disabled (@0x8b232), mining with no rock
+//!   (@0x8b2cb) and while its wait runs (@0x8b45d), and the nearest pick
+//!   (@0x8b386);
+//! - `_InterceptorAI`'s patrol pick, through its `Land` (@0x8d132), and
+//!   the lost-sight drop's -1 (@0x8d3df,
+//!   [`lost_sight::after_inspection`](super::lost_sight::after_inspection));
+//!   goal 7's -1 as it scans the player (@0x8f369; the traffic's
+//!   `take_goals`), kept for any other ship (@0x8f391);
+//! - goal 0xf's repair, its target's slot (@0x8f74c, the traffic's
+//!   `plunder` high level).
+//!
+//! **The session's.** A write that replaces a goal outside [`take`] leaves
+//! a taken stellar goal's stellar held, as the original's +0x6c is left
+//! unless the replacing routine writes it: the scan's find writes -1
+//! (`_AIMakeShipAttackPlayer` @0x89d47), a ship falling in with the player
+//! the player's slot (`_AIMakeEscortFlyInForm` @0x89bac), and the eject's
+//! threat walk moves a threat's slot 0 onto the hulk's (@0x6f6ff-0x6f70d).
+//! The releases of the ships the player leads and the pod's drop of the
+//! player write none, as the original's don't.
 
 #[cfg(doc)]
 use crate::ai::{Decision, idle_block};
