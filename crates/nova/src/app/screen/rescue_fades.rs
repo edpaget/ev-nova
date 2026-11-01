@@ -21,14 +21,44 @@
 //!   under it), flight's cover is drawn over the dialogs
 //!   ([`AppScreen::draw_cover_over_texts`]);
 //! - what was pressed under the rescue's fades goes to what shows next
-//!   ([`AppScreen::replay_rescue_input`]).
+//!   ([`AppScreen::replay_rescue_input`]), the router's own keys ahead of
+//!   flight's waiting too ([`AppScreen::rescue_takes`]).
 
 #[cfg(doc)]
 use nova_view::flight::FlightView;
+use nova_view::{Input, Screen as _};
 
-use super::AppScreen;
+use super::{AppScreen, Side};
 
 impl AppScreen {
+    /// Gives `input` to flight while it shows the rescue's screen with
+    /// nothing in front ([`FlightView::rescuing`]): whether it did.
+    /// Flight keeps it for what shows next, as the original's fades are
+    /// synchronous (`_FadeScreenOut` and `_FadeScreenIn`,
+    /// @0x68de3-0x692c9) and nothing reads an event until then. So the
+    /// router's own keys ahead of flight's wait too, Command-, for the
+    /// Preferences and flight's Escape, as a movie in front of flight
+    /// keeps Escape ([`AppScreen::flight_input`]). Replayed
+    /// ([`AppScreen::replay_rescue_input`]), each does what it would do
+    /// over what shows then: an Escape closes the rescue's `dësc` or
+    /// first text, as Return does; a Command-, over a text opens
+    /// nothing, the text in front taking it; and with no text, either
+    /// reaches flight once the rescue is over, an Escape leaving for the
+    /// main screen.
+    ///
+    /// Command-Q still quits at once, as it does under a movie: the
+    /// router's chord check runs before this.
+    pub(super) fn rescue_takes(&mut self, input: &Input) -> bool {
+        if self.side != Side::Flight {
+            return false;
+        }
+        let Some(flight) = self.flight.as_mut().filter(|flight| flight.rescuing()) else {
+            return false;
+        };
+        flight.input(input);
+        true
+    }
+
     /// Routes what was pressed under the rescue's fades
     /// ([`FlightView::take_rescue_replay`]) to what shows now: the
     /// rescue's `dësc`, its first text, or flight. It runs once a tick's

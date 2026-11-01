@@ -295,6 +295,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         true
     }
 
+    /// Whether the rescue's screen shows, from its fade out until its
+    /// closing fade ends: while it does, flight keeps every input it is
+    /// given ([`FlightView::take_rescue_replay`]), so the router gives
+    /// it them all, ahead of its own keys, as the original's fades are
+    /// synchronous and nothing reads an event until the next screen.
+    #[must_use]
+    pub fn rescuing(&self) -> bool {
+        self.rescue.is_some()
+    }
+
     /// Keeps `input` while the rescue shows: whether it did.
     pub(super) fn hold_under_rescue(&mut self, input: &Input) -> bool {
         let Some(screen) = &mut self.rescue else {

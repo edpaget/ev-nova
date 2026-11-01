@@ -560,6 +560,9 @@ impl AppScreen {
         if let Some(front) = self.front() {
             return self.front_input(front, input);
         }
+        if self.rescue_takes(input) {
+            return ScreenAction::None;
+        }
         if self.preferences_key(input) {
             return ScreenAction::None;
         }

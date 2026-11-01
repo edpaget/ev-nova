@@ -593,6 +593,63 @@ fn a_return_pressed_under_the_rescues_fade_out_reaches_its_text() {
     assert_eq!(black_over(&screen), Some(255), "the second fade");
 }
 
+#[test]
+fn an_escape_pressed_under_the_rescues_fade_out_reaches_its_text_not_the_main_screen() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, Some(RESCUE_TEXT));
+    until_rescued(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    assert_eq!(screen.showing(), Showing::Flight, "held, not acted on");
+    tick_for(&mut screen, 2 * RESCUE_FADE_FOR);
+    assert_eq!(
+        screen.showing(),
+        Showing::Flight,
+        "the text took it and closed"
+    );
+    assert_eq!(black_over(&screen), Some(255), "the second fade");
+}
+
+#[test]
+fn an_escape_pressed_under_a_rescue_with_no_desc_leaves_flight_once_it_is_over() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, None);
+    until_rescued(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    screen.input(&key(Key::Escape, false));
+    for _ in 0..rescue_bound() {
+        assert_eq!(screen.showing(), Showing::Flight, "held while it shows");
+        screen.tick(TICK);
+        if !screen.flight_view().is_some_and(FlightView::rescuing) {
+            break;
+        }
+    }
+    assert_eq!(
+        screen.showing(),
+        Showing::MainMenu,
+        "flight took it as the rescue ended"
+    );
+}
+
+#[test]
+fn command_comma_under_the_rescues_fade_out_opens_no_preferences() {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, Some(RESCUE_TEXT));
+    until_rescued(&mut screen);
+    screen.input(&key(Key::Command, true));
+    screen.input(&key(PREFERENCES_KEY, true));
+    screen.input(&key(PREFERENCES_KEY, false));
+    screen.input(&key(Key::Command, false));
+    assert_eq!(screen.showing(), Showing::Flight, "held, not acted on");
+    until_shown(&mut screen, Showing::MissionText);
+    screen.tick(TICK);
+    assert_eq!(
+        screen.showing(),
+        Showing::MissionText,
+        "the text took it, as it takes a live one"
+    );
+}
+
 /// The router over [`ejected`] (with its `dësc` of the text `desc`
 /// gives, if any), Caps Lock tapped during the rescue's fade-out, then
 /// ticked until the rescue is over, its `dësc` closed with Return.

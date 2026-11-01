@@ -546,6 +546,19 @@ fn a_press_under_the_fade_out_reaches_the_desc_not_flight() {
 }
 
 #[test]
+fn the_rescue_shows_from_its_start_until_its_closing_fade_ends() {
+    let mut view = in_the_pod();
+    assert!(!view.rescuing(), "in the pod");
+    rescue(&mut view);
+    assert!(view.rescuing(), "the fade out");
+    let mut view = under_the_texts(Vec::new());
+    view.tick(TICK);
+    assert!(view.rescuing(), "the closing fade");
+    ticks(&mut view, RESCUE_FADE_FOR);
+    assert!(!view.rescuing(), "flying on");
+}
+
+#[test]
 fn a_press_under_the_closing_fade_reaches_flight_once_it_ends() {
     let mut view = under_the_texts(Vec::new());
     view.tick(TICK);
