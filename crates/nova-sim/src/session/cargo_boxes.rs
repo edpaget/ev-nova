@@ -252,8 +252,8 @@ mod tests {
     use crate::session::tests::{at_gate, gated};
     use crate::stats::ShipStats;
     use crate::testkit::{
-        FAST, FakePilotCatalog, Scripted, begin_jump_now, carrying, catalog, fly_out, hull,
-        land_now, mission, npc, outfit, ship,
+        FAST, FakePilotCatalog, Passive, Scripted, begin_jump_now, carrying, catalog, fly_out,
+        hull, land_now, mission, npc, outfit, ship,
     };
     use crate::testkit::{work, work_with};
     use crate::traffic::npc::{Npc, NpcHold};
@@ -652,6 +652,21 @@ mod tests {
         nova_sim_base::fixture::rle::sheet(&[&rows])
     }
 
+    /// A 36-frame sheet of 20 square, only frame `drawn` drawn.
+    fn drawn_only_on(drawn: u16) -> crate::sprite_mask::RleSheet {
+        let frames: Vec<crate::sprite_mask::RleSheet> = (0..36)
+            .map(|frame| square(20, |_, _| frame == drawn))
+            .collect();
+        let mut words = frames[0].clone();
+        words.words.clear();
+        words.starts.clear();
+        for frame in &frames {
+            words.starts.push(Some(words.words.len()));
+            words.words.extend(&frame.words);
+        }
+        words
+    }
+
     #[test]
     fn the_scoop_takes_a_box_by_the_players_frame_after_its_turn() {
         use crate::catalog::MaskSheet;
@@ -680,20 +695,9 @@ mod tests {
             .frames
             .rotation(probe.ship.player.heading);
         assert_ne!(turned, before);
-        // A 36-frame sheet of 20 square: only the turned frame drawn.
-        let frames: Vec<crate::sprite_mask::RleSheet> = (0..36)
-            .map(|frame| square(20, |_, _| frame == turned))
-            .collect();
-        let mut words = frames[0].clone();
-        words.words.clear();
-        words.starts.clear();
-        for frame in &frames {
-            words.starts.push(Some(words.words.len()));
-            words.words.extend(&frame.words);
-        }
         let base = probe.statics.arsenal.sprite_base(probe.pilot.ship);
         catalog.rle_sheets = vec![
-            (MaskSheet::Ship(base), words),
+            (MaskSheet::Ship(base), drawn_only_on(turned)),
             (MaskSheet::CargoBox(1), square(8, |_, _| true)),
         ];
         for (controls, taken) in [(Controls::default(), false), (turning, true)] {
@@ -1098,6 +1102,140 @@ mod tests {
             let hold = session.space.npc(id).expect("here").cargo;
             assert_eq!(hold.tons(2), u32::from(on_point), "{mark} {rules:?}");
             assert_eq!(hold.tons(3), 0, "the masks, not the disc: {mark}");
+        }
+    }
+
+    // Double time's second pass (`Session::tick_again`) scoops and steps
+    // the boxes after its own move, as the advance pass does.
+
+    /// Runs double time's second pass on `session` under `controls`.
+    fn again(session: &mut Session, controls: Controls) {
+        session.tick_again(controls, &Passive, Rules::default(), &mut NeverFires);
+    }
+
+    /// [`scooper`] holding nothing in double time, its sheets read in
+    /// `catalog` by an advance pass under no controls, box graphic 1's
+    /// too, as that pass reads it for a box in space (the
+    /// `sprite_sheets` module): the second pass reads no catalog.
+    fn doubling(catalog: &FakePilotCatalog) -> Session {
+        let mut session = scooper(catalog, 0);
+        session.set_double_time_key(true);
+        work(&mut session, catalog, Controls::default());
+        session
+            .space
+            .sprite_masks
+            .load(catalog, crate::catalog::MaskSheet::CargoBox(1));
+        assert!(session.double_time());
+        session
+    }
+
+    #[test]
+    fn the_second_pass_scoops_a_box_on_the_ship_by_the_masks() {
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(4, '#'), None, base);
+        // 12 right, the box's 8-square frame is clear of the player's 4,
+        // though graphic 1's 40-square frame for the disc is over it.
+        for (right, taken) in [(0.0, true), (12.0, false)] {
+            let mut session = doubling(&catalog);
+            let at = session.player().position + Vec2::new(right, 0.0);
+            session
+                .space
+                .boxes
+                .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
+            again(&mut session, Controls::default());
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{right}");
+            let hold: &[(Good, u32)] = if taken {
+                &[(Good::Commodity(2), 1)]
+            } else {
+                &[]
+            };
+            assert_eq!(held(&session), hold, "{right}");
+        }
+    }
+
+    #[test]
+    fn the_second_pass_steps_a_box_the_ship_does_not_touch_once() {
+        let catalog = scoopable();
+        let mut session = doubling(&catalog);
+        let far = session.player().position + Vec2::new(500.0, 0.0);
+        session
+            .space
+            .boxes
+            .spawn_scoopable(far, Some(2), 1, &mut NeverFires);
+        let before = session.cargo_boxes().to_vec();
+        let mut stepped = session.space.clone();
+        stepped.boxes_tick();
+        again(&mut session, Controls::default());
+        assert_eq!(session.cargo_boxes(), stepped.cargo_boxes());
+        assert_ne!(session.cargo_boxes(), before.as_slice(), "it stepped");
+    }
+
+    #[test]
+    fn the_second_pass_scoops_by_the_players_frame_after_its_own_turn() {
+        use crate::catalog::MaskSheet;
+        use crate::flight::Turn;
+        let turning = Controls {
+            turn: Turn::Left,
+            ..Controls::default()
+        };
+        let mut catalog = scoopable();
+        let mut probe = scooper(&catalog, 0);
+        probe.set_double_time_key(true);
+        let rotation = |session: &Session| {
+            let ship = &session.ship;
+            ship.fit.hull.frames.rotation(ship.player.heading)
+        };
+        // The rotations the second pass leaves, by its turn or none.
+        let (still, turned) = {
+            let mut ahead = probe.clone();
+            work(&mut ahead, &catalog, Controls::default());
+            let mut turning_ahead = ahead.clone();
+            again(&mut ahead, Controls::default());
+            again(&mut turning_ahead, turning);
+            (rotation(&ahead), rotation(&turning_ahead))
+        };
+        assert_ne!(turned, still);
+        let base = probe.statics.arsenal.sprite_base(probe.pilot.ship);
+        catalog.rle_sheets = vec![
+            (MaskSheet::Ship(base), drawn_only_on(turned)),
+            (MaskSheet::CargoBox(1), square(8, |_, _| true)),
+        ];
+        for (controls, taken) in [(Controls::default(), false), (turning, true)] {
+            let mut session = probe.clone();
+            work(&mut session, &catalog, Controls::default());
+            session
+                .space
+                .sprite_masks
+                .load(&catalog, MaskSheet::CargoBox(1));
+            drop_on_ship(&mut session, Some(2));
+            again(&mut session, controls);
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{controls:?}");
+        }
+    }
+
+    #[test]
+    fn the_second_pass_lays_its_masks_out_from_where_the_player_stood_before_its_move() {
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(4, '#'), None, base);
+        let mut moving = doubling(&catalog);
+        moving.ship.player.velocity = Vec2::new(-20.0, 0.0);
+        let stood = moving.player().position;
+        let moved_to = {
+            let mut ahead = moving.clone();
+            again(&mut ahead, Controls::default());
+            ahead.player().position
+        };
+        // A box's 8-square frame runs up and left of its point, so one where
+        // the player moved to is clear of its 4 square at the centre.
+        assert!(moved_to.x < stood.x - 2.0, "{stood:?} {moved_to:?}");
+        for (at, taken) in [(stood, true), (moved_to, false)] {
+            let mut session = moving.clone();
+            session
+                .space
+                .boxes
+                .spawn_scoopable(at, Some(2), 1, &mut NeverFires);
+            again(&mut session, Controls::default());
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "{at:?}");
         }
     }
 }
