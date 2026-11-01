@@ -126,7 +126,6 @@ pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: B
     let controls = Controls {
         thrust: window,
         turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
-        reverse: false,
         ..Controls::default()
     };
     let pull = handling.accel * FORMATION_NUDGE;
@@ -229,6 +228,16 @@ mod tests {
     /// [`FAST`]'s pull of 1.8 a tick at a top speed of 1.0: `Accel` above
     /// 5 × `Speed`.
     const SLOW_TOP: ShipFields = ShipFields { speed: 100, ..FAST };
+
+    /// A pull of 10 a tick at a top speed of 10.
+    const EVEN: ShipFields = ShipFields {
+        speed: 1000,
+        accel: 5000,
+        ..FAST
+    };
+
+    /// No acceleration, so no pull.
+    const DRIFTER: ShipFields = ShipFields { accel: 0, ..FAST };
 
     fn at(x: f32, y: f32, vx: f32, vy: f32, heading: f32) -> ShipState {
         ShipState {
@@ -393,6 +402,25 @@ mod tests {
         let mut ship = docking(SLOW_TOP, away, None);
         fly(&mut ship);
         assert!(near(ship.owed_burst, 0.8), "{:?}", ship.owed_burst);
+        // A pull of exactly its top speed (1.0 × 10 against 10) leaves the
+        // word at 0, owing nothing.
+        let mut ship = docking(EVEN, away, None);
+        assert_eq!(pull_of(&ship), ship.stats.handling.max_speed);
+        fly(&mut ship);
+        assert_eq!(ship.owed_burst, None);
+    }
+
+    #[test]
+    fn with_no_acceleration_its_window_writes_the_word_0_and_it_owes_nothing() {
+        // +0x34 = 0 less a pull of 0 (@0x87ef8, @0x880c0): no word, so no
+        // burst, over the word it owed.
+        let start = at(0.0, -60.0, 0.0, 0.0, 180.0);
+        let mut ship = docking(DRIFTER, start, Some(30.0));
+        assert_eq!(pull_of(&ship), 0.0);
+        fly(&mut ship);
+        assert_eq!(ship.owed_burst, None);
+        assert_eq!(ship.state.velocity, Vec2::ZERO);
+        assert_eq!(ship.state.position, start.position);
     }
 
     // Double time's second pass.

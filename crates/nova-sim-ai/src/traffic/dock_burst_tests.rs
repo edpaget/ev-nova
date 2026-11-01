@@ -180,4 +180,19 @@ fn an_npc_carriers_fighter_returning_to_a_slow_carrier_keeps_its_burst_and_goal_
             flown.state
         );
     }
+    // Its carrier as fast as it, it faces away: outside its window the word
+    // falls by its pull with no burst (@0x880c0, @0x34a84), within its cap
+    // now, and goes on. Last frame's burst doesn't end this one's word.
+    traffic.npcs[0].stats = ShipStats::new(FAST, &[]);
+    traffic.npcs[1].state.heading = 0.0;
+    let (_, flown) = tick(&mut traffic, &world, id);
+    let flown = flown.expect("not docked");
+    assert_eq!(flown.goal, Goal::Dock(ShipRef::Npc(carrier_id)));
+    assert!(
+        flown
+            .owed_burst
+            .is_some_and(|owed| (owed - (2.0 * pull - accel)).abs() < 1e-5),
+        "{:?}",
+        flown.owed_burst
+    );
 }
