@@ -316,9 +316,11 @@ mod tests {
             npc.target = None;
             assert_eq!(npc.flown_goal(), Goal::Regroup { kept }.flown(None));
         }
-        npc.goal = Goal::Attack(T);
-        npc.target = Some(other);
-        assert_eq!(npc.flown_goal(), Goal::Attack(T), "not paused");
+        for goal in [Goal::Attack(T), Goal::Snipe(T)] {
+            npc.goal = goal;
+            npc.target = Some(other);
+            assert_eq!(npc.flown_goal(), goal, "not paused");
+        }
     }
 
     #[test]

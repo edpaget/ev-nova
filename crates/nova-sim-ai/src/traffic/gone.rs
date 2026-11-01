@@ -1073,12 +1073,22 @@ mod tests {
             let wreck = in_slot(&mut traffic, 1);
             let holder = aiming_at(&mut traffic, 3, ShipRef::Npc(wreck));
             traffic.npcs[0].condition = Condition::Destroyed;
+            // Another wreck, in another berth, keeps its holder.
+            let other = in_slot(&mut traffic, 5);
+            let other_holder = aiming_at(&mut traffic, 6, ShipRef::Npc(other));
+            let at = traffic.npcs.iter().position(|npc| npc.id == other);
+            traffic.npcs[at.expect("there")].condition = Condition::Destroyed;
             assert_eq!(traffic.free_berth(0), Some(2), "outside the loop");
             traffic.set_ship_loop(true);
             assert_eq!(traffic.free_berth(0), Some(1));
             let new = traffic.add_npc_at(ship(0, TRADERS, AiType::Warship, 0.0, 0.0), 1);
             traffic.set_ship_loop(false);
             assert_eq!(target_of(&traffic, holder), Some(ShipRef::Npc(new)));
+            assert_eq!(
+                target_of(&traffic, other_holder),
+                Some(ShipRef::Npc(other)),
+                "another berth's wreck"
+            );
             traffic.remove_destroyed(wreck);
             assert_eq!(traffic.gone.ships(), [], "rewritten by the newcomer");
             assert!(traffic.npcs().iter().any(|npc| npc.id == new));
