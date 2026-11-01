@@ -156,6 +156,13 @@
 //! gone or breaking up; disabled while the ship has no destroying
 //! weapons; or a ship it spares. The hunt drops a fresh pick so too, in
 //! the same think (see [`warship::hunt`](crate::ai::warship::hunt)).
+//! These are the thinks' own drops, which read [`spares`]; every type's
+//! goal 4 then meets `_HighLevelAIHandler`'s state-4 block
+//! ([`attack_drop`](crate::ai::attack_drop)), whose ally drop is
+//! [`spares_ally`] and whose fleet drops are the literal walk of
+//! @0x8e2e9-0x8e37c, not [`Npc::fleet_among`]. The thinks' reading of
+//! `spares` reaching the block instead is
+//! rdm:phase/escort-fleet-fidelity-followups/phase-22-spared-ships-reach-the-block.
 //!
 //! **A ship it spares** ([`spares`]): an NPC of its own fleet, or an ally
 //! as [`TargetRules::led_ally`] reads

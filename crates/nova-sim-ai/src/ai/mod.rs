@@ -16,7 +16,11 @@
 //!   [`candidates`], the candidate pass its steps share; and
 //!   [`threatened`], whether a friend is threatened by a ship's enemy.
 //! - [`flee_drop`]: a fleeing ship giving up fleeing an ally it spares.
-//! - [`attack_drop`]: a ship dropping an attack on a ship breaking up.
+//! - [`handler_head`]: `_HighLevelAIHandler`'s head, after every type's
+//!   think: the wait exit and the slot test.
+//! - [`attack_drop`]: its state-4 block, after every type's think: the
+//!   drops of an attack (the wait, an ally, the fleet, a ship gone or
+//!   breaking up), the hopeless chase and the attack.
 //! - [`fire`]: which weapon an NPC fires, as it attacks, snipes or flees.
 //! - [`stand_off`]: how far a stand-off ship keeps from its target, by its
 //!   weapons' longest reach, and how it flies there.

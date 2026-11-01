@@ -23,10 +23,15 @@
 //!
 //!   Defend and Attack keep the player too: `_EscortAI` keeps no record
 //!   of where its target came from, so an escort the player hits
-//!   (`_AIMakeShipAttackPlayer`, goal 4, +0x70 = 0) attacks the player at
-//!   every think after, Defend measuring the player from itself, 0. Only
-//!   formation drops it (@0x83f0d-0x83f1a). No source says an escort
-//!   spares the player, so there is no rulebook key.
+//!   (`_AIMakeShipAttackPlayer`, goal 4, +0x70 = 0) keeps the attack on
+//!   the player in its think, Defend measuring the player from itself, 0.
+//!   The high level's state-4 block then drops it that frame, as the
+//!   escort's +0x9a is the player (@0x8e306 → @0x8e381,
+//!   [`attack_drop`](super::attack_drop)): goal 0 and target -1, so the
+//!   next think picks again. Formation drops it in the think
+//!   (@0x83f0d-0x83f1a). The same drop takes an attack on a fellow escort
+//!   (@0x8e322 → @0x8e81d), and an escort can snipe a hopeless chase
+//!   (@0x8e614).
 //! - **No standing command** ("Formation"), as the rulebook's
 //!   [`RuleKey::EscortAi`](crate::RuleKey::EscortAi) entry says:
 //!   - by the engine, it keeps formation ([`Goal::Formation`]) and guards

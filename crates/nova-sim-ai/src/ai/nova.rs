@@ -41,10 +41,17 @@
 //! `_MinerAI` does; the type's fire reads the goal, and a miner's own
 //! goals fire at nothing but an attacker it flees. A mission ship of
 //! `ShipBehav` 0 still hunts the player while it sees it (@0x8d6a8),
-//! miner or not; with the player
-//! disabled and no destroying weapon it gives up and leaves by hyperspace
-//! after its type's think, whatever that decided and whatever its fuel
-//! (`_HighLevelAIHandler` @0x8d6be-0x8d6e9; see [`leave`](crate::ai::leave)).
+//! miner or not, after its type's think and unless its wait stops the
+//! handler first; with the player disabled, breaking up or destroyed and
+//! no destroying weapon it gives up and leaves by hyperspace, whatever its
+//! type decided and whatever its fuel (`_HighLevelAIHandler`
+//! @0x8d6be-0x8d6e9; see [`leave`](crate::ai::leave)).
+//!
+//! Every type's think goes through `_HighLevelAIHandler` in its order
+//! ([`NovaAi::decision`]): the head's wait exit and slot test
+//! ([`handler_head`]), the mission hunt, the lost-sight block, the flee
+//! block, the state-4 block ([`attack_drop`]) and the call for
+//! reinforcements.
 //! A leaderless warship of a government with `Flags` 0x1000 goes to the
 //! pirate's AI ([`PirateWarship`], `_PirateWarshipAI`, `_AIDispatch`
 //! @0x8ffc8-0x8fff0), which disables, docks with and plunders its victim
@@ -2746,7 +2753,9 @@ mod tests {
     #[test]
     fn a_ship_that_thought_a_goal_it_flies_in_form_passes_the_head_under_its_wait() {
         // Goal 0xa or 0xe left by the think goes on past the head: the
-        // think stands, but a hunter hunts (@0x8d4c8, @0x8d4ce).
+        // think stands, but a hunter hunts (@0x8d4c8, @0x8d4ce), and the
+        // state-4 block's wait test then drops the hunt to goal 0, its
+        // target 0 kept (@0x8e26d → @0x8e731).
         let hunter = Npc {
             ai_wait: 3,
             ..gunned(mission_ship(of(1, AiType::Warship), 0))
@@ -2757,6 +2766,11 @@ mod tests {
             let ai = thinking(of_goal(goal));
             let decision = ai.decision(&npcs[0], &around, &mut Draws::of(&[]));
             assert!(decision.turns_on_player, "{goal:?}: @0x8d6b7");
+            assert_eq!(
+                (decision.goal, decision.holds_target),
+                (Goal::Idle, Some(ShipRef::Player)),
+                "{goal:?}: @0x8e26d"
+            );
         }
         let plain = Npc {
             mission: None,
