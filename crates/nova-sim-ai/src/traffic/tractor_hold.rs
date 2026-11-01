@@ -42,9 +42,11 @@
 //! holder's berth is taken before its step is held, and pulled, by the
 //! newcomer. A launch into a berth since the pass began (an escape ship's
 //! `_LaunchFighter` @0x354ea) is read as it stands ([`Holders::launched`]).
-//! The player's hold on a taken berth is `_HandlePlayer`'s
-//! (@0x68436-0x684b7), left out (see
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-17-left-out-of-phase-15-handle-ship).
+//! Each take is read out in order ([`Traffic::take_berths_taken`], a
+//! [`BerthTaken`]) for the player's hold, as `_HandlePlayer` reads its
+//! +0xc8dc as a slot too (@0x68468-0x684b7): a player held by a ship whose
+//! berth is taken before its next hold is held, and pulled, by the
+//! newcomer (`nova_sim`'s session `tractor_hold`).
 //!
 //! The player's
 //! hold releases first and isn't pulled on the frame it is released
@@ -182,8 +184,11 @@ impl Traffic {
     /// original's slot link, whatever the reading of the parent link
     /// ([`parent_slot`](super::parent_slot)), which is the escort port's
     /// routing. Each such hold is one whose step hasn't come since `old`'s
-    /// slot was freed, as that step lets go (see the module docs).
+    /// slot was freed, as that step lets go (see the module docs). The
+    /// take is read out for the player's hold
+    /// ([`Traffic::take_berths_taken`]).
     pub(super) fn holds_follow_berth(&mut self, old: NpcId, new: NpcId) {
+        self.berth_takes.push(BerthTaken { old, new });
         let (old, new) = (ShipRef::Npc(old), ShipRef::Npc(new));
         for lock in self.npcs.iter_mut().filter_map(|npc| npc.tractor.as_mut()) {
             if lock.holder == old {
@@ -191,6 +196,23 @@ impl Traffic {
             }
         }
     }
+
+    /// Each berth taken since the last call, in order, each old ship
+    /// whose berth a newcomer took: the readout the session's player hold
+    /// follows (`_HandlePlayer` @0x68436-0x684b7, see the module docs).
+    pub fn take_berths_taken(&mut self) -> Vec<BerthTaken> {
+        std::mem::take(&mut self.berth_takes)
+    }
+}
+
+/// A berth taken: `new` took the berth `old` left, its record or its wreck
+/// ([`Traffic::take_berths_taken`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BerthTaken {
+    /// The ship whose berth was taken.
+    pub old: NpcId,
+    /// The newcomer.
+    pub new: NpcId,
 }
 
 /// `npc`'s frame's pull among `holders` at the pull's `step` ([`npc_pull`],
@@ -682,5 +704,51 @@ mod tests {
         assert_eq!(ship.display.drive.thrust, Thrust::Rush);
         record(&mut ship, &own, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Plain);
+    }
+
+    #[test]
+    fn a_berth_taken_is_read_out_once_old_to_new() {
+        // `_HandlePlayer` reads +0xc8dc as a slot (@0x68468), so the
+        // session's player hold follows the take.
+        let mut traffic = Traffic::new();
+        let old = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.add_npc_at(moving(0, Vec2::ZERO), 4);
+        assert_eq!(traffic.take_berths_taken(), []);
+        traffic.remove_killed(old);
+        let new = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        assert_eq!(traffic.take_berths_taken(), [BerthTaken { old, new }]);
+        assert_eq!(traffic.take_berths_taken(), [], "drained");
+    }
+
+    #[test]
+    fn a_spawn_into_a_berth_no_ship_left_reads_out_nothing() {
+        let mut traffic = Traffic::new();
+        let gone = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.remove_killed(gone);
+        traffic.add_npc_at(moving(0, Vec2::ZERO), 5);
+        assert_eq!(traffic.take_berths_taken(), []);
+    }
+
+    #[test]
+    fn a_chain_of_takes_is_read_out_in_order() {
+        let mut traffic = Traffic::new();
+        let first = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.remove_killed(first);
+        let second = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.remove_killed(second);
+        let third = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        assert_eq!(
+            traffic.take_berths_taken(),
+            [
+                BerthTaken {
+                    old: first,
+                    new: second
+                },
+                BerthTaken {
+                    old: second,
+                    new: third
+                }
+            ]
+        );
     }
 }

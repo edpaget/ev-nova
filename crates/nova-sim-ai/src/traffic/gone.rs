@@ -347,7 +347,8 @@ impl Traffic {
     /// reading of the link ([`parent_slot`](crate::traffic::parent_slot)).
     /// So does every tractor hold (+0xc8dc), whatever that reading
     /// ([`Traffic::holds_follow_berth`]): a hold on the old ship is one
-    /// whose step hasn't come since its slot was freed.
+    /// whose step hasn't come since its slot was freed. Each take is read
+    /// out for the player's hold ([`Traffic::take_berths_taken`]).
     pub(super) fn slot_taken(&mut self, newcomer: &Npc) {
         let (berth, id) = (newcomer.berth, newcomer.id);
         let new = ShipRef::Npc(id);

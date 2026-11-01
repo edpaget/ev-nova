@@ -969,6 +969,9 @@ pub struct Traffic {
     /// slot this tick ([`dispatch_dock`]), which both of double time's
     /// passes fly.
     dock_flights: BTreeMap<NpcId, plunder_dock::DockFlight>,
+    /// The berths taken since the session last read them, in order
+    /// ([`Traffic::take_berths_taken`]), for the player's hold.
+    berth_takes: Vec<tractor_hold::BerthTaken>,
     /// Each follower whose sub 0xd ran at its slot this tick
     /// ([`dispatch_follow`]), and whether it kept formation, so the
     /// autopilot flies it.
@@ -1126,6 +1129,7 @@ impl Traffic {
             freed: Vec::new(),
             left_in_dispatch: Vec::new(),
             dock_flights: BTreeMap::new(),
+            berth_takes: Vec::new(),
             followed: BTreeMap::new(),
             held_still: BTreeSet::new(),
             open_leaders: BTreeMap::new(),
@@ -1215,6 +1219,7 @@ impl Traffic {
         self.freed.clear();
         self.left_in_dispatch.clear();
         self.dock_flights.clear();
+        self.berth_takes.clear();
         self.followed.clear();
         self.open_states.clear();
         self.gone.clear();
@@ -1339,6 +1344,7 @@ impl Traffic {
         self.freed.clear();
         self.left_in_dispatch.clear();
         self.dock_flights.clear();
+        self.berth_takes.clear();
         self.followed.clear();
         self.open_states.clear();
         self.gone.clear();
