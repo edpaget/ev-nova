@@ -8,8 +8,10 @@
 //! ([`OfferPrompt`]); a mission that cannot be refused shows the one
 //! button of item 6 in their place, labelled to accept. The stock items
 //! are all disabled, so the dialog enables its buttons itself. Items 4, 5
-//! and 7 (the map, player info and mission info) lie outside it, and the
-//! arrows of items 9 and 10 are not drawn: Up and Down scroll the text.
+//! and 7 (the map, player info and mission info) lie outside it. The
+//! scroll arrows, items 9 and 10, are drawn and tracked as the text
+//! dialog's are, and the text scrolls by pixels, a partial line cut at the
+//! box ([`offer_arrows`](super::offer_arrows)).
 //!
 //! The dialog shrinks 1016 to its text as the original does, after
 //! `_CenterWindow` has placed it at its stock size (@0xa23fd,
@@ -18,7 +20,8 @@
 //! @0xa25d1), measured as the text box sets the text. Items 1, 2 and 6 and
 //! the text box's bottom come up by `d`, and the arrows of items 9 and 10
 //! stay where they are, unlike "Desc Dialog"'s, so a dialog shrunk far
-//! enough leaves them outside it. The window's top then becomes
+//! enough leaves them outside it, and one shrunk less never draws them, its
+//! text always fitting its box. The window's top then becomes
 //! `trunc(top + 0.3 × d)` (`MoveWindow` @0xa2640), the sum truncated and
 //! not the product. All of it happens before the dialog shows
 //! (`ShowWindowNoFlash` @0xa2c81), so the player sees the final place only.
@@ -53,7 +56,11 @@
 //! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
 //! accept label's first letter accepts and, when the mission can be
 //! refused, the refuse label's refuses, unless both start with the same
-//! letter. Escape does nothing. The choice is taken once
+//! letter. Escape does nothing. Up and Down scroll the text 10 px, repeats
+//! included, and Home, End, Page Up and Page Down as the text dialog's do
+//! ([`page_key`](crate::ui::desc::page_key)), on the press alone by the user's
+//! standing decision, though the filter reads auto-key too
+//! (@0x98efd-0x98fdf). The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
 //! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
 //! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
@@ -106,6 +113,7 @@ use std::time::Duration;
 
 use nova_sim::{MissionId, OfferPrompt, RuleSource};
 
+use super::offer_arrows::arrow_roles;
 use super::offer_buttons::widen_to_labels;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -118,7 +126,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, shown_graphic};
+use crate::ui::desc::{BODY_COLOR, BODY_FONT, BODY_SIZE, page_key, shown_graphic};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, FocusRing, Role};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::picture_variant::VariantTemplates;
@@ -294,6 +302,7 @@ impl OfferDialog {
                     backing: None,
                 },
             )];
+            roles.extend(arrow_roles());
             match &prompt.labels.refuse {
                 Some(refuse) => roles.extend([
                     (ACCEPT_ITEM, accept),
@@ -309,7 +318,8 @@ impl OfferDialog {
             let dialog = Dialog::new(&template, &roles, metrics)
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(None)
-                .with_cancel(None);
+                .with_cancel(None)
+                .with_pixel_scroll();
             if picture.is_some() {
                 dialog
             } else {
@@ -495,6 +505,12 @@ impl OfferDialog {
         let Ok(dialog) = &mut self.laid else {
             return;
         };
+        if dialog
+            .scroll_text_mut()
+            .is_some_and(|text| page_key(text, input))
+        {
+            return;
+        }
         let event = dialog.input(input);
         match event {
             Some(DialogEvent::Item(ACCEPT_ITEM | SINGLE_ITEM)) => self.choose(OfferChoice::Accept),
@@ -520,11 +536,15 @@ impl Screen for OfferDialog {
     }
 
     /// The movie before the dialog begins, if it has not, and moves on.
+    /// Once no movie plays, the dialog ticks: a press held on an arrow
+    /// scrolls a pixel a Mac tick ([`Dialog::tick`]).
     fn tick(&mut self, dt: Duration) {
         self.begin_movie();
         if let Some(stage) = &mut self.before {
             stage.tick(dt);
             self.settle_movie();
+        } else if let Ok(dialog) = &mut self.laid {
+            dialog.tick(dt);
         }
     }
 
@@ -895,6 +915,64 @@ pub(crate) mod fixture {
         }
     }
 
+    /// Stock `DLOG` 1016, 441 x 317 and centred, with its ten disabled
+    /// user items as `DITL` 1016 has them, 4, 5 and 7 parked outside it.
+    pub(crate) fn stock_1016() -> DialogTemplate {
+        stock(
+            (441.0, 317.0),
+            [
+                (225.0, 285.0, 99.0, 25.0),
+                (117.0, 285.0, 99.0, 25.0),
+                (12.0, 9.0, 415.0, 267.0),
+                (150.0, 323.0, 32.0, 32.0),
+                (197.0, 326.0, 32.0, 32.0),
+                (173.0, 285.0, 99.0, 25.0),
+                (172.0, 337.0, 32.0, 32.0),
+                (272.0, 345.0, 23.0, 23.0),
+                (340.0, 287.0, 23.0, 23.0),
+                (373.0, 287.0, 23.0, 23.0),
+            ],
+        )
+    }
+
+    /// Stock `DLOG` 1020's shape, 651 x 244 and centred: its buttons, text,
+    /// picture and arrows where `DITL` 1020 has them, 4, 5 and 7 parked
+    /// outside it.
+    pub(crate) fn stock_1020() -> DialogTemplate {
+        stock(
+            (651.0, 244.0),
+            [
+                (221.0, 213.0, 99.0, 25.0),
+                (115.0, 213.0, 99.0, 25.0),
+                (13.0, 7.0, 413.0, 200.0),
+                (150.0, 300.0, 32.0, 32.0),
+                (197.0, 300.0, 32.0, 32.0),
+                (170.0, 213.0, 99.0, 25.0),
+                (172.0, 340.0, 32.0, 32.0),
+                (441.0, 7.0, 200.0, 200.0),
+                (340.0, 214.0, 23.0, 23.0),
+                (373.0, 214.0, 23.0, 23.0),
+            ],
+        )
+    }
+
+    /// A centred dialog `size` big with disabled user items at `items`.
+    fn stock((width, height): (f32, f32), items: [(f32, f32, f32, f32); 10]) -> DialogTemplate {
+        let rect = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
+        DialogTemplate {
+            bounds: rect(40.0, 40.0, width, height),
+            placement: Placement::Center,
+            items: items
+                .into_iter()
+                .map(|(x, y, w, h)| ItemTemplate {
+                    bounds: rect(x, y, w, h),
+                    enabled: false,
+                    kind: ItemSpec::User,
+                })
+                .collect(),
+        }
+    }
+
     /// [`template`] as the offer dialog, with no picture variant.
     pub(crate) fn templates() -> super::OfferTemplates {
         super::OfferTemplates {
@@ -938,33 +1016,9 @@ mod tests {
         Bounds::at(Point::new(x, y), w, h)
     }
 
-    /// Stock `DLOG` 1016, 441 x 317 and centred, with its ten disabled
-    /// user items as `DITL` 1016 has them, 4, 5 and 7 parked outside it.
+    /// Stock `DLOG` 1016 ([`fixture::stock_1016`]).
     fn template() -> DialogTemplate {
-        let items = [
-            (225.0, 285.0, 99.0, 25.0),
-            (117.0, 285.0, 99.0, 25.0),
-            (12.0, 9.0, 415.0, 267.0),
-            (150.0, 323.0, 32.0, 32.0),
-            (197.0, 326.0, 32.0, 32.0),
-            (173.0, 285.0, 99.0, 25.0),
-            (172.0, 337.0, 32.0, 32.0),
-            (272.0, 345.0, 23.0, 23.0),
-            (340.0, 287.0, 23.0, 23.0),
-            (373.0, 287.0, 23.0, 23.0),
-        ];
-        DialogTemplate {
-            bounds: rect(40.0, 40.0, 441.0, 317.0),
-            placement: Placement::Center,
-            items: items
-                .into_iter()
-                .map(|(x, y, w, h)| ItemTemplate {
-                    bounds: rect(x, y, w, h),
-                    enabled: false,
-                    kind: ItemSpec::User,
-                })
-                .collect(),
-        }
+        fixture::stock_1016()
     }
 
     /// Where the dialog goes: (1024 - 441) / 2 and (768 - 317) / 2,
@@ -1170,13 +1224,7 @@ mod tests {
             ..prompt("Yes", Some("No"))
         });
         dialog.input(&key(Key::Down));
-        assert_eq!(
-            dialog
-                .dialog()
-                .and_then(|laid| laid.text(TEXT_ITEM))
-                .map(crate::ui::ScrollText::first),
-            Some(1)
-        );
+        assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
         assert!(!dialog.answered());
     }
 
@@ -1187,11 +1235,11 @@ mod tests {
         Point::new(at.x - laid.bounds().min.x, at.y - laid.bounds().min.y)
     }
 
-    fn first_line(dialog: &OfferDialog) -> Option<usize> {
+    fn scrolled(dialog: &OfferDialog) -> Option<f32> {
         dialog
             .dialog()
             .and_then(|laid| laid.text(TEXT_ITEM))
-            .map(crate::ui::ScrollText::first)
+            .map(crate::ui::ScrollText::offset)
     }
 
     fn long(accept: &str, refuse: Option<&str>) -> OfferPrompt {
@@ -1240,14 +1288,14 @@ mod tests {
         assert_eq!(laid.bounds(), Bounds::at(ORIGIN, 441.0, 317.0));
         assert_eq!(local(&dialog, ACCEPT_ITEM), Point::new(225.0, 285.0));
         dialog.input(&key(Key::Down));
-        assert_eq!(first_line(&dialog), Some(1));
+        assert_eq!(scrolled(&dialog), Some(crate::ui::desc::ARROW_UNITS));
     }
 
     #[test]
     fn a_shrunk_text_has_nothing_to_scroll() {
         let mut dialog = offer();
         dialog.input(&key(Key::Down));
-        assert_eq!(first_line(&dialog), Some(0));
+        assert_eq!(scrolled(&dialog), Some(0.0));
     }
 
     #[test]

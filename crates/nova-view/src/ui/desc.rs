@@ -80,6 +80,38 @@ pub const HOME_END_UNITS: f32 = 9999.0;
 /// (the engine's logical units): 250 (@0x5206b, @0x52112).
 pub const PAGE_UNITS: f32 = 250.0;
 
+/// Scrolls `text` for a press of Home, End, Page Up or Page Down, as
+/// `_TextDialogFilter` @0x51f77 and `_SingleMissionFilter` @0x98d9a both
+/// do through `_ScrollDialogText`: while the text can scroll up
+/// (@0x51ff4, @0x98ef0), Home jumps [`HOME_END_UNITS`] and Page Up
+/// [`PAGE_UNITS`] toward its start; while it can scroll down (@0x52095,
+/// @0x98f43), End and Page Down the same toward its end, End then clearing
+/// "can scroll down" at once (@0x520f7, @0x98fa5). Whether it took
+/// `input`: a key that can't scroll its way, a repeat or a release isn't
+/// taken, and leaves the text untouched.
+pub(crate) fn page_key(text: &mut ScrollText, input: &Input) -> bool {
+    let Input::Key {
+        key,
+        pressed: true,
+        repeat: false,
+    } = *input
+    else {
+        return false;
+    };
+    let units = match key {
+        Key::Home if text.can_scroll_up() => -HOME_END_UNITS,
+        Key::PageUp if text.can_scroll_up() => -PAGE_UNITS,
+        Key::End if text.can_scroll_down() => HOME_END_UNITS,
+        Key::PageDown if text.can_scroll_down() => PAGE_UNITS,
+        _ => return false,
+    };
+    text.scroll_units(units);
+    if key == Key::End {
+        text.clear_can_scroll_down();
+    }
+    true
+}
+
 /// The description's font, which both lays it out and measures it for
 /// the shrink.
 pub const BODY_FONT: Font = Font::Geneva;
@@ -390,27 +422,12 @@ impl Screen for DescDialog {
             }
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key,
-            pressed: true,
-            repeat: false,
-        } = *input
-            && let Some(text) = self.dialog.scroll_text_mut()
+        if self
+            .dialog
+            .scroll_text_mut()
+            .is_some_and(|text| page_key(text, input))
         {
-            let units = match key {
-                Key::Home if text.can_scroll_up() => Some(-HOME_END_UNITS),
-                Key::PageUp if text.can_scroll_up() => Some(-PAGE_UNITS),
-                Key::End if text.can_scroll_down() => Some(HOME_END_UNITS),
-                Key::PageDown if text.can_scroll_down() => Some(PAGE_UNITS),
-                _ => None,
-            };
-            if let Some(units) = units {
-                text.scroll_units(units);
-                if key == Key::End {
-                    text.clear_can_scroll_down();
-                }
-                return ScreenAction::None;
-            }
+            return ScreenAction::None;
         }
         if self.dialog.input(input) == Some(DialogEvent::Item(DONE_ITEM)) {
             self.closed = true;
