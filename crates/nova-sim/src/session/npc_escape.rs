@@ -194,16 +194,9 @@ impl Session {
         };
         let cut = match self.setup.rules.source_for(RuleKey::EscapeShipCut) {
             RuleSource::Engine => match launched {
-                // The ship slot 1 holds now: the last to take it, past a
-                // wreck there not yet taken out.
-                Some(_) => self
-                    .space
-                    .traffic
-                    .npcs()
-                    .iter()
-                    .filter(|npc| npc.berth == 1)
-                    .max_by_key(|npc| npc.id)
-                    .map(|npc| ShipRef::Npc(npc.id)),
+                // The ship slot 1 holds now, past a wreck there not yet
+                // taken out.
+                Some(_) => self.space.traffic.holder_of(1).map(ShipRef::Npc),
                 None => Some(ShipRef::Player),
             },
             RuleSource::Bible => launched.map(ShipRef::Npc),

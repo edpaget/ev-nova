@@ -79,6 +79,7 @@
 //! (`_AIDispatch` @0x8fbb3) fires nothing, so no target names it.
 
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 use crate::player_wrap::PlayerWrap;
 use crate::traffic::Traffic;
 use crate::traffic::autopilot::Outcome;
@@ -274,6 +275,29 @@ impl Traffic {
         self.ship_loop = running;
     }
 
+    /// Whether `npc` holds its berth: any ship but a wreck
+    /// ([`Condition::Destroyed`](crate::combat::hull::Condition::Destroyed)),
+    /// whose display freed its slot (@0x2dee0). A wreck still holds it
+    /// outside the ship loop, alone in it, as the engine takes it out only
+    /// after the loop; in the loop, or once a launch took the berth
+    /// (`_GenericRandomShipSpawn` rewrote the slot, @0x3c8b1-0x3c90b), it
+    /// holds none.
+    pub(super) fn holds_berth(&self, npc: &Npc) -> bool {
+        npc.condition != Condition::Destroyed
+            || !(self.ship_loop
+                || (self.npcs.iter()).any(|other| other.berth == npc.berth && other.id != npc.id))
+    }
+
+    /// The NPC slot `berth` holds ([`Traffic::holds_berth`]): its ship, or
+    /// the one a launch put there past a wreck not yet taken out; none for
+    /// an empty berth, or one a wreck freed in the ship loop.
+    #[must_use]
+    pub fn holder_of(&self, berth: u32) -> Option<NpcId> {
+        (self.npcs.iter())
+            .find(|npc| npc.berth == berth && self.holds_berth(npc))
+            .map(|npc| npc.id)
+    }
+
     /// The ship `id` takes slot `berth`: every ship still holding that slot
     /// finds it active at its next slot test, so its target is now the new
     /// ship, friend or not, and a fight on the old ship moves to it
@@ -310,7 +334,7 @@ impl Traffic {
         if in_loop {
             olds.extend(
                 (self.npcs.iter())
-                    .filter(|npc| npc.berth == berth && npc.id != id && !npc.condition.active())
+                    .filter(|npc| npc.berth == berth && npc.id != id && !self.holds_berth(npc))
                     .map(|npc| (npc.id, None)),
             );
         }
@@ -1061,6 +1085,36 @@ mod tests {
                     }
                 }
             }
+        }
+
+        #[test]
+        fn a_berth_is_held_by_its_newcomer_past_a_wreck_displayed_in_the_loop() {
+            // The wreck's display freed the slot (@0x2dee0) and a launch
+            // rewrote it (@0x3c8b1-0x3c90b): the slot is the newcomer's,
+            // in the loop and after it, until the take-out.
+            let mut traffic = Traffic::new();
+            let wreck = in_slot(&mut traffic, 1);
+            traffic.npcs[0].condition = Condition::Destroyed;
+            traffic.set_ship_loop(true);
+            let new = in_slot(&mut traffic, 1);
+            assert_eq!(traffic.holder_of(1), Some(new), "in the loop");
+            traffic.set_ship_loop(false);
+            assert_eq!(traffic.holder_of(1), Some(new), "after it");
+            assert_ne!(traffic.holder_of(1), Some(wreck));
+        }
+
+        #[test]
+        fn a_berth_is_held_by_its_lone_ship_and_by_a_lone_wreck_only_outside_the_loop() {
+            let mut traffic = Traffic::new();
+            let live = in_slot(&mut traffic, 2);
+            let wreck = in_slot(&mut traffic, 3);
+            traffic.npcs[1].condition = Condition::Destroyed;
+            assert_eq!(traffic.holder_of(2), Some(live));
+            assert_eq!(traffic.holder_of(3), Some(wreck), "outside the loop");
+            assert_eq!(traffic.holder_of(4), None, "empty");
+            traffic.set_ship_loop(true);
+            assert_eq!(traffic.holder_of(2), Some(live), "live, in the loop");
+            assert_eq!(traffic.holder_of(3), None, "displayed: freed");
         }
 
         #[test]

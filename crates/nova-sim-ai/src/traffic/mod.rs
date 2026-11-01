@@ -2466,8 +2466,9 @@ impl Traffic {
     /// `skip` does not hold: `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
     /// takes the first slot whose active flag is clear, with no test of
     /// the system. It has no bound: a spawn that leaves slots free takes
-    /// [`Traffic::free_berth`] instead. In the ship loop a wreck whose
-    /// display ran holds none (@0x2dee0, [`Traffic::set_ship_loop`]).
+    /// [`Traffic::free_berth`] instead. An NPC holds its berth as
+    /// [`Traffic::holder_of`] says: in the ship loop a wreck whose display
+    /// ran holds none (@0x2dee0, [`Traffic::set_ship_loop`]).
     pub(crate) fn next_berth_skipping(&self, skip: &BTreeSet<u32>) -> u32 {
         let held: BTreeSet<u32> = self
             .left_behind
@@ -2475,16 +2476,12 @@ impl Traffic {
             .flatten()
             .map(|left| left.npc.berth)
             .collect();
-        let holds = |npc: &Npc| !(self.ship_loop && npc.condition == Condition::Destroyed);
         (1..=u32::MAX)
-            .find(|berth| {
-                !self.reserved.contains(berth)
-                    && !skip.contains(berth)
-                    && !held.contains(berth)
-                    && self
-                        .npcs
-                        .iter()
-                        .all(|npc| npc.berth != *berth || !holds(npc))
+            .find(|&berth| {
+                !self.reserved.contains(&berth)
+                    && !skip.contains(&berth)
+                    && !held.contains(&berth)
+                    && self.holder_of(berth).is_none()
             })
             .unwrap_or(u32::MAX)
     }
@@ -2523,11 +2520,11 @@ impl Traffic {
     /// slot freed as its last explosion ends (`_HandleShipDisplay`
     /// @0x2dee0), its record kept for the thinks that still read it
     /// ([`gone`], [`Freed::InShipPass`]), unless a ship launched later in
-    /// the loop took its berth and rewrote the record
-    /// ([`Traffic::set_ship_loop`]).
+    /// the loop took its berth and rewrote the record, so holds it now
+    /// ([`Traffic::holder_of`]).
     pub fn remove_destroyed(&mut self, id: NpcId) {
         if let Some(npc) = self.npcs.iter().find(|npc| npc.id == id)
-            && !(self.npcs.iter()).any(|other| other.berth == npc.berth && other.id != id)
+            && self.holder_of(npc.berth).is_none_or(|holder| holder == id)
         {
             self.gone.record(npc.clone(), Freed::InShipPass);
         }
