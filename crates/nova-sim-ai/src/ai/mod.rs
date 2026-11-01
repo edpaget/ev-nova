@@ -753,6 +753,10 @@ pub struct Surroundings<'a> {
     /// on, when every ship it leads takes its jump (`_EscortAI`
     /// @0x83a41-0x83a5f, [`EscortAi`]).
     pub player_warp_stage: f32,
+    /// The player's +0x6c ([`LeaderWarp::travel`](crate::traffic::warp_out::LeaderWarp::travel)):
+    /// the selection it holds, which every ship it leads copies as it takes
+    /// its jump (`_EscortAI` @0x83a77-0x83a7c, [`EscortAi`]).
+    pub player_travel: Option<StellarId>,
     /// The stellars shots can shoot down, those of `Strength` above 0
     /// (`nova_sim::story::wreck::destroyable`), among which a stellar
     /// attacker picks its quarry ([`death_star`]).
@@ -810,6 +814,7 @@ impl<'a> Surroundings<'a> {
             weapons: &NO_WEAPONS,
             gone: &[],
             player_warp_stage: 0.0,
+            player_travel: None,
             destroyable: &NO_DESTROYABLE,
             slot_stellars: &[],
         }

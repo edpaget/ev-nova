@@ -896,6 +896,7 @@ impl<'a> World<'a> {
             weapons: self.weapons,
             gone: &[],
             player_warp_stage: self.warp.player.stage,
+            player_travel: self.warp.player.travel,
             destroyable: self.destroyable,
             slot_stellars: self.slot_stellars,
         }

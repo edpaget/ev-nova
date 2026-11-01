@@ -214,8 +214,8 @@ impl Behaviour for EscortAi {
     /// The order block writes its travel stellar ([`Decision::travel`],
     /// [`travel::order_block`]), the player's slot or -1, which a pirate
     /// mission escort's release reads. The lost parent writes none, and
-    /// nor does the jump: the player's own +0x6c, which its entry copies
-    /// (@0x83a7c), is left out (see [`travel`]).
+    /// the jump's entry copies the player's own +0x6c
+    /// ([`Surroundings::player_travel`], @0x83a77-0x83a7c, see [`travel`]).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if player_breaking_up(around) {
             // Goal 0 ([`Goal::Idle`], the default), its target kept.
@@ -228,6 +228,7 @@ impl Behaviour for EscortAi {
                 clears_target: true,
                 follows_jump: true,
                 voice: Some(VoiceCue::Thought),
+                travel: travel::copying(around.player_travel),
                 ..Decision::default()
             };
         }
@@ -2191,14 +2192,28 @@ mod tests {
     }
 
     #[test]
-    fn the_players_jump_and_its_breaking_up_write_none() {
-        // The jump's copy of the player's own +0x6c is left out: `WarpWorld`
-        // carries no nav stellar (see `traffic::warp_out`).
+    fn the_players_jump_copies_its_travel_stellar_and_its_breaking_up_writes_none() {
+        // The entry copies the player's +0x6c (@0x83a77-0x83a7c).
         let npcs = [escort(None)];
-        let jump = decision_of(ENGINE, &npcs, 1.0, &[0]);
-        assert!(jump.follows_jump);
-        assert_eq!(jump.travel, TravelWrite::Keep);
         let govts = govts(0, 0);
+        let jumping = |player_travel| {
+            let around = Surroundings {
+                player: Some(player(0.0, 0.0)),
+                govts: &govts,
+                player_warp_stage: 1.0,
+                player_travel,
+                ..Surroundings::new(&[], &npcs)
+            };
+            ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]))
+        };
+        let held = Some(crate::catalog::StellarId(129));
+        let jump = jumping(held);
+        assert!(jump.follows_jump);
+        assert_eq!(
+            jump.travel,
+            TravelWrite::Set(crate::catalog::StellarId(129))
+        );
+        assert_eq!(jumping(None).travel, TravelWrite::Clear, "-1 copied");
         let around = Surroundings {
             player: Some(PlayerSide {
                 condition: Condition::Destroyed,

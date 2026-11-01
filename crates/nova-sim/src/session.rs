@@ -2159,9 +2159,12 @@ impl Session {
             afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.setup.disable_rule.0,
             plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
-            warp: self
-                .ship
-                .warp_world(&self.pilot, &self.statics, self.mode.jump()),
+            warp: self.ship.warp_world(
+                &self.pilot,
+                &self.statics,
+                self.mode.jump(),
+                self.chart.held_selection(&self.pilot),
+            ),
             tractor_step: self
                 .ship
                 .tractor_step(&self.pilot, &self.setup, self.mode.jump()),
@@ -2259,9 +2262,12 @@ impl Session {
             afterburner_yardstick: self.setup.rules.source_for(RuleKey::AfterburnerYardstick),
             disable: &*self.setup.disable_rule.0,
             plunder_marines: self.setup.rules.source_for(RuleKey::PlunderMarines),
-            warp: self
-                .ship
-                .warp_world(&self.pilot, &self.statics, self.mode.jump()),
+            warp: self.ship.warp_world(
+                &self.pilot,
+                &self.statics,
+                self.mode.jump(),
+                self.chart.held_selection(&self.pilot),
+            ),
             tractor_step: self
                 .ship
                 .tractor_step(&self.pilot, &self.setup, self.mode.jump()),

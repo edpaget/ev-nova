@@ -501,8 +501,8 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
 /// half's docks, rolling on `chance`. Its goal's stellar is looked up
 /// among every stellar the system lists, shown or not ([`World::listed`]),
 /// as `_HighLevelAIHandler` reads the stellar's record (state 1 @0x8d8d7,
-/// state 20 @0x8db8a): every such goal names a stellar the traffic picked
-/// from the listing, which holds every stellar shown.
+/// state 20 @0x8db8a), or among the slot stellars for one the system
+/// doesn't list, as a slot names ([`World::flown_among`]).
 fn fly_steered(
     npc: &mut Npc,
     pass: &mut FlyPass,
