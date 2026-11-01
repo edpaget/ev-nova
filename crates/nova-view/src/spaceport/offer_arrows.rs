@@ -515,6 +515,22 @@ mod tests {
         }
     }
 
+    /// With no active mission that isn't hidden, `_OfferOneMission`'s I
+    /// arm does nothing (the count @0xa32c1-0xa32ee): no screen opens, so
+    /// nothing flushes, and the offer takes the next event.
+    #[test]
+    fn i_then_return_with_no_mission_listed_accepts_at_the_release() {
+        use crate::spaceport::offer::OfferChoice;
+        let (mut offer, at) = held();
+        offer.set_missions_listed(false);
+        for k in [crate::ui::mission_info::MISSION_INFO_KEY, Key::Enter] {
+            offer.input(&key(k, false));
+        }
+        offer.input(&left(false, at));
+        assert!(!offer.take_info_request(), "nothing to open");
+        assert_eq!(offer.take_choice(), Some(OfferChoice::Accept));
+    }
+
     #[test]
     fn the_venue_hears_the_choice_after_the_release_and_after_a_ticks_replay() {
         use crate::spaceport::offer::{OfferChoice, VenueOffers};

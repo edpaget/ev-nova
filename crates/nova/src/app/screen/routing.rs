@@ -295,7 +295,9 @@ impl AppScreen {
 
     /// The venues' mission offers (`_OfferMissionFromPort` @0xa369e): a
     /// venue's ask answered with the session's next offer there, which
-    /// enters the venue, and a choice made through the session, each
+    /// enters the venue, told whether the mission info screen lists a
+    /// mission (`OfferDialog::set_missions_listed`), and a choice made
+    /// through the session, each
     /// answer showing the texts it queued and rearming the venue with a
     /// gap drawn on the router's chance (the spaceport never asks again);
     /// an accept changes the cash, so the shops are handed back.
@@ -315,7 +317,10 @@ impl AppScreen {
         }
         if let Some(venue) = spaceport.take_offer_request() {
             match flight.next_offer(venue) {
-                Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
+                Some(VenueOffer::Prompt(prompt)) => {
+                    spaceport.open_offer(prompt);
+                    spaceport.set_offer_missions_listed(!flight.mission_info().rows.is_empty());
+                }
                 Some(VenueOffer::Accepted { .. }) => {
                     spaceport.show_mission_texts(flight.take_mission_texts());
                     spaceport.rearm_offers(offer_gap(chance));

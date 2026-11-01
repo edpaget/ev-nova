@@ -1740,6 +1740,25 @@ impl SpaceportView {
         }
     }
 
+    /// Tells the offer dialog open, the spaceport's or the one over the
+    /// venue open, whether the mission info screen lists a mission
+    /// ([`OfferDialog::set_missions_listed`]): whoever flies the ship says
+    /// so as it opens one ([`SpaceportView::open_offer`]), and the mission
+    /// info screen's view says so after an abort
+    /// ([`SpaceportView::set_mission_info`]).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(missioning) = &mut self.missioning {
+            missioning.landing.set_missions_listed(listed);
+        }
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Trade(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Outfitter(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Shipyard(screen)) => screen.set_offer_missions_listed(listed),
+            Some(Open::Service(_) | Open::Computer(_)) | None => {}
+        }
+    }
+
     /// Disposes of the offer dialog answered and left drawn once no
     /// mission dialog covers it (`DisposeDialogNoFlash` @0xa361e, after
     /// the after-check @0xa3580-0xa35b8), in the input or tick that closed
@@ -1912,8 +1931,10 @@ impl SpaceportView {
     }
 
     /// After an abort, the mission info screen shows `info`, closing once
-    /// nothing is left.
+    /// nothing is left; the offer under it, if any, is told whether
+    /// anything is still listed ([`SpaceportView::set_offer_missions_listed`]).
     pub fn set_mission_info(&mut self, info: MissionInfo) {
+        self.set_offer_missions_listed(!info.rows.is_empty());
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.set_info(info);
             self.sounds.extend(dialogs.take_sounds());
@@ -7105,6 +7126,44 @@ pub(in crate::spaceport) mod tests {
                     "{venue} {overlay:?}"
                 );
             }
+        }
+    }
+
+    /// With no mission listed, an offer's I asks for nothing
+    /// (`OfferDialog::set_missions_listed`), at the spaceport and over
+    /// every venue.
+    #[test]
+    fn an_offers_i_asks_nothing_once_told_no_mission_is_listed() {
+        let mut view = missioned();
+        view.open_offer(offered());
+        view.set_offer_missions_listed(false);
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(!view.take_mission_info_request(), "the spaceport's");
+        for venue in OFFER_VENUES {
+            let mut view = asked_at(venue, RuleSource::Engine);
+            view.open_offer(offered());
+            view.set_offer_missions_listed(false);
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(!view.take_mission_info_request(), "{venue}");
+            view.set_offer_missions_listed(true);
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(view.take_mission_info_request(), "{venue}");
+        }
+    }
+
+    /// The mission info screen shown after an abort tells the offer under
+    /// it whether anything is still listed.
+    #[test]
+    fn an_abort_that_leaves_nothing_listed_tells_the_offer_under_it() {
+        for left in [1, 0] {
+            let mut view = missioned();
+            view.open_offer(offered());
+            view.open_mission_info(actives(2));
+            view.set_mission_info(actives(left));
+            view.input(&key(Key::Escape));
+            assert!(view.mission_info().is_none(), "{left} left");
+            view.input(&key(MISSION_INFO_KEY));
+            assert_eq!(view.take_mission_info_request(), left > 0, "{left} left");
         }
     }
 

@@ -539,7 +539,7 @@ impl AppScreen {
 
     /// The input of the mission dialogs over flight: an Abort on the
     /// mission info screen goes through flight, and the screen shows the
-    /// missions left. Its close, laid out, redraws the whole status bar
+    /// missions left, the offer under it told whether any is listed. Its close, laid out, redraws the whole status bar
     /// ([`FlightView::refresh_status`]), as `_DoMissionInfoDialog` ends in
     /// `_RefreshSAT` (@0x9e769). They are dropped once nothing is open.
     pub(super) fn missions_input(&mut self, input: &Input) -> ScreenAction {
@@ -551,7 +551,11 @@ impl AppScreen {
             return ScreenAction::None;
         }
         let missions = self.missions.as_mut().expect("open");
-        abort_and_refresh(missions, self.flight.as_mut());
+        if let Some(listed) = abort_and_refresh(missions, self.flight.as_mut())
+            && let Some(offer) = &mut self.offer
+        {
+            offer.set_missions_listed(listed);
+        }
         self.load_flight_info_text();
         if self
             .missions
@@ -652,7 +656,10 @@ impl AppScreen {
     /// already let go of its keys. The original keeps reading them live
     /// over the offer's close, so the router hands back what is still
     /// down as the last dialog over flight closes (see `live_input`,
-    /// rdm:phase/play-feel-8/phase-3-keys-live-across-a-dialog).
+    /// rdm:phase/play-feel-8/phase-3-keys-live-across-a-dialog). The
+    /// dialog is told whether the mission info screen lists a mission
+    /// ([`OfferDialog::with_missions_listed`]), and again after an abort
+    /// ([`AppScreen::missions_input`]).
     pub(super) fn open_offer(&mut self, prompt: OfferPrompt) {
         if let Some(flight) = &mut self.flight {
             flight.cancel_pointer();
@@ -666,10 +673,15 @@ impl AppScreen {
             .map(|template| (template, metrics)),
             _ => Err(NO_INTERFACE.to_owned()),
         };
+        let listed = self
+            .flight
+            .as_mut()
+            .is_some_and(|flight| !flight.mission_info().rows.is_empty());
         self.offer = Some(
             OfferDialog::new(layout, prompt, self.data.button_style())
                 .with_focus_ring(self.dialog_focus_ring())
-                .with_movies(&self.movies),
+                .with_movies(&self.movies)
+                .with_missions_listed(listed),
         );
     }
 

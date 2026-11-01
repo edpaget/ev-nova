@@ -409,3 +409,25 @@ fn an_m_queued_during_a_click_that_refuses_the_flight_offer_opens_flights_map() 
     assert!(screen.offer().is_none(), "refused");
     assert_eq!(screen.showing(), Showing::FlightMap, "the M reached flight");
 }
+
+/// With no mission active, `_OfferOneMission`'s I arm does nothing
+/// (@0xa32c1-0xa32ee): an I held back by a click on Refuse, let go
+/// outside it, opens nothing and flushes nothing, so the Return after it
+/// answers the offer at the release.
+#[test]
+fn an_i_and_a_return_held_back_on_the_flight_offer_answer_it_with_no_mission_active() {
+    let mut screen = offered_over_flight();
+    let offer = screen
+        .offer()
+        .and_then(OfferDialog::dialog)
+        .expect("laid")
+        .clone();
+    let refuse = item_on_screen(&screen, &offer, nova_view::spaceport::offer::REFUSE_ITEM);
+    screen.input(&left(true, refuse));
+    tap(&mut screen, nova_view::ui::mission_info::MISSION_INFO_KEY);
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::Offer, "it waits");
+    screen.input(&left(false, Point::new(1.0, 1.0)));
+    assert!(screen.flight_mission_info().is_none(), "nothing to list");
+    assert!(screen.offer().is_none(), "the Return answered it");
+}

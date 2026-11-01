@@ -1228,6 +1228,14 @@ impl ShipyardScreen {
         }
     }
 
+    /// Tells its offer dialog open whether the mission info screen lists a
+    /// mission ([`SpaceportView::set_offer_missions_listed`](super::SpaceportView::set_offer_missions_listed)).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_missions_listed(listed);
+        }
+    }
+
     /// Its offers play their movies as `movies` says, and so does the
     /// selected ship's loop in item 8, through its looping player: the
     /// ship selected now starts its own ([`ShipMovie::set_movies`]).

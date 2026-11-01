@@ -63,7 +63,11 @@
 //! tick. What they queued after the answering key is left for what shows
 //! next ([`OfferDialog::take_unclaimed`]), as the answer's `FlushEvents`
 //! flush only mouse events; after M, P or I it goes with that screen's
-//! flush. See the `held_keys` module.
+//! flush. M and P always open theirs where an offer can hold keys (the
+//! course map opens unasked, and the player info screen is refused only in
+//! a jump or while the ship breaks up, under no offer); I opens nothing,
+//! and so flushes nothing, with no mission listed
+//! ([`OfferDialog::set_missions_listed`]). See the `held_keys` module.
 //!
 //! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
 //! accept label's first letter accepts and, when the mission can be
@@ -81,7 +85,9 @@
 //! press) asks for the mission info screen
 //! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
 //! `_OfferOneMission` @0xa3344), also before the letters; the dialog
-//! stays open under it. The original then reloads the offer's `dësc`
+//! stays open under it. With no active mission that isn't hidden it
+//! asks for nothing and does nothing else (@0xa32c1-0xa32ee), as its
+//! holder tells it ([`OfferDialog::set_missions_listed`]). The original then reloads the offer's `dësc`
 //! (`_LoadDescription` @0xa335c), which redraws what the info screen
 //! covered and leaves its movie the last loaded again: the spaceport asks
 //! for that reload as the screen closes
@@ -271,6 +277,10 @@ pub struct OfferDialog {
     /// What a replay queued after the key that answered it, until taken
     /// ([`OfferDialog::take_unclaimed`]).
     unclaimed: Vec<Input>,
+    /// Whether the mission info screen lists a mission, so that
+    /// [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// opens it ([`OfferDialog::set_missions_listed`]).
+    missions_listed: bool,
 }
 
 impl OfferDialog {
@@ -351,7 +361,29 @@ impl OfferDialog {
             picture,
             before: None,
             unclaimed: Vec::new(),
+            missions_listed: true,
         }
+    }
+
+    /// This dialog told whether the mission info screen lists a mission
+    /// ([`OfferDialog::set_missions_listed`]).
+    #[must_use]
+    pub fn with_missions_listed(mut self, listed: bool) -> Self {
+        self.set_missions_listed(listed);
+        self
+    }
+
+    /// Tells the dialog whether the mission info screen lists a mission:
+    /// an active one that isn't hidden. With none, `_OfferOneMission`'s
+    /// arm for [`MISSION_INFO_KEY`](crate::ui::mission_info::MISSION_INFO_KEY)
+    /// does nothing (the count @0xa32c1-0xa32ee), so the key asks for
+    /// nothing, flushes nothing, and the offer takes the next event, a key
+    /// held back by a press among them. Its holder says so as the dialog
+    /// opens and after an abort from the mission info screen over it, the
+    /// only change to the missions while the offer is open. Listed until
+    /// told otherwise.
+    pub fn set_missions_listed(&mut self, listed: bool) {
+        self.missions_listed = listed;
     }
 
     /// This dialog with its buttons taking the keyboard focus as `ring`
@@ -443,7 +475,9 @@ impl OfferDialog {
     /// shows next ([`Self::take_unclaimed`]), or asks for the map, player
     /// info or mission info, whose rest that screen's flush drops
     /// (`_DoSystemMap` @0x1257b, `_DoPlayerInfoDialog` @0x5a544,
-    /// `_DoMissionInfoDialog` @0x9e287).
+    /// `_DoMissionInfoDialog` @0x9e287). Each asks only for a screen that
+    /// opens, so the flush always follows: an I with no mission listed
+    /// asks nothing, and the replay runs on past it.
     fn run_replay(&mut self) {
         let asked = self.asked();
         let Ok(dialog) = &mut self.laid else {
@@ -570,7 +604,7 @@ impl OfferDialog {
             return;
         }
         if is_mission_info_press(input) {
-            self.asks.mission_info = true;
+            self.asks.mission_info |= self.missions_listed;
             return;
         }
         if let Input::Key {
@@ -839,6 +873,14 @@ impl VenueOffers {
         self.dialog
             .as_mut()
             .is_some_and(OfferDialog::take_player_info_request)
+    }
+
+    /// Tells the offer dialog open whether the mission info screen lists
+    /// a mission ([`OfferDialog::set_missions_listed`]).
+    pub(crate) fn set_missions_listed(&mut self, listed: bool) {
+        if let Some(dialog) = &mut self.dialog {
+            dialog.set_missions_listed(listed);
+        }
     }
 
     /// Whether the offer dialog open asked for the mission info screen
@@ -2122,6 +2164,27 @@ mod tests {
         assert!(offers.take_info_request());
         assert!(!offers.take_info_request(), "once");
         assert!(offers.dialog().is_some(), "still open");
+    }
+
+    /// `_OfferOneMission`'s I arm counts the active missions that aren't
+    /// hidden and, with none, does nothing (@0xa32c1-0xa32ee): I is still
+    /// read before the labels' letters, so it doesn't choose I'm in.
+    #[test]
+    fn with_no_mission_listed_the_mission_info_key_asks_and_chooses_nothing() {
+        let i = crate::ui::mission_info::MISSION_INFO_KEY;
+        let mut dialog = offer().with_missions_listed(false);
+        dialog.input(&key(i));
+        assert!(!dialog.take_info_request());
+        assert_eq!(dialog.take_choice(), None);
+        dialog.set_missions_listed(true);
+        dialog.input(&key(i));
+        assert!(dialog.take_info_request(), "listed again after an abort");
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut offers);
+        offers.set_missions_listed(false);
+        offers.input(&key(i), &mut Vec::new());
+        assert!(!offers.take_info_request(), "told through the venue");
+        assert_eq!(offers.take_choice(), None);
     }
 
     #[test]

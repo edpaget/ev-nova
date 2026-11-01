@@ -468,6 +468,14 @@ impl TradeScreen {
         }
     }
 
+    /// Tells its offer dialog open whether the mission info screen lists a
+    /// mission ([`SpaceportView::set_offer_missions_listed`](super::SpaceportView::set_offer_missions_listed)).
+    pub fn set_offer_missions_listed(&mut self, listed: bool) {
+        if let Some(offering) = &mut self.offering {
+            offering.set_missions_listed(listed);
+        }
+    }
+
     /// Its offers play their movies as `movies` says.
     pub fn set_offer_movies(&mut self, movies: Movies) {
         if let Some(offering) = &mut self.offering {
