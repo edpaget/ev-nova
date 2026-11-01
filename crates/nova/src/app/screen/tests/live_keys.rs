@@ -279,3 +279,97 @@ fn thrust_held_through_the_spaceport_thrusts_after_the_take_off() {
         nova_sim::ShipState::default().velocity
     );
 }
+
+// Keys a dialog holds back while a press is held in it (nova-view's
+// `ui::held_keys`) run at the release below the router, whose own
+// handlers ran on them live: wiring through the real router, views and
+// flight. A click held on Okay or a button holds them as a held arrow
+// does.
+
+/// Where item `item` of `dialog`, drawn over flight, is on the screen.
+fn item_on_screen(screen: &AppScreen, dialog: &nova_view::ui::Dialog, item: usize) -> Point {
+    let at = dialog.item_bounds(item).expect("the item").center();
+    let offset = screen.overlay_offset();
+    Point::new(at.x + offset.x, at.y + offset.y)
+}
+
+fn left(pressed: bool, at: Point) -> Input {
+    Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at,
+    }
+}
+
+/// Flight in Sol with a mission text over it, and a click held on its
+/// Okay.
+fn texted_and_held() -> AppScreen {
+    let store = MemoryPilots::new();
+    let mut screen = AppScreen::new(game_data_fork_loaded())
+        .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+        .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
+        .appeared();
+    create(&mut screen, "Ada");
+    screen.show_over_flight(vec![nova_view::ui::mission_dialogs::DescShown::str_text(
+        "Well done.",
+        None,
+    )]);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::MissionText);
+    let text = screen
+        .flight_mission_text()
+        .expect("shown")
+        .dialog()
+        .clone();
+    let okay = item_on_screen(&screen, &text, nova_view::ui::desc::DONE_ITEM);
+    screen.input(&left(true, okay));
+    screen
+}
+
+#[test]
+fn a_return_held_back_by_a_click_closes_the_text_at_the_release_and_flight_thrusts() {
+    let mut screen = texted_and_held();
+    screen.input(&key(Key::Up, true));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::MissionText, "it waits");
+    screen.input(&left(false, Point::new(1.0, 1.0)));
+    assert_eq!(screen.showing(), Showing::Flight, "closed by the release");
+    let closed = speed(&screen);
+    screen.tick(TICK * 3);
+    assert!(speed(&screen) > closed, "thrust: {:?}", ship(&screen));
+}
+
+#[test]
+fn caps_lock_pressed_during_a_held_click_toggles_double_time_once() {
+    let mut screen = texted_and_held();
+    let before = flight(&screen).double_time();
+    tap(&mut screen, Key::CapsLock);
+    assert_ne!(flight(&screen).double_time(), before, "live, as it came");
+    tap(&mut screen, Key::Enter);
+    screen.input(&left(false, Point::new(1.0, 1.0)));
+    assert_eq!(screen.showing(), Showing::Flight);
+    assert_ne!(
+        flight(&screen).double_time(),
+        before,
+        "not toggled back by the replay"
+    );
+}
+
+#[test]
+fn the_flight_offer_closes_from_a_ticks_replay_after_a_release_outside() {
+    let mut screen = offered_over_flight();
+    let offer = screen
+        .offer()
+        .and_then(OfferDialog::dialog)
+        .expect("laid")
+        .clone();
+    let accept = item_on_screen(&screen, &offer, nova_view::spaceport::offer::ACCEPT_ITEM);
+    screen.input(&left(true, accept));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::Offer, "it waits");
+    // The window's adapter cancels a press released outside the content.
+    screen.cancel_pointer();
+    assert_eq!(screen.showing(), Showing::Offer, "until the tick");
+    screen.tick(TICK);
+    assert_ne!(screen.showing(), Showing::Offer, "answered by the tick");
+}

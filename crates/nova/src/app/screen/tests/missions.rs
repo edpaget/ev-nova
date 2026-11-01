@@ -1357,17 +1357,20 @@ fn the_mission_info_closing_over_a_flight_offer_lets_go_of_the_keys_held() {
 }
 
 #[test]
-fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_pointer_held() {
-    // A press on the offer's Refuse held as I opens the info is let go
-    // (`FlushEvents` @0xa32f4-0xa333f), so its release after the close
-    // clicks nothing.
+fn i_pressed_during_a_click_on_a_flight_offers_refuse_waits_for_its_release() {
+    // `_TrackSingleMissionButtons` reads no events (@0x28188), so the I
+    // waits in the queue while the press is held on Refuse. The release
+    // refuses, and the I after it reaches what shows next: over flight,
+    // which reads its keys as held, nothing.
     let (mut screen, _reel) = holding_and_offered_in_flight();
-    let at = screen
+    let refuse = screen
         .offer()
         .and_then(|offer| offer.dialog())
         .and_then(|dialog| dialog.item_bounds(nova_view::spaceport::offer::REFUSE_ITEM))
         .expect("the Refuse button")
         .center();
+    let offset = screen.overlay_offset();
+    let at = Point::new(refuse.x + offset.x, refuse.y + offset.y);
     let pointer = |pressed| Input::PointerButton {
         button: MouseButton::Left,
         pressed,
@@ -1375,15 +1378,14 @@ fn the_mission_info_opening_over_a_flight_offer_lets_go_of_the_pointer_held() {
     };
     screen.input(&pointer(true));
     press_mission_info(&mut screen);
-    assert!(screen.flight_mission_info().is_some(), "info open");
-    screen.input(&key(Key::Escape, true));
-    screen.input(&key(Key::Escape, false));
-    assert!(screen.flight_mission_info().is_none(), "info closed");
-    screen.take_sounds();
+    assert!(screen.flight_mission_info().is_none(), "it waits");
     screen.input(&pointer(false));
     assert!(
-        screen.offer().is_some_and(|offer| !offer.answered()),
-        "the offer still open and unanswered"
+        screen.offer().is_none_or(OfferDialog::answered),
+        "refused by the click"
     );
-    assert_eq!(screen.take_sounds(), [], "no click or button sound");
+    assert!(
+        screen.flight_mission_info().is_none(),
+        "the I reached nothing"
+    );
 }

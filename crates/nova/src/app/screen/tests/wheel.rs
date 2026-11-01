@@ -8,7 +8,9 @@ use super::*;
 use nova_sim::Rulebook;
 use nova_view::ScrollDelta;
 use nova_view::spaceport::offer::TEXT_ITEM;
+use nova_view::text::TextMetrics;
 use nova_view::ui::ScrollText;
+use nova_view::ui::desc::ARROW_UNITS;
 
 /// A 16:9 window's widened size, and how far right a 1024-wide frame sits
 /// in it.
@@ -55,20 +57,30 @@ pub(super) fn wheel_over_text(screen: &mut AppScreen) {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // Whole pixels, exactly.
 fn by_the_engine_the_wheel_scrolls_no_dialog_text_and_the_arrows_still_do() {
     let mut screen = offering(Rulebook::default());
     wheel_over_text(&mut screen);
-    assert_eq!(text(&screen).first(), 0);
+    assert_eq!(text(&screen).offset(), 0.0);
     screen.input(&key(Key::Down, true));
-    assert_eq!(text(&screen).first(), 1, "Down still scrolls");
+    assert_eq!(text(&screen).offset(), ARROW_UNITS, "Down still scrolls");
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // Whole pixels, exactly.
 fn by_the_other_reading_the_wheel_scrolls_the_dialog_text_under_it() {
     let mut screen =
         offering(Rulebook::default().with_override(RuleKey::DialogTextWheel, RuleSource::Bible));
     wheel_over_text(&mut screen);
-    assert_eq!(text(&screen).first(), 1);
+    let notch = MonoMetrics.line_height(
+        nova_view::ui::desc::BODY_FONT,
+        nova_view::ui::desc::BODY_SIZE,
+    );
+    assert_eq!(text(&screen).offset(), notch, "a line's pixels");
     screen.input(&key(Key::Down, true));
-    assert_eq!(text(&screen).first(), 2, "Down still scrolls");
+    assert_eq!(
+        text(&screen).offset(),
+        notch + ARROW_UNITS,
+        "Down still scrolls"
+    );
 }
