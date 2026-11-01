@@ -31,6 +31,10 @@
 //! outside is. One shrunk less, with them partly inside, never draws them
 //! either: a shrunk box is taller than its text, so both flags start clear
 //! and the arrows' state is −2. Nothing plays a sound.
+//!
+//! The held loops read no events, nor does the tracker, so keys pressed
+//! meanwhile wait for the release ([`OfferDialog`](super::OfferDialog)'s
+//! `Screen::input`, and the `held_keys` module).
 
 use crate::ui::dialog::Role;
 use crate::ui::scroll_arrows::ScrollArrow;
@@ -466,6 +470,27 @@ mod tests {
         assert!(offer.answered());
         assert_eq!(offer.take_unclaimed(), [key(Key::Char('b'), false)]);
         assert_eq!(offer.take_unclaimed(), [], "once");
+    }
+
+    /// A press that ends a hold (a release the engine never saw) replays
+    /// after the keys: an accept's flush drops it, as its codes read as
+    /// masks flush mouse events, and a refusal, which flushes nothing,
+    /// leaves it.
+    #[test]
+    fn a_press_left_after_an_accept_goes_with_its_flush_and_after_a_refusal_stays() {
+        for (letter, kept) in [('y', false), ('n', true)] {
+            let (mut offer, at) = held();
+            for k in [Key::Char(letter), Key::Char('b')] {
+                offer.input(&key(k, false));
+            }
+            offer.input(&left(true, at));
+            assert!(offer.answered());
+            let mut left_over = vec![key(Key::Char('b'), false)];
+            if kept {
+                left_over.push(left(true, at));
+            }
+            assert_eq!(offer.take_unclaimed(), left_over, "{letter}");
+        }
     }
 
     /// `_DoSystemMap`, `_DoPlayerInfoDialog` and `_DoMissionInfoDialog`

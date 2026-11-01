@@ -31,6 +31,19 @@
 //! The text moves by pixels, as `_ScrollDialogText` @0x51839 moves it, a
 //! partial line cut at the box ([`ScrollText::pixel_scrolled`]). Every text
 //! it shows does, whichever host opens it.
+//!
+//! Keys pressed while a press is held on an arrow, or a click tracked on
+//! Okay or an arrow, wait for the release, as the held loops and
+//! `_TrackTextButtons` @0x26bb0 read no events: the map key and the page
+//! keys too. The release runs them through the dialog's own input in
+//! order, within the same input, so a key that closes it closes it by the
+//! input that let go, and a host that looks for a close after input hears
+//! it. A press cancelled by its host runs them on the next tick, and every
+//! host looks for a close after a tick too. What they queued after the
+//! closing key is left for what shows next ([`DescDialog::take_unclaimed`]),
+//! as `_ShowTextDialog` flushes nothing as it closes; what they queued
+//! after the map key goes with the map's flush. See the `held_keys`
+//! module.
 
 use std::rc::Rc;
 use std::time::Duration;

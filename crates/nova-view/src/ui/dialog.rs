@@ -599,7 +599,7 @@ impl Dialog {
     /// The dialog with its keys waiting while a left press is held on an
     /// arrow or a click is tracked on an item, until the release, as the
     /// text dialog's and the offer's held loops and trackers read no events
-    /// (see the [`held_keys`](super::held_keys) module). Other dialogs act
+    /// (see the `held_keys` module). Other dialogs act
     /// on keys at once.
     #[must_use]
     pub fn with_held_keys(mut self) -> Self {
@@ -900,7 +900,7 @@ impl Dialog {
     ///
     /// When the dialog holds its keys, a left press during a hold, or any
     /// press during a tracked click, ends it without acting: it joins the
-    /// replay after the keys (see the [`held_keys`](super::held_keys)
+    /// replay after the keys (see the `held_keys`
     /// module).
     fn pointer(&mut self, input: &Input) -> Option<DialogEvent> {
         if self.hold.is_some() {

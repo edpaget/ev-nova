@@ -53,12 +53,24 @@
 //! texts the answer shows
 //! ([`MissionShown::Movie`](nova_sim::MissionShown::Movie)).
 //!
+//! Keys pressed while a press is held on an arrow, or a click tracked on a
+//! button or an arrow, wait for the release (`_SingleMissionFilter`'s held
+//! loops and `_TrackSingleMissionButtons` @0x28188 read no events), the
+//! map, player info and mission info keys, the labels' letters and the page
+//! keys among them. The release runs them in order through the dialog's
+//! own input, within the same input, so a key that answers answers by the
+//! input that let go, and a press its holder cancels runs them on the next
+//! tick. What they queued after the answering key is left for what shows
+//! next ([`OfferDialog::take_unclaimed`]), as the answer's `FlushEvents`
+//! flush only mouse events; after M, P or I it goes with that screen's
+//! flush. See the `held_keys` module.
+//!
 //! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
 //! accept label's first letter accepts and, when the mission can be
 //! refused, the refuse label's refuses, unless both start with the same
 //! letter. Escape does nothing. Up and Down scroll the text 10 px, repeats
 //! included, and Home, End, Page Up and Page Down as the text dialog's do
-//! ([`page_key`](crate::ui::desc::page_key)), on the press alone by the user's
+//! (`ui::desc`'s `page_key`), on the press alone by the user's
 //! standing decision, though the filter reads auto-key too
 //! (@0x98efd-0x98fdf). The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
@@ -408,6 +420,17 @@ impl OfferDialog {
         std::mem::take(&mut self.unclaimed)
     }
 
+    /// An accept's `FlushEvents(3, 0)`, `(5, 0)`, `(1, 0)` and `(2, 0)`
+    /// flush mouse-downs and mouse-ups, their codes read as masks
+    /// (@0xa2da2-0xa2dde, @0xa2f70-0xa2fac), so a press left after it goes;
+    /// a refusal flushes nothing (@0xa2e65-0xa2f09).
+    fn flush_answers_mouse(&mut self) {
+        if self.choice == Some(OfferChoice::Accept) {
+            self.unclaimed
+                .retain(|input| !matches!(input, Input::PointerButton { .. }));
+        }
+    }
+
     /// Whether a key has asked for the map, player info or mission info,
     /// and not been taken.
     fn asked(&self) -> bool {
@@ -432,6 +455,7 @@ impl OfferDialog {
             if self.answered {
                 self.unclaimed.push(input);
                 self.unclaimed.extend(replay);
+                self.flush_answers_mouse();
                 return;
             }
             self.dialog_input(&input);

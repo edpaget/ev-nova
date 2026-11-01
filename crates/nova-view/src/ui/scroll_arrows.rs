@@ -14,6 +14,13 @@
 //! @0x26bb0 tracks it. Nothing here plays a sound, as `_DrawButton`,
 //! `_DrawTextButtons`, `_TrackTextButtons`, `_ScrollDialogText` and the
 //! filter's arms play none.
+//!
+//! The held loop reads no events (@0x52242), so in the dialogs that hold
+//! their keys ([`Dialog::with_held_keys`](super::Dialog::with_held_keys)),
+//! a key pressed during a hold waits for its release and then runs, in
+//! order, through the host's own input. The wheel stays live. The
+//! `held_keys` module has the rules, and the contract for what the
+//! replay leaves after a key that closes the dialog.
 
 use std::time::Duration;
 
