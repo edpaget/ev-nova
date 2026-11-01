@@ -146,7 +146,7 @@ pub const STAY_SPAN: u32 = 200;
 /// and speed (+0x48) none, takes goal 0 ([`Goal::Idle`], sub-goal 0), marks
 /// the stellar visited (+0x92 = +0x6c @0x8db00, [`Npc::visited`]) and
 /// keeps it as its travel stellar (+0x6c is not written, so
-/// [`Npc::travel_set`] holds), and starts its AI wait (+0x4c): a class
+/// [`Npc::travel`] holds), and starts its AI wait (+0x4c): a class
 /// that scoops (`shïp` `Flags3` 0x0002, class +0x9ec, copied from the
 /// record's +0x726 @0x7a204-0x7a20b; [`SCOOPS`])
 /// [`SHORT_STAY_BASE`] + `Rand(`[`SHORT_STAY_SPAN`]`)`, any other
@@ -159,7 +159,7 @@ pub fn stay(npc: &mut Npc, stellar: StellarId, chance: &mut (impl Chance + ?Size
     npc.speed = 0.0;
     npc.goal = Goal::Idle;
     npc.visited = Some(stellar);
-    npc.travel_set = true;
+    npc.travel = Some(stellar);
     npc.ai_wait = if npc.miner & SCOOPS != 0 {
         SHORT_STAY_BASE + chance.below(SHORT_STAY_SPAN)
     } else {
@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(npc.speed, 0.0);
         assert_eq!(npc.goal, Goal::Idle);
         assert_eq!(npc.visited, Some(StellarId(140)), "+0x92 @0x8db00");
-        assert!(npc.travel_set, "+0x6c keeps the stellar");
+        assert!(npc.travel_set(), "+0x6c keeps the stellar");
         assert_eq!(npc.state.position, site().position + Vec2::new(10.0, 0.0));
         assert_eq!(npc.target, Some(crate::combat::ShipRef::Player), "kept");
         assert_eq!(npc.provoked, 7.0, "kept");

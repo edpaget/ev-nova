@@ -441,7 +441,7 @@ impl PlayerShip {
                 glow: self.engine_glow,
                 // `WarpWorld` carries no nav stellar, so a follower keeps
                 // its own (see `traffic::warp_out`'s left-out).
-                travel_set: false,
+                travel: None,
             },
             durations: statics.warp_sounds,
             double_time: self.warp.double_time,

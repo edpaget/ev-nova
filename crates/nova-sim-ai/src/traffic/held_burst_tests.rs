@@ -529,7 +529,7 @@ fn a_held_swarmer_bursts_out_slowing_by_its_thrust_and_stops_jumping_at_its_cap(
             // `_AIMakeShipStopJumping` (@0x82e77-0x82eba), then
             // Rand(30) + 30 (@0x34d5c-0x34d8b): 29 + 30.
             assert_eq!(ship.goal, Goal::Idle);
-            assert!(!ship.travel_set);
+            assert!(!ship.travel_set());
             assert_eq!(ship.owed_burst, None);
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
             break;

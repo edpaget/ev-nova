@@ -523,7 +523,7 @@ impl PlayerShip {
             led_out: false,
             emerges_from: None,
             visited: None,
-            travel_set: false,
+            travel: None,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
             // `_GenericRandomShipSpawn` rolls it (@0x3cad1).

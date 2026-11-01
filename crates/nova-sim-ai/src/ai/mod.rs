@@ -1062,7 +1062,7 @@ pub struct Decision {
     pub lost_sight: Option<lost_sight::LostSight>,
     /// How the think writes its travel stellar, the original's +0x6c (see
     /// [`travel`]): the traffic [`take`](travel::take)s it into
-    /// [`Npc::travel_set`] as it takes the goal.
+    /// [`Npc::travel`] as it takes the goal.
     pub travel: travel::TravelWrite,
     /// The stellar the think records as visited, its +0x92, if it writes
     /// one: a miner's shuttle as it sets off (`_MinerAI` @0x8b3ae, see

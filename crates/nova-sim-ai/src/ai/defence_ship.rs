@@ -176,7 +176,7 @@ impl Behaviour for DefenceShipAi {
             };
         };
         let travel = match think.goal {
-            Goal::Land(_) => TravelWrite::Set,
+            Goal::Land(stellar) => TravelWrite::Set(stellar),
             _ => TravelWrite::Clear,
         };
         Decision {
@@ -295,7 +295,7 @@ mod tests {
         let npcs = [defender(1)];
         let (goal, target, decision) = thinks(&npcs, None);
         assert_eq!((goal, target), (Goal::Land(EARTH), None));
-        assert_eq!(decision.travel, TravelWrite::Set, "+0x6c = +0x8c");
+        assert_eq!(decision.travel, TravelWrite::Set(EARTH), "+0x6c = +0x8c");
         assert!(decision.ends_wait, "its stay ended");
         // A cloaked player it can't see is no candidate.
         let around = Surroundings {

@@ -153,7 +153,15 @@ impl Traffic {
         self.hold_cloaks(world);
         if think {
             // `TickCount` moves on between advance passes alone, and the
-            // high level holds each ship's warp to its goal.
+            // high level holds each ship's warp to its goal. A fighter
+            // turning back reads its carrier's slot, which this loop doesn't
+            // move.
+            let berths: BTreeMap<NpcId, u32> = self
+                .npcs
+                .iter()
+                .chain(self.gone.ships().iter().map(|gone| &gone.ship))
+                .map(|npc| (npc.id, npc.berth))
+                .collect();
             for npc in &mut self.npcs {
                 npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
@@ -164,7 +172,11 @@ impl Traffic {
                 // step below changes it.
                 if npc.condition == Condition::Intact && !npc.high_level_waits() {
                     warp_out::hold_stage(npc);
-                    jump_with_leader::turn_back(npc, world.npc_jump_fuel);
+                    let carrier_slot = npc.carrier.and_then(|carrier| match carrier.ship {
+                        ShipRef::Player => Some(0),
+                        ShipRef::Npc(id) => berths.get(&id).copied(),
+                    });
+                    jump_with_leader::turn_back(npc, world.npc_jump_fuel, carrier_slot);
                 }
                 ship_display::dispatch_fold(npc);
             }

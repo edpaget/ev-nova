@@ -109,7 +109,7 @@
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::{hopeless_chase, state4_attack};
 use crate::ai::target::{TargetRules, pick_target, spares};
-use crate::ai::travel::TravelWrite;
+use crate::ai::travel::{self, TravelWrite};
 use crate::ai::{
     Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_target, react,
 };
@@ -271,11 +271,9 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
                 // Goal 0xd's high level, every frame: -1 against the ship
                 // intact (@0x8ea50), the victim's slot against it disabled
                 // (@0x8e8c9).
-                travel: if wreck {
-                    TravelWrite::Set
-                } else {
-                    TravelWrite::Clear
-                },
+                travel: travel::slot_of(target, around)
+                    .filter(|_| wreck)
+                    .map_or(TravelWrite::Clear, TravelWrite::Set),
                 ..of(Goal::Plunder {
                     ship: target,
                     hopeless: !wreck
@@ -566,10 +564,14 @@ mod tests {
     }
 
     /// A plunder of `ship` disabled: the travel stellar is its slot
-    /// (@0x8e8c9).
+    /// (@0x8e8c9): the player's 0, a fixture NPC's berth its id.
     fn plundered_wreck(ship: ShipRef) -> Decision {
+        let slot = match ship {
+            ShipRef::Player => 0,
+            ShipRef::Npc(crate::traffic::npc::NpcId(id)) => id,
+        };
         Decision {
-            travel: TravelWrite::Set,
+            travel: TravelWrite::Set(travel::of_slot(slot)),
             ..only(plunder(ship))
         }
     }
@@ -788,7 +790,7 @@ mod tests {
         // The idle block's fuel test (@0x8c52d-0x8c5d2): state 2 or 6.
         // Its travel stellar set by the pick it left on.
         let mut leaving = Npc {
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..holding(Goal::JumpOut, None)
         };
         leaving.reserves.fuel.now = 0.0;
@@ -913,7 +915,7 @@ mod tests {
     fn a_pirate_dropped_from_a_fight_with_its_travel_stellar_set_leaves_without_a_pick() {
         // The head drop (@0x8c2fc-0x8c330) leaves +0x6c.
         let fighting = Npc {
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..holding(Goal::Attack(n(9)), Some(n(9)))
         };
         assert_eq!(
@@ -926,7 +928,7 @@ mod tests {
         };
         assert_eq!(alone(stranded), (dropped().goal_of(Goal::Wait), vec![]));
         let unbound = Npc {
-            travel_set: false,
+            travel: None,
             ..fighting
         };
         assert_eq!(alone(unbound), (dropped().goal_of(IDLE), vec![1]));
@@ -949,7 +951,7 @@ mod tests {
         );
         assert_eq!(
             travel(&[pirate(), wreck(2, 300.0)]),
-            TravelWrite::Set,
+            TravelWrite::Set(travel::of_slot(2)),
             "the victim's slot, @0x8e8c9"
         );
         let docked = docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 0);
@@ -983,7 +985,7 @@ mod tests {
     fn a_waiting_pirate_picks_again_only_while_its_travel_stellar_is_clear() {
         let waiting = Npc {
             class_fuel: 99,
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..holding(Goal::Wait, None)
         };
         assert_eq!(
@@ -991,7 +993,7 @@ mod tests {
             (dropped().goal_of(Goal::Wait), vec![])
         );
         let failed = Npc {
-            travel_set: false,
+            travel: None,
             ..waiting
         };
         assert_eq!(

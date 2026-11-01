@@ -93,7 +93,7 @@ mod tests {
         npc.goal = Goal::Assist(Help::Refuel);
         npc.target = Some(ShipRef::Player);
         npc.hull.class_turn = 3.0;
-        npc.travel_set = true;
+        npc.travel = Some(StellarId(150));
         let helper = npc.id;
         (session, helper)
     }
@@ -209,7 +209,7 @@ mod tests {
         let done = session.space.npc(helper).expect("here");
         assert_eq!(done.goal, Goal::Idle, "it decides again");
         assert_eq!(done.target, None);
-        assert!(!done.travel_set, "+0x6c -1, @0x8f6ce");
+        assert!(!done.travel_set(), "+0x6c -1, @0x8f6ce");
         assert!(frame(&mut session, &catalog).is_empty());
         assert_eq!(session.reserves().fuel.now, 101.0);
     }
@@ -403,7 +403,7 @@ mod tests {
         let npc = session.space.npc_mut(helper).expect("here");
         npc.goal = Goal::Assist(Help::Refuel);
         npc.target = Some(ShipRef::Player);
-        npc.travel_set = true;
+        npc.travel = Some(StellarId(150));
         npc.state.position = above;
         npc.state.velocity = Vec2::ZERO;
     }

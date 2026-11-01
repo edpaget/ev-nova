@@ -79,7 +79,7 @@ impl Behaviour for DeathStar {
             return Decision {
                 goal: Goal::AttackStellar(stellar.id),
                 clears_target: true,
-                travel: TravelWrite::Set,
+                travel: TravelWrite::Set(stellar.id),
                 ..Decision::default()
             };
         }
@@ -88,7 +88,7 @@ impl Behaviour for DeathStar {
             Npc {
                 goal: Goal::Idle,
                 target: None,
-                travel_set: false,
+                travel: None,
                 ..npc.clone()
             }
         } else {
@@ -99,7 +99,7 @@ impl Behaviour for DeathStar {
         let travel_to = enemy.filter(|_| !reset);
         let travel = match (decision.travel, reset, travel_to) {
             (TravelWrite::Keep, true, _) => TravelWrite::Clear,
-            (TravelWrite::Keep, false, Some(_)) => TravelWrite::Set,
+            (TravelWrite::Keep, false, Some(stellar)) => TravelWrite::Set(stellar.id),
             (written, _, _) => written,
         };
         let kept = decision.goal == asked.goal && decision.travel == TravelWrite::Keep;
@@ -356,7 +356,7 @@ mod tests {
         fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
             self.asked
                 .borrow_mut()
-                .push((npc.goal, npc.target, npc.travel_set));
+                .push((npc.goal, npc.target, npc.travel_set()));
             self.goal
         }
 
@@ -471,7 +471,11 @@ mod tests {
         );
         assert_eq!(decision.goal, Goal::AttackStellar(StellarId(131)));
         assert!(decision.clears_target);
-        assert_eq!(decision.travel, TravelWrite::Set);
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(StellarId(131)),
+            "its quarry"
+        );
         assert_eq!(*warship.asked.borrow(), [], "no warship think");
         let govts = govts(0, 0);
         let destroyable = destroyable();
@@ -584,7 +588,7 @@ mod tests {
         let warship = Recording::answering(Goal::Land(StellarId(128)));
         let decision = decided(&landing, &sites(), &armed, warship.clone());
         assert_eq!(decision.goal, Goal::Land(StellarId(131)), "@0x8d8c9");
-        assert_eq!(decision.travel, TravelWrite::Set);
+        assert_eq!(decision.travel, TravelWrite::Set(StellarId(131)));
         assert_eq!(warship.asked.borrow().len(), 1);
         let mut gate_sites = sites();
         gate_sites[3].flags2 = 0x1000;
@@ -660,7 +664,7 @@ mod tests {
         let mut npc = attacker(&[gun]);
         npc.goal = Goal::AttackStellar(StellarId(131));
         npc.target = Some(ShipRef::Player);
-        npc.travel_set = true;
+        npc.travel = Some(StellarId(150));
         let no_enemy: Vec<LandingSite> = sites()[..3].to_vec();
         let warship = Recording::answering(Goal::Wait);
         let decision = decided(&npc, &no_enemy, &armed, warship.clone());
@@ -669,7 +673,8 @@ mod tests {
         assert_eq!(decision.travel, TravelWrite::Clear);
         assert!(decision.clears_target);
         let dry = arsenal(&[gun], &[(130, 0)]);
-        let warship = Recording::writing(Goal::Land(StellarId(128)), TravelWrite::Set);
+        let warship =
+            Recording::writing(Goal::Land(StellarId(128)), TravelWrite::Set(StellarId(128)));
         let decision = decided(&npc, &sites(), &dry, warship.clone());
         assert_eq!(*warship.asked.borrow(), [(Goal::Idle, None, false)]);
         assert_eq!(
@@ -677,7 +682,11 @@ mod tests {
             Goal::Land(StellarId(128)),
             "no redirect: +0x6c was cleared"
         );
-        assert_eq!(decision.travel, TravelWrite::Set, "the warship's write");
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(StellarId(128)),
+            "the warship's write"
+        );
         let fighting = Recording::answering(Goal::Attack(ShipRef::Player));
         let decision = decided(&npc, &no_enemy, &armed, fighting);
         assert!(

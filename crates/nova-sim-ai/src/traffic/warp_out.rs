@@ -135,6 +135,7 @@
 use std::collections::BTreeMap;
 
 use crate::ai::{Goal, travel};
+use crate::catalog::StellarId;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::{self, Controls, FlightRules, drag_by, turned};
@@ -288,10 +289,10 @@ pub struct LeaderWarp {
     /// copies (see [`follow_jump`], and the close formation's copy in
     /// [`ship_display`](crate::traffic::ship_display)).
     pub glow: i16,
-    /// Whether its travel stellar, +0x6c, is set, as
-    /// [`travel::is_set`] reads it: an NPC's, which goal 0xb and sub-goal
-    /// 0xd copy. The player's reads false (see the module docs).
-    pub travel_set: bool,
+    /// Its travel stellar, +0x6c, as [`travel::held`] reads it: an NPC's,
+    /// which goal 0xb and sub-goal 0xd copy. The player's reads none (see
+    /// the module docs).
+    pub travel: Option<StellarId>,
 }
 
 /// What the traffic reads of the warps: the player's, the warp sound's
@@ -431,7 +432,7 @@ pub fn follow_jump(npc: &mut Npc, leader: LeaderWarp, player: bool) -> FollowSte
         return FollowStep::Waiting;
     }
     if !player {
-        npc.travel_set = leader.travel_set;
+        npc.travel = leader.travel;
     }
     if npc.warp.stage == 0.0 {
         npc.warp.stage = 1.0;
@@ -552,7 +553,7 @@ pub fn leaders(npcs: &[Npc]) -> BTreeMap<NpcId, LeaderWarp> {
                 velocity: npc.state.velocity,
                 leaving: jump_with_leader::leaves_by_substate(npc),
                 glow: npc.display.glow,
-                travel_set: travel::is_set(npc),
+                travel: travel::held(npc),
             };
             (npc.id, view)
         })
@@ -651,7 +652,7 @@ pub fn fly_jump(
                 match check {
                     FollowCheck::Own => {
                         // +0x6c -1 (@0x8df5d).
-                        npc.travel_set = false;
+                        npc.travel = None;
                         npc.begin_own_jump();
                     }
                     FollowCheck::GiveUp => {
@@ -659,7 +660,7 @@ pub fn fly_jump(
                         // (@0x8deb9-0x8ded1, @0x8df31-0x8df49).
                         npc.goal = Goal::Idle;
                         npc.target = None;
-                        npc.travel_set = false;
+                        npc.travel = None;
                         npc.warp.goal = None;
                         return None;
                     }
@@ -667,7 +668,7 @@ pub fn fly_jump(
                         if let Some((player, leader)) = leader {
                             if !skipped && !player {
                                 // +0x6c its leader's (@0x8df18-0x8df22).
-                                npc.travel_set = leader.travel_set;
+                                npc.travel = leader.travel;
                             }
                             if follow_jump(npc, leader, player) == FollowStep::Formation {
                                 return None;
@@ -1016,7 +1017,7 @@ mod tests {
             velocity: Vec2::new(1.0, 0.5),
             leaving: true,
             glow: 20,
-            travel_set: false,
+            travel: None,
         }
     }
 
@@ -1291,7 +1292,7 @@ mod tests {
                 velocity: Vec2::new(1.0, 2.0),
                 leaving: true,
                 glow: 7,
-                travel_set: false,
+                travel: None,
             }
         );
         assert!(!views[&crate::traffic::npc::NpcId(2)].leaving);
@@ -1582,6 +1583,12 @@ mod tests {
     /// NPC 4, a lead.
     const LEAD: NpcId = NpcId(4);
 
+    /// The travel stellar [`LEAD`] shows.
+    const LEAD_STELLAR: StellarId = StellarId(140);
+
+    /// A follower's own travel stellar.
+    const OWN_STELLAR: StellarId = StellarId(150);
+
     /// [`leader`] as NPC [`LEAD`]'s view, on its way out, not yet warping,
     /// its travel stellar `travel_set`.
     fn views_of(travel_set: bool) -> BTreeMap<NpcId, LeaderWarp> {
@@ -1590,7 +1597,7 @@ mod tests {
             LeaderWarp {
                 stage: 1.0,
                 leaving: true,
-                travel_set,
+                travel: travel_set.then_some(LEAD_STELLAR),
                 ..leader()
             },
         )])
@@ -1600,7 +1607,7 @@ mod tests {
     fn following_lead(own: bool) -> Npc {
         let mut ship = ship();
         ship.leader = Some(LEAD);
-        ship.travel_set = own;
+        ship.travel = own.then_some(OWN_STELLAR);
         ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
         ship
     }
@@ -1611,15 +1618,15 @@ mod tests {
         for set in [false, true] {
             let mut ship = following_lead(!set);
             fly_jump_by(&mut ship, &views_of(set), &world, true);
-            assert_eq!(ship.travel_set, set, "@0x8df18-0x8df22");
+            assert_eq!(ship.travel_set(), set, "@0x8df18-0x8df22");
             assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(LEAD))));
             let mut ship = following_lead(!set);
             ship.ai_wait = 1;
             fly_jump_by(&mut ship, &views_of(set), &world, true);
-            assert_eq!(ship.travel_set, !set, "the wait skips the check");
+            assert_eq!(ship.travel_set(), !set, "the wait skips the check");
             let mut paused = following_lead(!set);
             fly_jump(&mut paused, &views_of(set), &world, true, true);
-            assert_eq!(paused.travel_set, !set, "goal 0x13 runs no check");
+            assert_eq!(paused.travel_set(), !set, "goal 0x13 runs no check");
         }
     }
 
@@ -1631,18 +1638,18 @@ mod tests {
         ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
         fly_jump_by(&mut ship, &BTreeMap::new(), &world, true);
         assert_eq!(ship.goal, Goal::Idle);
-        assert!(!ship.travel_set);
+        assert!(!ship.travel_set());
         // An NPC lead not on its way out (@0x8df3a).
         let stays = BTreeMap::from([(LEAD, LeaderWarp::default())]);
         let mut ship = following_lead(true);
         fly_jump_by(&mut ship, &stays, &world, true);
         assert_eq!(ship.goal, Goal::Idle);
-        assert!(!ship.travel_set);
+        assert!(!ship.travel_set());
         // No leader (@0x8df5d).
         let mut ship = following_lead(true);
         fly_jump_by(&mut ship, &BTreeMap::new(), &world, true);
         assert_eq!(ship.warp.goal, Some(WarpGoal::Own));
-        assert!(!ship.travel_set);
+        assert!(!ship.travel_set());
     }
 
     #[test]
@@ -1663,7 +1670,7 @@ mod tests {
             ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
             fly_jump_by(&mut ship, &BTreeMap::new(), &world, true);
             assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
-            assert_eq!(ship.travel_set, own);
+            assert_eq!(ship.travel_set(), own);
         }
     }
 
@@ -1671,7 +1678,7 @@ mod tests {
     fn past_its_wait_a_warping_follower_copies_it() {
         // @0x85bf1-0x85bf6: sub 0xd's warping branch alone.
         let warping = LeaderWarp {
-            travel_set: true,
+            travel: Some(LEAD_STELLAR),
             ..leader()
         };
         let mut ship = following_lead(false);
@@ -1680,16 +1687,16 @@ mod tests {
             FollowStep::Warping,
             "under an NPC"
         );
-        assert!(ship.travel_set);
+        assert!(ship.travel_set());
         let cleared = LeaderWarp {
-            travel_set: false,
+            travel: None,
             ..leader()
         };
         assert_eq!(follow_jump(&mut ship, cleared, false), FollowStep::Warping);
-        assert!(!ship.travel_set);
+        assert!(!ship.travel_set());
         let mut led = following_lead(false);
         assert_eq!(follow_jump(&mut led, warping, true), FollowStep::Warping);
-        assert!(!led.travel_set, "the player's is left out");
+        assert!(!led.travel_set(), "the player's is left out");
         for (step, view) in [
             (
                 FollowStep::Formation,
@@ -1708,19 +1715,22 @@ mod tests {
         ] {
             let mut ship = following_lead(false);
             assert_eq!(follow_jump(&mut ship, view, false), step);
-            assert!(!ship.travel_set, "{step:?}");
+            assert!(!ship.travel_set(), "{step:?}");
         }
     }
 
     #[test]
-    fn a_leaders_view_reads_its_travel_stellar_as_set_by_a_stellar_goal_too() {
+    fn each_ship_shows_its_followers_the_stellar_it_holds() {
+        let shown = |lead: &Npc| leaders(std::slice::from_ref(lead))[&lead.id].travel;
         let mut lead = ship();
-        assert!(!leaders(std::slice::from_ref(&lead))[&lead.id].travel_set);
-        lead.travel_set = true;
-        assert!(leaders(std::slice::from_ref(&lead))[&lead.id].travel_set);
-        lead.travel_set = false;
-        lead.goal = Goal::Land(crate::catalog::StellarId(128));
-        assert!(leaders(std::slice::from_ref(&lead))[&lead.id].travel_set);
+        assert_eq!(shown(&lead), None);
+        lead.travel = Some(OWN_STELLAR);
+        assert_eq!(shown(&lead), Some(OWN_STELLAR));
+        lead.goal = Goal::Land(StellarId(128));
+        assert_eq!(shown(&lead), Some(StellarId(128)), "its goal's first");
+        lead.goal = Goal::Idle;
+        lead.emerges_from = Some(StellarId(130));
+        assert_eq!(shown(&lead), Some(StellarId(130)), "then its gate");
     }
 
     #[test]

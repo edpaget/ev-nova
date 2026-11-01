@@ -123,7 +123,7 @@ pub fn complete(npc: &mut Npc) {
     npc.ai_wait = REPAIR_HOLD;
     npc.target = None;
     npc.docking = None;
-    npc.travel_set = false;
+    npc.travel = None;
 }
 
 /// A repaired ship's armour raised (`_LowLevelAIHandler`'s loop
@@ -413,12 +413,12 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Dock,
         });
-        ship.travel_set = true;
+        ship.travel = Some(crate::catalog::StellarId(150));
         complete(&mut ship);
         assert_eq!(ship.goal, Goal::Drift);
         assert_eq!(ship.ai_wait, REPAIR_HOLD);
         assert_eq!((ship.target, ship.docking), (None, None));
-        assert!(!ship.travel_set, "nav -1, @0x86f31");
+        assert!(!ship.travel_set(), "nav -1, @0x86f31");
     }
 
     /// The armour `raise_armor` leaves a gauge of `now` of `max` with,

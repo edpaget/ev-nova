@@ -1829,7 +1829,7 @@ impl Traffic {
                 follower.ai_type = gate_entry::released_ai_type(ai_type);
                 follower.overwrite_bribe();
                 follower.target = None;
-                follower.travel_set = true;
+                follower.travel = Some(gate);
                 follower.provoked = gate_entry::RELEASED_PROVOCATION;
                 follower.goal = Goal::EnterGate(gate);
             }
@@ -2848,7 +2848,7 @@ impl Traffic {
                 led_out: false,
                 emerges_from: ship.entry.gate(),
                 visited: ship.entry.visited(reserves.fuel.max),
-                travel_set: false,
+                travel: None,
                 self_repair: kind.self_repair,
                 immobile: kind.immobile,
                 skill,

@@ -174,7 +174,7 @@ pub fn take(npc: &mut Npc, ship: ShipRef, step: RefuelStep) {
             npc.goal = Goal::Idle;
             npc.target = None;
             npc.docking = None;
-            npc.travel_set = false;
+            npc.travel = None;
             return;
         }
     };
@@ -415,11 +415,11 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Close,
         });
-        ship.travel_set = true;
+        ship.travel = Some(crate::catalog::StellarId(150));
         take(&mut ship, ShipRef::Player, RefuelStep::Done);
         assert_eq!(ship.goal, Goal::Idle);
         assert_eq!((ship.target, ship.docking), (None, None));
-        assert!(!ship.travel_set, "nav -1, @0x8f6ce");
+        assert!(!ship.travel_set(), "nav -1, @0x8f6ce");
         assert_eq!(ship.state.velocity, Vec2::ZERO);
     }
 }

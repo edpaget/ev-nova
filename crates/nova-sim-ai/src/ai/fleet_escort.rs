@@ -229,7 +229,7 @@ pub fn decide_by(
     }
     let goal = |goal: Goal, ends_wait: bool, new_threat: bool| Decision {
         order_word: writes,
-        travel: travel::order_block(goal, order, new_threat),
+        travel: travel::order_block(goal, order, new_threat, lead.berth),
         ..goal_of(goal, ends_wait)
     };
     let follow = |guard: Option<ShipRef>| Goal::Follow {
@@ -420,9 +420,15 @@ mod tests {
         Some(EscortOrder::Dock),
     ];
 
-    /// The lead, a medium pirate warship at the centre with `goal`.
+    /// The lead's berth: the slot its escorts hold as their travel
+    /// stellar.
+    const LEAD_BERTH: u32 = 3;
+
+    /// The lead, a medium pirate warship at the centre with `goal`, in
+    /// berth [`LEAD_BERTH`].
     fn lead(goal: Goal) -> Npc {
         let mut npc = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
+        npc.berth = LEAD_BERTH;
         npc.class = EscortClass::Medium;
         npc.goal = goal;
         npc
@@ -831,12 +837,16 @@ mod tests {
             Some(EscortOrder::Attack),
             Some(EscortOrder::Dock),
         ] {
-            assert_eq!(travel(&npcs, order), TravelWrite::Set, "{order:?}");
+            assert_eq!(
+                travel(&npcs, order),
+                TravelWrite::Set(travel::of_slot(LEAD_BERTH)),
+                "{order:?}"
+            );
         }
         let npcs = [lead(Goal::Idle), fighter(n(1))];
         assert_eq!(
             travel(&npcs, Some(EscortOrder::Dock)),
-            TravelWrite::Set,
+            TravelWrite::Set(travel::of_slot(LEAD_BERTH)),
             "docking"
         );
     }
@@ -881,16 +891,22 @@ mod tests {
         assert_eq!(entering(on_jump).0.travel, TravelWrite::Clear);
         let (decision, _) = entering(|lead: &mut Npc| {
             on_jump(lead);
-            lead.travel_set = true;
+            lead.travel = Some(crate::catalog::StellarId(150));
         });
         assert!(decision.follows_jump);
-        assert_eq!(decision.travel, TravelWrite::Set);
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(crate::catalog::StellarId(150))
+        );
         let (decision, _) = entering(|lead: &mut Npc| {
             lead.goal = Goal::Land(crate::catalog::StellarId(128));
             lead.warp.stage = 0.5;
         });
         assert!(decision.follows_jump);
-        assert_eq!(decision.travel, TravelWrite::Set);
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(crate::catalog::StellarId(128))
+        );
     }
 
     #[test]

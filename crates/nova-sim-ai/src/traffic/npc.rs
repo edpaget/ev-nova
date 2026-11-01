@@ -422,21 +422,24 @@ pub struct Npc {
     /// marks the stellar it landed on (`_HighLevelAIHandler` @0x8db00,
     /// [`land_flight::stay`](crate::traffic::land_flight::stay)).
     pub visited: Option<StellarId>,
-    /// Whether its travel stellar, the original's +0x6c, is set: what a
-    /// pirate's idle block reads to skip its pick (@0x8c472-0x8c477, read
-    /// through [`travel::is_set`](crate::ai::travel::is_set), which adds the
-    /// stellar goals and the emerge's gate). Its writers are the decisions'
+    /// Its travel stellar, the original's +0x6c, read as the stellar it
+    /// names, `None` for -1. A slot it holds reads as the stellar of ID
+    /// 128 + slot ([`travel::of_slot`](crate::ai::travel::of_slot)), as a
+    /// miner's read takes it. What a pirate's idle block reads to skip its
+    /// pick (@0x8c472-0x8c477) and a miner's to land (@0x8b36c), both
+    /// through [`travel::held`](crate::ai::travel::held), which adds the
+    /// stellar goals and the emerge's gate. Its writers are the decisions'
     /// ([`Decision::travel`](crate::ai::Decision::travel), taken by
     /// [`travel::take`](crate::ai::travel::take)), the drops that write
     /// -1 (see [`travel`](crate::ai::travel)), the disabled reset
     /// ([`disabled_reset`](crate::traffic::disabled_reset), @0x8fece) and a
     /// successor taking over its lost lead's
     /// ([`succession`](crate::traffic::succession), @0x893b0). A ship in a
-    /// fleet holds its leader's slot here, which reads as set, through
-    /// `_EscortAI`'s order block and its leader's jump (the module docs of
+    /// fleet holds its leader's slot here through `_EscortAI`'s order block
+    /// and its leader's jump (the module docs of
     /// [`travel`](crate::ai::travel) list every write), and carries it out
     /// of the fleet. Every spawn clears it (@0x1c3c1, @0x3c444, @0x3c9e2).
-    pub travel_set: bool,
+    pub travel: Option<StellarId>,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
@@ -761,6 +764,13 @@ pub struct MissionMark {
 }
 
 impl Npc {
+    /// Whether its own travel stellar ([`Npc::travel`]) is set, for the
+    /// readers that ask only that.
+    #[must_use]
+    pub fn travel_set(&self) -> bool {
+        self.travel.is_some()
+    }
+
     /// Whether it is the player's: an escort hired or captured, or a
     /// fighter the player launched. In the original its parent (+0x9a)
     /// is the player (0), and `_EnterMoreShips` (@0x43b14) leaves it out

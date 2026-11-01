@@ -17,7 +17,7 @@
 //! defended stellar +0x8c = -1, its provocation +0x96 = 0, goal and
 //! substate 0. Here:
 //!
-//! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::defends`]
+//! - [`Npc::target`] none, [`Npc::travel`] cleared, [`Npc::defends`]
 //!   none (a defence ship held disabled stops defending; one breaking up
 //!   is not disabled, @0x2d6f, so it keeps defending and counts for its
 //!   stellar's wave until it is gone), [`Npc::provoked`]
@@ -96,7 +96,7 @@ fn resets(npc: &Npc) -> bool {
 /// docs).
 pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.target = None;
-    npc.travel_set = false;
+    npc.travel = None;
     npc.defends = None;
     npc.provoked = 0.0;
     npc.goal = Goal::Idle;
@@ -158,7 +158,7 @@ mod tests {
         led.hull.inherent_ai = 3;
         led.goal = Goal::Attack(ShipRef::Player);
         led.target = Some(ShipRef::Player);
-        led.travel_set = true;
+        led.travel = Some(crate::catalog::StellarId(150));
         led.provoked = 9.0;
         led.pursuit = Pursuit {
             kept: Some(PursuitKept::Rush),
@@ -198,7 +198,7 @@ mod tests {
     /// pursuit or docking, and idle.
     fn was_reset(npc: &Npc) -> bool {
         npc.target.is_none()
-            && !npc.travel_set
+            && !npc.travel_set()
             && npc.provoked == 0.0
             && npc.goal == Goal::Idle
             && npc.pursuit == Pursuit::default()
@@ -322,14 +322,14 @@ mod tests {
                     led.target,
                     led.goal,
                     led.provoked,
-                    led.travel_set
+                    led.travel_set()
                 ),
                 (
                     before.leader,
                     before.target,
                     before.goal,
                     before.provoked,
-                    before.travel_set
+                    before.travel_set()
                 ),
                 "{reading:?}"
             );
@@ -400,7 +400,7 @@ mod tests {
             let led = of(&traffic, LED);
             assert_eq!(led.leader, Some(NpcId(0)), "{name}");
             assert_eq!(led.target, Some(ShipRef::Player), "{name}");
-            assert!(led.travel_set, "{name}");
+            assert!(led.travel_set(), "{name}");
         }
     }
 

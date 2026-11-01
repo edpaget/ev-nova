@@ -295,7 +295,7 @@ fn tick_struck(
 #[test]
 fn an_npcs_hit_on_a_closing_repairer_makes_it_give_up_and_go_idle_still_provoked() {
     let mut traffic = repairing(1000.0, 0.0);
-    traffic.npcs[0].travel_set = true;
+    traffic.npcs[0].travel = Some(crate::catalog::StellarId(150));
     traffic.npcs.push(other(3000.0, 0.0, Condition::Intact));
     let recording = Recording::default();
     tick(&mut traffic, &recording, Condition::Disabled, &[]);
@@ -316,7 +316,7 @@ fn an_npcs_hit_on_a_closing_repairer_makes_it_give_up_and_go_idle_still_provoked
         (Goal::Idle, None, None),
         "its target intact, @0x8f702-0x8f732"
     );
-    assert!(!gave_up.travel_set, "nav -1, @0x8f732");
+    assert!(!gave_up.travel_set(), "nav -1, @0x8f732");
     assert_eq!(gave_up.provoked, 24.0, "still provoked");
     assert!(
         !recording.decided.borrow().contains(&HELPER),

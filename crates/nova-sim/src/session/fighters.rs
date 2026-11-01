@@ -683,7 +683,7 @@ fn fighter(
         led_out: false,
         emerges_from: None,
         visited: None,
-        travel_set: false,
+        travel: None,
         self_repair: kind.self_repair,
         immobile: kind.immobile,
         skill: 1.0,

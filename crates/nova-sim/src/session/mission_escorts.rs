@@ -106,7 +106,7 @@
 //! disabled mission escort keeps its place and takes nothing.
 
 use super::{Session, Space, Statics};
-use crate::ai::Goal;
+use crate::ai::{Goal, travel};
 use crate::catalog::ShipId;
 use crate::combat::hull::Condition;
 use crate::escort::{EscortClass, FormationSlot};
@@ -143,7 +143,7 @@ impl Session {
                     .and_then(|(_, order)| *order);
                 npc.goal = Goal::Formation { guard: None };
                 npc.target = None;
-                npc.travel_set = true;
+                npc.travel = Some(travel::of_slot(0));
                 joined = true;
             }
         }
@@ -1146,12 +1146,12 @@ pub(super) mod tests {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = flying(&catalog);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.travel_set = false;
+        npc.travel = None;
         if let Some(mark) = &mut npc.mission {
             mark.formation = None;
         }
         assert!(session.join_mission_escorts());
-        assert!(session.npcs()[0].travel_set);
+        assert!(session.npcs()[0].travel_set());
     }
 
     #[test]

@@ -117,7 +117,7 @@
 //!   `reinforcements` module); a paid warship, interceptor or brave
 //!   trader (`_AIFightEnemyThreatToPlayer`) calls none; a ship of AI type
 //!   0 or above 4 (`_AIFightThreatToPlayer` @0x8183c) calls none and drops
-//!   its travel stellar ([`Npc::travel_set`], +0x6c = -1, @0x81949).
+//!   its travel stellar ([`Npc::travel`], +0x6c = -1, @0x81949).
 //!   The target is picked at the press, which the comm dialog makes over
 //!   the paused flight, as the original's modal dialog does, so it is
 //!   still in the system when the deed is done.
@@ -690,7 +690,7 @@ impl Session {
                         npc.goal = Goal::Attack(ShipRef::Npc(threat));
                         npc.target = Some(ShipRef::Npc(threat));
                         if defence.drop_travel {
-                            npc.travel_set = false;
+                            npc.travel = None;
                         }
                     }
                     None => npc.target = None,
@@ -2601,7 +2601,7 @@ pub(super) mod tests {
         let ship = npc(&mut session);
         ship.goal = Goal::Idle;
         ship.target = Some(ShipRef::Player);
-        ship.travel_set = true;
+        ship.travel = Some(StellarId(150));
         let options = HailOptions::empty().with(Rc::new(Sends(defence(pirate))));
         session
             .hail(&catalog, &options, &mut Draws::of(&opening(0)))
@@ -2626,7 +2626,7 @@ pub(super) mod tests {
         let helper = &session.npcs()[0];
         assert_eq!(helper.target, None);
         assert_eq!(helper.goal, Goal::Idle, "nothing else changes");
-        assert!(helper.travel_set, "+0x6c is dropped only with a threat");
+        assert!(helper.travel_set(), "+0x6c is dropped only with a threat");
         assert_eq!(session.reinforcements_coming(), FED_COMING);
     }
 
@@ -2641,7 +2641,7 @@ pub(super) mod tests {
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
         assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
         assert!(
-            helper.travel_set,
+            helper.travel_set(),
             "`_AIFightEnemyThreatToPlayer` keeps +0x6c"
         );
         assert_eq!(session.reinforcements_coming(), None);
@@ -2657,7 +2657,7 @@ pub(super) mod tests {
         });
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
-        assert!(!helper.travel_set);
+        assert!(!helper.travel_set());
         assert_eq!(session.reinforcements_coming(), None);
     }
 
@@ -2732,7 +2732,7 @@ pub(super) mod tests {
         // `_AIFightThreatToPlayer` (@0x81949-0x81953).
         let (catalog, mut session, pirate) = unranked();
         in_a_fleet(&mut session);
-        npc(&mut session).travel_set = true;
+        npc(&mut session).travel = Some(StellarId(150));
         hail(&mut session, &catalog);
         let mut chance = Draws::of(&[0]);
         let view = session
@@ -2744,7 +2744,7 @@ pub(super) mod tests {
         assert_eq!(session.pilot().cash, 100_000);
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
-        assert!(!helper.travel_set);
+        assert!(!helper.travel_set());
         assert_eq!(session.reinforcements_coming(), None);
     }
 

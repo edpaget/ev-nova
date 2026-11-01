@@ -581,7 +581,7 @@ mod tests {
             holder.target = Some(target);
             holder.goal = Goal::Attack(target);
             holder.provoked = 10.0;
-            holder.travel_set = true;
+            holder.travel = Some(StellarId(150));
             traffic.add_npc_at(holder, berth)
         }
 

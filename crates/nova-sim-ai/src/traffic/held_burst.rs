@@ -232,7 +232,7 @@ fn stop_jumping(npc: &mut Npc) {
         npc.pursuit.kept = None;
         npc.docking = None;
     }
-    npc.travel_set = false;
+    npc.travel = None;
     npc.owed_burst = None;
 }
 
@@ -516,7 +516,7 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Close,
         });
-        npc.travel_set = true;
+        npc.travel = Some(crate::catalog::StellarId(150));
         npc.display.drive.thrust = Thrust::Plain;
         settle(&mut npc, Some(before), speeds, inertia, draws);
         npc
@@ -537,7 +537,7 @@ mod tests {
             "sub-goal 0"
         );
         assert_eq!(ended.target, Some(ShipRef::Player), "+0x70 kept");
-        assert!(!ended.travel_set, "+0x6c = -1");
+        assert!(!ended.travel_set(), "+0x6c = -1");
         assert_eq!(ended.owed_burst, None);
         assert_eq!(ended.display.drive.thrust, Thrust::None, "+0x30 = 0");
         assert_eq!(ended.mode, Mode::Coasting { ticks_left: 37 });
@@ -569,7 +569,7 @@ mod tests {
             assert_eq!(going.owed_burst, Some(now), "{before} {now}");
             assert_eq!(going.goal, Goal::Attack(ShipRef::Player));
             assert_eq!(going.mode, Mode::Flying);
-            assert!(going.travel_set);
+            assert!(going.travel_set());
             assert!(draws.asked.is_empty());
         }
         // Nothing owed before, or nothing now: no burst ran.
@@ -598,7 +598,7 @@ mod tests {
             sub: DockSub::Stop,
         });
         npc.docking = docking;
-        npc.travel_set = true;
+        npc.travel = Some(crate::catalog::StellarId(150));
         let own = TopSpeeds {
             own: 6.0,
             lead: None,
@@ -614,7 +614,7 @@ mod tests {
             (npc.goal, npc.docking),
             (Goal::Assist(Help::Refuel), docking)
         );
-        assert!(!npc.travel_set);
+        assert!(!npc.travel_set());
         assert_eq!(npc.owed_burst, None);
         assert_eq!(npc.mode, Mode::Coasting { ticks_left: 30 });
     }

@@ -237,7 +237,7 @@ pub fn answer(
 /// (@0x89d3e), whatever goal it had, a ship assisting the player
 /// included (`_AIMakeShipStopRefuelling` after it, @0x3bec7, then finds
 /// goal 4 and does nothing). Its travel stellar cleared (+0x6c -1,
-/// @0x89d47) the traffic writes ([`Npc::travel_set`]). Its one other
+/// @0x89d47) the traffic writes ([`Npc::travel`]). Its one other
 /// change, clearing a jump's sub-goal (4 or 0xd under goals 2, 3 and 0xb,
 /// @0x89cf2-0x89d35), the new goal makes here, as the engine has no jump
 /// stage; any other sub-goal it keeps, so a ship already attacking keeps

@@ -62,7 +62,7 @@
 use crate::ai::Decision;
 use crate::ai::leave::{self, Leg};
 use crate::ai::pursuit::Pursuit;
-use crate::ai::{Goal, dispatch_gate, sight};
+use crate::ai::{Goal, dispatch_gate, sight, travel};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::flight::FlightRules;
@@ -231,7 +231,7 @@ impl Traffic {
                 npc.goal = Goal::Idle;
                 npc.pursuit = Pursuit::default();
                 npc.target = None;
-                npc.travel_set = false;
+                npc.travel = None;
                 npc.warp.goal = None;
                 npc.warp.give_up();
             }
@@ -267,18 +267,23 @@ fn cancelled(npc: &Npc, npcs: &[Npc], player: Option<Condition>) -> bool {
 /// can't jump (`_AIShipHasFuelForJump` inlined, [`leave::can_jump`] by
 /// `reading` of [`RuleKey::NpcJumpFuel`](crate::RuleKey::NpcJumpFuel))
 /// turns back to dock with its carrier: goal 5 ([`Goal::Dock`]), target
-/// -1, its travel stellar its carrier's slot (@0x8d621), its jump dropped.
+/// -1, its travel stellar its carrier's slot (@0x8d61a-0x8d621),
+/// `carrier_slot` (the player's 0, an NPC carrier's berth; none for a
+/// carrier the caller found in neither the system nor the ships gone from
+/// it, which leaves the value as it was), its jump dropped.
 /// Its stage is left, for the warp-out's
 /// not-jumping test to zero. The player's fighters dock with the player,
 /// an NPC's with its carrier. It plays no sound and draws nothing.
-pub fn turn_back(npc: &mut Npc, reading: RuleSource) {
+pub fn turn_back(npc: &mut Npc, reading: RuleSource, carrier_slot: Option<u32>) {
     let Some(carrier) = npc.carrier else {
         return;
     };
     if npc.follows_leaders_jump() && !leave::can_jump(npc, reading) {
         npc.goal = Goal::Dock(carrier.ship);
         npc.target = None;
-        npc.travel_set = true;
+        if let Some(slot) = carrier_slot {
+            npc.travel = Some(travel::of_slot(slot));
+        }
         npc.warp.goal = None;
     }
 }
@@ -735,19 +740,19 @@ mod tests {
         // @0x8d575-0x8d625: goal 5, target -1, +0x6c its parent.
         let reading = crate::rulebook::RuleSource::Engine;
         let mut short = fighter_on_jump(ShipRef::Player, true);
-        turn_back(&mut short, reading);
+        turn_back(&mut short, reading, Some(0));
         assert_eq!(
             (short.goal, short.target, short.warp.goal),
             (Goal::Dock(ShipRef::Player), None, None)
         );
         assert_eq!(short.warp.stage, 3.0, "left for the warp-out to zero");
         let mut able = fighter_on_jump(ShipRef::Player, false);
-        turn_back(&mut able, reading);
+        turn_back(&mut able, reading, Some(0));
         assert_eq!(able.warp.goal, Some(WarpGoal::Follow(ShipRef::Player)));
         assert_eq!(able.goal, Goal::Formation { guard: None });
         let mut escort = fighter_on_jump(ShipRef::Player, true);
         escort.carrier = None;
-        turn_back(&mut escort, reading);
+        turn_back(&mut escort, reading, Some(0));
         assert_eq!(
             escort.warp.goal,
             Some(WarpGoal::Follow(ShipRef::Player)),
@@ -756,7 +761,7 @@ mod tests {
         let mut own = fighter_on_jump(ShipRef::Player, true);
         own.warp.goal = Some(WarpGoal::Own);
         own.goal = Goal::JumpOut;
-        turn_back(&mut own, reading);
+        turn_back(&mut own, reading, Some(0));
         assert_eq!(own.goal, Goal::JumpOut, "goal 0xb alone");
     }
 
@@ -766,11 +771,11 @@ mod tests {
         let reading = crate::rulebook::RuleSource::Engine;
         for carrier in [ShipRef::Player, ShipRef::Npc(NpcId(4))] {
             let mut short = fighter_on_jump(carrier, true);
-            turn_back(&mut short, reading);
-            assert!(short.travel_set, "{carrier:?}");
+            turn_back(&mut short, reading, Some(0));
+            assert!(short.travel_set(), "{carrier:?}");
             let mut able = fighter_on_jump(carrier, false);
-            turn_back(&mut able, reading);
-            assert!(!able.travel_set, "{carrier:?}: it jumps on");
+            turn_back(&mut able, reading, Some(0));
+            assert!(!able.travel_set(), "{carrier:?}: it jumps on");
         }
     }
 
@@ -934,7 +939,7 @@ mod tests {
         for leader in [ShipRef::Npc(NpcId(0)), ShipRef::Player] {
             let attacking = Goal::Attack(ShipRef::Player);
             let mut ships = on_leaders_jump(leader, 0.5, attacking, Condition::Intact);
-            ships[1].travel_set = true;
+            ships[1].travel = Some(crate::catalog::StellarId(150));
             let mut traffic = Traffic::with_interval(1);
             for ship in ships {
                 traffic.add_npc(ship);
@@ -946,7 +951,7 @@ mod tests {
             traffic.cancel_jump_follows(&world);
             let escort = of(&traffic, NpcId(1));
             assert_eq!(escort.goal, Goal::Idle, "{leader:?}");
-            assert!(!escort.travel_set, "{leader:?}");
+            assert!(!escort.travel_set(), "{leader:?}");
         }
     }
 

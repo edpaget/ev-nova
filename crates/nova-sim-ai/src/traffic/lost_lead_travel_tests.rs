@@ -64,11 +64,11 @@ fn fleet(lead_set: bool, own: bool) -> Traffic {
     let mut traffic = Traffic::with_interval(1);
     traffic.add_npc(Npc {
         goal: Goal::Hold,
-        travel_set: lead_set,
+        travel: lead_set.then_some(StellarId(140)),
         ..pirate(500)
     });
     traffic.add_npc(Npc {
-        travel_set: own,
+        travel: own.then_some(StellarId(128)),
         ..led_by(LEAD, 300)
     });
     traffic
@@ -168,7 +168,10 @@ fn a_pirate_successor_of_an_escort_lead_leaves_without_picking() {
     fighter.state.position = Vec2::new(500.0, 500.0);
     traffic.add_npc(fighter);
     tick(&mut traffic);
-    assert!(of(&traffic, ESCORT).travel_set, "formation writes its slot");
+    assert!(
+        of(&traffic, ESCORT).travel_set(),
+        "formation writes its slot"
+    );
     destroy(&mut traffic, ESCORT);
     tick(&mut traffic);
     let fighter = of(&traffic, FIGHTER);
@@ -187,7 +190,7 @@ fn left_alone() -> Traffic {
     let ship = of(&traffic, FOLLOWER);
     assert!(matches!(ship.goal, Goal::Regroup { .. }), "{:?}", ship.goal);
     assert_eq!(ship.leader, None);
-    assert!(ship.travel_set, "paused, it skips the reset");
+    assert!(ship.travel_set(), "paused, it skips the reset");
     traffic
 }
 
@@ -203,7 +206,7 @@ fn a_follower_left_alone_and_whole_by_its_release_leaves_without_picking() {
 fn one_still_disabled_at_its_release_picks_afresh_once_whole() {
     let mut traffic = left_alone();
     tick(&mut traffic);
-    assert!(!of(&traffic, FOLLOWER).travel_set, "the reset (@0x8fee9)");
+    assert!(!of(&traffic, FOLLOWER).travel_set(), "the reset (@0x8fee9)");
     of_mut(&mut traffic, FOLLOWER).condition = Condition::Intact;
     tick(&mut traffic);
     assert_eq!(of(&traffic, FOLLOWER).goal, Goal::Land(STELLAR));
@@ -228,5 +231,5 @@ fn a_follower_released_at_its_leads_gate_holds_the_gate() {
     traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
     let released = of(&traffic, FOLLOWER);
     assert_eq!(released.goal, Goal::EnterGate(GATE));
-    assert!(released.travel_set);
+    assert!(released.travel_set());
 }

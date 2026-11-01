@@ -224,7 +224,7 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
             npc.goal = Goal::Idle;
             npc.target = None;
             npc.docking = None;
-            npc.travel_set = false;
+            npc.travel = None;
         }
         HighLevel::Docks {
             ship,
@@ -398,7 +398,7 @@ fn plunder_npc(
         for other in npcs.iter_mut() {
             if other.target == Some(ShipRef::Npc(victim)) && other.condition.active() {
                 other.target = None;
-                other.travel_set = false;
+                other.travel = None;
                 other.docking = None;
                 other.goal = Goal::Idle;
                 other.pursuit = crate::ai::pursuit::Pursuit::default();
@@ -538,7 +538,7 @@ mod tests {
         // The plunder's give-up (@0x8e8b3) and the repair's (@0x8f732)
         // write +0x6c -1; a docking set writes the victim's slot.
         let mut docking = pirate(1000);
-        docking.travel_set = true;
+        docking.travel = Some(crate::catalog::StellarId(150));
         let mut kept = docking.clone();
         take_high_level(
             &mut docking,
@@ -547,7 +547,7 @@ mod tests {
                 step: DockStep::GiveUp,
             },
         );
-        assert!(!docking.travel_set);
+        assert!(!docking.travel_set());
         take_high_level(
             &mut kept,
             HighLevel::Docks {
@@ -555,7 +555,7 @@ mod tests {
                 step: DockStep::Sub(DockSub::Close),
             },
         );
-        assert!(kept.travel_set);
+        assert!(kept.travel_set());
     }
 
     #[test]
@@ -898,7 +898,7 @@ mod tests {
         wrecked.berth = 6;
         wrecked.condition = Condition::Disabled;
         wrecked.target = Some(ShipRef::Npc(VICTIM));
-        wrecked.travel_set = true;
+        wrecked.travel = Some(crate::catalog::StellarId(150));
         let mut docked = pirate(1000);
         docked.goal = Goal::Attack(ShipRef::Npc(VICTIM));
         docked.target = Some(ShipRef::Npc(VICTIM));
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(onlooker.provoked, 0.0);
         let wrecked = ship(&traffic, NpcId(6));
         assert_eq!(wrecked.target, None);
-        assert!(!wrecked.travel_set, "+0x6c -1, @0x8487a");
+        assert!(!wrecked.travel_set(), "+0x6c -1, @0x8487a");
         assert!(matches!(
             traffic.take_pirate_events()[..],
             [PirateEvent::Plundered {

@@ -6622,7 +6622,7 @@ impl Space {
     fn clear_quarry_travel(&mut self, id: NpcId) {
         for other in self.traffic.npcs_mut() {
             if holds_quarry(other, id) {
-                other.travel_set = false;
+                other.travel = None;
             }
         }
     }
@@ -8608,12 +8608,12 @@ pub(super) mod tests {
             let after = Npc {
                 goal: Goal::Attack(ShipRef::Npc(victim)),
                 target: Some(ShipRef::Npc(victim)),
-                travel_set: true,
+                travel: Some(StellarId(150)),
                 ..ship(1)
             };
             let after = session.space.traffic.add_npc(after);
             let apart = Npc {
-                travel_set: true,
+                travel: Some(StellarId(150)),
                 ..ship(2)
             };
             let apart = session.space.traffic.add_npc(apart);
@@ -8622,7 +8622,7 @@ pub(super) mod tests {
             } else {
                 session.mark_boarded(victim);
             }
-            let travel = |id| session.space.npc(id).expect("here").travel_set;
+            let travel = |id| session.space.npc(id).expect("here").travel_set();
             assert!(!travel(after), "dropped: capture {capture}");
             assert!(travel(apart), "left alone: capture {capture}");
         }

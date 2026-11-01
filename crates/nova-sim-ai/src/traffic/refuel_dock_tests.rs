@@ -214,7 +214,7 @@ fn a_refuel_ends_on_the_think_after_the_fuel_passes_100_and_queues_its_note() {
     let done = ship(&traffic, HELPER);
     assert_eq!(done.goal, Goal::Idle);
     assert_eq!((done.target, done.docking), (None, None));
-    assert!(!done.travel_set);
+    assert!(!done.travel_set());
 }
 
 #[test]

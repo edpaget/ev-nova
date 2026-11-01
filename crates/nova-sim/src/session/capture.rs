@@ -953,7 +953,7 @@ mod tests {
         let mut led = session.space.npc(ON_BOARD.npc).expect("aboard").clone();
         led.leader = Some(ON_BOARD.npc);
         led.condition = crate::combat::hull::Condition::Intact;
-        led.travel_set = true;
+        led.travel = Some(crate::catalog::StellarId(150));
         led.provoked = 3.0;
         session.space.traffic.add_npc(led)
     }
@@ -969,7 +969,7 @@ mod tests {
         use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
         let led = session.space.npc(led).expect("here");
         assert_eq!(led.leader, None);
-        assert!(!led.travel_set, "lose_captured_lead, not leader = None");
+        assert!(!led.travel_set(), "lose_captured_lead, not leader = None");
     }
 
     #[test]
@@ -985,7 +985,7 @@ mod tests {
             Some(Assigned::Escort)
         );
         let led = session.space.npc(led).expect("here");
-        assert!(led.travel_set);
+        assert!(led.travel_set());
         assert_eq!(led.provoked, 3.0);
     }
 

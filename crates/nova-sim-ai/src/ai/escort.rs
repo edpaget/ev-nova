@@ -238,7 +238,7 @@ impl Behaviour for EscortAi {
             goal,
             ends_wait: !keeps_wait,
             voice: Some(cue),
-            travel: travel::order_block(goal, order, cue == VoiceCue::NewThreat),
+            travel: travel::order_block(goal, order, cue == VoiceCue::NewThreat, 0),
             ..Decision::default()
         }
     }
@@ -2143,6 +2143,8 @@ mod tests {
 
     #[test]
     fn the_players_escort_writes_the_order_blocks_travel() {
+        // The player's slot, 0.
+        const PLAYERS_SLOT: crate::catalog::StellarId = travel::of_slot(0);
         let write = |npc: Npc, threat: bool| {
             let threat = threat.then(|| pirate(2, 0.0, 100.0));
             let npcs: Vec<Npc> = std::iter::once(npc).chain(threat).collect();
@@ -2155,9 +2157,21 @@ mod tests {
         assert_eq!(write(kept(attack), true), TravelWrite::Keep, "@0x83d6d");
         assert_eq!(write(escort(defend), true), TravelWrite::Keep, "@0x83e4b");
         assert_eq!(write(kept(defend), true), TravelWrite::Keep, "@0x83cd6");
-        assert_eq!(write(escort(attack), false), TravelWrite::Set, "@0x83dac");
-        assert_eq!(write(escort(defend), false), TravelWrite::Set, "@0x83e9f");
-        assert_eq!(write(escort(None), false), TravelWrite::Set, "@0x83f09");
+        assert_eq!(
+            write(escort(attack), false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83dac"
+        );
+        assert_eq!(
+            write(escort(defend), false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83e9f"
+        );
+        assert_eq!(
+            write(escort(None), false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83f09"
+        );
         assert_eq!(
             write(escort(Some(EscortOrder::Hold)), false),
             TravelWrite::Clear,
@@ -2169,7 +2183,11 @@ mod tests {
             window: 100.0,
             reach: 40.0,
         });
-        assert_eq!(write(fighter, false), TravelWrite::Set, "@0x83e9f");
+        assert_eq!(
+            write(fighter, false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83e9f"
+        );
     }
 
     #[test]

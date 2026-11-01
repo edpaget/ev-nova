@@ -34,8 +34,8 @@
 //!    Under the lost lead's own government (both not independent and
 //!    equal, @0x8938a-0x893ae), it takes over the lead's goal and
 //!    substate, target and travel stellar (@0x893b0-0x893e1, as
-//!    [`travel::is_set`] reads it, so a lead emerging or bound for a
-//!    stellar counts), read from the lead's record, there or gone
+//!    [`travel::held`] reads it, so a lead emerging or bound for a
+//!    stellar gives that stellar), read from the lead's record, there or gone
 //!    ([`gone`](super::gone)); goal 0xa with no leader is a hold
 //!    ([`Goal::Hold`]). Otherwise its own goal maps, and it keeps its own
 //!    travel stellar (@0x893ea-0x8945f):
@@ -201,7 +201,7 @@ impl Npc {
         self.overwrite_bribe();
         self.leave_fleet();
         self.target = None;
-        self.travel_set = false;
+        self.travel = None;
         self.provoked = 0.0;
         if self.goal.quarry().is_some() {
             self.goal = Goal::Idle;
@@ -253,7 +253,7 @@ impl Npc {
                 goal => goal,
             };
             self.target = lead.target;
-            self.travel_set = travel::is_set(lead);
+            self.travel = travel::held(lead);
             self.warp.goal = lead.warp.goal;
             self.pursuit = lead.pursuit;
             self.docking = lead.docking;
@@ -557,7 +557,7 @@ mod tests {
         let lead = of_mut(&mut traffic, 0);
         lead.goal = goal;
         lead.target = Some(ShipRef::Npc(NpcId(9)));
-        lead.travel_set = true;
+        lead.travel = Some(crate::catalog::StellarId(150));
         lead.warp.goal = Some(WarpGoal::Follow(PLAYER));
         lead.pursuit = Pursuit {
             kept: Some(PursuitKept::Rush),
@@ -578,7 +578,7 @@ mod tests {
         let taker = of(&traffic, 1);
         assert_eq!(taker.goal, Goal::Attack(ShipRef::Npc(NpcId(9))));
         assert_eq!(taker.target, lead.target);
-        assert!(taker.travel_set);
+        assert!(taker.travel_set());
         assert_eq!(taker.warp.goal, lead.warp.goal);
         assert_eq!(taker.leader, None);
         assert_eq!(taker.carrier, None);
@@ -593,21 +593,26 @@ mod tests {
         // keeps in `emerges_from`, not the flag.
         let mut traffic = taking_over(REBELS, Goal::Hold);
         let lead = of_mut(&mut traffic, 0);
-        lead.travel_set = false;
+        lead.travel = None;
         lead.emerges_from = Some(crate::catalog::StellarId(129));
         think(&mut traffic);
-        assert!(of(&traffic, 1).travel_set);
+        assert!(of(&traffic, 1).travel_set());
     }
 
     #[test]
     fn under_another_government_a_successor_keeps_its_own() {
         for own in [false, true] {
             let mut traffic = taking_over(FEDS, Goal::Hold);
-            of_mut(&mut traffic, 0).travel_set = !own;
-            of_mut(&mut traffic, 1).travel_set = own;
+            let (lead, mine) = if own {
+                (None, Some(crate::catalog::StellarId(150)))
+            } else {
+                (Some(crate::catalog::StellarId(151)), None)
+            };
+            of_mut(&mut traffic, 0).travel = lead;
+            of_mut(&mut traffic, 1).travel = mine;
             think(&mut traffic);
             assert_eq!(of(&traffic, 1).leader, None);
-            assert_eq!(of(&traffic, 1).travel_set, own);
+            assert_eq!(of(&traffic, 1).travel_set(), own);
         }
     }
 
@@ -617,14 +622,14 @@ mod tests {
         // and +0x88 its class's whatever a bribe wrote.
         let mut led = follower(FEDS, 300);
         led.target = Some(PLAYER);
-        led.travel_set = true;
+        led.travel = Some(crate::catalog::StellarId(150));
         led.provoked = 5.0;
         led.take_bribe();
         let goal = led.goal;
         led.lose_captured_lead();
         assert_eq!(led.leader, None);
         assert_eq!(led.target, None);
-        assert!(!led.travel_set);
+        assert!(!led.travel_set());
         assert_eq!(led.provoked, 0.0);
         assert!(!led.spared);
         assert_eq!(led.ai_type, AiType::Warship, "its class's, not the bribe's");
@@ -741,7 +746,7 @@ mod tests {
         let taker = of(&traffic, 1);
         assert_eq!(taker.goal, Goal::Attack(PLAYER));
         assert_eq!(taker.target, Some(PLAYER), "its own target, not the lead's");
-        assert!(!taker.travel_set, "not the lead's travel stellar");
+        assert!(!taker.travel_set(), "not the lead's travel stellar");
         assert_eq!(taker.warp.goal, None, "not the lead's warp");
         assert_eq!(taker.pursuit, Pursuit::default());
         assert_eq!(taker.docking, None);

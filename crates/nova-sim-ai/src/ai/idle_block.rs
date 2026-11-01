@@ -349,7 +349,7 @@ mod tests {
         );
         assert_eq!(chance.asked, [2]);
         let dropped = Npc {
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..ship()
         };
         let emerging = Npc {
