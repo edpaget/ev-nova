@@ -2,8 +2,8 @@
 //! putting a pilot into a given state without flying it there.
 //!
 //! Each edit keeps the session consistent with itself, and makes a save
-//! due, as a change made in the spaceport does; a refused one changes
-//! nothing. None asks the game's rules (cash, legal records or a
+//! due, as a change made in the spaceport does, written in flight too
+//! (see the `in_flight_save` module); a refused one changes nothing. None asks the game's rules (cash, legal records or a
 //! stellar's `MinStatus`): these are overrides.
 //!
 //! - **Credits** ([`Session::set_credits`]) and the **date**
@@ -105,14 +105,14 @@ impl Session {
     /// due.
     pub fn set_credits(&mut self, credits: i64) {
         self.pilot.cash = credits;
-        self.out.save_due = true;
+        self.out.save_now();
     }
 
     /// Sets the date to `date`, landed or in flight, with no days going by
     /// (see the module docs); a save is due.
     pub fn set_date(&mut self, date: GameDate) {
         self.pilot.date = date;
-        self.out.save_due = true;
+        self.out.save_now();
     }
 
     /// Moves the landed pilot to `stellar` in `system`, read from
@@ -132,7 +132,7 @@ impl Session {
             return Err(RelocateRefusal::InFlight);
         };
         if (system, stellar) == (self.pilot.system, landed) {
-            self.out.save_due = true;
+            self.out.save_now();
             return Ok(());
         }
         self.enter_at(catalog, system, stellar)?;
@@ -231,7 +231,7 @@ impl Session {
     pub fn set_reserve(&mut self, reserve: Reserve, amount: f32) -> f32 {
         let gauge = self.pilot.reserves.get_mut(reserve);
         gauge.now = amount.max(0.0).min(gauge.max);
-        self.out.save_due = true;
+        self.out.save_now();
         gauge.now
     }
 }

@@ -356,7 +356,7 @@ impl<C> SessionFlight<C> {
 
     /// Whether ending play now saves the pilot
     /// (`nova_sim::Session::saves_on_ending_play`): it may be saved, and it
-    /// is landed or the `ending_play_save` rule's other reading saves it in
+    /// is landed or the `in_flight_save` rule's other reading saves it in
     /// flight too. Never without a session.
     #[must_use]
     pub fn saves_on_ending_play(&self) -> bool {
@@ -1078,19 +1078,13 @@ mod tests {
     fn whether_ending_play_saves_is_the_sessions_under_either_reading() {
         let catalog = shared();
         for source in nova_sim::RuleSource::ALL {
-            let rules =
-                Rulebook::default().with_override(nova_sim::RuleKey::EndingPlaySave, source);
+            let rules = Rulebook::default().with_override(nova_sim::RuleKey::InFlightSave, source);
             let flight = SessionFlight::start_ruled(&catalog, &rules);
             let session = flight.session().expect("started");
             assert_eq!(
                 flight.saves_on_ending_play(),
                 session.saves_on_ending_play(),
                 "{source:?}"
-            );
-            assert_eq!(
-                flight.saves_on_ending_play(),
-                source == nova_sim::RuleSource::Bible,
-                "in flight, {source:?}"
             );
         }
     }

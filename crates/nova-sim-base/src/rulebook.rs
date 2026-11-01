@@ -172,7 +172,7 @@
 //! | [`NewPilotEmptyName`](RuleKey::NewPilotEmptyName) | `new_pilot_empty_name` | a New Pilot whose name is empty once culled and trimmed goes on to the christening with no replace question, and plays but is never saved, silently: `_DoNewPilotNameDialog` refuses no name (@0x1695b-0x16a15), and `FSMakeFSRefUnicode` fails on a 0-length name in `_DoesPilotExist` (@0x72e54) and `_SavePilotFile` (@0x768f5), whose failure `_DoNewPilot` ignores (@0x1935f; see `nova::app`'s menu) | the name is refused under its field and the New Pilot dialog stays open: **the default — a deliberate departure from the original**†††††††††††††††††† |
 //! | [`NewPilotEscape`](RuleKey::NewPilotEscape) | `new_pilot_escape` | Escape does nothing in the New Pilot dialog: `_DoNewPilotNameDialog` sets a default item (`SetDialogDefaultItem(1)` @0x166d2) but no cancel item, and its `ModalDialog` (@0x16956) has no filter proc (see the view's `ui::new_pilot`) | Escape cancels, as the Cancel button does, the port's earlier behaviour\* |
 //! | [`HypergateMovieDesc`](RuleKey::HypergateMovieDesc) | `hypergate_movie_desc` | a hypergate's entry loads, for its movie, the `dësc` numbered as the picked system's `sÿst` ID: `_PlayerEnterHypergate` passes `player+0x6c` + 128 (@0x639c6-0x639d8) after `_DoSystemMap` reused that field for the pick (@0x637f2, @0x63887-0x63897, @0x638fb; see `nova_sim::Session::gate_entry_desc`) | the gate's own `dësc`, as a landing and a wormhole load theirs\* |
-//! | [`EndingPlaySave`](RuleKey::EndingPlaySave) | `ending_play_save` | ending play in flight (quitting, or going back to the main menu) saves nothing, so the pilot reopens as it was at its last landing, take-off or rescue: `_SavePilotFile` is called only on creation (@0x1935f), the take-off (@0x6354b) and the pod's rescue (@0x692c4); ending play landed saves (see `nova_sim::Session::saves_on_ending_play`) | the pilot is saved wherever it is, the port's earlier behaviour\* |
+//! | [`InFlightSave`](RuleKey::InFlightSave) | `in_flight_save` | in flight only the take-off and a Strict Play rescue save: a save that comes due in space (a mission, cron, story, rank, escort or fighter change) waits for the next landing or take-off, and ending play in flight (quitting, or going back to the main menu) saves nothing, so the pilot reopens as it was at its last landing, take-off or rescue: `_SavePilotFile` is called only on creation (@0x1935f), the take-off (@0x6354b) and the pod's rescue (@0x692c4); landed, every save due is written and ending play saves (see `nova_sim`'s `in_flight_save` module) | the pilot is saved wherever it is, the port's earlier behaviour\* |
 //! | [`RechargeDebt`](RuleKey::RechargeDebt) | `recharge_debt` | R or F pressed with the cash below 0 at a stellar that isn't dominated, or an auto-refueller's top-up on landing at an inhabited stellar, clears the debt and takes as many units of fuel, possibly leaving the tank below empty, as `_DoPortDialog` (@0x5fdbf-0x5fdcf; see `nova_sim::recharge`) and `_DoAutoRefuel` (@0x41c48-0x41c62; see `nova_sim::auto_refuel`) clamp the missing units to the cash | the cash counts as 0: nothing fills and the debt stands\* |
 //! | [`EscortArrival`](RuleKey::EscortArrival) | `escort_arrival` | the hired escorts and fighters kept are snapped onto a formation counted without the mission escorts; on a jump's arrival each is pushed 891.7344 back along its heading, gains 50 along it and glides in as a ship arriving by hyperspace does; a take-off, load or new pilot re-snaps every led ship onto its final slot, a mission escort by position only (`_SetupShipsInSystem` @0x42c8e-0x42d9e, @0x4319a-0x431b2; see `nova_sim::escort_arrival`) | every led ship is snapped onto its final slot with the player's state, the port's earlier placement\* |
 //! | [`DialogTextWheel`](RuleKey::DialogTextWheel) | `dialog_text_wheel` | the wheel and trackpad do nothing: the original reads its events through `_WaitNextEvent` and installs no mouse Carbon handler (@0xcc748, @0xccb83) | a wheel or trackpad scroll over a dialog's scrolling text scrolls it, as Up and Down do (see `nova_view::ui::ScrollText`)\* |
@@ -4384,19 +4384,23 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says (see
     /// `nova_sim::Session::gate_entry_desc`).
     HypergateMovieDesc => "hypergate_movie_desc",
-    /// Whether ending play in flight saves the pilot (read by
-    /// `nova_sim::Session::saves_on_ending_play`): quitting the app, or
-    /// going back to the main menu, while the ship is in space. By the
-    /// engine it saves nothing: `_SavePilotFile` is called only on
-    /// creation (`_DoNewPilot` @0x1935f), the take-off after the port
-    /// dialog (`_PlayerLandOnStellar` @0x6354b) and the escape pod's
-    /// rescue (@0x692c4), so a pilot ended in flight reopens as it was
-    /// there, never past a jump made since. Ending play landed saves under
-    /// both readings. By the other reading, the port's earlier behaviour,
-    /// the pilot is saved wherever it is, so a reload can skip the risk of
-    /// a jump. The Bible says nothing of it, so the other reading is a
-    /// convenience of the port's.
-    EndingPlaySave => "ending_play_save",
+    /// Whether the pilot is saved in flight (read by `nova_sim`'s
+    /// `in_flight_save` module, `nova_sim::Session::saves_on_ending_play`
+    /// among it). By the engine only the take-off and a Strict Play
+    /// rescue save in space: `_SavePilotFile` is called only on creation
+    /// (`_DoNewPilot` @0x1935f), the take-off after the port dialog
+    /// (`_PlayerLandOnStellar` @0x6354b) and the escape pod's rescue
+    /// (@0x692c4). A save that comes due in flight (a mission, cron,
+    /// story, rank, escort or fighter change) waits for the next landing
+    /// or take-off, and ending play in flight (quitting the app, or going
+    /// back to the main menu) saves nothing, so a pilot ended in flight
+    /// reopens as it was at the last of those, never past a jump made
+    /// since. Landed, every save due is written and ending play saves,
+    /// under both readings. By the other reading, the port's earlier
+    /// behaviour, the pilot is saved wherever it is, so a reload can skip
+    /// the risk of a jump. The Bible says nothing of it, so the other
+    /// reading is a convenience of the port's.
+    InFlightSave => "in_flight_save",
 }
 
 impl RuleKey {
@@ -7127,7 +7131,7 @@ mod tests {
                 RuleKey::NewPilotEmptyName,
                 RuleKey::NewPilotEscape,
                 RuleKey::HypergateMovieDesc,
-                RuleKey::EndingPlaySave
+                RuleKey::InFlightSave
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
@@ -8687,10 +8691,10 @@ mod tests {
     }
 
     #[test]
-    fn the_ending_play_save_rule_is_found_by_its_key_and_reads_the_engine() {
-        let rule = RuleKey::EndingPlaySave;
-        assert_eq!(rule.key(), "ending_play_save");
-        assert_eq!(RuleKey::from_key("ending_play_save"), Some(rule));
+    fn the_in_flight_save_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::InFlightSave;
+        assert_eq!(rule.key(), "in_flight_save");
+        assert_eq!(RuleKey::from_key("in_flight_save"), Some(rule));
         assert_eq!(rule.default_source(), RuleSource::Engine);
         assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         assert_eq!(

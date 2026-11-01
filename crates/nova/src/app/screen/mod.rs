@@ -55,8 +55,9 @@
 //! on landing, on taking off, after each change made in the spaceport
 //! (`AppScreen::transact`), and on going back to the menu and when the
 //! app quits in play ([`Screen::quit`](nova_view::Screen::quit)) while
-//! landed; never in flight by default, so a pilot ended in space reopens
-//! as it was at its last landing (`ending_play_save`,
+//! landed; in flight by default only on taking off and on a Strict Play
+//! rescue, a save due there waiting for the next landing, so a pilot
+//! ended in space reopens as it was at its last landing (`in_flight_save`,
 //! [`SessionFlight::saves_on_ending_play`](nova_view::flight::SessionFlight::saves_on_ending_play)),
 //! never on an open, nor when the app quits with the game only held;
 //! each failure is a warning

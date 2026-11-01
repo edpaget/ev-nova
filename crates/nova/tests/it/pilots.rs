@@ -1026,8 +1026,8 @@ fn the_event_loops_end_landed_saves_the_pilot_once() {
     assert_eq!(store.writes(), writes + 1, "once");
 }
 
-/// The menu's Quit (and so the quit Apple event, which sends it) saves the
-/// pilot flying; the event loop's end after it saves nothing more.
+/// The menu's Quit (and so the quit Apple event, which sends it) in flight
+/// saves nothing, and nor does the event loop's end after it.
 #[test]
 fn after_the_menus_quit_in_flight_the_event_loops_end_saves_nothing_more() {
     let store = MemoryPilots::new();
@@ -1039,6 +1039,23 @@ fn after_the_menus_quit_in_flight_the_event_loops_end_saves_nothing_more() {
     assert_eq!(store.writes(), writes, "in flight, the quit saves nothing");
     game.app.exiting(&mut FakeWindow);
     assert_eq!(store.writes(), writes, "nor the loop's end");
+}
+
+/// The menu's Quit landed saves the pilot; the event loop's end after it
+/// saves nothing more.
+#[test]
+fn after_the_menus_quit_landed_the_event_loops_end_saves_nothing_more() {
+    let store = MemoryPilots::new();
+    let mut game = flying(&store, "Ada");
+    game.land();
+    assert_eq!(game.showing(), Showing::Spaceport);
+    let writes = store.writes();
+    if game.handle(WindowEvent::Menu(MenuCommand::Quit)) != Control::Exit {
+        game.frames_until_exit();
+    }
+    assert_eq!(store.writes(), writes + 1, "saved by the quit");
+    game.app.exiting(&mut FakeWindow);
+    assert_eq!(store.writes(), writes + 1, "not saved twice");
 }
 
 /// On the main menu, with no pilot flying, the event loop's end saves

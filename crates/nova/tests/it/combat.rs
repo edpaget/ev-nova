@@ -1331,6 +1331,18 @@ fn steering(session: &Session, quarry: &Npc) -> nova_sim::Controls {
 /// (Tab), flies over it with the arrow keys and boards it (B), the trader
 /// placed and the capture rolled as [`Boarder::opening`] rolls them.
 fn boarded(store: &MemoryPilots) -> Boarder {
+    boarded_by(store, nova_sim::Rulebook::default())
+}
+
+/// The rules with `in_flight_save` read as the port's earlier
+/// behaviour: a save due in flight is written when it comes.
+fn saving_in_flight() -> nova_sim::Rulebook {
+    nova_sim::Rulebook::default()
+        .with_override(nova_sim::RuleKey::InFlightSave, nova_sim::RuleSource::Bible)
+}
+
+/// [`boarded`], the router's rule set `rules`.
+fn boarded_by(store: &MemoryPilots, rules: nova_sim::Rulebook) -> Boarder {
     let data = boarding_data();
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
@@ -1344,7 +1356,7 @@ fn boarded(store: &MemoryPilots) -> Boarder {
         boarding_interface(),
         store,
         SharedChance::new(chance),
-        |screen| screen.with_behaviour(Rc::new(Still)),
+        |screen| screen.with_behaviour(Rc::new(Still)).with_rules(rules),
     );
     game.open_pilot();
     game.populated();
@@ -1387,9 +1399,23 @@ fn boarded(store: &MemoryPilots) -> Boarder {
 }
 
 #[test]
-fn b_and_capture_reach_the_boarding_dialogs_and_the_escort_is_saved_and_reopened() {
+fn by_the_engine_a_capture_in_flight_leaves_the_store_as_it_was() {
     let store = MemoryPilots::new();
     let mut game = boarded(&store);
+    let writes = store.writes();
+    game.click(game.item(3));
+    game.click(game.item(7));
+    game.click(game.item(2));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.pilot().escorts().len(), 1, "captured");
+    assert_eq!(store.writes(), writes, "held for the next landing");
+}
+
+#[test]
+fn by_the_other_reading_b_and_capture_reach_the_boarding_dialogs_and_the_escort_is_saved_and_reopened()
+ {
+    let store = MemoryPilots::new();
+    let mut game = boarded_by(&store, saving_in_flight());
     // The credits, then the capture: its press rolls the self-destruct.
     game.click(game.item(3));
     game.click(game.item(7));
@@ -1979,7 +2005,9 @@ fn the_escort_dialog_opens_with_the_rulebooks_focus_ring() {
 #[test]
 fn option_tab_and_y_reach_the_escort_dialog_and_its_release_reaches_the_saved_fleet() {
     let store = MemoryPilots::new();
-    let mut game = escorted(&store, &[], &[129], |screen| screen);
+    let mut game = escorted(&store, &[], &[129], |screen| {
+        screen.with_rules(saving_in_flight())
+    });
     game.key(Key::Alt, true);
     game.tap(Key::Tab);
     game.key(Key::Alt, false);

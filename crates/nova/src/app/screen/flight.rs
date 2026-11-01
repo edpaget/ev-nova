@@ -633,7 +633,10 @@ impl AppScreen {
     }
 
     /// Saves the pilot if flight says a save is due: it has landed, taken
-    /// off or changed in the spaceport.
+    /// off or changed in the spaceport. The sim decides which saves are
+    /// written in flight (by default only the take-off's and a rescue's;
+    /// the rest wait for the next landing, see `nova_sim`'s
+    /// `in_flight_save` module).
     pub(super) fn save_if_due(&mut self) {
         if self.flight.as_mut().is_some_and(FlightView::take_save_due) {
             self.save_pilot();

@@ -1379,10 +1379,10 @@ pub(crate) fn menu_ruled(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
     )
 }
 
-/// The rules with `ending_play_save` read as the port's earlier
+/// The rules with `in_flight_save` read as the port's earlier
 /// behaviour: ending play in flight saves the pilot where it is.
 pub(crate) fn saving_in_flight() -> Rulebook {
-    Rulebook::default().with_override(RuleKey::EndingPlaySave, RuleSource::Bible)
+    Rulebook::default().with_override(RuleKey::InFlightSave, RuleSource::Bible)
 }
 
 /// Escape from flight, back to the main menu, past the return's appear

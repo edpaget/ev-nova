@@ -294,7 +294,9 @@ impl Session {
             .first()
             .map_or(STRICT_SAVE_FALLBACK, |site| site.id);
         self.pilot.stellar = Some(first);
-        self.out.save_due = true;
+        // Written in flight, as the original's (see the `in_flight_save`
+        // module).
+        self.out.save_now();
     }
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] as the rescue loaded it,
@@ -1322,7 +1324,8 @@ mod tests {
         }
         session.take_save_due();
         assert!(session.rescue_if_due(&catalog, &mut Scripted::default()));
-        assert!(session.take_save_due(), "a save is due");
+        assert_eq!(session.landed(), None);
+        assert!(session.take_save_now(), "a save is written in flight");
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("decodes");
         assert_eq!(saved.system, SystemId(131));
         assert_eq!(

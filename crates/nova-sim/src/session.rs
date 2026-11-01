@@ -13,7 +13,9 @@
 //! ([`Session::transact`]) and a Strict Play pilot's rescue from the
 //! escape pod ([`Session::rescue_if_due`]) make a save due
 //! ([`Session::take_save_due`]): whoever saves the pilot takes it after
-//! each input and saves then.
+//! each input and saves then. Other changes make one due too; in flight,
+//! by default, only the take-off's and the rescue's are written then, the
+//! rest held for the next landing (see the `in_flight_save` module).
 //! Arriving in a system explores it.
 //!
 //! The ship lands on a stellar of its system, on the land key's second
@@ -482,7 +484,6 @@ mod drift_blast;
 mod dying_player_escorts;
 mod edit;
 mod eject;
-mod ending_play_save;
 mod entry;
 mod escort_arrival;
 #[cfg(test)]
@@ -531,6 +532,7 @@ mod hire;
 mod hooks;
 mod hover;
 mod iff_scramblers;
+mod in_flight_save;
 mod inertialess;
 mod intro;
 mod ionization;
@@ -4216,7 +4218,9 @@ impl Session {
         // module).
         self.reset_stellar_frames(None);
         self.out.sounds.push(SimSound::TookOff);
-        self.out.save_due = true;
+        // Written in flight: the original's take-off save (@0x6354b; see
+        // the `in_flight_save` module).
+        self.out.save_now();
         self.run.raise(StoryEvent::TookOff { stellar });
         // The rest of the tail (see the `dock_tail` module). The
         // original's bar is redrawn before its deselect with the selection
@@ -6130,6 +6134,7 @@ impl Outbox {
     /// changed in the spaceport or, playing strictly, been rescued from the
     /// escape pod since this was last taken. Taking it clears it.
     fn take_save_due(&mut self) -> bool {
+        self.save_in_flight = false;
         std::mem::take(&mut self.save_due)
     }
 
