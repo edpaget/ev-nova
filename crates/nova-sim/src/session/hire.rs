@@ -1656,6 +1656,36 @@ mod tests {
         assert_eq!(session.pilot().cash(), 1000);
     }
 
+    #[test]
+    fn the_escorts_settling_does_nothing_in_flight() {
+        let catalog = paying();
+        let mut session = docked(350, RuleSource::Engine);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+        let (cash, date) = (session.pilot().cash(), session.date());
+        let escorts = ships(&session);
+        assert!(!session.chart.in_take_off_window());
+        let answer = session.apply(
+            crate::flight_frame::FlightCommand::LandEscorts,
+            &mut crate::session::ApplyCollaborators {
+                catalog: Some(&catalog),
+                chance: &mut NeverFires,
+                law: &crate::legal::NovaLaw::default(),
+                boarding_rule: &crate::board::NovaBoarding::default(),
+                hail_options: &HailOptions::default(),
+            },
+        );
+        assert_eq!(answer, crate::flight_frame::Answer::EscortReport(None));
+        assert_eq!(session.landed(), None, "still flying");
+        assert_eq!(session.pilot().cash(), cash, "no wages");
+        assert_eq!(session.date(), date, "no escort days");
+        assert_eq!(ships(&session), escorts, "no defection");
+        assert!(!session.chart.in_take_off_window(), "no window");
+        assert_eq!(session.take_pay_notes(), []);
+    }
+
     /// [`docked`] holding `cash`, with rank 200 paying `salary` a day
     /// active, two escorts sold or upgraded on the stay so a day passes
     /// before the pay, and `rules`.

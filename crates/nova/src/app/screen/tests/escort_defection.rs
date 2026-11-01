@@ -190,10 +190,12 @@ fn an_arrivals_defection_fades_the_new_system_in_from_black_and_no_white_comes_b
     assert_eq!(screen.showing(), Showing::MissionText);
     assert_eq!(flight_text(&screen).as_deref(), Some(DEFECTED_ONE));
     assert!(pilot(&screen).escorts().is_empty(), "defected");
-    assert_ne!(
-        flight(&screen).message(),
-        Some(DEFECTED_ONE),
-        "not on the line"
+    assert!(
+        flight(&screen)
+            .message()
+            .is_none_or(|said| !said.contains(DEFECTED_ONE)),
+        "not on the line, nor joined onto the arrival's: {:?}",
+        flight(&screen).message()
     );
     assert_eq!(white(&screen), None, "the white is gone");
     assert_eq!(black(&screen), Some(255), "from black");
