@@ -308,3 +308,45 @@ fn the_first_step_after_the_rescue_holds_the_gain() {
     let input = view.sim.inputs().last().copied().expect("a step");
     assert!(input.held, "the seconds without a step hold the gain");
 }
+
+#[test]
+fn the_closing_redraws_the_whole_bar_from_the_rescued_frame() {
+    let mut view = under_the_texts(Vec::new());
+    let mut changed = view.frame.hud.reserves;
+    changed.fuel.now += 100.0;
+    changed.fuel.max += 100.0;
+    view.change_sim(|sim| sim.frame_mut().hud.reserves = changed);
+    assert_ne!(view.reserves_scene, Some(changed), "not yet redrawn");
+    view.tick(TICK);
+    assert_eq!(
+        view.reserves_scene,
+        Some(changed),
+        "_RedrawStatus(1) (@0x69219)"
+    );
+}
+
+#[test]
+fn the_rescues_black_covers_the_texts_while_the_screen_is_faded() {
+    let mut view = under_the_texts(vec![briefed()]);
+    let mut cover = DrawList::new();
+    view.draw_faded_cover(&mut cover, VIEW_SIZE);
+    assert_eq!(cover, black(255));
+    view.screen_faded_in();
+    let mut cover = DrawList::new();
+    view.draw_faded_cover(&mut cover, VIEW_SIZE);
+    assert!(cover.is_empty(), "faded in, and no jump");
+}
+
+/// Solid black over the whole of [`VIEW_SIZE`].
+fn black(alpha: u8) -> DrawList {
+    let mut list = DrawList::new();
+    crate::draw::fill_rect(
+        &mut list,
+        crate::fade::whole_view(VIEW_SIZE),
+        Color {
+            a: alpha,
+            ..Color::BLACK
+        },
+    );
+    list
+}
