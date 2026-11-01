@@ -108,8 +108,10 @@
 //! plunder's +0x8c write (-1, @0x8c791), the ship it takes into its fleet
 //! defending no stellar, is the take's ([`plunder`](crate::traffic::plunder)).
 
-use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
-use crate::ai::odds::{hopeless_chase, state4_attack};
+#[cfg(doc)]
+use crate::ai::fire::DOGFIGHT_BOX;
+use crate::ai::fire::{AmmoLeft, FireRules, ammo_left};
+use crate::ai::odds::{hopeless_chase, outside_box, state4_attack};
 use crate::ai::target::{TargetRules, pick_target, spares};
 use crate::ai::travel::TravelWrite;
 use crate::ai::{
@@ -380,16 +382,6 @@ fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> 
             && other.hull.inherent_ai > 2
             && other.former.is_none()
             && (!fire::destroys(npc) || ammo_left(npc) == AmmoLeft::Dry)
-    })
-}
-
-/// Whether `target` is outside [`DOGFIGHT_BOX`] of `npc` on either axis,
-/// by float abs (`_HighLevelAIHandler` @0x8ea49-0x8eac6); a ship not in
-/// the system is not.
-fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-    around.state_of(target).is_some_and(|at| {
-        let off = at.position - npc.state.position;
-        off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX
     })
 }
 

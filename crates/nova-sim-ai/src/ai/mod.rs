@@ -1062,6 +1062,12 @@ pub struct Decision {
     /// [`Behaviour::target`]'s answer, so the threat tests read it
     /// ([`Npc::fought`]) and the next think finds it.
     pub holds_target: Option<ShipRef>,
+    /// Whether its flight is the attack block's hopeless chase for a ship
+    /// of AI type 2 or below: goal 3, sub 5 (@0x8e625-0x8e62e), which flies
+    /// close at any distance and launches and calls as goal 4 does
+    /// (@0x8e6e5-0x8e70d; [`attack_drop`]). The traffic sets
+    /// [`Npc::flees_hopeless`] so as it takes the goal.
+    pub flees_hopeless: bool,
     /// The ship it plunders now: `_PirateWarshipAI`'s plunder
     /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
     /// out, its [`goal`](Self::goal) the drift that follows

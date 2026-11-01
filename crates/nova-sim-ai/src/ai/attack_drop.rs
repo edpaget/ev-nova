@@ -42,6 +42,24 @@
 //!    reaches it on a destroyed player only through the hunt, whose target
 //!    0 comes after the slot test.
 //!
+//! The ship it keeps is then flown. These two rows write no goal 0:
+//!
+//! 5. **A hopeless chase**: a hull that doesn't stand off (`shïp` `Flags2`
+//!    0x0002, @0x8e48e, which goes to its band instead, see
+//!    [`stand_off`](crate::ai::stand_off)), its target outside the
+//!    dogfight box on either axis ([`outside_box`], @0x8e41b-0x8e473; inside
+//!    goes to @0x8e6a2 and never asks), and `_AIEvalHopelessChase`
+//!    ([`hopeless_chase`], @0x8e5fe). A ship of AI type above 2
+//!    ([`Npc::original_ai_type`], @0x8e60a) keeps goal 4 on sub 0xe
+//!    ([`Goal::Snipe`], @0x8e614); any other flees, goal 3 and sub 5
+//!    (@0x8e625-0x8e62e, [`Decision::flees_hopeless`]), which flies close
+//!    at any distance. Both go on to the launch and the call, unless the
+//!    ship is disabled (@0x8e6e5-0x8e70d), so the flight calls for
+//!    reinforcements here, beyond the flee block's reach.
+//! 6. **Anything else** is goal 4 on sub 7, 6 or 0x12
+//!    (@0x8e63c-0x8e6dc): [`Goal::Attack`], over a think's
+//!    [`Goal::Snipe`], as a chase can stop being hopeless.
+//!
 //! The think's other words stand in every row, as they came first. A drop
 //! skips the fighter launch (@0x8e6fa) and the call for reinforcements
 //! (@0x8e70d), and `_LowLevelAIHandler`'s passes then find no target. The
@@ -55,6 +73,7 @@
 //! @0x8e263 has passed. A plunder (goal 0xd) has its own block. No sound
 //! and no draw.
 
+use crate::ai::odds::{hopeless_chase, outside_box};
 use crate::ai::target::spares_ally;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::combat::ShipRef;
@@ -109,7 +128,25 @@ pub fn attack_block(
             ..decision
         };
     }
-    decision
+    if !npc.hull.stands_off && outside_box(npc, ship, around) && hopeless_chase(npc, ship, around) {
+        return if npc.original_ai_type() > 2 {
+            Decision {
+                goal: Goal::Snipe(ship),
+                ..decision
+            }
+        } else {
+            Decision {
+                goal: Goal::Flee(ship),
+                flees_hopeless: true,
+                calls_reinforcements: decision.calls_reinforcements || npc.active_not_disabled(),
+                ..decision
+            }
+        };
+    }
+    Decision {
+        goal: Goal::Attack(ship),
+        ..decision
+    }
 }
 
 /// The ship `ship` follows among `around`, its +0x9a: none for the player
@@ -524,6 +561,154 @@ mod tests {
         }
         let player = of(Goal::Attack(ShipRef::Player));
         assert_eq!(by_engine(&[attacker()], player), player);
+    }
+
+    /// `chaser`, heavy at the centre, and NPC 2, a pirate fleeing it at
+    /// (0, `y`), its gap opening: a hopeless chase (`_AIEvalHopelessChase`).
+    fn chase(chaser: Npc, y: f32) -> [Npc; 2] {
+        let heavy = Npc {
+            hull: crate::combat::hull::HullSpec {
+                mass: 100.0,
+                ..chaser.hull
+            },
+            ..chaser
+        };
+        let mut runner = ship(2, PIRATES, AiType::Warship, 0.0, y);
+        runner.goal = Goal::Flee(n(1));
+        runner.state.velocity = crate::geometry::Vec2::new(0.0, -1.0);
+        [heavy, runner]
+    }
+
+    #[test]
+    fn a_hopeless_chase_outside_the_dogfight_box_is_sniped_by_any_type_above_2() {
+        // Either axis beyond 165 (@0x8e41b-0x8e473), no stand-off hull
+        // (@0x8e48e) and `_AIEvalHopelessChase` (@0x8e5fe): +0x88 above 2
+        // keeps goal 4 on sub 0xe (@0x8e614).
+        let worded = Decision {
+            comm_call: Some(CommCall::Distress),
+            ..of(Goal::Attack(n(2)))
+        };
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let warship = Npc {
+                ai_type,
+                ..attacker()
+            };
+            assert!(crate::ai::odds::hopeless_chase(
+                &chase(warship.clone(), -300.0)[0],
+                n(2),
+                &Surroundings::new(&[], &chase(warship.clone(), -300.0))
+            ));
+            assert_eq!(
+                by_engine(&chase(warship.clone(), -300.0), worded),
+                Decision {
+                    goal: Goal::Snipe(n(2)),
+                    ..worded
+                },
+                "{ai_type:?}"
+            );
+            assert_eq!(
+                by_engine(&chase(warship, -100.0), worded),
+                worded,
+                "{ai_type:?}: inside the box goes to @0x8e6a2 and never asks"
+            );
+        }
+        let led = Npc {
+            leader: Some(NpcId(9)),
+            ..attacker()
+        };
+        let mut npcs = chase(led, -300.0).to_vec();
+        npcs.push(other(9, PIRATES, None));
+        assert_eq!(
+            by_engine(&npcs, worded).goal,
+            Goal::Snipe(n(2)),
+            "a fleet escort, +0x88 6"
+        );
+    }
+
+    #[test]
+    fn a_stand_off_hull_never_asks_whether_a_chase_is_hopeless() {
+        // @0x8e48e jumps past `_AIEvalHopelessChase` to the band.
+        let stand_off = Npc {
+            hull: crate::combat::hull::HullSpec {
+                stands_off: true,
+                ..attacker().hull
+            },
+            ..attacker()
+        };
+        let attack = of(Goal::Attack(n(2)));
+        assert_eq!(by_engine(&chase(stand_off, -300.0), attack), attack);
+    }
+
+    #[test]
+    fn a_trader_in_a_hopeless_chase_flees_close_launching_and_calling() {
+        // +0x88 2 or below: goal 3, sub 5 (@0x8e625-0x8e62e), then the
+        // launch and the call (@0x8e6eb-0x8e70d) unless it is disabled.
+        let attack = Decision {
+            comm_call: Some(CommCall::Distress),
+            ..of(Goal::Attack(n(2)))
+        };
+        for ai_type in [AiType::WimpyTrader, AiType::BraveTrader] {
+            let trader = Npc {
+                ai_type,
+                ..attacker()
+            };
+            assert_eq!(
+                by_engine(&chase(trader.clone(), -300.0), attack),
+                Decision {
+                    goal: Goal::Flee(n(2)),
+                    flees_hopeless: true,
+                    calls_reinforcements: true,
+                    ..attack
+                },
+                "{ai_type:?}"
+            );
+            let downed = Npc {
+                condition: Condition::Disabled,
+                ..trader.clone()
+            };
+            assert_eq!(
+                by_engine(&chase(downed, -300.0), attack),
+                Decision {
+                    goal: Goal::Flee(n(2)),
+                    flees_hopeless: true,
+                    ..attack
+                },
+                "{ai_type:?}: disabled, no call (@0x8e6eb)"
+            );
+            assert_eq!(
+                by_engine(&chase(trader, -100.0), attack),
+                attack,
+                "{ai_type:?}: inside the box"
+            );
+        }
+    }
+
+    #[test]
+    fn a_thinks_snipe_that_isnt_hopeless_is_an_attack() {
+        // Every other goal 4 flies sub 7, 6 or 0x12 (@0x8e63c-0x8e6dc), the
+        // engine's `Goal::Attack`, whatever the think wrote.
+        for at in [-300.0, -100.0] {
+            let npcs = [attacker(), other(2, PIRATES, None)];
+            let mut npcs = npcs;
+            npcs[1].state.position = crate::geometry::Vec2::new(0.0, at);
+            assert_eq!(
+                by_engine(&npcs, of(Goal::Snipe(n(2)))),
+                of(Goal::Attack(n(2))),
+                "{at}"
+            );
+        }
+        let stand_off = Npc {
+            hull: crate::combat::hull::HullSpec {
+                stands_off: true,
+                ..attacker().hull
+            },
+            ..attacker()
+        };
+        assert_eq!(
+            by_engine(&chase(stand_off, -300.0), of(Goal::Snipe(n(2)))),
+            of(Goal::Attack(n(2))),
+            "a stand-off hull's band is its own"
+        );
     }
 
     #[test]

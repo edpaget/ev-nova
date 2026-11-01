@@ -5257,6 +5257,7 @@ mod tests {
             board_wait: None,
             clears_target: false,
             holds_target: None,
+            flees_hopeless: false,
             plunders: None,
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,
