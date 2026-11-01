@@ -30,7 +30,11 @@
 //! hasn't flown and 3 on a ship that is no fighter under a saved Return,
 //! which only its first think (`_EscortAI` @0x83ae4-0x83b2b) turns to 0. A
 //! command before that think compares with the table's word (see the
-//! [`command_word`](super::command_word) module).
+//! [`command_word`](super::command_word) module). The engine places a
+//! loaded pilot's escorts on the first pass's traffic tick, after that
+//! pass's bookkeeping, where `_LoadPilotData` spawns them before any pass,
+//! so the bookkeeping waits for the system to be set up
+//! ([`Space::settle_class_orders`]) and doesn't rewrite the table first.
 
 use super::Space;
 use crate::escort::{EscortClass, EscortCommand, EscortGroup};
