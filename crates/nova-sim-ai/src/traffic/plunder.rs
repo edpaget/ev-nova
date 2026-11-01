@@ -539,15 +539,15 @@ fn plunder_npc(
     let armor = (f64::from(ship.reserves.armor.max) * CAPTURED_ARMOR_SHARE) as f32;
     ship.reserves.armor.now = armor;
     ship.reserves.shield.now = 0.0;
-    // `_IsDisabled` reads the armour later; a defence ship's +0x8c, which
-    // the take leaves, skips its armour line (branch 3, @0x2d6f-0x2d77).
-    ship.condition = if armor > 0.0
-        && under_armour_line(
-            ship.reserves.armor,
-            &ship.hull,
-            world.disable,
-            ship.defends.is_some(),
-        ) {
+    // `_IsDisabled` reads the armour later: a ship with no armour capacity
+    // is never under its line, and a defence ship's +0x8c, which the take
+    // leaves, skips the line (branch 3, @0x2d6f-0x2d77).
+    ship.condition = if under_armour_line(
+        ship.reserves.armor,
+        &ship.hull,
+        world.disable,
+        ship.defends.is_some(),
+    ) {
         Condition::Disabled
     } else {
         Condition::Intact

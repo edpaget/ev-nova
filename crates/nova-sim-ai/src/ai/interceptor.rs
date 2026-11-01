@@ -872,6 +872,50 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_interceptor_holding_a_plunder_ends_its_attack_on_a_ship_breaking_up_forgetting_it()
+     {
+        // Goal 4 on a ship breaking up: goal 0, +0x70 -1, +0x96 0
+        // (@0x8e3ef → @0x8e714-0x8e726), with no search that think.
+        let mut cop = police();
+        cop.goal = PLUNDER;
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let npcs = [cop, pirate];
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let mut chance = Draws::of(&[0]);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut chance);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+        assert!(decision.forgets_provocation);
+        assert!(chance.asked.is_empty(), "no search that think");
+    }
+
+    #[test]
+    fn a_provoked_interceptor_holding_a_plunder_is_judged_by_its_new_goal_4_for_the_odds_retreat() {
+        // The provoked branch writes goal 4 before the retreats, which need
+        // it (@0x8cbf3-0x8cc31, @0x8d14d-0x8d2e4): outnumbered, it flees.
+        let mut cop = police();
+        cop.goal = PLUNDER;
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        cop.reserves.shield.now = 1.0;
+        cop.odds = 5.0;
+        let npcs = [cop, ship(2, PIRATES, AiType::Warship, 0.0, 300.0)];
+        let sites = sites();
+        let govts = govts(0, INTERCEPTORS_RETREAT);
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+    }
+
+    #[test]
     fn a_dry_interceptor_of_flags2_0x0080_holding_a_plunder_flees_its_ship() {
         // Any goal but 2, 3 and 0xb becomes goal 3 on +0x70 (@0x8d343-0x8d391).
         let mut cop = short_of_ammo(police(), AmmoLeft::Dry, true);
