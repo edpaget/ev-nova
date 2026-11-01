@@ -60,12 +60,13 @@ use nova_sim::flight_frame::{PassReport, StepInput, StepRun};
 use nova_sim::player_wrap::PlayerWrap;
 use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, ShipRef, Turn, Vec2};
 
-use crate::Key;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::effects::{LoopedSounds, Scene};
+use crate::flight::rescue_screen::Repaint;
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
+use crate::{DrawList, Key};
 
 use super::between_passes::{self, BetweenPasses};
 use super::{
@@ -317,8 +318,10 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// (`nova_sim::Session::step`), the view's effects stepped after each
     /// pass and the comm notes and quotes said. Then each hypergate draws
     /// the frame the steps left it on, and a pass whose ship tick brought
-    /// the escape pod's rescue, which ends the stepping there, has the
-    /// view laid out afresh where the rescue put the ship. Then the
+    /// the escape pod's rescue, which ends the stepping there, begins the
+    /// rescue's screen over `pod`, the frame the pod showed as the tick
+    /// began ([`FlightView::pod_frame`], the `rescue` module), which lays the view out afresh where the
+    /// rescue put the ship once it has faded out. Then the
     /// messages the steps raised are said, then the line they raised last
     /// again, whatever its kind ([`FlightView::relay_last_line`]), and the
     /// sheets of a system the session populated afresh are read. Flight and the jump's warp both
@@ -327,7 +330,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// The comm notes and quotes are said before the gates' frames are
     /// shown, where the view once showed the frames first: the two touch
     /// nothing in common, and both are set before the frame is drawn.
-    pub(super) fn run_steps(&mut self, steps: u32) {
+    pub(super) fn run_steps(&mut self, steps: u32, pod: Option<(DrawList, Repaint)>) {
         let rescued = self.step_frame(steps, self.anchor());
         let drawn = between_passes::drawn(self.between_passes.as_ref(), &self.frame);
         if let Some(scene) = &mut self.scene {
@@ -335,11 +338,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             show_gate_frames(scene, drawn);
         }
         if rescued {
-            // Laid out in the system the rescue took the pod to, from where
-            // it put the ship, before the frame is drawn; the course map
-            // looking there too (`_HandlePlayer` @0x68fab).
-            self.catch_up();
-            self.map.recentre();
+            self.begin_rescue(pod);
         }
         self.relay_messages();
         self.relay_last_line();

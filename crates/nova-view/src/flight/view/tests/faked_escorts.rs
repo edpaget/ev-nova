@@ -920,7 +920,7 @@ fn steps_clearing(view: &mut Faked, cleared: &[bool]) {
         stopped: false,
     });
     let count = u32::try_from(cleared.len()).expect("a few steps");
-    view.run_steps(count);
+    view.run_steps(count, None);
     view.update_escort_menu(count);
 }
 

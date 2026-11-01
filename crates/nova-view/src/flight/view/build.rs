@@ -631,6 +631,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             movies: crate::movie::Movies::none(),
             movie: None,
             movie_replay: Vec::new(),
+            rescue: None,
+            rescue_replay: Vec::new(),
             message: None,
             overlays: FlightOverlays::default(),
             pending_boarding: false,

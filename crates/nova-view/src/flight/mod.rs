@@ -88,6 +88,7 @@ pub mod paint;
 pub(crate) mod pen;
 pub mod pods;
 pub mod radar;
+pub mod rescue_screen;
 pub mod ship_layers;
 pub mod shot_fade;
 pub mod sim_adapter;

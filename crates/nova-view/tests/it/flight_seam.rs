@@ -1040,9 +1040,11 @@ fn a_real_fights_hit_shows_its_effect() {
 }
 
 /// `FlightSim::step`'s stop and the router's rescue desc: a rescue in the
-/// pod stops the stepping, and its desc reaches the router.
+/// pod stops the stepping, and its desc reaches the router once the
+/// rescue's screen has faded out and shown black.
 #[test]
 fn a_rescue_in_the_pod_stops_the_step_and_opens_its_desc() {
+    use nova_view::flight::rescue_screen::RESCUE_FADE_FOR;
     let data = fighting_data(&[(188, 1), (187, 1)]);
     let mut session = SessionBuilder::flying(&data).build();
     nova_sim::fixture::set_player_condition(
@@ -1053,16 +1055,22 @@ fn a_rescue_in_the_pod_stops_the_step_and_opens_its_desc() {
         },
     );
     let mut view = fighting(data, session);
-    let mut frames = 0;
-    let desc = loop {
+    let fate = |view: &FlightView<_, _>| view.session().expect("flying").player_fate();
+    let mut ejected = false;
+    for frames in 0.. {
         // A long frame, many steps: the rescue's ends them.
         view.tick(TICK * 30);
-        if let Some(desc) = view.take_rescue_desc() {
-            break desc;
+        ejected |= matches!(fate(&view), nova_sim::PlayerFate::Ejected { .. });
+        if ejected && fate(&view) == nova_sim::PlayerFate::Flying {
+            break;
         }
-        frames += 1;
-        assert!(frames <= 20, "no rescue");
-    };
+        assert!(frames < 20, "no rescue");
+    }
+    assert_eq!(view.take_rescue_desc(), None, "under the fade out");
+    view.tick(RESCUE_FADE_FOR);
+    assert_eq!(view.take_rescue_desc(), None, "black");
+    view.tick(RESCUE_FADE_FOR);
+    let desc = view.take_rescue_desc().expect("the rescue's desc");
     assert_eq!(desc.id, 13999);
     let session = view.session().expect("flying");
     assert_eq!(session.ship(), ShipId(128), "out of the pod");

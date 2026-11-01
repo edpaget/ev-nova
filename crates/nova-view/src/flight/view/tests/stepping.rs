@@ -1509,7 +1509,7 @@ fn raised(view: &mut Faked, messages: Vec<SimMessage>, report: StepReport) {
     }
     let steps = u32::try_from(report.steps.len()).expect("a frame's steps");
     view.sim.queue_report(report);
-    view.run_steps(steps);
+    view.run_steps(steps, None);
 }
 
 #[test]

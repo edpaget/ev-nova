@@ -87,7 +87,7 @@ pub struct FakeFlight {
     applied: Vec<FlightCommand>,
     answers: VecDeque<(Answer, Option<FlightFrame>, Vec<FlightEvent>)>,
     events: Vec<FlightEvent>,
-    reports: VecDeque<(StepReport, Option<FlightFrame>)>,
+    reports: VecDeque<(StepReport, Option<FlightFrame>, Vec<FlightEvent>)>,
     stepped: Vec<(StepInput, u32)>,
     refused: Vec<PlayerCommand>,
     asks: Vec<FlightCommand>,
@@ -225,13 +225,25 @@ impl FakeFlight {
     /// Reports `report` for the next call of [`FlightSim::step`] not yet
     /// reported, whatever its step count.
     pub fn queue_report(&mut self, report: StepReport) {
-        self.reports.push_back((report, None));
+        self.reports.push_back((report, None, Vec::new()));
     }
 
     /// Reports `report` as [`FakeFlight::queue_report`] does, and shows
     /// `frame` from then on, as a step that changes the flight leaves it.
     pub fn queue_report_showing(&mut self, report: StepReport, frame: FlightFrame) {
-        self.reports.push_back((report, Some(frame)));
+        self.reports.push_back((report, Some(frame), Vec::new()));
+    }
+
+    /// Reports `report` and shows `frame` as
+    /// [`FakeFlight::queue_report_showing`] does, and hands out `events`
+    /// on the drains after that step, as the events its steps raised.
+    pub fn queue_report_telling(
+        &mut self,
+        report: StepReport,
+        frame: FlightFrame,
+        events: Vec<FlightEvent>,
+    ) {
+        self.reports.push_back((report, Some(frame), events));
     }
 
     /// The commands applied, in the order sent.
@@ -356,11 +368,12 @@ impl FlightSim for FakeFlight {
     fn step(&mut self, input: &StepInput, steps: u32, into: &mut StepReport) {
         self.stepped.push((*input, steps));
         match self.reports.pop_front() {
-            Some((report, frame)) => {
+            Some((report, frame, events)) => {
                 into.clone_from(&report);
                 if let Some(frame) = frame {
                     self.frame = frame;
                 }
+                self.events.extend(events);
             }
             None => into.clear(),
         }
@@ -2019,6 +2032,22 @@ mod tests {
             fake.inputs(),
             [held, StepInput::default(), StepInput::default()]
         );
+    }
+
+    #[test]
+    fn the_fake_hands_out_a_steps_events_only_after_that_step() {
+        let mut fake = FakeFlight::new();
+        fake.queue_report_telling(
+            StepReport::default(),
+            FlightFrame::default(),
+            vec![FlightEvent::SaveDue],
+        );
+        let mut drained = Vec::new();
+        fake.drain(&mut drained);
+        assert_eq!(drained, [], "not before the step");
+        fake.step(&StepInput::default(), 1, &mut StepReport::default());
+        fake.drain(&mut drained);
+        assert_eq!(drained, [FlightEvent::SaveDue]);
     }
 
     #[test]

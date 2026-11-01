@@ -948,7 +948,9 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
 }
 
 #[test]
-fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_and_gives_its_desc() {
+fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_once_faded_out_and_gives_its_desc()
+ {
+    use crate::flight::rescue_screen::RESCUE_FADE_FOR;
     use nova_sim::flight_frame::{ShipPlace, StepReport, StepRun};
     let mut view = faked(sol());
     view.map.centre_on_system(SystemId(132));
@@ -972,13 +974,21 @@ fn the_escape_pods_rescue_lays_the_view_out_where_it_put_the_ship_and_gives_its_
         ships: vec![the_player_at(Vec2::new(50.0, 50.0), 90.0)],
         ..sol()
     });
-    view.run_steps(1);
+    view.run_steps(1, None);
+    assert_ne!(
+        view.scene().map(SystemScene::id),
+        Some(SystemId(131)),
+        "not under the fade out"
+    );
+    assert!(view.rescue_frame(RESCUE_FADE_FOR));
     assert_eq!(
         view.previous.position,
         Vec2::new(50.0, 50.0),
         "laid out there"
     );
     assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+    assert_eq!(view.take_rescue_desc(), None, "still black");
+    view.rescue_frame(RESCUE_FADE_FOR);
     assert_eq!(view.take_rescue_desc(), Some(rescued(13999)));
     assert_eq!(view.take_rescue_desc(), None, "once");
     let mut recentred = faked(FlightFrame {

@@ -107,6 +107,9 @@ impl<
     /// [`FlightView::draw_dialog_map`], which the app draws apart when a
     /// mission dialog goes between them.
     fn draw(&self, list: &mut DrawList) {
+        if self.draw_rescue(list) {
+            return;
+        }
         if self.draw_movie(list, |list| {
             if self.draw_scene(list) {
                 self.draw_fades(list);
@@ -182,6 +185,9 @@ impl<
     /// window), unless the map is open, the flight never started or the
     /// cursor's sheet could not be read.
     fn hides_pointer(&self) -> bool {
+        if self.rescue_shows_pointer() {
+            return false;
+        }
         if self.playing() {
             return self.movie_hides_pointer();
         }
@@ -227,6 +233,9 @@ impl<
             self.movie_tick(dt);
             return;
         }
+        if self.rescue_frame(dt) {
+            return;
+        }
         self.elapse_frame_rate(dt);
         self.catch_up();
         self.fade_frame(dt);
@@ -244,6 +253,7 @@ impl<
             self.frame_rate_frame();
             return;
         }
+        let pod = self.pod_frame();
         self.step_stellars(dt);
         if self.faded_keys_frame() {
             return;
@@ -253,7 +263,7 @@ impl<
         let Steps { steps, alpha } = self.clock.advance(dt);
         let keyed = self.cursor_keyed();
         let jumping = self.jump_under_way();
-        self.run_steps(steps);
+        self.run_steps(steps, pod);
         self.settle_faded_keys(jumping);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
@@ -288,6 +298,9 @@ impl<
     /// [`Screen::input`]'s work. The kept frame needs no fill at its end:
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
+        if self.hold_under_rescue(input) {
+            return ScreenAction::None;
+        }
         if self.playing() {
             // `_HandlePlayer` polls the unlatched keys again after the
             // movie, however they went down under it (the `movies` module).

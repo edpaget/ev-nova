@@ -733,6 +733,7 @@ mod outputs;
 mod player;
 mod port_screen_map;
 mod readouts;
+mod rescue;
 mod screen;
 mod shops;
 mod shots;
@@ -1465,6 +1466,12 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// What was pressed under the last movie, until the router takes it
     /// ([`FlightView::take_movie_replay`]).
     movie_replay: Vec<crate::Input>,
+    /// The escape pod's rescue on screen while it shows: flight steps no
+    /// more until it is over (see the `rescue` module).
+    rescue: Option<super::rescue_screen::RescueScreen>,
+    /// What was pressed under the rescue, until the router takes it
+    /// ([`FlightView::take_rescue_replay`]).
+    rescue_replay: Vec<crate::Input>,
     /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
     /// message replaces the old and its time. Its ticks count the
     /// flight's, so they stop while the map is open and while the router

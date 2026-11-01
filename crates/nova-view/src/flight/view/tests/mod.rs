@@ -117,6 +117,7 @@ mod nav;
 mod outputs;
 mod painted_ships;
 mod port_screen_map;
+mod rescue;
 mod ship_drawing;
 mod shots;
 mod stars;

@@ -151,22 +151,37 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.jump.as_ref().or(self.fade_in.as_ref())
     }
 
-    /// Whether the jump's white leaves the screen faded
-    /// ([`JumpEffect::faded`]): a text shown over flight now shows on the
-    /// faded screen, which whoever shows it tells its dialogs
+    /// Whether the jump's white ([`JumpEffect::faded`]) or the escape
+    /// pod's rescue (the `rescue` module) leaves the screen faded: a text
+    /// shown over flight now shows on the faded screen, which whoever
+    /// shows it tells its dialogs
     /// ([`MissionDialogs::set_faded`](crate::ui::mission_dialogs::MissionDialogs::set_faded)).
     #[must_use]
     pub fn screen_faded(&self) -> bool {
-        self.jump_effect().is_some_and(JumpEffect::faded)
+        self.jump_effect().is_some_and(JumpEffect::faded) || self.rescue_faded()
     }
 
     /// A text over flight has faded the screen in from black
     /// ([`MissionDialogs::take_faded_in`](crate::ui::mission_dialogs::MissionDialogs::take_faded_in)):
     /// the white is gone, the warp to be lit again, or the arrival's
-    /// effect over ([`JumpEffect::faded_in`]).
+    /// effect over ([`JumpEffect::faded_in`]); the rescue's screen
+    /// fades in no more as it closes.
     pub fn screen_faded_in(&mut self) {
         self.jump = self.jump.take().and_then(JumpEffect::faded_in);
         self.fade_in = self.fade_in.take().and_then(JumpEffect::faded_in);
+        self.rescue_faded_in();
+    }
+
+    /// Draws what still covers the faded screen over the texts shown on
+    /// it ([`FlightView::screen_faded`]), over the whole of a view `view`
+    /// in size: the rescue's black, or else the jump's white as far as it
+    /// shows.
+    pub fn draw_faded_cover(&self, list: &mut crate::DrawList, view: (f32, f32)) {
+        if self.rescue_faded() {
+            crate::draw::fill_rect(list, crate::fade::whole_view(view), crate::Color::BLACK);
+        } else if let Some(effect) = self.jump_effect() {
+            effect.draw_fade(list, view);
+        }
     }
 
     /// The fade to white moves on by `dt` while flight is paused under a
