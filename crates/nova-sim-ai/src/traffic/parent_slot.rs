@@ -182,6 +182,20 @@ mod tests {
         let before = player.clone();
         player.follow_berth(OLD, NEW, 55.0);
         assert_eq!(player, before, "the player's fighter");
+        let mut follower = npc(2, ShipStats::default());
+        follower.goal = Goal::Follow {
+            lead: OTHER,
+            guard: None,
+        };
+        follower.follow_berth(OLD, NEW, 55.0);
+        assert_eq!(
+            follower.goal,
+            Goal::Follow {
+                lead: OTHER,
+                guard: None
+            },
+            "a follow of another lead"
+        );
         let mut attacker = npc(3, ShipStats::default());
         attacker.goal = Goal::Attack(ShipRef::Npc(OLD));
         attacker.follow_berth(OLD, NEW, 55.0);
