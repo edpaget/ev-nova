@@ -1019,8 +1019,18 @@ fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled()
             (REFUSE_ITEM, rect(117.0, 285.0, 99.0, 25.0)),
             (OFFER_TEXT_ITEM, rect(12.0, 9.0, 415.0, 267.0)),
             (SINGLE_ITEM, rect(173.0, 285.0, 99.0, 25.0)),
+            (9, rect(340.0, 287.0, 23.0, 23.0)),
+            (10, rect(373.0, 287.0, 23.0, 23.0)),
         ] {
             assert_eq!(template.items[item - 1].bounds, bounds, "item {item}");
+        }
+        for item in [9, 10] {
+            let arrow = &template.items[item - 1];
+            assert_eq!(
+                (&arrow.kind, arrow.enabled),
+                (&ItemSpec::User, false),
+                "item {item}, a disabled user item"
+            );
         }
         let mut dialog = OfferDialog::new(
             Ok((template, mono())),
@@ -1232,6 +1242,8 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                     (3, rect(13.0, 7.0, 413.0, 200.0)),
                     (6, rect(170.0, 213.0, 99.0, 25.0)),
                     (OFFER_PICTURE_ITEM, rect(441.0, 7.0, 200.0, 200.0)),
+                    (9, rect(340.0, 214.0, 23.0, 23.0)),
+                    (10, rect(373.0, 214.0, 23.0, 23.0)),
                 ],
             ),
             (
@@ -1241,6 +1253,8 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                     (DONE_ITEM, rect(173.0, 214.0, 99.0, 25.0)),
                     (DESC_PICTURE_ITEM, rect(439.0, 7.0, 200.0, 200.0)),
                     (TEXT_ITEM, rect(12.0, 7.0, 415.0, 201.0)),
+                    (SCROLL_UP_ITEM, rect(330.0, 215.0, 23.0, 23.0)),
+                    (SCROLL_DOWN_ITEM, rect(363.0, 215.0, 23.0, 23.0)),
                 ],
             ),
             (
@@ -1268,6 +1282,20 @@ fn the_picture_variants_lay_out_with_their_items_where_recorded() {
                     template.items[item - 1].bounds,
                     bounds,
                     "DLOG {id} item {item}"
+                );
+            }
+        }
+        for (id, arrows) in [
+            (PICTURE_OFFER_DIALOG, [9, 10]),
+            (PICTURE_DESC_DIALOG, [SCROLL_UP_ITEM, SCROLL_DOWN_ITEM]),
+        ] {
+            let template = ui.dialog_template(id).expect("converts");
+            for item in arrows {
+                let arrow = &template.items[item - 1];
+                assert_eq!(
+                    (&arrow.kind, arrow.enabled),
+                    (&ItemSpec::User, false),
+                    "DLOG {id} item {item}, a disabled user item"
                 );
             }
         }
