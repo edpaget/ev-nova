@@ -978,4 +978,126 @@ mod tests {
         );
         assert!(session.cargo_boxes().is_empty());
     }
+
+    /// A sheet of 36 frames `side` square, each drawn wholly as `mark`.
+    fn whole_frames(side: usize, mark: char) -> crate::sprite_mask::RleSheet {
+        let row: String = std::iter::repeat_n(mark, side).collect();
+        let rows: Vec<&str> = vec![row.as_str(); side];
+        let frames: Vec<&[&str]> = vec![rows.as_slice(); 36];
+        nova_sim_base::fixture::rle::sheet(&frames)
+    }
+
+    /// [`scoopable`] holding the player's sheet `player`, the NPC's (its
+    /// sprite base `npc_base`) `npc`, and box graphic 1's 8 square solid.
+    fn masked(
+        player: crate::sprite_mask::RleSheet,
+        npc: Option<(ShipId, crate::sprite_mask::RleSheet)>,
+        base: ShipId,
+    ) -> FakePilotCatalog {
+        use crate::catalog::MaskSheet;
+        let mut catalog = framed();
+        catalog.rle_sheets = vec![
+            (MaskSheet::Ship(base), player),
+            (MaskSheet::CargoBox(1), whole_frames(8, '#')),
+        ];
+        if let Some((npc_base, sheet)) = npc {
+            catalog.rle_sheets.push((MaskSheet::Ship(npc_base), sheet));
+        }
+        catalog
+    }
+
+    /// The player's sprite base in `catalog`'s session.
+    fn player_base(catalog: &FakePilotCatalog) -> ShipId {
+        let session = flying(catalog, 0);
+        session.statics.arsenal.sprite_base(session.pilot.ship)
+    }
+
+    #[test]
+    fn the_scoop_lays_its_masks_out_from_where_the_player_stood_before_its_move() {
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(4, '#'), None, base);
+        let mut session = scooper(&catalog, 0);
+        let stood = Vec2::new(300.0, 200.0);
+        session.ship.player.position = stood;
+        drop_on_ship(&mut session, Some(2));
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(
+            held(&session),
+            [(Good::Commodity(2), 1)],
+            "taken at its place"
+        );
+        // Moved on since, its own mask still sits at the centre.
+        session.ship.player.position = stood + Vec2::new(50.0, 0.0);
+        let own = session.scoop_masks(stood).player.expect("its sheet");
+        assert_eq!(
+            own.rect,
+            crate::sprite_mask::MaskRect::placed((-2, -2), (4, 4))
+        );
+    }
+
+    #[test]
+    fn the_scoops_masks_are_walked_by_the_rle_collision_walk() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let base = player_base(&scoopable());
+        let catalog = masked(whole_frames(20, 'r'), None, base);
+        let drawn = Rulebook::default().with_override(RuleKey::RleCollisionWalk, RuleSource::Bible);
+        for (rules, taken) in [(Rulebook::default(), false), (drawn, true)] {
+            let mut session = scooper(&catalog, 0).with_rules(rules);
+            drop_on_ship(&mut session, Some(2));
+            work(&mut session, &catalog, Controls::default());
+            assert_eq!(
+                session.cargo_boxes().is_empty(),
+                taken,
+                "a run never touches"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scooping_npc_takes_a_box_by_the_masks_laid_out_from_the_player() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let npc_at = Vec2::new(300.0, 0.0);
+        let npc_base = |catalog: &FakePilotCatalog| {
+            let mut session = flying(catalog, 0);
+            let id = session.space.traffic.add_npc(scooping_npc(npc_at));
+            let ship = session.space.npc(id).expect("here").ship;
+            session.statics.arsenal.sprite_base(ship)
+        };
+        let plain = scoopable();
+        let (base, npc) = (player_base(&plain), npc_base(&framed()));
+        for (mark, rules, on_point) in [
+            ('#', Rulebook::default(), true),
+            ('r', Rulebook::default(), false),
+            (
+                'r',
+                Rulebook::default().with_override(RuleKey::RleCollisionWalk, RuleSource::Bible),
+                true,
+            ),
+        ] {
+            // The player owns no scoop; its sheet is the NPC's if they share
+            // a sprite base.
+            let catalog = if npc == base {
+                masked(whole_frames(20, mark), None, base)
+            } else {
+                masked(
+                    whole_frames(1, '.'),
+                    Some((npc, whole_frames(20, mark))),
+                    base,
+                )
+            };
+            let mut session = flying(&catalog, 0).with_rules(rules);
+            session.ship.player.position = Vec2::new(100.0, 50.0);
+            let id = session.space.traffic.add_npc(scooping_npc(npc_at));
+            let boxes = &mut session.space.boxes;
+            // On its point: the box's frame up and left of it, over the NPC.
+            boxes.spawn_scoopable(npc_at, Some(2), 1, &mut NeverFires);
+            // 25 right: its 8-square frame clear of the NPC's 20, though
+            // graphic 1's 40-square frame for the disc is over it.
+            boxes.spawn_scoopable(npc_at + Vec2::new(25.0, 0.0), Some(3), 1, &mut NeverFires);
+            work(&mut session, &catalog, Controls::default());
+            let hold = session.space.npc(id).expect("here").cargo;
+            assert_eq!(hold.tons(2), u32::from(on_point), "{mark} {rules:?}");
+            assert_eq!(hold.tons(3), 0, "the masks, not the disc: {mark}");
+        }
+    }
 }

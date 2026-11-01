@@ -307,4 +307,34 @@ mod tests {
             frames.index(session.ship.ship_display.drawn.set, after)
         );
     }
+
+    #[test]
+    fn a_weapon_of_no_graphic_asks_for_no_sheet() {
+        let mut catalog = left_quartered();
+        catalog.weapons.push(crate::catalog::WeaponRecord {
+            graphic: -1,
+            ..nova_sim_catalog::fixture::weapon(129)
+        });
+        let mut session = shooting(&catalog, 0.0, Rulebook::default());
+        work(&mut session, &catalog, Controls::default());
+        let asked = catalog.rle_sheets_asked.borrow().clone();
+        assert!(asked.contains(&BLASTER_SHOT), "{asked:?}");
+        assert!(!asked.contains(&MaskSheet::Shot(-1)), "{asked:?}");
+    }
+
+    #[test]
+    fn the_contact_is_walked_by_the_rle_collision_walk() {
+        let mut catalog = armed();
+        let runs: Vec<String> = (0..40).map(|_| "r".repeat(40)).collect();
+        let rows: Vec<&str> = runs.iter().map(String::as_str).collect();
+        catalog.rle_sheets = vec![
+            (NPC_SHIP, sheet(&[&rows])),
+            (BLASTER_SHOT, square(2, |_, _| true)),
+        ];
+        let drawn = Rulebook::default().with_override(RuleKey::RleCollisionWalk, RuleSource::Bible);
+        let mut original = shooting(&catalog, 0.0, Rulebook::default());
+        assert!(!struck(&mut original, &catalog, 12), "a run never touches");
+        let mut other = shooting(&catalog, 0.0, drawn);
+        assert!(struck(&mut other, &catalog, 12));
+    }
 }

@@ -319,3 +319,59 @@ fn an_asteroid_touches_by_the_frame_it_shows() {
     assert!(!on(0.0));
     assert!(on(1.7), "its whole part, 1");
 }
+
+/// The player's ship at `at`, of no sprite.
+fn player_at(at: Vec2) -> Ship {
+    Ship {
+        id: ShipRef::Player,
+        fleet: ShipRef::Player,
+        ..Ship::at(0, at.x, at.y)
+    }
+}
+
+/// Where the player was seen, far from the origin.
+const SEEN: Vec2 = Vec2::new(500.0, 300.0);
+
+#[test]
+fn a_ships_and_a_shots_rects_are_laid_out_from_where_the_player_was_seen() {
+    let sprites = lending(Some(quartered()), ShotContact::Placed);
+    let b = Vec2::new(SEEN.x, SEEN.y - 100.0);
+    let among = |off: Vec2| {
+        let at = b + off;
+        let mut ships = [player_at(SEEN), Ship::at(2, b.x, b.y).of(forty())];
+        shot_among(gun(), (at, at), &mut ships, &sprites).0
+    };
+    assert_eq!(among(Vec2::new(9.0, 9.0)), [B], "over its pixels");
+    assert_eq!(among(Vec2::new(-9.0, -9.0)), [], "over its clear quarter");
+}
+
+#[test]
+fn an_asteroids_and_a_shots_rects_are_laid_out_from_where_the_player_was_seen() {
+    let sprites = rocky(quartered(), ShotContact::Placed);
+    let worn = |off: Vec2| {
+        let at = Vec2::new(SEEN.x, SEEN.y - 100.0) + off;
+        let mut combat = Combat::default();
+        fly(&mut combat, (gun(), A, ShotLayer::Shots), (at, at), None);
+        let mut rocks = Rocks::of([rock(0, SEEN.x, SEEN.y - 100.0)]);
+        passes(&mut combat, &mut [player_at(SEEN)], &mut rocks, &sprites);
+        rocks.at(0).strength < 10
+    };
+    assert!(worn(Vec2::new(9.0, 9.0)), "over its pixels");
+    assert!(!worn(Vec2::new(-5.0, -5.0)), "over its clear quarter");
+}
+
+#[test]
+fn on_a_wraps_pass_a_shot_left_behind_meets_an_asteroid_by_their_masks_where_it_is() {
+    let stood = Vec2::new(WRAP_EDGE + 10.0, 0.0);
+    let at = Vec2::new(stood.x - WRAP_EDGE * 2.0, 0.0);
+    let mut combat = Combat::default();
+    fly(&mut combat, (gun(), A, ShotLayer::Shots), (at, at), None);
+    combat.carry(&PlayerWrap::of(stood).expect("past the edge"), Vec::new());
+    let mut rocks = Rocks::of([rock(0, at.x, at.y)]);
+    let solid = rocky(square(40, |_, _| true), ShotContact::Placed);
+    passes(&mut combat, &mut [], &mut rocks, &solid);
+    assert!(
+        rocks.at(0).strength < 10,
+        "both a shift back of where they stood"
+    );
+}

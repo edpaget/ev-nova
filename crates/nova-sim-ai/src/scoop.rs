@@ -607,6 +607,23 @@ mod tests {
     }
 
     #[test]
+    fn the_box_is_laid_out_from_where_the_player_stood() {
+        let camera = Vec2::new(300.0, 200.0);
+        let mut boxes = CargoBoxes::default();
+        boxes.spawn_scoopable(camera + Vec2::new(20.0, 20.0), Some(1), 1, &mut NeverFires);
+        let corner = box_sheets(|x, y| x < 4 && y < 4);
+        let mask = ship_mask((13, 13));
+        let scooping = Scooping {
+            mask: Some(&mask),
+            sheets: Some(&corner),
+            camera,
+            ..Scooping::disc(Vec2::ZERO, 0.0)
+        };
+        let frames = BoxFrames::new([None, Some((8, 8)), None, None, None]);
+        assert!(boxes.take_touching(&scooping, &frames).is_some());
+    }
+
+    #[test]
     fn a_ship_on_the_boxs_point_takes_a_box_drawn_at_its_bottom_right() {
         let on_point = ship_mask((15, 15));
         assert!(takes(
