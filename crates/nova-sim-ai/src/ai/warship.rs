@@ -139,7 +139,7 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::interceptor::inspection_holds;
-use crate::ai::odds::{cached_odds, state4_attack};
+use crate::ai::odds::cached_odds;
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
@@ -399,13 +399,14 @@ impl Hunt {
 /// What a hunter `npc`, judged by the goal it holds, does about
 /// `target`: it retreats from it as `retreat` says, the odds and shield
 /// retreats then the out-of-ammo one (@0x8bcd9-0x8bf35, then
-/// @0x8bf3e-0x8bf83), or snipes at it in a hopeless chase (which a
-/// stand-off ship never asks, @0x8e48e), or attacks it.
+/// @0x8bf3e-0x8bf83), or attacks it (goal 4), which the high level's
+/// state-4 block may then make a snipe in a hopeless chase
+/// ([`attack_drop`](crate::ai::attack_drop)).
 fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
     if retreats(npc, around, retreat) || (retreat.out_of_ammo && out_of_ammo::retreats(npc)) {
         Goal::Flee(target)
     } else {
-        state4_attack(npc, target, around)
+        Goal::Attack(target)
     }
 }
 
@@ -610,6 +611,13 @@ mod tests {
 
     fn decided(npcs: &[Npc], record: i16) -> Goal {
         decided_by(&govts(0, 0), npcs, record)
+    }
+
+    /// [`decided`] through Nova's AI: the think, then the high level.
+    fn flown(npcs: &[Npc], record: i16) -> Goal {
+        let (sites, govts) = (sites(), govts(0, 0));
+        let around = around(&sites, npcs, &govts, (0.0, -100.0), record);
+        crate::ai::NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
     }
 
     #[test]
@@ -1021,7 +1029,9 @@ mod tests {
         quarry.state.velocity = Vec2::new(0.0, -1.0);
         let mut trader_cop = hunter;
         trader_cop.govt = Some(TRADERS);
-        assert_eq!(decided(&[trader_cop, quarry], 0), Goal::Snipe(n(2)));
+        let npcs = [trader_cop, quarry];
+        assert_eq!(decided(&npcs, 0), Goal::Attack(n(2)), "the think's goal 4");
+        assert_eq!(flown(&npcs, 0), Goal::Snipe(n(2)), "the block's (@0x8e614)");
     }
 
     #[test]
@@ -1318,6 +1328,16 @@ mod tests {
         Warship::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
     }
 
+    /// [`worded`] through Nova's AI, the player intact 100 above: the
+    /// think, then the high level, whose state-4 block snipes a hopeless
+    /// chase.
+    fn worded_flown(flags: u16, npcs: &[Npc]) -> Goal {
+        let govts = govts(0, flags);
+        let sites = sites();
+        let seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        crate::ai::NovaAi::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+    }
+
     const ALWAYS: u16 = crate::govt::ALWAYS_ATTACKS_PLAYER;
     const NEVER: u16 = crate::govt::NEVER_ATTACKS_PLAYER;
     const INTACT: Option<Condition> = Some(Condition::Intact);
@@ -1568,16 +1588,18 @@ mod tests {
     // `_HighLevelAIHandler` asks `_AIEvalHopelessChase` @0x8e5fe, @0x8eace
     // of it too).
 
-    /// The decision of `npcs[0]`, a warship of the police with `flags`,
-    /// the player 100 above moving up at `speed`.
+    /// The goal of `npcs[0]`, a warship of the police with `flags`, through
+    /// Nova's AI, the player 300 above moving up at `speed`.
     fn worded_moving(flags: u16, npcs: &[Npc], speed: f32) -> Goal {
+        // Through Nova's AI, the player 300 above, outside the dogfight
+        // box: the state-4 block asks the chase (@0x8e41b-0x8e473).
         let govts = govts(0, flags);
         let sites = sites();
-        let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        let mut seen = around(&sites, npcs, &govts, (0.0, -300.0), 0);
         if let Some(player) = seen.player.as_mut() {
             player.state.velocity = Vec2::new(0.0, -speed);
         }
-        Warship::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+        crate::ai::NovaAi::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
     }
 
     /// A police warship at `shield` of its 30, of `aggression`, with
@@ -1666,7 +1688,12 @@ mod tests {
         runner.goal = Goal::Flee(n(1));
         runner.state.velocity = Vec2::new(0.0, -1.0);
         let npcs = [heavy, hired(), runner];
-        assert_eq!(worded(NEVER, &npcs, INTACT), Goal::Snipe(n(2)), "hopeless");
+        assert_eq!(worded(NEVER, &npcs, INTACT), Goal::Attack(n(2)), "its pick");
+        assert_eq!(
+            worded_flown(NEVER, &npcs),
+            Goal::Snipe(n(2)),
+            "hopeless, 300 off (@0x8e614)"
+        );
     }
 
     // The retreat judges the goal the word has just chosen: the original
@@ -1951,9 +1978,22 @@ mod tests {
         );
         let mut heavy = attacking(n(2));
         heavy.hull.mass = 100.0;
+        let govts = govts(0, ALWAYS);
+        let sites = sites();
+        let heavies = [heavy.clone(), pirate()];
+        let mut far = around(&sites, &heavies, &govts, (0.0, -300.0), 0);
+        if let Some(player) = far.player.as_mut() {
+            player.state.velocity = Vec2::new(0.0, -1.0);
+        }
+        let sniped = crate::ai::NovaAi::default().decision(&heavies[0], &far, &mut Draws::of(&[0]));
+        assert_eq!(
+            (sniped.goal, sniped.turns_on_player),
+            (Goal::Snipe(P), true),
+            "a hopeless chase, its snipe the state-4 block's (@0x8e614)"
+        );
         assert_eq!(
             worded_decision(ALWAYS, &[heavy, pirate()], intact, 1.0),
-            turning(Goal::Snipe(P), true),
+            turning(Goal::Attack(P), true),
             "a hopeless chase"
         );
         let tired = [worn(4.4, 2, Goal::Attack(n(2))), pirate()];

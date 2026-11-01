@@ -93,7 +93,6 @@
 //!   scan if it is the player.
 
 use crate::ai::fire::FireRules;
-use crate::ai::odds::state4_attack;
 use crate::ai::target::{TargetRules, let_go, re_pick_target};
 use crate::ai::warship::{BreakingUp, Retreat, hunt};
 use crate::ai::{
@@ -281,12 +280,11 @@ impl Interceptor {
 /// @0x8d404) runs `_SelectWarshipTarget` again
 /// ([`re_pick_target`](crate::ai::target::re_pick_target), by `rules`,
 /// drawing on `chance`). With none the inspection stands (@0x8d42d). A
-/// pick that writes state 4 ([`Pick::attacks`](crate::ai::target::Pick::attacks)) attacks, as
-/// `_HighLevelAIHandler`'s state-4 block takes it that frame: dropped at
-/// once when it lets the ship go ([`let_go`]), sniped at in a hopeless
-/// chase unless the hull stands off (@0x8e48e), the call on the player
-/// kept; one breaking up the block itself ends (@0x8e3ef,
-/// [`attack_drop`](crate::ai::attack_drop)). Any other pick is inspected
+/// pick that writes state 4 ([`Pick::attacks`](crate::ai::target::Pick::attacks)) attacks, the
+/// call on the player kept: dropped at once when it lets the ship go
+/// ([`let_go`]); `_HighLevelAIHandler`'s state-4 block then takes it that
+/// frame ([`attack_drop`](crate::ai::attack_drop)), sniping at it in a
+/// hopeless chase and ending it on a ship breaking up. Any other pick is inspected
 /// instead of the ship it was
 /// inspecting. The retreats came before (@0x8d161-0x8d2e4) and need state
 /// 4, so a fresh attack isn't judged for one in the same think.
@@ -312,7 +310,7 @@ fn re_pick(
     } else if let_go(npc, pick.ship, around, rules) {
         (Goal::Idle, true)
     } else {
-        (state4_attack(npc, pick.ship, around), false)
+        (Goal::Attack(pick.ship), false)
     };
     Decision {
         goal,
@@ -1829,7 +1827,11 @@ mod tests {
                 player.state.velocity = Vec2::new(0.0, -1.0);
                 player.hull.class_speed = 6.0;
             }
-            Interceptor::default()
+            let think = Interceptor::default()
+                .decision(&npcs[0], &seen, &mut Draws::of(&[]))
+                .goal;
+            assert_eq!(think, Goal::Attack(P), "the think's goal 4");
+            crate::ai::NovaAi::default()
                 .decision(&npcs[0], &seen, &mut Draws::of(&[]))
                 .goal
         };

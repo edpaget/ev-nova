@@ -359,20 +359,6 @@ pub fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
     })
 }
 
-/// How `npc` flies an attack on `target` among `around`, as
-/// `_HighLevelAIHandler`'s state-4 block takes it: it asks
-/// `_AIEvalHopelessChase` of every state-4 target, past a stand-off hull
-/// (@0x8e48e), and snipes in a hopeless chase ([`hopeless_chase`]);
-/// otherwise it attacks.
-#[must_use]
-pub fn state4_attack(npc: &Npc, target: ShipRef, around: &Surroundings) -> Goal {
-    if !npc.hull.stands_off && hopeless_chase(npc, target, around) {
-        Goal::Snipe(target)
-    } else {
-        Goal::Attack(target)
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {

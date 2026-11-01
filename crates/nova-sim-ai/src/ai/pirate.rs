@@ -111,7 +111,7 @@
 #[cfg(doc)]
 use crate::ai::fire::DOGFIGHT_BOX;
 use crate::ai::fire::{AmmoLeft, FireRules, ammo_left};
-use crate::ai::odds::{hopeless_chase, outside_box, state4_attack};
+use crate::ai::odds::{hopeless_chase, outside_box};
 use crate::ai::target::{TargetRules, pick_target, spares};
 use crate::ai::travel::TravelWrite;
 use crate::ai::{
@@ -293,7 +293,7 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
             ..if dry {
                 dry_dropped
             } else {
-                of(state4_attack(npc, target, around))
+                of(Goal::Attack(target))
             }
         },
         Class::Attack => {
@@ -309,7 +309,7 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
             } else if gone_or_dying(target, around) {
                 dropped
             } else {
-                of(state4_attack(npc, target, around))
+                of(Goal::Attack(target))
             }
         }
     }
@@ -502,6 +502,17 @@ mod tests {
             TargetRules::default(),
             &mut Draws::of(&[0, 0, 0]),
         )
+    }
+
+    /// The goal of `npcs[0]` by `govts` through Nova's AI, the pirate its
+    /// warships' think: the think, then the high level.
+    fn flown_by(govts: &Governments, npcs: &[Npc], side: Option<&PlayerSide>) -> Goal {
+        let sites = sites();
+        let mut seen = around(&sites, npcs, govts, (0.0, 0.0), 0);
+        seen.player = side.copied();
+        crate::ai::NovaAi::default()
+            .with(AiType::Warship, std::rc::Rc::new(PirateWarship::default()))
+            .decide(&npcs[0], &seen, &mut Draws::of(&[0, 0, 0]))
     }
 
     /// The decision of `npcs[0]`, the player intact far off with no crew.
@@ -1125,13 +1136,20 @@ mod tests {
         }
         let mut attacker = heavy.clone();
         attacker.goal = Goal::Attack(P);
-        let mut crewless = running(-100.0);
-        crewless.hull.crew = 0;
-        assert_eq!(
-            decided_by(&govts, &[attacker], Some(&crewless)),
-            only(Goal::Snipe(P)),
-            "goal 4 asks inside too"
-        );
+        for (y, goal) in [(-100.0, Goal::Attack(P)), (-400.0, Goal::Snipe(P))] {
+            let mut crewless = running(y);
+            crewless.hull.crew = 0;
+            assert_eq!(
+                decided_by(&govts, &[attacker.clone()], Some(&crewless)),
+                only(Goal::Attack(P)),
+                "{y}: the think's goal 4"
+            );
+            assert_eq!(
+                flown_by(&govts, &[attacker.clone()], Some(&crewless)),
+                goal,
+                "{y}: goal 4 isn't asked inside either (@0x8e473 → @0x8e6a2)"
+            );
+        }
     }
 
     #[test]
@@ -1156,12 +1174,20 @@ mod tests {
         fleeing.state.velocity = Vec2::new(0.0, 1.0);
         let mut heavy = holding(Goal::Attack(n(2)), Some(n(2)));
         heavy.hull.mass = 100.0;
+        let far = Some(player(0.0, 3000.0));
+        let govts = govts(0, 0);
+        let npcs = [heavy.clone(), fleeing.clone()];
+        assert_eq!(decided(&npcs), only(Goal::Attack(n(2))), "the think's");
         assert_eq!(
-            decided(&[heavy.clone(), fleeing.clone()]),
-            only(Goal::Snipe(n(2)))
+            flown_by(&govts, &npcs, far.as_ref()),
+            Goal::Snipe(n(2)),
+            "the block's (@0x8e614)"
         );
         heavy.hull.stands_off = true;
-        assert_eq!(decided(&[heavy, fleeing]), only(Goal::Attack(n(2))));
+        assert_eq!(
+            flown_by(&govts, &[heavy, fleeing], far.as_ref()),
+            Goal::Attack(n(2))
+        );
     }
 
     #[test]
