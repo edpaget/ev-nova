@@ -14,10 +14,13 @@
 //!   (@0x8d462-0x8d4ac), so a pirate's count wait ([`Goal::CountWait`])
 //!   flies on as a fight with no quarry; a ship turned out of it onto
 //!   another goal keeps the wait and is skipped. A plunder whose ship has
-//!   gone, or whose target the slot test cleared, takes goal 0 alone,
+//!   gone, its target cleared by the slot test, takes goal 0 alone,
 //!   keeping its docking and nav for that tick's low level
 //!   ([`HighLevel::LetsGo`], @0x8e761 → @0x8eb5f); the next tick's goal
-//!   drops them. A plunder of a disabled ship docks
+//!   drops them. The goal's ship stands in for its target (+0x70), which
+//!   only the slot test clears under goal 0xd, so a plunder of a ship
+//!   still there reads it whatever target the traffic holds. A plunder of
+//!   a disabled ship docks
 //!   ([`plunder_dock::high_level`]), as does a repair of the player
 //!   ([`repair_dock::high_level`], nothing changing with no target); a
 //!   refuel with a target refuels ([`HighLevel::Refuels`], its docking
@@ -177,8 +180,10 @@ pub enum HighLevel {
     },
     /// It flies its fight, if any.
     Fights,
-    /// Its plunder's ship has gone, or its target was cleared (the slot
-    /// test's +0x70 -1, @0x8d4e4-0x8d50d): goal 0xd writes goal 0 alone
+    /// Its plunder's ship has gone, so the slot test cleared its target
+    /// (+0x70 -1, @0x8d4e4-0x8d50d), the only clear under goal 0xd; a ship
+    /// still there is read whatever target the traffic holds, as a fresh
+    /// plunder's is taken after the high level. Goal 0xd writes goal 0 alone
     /// (@0x8e74e-0x8e761 → @0x8eb5f), keeping its docking and nav, so that
     /// tick's low level flies its sub at the ship's record. Its +0x50 = 0
     /// (@0x8e751) is the hold's ([`warp_out::hold_stage`](crate::traffic::warp_out::hold_stage),
@@ -1266,23 +1271,51 @@ mod tests {
     }
 
     #[test]
-    fn a_plunder_whose_target_is_none_takes_goal_0_keeping_its_docking_and_nav() {
-        // The slot test makes +0x70 -1 (@0x8d4e4-0x8d50d), and goal 0xd's
-        // block then writes goal 0 alone (@0x8e74e-0x8e761 → @0x8eb5f):
-        // its sub and nav are kept for that frame's low level.
-        let mut cleared = closing_plunder();
-        cleared.target = None;
+    fn a_plunder_whose_ship_has_gone_takes_goal_0_keeping_its_docking_and_nav() {
+        // The slot test makes +0x70 -1 for a slot gone (@0x8d4e4-0x8d50d),
+        // and goal 0xd's block then writes goal 0 alone (@0x8e74e-0x8e761
+        // → @0x8eb5f): its sub and nav are kept for that frame's low level.
+        // The goal's ship stands in for +0x70, so the target the traffic
+        // holds isn't read.
         let world = World::new(&[]);
-        let cleared = [cleared];
-        let held = [closing_plunder()];
-        for (name, npcs) in [("cleared", &cleared[..]), ("held", &held[..])] {
-            let high = high_level(&npcs[0], &world.around(npcs), InertialDampener::PlayerOnly);
+        for target in [Some(ShipRef::Npc(VICTIM)), None] {
+            let mut plunder = closing_plunder();
+            plunder.target = target;
+            let npcs = [plunder];
+            let high = high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly);
+            assert_eq!(high, HighLevel::LetsGo, "{target:?}");
             let mut taken = npcs[0].clone();
             take_high_level(&mut taken, high);
-            assert_eq!(taken.goal, Goal::Idle, "{name}: {high:?}");
-            assert_eq!(taken.docking, npcs[0].docking, "{name}");
-            assert_eq!(taken.travel, npcs[0].travel, "{name}");
+            assert_eq!(taken.goal, Goal::Idle, "{target:?}");
+            assert_eq!(taken.docking, npcs[0].docking, "{target:?}");
+            assert_eq!(taken.travel, npcs[0].travel, "{target:?}");
         }
+    }
+
+    #[test]
+    fn a_plunder_of_a_disabled_ship_still_there_docks_though_the_traffic_holds_no_target() {
+        // Only the slot test clears +0x70 under goal 0xd, and only for a
+        // slot gone; a fresh plunder's target is taken after the high
+        // level, so the goal's ship there is +0x70 set: it docks.
+        let mut plunder = closing_plunder();
+        plunder.target = None;
+        let npcs = [plunder, victim()];
+        let world = World::new(&[]);
+        let high = high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly);
+        assert!(
+            matches!(
+                high,
+                HighLevel::Docks {
+                    ship: ShipRef::Npc(VICTIM),
+                    step: DockStep::Sub(_),
+                    ..
+                }
+            ),
+            "{high:?}"
+        );
+        let mut taken = npcs[0].clone();
+        take_high_level(&mut taken, high);
+        assert_eq!(taken.goal, npcs[0].goal, "no goal 0");
     }
 
     #[test]
