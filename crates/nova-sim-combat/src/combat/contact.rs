@@ -475,6 +475,35 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_with_a_mask_goes_by_radius_where_its_shape_says_against_its_pixels() {
+        let clear = |side| laid(&vec![row(side, |_| false).as_str(); side], (0, 0));
+        let solid = |side| laid(&vec![row(side, |_| true).as_str(); side], (0, 0));
+        let dot = |at| laid(&["#"], at);
+        let walk = MaskWalk::Original;
+        // 32 wide: by radius at the centre over clear pixels, and not by
+        // its drawn corner, 22.6 from its centre, past 16.
+        assert_eq!(
+            ship_meets(&clear(32), &dot((16, 16)), 1.0, walk),
+            Some(true)
+        );
+        let (ship, corner) = (solid(32), dot((0, 0)));
+        let masks = ship.mask.as_ref().zip(corner.mask.as_ref());
+        assert_eq!(masks.and_then(|(a, b)| a.touches(b, walk)), Some(true));
+        assert_eq!(ship_meets(&ship, &corner, 1.0, walk), Some(false));
+        // 40 wide: by its pixels at 1.0, by radius at 2.0.
+        assert_eq!(
+            ship_meets(&clear(40), &dot((20, 20)), 1.0, walk),
+            Some(false)
+        );
+        assert_eq!(
+            ship_meets(&clear(40), &dot((20, 20)), 2.0, walk),
+            Some(true)
+        );
+        assert_eq!(ship_meets(&solid(40), &dot((0, 0)), 1.0, walk), Some(true));
+        assert_eq!(ship_meets(&solid(40), &dot((0, 0)), 2.0, walk), Some(false));
+    }
+
+    #[test]
     fn a_ship_is_laid_out_at_its_sheets_size_or_its_shan_sizes() {
         let sheet = one(&["###", "###"]);
         let mut sprites = ContactSprites::default();

@@ -201,6 +201,57 @@ fn a_small_ship_goes_by_radius_at_its_shan_sizes_with_no_sheet() {
     assert_eq!(hit(Vec2::new(13.0, 13.0)), None);
 }
 
+/// A 30-square ship frame drawn only in its bottom-right quarter.
+fn quartered_small() -> Rc<RleSheet> {
+    square(30, |x, y| x >= 15 && y >= 15)
+}
+
+/// Whether A's shot, a still 2-square at `at`, strikes B of `hull`,
+/// `sprites` lent.
+fn struck_at(at: Vec2, hull: &HullSpec, sprites: &ContactSprites) -> bool {
+    let (struck, _) = shot_among(gun(), (at, at), &mut [b_of(hull)], sprites);
+    struck == [B]
+}
+
+#[test]
+fn a_small_ship_whose_sheet_was_read_goes_by_radius_not_its_pixels() {
+    // Rects (-15, 15) and the shot's, 2 across: centres nearer than 16.
+    let clear = lending(Some(quartered_small()), ShotContact::Placed);
+    assert!(
+        struck_at(Vec2::new(-9.0, -9.0), &thirty(), &clear),
+        "over its clear quarter, 12.7 from its centre"
+    );
+    let solid = lending(Some(square(30, |_, _| true)), ShotContact::Placed);
+    assert!(
+        !struck_at(Vec2::new(-13.0, -13.0), &thirty(), &solid),
+        "over its pixels and within its rect, but 18.4 from its centre"
+    );
+}
+
+#[test]
+fn a_wide_ship_whose_sheet_was_read_goes_by_radius_at_twice_the_speed() {
+    // Rects (-20, 20) and the shot's, 2 across: centres nearer than 21.
+    let twice = |sheet: Rc<RleSheet>| ContactSprites {
+        speed_mult: 2.0,
+        ..lending(Some(sheet), ShotContact::Placed)
+    };
+    let corner = Vec2::new(-9.0, -9.0);
+    assert!(
+        struck_at(corner, &forty(), &twice(quartered())),
+        "its clear quarter"
+    );
+    let once = lending(Some(quartered()), ShotContact::Placed);
+    assert!(!struck_at(corner, &forty(), &once), "by its pixels at 1.0");
+    let edge = Vec2::new(-18.0, -18.0);
+    let solid = square(40, |_, _| true);
+    assert!(
+        !struck_at(edge, &forty(), &twice(Rc::clone(&solid))),
+        "over its pixels, but 25.5 from its centre"
+    );
+    let once = lending(Some(solid), ShotContact::Placed);
+    assert!(struck_at(edge, &forty(), &once), "by its pixels at 1.0");
+}
+
 #[test]
 fn a_tall_shot_is_tested_at_its_width_only_rect() {
     // 4 by 12, 14 above: its centre by radius is its point, 14 from the
