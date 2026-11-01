@@ -1799,34 +1799,16 @@ impl Traffic {
     }
 
     /// Runs the `plunders` the decisions made, in berth order, in `world`,
-    /// rolling on `chance` ([`plunder::resolve`]), queueing what happened
-    /// on the line at each pirate's berth ([`on_line`]); a captured ship's
-    /// berth forgets its person's name, as its slot's +0xc8d0 is cleared
-    /// (@0x84953).
+    /// rolling on `chance` ([`plunder::resolve`]), settling what happened
+    /// ([`Traffic::settle_plunder`]).
     fn plunder(
         &mut self,
         plunders: Vec<(usize, ShipRef)>,
         world: &World,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let events = plunder::resolve(&mut self.npcs, plunders, world, &mut *chance);
-        for event in &events {
-            if let PirateEvent::Plundered {
-                victim,
-                taken: Some(_),
-                ..
-            } = *event
-                && let Some(berth) = self
-                    .npcs
-                    .iter()
-                    .find(|npc| npc.id == victim)
-                    .map(|npc| npc.berth)
-            {
-                self.forget_berth_person(berth);
-            }
-        }
-        for event in events {
-            self.queue_pirate(event);
+        for event in plunder::resolve(&mut self.npcs, plunders, world, &mut *chance) {
+            self.settle_plunder(event);
         }
     }
 

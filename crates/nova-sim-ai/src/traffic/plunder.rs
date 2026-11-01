@@ -28,10 +28,14 @@
 //!   While the wait skips it, a docking outlives whatever goal the think
 //!   writes, unless the think writes the sub itself
 //!   ([`plunder_dock::kept_by`]).
-//! - **The plunder** ([`resolve`]), over the decisions that plunder
-//!   ([`Decision::plunders`]), in berth order: the pirate takes goal 0xe
-//!   ([`Goal::Drift`]) and an AI wait of [`PLUNDER_HOLD`], then plunders,
-//!   then its target and nav are cleared. Against an NPC it moves the
+//! - **The plunder** ([`plunder()`]), over the decisions that plunder
+//!   ([`Decision::plunders`], [`resolve`]), in berth order, and in sub
+//!   0xf's completion under goal 0xd at the pirate's slot (the traffic's
+//!   `dispatch_dock`): the pirate takes goal 0xe ([`Goal::Drift`]), an AI
+//!   wait of [`PLUNDER_HOLD`] and +0x8c -1 ([`Npc::defends`]), then
+//!   plunders its nav, then its target and nav are cleared. A ship gone
+//!   from the system, read by its slot's record, or breaking up yields
+//!   nothing (@0x83fbd-0x83fd4). Against an NPC it moves the
 //!   victim's cargo into its free holds ([`steal`]) and zeroes the
 //!   victim's credits (+0xa0, read by no one, so not kept); a mission ship
 //!   keeps nothing else, and any other may be captured ([`captures`]).
@@ -55,8 +59,8 @@
 //!   thinks afresh on the next. The flight moves it on at its velocity
 //!   meanwhile ([`autopilot`](crate::traffic::autopilot)).
 //!
-//! The original plunders inside each pirate's think, and so does the
-//! traffic (`Traffic::think_run`): a later slot's think reads an earlier
+//! The original plunders inside each pirate's think or its low level, and
+//! so does the traffic (`Traffic::think_run`, `dispatch_dock`): a later slot's think reads an earlier
 //! slot's capture that frame, a ship the capture dropped thinking from goal
 //! 0 and a ship taken above its pirate thinking at once as its escort.
 //! Nothing here plays a sound: the session raises `snd ` 151 with each
@@ -77,12 +81,12 @@ use crate::flight::{self, FlightRules, ShipState};
 use crate::hail::Help;
 use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
-use crate::traffic::World;
 #[cfg(test)]
 use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::npc::{NPC_COMMODITIES, Npc, NpcHold, NpcId};
 use crate::traffic::plunder_dock::{self, DockOutcome, DockStep, Docking};
 use crate::traffic::repair_dock;
+use crate::traffic::{Traffic, World};
 use nova_sim_base::trig;
 use nova_sim_catalog::catalog::ShipId;
 
@@ -366,23 +370,62 @@ pub fn resolve(
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<PirateEvent> {
     plunders.sort_by_key(|&(at, _)| npcs[at].berth);
-    let mut events = Vec::new();
-    for (at, victim) in plunders {
-        npcs[at].goal = Goal::Drift;
-        npcs[at].ai_wait = PLUNDER_HOLD;
-        let pirate = npcs[at].id;
-        match victim {
-            ShipRef::Player => events.push(PirateEvent::PlunderPlayer { pirate }),
-            ShipRef::Npc(id) => {
-                if let Some(event) = plunder_npc(npcs, at, id, world, chance) {
-                    events.push(event);
-                }
-            }
+    plunders
+        .into_iter()
+        .filter_map(|(at, victim)| plunder(npcs, at, victim, world, chance))
+        .collect()
+}
+
+/// The pirate at `at` among `npcs` plunders `victim`, the ship its nav
+/// names, in `world`, rolling on `chance`, as the type think's plunder
+/// (@0x8c772-0x8c7ae, [`resolve`]) and sub 0xf's completion
+/// (@0x86f46-0x86f8d, the traffic's `dispatch_dock`) both do: goal 0xe
+/// ([`Goal::Drift`]) and an AI wait of [`PLUNDER_HOLD`], its +0x8c -1
+/// (@0x8c791, @0x86f67: [`Npc::defends`]), then `_AIPlunderShipContents`
+/// (see the module docs), then its target, docking and travel stellar
+/// cleared (@0x8c7a8-0x8c7ae, @0x86f87-0x86f8d). What happened, for the
+/// session: nothing for an NPC gone from the system or breaking up
+/// (@0x83fbd-0x83fd4), whose record is left as it was.
+pub fn plunder(
+    npcs: &mut [Npc],
+    at: usize,
+    victim: ShipRef,
+    world: &World,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<PirateEvent> {
+    npcs[at].goal = Goal::Drift;
+    npcs[at].ai_wait = PLUNDER_HOLD;
+    npcs[at].defends = None;
+    let pirate = npcs[at].id;
+    let event = match victim {
+        ShipRef::Player => Some(PirateEvent::PlunderPlayer { pirate }),
+        ShipRef::Npc(id) => plunder_npc(npcs, at, id, world, chance),
+    };
+    npcs[at].target = None;
+    npcs[at].docking = None;
+    npcs[at].travel = None;
+    event
+}
+
+impl Traffic {
+    /// Queues `event`, a plunder's, on the line at its pirate's berth
+    /// ([`on_line`](crate::traffic::on_line)); a captured ship's berth
+    /// forgets its person's name, as its slot's +0xc8d0 is cleared
+    /// (@0x84953).
+    pub(super) fn settle_plunder(&mut self, event: PirateEvent) {
+        if let PirateEvent::Plundered {
+            victim,
+            taken: Some(_),
+            ..
+        } = event
+            && let Some(berth) = (self.npcs.iter())
+                .find(|npc| npc.id == victim)
+                .map(|npc| npc.berth)
+        {
+            self.forget_berth_person(berth);
         }
-        npcs[at].target = None;
-        npcs[at].docking = None;
+        self.queue_pirate(event);
     }
-    events
 }
 
 /// The pirate at `at` among `npcs` plunders NPC `victim`, if it is in the
@@ -471,7 +514,9 @@ fn plunder_npc(
     // +0x88 = 6 (@0x8495c) overwrites a bribe's 1, its only word
     // (`_DoCommDialog` @0x961f8): the taken ship spares the player no more.
     ship.overwrite_bribe();
-    // It defends no stellar now (+0x8c = -1, @0x8c791).
+    // It defends no stellar now. The original writes no +0x8c of the ship
+    // it takes (@0x8c791 is the pirate's): see
+    // rdm:phase/combat-ai-fidelity-cross-roadmap/phase-16-left-out-of-phase-13.
     ship.defends = None;
     ship.goal = Goal::Idle;
     ship.pursuit = crate::ai::pursuit::Pursuit::default();
@@ -774,7 +819,7 @@ mod tests {
         let mut traffic = traffic_of(vec![docked, taken]);
         tick(&mut traffic, 0);
         assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
-        assert_eq!(ship(&traffic, VICTIM).defends, None, "@0x8c791");
+        assert_eq!(ship(&traffic, VICTIM).defends, None, "see phase 16");
     }
 
     /// The traffic once a docked pirate has taken a former escort into

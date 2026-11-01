@@ -58,9 +58,13 @@
 //!     tick towards it, its speed zeroed, inertialess or not
 //!     (@0x8700f-0x87095, @0x8702d). Inside, its speed is left alone:
 //!     while its AI wait is above [`DOCK_WAIT`] it holds; above none, under
-//!     goal 0xd it would plunder ([`DockOutcome::Completed`],
-//!     @0x86f3c-0x86f93: never reached by a pirate, whose think turns a
-//!     boarded victim's plunder into goal 4 first), under goal 0xf it
+//!     goal 0xd it plunders its nav ([`DockOutcome::Completed`],
+//!     @0x86f3c-0x86f93, the traffic's `dispatch_dock`). A pirate's
+//!     think turns a live boarded victim's plunder into goal 4 first, so
+//!     it gets here once the victim's slot has gone and its think, under
+//!     the dock wait, writes goal 0xd on another ship, the warship's pick
+//!     (see [`pirate`](crate::ai::pirate)): it plunders the record, which
+//!     yields nothing, or a ship that took the berth since. Under goal 0xf it
 //!     repairs its nav, the player or an NPC ([`DockOutcome::Repaired`],
 //!     @0x86d84-0x86f37, see
 //!     [`repair_dock`](crate::traffic::repair_dock)), under goal 4 or 9
@@ -267,9 +271,9 @@ pub enum DockOutcome {
     /// velocity the victim's. Boarding the victim (+0xb9 = 1, @0x86fc7) is
     /// its caller's.
     Started,
-    /// Docked under goal 0xd with its wait at most [`DOCK_WAIT`]: the
-    /// original plunders here, which no pirate reaches (see the module
-    /// docs).
+    /// Docked under goal 0xd with its wait at most [`DOCK_WAIT`]: it
+    /// plunders its nav (see the module docs), its caller's
+    /// ([`plunder::plunder`](crate::traffic::plunder::plunder)).
     Completed,
     /// Docked under goal 0xf (a repair of the player) with its wait above
     /// none and at most [`DOCK_WAIT`]: the repair completes

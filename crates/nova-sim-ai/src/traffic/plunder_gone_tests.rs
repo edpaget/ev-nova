@@ -10,7 +10,7 @@
 use super::{Traffic, World};
 use crate::ai::Goal;
 use crate::ai::fire::AmmoLeft;
-use crate::ai::fixture::{PIRATES, TRADERS, govts, ship, short_of_ammo};
+use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, govts, ship, short_of_ammo};
 use crate::ai::pirate::PirateWarship;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
@@ -192,4 +192,155 @@ fn a_docked_pirate_whose_victims_slot_went_and_who_finds_a_disabled_ship_drops_i
         found.goal
     );
     assert_eq!(found.docking, None);
+}
+
+/// An intact trader, NPC `id` in slot `id` at (0, `y`), of a class with a
+/// crew and `InherentAI` 2: the warship's pick, which the classification
+/// plunders (@0x8c738).
+fn trader(id: u32, y: f32) -> Npc {
+    let mut trader = ship(id, TRADERS, AiType::WimpyTrader, 0.0, y);
+    trader.berth = id;
+    trader.hull.crew = 1;
+    trader.hull.inherent_ai = 2;
+    trader.no_ai = true;
+    trader
+}
+
+#[test]
+fn a_slot_taken_again_moves_a_docked_pirates_dock_onto_the_newcomer() {
+    // A spawn rewrites the slot (@0x3c8b1-0x3c90b), unboarded (+0xb9 0,
+    // @0x3c981), and sub 0xf goes on reading the nav +0x6c
+    // (@0x86a19-0x86a51): it matches the newcomer's velocity and creeps
+    // to its place.
+    let govts = govts(0, 0);
+    let mut traffic = traffic_of(vec![pirate(150, true), victim()]);
+    traffic.remove_destroyed(VICTIM);
+    tick(&mut traffic, &govts);
+    // Of a government neither side fights.
+    let mut newcomer = ship(0, NEUTRAL, AiType::WimpyTrader, 0.0, 50.0);
+    newcomer.state.velocity = Vec2::new(0.25, 0.4);
+    newcomer.no_ai = true;
+    let newcomer = traffic.add_npc_at(newcomer, 5);
+    let held = of(&traffic, PIRATE);
+    assert_eq!(
+        held.docking.map(|docking| docking.ship),
+        Some(ShipRef::Npc(newcomer))
+    );
+    assert_ne!(
+        held.target,
+        Some(ShipRef::Npc(newcomer)),
+        "+0x70 named none"
+    );
+    assert!(!of(&traffic, newcomer).boarded);
+    let before = held.state.position;
+    tick(&mut traffic, &govts);
+    let flown = of(&traffic, PIRATE);
+    assert_eq!(flown.state.velocity, Vec2::new(0.25, 0.4), "the newcomer's");
+    assert!(
+        flown.state.position.y > before.y + 0.4,
+        "crept toward the newcomer: {:?}",
+        flown.state.position
+    );
+}
+
+/// `traffic` ticked until the pirate drifts or `most` ticks pass, `each`
+/// asked of it after every tick that doesn't: the ticks it took.
+fn until_it_drifts(
+    traffic: &mut Traffic,
+    govts: &Governments,
+    most: u32,
+    each: &dyn Fn(&Npc),
+) -> u32 {
+    for ticks in 1..=most {
+        tick(traffic, govts);
+        if of(traffic, PIRATE).goal == Goal::Drift {
+            return ticks;
+        }
+        each(of(traffic, PIRATE));
+    }
+    panic!("no drift in {most} ticks");
+}
+
+#[test]
+fn a_docked_pirate_whose_victim_went_and_who_found_another_to_plunder_completes_on_the_record_and_drifts()
+ {
+    // `_AIFindShipToPlunder` finds no wreck, so the warship's pick, an
+    // intact trader, is plundered (goal 0xd, @0x8c738) with sub 0xf and
+    // the nav kept under the wait, goal 0xd's high level skipped (so the
+    // nav, +0x6c, still names the dead slot). With the wait at 100 sub
+    // 0xf completes (@0x86d54-0x86d7e, @0x86f3c-0x86f93) on the record:
+    // nothing plundered, the trader untouched, the pirate drifting.
+    let govts = govts(0, 0);
+    let mut traffic = traffic_of(vec![pirate(120, true), victim(), trader(7, 400.0)]);
+    traffic.remove_destroyed(VICTIM);
+    let ticks = until_it_drifts(&mut traffic, &govts, 30, &|pirate| {
+        assert!(
+            matches!(pirate.goal, Goal::Plunder { ship, .. } if ship == ShipRef::Npc(NpcId(7))),
+            "{:?}",
+            pirate.goal
+        );
+        assert_eq!(pirate.docking, ON_VICTIM);
+        assert_eq!(
+            pirate.travel,
+            Some(crate::ai::travel::of_slot(5)),
+            "the high level writes no +0x6c under its wait"
+        );
+    });
+    assert_eq!(ticks, 21, "the wait at 100 as the low level reads it");
+    let drifting = of(&traffic, PIRATE);
+    assert_eq!(
+        drifting.ai_wait,
+        crate::ai::plunder_contents::PLUNDER_HOLD - 1
+    );
+    assert_eq!(
+        (drifting.docking, drifting.target, drifting.travel),
+        (None, None, None)
+    );
+    assert!(!of(&traffic, NpcId(7)).boarded, "the trader untouched");
+    assert_eq!(traffic.take_pirate_events(), [], "nothing plundered");
+}
+
+#[test]
+fn a_docked_pirate_whose_victim_went_and_who_found_a_warship_plunders_the_record_at_its_waits_end_and_drifts()
+ {
+    // Goal 4 with sub 0xf completes nothing at the slot; with the wait out
+    // the type think's plunder (@0x8c74c-0x8c7ae) runs on the dead nav,
+    // which `_AIPlunderShipContents` passes over (@0x83fcd-0x83fd4).
+    let govts = govts(0, 0);
+    let mut warship = ship(7, TRADERS, AiType::Warship, 0.0, 400.0);
+    warship.berth = 7;
+    warship.hull.inherent_ai = 3;
+    warship.no_ai = true;
+    let mut traffic = traffic_of(vec![pirate(30, true), victim(), warship]);
+    traffic.remove_destroyed(VICTIM);
+    let ticks = until_it_drifts(&mut traffic, &govts, 40, &|pirate| {
+        assert_eq!(pirate.goal, Goal::Attack(ShipRef::Npc(NpcId(7))));
+        assert_eq!(pirate.docking, ON_VICTIM);
+    });
+    assert_eq!(ticks, 31, "the think after its wait ran out");
+    assert_eq!(of(&traffic, PIRATE).docking, None);
+    assert_eq!(traffic.take_pirate_events(), [], "nothing plundered");
+}
+
+#[test]
+fn a_docked_pirates_completion_after_its_victims_berth_was_taken_plunders_the_newcomer() {
+    // `_AIPlunderShipContents` tests only `_IsDying` and +0xb8
+    // (@0x83fbd-0x83fd4), so the nav's newcomer, a live ship, is
+    // plundered in full, and the event queued at the pirate's berth.
+    let govts = govts(0, 0);
+    let mut traffic = traffic_of(vec![pirate(120, true), victim()]);
+    traffic.remove_destroyed(VICTIM);
+    tick(&mut traffic, &govts);
+    // An intact trader beside the pirate, matched: the warship's pick, and
+    // docked with within the box.
+    let mut beside = trader(0, 0.0);
+    beside.state = of(&traffic, PIRATE).state;
+    beside.state.position.y += 1.0;
+    let newcomer = traffic.add_npc_at(beside, 5);
+    until_it_drifts(&mut traffic, &govts, 30, &|_| {});
+    assert!(matches!(
+        traffic.take_pirate_events()[..],
+        [crate::traffic::plunder::PirateEvent::Plundered { pirate: PIRATE, victim, .. }]
+            if victim == newcomer
+    ));
 }

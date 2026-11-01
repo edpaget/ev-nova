@@ -65,7 +65,11 @@
 //!   with ([`Decision::plunders`], which the traffic runs:
 //!   [`plunder`](crate::traffic::plunder)) and drifts ([`Goal::Drift`]).
 //!   So a dry pirate still plunders, and one whose wait loop makes it wait
-//!   doesn't.
+//!   doesn't. Under goal 0xd it is sub 0xf's own completion, at its slot,
+//!   that plunders the nav while the wait is in (0, 100]
+//!   ([`plunder_dock`](crate::traffic::plunder_dock)): reached once its
+//!   victim's slot has gone and the warship's pick gives it another ship
+//!   to plunder under the dock wait, which skips goal 0xd's high level.
 //! - **The drift** (goal 0xe): with no target the search is skipped
 //!   (@0x8c353 → @0x8c74c), and with one the goal and target are kept
 //!   (@0x8c5e8-0x8c5f8), so the drift runs on until the traffic ends it.
@@ -99,7 +103,9 @@
 //! sets it, the count wait (@0x8c70d), the plunder (@0x8c7ae) and the dry
 //! drop (@0x8c887) clear it, and the head drop and the disabled-warship
 //! drop leave it; goal 0xd's high level clears it against an intact ship
-//! (@0x8ea50) and sets it to a disabled one's slot (@0x8e8c9). So a pirate
+//! (@0x8ea50) and sets it to a disabled one's slot (@0x8e8c9), except while
+//! its AI wait skips that high level (@0x8d4b9-0x8d4d2), so a docked
+//! pirate's nav still names its victim's slot. So a pirate
 //! dropped from a fight with its stellar set leaves or waits without a
 //! pick, and one whose pick failed picks again once it can.
 //!
@@ -107,8 +113,10 @@
 //! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board,
 //! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols and
 //! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): none. The
-//! plunder's +0x8c write (-1, @0x8c791), the ship it takes into its fleet
-//! defending no stellar, is the take's ([`plunder`](crate::traffic::plunder)).
+//! plunder's +0x8c write (-1, @0x8c791) is the pirate's own, the plunder's
+//! ([`plunder`](crate::traffic::plunder)). The take also clears the
+//! captured ship's, which `_AIPlunderShipContents` never writes: filed as
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-16-left-out-of-phase-13.
 
 use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
 use crate::ai::odds::{hopeless_chase, state4_attack};
@@ -312,13 +320,18 @@ fn fought(
         Class::Plunder if dry => dry_dropped,
         Class::Plunder => {
             let wreck = disabled(target, around);
-            Decision {
-                // Goal 0xd's high level, every frame: -1 against the ship
-                // intact (@0x8ea50), the victim's slot against it disabled
-                // (@0x8e8c9).
-                travel: travel::slot_of(target, around)
+            // Goal 0xd's high level, every frame its AI wait doesn't skip
+            // (@0x8d4b9-0x8d4d2): -1 against the ship intact (@0x8ea50),
+            // the victim's slot against it disabled (@0x8e8c9).
+            let travel = if npc.ai_wait > 0 {
+                TravelWrite::Keep
+            } else {
+                travel::slot_of(target, around)
                     .filter(|_| wreck)
-                    .map_or(TravelWrite::Clear, TravelWrite::Set),
+                    .map_or(TravelWrite::Clear, TravelWrite::Set)
+            };
+            Decision {
+                travel,
                 ..of(Goal::Plunder {
                     ship: target,
                     hopeless: !wreck
@@ -1464,6 +1477,23 @@ mod tests {
             plundered(n(3)),
             "goal 0xd plunders nothing"
         );
+    }
+
+    #[test]
+    fn under_its_ai_wait_a_plunder_leaves_its_travel_stellar() {
+        // Goal 0xd's high level writes +0x6c (@0x8ea50, @0x8e8c9), and
+        // returns first while +0x4c runs (@0x8d4b9-0x8d4d2).
+        let plundering = holding(plunder(n(2)), Some(n(2)));
+        let waiting = Npc {
+            ai_wait: 1,
+            ..plundering.clone()
+        };
+        for ship in [trader(2, 300.0), wreck(2, 300.0)] {
+            let npcs = [waiting.clone(), ship.clone()];
+            assert_eq!(decided(&npcs).travel, TravelWrite::Keep);
+            let npcs = [plundering.clone(), ship];
+            assert_ne!(decided(&npcs).travel, TravelWrite::Keep);
+        }
     }
 
     #[test]

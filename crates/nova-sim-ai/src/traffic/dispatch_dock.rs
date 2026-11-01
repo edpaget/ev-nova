@@ -47,8 +47,13 @@
 //! again, as `_HandleShip` reads the words the low level left.
 //!
 //! The plunder's completion ([`DockOutcome::Completed`], @0x86f3c-0x86f93)
-//! still does nothing: no pirate reaches it ([`plunder_dock`]'s docs).
-//! Nothing here plays a sound but the session's `snd ` 151.
+//! plunders the nav at the slot ([`plunder::plunder`]): goal 0xe, its wait
+//! [`PLUNDER_HOLD`](crate::ai::plunder_contents::PLUNDER_HOLD), +0x8c,
+//! +0x70 and +0x6c -1, and `_AIPlunderShipContents` on the nav, a gone
+//! ship's record yielding nothing (@0x83fbd-0x83fd4), a live one's event
+//! queued at the pirate's berth as the type think's plunder queues it, so
+//! a higher slot's think reads the drift that tick. Nothing here plays a
+//! sound but the session's `snd ` 151, with a plunder's line.
 
 use super::plunder::{self, PirateEvent};
 use super::plunder_dock::DockOutcome;
@@ -126,7 +131,15 @@ impl Traffic {
                     },
                 });
             }
-            DockOutcome::Flying | DockOutcome::Completed => {}
+            DockOutcome::Completed => {
+                // The plunder of its nav (@0x86f3c-0x86f93), the ship the
+                // docking names, there or gone.
+                let event = plunder::plunder(&mut self.npcs, index, docking.ship, world, chance);
+                if let Some(event) = event {
+                    self.settle_plunder(event);
+                }
+            }
+            DockOutcome::Flying => {}
         }
     }
 }
@@ -347,6 +360,80 @@ mod tests {
         traffic.tick_in(&reads, World::new(&[]), &[], draws);
         assert_eq!(traffic.take_on_line().len(), 1, "the next tick");
         assert_eq!(of(&traffic, helper).goal, Goal::Drift);
+    }
+
+    /// The `docking` scene with the pirate docked inside 3.0 of the
+    /// victim, its dock wait `wait`, plundering the watcher above (goal
+    /// 0xd on another ship), defending a stellar, and the victim's slot
+    /// freed.
+    fn completing_on_the_record(traffic: &mut Traffic, wait: u32) -> [NpcId; 4] {
+        let ships = docking(traffic, at(101.0, 1.0, 0.0, 0.0));
+        let [_, pirate, victim, above] = ships;
+        let index = (traffic.npcs().iter()).position(|npc| npc.id == pirate);
+        let npc = &mut traffic.npcs_mut()[index.expect("there")];
+        npc.goal = Goal::Plunder {
+            ship: ShipRef::Npc(above),
+            hopeless: false,
+        };
+        npc.target = Some(ShipRef::Npc(above));
+        npc.travel = Some(crate::ai::travel::of_slot(5));
+        npc.defends = Some(crate::catalog::StellarId(128));
+        npc.ai_wait = wait;
+        traffic.remove_destroyed(victim);
+        ships
+    }
+
+    #[test]
+    fn a_plunder_completed_on_a_gone_victims_record_plunders_nothing_and_drifts() {
+        // Sub 0xf's goal-0xd branch (@0x86f3c-0x86f93): +0x4c 100, goal
+        // 0xe, sub 0, +0x8c -1, then `_AIPlunderShipContents` on the nav's
+        // record, which returns at once for a slot gone (@0x83fcd-0x83fd4),
+        // then +0x70 and +0x6c -1.
+        let mut traffic = Traffic::with_interval(1);
+        let [_, pirate, _, _] = completing_on_the_record(&mut traffic, 50);
+        let index = (traffic.npcs().iter()).position(|npc| npc.id == pirate);
+        traffic.dock_in_dispatch(index.expect("there"), &World::new(&[]), &mut NeverFires);
+        let npc = of(&traffic, pirate);
+        assert_eq!(npc.goal, Goal::Drift);
+        assert_eq!(npc.ai_wait, crate::ai::plunder_contents::PLUNDER_HOLD);
+        assert_eq!((npc.docking, npc.target, npc.travel), (None, None, None));
+        assert_eq!(npc.defends, None, "+0x8c -1 (@0x86f67)");
+        assert_eq!(traffic.take_on_line_through(3), [], "nothing plundered");
+    }
+
+    /// Every ship keeps its goal; each think records the goal `watched`
+    /// holds as it reads it.
+    #[derive(Debug)]
+    struct GoalReads {
+        watched: NpcId,
+        seen: RefCell<BTreeMap<NpcId, Option<Goal>>>,
+    }
+
+    impl Behaviour for GoalReads {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            let watched = around.npc(self.watched).map(|ship| ship.goal);
+            self.seen.borrow_mut().insert(npc.id, watched);
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_higher_slots_think_reads_a_plunder_completed_at_a_lower_slot_that_tick() {
+        // The completion is the pirate's own low level's, at its slot.
+        let mut traffic = Traffic::with_interval(1);
+        let [below, pirate, _, above] = completing_on_the_record(&mut traffic, 50);
+        let reads = GoalReads {
+            watched: pirate,
+            seen: RefCell::default(),
+        };
+        traffic.think_holding(&reads, World::new(&[]), &[], &mut NeverFires);
+        let seen = |id| reads.seen.borrow()[&id];
+        assert!(
+            matches!(seen(below), Some(Goal::Plunder { .. })),
+            "{:?}",
+            seen(below)
+        );
+        assert_eq!(seen(above), Some(Goal::Drift));
     }
 
     #[test]
