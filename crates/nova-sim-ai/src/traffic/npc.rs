@@ -99,8 +99,10 @@ pub enum Mode {
     /// built in [`answer_flag`](crate::ai::answer_flag)),
     /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
     /// its target and the damage as provocation, and its wait is cut to
-    /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both
-    /// through its burst. The hit's push moves it (`_DamageShip`
+    /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, keeping both until
+    /// the dispatch that turns it out: the target goes as its burst starts
+    /// (+0x70 = -1, @0x8dd7b), the provocation stays
+    /// (`Traffic::turn_out_of_waits`). The hit's push moves it (`_DamageShip`
     /// @0x3aa7d): it drifts on that velocity as it waits, as
     /// `_HandleShip` moves every ship (@0x34274-0x342aa). A hit by the
     /// player holds it here instead ([`Mode::HeldAtGate`]).
@@ -141,7 +143,11 @@ pub enum Mode {
     /// 0x15, so it still holds the gate's sprite open and no ship sees it
     /// ([`Npc::emerging`]); from its first moving tick it has goal 8 and is
     /// out of its gate (+0x6c = -1, @0x8dd8a-0x8dd93), lets go
-    /// ([`Npc::holds_gate_open`]) and is seen.
+    /// ([`Npc::holds_gate_open`]) and is seen. The dispatch that turns it
+    /// out drops its target (+0x70 = -1, @0x8dd7b) and keeps its
+    /// provocation, so the target a hit gave it in its gate goes as the
+    /// burst starts; a hit during the burst (goal 8) gives it one it
+    /// keeps.
     LeavingGate {
         /// The tick of the burst.
         tick: u32,

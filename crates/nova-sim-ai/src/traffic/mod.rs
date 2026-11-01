@@ -5568,7 +5568,15 @@ mod tests {
         let mut ticks = 1;
         while traffic.npcs()[0].mode != Mode::Flying {
             let npc = &traffic.npcs()[0];
-            assert_eq!(npc.target, Some(ShipRef::Npc(NpcId(1))), "{:?}", npc.mode);
+            // The turn-out drops the target (@0x8dd7b) in the dispatch
+            // before the burst's first moving tick; the provocation stays.
+            let target = match npc.mode {
+                Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 } => {
+                    Some(ShipRef::Npc(NpcId(1)))
+                }
+                _ => None,
+            };
+            assert_eq!(npc.target, target, "{:?}", npc.mode);
             assert_eq!(npc.provoked, 5.0, "{:?}", npc.mode);
             assert!(!matches!(npc.mode, Mode::HeldAtGate { .. }));
             traffic.tick_in(&fighting, World::new(&[]), &[], &mut Draws::of(&[]));

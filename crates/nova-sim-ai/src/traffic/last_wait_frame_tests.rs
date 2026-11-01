@@ -215,3 +215,107 @@ fn a_ship_whose_wait_runs_out_in_the_ship_loop_is_held_by_a_later_hit_in_it() {
     );
     assert_eq!(of(&traffic, 0).mode, Mode::HeldAtGate { ticks_left: 1 });
 }
+
+// Goal 0x15's turn-out drops the target (@0x8dd7b).
+
+/// Every ship keeps its goal and target, and a ship hit takes the ship
+/// that hit it as its target and the damage as provocation, its goal
+/// kept.
+#[derive(Debug)]
+struct Provoked;
+
+impl Behaviour for Provoked {
+    fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+        npc.goal
+    }
+
+    fn target(&self, npc: &Npc, _: &Surroundings) -> Option<ShipRef> {
+        npc.target
+    }
+
+    fn react(&self, npc: &Npc, strike: &Strike, _: &Surroundings) -> Reaction {
+        if strike.ship == ShipRef::Npc(npc.id) {
+            Reaction {
+                target: strike.by,
+                provoked: strike.damage,
+                goal: None,
+            }
+        } else {
+            Reaction::default()
+        }
+    }
+}
+
+/// NPC 1's hit on NPC `ship`.
+fn npc_hit(ship: u32) -> Strike {
+    crate::combat::fixture::strike(ShipRef::Npc(NpcId(ship)), ShipRef::Npc(NpcId(1)))
+}
+
+/// [`traffic`] with NPC 0 waiting `ticks_left` more ticks in its gate.
+fn waiting(ticks_left: u32) -> Traffic {
+    let mut traffic = traffic();
+    traffic.npcs[0].mode = Mode::Emerging { ticks_left };
+    traffic
+}
+
+#[test]
+fn a_ship_hit_in_its_gate_keeps_its_target_until_the_dispatch_that_turns_it_out() {
+    // +0x70 = -1 at the turn-out (@0x8dd7b); +0x96 is not written.
+    let world = World::new(&[]);
+    let mut traffic = waiting(2);
+    traffic.tick_in(&Provoked, world, &[npc_hit(0)], &mut NeverFires);
+    let hit = of(&traffic, 0);
+    assert_eq!(hit.mode, Mode::Emerging { ticks_left: 1 });
+    assert_eq!(hit.target, Some(ShipRef::Npc(NpcId(1))), "through the wait");
+    assert_eq!(hit.provoked, 12.0);
+    traffic.tick_in(&Provoked, world, &[], &mut NeverFires);
+    let out = of(&traffic, 0);
+    assert_eq!(out.mode, Mode::LeavingGate { tick: 0 });
+    assert_eq!(
+        out.target,
+        Some(ShipRef::Npc(NpcId(1))),
+        "before the dispatch"
+    );
+    traffic.think_holding(&Provoked, world, &[], &mut NeverFires);
+    let turned = of(&traffic, 0);
+    assert_eq!(turned.target, None, "the turn-out drops it");
+    assert_eq!(turned.provoked, 12.0, "and keeps the provocation");
+    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    assert_eq!(of(&traffic, 0).mode, Mode::LeavingGate { tick: 1 });
+}
+
+#[test]
+fn a_hit_in_its_burst_gives_it_a_target_it_keeps() {
+    let world = World::new(&[]);
+    let mut traffic = traffic();
+    traffic.tick_in(&Provoked, world, &[], &mut NeverFires);
+    assert_eq!(of(&traffic, 0).mode, Mode::LeavingGate { tick: 1 });
+    traffic.tick_in(&Provoked, world, &[npc_hit(0)], &mut NeverFires);
+    for _ in 0..3 {
+        traffic.tick_in(&Provoked, world, &[], &mut NeverFires);
+        let bursting = of(&traffic, 0);
+        assert!(matches!(bursting.mode, Mode::LeavingGate { tick: 2.. }));
+        assert_eq!(bursting.target, Some(ShipRef::Npc(NpcId(1))));
+    }
+}
+
+#[test]
+fn a_ship_the_player_holds_on_its_last_wait_frame_keeps_its_target() {
+    // Held before the dispatch (@0x89d3e): no goal 0x15 for it to turn out.
+    let mut traffic = traffic();
+    traffic.tick_in(&Answering, World::new(&[]), &[hit(0)], &mut NeverFires);
+    let held = of(&traffic, 0);
+    assert_eq!(held.goal, Goal::Attack(ShipRef::Player));
+    assert_eq!(held.target, Some(ShipRef::Player));
+}
+
+#[test]
+fn double_times_second_pass_keeps_the_target_until_the_next_dispatch() {
+    let world = World::new(&[]);
+    let mut traffic = traffic();
+    traffic.npcs[0].target = Some(ShipRef::Npc(NpcId(1)));
+    traffic.move_in(world, &mut NeverFires);
+    assert_eq!(of(&traffic, 0).target, Some(ShipRef::Npc(NpcId(1))));
+    traffic.think_holding(&Provoked, world, &[], &mut NeverFires);
+    assert_eq!(of(&traffic, 0).target, None, "the advance pass's dispatch");
+}

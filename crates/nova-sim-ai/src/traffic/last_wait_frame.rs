@@ -25,8 +25,17 @@
 //!   and with none its burst waits for the next advance pass
 //!   ([`autopilot`](super::autopilot)'s second-pass wait).
 //!
-//! **Here.** The think half notes each ship at that frame as its
-//! dispatch turns it out ([`Traffic::turn_out_of_waits`]), and the answer
+//! **The target goes as the burst starts, the provocation stays.** The
+//! turn-out writes sub 0, +0x70 = -1 (@0x8dd7b), +0x4c = -1.0, goal 8 and
+//! +0x6c = -1 (@0x8dd61-0x8dd93), and not +0x96. So the target a hit gave
+//! a ship in its gate is kept through its wait, and to that dispatch, and
+//! goes there; the provocation stays. A hit during the burst sets a
+//! target again, which it keeps. A ship held before the dispatch is no
+//! longer in goal 0x15 and keeps its target.
+//!
+//! **Here.** The think half turns out each ship at that frame as its
+//! dispatch does, dropping its target, and notes it
+//! ([`Traffic::turn_out_of_waits`]), and the answer
 //! to a strike holds a ship at that frame that is not among them
 //! ([`in_turn`](super::in_turn)). They are kept until the next dispatch,
 //! as their goal 8 is: by then the fly half has burst each on but one held
@@ -56,16 +65,18 @@ use super::npc::{Mode, NpcId};
 pub(super) struct TurnedOut(BTreeSet<NpcId>);
 
 impl Traffic {
-    /// Notes each ship whose wait at its gate has run out as this pass's
-    /// dispatch turns it out of goal 0x15 (@0x8dd61-0x8dd93).
+    /// Turns each ship whose wait at its gate has run out out of goal
+    /// 0x15, as this pass's dispatch does (@0x8dd61-0x8dd93): its target
+    /// goes (+0x70 = -1, @0x8dd7b), its provocation stays, and it is noted.
     pub(super) fn turn_out_of_waits(&mut self) {
-        self.turned_out = TurnedOut(
-            self.npcs
-                .iter()
-                .filter(|npc| npc.mode == Mode::LeavingGate { tick: 0 })
-                .map(|npc| npc.id)
-                .collect(),
-        );
+        let mut turned_out = BTreeSet::new();
+        for npc in &mut self.npcs {
+            if npc.mode == (Mode::LeavingGate { tick: 0 }) {
+                npc.target = None;
+                turned_out.insert(npc.id);
+            }
+        }
+        self.turned_out = TurnedOut(turned_out);
     }
 
     /// Whether the last dispatch turned NPC `id` out of its gate wait
