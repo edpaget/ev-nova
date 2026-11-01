@@ -150,6 +150,25 @@ fn below_0_35_it_settles_once_by_0_95_and_stores_sub_0() {
 }
 
 #[test]
+fn the_traffic_clears_a_ship_below_0_35_in_a_mode_wait_or_a_count_wait() {
+    // Neither flies the AI wait's flight, so the fly pass ends a stored
+    // sub 1 below 0.35 itself.
+    let coasting = Npc {
+        ai_wait: 0,
+        mode: super::npc::Mode::Coasting { ticks_left: 9 },
+        ..waiting(FAST, Goal::Wait, Vec2::new(0.0, -0.2), 180.0)
+    };
+    let counting = waiting(FAST, Goal::CountWait, Vec2::new(0.0, -0.2), 180.0);
+    for ship in [coasting, counting] {
+        let mut traffic = Traffic::with_interval(1);
+        traffic.add_npc(ship);
+        traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
+        let ship = &traffic.npcs()[0];
+        assert!(!ship.stopping, "{:?}", ship.mode);
+    }
+}
+
+#[test]
 fn the_traffic_leaves_a_waiting_ships_sub_1_for_its_low_level_to_settle() {
     let mut traffic = Traffic::with_interval(1);
     let ship = waiting(FAST, Goal::Wait, Vec2::new(0.0, -0.2), 180.0);

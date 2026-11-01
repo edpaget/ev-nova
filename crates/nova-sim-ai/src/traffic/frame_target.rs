@@ -13,7 +13,7 @@ use crate::combat::armament::Trigger;
 use crate::traffic::npc::Npc;
 
 /// `behaviour`'s trigger for `npc` among `around`, reading the target its
-/// decision `held` in place of the one `npc` had, when they differ.
+/// decision `held` in place of the one `npc` had.
 pub(crate) fn held_trigger(
     behaviour: &(impl Behaviour + ?Sized),
     npc: &Npc,
@@ -21,13 +21,13 @@ pub(crate) fn held_trigger(
     around: &Surroundings,
 ) -> Trigger {
     match held {
-        Some(held) if npc.target != Some(held) => {
+        Some(held) => {
             let framed = Npc {
                 target: Some(held),
                 ..npc.clone()
             };
             behaviour.trigger(&framed, around)
         }
-        _ => behaviour.trigger(npc, around),
+        None => behaviour.trigger(npc, around),
     }
 }
