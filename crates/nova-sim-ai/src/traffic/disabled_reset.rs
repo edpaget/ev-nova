@@ -62,6 +62,15 @@
 //! Goal 0 is never throttled (@0x8fdee-0x8fe6f), so it repeats every
 //! frame the ship is disabled: the leader is gone for good.
 //!
+//! The reset reaches a ship entering a gate too (sub 0x17): its +0x50 is
+//! 0 (@0x8db8f), so it is off the glide and jump paths. Its sub 0
+//! (@0x8ff0a) ends the entry, which `_HandleShipDisplay` reads by the sub
+//! alone (@0x89502, @0x2bf94-0x2c088): from that dispatch the ship is drawn
+//! unfaded and never freed, and it drifts disabled while its +0x4c counts
+//! down, a ship breaking up exploding where it is
+//! ([`Npc::ends_gate_entry`]). A ship disabled after the dispatch still
+//! fades that frame, and may be freed then, as the fly half has it.
+//!
 //! **Ordering.** The original runs each step per ship in slot order, the
 //! cancel and the reset inside each dispatch; the engine runs each over
 //! all ships after the regroup pause's draws. A lower slot's think that
@@ -71,6 +80,8 @@
 //! for that one tick its fleet's slots still count it, as the original's
 //! do (it numbers disabled followers too, and the parent's slot
 //! calculation runs in the frame before its reset): a lag no player sees.
+//! The reset's end of a gate entry comes in the think half, before the fly
+//! half's count-down, as `_AIDispatch` comes before `_HandleShipDisplay`.
 //!
 //! Nothing here plays a sound or draws a random number.
 
@@ -113,6 +124,7 @@ fn resets(npc: &Npc) -> bool {
 /// docs).
 pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.leaves_gate_goal();
+    npc.ends_gate_entry();
     npc.target = None;
     npc.travel_set = false;
     npc.defends = None;
@@ -163,6 +175,7 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::escort::FormationSlot;
     use crate::stats::ShipStats;
+    use crate::traffic::autopilot::Outcome;
     use crate::traffic::fixture::npc;
     use crate::traffic::npc::{AiType, MissionMark, Mode, NpcId};
     use crate::traffic::plunder_dock::{DockSub, Docking};
@@ -170,6 +183,7 @@ mod tests {
     use crate::traffic::warp_out::{GIVEN_UP_STAGE, WarpGoal};
     use crate::traffic::{ShipBehav, World};
     use nova_sim_base::fixture::{Draws, FAST};
+    use std::collections::BTreeSet;
 
     /// Every ship keeps its goal.
     #[derive(Debug)]
@@ -500,6 +514,73 @@ mod tests {
         let waiting = of(&traffic, LED);
         assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2 });
         assert!(waiting.emerges_from.is_some());
+    }
+
+    /// The gate the led ship enters in [`entering`].
+    const ENTERED: crate::catalog::StellarId = crate::catalog::StellarId(320);
+
+    /// `fleet(condition)` with its led ship entering [`ENTERED`], 9 ticks
+    /// of its wait left.
+    fn entering(condition: Condition) -> Traffic {
+        let mut traffic = fleet(condition);
+        let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
+        led.expect("there").mode = Mode::EnteringGate {
+            gate: ENTERED,
+            ticks_left: 9,
+        };
+        traffic
+    }
+
+    #[test]
+    fn a_ship_disabled_as_it_enters_a_gate_is_reset_out_of_the_entry_and_stays() {
+        // Its +0x50 is 0 (@0x8db8f), so it is off the glide and jump paths,
+        // and the reset's sub 0 (@0x8ff0a) ends sub 0x17: drawn unfaded,
+        // never freed (@0x2bf94-0x2c088), its +0x4c counting down
+        // (@0x3501f-0x35048).
+        let dying = Condition::Dying {
+            ticks_left: 90,
+            starting: false,
+        };
+        for condition in [Condition::Disabled, dying] {
+            let mut traffic = entering(condition);
+            traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
+            let reset = of(&traffic, LED);
+            assert!(!reset.entering_gate(), "{condition:?}");
+            assert!(reset.arrived(), "{condition:?}");
+            assert_eq!(reset.goal, Goal::Idle, "{condition:?}");
+            traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut NeverFires);
+            assert_eq!(
+                of(&traffic, LED).mode,
+                Mode::Coasting { ticks_left: 8 },
+                "{condition:?}: its wait counts down"
+            );
+            let mut departed = Vec::new();
+            for _ in 0..30 {
+                ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+                departed.extend(traffic.departed().iter().copied());
+            }
+            assert!(
+                departed
+                    .iter()
+                    .all(|&(_, outcome)| outcome != Outcome::EnteredGate(ENTERED)),
+                "{condition:?}: {departed:?}"
+            );
+            assert!(
+                traffic.npcs().iter().any(|npc| npc.id == LED),
+                "{condition:?}: still here"
+            );
+        }
+    }
+
+    #[test]
+    fn an_intact_ship_entering_a_gate_still_leaves() {
+        let mut traffic = entering(Condition::Intact);
+        let mut departed = Vec::new();
+        for _ in 0..9 {
+            ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
+            departed.extend(traffic.departed().iter().copied());
+        }
+        assert_eq!(departed, [(LED, Outcome::EnteredGate(ENTERED))]);
     }
 
     #[test]

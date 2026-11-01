@@ -1168,7 +1168,9 @@ fn unsteered(
 /// One tick of `npc` entering `gate`, `ticks_left` of its wait left
 /// (see [`gate_entry`]): still, whatever its condition and goal, as
 /// `_HandleShip` counts +0x4c down for every ship and the fade reads only
-/// the sub-goal; and gone once the wait is out. An inertialess ship's
+/// the sub-goal; and gone once the wait is out. That holds for the fly
+/// half: a ship disabled by the think half's dispatch has had its entry
+/// ended by the reset first ([`Npc::ends_gate_entry`]). An inertialess ship's
 /// velocity follows its speed meanwhile, as `flown` says
 /// ([`inertialess::drift`]).
 fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> Outcome {

@@ -173,7 +173,9 @@ pub enum Mode {
     /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
     /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`]. A ship
     /// boarded on a mission's assist path waits so too
-    /// ([`Npc::wait_on_course`]); one not intact drifts instead, its wait
+    /// ([`Npc::wait_on_course`]), and so does a ship whose gate entry the
+    /// disabled reset ended, for what was left of the entry's wait
+    /// ([`Npc::ends_gate_entry`]); one not intact drifts instead, its wait
     /// counting down all the same.
     Coasting {
         /// The ticks of the wait left.
@@ -184,7 +186,9 @@ pub enum Mode {
     /// its wait +0x4c counting down (see
     /// [`gate_entry`](crate::traffic::gate_entry)). It holds still and
     /// fades out, and decides nothing, but is seen, targeted, fought and
-    /// hailed as a flying ship is ([`Npc::arrived`]).
+    /// hailed as a flying ship is ([`Npc::arrived`]). The disabled reset's
+    /// sub 0 ends it (@0x8ff0a, [`Npc::ends_gate_entry`]): the ship stays,
+    /// holding its course ([`Mode::Coasting`]) for the wait left.
     EnteringGate {
         /// The gate it enters.
         gate: StellarId,
@@ -1629,6 +1633,21 @@ impl Npc {
             _ => return,
         }
         self.emerges_from = None;
+    }
+
+    /// A sub other than 0x17 is written over its gate entry, which
+    /// `_HandleShipDisplay` reads alone to fade it out and free it
+    /// (`_AIShipIsEnteringHypergate` @0x89502, @0x2bf94-0x2c088): the
+    /// disabled reset's sub 0 (@0x8ff0a, see
+    /// [`disabled_reset`](super::disabled_reset)). It stays in the system,
+    /// drawn unfaded and never freed, while its wait +0x4c runs on
+    /// (@0x3501f-0x35048), as a ship holding its course does
+    /// ([`Mode::Coasting`]): disabled it drifts, and once whole it moves on
+    /// at its velocity, then flies its goal. Any other ship is left.
+    pub fn ends_gate_entry(&mut self) {
+        if let Mode::EnteringGate { ticks_left, .. } = self.mode {
+            self.mode = Mode::Coasting { ticks_left };
+        }
     }
 
     /// Whether its +0x50 is below 0, as `_AICheckParentExists` tests it
