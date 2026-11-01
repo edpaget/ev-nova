@@ -33,7 +33,7 @@ impl Session {
     ///   [`Answer::Departed`], or refused when the ship is not landed or no
     ///   leave is due.
     /// - [`FlightCommand::LandEscorts`] runs [`Session::land_escorts`]:
-    ///   [`Answer::EscortReport`], never refused.
+    ///   [`Answer::EscortReport`], the escort days and their pay with it.
     /// - [`FlightCommand::SettleScript`] runs [`Session::settle_script`]:
     ///   [`Answer::Settled`].
     /// - [`FlightCommand::BeginFade`] and [`FlightCommand::EndPlay`] run
@@ -43,8 +43,9 @@ impl Session {
     /// An arrival answers, with the system, the fight's events still
     /// pending ([`Session::take_combat_events`]): the explosions the jump
     /// left, a crön's `Y` on its days among them, which the view shows on
-    /// the arrival's first frame. The gates, the arrival, the take-offs and
-    /// the settling read the catalog: with none they are refused.
+    /// the arrival's first frame. The gates, the arrival, the take-offs,
+    /// the escorts' landing and the settling read the catalog: with none
+    /// they are refused.
     pub(super) fn apply_travel(
         &mut self,
         command: FlightCommand,
@@ -78,7 +79,6 @@ impl Session {
                 self.begin_fade();
                 done_if(self.player_end != before)
             }
-            FlightCommand::LandEscorts => Answer::EscortReport(self.land_escorts(chance)),
             command => {
                 let Some(catalog) = collab.catalog else {
                     return Answer::Refused;
@@ -106,6 +106,9 @@ impl Session {
                     FlightCommand::LeaveIfDue => self
                         .leave_if_due(catalog, chance)
                         .map_or(Answer::Refused, Answer::Departed),
+                    FlightCommand::LandEscorts => {
+                        Answer::EscortReport(self.land_escorts(catalog, chance))
+                    }
                     FlightCommand::SettleScript => {
                         Answer::Settled(self.settle_script(catalog, chance))
                     }
@@ -432,11 +435,23 @@ mod tests {
 
     #[test]
     fn the_escorts_landing_reports_nothing_with_nothing_to_settle() {
+        let catalog = catalog();
         let mut session = super::super::tests::landed();
         assert_eq!(
-            apply_bare(&mut session, FlightCommand::LandEscorts),
+            apply_with(&mut session, &catalog, FlightCommand::LandEscorts),
             Answer::EscortReport(None)
         );
+    }
+
+    #[test]
+    fn the_escorts_landing_is_refused_without_the_catalog() {
+        let mut session = super::super::tests::landed();
+        let before = session.clone();
+        assert_eq!(
+            apply_bare(&mut session, FlightCommand::LandEscorts),
+            Answer::Refused
+        );
+        assert_eq!(session, before);
     }
 
     #[test]

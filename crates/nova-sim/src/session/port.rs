@@ -53,6 +53,11 @@ pub(super) struct Port {
     /// saved: the original keeps it in flags `_DoPortDialog` clears on
     /// opening (@0x5f93d-0x5f95a), and loading a save passes no time.
     pub(super) stay: Stay,
+    /// Whether the leave under way has run `_DoEscortLand`'s tail, the
+    /// escort days and the day's pay (see the `escort_land` module), so a
+    /// second settling of the marks runs it no more. The take-off clears
+    /// it as the ship leaves. Not saved, as the stay is not.
+    pub(super) escorts_landed: bool,
     /// Each ship class's roll for sale today: drawn by the daily step, or
     /// else the first time the shipyard's list asks it (see
     /// [`RuleKey::DayRolls`](crate::rulebook::RuleKey::DayRolls)). Not saved.
@@ -147,6 +152,7 @@ impl Port {
             outfit_visit: OutfitVisit::default(),
             outfit_reselected: None,
             stay: Stay::default(),
+            escorts_landed: false,
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             shipyard_listing: None,

@@ -399,6 +399,23 @@ impl PlayerShip {
         self.warp.warp.gamma
     }
 
+    /// Puts the screen's white out for an escort's defection: a
+    /// `_hyperGamma` of 0 or more goes to −1.0, as `_DoEscortPayment`
+    /// sets it once any escort has defected (@0x40298-0x402aa), so the
+    /// next pass's `_FadeWhiteOut` is skipped (@0x6840b-0x6841f). A value
+    /// below 0 stays.
+    pub(super) fn put_out_white(&mut self) {
+        if self.warp.warp.gamma >= 0.0 {
+            self.warp.warp.gamma = -1.0;
+        }
+    }
+
+    /// Sets `_hyperGamma` to `gamma`, for the tests.
+    #[cfg(test)]
+    pub(super) fn light_white(&mut self, gamma: f32) {
+        self.warp.warp.gamma = gamma;
+    }
+
     /// Whether the warp has ended, so the jump arrives
     /// ([`Session::arrive`]): its natural end, or a pass after its
     /// fallback (see the module docs).

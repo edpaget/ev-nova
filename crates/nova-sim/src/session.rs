@@ -4112,14 +4112,18 @@ impl Session {
         // A docked move's entry still owed comes before the take-off's
         // window opens (see the `operator_moves` module).
         self.settle_pending_move(catalog, catalog, chance);
-        // The escorts' marks, settled on the leave before the stay's days
-        // (`_DoPortDialog` @0x601a0; see the `escort_land` module). The
-        // router settles them first, to show the report over the
-        // spaceport; this settles them on every other leave.
-        self.land_escorts(&mut &mut *chance);
+        // The escorts' marks, then the escort days and their pay, settled
+        // on the leave before the port's days (`_DoPortDialog` @0x601a0;
+        // see the `escort_land` module). The router settles them first, to
+        // show the report and any defection over the spaceport; this
+        // settles them on every other leave, and runs the days and pay
+        // once.
+        self.land_escorts(catalog, chance);
         let stellar = self.mode.take_landed()?;
+        self.port.escorts_landed = false;
         // `_playerIsLanded` stays set to @0x6358e: the moves until then
-        // are landed ones (see the `take_off_moves` module).
+        // are landed ones (see the `take_off_moves` module). The window
+        // `land_escorts` opened stays open.
         self.chart.open_take_off_window();
         // The take-off's whole-bar redraw (`_PlayerLandOnStellar`
         // @0x633a0), before the stay's days (@0x63440) and the deselect
@@ -4133,12 +4137,6 @@ impl Session {
         self.port.forget_shipyard_listing();
         self.chart.bar_nav = None;
         let stay_days = self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
-        if stay_days {
-            self.pass_days(stay.escort_days(), chance);
-        }
-        if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
-            self.pay_escorts(1);
-        }
         // The port's days, before the take-off's placement
         // (`_DoPortDialog` @0x601fa, @0x6020e).
         if stay_days {

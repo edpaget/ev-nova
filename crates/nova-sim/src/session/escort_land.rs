@@ -31,7 +31,24 @@
 //! ([`Stay::escort_days`](crate::story::day::Stay::escort_days),
 //! @0x407ed-0x40851), and a save is due. The report is a text dialog
 //! ([`escort_dialog::escort_land_text`]), which the router shows over the
-//! spaceport before the leave's days and pay.
+//! spaceport.
+//!
+//! **The tail.** After the report `_DoEscortLand` passes the escort days
+//! (`_IncrementGameTime` @0x40849), by [`RuleKey::StayDays`], then pays a
+//! day's wages (`_DoEscortPayment(1)` @0x4085a), by
+//! [`RuleKey::TakeOffPay`], all still inside `_DoPortDialog` with the
+//! spaceport up. So [`Session::land_escorts`] runs them too, once a
+//! leave (`Port::escorts_landed`): the days before the pay, as the
+//! salaries and the tribute they pay change the cash the pay reads. An
+//! escort that defects is told through the pay notes, so whoever shows
+//! the spaceport shows its dialog over it, unfaded. The router calls it
+//! before either leave; [`Session::take_off`] calls it on every other
+//! leave and runs no tail twice. It first completes a docked move's
+//! entry still owed, then opens the take-off's window (see the
+//! `take_off_moves` module) before the days: `_playerIsLanded` stays set
+//! across `_DoPortDialog`, so a move on an escort day is a take-off's
+//! landed move on either path. Left out: `_DoEscortLand`'s
+//! `_crashlog_print*` calls (@0x4080a-0x40843), a debug log.
 //!
 //! Left out, as the engine shows the same: the refit of every slot
 //! (@0x4052e-0x405a9) and an upgrade's zeroing of the weapon entries
@@ -41,19 +58,56 @@
 //! (`_DamageShip` @0x3afdd), so none marked can be disabled here.
 
 use super::Session;
+use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::escort_dialog;
 use crate::landing::StellarFlags;
-use crate::rulebook::RuleKey;
+use crate::rulebook::{RuleKey, RuleSource};
 
 impl Session {
-    /// Settles the escorts' marks as the ship leaves the stellar it is
-    /// landed at (see the module docs), drawing an upgraded escort's new
-    /// NPC's rolls on `chance`, and gives the report to show; none, and
-    /// nothing changed, away from a shipyard or when nothing was sold or
-    /// upgraded. A second call settles only what a first left: marks the
-    /// cash didn't cover, which it still doesn't.
-    pub(crate) fn land_escorts(&mut self, chance: &mut dyn Chance) -> Option<String> {
+    /// `_DoEscortLand` as the ship leaves the stellar it is landed at:
+    /// settles the escorts' marks (see the module docs), drawing an
+    /// upgraded escort's new NPC's rolls on `chance`, then, once a leave,
+    /// its tail: the escort days, then a day's pay (see the module docs'
+    /// "The tail"). Gives the report to show; none when nothing was sold
+    /// or upgraded, and nothing at all happens in flight. A second call
+    /// settles only what a first left: marks the cash didn't cover, which
+    /// it still doesn't.
+    ///
+    /// **Ordering.** The original shows the report before the days and
+    /// the pay (@0x407e8, @0x407ed-0x4085a); here they run before whoever
+    /// shows it does. Nothing the report shows reads the date or the
+    /// cash, and the spaceport under it draws neither, so the player sees
+    /// no difference.
+    pub(crate) fn land_escorts(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<String> {
+        self.mode.landed()?;
+        // A docked move's entry still owed comes before the take-off's
+        // window opens (see the `operator_moves` module).
+        self.settle_pending_move(catalog, catalog, chance);
+        let report = self.settle_escort_marks(&mut &mut *chance);
+        if !std::mem::replace(&mut self.port.escorts_landed, true) {
+            // `_playerIsLanded` stays set across `_DoPortDialog`: a move
+            // on an escort day is a take-off's landed move (see the
+            // `take_off_moves` module).
+            self.chart.open_take_off_window();
+            if self.setup.rules.source_for(RuleKey::StayDays) == RuleSource::Engine {
+                self.pass_days(self.port.stay.escort_days(), chance);
+            }
+            if self.setup.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
+                self.pay_escorts(1);
+            }
+        }
+        report
+    }
+
+    /// Settles the escorts' marks (see the module docs) and gives the
+    /// report; none, and nothing changed, away from a shipyard or when
+    /// nothing was sold or upgraded.
+    fn settle_escort_marks(&mut self, chance: &mut dyn Chance) -> Option<String> {
         let stellar = self.mode.landed()?;
         let shipyard = self
             .chart
@@ -144,7 +198,7 @@ mod tests {
     use crate::flight::Controls;
     use crate::handling::ShipFields;
     use crate::market::Good;
-    use crate::rulebook::{RuleSource, Rulebook};
+    use crate::rulebook::Rulebook;
     use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, land_now, planet, ship};
     use crate::traffic::npc::NpcId;
@@ -238,7 +292,7 @@ mod tests {
         let mut session = landed_with(&catalog, &[131, 129], &[], 10_000);
         mark(&mut session, 0, EscortMark::Sell);
         mark(&mut session, 1, EscortMark::Upgrade);
-        let text = session.land_escorts(&mut NeverFires);
+        let text = session.land_escorts(&catalog, &mut NeverFires);
         assert_eq!(
             text.as_deref(),
             Some(
@@ -253,7 +307,11 @@ mod tests {
         assert_eq!(session.port.stay.escorts_changed, 2);
         assert_eq!(session.port.stay.escort_days(), 1);
         assert!(session.take_save_due());
-        assert_eq!(session.land_escorts(&mut NeverFires), None, "nothing left");
+        assert_eq!(
+            session.land_escorts(&catalog, &mut NeverFires),
+            None,
+            "nothing left"
+        );
         assert_eq!(session.port.stay.escorts_changed, 2);
     }
 
@@ -286,7 +344,7 @@ mod tests {
         let mut session = landed_with(&catalog, &[131, 129], &[], 10_000);
         mark(&mut session, 0, EscortMark::Sell);
         mark(&mut session, 1, EscortMark::Upgrade);
-        assert_eq!(session.land_escorts(&mut NeverFires), None);
+        assert_eq!(session.land_escorts(&catalog, &mut NeverFires), None);
         assert_eq!(session.pilot.escorts.len(), 2);
         assert_eq!(session.pilot.escorts[0].mark, Some(EscortMark::Sell));
         assert_eq!(session.pilot.escorts[1].mark, Some(EscortMark::Upgrade));
@@ -299,7 +357,7 @@ mod tests {
         let catalog = yards();
         let mut session = landed_with(&catalog, &[129], &[], 5_999);
         mark(&mut session, 0, EscortMark::Upgrade);
-        assert_eq!(session.land_escorts(&mut NeverFires), None);
+        assert_eq!(session.land_escorts(&catalog, &mut NeverFires), None);
         assert_eq!(session.pilot.escorts[0].ship, ShipId(129));
         assert_eq!(session.pilot.escorts[0].mark, Some(EscortMark::Upgrade));
         assert_eq!(session.pilot.cash, 5_999);
@@ -311,7 +369,9 @@ mod tests {
         let mut session = landed_with(&catalog, &[131], &[], 0);
         session.pilot.cargo.insert(Good::Commodity(0), 20);
         mark(&mut session, 0, EscortMark::Sell);
-        session.land_escorts(&mut NeverFires).expect("sold");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("sold");
         assert_eq!(session.pilot.cargo.get(&Good::Commodity(0)), Some(&20));
     }
 
@@ -333,7 +393,9 @@ mod tests {
         };
         assert_eq!(ships(&session, c), Some(4));
         mark(&mut session, 1, EscortMark::Sell);
-        session.land_escorts(&mut NeverFires).expect("sold");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("sold");
         assert_eq!(session.pilot.escorts.len(), 2);
         assert_eq!(ids(&session), [Some(a), Some(c)]);
         assert_eq!(session.space.npc(c).expect("C").berth, c_berth);
@@ -350,7 +412,9 @@ mod tests {
             let mut session = landed_with(&catalog, &[131, 131, 131], &[], 0);
             let before = ids(&session);
             mark(&mut session, sold, EscortMark::Sell);
-            session.land_escorts(&mut NeverFires).expect("sold");
+            session
+                .land_escorts(&catalog, &mut NeverFires)
+                .expect("sold");
             let mut kept = before.clone();
             kept.remove(sold);
             assert_eq!(ids(&session), kept, "{sold}");
@@ -364,7 +428,9 @@ mod tests {
         let mut session = landed_with(&catalog, &[131], &[], 0);
         session.space.escorts.fleet.clear();
         mark(&mut session, 0, EscortMark::Sell);
-        session.land_escorts(&mut NeverFires).expect("sold");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("sold");
         assert!(session.pilot.escorts.is_empty());
         assert!(session.space.escorts.fleet.is_empty());
     }
@@ -379,7 +445,9 @@ mod tests {
             (npc.berth, npc.skill)
         };
         mark(&mut session, 0, EscortMark::Upgrade);
-        session.land_escorts(&mut NeverFires).expect("upgraded");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("upgraded");
         assert!(
             session.space.npc(old).is_none(),
             "the old class's NPC is gone"
@@ -444,7 +512,9 @@ mod tests {
             npc.state = state;
         }
         mark(&mut session, 0, EscortMark::Upgrade);
-        session.land_escorts(&mut NeverFires).expect("upgraded");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("upgraded");
         let id = ids(&session)[0].expect("placed");
         assert_ne!(id, old, "a new NPC");
         let npc = session.space.npc(id).expect("in the system");
@@ -496,7 +566,9 @@ mod tests {
         mark(&mut session, 0, EscortMark::Upgrade);
         mark(&mut session, 2, EscortMark::Upgrade);
         session.pilot.cash = 6_000;
-        session.land_escorts(&mut NeverFires).expect("upgraded one");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("upgraded one");
         assert_eq!(
             session.pilot.escorts[2].ship,
             ShipId(130),
@@ -514,7 +586,9 @@ mod tests {
         let mut session = landed_with(&catalog, &[131, 129], &[], 6_000);
         mark(&mut session, 0, EscortMark::Sell);
         mark(&mut session, 1, EscortMark::Upgrade);
-        session.land_escorts(&mut NeverFires).expect("settled");
+        session
+            .land_escorts(&catalog, &mut NeverFires)
+            .expect("settled");
         let id = ids(&session)[0].expect("the upgraded escort's NPC");
         assert_eq!(
             session.space.npc(id).expect("in the system").ship,
@@ -527,11 +601,13 @@ mod tests {
     fn an_upgraded_hired_escort_is_paid_by_its_new_class_or_its_kept_wage() {
         let catalog = yards();
         for (rule, wage) in [(RuleSource::Engine, 300), (RuleSource::Bible, 100)] {
-            let mut session = landed_with(&catalog, &[129], &[0], 6_000);
+            let mut session = landed_with(&catalog, &[129], &[0], 6_000 + 1_000);
             session.setup.rules = Rulebook::default().with_override(RuleKey::EscortWage, rule);
             session.pilot.escorts[0].wage = Some(100);
             mark(&mut session, 0, EscortMark::Upgrade);
-            session.land_escorts(&mut NeverFires).expect("upgraded");
+            session
+                .land_escorts(&catalog, &mut NeverFires)
+                .expect("upgraded");
             let escort = session.pilot.escorts[0];
             assert_eq!(
                 session.setup.paid_wage(&session.statics, &escort),
