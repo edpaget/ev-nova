@@ -348,7 +348,7 @@ fn reentering_shuts_the_escort_menu_and_starts_the_cursor_hidden() {
 #[test]
 fn command_q_during_the_fade_out_quits_at_the_handover_saving_the_pilot() {
     let store = MemoryPilots::new();
-    let mut screen = menu(&store);
+    let mut screen = menu_ruled(&store, saving_in_flight());
     create_held(&mut screen, "Ada");
     choose(&mut screen, MenuChoice::EnterShip);
     command_q(&mut screen);
@@ -703,7 +703,8 @@ fn an_empty_intro_marks_the_pilot_seen() {
 #[test]
 fn a_seen_pilot_goes_from_the_fade_straight_to_flight_after_a_return_and_a_reopen() {
     let store = MemoryPilots::new();
-    let mut screen = intro_menu(&store);
+    // Saving in flight, so the return's save keeps the flag.
+    let mut screen = opening_with(&store, intro_data(), saving_in_flight());
     create_held(&mut screen, "Ada");
     enter_ship(&mut screen);
     escape_to_menu(&mut screen);

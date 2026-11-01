@@ -634,7 +634,7 @@ fn quitting_on_the_menu_with_a_held_pilot_writes_nothing() {
 // Escape in flight, by the rule.
 
 #[test]
-fn by_the_engine_escape_saves_and_returns_with_the_pilot_held_and_enter_resumes_it() {
+fn by_the_engine_escape_returns_with_the_pilot_held_and_enter_resumes_it() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
     create(&mut screen, "Ada");
@@ -644,12 +644,12 @@ fn by_the_engine_escape_saves_and_returns_with_the_pilot_held_and_enter_resumes_
     let left = ship(&screen).position;
     let writes = store.writes();
     escape_to_menu(&mut screen);
-    assert_eq!(store.writes(), writes + 1, "saved once");
+    assert_eq!(store.writes(), writes, "in flight, nothing saved");
     assert!(screen.flight_view().is_none());
     assert_eq!(held_name(&screen), "Ada");
     enter_ship(&mut screen);
     assert_eq!(ship(&screen).position, left, "where it left off");
-    assert_eq!(store.writes(), writes + 1);
+    assert_eq!(store.writes(), writes);
 }
 
 #[test]

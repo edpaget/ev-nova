@@ -587,7 +587,7 @@ fn comes_back(screen: &mut AppScreen) {
 }
 
 #[test]
-fn quit_from_the_menu_in_flight_saves_the_pilot_as_command_q_does() {
+fn quit_from_the_menu_in_flight_quits_saving_nothing_as_command_q_does() {
     let store = MemoryPilots::new();
     let mut screen = with_dialogs(data())
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
@@ -597,7 +597,7 @@ fn quit_from_the_menu_in_flight_saves_the_pilot_as_command_q_does() {
     let writes = store.writes();
     assert_eq!(screen.menu_command(MenuCommand::Quit), ScreenAction::Quit);
     screen.quit();
-    assert_eq!(store.writes(), writes + 1, "saved as the app quits");
+    assert_eq!(store.writes(), writes, "in flight, nothing saved");
 }
 
 #[test]

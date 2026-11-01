@@ -482,6 +482,7 @@ mod drift_blast;
 mod dying_player_escorts;
 mod edit;
 mod eject;
+mod ending_play_save;
 mod entry;
 mod escort_arrival;
 #[cfg(test)]

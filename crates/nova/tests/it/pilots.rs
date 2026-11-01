@@ -996,17 +996,32 @@ fn in_flight_a_plain_q_or_g_does_nothing_and_command_q_exits() {
 }
 
 /// The event loop ending under the game (macOS's `terminate:`, a quit
-/// that never reached it) saves the pilot flying, once.
+/// that never reached it) saves nothing in flight: the pilot stays as it
+/// was last saved.
 #[test]
-fn the_event_loops_end_in_flight_saves_the_pilot_once() {
+fn the_event_loops_end_in_flight_saves_nothing() {
     let store = MemoryPilots::new();
     let mut game = flying(&store, "Ada");
     let writes = store.writes();
-    let flown = game.pilot();
+    let before = saved(&store, "Ada");
+    game.app.exiting(&mut FakeWindow);
+    assert_eq!(store.writes(), writes, "nothing saved");
+    assert_eq!(saved(&store, "Ada"), before);
+    assert_eq!(game.app.take_warnings(), Vec::<String>::new());
+}
+
+/// The event loop ending under the game landed saves the pilot, once.
+#[test]
+fn the_event_loops_end_landed_saves_the_pilot_once() {
+    let store = MemoryPilots::new();
+    let mut game = flying(&store, "Ada");
+    game.land();
+    assert_eq!(game.showing(), Showing::Spaceport);
+    let writes = store.writes();
+    let landed = game.pilot();
     game.app.exiting(&mut FakeWindow);
     assert_eq!(store.writes(), writes + 1, "saved as the app quits");
-    assert_eq!(saved(&store, "Ada"), flown);
-    assert_eq!(game.app.take_warnings(), Vec::<String>::new());
+    assert_eq!(saved(&store, "Ada"), landed);
     game.app.exiting(&mut FakeWindow);
     assert_eq!(store.writes(), writes + 1, "once");
 }
@@ -1021,9 +1036,9 @@ fn after_the_menus_quit_in_flight_the_event_loops_end_saves_nothing_more() {
     if game.handle(WindowEvent::Menu(MenuCommand::Quit)) != Control::Exit {
         game.frames_until_exit();
     }
-    assert_eq!(store.writes(), writes + 1, "saved by the quit");
+    assert_eq!(store.writes(), writes, "in flight, the quit saves nothing");
     game.app.exiting(&mut FakeWindow);
-    assert_eq!(store.writes(), writes + 1, "not saved twice");
+    assert_eq!(store.writes(), writes, "nor the loop's end");
 }
 
 /// On the main menu, with no pilot flying, the event loop's end saves

@@ -1352,7 +1352,8 @@ fn undocked(screen: &AppScreen) -> bool {
 fn an_opened_pilot_whose_stellar_no_system_lists_shows_the_note_over_the_menu_holding_it() {
     let store = MemoryPilots::new();
     save_unlisted_ada(&store);
-    let mut screen = menu_with_dialogs(&store);
+    // Saving in flight, so the return writes the repaired pilot back.
+    let mut screen = menu_with_dialogs(&store).with_rules(saving_in_flight());
     open_first(&mut screen);
     assert_eq!(screen.showing(), Showing::Note);
     assert_eq!(screen.now_showing(), Some(Showing::Note));
@@ -1672,9 +1673,37 @@ fn landing_taking_off_and_a_transaction_each_save_the_pilot() {
 }
 
 #[test]
-fn escape_to_the_menu_and_quitting_save_the_pilot() {
+fn by_the_engine_escape_to_the_menu_in_flight_saves_nothing_and_quitting_landed_saves() {
     let store = MemoryPilots::new();
     let mut screen = menu(&store);
+    create(&mut screen, "Ada");
+    let created = store.text("Ada");
+    screen.input(&key(Key::Up, true));
+    screen.tick(TICK * 10);
+    let writes = store.writes();
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::MainMenu);
+    assert_eq!(store.writes(), writes, "in flight, nothing saved");
+    assert_eq!(store.text("Ada"), created);
+    assert!(screen.flight_view().is_none(), "the pilot is put away");
+    let mut screen = menu(&store);
+    open_first(&mut screen);
+    screen.tick(TICK);
+    let writes = store.writes();
+    screen.quit();
+    assert_eq!(store.writes(), writes, "quitting in flight saves nothing");
+    let mut screen = menu(&store);
+    open_first(&mut screen);
+    land_twice(&mut screen);
+    let writes = store.writes();
+    screen.quit();
+    assert_eq!(store.writes(), writes + 1, "quitting landed saves");
+}
+
+#[test]
+fn by_the_other_reading_escape_to_the_menu_and_quitting_in_flight_save_the_pilot() {
+    let store = MemoryPilots::new();
+    let mut screen = menu_ruled(&store, saving_in_flight());
     create(&mut screen, "Ada");
     screen.input(&key(Key::Up, true));
     screen.tick(TICK * 10);
@@ -1682,13 +1711,12 @@ fn escape_to_the_menu_and_quitting_save_the_pilot() {
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::MainMenu);
     assert_eq!(store.writes(), writes + 1);
-    assert!(screen.flight_view().is_none(), "the pilot is put away");
-    let mut screen = menu(&store);
+    let mut screen = menu_ruled(&store, saving_in_flight());
     open_first(&mut screen);
-    land_twice(&mut screen);
+    screen.tick(TICK);
     let writes = store.writes();
     screen.quit();
-    assert_eq!(store.writes(), writes + 1, "quitting saves");
+    assert_eq!(store.writes(), writes + 1, "quitting in flight saves");
 }
 
 #[test]

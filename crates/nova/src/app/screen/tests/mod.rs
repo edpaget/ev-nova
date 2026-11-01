@@ -1367,7 +1367,22 @@ fn keeper(store: &MemoryPilots) -> PilotKeeper<Box<dyn PilotStore>> {
 /// The router with the main menu over `store`, and no dialogs, past its
 /// start-up appear ([`appeared`]).
 pub(crate) fn menu(store: &MemoryPilots) -> AppScreen {
-    appeared(AppScreen::new(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)))
+    menu_ruled(store, Rulebook::default())
+}
+
+/// [`menu`] under `rules`.
+pub(crate) fn menu_ruled(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
+    appeared(
+        AppScreen::new(data())
+            .with_rules(rules)
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)),
+    )
+}
+
+/// The rules with `ending_play_save` read as the port's earlier
+/// behaviour: ending play in flight saves the pilot where it is.
+pub(crate) fn saving_in_flight() -> Rulebook {
+    Rulebook::default().with_override(RuleKey::EndingPlaySave, RuleSource::Bible)
 }
 
 /// Escape from flight, back to the main menu, past the return's appear

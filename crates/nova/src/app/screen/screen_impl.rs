@@ -524,7 +524,8 @@ impl Screen for AppScreen {
     }
 
     /// Puts the pilot flying away, in flight or in the spaceport, when it
-    /// has a name: saves it, or deletes a strict pilot dying
+    /// has a name: saves it when ending play saves it (landed, by
+    /// default), or deletes a strict pilot dying
     /// ([`AppScreen::put_away_pilot`]). A game only held on the menu is
     /// put away by nothing: the original saves nothing on a quit from the
     /// main screen.
