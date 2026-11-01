@@ -1062,6 +1062,14 @@ pub struct Decision {
     /// target alone (@0x8c839-0x8c842), so a kept rush or break-off
     /// ([`Npc::pursuit`]) carries over to its next fight.
     pub keeps_pursuit: bool,
+    /// Whether the think writes the sub-goal (+0xc8ca) itself, ending any
+    /// docking ([`Npc::docking`]) even while the AI wait skips the high
+    /// level: `_PirateWarshipAI`'s count wait entry (@0x8c6fe), its plunder
+    /// (@0x8c788) and its dry drop (@0x8c878), and `_AIFindShipToPlunder`'s
+    /// find (@0x7fea5). A think that writes it not leaves a docking under
+    /// the wait whatever goal it writes (see
+    /// [`plunder_dock::kept_by`](crate::traffic::plunder_dock::kept_by)).
+    pub writes_sub: bool,
     /// The ship it plunders now: `_PirateWarshipAI`'s plunder
     /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
     /// out, its [`goal`](Self::goal) the drift that follows

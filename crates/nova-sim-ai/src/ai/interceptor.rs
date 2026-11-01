@@ -889,6 +889,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 keeps_pursuit: false,
+                writes_sub: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,

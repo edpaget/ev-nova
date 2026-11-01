@@ -25,6 +25,9 @@
 //!   nothing changing with none (@0x8f3f3); any
 //!   other goal flies its fight, which
 //!   drops any docking, as goal 4's and goal 0xd's other substates do.
+//!   While the wait skips it, a docking outlives whatever goal the think
+//!   writes, unless the think writes the sub itself
+//!   ([`plunder_dock::kept_by`]).
 //! - **The plunder** ([`resolve`]), over the decisions that plunder
 //!   ([`Decision::plunders`]), in berth order: the pirate takes goal 0xe
 //!   ([`Goal::Drift`]) and an AI wait of [`PLUNDER_HOLD`], then plunders,
@@ -1154,9 +1157,9 @@ mod tests {
         // Its dock wait skips the high level (@0x8d4b9-0x8d4d2), so goal
         // 0xd keeps sub 0xf and its nav, which no slot test clears: it
         // matches the record's velocity and creeps to its place
-        // (@0x86a3f-0x86a51, @0x8702d). Its think keeps its goal: what a
-        // type think makes of the gone victim is the decisions' own
-        // matter.
+        // (@0x86a3f-0x86a51, @0x8702d). Its think keeps its goal here; a
+        // pirate's own think on the gone victim is
+        // `plunder_gone_tests`'s.
         #[derive(Debug)]
         struct Keeps;
         impl crate::ai::Behaviour for Keeps {

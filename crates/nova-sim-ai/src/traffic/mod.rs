@@ -271,6 +271,8 @@ pub mod original_ai_type;
 pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
+#[cfg(test)]
+mod plunder_gone_tests;
 pub mod pod_flight;
 pub mod provocation;
 #[cfg(test)]
@@ -2627,10 +2629,7 @@ impl Traffic {
             if clears_target {
                 npc.target = None;
             }
-            if !matches!(
-                goal,
-                Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } | Goal::Assist(_)
-            ) {
+            if !plunder_dock::kept_by(npc, &decision) {
                 npc.docking = None;
             }
             board_wait::enter(npc, goal);
@@ -5349,6 +5348,7 @@ mod tests {
             board_wait: None,
             clears_target: false,
             keeps_pursuit: false,
+            writes_sub: false,
             plunders: None,
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,

@@ -104,6 +104,8 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
                 plunders: None,
                 // +0x6c -1 (@0x8c70d).
                 travel: TravelWrite::Clear,
+                // Sub 0 (@0x8c6fe), ending a dock under its wait.
+                writes_sub: true,
                 ..*decision
             };
         }

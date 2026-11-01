@@ -95,9 +95,15 @@ impl Npc {
     /// the engine keeps beside it.
     #[must_use]
     pub fn high_level_waits(&self) -> bool {
+        self.high_level_waits_under(self.goal)
+    }
+
+    /// Whether its high level returns at once for its AI wait under
+    /// `goal`, the goal its think writes ([`Npc::high_level_waits`]).
+    #[must_use]
+    pub fn high_level_waits_under(&self, goal: Goal) -> bool {
         self.ai_wait > 0
-            && (self.follows_leaders_jump()
-                || !(self.goal.flies_in_form() || self.goal == Goal::Drift))
+            && (self.follows_leaders_jump() || !(goal.flies_in_form() || goal == Goal::Drift))
     }
 
     /// It follows `leader`'s jump, sub 0xd ([`WarpGoal::Follow`]), letting
