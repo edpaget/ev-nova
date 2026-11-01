@@ -1551,6 +1551,45 @@ mod tests {
     }
 
     #[test]
+    fn the_rescues_move_mark_counts_no_text_its_days_queue() {
+        use crate::catalog::{MissionId, MissionTexts};
+        let mut catalog = rescuing_with(Some("Rescued."), "S141", 0);
+        catalog.ship_records[0].on_purchase = Script::parse("S142");
+        for id in [142, 143] {
+            catalog.missions.push(MissionRecord {
+                id: MissionId(id),
+                ..catalog.missions[1].clone()
+            });
+            catalog.mission_texts.push(MissionTexts {
+                brief: Some("Brief.".to_owned()),
+                ..MissionTexts::named(MissionId(id), "Started")
+            });
+        }
+        // A crön starting mission 143 on the rescue's first day, once.
+        catalog.crons = vec![crate::catalog::CronRecord {
+            enable_on: crate::control::Test::parse("!b30"),
+            on_start: Script::parse("S143 b30"),
+            ..crate::testkit::cron(128)
+        }];
+        let mut session = due_holding(&catalog);
+        let before = session.texts_queued();
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(
+            session.texts_queued(),
+            before + 3,
+            "the OnAbort's, the OnPurchase's and the days' briefs"
+        );
+        assert_eq!(
+            session.ship.fate.rescue_texts,
+            Some(RescueTexts {
+                reset: before + 1,
+                moved: before + 2,
+            }),
+            "the days' text falls above the move (@0x6912a)"
+        );
+    }
+
+    #[test]
     fn a_missing_rescue_desc_empties_the_movie_and_gives_no_text() {
         let catalog = rescuing_with(None, "b22", 0);
         let mut session = due_holding(&catalog);
