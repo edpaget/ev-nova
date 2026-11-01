@@ -638,11 +638,10 @@ mod tests {
                 goal: Goal::Idle,
                 clears_target: true,
                 forgets_provocation: true,
-                keeps_pursuit: true,
                 lost_sight: Some(LostSight::Seen),
                 ..Decision::default()
             },
-            "@0x8e717-0x8e726, no substate written"
+            "@0x8e717-0x8e726, then sub 0 at the tail (@0x8fb13)"
         );
     }
 
@@ -678,7 +677,6 @@ mod tests {
             assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");
             assert!(!decision.forgets_provocation, "+0x96 stands");
             assert!(!decision.clears_target, "+0x70 stands");
-            assert!(!decision.keeps_pursuit, "the block never ran");
         }
     }
 
@@ -1163,7 +1161,6 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
-                keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,

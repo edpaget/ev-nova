@@ -92,6 +92,22 @@ fn a_defender_whose_led_target_breaks_up_attacks_the_nearer_player_on_its_next_t
 }
 
 #[test]
+fn a_kept_rush_doesnt_survive_a_drop() {
+    // The drop writes goal 0 (@0x8e726), and the handler's tail writes sub
+    // 0 on every goal-0 frame (@0x8fb09-0x8fb13), so no pursuit carries
+    // over to the next fight.
+    let mut rushing = defender();
+    rushing.pursuit = crate::ai::pursuit::Pursuit {
+        kept: Some(crate::ai::pursuit::Kept::Rush),
+        frame: None,
+    };
+    let mut traffic = traffic_of(vec![rushing, led_wreck()]);
+    tick(&mut traffic, &player(0.0, 90_000.0));
+    assert_eq!(first(&traffic), (Goal::Idle, None));
+    assert_eq!(traffic.npcs()[0].pursuit.kept, None, "@0x8fb13");
+}
+
+#[test]
 fn a_defender_whose_wreck_is_the_nearest_candidate_takes_it_and_drops_it_each_think() {
     // Far from the player the wreck is the candidate again, and the block
     // drops it again: the target -1 holds at each frame's end.

@@ -70,8 +70,10 @@
 //! - **The disabled-warship drop** (@0x8c7b4-0x8c842): attacking a disabled
 //!   NPC of a class whose `InherentAI` is above 2, not a former escort,
 //!   with no destroying weapon ([`fire::destroys`]) or fully dry, it drops
-//!   it: goal 0 and target -1 alone, so a kept rush or break-off carries
-//!   over to its next fight ([`Decision::keeps_pursuit`]).
+//!   it: goal 0 and target -1 alone (@0x8c839-0x8c842). It reaches the
+//!   handler's tail, which writes sub 0 on goal 0 (@0x8c839-0x8c842 →
+//!   @0x901e5, @0x8fb09-0x8fb13), so no kept rush or break-off carries
+//!   over to its next fight.
 //! - **The dry drop** (@0x8c848-0x8c887): attacking or plundering fully dry
 //!   ([`AmmoLeft::Dry`]), it drops the fight, its sub-goal too. It comes
 //!   after the wait loop, so a dry pirate waits all the same when another
@@ -79,8 +81,8 @@
 //! - **An attack** it keeps is goal 4's, as `_HighLevelAIHandler` flies it
 //!   in the same frame: it drops a target it spares (the ally drop
 //!   @0x8e277-0x8e2e4, [`spares`]: goal and sub 0, the target kept), then
-//!   one breaking up or gone (@0x8e3ef → @0x8e714: target -1, goal 0, the
-//!   sub kept), and snipes a hopeless chase unless it stands off (as
+//!   one breaking up or gone (@0x8e3ef → @0x8e714: target -1, goal 0),
+//!   and snipes a hopeless chase unless it stands off (as
 //!   [`warship::hunt`](super::warship::hunt)'s hunted ship does).
 //!
 //! It takes no government's word, has no odds, shield or out-of-ammunition
@@ -295,19 +297,15 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
         Class::Attack => {
             // The think's drops, then goal 4's high level in the same
             // frame: its ally drop (goal and sub 0, the target kept), then
-            // its gone-or-breaking-up drop (the sub kept).
-            let keeps = Decision {
-                keeps_pursuit: true,
-                ..dropped
-            };
+            // its gone-or-breaking-up drop.
             if drops_disabled_warship(npc, target, around) {
-                keeps
+                dropped
             } else if dry {
                 dry_dropped
             } else if spares(npc, target, around, rules) {
                 of(Goal::Idle)
             } else if gone_or_dying(target, around) {
-                keeps
+                dropped
             } else {
                 of(state4_attack(npc, target, around))
             }
@@ -659,19 +657,18 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_warship_class_is_dropped_keeping_the_pursuit_without_destroying_weapons() {
-        // AI type 1, so a plunder candidate, but of a warship's class.
+    fn a_disabled_warship_class_is_dropped_without_destroying_weapons() {
+        // AI type 1, so a plunder candidate, but of a warship's class. The
+        // drop writes goal 0 and target -1 alone (@0x8c839-0x8c842), and the
+        // handler's tail writes sub 0 (@0x8fb13).
         let downed = Npc {
             condition: Condition::Disabled,
             ..warship_class(2, 300.0)
         };
         assert_eq!(
             decided(&[pirate(), downed.clone()]),
-            Decision {
-                keeps_pursuit: true,
-                ..dropped()
-            },
-            "goal 0 and target -1 alone (@0x8c839-0x8c842)"
+            dropped(),
+            "@0x8c839-0x8c842"
         );
         let mut armed = pirate();
         armed.armament = Armament::new([(
@@ -689,10 +686,10 @@ mod tests {
     }
 
     #[test]
-    fn a_warship_class_found_breaking_up_is_dropped_keeping_the_pursuit_with_destroying_weapons() {
+    fn a_warship_class_found_breaking_up_is_dropped_with_destroying_weapons() {
         // The plunder search finds it (`_IsDisabled` counts breaking up),
         // the destroying weapon passes the disabled-warship drop, and goal
-        // 4's high level drops it in the same frame, its sub kept.
+        // 4's high level drops it in the same frame.
         let mut armed = pirate();
         armed.armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
@@ -710,10 +707,7 @@ mod tests {
         };
         assert_eq!(
             decided(&[armed.clone(), breaking_up]),
-            Decision {
-                keeps_pursuit: true,
-                ..dropped()
-            },
+            dropped(),
             "goal 4's gone-or-breaking-up drop"
         );
         let downed = Npc {
@@ -1251,13 +1245,7 @@ mod tests {
         assert_eq!(decided(&npcs), only(Goal::Attack(n(2))));
         crewless.hull.inherent_ai = 3;
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), crewless];
-        assert_eq!(
-            decided(&npcs),
-            Decision {
-                keeps_pursuit: true,
-                ..dropped()
-            }
-        );
+        assert_eq!(decided(&npcs), dropped());
     }
 
     #[test]

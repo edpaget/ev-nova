@@ -1400,10 +1400,6 @@ impl Traffic {
                 .filter_map(|(npc, decision)| Some((npc.id, (*decision)?.voice?))),
         );
         board_wait::resolve(&self.npcs, &mut decisions);
-        let keeps: Vec<bool> = decisions
-            .iter()
-            .map(|decision| decision.is_some_and(|decision| decision.keeps_pursuit))
-            .collect();
         let clears: Vec<bool> = decisions
             .iter()
             .map(|decision| decision.is_some_and(|decision| decision.clears_target))
@@ -1445,7 +1441,7 @@ impl Traffic {
             .zip(&picked)
             .map(|(high_level, &picked)| high_level && picked)
             .collect();
-        self.pursue(world, &high_levels, &keeps, chance);
+        self.pursue(world, &high_levels, chance);
         self.refuel(world, &high_levels);
         plunder::drift(&mut self.npcs, &due);
         // Whether a fighter launched now finds a slot, the test
@@ -1598,15 +1594,9 @@ impl Traffic {
     /// or its fight ([`pursuit::step`]). `_LowLevelAIHandler` runs
     /// in the same frame as the think (`_AIDispatch` @0x901e5-0x901f4),
     /// after the goal and before the passes and the flight read its frame.
-    /// One whose decision `keeps` its pursuit ([`Decision::keeps_pursuit`])
-    /// holds on to the substate it kept.
-    fn pursue(
-        &mut self,
-        world: &World,
-        due: &[bool],
-        keeps: &[bool],
-        chance: &mut (impl Chance + ?Sized),
-    ) {
+    /// Each takes its step's pursuit: a drop to goal 0 keeps none, as the
+    /// handler's tail writes sub 0 on every goal-0 frame (@0x8fb09-0x8fb13).
+    fn pursue(&mut self, world: &World, due: &[bool], chance: &mut (impl Chance + ?Sized)) {
         let around = world.around(&self.npcs);
         let rules = PursuitRules {
             approach_lead: world.approach_lead,
@@ -1632,7 +1622,7 @@ impl Traffic {
                 })
             })
             .collect();
-        for ((npc, step), &keep) in self.npcs.iter_mut().zip(steps).zip(keeps) {
+        for (npc, step) in self.npcs.iter_mut().zip(steps) {
             let Some((high, pursuit)) = step else {
                 continue;
             };
@@ -1640,14 +1630,7 @@ impl Traffic {
                 continue;
             }
             plunder::take_high_level(npc, high);
-            npc.pursuit = if keep && high != HighLevel::Stops {
-                Pursuit {
-                    kept: npc.pursuit.kept,
-                    ..pursuit
-                }
-            } else {
-                pursuit
-            };
+            npc.pursuit = pursuit;
         }
     }
 
@@ -5273,7 +5256,6 @@ mod tests {
             calls_reinforcements: false,
             board_wait: None,
             clears_target: false,
-            keeps_pursuit: false,
             plunders: None,
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,

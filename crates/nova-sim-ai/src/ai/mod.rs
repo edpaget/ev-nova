@@ -1055,11 +1055,6 @@ pub struct Decision {
     /// so the next think finds no target, whatever its thinker's target
     /// step works out afresh (the attack block's -1, @0x8e717).
     pub clears_target: bool,
-    /// Whether the think dropped its fight leaving its sub-goal as it was:
-    /// `_PirateWarshipAI`'s disabled-warship drop writes the goal and the
-    /// target alone (@0x8c839-0x8c842), so a kept rush or break-off
-    /// ([`Npc::pursuit`]) carries over to its next fight.
-    pub keeps_pursuit: bool,
     /// The ship it plunders now: `_PirateWarshipAI`'s plunder
     /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
     /// out, its [`goal`](Self::goal) the drift that follows

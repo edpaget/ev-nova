@@ -1885,7 +1885,6 @@ mod tests {
         assert_eq!(decision.goal, Goal::Idle, "goal 0 (@0x8e726)");
         assert!(decision.clears_target, "target -1 (@0x8e717)");
         assert!(decision.forgets_provocation, "+0x96 0 (@0x8e71d)");
-        assert!(decision.keeps_pursuit, "no write of the sub");
         assert!(!decision.calls_reinforcements, "@0x8e3f6 skips @0x8e70d");
         let dropped = taking(&npcs[0], decision);
         assert_eq!(ai.trigger(&dropped, &around), Trigger::default());
@@ -2412,7 +2411,6 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
-                keeps_pursuit: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
@@ -2448,7 +2446,6 @@ mod tests {
                 calls_reinforcements: true,
                 board_wait: None,
                 clears_target: false,
-                keeps_pursuit: false,
                 plunders: None,
                 lost_sight: Some(crate::ai::lost_sight::LostSight::Seen),
                 travel: crate::ai::travel::TravelWrite::Keep,

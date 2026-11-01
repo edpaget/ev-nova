@@ -7,8 +7,9 @@
 //! ([`Goal::attacking`], an attack or a snipe, whatever the ship's type).
 //! Its target's slot still active (+0xb8 @0x8e3df) and `_IsDying` true
 //! (@0x8e3ef), it writes target -1 (@0x8e717), +0x96 0 (@0x8e71d) and goal
-//! 0 (@0x8e726), and no substate, so a kept rush or break-off carries over
-//! ([`Decision::keeps_pursuit`]). Its +0x96 0 comes after the think, so it
+//! 0 (@0x8e726), and the handler's tail then writes sub 0
+//! (@0x8fb09-0x8fb13), so no pursuit carries over. Its +0x96 0 comes after
+//! the think, so it
 //! stands over a word's 1 (@0x8cb9d) on a player breaking up. It skips the
 //! fighter launch (@0x8e6fa) and the call for reinforcements (@0x8e70d),
 //! and `_LowLevelAIHandler`'s passes then find no target. So nothing fires
@@ -65,7 +66,6 @@ pub fn with_attack_drop(decision: Decision, around: &Surroundings) -> Decision {
         provokes: false,
         clears_target: true,
         forgets_provocation: true,
-        keeps_pursuit: true,
         ..decision
     }
 }
@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn an_attack_or_snipe_on_a_ship_breaking_up_ends_keeping_its_substate() {
+    fn an_attack_or_snipe_on_a_ship_breaking_up_ends_on_goal_0() {
         for goal in [Goal::Attack(n(2)), Goal::Snipe(n(2))] {
             assert_eq!(
                 after(of(goal), DYING),
@@ -113,7 +113,6 @@ mod tests {
                     goal: Goal::Idle,
                     clears_target: true,
                     forgets_provocation: true,
-                    keeps_pursuit: true,
                     ..Decision::default()
                 },
                 "{goal:?}"
