@@ -1618,15 +1618,23 @@ mod tests {
         for set in [false, true] {
             let mut ship = following_lead(!set);
             fly_jump_by(&mut ship, &views_of(set), &world, true);
-            assert_eq!(ship.travel_set(), set, "@0x8df18-0x8df22");
+            assert_eq!(ship.travel, set.then_some(LEAD_STELLAR), "@0x8df18-0x8df22");
             assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(LEAD))));
             let mut ship = following_lead(!set);
             ship.ai_wait = 1;
             fly_jump_by(&mut ship, &views_of(set), &world, true);
-            assert_eq!(ship.travel_set(), !set, "the wait skips the check");
+            assert_eq!(
+                ship.travel,
+                (!set).then_some(OWN_STELLAR),
+                "the wait skips the check"
+            );
             let mut paused = following_lead(!set);
             fly_jump(&mut paused, &views_of(set), &world, true, true);
-            assert_eq!(paused.travel_set(), !set, "goal 0x13 runs no check");
+            assert_eq!(
+                paused.travel,
+                (!set).then_some(OWN_STELLAR),
+                "goal 0x13 runs no check"
+            );
         }
     }
 
@@ -1687,7 +1695,7 @@ mod tests {
             FollowStep::Warping,
             "under an NPC"
         );
-        assert!(ship.travel_set());
+        assert_eq!(ship.travel, Some(LEAD_STELLAR));
         let cleared = LeaderWarp {
             travel: None,
             ..leader()

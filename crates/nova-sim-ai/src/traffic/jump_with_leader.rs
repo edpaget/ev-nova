@@ -766,17 +766,52 @@ mod tests {
     }
 
     #[test]
-    fn a_fighter_turned_back_holds_its_carriers_slot() {
-        // +0x6c its parent (@0x8d621).
+    fn a_fighter_turning_back_holds_its_carriers_slot() {
+        // +0x6c its parent (@0x8d61a-0x8d621).
         let reading = crate::rulebook::RuleSource::Engine;
-        for carrier in [ShipRef::Player, ShipRef::Npc(NpcId(4))] {
+        for (carrier, slot) in [(ShipRef::Player, 0), (ShipRef::Npc(NpcId(4)), 6)] {
             let mut short = fighter_on_jump(carrier, true);
-            turn_back(&mut short, reading, Some(0));
-            assert!(short.travel_set(), "{carrier:?}");
+            turn_back(&mut short, reading, Some(slot));
+            assert_eq!(short.travel, Some(travel::of_slot(slot)), "{carrier:?}");
             let mut able = fighter_on_jump(carrier, false);
-            turn_back(&mut able, reading, Some(0));
+            turn_back(&mut able, reading, Some(slot));
             assert!(!able.travel_set(), "{carrier:?}: it jumps on");
         }
+        let held = Some(crate::catalog::StellarId(150));
+        let mut lost = fighter_on_jump(ShipRef::Npc(NpcId(4)), true);
+        lost.travel = held;
+        turn_back(&mut lost, reading, None);
+        assert_eq!(lost.goal, Goal::Dock(ShipRef::Npc(NpcId(4))));
+        assert_eq!(lost.travel, held, "a carrier found nowhere writes none");
+    }
+
+    #[test]
+    fn in_the_fly_half_a_fighter_turning_back_reads_its_carriers_berth() {
+        use crate::traffic::fly_pass::FlyHalf;
+        let mut traffic = Traffic::with_interval(1);
+        let mut carrier = far(0);
+        carrier.begin_own_jump();
+        let carrier = traffic.add_npc_at(carrier, 9);
+        let mut fighter = fighter_on_jump(ShipRef::Npc(carrier), true);
+        fighter.leader = Some(carrier);
+        fighter.warp.stage = 0.0;
+        let fighter = traffic.add_npc_at(fighter, 2);
+        let mut orphan = fighter_on_jump(ShipRef::Npc(NpcId(40)), true);
+        orphan.warp.stage = 0.0;
+        orphan.travel = Some(crate::catalog::StellarId(150));
+        let orphan = traffic.add_npc_at(orphan, 3);
+        let world = jumping_world(0.0);
+        let _ = traffic.begin_fly(&world, &std::collections::BTreeSet::new(), FlyHalf::Advance);
+        assert_eq!(
+            of(&traffic, fighter).goal,
+            Goal::Dock(ShipRef::Npc(carrier))
+        );
+        assert_eq!(of(&traffic, fighter).travel, Some(travel::of_slot(9)));
+        assert_eq!(
+            of(&traffic, orphan).travel,
+            Some(crate::catalog::StellarId(150)),
+            "a carrier in neither the system nor the gone"
+        );
     }
 
     #[test]

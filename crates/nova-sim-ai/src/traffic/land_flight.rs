@@ -479,13 +479,19 @@ mod tests {
     }
 
     #[test]
+    fn a_landed_ship_holds_the_stellar_it_landed_on() {
+        // +0x6c is not written: it holds the stellar goal 1 flew to.
+        let (npc, _) = stayed(0, 0);
+        assert_eq!(npc.travel, Some(StellarId(140)));
+    }
+
+    #[test]
     fn a_landed_ship_stops_takes_goal_0_and_marks_the_stellar_visited() {
         let (npc, _) = stayed(0, 0);
         assert_eq!(npc.state.velocity, Vec2::ZERO);
         assert_eq!(npc.speed, 0.0);
         assert_eq!(npc.goal, Goal::Idle);
         assert_eq!(npc.visited, Some(StellarId(140)), "+0x92 @0x8db00");
-        assert!(npc.travel_set(), "+0x6c keeps the stellar");
         assert_eq!(npc.state.position, site().position + Vec2::new(10.0, 0.0));
         assert_eq!(npc.target, Some(crate::combat::ShipRef::Player), "kept");
         assert_eq!(npc.provoked, 7.0, "kept");

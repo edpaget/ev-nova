@@ -596,7 +596,25 @@ mod tests {
         lead.travel = None;
         lead.emerges_from = Some(crate::catalog::StellarId(129));
         think(&mut traffic);
-        assert!(of(&traffic, 1).travel_set());
+        assert_eq!(of(&traffic, 1).travel, Some(crate::catalog::StellarId(129)));
+    }
+
+    #[test]
+    fn a_successor_takes_the_stellar_its_lead_held() {
+        use crate::ai::travel;
+        use crate::catalog::StellarId;
+        // @0x893b0-0x893e1 copies the number, whatever it names.
+        let mut traffic = taking_over(REBELS, Goal::Land(StellarId(133)));
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).travel, Some(StellarId(133)), "bound for it");
+        let mut traffic = taking_over(REBELS, Goal::Hold);
+        of_mut(&mut traffic, 0).travel = Some(travel::of_slot(6));
+        think(&mut traffic);
+        assert_eq!(
+            of(&traffic, 1).travel,
+            Some(travel::of_slot(6)),
+            "a slot it held"
+        );
     }
 
     #[test]

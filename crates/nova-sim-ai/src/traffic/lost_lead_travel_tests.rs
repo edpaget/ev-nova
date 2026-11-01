@@ -231,5 +231,5 @@ fn a_follower_released_at_its_leads_gate_holds_the_gate() {
     traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
     let released = of(&traffic, FOLLOWER);
     assert_eq!(released.goal, Goal::EnterGate(GATE));
-    assert!(released.travel_set());
+    assert_eq!(released.travel, Some(GATE));
 }

@@ -1151,7 +1151,11 @@ pub(super) mod tests {
             mark.formation = None;
         }
         assert!(session.join_mission_escorts());
-        assert!(session.npcs()[0].travel_set());
+        assert_eq!(
+            session.npcs()[0].travel,
+            Some(crate::catalog::StellarId(128)),
+            "slot 0, read as stellar 128"
+        );
     }
 
     #[test]
