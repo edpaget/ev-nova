@@ -154,7 +154,7 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
 ///
 /// The block ran when the think fled or fought from state 0 (the pick
 /// comes before the provoked test, @0x8b1ac), or, for any other `thought`,
-/// when the ship kept no goal ([`kept`](super::kept)). It writes nothing
+/// when the ship kept no goal (`ai::kept`). It writes nothing
 /// when it didn't run or the ship has visited ([`visited_here`]), and
 /// nothing of its own for a pick, which [`travel::take`] writes as it takes
 /// the `Land` or `EnterGate`. Otherwise the pick failed, -1, when there is

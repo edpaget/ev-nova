@@ -149,7 +149,7 @@ impl Behaviour for MinerAi {
 }
 
 /// `npc`'s goal among `around`, as `_MinerAI` decides it (see the module
-/// docs): its [`think`]'s.
+/// docs): its think's.
 #[must_use]
 pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
     think(npc, around).0
