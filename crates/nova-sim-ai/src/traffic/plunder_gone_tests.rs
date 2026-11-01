@@ -323,6 +323,33 @@ fn a_docked_pirate_whose_victim_went_and_who_found_a_warship_plunders_the_record
 }
 
 #[test]
+fn a_docked_pirate_whose_victims_slot_went_and_who_picks_a_hopeless_chase_attacks_it_through_its_wait_and_plunders_at_its_end()
+ {
+    // Under the dock wait the high level returns at once (@0x8d4b9-0x8d4d2),
+    // so goal 4's hopeless test (@0x8e5f8) never snipes: the warship's
+    // pick, fleeing the heavy pirate faster than it can follow, is a plain
+    // attack on every tick of the wait, and the type think's plunder
+    // (@0x8c74c-0x8c7ae) runs on the dead nav at its end.
+    let govts = govts(0, 0);
+    let mut warship = ship(7, TRADERS, AiType::Warship, 0.0, 400.0);
+    warship.berth = 7;
+    warship.hull.inherent_ai = 3;
+    warship.no_ai = true;
+    warship.goal = Goal::Flee(ShipRef::Npc(PIRATE));
+    warship.state.velocity = Vec2::new(0.0, 1.0);
+    let mut heavy = pirate(30, true);
+    heavy.hull.mass = 100.0;
+    let mut traffic = traffic_of(vec![heavy, victim(), warship]);
+    traffic.remove_destroyed(VICTIM);
+    let ticks = until_it_drifts(&mut traffic, &govts, 40, &|pirate| {
+        assert_eq!(pirate.goal, Goal::Attack(ShipRef::Npc(NpcId(7))));
+        assert_eq!(pirate.docking, ON_VICTIM);
+    });
+    assert_eq!(ticks, 31, "the think after its wait ran out");
+    assert_eq!(traffic.take_pirate_events(), [], "nothing plundered");
+}
+
+#[test]
 fn a_docked_pirates_completion_after_its_victims_berth_was_taken_plunders_the_newcomer() {
     // `_AIPlunderShipContents` tests only `_IsDying` and +0xb8
     // (@0x83fbd-0x83fd4), so the nav's newcomer, a live ship, is
