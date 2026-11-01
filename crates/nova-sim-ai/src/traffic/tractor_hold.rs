@@ -291,6 +291,25 @@ mod tests {
         };
         again(&mut traffic, &world);
         assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.5)));
+        assert!(
+            traffic.npcs[0].tractor.is_some(),
+            "kept by an intact player"
+        );
+    }
+
+    #[test]
+    fn a_held_npc_is_pulled_then_released_by_a_disabled_player() {
+        // The release tests slot 0 too: `_IsDisabled` (@0x353ee).
+        let mut traffic = traffic_of(vec![held_by(ShipRef::Player, Vec2::new(5.0, 0.0))]);
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.condition = Condition::Disabled;
+        let world = World {
+            player: Some(player),
+            ..pulling(0.5)
+        };
+        again(&mut traffic, &world);
+        assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.0)));
+        assert_eq!(traffic.npcs[0].tractor, None, "released after its pull");
     }
 
     #[test]
