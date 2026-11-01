@@ -1400,9 +1400,9 @@ impl Traffic {
                 .filter_map(|(npc, decision)| Some((npc.id, (*decision)?.voice?))),
         );
         board_wait::resolve(&self.npcs, &mut decisions);
-        let clears: Vec<bool> = decisions
+        let last_words: Vec<Option<Option<ShipRef>>> = decisions
             .iter()
-            .map(|decision| decision.is_some_and(|decision| decision.clears_target))
+            .map(|decision| decision.and_then(|decision| decision.last_target()))
             .collect();
         let turning: Vec<(NpcId, bool)> = self
             .npcs
@@ -1463,10 +1463,10 @@ impl Traffic {
             let (trigger, target) = if decides[index] {
                 (
                     behaviour.trigger(npc, &around),
-                    // A cleared target is the frame's last word: a target
-                    // step that works its answer out afresh (a defender's
-                    // think, a mission hunt) would refill it.
-                    Some(behaviour.target(npc, &around).filter(|_| !clears[index])),
+                    // A cleared or held target is the frame's last word: a
+                    // target step that works its answer out afresh (a
+                    // defender's think, a mission hunt) would refill it.
+                    Some(last_words[index].unwrap_or_else(|| behaviour.target(npc, &around))),
                 )
             } else if regroup::paused(npc) {
                 let wait = regroup::held_fire(behaviour, npc, &around);
@@ -5256,6 +5256,7 @@ mod tests {
             calls_reinforcements: false,
             board_wait: None,
             clears_target: false,
+            holds_target: None,
             plunders: None,
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,

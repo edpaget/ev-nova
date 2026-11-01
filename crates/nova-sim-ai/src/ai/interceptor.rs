@@ -1161,6 +1161,7 @@ mod tests {
                 calls_reinforcements: false,
                 board_wait: None,
                 clears_target: false,
+                holds_target: None,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,

@@ -1055,6 +1055,13 @@ pub struct Decision {
     /// so the next think finds no target, whatever its thinker's target
     /// step works out afresh (the attack block's -1, @0x8e717).
     pub clears_target: bool,
+    /// The target the frame ends with on goal 0, when the high level
+    /// dropped the attack keeping it: the attack block's wait test and its
+    /// ally drop write goal 0 alone (@0x8e26d → @0x8e731, @0x8e2d2;
+    /// [`attack_drop`]). The traffic writes it over
+    /// [`Behaviour::target`]'s answer, so the threat tests read it
+    /// ([`Npc::fought`]) and the next think finds it.
+    pub holds_target: Option<ShipRef>,
     /// The ship it plunders now: `_PirateWarshipAI`'s plunder
     /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
     /// out, its [`goal`](Self::goal) the drift that follows
@@ -1139,6 +1146,21 @@ pub struct Decision {
     /// [`VoiceCue::Thought`]: crate::escort_voice::VoiceCue::Thought
     /// [`VoiceCue::NewThreat`]: crate::escort_voice::VoiceCue::NewThreat
     pub voice: Option<crate::escort_voice::VoiceCue>,
+}
+
+impl Decision {
+    /// The target the frame ends with whatever the target step answers:
+    /// the one it holds ([`holds_target`](Self::holds_target)), or none
+    /// when it clears its target ([`clears_target`](Self::clears_target));
+    /// `None` when the target step's answer stands.
+    #[must_use]
+    pub fn last_target(&self) -> Option<Option<ShipRef>> {
+        match (self.holds_target, self.clears_target) {
+            (Some(ship), _) => Some(Some(ship)),
+            (None, true) => Some(None),
+            (None, false) => None,
+        }
+    }
 }
 
 /// How NPCs decide what to do.

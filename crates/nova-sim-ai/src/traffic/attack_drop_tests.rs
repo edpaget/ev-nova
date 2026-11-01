@@ -91,6 +91,44 @@ fn a_defender_whose_led_target_breaks_up_attacks_the_nearer_player_on_its_next_t
     );
 }
 
+/// Drops to goal 0 holding NPC 9, its target step answering none.
+#[derive(Debug)]
+struct Holding;
+
+impl crate::ai::Behaviour for Holding {
+    fn decide(
+        &self,
+        _npc: &Npc,
+        _around: &crate::ai::Surroundings,
+        _chance: &mut dyn crate::chance::Chance,
+    ) -> Goal {
+        Goal::Idle
+    }
+
+    fn decision(
+        &self,
+        _npc: &Npc,
+        _around: &crate::ai::Surroundings,
+        _chance: &mut dyn crate::chance::Chance,
+    ) -> crate::ai::Decision {
+        crate::ai::Decision {
+            holds_target: Some(n(9)),
+            ..crate::ai::Decision::default()
+        }
+    }
+}
+
+#[test]
+fn a_held_target_ends_the_frame_over_the_target_steps_answer() {
+    let mut traffic = traffic_of(vec![ship(1, PIRATES, AiType::Warship, 0.0, 0.0)]);
+    let world = World {
+        player: Some(player(0.0, 90_000.0)),
+        ..World::new(&[])
+    };
+    traffic.tick_holding(&Holding, world, &[], &BTreeSet::new(), &mut Ranged::of(&[]));
+    assert_eq!(first(&traffic), (Goal::Idle, Some(n(9))));
+}
+
 #[test]
 fn a_kept_rush_doesnt_survive_a_drop() {
     // The drop writes goal 0 (@0x8e726), and the handler's tail writes sub
