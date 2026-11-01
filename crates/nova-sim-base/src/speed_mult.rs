@@ -28,7 +28,8 @@
 //!
 //! In doubles the ramp never reaches 1.0: it settles one ulp below, at
 //! 1 − 2^-52, where 3 × gain + 1 rounds to 4 − 2^-51 and its quarter is
-//! the gain again. The engine keeps that, as the original does.
+//! the gain again ([`SpeedMult::SETTLED`]). The engine keeps that, as the
+//! original does.
 //!
 //! # Float timers
 //!
@@ -114,6 +115,12 @@ impl SpeedMult {
     /// No time at all, 0.0, as a landing's tail or a dialog's close sets
     /// it.
     pub const ZERO: Self = Self(0.0);
+
+    /// The gain the ramp settles at after a zero, 1 − 2^-52, one ulp
+    /// below [`FULL`](Self::FULL), where [`TimeAdjustment::frame`] gives
+    /// it again (see the module docs' "The ramp"). A float timer takes it
+    /// as a whole frame ([`added_to_float`](Self::added_to_float)).
+    pub const SETTLED: Self = Self(1.0 - f64::EPSILON);
 
     /// The gain `value`.
     #[must_use]
@@ -323,12 +330,13 @@ mod tests {
         time.zero();
         let gains = frames(&mut time, 200);
         assert_eq!(gains[199], 1.0 - f64::EPSILON);
-        assert_eq!(time.frame().get(), 1.0 - f64::EPSILON, "it stays there");
+        assert_eq!(SpeedMult::new(gains[199]), SpeedMult::SETTLED);
+        assert_eq!(time.frame(), SpeedMult::SETTLED, "it stays there");
     }
 
     #[test]
     fn a_float_timer_takes_the_settled_ramp_as_a_whole_frame() {
-        let settled = SpeedMult::new(1.0 - f64::EPSILON);
+        let settled = SpeedMult::SETTLED;
         assert_eq!(settled.added_to_float(0.0), 1.0);
         assert_eq!(settled.added_to_float(1.0), 2.0);
         assert_eq!(settled.added_to_float(-1.0), -f64::EPSILON);

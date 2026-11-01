@@ -463,7 +463,6 @@ mod tests {
     use super::*;
     use crate::catalog::StellarId;
     use crate::chance::NeverFires;
-    use nova_sim_base::TimeAdjustment;
     use nova_sim_base::fixture::Draws;
 
     fn gate(frames: u16, delay: i16) -> GateAnimation {
@@ -1063,16 +1062,10 @@ mod tests {
         // as a whole frame.
         for (delay, steps) in [(1, [true; 6]), (2, [false, true, false, true, false, true])] {
             let anim = gate(42, delay);
-            let mut time = TimeAdjustment::default();
-            time.zero();
             let mut sprite = GateSprite::new();
-            for _ in 0..200 {
-                sprite.step_by(time.frame(), &anim, false, true, &mut NeverFires);
-            }
-            sprite.timer = 0.0;
             let stepped = steps.map(|_| {
                 let before = sprite.shown(&anim, false);
-                sprite.step_by(time.frame(), &anim, false, true, &mut NeverFires);
+                sprite.step_by(SpeedMult::SETTLED, &anim, false, true, &mut NeverFires);
                 sprite.shown(&anim, false) != before
             });
             assert_eq!(stepped, steps, "AnimDelay {delay}");

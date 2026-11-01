@@ -306,7 +306,7 @@ impl Frames {
 mod tests {
     use std::collections::VecDeque;
 
-    use nova_sim::{NeverFires, TimeAdjustment};
+    use nova_sim::NeverFires;
 
     use super::*;
     use crate::flight::SharedChance;
@@ -905,16 +905,17 @@ mod tests {
         let four = count(4);
         for (delay, steps) in [(1, [true; 6]), (2, [false, true, false, true, false, true])] {
             let every = data(delay, 0);
-            let mut time = TimeAdjustment::default();
-            time.zero();
             let mut frames = Frames::new();
-            for _ in 0..200 {
-                frames.step_by(time.frame(), every, false, four, four, &mut NeverFires);
-            }
-            frames.timer = 0.0;
             let advanced = steps.map(|_| {
                 let before = frames.shown();
-                frames.step_by(time.frame(), every, false, four, four, &mut NeverFires);
+                frames.step_by(
+                    SpeedMult::SETTLED,
+                    every,
+                    false,
+                    four,
+                    four,
+                    &mut NeverFires,
+                );
                 frames.shown() != before
             });
             assert_eq!(advanced, steps, "AnimDelay {delay}");
