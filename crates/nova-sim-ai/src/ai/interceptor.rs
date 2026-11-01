@@ -93,7 +93,9 @@
 //!   scan if it is the player.
 
 use crate::ai::fire::FireRules;
-use crate::ai::target::{TargetRules, let_go, re_pick_target};
+#[cfg(doc)]
+use crate::ai::target::let_go;
+use crate::ai::target::{TargetRules, re_pick_target};
 use crate::ai::warship::{BreakingUp, Retreat, hunt};
 use crate::ai::{
     Behaviour, CommCall, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block,
@@ -281,13 +283,15 @@ impl Interceptor {
 /// ([`re_pick_target`](crate::ai::target::re_pick_target), by `rules`,
 /// drawing on `chance`). With none the inspection stands (@0x8d42d). A
 /// pick that writes state 4 ([`Pick::attacks`](crate::ai::target::Pick::attacks)) attacks, the
-/// call on the player kept: dropped at once when it lets the ship go
-/// ([`let_go`]); `_HighLevelAIHandler`'s state-4 block then takes it that
-/// frame ([`attack_drop`](crate::ai::attack_drop)), sniping at it in a
-/// hopeless chase and ending it on a ship breaking up. Any other pick is inspected
-/// instead of the ship it was
-/// inspecting. The retreats came before (@0x8d161-0x8d2e4) and need state
-/// 4, so a fresh attack isn't judged for one in the same think.
+/// call on the player kept; `_HighLevelAIHandler`'s state-4 block then
+/// takes it that frame ([`attack_drop`](crate::ai::attack_drop)),
+/// dropping an ally, a fleet-mate or a ship breaking up and sniping at a
+/// hopeless chase. The think's disabled test (@0x8d2fd-0x8d33a) needs
+/// goal 4 and came before (@0x8d41e), and the block has no disabled drop,
+/// so a disabled pick stands this think and the next one drops it. Any
+/// other pick is inspected instead of the ship it was inspecting. The
+/// retreats came before too (@0x8d161-0x8d2e4) and need state 4, so a
+/// fresh attack isn't judged for one in the same think.
 fn re_pick(
     npc: &Npc,
     decision: Decision,
@@ -304,18 +308,13 @@ fn re_pick(
     let Some(pick) = re_pick_target(npc, around, rules, chance) else {
         return decision;
     };
-    let turns_on_player = decision.turns_on_player || pick.turns_on_player;
-    let (goal, clears_target) = if !pick.attacks {
-        (Goal::Inspect(pick.ship), false)
-    } else if let_go(npc, pick.ship, around, rules) {
-        (Goal::Idle, true)
-    } else {
-        (Goal::Attack(pick.ship), false)
-    };
     Decision {
-        goal,
-        turns_on_player,
-        clears_target,
+        goal: if pick.attacks {
+            Goal::Attack(pick.ship)
+        } else {
+            Goal::Inspect(pick.ship)
+        },
+        turns_on_player: decision.turns_on_player || pick.turns_on_player,
         re_picked: true,
         ..decision
     }
@@ -1797,9 +1796,10 @@ mod tests {
     }
 
     #[test]
-    fn a_re_picked_attack_on_a_ship_it_drops_leaves_it_idle() {
-        // `_HighLevelAIHandler`'s state-4 drop takes it that frame
-        // (@0x8e3ef).
+    fn a_re_picked_attack_on_a_disabled_ship_stands_until_the_next_think() {
+        // The disabled test (@0x8d2fd-0x8d33a) needs goal 4 and comes
+        // before the re-pick (@0x8d41e), and the state-4 block has no
+        // disabled drop: the pick stands that think.
         let (cop, trader) = trader_cop_inspecting();
         let mut police_cop = cop;
         police_cop.govt = Some(POLICE);
@@ -1807,9 +1807,20 @@ mod tests {
         fleeing.goal = Goal::Flee(n(4));
         let mut wreck = ship(4, PIRATES, AiType::Warship, 0.0, 300.0);
         wreck.condition = Condition::Disabled;
-        let (decision, _) = re_picked(police_cop, &[trader, fleeing, wreck], 0, None, &[]);
-        assert_eq!(decision.goal, Goal::Idle);
-        assert!(decision.clears_target);
+        let others = [trader.clone(), fleeing, wreck.clone()];
+        let (decision, _) = re_picked(police_cop.clone(), &others, 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Attack(n(4)), "@0x8d41e");
+        assert!(!decision.clears_target);
+        // Its next think finds goal 4 on a disabled ship with no
+        // destroying weapons and drops it (@0x8d319); with no call for help
+        // to pick it again, it fights nothing.
+        let attacking = Npc {
+            goal: Goal::Attack(n(4)),
+            target: Some(n(4)),
+            ..police_cop
+        };
+        let (next, _) = re_picked(attacking, &[trader, wreck], 0, None, &[0; 4]);
+        assert_eq!(next.goal.quarry(), None, "{next:?}");
     }
 
     #[test]
