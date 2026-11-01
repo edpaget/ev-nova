@@ -70,3 +70,54 @@ fn a_re_pick_away_from_the_player_within_reach_scans_nothing() {
     };
     assert_eq!(on_line_after(attacking), [], "state 4 runs no reach");
 }
+
+/// The travel stellar of one interceptor holding stellar 140, inspecting
+/// `inspected` 50 off with the player there too, once it takes
+/// `decision`.
+fn travel_after(inspected: ShipRef, decision: Decision) -> Option<crate::catalog::StellarId> {
+    let mut traffic = Traffic::with_interval(1);
+    let mut cop = npc(1, ShipStats::new(FAST, &[]));
+    cop.goal = Goal::Inspect(inspected);
+    cop.travel = Some(crate::catalog::StellarId(140));
+    traffic.npcs = vec![cop];
+    let world = World {
+        player: Some(crate::ai::fixture::player(50.0, 0.0)),
+        ..World::new(&[])
+    };
+    traffic.tick_in(&Fixed(decision), world, &[], &mut Draws::of(&[]));
+    traffic.npcs[0].travel
+}
+
+#[test]
+fn scanning_the_player_clears_the_travel_stellar() {
+    // Goal 7 within reach of the player: goal 0, +0x6c -1, then
+    // `_ScanPlayer` (@0x8f369-0x8f38a).
+    let done = Decision {
+        goal: Goal::Idle,
+        ..Decision::default()
+    };
+    assert_eq!(travel_after(ShipRef::Player, done), None);
+}
+
+#[test]
+fn looking_over_another_ship_keeps_it() {
+    // Within reach of any other ship: goal 0, +0x6c kept (@0x8f391).
+    let done = Decision {
+        goal: Goal::Idle,
+        ..Decision::default()
+    };
+    assert_eq!(
+        travel_after(ShipRef::Npc(NpcId(5)), done),
+        Some(crate::catalog::StellarId(140))
+    );
+    let re_picked = Decision {
+        goal: Goal::Inspect(ShipRef::Npc(NpcId(5))),
+        re_picked: true,
+        ..Decision::default()
+    };
+    assert_eq!(
+        travel_after(ShipRef::Player, re_picked),
+        Some(crate::catalog::StellarId(140)),
+        "a re-pick scans nothing"
+    );
+}

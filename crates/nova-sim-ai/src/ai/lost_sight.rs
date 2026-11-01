@@ -235,13 +235,15 @@ pub fn trader_target(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 
 /// `decision`, an interceptor's think, through `_InterceptorAI`'s
 /// lost-sight tail among `around` (@0x8d39a-0x8d3ee): an inspection of a
-/// ship `npc` doesn't see is dropped.
+/// ship `npc` doesn't see is dropped, its target and travel stellar -1
+/// (@0x8d3d9, @0x8d3df).
 #[must_use]
 pub fn after_inspection(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
     match decision.goal {
         Goal::Inspect(ship) if !around.sees(npc, ship) => Decision {
             goal: Goal::Idle,
             clears_target: true,
+            travel: crate::ai::travel::TravelWrite::Clear,
             ..decision
         },
         _ => decision,
@@ -585,6 +587,16 @@ mod tests {
         assert_eq!(kept, of(Goal::Inspect(n(2))));
         let fled = inspected(quarry(true), of(Goal::Flee(n(2))));
         assert_eq!(fled, of(Goal::Flee(n(2))), "a flight is left alone");
+    }
+
+    #[test]
+    fn an_inspection_dropped_for_lost_sight_clears_the_travel_stellar() {
+        // +0x70 and +0x6c -1, goal and sub-goal 0 (@0x8d3d9-0x8d3ee).
+        use crate::ai::travel::TravelWrite;
+        let dropped = inspected(quarry(true), of(Goal::Inspect(n(2))));
+        assert_eq!(dropped.travel, TravelWrite::Clear);
+        let kept = inspected(quarry(false), of(Goal::Inspect(n(2))));
+        assert_eq!(kept.travel, TravelWrite::Keep, "in sight, none");
     }
 
     #[test]

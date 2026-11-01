@@ -65,13 +65,15 @@
 //!   @0x8d391 and @0x8e228; see [`out_of_ammo`]).
 //! - Inspecting a ship it no longer sees (`_ShipVisibleToShip`, see
 //!   [`sight`](super::sight)), it drops it: target -1, state 0
-//!   (@0x8d39a-0x8d3ee, [`lost_sight::after_inspection`]). An inspection
+//!   (@0x8d39a-0x8d3ee, [`lost_sight::after_inspection`]), and its
+//!   travel stellar -1 (@0x8d3df). An inspection
 //!   the out-of-ammo retreat turned into a flight is left alone.
 //! - Inspecting (state 7) it runs no search of its own (the block needs
 //!   state 1 or below, or 0x14, @0x8cc6d-0x8cc7d; [`hunt`] answers only
 //!   its provoker) while the inspection holds ([`inspection_holds`]): one
-//!   that ends this think, within reach or gone, is let go as state 0
-//!   (@0x8f391) and the hunt runs its full search, attacking any pick
+//!   that ends this think, within reach or gone, is let go as state 0,
+//!   its travel stellar -1 when it scanned the player (@0x8f369) and kept
+//!   for any other ship (@0x8f391), and the hunt runs its full search, attacking any pick
 //!   (@0x8cce6-0x8cd02). Holding, last in its think, with a government (+0x98,
 //!   @0x8d404), it re-picks ([`re_pick`], `_SelectWarshipTarget` @0x8d41e):
 //!   a pick that writes state 4 itself (a grudge, a mission hunter's, the

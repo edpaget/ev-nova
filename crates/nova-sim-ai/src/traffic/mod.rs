@@ -2513,7 +2513,8 @@ impl Traffic {
     /// takes its AI wait and loses its provocation
     /// ([`board_wait::enter`]). Its travel stellar takes
     /// the decision's write ([`Decision::travel`],
-    /// [`travel::take`](crate::ai::travel::take)), and the stellar it
+    /// [`travel::take`](crate::ai::travel::take)), or -1 for a scan of the
+    /// player (@0x8f369), and the stellar it
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
     /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`] and ends a hold at
@@ -2579,6 +2580,12 @@ impl Traffic {
                 npc.docking = None;
             }
             board_wait::enter(npc, goal);
+            // The scan's state-7 block writes +0x6c -1 first (@0x8f369).
+            let travel = if scans {
+                crate::ai::travel::TravelWrite::Clear
+            } else {
+                travel
+            };
             crate::ai::travel::take(npc, travel, goal);
             if let Some(stellar) = visits {
                 npc.visited = Some(stellar);
