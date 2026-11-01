@@ -12,7 +12,7 @@
 //! Landing, taking off, each change made in the spaceport
 //! ([`Session::transact`]) and a Strict Play pilot's rescue from the
 //! escape pod ([`Session::rescue_if_due`]) make a save due
-//! ([`Session::take_save_due`]): whoever saves the pilot takes it after
+//! ([`Session::take_save_now`]): whoever saves the pilot takes it after
 //! each input and saves then. Other changes make one due too; in flight,
 //! by default, only the take-off's and the rescue's are written then, the
 //! rest held for the next landing (see the `in_flight_save` module).
@@ -5025,7 +5025,9 @@ impl Session {
 
     /// Whether the pilot should be saved: it has landed, taken off,
     /// changed in the spaceport or, playing strictly, been rescued from the
-    /// escape pod since this was last taken. Taking it clears it.
+    /// escape pod since this was last taken, written now or held (see
+    /// [`Session::take_save_now`]). Taking it clears it.
+    #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn take_save_due(&mut self) -> bool {
         self.out.take_save_due()
     }
