@@ -67,6 +67,7 @@ pub mod odds;
 pub mod out_of_ammo;
 pub mod pirate;
 pub mod plunder_contents;
+pub mod plunder_high;
 pub mod plunder_target;
 pub mod pursuit;
 pub mod react;

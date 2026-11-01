@@ -50,9 +50,12 @@
 //!   (@0x8c38b-0x8c40b) is always overridden by this one, so it is not
 //!   modelled apart: with a `Crew` of -1 the first gives 0xd and this one
 //!   goal 4.
-//! - **A plunder** of an intact ship snipes when the chase is hopeless,
-//!   outside [`DOGFIGHT_BOX`] on either axis alone (`_HighLevelAIHandler`
-//!   @0x8ea49-0x8eacb, [`hopeless_chase`]); it has no ally drop, no
+//! - **A plunder** is flown by goal 0xd's high level
+//!   ([`plunder_high::fold`], as every holder's is): of an intact ship it
+//!   snipes when the chase is hopeless, outside
+//!   [`DOGFIGHT_BOX`](super::fire::DOGFIGHT_BOX) on either axis alone
+//!   (`_HighLevelAIHandler` @0x8ea49-0x8eacb,
+//!   [`hopeless_chase`](super::odds::hopeless_chase)); it has no ally drop, no
 //!   stand-off band, no fighter launch but the snipe's and no call for
 //!   reinforcements (see [`pursuit`](super::pursuit)). A plunder of a
 //!   disabled ship docks with it (@0x8e873-0x8ea44, see
@@ -118,12 +121,13 @@
 //! captured ship's, which `_AIPlunderShipContents` never writes: filed as
 //! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-16-left-out-of-phase-13.
 
-use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
-use crate::ai::odds::{hopeless_chase, state4_attack};
+use crate::ai::fire::{AmmoLeft, FireRules, ammo_left};
+use crate::ai::odds::state4_attack;
 use crate::ai::target::{TargetRules, pick_target, spares};
-use crate::ai::travel::{self, TravelWrite};
+use crate::ai::travel::TravelWrite;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_target, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_high,
+    plunder_target, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -319,26 +323,9 @@ fn fought(
     match class {
         Class::Plunder if dry => dry_dropped,
         Class::Plunder => {
-            let wreck = disabled(target, around);
-            // Goal 0xd's high level, every frame its AI wait doesn't skip
-            // (@0x8d4b9-0x8d4d2): -1 against the ship intact (@0x8ea50),
-            // the victim's slot against it disabled (@0x8e8c9).
-            let travel = if npc.ai_wait > 0 {
-                TravelWrite::Keep
-            } else {
-                travel::slot_of(target, around)
-                    .filter(|_| wreck)
-                    .map_or(TravelWrite::Clear, TravelWrite::Set)
-            };
-            Decision {
-                travel,
-                ..of(Goal::Plunder {
-                    ship: target,
-                    hopeless: !wreck
-                        && outside_box(npc, target, around)
-                        && hopeless_chase(npc, target, around),
-                })
-            }
+            // Goal 0xd's high level, every frame its AI wait doesn't skip.
+            let (goal, travel) = plunder_high::fold(npc, target, around);
+            Decision { travel, ..of(goal) }
         }
         Class::Boarded => Decision {
             board_wait: Some(target),
@@ -378,12 +365,6 @@ fn docked_victim(npc: &Npc) -> Option<ShipRef> {
     npc.docking
         .filter(|docking| docking.sub == DockSub::Dock && npc.ai_wait == 0)
         .map(|docking| docking.ship)
-}
-
-/// Whether `ship` is disabled among `around` (`_IsDisabled`): a plunder of
-/// it docks, so it is never a hopeless chase (@0x8e866-0x8e86d).
-fn disabled(ship: ShipRef, around: &Surroundings) -> bool {
-    around.condition_of(ship).is_some_and(Condition::disabled)
 }
 
 /// How `_PirateWarshipAI`'s second classification (@0x8c5e1-0x8c743) takes
@@ -441,16 +422,6 @@ fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> 
     })
 }
 
-/// Whether `target` is outside [`DOGFIGHT_BOX`] of `npc` on either axis,
-/// by float abs (`_HighLevelAIHandler` @0x8ea49-0x8eac6); a ship not in
-/// the system is not.
-fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-    around.state_of(target).is_some_and(|at| {
-        let off = at.position - npc.state.position;
-        off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX
-    })
-}
-
 /// Whether `ship` has left the system or is breaking up, as the head drop
 /// reads it (its slot +0xb8 clear, or `_IsDying`, @0x8c315-0x8c328): a ship
 /// still jumping in is neither.
@@ -473,7 +444,7 @@ mod tests {
     use crate::ai::fixture::{
         NEUTRAL, PIRATES, TRADERS, around, govts, n, player, ship, short_of_ammo, sites,
     };
-    use crate::ai::travel::TravelWrite;
+    use crate::ai::travel::{self, TravelWrite};
     use crate::catalog::{GovtRecord, ShipId, StellarId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;

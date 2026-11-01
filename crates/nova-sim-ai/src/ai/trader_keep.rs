@@ -18,7 +18,8 @@
 //!
 //! - a plunder ([`Goal::Plunder`]), whether its ship is there or gone:
 //!   goal 0xd's high level docks with a disabled ship, chases an intact
-//!   one and lets a gone one go (the traffic's
+//!   one, fleeing a hopeless chase, and lets a gone one go
+//!   ([`plunder_high`](super::plunder_high) and the traffic's
 //!   [`plunder::high_level`](crate::traffic::plunder::high_level));
 //! - a count wait;
 //! - an attack, snipe or flight on a ship still in the system (dying or
