@@ -4,6 +4,11 @@
 //! `_AIDispatch` (@0x8fb52-0x90200) runs, for each ship, before its type's
 //! think:
 //!
+//! 0. the cloak think, with its AI wait +0x4c at 0 or below
+//!    (`_AIHandleCloaking` @0x8fc9e-0x8fcaa; the traffic's
+//!    `think_cloaks`), reading the goal and target the last tick left;
+//!    only the pod's return (@0x8fb62) and the +0xc8d2 block
+//!    (@0x8fbcd-0x8fc9c) come before it;
 //! 1. the warp cancel: a ship `_IsDisabled` whose +0x50 is above 0 gives
 //!    its stage up (@0x8fcc8-0x8fce9; [`disabled_reset`]);
 //! 2. the jump path: a ship in sub 4 or 0xd goes to goal 0xb's cancels
@@ -62,6 +67,7 @@ impl Traffic {
         picked: &[bool],
         chance: &mut (impl Chance + ?Sized),
     ) -> Vec<bool> {
+        self.think_cloaks(world, picked);
         self.cancel_warps(picked);
         let jump_path: Vec<bool> = self
             .npcs
@@ -372,6 +378,29 @@ mod tests {
         let goal = |id| watch.seen(id).1.expect("watched").goal;
         assert_eq!(goal(below), Goal::Regroup { kept: Kept::Coast });
         assert_eq!(goal(above), Goal::Idle, "drawn 0 at its slot");
+    }
+
+    #[test]
+    fn a_ships_cloak_thinks_at_the_head_before_its_regroup_release() {
+        // `_AIHandleCloaking` (@0x8fcaa) comes before the warp cancel
+        // (@0x8fcc8) and every pass after it, the regroup draws
+        // (@0x8fe73-0x8febb) among them: a ship released at its head
+        // thinks its cloak on goal 0x13, which no term reads, not on the
+        // idle it is released to.
+        let mut traffic = traffic();
+        let mut paused = ship();
+        paused.goal = Goal::Regroup { kept: Kept::Coast };
+        paused.cloak_gear = crate::cloak::CloakGear {
+            device: true,
+            flags2: crate::cloak::CLOAK_IDLE,
+            ..crate::cloak::CloakGear::default()
+        };
+        let paused = traffic.add_npc_at(paused, 3);
+        let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
+        traffic.think_holding(&Watch::default(), World::new(&[]), &[], &mut chance);
+        let npc = of(&traffic, paused);
+        assert_eq!(npc.goal, Goal::Idle, "released at its head");
+        assert_eq!(npc.cloak, crate::cloak::Cloak::default(), "not idle yet");
     }
 
     /// A ship at berth 3, disabled on the last tick while it attacked NPC 9

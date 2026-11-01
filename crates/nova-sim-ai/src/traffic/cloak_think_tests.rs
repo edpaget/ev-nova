@@ -316,3 +316,99 @@ fn a_fleet_escort_takes_no_parent_rule_from_a_cloaked_leader_it_cannot_see() {
         "unseen"
     );
 }
+
+/// A cloaked ship of `Flags2` [`CLOAK_PRESSING`] in slot `berth`, on
+/// goal 4 at `target` (+0x70 too), at the centre.
+fn pressing(berth: u32, target: crate::combat::ShipRef) -> (Npc, u32) {
+    let mut ship = npc(1, ShipStats::default());
+    ship.goal = Goal::Attack(target);
+    ship.target = Some(target);
+    ship.cloak = CLOAKED;
+    ship.cloak_gear = CloakGear {
+        device: true,
+        flags2: CLOAK_PRESSING,
+        ..CloakGear::default()
+    };
+    (ship, berth)
+}
+
+/// A ship in slot `berth` of `traffic`, 500 off the centre: more than
+/// 165 off on an axis.
+fn far_ship(traffic: &mut Traffic, berth: u32) -> crate::traffic::npc::NpcId {
+    let mut ship = npc(0, ShipStats::default());
+    ship.state.position = Vec2::new(500.0, 0.0);
+    traffic.add_npc_at(ship, berth)
+}
+
+#[test]
+fn a_cloak_think_on_goal_4_reads_a_gone_targets_record_where_it_was() {
+    // `_AIHandleCloaking` reads the +0x70 record's place with no +0xb8
+    // test (@0x8355e-0x835d7): a slot freed in the ship pass is still
+    // named by a lower slot's +0x70 at its next think, and the record
+    // stands where the ship was.
+    let mut traffic = Traffic::with_interval(1);
+    let gone = far_ship(&mut traffic, 4);
+    let aim = crate::combat::ShipRef::Npc(gone);
+    let (ship, berth) = pressing(2, aim);
+    let below = traffic.add_npc_at(ship, berth);
+    let (ship, berth) = pressing(6, aim);
+    let above = traffic.add_npc_at(ship, berth);
+    traffic.remove_destroyed(gone);
+    // The slot above's `_HandleShip` came after the wreck's display.
+    traffic.let_go_at_step(above, true);
+    traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+    let cloak = |id| {
+        traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("there")
+            .cloak
+    };
+    assert_eq!(cloak(below), CLOAKED, "pressing on the record");
+    assert_eq!(cloak(above).direction, -1, "let go: nothing to press");
+}
+
+#[test]
+fn a_cloak_think_reads_the_goal_and_target_the_last_tick_left() {
+    // The think runs at the dispatch's head (@0x8fcaa), before the high
+    // level writes the frame's goal (@0x901e5).
+    #[derive(Debug)]
+    struct Idles;
+    impl Behaviour for Idles {
+        fn decide(&self, _: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+    }
+    let (ship, _) = pressing(1, crate::combat::ShipRef::Player);
+    let mut traffic = Traffic::with_interval(1);
+    traffic.npcs = vec![ship];
+    let world = World {
+        player: Some(crate::ai::fixture::player(500.0, 0.0)),
+        ..World::new(&[])
+    };
+    traffic.think_holding(&Idles, world, &[], &mut Draws::of(&[]));
+    assert_eq!(traffic.npcs()[0].goal, Goal::Idle, "it turned idle");
+    assert_eq!(traffic.npcs()[0].cloak, CLOAKED, "on last tick's attack");
+}
+
+#[test]
+fn a_ship_whose_ai_wait_runs_does_not_think_its_cloak() {
+    // `_AIDispatch` calls `_AIHandleCloaking` only with +0x4c at 0 or
+    // below (@0x8fc9e-0x8fca5).
+    let waiting = |ai_wait| {
+        let mut ship = npc(1, ShipStats::default());
+        ship.cloak = CLOAKED;
+        ship.ai_wait = ai_wait;
+        ship.cloak_gear = CloakGear {
+            device: true,
+            ..CloakGear::default()
+        };
+        let mut traffic = Traffic::with_interval(1);
+        traffic.npcs = vec![ship];
+        traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        traffic.npcs()[0].cloak
+    };
+    assert_eq!(waiting(10), CLOAKED, "no think");
+    assert_eq!(waiting(0).direction, -1, "nothing keeps it");
+}

@@ -68,8 +68,11 @@
 //!    NPC lead is lost takes a new lead, leads, or is left alone
 //!    ([`succession`]); and each ship led by an NPC takes its slot in that
 //!    NPC's formation ([`fleet_formation`]);
-//! 4. at the head of each ship's dispatch ([`dispatch_head`]): a disabled
-//!    ship's warp cancelled; a ship on its leader's jump cancelled when
+//! 4. at the head of each ship's dispatch ([`dispatch_head`]): each
+//!    flying NPC's cloak think, its AI wait out ([`cloak`],
+//!    `_AIHandleCloaking` @0x8fcaa), which cloaks or uncloaks it on the
+//!    goal and target the last tick left; a disabled ship's warp
+//!    cancelled; a ship on its leader's jump cancelled when
 //!    its leader can no longer take it ([`jump_with_leader`]); a fleet's
 //!    leader due on the frame issuing its orders ([`escort_orders`]); a
 //!    ship in the regroup pause drawing its release ([`regroup`]); and,
@@ -109,8 +112,7 @@
 //!    at it holds only what the behaviour gives it for the wait
 //!    ([`Behaviour::gate_wait`], `_AIEscortFireUnprovoked`), dropping its
 //!    target if the behaviour says so;
-//! 5. each flying NPC's cloak think ([`cloak`], `_AIHandleCloaking`
-//!    @0x8fcaa), which cloaks or uncloaks it; then each escape pod's wait
+//! 5. each escape pod's wait
 //!    counted down, a pod whose wait ran out freed
 //!    ([`pod_flight::count_down`], `Outcome::Freed`); then each ship's high
 //!    level holding its warp to its goal, turning a fighter that can't
@@ -1406,12 +1408,11 @@ impl Traffic {
     /// One run of `_AIDispatch`'s loop (@0x4429d) in `world`, the think of
     /// each NPC `picks` picks, deciding as `behaviour` says, rolling on
     /// `chance` (steps 4 and 5 of the module docs): the head of each
-    /// picked ship's dispatch ([`dispatch_head`]: its warp cancel, its jump
-    /// path's cancels, a leader's orders, the regroup draws and the
-    /// disabled reset), the decisions, the
+    /// picked ship's dispatch ([`dispatch_head`]: its cloak think, its warp
+    /// cancel, its jump path's cancels, a leader's orders, the regroup
+    /// draws and the disabled reset), the decisions, the
     /// board waits, the comm calls and the quote gate, the plunders, the
     /// goals, pursuit, the fire commands and targets, the gate waits, each
-    /// flying NPC's cloak think (`_AIHandleCloaking` @0x8fcaa), each
     /// escape pod's wait ([`pod_flight::count_down`]), and last the low
     /// level's leaves ([`dispatch_leave`]): its own jump-out, and a
     /// fighter's dock unless `no_bay` names it. The ships that left in the
@@ -1540,7 +1541,6 @@ impl Traffic {
             }
         }
         self.take_gate_waits(behaviour, &world, &picked);
-        self.think_cloaks(&world, &picked);
         let freed = pod_flight::count_down(&mut self.npcs, &picks);
         self.freed.extend(freed);
         self.leave_in_dispatch(&world, &picks, no_bay, chance)
@@ -1892,10 +1892,13 @@ impl Traffic {
     }
 
     /// Each NPC `picked` says (one flag an NPC) that is flying, gliding
-    /// in from hyperspace or bursting out of a gate thinks its cloak
-    /// (`_AIHandleCloaking`, see [`cloak`]), in the
+    /// in from hyperspace or bursting out of a gate, its AI wait out, thinks
+    /// its cloak (`_AIHandleCloaking`, see [`cloak`]), at the head of its
+    /// dispatch ([`dispatch_head`]), in the
     /// [situation](cloak_situation::situation) it reads in `world`: where
-    /// the ship it attacks is, among the NPCs and the player, its leader's
+    /// the ship its target names is on goal 4, among the NPCs, the player
+    /// and the gone ships it holds ([`cloak_situation::pressed`]), its
+    /// leader's
     /// cloak and whether the leader carries an area cloak, and the asteroid
     /// in slot 0. Its leader is [`Npc::leader_ref`]'s, so a ship that
     /// escorts the player takes the player, with the cloak the player's
@@ -1903,14 +1906,19 @@ impl Traffic {
     /// player's slot (+0x9a 0, @0x83633-0x8366d). Whether it keeps close
     /// formation is its last flight's ([`Npc::close_form`]), as the think
     /// runs before the high level writes the sub-goal (@0x8fcaa before
-    /// @0x901e5). The original thinks a glide and a burst too
+    /// @0x901e5), and so is its goal and target the last tick's. The
+    /// original thinks a glide and a burst too
     /// (their AI wait +0x4c is 0, `_AIDispatch` @0x8fc9e-0x8fcaa); a ship
     /// emerging, held at its gate, coasting, entering a gate or adrift
-    /// waits out +0x4c, so its cloak doesn't think.
+    /// waits out +0x4c, so its cloak doesn't think, nor does a flying ship
+    /// whose [`Npc::ai_wait`] runs.
     fn think_cloaks(&mut self, world: &World, picked: &[bool]) {
         let player = world.player.map(|player| player.state);
-        let states: Vec<(NpcId, ShipState)> =
-            self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
+        let pressed: Vec<Option<ShipState>> = self
+            .npcs
+            .iter()
+            .map(|npc| cloak_situation::pressed(npc, &self.npcs, self.gone.ships(), player))
+            .collect();
         let leaders: Vec<Option<(ShipState, Cloak, bool)>> = self
             .npcs
             .iter()
@@ -1918,26 +1926,21 @@ impl Traffic {
                 crate::ai::sight::leader_cloak_and_area(npc, &self.npcs, world.player.as_ref())
             })
             .collect();
-        for ((npc, _), leader) in
-            self.npcs
-                .iter_mut()
-                .zip(picked)
-                .zip(leaders)
-                .filter(|((npc, picked), _)| {
-                    **picked
-                        && matches!(
-                            npc.mode,
-                            Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
-                        )
-                })
+        for (((npc, _), leader), attacking) in self
+            .npcs
+            .iter_mut()
+            .zip(picked)
+            .zip(leaders)
+            .zip(pressed)
+            .filter(|(((npc, picked), _), _)| {
+                **picked
+                    && npc.ai_wait == 0
+                    && matches!(
+                        npc.mode,
+                        Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
+                    )
+            })
         {
-            let attacking = npc.goal.attacking().and_then(|ship| match ship {
-                ShipRef::Player => player,
-                ShipRef::Npc(id) => states
-                    .iter()
-                    .find(|(other, _)| *other == id)
-                    .map(|&(_, state)| state),
-            });
             let around = cloak_situation::Around {
                 attacking: attacking.map(|state| state.position - npc.state.position),
                 leader: leader.map(|(_, cloak, _)| cloak),
@@ -3482,8 +3485,10 @@ mod tests {
         // holds a cloak that can no longer cloak (@0x3413d), and
         // `_HandleShipDisplay` steps the fade (@0x2d088). A think sets
         // only the way the fade moves, never whether the ship is cloaked
-        // (see `cloak::think`).
+        // (see `cloak::think`). The think reads the last tick's goal, at
+        // the dispatch's head (@0x8fcaa before @0x901e5).
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
         let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
         traffic.think_holding(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(
@@ -6867,7 +6872,10 @@ mod tests {
 
     #[test]
     fn a_mission_ship_come_in_uncloaked_cloaks_on_its_think_while_it_retreats_and_uncloaks_after() {
+        // Each think reads the goal the last tick left, at the dispatch's
+        // head (@0x8fcaa before @0x901e5).
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
         let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
         displayed(&mut traffic, &fleeing);
         assert_eq!(
@@ -6886,6 +6894,12 @@ mod tests {
         displayed(&mut traffic, &calm);
         assert_eq!(
             traffic.npcs()[0].cloak.direction,
+            1,
+            "the tick it calms, its head read the flight"
+        );
+        displayed(&mut traffic, &calm);
+        assert_eq!(
+            traffic.npcs()[0].cloak.direction,
             -1,
             "no longer retreating"
         );
@@ -6897,17 +6911,22 @@ mod tests {
             false,
             0.0,
         );
+        plain.npcs[0].goal = Goal::Flee(ShipRef::Player);
         displayed(&mut plain, &fleeing);
         assert_eq!(plain.npcs()[0].cloak, Cloak::default(), "no bit");
     }
 
     #[test]
     fn a_cloaked_ship_keeps_its_cloak_attacking_the_player_from_afar_and_drops_it_close() {
+        // The head's think reads goal 4 and +0x70 as the last tick left
+        // them (@0x8fcaa, @0x8355e).
         let mut traffic = with_mission_ship(ZEPHYR, false, 1000.0);
         traffic.npcs[0].cloak = Cloak {
             fade: FADE_FULL,
             direction: 0,
         };
+        traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
+        traffic.npcs[0].target = Some(ShipRef::Player);
         let attacking = Recording::deciding(Goal::Attack(ShipRef::Player));
         let far = World {
             player: Some(player_at(0.0, 400.0)),
@@ -6938,6 +6957,10 @@ mod tests {
                 fade: FADE_FULL,
                 direction: 0,
             };
+            // The head's think reads goal 4 and +0x70 as the last tick
+            // left them (@0x8fcaa, @0x8355e).
+            traffic.npcs[0].goal = Goal::Attack(ShipRef::Npc(NpcId(1)));
+            traffic.npcs[0].target = Some(ShipRef::Npc(NpcId(1)));
             let attacking = Recording::deciding(Goal::Attack(ShipRef::Npc(NpcId(1))));
             traffic.tick_in(&attacking, World::new(&[]), &[], &mut Draws::of(&[]));
             let direction = traffic.npcs()[0].cloak.direction;
@@ -7023,6 +7046,8 @@ mod tests {
                 direction: 0,
             };
             npc.reserves.shield.now = shield;
+            // The head's think reads the last tick's goal (@0x8fcaa).
+            npc.goal = Goal::Flee(ShipRef::Player);
             traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
             assert_eq!(
                 traffic.npcs()[0].cloak.direction,

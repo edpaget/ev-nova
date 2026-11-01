@@ -22,9 +22,12 @@
 use crate::ai::Goal;
 use crate::area_cloak;
 use crate::cloak::{self, Cloak, MineOrder};
+use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
+use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::traffic::gone::GoneShip;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::warp_out::WarpGoal;
 
@@ -113,6 +116,33 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         mining: (goal == Some(Goal::Mine) && !around.mining_rock).then_some(MineOrder::Stop),
         close_to_cloaked_parent,
         area_cloak: area_cloak::rides(npc.close_form, leader_cloaked, around.leader_area),
+    }
+}
+
+/// The ship whose place the 0x1000 term of `npc`'s cloak think reads
+/// (`_AIHandleCloaking` @0x8355e-0x835d7): on goal 4 ([`Goal::attacking`]),
+/// the ship its target (+0x70) names, not its goal's, as it stands among
+/// `npcs` or as `player`, else the record of a gone ship it still holds
+/// among `gone` ([`GoneShip::held_by`]), as the term reads the slot's record
+/// with no +0xb8 test; none on any other goal or with no target.
+#[must_use]
+pub fn pressed(
+    npc: &Npc,
+    npcs: &[Npc],
+    gone: &[GoneShip],
+    player: Option<ShipState>,
+) -> Option<ShipState> {
+    npc.goal.attacking()?;
+    match npc.target? {
+        ShipRef::Player => player,
+        ShipRef::Npc(id) => npcs
+            .iter()
+            .find(|other| other.id == id)
+            .or_else(|| {
+                let held = gone.iter().find(|gone| gone.held_by(npc))?;
+                Some(&held.ship)
+            })
+            .map(|other| other.state),
     }
 }
 
@@ -276,6 +306,47 @@ mod tests {
             },
         );
         assert_eq!(attacker, jumping, "goal 0xb attacks nothing");
+    }
+
+    #[test]
+    fn the_pressing_term_reads_the_target_on_goal_4_and_a_gone_ones_record() {
+        use crate::traffic::gone::Freed;
+        let at = |id, berth, x| Npc {
+            berth,
+            state: ShipState {
+                position: Vec2::new(x, 0.0),
+                ..ShipState::default()
+            },
+            ..fixture::npc(id, ShipStats::default())
+        };
+        let (live, other, left) = (at(2, 3, 300.0), at(3, 4, 400.0), at(4, 5, 500.0));
+        let npcs = [live.clone(), other.clone()];
+        let gone = [GoneShip {
+            ship: left.clone(),
+            freed: Freed::InShipPass,
+        }];
+        let player = Some(ShipState::default());
+        let reader = |goal, target, berth| Npc {
+            goal,
+            target: Some(target),
+            berth,
+            ..fixture::npc(1, ShipStats::default())
+        };
+        let read = |npc: &Npc| pressed(npc, &npcs, &gone, player).map(|s| s.position.x);
+        let (n, p) = (|id| ShipRef::Npc(NpcId(id)), ShipRef::Player);
+        // +0x70, not the goal's ship (@0x8355e).
+        assert_eq!(read(&reader(Goal::Attack(n(2)), n(3), 1)), Some(400.0));
+        assert_eq!(read(&reader(Goal::Snipe(n(2)), n(2), 1)), Some(300.0));
+        assert_eq!(read(&reader(Goal::Attack(p), p, 1)), Some(0.0));
+        // The record of a slot it still holds, with no +0xb8 test.
+        assert_eq!(read(&reader(Goal::Attack(n(4)), n(4), 1)), Some(500.0));
+        assert_eq!(read(&reader(Goal::Attack(n(4)), n(4), 6)), None, "let go");
+        assert_eq!(read(&reader(Goal::Flee(n(2)), n(2), 1)), None, "not goal 4");
+        let none = Npc {
+            target: None,
+            ..reader(Goal::Attack(n(2)), n(2), 1)
+        };
+        assert_eq!(read(&none), None, "+0x70 -1");
     }
 
     #[test]

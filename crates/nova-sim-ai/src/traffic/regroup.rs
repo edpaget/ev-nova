@@ -17,7 +17,9 @@
 //! think and `_HighLevelAIHandler` (@0x9002d → @0x900c6 → @0x901ea): in
 //! [`Traffic::think_holding`] it is never due ([`paused`]), so it decides
 //! nothing and runs no high level, and no swarm check. Its cloak still
-//! thinks, as `_AIHandleCloaking` comes first (@0x8fcaa).
+//! thinks, as `_AIHandleCloaking` comes first, at the head of its dispatch
+//! before the release draw (@0x8fcaa before @0x8fe73), so a ship released
+//! at its head thinks its cloak still paused.
 //!
 //! **What it flies and fires.** `_LowLevelAIHandler` runs its kept
 //! substate: the fly half flies its kept substate's goal
