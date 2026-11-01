@@ -25,6 +25,7 @@ mod stock_cloak_when_hit_burst;
 mod stock_combat_rating;
 mod stock_comm_calls;
 mod stock_conditional_text;
+mod stock_contact_masks;
 mod stock_crons;
 mod stock_domination;
 mod stock_escape_pod;
