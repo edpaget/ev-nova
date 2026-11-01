@@ -653,6 +653,19 @@ impl AppScreen {
     /// expressions queued settled and a save that is due made.
     pub(super) fn routed_input(&mut self, input: &Input) -> ScreenAction {
         self.double_time_key(input);
+        self.rerouted_input(input)
+    }
+
+    /// `input` routed again, as [`AppScreen::routed_input`] routes it, but
+    /// for Caps Lock's double time: a replay of what a screen past the
+    /// router held, the router's own handlers having run on it live, so
+    /// that double time, which toggles, doesn't toggle back. The route's
+    /// notes of the keys and the pointer ([`AppScreen::note_keys`],
+    /// [`AppScreen::note_pointer`]) run again, setting in order what the
+    /// same inputs set live, and the Command-Q chord quits live, before
+    /// flight can hold the Q; a key the route takes in front of flight
+    /// never reaches its hold.
+    pub(super) fn rerouted_input(&mut self, input: &Input) -> ScreenAction {
         let action = self.route(input);
         self.keep_frame_rate();
         self.settle_script();

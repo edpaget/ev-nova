@@ -34,6 +34,12 @@ impl AppScreen {
     /// rescue's `dësc`, its first text, or flight. It runs once a tick's
     /// texts are shown, so they are open to take it, as the original's
     /// queued events reach the next event loop.
+    ///
+    /// The router's own handlers ran on each input as it came, before
+    /// flight held it, so the replay goes past them
+    /// ([`AppScreen::rerouted_input`]): a Caps Lock pressed under the
+    /// fades toggles double time once, however often flight, still in the
+    /// rescue, holds it again for the next stage's replay.
     pub(super) fn replay_rescue_input(&mut self) {
         let Some(replay) = self
             .flight
@@ -43,7 +49,7 @@ impl AppScreen {
             return;
         };
         for input in replay {
-            let _ = self.routed_input(&input);
+            let _ = self.rerouted_input(&input);
         }
     }
 }

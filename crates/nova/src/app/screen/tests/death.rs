@@ -593,6 +593,42 @@ fn a_return_pressed_under_the_rescues_fade_out_reaches_its_text() {
     assert_eq!(black_over(&screen), Some(255), "the second fade");
 }
 
+/// The router over [`ejected`] (with its `dësc` of the text `desc`
+/// gives, if any), Caps Lock tapped during the rescue's fade-out, then
+/// ticked until the rescue is over, its `dësc` closed with Return.
+fn caps_lock_tapped_under_the_rescue(desc: Option<&str>) -> AppScreen {
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, desc);
+    until_rescued(&mut screen);
+    assert!(!flight(&screen).double_time(), "off to begin with");
+    screen.input(&key(Key::CapsLock, true));
+    screen.input(&key(Key::CapsLock, false));
+    assert!(flight(&screen).double_time(), "on as it is pressed");
+    if desc.is_some() {
+        // The replay reaches the `dësc`, which Return closes.
+        until_shown(&mut screen, Showing::MissionText);
+        screen.input(&key(Key::Enter, true));
+        screen.input(&key(Key::Enter, false));
+    }
+    until_uncovered(&mut screen);
+    assert_eq!(screen.showing(), Showing::Flight, "the rescue is over");
+    screen
+}
+
+#[test]
+fn caps_lock_pressed_under_the_rescues_fade_out_toggles_double_time_once() {
+    let screen = caps_lock_tapped_under_the_rescue(Some(RESCUE_TEXT));
+    assert!(flight(&screen).double_time(), "on, not toggled back");
+}
+
+#[test]
+fn caps_lock_pressed_under_a_rescue_with_no_desc_toggles_double_time_once() {
+    // No `dësc` shows, so each stage's replay reaches flight, still in
+    // the rescue, which holds it again for the next.
+    let screen = caps_lock_tapped_under_the_rescue(None);
+    assert!(flight(&screen).double_time(), "on, not toggled back");
+}
+
 /// Draws the last outcome of every roll but the traffic's placement:
 /// its two 1500-wide draws place a ship at (0, -100), 100 pixels
 /// above the player at the centre, and its heading draw faces it down
