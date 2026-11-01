@@ -51,11 +51,8 @@ use std::collections::BTreeSet;
 
 use super::gone::Freed;
 use super::npc::{Mode, Npc, NpcId};
-use super::plunder::PirateEvent;
 use super::warp_out::{self, WarpGoal};
-use super::{
-    Outcome, Traffic, World, autopilot, jump_with_leader, launch_room, plunder_dock, regroup,
-};
+use super::{Outcome, Traffic, World, autopilot, jump_with_leader, launch_room, regroup};
 use crate::ai::Goal;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -65,20 +62,26 @@ impl Traffic {
     /// The loop's opening, after the passes before the first slot: every
     /// ship's warp clock moves on, as `TickCount` does between advance
     /// passes; each ship's warp is kept as the tick opened, for the
-    /// followers below it; and the last tick's leavers are forgotten.
+    /// followers below it, and its state, for the flights of the lower
+    /// slots (see [`fly_pass`](super::fly_pass)); and the last tick's
+    /// leavers and docking flights are forgotten.
     pub(super) fn open_dispatch(&mut self) {
         for npc in &mut self.npcs {
             npc.warp.tick_clock();
         }
         self.open_leaders = warp_out::leaders(&self.npcs);
+        self.open_states = (self.npcs.iter())
+            .map(|npc| (npc.id, (npc.berth, npc.state)))
+            .collect();
         self.left_in_dispatch.clear();
-        self.started_in_dispatch.clear();
+        self.dock_flights.clear();
     }
 
     /// The high level's and low level's work at the slot of each NPC
     /// `picks` picks, in berth order, in `world`, rolling on `chance` (see
     /// the module docs): its warp's hold and a fighter's turn-back, a gate
-    /// entrant's box and release, a pirate's dock start, and its leaves,
+    /// entrant's box and release, a docking ship's low level (its match,
+    /// creep, dock start and completion, [`dispatch_dock`](super::dispatch_dock)), and its leaves,
     /// its own jump-out and a fighter's dock with its carrier unless
     /// `no_bay` names it. Each leaver is recorded among the ships gone,
     /// freed in the AI loop, and taken out of the traffic at once. The
@@ -102,7 +105,7 @@ impl Traffic {
             };
             self.hold_and_turn_back(index, world);
             self.enter_gate_box(index, world);
-            self.start_dock(index, world, chance);
+            self.dock_in_dispatch(index, world, chance);
             let Some(outcome) = self.leaves(index, world, no_bay) else {
                 continue;
             };
@@ -176,44 +179,6 @@ impl Traffic {
         };
         let (lead, ai_type) = (npc.id, npc.ai_type);
         self.release_followers(lead, gate, ai_type);
-    }
-
-    /// The low level's dock start for the NPC at `index` in `world`,
-    /// rolling its wait on `chance` (sub 0xf @0x86f98-0x8700a,
-    /// [`plunder_dock::starts`]): the victim is boarded (+0xb9 = 1,
-    /// @0x86fc7), an NPC at once and the player by the session, as the
-    /// pirate's line work ([`PirateEvent::PlayerDockedWith`]) settles at
-    /// its slot; its flight that tick only moves on.
-    fn start_dock(&mut self, index: usize, world: &World, chance: &mut (impl Chance + ?Sized)) {
-        let npc = &self.npcs[index];
-        let Some(docking) = npc.docking else {
-            return;
-        };
-        // A ship gone is read by its slot's record, which the nav still
-        // names whatever tick freed it: no slot test clears the nav, and
-        // the record stands until a ship takes the berth, when the
-        // docking moves to that ship (see `repair_dock`).
-        let victim = match docking.ship {
-            ShipRef::Player => world.player.map(|player| player.state),
-            ShipRef::Npc(id) => (self.npcs.iter())
-                .chain(self.gone.ships().iter().map(|gone| &gone.ship))
-                .find(|n| n.id == id)
-                .map(|n| n.state),
-        };
-        let Some(victim) = victim.filter(|victim| plunder_dock::starts(npc, victim)) else {
-            return;
-        };
-        let pirate = npc.id;
-        plunder_dock::start(&mut self.npcs[index], &victim, chance);
-        self.started_in_dispatch.insert(pirate);
-        match docking.ship {
-            ShipRef::Player => self.queue_pirate(PirateEvent::PlayerDockedWith { pirate }),
-            ShipRef::Npc(id) => {
-                if let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) {
-                    npc.boarded = true;
-                }
-            }
-        }
     }
 
     /// How the NPC at `index` leaves at its slot in `world`, if it does:

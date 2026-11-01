@@ -16,17 +16,23 @@
 //!   swarmer's lead and the ships that don't see their leader. The
 //!   original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
-//!   so every flight reads the others where the last tick left them. A
-//!   ship that left at its slot of the AI loop is still there for the
-//!   flights of lower slots, whose low level came before it left, and a
-//!   follower reads its leader's warp as the tick opened when its slot is
-//!   below the leader's (see [`dispatch_leave`](super::dispatch_leave)).
-//!   A gone ship is there, by its record, for a ship whose high level its
-//!   think skipped and that held it then (see
-//!   [`skipped_high_level`](super::skipped_high_level)). The warp clocks, the high level's hold, turn-back, gate box and
-//!   release, a pirate's dock start, a ship's own jump-out and a fighter's
-//!   dock are the AI loop's, at each ship's slot; a dock started there that
-//!   tick only moves on, completing nothing.
+//!   at each reader's own slot. So on the advance pass a flight reads a
+//!   ship of a higher slot where it was as the AI loop opened, before that
+//!   slot's own work moved it (a docking ship's creep, match or dock
+//!   start, a follower's step, a gate entrant's stop, a drift), a ship
+//!   that left at its slot among them; and a ship of a lower slot, or its
+//!   own, where the half found it ([`FlyPass`]'s `opened`). A follower
+//!   reads its leader's glow as the tick opened when its slot is below the
+//!   leader's (see [`dispatch_leave`](super::dispatch_leave)). A gone ship
+//!   is there, by its record, for a ship whose high level its think
+//!   skipped and that held it then (see
+//!   [`skipped_high_level`](super::skipped_high_level)). The warp clocks,
+//!   the high level's hold, turn-back, gate box and release, a docking
+//!   ship's low level (its match, creep, dock start and completion, see
+//!   [`dispatch_dock`](super::dispatch_dock)), a ship's own jump-out and a
+//!   fighter's dock are the AI loop's, at each ship's slot. A docking ship
+//!   here only flies the heading and thrust its low level left
+//!   ([`plunder_dock::handle_ship`]), on both passes.
 //! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
 //!   its spawn's display rolls, then flies its jump, its docking flight
 //!   or its autopilot step from its own state as it stands, so a push an
@@ -40,8 +46,7 @@
 //!   @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
 //!   reading leaves as it lands ([`land_flight::leaves`]).
-//! - **End** queues the repairs completed on the line, counts the AI waits
-//!   down, and regenerates the fuel; on the
+//! - **End** counts the AI waits down, and regenerates the fuel; on the
 //!   advance pass the pods the think half freed join the departures, the
 //!   ships left behind are let go, and the tick is counted on the AI
 //!   timer.
@@ -57,13 +62,11 @@ use super::autopilot::{self, Beside, Outcome, TopSpeeds};
 use super::gone::Freed;
 use super::held_burst;
 use super::inertialess::Inertia;
-use super::npc::{Npc, NpcId};
-use super::plunder::PirateEvent;
-use super::plunder_dock::DockOutcome;
+use super::npc::{Mode, Npc, NpcId};
+use super::plunder_dock::{self, DockFlight};
 use super::skipped_high_level::SkippedReads;
 use super::{
-    DockNotes, Traffic, World, ionization, land_flight, plunder, regroup, repair_dock,
-    ship_display, tractor_hold, warp_out,
+    Traffic, World, ionization, land_flight, plunder, regroup, ship_display, tractor_hold, warp_out,
 };
 use crate::ai::Goal;
 use crate::ai::mine_orders;
@@ -105,10 +108,10 @@ pub struct FlyPass {
     speeds: BTreeMap<NpcId, TopSpeeds>,
     /// The NPCs disabled as the half began.
     disabled: BTreeSet<NpcId>,
-    /// The NPCs whose dock started at their slot of the AI loop this tick,
-    /// whose dock flight only moves on, completing nothing (see the
-    /// traffic's `dispatch_leave`).
-    started: BTreeSet<NpcId>,
+    /// The flight each docking ship's low level left `_HandleShip` at its
+    /// slot of the AI loop this tick (the traffic's `dispatch_dock`), which
+    /// both of double time's passes fly.
+    docks: BTreeMap<NpcId, DockFlight>,
     /// The NPCs in the traffic's order as the half began.
     order: Vec<NpcId>,
     /// Each leader's warp as the half began, after every slot's step of
@@ -122,10 +125,13 @@ pub struct FlyPass {
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
     /// Each leader's slot, the ships that left in the AI loop among them.
     leader_berths: BTreeMap<NpcId, u32>,
-    /// Each ship that left at its slot of the AI loop, its slot and where
-    /// it was: the ships of lower slots steer by it, as their low level
-    /// came before it left.
-    left: BTreeMap<NpcId, (u32, ShipState)>,
+    /// Each ship's slot and state as the advance pass's AI loop opened,
+    /// before any slot's work, the ships that left in it among them: the
+    /// ships of lower slots steer by it so, as their low level came before
+    /// its slot's (its creep, match or dock start, a follower's step, a
+    /// gate entrant's stop, its leave). None on double time's second pass,
+    /// which has no AI loop.
+    opened: BTreeMap<NpcId, (u32, ShipState)>,
     /// The ships a tractor's hold may name, as the half began.
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
@@ -150,8 +156,6 @@ pub struct FlyPass {
     records: BTreeMap<NpcId, ShipState>,
     /// The first class, which a spawn's anim rolls may read.
     first: ship_display::FirstClass,
-    /// Each repair completed.
-    docks: DockNotes,
 }
 
 impl FlyPass {
@@ -199,11 +203,7 @@ impl Traffic {
             // `_HandleShip` (@0x442b0-0x44336; see `odds_cache`).
             self.refresh_odds(world);
         }
-        let started = if think {
-            self.started_in_dispatch.clone()
-        } else {
-            BTreeSet::new()
-        };
+        let docks = self.dock_flights.clone();
         let speeds = self
             .npcs
             .iter()
@@ -223,10 +223,14 @@ impl Traffic {
         } else {
             leaders.clone()
         };
-        let left = left_in_dispatch
-            .iter()
-            .map(|npc| (npc.id, (npc.berth, npc.state)))
-            .collect();
+        let mut opened = if think {
+            std::mem::take(&mut self.open_states)
+        } else {
+            BTreeMap::new()
+        };
+        for npc in left_in_dispatch {
+            opened.entry(npc.id).or_insert((npc.berth, npc.state));
+        }
         if think {
             warp_out::send_leaders_out(&mut self.npcs);
         }
@@ -271,12 +275,12 @@ impl Traffic {
             states,
             speeds,
             disabled,
-            started,
+            docks,
             order,
             leaders,
             open_leaders,
             leader_berths,
-            left,
+            opened,
             holders,
             leads,
             unseen,
@@ -284,7 +288,6 @@ impl Traffic {
             skipped,
             records,
             first: self.first_class,
-            docks: DockNotes::default(),
         }
     }
 
@@ -334,18 +337,12 @@ impl Traffic {
         autopilot::coast_unsteered(npc, other.as_ref(), seen, world.flight);
     }
 
-    /// Ends the fly half `pass` (see the module docs).
+    /// Ends the fly half `pass` (see the module docs), which no NPC is
+    /// flown in after.
+    // Taken by value so no flight of the half can follow its end.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn end_fly(&mut self, pass: FlyPass) {
-        let FlyPass { half, docks, .. } = pass;
-        for (helper, ship, nav) in docks.repaired {
-            self.queue_pirate(match nav {
-                ShipRef::Player => PirateEvent::PlayerRepaired { helper, ship },
-                ShipRef::Npc(repaired) => PirateEvent::NpcRepaired {
-                    helper,
-                    ship: repaired,
-                },
-            });
-        }
+        let half = pass.half;
         plunder::count_down(&mut self.npcs);
         self.npcs.iter_mut().for_each(Npc::regenerate_fuel);
         if half == FlyHalf::Advance {
@@ -395,21 +392,19 @@ fn ends(npc: &Npc, outcome: Outcome, world: &World) -> bool {
 }
 
 /// Where the fly half `pass` found `ship` for `reader`, if it is there:
-/// a ship that left at its slot of the AI loop is there for a reader in a
-/// lower slot, whose low level came before it left; a gone ship is there,
-/// by its record, for a reader whose high level was skipped and that held
-/// it at its think ([`skipped_high_level`](super::skipped_high_level)).
+/// for a reader in a lower slot on the advance pass, where it was as the
+/// AI loop opened, as the reader's low level steered by it before the
+/// ship's own slot wrote it (a ship that left there among them); for any
+/// other, where the half found it. A gone ship is there, by its record,
+/// for a reader whose high level was skipped and that held it at its think
+/// ([`skipped_high_level`](super::skipped_high_level)).
 fn state_of(pass: &FlyPass, ship: ShipRef, reader: &Npc) -> Option<ShipState> {
     match ship {
         ShipRef::Player => pass.player,
-        ShipRef::Npc(id) => pass
-            .states
-            .get(&id)
-            .copied()
-            .or_else(|| {
-                let &(berth, state) = pass.left.get(&id)?;
-                (reader.berth < berth).then_some(state)
-            })
+        ShipRef::Npc(id) => (pass.opened.get(&id))
+            .filter(|&&(berth, _)| reader.berth < berth)
+            .map(|&(_, state)| state)
+            .or_else(|| pass.states.get(&id).copied())
             .or_else(|| pass.skipped.state_of(reader.id, id)),
     }
 }
@@ -547,11 +542,11 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
 }
 
 /// Flies `npc` a tick in `world` in the fly half `pass`: its jump, its
-/// dock with a ship it plunders or repairs, or its goal, toward `other`,
-/// disabled as `other_disabled` says, with `beside` what it reads beside
-/// it (its swarm lead, a formation escort's guard and sight), at
-/// `speeds`, a dock it starts or a repair it completes noted in the
-/// half's docks, rolling on `chance`. Its goal's stellar is looked up
+/// dock with a ship it plunders or repairs (by the flight its low level
+/// left at its slot), or its goal, toward `other`, disabled as
+/// `other_disabled` says, with `beside` what it reads beside it (its
+/// swarm lead, a formation escort's guard and sight), at `speeds`,
+/// rolling on `chance`. Its goal's stellar is looked up
 /// among every stellar the system lists, shown or not ([`World::listed`]),
 /// as `_HighLevelAIHandler` reads the stellar's record (state 1 @0x8d8d7,
 /// state 20 @0x8db8a), or among the slot stellars for one the system
@@ -570,19 +565,20 @@ fn fly_steered(
     if let Some(outcome) = warp_out::fly_jump(npc, leaders, world, pass.think, paused) {
         return outcome;
     }
-    match plunder::fly_docking(npc, other.as_ref(), speeds, world.flight, beside.swarm) {
-        // A dock started at its slot this tick completes nothing in the
-        // same frame: the low level read its wait before it was set.
-        Some(DockOutcome::Repaired) if !pass.started.contains(&npc.id) => {
-            // Its nav, the ship it repaired, before the completion
-            // clears it (@0x86d84, @0x86f31).
-            let nav = npc.docking.map_or(ShipRef::Player, |docking| docking.ship);
-            repair_dock::complete(npc);
-            pass.docks.repaired.push((npc.id, npc.ship, nav));
-            return Outcome::Flying;
-        }
-        Some(_) => return Outcome::Flying,
-        None => {}
+    // A docking ship flies what its low level left at its slot of the AI
+    // loop (the traffic's `dispatch_dock`), and decides nothing here. One
+    // whose low level flew no docking this tick keeps its heading and
+    // thrusts nothing.
+    let docks =
+        npc.docking.is_some() && npc.condition == Condition::Intact && npc.mode == Mode::Flying;
+    if let Some(flown) = pass.docks.get(&npc.id).copied().or_else(|| {
+        docks.then(|| {
+            let handling = npc.flying_handling(speeds.own, world.flight);
+            DockFlight::none(npc, &handling, world.flight)
+        })
+    }) {
+        plunder_dock::handle_ship(npc, &flown, world.flight);
+        return Outcome::Flying;
     }
     // A goal naming a stellar the system doesn't list, as a slot does, is
     // flown among the slot stellars (see `slot_stellars`).
@@ -1028,6 +1024,61 @@ mod tests {
         // A ship in its own slot came after it left, as a launch into the
         // freed slot does: gone.
         assert_ne!(flown(3, true), flown(3, false), "its slot's new ship");
+    }
+
+    /// Keeps every ship's goal.
+    #[derive(Debug)]
+    struct Keeps;
+
+    impl crate::ai::Behaviour for Keeps {
+        fn decide(
+            &self,
+            npc: &Npc,
+            _around: &crate::ai::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_lower_slot_steers_by_a_docking_ship_where_it_was_before_its_creep_and_a_higher_one_after()
+    {
+        // The creep is the docking ship's own low level's, at its slot of
+        // `_AIDispatch`'s loop (@0x8700f-0x87095): a lower slot's low level
+        // steered by it before, a higher slot's after.
+        let mut victim = at(4, 100.0, 0.0);
+        victim.condition = Condition::Disabled;
+        let mut pirate = at(2, 100.0, 10.0);
+        pirate.goal = Goal::Plunder {
+            ship: ShipRef::Npc(victim.id),
+            hopeless: false,
+        };
+        pirate.target = Some(ShipRef::Npc(victim.id));
+        pirate.hull.class_turn = 3.0;
+        pirate.docking = Some(Docking {
+            ship: ShipRef::Npc(victim.id),
+            sub: DockSub::Dock,
+        });
+        let hunter = |id: u32| {
+            let mut hunter = at(id, -500.0, 0.0);
+            hunter.goal = Goal::Attack(ShipRef::Npc(pirate.id));
+            hunter
+        };
+        let (below, above) = (hunter(0), hunter(6));
+        let mut traffic = Traffic {
+            npcs: vec![below.clone(), pirate.clone(), victim, above.clone()],
+            interval: 1,
+            ..Traffic::default()
+        };
+        let world = World::new(&[]);
+        traffic.think_holding(&Keeps, world, &[], &mut NeverFires);
+        let crept = traffic.npcs[1].state;
+        assert_eq!(crept.position, Vec2::new(100.0, 9.0), "crept at its slot");
+        let pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        let read = |reader: &Npc| other_of(&pass, reader).0;
+        assert_eq!(read(&below), Some(pirate.state), "before its creep");
+        assert_eq!(read(&above), Some(crept), "after it");
     }
 
     #[test]

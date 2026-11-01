@@ -118,10 +118,11 @@
 //!    level holding its warp to its goal, turning a fighter that can't
 //!    follow its leader's jump back, and stopping a gate entrant in its
 //!    gate's box, its followers released to enter the gate on their own
-//!    ([`gate_entry`]); and its low level's work: a pirate's dock started,
-//!    boarding the victim, and its leaves, its own jump-out and a
-//!    fighter's dock ([`dispatch_leave`]), each recorded gone and taken
-//!    out of the traffic at its slot. Steps 1 to 5 are the
+//!    ([`gate_entry`]); and its low level's work: a docking ship's match,
+//!    creep, dock start, boarding the victim, and completion, a repair's
+//!    line queued at its berth ([`dispatch_dock`]), and its leaves, its own
+//!    jump-out and a fighter's dock ([`dispatch_leave`]), each recorded
+//!    gone and taken out of the traffic at its slot. Steps 1 to 5 are the
 //!    tick's think half, `_DoPlayGameWork`'s advance-pass AI
 //!    (`_EnterMoreShips` @0x44237, `_AIDispatch` @0x4429d): steps 1 to 3
 //!    once ([`Traffic::open_think`]), and steps 4 and 5 one run a slot, its
@@ -137,10 +138,8 @@
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter flying in to its
 //!    carrier, a jumping ship turning and warping out,
-//!    a pirate docking with its victim ([`plunder::fly_docking`]), a
-//!    repairer's dock done repairing the
-//!    player ([`PirateEvent::PlayerRepaired`]) or an NPC
-//!    ([`PirateEvent::NpcRepaired`]), a gate entrant counting its entry
+//!    a pirate docking with its victim by the flight its low level left
+//!    ([`plunder_dock::handle_ship`]), a gate entrant counting its entry
 //!    down, and a tick off each flying ship's AI wait, a pirate's count
 //!    wait's included ([`plunder::count_down`]);
 //! 7. the removal of those that entered a gate, each in
@@ -204,6 +203,7 @@ mod comm_call_tests;
 mod count_wait_turn_tests;
 pub mod destination;
 pub mod disabled_reset;
+pub mod dispatch_dock;
 pub mod dispatch_head;
 pub mod dispatch_leave;
 #[cfg(test)]
@@ -952,12 +952,17 @@ pub struct Traffic {
     /// they left ([`dispatch_leave`]), which the fly half's followers and
     /// lower slots still read.
     left_in_dispatch: Vec<Npc>,
-    /// The ships whose dock started at their slot this tick
-    /// ([`dispatch_leave`]), whose flight then only moves on.
-    started_in_dispatch: BTreeSet<NpcId>,
+    /// The flight each docking ship's low level left `_HandleShip` at its
+    /// slot this tick ([`dispatch_dock`]), which both of double time's
+    /// passes fly.
+    dock_flights: BTreeMap<NpcId, plunder_dock::DockFlight>,
     /// Each ship's warp as the tick's think opened, which a follower below
     /// its leader reads ([`dispatch_leave`]).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
+    /// Each ship's slot and state as `_AIDispatch`'s loop opened, before
+    /// any slot's work: what the advance pass's flight of a lower slot
+    /// reads of it, as that slot's low level came first ([`fly_pass`]).
+    open_states: BTreeMap<NpcId, (u32, ShipState)>,
     /// The records of the freed slots not taken again, which a think or a
     /// flight may still read ([`gone`]).
     gone: GoneShips,
@@ -1041,15 +1046,6 @@ pub struct Traffic {
     defences: stellar_defence::StellarDefences,
 }
 
-/// The repairs the ships completed in one tick's flight ([`fly_pass`]);
-/// the docks start at their slot ([`dispatch_leave`]).
-#[derive(Clone, Debug, Default)]
-struct DockNotes {
-    /// Each repair completed, as (helper, its ship type, the ship
-    /// repaired).
-    repaired: Vec<(NpcId, ShipId, ShipRef)>,
-}
-
 /// What becomes of the ships [`Traffic::retarget`] does not take along.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Leave {
@@ -1103,8 +1099,9 @@ impl Traffic {
             departed: Vec::new(),
             freed: Vec::new(),
             left_in_dispatch: Vec::new(),
-            started_in_dispatch: BTreeSet::new(),
+            dock_flights: BTreeMap::new(),
             open_leaders: BTreeMap::new(),
+            open_states: BTreeMap::new(),
             gone: GoneShips::default(),
             skipped: skipped_high_level::SkippedReads::default(),
             ship_loop: false,
@@ -1188,7 +1185,8 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.left_in_dispatch.clear();
-        self.started_in_dispatch.clear();
+        self.dock_flights.clear();
+        self.open_states.clear();
         self.gone.clear();
         self.skipped = skipped_high_level::SkippedReads::default();
         self.vacated.clear();
@@ -1310,7 +1308,8 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.left_in_dispatch.clear();
-        self.started_in_dispatch.clear();
+        self.dock_flights.clear();
+        self.open_states.clear();
         self.gone.clear();
         self.skipped = skipped_high_level::SkippedReads::default();
         self.vacated.clear();

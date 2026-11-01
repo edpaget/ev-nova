@@ -27,10 +27,9 @@
 //!   rewrites it (+0xb9 @0x3c981). A spawn into the slot hands the
 //!   docking to the newcomer, as the nav names the slot
 //!   ([`Traffic::slot_taken`](crate::traffic::Traffic::slot_taken)). The
-//!   dock's completion, creep and velocity match are read where the fly
-//!   half decides them today;
-//!   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9
-//!   moves them to the slot. Otherwise nav = the target
+//!   dock's start, completion, creep and velocity match are decided at the
+//!   repairer's own slot of the AI loop, reading the record there (the
+//!   traffic's `dispatch_dock`). Otherwise nav = the target
 //!   (@0x8f74c) and, within [`repair_box`] of it on both axes,
 //!   inclusive, it docks (sub 0xf, @0x8f815); otherwise it closes (sub 0xb,
 //!   @0x8f823). There is no approach (sub 9): the box is 2-way, not the
@@ -53,7 +52,12 @@
 //!   or silently for an NPC, from
 //!   [`PirateEvent::NpcRepaired`](crate::traffic::plunder::PirateEvent::NpcRepaired).
 //!   The repairer then drifts (goal 0xe) with a wait of [`REPAIR_HOLD`],
-//!   its target, nav and substate cleared (@0x86f09-0x86f31).
+//!   its target, nav and substate cleared (@0x86f09-0x86f31). All of it is
+//!   the repairer's low level, at its slot of the AI loop: the drift at
+//!   once, and the event queued on the line at its berth, which the
+//!   session settles as that slot's run ends, so a higher slot's think
+//!   reads the patient repaired that tick (the traffic's
+//!   `dispatch_dock`).
 //!
 //! With the wait counted down after each tick's flight (`_HandleShip`
 //! @0x35037-0x35048, after every ship's `_AIDispatch`), a dock started on

@@ -1,5 +1,5 @@
 //! A pirate's plunder among the traffic: the docking's high level and
-//! flight ([`high_level`], [`fly_docking`]), the plunder its think decides
+//! low level ([`high_level`], [`dock_low_level`]), the plunder its think decides
 //! (`_PirateWarshipAI` @0x8c74c-0x8c7ae in the `EV Nova` executable,
 //! [`resolve`]) and the drift that follows it (goal 0xe, `_HighLevelAIHandler`
 //! @0x8eb6b-0x8ebd4, [`drift`]). The rules of the plunder itself are
@@ -71,6 +71,7 @@ use crate::hail::Help;
 use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
 use crate::traffic::World;
+#[cfg(test)]
 use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::npc::{NPC_COMMODITIES, Npc, NpcHold, NpcId};
 use crate::traffic::plunder_dock::{self, DockOutcome, DockStep, Docking};
@@ -249,18 +250,22 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
     }
 }
 
-/// Flies `npc`'s docking one tick at `victim` (none when that ship is gone,
-/// which drops the docking), at `speeds` under `flight`, with `swarm` its
-/// swarm lead ([`plunder_dock::fly`]): what became of it, or none when it
-/// has no docking to fly, is not intact or not flying, for the autopilot
-/// to fly it instead.
-pub fn fly_docking(
+/// The low level of `npc`'s docking at `victim` (none when that ship is
+/// gone, which drops the docking), at its own top speed `own` under
+/// `flight`, with `swarm` its swarm lead, rolling a dock's wait on
+/// `chance` ([`plunder_dock::low_level`]): the flight it leaves
+/// `_HandleShip` and what became of the docking, or none when it has no
+/// docking to fly, is not intact or not flying, for the autopilot to fly
+/// it instead. It runs at the ship's slot of the AI loop (the traffic's
+/// `dispatch_dock`).
+pub fn dock_low_level(
     npc: &mut Npc,
     victim: Option<&ShipState>,
-    speeds: TopSpeeds,
+    own: f32,
     flight: FlightRules,
     swarm: Option<SwarmLead>,
-) -> Option<DockOutcome> {
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<(plunder_dock::DockFlight, DockOutcome)> {
     npc.docking?;
     if npc.condition != Condition::Intact || npc.mode != crate::traffic::npc::Mode::Flying {
         return None;
@@ -269,8 +274,28 @@ pub fn fly_docking(
         npc.docking = None;
         return None;
     };
-    let handling = npc.flying_handling(speeds.own, flight);
-    Some(plunder_dock::fly(npc, victim, &handling, flight, swarm))
+    let handling = npc.flying_handling(own, flight);
+    Some(plunder_dock::low_level(
+        npc, victim, &handling, flight, swarm, chance,
+    ))
+}
+
+/// `npc`'s whole tick of its docking at `victim`, its low level then
+/// `_HandleShip` ([`dock_low_level`], [`plunder_dock::handle_ship`]), at
+/// `speeds` under `flight` with `swarm` its swarm lead, a dock's wait
+/// rolling 0: for the tests of the flight it shares.
+#[cfg(test)]
+pub(crate) fn fly_docking(
+    npc: &mut Npc,
+    victim: Option<&ShipState>,
+    speeds: TopSpeeds,
+    flight: FlightRules,
+    swarm: Option<SwarmLead>,
+) -> Option<DockOutcome> {
+    let chance = &mut crate::chance::NeverFires;
+    let (flown, outcome) = dock_low_level(npc, victim, speeds.own, flight, swarm, chance)?;
+    plunder_dock::handle_ship(npc, &flown, flight);
+    Some(outcome)
 }
 
 /// A tick off each AI wait among `npcs` that has any left (`_HandleShip`
@@ -1180,7 +1205,10 @@ mod tests {
         other.state.position = Vec2::new(0.0, 500.0);
         other.state.velocity = Vec2::new(0.0, 2.0);
         let mut traffic = traffic_of(vec![docked, drifting, other]);
-        traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+        // Its low level at its slot (`dispatch_dock`), then its flight.
+        traffic.dock_in_dispatch(0, &World::new(&[]), &mut Draws::of(&[]));
+        let still = std::collections::BTreeSet::new();
+        traffic.fly_holding(World::new(&[]), &still, &mut Draws::of(&[]));
         assert_eq!(ship(&traffic, PIRATE).state.velocity, Vec2::new(0.25, 0.0));
     }
 
