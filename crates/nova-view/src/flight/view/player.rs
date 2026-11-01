@@ -1,7 +1,9 @@
 //! [`FlightView`]'s player info screen and the main screen's pilot panel,
 //! over the [`FlightSim`] port: the player info key's press and the
 //! screen's opening are commands ([`FlightCommand::PressPlayerInfo`],
-//! [`FlightCommand::OpenPlayerInfo`], whose answer carries the screen),
+//! [`FlightCommand::OpenPlayerInfo`], whose answer carries the screen,
+//! and [`FlightCommand::CloseInfoDialog`], the player info's or the
+//! mission info's close),
 //! and the view marks the screen with its own cheats setting; the pilot
 //! panel is the flight's answer to its screen ask
 //! ([`ScreenAsk::PilotPanel`]), kept until the flight next changes
@@ -75,6 +77,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
             Answer::PlayerInfo(Some(info)) => Some(self.marked(*info)),
             _ => None,
         }
+    }
+
+    /// The player info or mission info dialog over flight closed
+    /// ([`FlightCommand::CloseInfoDialog`],
+    /// `nova_sim::Session::close_info_dialog`): told at every close,
+    /// whatever opened it, as the flight settles the gain's zero an
+    /// opening owes after anything that ran under the dialog.
+    pub fn close_info_dialog(&mut self) {
+        self.send(FlightCommand::CloseInfoDialog);
     }
 
     /// `info` marked with the cheats setting ([`FlightOverlays::cheats`](super::FlightOverlays::cheats)),

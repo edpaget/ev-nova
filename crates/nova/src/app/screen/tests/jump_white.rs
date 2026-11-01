@@ -38,6 +38,14 @@ fn jump_ready(fork: &ForkBuilder) -> nova_rsrc::fixture::BuiltFork {
 /// [`lit`], the pilot in Ada's first flight off Alpha Prime with mission
 /// 130 active.
 fn lit_on_a_mission(store: &MemoryPilots) -> AppScreen {
+    let mut screen = flying_on_a_mission(store);
+    plot_beta(&mut screen);
+    lit_from(screen)
+}
+
+/// Ada's first flight off Alpha Prime with mission 130 active, flown out
+/// of the take-off's grace, with dialogs.
+pub(super) fn flying_on_a_mission(store: &MemoryPilots) -> AppScreen {
     let fork = game_data_fork(true, true, true, 100, b"", b"", None)
         .resource(
             Mission::TYPE,
@@ -67,8 +75,7 @@ fn lit_on_a_mission(store: &MemoryPilots) -> AppScreen {
     for _ in 0..120 {
         screen.tick(TICK);
     }
-    plot_beta(&mut screen);
-    lit_from(screen)
+    screen
 }
 
 /// `screen` flying with a course to Beta, flown out past the minimum jump

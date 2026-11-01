@@ -1031,6 +1031,12 @@ pub enum FlightCommand {
     PressFaded(FadedPress),
     /// The player info dialog opens (`Session::open_player_info`).
     OpenPlayerInfo,
+    /// The player info or mission info dialog over flight closes: the
+    /// gain's zero its opening owes, after whatever ran under the dialog
+    /// ([`Session::close_info_dialog`](crate::Session::close_info_dialog)).
+    /// Sent at every close, whatever opened the dialog: the session knows
+    /// which openings owe one.
+    CloseInfoDialog,
     /// Jettison the cargo, `all` of it or all but the mission cargo
     /// ([`Session::jettison_cargo`](crate::Session::jettison_cargo)).
     Jettison {
@@ -1142,8 +1148,9 @@ impl FlightCommand {
     ///   message line's ([`FlightCommand::CommShown`],
     ///   [`FlightCommand::CommAcknowledged`], [`FlightCommand::CommTicked`])
     ///   the dialogs' presses: the comm dialog's answers, haggles and
-    ///   close, the plunder dialog's takes and its letting go, and the
-    ///   escort dialog's buttons; and the spaceport's: the shops', the
+    ///   close, the plunder dialog's takes and its letting go, the
+    ///   escort dialog's buttons, and the info dialogs' close
+    ///   ([`FlightCommand::CloseInfoDialog`]); and the spaceport's: the shops', the
     ///   bar's and the mission screens', which run docked where no key
     ///   gates them. [`FlightCommand::Jettison`] is `None` too: its key's
     ///   press is gated by the key, and the player info's Jettison by no
@@ -1234,6 +1241,7 @@ impl FlightCommand {
             | Self::NameCapture(_)
             | Self::MarkIntroSeen
             | Self::OpenPlayerInfo
+            | Self::CloseInfoDialog
             | Self::SetWindowWidth(_)
             | Self::SetDoubleTimeKey(_)
             | Self::SetSoundQuiet(_)
@@ -2279,6 +2287,7 @@ mod tests {
             (C::PressMissionInfo, Some(PlayerCommand::MissionInfo)),
             (C::PressPlayerInfo, Some(PlayerCommand::PlayerInfo)),
             (C::OpenPlayerInfo, None),
+            (C::CloseInfoDialog, None),
             (C::SetWindowWidth(1024), None),
             (C::SetDoubleTimeKey(true), None),
             (C::SetSoundQuiet(true), None),

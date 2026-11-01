@@ -213,12 +213,14 @@ mod tests {
 
     #[test]
     fn a_mission_info_press_that_reaches_the_dialog_zeroes_the_gain_faded_or_not() {
-        // The opened dialog lasts, so the next frame holds at 0.0; the
-        // faded one's guard returns at once, so it ramps from 0.0.
-        for (command, next) in [
-            (FlightCommand::PressMissionInfo, 0.0),
+        // The opened dialog lasts, so its close zeroes the gain after a
+        // switch-in under it and the next frame holds at 0.0; the faded
+        // one's guard returns at once, so it ramps from 0.0.
+        for (command, opens, next) in [
+            (FlightCommand::PressMissionInfo, true, 0.0),
             (
                 FlightCommand::PressFaded(crate::flight_frame::FadedPress::MissionInfo),
+                false,
                 0.25,
             ),
         ] {
@@ -226,6 +228,7 @@ mod tests {
             let mut session = docked(&catalog);
             apply(&mut session, FlightCommand::AcceptMission(MissionId(130)));
             apply(&mut session, command.clone());
+            apply(&mut session, FlightCommand::CloseInfoDialog);
             assert_eq!(
                 session.speed_mult(),
                 crate::SpeedMult::FULL,
@@ -241,6 +244,10 @@ mod tests {
             let frame_gains = crate::session::time_adjustment::tests::frame_gains;
             assert_eq!(frame_gains(&mut session, 1), [1.0]);
             apply(&mut session, command.clone());
+            if opens {
+                apply(&mut session, FlightCommand::SwitchedIn);
+                apply(&mut session, FlightCommand::CloseInfoDialog);
+            }
             assert_eq!(session.speed_mult(), crate::SpeedMult::ZERO, "{command:?}");
             assert_eq!(frame_gains(&mut session, 1), [next], "{command:?}");
         }

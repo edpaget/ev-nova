@@ -120,6 +120,13 @@ fn opening_the_player_info_gives_the_flights_screen_or_none() {
 }
 
 #[test]
+fn an_info_dialogs_close_tells_the_flight() {
+    let mut view = faked(in_sol());
+    view.close_info_dialog();
+    assert_eq!(sent_but_lines(&view), [FlightCommand::CloseInfoDialog]);
+}
+
+#[test]
 fn open_player_info_carries_the_cheats_setting() {
     for cheats in [false, true] {
         let mut view = faked_cheats(cheats);

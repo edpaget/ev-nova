@@ -1065,6 +1065,13 @@ pub struct Session {
     /// a plain [`SpeedMult`](crate::SpeedMult). Never saved: the pilot
     /// file doesn't keep it.
     time: crate::TimeAdjustment,
+    /// Whether an info dialog `_HandlePlayer` opened in flight (the player
+    /// info or the mission info) is open, whose close owes the gain's zero
+    /// (`Session::close_info_dialog`; see the `time_adjustment` module).
+    /// On `Session` itself beside `time`, for its reason: it is a write
+    /// of `time` waiting for the close. Never saved: no step runs under
+    /// the dialog, so none is open at a save.
+    info_zero_owed: bool,
 }
 
 impl Session {
@@ -1357,6 +1364,7 @@ impl Session {
             tutorial: crate::tutorial::Tutorial::SEASONED,
             load_repaired,
             time: crate::TimeAdjustment::default(),
+            info_zero_owed: false,
             pilot,
             statics: Rc::new(statics),
             setup: Setup::default(),

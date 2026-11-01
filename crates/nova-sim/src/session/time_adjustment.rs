@@ -14,11 +14,16 @@
 //!   @0x97af2, @0x95693); and the player and mission info dialogs
 //!   (`_HandlePlayer` @0x70357, @0x704e8), at the press the dialog's own
 //!   guard refuses as well as one it opens, as the write follows the call
-//!   whatever it did. The session zeroes at the opening, not the close:
-//!   no step runs under the dialog, so the next frame sees the same. An
-//!   opened dialog holds the next frame, as the player spent 334 ms or
-//!   more in it. A press the dialog's own guard refuses (the screen faded,
-//!   `_DoPlayerInfoDialog` @0x5a013 and `_DoMissionInfoDialog`; a jump or
+//!   whatever it did. An opened dialog's zero waits for its close
+//!   ([`Session::close_info_dialog`], which the view sends whatever
+//!   opened the dialog; only an opening `_HandlePlayer` made owes one),
+//!   as the comm dialogs' do: a switch-in under the dialog
+//!   (`_MyModalDialog` runs `_SwitchedIn` there, @0x599be, @0x59a95)
+//!   writes the gain before the dialog returns, and the zero after it
+//!   wins. The zero holds the next frame, as the player spent 334 ms or
+//!   more in the dialog. A press the dialog's own guard refuses (the
+//!   screen faded, `_DoPlayerInfoDialog` @0x5a013 and
+//!   `_DoMissionInfoDialog`; a jump or
 //!   breaking up, @0x5a02a-0x5a04c) returns at once, so only a frame's
 //!   time passes and the next frame ramps from 0.0 to 0.25
 //!   ([`Session::zero_speed_mult_unheld`]). A press `_HandlePlayer`
@@ -86,6 +91,24 @@ impl Session {
     pub(super) fn zero_speed_mult_unheld(&mut self) {
         if self.ramps() {
             self.time.zero_unheld();
+        }
+    }
+
+    /// An info dialog `_HandlePlayer` opened in flight: its close owes the
+    /// gain's zero ([`Session::close_info_dialog`]).
+    pub(super) fn owe_info_zero(&mut self) {
+        self.info_zero_owed = true;
+    }
+
+    /// The player info or mission info dialog over flight closed: the
+    /// zero its opening owes, the next frame held, once, as `_HandlePlayer`
+    /// writes it when the dialog returns (@0x70357, @0x704e8), after
+    /// anything that ran under it (see the module docs). A dialog no
+    /// opening owed one for (the port's, a guard's refusal, the offer
+    /// dialog's mission info) leaves the gain.
+    pub(crate) fn close_info_dialog(&mut self) {
+        if std::mem::take(&mut self.info_zero_owed) {
+            self.zero_speed_mult();
         }
     }
 
@@ -327,15 +350,67 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_opened_player_info_zeroes_the_gain_in_flight_only() {
+    fn an_opened_player_info_zeroes_the_gain_at_its_close_in_flight_only() {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         session.open_player_info(&catalog);
+        assert_eq!(session.speed_mult(), SpeedMult::FULL, "not yet");
+        assert_eq!(
+            apply(&mut session, FlightCommand::CloseInfoDialog),
+            crate::flight_frame::Answer::Done
+        );
         assert_eq!(frame_gains(&mut session, 2), RAMP[..2]);
         let mut landed = Session::start(&catalog).expect("starts");
         land_now(&mut landed).expect("lands");
         landed.open_player_info(&catalog);
+        apply(&mut landed, FlightCommand::CloseInfoDialog);
         assert_eq!(landed.speed_mult(), SpeedMult::FULL, "the port's own");
+    }
+
+    #[test]
+    fn a_switch_in_under_an_info_dialog_gives_way_to_its_closes_zero() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.open_player_info(&catalog);
+        apply(&mut session, FlightCommand::SwitchedIn);
+        apply(&mut session, FlightCommand::CloseInfoDialog);
+        assert_eq!(
+            frame_gains(&mut session, 4),
+            RAMP,
+            "@0x599be, then @0x70357"
+        );
+    }
+
+    #[test]
+    fn a_close_zeroes_only_what_an_opening_owes_and_once() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        apply(&mut session, FlightCommand::CloseInfoDialog);
+        assert_eq!(session.speed_mult(), SpeedMult::FULL, "nothing opened");
+        session.open_player_info(&catalog);
+        apply(&mut session, FlightCommand::CloseInfoDialog);
+        frame_gains(&mut session, 2);
+        apply(&mut session, FlightCommand::CloseInfoDialog);
+        assert_eq!(frame_gains(&mut session, 1), RAMP[2..3], "once");
+        let mut refused = jumping();
+        refused.open_player_info(&catalog);
+        frame_gains(&mut refused, 1);
+        apply(&mut refused, FlightCommand::CloseInfoDialog);
+        assert_eq!(
+            frame_gains(&mut refused, 1),
+            RAMP[2..3],
+            "the guard's refusal owes none"
+        );
+    }
+
+    #[test]
+    fn by_the_earlier_reading_an_info_dialogs_close_leaves_the_gain() {
+        let catalog = catalog();
+        let rules = Rulebook::default().with_override(RuleKey::SpeedMultRamp, RuleSource::Bible);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        session.open_player_info(&catalog);
+        apply(&mut session, FlightCommand::CloseInfoDialog);
+        assert_eq!(session.speed_mult(), SpeedMult::FULL);
     }
 
     #[test]

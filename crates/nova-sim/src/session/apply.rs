@@ -125,7 +125,9 @@ impl Session {
     ///   [`FlightCommand::CueCourse`] ([`Session::cue_course`]),
     ///   [`FlightCommand::CommShown`] ([`Session::comm_shown`]),
     ///   [`FlightCommand::SwitchedOut`] ([`Session::switched_out`]),
-    ///   [`FlightCommand::SwitchedIn`] ([`Session::switch_in`]), and the
+    ///   [`FlightCommand::SwitchedIn`] ([`Session::switch_in`]),
+    ///   [`FlightCommand::CloseInfoDialog`] ([`Session::close_info_dialog`]),
+    ///   and the
     ///   nav's saves and restores: [`Session::save_port_nav`],
     ///   [`Session::restore_port_nav`], [`Session::restore_bar_nav`],
     ///   [`Session::put_back_port_nav`], [`Session::restore_map_nav`] and
@@ -211,6 +213,10 @@ impl Session {
             }
             FlightCommand::SwitchedIn => {
                 self.switch_in();
+                Answer::Done
+            }
+            FlightCommand::CloseInfoDialog => {
+                self.close_info_dialog();
                 Answer::Done
             }
             FlightCommand::Jump

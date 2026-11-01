@@ -343,15 +343,16 @@ impl Session {
         }
         // In flight, `_HandlePlayer` zeroes the gain once
         // `_DoMissionInfoDialog` returns, whatever its guard did
-        // (@0x704e3-0x704f3; see the `time_adjustment` module): held
-        // after the dialog, not after the guard's refusal. The
-        // no-missions path skips both (@0x704ba). The port's is
-        // `_DoPortDialog`'s, which writes none.
+        // (@0x704e3-0x704f3; see the `time_adjustment` module): after the
+        // dialog, at its close (`Session::close_info_dialog`), held, so it
+        // follows a switch-in under the dialog; after the guard's refusal
+        // here, not held. The no-missions path skips both (@0x704ba). The
+        // port's is `_DoPortDialog`'s, which writes none.
         if self.mode.landed().is_none() {
             if faded {
                 self.zero_speed_mult_unheld();
             } else {
-                self.zero_speed_mult();
+                self.owe_info_zero();
             }
         }
         if faded {

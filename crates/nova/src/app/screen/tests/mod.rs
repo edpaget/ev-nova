@@ -101,6 +101,7 @@ mod encounters;
 mod entry;
 mod flight;
 mod game;
+mod info_dialog_gain;
 mod jump_white;
 mod landing_texts_after_movie;
 mod launch;

@@ -494,13 +494,19 @@ impl AppScreen {
             for _ in 0..missions.take_texts_closed() {
                 flight.close_mission_text();
             }
-            // The mission info's close over a person's offer loads the
-            // offer's `dësc` again (`_OfferOneMission` @0xa335c), as the
-            // port's does; the port-only `PortDialogUpdate`
+            // The mission info's close tells flight, whatever opened it
+            // (`FlightView::close_info_dialog`): an opening flight's own I
+            // made owes the gain's zero. Its close over a person's offer
+            // loads the offer's `dësc` again (`_OfferOneMission` @0xa335c),
+            // as the port's does; the port-only `PortDialogUpdate`
             // (@0xa3377-0xa33d1) has nothing to do over flight. Taken
             // whatever opened it, so a close of flight's own I never
             // reaches a later offer.
-            if missions.take_info_closed()
+            let info_closed = missions.take_info_closed();
+            if info_closed {
+                flight.close_info_dialog();
+            }
+            if info_closed
                 && let Some(offer) = self.offer.as_ref().filter(|offer| !offer.answered())
             {
                 flight.reload_offer_desc(offer.prompt().mission);
@@ -588,7 +594,9 @@ impl AppScreen {
     /// jettisons everything through flight. Once it closes, the screen
     /// below lets go of its keys, and, laid out, it redraws the whole
     /// status bar ([`FlightView::refresh_status`]), as
-    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725).
+    /// `_DoPlayerInfoDialog` ends in `_RefreshSAT` (@0x5a725); then flight
+    /// is told of the close ([`FlightView::close_info_dialog`]), whose
+    /// opening owes the gain's zero once the dialog returns (@0x70357).
     pub(super) fn player_info_input(&mut self, input: &Input) -> ScreenAction {
         let screen = self.player_info.as_mut().expect("open");
         screen.input(input);
@@ -601,8 +609,11 @@ impl AppScreen {
         if closed {
             self.player_info = None;
             self.let_go_of_keys();
-            if laid_out && let Some(flight) = &mut self.flight {
-                flight.refresh_status();
+            if let Some(flight) = &mut self.flight {
+                if laid_out {
+                    flight.refresh_status();
+                }
+                flight.close_info_dialog();
             }
         }
         ScreenAction::None
