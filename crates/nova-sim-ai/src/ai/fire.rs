@@ -547,6 +547,18 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
     }
 }
 
+/// Whether `npc`, of AI type 4 or below, holds its fire as it docks or
+/// drifts: subs 9 and 0xb end in `_AIEscortFireUnprovoked`, which returns
+/// for AI type 4 or below (@0x80e59-0x80e61), sub 0xf fires nothing, and
+/// so does the drift's sub 0; nor does its high level, skipped while the
+/// dock waits, launch fighters. The pirate's, the traders' and the
+/// interceptor's triggers ask it, a docking a copied plunder gave
+/// included.
+#[must_use]
+pub fn quiet(npc: &Npc) -> bool {
+    npc.docking.is_some() || npc.goal == crate::ai::Goal::Drift
+}
+
 /// The weapon `npc` fires now among `around`, if any (see the module
 /// docs), its fighter bays while it attacks or snipes at a ship that is
 /// live there, and its point defence while its manoeuvre reaches a turret
@@ -2736,6 +2748,21 @@ mod tests {
                 "{what}"
             );
         }
+    }
+
+    #[test]
+    fn a_ship_docking_or_drifting_is_quiet_and_any_other_is_not() {
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let mut npc = shooter(&[gun(128, 1, 1)], Goal::Attack(ShipRef::Player));
+        assert!(!quiet(&npc));
+        npc.docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Dock,
+        });
+        assert!(quiet(&npc), "docking");
+        npc.docking = None;
+        npc.goal = Goal::Drift;
+        assert!(quiet(&npc), "drifting");
     }
 
     #[test]

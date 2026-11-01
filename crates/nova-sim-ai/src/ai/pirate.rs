@@ -159,12 +159,10 @@ impl Behaviour for PirateWarship {
         think(npc, around, self.target, chance)
     }
 
-    /// Its weapon pick, but nothing while it docks (subs 9 and 0xb end in
-    /// `_AIEscortFireUnprovoked`, which fires nothing for its AI type, and
-    /// 0xf fires nothing; its high level, skipped while it waits, launches
-    /// no fighters) or drifts (sub 0).
+    /// Its weapon pick, but nothing while it docks or drifts
+    /// ([`fire::quiet`]).
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        if npc.docking.is_some() || npc.goal == Goal::Drift {
+        if fire::quiet(npc) {
             return Trigger::default();
         }
         fire::trigger(npc, around, self.fire)

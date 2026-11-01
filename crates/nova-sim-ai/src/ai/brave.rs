@@ -138,7 +138,12 @@ impl Behaviour for BraveTrader {
         self.decision(npc, around, chance).goal
     }
 
+    /// Its weapon pick, but nothing while it docks or drifts
+    /// ([`fire::quiet`]).
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+        if fire::quiet(npc) {
+            return Trigger::default();
+        }
         fire::trigger(npc, around, self.fire)
     }
 
@@ -652,6 +657,43 @@ mod tests {
                 .target,
             Some(n(2)),
             "by the other reading"
+        );
+    }
+
+    #[test]
+    fn a_brave_trader_docking_or_drifting_fires_nothing() {
+        // Subs 9 and 0xb end in `_AIEscortFireUnprovoked`, which returns
+        // for AI type 4 or below (@0x80e59-0x80e61); sub 0xf and the
+        // drift's sub 0 fire nothing.
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut npcs = provoked(0.0, -100.0);
+        npcs[0].goal = Goal::Attack(n(2));
+        npcs[0].armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                speed: 1000,
+                count: 20,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        npcs[0].docking = Some(Docking {
+            ship: n(2),
+            sub: DockSub::Close,
+        });
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        assert_eq!(
+            BraveTrader::default().trigger(&npcs[0], &around),
+            Trigger::default()
+        );
+        let mut drifting = npcs.clone();
+        drifting[0].docking = None;
+        drifting[0].goal = Goal::Drift;
+        let around = crate::ai::fixture::around(&sites, &drifting, &govts, (0.0, -5000.0), 0);
+        assert_eq!(
+            BraveTrader::default().trigger(&drifting[0], &around),
+            Trigger::default()
         );
     }
 

@@ -268,7 +268,12 @@ impl Behaviour for Interceptor {
         }
     }
 
+    /// Its weapon pick, but nothing while it docks or drifts
+    /// ([`fire::quiet`]).
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+        if fire::quiet(npc) {
+            return Trigger::default();
+        }
         fire::trigger(npc, around, self.fire)
     }
 
@@ -906,6 +911,45 @@ mod tests {
             ..short_of_ammo(police(), AmmoLeft::Dry, true)
         };
         assert_eq!(lone(waiting, &sites(), &[]).0, Goal::Idle);
+    }
+
+    #[test]
+    fn an_interceptor_docking_with_a_plunder_or_drifting_fires_nothing() {
+        // Subs 9 and 0xb end in `_AIEscortFireUnprovoked`, which returns
+        // for AI type 4 or below (@0x80e59-0x80e61); sub 0xf and the
+        // drift's sub 0 fire nothing.
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut hunter = police();
+        hunter.goal = Goal::Attack(P);
+        hunter.target = Some(P);
+        hunter.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                speed: 1000,
+                count: 20,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        for sub in [DockSub::Approach, DockSub::Close, DockSub::Dock] {
+            hunter.docking = Some(Docking { ship: P, sub });
+            let npcs = [hunter.clone()];
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            assert_eq!(
+                Interceptor::default().trigger(&npcs[0], &around),
+                Trigger::default(),
+                "{sub:?}"
+            );
+        }
+        hunter.docking = None;
+        hunter.goal = Goal::Drift;
+        let npcs = [hunter];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            Interceptor::default().trigger(&npcs[0], &around),
+            Trigger::default()
+        );
     }
 
     #[test]

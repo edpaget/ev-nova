@@ -77,7 +77,12 @@ impl Behaviour for WimpyTrader {
         self.decision(npc, around, chance).goal
     }
 
+    /// Its weapon pick, but nothing while it docks or drifts
+    /// ([`fire::quiet`]).
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+        if fire::quiet(npc) {
+            return Trigger::default();
+        }
         fire::trigger(npc, around, self.fire)
     }
 
@@ -266,6 +271,47 @@ mod tests {
         assert_eq!(
             WimpyTrader::default().trigger(&npcs[0], &around).only,
             Some(crate::catalog::WeaponId(130))
+        );
+    }
+
+    #[test]
+    fn a_wimpy_trader_docking_or_drifting_fires_nothing() {
+        // Subs 9 and 0xb end in `_AIEscortFireUnprovoked`, which returns
+        // for AI type 4 or below (@0x80e59-0x80e61); sub 0xf and the
+        // drift's sub 0 fire nothing.
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Flee(n(2));
+        trader.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                guidance: 4,
+                speed: 1000,
+                count: 20,
+                ..weapon(130)
+            }),
+            1,
+        )]);
+        trader.docking = Some(Docking {
+            ship: n(2),
+            sub: DockSub::Approach,
+        });
+        let npcs = [trader, ship(2, PIRATES, AiType::Warship, 0.0, 100.0)];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().trigger(&npcs[0], &around),
+            Trigger::default(),
+            "docking"
+        );
+        let mut drifting = npcs.clone();
+        drifting[0].docking = None;
+        drifting[0].goal = Goal::Drift;
+        let around = crate::ai::fixture::around(&sites, &drifting, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().trigger(&drifting[0], &around),
+            Trigger::default(),
+            "drifting"
         );
     }
 
