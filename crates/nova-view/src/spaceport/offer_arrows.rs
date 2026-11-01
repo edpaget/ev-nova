@@ -532,7 +532,7 @@ mod tests {
             assert_eq!(offers.take_choice(), None);
             if cancelled {
                 offers.cancel_pointer();
-                offers.tick_dialog(Duration::ZERO);
+                offers.tick(Duration::ZERO, false);
             } else {
                 offers.input(&left(false, at), &mut Vec::new());
             }
@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn the_venues_offer_ticks_its_dialog_under_tick_dialog() {
+    fn the_venues_offer_ticks_its_dialog_while_nothing_covers_it() {
         use crate::spaceport::offer::VenueOffers;
         let mut offers = VenueOffers::asking(crate::spaceport::offer::OfferTemplates {
             plain: Ok(fixture::stock_1016()),
@@ -556,7 +556,7 @@ mod tests {
         offers.open(prompt, Rc::new(MonoMetrics), ButtonStyle::STOCK);
         let at = item_at(offers.dialog().expect("open"), SCROLL_DOWN_ITEM);
         offers.input(&left(true, at), &mut Vec::new());
-        offers.tick_dialog(TICK);
+        offers.tick(TICK, false);
         assert_eq!(offset(offers.dialog().expect("open")), 2.0);
     }
 }

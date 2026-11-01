@@ -662,9 +662,6 @@ impl BarScreen {
     /// presses on its grid measured by the clock, and its ship movie's
     /// time base, unserviced.
     pub(crate) fn tick_covered(&mut self, dt: Duration) {
-        if let Some(offering) = &mut self.offering {
-            offering.take_unclaimed();
-        }
         if let Some(hire) = &mut self.hire {
             hire.tick_covered(dt);
         }
@@ -2196,51 +2193,25 @@ mod tests {
         assert_eq!(screen.take_offer_choice(), None, "once");
     }
 
-    /// An offer over the bar accepted by a click on its accept button, an
-    /// Escape held back by the click.
-    fn accepted_with_an_escape_queued() -> BarScreen {
-        let mut screen = offering();
-        screen.open_offer(prompt());
-        let accept = screen
-            .offer_dialog()
-            .and_then(OfferDialog::dialog)
-            .and_then(|dialog| dialog.item_bounds(1))
-            .expect("accept")
-            .center();
-        let left = |pressed| Input::PointerButton {
-            button: crate::input::MouseButton::Left,
-            pressed,
-            at: accept,
-        };
-        screen.input(&left(true));
-        screen.input(&key(Key::Escape, false));
-        screen.input(&left(false));
-        assert!(screen.offer_dialog().is_none(), "answered");
-        assert!(!screen.closed(), "the Escape waits for what shows next");
-        screen
-    }
-
-    /// The answer flushes only mouse events (@0xa2da2-0xa2dde), so the
-    /// Escape reaches the bar once the answer is taken and nothing shows
-    /// over it, on its next tick.
+    /// Wiring: the bar runs what the offer's answer left, an Escape
+    /// held back by the click that accepts, through its own input on its
+    /// next tick ([`VenueOffers::take_unclaimed`]). When it is dropped
+    /// instead is the offers' rule, pinned in `offer`.
     #[test]
     fn a_key_queued_after_the_offers_answer_reaches_the_bar_on_its_next_tick() {
-        let mut screen = accepted_with_an_escape_queued();
-        screen.tick(ms(0));
-        assert!(!screen.closed(), "not before the answer is taken");
-        assert!(screen.take_offer_choice().is_some());
-        screen.tick(ms(0));
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let click = crate::spaceport::offer::fixture::accept_click_holding(
+            screen.offer_dialog().expect("open"),
+            key(Key::Escape, false),
+        );
+        for input in &click {
+            screen.input(input);
+        }
+        assert!(screen.take_offer_choice().is_some(), "accepted");
+        assert!(!screen.closed(), "the Escape waits for the next tick");
+        screen.tick(Duration::ZERO);
         assert!(screen.closed());
-    }
-
-    /// A text the answer shows flushes it as it opens (@0x5ae67).
-    #[test]
-    fn a_key_queued_after_the_offers_answer_is_dropped_under_a_text() {
-        let mut screen = accepted_with_an_escape_queued();
-        assert!(screen.take_offer_choice().is_some());
-        screen.tick_covered(ms(0));
-        screen.tick(ms(0));
-        assert!(!screen.closed());
     }
 
     #[test]

@@ -932,11 +932,10 @@ impl VenueOffers {
 
     /// What the answered dialog's replay queued after the key that answered
     /// it, once its choice has been taken, and so acted on: the venue runs
-    /// it through its own input on its next tick while nothing covers it,
-    /// and drops it under the texts the answer shows, whose
-    /// `_ShowTextDialog` flushes it as it opens (@0x5ae67). The answer's own
-    /// `FlushEvents` flush only mouse events (@0xa2da2-0xa2dde). Nothing
-    /// while the choice waits to be taken.
+    /// it through its own input as its next tick begins, the answer's own
+    /// `FlushEvents` flushing only mouse events (@0xa2da2-0xa2dde). A tick
+    /// covered before then drops it ([`VenueOffers::tick`]). Nothing while
+    /// the choice waits to be taken.
     pub(crate) fn take_unclaimed(&mut self) -> Vec<Input> {
         if self.choice.is_some() {
             return Vec::new();
@@ -964,8 +963,16 @@ impl VenueOffers {
     /// other reading only while nothing does.
     /// The offer dialog open ticks too, its movie moving on, unless
     /// something covers it ([`VenueOffers::tick_dialog`]).
+    ///
+    /// Covered, it drops what the answer left once its choice has been
+    /// taken ([`VenueOffers::take_unclaimed`]): what covers the venue then
+    /// is a text the answer shows, or an info screen, and each flushes the
+    /// queue as it opens (`_ShowTextDialog` @0x5ae67, `_DoMissionInfoDialog`
+    /// @0x9e287, `_DoPlayerInfoDialog` @0x5a544).
     pub(crate) fn tick(&mut self, dt: Duration, covered: bool) {
-        if !covered {
+        if covered {
+            drop(self.take_unclaimed());
+        } else {
             self.tick_dialog(dt);
         }
         let covered = covered || self.dialog.is_some();
@@ -985,8 +992,9 @@ impl VenueOffers {
 
     /// Ticks the offer dialog, if it is open: its movie begins or moves
     /// on, and the keys pressed under a movie that ends can answer it, on
-    /// that tick. Its holder ticks it only while nothing covers it.
-    pub(crate) fn tick_dialog(&mut self, dt: Duration) {
+    /// that tick. [`VenueOffers::tick`] ticks it only while nothing covers
+    /// it.
+    fn tick_dialog(&mut self, dt: Duration) {
         if let Some(dialog) = &mut self.dialog {
             dialog.tick(dt);
             self.settle_dialog();
@@ -1121,6 +1129,26 @@ pub(crate) mod fixture {
             },
             movie: None,
         }
+    }
+
+    /// A click on `dialog`'s accept button (item 1) with `held` pressed
+    /// while the click is held: the press, `held` and the release, which
+    /// accepts and leaves `held` for what shows next.
+    pub(crate) fn accept_click_holding(
+        dialog: &super::OfferDialog,
+        held: crate::input::Input,
+    ) -> [crate::input::Input; 3] {
+        let at = dialog
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(super::ACCEPT_ITEM))
+            .expect("the accept button")
+            .center();
+        let left = |pressed| crate::input::Input::PointerButton {
+            button: crate::input::MouseButton::Left,
+            pressed,
+            at,
+        };
+        [left(true), held, left(false)]
     }
 }
 
@@ -2337,6 +2365,56 @@ mod tests {
         );
         offers.tick(TICK, false);
         assert_eq!(player.calls()[0], Call::Start("Offer.mov".to_owned()));
+    }
+
+    /// Offers whose dialog was accepted by a click on its accept button,
+    /// an Escape pressed while the click was held, the choice not taken.
+    fn accepted_with_an_escape_left() -> VenueOffers {
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        opened(&mut offers);
+        let click = fixture::accept_click_holding(offers.dialog().expect("open"), key(Key::Escape));
+        for input in &click {
+            offers.input(input, &mut Vec::new());
+        }
+        assert!(offers.dialog().is_none(), "accepted");
+        offers
+    }
+
+    /// The answer's `FlushEvents` flush only mouse events (@0xa2da2-0xa2dde),
+    /// so the Escape goes to the venue once the answer has been acted on.
+    #[test]
+    fn what_the_answer_left_goes_to_the_venue_once_its_choice_is_taken() {
+        let mut offers = accepted_with_an_escape_left();
+        assert_eq!(
+            offers.take_unclaimed(),
+            [],
+            "not before the choice is taken"
+        );
+        offers.tick(TICK, true);
+        assert!(offers.take_choice().is_some());
+        assert_eq!(
+            offers.take_unclaimed(),
+            [key(Key::Escape)],
+            "a cover before the answer was acted on drops nothing"
+        );
+        assert_eq!(offers.take_unclaimed(), [], "once");
+    }
+
+    /// A text the answer shows flushes the queue as it opens (@0x5ae67).
+    #[test]
+    fn a_tick_covered_once_the_choice_is_taken_drops_what_the_answer_left() {
+        let mut offers = accepted_with_an_escape_left();
+        assert!(offers.take_choice().is_some());
+        offers.tick(TICK, true);
+        assert_eq!(offers.take_unclaimed(), []);
+        let mut offers = accepted_with_an_escape_left();
+        assert!(offers.take_choice().is_some());
+        offers.tick(TICK, false);
+        assert_eq!(
+            offers.take_unclaimed(),
+            [key(Key::Escape)],
+            "an uncovered tick keeps it"
+        );
     }
 
     /// Answers `offers`' open dialog with `key`, taking the choice.

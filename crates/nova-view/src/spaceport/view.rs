@@ -2465,22 +2465,19 @@ impl SpaceportView {
         self.dispose_answered_offer();
         self.close_alerted_outfitter();
         let open_covered = self.mission_dialogs_open() || self.player_info.is_some();
-        // What the spaceport's offer's answer left reaches the spaceport,
-        // or goes with the flush of a text the answer shows (@0x5ae67).
+        // The spaceport's offer ticks, or, covered, drops what its answer
+        // left ([`VenueOffers::tick`]); what is still left then reaches the
+        // spaceport. Its timer never runs out: the spaceport asks once.
         let unclaimed = self
             .missioning
             .as_mut()
-            .map(|missioning| missioning.landing.take_unclaimed())
+            .map(|missioning| {
+                missioning.landing.tick(dt, open_covered);
+                missioning.landing.take_unclaimed()
+            })
             .unwrap_or_default();
-        if !open_covered {
-            for input in &unclaimed {
-                self.route_input(input);
-            }
-        }
-        if let Some(missioning) = &mut self.missioning
-            && !open_covered
-        {
-            missioning.landing.tick_dialog(dt);
+        for input in &unclaimed {
+            self.route_input(input);
         }
         if let Some(open) = &mut self.open {
             if open_covered {
