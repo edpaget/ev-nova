@@ -212,7 +212,7 @@ impl Traffic {
             return None;
         };
         let waiting = npc.ai_wait > 0 && !npc.count_wait();
-        if waiting || npc.jumping() || npc.docking.is_some() || no_bay.contains(&npc.id) {
+        if waiting || npc.jumping() || no_bay.contains(&npc.id) {
             return None;
         }
         let carrier = match ship {
@@ -353,6 +353,55 @@ mod tests {
             ship: crate::catalog::ShipId(128),
         };
         assert_eq!(traffic.departed(), [(fighter, docked)]);
+    }
+
+    #[test]
+    fn a_fighter_in_reach_docks_only_flying_intact_out_of_its_wait_and_off_a_jump() {
+        // The carrier dock is sub 8's (@0x87f0b-0x87fef), which a disabled
+        // ship's dispatch, its AI wait and the jump path never reach.
+        use crate::combat::hull::Condition;
+        use crate::traffic::npc::Mode;
+        let stays = |change: &dyn Fn(&mut Npc)| {
+            let mut traffic = Traffic::with_interval(1);
+            let (fighter, carrier) = docking(&mut traffic, 3, 8);
+            let npc = traffic.npcs_mut().iter_mut().find(|npc| npc.id == fighter);
+            change(npc.expect("there"));
+            let watch = Watch::default();
+            traffic.open_think(&watch, world(), &[], &mut NeverFires);
+            let left = traffic.think_run(&watch, world(), |_| true, &NoBay::new(), &mut NeverFires);
+            let _ = carrier;
+            left.is_empty()
+        };
+        assert!(!stays(&|_| {}), "it docks");
+        assert!(
+            stays(&|npc| npc.condition = Condition::Disabled),
+            "disabled"
+        );
+        assert!(
+            stays(&|npc| npc.mode = Mode::Coasting { ticks_left: 5 }),
+            "coasting"
+        );
+        assert!(stays(&|npc| npc.ai_wait = 5), "in its wait");
+        let on_a_jump = |npc: &mut Npc| {
+            npc.class_fuel = 300;
+            npc.leader = Some(NpcId(0));
+            npc.follow_leaders_jump(ShipRef::Npc(NpcId(0)));
+        };
+        assert!(stays(&on_a_jump), "on its leader's jump");
+    }
+
+    #[test]
+    fn a_gate_entrant_whose_high_level_waits_does_not_enter_at_its_slot() {
+        // While +0x4c is above 0 the high level returns at once
+        // (@0x8d4b9-0x8d4d2), before goal 0x14's block.
+        let sites = gate_sites();
+        let mut traffic = Traffic::with_interval(1);
+        let lead = entrant(&mut traffic);
+        let npc = traffic.npcs_mut().iter_mut().find(|npc| npc.id == lead);
+        npc.expect("there").ai_wait = 5;
+        traffic.think_holding(&Reads::of(lead), World::new(&sites), &[], &mut NeverFires);
+        let mode = of(&traffic, lead).expect("there").mode;
+        assert_eq!(mode, crate::traffic::npc::Mode::Flying);
     }
 
     #[test]

@@ -990,6 +990,9 @@ mod tests {
         };
         assert_eq!(flown(1, true), flown(1, false), "below it: as it was");
         assert_ne!(flown(4, true), flown(4, false), "above it: gone");
+        // A ship in its own slot came after it left, as a launch into the
+        // freed slot does: gone.
+        assert_ne!(flown(3, true), flown(3, false), "its slot's new ship");
     }
 
     #[test]

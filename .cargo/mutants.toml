@@ -644,6 +644,10 @@ exclude_re = [
     # A berth holds one ship, so a fighter just put in the system never
     # shares its carrier's: `>` and `>=` pick the same fighters above it.
     "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",
+    # A follower never shares its leader's berth: a berth holds one ship,
+    # and a ship that takes a leader's freed berth this tick is not led by
+    # it, so `<` and `<=` pick the same view of the leader.
+    "nova-sim-ai/src/traffic/fly_pass\\.rs:.*replace < with <= in FlyPass::leaders_for$",
     # The fold steps only with a direction (`fold.dir == 0` is the other
     # arm), so its tests of `dir > 0` and `dir < 0` read the same as
     # `>= 0` and `<= 0` there.
