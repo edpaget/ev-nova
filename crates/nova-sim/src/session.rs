@@ -458,6 +458,7 @@ mod carrier_lead;
 mod chart;
 mod chart_ownership;
 mod class_orders;
+mod class_table;
 mod clearance;
 mod cloaks;
 mod collision_order;
@@ -1334,6 +1335,9 @@ impl Session {
             port: Port::new(player.position),
             run: MissionRun::new(),
         };
+        // `_LoadPilotData` reads the class table back (@0x760c2-0x760ea;
+        // see the `class_table` module).
+        session.space.seed_class_orders(&session.pilot);
         session.run.register_offer_roll();
         session.run.register_nebulae(&session.statics);
         session.run.register_slots(&session.pilot);

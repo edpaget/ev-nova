@@ -201,9 +201,10 @@ pub(super) struct KeptEscort {
     /// (see the `voices` module).
     pub(super) voice: Option<crate::voice::VoiceVariant>,
     /// Its order word ([`Npc::order_word`]), which `_RespawnEscort` never
-    /// writes (+0xc90a, @0x3d4b8-0x3d62c); none with no NPC, and it holds
-    /// its record's order, which stands in for the class table
-    /// `_LoadPilotData` writes it from (@0x76102-0x7613b).
+    /// writes (+0xc90a, @0x3d4b8-0x3d62c); none with no NPC, and it takes
+    /// its class's word from the pilot's saved class table, raw, as
+    /// `_LoadPilotData` writes it (@0x760ec-0x76147; see the
+    /// `class_table` module).
     pub(super) order_word: Option<OrderWord>,
     /// Its weapons and rounds, each weapon entry's count, rounds and reload
     /// as its slot held them: kept whole with no restock, and only the
@@ -247,14 +248,10 @@ impl Session {
         // Every ship marked is gone with the system left (see the
         // `class_orders` module).
         self.space.escorts.commanded.clear();
-        // Read before the reset: `_LoadPilotData` writes each word (see
-        // [`KeptEscort::order_word`]) before the reset comes.
-        let recorded: Vec<Option<EscortOrder>> = self
-            .pilot
-            .escorts
-            .iter()
-            .map(|escort| escort.order)
-            .collect();
+        // The reset leaves the pilot's copy of the class table, which an
+        // escort with no NPC takes its word from (see
+        // [`KeptEscort::order_word`]): in the original the next pass's
+        // loop 2 clears it, before any save (see the `class_table` module).
         let reset = self.setup.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine;
         if reset {
             for escort in &mut self.pilot.escorts {
@@ -283,7 +280,9 @@ impl Session {
                     .map(|npc| self.ship.loaded_escort_set(&self.setup, &npc.hull.frames));
                 if let Some(npc) = self.space.npc_mut(id) {
                     npc.aux = kept.aux;
-                    npc.order_word = kept.order_word.unwrap_or(OrderWord::of(recorded[index]));
+                    npc.order_word = kept
+                        .order_word
+                        .unwrap_or_else(|| super::class_table::table_word(&self.pilot, npc.class));
                     npc.ion = Ion::default();
                     npc.cloak = kept.cloak;
                     // `_RespawnEscort` clears its glow (@0x3d505).
@@ -870,8 +869,7 @@ impl Session {
             let placed = self.space.escorts.fleet.get(index).copied().flatten();
             let npc = placed.and_then(|id| self.space.npc(id));
             let word = npc.map_or(OrderWord::of(held), |npc| npc.order_word);
-            let taken = word_change(word, command, carried);
-            // A record with no ship counts as marked, and keeps a Return.
+            let taken = word_change(word, command, carried); // A record with no ship counts as marked, and keeps a Return.
             let keeps_mark = taken.marks || npc.is_none_or(|npc| self.space.marked(npc));
             let order = standing(command, carried, keeps_mark);
             self.pilot.escorts[index].order = order;
@@ -897,6 +895,7 @@ impl Session {
                 *kept = command.order();
             }
         }
+        super::class_table::record_command(&mut self.pilot, group, command);
         let mission_escorts: Vec<NpcId> = self
             .player_led()
             .filter(|npc| npc.mission_escort() && group.holds(npc.class))
@@ -3107,7 +3106,16 @@ pub(super) mod tests {
             session.command_escorts(fighters, EscortCommand::Defend, &mut NeverFires),
             None
         );
-        assert_eq!(session.pilot(), &before, "no fighters: nothing changes");
+        // The class's entry takes the command whatever the ships do
+        // (@0x6e23e-0x6e26b; see the `class_table` module).
+        assert_eq!(
+            session.pilot(),
+            &Pilot {
+                class_orders: [OrderWord(1), OrderWord(4), OrderWord(4), OrderWord(4)],
+                ..before
+            },
+            "no fighters: nothing else changes"
+        );
     }
 
     #[test]

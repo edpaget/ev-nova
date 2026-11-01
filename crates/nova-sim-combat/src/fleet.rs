@@ -101,11 +101,12 @@ pub enum EscortOrder {
 /// its last think or the player's last command wrote (see
 /// `nova_sim_ai::ai::escort::think_word`, `nova_sim`'s `command_word`
 /// module): 1 Defend, 2 Attack, 3 Return, 4 Hold, 0 formation. A fleet's
-/// placement on an entry keeps the word the ship held, or its record's
-/// order with no ship (see `nova_sim`'s `escorts` module). Kept raw, as a
-/// stray beam of `ExitType` 6 steps it as a cursor, and a command and a
-/// think's validity step tell -1 from 0. Never saved. Held by
-/// `nova_sim_ai`'s `Npc::order_word`.
+/// placement on an entry keeps the word the ship held, or with no ship
+/// its class's word in the pilot's saved class table, raw (see `nova_sim`'s
+/// `escorts` and `class_table` modules). Kept raw, as a stray beam of
+/// `ExitType` 6 steps it as a cursor, and a command and a think's validity
+/// step tell -1 from 0. An NPC's word is never saved, but the class table
+/// is, in the same words. Held by `nova_sim_ai`'s `Npc::order_word`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderWord(pub i16);
 

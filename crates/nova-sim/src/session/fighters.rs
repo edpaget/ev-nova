@@ -901,6 +901,14 @@ pub(super) mod tests {
         pilot
     }
 
+    /// `pilot` as saved after flying with its escorts' orders: its class
+    /// table the raw words `table`, in class order, which its escorts
+    /// take as they are placed (see the `class_table` module).
+    pub(in crate::session) fn flown(mut pilot: Pilot, table: [i16; 4]) -> Pilot {
+        pilot.class_orders = table.map(crate::fleet::OrderWord);
+        pilot
+    }
+
     /// `pilot`'s session by `launch`, the bay selected, its first traffic
     /// tick done.
     fn flying(catalog: &FakePilotCatalog, pilot: Pilot, launch: RuleSource) -> Session {
@@ -1971,7 +1979,9 @@ pub(super) mod tests {
             None,
             "nothing changed"
         );
-        let mut session = fleet(&catalog, 0, vec![warship(None), out()]);
+        // Saved after flying in formation, each word 0.
+        let saved = flown(pilot(&catalog, 0, vec![warship(None), out()]), [0; 4]);
+        let mut session = flying_by(&catalog, saved, kept_orders());
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires),
             Some(Commanded {

@@ -2,7 +2,10 @@
 //! Nova.app`'s `EV Nova`): the order kept for each escort class
 //! ([`Escorts::class_orders`](super::space::Escorts), the original's
 //! table at 0x3b5394) is cleared in flight once no ship of the class can
-//! hold it ([`Space::settle_class_orders`]).
+//! hold it ([`Space::settle_class_orders`]). The pilot keeps the table's
+//! raw words for the save, written by each command and at the end of each
+//! pass, and a load seeds the table from them (see the
+//! [`class_table`](super::class_table) module).
 //!
 //! **The mark.** A ship of the player's that takes a command differing from
 //! its order word is marked ([`Escorts::commanded`](super::space::Escorts),
@@ -130,6 +133,9 @@ impl Space {
         for &class in &cleared {
             self.send_class_to_formation(pilot, statics, class);
         }
+        // The table as the pass leaves it, for the save (see the
+        // `class_table` module).
+        self.record_class_orders(pilot);
         !cleared.is_empty()
     }
 
@@ -190,7 +196,7 @@ mod tests {
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Session;
     use crate::session::fighters::tests::{
-        carrying, fleet_npcs, flying_by, launch, out, pilot, warship,
+        carrying, fleet_npcs, flown, flying_by, launch, out, pilot, warship,
     };
     use crate::testkit::{FakePilotCatalog, work};
     use crate::traffic::npc::NpcId;
@@ -200,6 +206,18 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, escorts: Vec<Escort>, source: RuleSource) -> Session {
         let rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
         flying_by(catalog, pilot(catalog, 2, escorts), rules)
+    }
+
+    /// [`flying`], the pilot saved with the class table `table` (see
+    /// [`flown`]).
+    fn flying_saved(
+        catalog: &FakePilotCatalog,
+        escorts: Vec<Escort>,
+        table: [i16; 4],
+        source: RuleSource,
+    ) -> Session {
+        let rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+        flying_by(catalog, flown(pilot(catalog, 2, escorts), table), rules)
     }
 
     /// The fleet's NPCs' numbers, in fleet order.
@@ -231,10 +249,11 @@ mod tests {
     #[test]
     fn an_escort_given_the_order_it_holds_is_not_marked() {
         let catalog = carrying();
-        let mut session = flying(
+        let mut session = flying_saved(
             &catalog,
             vec![warship(Some(EscortOrder::Hold))],
-            RuleSource::Bible,
+            [0, 0, 4, 0],
+            RuleSource::Engine,
         );
         command(&mut session, EscortGroup::All, EscortCommand::Hold);
         assert_eq!(marked(&session), BTreeSet::new());
@@ -256,7 +275,8 @@ mod tests {
             order: Some(EscortOrder::Dock),
             ..out()
         };
-        let mut session = flying(&catalog, vec![returning], RuleSource::Bible);
+        // By the engine, so no mark from a kept order is set on entry.
+        let mut session = flying_saved(&catalog, vec![returning], [3, 0, 0, 0], RuleSource::Engine);
         command(&mut session, EscortGroup::All, EscortCommand::Dock);
         assert_eq!(marked(&session), BTreeSet::new());
         command(&mut session, EscortGroup::All, EscortCommand::Hold);

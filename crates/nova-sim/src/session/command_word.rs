@@ -464,15 +464,14 @@ mod tests {
     }
 
     #[test]
-    fn a_loaded_pilots_first_placement_holds_its_records_order_by_either_reading() {
-        // `_LoadPilotData` writes the table raw (@0x76102-0x7613b), which
-        // the record stands in for; the engine's reset comes after it.
+    fn a_loaded_pilots_first_placement_keeps_its_records_order_by_the_other_reading_only() {
+        // Its word is the saved table's (see the `class_table` module);
+        // the engine's reset clears the standing order.
         let attack = Some(EscortOrder::Attack);
         for (source, kept) in [(RuleSource::Engine, None), (RuleSource::Bible, attack)] {
             let catalog = carrying();
             let rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
             let session = flying_by(&catalog, pilot(&catalog, 0, vec![warship(attack)]), rules);
-            assert_eq!(word(&session, 0), OrderWord(2), "{source:?}");
             assert_eq!(order_of(&session, 0), [kept, kept], "{source:?}");
         }
     }
