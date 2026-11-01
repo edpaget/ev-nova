@@ -48,7 +48,12 @@
 //!
 //! An escape pod's wait runs at its own slot's turn too (`_AIDispatch`
 //! @0x8fb62-0x8fbba), so its slot is free to the slots after it that
-//! frame, and not to those before (`Traffic::think_run`).
+//! frame, and not to those before (`Traffic::think_run`). So do a ship's
+//! own jump-out (@0x859b8) and a fighter's dock (@0x80404), the low
+//! level's leaves (see the traffic's `dispatch_leave`): the slot is free
+//! to a higher carrier's launch that frame, and a docked fighter goes
+//! aboard at its slot ([`Session::dock_fighter`]), so a carrier above it
+//! launches the round.
 
 use std::collections::BTreeSet;
 
@@ -68,7 +73,10 @@ impl Session {
     /// refuel it gave landed, its point defence and launches
     /// ([`Combat::defend_npcs`](crate::combat::Combat::defend_npcs)) and
     /// its fighters put in the system at once
-    /// ([`Session::launch_fighters`]), and its work on the line settled
+    /// ([`Session::launch_fighters`]), a fighter that docked in its run
+    /// taken aboard first ([`Session::dock_fighter`]; one with no bay
+    /// stays out, [`Session::fighters_staying_out`], asked as the loop
+    /// begins), and its work on the line settled
     /// ([`Session::settle_line_through`]): its calls, its scan, its
     /// plunder of the player and its refuel note, as the original says
     /// each inside its own `_AIDispatch`, so a higher slot's think reads
@@ -93,10 +101,9 @@ impl Session {
     ///   order ([`Space::answer_voice_cues`](super::Space::answer_voice_cues)).
     ///   They speak on the voice channel and raise no line, so no slot's
     ///   call reads them.
-    /// - What the fly half settles (a dock, a jump-out, the boarded flag, a
-    ///   gate entrant's followers), a lag across a drawn frame for a
-    ///   higher slot, filed in
-    ///   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6.
+    /// - What the fly half settles (the boarded flag, a gate entrant's
+    ///   followers), a lag across a drawn frame for a higher slot, filed
+    ///   in rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6.
     ///
     /// The head of each ship's dispatch (its warp cancel, its jump's
     /// cancels, a leader's orders, the regroup draws and the disabled
@@ -113,6 +120,8 @@ impl Session {
         let by_slot = self.setup.rules.source_for(RuleKey::LaunchFrameAi) == RuleSource::Engine;
         let mut after: Option<u32> = None;
         let mut launched: BTreeSet<NpcId> = BTreeSet::new();
+        // No bay comes or goes in the loop (see the `fighter_homes` module).
+        let no_bay = self.fighters_staying_out();
         loop {
             let through = if by_slot {
                 self.space.traffic.next_slot_after(after)
@@ -124,9 +133,15 @@ impl Session {
                     && through.is_none_or(|through| npc.berth <= through)
                     && (thought || launched.contains(&npc.id))
             };
-            self.step_traffic(|traffic, world| {
-                traffic.think_run(behaviour, world, in_run, chance);
+            let left = self.step_traffic(|traffic, world| {
+                traffic.think_run(behaviour, world, in_run, &no_bay, chance)
             });
+            // A fighter that docked at its slot goes aboard there
+            // (`_AIAddFighterToParent` @0x803e6), so a carrier above it
+            // launches the round.
+            for (id, outcome) in left {
+                self.dock_fighter(id, outcome);
+            }
             // The fuel a refueller gave, so the next slot reads the tank
             // it left.
             self.space.take_refuel(&mut self.pilot);
@@ -1190,5 +1205,114 @@ mod tests {
         game_pass(&mut session, &catalog, &Order::of(carrier));
         assert_eq!(vipers(&session).len(), 1, "it launched");
         assert_eq!(vipers(&session)[0].berth, 3);
+    }
+
+    // The low level's leaves at their slot (the traffic's
+    // `dispatch_leave`).
+
+    /// A Viper at `berth` docking with `carrier`, at its side within its
+    /// reach.
+    fn docking_viper(session: &mut Session, berth: u32, carrier: NpcId) -> NpcId {
+        let at = session.space.npc(carrier).expect("there").state.position;
+        let mut fighter = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        fighter.ship = VIPER;
+        fighter.state.position = at + Vec2::new(10.0, 0.0);
+        fighter.goal = Goal::Dock(ShipRef::Npc(carrier));
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(carrier),
+            window: 100.0,
+            reach: 60.0,
+        });
+        session.space.traffic.add_npc_at(fighter, berth)
+    }
+
+    /// A ship at `berth` on the last pass of its own warp out.
+    fn jumping_out(session: &mut Session, berth: u32) -> NpcId {
+        let mut runner = bystander();
+        runner.state.position = Vec2::new(-2000.0, 0.0);
+        runner.goal = Goal::JumpOut;
+        runner.begin_own_jump();
+        runner.warp.stage = 3.0;
+        runner.warp.since = 100_000;
+        session.space.traffic.add_npc_at(runner, berth)
+    }
+
+    /// [`raid`]'s carrier at slot 5 at the cap, every slot below the
+    /// reserve taken but 3, which `leaver` takes: the session, the carrier
+    /// and the leaver.
+    fn at_the_cap_with(
+        catalog: &FakePilotCatalog,
+        leaver: impl FnOnce(&mut Session, NpcId) -> NpcId,
+    ) -> (Session, NpcId, NpcId) {
+        let (mut session, carrier, _) = raid(catalog, RuleSource::Engine, 5);
+        fill(
+            &mut session,
+            (1..=55).filter(|&berth| ![3, 5, 20].contains(&berth)),
+        );
+        let leaver = leaver(&mut session, carrier);
+        (session, carrier, leaver)
+    }
+
+    /// Whether `carrier` was heard launching among `events`.
+    fn launched_from(events: &[CombatEvent], carrier: NpcId) -> bool {
+        firing(events, BAY).contains(&ShipRef::Npc(carrier))
+    }
+
+    #[test]
+    fn at_the_cap_a_slot_a_lower_fighters_dock_frees_is_free_to_a_higher_carriers_launch_that_tick()
+    {
+        // `_AIAddFighterToParent` frees slot 3 at its own `_AIDispatch`
+        // (@0x80404), before slot 5's `_GenericRandomShipSpawn` rereads it
+        // (@0x3c8c6-0x3c8e9).
+        let catalog = catalog();
+        let (mut session, carrier, fighter) = at_the_cap_with(&catalog, |session, carrier| {
+            docking_viper(session, 3, carrier)
+        });
+        game_pass(&mut session, &catalog, &Order::of(carrier));
+        assert!(session.space.npc(fighter).is_none(), "aboard");
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1, "it launched");
+        assert_eq!(launched[0].berth, 3);
+        assert!(launched_from(&session.take_combat_events(), carrier));
+    }
+
+    #[test]
+    fn at_the_cap_a_slot_a_lower_ships_jump_out_frees_is_free_to_a_higher_carriers_launch_that_tick()
+     {
+        // Sub 4 frees slot 3 at its own `_AIDispatch` (@0x859b8).
+        let catalog = catalog();
+        let (mut session, carrier, runner) =
+            at_the_cap_with(&catalog, |session, _| jumping_out(session, 3));
+        game_pass(&mut session, &catalog, &Order::of(carrier));
+        assert!(session.space.npc(runner).is_none(), "jumped out");
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1, "it launched");
+        assert_eq!(launched[0].berth, 3);
+        assert!(launched_from(&session.take_combat_events(), carrier));
+    }
+
+    #[test]
+    fn a_fighter_docking_below_its_carrier_restocks_the_bay_its_carrier_launches_from_that_tick() {
+        // The bay's count goes up at the fighter's slot (@0x803e6), so the
+        // carrier above it, holding one round in a bay of `Reload` 0,
+        // finds a second for the snipe's launch after its goal-4 one
+        // (@0x8732f). (A bay at 0 has its reload raised by the dock,
+        // @0x803a4-0x803c0, and launches nothing that tick in either
+        // order.)
+        let catalog = catalog();
+        let (mut session, carrier, _) = raid(&catalog, RuleSource::Engine, 5);
+        let npc = session.space.npc_mut(carrier).expect("there");
+        npc.armament = Armament::new([(WeaponSpec::new(&WeaponRecord { reload: 0, ..bay() }), 1)]);
+        npc.rounds = LauncherRounds::from([(BAY, 1)]);
+        let fighter = docking_viper(&mut session, 3, carrier);
+        let script = Scripted {
+            carrier,
+            twice: true,
+            defenders: Vec::new(),
+            fighter: Trigger::default(),
+        };
+        game_pass(&mut session, &catalog, &script);
+        assert!(session.space.npc(fighter).is_none(), "aboard");
+        assert_eq!(vipers(&session).len(), 2, "both rounds launched");
     }
 }

@@ -609,10 +609,11 @@ pub fn settle(
 }
 
 /// Flies `npc` one pass of its jump, the advance pass when `think`, among
-/// `leaders`, in `world` at `speeds`: goal 0xb's check and its low level,
-/// sub-goal 4 or 0xd ([`follow_check`], [`own_jump`], [`follow_jump`]) on
-/// the advance pass, then its flight ([`fly`]) and its warp-out
-/// ([`warp_block`]). None when it is not jumping, or follows a leader not
+/// `leaders`, in `world` at `speeds`: goal 0xb's check and its low level's
+/// sub-goal 0xd ([`follow_check`], [`follow_jump`]) on the advance pass,
+/// then its flight ([`fly`]) and its warp-out ([`warp_block`]). Sub-goal
+/// 4's step ([`own_jump`]) runs at the ship's slot of the AI loop, before
+/// this (the traffic's `dispatch_leave`). None when it is not jumping, or follows a leader not
 /// yet in its warp stage: the autopilot flies it as its goal says. It
 /// takes no thrust, so its top speed plays no part.
 ///
@@ -686,11 +687,9 @@ pub fn fly_jump(
                     }
                 }
             }
-            WarpGoal::Own => {
-                if npc.jumping() && own_jump(npc, world.warp.duration()) {
-                    return Some(Outcome::JumpedOut);
-                }
-            }
+            // Sub 4's step ran at its slot of the AI loop
+            // (`dispatch_leave`); its flight is all that is left.
+            WarpGoal::Own => {}
         }
     } else if leader.is_some_and(|(_, leader)| leader.stage <= 1.0) {
         return None;
@@ -1540,18 +1539,23 @@ mod tests {
     }
 
     #[test]
-    fn its_own_jump_departs_on_the_advance_pass_alone() {
+    fn its_own_jumps_flight_departs_it_on_neither_pass() {
+        // Sub 4's step, and its departure, are the AI loop's, on the
+        // advance pass alone (the traffic's `dispatch_leave`); here it only
+        // flies.
         let views = BTreeMap::new();
         let world = in_world(world());
+        for think in [false, true] {
+            let mut ship = warping(3.0, 1000);
+            assert_eq!(
+                fly_jump_by(&mut ship, &views, &world, think),
+                Some(Outcome::Flying),
+                "{think}"
+            );
+            assert_eq!(ship.warp.stage, 3.0, "{think}: no step");
+        }
         let mut ship = warping(3.0, 1000);
-        assert_eq!(
-            fly_jump_by(&mut ship, &views, &world, false),
-            Some(Outcome::Flying)
-        );
-        assert_eq!(
-            fly_jump_by(&mut ship, &views, &world, true),
-            Some(Outcome::JumpedOut)
-        );
+        assert!(own_jump(&mut ship, world.warp.duration()), "its step's");
     }
 
     #[test]

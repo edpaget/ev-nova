@@ -483,7 +483,13 @@ mod tests {
         };
         let mut chance = Draws::of(&[]);
         traffic.open_think(&sniping, world, &[], &mut chance);
-        traffic.think_run(&sniping, world, |_| true, &mut chance);
+        traffic.think_run(
+            &sniping,
+            world,
+            |_| true,
+            &crate::traffic::NoBay::new(),
+            &mut chance,
+        );
         traffic.close_think();
         let triggers = traffic.npcs().iter().map(|npc| npc.trigger).collect();
         (sniping.0.into_inner(), triggers)

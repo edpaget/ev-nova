@@ -30,8 +30,8 @@
 //! thinks are the last that can read them; a ship pass with no decisions
 //! before it, double
 //! time's second ([`Traffic::move_in`](crate::traffic::Traffic::move_in)),
-//! forgets those freed in a ship pass or after one, as its `_HandleShip`
-//! clears every target that names them.
+//! forgets those freed in a ship pass or after one, all that are left by
+//! then, as its `_HandleShip` clears every target that names them.
 //!
 //! **The let-go** ([`Traffic::let_go_at_step`]) is `_HandleShip`'s test, at
 //! each ship's own turn of the ship loop (`nova_sim::Session::ship_loop`),
@@ -43,17 +43,12 @@
 //! deadly stellar ([`Traffic::remove_killed`]) is read by every other slot
 //! in that next think.
 //!
-//! **A departure in the AI loop** is read one tick late: the original frees
-//! a jump-out in the low level, in the same frame's AI loop, so a later slot
-//! reads it on that frame, where the engine flies after the decisions and
-//! reads it on the next tick (filed in
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
-//! Two things stand in for moving the departure there, and that phase
-//! retires them. An earlier slot lets go as the ship leaves
-//! ([`Traffic::left_the_system`]), as its turn of the engine's loop has
-//! passed. A later slot lets go at its step, but is noted on the record
-//! ([`GoneShip::let_go`]), so the think that stands for that frame's still
-//! reads the slot.
+//! **A departure in the AI loop** (a jump-out, a fighter's dock) leaves at
+//! the ship's own slot of that loop, as the original's low level frees it
+//! there (see the traffic's `dispatch_leave`): the later slots' thinks read
+//! it on that frame, and every slot's `_HandleShip`, an earlier one's too,
+//! lets go of it at its step, before its fire. The loop's close forgets the
+//! record, as every holder has let go by the next frame.
 //!
 //! **A slot taken again** ([`Traffic::slot_taken`]) leaves every other
 //! ship's +0x70 as it was, so a ship still holding the slot finds it active
@@ -124,27 +119,18 @@ pub struct GoneShip {
     pub ship: Npc,
     /// Where its slot was freed.
     pub freed: Freed,
-    /// The ships that let go of it at their step
-    /// ([`Traffic::let_go_at_step`]) though their think still reads it:
-    /// see [`Freed::InDispatch`]. The engine flies a departure in the ship
-    /// loop, where the original frees it in the AI loop, so the think that
-    /// stands for that frame's comes after those ships' step, not before
-    /// it. Moving the departure into the AI loop retires this
-    /// (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
-    pub let_go: Vec<NpcId>,
 }
 
 impl GoneShip {
     /// Whether `reader`'s think still finds this slot in its target
     /// (+0x70), no slot test having cleared it by then: its target names
-    /// the ship, or it let go at a step that comes after that think in the
-    /// engine ([`GoneShip::let_go`]); and its slot comes after the gone
-    /// one's when that was freed in the AI loop ([`Freed::InDispatch`]),
-    /// before it when in the ship loop ([`Freed::InShipPass`]), and is any
-    /// other when after it ([`Freed::AfterShipLoop`]).
+    /// the ship, and its slot comes after the gone one's when that was
+    /// freed in the AI loop ([`Freed::InDispatch`]), before it when in the
+    /// ship loop ([`Freed::InShipPass`]), and is any other when after it
+    /// ([`Freed::AfterShipLoop`]).
     #[must_use]
     pub fn held_by(&self, reader: &Npc) -> bool {
-        (reader.target == Some(ShipRef::Npc(self.ship.id)) || self.let_go.contains(&reader.id))
+        reader.target == Some(ShipRef::Npc(self.ship.id))
             && match self.freed {
                 Freed::InDispatch => reader.berth > self.ship.berth,
                 Freed::InShipPass => reader.berth < self.ship.berth,
@@ -161,30 +147,15 @@ pub struct GoneShips(Vec<GoneShip>);
 impl GoneShips {
     /// Records `ship`, its slot freed as `freed` says.
     pub fn record(&mut self, ship: Npc, freed: Freed) {
-        self.0.push(GoneShip {
-            ship,
-            freed,
-            let_go: Vec::new(),
-        });
+        self.0.push(GoneShip { ship, freed });
     }
 
     /// A ship pass with no decisions before it runs `_HandleShip` for
-    /// every slot, clearing each target that names a slot freed before it
-    /// in a ship pass or after one. One freed in the AI loop stands for a
-    /// read the original made on that frame, before the pass, so it is
-    /// kept for the next think (see the module docs).
+    /// every slot, clearing each target that names a slot freed before it,
+    /// in a ship pass or after one. None freed in the AI loop is left by
+    /// then: the loop's close forgot them (see the module docs).
     pub fn ship_pass(&mut self) {
-        self.0.retain(|gone| gone.freed == Freed::InDispatch);
-    }
-
-    /// Notes on every record freed in the AI loop that `reader` holds that
-    /// it let go at its step ([`GoneShip::let_go`]).
-    fn note_let_go(&mut self, reader: &Npc) {
-        for gone in &mut self.0 {
-            if gone.freed == Freed::InDispatch && gone.held_by(reader) {
-                gone.let_go.push(reader.id);
-            }
-        }
+        self.0.clear();
     }
 
     /// Forgets every ship recorded: a think's close, whose runs are the
@@ -218,11 +189,10 @@ impl Traffic {
     /// so one destroyed at its display is inactive though the take-out
     /// comes later; one left behind by a move ([`Leave::Held`](super::Leave::Held))
     /// for a ship in a lower slot, as its own display frees it; anything
-    /// else is inactive.
-    ///
-    /// A ship still holding a record freed in the AI loop is noted on it
-    /// ([`GoneShip::let_go`]), so the think that stands for that frame's
-    /// still reads it. Nothing happens for an NPC not in the system.
+    /// else is inactive. A ship that left at its slot of the AI loop is out
+    /// of the system, so every slot, an earlier one too, lets go of it at
+    /// its step, before its fire. Nothing happens for an NPC not in the
+    /// system.
     pub fn let_go_at_step(&mut self, id: NpcId, player_active: bool) {
         let Some(at) = self.npcs.iter().position(|npc| npc.id == id) else {
             return;
@@ -234,7 +204,6 @@ impl Traffic {
             Some(ShipRef::Npc(ship)) => self.slot_active(ship, reader.berth),
         };
         if !active {
-            self.gone.note_let_go(reader);
             self.npcs[at].target = None;
         }
     }
@@ -252,22 +221,8 @@ impl Traffic {
         }
     }
 
-    /// `ship`, flown out of the system as `freed` says, is recorded. One
-    /// freed in the AI loop ([`Freed::InDispatch`]) lets go of every ship in
-    /// a lower slot at once, standing for the `_HandleShip` the original
-    /// runs after that loop (@0x33865-0x33888): their turn of the engine's
-    /// ship loop has passed. Moving the departure into the AI loop retires
-    /// this sweep
-    /// (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-9-slot-order-left-out-of-phase-6).
+    /// `ship`, gone out of the system as `freed` says, is recorded.
     pub(super) fn left_the_system(&mut self, ship: Npc, freed: Freed) {
-        if freed == Freed::InDispatch {
-            let aim = Some(ShipRef::Npc(ship.id));
-            for npc in &mut self.npcs {
-                if npc.berth < ship.berth && npc.target == aim {
-                    npc.target = None;
-                }
-            }
-        }
         self.gone.record(ship, freed);
     }
 
@@ -339,7 +294,6 @@ mod tests {
         let gone = |freed| GoneShip {
             ship: at_berth(2, 5),
             freed,
-            let_go: Vec::new(),
         };
         let on_it = Some(ShipRef::Npc(NpcId(2)));
         let dispatch = gone(Freed::InDispatch);
@@ -365,34 +319,12 @@ mod tests {
         let gone = GoneShip {
             ship: at_berth(2, 5),
             freed: Freed::AfterShipLoop,
-            let_go: Vec::new(),
         };
         let on_it = Some(ShipRef::Npc(NpcId(2)));
         assert!(gone.held_by(&reader(4, on_it)));
         assert!(gone.held_by(&reader(6, on_it)));
         assert!(!gone.held_by(&reader(5, on_it)), "its own slot");
         assert!(!gone.held_by(&reader(6, None)));
-    }
-
-    #[test]
-    fn a_ship_that_let_go_of_a_slot_freed_in_the_ai_loop_still_reads_it_from_a_later_slot() {
-        // The think that stands for the frame's dispatch comes after the
-        // ship's step, which let go (see `GoneShip::let_go`).
-        let holder = reader(6, None);
-        let gone = |freed| GoneShip {
-            ship: at_berth(2, 5),
-            freed,
-            let_go: vec![holder.id],
-        };
-        assert!(gone(Freed::InDispatch).held_by(&holder));
-        let earlier = reader(4, None);
-        assert!(!gone(Freed::InDispatch).held_by(&earlier), "its slot");
-        assert!(!gone(Freed::InShipPass).held_by(&holder), "its step ran");
-        let other = Npc {
-            id: NpcId(10),
-            ..reader(6, None)
-        };
-        assert!(!gone(Freed::InDispatch).held_by(&other), "it never held it");
     }
 
     #[test]
@@ -424,24 +356,18 @@ mod tests {
 
     #[test]
     fn a_thinks_close_forgets_every_gone_ship_and_a_lone_ship_pass_forgets_those_it_clears() {
+        // A record freed in the AI loop is gone by the loop's close, before
+        // any ship pass, so a ship pass finds only those freed in a ship
+        // pass or after one.
         let mut gone = GoneShips::default();
-        gone.record(at_berth(1, 1), Freed::InDispatch);
+        gone.record(at_berth(1, 1), Freed::AfterShipLoop);
         gone.record(at_berth(2, 2), Freed::InShipPass);
         let mut second = gone.clone();
         second.ship_pass();
-        assert_eq!(
-            second
-                .ships()
-                .iter()
-                .map(|gone| gone.ship.id)
-                .collect::<Vec<_>>(),
-            [NpcId(1)]
-        );
+        assert_eq!(second.ships(), []);
         assert_eq!(gone.ships().len(), 2);
         gone.clear();
         assert_eq!(gone.ships(), []);
-        second.clear();
-        assert_eq!(second.ships(), []);
     }
 
     mod in_traffic {
@@ -572,11 +498,9 @@ mod tests {
             });
             assert!(warped, "it warps out");
             assert_eq!(traffic.departed(), [(runner, Outcome::JumpedOut)]);
-            assert_eq!(
-                trader_of(&traffic, trader).goal,
-                Goal::Attack(ShipRef::Npc(runner))
-            );
-            traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
+            // Slot 1 left in its own dispatch (@0x859b8), so slot 2's think
+            // read its record on that tick: it attacked where it was, and
+            // the high level ended the fight.
             let after = trader_of(&traffic, trader);
             assert_eq!(after.goal, Goal::Idle, "@0x8e731");
             assert_eq!(after.target, None);
@@ -776,12 +700,32 @@ mod tests {
             fly_in(traffic, id, &world)
         }
 
+        /// Every ship keeps its goal and target.
+        #[derive(Debug)]
+        struct Keeps;
+
+        impl crate::ai::Behaviour for Keeps {
+            fn decide(
+                &self,
+                npc: &Npc,
+                _around: &crate::ai::Surroundings,
+                _chance: &mut dyn crate::chance::Chance,
+            ) -> Goal {
+                npc.goal
+            }
+
+            fn target(&self, npc: &Npc, _around: &crate::ai::Surroundings) -> Option<ShipRef> {
+                npc.target
+            }
+        }
+
         #[test]
-        fn a_jump_out_or_dock_lets_go_of_the_earlier_slots_and_leaves_the_later_to_their_step() {
+        fn a_jump_out_or_dock_at_its_slot_is_let_go_by_every_slot_at_its_step() {
             // The original frees these in the AI loop (@0x859b8, @0x80404),
-            // before the `_HandleShip` of every slot.
+            // before the `_HandleShip` of every slot, which lets go
+            // (@0x33865-0x33888), an earlier slot's too.
             for dock in [false, true] {
-                let mut traffic = Traffic::new();
+                let mut traffic = Traffic::with_interval(1);
                 let leaving = if dock {
                     docking(&mut traffic, 3, 8)
                 } else {
@@ -791,24 +735,27 @@ mod tests {
                 let earlier = aiming_at(&mut traffic, 2, aim);
                 let later = aiming_at(&mut traffic, 6, aim);
                 let elsewhere = aiming_at(&mut traffic, 1, ShipRef::Player);
-                let own_slot = aiming_at(&mut traffic, 3, aim);
-                fly(&mut traffic, leaving);
-                assert_eq!(traffic.departed().len(), 1, "{dock}: it left");
-                assert_eq!(target_of(&traffic, earlier), None, "{dock}");
-                assert_eq!(target_of(&traffic, own_slot), Some(aim), "not below");
-                assert_eq!(
-                    trader_of(&traffic, earlier).goal,
-                    Goal::Attack(aim),
-                    "{dock}: +0x70 alone"
+                traffic.think_holding(&Keeps, World::new(&[]), &[], &mut NeverFires);
+                assert!(
+                    traffic.npcs().iter().all(|npc| npc.id != leaving),
+                    "{dock}: it left at its slot"
                 );
-                assert_eq!(target_of(&traffic, later), Some(aim), "{dock}");
+                for holder in [earlier, later] {
+                    assert_eq!(target_of(&traffic, holder), Some(aim), "{dock}");
+                    traffic.let_go_at_step(holder, true);
+                    assert_eq!(target_of(&traffic, holder), None, "{dock}: its step");
+                    assert_eq!(
+                        trader_of(&traffic, holder).goal,
+                        Goal::Attack(aim),
+                        "{dock}: +0x70 alone"
+                    );
+                }
+                traffic.let_go_at_step(elsewhere, true);
                 assert_eq!(
                     target_of(&traffic, elsewhere),
                     Some(ShipRef::Player),
                     "{dock}"
                 );
-                traffic.let_go_at_step(later, true);
-                assert_eq!(target_of(&traffic, later), None, "{dock}: its step");
             }
         }
 
@@ -895,52 +842,6 @@ mod tests {
             assert_eq!(target_of(&traffic, earlier), Some(aim));
             traffic.let_go_at_step(earlier, true);
             assert_eq!(target_of(&traffic, earlier), None);
-        }
-
-        #[test]
-        fn a_later_slot_that_let_go_of_a_ship_gone_in_the_ai_loop_still_reads_it_in_the_next_think()
-        {
-            // The trader lets go at its step, after the flight that stands
-            // for the jump out, but the original's trader read the slot in
-            // that frame's dispatch, before its step.
-            let mut traffic = Traffic::new();
-            let runner = warping_out(&mut traffic, 1);
-            let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, -1100.0);
-            trader.provoked = 10.0;
-            trader.target = Some(ShipRef::Npc(runner));
-            let trader = traffic.add_npc_at(trader, 2);
-            fly(&mut traffic, runner);
-            traffic.let_go_at_step(trader, true);
-            assert_eq!(target_of(&traffic, trader), None);
-            let world = World {
-                player: Some(player(251.0, -10.0)),
-                ..World::new(&[])
-            };
-            traffic.tick_in(&NovaAi::default(), world, &[], &mut Draws::of(&[]));
-            let after = trader_of(&traffic, trader);
-            assert_eq!(after.goal, Goal::Idle, "@0x8e731");
-            assert_eq!(after.target, None);
-            assert_eq!(after.provoked, 10.0, "attacked near: it keeps it");
-        }
-
-        #[test]
-        fn a_step_notes_only_a_ship_that_held_a_slot_freed_in_the_ai_loop() {
-            // Another gone ship's record is no record of what this ship let
-            // go of.
-            let mut traffic = Traffic::new();
-            let runner = warping_out(&mut traffic, 3);
-            let holder = aiming_at(&mut traffic, 6, ShipRef::Npc(NpcId(99)));
-            fly(&mut traffic, runner);
-            traffic.let_go_at_step(holder, true);
-            assert_eq!(traffic.gone.ships()[0].let_go, []);
-            // A slot freed in the ship loop is read only while the ship
-            // holds it: its step is the read's end.
-            let mut traffic = Traffic::new();
-            let leaving = entering_a_gate(&mut traffic, 3);
-            let earlier = aiming_at(&mut traffic, 2, ShipRef::Npc(leaving));
-            fly(&mut traffic, leaving);
-            traffic.let_go_at_step(earlier, true);
-            assert_eq!(traffic.gone.ships()[0].let_go, []);
         }
 
         #[test]

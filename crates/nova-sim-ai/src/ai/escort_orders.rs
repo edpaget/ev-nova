@@ -738,7 +738,6 @@ mod tests {
         let gone = [GoneShip {
             ship: record,
             freed: Freed::InDispatch,
-            let_go: Vec::new(),
         }];
         let around = Surroundings {
             gone: &gone,
@@ -751,33 +750,24 @@ mod tests {
     }
 
     #[test]
-    fn a_leader_that_let_go_still_reads_its_target_by_its_record() {
-        // The stand-in think for the frame of a jump out comes after the
-        // leader's step, which let go (`GoneShip::let_go`); the original's
-        // read it in that frame's dispatch, before its `_HandleShip`.
+    fn a_leader_that_let_go_of_a_gone_target_reads_no_record() {
+        // Its `_HandleShip` cleared +0x70 (@0x33865-0x33888), so its next
+        // dispatch reads no target.
         let mut reader = leader(Goal::Attack(n(2)), 10.0);
         reader.berth = 5;
-        let id = reader.id;
         let npcs = [reader];
         let mut record = disabled(attacker(2, 100.0));
         record.berth = 1;
-        let gone = |let_go| {
-            [GoneShip {
-                ship: record.clone(),
-                freed: Freed::InDispatch,
-                let_go,
-            }]
+        let gone = [GoneShip {
+            ship: record,
+            freed: Freed::InDispatch,
+        }];
+        let around = Surroundings {
+            gone: &gone,
+            ..Surroundings::new(&[], &npcs)
         };
-        let words = |let_go| {
-            let gone = gone(let_go);
-            let around = Surroundings {
-                gone: &gone,
-                ..Surroundings::new(&[], &npcs)
-            };
-            orders(&npcs[0], &around, RuleSource::Engine).map(|word| word.0)
-        };
-        assert_eq!(words(vec![id]), [2, 2, 1, 0], "disabled, by its record");
-        assert_eq!(words(Vec::new()), [1, 1, 1, 0], "no target, no record");
+        let words = orders(&npcs[0], &around, RuleSource::Engine).map(|word| word.0);
+        assert_eq!(words, [1, 1, 1, 0], "no target, no record");
     }
 
     #[test]

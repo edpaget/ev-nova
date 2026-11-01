@@ -1315,7 +1315,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_gone_is_read_by_the_next_passes_think_and_forgotten_as_that_think_closes() {
+    fn a_ship_gone_at_its_slot_is_read_by_a_higher_slots_think_that_pass_and_forgotten_as_it_closes()
+     {
+        // Its own jump frees it in its own dispatch (@0x859b8), before the
+        // higher slot's think; the loop's close forgets it.
         let catalog = armed();
         let mut session = warmed(&catalog);
         let npc = &mut session.space.traffic.npcs_mut()[0];
@@ -1333,13 +1336,17 @@ mod tests {
             behaviour.0.take()
         };
         let mut passes = 0;
-        while session.departed().is_empty() {
-            assert_eq!(reads(&mut session), [], "pass {passes}: none gone yet");
+        let read = loop {
+            let read = reads(&mut session);
+            if !session.departed().is_empty() {
+                break read;
+            }
+            assert_eq!(read, [], "pass {passes}: none gone yet");
             passes += 1;
             assert!(passes < 1000, "it never jumped out");
-        }
+        };
         assert_eq!(session.departed(), [(leaver, Outcome::JumpedOut)]);
-        assert_eq!(reads(&mut session), [leaver], "the next pass's think");
+        assert_eq!(read, [leaver], "the higher slot's think that pass");
         assert_eq!(reads(&mut session), [], "forgotten as that think closed");
     }
 }

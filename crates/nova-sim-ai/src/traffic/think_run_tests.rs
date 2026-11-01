@@ -157,6 +157,7 @@ fn a_run_leaves_every_ship_outside_it_as_it_was() {
         &marking,
         world(63),
         |npc| npc.id == fighter,
+        &crate::traffic::NoBay::new(),
         &mut Draws::of(&[]),
     );
     assert_eq!(marking.0.into_inner(), [fighter], "it alone decides");
@@ -203,6 +204,7 @@ fn each_run_reads_the_berths_free_as_it_starts() {
             &launching,
             world(61),
             |npc| npc.id == id,
+            &crate::traffic::NoBay::new(),
             &mut Draws::of(&[]),
         );
     };
@@ -280,8 +282,20 @@ fn a_later_run_reads_the_goals_a_lower_run_wrote() {
     let reading = Reading::new();
     let world = World::new(&[]);
     let mut chance = Draws::of(&[]);
-    traffic.think_run(&reading, world, |npc| npc.id == low, &mut chance);
-    traffic.think_run(&reading, world, |npc| npc.id == high, &mut chance);
+    traffic.think_run(
+        &reading,
+        world,
+        |npc| npc.id == low,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
+    traffic.think_run(
+        &reading,
+        world,
+        |npc| npc.id == high,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
     assert_eq!(
         reading.reads.into_inner(),
         [(low, Goal::Idle), (high, Goal::JumpOut)]
@@ -303,12 +317,30 @@ fn a_pods_wait_counts_down_only_in_its_own_run() {
     let world = World::new(&[]);
     let mut chance = Draws::of(&[]);
     let keep = Marking::default();
-    traffic.think_run(&keep, world, |npc| npc.id == other, &mut chance);
+    traffic.think_run(
+        &keep,
+        world,
+        |npc| npc.id == other,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
     assert_eq!(find(&traffic, pod).mode, Mode::Adrift { ticks_left: 1 });
-    traffic.think_run(&keep, world, |npc| npc.id == pod, &mut chance);
+    traffic.think_run(
+        &keep,
+        world,
+        |npc| npc.id == pod,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
     assert_eq!(find(&traffic, pod).mode, Mode::Adrift { ticks_left: 0 });
     assert_eq!(traffic.free_berths(0), 61, "held by both");
-    traffic.think_run(&keep, world, |npc| npc.id == pod, &mut chance);
+    traffic.think_run(
+        &keep,
+        world,
+        |npc| npc.id == pod,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
     assert!(traffic.npcs().iter().all(|npc| npc.id != pod), "taken out");
     assert_eq!(traffic.free_berths(0), 62, "free at once");
 }
@@ -332,8 +364,20 @@ fn every_run_of_a_tick_reads_the_gone_ships_and_close_think_forgets_them() {
     let reading = ReadingGone::default();
     let world = World::new(&[]);
     let mut chance = Draws::of(&[]);
-    traffic.think_run(&reading, world, |npc| npc.id == low, &mut chance);
-    traffic.think_run(&reading, world, |npc| npc.id == high, &mut chance);
+    traffic.think_run(
+        &reading,
+        world,
+        |npc| npc.id == low,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
+    traffic.think_run(
+        &reading,
+        world,
+        |npc| npc.id == high,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
     assert_eq!(traffic.gone.ships().len(), 1, "held to the tick's end");
     traffic.close_think();
     assert_eq!(traffic.gone.ships(), []);

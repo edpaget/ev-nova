@@ -246,7 +246,7 @@ mod tests {
         };
         think(&mut traffic, &watch, &[]);
         assert_eq!(of(&traffic, above).warp.goal, None, "cancelled");
-        assert_eq!(of(&traffic, above).warp.stage, GIVEN_UP_STAGE);
+        assert_eq!(of(&traffic, above).goal, Goal::Idle, "goal 0");
         let held = Some(WarpGoal::Follow(ShipRef::Npc(leader)));
         assert_eq!(of(&traffic, below).warp.goal, held, "its head came first");
         think(&mut traffic, &watch, &[]);

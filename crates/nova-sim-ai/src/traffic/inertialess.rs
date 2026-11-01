@@ -699,24 +699,18 @@ mod tests {
         ] {
             let mut carrier = carrier;
             let mut ship = docking(at(300.0, -400.0, 0.0, 0.0, heading), 0.0);
-            let mut docked = None;
-            for tick in 0..2000 {
-                let outcome = fly(&mut ship, &[], Some(&carrier));
-                if outcome != Outcome::Flying {
-                    docked = Some((outcome, tick));
-                    break;
+            // Its low level docks it at its slot of the AI loop, before its
+            // flight (the traffic's `dispatch_leave`).
+            let dock = ship.carrier.expect("a fighter");
+            let ticks = (0..2000).find(|_| {
+                if crate::traffic::autopilot::docks_now(&ship.state, Some(&carrier), dock) {
+                    return true;
                 }
+                assert_eq!(fly(&mut ship, &[], Some(&carrier)), Outcome::Flying);
                 carrier.position = carrier.position + carrier.velocity;
-            }
-            let (outcome, ticks) = docked.expect("docks");
-            assert_eq!(
-                outcome,
-                Outcome::Docked {
-                    carrier: crate::combat::ShipRef::Player,
-                    ship: crate::catalog::ShipId(144),
-                },
-                "{heading}"
-            );
+                false
+            });
+            let ticks = ticks.expect("docks");
             assert!(ticks < 600, "{heading}: {ticks} ticks");
         }
     }

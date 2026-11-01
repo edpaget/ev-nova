@@ -791,8 +791,9 @@ mod tests {
     }
 
     #[test]
-    fn in_the_fly_half_a_fighter_turning_back_reads_its_carriers_berth() {
-        use crate::traffic::fly_pass::FlyHalf;
+    fn at_its_slot_a_fighter_turning_back_reads_its_carriers_berth() {
+        // The high level's turn-back runs in the fighter's own dispatch
+        // (@0x8d575-0x8d625; the traffic's `dispatch_leave`).
         let mut traffic = Traffic::with_interval(1);
         let mut carrier = far(0);
         carrier.begin_own_jump();
@@ -806,7 +807,7 @@ mod tests {
         orphan.travel = Some(crate::catalog::StellarId(150));
         let orphan = traffic.add_npc_at(orphan, 3);
         let world = jumping_world(0.0);
-        let _ = traffic.begin_fly(&world, &std::collections::BTreeSet::new(), FlyHalf::Advance);
+        traffic.think_holding(&Keep, world, &[], &mut NeverFires);
         assert_eq!(
             of(&traffic, fighter).goal,
             Goal::Dock(ShipRef::Npc(carrier))
@@ -1017,15 +1018,36 @@ mod tests {
                 escort.warp.goal,
                 escort.warp.stage
             ),
-            (Goal::Idle, None, None, -1.0),
-            "goal 0, target -1, +0x50 -1.0 (@0x90125-0x9019c)"
+            (Goal::Idle, None, None, 0.0),
+            "goal 0, target -1, +0x50 -1.0 (@0x90125-0x9019c), which the \
+             high level's hold zeroes in the same dispatch (@0x8d513)"
         );
+    }
+
+    #[test]
+    fn a_cancel_gives_its_ships_stage_up() {
+        // +0x50 = -1.0 (@0x90125-0x9019c), before the high level.
+        use crate::combat::hull::Condition;
+        let mut traffic = Traffic::with_interval(1);
+        for ship in on_leaders_jump(
+            ShipRef::Npc(NpcId(0)),
+            0.5,
+            Goal::Attack(ShipRef::Player),
+            Condition::Intact,
+        ) {
+            traffic.add_npc(ship);
+        }
+        let picked = vec![true; traffic.npcs().len()];
+        traffic.cancel_jump_follows(&jumping_world(0.0), &picked);
+        assert_eq!(of(&traffic, NpcId(1)).warp.stage, -1.0);
     }
 
     // `_EscortAI`'s -1.0 writes.
 
     /// The stages of the ships `ships` sets up, after the think half and
-    /// then after the fly half of a tick that `behaviour` decides.
+    /// then after the fly half of a tick that `behaviour` decides. A -1.0
+    /// a think writes, the high level's hold zeroes in the same dispatch
+    /// (@0x8d52e), as each slot's run ends, so it shows after neither.
     fn stages(behaviour: &impl Behaviour, ships: Vec<Npc>) -> (Vec<f32>, Vec<f32>) {
         let mut traffic = Traffic::with_interval(1);
         for ship in ships {
@@ -1059,7 +1081,7 @@ mod tests {
             &crate::ai::FleetEscortAi::default(),
             vec![lead, escort, lost],
         );
-        assert_eq!(thought, vec![0.0, -1.0, -1.0]);
+        assert_eq!(thought, vec![0.0, 0.0, 0.0], "zeroed in the dispatch");
         assert_eq!(flown, vec![0.0, 0.0, 0.0]);
     }
 
@@ -1085,7 +1107,7 @@ mod tests {
                 escort(Some(EscortOrder::Hold)),
             ],
         );
-        assert_eq!(thought, vec![-1.0, -1.0, -1.0, 0.0]);
+        assert_eq!(thought, vec![0.0; 4], "zeroed in the dispatch");
         assert_eq!(flown, vec![0.0; 4]);
     }
 

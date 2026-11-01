@@ -375,13 +375,15 @@ mod tests {
     }
 
     /// `traffic`'s think half by `reading` of `npc_escort_ai` and
-    /// `repairer` of `successor_repairer`, never releasing a pause.
+    /// `repairer` of `successor_repairer`, never releasing a pause, the
+    /// warp sound 600 Mac ticks long, so no jump ends at its slot.
     fn think_by(traffic: &mut Traffic, reading: RuleSource, repairer: RuleSource) {
-        let world = World {
+        let mut world = World {
             npc_escort_ai: reading,
             successor_repairer: repairer,
             ..World::new(&[])
         };
+        world.warp.durations = [600, 600];
         traffic.think_holding(&Keep, world, &[], &mut NeverFires);
     }
 
@@ -523,7 +525,9 @@ mod tests {
             let successor = of(&traffic, 1);
             assert_eq!(successor.leader, None, "{name}");
             assert_eq!(successor.goal, goal, "{name}");
-            assert_eq!(successor.warp.stage, GIVEN_UP_STAGE, "{name}");
+            // Its -1.0 the high level's hold zeroes in its dispatch
+            // (@0x8d513).
+            assert_eq!(successor.warp.stage, 0.0, "{name}");
         }
     }
 

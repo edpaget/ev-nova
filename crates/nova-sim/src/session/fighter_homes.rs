@@ -8,12 +8,15 @@
 //! the fighter stays active with its parent and goal, the call skipping
 //! the pull (@0x88111) after the steering and thrust have run
 //! (@0x87ed1-0x87f02), and it retries next tick. The original's `AmmoType`
-//! walks read the carrier's weapons, which the flight can't see, so the
-//! session lists such fighters as each fly half begins
-//! ([`Session::fighters_staying_out`], [`FlyPass::with_no_bay`]), asking
-//! afresh, so one docks the first tick a bay is there. By the other reading
-//! of [`RuleKey::FighterNoBay`] none stays out: it docks, and is lost
-//! ([`Session::dock_fighter`]).
+//! walks read the carrier's weapons, which the traffic can't see, so the
+//! session lists such fighters as each tick's AI loop begins, every fighter
+//! out whose carrier has no bay for it, whatever its goal, as a think at
+//! its own slot may send it home ([`Session::fighters_staying_out`],
+//! [`Traffic::think_run`](crate::traffic::Traffic::think_run)'s `no_bay`).
+//! It asks afresh each tick, so one docks the first tick a bay is there; no
+//! bay comes or goes inside the loop, the walks reading the bays and not
+//! their counts. By the other reading of [`RuleKey::FighterNoBay`] none
+//! stays out: it docks, and is lost ([`Session::dock_fighter`]).
 //!
 //! **Use As My Ship** (`_DoShipCapture` @0x41120). The player's own
 //! fighters are written nothing, no loop reading parent 0: slot 0 is still
@@ -40,17 +43,16 @@
 use std::collections::BTreeSet;
 
 use super::{Session, Space, Statics};
+#[cfg(any(test, doc))]
 use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::armament::Armament;
 use crate::rulebook::{RuleKey, RuleSource};
-#[cfg(doc)]
-use crate::traffic::fly_pass::FlyPass;
 use crate::traffic::npc::NpcId;
 
 impl Session {
-    /// The fighters that stay out at their carrier this fly half (see the
-    /// module docs).
+    /// The fighters that stay out at their carrier this tick's AI loop (see
+    /// the module docs).
     pub(super) fn fighters_staying_out(&self) -> BTreeSet<NpcId> {
         match self.setup.rules.source_for(RuleKey::FighterNoBay) {
             RuleSource::Engine => self
@@ -62,25 +64,24 @@ impl Session {
 }
 
 impl Space {
-    /// The fighters docking whose carrier has no
-    /// [`dock_bay`](Armament::dock_bay) for them, the player's carrying
-    /// `player`'s armament. One whose carrier is gone isn't among them: it
-    /// brakes, with nothing to dock with.
+    /// The fighters out whose carrier has no
+    /// [`dock_bay`](Armament::dock_bay) for them, whatever their goal, the
+    /// player's carrying `player`'s armament. One whose carrier is gone
+    /// isn't among them: it brakes, with nothing to dock with.
     fn fighters_without_a_bay(&self, player: &Armament, statics: &Statics) -> BTreeSet<NpcId> {
         let npcs = self.traffic.npcs().iter();
-        npcs.filter(|npc| matches!(npc.goal, Goal::Dock(_)))
-            .filter_map(|npc| {
-                let armament = match npc.carrier?.ship {
-                    ShipRef::Player => player,
-                    ShipRef::Npc(carrier) => &self.npc(carrier)?.armament,
-                };
-                let base = statics.arsenal.sprite_base(npc.ship);
-                armament
-                    .dock_bay(npc.ship, base)
-                    .is_none()
-                    .then_some(npc.id)
-            })
-            .collect()
+        npcs.filter_map(|npc| {
+            let armament = match npc.carrier?.ship {
+                ShipRef::Player => player,
+                ShipRef::Npc(carrier) => &self.npc(carrier)?.armament,
+            };
+            let base = statics.arsenal.sprite_base(npc.ship);
+            armament
+                .dock_bay(npc.ship, base)
+                .is_none()
+                .then_some(npc.id)
+        })
+        .collect()
     }
 
     /// Every fighter out of the player's reads `reach`, its carrier's new
@@ -231,12 +232,10 @@ mod tests {
         assert_eq!(session.fighters_staying_out(), BTreeSet::new(), "a bay");
         session.space.npc_mut(raider).expect("there").armament = Armament::default();
         assert_eq!(session.fighters_staying_out(), BTreeSet::from([fighter]));
+        // Listed whatever its goal: a think at its own slot may send it
+        // home before its low level docks it.
         session.space.npc_mut(fighter).expect("there").goal = Goal::Idle;
-        assert_eq!(
-            session.fighters_staying_out(),
-            BTreeSet::new(),
-            "not going home"
-        );
+        assert_eq!(session.fighters_staying_out(), BTreeSet::from([fighter]));
     }
 
     #[test]

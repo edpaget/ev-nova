@@ -112,7 +112,11 @@
 //! 5. each flying NPC's cloak think ([`cloak`], `_AIHandleCloaking`
 //!    @0x8fcaa), which cloaks or uncloaks it; then each escape pod's wait
 //!    counted down, a pod whose wait ran out freed
-//!    ([`pod_flight::count_down`], `Outcome::Freed`). Steps 1 to 5 are the
+//!    ([`pod_flight::count_down`], `Outcome::Freed`); then each ship's high
+//!    level holding its warp to its goal and turning a fighter that can't
+//!    follow its leader's jump back, and its low level's leaves: its own
+//!    jump-out and a fighter's dock ([`dispatch_leave`]), each recorded
+//!    gone and taken out of the traffic at its slot. Steps 1 to 5 are the
 //!    tick's think half, `_DoPlayGameWork`'s advance-pass AI
 //!    (`_EnterMoreShips` @0x44237, `_AIDispatch` @0x4429d): steps 1 to 3
 //!    once ([`Traffic::open_think`]), and steps 4 and 5 one run a slot, its
@@ -126,7 +130,8 @@
 //!    autopilot and a flight step for every NPC, a pod at full thrust
 //!    along its heading, each other ship flying towards
 //!    the ship its goal is about, the player's included (the one it
-//!    assists, or escorts in formation), a fighter docking its carrier,
+//!    assists, or escorts in formation), a fighter flying in to its
+//!    carrier, a jumping ship turning and warping out,
 //!    a pirate docking with its victim ([`plunder::fly_docking`]), a dock
 //!    started boarding the victim, a repairer's dock done repairing the
 //!    player ([`PirateEvent::PlayerRepaired`]) or an NPC
@@ -134,9 +139,10 @@
 //!    wait, a pirate's count wait's included ([`plunder::count_down`]);
 //!    then each NPC that reached its gate's box this tick releases the
 //!    ships it leads to enter the gate on their own ([`gate_entry`]);
-//! 7. the removal of those that jumped out, entered a gate or docked, each
-//!    in [`Traffic::departed`] with how it left, for its session to take a
-//!    fighter docked aboard, the pods freed in step 5 after them; a ship
+//! 7. the removal of those that entered a gate, each in
+//!    [`Traffic::departed`] with how it left, the pods freed and the ships
+//!    that jumped out or docked in step 5 after them (the docked fighters
+//!    the session took aboard at their slot); a ship
 //!    that landed stays in its slot, waiting at the stellar
 //!    ([`land_flight::stay`]), but for a mission ship under
 //!    [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
@@ -195,6 +201,7 @@ mod count_wait_turn_tests;
 pub mod destination;
 pub mod disabled_reset;
 pub mod dispatch_head;
+pub mod dispatch_leave;
 #[cfg(test)]
 mod display_tests;
 pub mod docked;
@@ -334,6 +341,7 @@ use berth_blink::BerthBlink;
 use berth_exits::BerthExits;
 use berth_picks::BerthPicks;
 use berth_search::BerthSearch;
+pub use dispatch_leave::NoBay;
 pub use fly_pass::{FlyHalf, FlyPass};
 use gone::{Freed, GoneShips};
 use launch_room::LaunchRoom;
@@ -932,9 +940,16 @@ pub struct Traffic {
     /// The NPCs that left on the last tick, and how.
     departed: Vec<(NpcId, Outcome)>,
     /// The escape pods the think half of the tick under way freed
-    /// ([`Traffic::think_holding`]), which its fly half adds to the
-    /// departures.
+    /// ([`Traffic::think_holding`]), and the ships that left at their slot
+    /// ([`dispatch_leave`]), which its fly half adds to the departures.
     freed: Vec<(NpcId, Outcome)>,
+    /// The records of the ships that left at their slot this tick, as
+    /// they left ([`dispatch_leave`]), which the fly half's followers and
+    /// lower slots still read.
+    left_in_dispatch: Vec<Npc>,
+    /// Each ship's warp as the tick's think opened, which a follower below
+    /// its leader reads ([`dispatch_leave`]).
+    open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
     /// The ships gone since the last think closed whose slots a think may
     /// still read ([`gone`]).
     gone: GoneShips,
@@ -1074,6 +1089,8 @@ impl Traffic {
             interval,
             departed: Vec::new(),
             freed: Vec::new(),
+            left_in_dispatch: Vec::new(),
+            open_leaders: BTreeMap::new(),
             gone: GoneShips::default(),
             vacated: VacatedBerths::default(),
             on_line: LineQueue::default(),
@@ -1154,6 +1171,7 @@ impl Traffic {
         self.left_behind.clear();
         self.departed.clear();
         self.freed.clear();
+        self.left_in_dispatch.clear();
         self.gone.clear();
         self.vacated.clear();
         self.on_line.clear();
@@ -1273,6 +1291,7 @@ impl Traffic {
         }
         self.departed.clear();
         self.freed.clear();
+        self.left_in_dispatch.clear();
         self.gone.clear();
         self.vacated.clear();
         self.on_line.clear();
@@ -1346,7 +1365,13 @@ impl Traffic {
         let mut after = None;
         while let Some(slot) = self.next_slot_after(after) {
             let world = world.with_fuel_given(self.fuel_given - tallied);
-            self.think_run(behaviour, world, |npc| npc.berth == slot, chance);
+            self.think_run(
+                behaviour,
+                world,
+                |npc| npc.berth == slot,
+                &NoBay::new(),
+                chance,
+            );
             after = Some(slot);
         }
         self.close_think();
@@ -1371,6 +1396,7 @@ impl Traffic {
         self.react(behaviour, &world, strikes);
         let dropped = self.succeed_leaders(&world);
         self.form_fleets(&world, &dropped);
+        self.open_dispatch();
     }
 
     /// One run of `_AIDispatch`'s loop (@0x4429d) in `world`, the think of
@@ -1381,8 +1407,11 @@ impl Traffic {
     /// disabled reset), the decisions, the
     /// board waits, the comm calls and the quote gate, the plunders, the
     /// goals, pursuit, the fire commands and targets, the gate waits, each
-    /// flying NPC's cloak think (`_AIHandleCloaking` @0x8fcaa) and each
-    /// escape pod's wait ([`pod_flight::count_down`]).
+    /// flying NPC's cloak think (`_AIHandleCloaking` @0x8fcaa), each
+    /// escape pod's wait ([`pod_flight::count_down`]), and last the low
+    /// level's leaves ([`dispatch_leave`]): its own jump-out, and a
+    /// fighter's dock unless `no_bay` names it. The ships that left in the
+    /// run, and how, the docked fighters for the session to take aboard.
     ///
     /// Each launch settles against the berths free as the run starts
     /// ([`LaunchRoom`]), every claim of an earlier run having been put in
@@ -1398,8 +1427,9 @@ impl Traffic {
         behaviour: &(impl Behaviour + ?Sized),
         world: World,
         picks: impl Fn(&Npc) -> bool,
+        no_bay: &NoBay,
         chance: &mut (impl Chance + ?Sized),
-    ) {
+    ) -> Vec<(NpcId, Outcome)> {
         let mut room = LaunchRoom::new(self.free_berths(world.spawn_reserve));
         let picked: Vec<bool> = self.npcs.iter().map(&picks).collect();
         // The head of each picked ship's dispatch ([`dispatch_head`]).
@@ -1509,6 +1539,7 @@ impl Traffic {
         self.think_cloaks(&world, &picked);
         let freed = pod_flight::count_down(&mut self.npcs, &picks);
         self.freed.extend(freed);
+        self.leave_in_dispatch(&world, &picks, no_bay)
     }
 
     /// The end of a tick's think: the ships gone are forgotten, as the

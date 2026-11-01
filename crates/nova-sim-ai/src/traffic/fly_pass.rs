@@ -7,11 +7,7 @@
 //! - **Begin** forgets, on double time's second pass, the ships gone in a
 //!   ship pass or after one (see [`gone`](super::gone)); holds every NPC's
 //!   cloak; on
-//!   the advance pass moves each
-//!   NPC's warp and fire clocks on (`TickCount`), holds each intact one's
-//!   warp to its goal and turns back a fighter that can't follow its
-//!   leader's jump, unless its high level waits (see
-//!   [`jump_with_leader`](super::jump_with_leader)), holds its fold to
+//!   the advance pass moves each NPC's fire clock on, holds its fold to
 //!   its dispatch, and runs the odds pass
 //!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
 //!   `_HandleShip`; see [`odds_cache`](super::odds_cache)); notes which
@@ -22,18 +18,22 @@
 //!   swarmer's lead and the ships that don't see their leader. The
 //!   original's steering reads come from
 //!   `_AIDispatch` (`_LowLevelAIHandler`), before the loop moves any ship,
-//!   so every flight reads the others where the last tick left them.
+//!   so every flight reads the others where the last tick left them. A
+//!   ship that left at its slot of the AI loop is still there for the
+//!   flights of lower slots, whose low level came before it left, and a
+//!   follower reads its leader's warp as the tick opened when its slot is
+//!   below the leader's (see [`dispatch_leave`](super::dispatch_leave)).
+//!   The warp clocks, the high level's hold and turn-back, a ship's own
+//!   jump-out and a fighter's dock are the AI loop's, at each ship's slot.
 //! - **Each NPC** sheds its ion charge, takes its tractor's hold, settles
 //!   its spawn's display rolls, then flies its jump, its docking flight
 //!   or its autopilot step from its own state as it stands, so a push an
 //!   earlier slot's shockwave gave it is in the velocity it moves by, and
-//!   banks and glows. One whose flight ends it (it jumped, entered a gate,
-//!   docked) leaves the traffic at once, as its slot is inactive from its
-//!   own `_HandleShip` on: no later slot's step, fire or shockwave sees it;
-//!   one that left the system is recorded among the ships gone, and one
-//!   the original frees in the AI loop lets go of every earlier slot's
-//!   target at once ([`Traffic::left_the_system`], see
-//!   [`gone`](super::gone)). One that landed stays in its slot, waiting
+//!   banks and glows. One whose flight ends it (it entered a gate) leaves
+//!   the traffic at once, as its slot is inactive from its own
+//!   `_HandleShip` on: no later slot's step, fire or shockwave sees it,
+//!   and it is recorded among the ships gone ([`Traffic::left_the_system`],
+//!   see [`gone`](super::gone)). One that landed stays in its slot, waiting
 //!   at the stellar, as the original's does (+0xb8 is not cleared,
 //!   @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
@@ -60,8 +60,8 @@ use super::npc::{AiType, Mode, Npc, NpcId};
 use super::plunder::PirateEvent;
 use super::plunder_dock::DockOutcome;
 use super::{
-    DockNotes, Traffic, World, ionization, jump_with_leader, land_flight, plunder, regroup,
-    repair_dock, ship_display, tractor_hold, warp_out,
+    DockNotes, Traffic, World, ionization, land_flight, plunder, regroup, repair_dock,
+    ship_display, tractor_hold, warp_out,
 };
 use crate::ai::Goal;
 use crate::ai::mine_orders;
@@ -108,8 +108,21 @@ pub struct FlyPass {
     entering: BTreeSet<NpcId>,
     /// The NPCs in the traffic's order as the half began.
     order: Vec<NpcId>,
-    /// Each leader's warp as the half began, which its followers read.
+    /// Each leader's warp as the half began, after every slot's step of
+    /// the AI loop, the ships that left in it as their records hold it:
+    /// what a follower above its leader reads, and every follower on
+    /// double time's second pass.
     leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
+    /// Each leader's warp as the tick's think opened, before any slot's
+    /// step: what a follower below its leader reads on the advance pass
+    /// (see the traffic's `dispatch_leave`).
+    open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
+    /// Each leader's slot, the ships that left in the AI loop among them.
+    leader_berths: BTreeMap<NpcId, u32>,
+    /// Each ship that left at its slot of the AI loop, its slot and where
+    /// it was: the ships of lower slots steer by it, as their low level
+    /// came before it left.
+    left: BTreeMap<NpcId, (u32, ShipState)>,
     /// The ships a tractor's hold may name, as the half began.
     holders: tractor_hold::Holders,
     /// Each swarmer's lead, as the half began.
@@ -127,9 +140,6 @@ pub struct FlyPass {
     docks: DockNotes,
     /// Each lead that reached its gate's box, its gate and AI type.
     reached: Vec<(NpcId, StellarId, AiType)>,
-    /// The docking fighters with no bay on their carrier, which stay out
-    /// ([`Beside::no_bay`]).
-    no_bay: BTreeSet<NpcId>,
 }
 
 impl FlyPass {
@@ -139,12 +149,19 @@ impl FlyPass {
         &self.order
     }
 
-    /// This half, the fighters `no_bay` having no bay on their carrier
-    /// ([`Beside::no_bay`]): none unless told, as the session decides it,
-    /// holding the player's armament and the rulebook.
-    #[must_use]
-    pub fn with_no_bay(self, no_bay: BTreeSet<NpcId>) -> Self {
-        Self { no_bay, ..self }
+    /// The leaders' warps `npc` reads: as the tick's think opened for a
+    /// follower below its leader on the advance pass, as the half began
+    /// otherwise (see [`FlyPass::leaders`]).
+    fn leaders_for(&self, npc: &Npc) -> &BTreeMap<NpcId, warp_out::LeaderWarp> {
+        let below = npc
+            .leader
+            .and_then(|leader| self.leader_berths.get(&leader))
+            .is_some_and(|&berth| npc.berth < berth);
+        if self.think && below {
+            &self.open_leaders
+        } else {
+            &self.leaders
+        }
     }
 }
 
@@ -163,32 +180,11 @@ impl Traffic {
         }
         self.hold_cloaks(world);
         if think {
-            // `TickCount` moves on between advance passes alone, and the
-            // high level holds each ship's warp to its goal. A fighter
-            // turning back reads its carrier's slot, which this loop doesn't
-            // move.
-            let berths: BTreeMap<NpcId, u32> = self
-                .npcs
-                .iter()
-                .chain(self.gone.ships().iter().map(|gone| &gone.ship))
-                .map(|npc| (npc.id, npc.berth))
-                .collect();
+            // The warp clocks moved on as the loop opened, and the high
+            // level's hold and turn-back ran at each ship's slot
+            // (`dispatch_leave`).
             for npc in &mut self.npcs {
-                npc.warp.tick_clock();
                 npc.armament.tick_fire_clock();
-                // `_AIDispatch` runs no high level for a disabled ship, nor
-                // the high level past its AI wait (`jump_with_leader`). A
-                // stellar's defence ship breaking up is not disabled
-                // (@0x2d6f), but it holds no warp and no carrier, so neither
-                // step below changes it.
-                if npc.condition == Condition::Intact && !npc.high_level_waits() {
-                    warp_out::hold_stage(npc);
-                    let carrier_slot = npc.carrier.and_then(|carrier| match carrier.ship {
-                        ShipRef::Player => Some(0),
-                        ShipRef::Npc(id) => berths.get(&id).copied(),
-                    });
-                    jump_with_leader::turn_back(npc, world.npc_jump_fuel, carrier_slot);
-                }
                 ship_display::dispatch_fold(npc);
             }
             // `_DoPlayGameWork`'s odds pass, after every think and before
@@ -207,7 +203,23 @@ impl Traffic {
             .map(|npc| npc.id)
             .zip(self.top_speeds(world))
             .collect();
-        let leaders = warp_out::leaders(&self.npcs);
+        // On the advance pass the ships that left at their slot show their
+        // records, +0x50 0 and sub 4 kept (@0x859ae-0x859bf).
+        let left_in_dispatch: &[Npc] = if think { &self.left_in_dispatch } else { &[] };
+        let leader_berths = (self.npcs.iter().chain(left_in_dispatch))
+            .map(|npc| (npc.id, npc.berth))
+            .collect();
+        let mut leaders = warp_out::leaders(left_in_dispatch);
+        leaders.extend(warp_out::leaders(&self.npcs));
+        let open_leaders = if think {
+            self.open_leaders.clone()
+        } else {
+            leaders.clone()
+        };
+        let left = left_in_dispatch
+            .iter()
+            .map(|npc| (npc.id, (npc.berth, npc.state)))
+            .collect();
         if think {
             warp_out::send_leaders_out(&mut self.npcs);
         }
@@ -251,6 +263,9 @@ impl Traffic {
             entering,
             order,
             leaders,
+            open_leaders,
+            leader_berths,
+            left,
             holders,
             leads,
             unseen,
@@ -258,7 +273,6 @@ impl Traffic {
             first: self.first_class,
             docks: DockNotes::default(),
             reached: Vec::new(),
-            no_bay: BTreeSet::new(),
         }
     }
 
@@ -380,11 +394,16 @@ fn ends(npc: &Npc, outcome: Outcome, world: &World) -> bool {
     }
 }
 
-/// Where the fly half `pass` found `ship`, if it is there.
-fn state_of(pass: &FlyPass, ship: ShipRef) -> Option<ShipState> {
+/// Where the fly half `pass` found `ship` for `reader`, if it is there:
+/// a ship that left at its slot of the AI loop is there for a reader in a
+/// lower slot, whose low level came before it left.
+fn state_of(pass: &FlyPass, ship: ShipRef, reader: &Npc) -> Option<ShipState> {
     match ship {
         ShipRef::Player => pass.player,
-        ShipRef::Npc(id) => pass.states.get(&id).copied(),
+        ShipRef::Npc(id) => pass.states.get(&id).copied().or_else(|| {
+            let &(berth, state) = pass.left.get(&id)?;
+            (reader.berth < berth).then_some(state)
+        }),
     }
 }
 
@@ -412,9 +431,8 @@ fn beside_of(pass: &FlyPass, npc: &Npc) -> Beside {
     };
     Beside {
         swarm: pass.leads.get(&npc.id).copied(),
-        guard: guard.and_then(|guard| state_of(pass, guard)),
+        guard: guard.and_then(|guard| state_of(pass, guard, npc)),
         leader_seen,
-        no_bay: pass.no_bay.contains(&npc.id),
         ..Beside::default()
     }
 }
@@ -434,7 +452,7 @@ fn other_of(pass: &FlyPass, npc: &Npc) -> (Option<ShipState>, bool) {
         ShipRef::Player => pass.player_disabled,
         ShipRef::Npc(id) => pass.disabled.contains(&id),
     });
-    (other.and_then(|ship| state_of(pass, ship)), disabled)
+    (other.and_then(|ship| state_of(pass, ship, npc)), disabled)
 }
 
 /// `npc`'s flight in the fly half `pass` at `speeds`, in `world`, rolling
@@ -501,7 +519,7 @@ fn fly_flown(
 fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
     match npc.goal {
         Goal::Follow { lead, .. } if world.flight.npc_formation == NpcFormation::Original => {
-            pass.leaders.get(&lead).map(|leader| leader.glow)
+            pass.leaders_for(npc).get(&lead).map(|leader| leader.glow)
         }
         _ => Some(world.warp.player.glow),
     }
@@ -527,7 +545,8 @@ fn fly_steered(
 ) -> Outcome {
     // The goal it holds, not the one it flies (see `fly_one`).
     let paused = pass.paused.contains(&npc.id);
-    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, pass.think, paused) {
+    let leaders = pass.leaders_for(npc);
+    if let Some(outcome) = warp_out::fly_jump(npc, leaders, world, pass.think, paused) {
         return outcome;
     }
     match plunder::fly_docking(
@@ -575,7 +594,7 @@ fn fly_steered(
         &mut *chance,
     );
     let jumping = npc.jumping() && !paused;
-    warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
+    warp_out::settle(npc, pass.leaders_for(npc), &world.warp, jumping);
     outcome
 }
 
@@ -616,25 +635,31 @@ mod tests {
         npc
     }
 
-    /// A traffic whose fly half lands one NPC, docks a fighter with its
-    /// carrier, starts a pirate's dock with that carrier, takes a lead
-    /// into its gate's box (releasing its follower) and holds one still:
-    /// 0 lands on planet 140 and stays there; 1, a fighter, docks with 2,
-    /// its carrier;
-    /// 3 docks with 2 to plunder it; 4 enters the gate, 5 following it;
-    /// 6 flies on, short of fuel and regenerating half a unit a tick.
+    /// A fighter, 1, of ship 200 at (480, 10) docking with its carrier, 2,
+    /// within its reach.
+    fn fighter() -> Npc {
+        let mut fighter = at(1, 480.0, 10.0);
+        fighter.ship = ShipId(200);
+        fighter.goal = Goal::Dock(ShipRef::Npc(NpcId(2)));
+        fighter.carrier = Some(Carrier {
+            ship: ShipRef::Npc(NpcId(2)),
+            window: 100.0,
+            reach: 30.0,
+        });
+        fighter
+    }
+
+    /// A traffic whose fly half lands one NPC, starts a pirate's dock with
+    /// a ship, takes a lead into its gate's box (releasing its follower)
+    /// and holds one still: 0 lands on planet 140 and stays there; 3 docks
+    /// with 2 to plunder it; 4 enters the gate, 5 following it; 6 flies
+    /// on, short of fuel and regenerating half a unit a tick. A fighter's
+    /// dock and a jump-out are its AI loop's ([`dispatch_leave`](super::super::dispatch_leave)),
+    /// so none of it leaves here.
     fn busy() -> Traffic {
         let mut lander = at(0, 0.0, 0.0);
         lander.goal = Goal::Land(StellarId(140));
         let carrier = NpcId(2);
-        let mut fighter = at(1, 480.0, 10.0);
-        fighter.ship = ShipId(200);
-        fighter.goal = Goal::Dock(ShipRef::Npc(carrier));
-        fighter.carrier = Some(Carrier {
-            ship: ShipRef::Npc(carrier),
-            window: 100.0,
-            reach: 30.0,
-        });
         let mut pirate = at(3, 501.0, 1.0);
         pirate.goal = Goal::Plunder {
             ship: ShipRef::Npc(carrier),
@@ -660,15 +685,7 @@ mod tests {
         flier.reserves.fuel.now = 100.0;
         flier.stats.fuel_regen = 0.5;
         Traffic {
-            npcs: vec![
-                lander,
-                fighter,
-                at(2, 500.0, 0.0),
-                pirate,
-                lead,
-                follower,
-                flier,
-            ],
+            npcs: vec![lander, at(2, 500.0, 0.0), pirate, lead, follower, flier],
             ..Traffic::default()
         }
     }
@@ -745,7 +762,7 @@ mod tests {
                 Mode::Flying,
                 498,
             ),
-            // The carrier, boarded by its fighter.
+            // The pirate's victim, boarded.
             (
                 NpcId(2),
                 state(500.0, 0.0, 0.0, 0.0),
@@ -801,16 +818,9 @@ mod tests {
         ]
     }
 
-    /// What [`busy`]'s fly half sent away: the fighter, docked. The lander
-    /// stays.
-    fn busy_departed() -> [(NpcId, Outcome); 1] {
-        [(
-            NpcId(1),
-            Outcome::Docked {
-                carrier: ShipRef::Npc(NpcId(2)),
-                ship: ShipId(200),
-            },
-        )]
+    /// What [`busy`]'s fly half sent away: nothing. The lander stays.
+    fn busy_departed() -> [(NpcId, Outcome); 0] {
+        []
     }
 
     /// `traffic`'s fly half of `half` run one NPC at a time, in the
@@ -870,19 +880,40 @@ mod tests {
 
     #[test]
     fn an_npc_whose_flight_ends_it_leaves_the_traffic_at_once() {
+        // The lead's gate entry ends on its last count (@0x2c078).
         let sites = sites();
         let world = World::new(&sites);
         let mut traffic = busy();
+        let lead = NpcId(4);
+        traffic.npcs[3].mode = Mode::EnteringGate {
+            gate: GATE,
+            ticks_left: 1,
+        };
         let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
-        let docked = traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
-        assert_eq!(docked, Some(busy_departed()[0].1));
-        assert!(traffic.npcs().iter().all(|npc| npc.id != NpcId(1)), "gone");
-        assert_eq!(traffic.departed(), busy_departed());
+        let entered = traffic.fly_npc(&mut pass, lead, &world, &mut NeverFires);
+        assert_eq!(entered, Some(Outcome::EnteredGate(GATE)));
+        assert!(traffic.npcs().iter().all(|npc| npc.id != lead), "gone");
+        assert_eq!(traffic.departed(), [(lead, Outcome::EnteredGate(GATE))]);
         assert_eq!(
-            traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires),
+            traffic.fly_npc(&mut pass, lead, &world, &mut NeverFires),
             None,
             "no longer there"
         );
+    }
+
+    #[test]
+    fn a_fighter_within_its_carriers_reach_docks_nowhere_in_the_fly_half() {
+        // Its low level docks it at its slot of the AI loop (@0x87fef).
+        let sites = sites();
+        let world = World::new(&sites);
+        let mut traffic = Traffic {
+            npcs: vec![fighter(), at(2, 500.0, 0.0)],
+            ..Traffic::default()
+        };
+        let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+        let flown = traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
+        assert_eq!(flown, Some(Outcome::Flying));
+        assert_eq!(traffic.npcs().len(), 2, "still out");
     }
 
     #[test]
@@ -930,32 +961,50 @@ mod tests {
         // though the carrier has since been pushed on.
         let sites = sites();
         let world = World::new(&sites);
-        let mut moved = busy();
-        let mut pass = moved.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
-        moved.npcs[2].state.position = Vec2::new(5000.0, 0.0);
-        moved.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
-        assert_eq!(
-            moved.departed()[0].1,
-            Outcome::Docked {
-                carrier: ShipRef::Npc(NpcId(2)),
-                ship: ShipId(200)
+        let flown = |push: bool| {
+            let mut traffic = Traffic {
+                npcs: vec![fighter(), at(2, 500.0, 0.0)],
+                ..Traffic::default()
+            };
+            let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+            if push {
+                traffic.npcs[1].state.position = Vec2::new(5000.0, 0.0);
             }
-        );
+            traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
+            traffic.npcs[0].state
+        };
+        assert_eq!(flown(true), flown(false));
     }
 
     #[test]
-    fn the_half_tells_a_fighter_that_it_has_no_bay() {
+    fn a_lower_slot_steers_by_a_ship_that_left_at_its_slot_and_a_higher_one_does_not() {
+        // A lower slot's low level steered before the ship left in the AI
+        // loop; a higher one's came after (@0x859b8).
         let sites = sites();
         let world = World::new(&sites);
-        let mut traffic = busy();
-        let pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
-        assert!(
-            !beside_of(&pass, &traffic.npcs[1]).no_bay,
-            "none unless told"
-        );
-        let pass = pass.with_no_bay(BTreeSet::from([NpcId(1)]));
-        assert!(beside_of(&pass, &traffic.npcs[1]).no_bay);
-        assert!(!beside_of(&pass, &traffic.npcs[0]).no_bay, "another ship");
+        let flown = |berth: u32, left: bool| {
+            let mut fighter = fighter();
+            fighter.berth = berth;
+            fighter.carrier = Some(Carrier {
+                reach: 0.0,
+                ..fighter.carrier.expect("a fighter")
+            });
+            let carrier = at(2, 500.0, 0.0);
+            let mut traffic = Traffic {
+                npcs: vec![fighter],
+                ..Traffic::default()
+            };
+            if left {
+                traffic.left_in_dispatch.push(carrier);
+            } else {
+                traffic.npcs.push(carrier);
+            }
+            let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
+            traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
+            traffic.npcs[0].state
+        };
+        assert_eq!(flown(1, true), flown(1, false), "below it: as it was");
+        assert_ne!(flown(4, true), flown(4, false), "above it: gone");
     }
 
     #[test]
@@ -966,11 +1015,11 @@ mod tests {
         let world = World::new(&sites);
         let push = Vec2::new(0.0, 3.0);
         let mut pushed_before = busy();
-        pushed_before.npcs[6].state.velocity = push;
+        pushed_before.npcs[5].state.velocity = push;
         pushed_before.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
         let mut pushed_after = busy();
         let mut pass = pushed_after.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
-        pushed_after.npcs[6].state.velocity = push;
+        pushed_after.npcs[5].state.velocity = push;
         for id in pass.order().to_vec() {
             pushed_after.fly_npc(&mut pass, id, &world, &mut NeverFires);
         }

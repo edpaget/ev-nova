@@ -439,6 +439,9 @@ mod tests {
             let led = led.expect("there");
             led.warp.stage = stage;
             led.no_ai = no_ai;
+            // A jump's goal, so an intact ship's high level holds its
+            // stage rather than ending it (@0x8d513).
+            led.goal = crate::ai::Goal::JumpOut;
             traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
             assert_eq!(
                 of(&traffic, LED).warp.stage,

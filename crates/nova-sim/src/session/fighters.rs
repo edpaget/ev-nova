@@ -2184,8 +2184,40 @@ pub(super) mod tests {
         assert!(!session.take_save_due(), "as rounds are");
     }
 
+    /// Double time's pairs of passes of `session`, each second pass first,
+    /// until the fighters out are `docked` many fewer than `out`, at most
+    /// 600: whether they docked, never on a second pass. That pass runs no
+    /// `_AIDispatch` (@0x44350), and its low level docks a fighter
+    /// (@0x87fef → @0x80404).
+    fn docked_in_double_time(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        out: usize,
+        docked: usize,
+    ) -> bool {
+        (1..=600).any(|_| {
+            session.tick_again(
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            let left = session.pilot().escorts().len();
+            assert_eq!(left, out, "not on the second pass");
+            work_with(
+                session,
+                catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().len() == out - docked
+        })
+    }
+
     #[test]
-    fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
+    fn a_fighter_docking_in_double_time_is_aboard_again_from_an_advance_pass() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
         let id = session.space.escorts.fleet[0].expect("placed");
@@ -2200,16 +2232,8 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
-        let docked = (1..=600).find(|_| {
-            session.tick_again(
-                Controls::default(),
-                &crate::ai::NovaAi::default(),
-                crate::Rules::default(),
-                &mut NeverFires,
-            );
-            session.pilot().escorts().is_empty()
-        });
-        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        let docked = docked_in_double_time(&mut session, &catalog, 1, 1);
+        assert!(docked, "{:?}", fleet_npcs(&session));
         assert_eq!(session.npcs(), []);
         assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
     }
@@ -2263,7 +2287,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fighter_docking_on_double_times_second_pass_below_another_slot_makes_no_save_due() {
+    fn a_fighter_docking_in_double_time_below_another_slot_makes_no_save_due() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
         let fighter = session.space.escorts.fleet[0].expect("placed");
@@ -2280,16 +2304,8 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         session.take_save_due();
-        let docked = (1..=600).find(|_| {
-            session.tick_again(
-                Controls::default(),
-                &NovaAi::default(),
-                Rules::default(),
-                &mut NeverFires,
-            );
-            session.pilot().escorts().len() == 1
-        });
-        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        let docked = docked_in_double_time(&mut session, &catalog, 2, 1);
+        assert!(docked, "{:?}", fleet_npcs(&session));
         assert_eq!(
             session.space.escorts.fleet,
             [Some(escort)],

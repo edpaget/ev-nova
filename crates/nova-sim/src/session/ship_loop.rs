@@ -28,22 +28,18 @@
 //! - **A slot's let-go** reads the ships as the loop has left them: a ship
 //!   of a later slot than a wreck or a gate entry lets go in that pass, an
 //!   earlier one at its step in the next, and its idle bays hold from there
-//!   (`_HandleShip` @0x3390a-0x3394e). A ship jumping out or a fighter
-//!   docking is let go by every slot in that pass, as the original frees
-//!   them in the AI loop (see the traffic's `gone` module).
+//!   (`_HandleShip` @0x3390a-0x3394e). A ship that jumped out or a fighter
+//!   that docked left at its slot of the AI loop, before the ship loop, so
+//!   every slot, an earlier one too, lets go of it at its step, before its
+//!   fire (see the traffic's `dispatch_leave` and `gone` modules).
 //! - **The let-go before the flight** is the original's order, but the
 //!   ship flies the same either way: a flight steers by the ship its goal
 //!   names and reads no target (+0x70), and the fly half's own reads of it
 //!   ([`Traffic::begin_fly`](crate::traffic::Traffic::begin_fly)) come
-//!   before every slot's test. The one trace of the order is a flight that
-//!   drops the target itself, giving up a followed jump
-//!   ([`warp_out`](crate::traffic::warp_out)): a test after it would find
-//!   nothing to note on a ship gone in the AI loop
-//!   ([`GoneShip::let_go`](crate::traffic::gone::GoneShip::let_go)), so the
-//!   ship's next think would not read that slot.
-//! - **A ship whose flight ends it** (it lands, jumps, enters a gate or
-//!   docks) leaves at once: its slot takes no step, and no later slot's
-//!   fire or shockwave sees it.
+//!   before every slot's test.
+//! - **A ship whose flight ends it** (it enters a gate, or a mission ship
+//!   leaves as it lands) leaves at once: its slot takes no step, and no
+//!   later slot's fire or shockwave sees it.
 //! - **An escape ship's fighter** (`_LaunchFighter` @0x354ea, its slot
 //!   active at once @0x3c90b, @0x3d680) launched into a slot above its
 //!   carrier's is reached later in the same loop, as the loop reads each
@@ -105,16 +101,17 @@ impl Session {
     /// the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
     ///
-    /// A fighter whose flight docks it goes aboard its carrier at its own
-    /// slot ([`Session::dock_fighter`]), as `_LowLevelAIHandler` calls
-    /// `_AIAddFighterToParent` there (@0x87fef): the player's leaves the
-    /// fleet before any later slot's step settles its hits, whose escorts
-    /// lost ([`Session::lose_escorts`]) would otherwise take the fighter
-    /// gone from the system for a loss and make a save due.
+    /// A fighter docks, and goes aboard, at its own slot of the AI loop
+    /// before this ([`Session::dispatch_npcs`], [`Session::dock_fighter`]),
+    /// as `_LowLevelAIHandler` calls `_AIAddFighterToParent` there
+    /// (@0x87fef): the player's leaves the fleet before any step settles
+    /// its hits, whose escorts lost ([`Session::lose_escorts`]) would
+    /// otherwise take the fighter gone from the system for a loss and make
+    /// a save due.
     ///
-    /// The rest of what the loop's departures leave the session (each
-    /// mission ship that left raising its fate, the persons' offers, the
-    /// fighters orphaned, the watched ships observed), the fly half's end
+    /// The rest of what the departures leave the session (each mission
+    /// ship that left raising its fate, the persons' offers, the fighters
+    /// orphaned, the watched ships observed), the fly half's end
     /// (the docks started, the repairs queued, the waits counted down, the
     /// followers released, the fuel), the docks' and repairs' work on the
     /// line ([`Session::settle_line_queue`]), the reinforcement clock and
@@ -225,29 +222,23 @@ impl Session {
     }
 
     /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
-    /// flight, a fighter its flight docks going aboard at once
-    /// ([`Session::dock_fighter`]); or, for one launched since the half
-    /// began, its move alone, unsteered
-    /// ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)).
+    /// flight; or, for one launched since the half began, its move alone,
+    /// unsteered
+    /// ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)). No
+    /// flight docks a fighter: it docks at its slot of the AI loop
+    /// ([`Session::dispatch_npcs`]).
     fn fly_in_loop(&mut self, fly: &mut FlyPass, id: NpcId, chance: &mut dyn Chance) {
         if !fly.order().contains(&id) {
             self.step_traffic(|traffic, world| traffic.coast_npc(fly, id, &world));
             return;
         }
-        if let Some(outcome) =
-            self.step_traffic(|traffic, world| traffic.fly_npc(fly, id, &world, &mut *chance))
-        {
-            self.dock_fighter(id, outcome);
-        }
+        self.step_traffic(|traffic, world| traffic.fly_npc(fly, id, &world, &mut *chance));
     }
 
     /// Begins the traffic's fly half of `half`, the NPCs in `still`
-    /// keeping their place, in the world it flies in, each fighter with
-    /// no bay staying out (see the `fighter_homes` module): asked after
-    /// the half has begun, whose turn-back sends a fighter home.
+    /// keeping their place, in the world it flies in.
     fn begin_fly(&mut self, still: &BTreeSet<NpcId>, half: FlyHalf) -> FlyPass {
-        let pass = self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half));
-        pass.with_no_bay(self.fighters_staying_out())
+        self.step_traffic(|traffic, world| traffic.begin_fly(&world, still, half))
     }
 }
 
@@ -494,6 +485,112 @@ mod tests {
         let still = heading(1, 2, false);
         assert_eq!(heading(2, 1, true), still, "both moved");
         assert_ne!(heading(1, 2, true), still, "where it stood");
+    }
+
+    /// [`FiringAt`] NPC `at`, which keeps its own goal.
+    #[derive(Debug)]
+    struct FiringAtKeeping(NpcId);
+
+    impl Behaviour for FiringAtKeeping {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            if npc.id == self.0 {
+                npc.goal
+            } else {
+                FiringAt(self.0).decide(npc, around, chance)
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            FiringAt(self.0).trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            FiringAt(self.0).target(npc, around)
+        }
+    }
+
+    #[test]
+    fn on_a_jump_outs_tick_an_earlier_slot_lets_go_before_its_fire() {
+        // Sub 4 frees slot 3 in the AI loop (@0x859b8), before slot 2's
+        // `_HandleShip`, whose slot test (@0x33865-0x33888) clears its
+        // target before its fire (@0x34ffd).
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                guidance: 4,
+                ..blaster()
+            }],
+            ..armed()
+        };
+        let fired_at = |jumps: bool| {
+            let mut session = facing_an_npc(&catalog, 180);
+            let shooter = &mut session.space.traffic.npcs_mut()[0];
+            shooter.berth = 2;
+            shooter.state.position = WRECKED;
+            let shooter = shooter.id;
+            let target = place(&mut session, 3, WRECKED + Vec2::new(0.0, -40.0), Vec2::ZERO);
+            if jumps {
+                let runner = session.space.npc_mut(target).expect("there");
+                runner.goal = Goal::JumpOut;
+                runner.begin_own_jump();
+                runner.warp.stage = 3.0;
+                runner.warp.since = 100_000;
+            }
+            pass(&mut session, &catalog, &FiringAtKeeping(target));
+            assert_eq!(session.space.npc(target).is_none(), jumps, "{jumps}");
+            let mut shots = session.shots().iter();
+            shots.any(|shot| shot.firer == ShipRef::Npc(shooter))
+        };
+        assert!(fired_at(false), "it fires at a ship that stays");
+        assert!(!fired_at(true), "it let go of the one gone");
+    }
+
+    /// Every NPC keeps its goal and target; each think records whether it
+    /// reads a gone slot in its target.
+    #[derive(Debug, Default)]
+    struct ReadsGone(std::cell::RefCell<Vec<(NpcId, bool)>>);
+
+    impl Behaviour for ReadsGone {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            let held = around.held_gone(npc).is_some();
+            self.0.borrow_mut().push((npc.id, held));
+            npc.goal
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.target
+        }
+    }
+
+    #[test]
+    fn a_follower_that_gives_up_a_jump_on_a_ship_gone_at_a_lower_slot_reads_no_gone_slot_on_the_next_tick()
+     {
+        // On the jump path the high level clears +0x70 before every goal
+        // block (@0x8d4e4-0x8d50d), goal 0xb's give-up included
+        // (@0x8deb9-0x8ded1, @0x8df31-0x8df49), and the AI wait's skip
+        // leaves it to `_HandleShip`'s test that frame (@0x8d4b9-0x8d4d2):
+        // no think of the follower reads the slot its target held.
+        let catalog = armed();
+        let mut session = empty(&catalog);
+        let runner = place(&mut session, 2, Vec2::new(-2000.0, 0.0), Vec2::ZERO);
+        let npc = session.space.npc_mut(runner).expect("there");
+        npc.goal = Goal::JumpOut;
+        npc.begin_own_jump();
+        npc.warp.stage = 3.0;
+        npc.warp.since = 100_000;
+        let leader = place(&mut session, 3, Vec2::new(-900.0, 0.0), Vec2::ZERO);
+        let follower = place(&mut session, 5, Vec2::new(-900.0, 50.0), Vec2::ZERO);
+        let npc = session.space.npc_mut(follower).expect("there");
+        npc.leader = Some(leader);
+        npc.follow_leaders_jump(ShipRef::Npc(leader));
+        npc.target = Some(ShipRef::Npc(runner));
+        let reads = ReadsGone::default();
+        pass(&mut session, &catalog, &reads);
+        assert!(session.space.npc(runner).is_none(), "jumped out");
+        let npc = session.space.npc(follower).expect("there");
+        assert_eq!((npc.goal, npc.warp.goal), (Goal::Idle, None), "gave up");
+        reads.0.take();
+        pass(&mut session, &catalog, &reads);
+        assert!(reads.0.take().contains(&(follower, false)));
     }
 
     /// `session`'s NPC `lander` put at rest over the system's first

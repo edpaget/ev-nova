@@ -252,7 +252,13 @@ fn two_refuellers_in_one_run_read_the_fuel_in_berth_order() {
     let world = world(tank, 300.0, RuleSource::Engine);
     let mut chance = Scripted::default();
     traffic.open_think(&recording, world, &[], &mut chance);
-    traffic.think_run(&recording, world, |_| true, &mut chance);
+    traffic.think_run(
+        &recording,
+        world,
+        |_| true,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
     traffic.close_think();
     assert_eq!(tank + traffic.take_fuel_given(), 101.0);
     assert_eq!(ship(&traffic, NpcId(3)).goal, Goal::Assist(Help::Refuel));
