@@ -30,7 +30,10 @@
 //!   - state 4 on a ship breaking up, still in its slot (@0x8e3e6 →
 //!     @0x8e714-0x8e726), which the brave trader's and the interceptor's
 //!     thinks leave it in, having no drop of their own
-//!     ([`attack_breaking_up`]). The warship and the pirate drop such a
+//!     ([`attack_breaking_up`]), and a wimpy trader's attack it keeps
+//!     unprovoked, a lost lead's copied one included
+//!     ([`trader_keep`](crate::ai::trader_keep)); behind an interceptor's
+//!     gate the provoked attack on such a ship ends so too. The warship and the pirate drop such a
 //!     target themselves, writing goal 0 and target -1 but no +0x96
 //!     (`_WarshipAI` @0x8bc67-0x8bca9, `_PirateWarshipAI`
 //!     @0x8c315-0x8c330), so theirs is kept. An attack on a ship gone
