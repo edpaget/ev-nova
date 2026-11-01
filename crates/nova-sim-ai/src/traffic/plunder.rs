@@ -10,7 +10,9 @@
 //! - **The high level** ([`high_level`]): while a ship's AI wait runs
 //!   ([`Npc::wait_running`], the hold at its gate's included)
 //!   `_HighLevelAIHandler` returns before every goal but
-//!   10 and 0xe (@0x8d4b9-0x8d4d2), so the traffic keeps its pursuit and
+//!   10 and 0xe (@0x8d4b9-0x8d4d2,
+//!   [`handler_head::waits_out`](crate::ai::handler_head::waits_out)),
+//!   so the traffic keeps its pursuit and
 //!   docking as they were. Goal 0x16's block comes before that return
 //!   (@0x8d462-0x8d4ac), so a pirate's count wait ([`Goal::CountWait`])
 //!   flies on as a fight with no quarry; a ship turned out of it onto
@@ -174,7 +176,9 @@ pub enum HighLevel {
 /// ([`RuleKey::InertialDampener`](crate::RuleKey::InertialDampener)).
 #[must_use]
 pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> HighLevel {
-    if npc.wait_running() && !matches!(npc.goal, Goal::Hold | Goal::Drift | Goal::CountWait) {
+    // Goal 0x16's block comes before the head's wait exit (@0x8d462-0x8d4ac).
+    let counts = npc.goal == Goal::CountWait;
+    if !counts && crate::ai::handler_head::waits_out(npc, npc.goal) {
         return HighLevel::Skipped;
     }
     if npc.goal == Goal::Assist(Help::Refuel) {
@@ -1078,15 +1082,33 @@ mod tests {
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly)
         };
         assert_eq!(high(&held), HighLevel::Skipped);
-        let in_form = Npc {
-            goal: Goal::Hold,
+        // Goal 0xa, each of the engine's three, and 0xe pass the head
+        // (@0x8d4c8, @0x8d4ce), as `handler_head::waits_out` reads them.
+        for goal in [
+            Goal::Hold,
+            Goal::Follow {
+                lead: crate::traffic::npc::NpcId(9),
+                guard: None,
+            },
+            Goal::Formation { guard: None },
+            Goal::Drift,
+        ] {
+            let in_form = Npc {
+                goal,
+                ..held.clone()
+            };
+            assert_eq!(
+                high(&in_form),
+                HighLevel::Fights,
+                "{goal:?} passes the head"
+            );
+        }
+        // Goal 0x16's block comes before the head (@0x8d462-0x8d4ac).
+        let counting = Npc {
+            goal: Goal::CountWait,
             ..held.clone()
         };
-        assert_eq!(
-            high(&in_form),
-            HighLevel::Fights,
-            "goal 0xa passes the head"
-        );
+        assert_eq!(high(&counting), HighLevel::Fights, "the count wait flies");
         held.mode = crate::traffic::npc::Mode::Flying;
         assert_eq!(high(&held), HighLevel::Fights);
     }
