@@ -423,7 +423,13 @@ pub fn unprovoked(
     let Some(target) = target else {
         return GateWait::default();
     };
-    if around.condition_of(target) != Some(Condition::Intact) {
+    // A player whose armour is gone is breaking up before anything settles
+    // his condition (`_IsDying`), which `_IsDisabled` holds disabled.
+    let breaking_up = target == ShipRef::Player
+        && around
+            .player
+            .is_some_and(|player| player.condition.is_dying(player.reserves.armor));
+    if breaking_up || around.condition_of(target) != Some(Condition::Intact) {
         return GateWait {
             trigger: Trigger::default(),
             drops_target: true,
@@ -1913,9 +1919,14 @@ mod tests {
     /// What `ENGINE` fires for `npcs[0]` flying among `npcs`, and the
     /// target it keeps.
     fn idle_fire(npcs: &[Npc]) -> (Trigger, Option<ShipRef>) {
+        idle_fire_beside(npcs, &player(0.0, 0.0))
+    }
+
+    /// [`idle_fire`], the player `side`.
+    fn idle_fire_beside(npcs: &[Npc], side: &PlayerSide) -> (Trigger, Option<ShipRef>) {
         let govts = govts(0, 0);
         let around = Surroundings {
-            player: Some(player(0.0, 0.0)),
+            player: Some(*side),
             govts: &govts,
             ..Surroundings::new(&[], npcs)
         };
@@ -1923,6 +1934,51 @@ mod tests {
             ENGINE.trigger(&npcs[0], &around),
             ENGINE.target(&npcs[0], &around),
         )
+    }
+
+    #[test]
+    fn an_idle_escort_targeting_the_player_drops_him_breaking_up_and_fires_at_him_intact() {
+        // The lost parent keeps its target (@0x83917-0x8397b), and sub 0's
+        // `_AIEscortFireUnprovoked` drops a player down (+0x70 = -1,
+        // @0x80e9d): `_IsDisabled` holds a player breaking up, destroyed
+        // or with no armour left disabled.
+        let dying = Condition::Dying {
+            ticks_left: 0,
+            starting: true,
+        };
+        let mut armourless = player(0.0, -100.0);
+        armourless.reserves.armor.now = 0.0;
+        let idle = [having(escort(None), Goal::Idle, Some(ShipRef::Player))];
+        for side in [
+            PlayerSide {
+                condition: dying,
+                ..player(0.0, -100.0)
+            },
+            PlayerSide {
+                condition: Condition::Destroyed,
+                ..player(0.0, -100.0)
+            },
+            armourless,
+        ] {
+            assert_eq!(
+                idle_fire_beside(&idle, &side),
+                (Trigger::default(), None),
+                "{:?}",
+                side.condition
+            );
+        }
+        assert_eq!(
+            idle_fire_beside(&idle, &player(0.0, -100.0)),
+            (
+                Trigger {
+                    only: Some(WeaponId(140)),
+                    keep: Some(WeaponId(140)),
+                    ..POINT_DEFENCE.trigger
+                },
+                Some(ShipRef::Player)
+            ),
+            "intact, in reach"
+        );
     }
 
     #[test]

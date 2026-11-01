@@ -332,7 +332,7 @@ use berth_search::BerthSearch;
 use berth_voices::BerthVoices;
 pub use fly_pass::{FlyHalf, FlyPass};
 use formation_places::BerthPlaces;
-use frame_target::held_trigger;
+use frame_target::decided_command;
 use gone::{Freed, GoneShips};
 use launch_room::LaunchRoom;
 use nova_sim_combat::asteroid::Asteroid;
@@ -1478,13 +1478,8 @@ impl Traffic {
             let npc = &self.npcs[index];
             around.fighter_room = room.any();
             let (trigger, target) = if decides[index] {
-                (
-                    held_trigger(behaviour, npc, last_words[index].flatten(), &around),
-                    // A cleared or held target is the frame's last word: a
-                    // target step that works its answer out afresh (a
-                    // defender's think, a mission hunt) would refill it.
-                    Some(last_words[index].unwrap_or_else(|| behaviour.target(npc, &around))),
-                )
+                let (trigger, target) = decided_command(behaviour, npc, last_words[index], &around);
+                (trigger, Some(target))
             } else if regroup::paused(npc) {
                 let wait = regroup::held_fire(behaviour, npc, &around);
                 (wait.trigger, wait.drops_target.then_some(None))

@@ -188,3 +188,21 @@ fn a_fleet_escort_whose_attack_on_an_ally_is_dropped_fires_its_turret_at_it_that
     assert_eq!(escort.trigger.only, Some(WeaponId(140)), "its turret pick");
     assert!(escort.trigger.point_defence);
 }
+
+#[test]
+fn a_fleet_escort_whose_dropped_ally_is_disabled_drops_it_and_fires_nothing_that_tick() {
+    // The ally drop keeps +0x70 (@0x8e2d2), and sub 0's
+    // `_AIEscortFireUnprovoked` then writes it -1 in the same dispatch
+    // (@0x80e9d), the ally being down.
+    let mut lead = ship(9, PIRATES, AiType::Warship, 0.0, 200.0);
+    lead.berth = 9;
+    lead.no_ai = true;
+    let mut escort = attacking(ship(1, PIRATES, AiType::Warship, 0.0, 0.0), n(2));
+    escort.leader = Some(NpcId(9));
+    let mut ally = bystander(2, PIRATES);
+    ally.condition = crate::combat::hull::Condition::Disabled;
+    let traffic = ticked(vec![escort, ally, lead], (0.0, 90_000.0));
+    let escort = &traffic.npcs()[0];
+    assert_eq!((escort.goal, escort.target), (Goal::Idle, None));
+    assert_eq!(escort.trigger, Trigger::default(), "nothing to fire at");
+}

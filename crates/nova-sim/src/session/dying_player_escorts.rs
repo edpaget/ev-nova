@@ -409,11 +409,8 @@ mod tests {
                 mission.mission.is_some_and(|mark| mark.formation.is_some()),
                 "{name}: its mark stays, as +0xc92e does"
             );
+            // What becomes of its target is the escort AI's to pin.
             assert_eq!(mission.goal, Goal::Idle, "{name}");
-            // The lost parent keeps its target, and goal 0's sub 0 then
-            // drops a target breaking up (`_AIEscortFireUnprovoked`,
-            // @0x80e9d).
-            assert_eq!(mission.target, None, "{name}");
             assert_eq!(mission.ai_type, AiType::WimpyTrader, "{name}");
         }
     }
