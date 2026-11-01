@@ -214,26 +214,40 @@ mod tests {
     }
 
     #[test]
-    fn the_slot_stellars_are_ids_128_to_191() {
-        use crate::catalog::SystemId;
+    fn the_slot_stellars_are_the_readable_sites_a_slot_names_of_every_system() {
+        // Which stellars a slot names is the traffic's
+        // (`traffic::slot_stellars::ids`); the session holds the sites the
+        // catalog can read among them, whichever system lists each.
+        use crate::catalog::{PilotCatalog, SystemId};
         use crate::testkit::planet;
+        use crate::traffic::slot_stellars;
+        let some = slot_stellars::ids().nth(20).expect("a slot");
+        let last = slot_stellars::ids().last().expect("a slot");
+        let past = StellarId(last.0 + 1);
         let mut catalog = crate::testkit::catalog();
+        catalog
+            .sites
+            .push((SystemId(132), vec![planet(some.0, 0.0, 0.0)]));
         catalog.sites.push((
-            SystemId(132),
-            vec![planet(191, 0.0, 0.0), planet(192, 0.0, 0.0)],
+            SystemId(133),
+            vec![planet(last.0, 0.0, 0.0), planet(past.0, 0.0, 0.0)],
         ));
         let session = Session::start(&catalog).expect("starts");
-        let ids: Vec<StellarId> = session
+        let held: Vec<StellarId> = session
             .statics
             .slot_stellars
             .iter()
             .map(|site| site.id)
             .collect();
-        assert_eq!(
-            ids,
-            [128, 129, 140, 191].map(StellarId),
-            "every system's, 192 past the last slot"
+        let readable: Vec<StellarId> = slot_stellars::ids()
+            .filter(|&id| catalog.landing_site(id).is_some())
+            .collect();
+        assert_eq!(held, readable);
+        assert!(
+            held.contains(&some) && held.contains(&last),
+            "every system's: {held:?}"
         );
+        assert!(!held.contains(&past), "none a slot doesn't name");
     }
 
     #[test]

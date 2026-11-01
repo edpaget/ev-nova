@@ -1153,8 +1153,8 @@ pub(super) mod tests {
         assert!(session.join_mission_escorts());
         assert_eq!(
             session.npcs()[0].travel,
-            Some(crate::catalog::StellarId(128)),
-            "slot 0, read as stellar 128"
+            Some(travel::of_slot(0)),
+            "the player's slot, 0"
         );
     }
 

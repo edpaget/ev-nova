@@ -1297,7 +1297,7 @@ pub(super) mod tests {
         npc.travel = Some(crate::catalog::StellarId(140));
         fall_in(&mut npc, None);
         assert_eq!(npc.goal, Goal::Formation { guard: None });
-        assert_eq!(npc.travel, Some(crate::catalog::StellarId(128)));
+        assert_eq!(npc.travel, Some(travel::of_slot(0)));
     }
 
     /// A pilot whose fleet is two escorts, both defending the player.
