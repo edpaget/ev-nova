@@ -791,8 +791,7 @@ pub mod record {
             velocity: Vec2::ZERO,
             heading: 0.0,
             age: 0,
-            spin_timer: 0,
-            spin_start: 0,
+            frame: Some(0),
             layer: nova_sim::combat::shot_layer::ShotLayer::Shots,
         }
     }

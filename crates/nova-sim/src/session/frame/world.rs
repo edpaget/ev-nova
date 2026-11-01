@@ -2,12 +2,13 @@
 //! cargo boxes, asteroids and stellars the flight view draws, each written
 //! into the frame's own buffers, and the record builders the step's report
 //! shares ([`Session::frame_ship_player`], [`Session::frame_ship_npc`],
-//! [`FrameShot::of`]), so a field the frame and a pass both carry is
+//! [`Space::frame_shot`]), so a field the frame and a pass both carry is
 //! built once.
 
 use super::super::{Chart, Session, Space};
-use crate::catalog::StellarId;
+use crate::catalog::{MaskSheet, StellarId};
 use crate::combat::ShipRef;
+use crate::combat::projectile::Shot;
 use crate::flight_frame::{
     FrameAsteroid, FrameBeam, FrameBox, FrameShip, FrameShot, FrameStellar, GateFade,
 };
@@ -127,7 +128,20 @@ impl Space {
     /// (`Space::shots_drawn`).
     pub(super) fn fill_shots(&self, into: &mut Vec<FrameShot>) {
         into.clear();
-        into.extend(self.shots_drawn().into_iter().map(FrameShot::of));
+        into.extend(
+            self.shots_drawn()
+                .into_iter()
+                .map(|shot| self.frame_shot(shot)),
+        );
+    }
+
+    /// `shot`'s record, at the frame it shows on the sheet the contact
+    /// passes touch it by ([`FrameShot::of`]).
+    pub(in crate::session) fn frame_shot(&self, shot: &Shot) -> FrameShot {
+        let sheet = self
+            .sprite_masks
+            .sheet(MaskSheet::Shot(shot.weapon.graphic));
+        FrameShot::of(shot, sheet.map(AsRef::as_ref))
     }
 
     /// Fills `into` with the beams being fired.

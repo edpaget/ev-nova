@@ -71,6 +71,7 @@ use crate::session::{
 };
 use crate::ship_layer::ShipLayer;
 use crate::sound::SimSound;
+use crate::sprite_mask::RleSheet;
 use crate::status_cargo::StatusCargo;
 use crate::story::DrawnSheet;
 use crate::target_panel::{TargetStatus, TargetTag};
@@ -1879,19 +1880,19 @@ pub struct FrameShot {
     pub heading: f32,
     /// How many steps it has flown.
     pub age: u32,
-    /// Its spin's timer (`Shot::spin_timer`).
-    pub spin_timer: u32,
-    /// The index its spin started on (`Shot::spin_start`), which its frame
-    /// counts from (`nova_sim::combat::shot_frame`).
-    pub spin_start: u8,
+    /// The frame it shows on its weapon's sheet ([`Shot::frame_on`]), as
+    /// the view draws it and the contact passes touch it; none where the
+    /// simulation read no sheet of frames for its `Graphic`.
+    pub frame: Option<u16>,
     /// The sprite layer it is drawn in.
     pub layer: ShotLayer,
 }
 
 impl FrameShot {
-    /// `shot`'s record.
+    /// `shot`'s record, at the frame it shows on `sheet`, its weapon
+    /// `Graphic`'s as the contact passes read it, if read.
     #[must_use]
-    pub fn of(shot: &Shot) -> Self {
+    pub fn of(shot: &Shot, sheet: Option<&RleSheet>) -> Self {
         Self {
             id: shot.id,
             weapon: shot.weapon.id,
@@ -1899,8 +1900,7 @@ impl FrameShot {
             velocity: shot.velocity,
             heading: shot.heading,
             age: shot.age,
-            spin_timer: shot.spin_timer,
-            spin_start: shot.spin_start,
+            frame: sheet.and_then(|sheet| shot.frame_on(sheet)),
             layer: shot.layer,
         }
     }

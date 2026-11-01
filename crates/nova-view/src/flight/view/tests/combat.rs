@@ -749,9 +749,11 @@ fn an_explosion_in_a_murky_system_is_murked_as_the_player_sees_it() {
 
 #[test]
 fn a_shot_is_drawn_with_its_frame_where_it_flies() {
-    // Turned 45 degrees right, so the shot flies across and up.
+    // Turned 45 degrees right, so the shot flies across and up, at the
+    // frame the simulation gives.
     let shot = nova_sim::flight_frame::FrameShot {
         velocity: Vec2::new(14.0, -14.0),
+        frame: Some(4),
         ..super::faked_world::shot_of(0, BLASTER, Vec2::new(28.0, -28.0), 45.0)
     };
     let mut view = world(
@@ -771,7 +773,7 @@ fn a_shot_is_drawn_with_its_frame_where_it_flies() {
         .into_iter()
         .find(|(image, _)| image.id == 3500)
         .expect("the shot");
-    assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "heading 45");
+    assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "the frame given");
     assert_eq!(drawn_at.1, view.camera().shot_centre(shown, (0, 0)));
 }
 

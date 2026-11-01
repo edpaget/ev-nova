@@ -31,6 +31,7 @@ use super::spin_timer;
 pub use super::weapon::SPINS;
 use super::weapon::WeaponSpec;
 use crate::chance::Chance;
+use crate::sprite_mask::RleSheet;
 
 /// `Flags`: the shot's frames start on the first (@0x3e976-0x3e985).
 pub const FIRST_FRAME_START: u16 = 0x0004;
@@ -149,6 +150,15 @@ impl Shot {
             self.spin_start,
             self.spin_timer,
         )
+    }
+
+    /// The frame it shows now on `sheet`, by the frames its tokens hold
+    /// ([`Shot::frame`]): the one the contact passes touch it by and the
+    /// view draws. None on a sheet of no frames.
+    #[must_use]
+    pub fn frame_on(&self, sheet: &RleSheet) -> Option<u16> {
+        let frames = NonZeroU16::new(u16::try_from(sheet.starts.len()).unwrap_or(u16::MAX))?;
+        Some(self.frame(frames))
     }
 }
 
@@ -392,5 +402,27 @@ mod tests {
         shot.weapon.flags = 0;
         shot.heading = 100.0;
         assert_eq!(shot.frame(n(36)), 10);
+    }
+
+    #[test]
+    fn a_shot_shows_its_frame_on_a_sheets_frame_count_and_none_on_an_empty_one() {
+        use nova_sim_base::fixture::rle::sheet;
+        let spec = WeaponSpec::new(&nova_sim_catalog::fixture::weapon(128));
+        let (ship, from) = (
+            super::super::ShipRef::Player,
+            crate::flight::ShipState::default(),
+        );
+        let mut shot = Shot::launch(spec, ship, ship, &from, 0.0);
+        shot.weapon.flags = 0;
+        shot.heading = 200.0;
+        let frame = ["#"];
+        let four = sheet(&[&frame, &frame, &frame, &frame]);
+        assert_eq!(shot.frame_on(&four), Some(shot.frame(n(4))));
+        assert_eq!(shot.frame_on(&four), Some(2));
+        let empty = RleSheet {
+            starts: Vec::new(),
+            ..four
+        };
+        assert_eq!(shot.frame_on(&empty), None);
     }
 }

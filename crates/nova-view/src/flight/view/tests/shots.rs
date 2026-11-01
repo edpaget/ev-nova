@@ -1,5 +1,5 @@
 //! How the flight draws its shots and beams (rdm weapons-fidelity phase
-//! 24): the spin start, the fade, the murk, the trails, the weapon glow
+//! 24): the frame, the fade, the murk, the trails, the weapon glow
 //! and the lightning. On [`FakeFlight`]: each frame's shots and beams are
 //! scripted, and each pass the view steps its shot looks after is
 //! reported; what the session does to a shot (its age, its slot's spin
@@ -11,7 +11,6 @@ use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
 use crate::Colorize;
 use crate::system::camera::Anchor;
-use nova_sim::combat::shot_frame::{SPINS, shot_frame};
 
 /// The blaster's look set by `edit`, in [`armed`]'s catalog.
 fn with_blaster(edit: impl FnOnce(&mut WeaponLook)) -> FakeCatalog {
@@ -128,66 +127,42 @@ fn a_shot_draws_with_the_look_of_a_weapon_the_flight_lists() {
 }
 
 #[test]
-fn a_spinning_shot_is_drawn_from_the_start_the_frame_gives_drawing_nothing() {
-    // The start is the simulation's (nova-sim-combat's
-    // `a_spinning_shot_draws_its_start_as_it_is_launched_and_no_other_draws_one`):
-    // the view draws from the start the frame carries.
-    let catalog = with_blaster(|look| {
-        look.flags = SPINS;
-        look.beam_width = 1;
-    });
+fn a_shot_is_drawn_at_the_frame_the_simulation_gives_drawing_nothing() {
+    // The frame is the simulation's (nova-sim's
+    // `a_fill_shows_each_shot_at_the_frame_the_contact_passes_touch_it_by`):
+    // the view draws the frame the frame carries, whatever the shot's
+    // heading, age or look would make of it.
+    let catalog = with_blaster(|look| look.flags = 0);
     let (effects, effects_chance) = scripted(&[]);
     let mut view = shooting(catalog);
     view.effects_chance = effects_chance;
-    let started = |tick| FrameShot {
-        spin_start: 20,
-        ..blaster_shot(tick)
-    };
-    pass_with(&mut view, vec![started(0)], false, Vec::new());
-    assert_eq!(
-        blaster_frames(&view),
-        [20],
-        "its first pass shows its start"
-    );
-    pass_with(&mut view, vec![started(1)], false, Vec::new());
-    assert_eq!(blaster_frames(&view), [21], "then a frame a tick");
-    assert_eq!(effects.borrow().asked, Vec::<u32>::new(), "no draw");
-}
-
-#[test]
-fn a_spinning_shot_is_drawn_stepping_on_the_spin_timer_its_frame_gives() {
-    // The blaster spins from its first frame, a step every 4 passes. The
-    // timer a shot's slot left it is the session's
-    // (nova-sim-combat's `a_spinning_shot_runs_its_slots_spin_timer_and_the_next_shot_there_starts_on_it`):
-    // the view steps it from the timer the frame gives, by the
-    // simulation's rule.
-    let look = WeaponLook {
-        flags: SPINS,
-        beam_width: 4,
-        ..WeaponLook::default()
-    };
-    let catalog = with_blaster(|blaster| {
-        blaster.flags = look.flags;
-        blaster.beam_width = look.beam_width;
-    });
-    let mut view = shooting(catalog);
-    let frames = NonZeroU16::new(36).expect("non-zero");
-    let timer = 3;
-    let rule = look.frame_rule();
-    let (mut shown, mut expected, mut from_0) = (Vec::new(), Vec::new(), Vec::new());
-    for tick in 0..6 {
+    let mut shown = Vec::new();
+    for (tick, frame) in [(0, 20), (1, 21), (2, 5)] {
         let shot = FrameShot {
-            spin_timer: timer,
             heading: 90.0,
+            frame: Some(frame),
             ..blaster_shot(tick)
         };
         pass_with(&mut view, vec![shot], false, Vec::new());
         shown.extend(blaster_frames(&view));
-        expected.push(shot_frame(90.0, shot.age, frames, rule, 0, timer));
-        from_0.push(shot_frame(90.0, shot.age, frames, rule, 0, 0));
     }
-    assert_eq!(shown, expected, "from timer {timer}");
-    assert_ne!(shown, from_0, "not as from 0");
+    assert_eq!(shown, [20, 21, 5]);
+    assert_eq!(effects.borrow().asked, Vec::<u32>::new(), "no draw");
+}
+
+#[test]
+fn a_shot_given_no_frame_is_drawn_at_its_sheets_first() {
+    // The simulation reads the same `spïn` the view draws, so it gives
+    // none only where the view's sheet is missing too; a sheet the view
+    // read anyway shows its first frame.
+    let mut view = shooting(with_blaster(|_| {}));
+    let shot = FrameShot {
+        heading: 90.0,
+        frame: None,
+        ..blaster_shot(3)
+    };
+    pass_with(&mut view, vec![shot], false, Vec::new());
+    assert_eq!(blaster_frames(&view), [0]);
 }
 
 /// Each frame's draw of the blaster's shot over `ticks` ticks from the

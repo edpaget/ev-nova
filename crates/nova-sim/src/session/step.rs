@@ -79,9 +79,7 @@ use crate::chance::Chance;
 use crate::combat::{Rules, ShipRef};
 #[cfg(doc)]
 use crate::flight_frame::RaisedLine;
-use crate::flight_frame::{
-    FlightFrame, FrameShot, PassReport, ShipPlace, StepInput, StepReport, StepRun,
-};
+use crate::flight_frame::{FlightFrame, PassReport, ShipPlace, StepInput, StepReport, StepRun};
 
 use super::Session;
 
@@ -237,7 +235,11 @@ impl Session {
     fn pass_report(&mut self) -> PassReport {
         let mut ships = Vec::new();
         self.fill_ships(&mut ships);
-        let shots = self.shots().iter().map(FrameShot::of).collect();
+        let shots = self
+            .shots()
+            .iter()
+            .map(|shot| self.space.frame_shot(shot))
+            .collect();
         PassReport {
             ships,
             shots,
@@ -256,10 +258,11 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::MaskSheet;
     use crate::chance::NeverFires;
     use crate::combat::CombatEvent;
     use crate::flight::Controls;
-    use crate::flight_frame::RaisedLine;
+    use crate::flight_frame::{FrameShot, RaisedLine};
     use crate::geometry::Vec2;
     use crate::hail::CommNote;
     use crate::player_wrap::{PlayerWrap, WRAP_EDGE};
@@ -509,8 +512,16 @@ mod tests {
 
     #[test]
     fn each_pass_reports_the_session_as_it_stood_after_it() {
+        let one: &[&str] = &["#"];
+        let catalog = FakePilotCatalog {
+            rle_sheets: vec![(
+                MaskSheet::Shot(0),
+                nova_sim_base::fixture::rle::sheet(&[one; 4]),
+            )],
+            ..armed()
+        };
         for double in [false, true] {
-            let (catalog, mut session) = fight();
+            let mut session = facing_an_npc(&catalog, 180);
             let input = firing(double);
             // Each pass's records, as the session stands after it.
             let mut expected = Vec::new();
@@ -545,7 +556,9 @@ mod tests {
                 .flat_map(|run| run.passes.iter().cloned())
                 .collect();
             assert_eq!(passes, expected, "double time {double}");
-            assert!(passes.iter().any(|pass| !pass.shots.is_empty()), "fired");
+            let mut shots = passes.iter().flat_map(|pass| &pass.shots).peekable();
+            assert!(shots.peek().is_some(), "fired");
+            assert!(shots.all(|shot| shot.frame.is_some()), "each at its frame");
         }
     }
 
@@ -958,8 +971,11 @@ mod tests {
                 velocity: shot.velocity,
                 heading: shot.heading,
                 age: shot.age,
-                spin_timer: shot.spin_timer,
-                spin_start: shot.spin_start,
+                frame: session
+                    .space
+                    .sprite_masks
+                    .sheet(MaskSheet::Shot(shot.weapon.graphic))
+                    .and_then(|sheet| shot.frame_on(sheet)),
                 layer: shot.layer,
             })
             .collect();

@@ -3,8 +3,8 @@
 //! ([`TrailTables`]), the puffs of smoke ([`SmokePuffs`]) and the step's
 //! lightning rolls ([`StepRolls`]). The simulation keeps none of it: it
 //! is the view's, drawn on the effects' chance, never the simulation's.
-//! A spinning shot's start is the simulation's
-//! (`nova_sim::combat::shot_frame`), which the frame carries.
+//! A shot's frame is the simulation's
+//! ([`FrameShot::frame`](nova_sim::flight_frame::FrameShot::frame)).
 
 use nova_sim::Chance;
 use nova_sim::flight_frame::PassReport;

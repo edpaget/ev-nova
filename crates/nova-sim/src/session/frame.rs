@@ -288,8 +288,7 @@ pub(super) mod tests {
                 velocity: Vec2::new(9.0, 9.0),
                 heading: 9.0,
                 age: 9,
-                spin_timer: 9,
-                spin_start: 9,
+                frame: Some(9),
                 layer: ShotLayer::OverShips,
             }],
             beams: vec![FrameBeam {
@@ -675,11 +674,50 @@ pub(super) mod tests {
         let drawn: Vec<FrameShot> = session
             .shots_drawn()
             .into_iter()
-            .map(FrameShot::of)
+            .map(|shot| FrameShot::of(shot, None))
             .collect();
         assert_eq!(frame.shots, drawn);
         assert_eq!(frame.shots[1].id, session.shots()[0].id, "over the ships");
         assert_eq!(frame.shots[1].layer, ShotLayer::OverShips);
+    }
+
+    /// The blaster's `Graphic`, 0, as the contact passes read its sheet.
+    const BLASTER_SHOT: crate::catalog::MaskSheet = crate::catalog::MaskSheet::Shot(0);
+
+    /// `catalog`'s session started and firing until a shot is in flight.
+    fn one_shot_out(catalog: &crate::testkit::FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.hold_trigger(crate::session::tests::FIRE);
+        while session.shots().is_empty() {
+            crate::testkit::work(&mut session, catalog, crate::flight::Controls::default());
+        }
+        session
+    }
+
+    #[test]
+    fn a_fill_shows_each_shot_at_the_frame_the_contact_passes_touch_it_by() {
+        let one: &[&str] = &["#"];
+        let catalog = crate::testkit::FakePilotCatalog {
+            rle_sheets: vec![(BLASTER_SHOT, nova_sim_base::fixture::rle::sheet(&[one; 4]))],
+            ..crate::session::tests::armed()
+        };
+        let mut session = one_shot_out(&catalog);
+        session.space.combat.shots_mut()[0].heading = 200.0;
+        let sheet = session
+            .space
+            .sprite_masks
+            .sheet(BLASTER_SHOT)
+            .expect("read");
+        let touched = session.shots()[0].frame_on(sheet);
+        assert!(touched.is_some_and(|frame| frame > 0), "{touched:?}");
+        assert_eq!(filled(&session).shots[0].frame, touched);
+    }
+
+    #[test]
+    fn a_shot_whose_sheet_was_not_read_shows_no_frame() {
+        let catalog = crate::session::tests::armed();
+        let session = one_shot_out(&catalog);
+        assert_eq!(filled(&session).shots[0].frame, None);
     }
 
     #[test]

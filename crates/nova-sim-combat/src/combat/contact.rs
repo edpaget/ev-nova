@@ -38,7 +38,7 @@
 //! **The masks** are each sheet's run-length tokens, which the session
 //! lends ([`ContactSprites`]): a ship's sprite base's sheet at the frame
 //! its last display drew, a shot's weapon sheet at the frame
-//! [`Shot::frame`] gives, an asteroid kind's at its shown frame. They are
+//! [`Shot::frame_on`] gives, an asteroid kind's at its shown frame. They are
 //! walked as [`RuleKey::RleCollisionWalk`](crate::RuleKey::RleCollisionWalk)
 //! says, quirk 2 included: the ship's or asteroid's last drawn pixel at
 //! x − 1 touches the shot's first at x.
@@ -63,7 +63,6 @@
 //! [`Asteroid::shown_frame`]: crate::asteroid::Asteroid::shown_frame
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU16;
 use std::rc::Rc;
 
 use super::asteroid_hit::{self, Rock};
@@ -186,11 +185,6 @@ fn whole(side: f32) -> u32 {
     whole
 }
 
-/// The frame count of `sheet`, if it has frames.
-fn frames_of(sheet: &RleSheet) -> Option<NonZeroU16> {
-    NonZeroU16::new(u16::try_from(sheet.starts.len()).unwrap_or(u16::MAX))
-}
-
 impl ContactSprites {
     /// `ship` of `hull` laid out `offset` from the player (see the module
     /// docs): at its sheet's size with its mask, else at its `shän`
@@ -216,18 +210,18 @@ impl ContactSprites {
     }
 
     /// `shot` laid out `offset` from the player by the shot rule: at its
-    /// sheet's size with its mask at [`Shot::frame`], else at its weapon's
+    /// sheet's size with its mask at [`Shot::frame_on`], else at its weapon's
     /// frame size with none; none without either.
     fn shot(&self, shot: &Shot, offset: Vec2) -> Option<Laid> {
         let read = self
             .shots
             .get(&shot.weapon.graphic)
-            .and_then(|sheet| Some((sheet, frames_of(sheet)?)));
-        if let Some((sheet, frames)) = read {
+            .and_then(|sheet| Some((sheet, shot.frame_on(sheet)?)));
+        if let Some((sheet, frame)) = read {
             let rect = Placement::Shot.rect(offset, (sheet.width, sheet.height));
             let mask = PlacedMask {
                 sheet: Rc::clone(sheet),
-                frame: shot.frame(frames),
+                frame,
                 rect,
             };
             return Some(Laid {

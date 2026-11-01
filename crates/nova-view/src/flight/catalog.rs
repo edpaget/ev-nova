@@ -331,7 +331,7 @@ pub struct WeaponLook {
     pub flags2: u16,
     /// Its `Flags3`.
     pub flags3: u16,
-    /// `BeamWidth`: a beam's width, and a spinning shot's ticks a frame.
+    /// `BeamWidth`: a beam's width.
     pub beam_width: i16,
     /// `Falloff` as the original loads it
     /// ([`loaded_falloff`](nova_sim::combat::weapon::loaded_falloff)): how
@@ -365,27 +365,9 @@ pub struct WeaponLook {
     pub beam_color: u32,
     /// `CoronaColor`, `00RRGGBB`.
     pub corona_color: u32,
-    /// `ProxSafety`: the ticks a shot's frame waits before it spins, with
-    /// `Flags2` 0x0001.
-    pub prox_safety: i16,
     /// How long its sound lasts, in ticks rounded up; none when it has no
     /// sound or the sound cannot be decoded.
     pub sound_ticks: Option<u32>,
-}
-
-impl WeaponLook {
-    /// What the simulation's frame rule reads of it
-    /// ([`FrameRule`](nova_sim::combat::shot_frame::FrameRule)): its
-    /// `ProxSafety` none below none, as the simulation loads it.
-    #[must_use]
-    pub fn frame_rule(&self) -> nova_sim::combat::shot_frame::FrameRule {
-        nova_sim::combat::shot_frame::FrameRule {
-            flags: self.flags,
-            flags2: self.flags2,
-            prox_safety: u32::try_from(self.prox_safety).unwrap_or(0),
-            beam_width: self.beam_width,
-        }
-    }
 }
 
 /// How an explosion type is shown and heard: its `bööm`.

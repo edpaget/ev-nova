@@ -3,10 +3,11 @@
 //! @0xc3b3c in the `EV Nova` executable).
 //!
 //! - A shot is a frame of its weapon's sheet, `spïn` 3000 + `Graphic`: the
-//!   simulation's frame rule ([`shot_frame`]) on the sheet's frame count,
-//!   from the index its spin started on and the timer it started on, both
-//!   the simulation's, as the frame carries them. The contact passes touch
-//!   by the same frame.
+//!   one the simulation gives
+//!   ([`FrameShot::frame`](nova_sim::flight_frame::FrameShot::frame)),
+//!   which the contact passes touch by. The simulation reads the same
+//!   `spïn`, so it gives none only where the view has no sheet either; a
+//!   sheet the view read anyway shows its first frame.
 //! - A shot is placed at whole pixels from the player, half its frame's
 //!   width off both axes: `_HandleShot` never asks its height
 //!   ([`Camera::shot_centre`](crate::system::camera::Camera::shot_centre),
@@ -39,7 +40,6 @@ use crate::draw::{crossed_box, lights_tint};
 use crate::system::scene::PLACEHOLDER;
 use crate::{Blend, Color, Colorize, DrawList, Point};
 use nova_sim::combat::projectile::ShotId;
-use nova_sim::combat::shot_frame::shot_frame;
 use nova_sim::sprite_layer::SpriteLayer;
 use nova_sim::{Chance, RuleSource};
 
@@ -137,8 +137,6 @@ pub struct ShotShown {
     pub id: ShotId,
     /// Where its centre is drawn, on screen.
     pub at: Point,
-    /// Which way it heads, in degrees.
-    pub heading: f32,
     /// The ticks it has flown.
     pub age: u32,
     /// Its weapon.
@@ -146,12 +144,10 @@ pub struct ShotShown {
     /// The layer it is drawn in among the ships
     /// ([`nova_sim::sprite_layer`]).
     pub layer: SpriteLayer,
-    /// The index its spin started on
-    /// ([`Shot::spin_start`](nova_sim::combat::projectile::Shot::spin_start)).
-    pub spin_start: u8,
-    /// The spin timer it started on, its slot's leftover
-    /// ([`Shot::spin_timer`](nova_sim::combat::projectile::Shot::spin_timer)).
-    pub spin_timer: u32,
+    /// The frame of its sheet it shows, as the simulation gives it
+    /// ([`FrameShot::frame`](nova_sim::flight_frame::FrameShot::frame));
+    /// none where the simulation read no sheet for it.
+    pub frame: Option<u16>,
     /// Its murk's colorize ([`SeenMurk::at`](super::murk::SeenMurk::at)).
     pub colorize: Colorize,
 }
@@ -164,8 +160,8 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
     }
 }
 
-/// Draws `shot` as its weapon's frame, the simulation's rule
-/// ([`shot_frame`]) on its sheet's frames, shaded as it
+/// Draws `shot` as the frame of its weapon's sheet the simulation gives,
+/// the first where it gives none, shaded as it
 /// fades ([`shot_shade`], by `fade`'s reading of
 /// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
 /// opaque; translucent by t, crossfaded by OR,
@@ -184,10 +180,7 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
         None => {}
         Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         Some(Ok(sheet)) => {
-            let spin = (shot.spin_start, shot.spin_timer);
-            let rule = look.frame_rule();
-            let frame = shot_frame(shot.heading, shot.age, sheet.frames, rule, spin.0, spin.1);
-            let image = sheet.image.frame(frame);
+            let image = sheet.image.frame(shot.frame.unwrap_or(0));
             let (tint, blend) = match shot_shade(look, shot.age, fade) {
                 ShotShade::Opaque => (Color::WHITE, Blend::Normal),
                 ShotShade::Translucent(t) => (see_through(t), Blend::OrCrossfade),
@@ -530,11 +523,9 @@ mod tests {
         ]);
         let shot = |x, weapon| ShotShown {
             id: ShotId(1),
-            spin_start: 0,
-            spin_timer: 0,
+            frame: Some(9),
             colorize: Colorize::default(),
             at: at(x, 5.0),
-            heading: 90.0,
             age: 3,
             weapon: WeaponId(weapon),
             layer: SpriteLayer::Shots,
@@ -588,12 +579,10 @@ mod tests {
         let shot = ShotShown {
             id: ShotId(1),
             at: at(0.0, 0.0),
-            heading: 0.0,
             age,
             weapon: WeaponId(128),
             layer: SpriteLayer::Shots,
-            spin_start: 0,
-            spin_timer: 0,
+            frame: Some(0),
             colorize: Colorize::toward_pixel(murk, COLOUR),
         };
         let mut list = DrawList::new();
