@@ -424,6 +424,7 @@ impl Space {
         if let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) {
             npc.goal = Goal::Attack(ShipRef::Player);
             npc.target = Some(ShipRef::Player);
+            npc.travel = None;
         }
     }
 }
@@ -1737,6 +1738,18 @@ mod tests {
             Some(("blaster", "blasters"))
         );
         assert_eq!(session.statics.outfit_names(OutfitId(151)), None);
+    }
+
+    #[test]
+    fn a_scan_find_clears_the_travel_stellar() {
+        // `_AIMakeShipAttackPlayer` writes +0x6c = -1 (@0x89d47).
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 2, 0, 1200);
+        police(&mut session).travel = Some(crate::catalog::StellarId(140));
+        looked_over(&mut session, &catalog, 0);
+        let police = police(&mut session);
+        assert_eq!(police.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(police.travel, None);
     }
 
     #[test]

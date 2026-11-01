@@ -140,7 +140,7 @@ use std::collections::BTreeSet;
 use super::{Session, Setup, Space, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::swarm::{self, FormationParent};
-use crate::ai::{Goal, Surroundings};
+use crate::ai::{Goal, Surroundings, travel};
 use crate::bay::{Carrier, dock_window};
 use crate::catalog::ShipId;
 use crate::chance::Chance;
@@ -1178,7 +1178,8 @@ pub(super) fn reset_released(npc: &mut Npc) {
 /// alike: of no government, and so of no government's factor, keeping
 /// its skill, its AI type `inherent` (its ship type's `InherentAI`) when
 /// known, no longer a former escort, of no leader but the player, keeping
-/// formation with no target of its own. Its +0x88 = 6 overwrites a bribe
+/// formation with no target of its own, its travel stellar the player's slot
+/// (+0x6c = +0x9a, 0, @0x89bac). Its +0x88 = 6 overwrites a bribe
 /// ([`Npc::overwrite_bribe`]; `_DoPlunderDialog` @0x9461f).
 pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.independent();
@@ -1190,6 +1191,7 @@ pub(super) fn fall_in(npc: &mut Npc, inherent: Option<AiType>) {
     npc.leader = None;
     npc.goal = Goal::Formation { guard: None };
     npc.target = None;
+    npc.travel = Some(travel::of_slot(0));
 }
 
 /// The order an escort holding `order`, carried or not, takes from
@@ -1285,6 +1287,18 @@ pub(super) mod tests {
         Draws, FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, outfit, ship,
         weapon, work_with,
     };
+
+    #[test]
+    fn a_ship_falling_in_holds_the_players_slot() {
+        // `_AIMakeEscortFlyInForm` writes +0x6c = +0x9a, the player's 0
+        // (@0x89b97, @0x89bac), over a stellar it was bound for.
+        let mut npc = crate::traffic::fixture::npc(1, ShipStats::default());
+        npc.goal = Goal::Land(crate::catalog::StellarId(140));
+        npc.travel = Some(crate::catalog::StellarId(140));
+        fall_in(&mut npc, None);
+        assert_eq!(npc.goal, Goal::Formation { guard: None });
+        assert_eq!(npc.travel, Some(crate::catalog::StellarId(128)));
+    }
 
     /// A pilot whose fleet is two escorts, both defending the player.
     fn defended(catalog: &FakePilotCatalog) -> Pilot {
