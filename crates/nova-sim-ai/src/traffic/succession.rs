@@ -102,7 +102,7 @@ impl Traffic {
         let lost: BTreeSet<NpcId> = self
             .npcs
             .iter()
-            .filter(|npc| npc.condition.active())
+            .filter(|npc| checked(npc))
             .filter_map(|npc| npc.leader)
             .filter(|&lead| !self.intact(lead))
             .collect();
@@ -129,7 +129,7 @@ impl Traffic {
             for npc in self
                 .npcs
                 .iter_mut()
-                .filter(|npc| npc.condition.active() && npc.leader == Some(lead))
+                .filter(|npc| checked(npc) && npc.leader == Some(lead))
             {
                 match successor {
                     None => npc.leave_alone(),
@@ -159,6 +159,16 @@ impl Traffic {
             .iter()
             .any(|npc| npc.id == id && npc.condition == Condition::Intact)
     }
+}
+
+/// Whether the marking pass checks `npc`'s parent (@0x440cb-0x440e0):
+/// active and of AI type above 4 (+0x88, [`Npc::original_ai_type`]), so
+/// not a bribed follower (+0x88 1, `_DoCommDialog` @0x961f8), which keeps
+/// its parent, goal and sub through its lead's loss. Its fellows'
+/// successor may still be it: the candidates' test reads no AI type
+/// (@0x892c5-0x8933d, [`successor`]).
+fn checked(npc: &Npc) -> bool {
+    npc.condition.active() && npc.original_ai_type() > 4
 }
 
 /// The successor of `lead` among `npcs`: of the intact ships it led, the
@@ -946,6 +956,38 @@ mod tests {
         assert_eq!(fighter.leader, Some(NpcId(1)));
         assert_eq!(fighter.carrier, None);
         assert_eq!(fighter.reserves.shield.max, 30.0);
+    }
+
+    #[test]
+    fn a_bribed_follower_is_left_out_of_the_succession() {
+        // The marking pass checks a ship only above AI type 4 (@0x440d8),
+        // so a bribed follower (+0x88 1, `_DoCommDialog` @0x961f8) keeps
+        // its parent, its goal and its jump. The candidates' test reads no
+        // AI type (@0x892c5-0x8933d): it may still be the successor.
+        let bribed = || {
+            let mut ship = follower(FEDS, 900);
+            ship.take_bribe();
+            ship
+        };
+        let mut traffic = fleet(FEDS, DISABLED, vec![bribed(), follower(FEDS, 100)]);
+        succeed(&mut traffic);
+        let spared = of(&traffic, 1);
+        assert_eq!(spared.leader, Some(LEAD), "left alone");
+        assert_eq!(
+            spared.goal,
+            Goal::Follow {
+                lead: LEAD,
+                guard: None
+            }
+        );
+        assert_eq!(of(&traffic, 2).leader, Some(NpcId(1)), "its successor");
+        // A lead that jumped out at its slot, the same.
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![bribed()]);
+        let lead = traffic.npcs()[0].clone();
+        traffic.remove(lead.id);
+        traffic.left_the_system(lead, crate::traffic::gone::Freed::InDispatch);
+        succeed(&mut traffic);
+        assert_eq!(of(&traffic, 1).leader, Some(LEAD), "jumped out");
     }
 
     #[test]

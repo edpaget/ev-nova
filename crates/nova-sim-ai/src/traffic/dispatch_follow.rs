@@ -280,6 +280,95 @@ mod tests {
         assert_eq!((goal, warp), (Goal::Idle, None));
     }
 
+    #[test]
+    fn a_follower_above_a_leader_that_left_at_its_slot_pushes_goal_2_onto_its_record() {
+        // The push writes +0x9a's slot whether or not it is active
+        // (@0x8def0); a successor copies the record's goal next tick
+        // (@0x893b0-0x893e1).
+        let mut traffic = Traffic::with_interval(1);
+        let attacker = idle(&mut traffic, 1);
+        let mut lead = ship(0, TRADERS, AiType::Warship, 2000.0, 0.0);
+        lead.goal = Goal::Flee(ShipRef::Npc(attacker));
+        lead.target = Some(ShipRef::Npc(attacker));
+        lead.begin_own_jump();
+        lead.warp.aim = crate::trig::intercept_angle(Vec2::ZERO, lead.state.position);
+        lead.state.heading = f32::from(lead.warp.aim);
+        lead.warp.stage = 3.0;
+        lead.warp.since = 1000;
+        let leader = traffic.add_npc_at(lead, 3);
+        following(&mut traffic, leader, 4, 0.0);
+        let reads = Reads::of(leader);
+        traffic.think_holding(&reads, world(), &[], &mut NeverFires);
+        let record = traffic
+            .gone
+            .ships()
+            .iter()
+            .find(|gone| gone.ship.id == leader);
+        assert_eq!(record.expect("left at slot 3").ship.goal, Goal::JumpOut);
+    }
+
+    /// A ship in slot `berth` on the last pass of its own warp out, bound
+    /// for stellar 140, its record left at its slot this tick.
+    fn last_pass(traffic: &mut Traffic, berth: u32) -> NpcId {
+        let mut lead = ship(0, TRADERS, AiType::Warship, 2000.0, 0.0);
+        lead.goal = Goal::JumpOut;
+        lead.begin_own_jump();
+        lead.warp.aim = crate::trig::intercept_angle(Vec2::ZERO, lead.state.position);
+        lead.state.heading = f32::from(lead.warp.aim);
+        lead.warp.stage = 3.0;
+        lead.warp.since = 1000;
+        lead.travel = Some(crate::catalog::StellarId(140));
+        traffic.add_npc_at(lead, berth)
+    }
+
+    #[test]
+    fn a_follower_of_a_leader_that_jumped_out_at_its_slot_takes_over_by_its_record_the_next_tick() {
+        // The departure tick it follows the record (sub 4 kept). Before the
+        // next tick's loop the marking pass's succession runs (@0x44101): a
+        // lone follower of its government takes the record's goal and sub,
+        // its target and travel stellar (@0x893b0-0x893e1), and +0x50 =
+        // -1.0, so its own jump restarts its stage at its slot. It takes
+        // none of goal 0xb's no-leader clears (@0x8df57-0x8df5d).
+        let mut traffic = Traffic::with_interval(1);
+        let leader = last_pass(&mut traffic, 3);
+        let follower = following(&mut traffic, leader, 4, 0.0);
+        let keep = Reads::of(leader);
+        traffic.tick_in(&keep, world(), &[], &mut NeverFires);
+        assert!(traffic.npcs().iter().all(|npc| npc.id != leader), "gone");
+        let follows = Some(WarpGoal::Follow(ShipRef::Npc(leader)));
+        assert_eq!(of(&traffic, follower).warp.goal, follows, "that tick");
+        traffic.tick_in(&keep, world(), &[], &mut NeverFires);
+        let npc = of(&traffic, follower);
+        assert_eq!(npc.leader, None, "+0x9a -1 (@0x894b4)");
+        assert_eq!(
+            (npc.goal, npc.warp.goal),
+            (Goal::JumpOut, Some(WarpGoal::Own))
+        );
+        assert_eq!(
+            npc.travel,
+            Some(crate::catalog::StellarId(140)),
+            "the record's"
+        );
+        assert_eq!((npc.warp.stage, npc.warp.since), (2.0, 0), "restarted");
+    }
+
+    #[test]
+    fn a_fellow_follower_of_a_leader_that_jumped_out_at_its_slot_follows_its_successor() {
+        // "Another leads" (@0x89479-0x894af): the heavier follower takes
+        // over, the other's +0x9a names it.
+        let mut traffic = Traffic::with_interval(1);
+        let leader = last_pass(&mut traffic, 3);
+        let heavy = following(&mut traffic, leader, 4, 0.0);
+        let light = following(&mut traffic, leader, 5, 0.0);
+        let npc = traffic.npcs_mut().iter_mut().find(|npc| npc.id == heavy);
+        npc.expect("there").hull.signed_mass = 900;
+        let keep = Reads::of(leader);
+        traffic.tick_in(&keep, world(), &[], &mut NeverFires);
+        traffic.tick_in(&keep, world(), &[], &mut NeverFires);
+        assert_eq!(of(&traffic, heavy).leader, None, "it leads");
+        assert_eq!(of(&traffic, light).leader, Some(heavy));
+    }
+
     /// Every ship keeps its goal; each think records the velocity it reads
     /// of the ship in slot 2.
     #[derive(Debug, Default)]
