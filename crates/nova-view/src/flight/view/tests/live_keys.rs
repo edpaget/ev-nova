@@ -195,6 +195,16 @@ fn the_close_hands_back_a_latched_key_set_whole() {
 }
 
 #[test]
+fn the_close_latches_only_the_latched_flight_keys_of_what_is_down() {
+    // Only a latched key waits for its release; an unlatched one's
+    // repeats must go on holding it wherever `held` lost it.
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    view.take_back_live_input([JUMP_KEY, Key::Up, FIRE_KEY], false);
+    assert_eq!(view.latched_down, HashSet::from([JUMP_KEY]));
+}
+
+#[test]
 fn the_keys_no_latch_guards_read_down_after_the_close() {
     // Weapon Safety reads every pass held (@0x6adc2-0x6addf), the eject
     // and self-destruct chords run with no latch (@0x6f29e-0x6f2c1,
