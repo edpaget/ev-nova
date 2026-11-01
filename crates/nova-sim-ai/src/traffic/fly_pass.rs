@@ -611,17 +611,18 @@ fn fly_steered(
         return outcome;
     }
     // A docking ship flies what its low level left at its slot of the AI
-    // loop (the traffic's `dispatch_dock`), and decides nothing here. One
+    // loop (the traffic's `dispatch_dock`), and decides nothing here, while
+    // it flies intact: one disabled since flies as a disabled ship. One
     // whose low level flew no docking this tick keeps its heading and
     // thrusts nothing.
-    let docks =
-        npc.docking.is_some() && npc.condition == Condition::Intact && npc.mode == Mode::Flying;
-    if let Some(flown) = pass.docks.get(&npc.id).copied().or_else(|| {
-        docks.then(|| {
+    let flies = npc.condition == Condition::Intact && npc.mode == Mode::Flying;
+    let flown = pass.docks.get(&npc.id).copied().or_else(|| {
+        npc.docking.is_some().then(|| {
             let handling = npc.flying_handling(speeds.own, world.flight);
             DockFlight::none(npc, &handling, world.flight)
         })
-    }) {
+    });
+    if let Some(flown) = flown.filter(|_| flies) {
         plunder_dock::handle_ship(npc, &flown, world.flight);
         return Outcome::Flying;
     }
@@ -1124,6 +1125,43 @@ mod tests {
         let read = |reader: &Npc| other_of(&pass, reader).0;
         assert_eq!(read(&below), Some(pirate.state), "before its creep");
         assert_eq!(read(&above), Some(crept), "after it");
+    }
+
+    #[test]
+    fn a_docking_ship_disabled_after_its_slot_flies_as_a_disabled_ship_not_by_its_low_levels_flight()
+     {
+        // A hit between its slot and the ship loop (the session's fight
+        // runs between the slots' runs) leaves the low level's words, but a
+        // disabled ship's flight is no docking's (`_IsDisabled`, @0x85240).
+        let docking = || {
+            let mut pirate = at(2, 100.0, 50.0);
+            pirate.state.velocity = Vec2::new(0.0, 3.0);
+            pirate.goal = Goal::Plunder {
+                ship: ShipRef::Npc(NpcId(4)),
+                hopeless: false,
+            };
+            pirate.hull.class_turn = 3.0;
+            pirate.docking = Some(Docking {
+                ship: ShipRef::Npc(NpcId(4)),
+                sub: DockSub::Dock,
+            });
+            pirate
+        };
+        let world = World::new(&[]);
+        let flown = |low_level: bool| {
+            let mut traffic = Traffic {
+                npcs: vec![docking(), at(4, 100.0, 0.0)],
+                ..Traffic::default()
+            };
+            if low_level {
+                traffic.dock_in_dispatch(0, &world, &mut NeverFires);
+            }
+            traffic.npcs[0].condition = Condition::Disabled;
+            traffic.npcs[0].state.velocity = Vec2::new(0.0, 3.0);
+            traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+            traffic.npcs[0].state
+        };
+        assert_eq!(flown(true), flown(false));
     }
 
     #[test]
