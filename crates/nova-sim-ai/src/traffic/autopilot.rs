@@ -584,7 +584,7 @@ fn fly_mobile(
     if let Some(outcome) = unsteered(npc, &handling, unsteered_by, inertia, chance) {
         return outcome;
     }
-    if npc.ai_wait > 0 && !npc.count_wait() {
+    if npc.ai_wait_flies() {
         // `_HandleShip` skips its turn and thrust while +0x4c runs
         // (@0x34a54-0x34a72) and moves it first (@0x34274-0x342aa), an
         // inertialess ship's velocity following its speed (@0x3425f);

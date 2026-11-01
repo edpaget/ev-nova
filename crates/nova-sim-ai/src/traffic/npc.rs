@@ -1463,6 +1463,16 @@ impl Npc {
         self.goal == Goal::CountWait
     }
 
+    /// Whether its flight is its AI wait's ([`Npc::ai_wait`] running, and
+    /// not the count wait, which flies its own sub 1): the high level
+    /// writes no sub while +0x4c runs (@0x8d4b9-0x8d4d2), the low level
+    /// still runs on what it kept (@0x901ea-0x901f4), and `_HandleShip`
+    /// skips its turn and thrust (@0x34a54-0x34a72).
+    #[must_use]
+    pub fn ai_wait_flies(&self) -> bool {
+        self.ai_wait > 0 && !self.count_wait()
+    }
+
     /// Cuts its velocity and its speed along its heading (+0x48,
     /// [`Npc::speed`]) each to `by` of themselves, in doubles, back to
     /// floats: the high level's drags, a stellar attacker's in band
@@ -3226,6 +3236,23 @@ mod tests {
             ..plain(1)
         };
         assert!(coasting.wait_running() && !coasting.count_wait());
+    }
+
+    #[test]
+    fn only_an_ai_wait_that_isnt_a_count_wait_flies_the_wait() {
+        let waiting = |goal: Goal, ai_wait: u32| Npc {
+            goal,
+            ai_wait,
+            ..plain(1)
+        };
+        assert!(waiting(Goal::Wait, 1).ai_wait_flies());
+        assert!(!waiting(Goal::Wait, 0).ai_wait_flies(), "none left");
+        assert!(!waiting(Goal::CountWait, 5).ai_wait_flies(), "goal 0x16");
+        let coasting = Npc {
+            mode: Mode::Coasting { ticks_left: 3 },
+            ..plain(1)
+        };
+        assert!(!coasting.ai_wait_flies(), "a mode wait");
     }
 
     #[test]

@@ -595,7 +595,7 @@ pub fn warp_block(npc: &mut Npc, led: Led, world: &WarpWorld, jumping: bool) {
 /// @0x34a54-0x34a72), as the autopilot moves a waiting ship.
 pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Inertia) {
     npc.trigger = crate::combat::armament::Trigger::default();
-    if npc.ai_wait > 0 && !npc.count_wait() {
+    if npc.ai_wait_flies() {
         position_step(npc, handling, inertia);
         return;
     }
