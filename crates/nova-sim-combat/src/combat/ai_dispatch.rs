@@ -126,12 +126,30 @@ impl Combat {
     }
 }
 
-/// `target` among `targets` while it can be hit: what a ship's weapons
-/// aim at ([`Combat::fire`], [`Combat::launch_bay`]).
+/// `target` among `targets` while it can be hit: what the player's
+/// weapons, an NPC's trigger and its bay aim at ([`Combat::fire`],
+/// [`Combat::launch_bay`]); an NPC's pick aims at any [`active`] target.
 pub(super) fn standing(target: Option<ShipRef>, targets: &[Target]) -> Option<&Target> {
     target.and_then(|ship| {
         targets
             .iter()
             .find(|target| target.ship == ship && target.condition.standing())
+    })
+}
+
+/// `target` among `targets` while its slot is active
+/// ([`Condition::active`](super::Condition::active)), breaking up
+/// included: what an NPC's pick aims at ([`Combat::fire`]).
+/// `_FireAIShipWeapon` (@0x8873d-0x89269) reads of its target only whether
+/// there is one (+0x70 against -1, @0x88824, @0x889ea, @0x88bbf,
+/// @0x88c0f), its position (+0x18, +0x1c) and whether it is slot 0, the
+/// player (@0x88fb3), and calls no `_IsDying`; nor do `_SpawnShot`
+/// (@0x3e550) or `_SpawnBeam` (@0x44ff3). A destroyed ship's slot isn't
+/// active, so it is no target.
+pub(super) fn active(target: Option<ShipRef>, targets: &[Target]) -> Option<&Target> {
+    target.and_then(|ship| {
+        targets
+            .iter()
+            .find(|target| target.ship == ship && target.condition.active())
     })
 }
