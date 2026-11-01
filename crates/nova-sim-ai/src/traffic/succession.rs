@@ -117,6 +117,8 @@ impl Traffic {
             // A gone lead is read by its record whatever tick freed it:
             // the check reads the parent's slot (+0x9a), which no slot
             // test clears, and the record stands until a ship takes it.
+            // A ship taking it becomes the parent of every ship the lead
+            // led (`parent_slot`), so no lead whose berth is taken is lost.
             let record = before
                 .iter()
                 .find(|npc| npc.id == lead)
@@ -1301,6 +1303,64 @@ mod tests {
         assert_eq!(successor.goal, Goal::Attack(PLAYER), "the lead's job");
         assert_eq!(successor.target, Some(PLAYER));
         assert_eq!(of(&traffic, 2).leader, Some(NpcId(1)), "not the arrival");
+    }
+
+    #[test]
+    fn a_follower_whose_leads_berth_was_taken_follows_the_newcomer_and_is_not_succeeded() {
+        // The check reads the parent by its slot (+0x9a, @0x89276-0x892a9):
+        // a newcomer there, active and not disabled, is the parent, so no
+        // successor is chosen and the followers stay on it.
+        let mut jumping = follower(FEDS, 100);
+        jumping.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![follower(FEDS, 300), jumping]);
+        let lead = traffic.npcs()[0].clone();
+        traffic.remove(LEAD);
+        traffic.left_the_system(lead, Freed::InDispatch);
+        let newcomer = traffic.add_npc_at(ship(REBELS, 100), 1);
+        succeed(&mut traffic);
+        for id in [1, 2] {
+            let kept = of(&traffic, id);
+            assert_eq!(kept.leader, Some(newcomer), "NPC {id}");
+            assert_eq!(
+                kept.goal,
+                Goal::Follow {
+                    lead: newcomer,
+                    guard: None
+                },
+                "NPC {id}"
+            );
+        }
+        assert_eq!(
+            of(&traffic, 2).warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(newcomer)))
+        );
+    }
+
+    #[test]
+    fn a_bribed_followers_parent_names_a_ship_that_takes_its_lost_leads_berth_later() {
+        // The pass skips a bribed follower (@0x440d8), so its +0x9a names
+        // the lost lead's slot until a spawn rewrites the slot, ticks
+        // later.
+        let mut bribed = follower(FEDS, 900);
+        bribed.take_bribe();
+        let mut traffic = fleet(FEDS, Condition::Destroyed, vec![bribed]);
+        traffic.remove_destroyed(LEAD);
+        think(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).leader, Some(LEAD), "the berth stands free");
+        traffic.table = arriving();
+        let mut draws = nova_sim_base::fixture::Draws::of(&ARRIVAL_DRAWS);
+        traffic.open_think(&Keep, World::new(&[]), &[], &mut draws);
+        let arrival = at_berth(&traffic, 1);
+        let spared = of(&traffic, 1);
+        assert_eq!(spared.leader, Some(arrival));
+        assert_eq!(
+            spared.goal,
+            Goal::Follow {
+                lead: arrival,
+                guard: None
+            }
+        );
     }
 
     #[test]

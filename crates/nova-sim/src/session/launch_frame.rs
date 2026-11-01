@@ -1402,6 +1402,39 @@ mod tests {
         assert_eq!(target(above), new, "above the launch");
     }
 
+    #[test]
+    fn at_the_cap_a_fighter_above_a_launch_into_its_jumped_carriers_slot_turns_back_to_the_newcomer()
+     {
+        // Slot 3, a carrier, jumps out at its slot (@0x859b8); slot 6's
+        // launch rewrites the slot; slot 7, its fighter on its jump and
+        // short of fuel, turns back: +0x6c its +0x9a (@0x8d61a-0x8d621),
+        // the slot, and goal 5 on what the slot holds (@0x8ebe5).
+        let catalog = catalog();
+        let (mut session, carrier, runner) =
+            at_the_cap_above(&catalog, 6, |session, _| jumping_out(session, 3));
+        let fighter = session.space.traffic.holder_of(7).expect("filled");
+        let npc = session.space.npc_mut(fighter).expect("there");
+        let bay = ShipRef::Npc(runner);
+        npc.carrier = Some(crate::bay::Carrier {
+            ship: bay,
+            window: 100.0,
+            reach: 60.0,
+        });
+        npc.leader = Some(runner);
+        npc.goal = Goal::Formation { guard: None };
+        npc.warp.goal = Some(crate::traffic::warp_out::WarpGoal::Follow(bay));
+        npc.class_fuel = 0;
+        game_pass(&mut session, &catalog, &Order::of(carrier));
+        assert!(session.space.npc(runner).is_none(), "jumped out");
+        let launched = vipers(&session);
+        assert_eq!(launched[0].berth, 3, "the launch took its slot");
+        let new = ShipRef::Npc(launched[0].id);
+        let turned = session.space.npc(fighter).expect("there");
+        assert_eq!(turned.goal, Goal::Dock(new));
+        assert_eq!(turned.carrier.map(|carrier| carrier.ship), Some(new));
+        assert_eq!(turned.travel, Some(crate::ai::travel::of_slot(3)));
+    }
+
     /// Whether `carrier` was heard launching among `events`.
     fn launched_from(events: &[CombatEvent], carrier: NpcId) -> bool {
         firing(events, BAY).contains(&ShipRef::Npc(carrier))

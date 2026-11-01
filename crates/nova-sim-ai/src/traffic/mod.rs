@@ -272,6 +272,7 @@ mod odds_cache_ai_tests;
 mod odds_cache_tests;
 pub mod on_line;
 pub mod original_ai_type;
+pub mod parent_slot;
 pub mod persons;
 pub mod plunder;
 pub mod plunder_dock;
@@ -988,6 +989,11 @@ pub struct Traffic {
     /// a slot taken in it passes to every holder whose step hasn't come,
     /// and a wreck displayed in it holds no berth ([`gone`]).
     ship_loop: bool,
+    /// The reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
+    /// the last think opened with ([`Traffic::open_think`]), which says
+    /// whether a ship's parent link follows its berth when another ship
+    /// takes it ([`parent_slot`]): the engine's until a think opens.
+    parent_link: RuleSource,
     /// The last ship of each berth whose slot lost only its active flag,
     /// until a ship takes the berth or the system is left ([`vacated`]).
     vacated: VacatedBerths,
@@ -1122,6 +1128,7 @@ impl Traffic {
             gone: GoneShips::default(),
             skipped: skipped_high_level::SkippedReads::default(),
             ship_loop: false,
+            parent_link: RuleSource::Engine,
             vacated: VacatedBerths::default(),
             on_line: LineQueue::default(),
             quotes: Vec::new(),
@@ -1435,6 +1442,7 @@ impl Traffic {
         chance: &mut (impl Chance + ?Sized),
     ) {
         self.on_line.next_frame();
+        self.parent_link = world.npc_escort_ai;
         self.react(behaviour, &world, strikes);
         let dropped = self.succeed_leaders(&world);
         self.form_fleets(&world, &dropped);
@@ -2411,7 +2419,7 @@ impl Traffic {
         self.mark_spawned(berth);
         // A ship taking the slot rewrites the vacated record ([`vacated`]).
         self.vacated.taken(berth);
-        self.slot_taken(berth, id);
+        self.slot_taken(&npc);
         self.npcs.push(npc);
         id
     }
@@ -2963,7 +2971,7 @@ impl Traffic {
             self.write_berth_person(berth, name);
             self.mark_spawned(berth);
             self.vacated.taken(berth);
-            self.slot_taken(berth, npc.id);
+            self.slot_taken(&npc);
             self.npcs.push(npc);
         }
         if formation == NpcFormation::Original {

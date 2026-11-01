@@ -52,9 +52,11 @@
 //! the next frame.
 //!
 //! **A slot taken again** ([`Traffic::slot_taken`]) leaves every other
-//! ship's +0x70 and +0x6c as they were, so a ship still holding the slot
-//! finds it active at its next test and now fights the newcomer, friend
-//! or not, a paused fight or guard too, and a docking flies at it. In the
+//! ship's +0x70, +0x6c and +0x9a as they were, so a ship still holding the
+//! slot finds it active at its next test and now fights the newcomer,
+//! friend or not, a paused fight or guard too, a docking flies at it, and
+//! a ship whose carrier or lead held the slot now has the newcomer as its
+//! parent ([`parent_slot`](crate::traffic::parent_slot)). In the
 //! ship loop ([`Traffic::set_ship_loop`]) a wreck displayed earlier in the
 //! loop holds no berth, and every holder whose step hasn't come passes. It
 //! changes what is drawn and breaks no stock mission, so it has no rulebook
@@ -307,14 +309,14 @@ impl Traffic {
             .map(|npc| npc.id)
     }
 
-    /// The ship `id` takes slot `berth`: every ship still holding that slot
+    /// The ship `newcomer` takes its slot: every ship still holding that slot
     /// finds it active at its next slot test, so its target is now the new
     /// ship, friend or not, and a fight on the old ship moves to it
     /// ([`Goal::with_quarry`](crate::ai::Goal::with_quarry)), a fight or
     /// a guard the regroup pause keeps too
     /// ([`Goal::kept_quarry`](crate::ai::Goal::kept_quarry)). A spawn
-    /// rewrites the slot and leaves every other ship's +0x70 and +0x6c
-    /// (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), and the engine's
+    /// rewrites the slot and leaves every other ship's +0x70, +0x6c and
+    /// +0x9a (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), and the engine's
     /// numbers, unlike the slots, are never used again.
     ///
     /// Who still holds the slot turns on where the spawn runs:
@@ -338,8 +340,11 @@ impl Traffic {
     ///
     /// A docking (its nav, +0x6c, which no slot test clears) on the old
     /// ship moves to the new one wherever the spawn runs (see
-    /// [`repair_dock`](crate::traffic::repair_dock)).
-    pub(super) fn slot_taken(&mut self, berth: u32, id: NpcId) {
+    /// [`repair_dock`](crate::traffic::repair_dock)), and so does every
+    /// parent link, a ship's leader or carrier (+0x9a), by the engine's
+    /// reading of the link ([`parent_slot`](crate::traffic::parent_slot)).
+    pub(super) fn slot_taken(&mut self, newcomer: &Npc) {
+        let (berth, id) = (newcomer.berth, newcomer.id);
         let new = ShipRef::Npc(id);
         let in_loop = self.ship_loop;
         let mut olds: Vec<(NpcId, Option<GoneShip>)> = (self.gone.ships().iter())
@@ -354,6 +359,7 @@ impl Traffic {
             );
         }
         for (old_id, record) in olds {
+            self.parents_follow_berth(old_id, newcomer);
             let old = ShipRef::Npc(old_id);
             for npc in &mut self.npcs {
                 if let Some(docking) = npc.docking.as_mut().filter(|d| d.ship == old) {

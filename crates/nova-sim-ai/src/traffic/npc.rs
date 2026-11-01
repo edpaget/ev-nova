@@ -267,7 +267,10 @@ pub struct Npc {
     /// ([`disabled_reset`](crate::traffic::disabled_reset)); and
     /// [`Npc::leave_fleet`] drops it with its class's `InherentAI`. With
     /// one, it reads as the original's AI type 6
-    /// ([`Npc::original_ai_type`]).
+    /// ([`Npc::original_ai_type`]). The original holds a slot here, so
+    /// once another ship takes the lead's berth, that ship is its lead
+    /// ([`Npc::follow_berth`], see
+    /// [`parent_slot`](crate::traffic::parent_slot)).
     pub leader: Option<NpcId>,
     /// Its ship type's class as an escort, which the escorts' threat
     /// scores weigh (see [`escort`](crate::escort)).
@@ -367,10 +370,14 @@ pub struct Npc {
     pub spared: bool,
     /// The ship that launched it from a fighter bay, which it docks with,
     /// while it has one (see [`bay`](crate::bay)); none for any other
-    /// ship. Built `None` and changed only through [`Npc::take_carrier`]
-    /// and [`Npc::leave_carrier`], which hold its shield and armour
-    /// capacities to it (see
-    /// [`fighter_capacity`](crate::traffic::fighter_capacity)).
+    /// ship. Built `None` and made or dropped only through
+    /// [`Npc::take_carrier`] and [`Npc::leave_carrier`], which hold its
+    /// shield and armour capacities to it (see
+    /// [`fighter_capacity`](crate::traffic::fighter_capacity)). The
+    /// original's +0x9a for an NPC carrier, a slot: once another ship
+    /// takes the carrier's berth, that ship is its carrier, reached by its
+    /// own sprite, its capacities kept ([`Npc::follow_berth`], see
+    /// [`parent_slot`](crate::traffic::parent_slot)).
     pub carrier: Option<Carrier>,
     /// The person flying it, if any.
     pub person: Option<NpcPerson>,

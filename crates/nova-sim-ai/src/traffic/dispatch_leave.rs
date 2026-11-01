@@ -145,11 +145,13 @@ impl Traffic {
     /// comes first (@0x8d4e4-0x8d50d): a target whose slot is inactive is
     /// none, which the hold's goal reads ([`Traffic::slot_test`]). A ship
     /// in the regroup pause runs no high level (@0x9002d → @0x901ea), so
-    /// no slot test. The carrier's slot is found among the ships gone by
-    /// its id, whatever tick freed it: the turn-back copies the carrier's
-    /// slot number, its parent (+0x9a), which no slot test clears, into
-    /// +0x6c (@0x8d61a-0x8d621), and a record stands until a ship takes
-    /// its berth.
+    /// no slot test. The turn-back copies the fighter's own parent
+    /// (+0x9a), its carrier's slot number, which no slot test clears, into
+    /// +0x6c (@0x8d61a-0x8d621). Its carrier is found in the system, or
+    /// among the ships gone by its id, whatever tick freed it, as a record
+    /// stands until a ship takes its berth; once one has, the fighter's
+    /// carrier is the newcomer ([`parent_slot`](super::parent_slot)), whose
+    /// berth is the same.
     fn hold_and_turn_back(&mut self, index: usize, world: &World) {
         let npc = &self.npcs[index];
         if npc.condition != Condition::Intact || npc.high_level_waits() {
@@ -459,6 +461,41 @@ mod tests {
         assert!(of(&traffic, fighter).is_some(), "still out");
         let left = traffic.think_run(&watch, world(), |_| true, &NoBay::new(), &mut NeverFires);
         assert_eq!(left.len(), 1, "with a bay it docks");
+    }
+
+    #[test]
+    fn a_fighter_turning_back_after_its_carriers_berth_is_taken_writes_that_berth_as_its_nav() {
+        // The turn-back copies the fighter's own +0x9a, its carrier's slot,
+        // into +0x6c (@0x8d61a-0x8d621), and goal 5 docks with that slot
+        // (@0x8ebe5-0x8ed0c): once a launch has taken the berth, the
+        // newcomer's.
+        let mut traffic = Traffic::with_interval(1);
+        let carrier = warping_out(&mut traffic, 3);
+        let bay = ShipRef::Npc(carrier);
+        let mut fighter = ship(1, PIRATES, AiType::Warship, 3000.0, 500.0);
+        fighter.carrier = Some(Carrier {
+            ship: bay,
+            window: 100.0,
+            reach: 40.0,
+        });
+        fighter.leader = Some(carrier);
+        fighter.goal = Goal::Formation { guard: None };
+        fighter.target = Some(ShipRef::Npc(NpcId(9)));
+        fighter.warp.goal = Some(WarpGoal::Follow(bay));
+        fighter.class_fuel = 0;
+        let fighter = traffic.add_npc_at(fighter, 6);
+        let watch = Watch::default();
+        traffic.open_think(&watch, world(), &[], &mut NeverFires);
+        let at = |slot: u32| move |npc: &Npc| npc.berth == slot;
+        traffic.think_run(&watch, world(), at(3), &NoBay::new(), &mut NeverFires);
+        assert!(of(&traffic, carrier).is_none(), "jumped out at its slot");
+        // A carrier at slot 5 launches into the freed slot.
+        let newcomer = traffic.add_npc_at(ship(2, PIRATES, AiType::Warship, 0.0, 0.0), 3);
+        traffic.think_run(&watch, world(), at(6), &NoBay::new(), &mut NeverFires);
+        let turned = of(&traffic, fighter).expect("there");
+        assert_eq!(turned.goal, Goal::Dock(ShipRef::Npc(newcomer)));
+        assert_eq!(turned.target, None);
+        assert_eq!(turned.travel, Some(crate::ai::travel::of_slot(3)));
     }
 
     #[test]

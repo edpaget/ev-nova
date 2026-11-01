@@ -759,6 +759,49 @@ mod tests {
     }
 
     #[test]
+    fn an_escape_ship_taking_a_wrecked_leads_berth_leads_its_follower_at_the_next_think() {
+        // The lead's +0x9a is a slot (`_AICheckParentExists` @0x89276): the
+        // escape ship rewrites it, and the next marking pass finds it
+        // active and runs no succession (@0x89296-0x892a9). A bribed
+        // follower, which the pass skips (@0x440d8), still names the slot
+        // as the lead breaks up.
+        let catalog = escaping(0);
+        let (mut session, _) = carrier(&catalog, RuleSource::Bible, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let mut follower = npc(0, ShipStats::new(FAST, &[]));
+        follower.leader = Some(wreck);
+        follower.goal = crate::ai::Goal::Follow {
+            lead: wreck,
+            guard: None,
+        };
+        follower.take_bribe();
+        follower.state.position = Vec2::new(0.0, 900.0);
+        let follower = session.space.traffic.add_npc_at(follower, 3);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        let escape = vipers(&session).remove(0);
+        assert_eq!(escape.berth, 1, "the wreck's slot");
+        let world = crate::traffic::World::new(&[]);
+        let traffic = &mut session.space.traffic;
+        traffic.think_holding(&crate::ai::NovaAi::default(), world, &[], &mut chance);
+        let led = session.space.npc(follower).expect("there");
+        assert_eq!(led.leader, Some(escape.id));
+    }
+
+    #[test]
     fn by_the_engine_the_cut_lands_on_berth_1_whichever_ship_holds_it() {
         let catalog = escaping(0);
         // The carrier at berth 2: the fighter takes berth 1, and the cut.
