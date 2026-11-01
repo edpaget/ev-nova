@@ -82,7 +82,7 @@
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 
 use crate::ai::travel::{self, TravelWrite};
-use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar};
+use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, trader_keep};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::traffic::destination;
@@ -154,7 +154,10 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
 ///
 /// The block ran when the think fled or fought from state 0 (the pick
 /// comes before the provoked test, @0x8b1ac), or, for any other `thought`,
-/// when the ship kept no goal (`ai::kept`). It writes nothing
+/// when the ship kept no goal: neither the block's own (`ai::kept`) nor
+/// the one a trader keeps as its `thought` ([`trader_keep::kept`],
+/// read only of the goal the think gave, so the warship's are its own).
+/// It writes nothing
 /// when it didn't run or the ship has visited ([`visited_here`]), and
 /// nothing of its own for a pick, which [`travel::take`] writes as it takes
 /// the `Land` or `EnterGate`. Otherwise the pick failed, -1, when there is
@@ -167,7 +170,7 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
 pub fn pick_write(npc: &Npc, around: &Surroundings, thought: Goal) -> TravelWrite {
     let ran = match thought {
         Goal::Flee(_) | Goal::Attack(_) => npc.goal == Goal::Idle,
-        _ => super::kept(npc, around).is_none(),
+        _ => super::kept(npc, around).is_none() && trader_keep::kept(npc, around) != Some(thought),
     };
     if !ran || visited_here(npc, around) {
         return TravelWrite::Keep;

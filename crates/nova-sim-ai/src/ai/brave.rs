@@ -3,25 +3,32 @@
 //! stopping to wait ([`Goal::Wait`], state 6) where it can't leave until
 //! provoked, and once provoked it attacks its attacker while it is within
 //! [`STAND_AND_FIGHT`] pixels on both axes (@0x8b616), and flees from it
-//! beyond, or when the chase is hopeless; with the attacker gone from the
+//! beyond; goal 4's high level flees a hopeless chase in the same frame
+//! ([`trader_keep::high_level`]). Within 1250 it writes goal 4 only while
+//! its warp stage is at or below 0 (@0x8b684-0x8b68b): mid-jump it writes
+//! nothing, keeping the goal it held. With the attacker gone from the
 //! system it reads the place its freed slot still holds, while its target
 //! names it ([`gone`](crate::traffic::gone)), and decides again once that
-//! is cleared. Fleeing, or fighting a warship or an interceptor, it
-//! calls for help on every think (`_AICallForHelp` @0x8b6cc, @0x8b71c;
-//! see [`call_for_help`](super::call_for_help)), and fleeing it calls
-//! for reinforcements too, after the call for help (@0x8b6dc; see
-//! [`reinforcements`](super::reinforcements)). A stand-off ship (`shïp`
-//! `Flags2` 0x0002) never asks
-//! whether the chase is hopeless: `_HighLevelAIHandler` tests the bit
-//! first and jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its
-//! band instead (see [`stand_off`](super::stand_off)).
+//! is cleared. In its count wait (goal 0x16) it returns at once
+//! (@0x8b4cc), and unprovoked it keeps any goal it holds but 0, a lost
+//! lead's that the succession copied included ([`trader_keep`]). Its calls
+//! read the goal its think wrote, before the high level: fleeing, or
+//! fighting a warship or an interceptor (goal 4, a snipe too), it calls
+//! for help on every think (`_AICallForHelp` @0x8b6cc, @0x8b71c; see
+//! [`call_for_help`](super::call_for_help)), and fleeing it calls for
+//! reinforcements too, after the call for help (@0x8b6dc; see
+//! [`reinforcements`](super::reinforcements)). So a hopeless chase is goal
+//! 4 to its calls, and its flight calls from the next think. A stand-off
+//! ship (`shïp` `Flags2` 0x0002) never asks whether the chase is hopeless:
+//! `_HighLevelAIHandler` tests the bit first and jumps past
+//! `_AIEvalHopelessChase` (@0x8e48e), keeping its band instead (see
+//! [`stand_off`](super::stand_off)).
 
 use crate::ai::call_for_help::brave_call;
 use crate::ai::fire::FireRules;
-use crate::ai::odds::hopeless_chase;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block, lost_sight,
-    provoked_by, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, lost_sight, provoked_by,
+    react, trader_keep,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -45,76 +52,77 @@ pub struct BraveTrader {
     pub fire: FireRules,
 }
 
-/// What `_BraveTraderAI` writes, before the high level: provoked, it
-/// attacks its attacker within [`STAND_AND_FIGHT`] on both axes
-/// (`setle`, @0x8b616-0x8b68d) unless the chase is hopeless, and flees
-/// it beyond; unprovoked, it goes about its business. The think reads
-/// the place of +0x70's slot whatever its state. An attacker breaking up
-/// is still in its slot, so the think attacks it near, whatever the
-/// chase (the high level's `_IsDying` test, @0x8e3ef, comes before the
-/// hopeless chase's, @0x8e48e), or flees it far. One gone from the
+/// What `_BraveTraderAI` writes, before the high level: its count wait
+/// kept (@0x8b4cc); provoked, an attack on its attacker within
+/// [`STAND_AND_FIGHT`] on both axes (`setle`, @0x8b616-0x8b68d) while its
+/// warp stage is at or below 0 (@0x8b684-0x8b68b), nothing above it, and
+/// a flight beyond; unprovoked, or writing nothing, a goal it keeps or its
+/// idle block's ([`trader_keep::unprovoked`]). The think reads the place
+/// of +0x70's slot whatever its state. An attacker breaking up is still in
+/// its slot, so the think attacks it near (the high level's `_IsDying`
+/// test, @0x8e3ef, then ends that) or flees it far. One gone from the
 /// system whose slot the trader's target still names
 /// ([`Surroundings::held_gone`]) is read at its last place, attacked near
-/// whatever the chase (the slot test makes the target -1 before the
-/// hopeless chase's test, @0x8e263) or fled far.
+/// (the slot test makes the target -1 before goal 4's high level,
+/// @0x8e263) or fled far.
 fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    if npc.goal == Goal::CountWait {
+        return npc.goal;
+    }
     let near = |place: Vec2| {
         let off = place - npc.state.position;
         off.x.abs() <= STAND_AND_FIGHT && off.y.abs() <= STAND_AND_FIGHT
     };
-    let near_to = |attacker| {
-        around
-            .state_of(attacker)
-            .is_some_and(|state| near(state.position))
-    };
-    if let Some(attacker) = provoked_by(npc, around) {
-        let near = near_to(attacker);
-        return if near && (npc.hull.stands_off || !hopeless_chase(npc, attacker, around)) {
-            Goal::Attack(attacker)
-        } else {
+    let mut fight = |attacker: ShipRef, at: Option<Vec2>| {
+        if !at.is_some_and(near) {
             Goal::Flee(attacker)
-        };
+        } else if npc.warp.stage > 0.0 {
+            trader_keep::unprovoked(npc, around, chance)
+        } else {
+            Goal::Attack(attacker)
+        }
+    };
+    let at = |attacker| around.state_of(attacker).map(|state| state.position);
+    if let Some(attacker) = provoked_by(npc, around) {
+        return fight(attacker, at(attacker));
     }
     if let Some(gone) = around.held_gone(npc).filter(|_| npc.provoked > 0.0) {
-        let attacker = ShipRef::Npc(gone.id);
-        return if near(gone.state.position) {
-            Goal::Attack(attacker)
-        } else {
-            Goal::Flee(attacker)
-        };
+        return fight(ShipRef::Npc(gone.id), Some(gone.state.position));
     }
     let breaking_up = npc.target.filter(|&attacker| {
         npc.provoked > 0.0 && matches!(around.condition_of(attacker), Some(Condition::Dying { .. }))
     });
     match breaking_up {
-        Some(attacker) if near_to(attacker) => Goal::Attack(attacker),
-        Some(attacker) => Goal::Flee(attacker),
-        None => idle(npc, around, chance),
+        Some(attacker) => fight(attacker, at(attacker)),
+        None => trader_keep::unprovoked(npc, around, chance),
     }
 }
 
 impl Behaviour for BraveTrader {
-    /// Its think's goal ([`think`]), with a distress call
-    /// fleeing or fighting a warship or interceptor ([`brave_call`]), and a
-    /// call for reinforcements fleeing (state 3, @0x8b6dc). An attack on a
-    /// ship breaking up ends with its provocation and its target
-    /// ([`attack_breaking_up`]): `_BraveTraderAI` has no drop of its own,
-    /// so the high level ends it (@0x8e3ef → @0x8e714-0x8e726: goal 0,
-    /// target -1, +0x96 0), after the think's call. A fight on a ship gone
-    /// from its slot ends with its target, and a flight with its
-    /// provocation too ([`fight_on_gone`]), after the think's calls. Its
-    /// idle block's pick is written to its travel stellar
-    /// ([`idle_block::pick_write`] of the think's goal, before an ended fight
-    /// maps to goal 0; @0x8b53b, @0x8b559).
+    /// Its think's goal ([`think`]) as goal 4's high level takes it
+    /// ([`trader_keep::high_level`]: a hopeless chase fled), with a
+    /// distress call fleeing or fighting a warship or interceptor
+    /// ([`brave_call`]), and a call for reinforcements fleeing (state 3,
+    /// @0x8b6dc), each of the think's goal. An attack on a ship breaking
+    /// up ends with its provocation and its target
+    /// ([`trader_keep::ends_attack`], [`attack_breaking_up`]):
+    /// `_BraveTraderAI` has no drop of its own, so the high level ends it
+    /// (@0x8e3ef → @0x8e714-0x8e726: goal 0, target -1, +0x96 0), after
+    /// the think's call. A fight on a ship gone from its slot ends with its
+    /// target, and a flight with its provocation too ([`fight_on_gone`]),
+    /// after the think's calls. Its idle block's pick is written to its
+    /// travel stellar ([`idle_block::pick_write`] of the think's goal,
+    /// before an ended fight maps to goal 0; @0x8b53b, @0x8b559).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
         let on_gone = fight_on_gone(npc, thought, around);
-        let ended = on_gone.is_some()
-            || thought.attacking().is_some_and(|ship| {
-                matches!(around.condition_of(ship), Some(Condition::Dying { .. }))
-            });
+        let ended = on_gone.is_some() || trader_keep::ends_attack(thought, around);
         Decision {
-            goal: if ended { Goal::Idle } else { thought },
+            goal: if ended {
+                Goal::Idle
+            } else {
+                trader_keep::high_level(npc, thought, around)
+            },
             comm_call: brave_call(npc, thought, around),
             calls_reinforcements: matches!(thought, Goal::Flee(_)),
             forgets_provocation: on_gone.unwrap_or(false)
@@ -312,11 +320,129 @@ mod tests {
 
     #[test]
     fn a_brave_trader_flees_a_hopeless_chase() {
+        // The think writes goal 4 (@0x8b684-0x8b68d) and its calls read it
+        // (@0x8b6e3-0x8b71c): a call for help on a warship or
+        // interceptor, and no reinforcements. The high level then flees
+        // (goal 3, sub 5, @0x8e622-0x8e62e).
         let mut npcs = provoked(0.0, -300.0);
         npcs[0].hull.mass = 100.0;
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = Vec2::new(0.0, -1.0);
         assert_eq!(decided(&npcs), Goal::Flee(n(2)));
+        assert!(!calls_reinforcements(&npcs), "the think saw goal 4");
+        assert_eq!(call(&npcs), Some(CommCall::Distress), "a warship");
+        npcs[1].ai_type = AiType::WimpyTrader;
+        assert_eq!(call(&npcs), None, "a trader");
+    }
+
+    #[test]
+    fn a_provoked_brave_trader_mid_jump_writes_nothing_within_1250() {
+        // Goal 4 only while +0x50 <= 0 (`ucomiss`/`jb` @0x8b684-0x8b68b):
+        // a trader whose jump is under way keeps leaving.
+        let mut npcs = provoked(100.0, 0.0);
+        npcs[0].goal = Goal::JumpOut;
+        npcs[0].warp.stage = 2.0;
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        let decision = BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::JumpOut);
+        assert_eq!(decision.comm_call, None);
+        assert!(!decision.calls_reinforcements);
+        npcs[0].warp.stage = 0.0;
+        assert_eq!(decided(&npcs), Goal::Attack(n(2)), "at 0 it fights");
+        let mut far = provoked(1251.0, 0.0);
+        far[0].warp.stage = 2.0;
+        assert_eq!(
+            decided(&far),
+            Goal::Flee(n(2)),
+            "beyond 1250 it flees all the same"
+        );
+    }
+
+    /// An unprovoked brave trader holding `goal` on its quarry, and the
+    /// warship (NPC 2) 100 from it, in `condition`.
+    fn keeping(goal: Goal, condition: Condition) -> [Npc; 2] {
+        let mut npcs = provoked(100.0, 0.0);
+        npcs[0].provoked = 0.0;
+        npcs[0].goal = goal;
+        npcs[0].target = goal.quarry();
+        npcs[1].condition = condition;
+        npcs
+    }
+
+    /// The brave trader's decision among `npcs`.
+    fn decision_among(npcs: &[Npc]) -> Decision {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
+        BraveTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn an_unprovoked_brave_trader_keeps_a_plunder_a_count_wait_or_a_fight_on_a_ship_still_here() {
+        // Its idle block runs on goal 0 alone (@0x8b4d6), and unprovoked
+        // the think writes nothing (@0x8b616).
+        let plunder = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        for condition in [Condition::Disabled, Condition::Intact] {
+            let decision = decision_among(&keeping(plunder, condition));
+            assert_eq!(decision.goal, plunder, "{condition:?}");
+            assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Keep);
+        }
+        assert_eq!(
+            decision_among(&keeping(plunder, Condition::Intact)[..1]).goal,
+            plunder,
+            "gone"
+        );
+        for goal in [Goal::CountWait, Goal::Attack(n(2)), Goal::Flee(n(2))] {
+            assert_eq!(
+                decision_among(&keeping(goal, Condition::Intact)).goal,
+                goal,
+                "{goal:?}"
+            );
+        }
+        assert_eq!(
+            decision_among(&keeping(Goal::Attack(n(2)), Condition::Intact)[..1]).goal,
+            Goal::Land(StellarId(128)),
+            "a fight on a ship gone idles"
+        );
+    }
+
+    #[test]
+    fn a_brave_trader_keeping_a_flight_calls_for_help_and_reinforcements() {
+        let decision = decision_among(&keeping(Goal::Flee(n(2)), Condition::Intact));
+        assert_eq!(decision.comm_call, Some(CommCall::Distress), "@0x8b6cc");
+        assert!(decision.calls_reinforcements, "@0x8b6dc");
+    }
+
+    #[test]
+    fn a_brave_trader_keeping_an_attack_or_snipe_on_a_warship_calls_for_help() {
+        // Goal 4 on an NPC of AI type above 2 (@0x8b6e3-0x8b71c).
+        for goal in [Goal::Attack(n(2)), Goal::Snipe(n(2))] {
+            let decision = decision_among(&keeping(goal, Condition::Intact));
+            assert_eq!(decision.comm_call, Some(CommCall::Distress), "{goal:?}");
+            assert!(!decision.calls_reinforcements, "{goal:?}");
+            let mut trader = keeping(goal, Condition::Intact);
+            trader[1].ai_type = AiType::WimpyTrader;
+            assert_eq!(
+                decision_among(&trader).comm_call,
+                None,
+                "{goal:?}: a trader"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provoked_brave_trader_in_its_count_wait_keeps_it() {
+        // @0x8b4cc: it returns before the provoked test.
+        let mut npcs = provoked(100.0, 0.0);
+        npcs[0].goal = Goal::CountWait;
+        let decision = decision_among(&npcs);
+        assert_eq!(decision.goal, Goal::CountWait);
+        assert_eq!(decision.comm_call, None);
     }
 
     #[test]

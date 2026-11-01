@@ -30,7 +30,8 @@
 //!   next.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
-//!   NPC to the one for its type.
+//!   NPC to the one for its type; [`trader_keep`], the goals the two
+//!   traders keep unprovoked and goal 4's high level for them.
 //! - [`escort`]: [`EscortAi`], how the player's escorts fly and fight by
 //!   their standing orders; [`NovaAi`] routes every escort to it.
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
@@ -76,6 +77,7 @@ pub mod stand_off;
 pub mod swarm;
 pub mod target;
 pub mod threatened;
+pub mod trader_keep;
 pub mod travel;
 pub mod wait;
 pub mod warship;
@@ -1211,7 +1213,8 @@ impl Behaviour for Peaceful {
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
 ///   landable, a gate it enters that is still there, a jump out, a hold,
-///   or a wait. A leaving ship (state 2) keeps leaving whether or not it
+///   or a wait. A trader's think keeps more before it reaches the block
+///   (a plunder, a fight on a ship still here, [`trader_keep`]). A leaving ship (state 2) keeps leaving whether or not it
 ///   can jump: no type's idle block tests it again (`_WimpyTraderAI`
 ///   @0x8b06c, `_BraveTraderAI` @0x8b4d6 and `_InterceptorAI` @0x8d010
 ///   pick only in state 0); the warship's and the pirate's own re-tests
@@ -1287,7 +1290,8 @@ pub(crate) fn random_stellar(
 
 /// What `npc` keeps to among `around` before its idle block runs, if
 /// anything: an escort follows its lead while the lead is in the system,
-/// guarding nothing, and a goal it can still fly is kept. A led ship
+/// guarding nothing, and a goal it can still fly is kept. The traders
+/// keep more of their own before their idle block ([`trader_keep`]). A led ship
 /// reaches its type's idle block only by the other reading of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the port's
 /// earlier routing; by the engine's it flies [`FleetEscortAi`] instead.
@@ -1316,7 +1320,8 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 /// drift (goal 0xe, which its high level ends: the trader AIs' idle blocks
 /// run only on goal 0, `_WimpyTraderAI` @0x8b06c, `_BraveTraderAI`
 /// @0x8b4d6). Idling, following once the lead is gone, fighting and
-/// inspecting are no goals to keep.
+/// inspecting are no goals for the idle block to keep; the traders keep
+/// a fight, a plunder and the rest of their own ([`trader_keep`]).
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
         Goal::Land(stellar) => around

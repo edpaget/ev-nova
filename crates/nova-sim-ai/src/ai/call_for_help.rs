@@ -49,7 +49,8 @@ pub fn when_fleeing(goal: Goal) -> Option<CommCall> {
 
 /// The call of brave trader `npc`'s think ending in `goal` among
 /// `around`: a distress call fleeing (state 3, @0x8b6bc-0x8b6cc), or
-/// attacking an NPC of the original's AI type above 2 (state 4, a target
+/// attacking or sniping at an NPC of the original's AI type above 2
+/// (state 4, a target
 /// neither -1 nor the player, @0x8b6e3-0x8b71c,
 /// [`Npc::original_ai_type`](crate::traffic::npc::Npc::original_ai_type)):
 /// a warship, an interceptor, a led ship or a fighter, disabled or not;
@@ -63,7 +64,7 @@ pub fn when_fleeing(goal: Goal) -> Option<CommCall> {
 pub fn brave_call(npc: &Npc, goal: Goal, around: &Surroundings) -> Option<CommCall> {
     match goal {
         Goal::Flee(_) => Some(CommCall::Distress),
-        Goal::Attack(ShipRef::Npc(id)) => around
+        Goal::Attack(ShipRef::Npc(id)) | Goal::Snipe(ShipRef::Npc(id)) => around
             .npc(id)
             .or_else(|| around.held_gone(npc).filter(|gone| gone.id == id))
             .filter(|target| target.original_ai_type() > 2)
@@ -194,7 +195,12 @@ mod tests {
         assert_eq!(call(Goal::Attack(n(5))), None, "a wimpy trader");
         assert_eq!(call(Goal::Attack(ShipRef::Player)), None, "the player");
         assert_eq!(call(Goal::Attack(ShipRef::Npc(NpcId(9)))), None, "gone");
-        assert_eq!(call(Goal::Snipe(n(2))), None, "sniping");
+        assert_eq!(
+            call(Goal::Snipe(n(2))),
+            Some(CommCall::Distress),
+            "a snipe is goal 4 too (`cmpw $0x4` @0x8b6e3), as a kept one is"
+        );
+        assert_eq!(call(Goal::Snipe(n(5))), None, "sniping a wimpy trader");
         assert_eq!(call(Goal::Idle), None);
     }
 

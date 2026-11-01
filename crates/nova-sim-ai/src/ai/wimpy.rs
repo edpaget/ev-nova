@@ -5,19 +5,27 @@
 //! back by choice, calling for help on every think it flees
 //! (`_AICallForHelp` @0x8b1f5; see
 //! [`call_for_help`](super::call_for_help)); with the attacker gone it
-//! decides again.
+//! decides again. In its count wait (goal 0x16) it returns at once
+//! (@0x8b062), provoked or not. Unprovoked, it keeps any goal it holds
+//! but 0, as its idle block runs on goal 0 alone (@0x8b06c): a plunder, a
+//! fight on a ship still here, a mine, a scoop or a stellar attack, a lost
+//! lead's that the succession copied included ([`trader_keep`]). Goal 4's
+//! high level then flies a kept attack in the same frame: one on a ship
+//! breaking up ends, and a hopeless chase is fled
+//! ([`trader_keep::high_level`]).
 
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block, lost_sight,
-    provoked_by, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, lost_sight, provoked_by,
+    react, trader_keep,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
+use crate::traffic::provocation::attack_breaking_up;
 
 /// Nova's wimpy trader (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -28,22 +36,45 @@ pub struct WimpyTrader {
     pub fire: FireRules,
 }
 
+/// What `_WimpyTraderAI` writes, before the high level: its count wait
+/// kept (@0x8b062), a flight from its attacker provoked (@0x8b1ac), and
+/// otherwise a goal it keeps or its idle block's
+/// ([`trader_keep::unprovoked`]).
+fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    if npc.goal == Goal::CountWait {
+        return npc.goal;
+    }
+    provoked_by(npc, around)
+        .map_or_else(|| trader_keep::unprovoked(npc, around, chance), Goal::Flee)
+}
+
 impl Behaviour for WimpyTrader {
-    /// Its [`decide`](Self::decide) goal, with a distress call fleeing
+    /// Its think's goal ([`think`]) as goal 4's high level takes it
+    /// ([`trader_keep::high_level`]), an attack on a ship breaking up
+    /// ended with its target and provocation ([`trader_keep::ends_attack`],
+    /// [`attack_breaking_up`]), with a distress call when the think flees
     /// ([`when_fleeing`]), and its idle block's pick written to its travel
     /// stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
-        let goal = self.decide(npc, around, chance);
+        let thought = think(npc, around, chance);
+        let ended = trader_keep::ends_attack(thought, around);
         Decision {
-            goal,
-            comm_call: when_fleeing(goal),
-            travel: idle_block::pick_write(npc, around, goal),
+            goal: if ended {
+                Goal::Idle
+            } else {
+                trader_keep::high_level(npc, thought, around)
+            },
+            comm_call: when_fleeing(thought),
+            clears_target: ended,
+            forgets_provocation: attack_breaking_up(npc, thought, around),
+            travel: idle_block::pick_write(npc, around, thought),
             ..Decision::default()
         }
     }
 
+    /// Its [`decision`](Self::decision)'s goal.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        provoked_by(npc, around).map_or_else(|| idle(npc, around, chance), Goal::Flee)
+        self.decision(npc, around, chance).goal
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -263,6 +294,157 @@ mod tests {
                 .react(&npcs[0], &strike, &around)
                 .provoked,
             7.0
+        );
+    }
+
+    /// A wimpy trader (NPC 1) at the centre, unprovoked, holding `goal` on
+    /// its quarry, and a pirate (NPC 2) 300 below it in `condition`.
+    fn keeping(goal: Goal, condition: crate::combat::hull::Condition) -> [Npc; 2] {
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = goal;
+        trader.target = goal.quarry();
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.condition = condition;
+        [trader, pirate]
+    }
+
+    /// The wimpy trader's decision among `npcs`, drawing 0.
+    fn decision_among(npcs: &[Npc]) -> Decision {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -1000.0), 0);
+        WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    #[test]
+    fn an_unprovoked_wimpy_trader_keeps_a_plunder_of_a_disabled_or_intact_ship_or_one_gone() {
+        // Its idle block runs on goal 0 alone (@0x8b06c), and unprovoked
+        // the think writes nothing (@0x8b1ac-0x8b1fa): goal 0xd's high
+        // level flies it.
+        use crate::combat::hull::Condition;
+        let plunder = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        for condition in [Condition::Disabled, Condition::Intact] {
+            let decision = decision_among(&keeping(plunder, condition));
+            assert_eq!(decision.goal, plunder, "{condition:?}");
+            assert_eq!(decision.comm_call, None, "{condition:?}");
+            assert_eq!(
+                decision.travel,
+                crate::ai::travel::TravelWrite::Keep,
+                "{condition:?}: no idle block, so no +0x6c"
+            );
+        }
+        let npcs = keeping(plunder, Condition::Intact);
+        assert_eq!(decision_among(&npcs[..1]).goal, plunder, "gone");
+    }
+
+    #[test]
+    fn an_unprovoked_wimpy_trader_keeps_a_count_wait_or_a_fight_on_a_ship_still_here() {
+        use crate::combat::hull::Condition;
+        for goal in [
+            Goal::CountWait,
+            Goal::Attack(n(2)),
+            Goal::Snipe(n(2)),
+            Goal::Flee(n(2)),
+        ] {
+            let goal_now = if goal == Goal::Snipe(n(2)) {
+                // Goal 4's high level: a chase that isn't hopeless is
+                // attacked (sub 0xe only while hopeless, @0x8e5f8).
+                Goal::Attack(n(2))
+            } else {
+                goal
+            };
+            assert_eq!(
+                decision_among(&keeping(goal, Condition::Intact)).goal,
+                goal_now,
+                "{goal:?}"
+            );
+        }
+        let npcs = keeping(Goal::Attack(n(2)), Condition::Intact);
+        assert_eq!(
+            decision_among(&npcs[..1]).goal,
+            Goal::Land(StellarId(128)),
+            "a fight on a ship gone idles (@0x8e263 → @0x8e731)"
+        );
+    }
+
+    #[test]
+    fn a_wimpy_trader_keeping_a_flight_calls_for_help() {
+        // `_AICallForHelp` reads the goal the think leaves (@0x8b1e1-0x8b1f5).
+        let npcs = keeping(Goal::Flee(n(2)), crate::combat::hull::Condition::Intact);
+        assert_eq!(decision_among(&npcs).comm_call, Some(CommCall::Distress));
+    }
+
+    #[test]
+    fn a_provoked_wimpy_trader_still_flees_whatever_it_held_but_its_count_wait() {
+        use crate::combat::hull::Condition;
+        let plunder = Goal::Plunder {
+            ship: ShipRef::Player,
+            hopeless: false,
+        };
+        let mut npcs = keeping(plunder, Condition::Intact);
+        npcs[0].provoked = 5.0;
+        npcs[0].target = Some(n(2));
+        assert_eq!(decision_among(&npcs).goal, Goal::Flee(n(2)), "@0x8b1ac");
+        npcs[0].goal = Goal::CountWait;
+        let decision = decision_among(&npcs);
+        assert_eq!(decision.goal, Goal::CountWait, "@0x8b062: it returns first");
+        assert_eq!(decision.comm_call, None);
+    }
+
+    #[test]
+    fn a_wimpy_trader_fights_the_player_whose_hit_of_no_damage_turned_it() {
+        // `react::victim` writes goal 4 on the player with no provocation;
+        // `_WimpyTraderAI` keeps it unprovoked (@0x8b1ac → @0x8b1fa), and
+        // goal 4's high level flies it.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Attack(ShipRef::Player);
+        trader.target = Some(ShipRef::Player);
+        let npcs = [trader];
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), 0);
+        let decision = WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(decision.comm_call, None);
+        assert_eq!(
+            WimpyTrader::default().target(&npcs[0], &around),
+            Some(ShipRef::Player)
+        );
+    }
+
+    #[test]
+    fn a_wimpy_traders_kept_attack_on_a_ship_breaking_up_ends_with_its_target_and_provocation() {
+        // @0x8e3ef → @0x8e714-0x8e726: goal 0, target -1, +0x96 0.
+        let dying = crate::combat::hull::Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let decision = decision_among(&keeping(Goal::Attack(n(2)), dying));
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+        assert!(decision.forgets_provocation);
+        assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Keep);
+    }
+
+    #[test]
+    fn a_wimpy_traders_kept_hopeless_attack_flees_and_calls_from_the_next_think() {
+        // Goal 3 with sub 5 (@0x8e622-0x8e62e), written by the high level
+        // after the think's call for help read goal 4.
+        let mut npcs = keeping(Goal::Attack(n(2)), crate::combat::hull::Condition::Intact);
+        npcs[0].hull.mass = 100.0;
+        npcs[1].goal = Goal::Flee(n(1));
+        npcs[1].state.velocity = crate::geometry::Vec2::new(0.0, 1.0);
+        let decision = decision_among(&npcs);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert_eq!(decision.comm_call, None, "the think saw goal 4");
+        npcs[0].goal = decision.goal;
+        assert_eq!(
+            decision_among(&npcs).comm_call,
+            Some(CommCall::Distress),
+            "the next think keeps the flight"
         );
     }
 
