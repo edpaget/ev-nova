@@ -50,6 +50,13 @@ pub struct Escort {
     /// slot's word (see `nova_sim_ai::traffic::berth_voices`). Read it
     /// through [`Escort::saved_voice`], which holds to that rule.
     pub voice: Option<VoiceVariant>,
+    /// The ship-table slot it holds, which a save writes it from, as
+    /// `_WritePilotData` indexes its tables by slot (@0x725f6-0x72711),
+    /// and which a load packs the fleet by, as `_LoadPilotData` spawns
+    /// the saved ships in slot order (@0x759af-0x75b91; see
+    /// `nova_sim::Session::load`). None for a record from a save older
+    /// than the field, or one never placed.
+    pub berth: Option<u32>,
 }
 
 /// What an escort is marked for at the next shipyard (`_DoEscortLand`
@@ -163,6 +170,7 @@ mod tests {
             person: None,
             mark: None,
             voice,
+            berth: None,
         }
     }
 

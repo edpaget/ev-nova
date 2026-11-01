@@ -271,6 +271,7 @@ impl Session {
             person: None,
             mark: None,
             voice: npc.voice,
+            berth: None,
         };
         let id = self.space.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
@@ -1351,6 +1352,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
@@ -1864,6 +1866,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 
@@ -1878,6 +1881,15 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
+        }
+    }
+
+    /// `escort` as its record holds it at `berth`.
+    fn at_berth(berth: u32, escort: Escort) -> Escort {
+        Escort {
+            berth: Some(berth),
+            ..escort
         }
     }
 
@@ -2051,7 +2063,7 @@ pub(super) mod tests {
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         let ticks = until_docked(&mut session, &catalog, 600);
         assert!(ticks.is_some(), "{:?}", fleet_npcs(&session));
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().escorts(), [at_berth(2, warship(None))]);
         assert_eq!(session.npcs().len(), 1, "their NPCs are gone");
         assert_eq!(
             fleet_npcs(&session)[0]
@@ -2133,7 +2145,10 @@ pub(super) mod tests {
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         let passes = until_docked_in_game_work(&mut session, &catalog, 600);
         assert!(passes.is_some(), "{:?}", fleet_npcs(&session));
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            session.pilot().escorts(),
+            [at_berth(berth(&session, escort), warship(None))]
+        );
         assert_eq!(
             session.space.escorts.fleet,
             [Some(escort)],
@@ -3691,7 +3706,7 @@ pub(super) mod tests {
         let mut session = fleet(&catalog, 0, vec![warship(None), out(), dart_out()])
             .with_rules(kept_orders().with_override(RuleKey::FighterRecall, RuleSource::Bible));
         land_now(&mut session).expect("lands");
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().escorts(), [at_berth(1, warship(None))]);
         assert_eq!(
             (session.pilot().owned(VIPERS), session.pilot().owned(DARTS)),
             (1, 1)
@@ -3820,6 +3835,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
         assert!(
@@ -3866,6 +3882,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
         let facts = session.ship.facts(&session.pilot, &session.statics);
@@ -3950,7 +3967,7 @@ pub(super) mod tests {
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().escorts(), [at_berth(2, warship(None))]);
         assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
         session
             .take_off(&catalog, &mut NeverFires)
@@ -3984,7 +4001,11 @@ pub(super) mod tests {
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            session.pilot().escorts(),
+            [at_berth(1, warship(None))],
+            "the berth it will take, the fighters gone"
+        );
     }
 
     /// Whether the outfitter sells another Viper to a pilot with `aboard`

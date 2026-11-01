@@ -438,7 +438,8 @@ fn the_escorts_landing_report_at_aurora_starts_no_movie_once_it_closes() {
             "wage": null,
             "person": null,
             "mark": "sell",
-            "voice": null
+            "voice": null,
+            "berth": null
         }]);
     };
     let Some((mut driver, player, landed)) = landed_at(AURORA, sold, None) else {

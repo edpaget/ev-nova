@@ -209,6 +209,7 @@ mod tests {
                 wage: Some(30),
                 order: None,
                 reserves: npc.reserves,
+                berth: Some(npc.berth),
                 ..trader_escort()
             }],
             "its wage kept, its standing order cleared"

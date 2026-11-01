@@ -2147,6 +2147,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         });
         session.set_credits(1000);
         session.let_days_pass(2, &mut NeverFires);

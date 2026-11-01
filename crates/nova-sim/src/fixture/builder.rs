@@ -352,6 +352,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         let mut session = SessionBuilder::flying(&catalog)
             .with_escorts(vec![escort(false), escort(false)])

@@ -125,6 +125,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 

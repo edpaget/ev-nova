@@ -140,6 +140,7 @@
 use std::collections::BTreeSet;
 
 use super::command_word::{standing, word_change};
+use super::loaded_berths;
 use super::{Session, Setup, Space, Statics};
 use crate::ai::pursuit::Pursuit;
 use crate::ai::swarm::{self, FormationParent};
@@ -557,7 +558,13 @@ impl Session {
     /// engine re-forms on each change to the led set, and on each change
     /// of parent before the traffic's tick (the `swarm_formation` module),
     /// which gives the same slots at every frame.
+    ///
+    /// As each change to the fleet re-forms, each escort record takes its
+    /// berth here too ([`Space::record_berths`]), so a save made while
+    /// landed, where no pass syncs the fleet, keeps the berths of a ship
+    /// hired or kept since the last pass.
     pub(super) fn reform(&mut self) {
+        self.space.record_berths(&mut self.pilot);
         for (id, formation) in self.formation_slots() {
             let Some(npc) = self.space.npc_mut(id) else {
                 continue;
@@ -977,31 +984,30 @@ impl Space {
     /// takes as the system is set up, by its index. As
     /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
     /// the table across every setup, an escort whose NPC is in the system
-    /// keeps its berth. Every other (a loaded pilot's, or one whose ship
-    /// type has no record) takes the lowest berth not already chosen, in
-    /// fleet order, before anything else is set up, as `_LoadPilotData`
-    /// spawns a loaded pilot's escorts first (@0x759a4-0x75b2b). The old
-    /// ship kept after a capture and a ship hired are placed at once, so
-    /// they keep theirs.
+    /// keeps its berth. Every other (a loaded pilot's) takes the lowest
+    /// berth not already chosen, in the order of the berths they were
+    /// saved at ([`loaded_berths::packing_order`]), before anything else
+    /// is set up, as `_LoadPilotData` spawns a loaded pilot's escorts
+    /// first, walking their old slots up (@0x759a4-0x75b91). The old ship
+    /// kept after a capture and a ship hired are placed at once, so they
+    /// keep theirs.
     pub(super) fn fleet_berths(&self, pilot: &Pilot) -> Vec<u32> {
-        let kept: Vec<Option<u32>> = (0..pilot.escorts.len())
+        let mut berths: Vec<Option<u32>> = (0..pilot.escorts.len())
             .map(|index| {
                 let id = self.escorts.fleet.get(index).copied().flatten()?;
                 self.npc(id).map(|npc| npc.berth)
             })
             .collect();
-        let mut taken: BTreeSet<u32> = kept.iter().flatten().copied().collect();
-        kept.into_iter()
-            .map(|berth| {
-                berth.unwrap_or_else(|| {
-                    let free = (1..=u32::MAX)
-                        .find(|b| !taken.contains(b))
-                        .unwrap_or(u32::MAX);
-                    taken.insert(free);
-                    free
-                })
-            })
-            .collect()
+        let mut taken: BTreeSet<u32> = berths.iter().flatten().copied().collect();
+        let unplaced = (0..berths.len()).filter(|&index| berths[index].is_none());
+        for index in loaded_berths::packing_order(&pilot.escorts, unplaced.collect()) {
+            let free = (1..=u32::MAX)
+                .find(|b| !taken.contains(b))
+                .unwrap_or(u32::MAX);
+            taken.insert(free);
+            berths[index] = Some(free);
+        }
+        berths.into_iter().map(Option::unwrap_or_default).collect()
     }
 
     /// What each of the fleet's escorts keeps across a setup, by its
@@ -1076,7 +1082,8 @@ impl Space {
         self.escorts.restock = true;
     }
 
-    /// Each escort's record takes its NPC's shield, armour and fuel.
+    /// Each escort's record takes its NPC's shield, armour and fuel, and
+    /// every record its berth ([`Space::record_berths`]).
     pub(super) fn sync_fleet(&mut self, pilot: &mut Pilot) {
         for index in 0..pilot.escorts.len() {
             let Some(id) = self.escorts.fleet.get(index).copied().flatten() else {
@@ -1086,6 +1093,7 @@ impl Space {
                 pilot.escorts[index].reserves = reserves;
             }
         }
+        self.record_berths(pilot);
     }
 
     /// The `Holds` escort NPC `id` takes its share of the cargo by as it
@@ -1324,6 +1332,7 @@ pub(super) mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             };
             2
         ];
@@ -1504,6 +1513,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 

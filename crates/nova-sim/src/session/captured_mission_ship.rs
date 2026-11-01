@@ -208,6 +208,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 
@@ -296,7 +297,15 @@ mod tests {
         assert_eq!(session.can_hire_escorts(), can_hire);
         let saved = crate::save::encode(session.pilot());
         let loaded = crate::save::decode(&saved).expect("loads");
-        assert_eq!(loaded.escorts(), [hired()], "_WritePilotData @0x72683");
+        let hired_berth = session.space.npc(hired_id).map(|npc| npc.berth);
+        assert_eq!(
+            loaded.escorts(),
+            [Escort {
+                berth: hired_berth,
+                ..hired()
+            }],
+            "_WritePilotData @0x72683"
+        );
     }
 
     #[test]

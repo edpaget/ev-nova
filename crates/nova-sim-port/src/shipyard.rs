@@ -4766,6 +4766,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }];
         pilot.gone_persons = std::collections::BTreeSet::from([crate::catalog::PersonId(151)]);
         pilot.grudges = std::collections::BTreeSet::from([crate::catalog::PersonId(152)]);

@@ -2317,6 +2317,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }];
         let refused = |session: &Session| {
             session
@@ -2396,6 +2397,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }];
         session.pilot.cargo.insert(Good::Commodity(0), 25);
         assert_eq!(

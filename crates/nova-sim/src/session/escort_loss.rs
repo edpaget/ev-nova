@@ -62,6 +62,7 @@ pub(super) fn escorted(catalog: &FakePilotCatalog) -> Session {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         },
     );
     let npc = session.space.npc_mut(NpcId(0)).expect("there");

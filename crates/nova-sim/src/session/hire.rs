@@ -243,6 +243,7 @@ impl Session {
                     person: None,
                     mark: None,
                     voice: None,
+                    berth: None,
                 });
             }
         });
@@ -340,7 +341,7 @@ impl Chart {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::ai::{Goal, Peaceful};
     use crate::board::MAX_ESCORTS;
@@ -367,7 +368,7 @@ mod tests {
 
     /// The bar's stellar, 128, at the centre, under the ship as it
     /// starts.
-    const BAR_AT: StellarId = StellarId(128);
+    pub(in crate::session) const BAR_AT: StellarId = StellarId(128);
 
     /// [`catalog`] with planet 128 a bar of tech level 7 and these ships
     /// besides the player's own (ship 128, never for hire).
@@ -810,6 +811,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 
@@ -896,6 +898,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: Some(1),
             }]
         );
         assert!(session.take_save_due());
@@ -1209,7 +1212,7 @@ mod tests {
 
     /// [`barred`] with ship 129 of `Cost` 10,000 and 130 of 30,000, both
     /// for hire, and outfit 300 adding a day to each jump.
-    fn paying() -> FakePilotCatalog {
+    pub(in crate::session) fn paying() -> FakePilotCatalog {
         let mut catalog = barred(vec![
             hireable(129, 100),
             ShipRecord {
@@ -1222,7 +1225,7 @@ mod tests {
     }
 
     /// An escort of `ship` at `wage`, `carried` or not.
-    fn paid(ship: i16, wage: Option<i64>, carried: bool) -> Escort {
+    pub(in crate::session) fn paid(ship: i16, wage: Option<i64>, carried: bool) -> Escort {
         Escort {
             ship: ShipId(ship),
             wage,

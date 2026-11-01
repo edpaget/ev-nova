@@ -181,6 +181,7 @@ fn an_escort_keeps_its_rounds_through_a_gate_exit() {
         person: None,
         mark: None,
         voice: None,
+        berth: None,
     });
     take_off(&mut session, &catalog);
     let id = session.space.escorts.fleet[0].expect("placed");

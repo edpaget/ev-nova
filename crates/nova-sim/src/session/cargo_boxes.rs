@@ -347,6 +347,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         pilot.escorts = vec![
             escort(WARSHIP, false),

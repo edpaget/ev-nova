@@ -169,6 +169,14 @@
 //!   older version, @0x75c67-0x75cc7), so an older save's reading is the
 //!   engine's: the upgrade gives `[-1, -1, -1, -1]`, a pilot who hasn't
 //!   flown, and its escorts hold -1 until their first think.
+//! - Version 38: adds each escort's berth (`berth`, a ship-table slot, or
+//!   `null`), the slot `i` the original's save indexes its escort and
+//!   fighter tables by (+0xe72e and +0xe7ae, `_WritePilotData`
+//!   @0x725f6-0x72711), which `_LoadPilotData` walks up to spawn them in
+//!   (@0x759af-0x75b91): a load packs the escorts into berths 1 up in
+//!   that order (see the session's `loaded_berths` module). No older save
+//!   kept it, so the upgrade gives `null`, and its escorts load in fleet
+//!   order.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -181,8 +189,8 @@
 //! standing order (`defend`, `attack`, `hold`, `dock`, or `null` for
 //! none), whether it is `carried`, its `wage` in credits a day (`null`
 //! for an escort that was not hired), and the `person` it is (a `përs`
-//! ID, or `null`; one whose record is gone is kept as saved), and its
-//! `mark` (`upgrade`, `sell` or `null`). The class table
+//! ID, or `null`; one whose record is gone is kept as saved), its
+//! `mark` (`upgrade`, `sell` or `null`), its `voice` and its `berth`. The class table
 //! (`class_orders`) is four raw words in the escort menu's class order
 //! (fighters, medium ships, warships, freighters): -1 unset, 0 formation, 1
 //! defend, 2 attack, 3 return, 4 hold. The
@@ -275,7 +283,7 @@ use crate::traffic::stellar_defence::DefenceShips;
 use crate::voice::VoiceVariant;
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 37;
+pub const CURRENT: u64 = 38;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -377,6 +385,8 @@ struct SavedEscort {
     mark: Option<SavedMark>,
     #[serde(deserialize_with = "Option::deserialize")]
     voice: Option<SavedVoice>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    berth: Option<u32>,
 }
 
 /// A saved fighter's voice variant (see the module docs' version 36).
@@ -1222,6 +1232,7 @@ pub fn encode(pilot: &Pilot) -> String {
                 person: escort.person.map(|person| person.0),
                 mark: escort.mark.map(SavedMark::from),
                 voice: escort.saved_voice().map(SavedVoice::from),
+                berth: escort.berth,
             })
             .collect(),
         class_orders: pilot.class_orders.map(|word| word.0),
@@ -1291,7 +1302,14 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     dominations,
     fighter_voices,
     class_orders,
+    escort_berths,
 ];
+
+/// Version 37 to 38: no escort's berth, as no older save kept it, so its
+/// escorts load in fleet order.
+fn escort_berths(save: &mut Value) {
+    add_to_each(save, "escorts", "berth", &Value::Null);
+}
 
 /// Version 36 to 37: the class table unset, as a pilot who hasn't flown
 /// holds it (`_InitObjects` @0x1cebd), since no older save kept it.
@@ -1756,6 +1774,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
                 person: saved.person.map(PersonId),
                 mark: saved.mark.map(EscortMark::from),
                 voice: saved.voice.map(VoiceVariant::from),
+                berth: saved.berth,
             })
             .collect(),
         class_orders: saved.class_orders.map(class_word_of),
@@ -1846,6 +1865,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(141),
@@ -1856,6 +1876,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(144),
@@ -1866,6 +1887,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(128),
@@ -1876,6 +1898,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(136),
@@ -1886,6 +1909,7 @@ mod tests {
                 person: Some(PersonId(128)),
                 mark: None,
                 voice: None,
+                berth: None,
             },
         ]
     }
@@ -2108,7 +2132,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 37);
+        assert_eq!(CURRENT, 38);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -2191,12 +2215,13 @@ mod tests {
                 "wage": null,
                 "person": null,
                 "mark": null,
-                "voice": null
+                "voice": null,
+                "berth": null
             })
         );
         assert_eq!(value["strict_play"], false);
         assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 37"), "{text}");
+        assert!(text.contains("\n  \"version\": 38"), "{text}");
     }
 
     #[test]
@@ -2446,6 +2471,7 @@ mod tests {
                     person: None,
                     mark: None,
                     voice: None,
+                    berth: None,
                 },
                 Escort {
                     ship: ShipId(141),
@@ -2456,6 +2482,7 @@ mod tests {
                     person: None,
                     mark: None,
                     voice: None,
+                    berth: None,
                 },
             ]
         );
@@ -4792,12 +4819,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 37", "\"version\": 38");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 38 }));
+        let newer = encode(&seasoned()).replace("\"version\": 38", "\"version\": 39");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 39 }));
         assert_eq!(
-            SaveError::Newer { version: 38 }.to_string(),
+            SaveError::Newer { version: 39 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 38, and this version of Nova reads up to 37)."
+             (it is version 39, and this version of Nova reads up to 38)."
         );
     }
 
@@ -4813,9 +4840,11 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             },
             |escort| Escort {
                 voice: None,
+                berth: None,
                 ..escort
             },
         );
@@ -4884,6 +4913,44 @@ mod tests {
             .expect("an escort")
             .remove("voice");
         assert!(unusable(&value.to_string()).contains("voice"));
+    }
+
+    // Each escort's berth, the slot `_WritePilotData` indexes its tables by
+    // (@0x725f6-0x72711).
+
+    #[test]
+    fn an_escorts_berth_round_trips_none_included() {
+        let mut pilot = seasoned();
+        pilot.escorts[0].berth = Some(3);
+        pilot.escorts[2].berth = Some(1);
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(value["escorts"][0]["berth"], 3);
+        assert_eq!(value["escorts"][1]["berth"], serde_json::Value::Null);
+        assert_eq!(value["escorts"][2]["berth"], 1);
+        assert_eq!(decode(&text), Ok(pilot));
+    }
+
+    #[test]
+    fn a_version_37_saves_escorts_load_with_no_berth() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(37);
+        for escort in value["escorts"].as_array_mut().expect("escorts") {
+            escort.as_object_mut().expect("an escort").remove("berth");
+        }
+        assert_eq!(decode(&value.to_string()), Ok(seasoned()));
+    }
+
+    #[test]
+    fn a_save_missing_an_escorts_berth_at_the_current_version_is_refused() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["escorts"][0]
+            .as_object_mut()
+            .expect("an escort")
+            .remove("berth");
+        assert!(unusable(&value.to_string()).contains("berth"));
     }
 
     // The class table (`_WritePilotData` @0x72b01-0x72b25, `_LoadPilotData`

@@ -546,6 +546,7 @@ mod landing_fee;
 mod last_refresh;
 mod launch_frame;
 mod load_reset;
+mod loaded_berths;
 mod lost_lead;
 mod lost_target;
 mod map;
@@ -5673,6 +5674,7 @@ impl Session {
             person,
             mark: None,
             voice: None,
+            berth: None,
         };
         // `_DoShipCapture` clears the captured ship's pick (@0x41207), and
         // so its slot's.
@@ -10588,6 +10590,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 
@@ -25830,6 +25833,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -25852,6 +25856,7 @@ pub(super) mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             };
             MAX_ESCORTS
         ];
@@ -26451,6 +26456,7 @@ pub(super) mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             };
             MAX_ESCORTS
         ];
@@ -26474,6 +26480,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         };
         let fleet = |escorts: usize, fighters: usize| {
             let mut fleet = vec![escort(false); escorts];
@@ -26551,6 +26558,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 
@@ -26580,7 +26588,7 @@ pub(super) mod tests {
             take(&mut session, Take::Capture, &[10, 1]).0,
             Taken::Escorted
         );
-        assert_eq!(session.pilot().escorts(), [trader_escort()]);
+        assert_eq!(session.pilot().escorts(), [joined_escort(&session)]);
         assert_joined_in_place(&session);
         assert_eq!(
             session.npcs()[0].pick,
@@ -26591,6 +26599,14 @@ pub(super) mod tests {
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());
+    }
+
+    /// The trader's record once NPC 0 has joined the fleet, at its berth.
+    fn joined_escort(session: &Session) -> Escort {
+        Escort {
+            berth: session.space.npc(NpcId(0)).map(|npc| npc.berth),
+            ..trader_escort()
+        }
     }
 
     /// The trader, NPC 0, has joined the fleet where it is: intact, its
@@ -26654,7 +26670,7 @@ pub(super) mod tests {
         );
         assert_eq!(session.npcs()[1].leader, Some(NpcId(7)), "another's escort");
         session.space.traffic.npcs_mut()[1].leader = None;
-        assert_eq!(session.pilot().escorts(), [trader_escort()]);
+        assert_eq!(session.pilot().escorts(), [joined_escort(&session)]);
         assert_joined_in_place(&session);
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
@@ -27016,6 +27032,7 @@ pub(super) mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: Some(1),
             }],
             "the old ship, stock and full"
         );
@@ -29047,6 +29064,7 @@ pub(super) mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }];
         session.populate(catalog, &mut NeverFires);
         session.hold_fire(true, false);

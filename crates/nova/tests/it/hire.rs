@@ -705,7 +705,8 @@ fn hiring_already(pilot: &Pilot, cash: i64, docked: bool) -> Pilot {
         "wage": 100,
         "person": null,
         "mark": null,
-        "voice": null
+        "voice": null,
+        "berth": null
     });
     save["escorts"] = serde_json::json!([hireling]);
     nova_sim::save::decode(&save.to_string()).expect("a pilot")

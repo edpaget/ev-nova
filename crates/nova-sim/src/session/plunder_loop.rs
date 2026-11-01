@@ -194,6 +194,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             };
             MAX_ESCORTS
         ];
@@ -428,6 +429,7 @@ mod tests {
                 person: None,
                 mark: None,
                 voice: None,
+                berth: None,
             };
             MAX_ESCORTS
         ];

@@ -1537,6 +1537,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         });
         session.ship.player = ShipState {
             position: Vec2::new(5.0, -3.0),
@@ -1831,6 +1832,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         });
         session.pilot.cargo = [
             (Good::Commodity(0), 20),

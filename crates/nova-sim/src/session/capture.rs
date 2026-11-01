@@ -235,6 +235,7 @@ impl PlayerShip {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 }
@@ -297,6 +298,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         }
     }
 

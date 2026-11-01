@@ -472,6 +472,7 @@ mod tests {
             person: None,
             mark: None,
             voice: None,
+            berth: None,
         });
         session.space.escorts.fleet.push(Some(id));
         work_with(

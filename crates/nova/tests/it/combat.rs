@@ -1869,7 +1869,8 @@ fn with_fleet(pilot: &Pilot, ships: &[i16]) -> Pilot {
                 "wage": null,
                 "person": null,
                 "mark": null,
-                "voice": null
+                "voice": null,
+                "berth": null
             })
         })
         .collect();
