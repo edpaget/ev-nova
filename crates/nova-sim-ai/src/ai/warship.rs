@@ -104,12 +104,13 @@
 //! - **The out-of-ammo retreat** (@0x8bf3e-0x8bf83), after those, by its
 //!   hull's `Flags2` 0x0080 rather than its government: short of
 //!   ammunition, it flees its target (see [`out_of_ammo`]).
-//! - **A hopeless chase**
-//!   ([`hopeless_chase`](crate::ai::odds::hopeless_chase), asked by
-//!   [`state4_attack`]) stands off and snipes; anything else is attacked. A stand-off ship (`shïp` `Flags2`
-//!   0x0002) never asks: `_HighLevelAIHandler` tests the bit first and
-//!   jumps past `_AIEvalHopelessChase` (@0x8e48e), keeping its band
-//!   instead (see [`stand_off`](super::stand_off)).
+//! - Anything else is attacked (goal 4). The high level's state-4 block
+//!   then snipes a hopeless chase outside the dogfight box
+//!   ([`hopeless_chase`](crate::ai::odds::hopeless_chase),
+//!   [`attack_drop`](super::attack_drop)), as it does for every type. A
+//!   stand-off ship (`shïp` `Flags2` 0x0002) never asks: the block tests
+//!   the bit first and jumps past `_AIEvalHopelessChase` (@0x8e48e),
+//!   keeping its band instead (see [`stand_off`](super::stand_off)).
 //! - **Fully dry** (@0x8c0e7-0x8c117), an attack or snipe is dropped: it
 //!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
 //! - With no target it goes about its business ([`idle`](super::idle)),
