@@ -23,15 +23,16 @@
 //! fight ([`fight_on_gone`](crate::traffic::provocation::fight_on_gone)).
 //!
 //! [`Traffic`](crate::traffic::Traffic) keeps the gone ships in
-//! [`GoneShips`]: each departure and destruction is recorded with its
-//! record; every run of a tick's think reads them all, and the think's
-//! close forgets them
-//! ([`Traffic::close_think`](crate::traffic::Traffic::close_think)), as its
-//! thinks are the last that can read them; a ship pass with no decisions
-//! before it, double
-//! time's second ([`Traffic::move_in`](crate::traffic::Traffic::move_in)),
-//! forgets those freed in a ship pass or after one, all that are left by
-//! then, as its `_HandleShip` clears every target that names them.
+//! [`GoneShips`], one record a slot: each departure and destruction is
+//! recorded with its record, which stands, as the original's does, until
+//! a ship takes the slot ([`Traffic::slot_taken`]) or the system is left.
+//! Every run of every tick's think reads them all. A record is read only
+//! where a target (+0x70) or a nav (+0x6c) still names its slot: the
+//! think's [`GoneShip::held_by`], whose target `_HandleShip`'s let-go
+//! clears on the first pass after the free; a ship whose high level is
+//! skipped, noted at its think for its flight (see the traffic's
+//! `skipped_high_level`); and a docking's nav, which no slot test clears
+//! (see [`repair_dock`](crate::traffic::repair_dock)).
 //!
 //! **The let-go** ([`Traffic::let_go_at_step`]) is `_HandleShip`'s test, at
 //! each ship's own turn of the ship loop (`nova_sim::Session::ship_loop`),
@@ -47,8 +48,8 @@
 //! the ship's own slot of that loop, as the original's low level frees it
 //! there (see the traffic's `dispatch_leave`): the later slots' thinks read
 //! it on that frame, and every slot's `_HandleShip`, an earlier one's too,
-//! lets go of it at its step, before its fire. The loop's close forgets the
-//! record, as every holder has let go by the next frame.
+//! lets go of it at its step, before its fire, so no target names it by
+//! the next frame.
 //!
 //! **A slot taken again** ([`Traffic::slot_taken`]) leaves every other
 //! ship's +0x70 as it was, so a ship still holding the slot finds it active
@@ -139,27 +140,27 @@ impl GoneShip {
     }
 }
 
-/// The ships gone since the last think closed, whose slots a think may
-/// still read (see the module docs).
+/// The records of the freed slots not taken again since the system was
+/// entered, one a slot, whose ships a think or a flight may still read
+/// (see the module docs).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GoneShips(Vec<GoneShip>);
 
 impl GoneShips {
-    /// Records `ship`, its slot freed as `freed` says.
+    /// Records `ship`, its slot freed as `freed` says, in place of any
+    /// record its slot held, as the slot keeps only its last ship's.
     pub fn record(&mut self, ship: Npc, freed: Freed) {
+        self.0.retain(|gone| gone.ship.berth != ship.berth);
         self.0.push(GoneShip { ship, freed });
     }
 
-    /// A ship pass with no decisions before it runs `_HandleShip` for
-    /// every slot, clearing each target that names a slot freed before it,
-    /// in a ship pass or after one. None freed in the AI loop is left by
-    /// then: the loop's close forgot them (see the module docs).
-    pub fn ship_pass(&mut self) {
-        self.0.clear();
+    /// Drops the record at `berth`, as a spawn into the slot rewrites it
+    /// (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b).
+    pub fn taken(&mut self, berth: u32) {
+        self.0.retain(|gone| gone.ship.berth != berth);
     }
 
-    /// Forgets every ship recorded: a think's close, whose runs are the
-    /// last that can read them, or a new system, whose slots hold none of
+    /// Forgets every ship recorded, as a new system's slots hold none of
     /// them.
     pub fn clear(&mut self) {
         self.0.clear();
@@ -253,6 +254,7 @@ impl Traffic {
                 }
             }
         }
+        self.gone.taken(berth);
     }
 
     /// Takes NPC `id`, killed by a deadly stellar, out of the system, if it
@@ -347,25 +349,25 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_ship_pass_forgets_a_slot_freed_after_the_ship_loop() {
+    fn a_berth_freed_again_keeps_its_latest_record() {
+        // A slot holds one record, the last ship's, as `VacatedBerths`
+        // keeps one.
         let mut gone = GoneShips::default();
-        gone.record(at_berth(1, 1), Freed::AfterShipLoop);
-        gone.ship_pass();
-        assert_eq!(gone.ships(), []);
-    }
-
-    #[test]
-    fn a_thinks_close_forgets_every_gone_ship_and_a_lone_ship_pass_forgets_those_it_clears() {
-        // A record freed in the AI loop is gone by the loop's close, before
-        // any ship pass, so a ship pass finds only those freed in a ship
-        // pass or after one.
-        let mut gone = GoneShips::default();
-        gone.record(at_berth(1, 1), Freed::AfterShipLoop);
-        gone.record(at_berth(2, 2), Freed::InShipPass);
-        let mut second = gone.clone();
-        second.ship_pass();
-        assert_eq!(second.ships(), []);
-        assert_eq!(gone.ships().len(), 2);
+        gone.record(at_berth(1, 5), Freed::InShipPass);
+        gone.record(at_berth(2, 6), Freed::InShipPass);
+        gone.record(at_berth(3, 5), Freed::AfterShipLoop);
+        let kept: Vec<(NpcId, Freed)> = gone
+            .ships()
+            .iter()
+            .map(|gone| (gone.ship.id, gone.freed))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (NpcId(2), Freed::InShipPass),
+                (NpcId(3), Freed::AfterShipLoop)
+            ]
+        );
         gone.clear();
         assert_eq!(gone.ships(), []);
     }
@@ -381,7 +383,7 @@ mod tests {
         use crate::traffic::fixture::calls_on_line;
         use crate::traffic::npc::{AiType, MissionMark, Mode};
         use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable};
-        use crate::traffic::{FlyHalf, LeftShip, ShipBehav, Traffic, World};
+        use crate::traffic::{FlyHalf, Leave, LeftShip, ShipBehav, Traffic, World};
         use nova_sim_base::fixture::{Draws, FAST};
         use nova_sim_catalog::fixture::planet;
         use std::collections::{BTreeMap, BTreeSet};
@@ -845,6 +847,40 @@ mod tests {
         }
 
         #[test]
+        fn a_freed_slots_record_stands_until_a_ship_takes_its_berth() {
+            // Nothing but a spawn into the slot rewrites its record
+            // (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b): not a ship pass,
+            // nor a later tick.
+            let mut traffic = Traffic::new();
+            let wreck = in_slot(&mut traffic, 4);
+            traffic.remove_destroyed(wreck);
+            traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+            tick(&mut traffic);
+            let ids = |traffic: &Traffic| -> Vec<NpcId> {
+                traffic
+                    .gone
+                    .ships()
+                    .iter()
+                    .map(|gone| gone.ship.id)
+                    .collect()
+            };
+            assert_eq!(ids(&traffic), [wreck]);
+            in_slot(&mut traffic, 5);
+            assert_eq!(ids(&traffic), [wreck], "another berth taken");
+            in_slot(&mut traffic, 4);
+            assert_eq!(ids(&traffic), [], "its berth taken");
+        }
+
+        #[test]
+        fn a_new_system_drops_every_record() {
+            let mut traffic = Traffic::new();
+            let wreck = in_slot(&mut traffic, 4);
+            traffic.remove_destroyed(wreck);
+            traffic.retarget(SpawnTable::default(), &BTreeSet::new(), Leave::Dropped);
+            assert_eq!(traffic.gone.ships(), []);
+        }
+
+        #[test]
         fn a_slot_taken_again_passes_its_holders_to_the_new_ship() {
             // A spawn rewrites the slot and leaves every other ship's +0x70
             // (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), so the holder's
@@ -1052,16 +1088,20 @@ mod tests {
             tick(&mut traffic);
             assert!(!read(&traffic, trader), "a later slot does not");
             // A trader not thinking on the next tick has its target cleared
-            // by its `_HandleShip` before it next thinks.
+            // by its `_HandleShip` before it next thinks, the session's
+            // ship loop's let-go, though the record stands.
             let (mut traffic, trader, attacker) = fleeing_a_warship((100.0, 0.0), 1, 2, 2);
             traffic.remove_destroyed(attacker);
             tick(&mut traffic);
+            traffic.let_go_at_step(trader, true);
             tick(&mut traffic);
             assert!(!read(&traffic, trader), "its next think comes too late");
+            assert_eq!(traffic.gone.ships().len(), 1, "the record stands");
             // Double time's second pass runs `_HandleShip` for every slot.
             let (mut traffic, trader, attacker) = fleeing_a_warship((100.0, 0.0), 1, 2, 1);
             traffic.remove_destroyed(attacker);
             traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
+            traffic.let_go_at_step(trader, true);
             tick(&mut traffic);
             assert!(!read(&traffic, trader), "the second pass clears it");
         }

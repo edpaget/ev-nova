@@ -258,7 +258,6 @@ fn two_refuellers_in_one_run_read_the_fuel_in_berth_order() {
         &crate::traffic::NoBay::new(),
         &mut chance,
     );
-    traffic.close_think();
     assert_eq!(tank + traffic.take_fuel_given(), 101.0);
     assert_eq!(ship(&traffic, NpcId(3)).goal, Goal::Assist(Help::Refuel));
     assert_eq!(ship(&traffic, NpcId(2)).goal, Goal::Idle, "it read 101");

@@ -1352,9 +1352,8 @@ impl Traffic {
     /// The think half of a tick in `world` (steps 1 to 5 of the module
     /// docs) in the default order but with no fight, for tests and
     /// [`Traffic::tick_holding`]: [`Traffic::open_think`], one
-    /// [`Traffic::think_run`] for each occupied berth in ascending order
-    /// and [`Traffic::close_think`]. The session drives the three parts
-    /// itself, its fight between the runs
+    /// [`Traffic::think_run`] for each occupied berth in ascending order.
+    /// The session drives the two parts itself, its fight between the runs
     /// (`nova_sim::Session::dispatch_npcs`), under both readings of
     /// [`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi); this
     /// holds one `world`, so like the session's landing it shows each run
@@ -1380,7 +1379,6 @@ impl Traffic {
             );
             after = Some(slot);
         }
-        self.close_think();
     }
 
     /// The part of a tick's think in `world` before the first slot's
@@ -1441,8 +1439,8 @@ impl Traffic {
         // The head of each picked ship's dispatch ([`dispatch_head`]).
         let jump_path = self.dispatch_heads(&world, &picked, chance);
         let due = self.thinks_due(&picked);
-        // The decisions can read a gone ship's slot, and every run of the
-        // tick does ([`gone`], [`Traffic::close_think`]).
+        // The decisions can read a gone ship's slot, which keeps its
+        // record until a ship takes it ([`gone`]).
         let around = Surroundings {
             gone: self.gone.ships(),
             ..world.around(&self.npcs)
@@ -1546,12 +1544,6 @@ impl Traffic {
         let freed = pod_flight::count_down(&mut self.npcs, &picks);
         self.freed.extend(freed);
         self.leave_in_dispatch(&world, &picks, no_bay, chance)
-    }
-
-    /// The end of a tick's think: the ships gone are forgotten, as the
-    /// tick's thinks are the last that can read them ([`gone`]).
-    pub fn close_think(&mut self) {
-        self.gone.clear();
     }
 
     /// Whether each NPC `picked` says (one flag an NPC) thinks this tick:

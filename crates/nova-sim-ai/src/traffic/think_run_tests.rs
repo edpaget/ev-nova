@@ -357,7 +357,9 @@ impl Behaviour for ReadingGone {
 }
 
 #[test]
-fn every_run_of_a_tick_reads_the_gone_ships_and_close_think_forgets_them() {
+fn every_run_of_a_tick_reads_the_gone_ships_and_the_tick_keeps_them() {
+    // The record stands until a ship takes its slot
+    // (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), past the tick.
     let (mut traffic, low, high) = two_ships();
     let ship = fixture::npc(9, ShipStats::default());
     traffic.gone.record(ship, Freed::InDispatch);
@@ -378,8 +380,6 @@ fn every_run_of_a_tick_reads_the_gone_ships_and_close_think_forgets_them() {
         &crate::traffic::NoBay::new(),
         &mut chance,
     );
-    assert_eq!(traffic.gone.ships().len(), 1, "held to the tick's end");
-    traffic.close_think();
-    assert_eq!(traffic.gone.ships(), []);
+    assert_eq!(traffic.gone.ships().len(), 1, "held past the tick's end");
     assert_eq!(reading.0.into_inner(), [1, 1]);
 }

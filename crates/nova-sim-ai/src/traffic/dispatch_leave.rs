@@ -484,7 +484,9 @@ mod tests {
     #[test]
     fn a_departure_at_a_slot_is_read_only_in_that_ticks_think() {
         // Every slot's `_HandleShip` lets go of it after the loop
-        // (@0x33865-0x33888), so no later tick's think reads it.
+        // (@0x33865-0x33888), the session's ship loop's let-go, so no
+        // later tick's think holds it, though its record stands until a
+        // ship takes the slot (@0x3c8b1-0x3c90b).
         let mut traffic = Traffic::with_interval(1);
         let runner = warping_out(&mut traffic, 2);
         let above = idle(&mut traffic, 5);
@@ -492,9 +494,10 @@ mod tests {
         npc.expect("there").target = Some(ShipRef::Npc(runner));
         let watch = Watch::default();
         traffic.tick_in(&watch, world(), &[], &mut NeverFires);
-        assert_eq!(watch.seen(above).0, [runner], "that tick's");
+        assert_eq!(watch.seen(above), (vec![runner], true), "that tick's");
+        traffic.let_go_at_step(above, true);
         traffic.tick_in(&watch, world(), &[], &mut NeverFires);
-        assert_eq!(watch.seen(above).0, [], "the next tick's");
+        assert_eq!(watch.seen(above), (vec![runner], false), "the next tick's");
     }
 
     // The high level's gate release and the low level's dock start, at

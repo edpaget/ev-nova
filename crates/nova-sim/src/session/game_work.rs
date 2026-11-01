@@ -328,9 +328,6 @@ impl Session {
             // so the rest of the loop, `_HandleShot` and its own
             // `_HandleShip` see it that frame.
             self.dispatch_npcs(marks.is_some(), pass, behaviour, rules, chance);
-            if marks.is_some() {
-                self.space.traffic.close_think();
-            }
             // `_EscortAI`'s variants and target calls, in berth order.
             self.space.answer_voice_cues(&self.statics, &mut *chance);
             // What the slots' runs left on the line, and the reinforcement
@@ -1315,10 +1312,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_gone_at_its_slot_is_read_by_a_higher_slots_think_that_pass_and_forgotten_as_it_closes()
-     {
+    fn a_ship_gone_at_its_slot_is_read_by_a_higher_slots_think_that_pass_and_its_record_stands() {
         // Its own jump frees it in its own dispatch (@0x859b8), before the
-        // higher slot's think; the loop's close forgets it.
+        // higher slot's think; its record stands until a ship takes the
+        // slot (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b).
         let catalog = armed();
         let mut session = warmed(&catalog);
         let npc = &mut session.space.traffic.npcs_mut()[0];
@@ -1347,6 +1344,6 @@ mod tests {
         };
         assert_eq!(session.departed(), [(leaver, Outcome::JumpedOut)]);
         assert_eq!(read, [leaver], "the higher slot's think that pass");
-        assert_eq!(reads(&mut session), [], "forgotten as that think closed");
+        assert_eq!(reads(&mut session), [leaver], "its record stands");
     }
 }

@@ -4,10 +4,7 @@
 //! before and after it: [`Traffic::begin_fly`], then
 //! [`Traffic::fly_npc`] for each NPC, then [`Traffic::end_fly`].
 //!
-//! - **Begin** forgets, on double time's second pass, the ships gone in a
-//!   ship pass or after one (see [`gone`](super::gone)); holds every NPC's
-//!   cloak; on
-//!   the advance pass moves each NPC's fire clock on, holds its fold to
+//! - **Begin** holds every NPC's cloak; on the advance pass moves each NPC's fire clock on, holds its fold to
 //!   its dispatch, and runs the odds pass
 //!   (`_DoPlayGameWork` @0x442b0-0x44336, after every think and before
 //!   `_HandleShip`; see [`odds_cache`](super::odds_cache)); notes which
@@ -174,10 +171,6 @@ impl Traffic {
         let states = self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let order = self.npcs.iter().map(|npc| npc.id).collect();
         let think = half == FlyHalf::Advance;
-        if !think {
-            // A ship pass with no decisions before it (see `gone`).
-            self.gone.ship_pass();
-        }
         self.hold_cloaks(world);
         if think {
             // The warp clocks moved on as the loop opened, and the high
