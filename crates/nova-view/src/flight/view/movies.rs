@@ -49,7 +49,11 @@
 //!   refused, and holds the entry command behind the movie. Under it is
 //!   the old system's flight, frozen. The load goes before the entry, so
 //!   the rank governments it resets and the last movie it leaves come
-//!   before the come-out's texts, as in the original.
+//!   before the come-out's texts, as in the original. The keys
+//!   `_HandlePlayer` polls with no latch stay tracked under the movie, as
+//!   it polls them again after the come-out (`_SetAllKeyCmdFlags`
+//!   @0x639f2, @0x6429c, latches only the rest), so one still down
+//!   reads down, whenever it went down, the skip's flush or not.
 //!
 //! Neither function plays a sound.
 

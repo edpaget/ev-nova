@@ -26,7 +26,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// offered in its place ([`FlightView::take_offer`](FlightView#method.take_offer))
     /// and the planet comm dialog a navigation stellar that answers opens
     /// ([`FlightView::take_planet_comm`]), each letting go of the flight
-    /// keys, as `_SetAllKeyCmdFlags` does after the dialog (@0x62067); a
+    /// keys, whose releases go to the dialog: as it closes, the router
+    /// gives back those still down that `_HandlePlayer` polls
+    /// ([`FlightView::take_back_live_input`]), and `_SetAllKeyCmdFlags`
+    /// latches the rest (@0x62062, @0x622ac, @0x6258e, @0x625ee); a
     /// mission accepted at once shows nothing. A refusal's beep is the
     /// flight's, drained with its sounds.
     pub(super) fn hail(&mut self) {
@@ -88,7 +91,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
-    /// keys; a mission accepted at once shows nothing here, its texts
+    /// keys, whose releases go to the offer, till its close gives back
+    /// those still down ([`FlightView::take_back_live_input`]); a mission
+    /// accepted at once shows nothing here, its texts
     /// queued in the flight, its before-movie first, for the router to
     /// show over flight.
     pub(super) fn hold_offer(&mut self, offer: VenueOffer) {

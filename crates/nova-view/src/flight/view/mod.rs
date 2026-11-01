@@ -1410,7 +1410,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// Time since the view opened, which drives the stellars' animations
     /// and the running lights' blinking. It stops while the map is open.
     elapsed: Duration,
-    /// The flight keys held down.
+    /// The flight keys held down. A dialog over flight lets go of them,
+    /// and its close gets back those `_HandlePlayer` polls with no latch
+    /// that are still down ([`FlightView::take_back_live_input`]).
     held: HashSet<Key>,
     /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
     /// Hyperspace Mode block and Option-\` share: set as one of them acts,

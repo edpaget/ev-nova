@@ -376,7 +376,8 @@ fn hanging_up_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
 // session's view's), here read off the view.
 
 #[test]
-fn y_on_a_person_offering_its_mission_holds_the_offer_once_letting_go_of_the_keys() {
+fn y_on_a_person_offering_its_mission_holds_the_offer_once_till_its_close_gives_back_the_live_keys()
+{
     let mut view = sol();
     assert_eq!(view.take_offer(), None);
     view.sim
@@ -387,7 +388,11 @@ fn y_on_a_person_offering_its_mission_holds_the_offer_once_letting_go_of_the_key
     assert_eq!(view.take_hail(), None, "no comm dialog");
     assert_eq!(view.take_offer(), Some(prompt("Ace needs help.")));
     assert_eq!(view.take_offer(), None, "once");
-    assert!(view.held.is_empty(), "the flight keys let go");
+    assert!(view.held.is_empty(), "let go for the dialog");
+    // The offer closes with Up and J down: `_HandlePlayer` polls Up, and
+    // `_SetAllKeyCmdFlags` (@0x622ac) latches J.
+    view.take_back_live_input([Key::Up, JUMP_KEY], false);
+    assert_eq!(view.held, [Key::Up].into_iter().collect());
 }
 
 #[test]

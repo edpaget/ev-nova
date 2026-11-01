@@ -138,10 +138,13 @@ impl<
 
     /// Plays `effect` for the ship having come out of a gate, `combat` the
     /// fight's events its arrival left pending, caught up with as an
-    /// arrival is ([`FlightView::arrived`]); the flight keys
-    /// are let go.
+    /// arrival is ([`FlightView::arrived`]). The latched flight keys are
+    /// let go and the unlatched ones kept, as `_PlayerEnterHypergate` and
+    /// `_PlayerEnterWormhole` set every latch after their movie
+    /// (`_SetAllKeyCmdFlags` @0x639f2, @0x6429c) and `_HandlePlayer` polls
+    /// the rest: neither touches the jump counter +0x50 its keys test.
     pub(super) fn came_through(&mut self, effect: JumpEffect, combat: &[CombatEvent]) {
-        self.held.clear();
+        self.keep_unlatched_keys();
         self.arrived(combat);
         self.fade_in = Some(effect);
     }

@@ -443,11 +443,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`Screen::release_keys`](crate::Screen::release_keys), so their
     /// releases will never reach it. The one place that does: the
     /// original reads both live (`_KeyCheck` @0xa19b-0xa1dc, `_Button`
-    /// @0x3803b), and ours has only the events flight is given. The
-    /// paths that keep the input in flight (a gate's exit, the course map
-    /// opened over a screen) clear `held` alone, as their releases still
-    /// come here, and the course map opened in flight keeps the keys read
-    /// with no latch ([`FlightView::open_map_as`]).
+    /// @0x3803b), and ours has only the events flight is given. So the
+    /// router, which sees the input under the dialog, gives back what is
+    /// still down as the last dialog over flight closes
+    /// ([`FlightView::take_back_live_input`]); a path that misses it
+    /// leaves the keys let go, never stuck down. The paths that keep the
+    /// input in flight (a gate's exit, the course map opened over a
+    /// screen) let go of `held` alone, as their releases still come here,
+    /// and the course map opened in flight and a gate's exit keep the
+    /// keys read with no latch ([`FlightView::open_map_as`],
+    /// `FlightView::came_through`).
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
         self.faded_keys.forget();

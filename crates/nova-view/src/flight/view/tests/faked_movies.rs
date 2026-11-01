@@ -467,6 +467,92 @@ fn under_a_gates_movie_the_old_systems_flight_is_drawn_frozen() {
     assert!(matches!(shown.last(), Some(DrawCommand::MovieFrame { .. })));
 }
 
+// The keys under a gate's movie: `_PlayerEnterHypergate` and
+// `_PlayerEnterWormhole` latch after it (@0x639f2, @0x6429c), and nothing
+// between keeps the unlatched keys from reading (the gates write no jump
+// counter +0x50), so `_HandlePlayer` polls them after the come-out.
+
+#[test]
+fn an_unlatched_key_pressed_under_a_gate_movie_reads_down_after_the_come_out() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&key(Key::Up, true));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert!(view.held.contains(&Key::Up), "down: {:?}", view.held);
+}
+
+#[test]
+fn one_let_go_under_the_movie_doesnt() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    super::faked_flight::hold(&mut view, Key::Up, true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    view.input(&key(Key::Up, false));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert!(!view.held.contains(&Key::Up));
+}
+
+#[test]
+fn an_unlatched_key_held_through_the_hypergates_map_and_movie_reads_down_after_the_come_out() {
+    let (mut view, _) = filming(filmed(&[131], &[]), true);
+    super::faked_flight::hold(&mut view, Key::Up, true);
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_answer(at_gate(GateKind::Hypergate));
+    view.sim
+        .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
+    view.land();
+    view.map.select_gate(Some(SystemId(131)));
+    view.sim
+        .queue_screen(ScreenAnswer::GateEntryDesc(Some(131)));
+    view.close_map();
+    assert!(view.playing());
+    came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
+    view.sim.queue_answer(arrived());
+    run_out(&mut view);
+    assert!(view.held.contains(&Key::Up), "down: {:?}", view.held);
+}
+
+#[test]
+fn a_skip_flushes_the_queue_but_not_a_key_still_down() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    view.input(&key(Key::Up, true));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    view.input(&key(Key::Enter, true));
+    assert!(!view.playing(), "skipped");
+    assert_eq!(view.take_movie_replay(), [], "flushed");
+    assert!(view.held.contains(&Key::Up), "polled: {:?}", view.held);
+}
+
+#[test]
+fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    view.held.insert(BOARD_KEY);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert!(!view.held.contains(&BOARD_KEY), "latched (@0x6429c)");
+}
+
 // The wormhole.
 
 /// L pressed over Sol's cleared wormhole (300) on `view`, the flight

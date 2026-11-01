@@ -285,6 +285,9 @@ impl<
     /// each command the input sends fills it ([`FlightView::send`]).
     fn take_input(&mut self, input: &Input) -> ScreenAction {
         if self.playing() {
+            // `_HandlePlayer` polls the unlatched keys again after the
+            // movie, however they went down under it (the `movies` module).
+            self.track_unlatched(input);
             self.movie_input(input);
             return ScreenAction::None;
         }

@@ -19,7 +19,12 @@
 //!   the view keeps [`UNLATCHED_KEYS`] held across the map, presses and
 //!   releases, and everything else is let go as the map opens. The latched
 //!   keys wait for their release: `_HandlePlayer` sets all 23 latches after
-//!   M's map (`_SetAllKeyCmdFlags` @0x61e6d, called @0x6a898).
+//!   M's map (`_SetAllKeyCmdFlags` @0x61e6d, called @0x6a898). The same
+//!   poll reads them after every other dialog over flight, which takes
+//!   flight's input from the router instead: the router keeps what is
+//!   physically down under it and hands it back as the last one closes
+//!   ([`FlightView::take_back_live_input`]), and a gate's movie, which
+//!   flight plays, keeps them as the map does (`FlightView::came_through`).
 //! - **A screen reads the queue.** Every screen's loop takes it through
 //!   `_MyModalDialog` (@0x5999a), and no caller flushes between
 //!   `_DoSystemMap` and that loop. So over a screen the view keeps what the
@@ -168,6 +173,27 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if UNLATCHED_KEYS.contains(&key) {
             self.held.insert(key);
         }
+    }
+
+    /// Takes back flight's input as the last dialog over it closes, `down`
+    /// the keys physically down and `button` whether the primary button
+    /// is: `_HandlePlayer` polls the keys (`_QuickKeyCheck` @0xa0f5) and
+    /// `_HandleMouse` reads `_Button` (@0x3801c-0x3803b) each frame, so
+    /// what is down reads as down whenever it went down, and
+    /// `_SetAllKeyCmdFlags` (@0x61e6d) latches the rest. The unlatched
+    /// keys held become exactly those of `down` ([`UNLATCHED_KEYS`]); no
+    /// latched key is taken from `down`, as its latch waits for its
+    /// release, and none flight holds is let go. A button still down keeps
+    /// the cursor whole.
+    ///
+    /// `down` names every key down, latched ones too, for the latch's
+    /// own bookkeeping (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
+    pub fn take_back_live_input(&mut self, down: impl IntoIterator<Item = Key>, button: bool) {
+        self.held.retain(|key| !UNLATCHED_KEYS.contains(key));
+        for key in down {
+            self.hold_live_key(key);
+        }
+        self.cursor.button(button);
     }
 
     /// What the last map over a screen left for the screen under it, in
