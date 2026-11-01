@@ -223,6 +223,8 @@ pub mod held_burst;
 #[cfg(test)]
 mod held_burst_tests;
 #[cfg(test)]
+mod held_target_tests;
+#[cfg(test)]
 mod hit_goal_tests;
 #[cfg(test)]
 mod idle_block_tests;
