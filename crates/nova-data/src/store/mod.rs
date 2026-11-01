@@ -217,7 +217,7 @@ pub use self::shot_spin::shot_spin_id;
 pub use self::spin_sprite::{SheetKind, SpinSheet, SpinSpriteError};
 pub use self::sprite::{
     LayerError, LayerSprite, SheetScan, ShipLayer, ShipLayerInfos, ShipLayers, ShipSprite,
-    ShipSpriteInfo, SpriteError,
+    ShipSpriteInfo, ShipSpriteWords, SpriteError,
 };
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 

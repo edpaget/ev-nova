@@ -5,7 +5,8 @@ use std::fmt;
 use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{
-    GraphicsError, RLED, RledInfo, SheetLayout, SpriteSheet, decode_rled, scan_rled,
+    GraphicsError, RLED, RleWords, RledInfo, SheetLayout, SpriteSheet, decode_rled, rled_words,
+    scan_rled,
 };
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
@@ -93,6 +94,10 @@ impl fmt::Display for ShipLayer {
 /// A ship's base sheet as [`GameData::ship_sprite_info`] reads it: its
 /// metadata without its pixels.
 pub type ShipSpriteInfo<'a> = ShipSprite<'a, SheetScan>;
+
+/// A ship's base sheet as [`GameData::ship_sprite_words`] reads it: its
+/// run-length tokens, which its pixels touch by.
+pub type ShipSpriteWords<'a> = ShipSprite<'a, RleWords>;
 
 /// What a sheet would hold once decoded, read without decoding it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -260,6 +265,13 @@ impl GameData {
     /// pixels. It fails exactly where and as that does.
     pub fn ship_sprite_info(&self, ship: ShipId) -> Result<ShipSpriteInfo<'_>, SpriteError> {
         self.resolve_sprite(ship, SheetScan::read)
+    }
+
+    /// What [`GameData::ship_sprite`] resolves, with the sheet read only as
+    /// its run-length tokens ([`rled_words`]), which its pixels touch by.
+    /// It fails where that does, but for tokens it does not check.
+    pub fn ship_sprite_words(&self, ship: ShipId) -> Result<ShipSpriteWords<'_>, SpriteError> {
+        self.resolve_sprite(ship, |data, _| rled_words(data))
     }
 
     fn resolve_sprite<S>(
@@ -771,6 +783,28 @@ mod tests {
                 .unwrap()
                 .alt
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_ships_words_are_its_base_sheets_tokens() {
+        let data = store(&[]);
+        let words = data.ship_sprite_words(ShipId(128)).expect("resolves");
+        assert_eq!(words.image_id, 1000);
+        assert_eq!(words.sheet, rled_words(&sheet(12, 0x7C00)).expect("reads"));
+        assert_eq!(words.sheet_source.path, Path::new("/d/sprites"));
+        assert_eq!(
+            data.ship_sprite_words(ShipId(129)).expect_err("absent"),
+            SpriteError::NoShip(129)
+        );
+        let deep = RledBuilder::new(2, 1).depth(32).build();
+        let data = store(&[("Bad Paint", fork(&[(RLED, 1000, deep)]))]);
+        assert_eq!(
+            data.ship_sprite_words(ShipId(128)).expect_err("32-bit"),
+            SpriteError::Graphics {
+                image_id: 1000,
+                source: GraphicsError::UnsupportedDepth { depth: 32 },
+            }
         );
     }
 
