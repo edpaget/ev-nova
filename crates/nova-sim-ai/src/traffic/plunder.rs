@@ -157,6 +157,11 @@ pub enum HighLevel {
         ship: ShipRef,
         /// What the docking's high level says.
         step: DockStep,
+        /// The slot of the ship it docks with, as +0x6c holds it
+        /// ([`travel::slot_of`](crate::ai::travel::slot_of)): what the
+        /// repair writes (@0x8f74c) and the plunder of a wreck too
+        /// (@0x8e8c9), as its decision does.
+        slot: Option<crate::catalog::StellarId>,
     },
     /// It flies its fight, if any.
     Fights,
@@ -187,7 +192,11 @@ pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> H
     }
     if npc.goal == Goal::Assist(Help::Repair) {
         return match (repair_dock::high_level(npc, around, rule), npc.target) {
-            (Some(step), Some(ship)) => HighLevel::Docks { ship, step },
+            (Some(step), Some(ship)) => HighLevel::Docks {
+                ship,
+                step,
+                slot: crate::ai::travel::slot_of(ship, around),
+            },
             _ => HighLevel::Skipped,
         };
     }
@@ -207,13 +216,15 @@ pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> H
     HighLevel::Docks {
         ship,
         step: plunder_dock::high_level(npc, at.position, boarded, rule),
+        slot: crate::ai::travel::slot_of(ship, around),
     }
 }
 
 /// Applies `high`, `npc`'s high level this think: nothing while its wait
 /// runs, a docking set or given up (goal 0, sub 0, target and nav -1, its
-/// travel stellar cleared: @0x8e8b3, @0x8f732), or any docking dropped as
-/// it flies its fight.
+/// travel stellar cleared: @0x8e8b3, @0x8f732), a docking set holding
+/// its ship's slot as its travel stellar (@0x8e8c9, @0x8f74c), or any
+/// docking dropped as it flies its fight.
 pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
     match high {
         HighLevel::Skipped | HighLevel::Refuels => {}
@@ -229,7 +240,11 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
         HighLevel::Docks {
             ship,
             step: DockStep::Sub(sub),
-        } => npc.docking = Some(Docking { ship, sub }),
+            slot,
+        } => {
+            npc.docking = Some(Docking { ship, sub });
+            npc.travel = slot.or(npc.travel);
+        }
         HighLevel::Fights | HighLevel::Stops => npc.docking = None,
     }
 }
@@ -545,6 +560,7 @@ mod tests {
             HighLevel::Docks {
                 ship: ShipRef::Npc(VICTIM),
                 step: DockStep::GiveUp,
+                slot: None,
             },
         );
         assert!(!docking.travel_set());
@@ -553,9 +569,10 @@ mod tests {
             HighLevel::Docks {
                 ship: ShipRef::Npc(VICTIM),
                 step: DockStep::Sub(DockSub::Close),
+                slot: Some(crate::ai::travel::of_slot(4)),
             },
         );
-        assert!(kept.travel_set());
+        assert_eq!(kept.travel, Some(crate::ai::travel::of_slot(4)));
     }
 
     #[test]
@@ -1154,7 +1171,8 @@ mod tests {
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
             HighLevel::Docks {
                 ship: ShipRef::Player,
-                step: DockStep::Sub(DockSub::Dock)
+                step: DockStep::Sub(DockSub::Dock),
+                slot: Some(crate::ai::travel::of_slot(0)),
             }
         );
         helper.target = None;
@@ -1164,6 +1182,35 @@ mod tests {
             HighLevel::Skipped,
             "no target: nothing changes"
         );
+    }
+
+    #[test]
+    fn a_repairer_holds_its_targets_slot() {
+        // Goal 0xf, its target there and disabled: +0x6c = +0x70 (@0x8f74c).
+        use crate::ai::travel;
+        let mut helper = npc(1, ShipStats::new(FAST, &[]));
+        helper.goal = Goal::Assist(Help::Repair);
+        let mut wreck = npc(2, ShipStats::new(FAST, &[]));
+        wreck.berth = 6;
+        wreck.condition = Condition::Disabled;
+        wreck.state.position = Vec2::new(2.0, 0.0);
+        let downed = crate::ai::PlayerSide {
+            condition: Condition::Disabled,
+            ..crate::ai::fixture::player(2.0, 0.0)
+        };
+        let world = World {
+            player: Some(downed),
+            ..World::new(&[])
+        };
+        for (target, slot) in [(ShipRef::Player, 0), (ShipRef::Npc(wreck.id), 6)] {
+            helper.target = Some(target);
+            let npcs = [helper.clone(), wreck.clone()];
+            let high = high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly);
+            assert!(matches!(high, HighLevel::Docks { .. }), "{high:?}");
+            let mut repairer = helper.clone();
+            take_high_level(&mut repairer, high);
+            assert_eq!(repairer.travel, Some(travel::of_slot(slot)), "{target:?}");
+        }
     }
 
     #[test]
@@ -1186,6 +1233,7 @@ mod tests {
         let docks = |sub| HighLevel::Docks {
             ship: ShipRef::Player,
             step: DockStep::Sub(sub),
+            slot: Some(crate::ai::travel::of_slot(0)),
         };
         assert_eq!(
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::AnyShip),
