@@ -711,6 +711,7 @@ fn fighter(
         afterburner: false,
         voice: None,
         pursuit: Pursuit::default(),
+        flees_hopeless: false,
         ai_wait: 0,
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
@@ -2242,10 +2243,19 @@ pub(super) mod tests {
             .with(AiType::Warship, Rc::new(Raiding))
     }
 
-    /// [`raiding_ai`] with the ships with an NPC parent raiding too: a
-    /// led carrier keeps whatever goal a test gives it, a snipe among them.
-    fn sniping_ai() -> NovaAi {
-        raiding_ai().with_fleet_escorts(Rc::new(Raiding))
+    /// One [`work_with`] of `session` with every NPC [`Raiding`] alone, so
+    /// a carrier keeps whatever goal a test gives it, a snipe among them,
+    /// with no high level after it: these tests pin the snipe's launches,
+    /// which the AI's attack block would make an attack within the box.
+    fn snipe(session: &mut Session, catalog: &FakePilotCatalog) {
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Raiding,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// [`raiding_ai`] by the other reading of [`RuleKey::NpcEscortAi`],
@@ -2499,7 +2509,7 @@ pub(super) mod tests {
             for n in 0..ships - 2 {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
-            fight(&mut session, &catalog, &sniping_ai());
+            snipe(&mut session, &catalog);
             (session, raider)
         };
         let (mut full, raider) = sniped(55);
@@ -2555,7 +2565,7 @@ pub(super) mod tests {
         for n in 0..ships - 2 {
             pirate(&mut session, 1000.0 + n as f32, 1000.0);
         }
-        fight(&mut session, catalog, &sniping_ai());
+        snipe(&mut session, catalog);
         (session, raider)
     }
 

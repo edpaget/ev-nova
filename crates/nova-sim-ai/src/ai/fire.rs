@@ -192,7 +192,7 @@
 #[cfg(doc)]
 use crate::ai::PlayerSide;
 use crate::ai::swarm::{self, SwarmLead};
-use crate::ai::{Surroundings, fire_untargeted, pursuit};
+use crate::ai::{Goal, Surroundings, fire_untargeted, pursuit};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, blind_spot, quadrant_off};
@@ -594,11 +594,14 @@ fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool)
 /// Whether `npc` launches its fighters: attacking or sniping at a ship
 /// the attack block finds standing (+0xb8 @0x8e3df, `_IsDying` @0x8e3ef),
 /// however it arrives (`_AILaunchFighter` from `_HighLevelAIHandler`'s
-/// attack block, @0x8e6fa, which reads no sight).
+/// attack block, @0x8e6fa, which reads no sight), or fleeing it in the
+/// block's hopeless chase ([`Npc::flees_hopeless`], @0x8e625 → @0x8e6e5).
 fn launches(npc: &Npc, around: &Surroundings) -> bool {
-    npc.goal
-        .attacking()
-        .is_some_and(|ship| around.standing(ship))
+    let quarry = match npc.goal {
+        Goal::Flee(ship) if npc.flees_hopeless => Some(ship),
+        goal => goal.attacking(),
+    };
+    quarry.is_some_and(|ship| around.standing(ship))
 }
 
 /// Whether `npc` launches its fighters after its passes, as the snipe
@@ -3204,6 +3207,26 @@ mod tests {
         let mut wreck = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
         breaking_up(&mut wreck);
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
+    }
+
+    #[test]
+    fn a_trader_fleeing_a_hopeless_chase_launches_its_fighters() {
+        // The attack block's goal 3 goes on to `_AILaunchFighter` (@0x8e625
+        // → @0x8e6e5-0x8e6fa), at its quarry standing.
+        let all = [gun(128, 1, 1)];
+        let hopeless = Npc {
+            flees_hopeless: true,
+            ..shooter(&all, Goal::Flee(ShipRef::Player))
+        };
+        assert!(bays(&hopeless, &[]));
+        let at = ShipRef::Npc(NpcId(7));
+        let mut wreck = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
+        breaking_up(&mut wreck);
+        let fleeing_wreck = Npc {
+            flees_hopeless: true,
+            ..shooter(&all, Goal::Flee(at))
+        };
+        assert!(!bays(&fleeing_wreck, &[wreck]), "not standing");
     }
 
     #[test]

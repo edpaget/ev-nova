@@ -94,16 +94,16 @@ fn a_defender_whose_led_target_breaks_up_attacks_the_nearer_player_on_its_next_t
 
 /// Drops to goal 0 holding NPC 9, its target step answering none.
 #[derive(Debug)]
-struct Holding;
+struct Deciding(crate::ai::Decision);
 
-impl crate::ai::Behaviour for Holding {
+impl crate::ai::Behaviour for Deciding {
     fn decide(
         &self,
         _npc: &Npc,
         _around: &crate::ai::Surroundings,
         _chance: &mut dyn crate::chance::Chance,
     ) -> Goal {
-        Goal::Idle
+        self.0.goal
     }
 
     fn decision(
@@ -112,22 +112,55 @@ impl crate::ai::Behaviour for Holding {
         _around: &crate::ai::Surroundings,
         _chance: &mut dyn crate::chance::Chance,
     ) -> crate::ai::Decision {
-        crate::ai::Decision {
-            holds_target: Some(n(9)),
-            ..crate::ai::Decision::default()
-        }
+        self.0
     }
+}
+
+/// `traffic` one tick on, each NPC deciding `decision`, its target step
+/// answering none, the player far off.
+fn tick_deciding(traffic: &mut Traffic, decision: crate::ai::Decision) {
+    let world = World {
+        player: Some(player(0.0, 90_000.0)),
+        ..World::new(&[])
+    };
+    traffic.tick_holding(
+        &Deciding(decision),
+        world,
+        &[],
+        &BTreeSet::new(),
+        &mut Ranged::of(&[]),
+    );
 }
 
 #[test]
 fn a_held_target_ends_the_frame_over_the_target_steps_answer() {
     let mut traffic = traffic_of(vec![ship(1, PIRATES, AiType::Warship, 0.0, 0.0)]);
-    let world = World {
-        player: Some(player(0.0, 90_000.0)),
-        ..World::new(&[])
+    let held = crate::ai::Decision {
+        holds_target: Some(n(9)),
+        ..crate::ai::Decision::default()
     };
-    traffic.tick_holding(&Holding, world, &[], &BTreeSet::new(), &mut Ranged::of(&[]));
+    tick_deciding(&mut traffic, held);
     assert_eq!(first(&traffic), (Goal::Idle, Some(n(9))));
+}
+
+#[test]
+fn each_decision_writes_whether_its_flight_is_a_hopeless_chase() {
+    let mut traffic = traffic_of(vec![ship(1, PIRATES, AiType::BraveTrader, 0.0, 0.0)]);
+    let hopeless = crate::ai::Decision {
+        goal: Goal::Flee(ShipRef::Player),
+        flees_hopeless: true,
+        ..crate::ai::Decision::default()
+    };
+    tick_deciding(&mut traffic, hopeless);
+    assert!(traffic.npcs()[0].flees_hopeless);
+    tick_deciding(
+        &mut traffic,
+        crate::ai::Decision {
+            flees_hopeless: false,
+            ..hopeless
+        },
+    );
+    assert!(!traffic.npcs()[0].flees_hopeless, "the flee block's own");
 }
 
 #[test]

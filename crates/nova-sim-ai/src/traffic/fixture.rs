@@ -83,6 +83,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         afterburner: false,
         voice: None,
         pursuit: Pursuit::default(),
+        flees_hopeless: false,
         ai_wait: 0,
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,

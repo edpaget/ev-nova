@@ -2488,7 +2488,9 @@ impl Traffic {
     /// as `_EscortAI` writes +0x50 = -1.0 with them (see
     /// [`jump_with_leader`]); and one that
     /// writes an order word ([`Decision::order_word`]) sets
-    /// [`Npc::order_word`]. Each decision's calls,
+    /// [`Npc::order_word`]. Each decision writes whether its flight is the
+    /// attack block's hopeless chase ([`Npc::flees_hopeless`]). Each
+    /// decision's calls,
     /// then its scan, are queued on the line at its berth ([`on_line`]).
     fn take_goals(&mut self, decisions: Vec<Option<Decision>>, world: &World) {
         let player_at = world.player.map(|player| player.state.position);
@@ -2568,6 +2570,7 @@ impl Traffic {
             if decision.leaves_fleet {
                 npc.leave_fleet();
             }
+            npc.flees_hopeless = decision.flees_hopeless;
             npc.goal = goal;
         }
     }
@@ -2852,6 +2855,7 @@ impl Traffic {
                 afterburner,
                 voice,
                 pursuit: Pursuit::default(),
+                flees_hopeless: false,
                 ai_wait: 0,
                 docking: None,
                 // No spawn writes the search timer (+0xc90c): it is the

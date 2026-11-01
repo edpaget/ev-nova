@@ -327,7 +327,11 @@ pub fn high_level(
                 (false, None) => Start::Sub(Manoeuvre::Dogfight),
             })
         }
-        Goal::Flee(_) if within_whole(off, FLEE_REACH) => Some(Start::Sub(Manoeuvre::Flee)),
+        // The attack block's hopeless chase writes sub 5 itself
+        // (@0x8e62e), with no reach test.
+        Goal::Flee(_) if npc.flees_hopeless || within_whole(off, FLEE_REACH) => {
+            Some(Start::Sub(Manoeuvre::Flee))
+        }
         Goal::Flee(_) => Some(Start::RunningOut),
         _ => None,
     }
@@ -1348,6 +1352,20 @@ mod tests {
         let out = fled(Vec2::new(251.0, 0.0));
         assert!(out.frame.is_some_and(|frame| frame.last().is_none()));
         assert_eq!(out.kept, None);
+    }
+
+    #[test]
+    fn a_hopeless_chases_flight_flees_close_at_any_distance() {
+        // Goal 3 on sub 5 from the attack block (@0x8e625-0x8e62e): the
+        // state-3 block's reach test isn't run that frame.
+        let npc = Npc {
+            flees_hopeless: true,
+            ..fighter(Goal::Flee(ShipRef::Player), 0.0)
+        };
+        for off in [Vec2::new(251.0, 0.0), Vec2::new(0.0, -3000.0)] {
+            let fled = stepped_at_player(&npc, &player_off(off, 0.0), 0, &mut Ranged::of(&[]));
+            assert_eq!(bodies(&fled), [Manoeuvre::Flee], "{off:?}");
+        }
     }
 
     #[test]

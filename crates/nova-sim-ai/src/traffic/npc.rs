@@ -574,6 +574,12 @@ pub struct Npc {
     /// this tick's frame (see [`pursuit`](crate::ai::pursuit)): none as it
     /// spawns. Never saved.
     pub pursuit: Pursuit,
+    /// Whether its flight is the attack block's hopeless chase for a
+    /// trader ([`Decision::flees_hopeless`](crate::ai::Decision::flees_hopeless)):
+    /// goal 3 on sub 5, which it flies close at any distance, launching its
+    /// fighters as an attack would. Each think's decision writes it. Never
+    /// saved.
+    pub flees_hopeless: bool,
     /// Its AI wait (the original's +0x4c) for the waits it takes while it
     /// flies, outside its [`Mode`]: a pirate's dock with its victim
     /// (`Rand(80)` + 100), its hold after a plunder (100), a ship a pirate
