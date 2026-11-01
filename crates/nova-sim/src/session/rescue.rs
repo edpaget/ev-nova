@@ -76,9 +76,14 @@
 //!     rdm:phase/player-death/phase-13-resume-at-saved-stellar-system
 //!     owns.
 //!
-//! Left out, with no counterpart in the engine: the fades, paints and
-//! cursor calls (@0x68de3-0x68e7b, @0x68eb1-0x68eef, @0x691cb-0x69253),
-//! and of `_ResetPlayer`'s writes the price flux
+//! The fades, paints and cursor calls (@0x68de3-0x68e7b,
+//! @0x68eb1-0x68eef, @0x691cb-0x69253, @0x692c9) are the view's: the
+//! rescue settles here on the pod's pass, and the view presents it over
+//! the next seconds, the texts it queued shown on the faded screen
+//! (`nova_view::flight::rescue_screen`).
+//!
+//! Left out, with no counterpart in the engine: of `_ResetPlayer`'s
+//! writes the price flux
 //! (`_globalPriceFlux`, `_localPriceFlux`), the bribe roll
 //! (`_bribeRandom`), the advice roll (`_adviceRandom`), the docking globals
 //! (`_dockTarget`, `_dockPermission`: the engine's clearance is its nav
