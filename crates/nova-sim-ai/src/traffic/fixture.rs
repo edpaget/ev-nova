@@ -88,6 +88,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
         owed_burst: None,
+        slot_accel: None,
         close_form: false,
         fleet_slot: None,
         form_parent: None,

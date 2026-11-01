@@ -20,6 +20,16 @@
 //! (@0x88114-0x8813d) writes no +0x68, so an intact one has its heading
 //! truncated each tick before it moves.
 //!
+//! Each thrusts by the accel its low level read at its slot of the AI loop
+//! ([`Npc::slot_accel`], see [`slot_accel`](super::slot_accel)), on both
+//! of double time's passes, as `_HandleShip` thrusts by the +0x30 the low
+//! level wrote there (@0x34a7b-0x34d93), before the frame's ion block: its
+//! whole accel, a sub's multiple of it, and every plan here that reads it.
+//! It turns by its turn rate at its step (@0x344b0), and where its sub
+//! leaves +0x34 at 0 its thrust is capped at its step's top speed
+//! (`_ShipMaxSpeed` @0x34a8a-0x34aab, [`TopSpeeds::own`]). A ship with no
+//! read since its spawn reads its accel at its step.
+//!
 //! - [`Goal::Land`]: by the engine's reading of
 //!   [`RuleKey::NpcLanding`](crate::RuleKey::NpcLanding)
 //!   ([`Readings::npc_landing`]), as `_HighLevelAIHandler` state 1 flies
@@ -536,7 +546,16 @@ fn fly_mobile(
     chance: &mut (impl Chance + ?Sized),
 ) -> Outcome {
     let snipe_lead = readings.snipe_lead;
-    let handling = npc.flying_handling(speeds.own, flight);
+    // It thrusts by the +0x30 its low level read at its slot
+    // ([`Npc::slot_accel`]), on both passes, or by its accel at its step
+    // with no read since its spawn. It turns by `_ShipTurnRate` at its step
+    // (@0x344b0), and a sub that leaves +0x34 at 0 caps at `_ShipMaxSpeed`
+    // at its step (@0x34a8a-0x34aab), `speeds.own` as this half began.
+    let at_step = npc.flying_handling(speeds.own, flight);
+    let handling = Handling {
+        accel: npc.slot_accel.unwrap_or(at_step.accel),
+        ..at_step
+    };
     let inertia = Inertia::of(npc, other, beside.leader_seen, flight);
     if pod_flight::is_pod(npc) {
         let controls = pod_flight::controls(npc);

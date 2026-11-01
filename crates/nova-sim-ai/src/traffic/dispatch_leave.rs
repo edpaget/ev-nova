@@ -83,7 +83,10 @@ impl Traffic {
     /// The high level's and low level's work at the slot of each NPC
     /// `picks` picks, in berth order, in `world`, rolling on `chance` (see
     /// the module docs): its warp's hold and a fighter's turn-back, a gate
-    /// entrant's box and release, a docking ship's low level (its match,
+    /// entrant's box and release, its low level's read of its accel for
+    /// `_HandleShip`'s thrust ([`Npc::read_at_slot`], see
+    /// [`slot_accel`](super::slot_accel); none for a ship a test holds
+    /// still), a docking ship's low level (its match,
     /// creep, dock start and completion, [`dispatch_dock`](super::dispatch_dock)), and its leaves,
     /// its own jump-out and a fighter's dock with its carrier unless
     /// `no_bay` names it. Each leaver is recorded among the ships gone,
@@ -113,6 +116,11 @@ impl Traffic {
             // detaches there runs no sub 4 that frame. A ship a test holds
             // still runs no low level.
             let still = self.held_still.contains(&id);
+            // The low level's `_ShipAccelRate`, read at its slot before its
+            // other work, for `_HandleShip`'s thrust ([`slot_accel`]).
+            if !still {
+                self.npcs[index].read_at_slot(world);
+            }
             let detached = self.follow_in_dispatch(index, world, still);
             if still || detached {
                 continue;

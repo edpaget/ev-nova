@@ -37,7 +37,9 @@
 //!   ([`plunder_dock::handle_ship`]), on both passes.
 //! - **Each NPC** sheds its ion charge, takes its tractor's pull, settles
 //!   its spawn's display rolls, then flies its jump, its docking flight
-//!   or its autopilot step from its own state as it stands, so a push an
+//!   or its autopilot step from its own state as it stands (the autopilot
+//!   thrusting by the accel its low level read at its slot,
+//!   [`Npc::slot_accel`]), so a push an
 //!   earlier slot's shockwave gave it is in the velocity it moves by,
 //!   banks and glows, and then takes its tractor's release and lapse, as
 //!   `_HandleShip` releases after the turn, thrust and fire that read the

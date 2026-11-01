@@ -299,6 +299,7 @@ pub mod skill;
 #[cfg(test)]
 mod skill_rolls;
 pub mod skipped_high_level;
+mod slot_accel;
 #[cfg(test)]
 mod slot_stellar_tests;
 pub mod slot_stellars;
@@ -2417,6 +2418,8 @@ impl Traffic {
         npc.display.frames.lights.timer = self.berth_blink_timer(berth);
         // Nor the search timer (+0xc90c): it is the berth's.
         npc.lost_sight = self.berth_search.seed(berth);
+        // Every spawn zeroes +0x30 (@0x3cb54, [`slot_accel`]).
+        npc.slot_accel = None;
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -2957,6 +2960,7 @@ impl Traffic {
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
                 owed_burst: None,
+                slot_accel: None,
                 close_form: false,
                 fleet_slot: None,
                 form_parent: None,

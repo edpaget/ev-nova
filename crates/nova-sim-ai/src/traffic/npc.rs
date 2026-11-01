@@ -671,6 +671,17 @@ pub struct Npc {
     /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
     /// None at every spawn. Never saved.
     pub owed_burst: Option<f32>,
+    /// The `_ShipAccelRate` its low level last read at its slot of
+    /// `_AIDispatch`'s loop, the source of the thrust word +0x30 that
+    /// `_HandleShip`'s thrust reads (@0x34a7b-0x34d93), slowed by its
+    /// charge as it stood at the slot, before the frame's ion block (see
+    /// [`slot_accel`](crate::traffic::slot_accel)). The autopilot thrusts
+    /// by it on both of double time's passes. Written by
+    /// [`Npc::read_at_slot`] at each slot the AI loop reaches; no pass
+    /// clears it, so a ship the loop doesn't reach flies its last read.
+    /// None at every spawn, as every spawn zeroes +0x30 (@0x3cb54), so
+    /// the autopilot reads its accel at its step. Never saved.
+    pub slot_accel: Option<f32>,
     /// Whether its last flight kept close formation: the original's stored
     /// sub-goal +0xc8ca == 0xc, which `_IsShipInCloseForm` (@0x82f54)
     /// reads. Each flight writes it ([`Npc::keeps_close_formation`] from

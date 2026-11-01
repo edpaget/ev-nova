@@ -31,9 +31,10 @@
 //! and pulls; the charge it leaves is what the turn that follows reads, as
 //! in the original. `_HandleShip`'s thrust reads no `_ShipAccelRate` but
 //! the +0x30 the low level wrote at its slot, before the shed: a docking
-//! ship's flight thrusts so ([`plunder_dock`](super::plunder_dock)); the
-//! autopilot reads its thrust after the shed, which is left out (see
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-17-left-out-of-phase-15-handle-ship).
+//! ship's flight thrusts so ([`plunder_dock`](super::plunder_dock)), and
+//! so does the autopilot, by the accel its low level read at its slot
+//! ([`Npc::slot_accel`], see [`slot_accel`](super::slot_accel)), on both
+//! passes.
 //! The pull's cap is the NPC's own `_ShipMaxSpeed`. None of this plays a
 //! sound.
 
