@@ -2,7 +2,10 @@
 //! data: a thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`,
 //! `wëap`, `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt`,
 //! `mïsn` and `röid` records, its string lists and its stellar and
-//! asteroid sprites; and a `shän`'s blink fields as a [`Blink`].
+//! asteroid sprites; and a `shän`'s blink fields as a [`Blink`]. The
+//! run-length tokens a sprite touches by are read in [`rle_sheets`].
+
+mod rle_sheets;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,7 +43,7 @@ use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
     DescMovie, DescText, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortClass, EscortRecord,
     Explosion, FIRST_NEBULA, FleetId, FleetRecord, FrameSize, GateSite, GovtId, GovtRecord,
-    HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MissionId,
+    HullRecord, JunkRecord, KINDS, LAST_NEBULA, LandingSite, ListedStellar, MaskSheet, MissionId,
     MissionRecord, MissionShip, MissionTexts, NavDefSlots, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
     RankId, RankRecord, ShipDisplay, ShipExits, ShipId, ShipRecord, SiteAnimation, SoundId,
@@ -521,6 +524,10 @@ impl PilotCatalog for GameData {
                 Some((SystemId(id), slots))
             })
             .collect()
+    }
+
+    fn rle_sheet(&self, sheet: MaskSheet) -> Option<nova_sim_base::sprite_mask::RleSheet> {
+        rle_sheets::rle_sheet(self, sheet)
     }
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {

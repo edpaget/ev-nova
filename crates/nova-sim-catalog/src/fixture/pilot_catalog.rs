@@ -5,17 +5,18 @@
 use std::cell::RefCell;
 
 use nova_sim_base::fixture::FAST;
+use nova_sim_base::sprite_mask::RleSheet;
 
 use super::{planet, star};
 use crate::catalog::{
     AsteroidCatalog, AsteroidFieldRecord, AsteroidTypeRecord, BOX_GRAPHICS, BoomId, CharacterStart,
     CombatCatalog, CommCatalog, CommodityStrings, CronRecord, DateAffixes, DescText,
     DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, ListedStellar, MissionRecord, MissionTexts, NavDefSlots, NebulaRecord, OutfitId,
-    OutfitRecord, PersonRecord, PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StellarScripts,
-    StringPatch, SystemId, SystemReinforcements, SystemTraffic, SystemVisibility, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    LandingSite, ListedStellar, MaskSheet, MissionRecord, MissionTexts, NavDefSlots, NebulaRecord,
+    OutfitId, OutfitRecord, PersonRecord, PilotCatalog, PlaceNames, RankRecord, ShipId, ShipRecord,
+    SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
+    StellarScripts, StringPatch, SystemId, SystemReinforcements, SystemTraffic, SystemVisibility,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::handling::ShipFields;
 use crate::voice::Voices;
@@ -150,6 +151,12 @@ pub struct FakePilotCatalog {
     /// none, by default, so each system's slots number its
     /// [`sites`](Self::sites) in order.
     pub nav_defs: Vec<(SystemId, NavDefSlots)>,
+    /// Each sheet's run-length tokens [`PilotCatalog::rle_sheet`] answers;
+    /// any other cannot be read. None, by default, so every touch falls
+    /// back to discs.
+    pub rle_sheets: Vec<(MaskSheet, RleSheet)>,
+    /// Each sheet asked for, in order.
+    pub rle_sheets_asked: RefCell<Vec<MaskSheet>>,
 }
 
 impl FakePilotCatalog {
@@ -250,6 +257,8 @@ pub fn catalog() -> FakePilotCatalog {
         descs: Vec::new(),
         desc_reads: RefCell::default(),
         nav_defs: Vec::new(),
+        rle_sheets: Vec::new(),
+        rle_sheets_asked: RefCell::default(),
     }
 }
 
@@ -499,6 +508,14 @@ impl PilotCatalog for FakePilotCatalog {
             .filter(|(system, _)| self.systems.contains(system))
             .filter_map(|(system, stellar)| Some((system, stellar?)))
             .collect()
+    }
+
+    fn rle_sheet(&self, sheet: MaskSheet) -> Option<RleSheet> {
+        self.rle_sheets_asked.borrow_mut().push(sheet);
+        self.rle_sheets
+            .iter()
+            .find(|(held, _)| *held == sheet)
+            .map(|(_, rle)| rle.clone())
     }
 
     /// Each existing system's [`FakePilotCatalog::nav_defs`] where given,
