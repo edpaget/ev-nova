@@ -2447,6 +2447,10 @@ impl Session {
     /// was last drawn at, its own for a ship new to the fight, how
     /// strongly it jams, and whether it threatens the player, as
     /// `_ExtendedIsThreatToPlayer` asks it, with the player's sight of it.
+    ///
+    /// The player's reads (its side, as the sight reads it, and its cloak
+    /// scanner) are taken once per call, not once per NPC: nothing in the
+    /// map writes them.
     fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
         let drawn =
             |ship: ShipRef, heading: f32| self.space.drawn.get(&ship).copied().unwrap_or(heading);
@@ -2475,6 +2479,7 @@ impl Session {
         let led_speed = self.led_speed();
         let capacity = self.setup.rules.source_for(RuleKey::FighterCapacity);
         let player_side = self.player_side();
+        let scans_screen = self.scanner().on_screen;
         let all = self.space.traffic.npcs();
         let npcs = all
             .iter()
@@ -2487,14 +2492,16 @@ impl Session {
                 held_disabled: self.held_disabled(npc),
                 shield_regen: npc.shield_recharge(capacity),
                 fleet_escort: self.space.escorts.fleet.contains(&Some(npc.id)),
-                threatens_player: npc
-                    .threatens_player_extended(self.space.traffic.npcs(), self.sees(npc)),
+                threatens_player: npc.threatens_player_extended(
+                    self.space.traffic.npcs(),
+                    self.ship.sees_scanning(scans_screen, npc),
+                ),
                 class_speed: self.statics.class_speed(npc.ship),
                 top_speed: npc.top_speed(led_speed),
                 drawn_heading: drawn(ShipRef::Npc(npc.id), npc.state.heading),
                 jamming: self.setup.npc_jamming(&self.statics, npc),
                 sprite: sprite(ShipRef::Npc(npc.id)),
-                resists: self.npc_hazard_resistance(npc),
+                resists: self.npc_hazard_resistance(npc, &player_side),
             })
             .collect();
         (player, npcs)

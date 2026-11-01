@@ -163,16 +163,35 @@ impl PlayerShip {
     /// Whether the player sees `npc` (see the module docs).
     #[must_use]
     fn sees(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
-        !npc.emerging() && self.sees_past_cloak(pilot, statics, npc)
+        self.sees_scanning(scanner(pilot, statics).on_screen, npc)
+    }
+
+    /// Whether the player sees `npc`, as [`PlayerShip::sees`] says, its
+    /// scanner seeing cloaked ships on screen when `on_screen`: for a
+    /// caller asking of many NPCs, which reads the scanner once.
+    #[must_use]
+    pub(super) fn sees_scanning(&self, on_screen: bool, npc: &Npc) -> bool {
+        !npc.emerging() && self.sees_past_cloak_scanning(on_screen, npc)
     }
 
     /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
     /// it waits at, which [`Session::sees`] holds unseen.
+    ///
+    /// For the tests: no production code calls it.
+    #[cfg(test)]
     #[must_use]
     fn sees_past_cloak(&self, pilot: &Pilot, statics: &Statics, npc: &Npc) -> bool {
+        self.sees_past_cloak_scanning(scanner(pilot, statics).on_screen, npc)
+    }
+
+    /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
+    /// it waits at, its scanner seeing cloaked ships on screen when
+    /// `on_screen`.
+    #[must_use]
+    fn sees_past_cloak_scanning(&self, on_screen: bool, npc: &Npc) -> bool {
         let observer = Observer {
             at: self.player.position,
-            scanner: scanner(pilot, statics).on_screen,
+            scanner: on_screen,
             cloaked_escort: false,
         };
         cloak::visible(npc.cloak, npc.state.position, false, observer)
