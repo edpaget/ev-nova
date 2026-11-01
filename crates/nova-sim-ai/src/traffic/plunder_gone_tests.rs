@@ -344,3 +344,55 @@ fn a_docked_pirates_completion_after_its_victims_berth_was_taken_plunders_the_ne
             if victim == newcomer
     ));
 }
+
+#[test]
+fn the_players_hit_on_a_docked_pirate_turns_it_on_the_player_and_its_completion_plunders_the_live_victim()
+ {
+    // The player's hit is answered (only an NPC's spares sub 0xf,
+    // @0x3bb0a-0x3bb1a): `_AIMakeShipAttackPlayer` writes goal 4 and +0x70
+    // 0, leaving sub 0xf (@0x89d11-0x89d4d), and the wait is cut to 20
+    // (@0x3be6e-0x3be7c). The think after it (here the same tick's, the
+    // strikes answered first) plunders the player, unboarded with a crew
+    // (@0x8c738), and once it has crept inside the box with the wait at
+    // most 100 sub 0xf completes. The original's call also writes +0x6c -1 (@0x89d47), so
+    // its completion reads the slot before the first (@0x86f51), which
+    // can't be replicated: the docking here still names the victim, which
+    // is plundered.
+    let govts = govts(0, 0);
+    let mut player = crate::ai::fixture::player(0.0, 500.0);
+    player.hull.crew = 1;
+    let world = World {
+        govts: &govts,
+        player: Some(player),
+        ..World::new(&[])
+    };
+    let mut traffic = traffic_of(vec![pirate(150, true), victim()]);
+    let hit = crate::combat::fixture::strike(ShipRef::Npc(PIRATE), ShipRef::Player);
+    let behaviour = PirateWarship::default();
+    traffic.tick_in(&behaviour, world, &[hit], &mut Draws::of(&[0; 64]));
+    let turned = of(&traffic, PIRATE);
+    assert_eq!(
+        turned.goal,
+        Goal::Plunder {
+            ship: ShipRef::Player,
+            hopeless: false
+        }
+    );
+    assert_eq!(turned.docking, ON_VICTIM);
+    assert_eq!(turned.ai_wait, crate::traffic::autopilot::HIT_WAIT - 1);
+    let mut ticks = 1;
+    while of(&traffic, PIRATE).goal != Goal::Drift {
+        assert_eq!(traffic.take_pirate_events(), [], "tick {ticks}");
+        assert!(ticks < 10, "no completion");
+        traffic.tick_in(&behaviour, world, &[], &mut Draws::of(&[0; 64]));
+        ticks += 1;
+    }
+    assert!(matches!(
+        traffic.take_pirate_events()[..],
+        [crate::traffic::plunder::PirateEvent::Plundered {
+            pirate: PIRATE,
+            victim: VICTIM,
+            ..
+        }]
+    ));
+}
