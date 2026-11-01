@@ -22,39 +22,43 @@
 //!   gone (+0xb8 clear, @0x8d4e4-0x8d50d), and then zeroes the provocation
 //!   in two blocks, after the type's think in the same dispatch:
 //!   - state 3 with no target (@0x8dff6 → @0x8e228-0x8e23d): a flight
-//!     from a ship gone, whatever its type ([`flight_ended`], which
-//!     `NovaAi` adds after every type's think, as the handler runs after
+//!     from a ship gone, whatever its type ([`with_flight_end`], which
+//!     `NovaAi` runs after every type's think, as the handler runs after
 //!     each, `_AIDispatch` @0x901e5), and an interceptor's
 //!     out-of-ammunition retreat with nothing to flee
-//!     ([`out_of_ammo::stops`]);
+//!     ([`out_of_ammo::stops`]). A hunted ship's goal is 4 or 2
+//!     (@0x8d6b7, @0x8d6be), so it never reaches this block;
 //!   - state 4 on a ship breaking up, still in its slot (@0x8e3e6 →
 //!     @0x8e714-0x8e726), which `NovaAi` runs after every type's think
 //!     ([`attack_drop`]). The brave trader's and the interceptor's thinks
 //!     leave it in that state, having no drop of their own, and so
-//!     do an escort's on the Attack order and a mission hunt. The warship
-//!     and the pirate drop
-//!     such a target themselves, writing goal 0 and target -1 but no +0x96
-//!     (`_WarshipAI` @0x8bc67-0x8bca9, `_PirateWarshipAI`
-//!     @0x8c315-0x8c330), so theirs is kept. An attack on a ship gone
-//!     from its slot, as one that has jumped out or landed, has target -1
-//!     by then, and its goal-0 drop (@0x8e263 → @0x8e731) zeroes nothing.
+//!     do an escort's on the Attack order and a mission hunt, the hunt on
+//!     a destroyed player too, as its target 0 comes after the slot test.
+//!     The warship and the pirate drop such a target themselves, writing
+//!     goal 0 and target -1 but no +0x96 (`_WarshipAI` @0x8bc67-0x8bca9,
+//!     `_PirateWarshipAI` @0x8c315-0x8c330), so theirs is kept.
 //!
 //!   A word that provokes the ship (+0x96 = 1, @0x8b7e5, @0x8cb9d) is
 //!   written in the think, before the block, which then finds the player
-//!   live: [`take`] zeroes first, then sets 1. An interceptor's word on a
-//!   player breaking up meets the block's zero after it, which
-//!   [`attack_drop`] leaves as 0. Two more zeroing blocks are
-//!   never reached: state 4 with no leader, target -1 and +0x8c -1
-//!   (@0x8e39e-0x8e3c1), as every path there has passed the target -1
-//!   test at @0x8e263; and the plunder's (state 0xd) target gone
+//!   live: [`take`] zeroes first, then sets 1. A word on a player breaking
+//!   up meets the block's zero after it, which [`attack_drop`] leaves as
+//!   0, and so does a word on a flight from a ship gone. Two more zeroing
+//!   blocks are never reached: state 4 with no leader, target -1 and
+//!   +0x8c -1 (@0x8e39e-0x8e3c1), as every path there has passed the
+//!   target -1 test at @0x8e263; and the plunder's (state 0xd) target gone
 //!   (@0x8e85d → @0x8eb3c-0x8eb54), as the slot test at @0x8d4e4 has made
 //!   such a target -1 and the pirate's head drop clears one breaking up
-//!   first. The block's other goal-0 writes zero nothing: an attack with
-//!   target -1 (@0x8e731), the ally drop (@0x8e2d2), the fleet drops
-//!   (@0x8e381, @0x8e7af, @0x8e820), the flee drop (@0x8e81d) and the
-//!   plunder's (@0x8eb5f). The ally and fleet drops come before the
-//!   liveness test, but the engine keeps no attack on a ship it spares
-//!   ([`spares`](crate::ai::target::spares)), so the order shows nowhere.
+//!   first.
+//!
+//!   The block's other goal-0 writes zero nothing (@0x8e731): an attack on
+//!   a ship gone from its slot, as one that has jumped out or landed,
+//!   whose target the slot test has made -1
+//!   ([`handler_head::slot_test`](crate::ai::handler_head::slot_test),
+//!   @0x8e263); the wait test (@0x8e26d); the ally drop (@0x8e2d2); the
+//!   fleet drops (@0x8e381, @0x8e7af, @0x8e820); the flee drop (@0x8e81d)
+//!   and the plunder's (@0x8eb5f). The ally and fleet drops come before the
+//!   dying test, so a dying ally or fleet-mate keeps the attacker's
+//!   provocation.
 //!
 //!   A brave trader whose attacker is breaking up reads the slot's place
 //!   ([`BraveTrader`](crate::ai::brave::BraveTrader)): within 1250 it
@@ -62,10 +66,9 @@
 //!   it flees it and keeps it. One whose attacker has gone from the
 //!   system reads the freed slot's last place while its target still names
 //!   it ([`gone`](crate::traffic::gone)): within 1250 it attacks it, which
-//!   the slot test turns into an attack with target -1, keeping the
-//!   provocation (@0x8e731), and beyond it flees it, which ends zeroed
-//!   (@0x8e228-0x8e23d) ([`fight_on_gone`]). A think that ends its own
-//!   fight so leaves no flight of its old goal for [`flight_ended`].
+//!   the slot test turns into goal 0 with target -1, keeping the
+//!   provocation (@0x8e731), and beyond it flees it, which the flee block
+//!   ends zeroed (@0x8e228-0x8e23d).
 //! - **The rest of the traffic**: the count wait's start (@0x8c713,
 //!   [`board_wait::enter`]); a disabled ship's reset (`_AIDispatch`
 //!   @0x8feef, [`disabled_reset`](crate::traffic::disabled_reset)), past
@@ -90,10 +93,9 @@ use crate::traffic::{board_wait, gate_entry};
 /// provocation (@0x8dff6 → @0x8e228-0x8e23d). A think that turns on
 /// another ship leaves no such flight; one that lets the fight go stands
 /// for the original's, which keeps goal 3 on +0x70, so the flight it had
-/// before is the one tested. `NovaAi` asks
-/// it only of a think that keeps its target: one that clears it
-/// ([`Decision::clears_target`]) has ended its own fight, as a brave
-/// trader's on a gone attacker does ([`fight_on_gone`]).
+/// before is the one tested. [`with_flight_end`] asks it only of a
+/// decision that keeps its target: one that clears it
+/// ([`Decision::clears_target`]) has ended its fight already.
 #[must_use]
 pub(crate) fn flight_ended(npc: &Npc, decided: Goal, around: &Surroundings) -> bool {
     let gone = |ship| !around.condition_of(ship).is_some_and(Condition::active);
@@ -128,25 +130,6 @@ pub(crate) fn with_flight_end(npc: &Npc, decision: Decision, around: &Surroundin
             ..decision
         },
     }
-}
-
-/// What the high level makes of a think that `decided` to fight a ship
-/// gone from its slot, read at its last place among `around`'s gone ships
-/// ([`Surroundings::held_gone`]): its slot test makes the target -1
-/// (@0x8d4e4-0x8d50d), then a flight with no target ends in state 0,
-/// zeroing the provocation (@0x8dff6 → @0x8e228-0x8e23d), and an attack
-/// with none in state 0, keeping it (@0x8e263 → @0x8e731). Whether the
-/// provocation is zeroed, or `None` for a think that fights no gone ship.
-#[must_use]
-pub(crate) fn fight_on_gone(decided: Goal, around: &Surroundings) -> Option<bool> {
-    let ship = fought(decided)?;
-    let gone = match ship {
-        crate::combat::ShipRef::Npc(id) => {
-            around.npc(id).is_none() && around.gone_npc(id).is_some()
-        }
-        crate::combat::ShipRef::Player => false,
-    };
-    gone.then_some(matches!(decided, Goal::Flee(_)))
 }
 
 /// The ship `goal` flees or attacks, the fight the high level then sees.
@@ -504,16 +487,6 @@ mod tests {
             &[ship(2, TRADERS, AiType::BraveTrader, 100.0, 0.0)],
         );
         assert!(!spared.forgets_provocation, "{spared:?}");
-    }
-
-    #[test]
-    fn a_fight_on_a_ship_neither_in_the_system_nor_recorded_gone_is_no_fight_on_a_gone_ship() {
-        let (sites, govts) = (sites(), govts(0, 0));
-        let npcs = [provoked(Goal::Idle)];
-        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
-        for goal in [Goal::Flee(n(7)), Goal::Attack(n(7))] {
-            assert_eq!(fight_on_gone(goal, &around), None, "{goal:?}");
-        }
     }
 
     /// `decision` of `npc` through the flee block, NPC 2 a foe in its slot.

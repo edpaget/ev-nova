@@ -20,7 +20,11 @@
 //! ([`BraveTrader`](crate::ai::brave::BraveTrader), `_BraveTraderAI`
 //! @0x8b616-0x8b68d): a provoked trader attacks a gone attacker within 1250
 //! on both axes, or flees it beyond, and the high level then ends that
-//! fight ([`fight_on_gone`](crate::traffic::provocation::fight_on_gone)).
+//! fight: the attack at its slot test, keeping the provocation
+//! ([`handler_head::slot_test`](crate::ai::handler_head::slot_test),
+//! @0x8e263 → @0x8e731), and the flight in its flee block, zeroing it
+//! ([`with_flight_end`](crate::traffic::provocation::with_flight_end),
+//! @0x8dff6 → @0x8e228-0x8e23d).
 //!
 //! [`Traffic`](crate::traffic::Traffic) keeps the gone ships in
 //! [`GoneShips`]: each departure and destruction is recorded with its

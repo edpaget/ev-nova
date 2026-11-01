@@ -351,3 +351,45 @@ fn a_brave_trader_provoked_by_an_ally_stays_on_it_on_goal_0() {
         assert_eq!(traffic.npcs()[0].provoked, 10.0, "tick {tick_no}");
     }
 }
+
+#[test]
+fn a_traders_hopeless_flight_flies_close_beyond_250_launching_and_calling() {
+    // The think attacks its provoker 300 off (@0x8b616); the block finds
+    // the chase hopeless and writes goal 3, sub 5 (@0x8e625-0x8e62e), then
+    // launches and calls (@0x8e6eb-0x8e70d).
+    let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+    trader.berth = 1;
+    trader.provoked = 10.0;
+    trader.target = Some(n(2));
+    trader.hull.mass = 100.0;
+    let mut runner = ship(2, PIRATES, AiType::Warship, 0.0, -300.0);
+    runner.berth = 2;
+    runner.goal = Goal::Flee(n(1));
+    runner.state.velocity = crate::geometry::Vec2::new(0.0, -1.0);
+    runner.no_ai = true;
+    let mut traffic = traffic_of(vec![trader, runner]);
+    tick(&mut traffic, &player(0.0, 90_000.0));
+    let fleeing = &traffic.npcs()[0];
+    assert_eq!(fleeing.goal, Goal::Flee(n(2)));
+    assert!(fleeing.flees_hopeless);
+    let last = fleeing
+        .pursuit
+        .frame
+        .and_then(|frame| frame.last())
+        .map(|body| body.manoeuvre);
+    assert_eq!(
+        last,
+        Some(crate::ai::fire::Manoeuvre::Flee),
+        "sub 5, 300 off"
+    );
+    assert!(fleeing.trigger.bays, "@0x8e6fa");
+    let calls: Vec<crate::ai::CommCall> =
+        crate::traffic::fixture::calls_on_line(&traffic.take_on_line())
+            .into_iter()
+            .map(|(_, call, _)| call)
+            .collect();
+    assert!(
+        calls.contains(&crate::ai::CommCall::Reinforcements),
+        "@0x8e70d: {calls:?}"
+    );
+}
