@@ -62,6 +62,7 @@ impl AppScreen {
             kept_berths: KeptBerths::default(),
             last_refresh: None,
             release_comm_escort: false,
+            speed_mult: nova_sim::SpeedMult::FULL,
             course_map_zoom: None,
             map_borders: true,
             dialogs: None,
@@ -385,6 +386,8 @@ impl AppScreen {
                 kept_berths: Some(self.kept_berths.clone()),
                 last_refresh,
                 release_comm_escort: Some(self.release_comm_escort),
+                // Handed to the game's entry instead ([`AppScreen::hand_over`]).
+                speed_mult: None,
             },
         }
     }

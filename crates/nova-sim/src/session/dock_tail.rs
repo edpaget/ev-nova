@@ -37,9 +37,8 @@
 //! before the next frame is drawn.
 
 use super::Session;
-use super::stellar_passes::GateHolds;
+use super::stellar_passes::{GateHolds, PassKind};
 use crate::chance::Chance;
-use crate::gate_sprite::StellarPass;
 
 impl Session {
     /// The dock request's tail before the system is set up (see the
@@ -59,10 +58,11 @@ impl Session {
 
     /// The dock request's tail once the system is set up and its frames
     /// reset (see the module docs): the stellars rebuilt, the dock request
-    /// dropped, both `_PrepareAllSprites`' stellar passes run as `pass`,
-    /// their random picks drawn on `chance`, every sprite prepared again,
+    /// dropped, both `_PrepareAllSprites`' stellar passes run at the
+    /// session's gain (0 after a take-off's zero), their random picks drawn
+    /// on `chance`, every sprite prepared again,
     /// the nav selection let go and the course cued.
-    pub(super) fn end_dock_tail(&mut self, pass: StellarPass, chance: &mut (impl Chance + ?Sized)) {
+    pub(super) fn end_dock_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         // The rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
         // `_dockPermission` = 0 (@0x67064), before either pass reads it.
@@ -72,11 +72,11 @@ impl Session {
         // follows @0x674c7's rebuild in the original and the only one
         // after the reset in the engine: the session's sites are as the
         // rebuild left them either way.
-        self.stellar_pass(pass, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The second `_PrepareAllSprites` (@0x67658), `populate`'s being
         // the first (@0x6764e): every NPC's fade steps again.
         self.prepare_all_sprites();
-        self.stellar_pass(pass, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The selection let go, the mode kept, then the course cued
         // (@0x674d2-0x674d8).
         self.chart.deselect();

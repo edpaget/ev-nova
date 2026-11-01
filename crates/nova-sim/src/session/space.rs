@@ -61,10 +61,10 @@ pub(super) struct Space {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     pub(super) traffic_due: bool,
-    /// Whether the gates' step of game entry's third stellar pass is owed
-    /// to the setup `traffic_due` waits for (see the `stellar_passes`
-    /// module); never saved.
-    pub(super) entry_gate_pass_owed: bool,
+    /// The gain of game entry's third stellar pass, while its gates' step
+    /// is owed to the setup `traffic_due` waits for (see the
+    /// `stellar_passes` module); never saved.
+    pub(super) entry_gate_pass_owed: Option<crate::SpeedMult>,
     /// The heading each ship in the fight was drawn at after the last
     /// pass ([`Session::game_work`](super::Session::game_work)): its heading as that pass ended, which the
     /// view draws before the next. Each ship's shots leave from the exit
@@ -230,7 +230,7 @@ impl Space {
             #[cfg(test)]
             queued_in_frame: Vec::new(),
             traffic_due: true,
-            entry_gate_pass_owed: false,
+            entry_gate_pass_owed: None,
             drawn: BTreeMap::new(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),

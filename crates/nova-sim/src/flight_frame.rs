@@ -71,6 +71,7 @@ use crate::session::{
 };
 use crate::ship_layer::ShipLayer;
 use crate::sound::SimSound;
+use crate::speed_mult::SpeedMult;
 use crate::sprite_mask::RleSheet;
 use crate::status_cargo::StatusCargo;
 use crate::story::DrawnSheet;
@@ -201,6 +202,10 @@ pub struct FlightFrame {
     /// Whether double time is on
     /// ([`Session::double_time`](crate::Session::double_time)).
     pub double_time: bool,
+    /// The gain the next step will run at, `_gSpeedMult` after its
+    /// adjustment, which the view steps the stellars by between steps
+    /// (see `Session`'s `time_adjustment` module).
+    pub speed_mult: SpeedMult,
     /// The jump's `_hyperGamma`
     /// ([`Session::hyper_gamma`](crate::Session::hyper_gamma)).
     pub hyper_gamma: f32,
@@ -291,6 +296,7 @@ impl Default for FlightFrame {
             system_background: None,
             murk_colour: 0,
             double_time: false,
+            speed_mult: SpeedMult::FULL,
             hyper_gamma: 0.0,
             traffic_ships: Vec::new(),
             hud: FrameHud::default(),
@@ -876,6 +882,10 @@ pub enum FlightCommand {
     /// does (@0x4f3a3-0x4f3e0;
     /// [`Session::switched_out`](crate::Session::switched_out)). Not an ask.
     SwitchedOut,
+    /// The app was switched back in: the gain full, the next frame held,
+    /// as `_SwitchedIn` sets `_gSpeedMult` (@0x513e1-0x513ec;
+    /// [`Session::switch_in`](crate::Session::switch_in)). Not an ask.
+    SwitchedIn,
     /// Return (`ackComm`) cleared the message line: the session's for a
     /// tick while a line shows
     /// ([`Session::comm_acknowledged`](crate::Session::comm_acknowledged)).
@@ -1186,6 +1196,7 @@ impl FlightCommand {
             | Self::EndPlay
             | Self::CommShown(_)
             | Self::SwitchedOut
+            | Self::SwitchedIn
             | Self::CommAcknowledged
             | Self::CommTicked
             | Self::AnswerHail(_)
@@ -1572,6 +1583,11 @@ pub struct StepInput {
     /// The land key
     /// ([`Session::set_land_key`](crate::Session::set_land_key)).
     pub land_key: bool,
+    /// Whether the view went 334 ms or more of the wall time it was handed
+    /// without a step: the next frame keeps the gain, as
+    /// `_HandleTimeAdjustment` leaves it after a frame that long (see
+    /// `Session`'s `time_adjustment` module).
+    pub held: bool,
 }
 
 /// What a frame's fixed steps reported
@@ -1688,6 +1704,10 @@ pub struct PassReport {
     /// Whether double time is on
     /// ([`Session::double_time`](crate::Session::double_time)).
     pub double_time: bool,
+    /// The gain the pass ran at, `_gSpeedMult`
+    /// ([`Session::speed_mult`](crate::Session::speed_mult)): both of
+    /// double time's passes run at one.
+    pub speed_mult: SpeedMult,
     /// The quotes the pass said, in order.
     pub quotes: Vec<PersonQuote>,
     /// The wrap of the player at the pass's head, if it ran, which the

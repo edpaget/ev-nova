@@ -322,12 +322,16 @@ impl Screen for AppScreen {
 
     /// Tells every flight held, shown or not, that the window came back
     /// to the front: the original's `_SwitchedIn` (@0x513cc-0x513dc)
-    /// zeroes the frame-rate readout's counters wherever the game is.
+    /// zeroes the frame-rate readout's counters and sets `_gSpeedMult` to
+    /// 1.0 (@0x513e1-0x513ec) wherever the game is: on the main screen the
+    /// gain the next game enters at, in each flight its own.
     /// No other screen keeps time across the switch. Then the router comes
     /// back, as `_SwitchedIn` clears `_inBackground` (@0x513c4): the
     /// pointer's last move while away goes to the screen, and the game
     /// goes on after the next tick (see `background`).
     fn focus_gained(&mut self) {
+        // `_SwitchedIn`'s 1.0 (@0x513e1-0x513ec), wherever the game is.
+        self.speed_mult = nova_sim::SpeedMult::FULL;
         for flight in self.flights_mut() {
             flight.focus_gained();
         }

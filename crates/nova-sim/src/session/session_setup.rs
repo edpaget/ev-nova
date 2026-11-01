@@ -110,6 +110,12 @@ pub struct CarryOver {
     /// reset, new pilot or launch touches it, so it outlives a pilot. It
     /// is never saved, so a quit drops it.
     pub release_comm_escort: Option<bool>,
+    /// The frame's gain the session leaves, the original's process-wide
+    /// `_gSpeedMult`: 0.0 while landed, as the stay's tail zeroes it on
+    /// the way out (see the `time_adjustment` module). The app hands it
+    /// to the next game's [`Session::enter_game`], not to the builders, so
+    /// [`Session::set_up`] reads none of it.
+    pub speed_mult: Option<crate::SpeedMult>,
 }
 
 impl Session {
@@ -160,8 +166,9 @@ impl Session {
     /// ([`Session::slot_sprites`]), its stellar sprite pool
     /// ([`Session::stellar_sprite_pool`]), its kept berths
     /// ([`Session::kept_berths`]), its last refresh
-    /// ([`Session::last_refresh`]) and its release flag
-    /// ([`Session::release_comm_escort`]).
+    /// ([`Session::last_refresh`]), its release flag
+    /// ([`Session::release_comm_escort`]) and its gain
+    /// ([`CarryOver::speed_mult`]).
     #[must_use]
     pub fn carry_over(&self) -> CarryOver {
         CarryOver {
@@ -170,6 +177,7 @@ impl Session {
             kept_berths: Some(self.kept_berths()),
             last_refresh: Some(self.last_refresh()),
             release_comm_escort: Some(self.release_comm_escort()),
+            speed_mult: Some(self.carry_speed_mult()),
         }
     }
 }
@@ -227,6 +235,7 @@ mod tests {
                 kept_berths: Some(traffic.kept_berths()),
                 last_refresh: Some(LastRefresh::hiding([SystemId(131)])),
                 release_comm_escort: Some(true),
+                speed_mult: Some(crate::SpeedMult::ZERO),
             },
         }
     }

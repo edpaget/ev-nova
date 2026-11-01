@@ -55,6 +55,7 @@ impl Session {
             system_background,
             murk_colour,
             double_time,
+            speed_mult,
             hyper_gamma,
             traffic_ships,
             hud,
@@ -102,6 +103,7 @@ impl Session {
         *system_background = self.system_background();
         *murk_colour = self.murk_colour();
         *double_time = self.double_time();
+        *speed_mult = self.next_speed_mult();
         *hyper_gamma = self.hyper_gamma();
         *traffic_ships = self.traffic_ships();
         self.fill_hud(hud);
@@ -333,6 +335,7 @@ pub(super) mod tests {
             system_background: Some(0x99),
             murk_colour: 0x99,
             double_time: true,
+            speed_mult: crate::SpeedMult::new(0.5),
             hyper_gamma: 9.0,
             traffic_ships: vec![ShipId(999)],
             hud: stale_hud(),

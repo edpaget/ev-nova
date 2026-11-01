@@ -105,11 +105,17 @@ impl Session {
     /// press is [`FlightCommand::PressFaded`](crate::flight_frame::FlightCommand::PressFaded),
     /// refused in `session/apply/faded.rs`. A fade pending (`_fadePending`,
     /// @0x5a052-0x5a064) is the screens' state, which the session does
-    /// not hold.
+    /// not hold. Either way, in flight, `_HandlePlayer` zeroes the gain
+    /// once the dialog returns (@0x70357; see the `time_adjustment`
+    /// module): zeroed here, as no step runs under the dialog. The
+    /// spaceport's opening is `_DoPortDialog`'s, which writes no gain.
     pub(crate) fn open_player_info(
         &mut self,
         catalog: &(impl PilotCatalog + ?Sized),
     ) -> Option<PlayerInfo> {
+        if self.mode.landed().is_none() {
+            self.zero_speed_mult();
+        }
         if self.mode.jump().is_some() || matches!(self.ship.condition, Condition::Dying { .. }) {
             return None;
         }

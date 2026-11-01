@@ -29,6 +29,7 @@
 use super::stellar_passes::GateHolds;
 use super::stellars::NO_SPRITE_SIDE;
 use super::{Chart, Session, Setup, Space, Statics};
+use crate::SpeedMult;
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::clearance::{CLEARED, DockRequest};
@@ -85,15 +86,15 @@ impl Session {
     /// frame), grown by
     /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.step_gates_by(1, GateHolds::AsTheyStand, chance);
+        self.step_gates_by(self.time.gain(), GateHolds::AsTheyStand, chance);
     }
 
-    /// One pass of every hypergate shown at `gain` ticks, held as `holds`
+    /// One pass of every hypergate shown at `gain`, held as `holds`
     /// says: the walk the play frame and each stellar pass share (see
     /// [`Session::step_gate_sprites`] and the `stellar_passes` module).
     pub(super) fn step_gates_by(
         &mut self,
-        gain: u8,
+        gain: SpeedMult,
         holds: GateHolds,
         chance: &mut (impl Chance + ?Sized),
     ) {

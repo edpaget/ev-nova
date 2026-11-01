@@ -1414,6 +1414,11 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// Time since the view opened, which drives the stellars' animations
     /// and the running lights' blinking. It stops while the map is open.
     elapsed: Duration,
+    /// The wall time handed to the view since the last step ran, the map's
+    /// ticks and those under a dialog over flight included: at 334 ms or
+    /// more the next step holds its gain (`StepInput::held`; see
+    /// `nova_sim::speed_mult`).
+    since_step: Duration,
     /// The flight keys held down. A dialog over flight lets go of them,
     /// and its close gets back those `_HandlePlayer` polls with no latch
     /// that are still down ([`FlightView::take_back_live_input`]).

@@ -402,6 +402,7 @@ pub use nova_sim_base::clock;
 pub use nova_sim_base::deadly_stellar;
 pub use nova_sim_base::gravity;
 pub use nova_sim_base::ionization;
+pub use nova_sim_base::speed_mult;
 pub use nova_sim_base::sprite_mask;
 pub use nova_sim_base::sprite_place;
 pub use nova_sim_catalog::buoy;
@@ -638,6 +639,7 @@ pub use shipyard::{
     StockLine,
 };
 pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound, SoundCue};
+pub use speed_mult::{SpeedMult, TimeAdjustment};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use story::DrawnSheet;

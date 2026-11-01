@@ -154,9 +154,12 @@ impl<
 
     /// The frame-rate readout starts afresh, "Calculating FPS..." on the
     /// next frame while it is shown, as `_SwitchedIn` zeroes its counters
-    /// (@0x513cc-0x513dc).
+    /// (@0x513cc-0x513dc), and the flight's gain is set full
+    /// (`FlightCommand::SwitchedIn`, @0x513e1-0x513ec). A flight that
+    /// failed to start refuses it, as any command.
     fn focus_gained(&mut self) {
         self.switched_in();
+        self.send(nova_sim::flight_frame::FlightCommand::SwitchedIn);
     }
 
     /// The flight halts both warp-ups, as `_SwitchedOut` does
@@ -219,6 +222,7 @@ impl<
     /// the catch-up, the steps and each command fill it where they change
     /// the flight.
     fn tick_then(&mut self, dt: Duration) {
+        self.since_step += dt;
         if self.playing() {
             self.movie_tick(dt);
             return;

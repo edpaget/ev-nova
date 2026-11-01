@@ -143,6 +143,9 @@ impl Session {
         self.set_double_time_key(input.double_time_key);
         self.set_hyperspace_effects(input.hyperspace_effects);
         self.set_land_key(input.land_key);
+        if input.held {
+            self.hold_time();
+        }
     }
 
     /// One step under `input`, handed `collab` (see the module docs).
@@ -152,6 +155,7 @@ impl Session {
             before: self.ships_before(),
             ..StepRun::default()
         };
+        self.adjust_time();
         let rescued = self.game_work(
             input.controls,
             catalog,
@@ -249,6 +253,7 @@ impl Session {
             system_murk: self.system_murk(),
             player_position: self.player().position,
             double_time: self.double_time(),
+            speed_mult: self.speed_mult(),
             quotes: self.take_quotes(),
             wrap: self.out.player_wrap.take(),
         }
@@ -987,6 +992,7 @@ mod tests {
             system_murk: session.system_murk(),
             player_position: session.player().position,
             double_time: session.double_time(),
+            speed_mult: session.speed_mult(),
             quotes: session.take_quotes(),
             combat: session.take_combat_events(),
             wrap: session.out.player_wrap.take(),

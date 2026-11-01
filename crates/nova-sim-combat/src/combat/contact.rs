@@ -24,11 +24,12 @@
 //! [`RADIUS_SPEED_MULT`] or more (`ucomisd`/`jae` against the double
 //! @0xdd1c8) or the ship's rect is [`RADIUS_WIDTH`] wide or less
 //! (`_GetSpriteXSize`, `cmpw $0x20`/`jg`), and `_SWRLECollision`
-//! (@0x37045, [`PlacedMask::touches`]) otherwise ([`shape`]). The engine's
-//! fixed tick runs at a multiplier of 1.0, so the speed's branch is not
-//! reached until the multiplier ramps
-//! (rdm:phase/play-feel-8/phase-5-speed-mult-ramp); it is built on the
-//! value the session lends ([`ContactSprites::speed_mult`]).
+//! (@0x37045, [`PlacedMask::touches`]) otherwise ([`shape`]). The session
+//! lends the frame's gain ([`ContactSprites::speed_mult`]), which at the
+//! engine's fixed step stays within 0 to 1: each step is a frame of 1.0 of
+//! new time, so the ramp never rises past it, and the original reaches
+//! 2.0 only on frames of about 67 ms or more, which the engine runs as
+//! catch-up steps. So the speed's branch is built but not reached.
 //! `_GetSpriteXSize`'s 32 for a sprite with no frames is never reached.
 //!
 //! **An asteroid** (`_AsteroidCollisionHandler` @0x369c8-0x36a44, the

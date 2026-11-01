@@ -326,8 +326,8 @@ impl AppScreen {
 
     /// Keeps `flight`'s ship slots' draw-layer and cloned-frame history,
     /// its stellar sprite pool, what its berths keep, what its last galaxy
-    /// refresh left hidden, its comm dialog's release flag, its course
-    /// map's zoom and whether the map
+    /// refresh left hidden, its comm dialog's release flag, its frame
+    /// gain, its course map's zoom and whether the map
     /// shows the borders, for the next flight in this run.
     pub(super) fn remember_flight(&mut self, flight: &FlightView<Rc<GameData>>) {
         if let Some(carry) = flight.sim().carry_over() {
@@ -345,6 +345,9 @@ impl AppScreen {
             }
             if let Some(release) = carry.release_comm_escort {
                 self.release_comm_escort = release;
+            }
+            if let Some(gain) = carry.speed_mult {
+                self.speed_mult = gain;
             }
         }
         if let Some(zoom) = flight.course_map_zoom() {

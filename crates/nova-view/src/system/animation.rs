@@ -17,9 +17,10 @@
 //! that frame (`SceneStellar::gate_frame`), and frame 0 where no session
 //! runs, as a released, closed gate shows.
 //!
-//! Each tick an animating stellar's timer gains one tick of 1/30 s (the
-//! original's `_gSpeedMult`, 1.0 a frame at 30 frames a second,
-//! @0x2e810-0x2e825). Once it reaches `AnimDelay`, or `AnimDelay` x
+//! Each tick an animating stellar's timer gains the frame's gain (the
+//! original's `_gSpeedMult`, @0x2e810-0x2e825: 1.0 a frame at 30 frames
+//! a second, less on the frames that ramp up after a landing or a dialog;
+//! see `nova_sim::speed_mult`). Once it reaches `AnimDelay`, or `AnimDelay` x
 //! `Frame0Bias` while the current frame is 0 and the bias is above 1
 //! (@0x2ec4b-0x2ec83), the timer starts again and the frames advance. A
 //! threshold of 0 or less is met every tick: an `AnimDelay` of 0 or less
@@ -49,9 +50,9 @@
 
 use std::num::NonZeroU16;
 
-use nova_sim::Chance;
 use nova_sim::gate::HYPERGATE;
 use nova_sim::gate_sprite::{ALTERNATE, ONLY_WHEN_DESTROYED, RANDOM};
+use nova_sim::{Chance, SpeedMult};
 
 use super::catalog::AnimationData;
 
@@ -67,14 +68,16 @@ pub fn is_animated(data: AnimationData, destroyed: bool, counted: NonZeroU16) ->
 
 /// A stellar's animation state: its current and next frame, its timer,
 /// and the frame its sheet drawn shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frames {
     /// The current frame, in the counted sheet's frames.
     current: u16,
     /// The frame after it.
     next: u16,
-    /// Ticks since the last advance.
-    timer: u64,
+    /// The gain taken since the last advance, in ticks: a double, where
+    /// the original's +0x490 is a float, as the threshold is kept wide (a
+    /// float stops counting whole ticks at 2^24).
+    timer: f64,
     /// The frame of the sheet drawn that shows.
     shown: u16,
 }
@@ -97,7 +100,7 @@ impl Frames {
         Self {
             current: 0,
             next: 1,
-            timer: 0,
+            timer: 0.0,
             shown: 0,
         }
     }
@@ -133,16 +136,16 @@ impl Frames {
         drawn: NonZeroU16,
         chance: &mut dyn Chance,
     ) {
-        self.step_by(1, data, destroyed, counted, drawn, chance);
+        self.step_by(SpeedMult::FULL, data, destroyed, counted, drawn, chance);
     }
 
-    /// One pass at `gain` ticks, as [`Frames::step`] runs one at 1: the
+    /// One pass at `gain`, as [`Frames::step`] runs one at full gain: the
     /// timer takes the gain (`_gSpeedMult`, @0x2e810-0x2e825) and the
     /// threshold is tested whatever it is, so at gain 0 a delay of 0, or a
     /// timer already there, still advances.
     pub fn step_by(
         &mut self,
-        gain: u8,
+        gain: SpeedMult,
         data: AnimationData,
         destroyed: bool,
         counted: NonZeroU16,
@@ -170,15 +173,15 @@ impl Frames {
         counted: NonZeroU16,
         chance: &mut dyn Chance,
     ) {
-        self.step_frozen_by(1, data, destroyed, counted, chance);
+        self.step_frozen_by(SpeedMult::FULL, data, destroyed, counted, chance);
     }
 
-    /// One pass at `gain` ticks for a stellar whose sprite slot shows a
-    /// frame frozen, as [`Frames::step_frozen`] runs one at 1 (see
+    /// One pass at `gain` for a stellar whose sprite slot shows a frame
+    /// frozen, as [`Frames::step_frozen`] runs one at full gain (see
     /// [`Frames::step_by`]).
     pub fn step_frozen_by(
         &mut self,
-        gain: u8,
+        gain: SpeedMult,
         data: AnimationData,
         destroyed: bool,
         counted: NonZeroU16,
@@ -187,12 +190,12 @@ impl Frames {
         let _ = self.advance(gain, data, destroyed, counted, chance);
     }
 
-    /// One pass of `gain` ticks on the timer and the current and next
+    /// One pass at `gain` on the timer and the current and next
     /// frames over `counted`: `None` when the stellar does not animate,
     /// else whether the current frame advanced.
     fn advance(
         &mut self,
-        gain: u8,
+        gain: SpeedMult,
         data: AnimationData,
         destroyed: bool,
         counted: NonZeroU16,
@@ -201,7 +204,7 @@ impl Frames {
         if !is_animated(data, destroyed, counted) {
             return None;
         }
-        self.timer += u64::from(gain);
+        self.timer += gain.get();
         // Wide, where the original's 16-bit `imul ax` wraps (@0x2ec62);
         // a threshold of 0 or less is met at once.
         let delay = i64::from(data.delay);
@@ -210,10 +213,11 @@ impl Frames {
         } else {
             delay
         };
-        if i128::from(self.timer) < i128::from(threshold) {
+        #[allow(clippy::cast_precision_loss)] // below 2^31, exact in a double
+        if self.timer < threshold as f64 {
             return Some(false);
         }
-        self.timer = 0;
+        self.timer = 0.0;
         let alternate = data.flags2 & ALTERNATE != 0;
         if alternate && self.current != 0 {
             // Back to frame 0, the next frame kept (@0x2eca5-0x2ecad).
@@ -278,7 +282,7 @@ impl Frames {
         Self {
             current: 0,
             next: 0,
-            timer: 0,
+            timer: 0.0,
             shown: 0,
         }
     }
@@ -687,9 +691,9 @@ mod tests {
         let slow = data(i16::MAX, i16::MAX);
         let most = count(u16::MAX);
         assert!(is_animated(slow, false, most));
-        let first = u64::from(i16::MAX.unsigned_abs()).pow(2);
+        let first = f64::from(i16::MAX).powi(2);
         let mut frames = Frames {
-            timer: first - 2,
+            timer: first - 2.0,
             ..Frames::new()
         };
         frames.step(slow, false, most, most, &mut NeverFires);
@@ -698,7 +702,7 @@ mod tests {
         assert_eq!(frames.shown(), 1);
         let mut last = Frames {
             next: u16::MAX - 1,
-            timer: u64::from(i16::MAX.unsigned_abs()) - 1,
+            timer: f64::from(i16::MAX) - 1.0,
             ..frames
         };
         last.step(slow, false, most, most, &mut NeverFires);
@@ -805,12 +809,12 @@ mod tests {
         }
         assert_eq!(
             (frames.current, frames.next, frames.timer, frames.shown()),
-            (2, 3, 1, 2)
+            (2, 3, 1.0, 2)
         );
         frames.take_off_reset();
         assert_eq!(
             (frames.current, frames.next, frames.timer, frames.shown()),
-            (0, 0, 1, 0)
+            (0, 0, 1.0, 0)
         );
         // The timer carries on: one tick reaches the delay, and the
         // current takes next 0; then frame 1 two ticks on.
@@ -826,7 +830,7 @@ mod tests {
     fn at_gain_0_the_timer_stands_and_the_frames_stay() {
         let (every_2, four) = (data(2, 0), count(4));
         let mut frames = Frames::new();
-        frames.step_by(0, every_2, false, four, four, &mut NeverFires);
+        frames.step_by(SpeedMult::ZERO, every_2, false, four, four, &mut NeverFires);
         assert_eq!(frames, Frames::new());
     }
 
@@ -834,7 +838,14 @@ mod tests {
     fn at_gain_0_a_delay_of_0_still_advances() {
         let (no_delay, four) = (data(0, 0), count(4));
         let mut frames = Frames::new();
-        frames.step_by(0, no_delay, false, four, four, &mut NeverFires);
+        frames.step_by(
+            SpeedMult::ZERO,
+            no_delay,
+            false,
+            four,
+            four,
+            &mut NeverFires,
+        );
         assert_eq!(frames.shown(), 1);
     }
 
@@ -842,25 +853,46 @@ mod tests {
     fn at_gain_0_a_timer_past_the_threshold_fires() {
         let (every_2, four) = (data(2, 0), count(4));
         let mut frames = Frames {
-            timer: 3,
+            timer: 3.0,
             ..Frames::new()
         };
-        frames.step_by(0, every_2, false, four, four, &mut NeverFires);
-        assert_eq!((frames.current, frames.timer), (1, 0));
+        frames.step_by(SpeedMult::ZERO, every_2, false, four, four, &mut NeverFires);
+        assert_eq!((frames.current, frames.timer), (1, 0.0));
     }
 
     #[test]
     fn at_gain_0_a_frozen_stellar_tests_its_threshold_with_its_frame_kept() {
         let (every_2, four) = (data(2, 0), count(4));
         let mut frames = Frames {
-            timer: 2,
+            timer: 2.0,
             ..Frames::new()
         };
-        frames.step_frozen_by(0, every_2, false, four, &mut NeverFires);
-        assert_eq!((frames.current, frames.timer, frames.shown()), (1, 0, 0));
+        frames.step_frozen_by(SpeedMult::ZERO, every_2, false, four, &mut NeverFires);
+        assert_eq!((frames.current, frames.timer, frames.shown()), (1, 0.0, 0));
         let before = frames;
-        frames.step_frozen_by(0, every_2, false, four, &mut NeverFires);
+        frames.step_frozen_by(SpeedMult::ZERO, every_2, false, four, &mut NeverFires);
         assert_eq!(frames, before);
+    }
+
+    #[test]
+    fn a_timer_takes_a_fractional_gain() {
+        // AnimDelay 1: a quarter a pass reaches it on the fourth.
+        let (every_1, four) = (data(1, 0), count(4));
+        let mut frames = Frames::new();
+        let shown: Vec<u16> = (0..5)
+            .map(|_| {
+                frames.step_by(
+                    SpeedMult::new(0.25),
+                    every_1,
+                    false,
+                    four,
+                    four,
+                    &mut NeverFires,
+                );
+                frames.shown()
+            })
+            .collect();
+        assert_eq!(shown, [0, 0, 0, 1, 1]);
     }
 
     #[test]
@@ -868,7 +900,7 @@ mod tests {
         let (every_2, four) = (data(2, 0), count(4));
         let (mut by, mut plain) = (Frames::new(), Frames::new());
         for tick in 0..9 {
-            by.step_by(1, every_2, false, four, four, &mut NeverFires);
+            by.step_by(SpeedMult::FULL, every_2, false, four, four, &mut NeverFires);
             plain.step(every_2, false, four, four, &mut NeverFires);
             assert_eq!(by, plain, "{tick}");
         }
@@ -879,7 +911,7 @@ mod tests {
         let afresh = Frames::after_reset();
         assert_eq!(
             (afresh.current, afresh.next, afresh.timer, afresh.shown()),
-            (0, 0, 0, 0)
+            (0, 0, 0.0, 0)
         );
     }
 }

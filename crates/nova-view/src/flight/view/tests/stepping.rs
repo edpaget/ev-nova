@@ -157,6 +157,31 @@ fn flash(view: &Faked, ship: ShipRef) -> Option<f32> {
 // The input.
 
 #[test]
+fn a_step_after_a_third_of_a_second_without_one_is_held() {
+    let mut view = stepping(catalog());
+    view.tick(Duration::from_millis(200));
+    view.tick(Duration::from_millis(133));
+    view.tick(Duration::from_millis(1));
+    let held: Vec<bool> = view.sim.inputs().iter().map(|input| input.held).collect();
+    assert_eq!(held, [false, false, true], "333 ms is short of the 334");
+}
+
+#[test]
+fn steady_steps_are_not_held() {
+    let mut view = stepping(catalog());
+    for _ in 0..31 {
+        view.sim.queue_report(one_step(Vec::new()));
+    }
+    view.tick(Duration::from_millis(400));
+    for _ in 0..30 {
+        view.tick(Duration::from_millis(17));
+    }
+    let held: Vec<bool> = view.sim.inputs().iter().map(|input| input.held).collect();
+    assert!(held[0], "the first, after 400 ms");
+    assert!(held[1..].iter().all(|&held| !held), "{held:?}");
+}
+
+#[test]
 fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
     let mut view = stepping(catalog());
     for k in [
@@ -189,6 +214,7 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
             double_time_key: true,
             hyperspace_effects: true,
             land_key: true,
+            held: false,
         }
     );
     assert_eq!(

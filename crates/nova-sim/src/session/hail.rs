@@ -628,7 +628,8 @@ impl Session {
     /// (@0x967e2-0x96948): it beeps [`SimSound::CommDialogClosed`]
     /// (@0x96843); then, while the release flag is set (see the module
     /// docs), the ship hailed is released ([`Session::release`],
-    /// @0x96852-0x968c1), the flag staying set; then a person hailed is
+    /// @0x96852-0x968c1), the flag staying set; then the gain is zeroed
+    /// (@0x9690e; see the `time_adjustment` module); then a person hailed is
     /// quoted (+0xbc 1, @0x9691d): it never says its hail quote again this
     /// stay where "once" holds it back.
     pub fn hang_up(&mut self) {
@@ -639,6 +640,9 @@ impl Session {
         if self.space.escorts.release_comm_escort {
             self.release(talk.npc);
         }
+        // `_gSpeedMult` 0.0 after `DisposeDialogNoFlash` (@0x968fd-0x9690e;
+        // see the `time_adjustment` module).
+        self.zero_speed_mult();
         if let Some(person) = self
             .space
             .npc_mut(talk.npc)
@@ -1598,6 +1602,24 @@ pub(super) mod tests {
                 .is_none()
         );
         assert_eq!(session.take_sounds(), [], "its ship gone");
+    }
+
+    #[test]
+    fn closing_the_hail_holds_the_next_frame_at_zero_then_ramps() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        hail(&mut session, &catalog);
+        session.hang_up();
+        let gains = crate::session::time_adjustment::tests::frame_gains(&mut session, 3);
+        assert_eq!(gains, [0.0, 0.25, 0.4375], "@0x9690e");
+    }
+
+    #[test]
+    fn hanging_up_nothing_leaves_the_gain() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.hang_up();
+        assert_eq!(session.speed_mult(), crate::SpeedMult::FULL);
     }
 
     #[test]

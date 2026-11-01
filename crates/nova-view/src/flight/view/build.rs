@@ -618,6 +618,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             previous: opening.frame.player().place(),
             alpha: 0.0,
             elapsed: Duration::ZERO,
+            since_step: Duration::ZERO,
             held: HashSet::new(),
             latched_down: HashSet::new(),
             nav_latch: false,

@@ -4,8 +4,9 @@
 //! **The contact passes** ([`Session::contact_sprites`]). Each ship's
 //! sprite whose sheet was read, at the frame its last display's set and
 //! its heading now give, each weapon `Graphic`'s and asteroid kind's sheet
-//! read, the pass's speed multiplier ([`SPEED_MULT`], 1.0 at the engine's
-//! fixed tick and on both passes of double time) and the readings of
+//! read, the pass's speed multiplier (the frame's gain, `_gSpeedMult`,
+//! one on both passes of double time; see the `time_adjustment` module)
+//! and the readings of
 //! [`RuleKey::RleCollisionWalk`] and [`RuleKey::ShotContact`]. Combat
 //! lays each rect out where the walk meets the sprite (see
 //! `nova_sim::combat::contact`). The frame set is the one the last
@@ -27,7 +28,6 @@ use crate::combat::ShipRef;
 use crate::combat::contact::{ContactSprites, ShipSprite, ShotContact};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
-use crate::gravity::SPEED_MULT;
 use crate::rulebook::RuleKey;
 use crate::sprite_mask::{MaskWalk, PlacedMask};
 
@@ -78,7 +78,7 @@ impl Session {
             ships: self.ship_sprites(),
             shots: masks.shot_sheets(),
             asteroids: masks.asteroid_sheets(),
-            speed_mult: SPEED_MULT,
+            speed_mult: self.time.gain().get(),
             walk: self.mask_walk(),
             reading: ShotContact::from(self.setup.rules.source_for(RuleKey::ShotContact)),
         }
@@ -185,6 +185,15 @@ mod tests {
         }
         let after = session.npcs()[0].reserves;
         after.shield.now < before.shield.now || after.armor.now < before.armor.now
+    }
+
+    #[test]
+    fn contact_sprites_lend_the_frames_gain() {
+        let catalog = crate::testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.time.zero();
+        crate::session::time_adjustment::tests::frame_gains(&mut session, 2);
+        assert!((session.contact_sprites().speed_mult - 0.25).abs() < f64::EPSILON);
     }
 
     #[test]

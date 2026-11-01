@@ -58,7 +58,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Replays the stellar passes the flight raised on the scene shown, the
     /// system entered's, on the effects' chance: the entry's first, on each
-    /// stellar's true frames ([`StellarPass::Entry`]); then the frames'
+    /// stellar's true frames ([`StellarPass::is_entry`]); then the frames'
     /// reset when `frames_reset`; then the rest, so a take-off's and a
     /// gate's exit step from the frames it leaves, before the first frame
     /// is drawn. Every view method that drives a transition catches up
@@ -68,7 +68,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .inbox
             .take_stellar_passes()
             .into_iter()
-            .partition(|&pass| pass == StellarPass::Entry);
+            .partition(|pass| pass.is_entry());
         self.step_scene_by(&entry);
         if frames_reset {
             self.reset_stellar_frames();
@@ -76,7 +76,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.step_scene_by(&others);
     }
 
-    /// Steps the scene shown once for each of `passes`.
+    /// Steps the scene shown once for each of `passes`, each at its own
+    /// gain.
     fn step_scene_by(&mut self, passes: &[StellarPass]) {
         if let Some(scene) = &mut self.scene {
             for pass in passes {
@@ -87,15 +88,21 @@ impl<C, S: FlightSim> FlightView<C, S> {
 
     /// Moves the clock on by `dt` and steps the stellars' animations by
     /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
-    /// runs every play frame, the jump's included. A random next frame
+    /// runs every play frame, the jump's included, each at the gain the
+    /// kept frame says the next step runs at
+    /// ([`FlightFrame::speed_mult`](nova_sim::flight_frame::FlightFrame::speed_mult),
+    /// `_gSpeedMult`). A tick that crosses several wall ticks during a
+    /// ramp steps them all at that one gain: a catch-up inside one tick,
+    /// which no frame drawn between them shows. A random next frame
     /// (`Flags2` 0x0002) is drawn on the effects' chance, never the
     /// session's: the frame a stellar shows is drawn state only.
     pub(super) fn step_stellars(&mut self, dt: Duration) {
         let before = crate::time::ticks(self.elapsed);
         self.elapsed += dt;
         if let Some(scene) = &mut self.scene {
-            scene.step(
+            scene.step_by(
                 crate::time::ticks(self.elapsed) - before,
+                self.frame.speed_mult,
                 &mut self.effects_chance,
             );
         }

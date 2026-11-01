@@ -544,6 +544,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         system_background,
         murk_colour,
         double_time,
+        speed_mult,
         hyper_gamma,
         traffic_ships,
         hud,
@@ -642,6 +643,7 @@ pub(crate) fn unlike(frame: &FlightFrame) -> FlightFrame {
         },
         murk_colour: murk_colour.wrapping_add(1),
         double_time: !double_time,
+        speed_mult: nova_sim::SpeedMult::new(1.0 - speed_mult.get() / 2.0),
         hyper_gamma: hyper_gamma + 1.0,
         traffic_ships: one_or_none(traffic_ships, || ShipId(128)),
         hud: unlike_hud(hud),
@@ -3021,6 +3023,7 @@ mod tests {
                 system_background,
                 murk_colour,
                 double_time,
+                speed_mult,
                 hyper_gamma,
                 traffic_ships,
                 hud,
@@ -3046,6 +3049,7 @@ mod tests {
             assert_ne!(other.system_background, *system_background);
             assert_ne!(other.murk_colour, *murk_colour);
             assert_ne!(other.double_time, *double_time);
+            assert_ne!(other.speed_mult, *speed_mult);
             assert_ne!(other.hyper_gamma.to_bits(), hyper_gamma.to_bits());
             assert_ne!(other.traffic_ships, *traffic_ships);
             assert_ne!(other.nav_mode, *nav_mode);

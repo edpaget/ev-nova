@@ -176,7 +176,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// chord, the cloak and the safety only while the flight takes its
     /// command (the cloak key needs no Command, `_QuickKeyCheck`
     /// @0x705b7); double time and Hyperspace Effects as the screen was
-    /// told; and the land key.
+    /// told; the land key; and whether 334 ms or more of the wall time
+    /// handed to the view went by without a step, which holds the next
+    /// step's gain.
     pub(super) fn step_input(&self, anchor: Anchor) -> StepInput {
         let held = |key| self.held.contains(&key);
         let chord = |command, key| self.takes(command) && held(Key::Command) && held(key);
@@ -192,6 +194,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             double_time_key: self.double_time,
             hyperspace_effects: self.hyperspace_effects,
             land_key: held(LAND_KEY),
+            held: nova_sim::speed_mult::holds_after(self.since_step),
         }
     }
 
@@ -207,6 +210,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let input = self.step_input(anchor);
         let mut report = std::mem::take(&mut self.step_report);
         self.sim.step(&input, steps, &mut report);
+        if !report.steps.is_empty() {
+            self.since_step = std::time::Duration::ZERO;
+        }
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         if !report.steps.is_empty() {

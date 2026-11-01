@@ -70,7 +70,7 @@ use nova_sim::{
 
 use nova_sim::{
     AsteroidCatalog, CarryOver, CombatCatalog, DeskReading, RelocateRefusal, Rulebook,
-    SessionSetup, StartError,
+    SessionSetup, SpeedMult, StartError,
 };
 
 use super::SharedChance;
@@ -326,13 +326,14 @@ impl<C> SessionFlight<C> {
         true
     }
 
-    /// Enters play from the main screen (`nova_sim::Session::enter_game`),
-    /// and says whether it did: a failed session enters nothing.
-    pub fn enter_game(&mut self) -> bool {
+    /// Enters play from the main screen at `gain`, the `_gSpeedMult` the
+    /// last game of the run left (`nova_sim::Session::enter_game`), and
+    /// says whether it did: a failed session enters nothing.
+    pub fn enter_game(&mut self, gain: SpeedMult) -> bool {
         let Ok(session) = &mut self.session else {
             return false;
         };
-        session.enter_game(&mut self.chance);
+        session.enter_game(gain, &mut self.chance);
         true
     }
 
@@ -933,7 +934,7 @@ mod tests {
         flight.set_up(SessionSetup::default());
         assert_eq!(flight.carry_over(), None);
         assert!(!flight.begin());
-        assert!(!flight.enter_game());
+        assert!(!flight.enter_game(SpeedMult::FULL));
         flight.open_saved(SavedOpening::AtLaunch);
         flight.open_saved(SavedOpening::OpenPilot);
         assert_eq!(flight.session().err(), Some("no chär"), "still failed");
@@ -1045,7 +1046,7 @@ mod tests {
         assert_ne!(expected, before, "beginning changes the session");
         assert!(flight.begin());
         assert_eq!(flight.session().ok(), Some(&expected), "as by hand");
-        assert!(flight.enter_game());
+        assert!(flight.enter_game(SpeedMult::FULL));
     }
 
     #[test]

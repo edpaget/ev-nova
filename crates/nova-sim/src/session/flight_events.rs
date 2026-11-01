@@ -115,6 +115,7 @@ impl Outbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SpeedMult;
     use crate::bay::FighterNote;
     use crate::board::MissionBoardLine;
     use crate::catalog::{DescMovie, MissionId, OutfitId, StellarId, WeaponId};
@@ -447,7 +448,11 @@ mod tests {
     #[test]
     fn the_stellar_passes_are_drained_in_order() {
         let mut session = started();
-        let passes = [StellarPass::Entry, StellarPass::Ticked, StellarPass::Still];
+        let passes = [
+            StellarPass::entry(SpeedMult::FULL),
+            StellarPass::ticked(SpeedMult::new(0.25)),
+            StellarPass::ticked(SpeedMult::ZERO),
+        ];
         session.out.stellar_passes.extend(passes);
         assert_eq!(drained(&mut session), passes.map(FlightEvent::StellarPass));
         assert_eq!(session.take_stellar_passes(), []);
@@ -459,7 +464,10 @@ mod tests {
         session.ship.fate.rescue_desc = Some(rescued());
         session.run.leave_with("Bye.");
         session.out.takeoff_nav = Some(NavMode::Off);
-        session.out.stellar_passes.push(StellarPass::Still);
+        session
+            .out
+            .stellar_passes
+            .push(StellarPass::ticked(SpeedMult::ZERO));
         session.out.begin_docked_run();
         let bar = queue_text(&mut session, text(128));
         session.out.quotes.push(PersonQuote {
@@ -510,7 +518,7 @@ mod tests {
                 },
                 FlightEvent::InterfaceLoadsCleared,
                 FlightEvent::TakeoffNav(NavMode::Off),
-                FlightEvent::StellarPass(StellarPass::Still),
+                FlightEvent::StellarPass(StellarPass::ticked(SpeedMult::ZERO)),
                 FlightEvent::RescueDesc(rescued()),
                 FlightEvent::LeaveMessage("Bye.".to_owned()),
             ]

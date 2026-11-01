@@ -658,6 +658,7 @@ mod takeoff_grace;
 mod target_panel;
 #[cfg(test)]
 mod thrust;
+mod time_adjustment;
 mod tractor_hold;
 mod trade_dialog;
 mod trip_days;
@@ -714,7 +715,7 @@ use self::setup::Setup;
 use self::ship_change::ClassChange;
 use self::space::Space;
 use self::statics::Statics;
-use self::stellar_passes::GateHolds;
+use self::stellar_passes::{GateHolds, PassKind};
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, CAPTURE_TRIP,
@@ -753,7 +754,6 @@ use crate::gate::WormholeRule;
 use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, emerge, has_links, hypergate_exit, wormhole_exit,
 };
-use crate::gate_sprite::StellarPass;
 use crate::geometry::Vec2;
 use crate::glow::step_glow;
 use crate::govt::{Governments, HALF_JAMMING};
@@ -1056,6 +1056,15 @@ pub struct Session {
     /// Whether the load had to fall back for data the save references
     /// and the catalog lacks ([`Session::load_repaired`]); never saved.
     load_repaired: bool,
+    /// The frame's time gain and its ramp, the original's `_gSpeedMult`
+    /// (see the `time_adjustment` module). On `Session` itself, not a
+    /// sub-state: the original's is process-wide, every pass of every
+    /// stateful sub-state reads it, and the landing, the dialogs, game
+    /// entry and the app's switch-in write it, so no one sub-state owns
+    /// it. Sub-state methods never take it: they take the frame's gain as
+    /// a plain [`SpeedMult`](crate::SpeedMult). Never saved: the pilot
+    /// file doesn't keep it.
+    time: crate::TimeAdjustment,
 }
 
 impl Session {
@@ -1347,6 +1356,7 @@ impl Session {
             // `_ResetPlayer` @0x1d7cf, at every flight start.
             tutorial: crate::tutorial::Tutorial::SEASONED,
             load_repaired,
+            time: crate::TimeAdjustment::default(),
             pilot,
             statics: Rc::new(statics),
             setup: Setup::default(),
@@ -3353,7 +3363,7 @@ impl Session {
         self.reset_precalced();
         // `_HandlePlayer` @0x6c59c, after the setup and the asteroids.
         self.prepare_all_sprites();
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         Some(self.pilot.system)
     }
 
@@ -3867,7 +3877,7 @@ impl Session {
         // entry, below, and they reach none of its gates.
         let exit_elsewhere = system != self.pilot.system;
         if !exit_elsewhere {
-            self.stellar_pass(StellarPass::Entry, GateHolds::Entered(entered), chance);
+            self.stellar_pass(PassKind::Entry, GateHolds::Entered(entered), chance);
         }
         let ship = match self.setup.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
@@ -3905,7 +3915,7 @@ impl Session {
             chance,
         );
         if exit_elsewhere {
-            self.stellar_pass(StellarPass::Entry, GateHolds::Nobody, chance);
+            self.stellar_pass(PassKind::Entry, GateHolds::Nobody, chance);
         }
         self.gate_exit_pass(catalog, chance);
         self.emerge_followers(exit.id, exit.position, chance);
@@ -3917,9 +3927,9 @@ impl Session {
         // out, and again after the stellars' visibility (@0x67658): every
         // NPC's fade steps twice, and every gate.
         self.prepare_all_sprites();
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         self.prepare_all_sprites();
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         // The tail the take-off's path ends in (@0x67673; see the
         // `takeoff_grace` module).
         self.start_takeoff_grace();
@@ -4195,9 +4205,12 @@ impl Session {
         // The rest of the tail (see the `dock_tail` module). The
         // original's bar is redrawn before its deselect with the selection
         // still held (@0x633a0), noted as `takeoff_nav` above; see the
-        // flight view's `took_off`. A landing left `_gSpeedMult` 0
-        // (@0x6375e-0x63769), so its passes add nothing.
-        self.end_dock_tail(StellarPass::Still, chance);
+        // flight view's `took_off`. The stay's tail zeroes `_gSpeedMult`
+        // (`_PlayerLandOnStellar` @0x6375e-0x63769, after `_DoPortDialog`),
+        // so its passes add nothing and the first frame holds (see the
+        // `time_adjustment` module).
+        self.zero_speed_mult();
+        self.end_dock_tail(chance);
         Some(stellar)
     }
 

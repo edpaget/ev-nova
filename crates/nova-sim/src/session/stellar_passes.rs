@@ -8,22 +8,24 @@
 //! `_dockPermission` and the ship table as each site leaves them, and it
 //! plays no sound. Only the gain and the callers' state differ.
 //!
-//! [`Session::stellar_pass`] steps every gate shown by a pass's gain and
-//! raises the pass ([`StellarPass`]), which the view replays on its scene
-//! before the next frame is drawn. The streams:
+//! [`Session::stellar_pass`] steps every gate shown by the session's gain
+//! and raises the pass ([`StellarPass`]), which the view replays on its
+//! scene before the next frame is drawn. The streams:
 //!
 //! | Way in | Passes |
 //! |---|---|
-//! | Entering play ([`Session::enter_game`]) | `Ticked` x 3 (@0x1a359, @0x1a36c, @0x45834) |
-//! | A take-off | `Still` x 2 (@0x6764e, @0x67658) |
-//! | A hypergate's or wormhole's exit | `Entry` (@0x63e91, @0x64743), `Ticked` x 2 (@0x6764e, @0x67658) |
-//! | A wormhole with no exit | `Ticked` x 2 (@0x6764e, @0x67658) |
-//! | A jump's arrival | `Ticked` (@0x6c59c) |
+//! | Entering play ([`Session::enter_game`]) | ticked x 3 (@0x1a359, @0x1a36c, @0x45834), at the gain carried |
+//! | A take-off | ticked x 2 (@0x6764e, @0x67658), at 0 |
+//! | A hypergate's or wormhole's exit | entry (@0x63e91, @0x64743), ticked x 2 (@0x6764e, @0x67658), at the frame's gain |
+//! | A wormhole with no exit | ticked x 2 (@0x6764e, @0x67658), at the frame's gain |
+//! | A jump's arrival | ticked (@0x6c59c), at the frame's gain |
 //!
-//! **The gain.** `_PlayerLandOnStellar` zeroes `_gSpeedMult` on every path
-//! (@0x6375e-0x63769), and only `_PlayGame`'s loop raises it (@0x45b28), so
-//! a take-off's two run at gain 0 ([`StellarPass::Still`]). They still test
-//! the threshold, so a timer already there, or no delay, still steps.
+//! **The gain** is `_gSpeedMult` as it stands (see the `time_adjustment`
+//! module). The stay's tail zeroes it (`_PlayerLandOnStellar`
+//! @0x6375e-0x63769), and only `_PlayGame`'s loop raises it (@0x45b28), so
+//! a take-off's two run at gain 0. They still test the threshold, so a
+//! timer already there, or no delay, still steps. Game entry's run at the
+//! gain the last game of the run left, 0 after one that ended landed.
 //!
 //! **What holds a gate** ([`GateHolds`]). A gate entry's pass follows a
 //! rebuild onto the exit system's stellars (@0x63e8c, @0x6473e), with the
@@ -51,10 +53,6 @@
 //!
 //! - the slot plumbing (@0x2e744-0x2e7e5, @0x2ee35-0x2ef1a), which the view
 //!   draws every frame;
-//! - the fractional gain (@0x2e810-0x2e825): only 0 and 1 are modelled, the
-//!   engine's tick being 1.0;
-//! - `_gSpeedMult` left 0.0 by an earlier game that ended landed,
-//!   rdm:phase/play-feel-7-fidelity/phase-3-speed-mult-ramp-after-a-landing-or-dialog;
 //! - the stellar step of the two frozen `_DoPlayGameWork(1)` passes
 //!   (@0x1a38a, @0x4580c),
 //!   rdm:phase/play-feel-7-cross-roadmap/phase-1-stellar-step-of-the-frozen-entry-passes.
@@ -64,6 +62,16 @@ use crate::chance::Chance;
 use crate::gate_sprite::StellarPass;
 
 use super::Session;
+
+/// Which of the passes a site runs: before the frames' reset or after
+/// (see [`StellarPass::entry`] and [`StellarPass::ticked`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PassKind {
+    /// A gate entry's, before the frames' reset.
+    Entry,
+    /// Any other, after any reset.
+    Ticked,
+}
 
 /// What may hold a gate open through a pass (see the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,16 +86,27 @@ pub(super) enum GateHolds {
 }
 
 impl Session {
-    /// Runs `pass` on every gate shown, held as `holds` says, its random
-    /// picks drawn on `chance`, and raises it for the view.
+    /// Runs a pass of `kind` on every gate shown, at the session's gain as
+    /// it stands (see the `time_adjustment` module), held as `holds` says,
+    /// its random picks drawn on `chance`, and raises it for the view.
     pub(super) fn stellar_pass(
         &mut self,
-        pass: StellarPass,
+        kind: PassKind,
         holds: GateHolds,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        let pass = self.pass_of(kind);
         self.step_gates_by(pass.gain(), holds, chance);
         self.out.stellar_passes.push(pass);
+    }
+
+    /// A pass of `kind` at the session's gain as it stands.
+    fn pass_of(&self, kind: PassKind) -> StellarPass {
+        let gain = self.time.gain();
+        match kind {
+            PassKind::Entry => StellarPass::entry(gain),
+            PassKind::Ticked => StellarPass::ticked(gain),
+        }
     }
 
     /// The stellar passes raised since they were last taken, in order;
@@ -96,28 +115,30 @@ impl Session {
         std::mem::take(&mut self.out.stellar_passes)
     }
 
-    /// Game entry's three passes (see the module docs): the first two now,
-    /// and the third now only with the ships in place. Otherwise it is
-    /// raised now, for the view, and the gates' step is owed to the first
-    /// step's setup: the warm-up frame before it shows neither the ships
-    /// nor the gate's change, under the entry's black.
+    /// Game entry's three passes (see the module docs), at the gain entry
+    /// set: the first two now, and the third now only with the ships in
+    /// place. Otherwise it is raised now, for the view, and the gates' step
+    /// at its gain is owed to the first step's setup: the warm-up frame
+    /// before it shows neither the ships nor the gate's change, under the
+    /// entry's black.
     pub(super) fn enter_game_passes(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
-        self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
+        self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         if self.space.traffic_due {
-            self.out.stellar_passes.push(StellarPass::Ticked);
-            self.space.entry_gate_pass_owed = true;
+            let pass = self.pass_of(PassKind::Ticked);
+            self.out.stellar_passes.push(pass);
+            self.space.entry_gate_pass_owed = Some(pass.gain());
         } else {
-            self.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, chance);
+            self.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, chance);
         }
     }
 
-    /// Takes the gates' step of game entry's third pass, if it is owed
-    /// ([`Session::enter_game_passes`]), once the system's ships are set
-    /// up: the view has its pass already.
+    /// Takes the gates' step of game entry's third pass at its gain, if it
+    /// is owed ([`Session::enter_game_passes`]), once the system's ships
+    /// are set up: the view has its pass already.
     pub(super) fn take_entry_gate_pass(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        if std::mem::take(&mut self.space.entry_gate_pass_owed) {
-            self.step_gates_by(StellarPass::Ticked.gain(), GateHolds::AsTheyStand, chance);
+        if let Some(gain) = self.space.entry_gate_pass_owed.take() {
+            self.step_gates_by(gain, GateHolds::AsTheyStand, chance);
         }
     }
 }
@@ -126,6 +147,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::SessionEvent;
+    use crate::SpeedMult;
     use crate::ai::NovaAi;
     use crate::catalog::{
         DudeId, DudeRecord, FleetId, FleetRecord, GovtId, LandingSite, ShipId, SiteAnimation,
@@ -141,17 +163,21 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::pilot::Pilot;
     use crate::rulebook::Rulebook;
+    use crate::rulebook::{RuleKey, RuleSource};
     use crate::session::SavedOpening;
     use crate::session::tests::{at_gate, at_wormhole, gate_site, gated, wormholes};
+    use crate::session::time_adjustment::tests::pass_gains;
     use crate::testkit::{
         FAST, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, jump, land_now, planet,
         ship, work_with,
     };
     use crate::traffic::npc::{Mode, Npc};
 
+    const TICKED: StellarPass = StellarPass::ticked(SpeedMult::FULL);
+    const STILL: StellarPass = StellarPass::ticked(SpeedMult::ZERO);
     const PASSES_THROUGH_A_GATE: [StellarPass; 3] =
-        [StellarPass::Entry, StellarPass::Ticked, StellarPass::Ticked];
-    const ENTERING_PLAY: [StellarPass; 3] = [StellarPass::Ticked; 3];
+        [StellarPass::entry(SpeedMult::FULL), TICKED, TICKED];
+    const ENTERING_PLAY: [StellarPass; 3] = [TICKED; 3];
 
     /// Hypergate `id` of 6 frames stepping every `delay` ticks.
     fn gate(id: i16, delay: i16) -> LandingSite {
@@ -287,7 +313,7 @@ mod tests {
             session.enter_wormhole(&catalog, &mut NeverFires),
             Err(GateRefusal::NoExit)
         );
-        assert_eq!(session.take_stellar_passes(), [StellarPass::Ticked; 2]);
+        assert_eq!(session.take_stellar_passes(), [TICKED; 2]);
         let anim = animation(&session, 330);
         assert_eq!(sprite(&session, 330), stepped(reset(before), &anim, 2));
         assert_eq!(session.gate_frame(StellarId(331)), Some(0), "not held");
@@ -298,13 +324,13 @@ mod tests {
         let catalog = gate_exits();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
-        assert_eq!(session.take_stellar_passes(), [StellarPass::Ticked]);
+        assert_eq!(session.take_stellar_passes(), [TICKED]);
         let anim = animation(&session, 311);
         assert_eq!(sprite(&session, 311), stepped(GateSprite::new(), &anim, 1));
     }
 
     #[test]
-    fn a_take_off_tests_each_threshold_and_adds_to_no_timer() {
+    fn a_take_off_tests_each_threshold_at_gain_0_and_adds_to_no_timer() {
         // Delay 3, bias 2: held on its open frame (3) a gate waits 6 ticks,
         // so a timer of 4 is past the 3 it waits released.
         let bias = |id| {
@@ -330,7 +356,7 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        assert_eq!(session.take_stellar_passes(), [StellarPass::Still; 2]);
+        assert_eq!(session.take_stellar_passes(), [STILL; 2]);
         assert_eq!(
             sprite(&session, 300),
             GateSprite::after_reset(),
@@ -352,7 +378,7 @@ mod tests {
         session.begin(&catalog, &mut NeverFires);
         assert_eq!(session.take_stellar_passes(), [], "no pass yet");
         let (start, anim) = (sprite(&session, 300), animation(&session, 300));
-        session.enter_game(&mut NeverFires);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
         assert_eq!(session.take_stellar_passes(), ENTERING_PLAY);
         assert_eq!(sprite(&session, 300), stepped(start, &anim, 2));
         tick(&mut session, &catalog);
@@ -364,6 +390,55 @@ mod tests {
         );
     }
 
+    /// A new pilot's session, begun, of [`one_gate`].
+    fn begun(catalog: &FakePilotCatalog) -> Session {
+        let pilot = Pilot::new(catalog, "").expect("starts");
+        let mut session = Session::fly(catalog, pilot).expect("flies");
+        session.begin(catalog, &mut NeverFires);
+        session
+    }
+
+    #[test]
+    fn a_second_pilot_entered_at_zero_runs_its_entry_passes_at_zero() {
+        let catalog = showing([gate(300, 1)]);
+        let mut session = begun(&catalog);
+        let start = sprite(&session, 300);
+        session.enter_game(SpeedMult::ZERO, &mut NeverFires);
+        assert_eq!(session.take_stellar_passes(), [STILL; 3]);
+        assert_eq!(sprite(&session, 300), start, "nothing added");
+        // The third pass's gates, owed to the first step, at zero too.
+        pass_gains(&mut session, &catalog, 1);
+        let anim = animation(&session, 300);
+        assert_eq!(sprite(&session, 300), stepped(start, &anim, 0));
+    }
+
+    #[test]
+    fn a_first_game_entered_at_full_gain_runs_them_at_full_gain() {
+        let catalog = one_gate();
+        let mut session = begun(&catalog);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
+        assert_eq!(session.take_stellar_passes(), ENTERING_PLAY);
+        assert_eq!(pass_gains(&mut session, &catalog, 2), [1.0, 1.0]);
+    }
+
+    #[test]
+    fn the_first_frame_after_an_entry_at_zero_is_held_then_ramps() {
+        let catalog = one_gate();
+        let mut session = begun(&catalog);
+        session.enter_game(SpeedMult::ZERO, &mut NeverFires);
+        assert_eq!(pass_gains(&mut session, &catalog, 3), [0.0, 0.25, 0.4375]);
+    }
+
+    #[test]
+    fn by_the_earlier_reading_an_entry_at_zero_runs_at_full_gain() {
+        let catalog = one_gate();
+        let rules = Rulebook::default().with_override(RuleKey::SpeedMultRamp, RuleSource::Bible);
+        let mut session = begun(&catalog).with_rules(rules);
+        session.enter_game(SpeedMult::ZERO, &mut NeverFires);
+        assert_eq!(session.take_stellar_passes(), ENTERING_PLAY);
+        assert_eq!(pass_gains(&mut session, &catalog, 2), [1.0, 1.0]);
+    }
+
     #[test]
     fn a_saved_pilots_gates_take_the_same_passes_on_entering_play() {
         let catalog = one_gate();
@@ -372,7 +447,7 @@ mod tests {
         session.open_saved(SavedOpening::AtLaunch, &mut NeverFires);
         assert_eq!(session.take_stellar_passes(), [], "no pass yet");
         let (start, anim) = (sprite(&session, 300), animation(&session, 300));
-        session.enter_game(&mut NeverFires);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
         assert_eq!(session.take_stellar_passes(), ENTERING_PLAY);
         assert_eq!(sprite(&session, 300), stepped(start, &anim, 2));
         tick(&mut session, &catalog);
@@ -383,11 +458,11 @@ mod tests {
     fn a_re_entry_steps_the_gates_three_times_at_once_with_the_ships_in_place() {
         let catalog = one_gate();
         let mut session = Session::start(&catalog).expect("starts");
-        session.enter_game(&mut NeverFires);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
         tick(&mut session, &catalog);
         session.take_stellar_passes();
         let (before, anim) = (sprite(&session, 300), animation(&session, 300));
-        session.enter_game(&mut NeverFires);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
         assert_eq!(session.take_stellar_passes(), ENTERING_PLAY);
         assert_eq!(sprite(&session, 300), stepped(before, &anim, 3));
         tick(&mut session, &catalog);
@@ -599,7 +674,7 @@ mod tests {
         let catalog = with_a_fleet(showing([gate(300, 1)]), SystemId(130), 0);
         let mut entered = Session::start(&catalog).expect("starts");
         let (start, anim) = (sprite(&entered, 300), animation(&entered, 300));
-        entered.enter_game(&mut NeverFires);
+        entered.enter_game(SpeedMult::FULL, &mut NeverFires);
         let mut expected = stepped(start, &anim, 2);
         assert_eq!(sprite(&entered, 300), expected, "released: no ship yet");
         // The third pass, then the step's own.
@@ -670,7 +745,7 @@ mod tests {
                     permission: CLEARED,
                 });
             }
-            session.stellar_pass(StellarPass::Ticked, holds, &mut NeverFires);
+            session.stellar_pass(PassKind::Ticked, holds, &mut NeverFires);
             (
                 session.gate_frame(StellarId(300)),
                 session.gate_frame(StellarId(301)),
@@ -692,7 +767,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let left = sprite(&session, 300);
         session.chart.sites.retain(|site| site.id != StellarId(300));
-        session.stellar_pass(StellarPass::Ticked, GateHolds::AsTheyStand, &mut NeverFires);
+        session.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, &mut NeverFires);
         assert_eq!(sprite(&session, 300), left);
     }
 
@@ -701,9 +776,10 @@ mod tests {
         let catalog = one_gate();
         let mut session = Session::start(&catalog).expect("starts");
         let left = sprite(&session, 300);
-        session.stellar_pass(StellarPass::Still, GateHolds::AsTheyStand, &mut NeverFires);
+        session.time.zero();
+        session.stellar_pass(PassKind::Ticked, GateHolds::AsTheyStand, &mut NeverFires);
         assert_eq!(sprite(&session, 300), left);
-        assert_eq!(session.take_stellar_passes(), [StellarPass::Still]);
+        assert_eq!(session.take_stellar_passes(), [STILL]);
         assert_eq!(session.take_stellar_passes(), [], "taken");
     }
 
@@ -712,7 +788,7 @@ mod tests {
         let catalog = one_gate();
         let mut session = Session::start(&catalog).expect("starts");
         session.take_events();
-        session.enter_game(&mut NeverFires);
+        session.enter_game(SpeedMult::FULL, &mut NeverFires);
         let events: Vec<SessionEvent> = session.take_events();
         assert_eq!(events, []);
     }

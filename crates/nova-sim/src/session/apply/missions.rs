@@ -212,6 +212,32 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_info_press_that_reaches_the_dialog_zeroes_the_gain_faded_or_not() {
+        for command in [
+            FlightCommand::PressMissionInfo,
+            FlightCommand::PressFaded(crate::flight_frame::FadedPress::MissionInfo),
+        ] {
+            let catalog = errands();
+            let mut session = docked(&catalog);
+            apply(&mut session, FlightCommand::AcceptMission(MissionId(130)));
+            apply(&mut session, command.clone());
+            assert_eq!(
+                session.speed_mult(),
+                crate::SpeedMult::FULL,
+                "the port's own"
+            );
+            session
+                .take_off(&catalog, &mut NeverFires)
+                .expect("takes off");
+            // Out of the take-off's grace.
+            crate::testkit::fly_out(&mut session, &catalog);
+            session.switch_in();
+            apply(&mut session, command.clone());
+            assert_eq!(session.speed_mult(), crate::SpeedMult::ZERO, "{command:?}");
+        }
+    }
+
+    #[test]
     fn the_mission_info_key_answers_its_press_and_its_own_refusal() {
         let mut session = docked(&errands());
         assert_eq!(

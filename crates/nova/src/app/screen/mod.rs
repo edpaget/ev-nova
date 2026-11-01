@@ -564,6 +564,13 @@ pub struct AppScreen {
     /// [`nova_sim::CarryOver::release_comm_escort`]). Clear at launch, as
     /// its BSS reads 0; it is never saved, so a quit drops it.
     release_comm_escort: bool,
+    /// The frame gain the last flight put away left, which the next game
+    /// enters at: the original's `_gSpeedMult` is process-wide (see
+    /// [`nova_sim::CarryOver::speed_mult`]), 0.0 after a game that ended
+    /// landed. Full at launch, as the launch's resume event runs
+    /// `_SwitchedIn` (`_DoMainScreen` @0x1b33c), and again at every
+    /// switch-in (`Screen::focus_gained`).
+    speed_mult: nova_sim::SpeedMult,
     /// The course map's zoom the last flight put away left, which each
     /// new flight's map opens at: the original's `_mapZoom` is set once,
     /// by its data, and never reset by a new or loaded pilot.

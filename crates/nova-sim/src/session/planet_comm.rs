@@ -53,10 +53,14 @@
 //! [`SimSound::PlanetCommHaggled`] as the bribe's haggle ends, and
 //! [`SimSound::PlanetCommClosed`] as it closes.
 //!
+//! **Its close** zeroes `_gSpeedMult` after `DisposeDialogNoFlash`
+//! (@0x97ae1-0x97af2; see the `time_adjustment` module), so the frames
+//! after it ramp up from 0.
+//!
 //! Left out, as frame-timing and redraw bookkeeping the engine has no use
 //! for: `_commDialogMode`, `_commShip`, `_adviceDisasterRandom` (which
 //! nothing reads), `_statusRedraw[2]`, the player's +0x4c (never above 0),
-//! stellar +0x2a (only saved), `_gSpeedMult`, `FlushEvents`, the cursor,
+//! stellar +0x2a (only saved), `FlushEvents`, the cursor,
 //! `_RefreshSAT` and the close's repaint of the message line. The
 //! `_adviceRandom` = -1 it writes makes the next ship advice pick
 //! clock-seeded, which can't be replicated
@@ -227,6 +231,7 @@ impl Session {
         match pressed {
             Pressed::Closed => {
                 self.chart.close_planet_comm(&mut self.out);
+                self.zero_speed_mult();
                 return None;
             }
             Pressed::Said | Pressed::Asked(_) => self.out.sounds.push(SimSound::PlanetCommPressed),
@@ -272,6 +277,7 @@ impl Session {
                 .say(&mut self.out, SimMessage::BribeCleared { station });
             self.pilot.cash -= price;
             self.chart.close_planet_comm(&mut self.out);
+            self.zero_speed_mult();
             return None;
         }
         self.planet_comm(catalog)
@@ -604,6 +610,7 @@ pub(in crate::session) mod tests {
         assert_eq!(lowered.expect("open").asking, Some(2200));
         assert_eq!(session.take_sounds(), [], "a won Lower Price plays nothing");
         session.take_messages();
+        assert_eq!(session.speed_mult(), crate::SpeedMult::FULL, "open");
         assert_eq!(
             session.haggle_bribe(Haggle::Accept, &catalog),
             None,
@@ -613,6 +620,11 @@ pub(in crate::session) mod tests {
             session.take_sounds(),
             [SimSound::PlanetCommHaggled, SimSound::PlanetCommClosed],
             "@0x970e9, then @0x97aa4"
+        );
+        assert_eq!(
+            session.speed_mult(),
+            crate::SpeedMult::ZERO,
+            "a paid bribe closes it"
         );
         assert_eq!(session.pilot.cash, 1_000_000 - 2200);
         assert_eq!(
@@ -1098,6 +1110,17 @@ pub(in crate::session) mod tests {
         let (view, sounds) = press(&mut session, &catalog, PlanetCommItem::Third, 0);
         assert_eq!(view.expect("open").reply, "c6", "No response.");
         assert_eq!(sounds, [SimSound::PlanetCommPressed]);
+    }
+
+    #[test]
+    fn closing_the_planet_comm_holds_the_next_frame_at_zero_then_ramps() {
+        let catalog = planet_catalog();
+        let mut session = at_earth(&catalog, 1_000_000, 0);
+        hail(&mut session, &catalog, 0, 0);
+        assert_eq!(session.speed_mult(), crate::SpeedMult::FULL, "open");
+        press(&mut session, &catalog, PlanetCommItem::Close, 0);
+        let gains = crate::session::time_adjustment::tests::frame_gains(&mut session, 3);
+        assert_eq!(gains, [0.0, 0.25, 0.4375], "@0x97af2");
     }
 
     #[test]
