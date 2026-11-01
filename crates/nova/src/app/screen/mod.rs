@@ -377,6 +377,7 @@ mod background;
 mod build;
 mod capture_naming;
 mod christening;
+mod defection;
 mod entry;
 mod escort_dialog;
 mod flight;

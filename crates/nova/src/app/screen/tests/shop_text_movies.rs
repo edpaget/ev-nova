@@ -19,20 +19,33 @@ fn empty_shops(rules: Rulebook) -> (AppScreen, Rc<MockMoviePlayer>) {
 
 /// [`empty_shops`] over `fork`'s resources too, Ada as `kit` makes her
 /// before she enters play.
-fn empty_shops_with(
+pub(super) fn empty_shops_with(
     rules: Rulebook,
     fork: impl FnOnce(ForkBuilder) -> ForkBuilder,
     kit: impl FnOnce(&mut nova_sim::Pilot),
 ) -> (AppScreen, Rc<MockMoviePlayer>) {
-    let mut built = fork(
-        game_data_fork(false, false, false, 100, b"", b"", None).resource(
-            Desc::TYPE,
-            128,
-            None,
-            &filmed_desc_of("A port.", "Port.mov", 0x0001),
-        ),
+    let built = fork(port_fork()).build();
+    empty_shops_built(rules, Prefs::default(), built, kit)
+}
+
+/// The fork [`empty_shops`] builds on: Alpha Prime's `dësc` naming
+/// "Port.mov" as its after-movie.
+pub(super) fn port_fork() -> ForkBuilder {
+    game_data_fork(false, false, false, 100, b"", b"", None).resource(
+        Desc::TYPE,
+        128,
+        None,
+        &filmed_desc_of("A port.", "Port.mov", 0x0001),
     )
-    .build();
+}
+
+/// [`empty_shops_with`] over `built`, the router under `prefs`.
+pub(super) fn empty_shops_built(
+    rules: Rulebook,
+    prefs: Prefs,
+    mut built: nova_rsrc::fixture::BuiltFork,
+    kit: impl FnOnce(&mut nova_sim::Pilot),
+) -> (AppScreen, Rc<MockMoviePlayer>) {
     let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
     built.bytes[stellar + 0x09] |= 0x0C;
     let data = loaded_bytes(built.bytes);
@@ -43,6 +56,7 @@ fn empty_shops_with(
     store.put("Ada", &nova_sim::save::encode(&ada));
     let reel = MockMoviePlayer::playing((160, 120), 2);
     let mut screen = AppScreen::new(data)
+        .with_prefs(prefs)
         .with_rules(rules)
         .with_movie_player(Rc::clone(&reel) as Rc<dyn MoviePlayer>)
         .with_dialogs(Rc::new(InfoOverEveryOpener), Rc::new(MonoMetrics))
@@ -59,7 +73,7 @@ fn empty_shops_with(
 }
 
 /// The movies started after the landing's.
-fn started_since_landing(reel: &MockMoviePlayer) -> Vec<Call> {
+pub(super) fn started_since_landing(reel: &MockMoviePlayer) -> Vec<Call> {
     reeled(reel)
         .into_iter()
         .skip(2)

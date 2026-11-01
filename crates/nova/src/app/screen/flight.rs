@@ -547,7 +547,17 @@ impl AppScreen {
     /// An offer's movies come in the places the session queued them.
     /// Over the spaceport, the texts it closed or dropped are told to
     /// flight first and last (`close_mission_texts`).
+    ///
+    /// Then the escorts' defections flight kept show after them, in the
+    /// same place (`AppScreen::show_defections`), as `_DoEscortPayment`
+    /// is an arrival's last call (@0x6c620).
     pub(super) fn show_mission_texts(&mut self) {
+        self.show_queued_mission_texts();
+        self.show_defections();
+    }
+
+    /// [`AppScreen::show_mission_texts`] but for the defections.
+    fn show_queued_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             close_mission_texts(spaceport, flight);
             spaceport.show_mission_texts(flight.take_mission_texts());

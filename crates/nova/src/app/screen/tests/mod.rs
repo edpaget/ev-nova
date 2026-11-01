@@ -99,6 +99,7 @@ mod desc_load_order;
 mod dialog_maps;
 mod encounters;
 mod entry;
+mod escort_defection;
 mod flight;
 mod game;
 mod info_dialog_gain;
