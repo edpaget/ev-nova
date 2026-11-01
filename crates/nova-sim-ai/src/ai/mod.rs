@@ -257,7 +257,11 @@ fn blessed_slot(govt: GovtId) -> Option<usize> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Goal {
     /// Nothing yet: the original's state 0, which a type's think reads to
-    /// run its idle block (see [`idle`]). It comes to a stop where it is.
+    /// run its idle block (see [`idle`]). It flies sub 0, as the high
+    /// level's tail writes (@0x8fb09-0x8fb13): it moves on at its velocity
+    /// with no thrust, its heading truncated (`_LowLevelAIHandler`
+    /// @0x851da-0x8522d). An escort or fighter fires unprovoked at its
+    /// target (`_AIEscortFireUnprovoked`, @0x85236).
     #[default]
     Idle,
     /// Stop and wait: the original's state 6, which the idle blocks write

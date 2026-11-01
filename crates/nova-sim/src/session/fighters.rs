@@ -3170,13 +3170,16 @@ pub(super) mod tests {
     #[test]
     fn once_its_carrier_stops_attacking_its_fighters_dock_and_it_holds_them_again() {
         let catalog = carrying();
-        let (mut session, raider, _) = raided_by(&catalog, RuleSource::Bible);
+        let (mut session, raider, lead) = raided_by(&catalog, RuleSource::Bible);
         let ai = raiding_ai();
         for _ in 0..61 {
             fight(&mut session, &catalog, &ai);
         }
         assert_eq!(vipers(&session).len(), 2);
         session.space.npc_mut(raider).expect("there").goal = Goal::Idle;
+        // The carrier follows its lead, which once its attack drops to goal
+        // 0 coasts on: held still, so the carrier stops by it.
+        session.space.npc_mut(lead).expect("there").immobile = true;
         let docked = (0..600).find(|_| {
             fight(&mut session, &catalog, &ai);
             vipers(&session).is_empty()

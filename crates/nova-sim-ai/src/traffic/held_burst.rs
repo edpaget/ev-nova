@@ -64,8 +64,8 @@
 //!   the word, as `Session::place_escort` builds a new ship.
 //! - **Goal 0 keeps it**: sub 0 writes no +0x30, so a ship that gave up to
 //!   goal 0 bursts nothing on its own (@0x34a84). The engine's
-//!   [`Goal::Idle`] stands in for it with a stop, which keeps what it owes
-//!   without bursting.
+//!   [`Goal::Idle`] flies sub 0 itself ([`autopilot::sub_0`]), keeping
+//!   what it owes.
 //! - **A ship disabled keeps it**: its +0x50 is -1.0, so it takes the
 //!   ordinary path and the disabled reset, goal 0 every frame
 //!   (@0x8fece-0x8ff13). Subs 1, 0xe and 0x12 all test not disabled

@@ -208,6 +208,8 @@ pub mod formation_places;
 #[cfg(test)]
 mod gate_approach_tests;
 pub mod gate_entry;
+#[cfg(test)]
+mod goal_0_tests;
 pub mod gone;
 #[cfg(test)]
 mod handle_turn_tests;
@@ -6343,9 +6345,10 @@ mod tests {
         for _ in 0..100 {
             alone.tick_in(&attacking, World::new(&[]), &[], &mut Draws::of(&[]));
         }
-        assert!(
-            alone.npcs()[0].state.velocity.length() < 0.5,
-            "no player: it brakes"
+        assert_eq!(
+            alone.npcs()[0].state.velocity,
+            Vec2::new(1.0, 0.0),
+            "no player: it coasts on sub 0"
         );
     }
 

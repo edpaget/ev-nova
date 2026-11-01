@@ -218,9 +218,7 @@ pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) 
 ///
 /// Every sub 1 flight passes here, so it notes what stays stored of it
 /// ([`Npc::stopping`]): sub 1 while it brakes, and sub 0 from the settle
-/// (@0x85624). Goal 0 flies no sub 1 in the original, its high level's tail
-/// writing sub 0 (@0x8fb09-0x8fb13): the engine's stop there is its own
-/// stand-in, and nothing stored.
+/// (@0x85624).
 pub(crate) fn stop_wanting(
     npc: &mut Npc,
     handling: &Handling,
@@ -228,7 +226,7 @@ pub(crate) fn stop_wanting(
     refuelling: bool,
 ) -> (Controls, Handling, i16) {
     let moving = inertialess::moving(npc.state.velocity);
-    npc.stopping = moving && npc.goal != Goal::Idle;
+    npc.stopping = moving;
     if !moving {
         // Velocity and +0x48, in doubles, back to floats (@0x855e3-0x8561f).
         npc.drag_in_doubles(SETTLE);
@@ -584,10 +582,10 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_leaves_sub_1_stored_while_it_brakes_but_not_once_it_settles_or_in_goal_0() {
-        let stored = |goal: Goal, vy: f32, inertia: Inertia, refuelling: bool| {
+    fn a_stop_leaves_sub_1_stored_while_it_brakes_but_not_once_it_settles() {
+        let stored = |vy: f32, inertia: Inertia, refuelling: bool| {
             let mut npc = npc_at(braking(0.0, vy, 180.0), inertia);
-            npc.goal = goal;
+            npc.goal = Goal::Wait;
             stop(&mut npc, &HANDLING, inertia, refuelling);
             npc.stopping
         };
@@ -597,14 +595,10 @@ mod tests {
             (Inertia::Inertial, true),
             (inertialess, false),
         ] {
-            assert!(stored(Goal::Wait, -3.0, inertia, refuelling), "{inertia:?}");
+            assert!(stored(-3.0, inertia, refuelling), "{inertia:?}");
             assert!(
-                !stored(Goal::Wait, -0.2, inertia, refuelling),
+                !stored(-0.2, inertia, refuelling),
                 "the settle writes sub 0 (@0x85624): {inertia:?}"
-            );
-            assert!(
-                !stored(Goal::Idle, -3.0, inertia, refuelling),
-                "goal 0 flies no sub 1 (@0x8fb09-0x8fb13): {inertia:?}"
             );
         }
     }

@@ -477,12 +477,14 @@ mod tests {
         let mut close = inspecting(at(0.0, -90.0, 0.0, 3.0, 180.0));
         flown_under(&mut close, Some(&CARRIER), Beside::default(), rules);
         assert!(close.state.velocity.y > 3.0, "{:?}", close.state);
-        // With nothing there it brakes, by either reading.
-        for reading in [rules, earlier()] {
-            let mut lost = inspecting(at(0.0, 0.0, 0.0, 2.0, 0.0));
-            flown_under(&mut lost, None, Beside::default(), reading);
-            assert!(lost.state.velocity.y < 2.0, "{:?}", lost.state);
-        }
+        // With nothing there it coasts by the original's (goal 7's gone
+        // let-go, goal 0, @0x8f3a5-0x8f3ae) and brakes by the earlier.
+        let mut lost = inspecting(at(0.0, 0.0, 0.0, 2.0, 0.0));
+        flown_under(&mut lost, None, Beside::default(), rules);
+        assert_eq!(lost.state.velocity.y, 2.0, "{:?}", lost.state);
+        let mut lost = inspecting(at(0.0, 0.0, 0.0, 2.0, 0.0));
+        flown_under(&mut lost, None, Beside::default(), earlier());
+        assert!(lost.state.velocity.y < 2.0, "{:?}", lost.state);
     }
 
     #[test]

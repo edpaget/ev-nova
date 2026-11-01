@@ -268,11 +268,11 @@ mod tests {
     fn with_slot_0_empty_a_miner_brakes_as_order_1() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         let mut mining_ship = miner(Goal::Mine, start);
-        let mut idle = miner(Goal::Idle, start);
+        let mut waiting = miner(Goal::Wait, start);
         for _ in 0..50 {
             flown(&mut mining_ship, Beside::default());
-            flown(&mut idle, Beside::default());
-            assert_eq!(mining_ship.state, idle.state);
+            flown(&mut waiting, Beside::default());
+            assert_eq!(mining_ship.state, waiting.state, "sub 1, a stop");
         }
     }
 

@@ -147,7 +147,7 @@ use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::Outcome;
 use crate::traffic::World;
-use crate::traffic::autopilot::{plain_step, position_step};
+use crate::traffic::autopilot::{self, plain_step, position_step};
 use crate::traffic::formation_flight;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::jump_with_leader;
@@ -823,16 +823,15 @@ pub fn fly_jump(
 /// Sub 0's flight, the frame a ship gives up its leader's jump: goal 0xb's
 /// block writes goal 0 and sub 0 and the low level runs in the same
 /// dispatch, so it moves on at its velocity with no thrust, on its own whole
-/// heading (@0x8521e-0x8522d, @0x85231). From the next tick on
-/// [`Goal::Idle`] flies a stop, the engine's own stand-in
-/// (rdm:phase/escort-fleet-fidelity-followups/phase-18-goal-0-coasts).
+/// heading (@0x8521e-0x8522d, @0x85231; [`autopilot::sub_0`]). From the
+/// next tick on [`Goal::Idle`] flies the same coast.
 fn fly_sub_0(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Inertia) {
     npc.trigger = crate::combat::armament::Trigger::default();
-    flight::turn_to_own(&mut npc.state);
+    let sub_0 = autopilot::sub_0(npc);
     // The low level's default +0x68 (@0x8522d), which the warp-out's test
     // reads, so a stage it held ends now.
     npc.warp.aim = whole(npc.state.heading);
-    plain_step(npc, handling, Controls::default(), flight, inertia);
+    plain_step(npc, handling, sub_0.controls, flight, inertia);
 }
 
 #[cfg(test)]

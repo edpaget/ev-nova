@@ -83,12 +83,7 @@ fn settled(velocity: Vec2) -> Vec2 {
 
 #[test]
 fn an_inertial_ship_stopping_from_a_speed_not_a_whole_number_of_thrusts_comes_to_rest() {
-    for goal in [
-        Goal::Idle,
-        Goal::Wait,
-        Goal::CountWait,
-        Goal::Land(StellarId(999)),
-    ] {
+    for goal in [Goal::Wait, Goal::CountWait, Goal::Land(StellarId(999))] {
         let mut stopping = ship(FAST, goal, at(0.13, -1.87, 10.0), 0.0);
         not_whole(
             stopping.state.velocity.length(),
@@ -112,8 +107,8 @@ fn an_inertial_ship_stopping_from_a_speed_not_a_whole_number_of_thrusts_comes_to
 
 #[test]
 fn an_inertialess_ship_stopping_from_a_speed_not_a_whole_number_of_brakes_comes_to_rest() {
-    // The autopilot's stop and an inspector with no lead both fly sub 1.
-    for goal in [Goal::Idle, Goal::Inspect(ShipRef::Player)] {
+    // A wait (state 6) and a count wait both fly sub 1.
+    for goal in [Goal::Wait, Goal::CountWait] {
         let mut stopping = ship(RAVEN, goal, at(0.0, -2.95, 0.0), 2.95);
         // Its brake is half a tick's thrust (@0x853f6).
         not_whole(stopping.speed, stopping.stats.handling.accel * 0.5);

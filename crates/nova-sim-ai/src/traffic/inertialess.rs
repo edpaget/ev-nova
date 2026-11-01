@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn an_inertialess_npcs_brake_takes_half_a_ticks_thrust_off_with_no_turn() {
-        let mut ship = npc(RAVEN, Goal::Idle, at(0.0, 0.0, 0.0, -3.0, 0.0), 3.0);
+        let mut ship = npc(RAVEN, Goal::Wait, at(0.0, 0.0, 0.0, -3.0, 0.0), 3.0);
         fly(&mut ship, &[], None);
         assert!((ship.speed - (3.0 - 0.09)).abs() < 1e-5, "{}", ship.speed);
         assert_eq!(ship.state.heading, 0.0, "no turn");
