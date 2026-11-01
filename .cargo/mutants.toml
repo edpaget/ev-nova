@@ -59,6 +59,8 @@ exclude_re = [
     # `Impact`: `moves` returns before it for an `Impact` of none, so
     # `impact < 0.0` and `impact <= 0.0` split the rest the same way.
     "asteroid_beam\\.rs:[0-9]+:[0-9]+: replace < with <= in moves$",
+    # The trait's default `landing_site` gives `None` already.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::landing_site -> Option<LandingSite> with None$",
     # The trait's default `boom_sounds` is empty already: `vec![]` is the
     # same empty list as `Vec::new()`.
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::boom_sounds -> Vec<\\(BoomId, SoundId\\)> with vec!\\[\\]$",

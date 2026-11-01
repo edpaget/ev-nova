@@ -631,6 +631,26 @@ mod tests {
     }
 
     #[test]
+    fn the_fake_reads_a_stellar_of_any_system_it_holds() {
+        let fake = FakePilotCatalog {
+            sites: vec![
+                (SystemId(130), vec![planet(128, 0.0, 0.0)]),
+                (SystemId(131), vec![planet(140, 5.0, 6.0)]),
+            ],
+            ..catalog()
+        };
+        let site = fake.landing_site(StellarId(140)).expect("131's");
+        assert_eq!(
+            (site.id, site.position),
+            (
+                StellarId(140),
+                crate::fixture::planet(140, 5.0, 6.0).position
+            )
+        );
+        assert_eq!(fake.landing_site(StellarId(141)), None, "in none");
+    }
+
+    #[test]
     fn the_fake_arms_the_stellars_it_is_given() {
         let fake = FakePilotCatalog {
             stellar_weapons: vec![(StellarId(128), WeaponId(196))],
