@@ -255,6 +255,33 @@ mod tests {
         let class = of(&traffic, follower).ai_type;
         assert_eq!(ai_type, class, "its class's, at slot 2");
         assert_eq!(of(&traffic, follower).leader, None);
+        // Sub 4's block comes first in the low level (@0x8585b): no sub 4
+        // step that frame.
+        assert_eq!(of(&traffic, follower).warp.stage, 30.5);
+    }
+
+    #[test]
+    fn a_follower_keeping_formation_at_its_slot_is_flown_by_its_goal() {
+        // Sub 0xd's formation branch takes its leader's velocity and leaves
+        // the flight to its goal's (@0x85a0b-0x85a51): an idle follower
+        // brakes, where a jump's flight wouldn't thrust.
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = ship(0, TRADERS, AiType::Warship, 0.0, 0.0);
+        lead.goal = Goal::JumpOut;
+        lead.begin_own_jump();
+        lead.state.velocity = Vec2::new(3.0, 0.0);
+        lead.state.heading = 270.0;
+        let leader = traffic.add_npc_at(lead, 5);
+        let follower = following(&mut traffic, leader, 2, 0.0);
+        let npc = traffic.npcs_mut().iter_mut().find(|npc| npc.id == follower);
+        npc.expect("there").state.heading = 270.0;
+        traffic.tick_in(&Reads::of(leader), world(), &[], &mut NeverFires);
+        let npc = of(&traffic, follower);
+        assert!(
+            npc.state.velocity.x < 3.0,
+            "braking: {:?}",
+            npc.state.velocity
+        );
     }
 
     #[test]

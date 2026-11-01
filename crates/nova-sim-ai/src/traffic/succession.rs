@@ -991,6 +991,26 @@ mod tests {
     }
 
     #[test]
+    fn the_marking_pass_checks_a_parent_above_ai_type_4_alone() {
+        // `cmpw $0x4, 0x88; jle` (@0x440d8-0x440e0): a word of 4 is left
+        // out, 5 and 6 are checked.
+        let word = |ai_type: AiType| {
+            let mut ship = follower(FEDS, 900);
+            ship.take_bribe();
+            ship.ai_type = ai_type;
+            let mut traffic = fleet(FEDS, DISABLED, vec![ship]);
+            succeed(&mut traffic);
+            of(&traffic, 1).leader
+        };
+        assert_eq!(AiType::Interceptor.raw(), 4);
+        assert_eq!(word(AiType::Interceptor), Some(LEAD), "AI type 4");
+        let mut escort = fleet(FEDS, DISABLED, vec![follower(FEDS, 900)]);
+        assert!(of(&escort, 1).original_ai_type() > 4);
+        succeed(&mut escort);
+        assert_eq!(of(&escort, 1).leader, None, "AI type 6: it leads");
+    }
+
+    #[test]
     fn a_follower_on_a_jump_follows_the_successors_and_keeps_its_goal() {
         let mut jumping = follower(FEDS, 100);
         jumping.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));

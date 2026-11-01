@@ -306,6 +306,30 @@ mod tests {
     }
 
     #[test]
+    fn a_closing_docker_takes_the_glow_of_its_swarm_leaders_freed_slot_at_its_slot() {
+        // Sub 0xb's swarm branch reads the swarm leader's slot with no +0xb8
+        // test (@0x87364-0x873a3), so a freed slot's record.
+        let mut traffic = Traffic::with_interval(1);
+        let [_, pirate, _, _] = docking(&mut traffic, at(100.0, 400.0, 0.0, 0.0));
+        let mut leader = ship(0, PIRATES, AiType::Warship, -900.0, 0.0);
+        leader.display.glow = 9;
+        let leader = traffic.add_npc_at(leader, 2);
+        let record = of(&traffic, leader).clone();
+        traffic.remove(leader);
+        traffic.left_the_system(record, crate::traffic::gone::Freed::InDispatch);
+        let index = (traffic.npcs().iter()).position(|npc| npc.id == pirate);
+        let npc = &mut traffic.npcs_mut()[index.expect("there")];
+        npc.swarm_leader = Some(2);
+        npc.docking = Some(Docking {
+            ship: npc.docking.expect("docking").ship,
+            sub: DockSub::Close,
+        });
+        traffic.dock_in_dispatch(index.expect("there"), &World::new(&[]), &mut NeverFires);
+        let glow = of(&traffic, pirate).display.drive.glow;
+        assert_eq!(glow, crate::traffic::ship_display::GlowCopy::Swarm(9));
+    }
+
+    #[test]
     fn a_dock_started_at_its_slot_completes_nothing_that_tick() {
         // The completion reads the wait the start had not yet set: one
         // pass, two branches (@0x86d54-0x86d6d, @0x86f98-0x86f9e). With

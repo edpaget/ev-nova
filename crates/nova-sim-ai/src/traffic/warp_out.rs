@@ -1055,6 +1055,32 @@ mod tests {
     // Goal 0xb.
 
     #[test]
+    fn goal_0xb_runs_only_for_a_follower_flying_intact() {
+        // A disabled ship's dispatch reaches no goal block (`_IsDisabled`,
+        // @0x8fece-0x8ff13), and the engine flies no jump for a ship not
+        // flying: either keeps its follow, whatever its leader does.
+        let lead = NpcId(4);
+        let not_leaving = Some((false, LeaderWarp::default()));
+        let kept = |change: &dyn Fn(&mut Npc)| {
+            let mut ship = ship();
+            ship.leader = Some(lead);
+            ship.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+            change(&mut ship);
+            let block = goal_block(&mut ship, not_leaving, false);
+            block.is_none() && ship.warp.goal == Some(WarpGoal::Follow(ShipRef::Npc(lead)))
+        };
+        assert!(!kept(&|_| {}), "flying intact, it gives up");
+        assert!(
+            kept(&|ship| ship.condition = Condition::Disabled),
+            "disabled"
+        );
+        assert!(
+            kept(&|ship| ship.mode = Mode::Coasting { ticks_left: 3 }),
+            "coasting"
+        );
+    }
+
+    #[test]
     fn goal_0xb_follows_a_jumping_leader_and_gives_up_on_one_that_is_not() {
         let jumping = LeaderWarp {
             stage: 0.5,
