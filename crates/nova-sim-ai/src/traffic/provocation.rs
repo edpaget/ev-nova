@@ -118,19 +118,23 @@ pub(crate) fn flight_ended(npc: &Npc, decided: Goal, around: &Surroundings) -> b
     }
 }
 
-/// What the high level makes of a think that `decided` to fight a ship
-/// gone from its slot, read at its last place among `around`'s gone ships
+/// What the high level makes of `npc`'s think that `decided` to fight a
+/// ship gone from its slot, read at its last place among `around`'s gone
+/// ships while `npc`'s target still names the slot
 /// ([`Surroundings::held_gone`]): its slot test makes the target -1
 /// (@0x8d4e4-0x8d50d), then a flight with no target ends in state 0,
 /// zeroing the provocation (@0x8dff6 → @0x8e228-0x8e23d), and an attack
 /// with none in state 0, keeping it (@0x8e263 → @0x8e731). Whether the
-/// provocation is zeroed, or `None` for a think that fights no gone ship.
+/// provocation is zeroed, or `None` for a think that fights no gone ship
+/// it holds. A record stands until a ship takes its berth, so one freed
+/// on an earlier tick is among the gone too, but `npc` let go of it at
+/// its step there (@0x33865-0x33888), and its fight is no fight on it.
 #[must_use]
-pub(crate) fn fight_on_gone(decided: Goal, around: &Surroundings) -> Option<bool> {
+pub(crate) fn fight_on_gone(npc: &Npc, decided: Goal, around: &Surroundings) -> Option<bool> {
     let ship = fought(decided)?;
     let gone = match ship {
         crate::combat::ShipRef::Npc(id) => {
-            around.npc(id).is_none() && around.gone_npc(id).is_some()
+            around.npc(id).is_none() && around.held_gone(npc).is_some_and(|gone| gone.id == id)
         }
         crate::combat::ShipRef::Player => false,
     };
@@ -492,8 +496,47 @@ mod tests {
         let npcs = [provoked(Goal::Idle)];
         let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
         for goal in [Goal::Flee(n(7)), Goal::Attack(n(7))] {
-            assert_eq!(fight_on_gone(goal, &around), None, "{goal:?}");
+            assert_eq!(fight_on_gone(&npcs[0], goal, &around), None, "{goal:?}");
         }
+    }
+
+    #[test]
+    fn a_fight_on_a_gone_ship_is_one_only_on_a_record_the_ship_still_holds() {
+        // A record stands until a ship takes its berth (@0x3c8b1-0x3c90b),
+        // so one freed on an earlier tick is still among the gone. The ship
+        // let go of it at its step there (@0x33865-0x33888), and a +0x70 of
+        // -1 names no slot for the think to read.
+        let (sites, govts) = (sites(), govts(0, 0));
+        let mut attacker = ship(7, PIRATES, AiType::Warship, 100.0, 0.0);
+        attacker.berth = 2;
+        let gone = [crate::traffic::gone::GoneShip {
+            ship: attacker,
+            freed: crate::traffic::gone::Freed::AfterShipLoop,
+        }];
+        let mut let_go = provoked(Goal::Idle);
+        let_go.berth = 1;
+        let mut holding = let_go.clone();
+        holding.target = Some(n(7));
+        let npcs = [let_go];
+        let around = Surroundings {
+            gone: &gone,
+            ..around(&sites, &npcs, &govts, (0.0, -5000.0), 0)
+        };
+        for goal in [Goal::Flee(n(7)), Goal::Attack(n(7))] {
+            assert_eq!(
+                fight_on_gone(&npcs[0], goal, &around),
+                None,
+                "let go: {goal:?}"
+            );
+        }
+        assert_eq!(
+            fight_on_gone(&holding, Goal::Flee(n(7)), &around),
+            Some(true)
+        );
+        assert_eq!(
+            fight_on_gone(&holding, Goal::Attack(n(7)), &around),
+            Some(false)
+        );
     }
 
     #[test]

@@ -748,10 +748,16 @@ pub struct Surroundings<'a> {
     /// it carries the weapon (@0x85e4c-0x85e59, @0x2b06a-0x2b075; see
     /// [`fire::dogfight_lead`]).
     pub weapons: &'a Arsenal,
-    /// The ships gone from the system since the last think closed, their
-    /// records as they left, whose slots a ship's target may still name
-    /// ([`gone`](crate::traffic::gone)): what a brave trader reads of a
-    /// gone attacker ([`Surroundings::held_gone`]).
+    /// The records of the freed slots, one a slot, each as its ship left
+    /// ([`gone`](crate::traffic::gone)). A record stands, as the
+    /// original's slot keeps it, until a ship takes its berth or the
+    /// system is left, so it may be many ticks old. Read a gone ship
+    /// through a reader whose target still names its slot
+    /// ([`Surroundings::held_gone`], [`GoneShip::held_by`]), not by its id:
+    /// a reader lets go of a gone target at its step (@0x33865-0x33888),
+    /// and a record from an earlier tick is then no ship its +0x70 names.
+    /// What a brave trader reads of a gone attacker, and a leader of its
+    /// gone target.
     pub gone: &'a [GoneShip],
     /// The player's warp stage, +0x50: above 0 from the brake of its jump
     /// on, when every ship it leads takes its jump (`_EscortAI`
@@ -904,16 +910,6 @@ impl<'a> Surroundings<'a> {
     #[must_use]
     pub fn npc(&self, id: NpcId) -> Option<&'a Npc> {
         self.npcs.iter().find(|npc| npc.id == id)
-    }
-
-    /// NPC `id`'s record as it left, if it is gone from the system since
-    /// the last think closed ([`Surroundings::gone`]).
-    #[must_use]
-    pub fn gone_npc(&self, id: NpcId) -> Option<&'a Npc> {
-        self.gone
-            .iter()
-            .find(|gone| gone.ship.id == id)
-            .map(|gone| &gone.ship)
     }
 
     /// The record of the gone ship `npc`'s target still names, no slot

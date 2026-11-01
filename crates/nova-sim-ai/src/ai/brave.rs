@@ -108,14 +108,14 @@ impl Behaviour for BraveTrader {
     /// maps to goal 0; @0x8b53b, @0x8b559).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let thought = think(npc, around, chance);
-        let on_gone = fight_on_gone(thought, around);
+        let on_gone = fight_on_gone(npc, thought, around);
         let ended = on_gone.is_some()
             || thought.attacking().is_some_and(|ship| {
                 matches!(around.condition_of(ship), Some(Condition::Dying { .. }))
             });
         Decision {
             goal: if ended { Goal::Idle } else { thought },
-            comm_call: brave_call(thought, around),
+            comm_call: brave_call(npc, thought, around),
             calls_reinforcements: matches!(thought, Goal::Flee(_)),
             forgets_provocation: on_gone.unwrap_or(false)
                 || attack_breaking_up(npc, thought, around),

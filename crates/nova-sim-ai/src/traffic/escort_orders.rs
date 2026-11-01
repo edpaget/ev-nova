@@ -21,8 +21,10 @@ use crate::ai::escort_orders::{for_class, issues, issues_on, orders};
 impl Traffic {
     /// Each leader `picked` picks (one flag an NPC) that is due on
     /// `world`'s frame issues its escorts' orders (see the module docs). A
-    /// leader reads the ships gone since the last think closed by their
-    /// records, leaving them for the tick's thinks to read.
+    /// leader reads a gone target by its slot's record while its target
+    /// still names the slot ([`Surroundings::held_gone`]); a record stands
+    /// until a ship takes its berth, so the leaders only read the records
+    /// and leave them for the tick's thinks.
     ///
     /// Every due leader's table is worked out, then written: the leaders
     /// read the NPCs while the writes need them mutably. No table reads an

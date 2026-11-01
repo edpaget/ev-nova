@@ -47,22 +47,25 @@ pub fn when_fleeing(goal: Goal) -> Option<CommCall> {
     matches!(goal, Goal::Flee(_)).then_some(CommCall::Distress)
 }
 
-/// The call of a brave trader's think ending in `goal` among `around`: a
-/// distress call fleeing (state 3, @0x8b6bc-0x8b6cc), or attacking an NPC
-/// of the original's AI type above 2 (state 4, a target neither -1 nor
-/// the player, @0x8b6e3-0x8b71c,
+/// The call of brave trader `npc`'s think ending in `goal` among
+/// `around`: a distress call fleeing (state 3, @0x8b6bc-0x8b6cc), or
+/// attacking an NPC of the original's AI type above 2 (state 4, a target
+/// neither -1 nor the player, @0x8b6e3-0x8b71c,
 /// [`Npc::original_ai_type`](crate::traffic::npc::Npc::original_ai_type)):
 /// a warship, an interceptor, a led ship or a fighter, disabled or not;
 /// not a ship with no AI (-1) or one the player has paid off (1). A
-/// ship gone from its slot is read in its record as it left
-/// ([`Surroundings::gone_npc`]), which the freed slot still holds.
+/// ship gone from its slot is read in its record as it left, which the
+/// freed slot still holds, only while `npc`'s target still names the slot
+/// ([`Surroundings::held_gone`]): a record stands until a ship takes its
+/// berth, and one freed on an earlier tick was let go of at the trader's
+/// step there (@0x33865-0x33888).
 #[must_use]
-pub fn brave_call(goal: Goal, around: &Surroundings) -> Option<CommCall> {
+pub fn brave_call(npc: &Npc, goal: Goal, around: &Surroundings) -> Option<CommCall> {
     match goal {
         Goal::Flee(_) => Some(CommCall::Distress),
         Goal::Attack(ShipRef::Npc(id)) => around
             .npc(id)
-            .or_else(|| around.gone_npc(id))
+            .or_else(|| around.held_gone(npc).filter(|gone| gone.id == id))
             .filter(|target| target.original_ai_type() > 2)
             .map(|_| CommCall::Distress),
         _ => None,
@@ -183,7 +186,7 @@ mod tests {
             ship(5, PIRATES, AiType::WimpyTrader, 0.0, 100.0),
         ];
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
-        let call = |goal| brave_call(goal, &around);
+        let call = |goal| brave_call(&npcs[0], goal, &around);
         assert_eq!(call(Goal::Flee(n(4))), Some(CommCall::Distress));
         assert_eq!(call(Goal::Attack(n(2))), Some(CommCall::Distress));
         assert_eq!(call(Goal::Attack(n(3))), Some(CommCall::Distress));
@@ -204,9 +207,44 @@ mod tests {
         let npcs = [ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0), hulk];
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         assert_eq!(
-            brave_call(Goal::Attack(n(2)), &around),
+            brave_call(&npcs[0], Goal::Attack(n(2)), &around),
             None,
             "AI type -1 is not above 2 (@0x8b707)"
+        );
+    }
+
+    #[test]
+    fn a_brave_trader_attacking_a_gone_warship_calls_only_while_its_target_holds_the_slot() {
+        // The call reads +0x70's slot (@0x8b6e3-0x8b71c). A freed slot's
+        // record stands until a ship takes its berth (@0x3c8b1-0x3c90b), so
+        // one freed on an earlier tick is still among the gone, but the
+        // trader let go of it at its step there (@0x33865-0x33888).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut warship = ship(2, PIRATES, AiType::Warship, 0.0, 100.0);
+        warship.berth = 2;
+        let gone = [crate::traffic::gone::GoneShip {
+            ship: warship,
+            freed: crate::traffic::gone::Freed::AfterShipLoop,
+        }];
+        let mut let_go = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+        let_go.berth = 1;
+        let mut holding = let_go.clone();
+        holding.target = Some(n(2));
+        let npcs = [let_go];
+        let around = Surroundings {
+            gone: &gone,
+            ..around(&sites, &npcs, &govts, (0.0, -100.0), 0)
+        };
+        assert_eq!(
+            brave_call(&holding, Goal::Attack(n(2)), &around),
+            Some(CommCall::Distress),
+            "held"
+        );
+        assert_eq!(
+            brave_call(&npcs[0], Goal::Attack(n(2)), &around),
+            None,
+            "let go"
         );
     }
 
@@ -238,7 +276,7 @@ mod tests {
             spared,
         ];
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
-        let call = |goal| brave_call(goal, &around);
+        let call = |goal| brave_call(&npcs[0], goal, &around);
         assert_eq!(call(Goal::Attack(n(2))), Some(CommCall::Distress), "led");
         assert_eq!(
             call(Goal::Attack(n(3))),
