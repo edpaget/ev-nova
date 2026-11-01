@@ -76,7 +76,9 @@ pub struct Frames {
     next: u16,
     /// The gain taken since the last advance, in ticks: a double, where
     /// the original's +0x490 is a float, as the threshold is kept wide (a
-    /// float stops counting whole ticks at 2^24).
+    /// float stops counting whole ticks at 2^24). Below that each add is
+    /// narrowed as the original's is (`SpeedMult::added_to_float`), so
+    /// the ramp's settled gain, a hair below 1.0, is a whole tick.
     timer: f64,
     /// The frame of the sheet drawn that shows.
     shown: u16,
@@ -140,7 +142,8 @@ impl Frames {
     }
 
     /// One pass at `gain`, as [`Frames::step`] runs one at full gain: the
-    /// timer takes the gain (`_gSpeedMult`, @0x2e810-0x2e825) and the
+    /// timer takes the gain, in doubles narrowed to a float (`_gSpeedMult`,
+    /// @0x2e810-0x2e825), and the
     /// threshold is tested whatever it is, so at gain 0 a delay of 0, or a
     /// timer already there, still advances.
     pub fn step_by(
@@ -204,7 +207,7 @@ impl Frames {
         if !is_animated(data, destroyed, counted) {
             return None;
         }
-        self.timer += gain.get();
+        self.timer = gain.added_to_float(self.timer);
         // Wide, where the original's 16-bit `imul ax` wraps (@0x2ec62);
         // a threshold of 0 or less is met at once.
         let delay = i64::from(data.delay);
@@ -303,7 +306,7 @@ impl Frames {
 mod tests {
     use std::collections::VecDeque;
 
-    use nova_sim::NeverFires;
+    use nova_sim::{NeverFires, TimeAdjustment};
 
     use super::*;
     use crate::flight::SharedChance;
@@ -893,6 +896,29 @@ mod tests {
             })
             .collect();
         assert_eq!(shown, [0, 0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn after_a_zero_and_its_ramp_a_stellar_advances_each_delay_again() {
+        // The ramp settles a hair below 1.0, which the float timer takes
+        // as a whole frame.
+        let four = count(4);
+        for (delay, steps) in [(1, [true; 6]), (2, [false, true, false, true, false, true])] {
+            let every = data(delay, 0);
+            let mut time = TimeAdjustment::default();
+            time.zero();
+            let mut frames = Frames::new();
+            for _ in 0..200 {
+                frames.step_by(time.frame(), every, false, four, four, &mut NeverFires);
+            }
+            frames.timer = 0.0;
+            let advanced = steps.map(|_| {
+                let before = frames.shown();
+                frames.step_by(time.frame(), every, false, four, four, &mut NeverFires);
+                frames.shown() != before
+            });
+            assert_eq!(advanced, steps, "AnimDelay {delay}");
+        }
     }
 
     #[test]

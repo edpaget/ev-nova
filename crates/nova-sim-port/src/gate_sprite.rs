@@ -12,7 +12,9 @@
 //!   at +0x490, gains the frame's `_gSpeedMult`, added in doubles and
 //!   narrowed back (@0x2e810-0x2e825; see `nova_sim_base::speed_mult`).
 //!   The engine keeps it a double, as it keeps the threshold wide: a
-//!   float stops counting whole ticks at 2^24.
+//!   float stops counting whole ticks at 2^24. Below that it narrows the
+//!   sum as the original does (`SpeedMult::added_to_float`), so the
+//!   ramp's settled gain, a hair below 1.0, is a whole tick.
 //! - **The open frame** `o` ([`GateAnimation::open_frame`],
 //!   @0x2e83c-0x2e864) is its `CustPicID`, or frames / 2 when that is 0
 //!   or less or at least frames - 1. Frames 0 to `o` - 1 are the opening,
@@ -300,8 +302,8 @@ impl GateSprite {
     }
 
     /// One pass of `anim`'s gate at `gain`, as [`GateSprite::step`] runs
-    /// one at full gain: the timer takes the gain, in doubles
-    /// (`_gSpeedMult`, @0x2e810-0x2e825), and the
+    /// one at full gain: the timer takes the gain, in doubles narrowed to
+    /// a float (`_gSpeedMult`, @0x2e810-0x2e825), and the
     /// threshold is tested whatever it is, so a gate at gain 0 with no
     /// delay, or with its timer already there, still steps.
     pub fn step_by(
@@ -315,7 +317,7 @@ impl GateSprite {
         if !anim.animates(destroyed) {
             return;
         }
-        self.timer += gain.get();
+        self.timer = gain.added_to_float(self.timer);
         #[allow(clippy::cast_precision_loss)] // the threshold is below 2^31
         let threshold = anim.threshold(self.current, held_open) as f64;
         if self.timer < threshold {
@@ -461,6 +463,7 @@ mod tests {
     use super::*;
     use crate::catalog::StellarId;
     use crate::chance::NeverFires;
+    use nova_sim_base::TimeAdjustment;
     use nova_sim_base::fixture::Draws;
 
     fn gate(frames: u16, delay: i16) -> GateAnimation {
@@ -1052,6 +1055,28 @@ mod tests {
             .collect();
         assert_eq!(shown, [0, 0, 0, 1, 1]);
         assert_eq!(sprite.timer, 0.25);
+    }
+
+    #[test]
+    fn after_a_zero_and_its_ramp_a_gate_steps_each_delay_again() {
+        // The ramp settles a hair below 1.0, which the float timer takes
+        // as a whole frame.
+        for (delay, steps) in [(1, [true; 6]), (2, [false, true, false, true, false, true])] {
+            let anim = gate(42, delay);
+            let mut time = TimeAdjustment::default();
+            time.zero();
+            let mut sprite = GateSprite::new();
+            for _ in 0..200 {
+                sprite.step_by(time.frame(), &anim, false, true, &mut NeverFires);
+            }
+            sprite.timer = 0.0;
+            let stepped = steps.map(|_| {
+                let before = sprite.shown(&anim, false);
+                sprite.step_by(time.frame(), &anim, false, true, &mut NeverFires);
+                sprite.shown(&anim, false) != before
+            });
+            assert_eq!(stepped, steps, "AnimDelay {delay}");
+        }
     }
 
     #[test]

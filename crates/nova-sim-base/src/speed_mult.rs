@@ -26,6 +26,27 @@
 //! engine holds instead, as its frames are not timed. The original's gain
 //! above 1.0 (a slow frame) is the engine's catch-up steps.
 //!
+//! In doubles the ramp never reaches 1.0: it settles one ulp below, at
+//! 1 − 2^-52, where 3 × gain + 1 rounds to 4 − 2^-51 and its quarter is
+//! the gain again. The engine keeps that, as the original does.
+//!
+//! # Float timers
+//!
+//! A pass that keeps its timer as a float (a stellar's sprite timer at
+//! `spöb` +0x490) adds the gain in doubles and narrows the sum back to a
+//! float (@0x2e810-0x2e825). The narrowing is what makes the settled
+//! gain a whole frame: 0 + (1 − 2^-52) rounds to 1.0, so an `AnimDelay`
+//! of 1 steps every frame. A double timer would stay just below each
+//! threshold and step a frame late every time. It also rounds away the
+//! last of the ramp's shortfall, which a double timer would carry into
+//! the threshold a long delay tests. [`SpeedMult::added_to_float`] is
+//! that add, so such a timer, though a double, steps on the frames the
+//! original's float does. From [`FLOAT_WHOLE_FRAMES`] (2^24) on a float
+//! stops counting, where the original's timer would never reach a
+//! threshold that wide (`AnimDelay` × `Frame0Bias` reaches 2^30); the
+//! engine's keeps the double sum and counts on, a float's width not
+//! replicated.
+//!
 //! # Its writers
 //!
 //! - [`TimeAdjustment::frame`]: `_HandleTimeAdjustment` @0x33424.
@@ -109,7 +130,29 @@ impl SpeedMult {
     pub const fn as_f32(self) -> f32 {
         self.0 as f32
     }
+
+    /// `timer` after it takes the gain, as a pass adds it to a timer the
+    /// original keeps as a float: the sum in doubles, narrowed back to a
+    /// float (see the module docs' "Float timers"). From
+    /// [`FLOAT_WHOLE_FRAMES`] on, where a float no longer counts whole
+    /// frames, the timer keeps the double sum.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn added_to_float(self, timer: f64) -> f64 {
+        let sum = timer + self.0;
+        let narrowed = f64::from(sum as f32);
+        if narrowed.abs() < FLOAT_WHOLE_FRAMES {
+            narrowed
+        } else {
+            sum
+        }
+    }
 }
+
+/// The frames a float timer counts one by one, 2^24: a float's whole
+/// numbers run out above it, so a float at 2^24 that takes a frame stays
+/// there.
+pub const FLOAT_WHOLE_FRAMES: f64 = 16_777_216.0;
 
 impl Default for SpeedMult {
     /// [`SpeedMult::FULL`]: the launch's resume event runs `_SwitchedIn`
@@ -244,6 +287,45 @@ mod tests {
         let gains = frames(&mut time, 200);
         assert!(gains.iter().all(|&gain| gain <= 1.0));
         assert!(gains.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn the_ramp_settles_one_ulp_below_full_as_the_originals_doubles_do() {
+        let mut time = TimeAdjustment::default();
+        time.zero();
+        let gains = frames(&mut time, 200);
+        assert_eq!(gains[199], 1.0 - f64::EPSILON);
+        assert_eq!(time.frame().get(), 1.0 - f64::EPSILON, "it stays there");
+    }
+
+    #[test]
+    fn a_float_timer_takes_the_settled_ramp_as_a_whole_frame() {
+        let settled = SpeedMult::new(1.0 - f64::EPSILON);
+        assert_eq!(settled.added_to_float(0.0), 1.0);
+        assert_eq!(settled.added_to_float(1.0), 2.0);
+        assert_eq!(settled.added_to_float(-1.0), -f64::EPSILON);
+    }
+
+    #[test]
+    fn a_float_timer_keeps_what_a_float_holds_of_a_gain() {
+        assert_eq!(SpeedMult::new(0.25).added_to_float(0.5), 0.75);
+        assert_eq!(SpeedMult::ZERO.added_to_float(3.0), 3.0);
+        let third = SpeedMult::new(1.0 / 3.0);
+        assert_eq!(
+            third.added_to_float(0.0),
+            f64::from(SpeedMult::new(1.0 / 3.0).as_f32())
+        );
+        assert_ne!(third.added_to_float(0.0), 1.0 / 3.0);
+    }
+
+    #[test]
+    fn past_a_floats_whole_frames_the_timer_keeps_counting_in_doubles() {
+        let wide = FLOAT_WHOLE_FRAMES;
+        assert_eq!(SpeedMult::FULL.added_to_float(wide - 1.0), wide);
+        assert_eq!(SpeedMult::FULL.added_to_float(wide), wide + 1.0);
+        assert_eq!(SpeedMult::FULL.added_to_float(-wide - 4.0), -wide - 3.0);
+        let widest = f64::from(i16::MAX).powi(2);
+        assert_eq!(SpeedMult::FULL.added_to_float(widest - 2.0), widest - 1.0);
     }
 
     #[test]
