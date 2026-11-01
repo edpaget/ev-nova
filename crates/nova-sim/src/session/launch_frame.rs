@@ -1346,13 +1346,60 @@ mod tests {
         catalog: &FakePilotCatalog,
         leaver: impl FnOnce(&mut Session, NpcId) -> NpcId,
     ) -> (Session, NpcId, NpcId) {
-        let (mut session, carrier, _) = raid(catalog, RuleSource::Engine, 5);
+        at_the_cap_above(catalog, 5, leaver)
+    }
+
+    /// [`at_the_cap_with`], the carrier at slot `carrier_berth`.
+    fn at_the_cap_above(
+        catalog: &FakePilotCatalog,
+        carrier_berth: u32,
+        leaver: impl FnOnce(&mut Session, NpcId) -> NpcId,
+    ) -> (Session, NpcId, NpcId) {
+        let (mut session, carrier, _) = raid(catalog, RuleSource::Engine, carrier_berth);
         fill(
             &mut session,
-            (1..=55).filter(|&berth| ![3, 5, 20].contains(&berth)),
+            (1..=55).filter(|&berth| ![3, carrier_berth, 20].contains(&berth)),
         );
         let leaver = leaver(&mut session, carrier);
         (session, carrier, leaver)
+    }
+
+    #[test]
+    fn at_the_cap_a_fighter_launched_into_a_slot_a_lower_jump_out_freed_passes_it_to_the_holders_below_the_leaver_and_above_the_launch()
+     {
+        // The launch rewrites slot 3 and leaves every +0x70
+        // (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b). Slot 2's high level
+        // kept the slot while it was active and finds the newcomer at its
+        // `_HandleShip`; slot 4's let go at its slot test (@0x8d4e4-0x8d50d);
+        // slot 5's, in its AI wait, skipped it (@0x8d4b9-0x8d4d2) and still
+        // held it; slot 7's comes after the launch and finds it active.
+        let catalog = catalog();
+        let (mut session, carrier, runner) =
+            at_the_cap_above(&catalog, 6, |session, _| jumping_out(session, 3));
+        let aim = ShipRef::Npc(runner);
+        let holder = |session: &mut Session, berth: u32, ai_wait: u32| {
+            let id = session.space.traffic.holder_of(berth).expect("filled");
+            let npc = session.space.npc_mut(id).expect("there");
+            npc.goal = Goal::Attack(aim);
+            npc.target = Some(aim);
+            npc.ai_wait = ai_wait;
+            id
+        };
+        let below = holder(&mut session, 2, 0);
+        let between = holder(&mut session, 4, 0);
+        let waiting = holder(&mut session, 5, 50);
+        let above = holder(&mut session, 7, 0);
+        game_pass(&mut session, &catalog, &Order::of(carrier));
+        assert!(session.space.npc(runner).is_none(), "jumped out");
+        let launched = vipers(&session);
+        assert_eq!(launched.len(), 1, "it launched");
+        assert_eq!(launched[0].berth, 3);
+        let new = Some(ShipRef::Npc(launched[0].id));
+        let target = |id| session.space.npc(id).expect("there").target;
+        assert_eq!(target(below), new, "below the leaver");
+        assert_eq!(target(between), None, "let go at its slot");
+        assert_eq!(target(waiting), new, "its high level skipped");
+        assert_eq!(target(above), new, "above the launch");
     }
 
     /// Whether `carrier` was heard launching among `events`.

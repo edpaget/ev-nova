@@ -65,9 +65,9 @@
 //! ([`cloak_situation::pressed`](crate::traffic::cloak_situation::pressed));
 //! the high level's own slot test before its hold writes goal 2 or 3 (the
 //! traffic's `dispatch_leave`); and a think after a dialog's free
-//! ([`Freed::InDialog`]). The launch in the AI loop into a slot a dock or
-//! jump-out freed that loop is
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9's.
+//! ([`Freed::InDialog`]). A launch in the AI loop into a slot a dock or
+//! jump-out freed in that loop passes it to every ship still holding it
+//! ([`Traffic::slot_taken`]).
 //!
 //! A ship that lands is not recorded: the original keeps a landed ship in
 //! its slot, waiting at the stellar (`_HighLevelAIHandler`
@@ -321,9 +321,15 @@ impl Traffic {
     ///
     /// - **Outside the ship loop** (the arrivals pass, a launch in the AI
     ///   loop), each holder of its record ([`GoneShip::held_by`]). A record
-    ///   freed in the AI loop ([`Freed::InDispatch`]) passes nothing there:
-    ///   the launch into a slot a dock or jump-out freed that loop is
-    ///   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9's.
+    ///   freed in the AI loop ([`Freed::InDispatch`]) passes, while that
+    ///   loop's tick runs, to every ship whose target still names the old
+    ///   ship: the slot tests at each ship's slot ([`Traffic::slot_test`])
+    ///   have cleared every ship that let go of it, so a holder below the
+    ///   leaver (whose high level ran while the slot was active) and one
+    ///   above the launch (whose high level hasn't run) pass, and one
+    ///   between them doesn't; a holder whose high level was skipped holds
+    ///   it still, and passes too. By the next tick's arrivals every slot's
+    ///   `_HandleShip` has let go of it, so it passes nothing.
     /// - **In the ship loop** ([`Traffic::set_ship_loop`]), every ship
     ///   whose target names the old ship: those whose `_HandleShip` hasn't
     ///   come hold it still, and those whose has have let go
@@ -354,9 +360,14 @@ impl Traffic {
                     docking.ship = new;
                 }
             }
+            // Freed in this tick's AI loop, whose let-go hasn't come.
+            let this_loop = (self.left_in_dispatch.iter()).any(|npc| npc.id == old_id);
             let holds = |npc: &Npc| match (&record, in_loop) {
                 (_, true) => npc.target == Some(old),
-                (Some(gone), false) => gone.freed != Freed::InDispatch && gone.held_by(npc),
+                (Some(gone), false) if gone.freed == Freed::InDispatch => {
+                    this_loop && npc.target == Some(old)
+                }
+                (Some(gone), false) => gone.held_by(npc),
                 (None, false) => false,
             };
             for npc in self.npcs.iter_mut().filter(|npc| holds(npc)) {
@@ -1281,6 +1292,62 @@ mod tests {
             fly(&mut traffic, runner);
             in_slot(&mut traffic, 3);
             assert_eq!(target_of(&traffic, holder), Some(aim));
+        }
+
+        #[test]
+        fn a_slot_freed_in_the_ai_loop_and_taken_again_there_passes_to_every_ship_still_holding_it()
+        {
+            // A launch at a higher slot (`_LaunchFighter` in its carrier's
+            // dispatch) rewrites the slot and leaves every +0x70
+            // (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b): a holder below
+            // the leaver kept the slot at its high level, one between the
+            // leaver and the launch let go at its own slot test
+            // (@0x8d4e4-0x8d50d), one above the launch has not yet run.
+            let mut traffic = Traffic::with_interval(1);
+            let runner = warping_out(&mut traffic, 3);
+            let aim = ShipRef::Npc(runner);
+            let below = aiming_at(&mut traffic, 2, aim);
+            let between = aiming_at(&mut traffic, 4, aim);
+            let above = aiming_at(&mut traffic, 6, aim);
+            let world = World::new(&[]);
+            traffic.open_think(&Keeps, world, &[], &mut NeverFires);
+            for slot in [2, 3, 4] {
+                let picks = |npc: &Npc| npc.berth == slot;
+                let no_bay = crate::traffic::NoBay::new();
+                traffic.think_run(&Keeps, world, picks, &no_bay, &mut NeverFires);
+            }
+            assert!(traffic.npcs().iter().all(|npc| npc.id != runner), "left");
+            let new = ShipRef::Npc(in_slot(&mut traffic, 3));
+            assert_eq!(target_of(&traffic, below), Some(new), "below the leaver");
+            assert_eq!(target_of(&traffic, between), None, "let go at its slot");
+            assert_eq!(target_of(&traffic, above), Some(new), "above the launch");
+            assert_eq!(trader_of(&traffic, above).goal, Goal::Attack(new));
+        }
+
+        #[test]
+        fn a_slot_freed_in_the_ai_loop_and_taken_at_the_next_arrivals_passes_nothing() {
+            // By the next frame's arrivals every slot's `_HandleShip` has let
+            // go of it (@0x33865-0x33888).
+            let mut traffic = Traffic::with_interval(1);
+            traffic.table = arriving();
+            let below = aiming_at(&mut traffic, 1, ShipRef::Player);
+            let runner = warping_out(&mut traffic, 3);
+            let aim = ShipRef::Npc(runner);
+            let holder = aiming_at(&mut traffic, 2, aim);
+            let trader = trader_of(&traffic, below).clone();
+            traffic.npcs_mut()[0] = Npc {
+                target: Some(aim),
+                goal: Goal::Attack(aim),
+                ..trader
+            };
+            traffic.tick_in(&Keeps, World::new(&[]), &[], &mut NeverFires);
+            assert!(traffic.npcs().iter().all(|npc| npc.id != runner), "left");
+            traffic.enter_more_ships(World::new(&[]), &mut Draws::of(&[0, 6, 6, 0, 0, 90]));
+            let arrival = (traffic.npcs().iter()).find(|npc| npc.berth == 3);
+            assert!(arrival.is_some(), "it takes the freed slot");
+            for id in [below, holder] {
+                assert_eq!(target_of(&traffic, id), Some(aim), "{id:?}");
+            }
         }
 
         #[test]

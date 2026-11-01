@@ -370,6 +370,10 @@ impl Traffic {
             // the lag of a settled script, crossing no boundary, as a ship
             // left behind is never drawn.
             self.left_behind.clear();
+            // Every slot's `_HandleShip` has let go of the ships that left
+            // in the AI loop (@0x33865-0x33888): a later spawn into one of
+            // their slots passes it to no holder (`Traffic::slot_taken`).
+            self.left_in_dispatch.clear();
             self.ticks += 1;
         }
     }
