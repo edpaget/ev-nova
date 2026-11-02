@@ -450,20 +450,21 @@ impl Interceptor {
     /// ship than the one it inspects, by the engine's reading of
     /// [`RuleKey::InspectionHit`](crate::RuleKey::InspectionHit): the
     /// original keeps goal 7's ship in +0x70 alone, which `_DamageShip`
-    /// rewrites (@0x3bcf6), so the inspection is of the hit's target, with
-    /// no target besides, and the think finds no provoker in it. A hit by
-    /// the ship it inspects leaves the inspection as it was, with no
+    /// rewrites (@0x3bcf6), so the inspection is of its slot's ship
+    /// ([`Npc::slot_target`]: the hit's target), with no target besides,
+    /// and the think finds no provoker in it. A hit by the ship it
+    /// inspects, or none, leaves the inspection as it was, with no
     /// provoker either. None by the other reading, or when it inspects
-    /// nothing or holds no target.
+    /// nothing.
     fn slot_inspection(self, npc: &Npc) -> Option<Npc> {
         if self.inspection_hit != RuleSource::Engine {
             return None;
         }
-        let (Goal::Inspect(_), Some(target)) = (npc.goal, npc.target) else {
+        let Goal::Inspect(_) = npc.goal else {
             return None;
         };
         Some(Npc {
-            goal: Goal::Inspect(target),
+            goal: Goal::Inspect(npc.slot_target()?),
             target: None,
             ..npc.clone()
         })
