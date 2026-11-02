@@ -3481,7 +3481,9 @@ impl Session {
     /// [`SimMessage::NoResponse`] and lands in that press when it can.
     /// With no stellar selected in nav mode 2, a press selects one there,
     /// in silence, starting its brackets' fly-in (@0x6a8ed-0x6a932), and
-    /// requests it in the same press. A press that lands docks the ship
+    /// requests it in the same press: the pick is
+    /// [`land_key_pick`](crate::landing::land_key_pick), which L held
+    /// also makes on every pass (the `land_key` module). A press that lands docks the ship
     /// at the stellar's centre, at rest, its heading and reserves
     /// unchanged, the selection kept, as the original's landing writes
     /// neither word; the take-off lets go of it, so that once it takes

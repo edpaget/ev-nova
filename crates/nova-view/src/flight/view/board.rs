@@ -104,7 +104,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x65031 and @0x6503f); with B up, the latch cleared. So B held
     /// with no target, or cloaked, boards on the first frame a target is
     /// taken or the cloak drops, and any other outcome waits for B's
-    /// release.
+    /// release. No `_SetAllKeyCmdFlags` site sets the latch, so B is held
+    /// across every close (the `map_wait` module's `OWN_LATCH_KEYS`) and
+    /// read here at the next frame: first pressed under a dialog, it
+    /// boards then.
     ///
     /// The Board key's gate ([`FlightCommand::gate`]) is asked here,
     /// before the latch moves, as J's frame asks its own

@@ -16,12 +16,14 @@
 //!   `_QuickKeyCheck` @0xa0f5). A key tapped during the wait does nothing
 //!   after the close, and one still down reads as down, whenever it went
 //!   down, before the wait and before the map opened too. So over flight
-//!   the view keeps [`UNLATCHED_KEYS`] held across the map, presses and
-//!   releases, and everything else is let go as the map opens. The latched
-//!   keys wait for their release, their OS repeats included, which the
-//!   poll never sees ([`FlightView::latched_down`]): `_HandlePlayer` sets
-//!   its 22 latches and the escort menu's 5 after M's map
-//!   (`_SetAllKeyCmdFlags` @0x61e6d, called @0x6a898). The same
+//!   the view keeps [`UNLATCHED_KEYS`] and [`OWN_LATCH_KEYS`] held across
+//!   the map, presses and releases, and everything else is let go as the
+//!   map opens. The latched keys wait for their release, their OS repeats
+//!   included, which the poll never sees ([`FlightView::latched_down`]),
+//!   reading down meanwhile for every read that skips their latch (the
+//!   `latched_reads` module): `_HandlePlayer` sets its 22 latches and the
+//!   escort menu's 5 after M's map (`_SetAllKeyCmdFlags` @0x61e6d, called
+//!   @0x6a898), but not B's and L's. The same
 //!   poll reads them after every other dialog over flight, which takes
 //!   flight's input from the router instead: the router keeps what is
 //!   physically down under it and hands it back as the last one closes

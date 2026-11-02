@@ -255,8 +255,12 @@
 //!   control answers with the request's line ([`request_line`]); within
 //!   249 pixels it says nothing. On the ticks after, the dock approach
 //!   greets the pilot ([`approach_greeting`]) as its own message, and a
-//!   second L lands. While L is held the approach waits
-//!   (`nova_sim::Session::set_land_key`), as the original's does. An uninhabited
+//!   second L lands. While L's latch is set, which only a request sets,
+//!   the approach waits (`nova_sim::Session::set_dock_try`), as the
+//!   original's `_dockTryFlag` holds it; L held with nothing targeted
+//!   picks the nearest on every pass, silently (`nova_sim`'s `land_key`
+//!   module), and L held with nothing to land reads again on every pass
+//!   (the `faded_keys` module). An uninhabited
 //!   stellar answers every press "No response." ([`NO_RESPONSE`]) and
 //!   lands in that press when it can; a refusal in the same press
 //!   replaces it on the message line. The router takes the landing
@@ -786,25 +790,29 @@ pub struct FlightOverlays {
 /// key, which lets go of the secondary on every pass it is held,
 /// Command, which the jettison, eject and self-destruct keys need, the
 /// eject key and the self-destruct key, which work only held with Command,
-/// the cloak key, which toggles once a hold, the land key, which holds the dock
-/// approach back while it is down, H and `\`, which show the floating map
-/// while they are down, \` and J, and B, which `_HandlePlayer` polls every
-/// frame, setting the cursor's fade while it is down (@0x6a98b-0x6a999).
+/// the cloak key, which toggles once a hold, the land key, which picks the
+/// nearest stellar on every pass it is down with none targeted, H and
+/// `\`, which show the floating map while they are down, \` and J, and B,
+/// which `_HandlePlayer` polls every frame, setting the cursor's fade
+/// while it is down (@0x6a98b-0x6a999).
 /// H, `\`, \` and J act again when held across a jump's end, a release
 /// of Option or a repair, and B once a target is taken or the cloak drops,
 /// as the original polls them with a latch each
 /// ([`FlightView::held_keys_frame`]). Held across a dialog or map that
 /// `_SetAllKeyCmdFlags` (@0x61e6d) follows, a latched key stays out of
 /// `held`, its OS repeats too, until its release
-/// ([`FlightView::latched_down`]); which keys have no latch is the
-/// `map_wait` module's `UNLATCHED_KEYS`. The original's
+/// ([`FlightView::latched_down`]), but still reads down for every read
+/// that skips its latch (the `latched_reads` module); which keys have no
+/// latch is the `map_wait` module's `UNLATCHED_KEYS`, and which have
+/// latches no site sets, B and L, its `OWN_LATCH_KEYS`. The original's
 /// `_quickKeyCheckResult` counts \`, J and B as held too (@0x69aa1,
 /// @0x6b0e6, @0x6a98b), which the floating map's zoom keys read. The
 /// stellar slot keys 1-4, F1-F4, F5 and the 5 are held for their block's
 /// latch and frame (see the `slot_block` module); they fade the cursor and
 /// hold the zoom back only while `_HandlePlayer` polls them
-/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P, I and K act
-/// on their press and are here because they stay down: `_HandlePlayer`
+/// ([`FlightView::slot_key_polled`]). Tab, R, Y, Return, M, P and I act
+/// on their press, K with Command on every step it is held, and are here
+/// because they stay down: `_HandlePlayer`
 /// sets the cursor's byte on every frame one is held, and the zoom reads
 /// them held. A key that opens a dialog from its press isn't tracked, as
 /// the dialog takes its release. Being here doesn't make a key fade the

@@ -52,15 +52,19 @@ impl<C, S: FlightSim + DevDesk> FlightView<C, S> {
 /// [`FlightView::map_input_taken`] says when a close is due.
 impl<C, S: FlightSim> FlightView<C, S> {
     /// The keys `_HandlePlayer` polls with a latch, once a frame, with
-    /// those held down, in its order: Option-\` and the Nav Off /
+    /// those read down, in its order: Option-\` and the Nav Off /
     /// Hyperspace Mode block ([`FlightView::nav_keys_frame`]), Hyper
     /// Select ([`FlightView::select_frame`]), the stellar slot keys
-    /// ([`FlightView::slot_keys_frame`]), the Board key
+    /// ([`FlightView::slot_keys_frame`]), Tab's and the button's shared
+    /// latch ([`FlightView::target_poll`]), the Board key
     /// ([`FlightView::board_frame`]), then the jump key
     /// ([`FlightView::jump_frame`]), each while the flight takes its
     /// command. A key held across a jump's end, a release of Option or a
     /// repair acts here, as a press would, on the first frame its latch
-    /// lets it.
+    /// lets it. A latched key held past a close reads down here with its
+    /// latch set ([`FlightView::reads_down`]), so it waits for its
+    /// release, and acts once a failed gate has cleared the latch with
+    /// it down. B is held across every close, read by its own latch.
     ///
     /// It runs before the tick's steps, as `_HandlePlayer` runs before the
     /// ships' `_HandleShip` (@0x43e19, @0x44483): a repair made in one

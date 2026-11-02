@@ -467,8 +467,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   once a refusal let go of the key.
     /// - A repeat of a key a `_SetAllKeyCmdFlags` site latched while it
     ///   was down ([`FlightView::latched_down`]) is dropped: its latch
-    ///   waits for the release. That release, or a fresh press, which the
-    ///   OS sends only after a release, ends the wait.
+    ///   waits for the release, the key reading down meanwhile past it
+    ///   ([`FlightView::reads_down`]). That release, or a fresh press,
+    ///   which the OS sends only after a release, ends the wait.
     pub(super) fn track_held(&mut self, input: &Input) {
         if let Input::Key {
             key,
@@ -509,10 +510,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// input in flight (a gate's exit, the course map opened over a
     /// screen) let go of `held` alone, as their releases still come here,
     /// and the course map opened in flight and a gate's exit keep the
-    /// keys read with no latch ([`FlightView::open_map_as`],
-    /// `FlightView::came_through`). The latched keys flight saw down are
-    /// forgotten too, as their releases go elsewhere: the next hand-back
-    /// says again which are down. It marks no `_SetAllKeyCmdFlags` site,
+    /// keys read with no latch, B and L among them
+    /// ([`FlightView::open_map_as`], `FlightView::came_through`). The
+    /// latched keys flight saw down are forgotten too, as their releases
+    /// go elsewhere: the next hand-back says again which are down. The
+    /// latches themselves are left as they are, as a dialog runs no pass. It marks no `_SetAllKeyCmdFlags` site,
     /// so a dialog it alone opens closes by the latches as they were
     /// (the `dialog_latch` module); a site's dialog opens through
     /// [`FlightView::let_go_into_dialog`].
@@ -525,13 +527,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// One frame of the keys `_HandlePlayer` polls with a latch before the
-    /// Board and jump keys, with those held down, in its order: Option-\`
-    /// and the Nav Off / Hyperspace Mode block
+    /// Board and jump keys, with those read down, a latched one held past
+    /// a close included ([`FlightView::reads_down`]), in its order:
+    /// Option-\` and the Nav Off / Hyperspace Mode block
     /// ([`FlightView::nav_keys_frame`]), Hyper Select
     /// ([`FlightView::select_frame`]), then the stellar slot keys
     /// ([`FlightView::slot_keys_frame`]), the first two while the flight
     /// takes their command: the head of
-    /// [`FlightView::held_keys_frame`]'s frame.
+    /// [`FlightView::held_keys_frame`]'s frame. So a latched key holds
+    /// the latch it shares: a latched H keeps a fresh \` from acting
+    /// (@0x69ae6), a latched slot key a fresh one from picking (@0x69e15).
     pub(super) fn nav_held_frame(&mut self) {
         let down = |key: Key| self.reads_down(key);
         let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
@@ -780,7 +785,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// takes its command; then hidden once more than 500 ticks have
     /// passed since it was last shown (@0x30262-0x30285). It runs once a
     /// frame, not once a pass: double time's second pass would only show
-    /// it again at the same tick.
+    /// it again at the same tick. H and `\` held past a close's latch
+    /// still show it, as the latched branches do (@0x69b8e-0x69ba3,
+    /// @0x69cdd-0x69ce7).
     pub(super) fn floating_frame(&mut self) {
         let jumping = self.jump_under_way();
         let mode_3 = matches!(self.frame.nav_mode, NavMode::Hyperspace(_));
@@ -832,8 +839,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// A zoom key's press: while the floating map is up and no key the
-    /// flight holds is down (`_quickKeyCheckResult` and the modifiers,
-    /// @0x70f4e-0x70fb5), `-` steps it out and `=` or keypad `+` in. A `-`,
+    /// flight reads is down (`_quickKeyCheckResult` and the modifiers,
+    /// @0x70f4e-0x70fb5), a latched one held past a close included, as
+    /// `_QuickKeyCheck` sets the result for any key it reads down
+    /// (@0xa145-0xa14c), `-` steps it out and `=` or keypad `+` in. A `-`,
     /// X or K held alone doesn't count: `_HandlePlayer` checks each only
     /// with Command down (@0x6fdc8, @0x6f2a5), so alone it never sets
     /// `_quickKeyCheckResult`, and Command itself holds the zoom back. One

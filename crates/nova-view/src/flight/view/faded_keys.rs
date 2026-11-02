@@ -55,7 +55,15 @@
 //! **The latches.** With its key down, a failed gate (a jump, or the
 //! flight not taking the command) clears the latch; a passing gate with
 //! the latch clear acts once and sets it; the key up clears it. A press
-//! sets it. Dialog keys stay press-only otherwise, by the user's decision:
+//! sets it. L's latch, `_dockTryFlag`, is set only by a dock request
+//! (@0x6a953): a press that found nothing to land on, or that the flight
+//! refused before its pick, leaves it clear, so L held reads again on
+//! every pass ([`FlightView::press_land`]). It is no `_SetAllKeyCmdFlags`
+//! latch, so L is held across every close (the `map_wait` module's
+//! `OWN_LATCH_KEYS`), and the step carries it as the dock approach's
+//! hold ([`StepInput::dock_try`](nova_sim::flight_frame::StepInput::dock_try)).
+//! I's is, and a site sets it ([`FlightView::set_every_latch`]). A pass in
+//! the pod or dead reaches neither block, so neither latch clears there. Dialog keys stay press-only otherwise, by the user's decision:
 //! M, P and Y don't act on being held. A key let go of as a dialog or a
 //! refusal takes the latched keys is held no more until it goes down
 //! afresh: ours has no live read to see it still down, so an OS repeat
