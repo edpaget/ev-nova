@@ -1068,3 +1068,73 @@ fn a_land_press_that_requests_sets_the_latch() {
     view.tick(TICK);
     assert_eq!(sent(&view, from), [FlightCommand::Land], "latched");
 }
+
+// A pass in the pod, or dead, returns before L's and I's blocks (@0x68ddd,
+// @0x68853), so neither latch clears there: L or I held from before an
+// eject still waits on its latch once the pass reaches the block again.
+
+/// `view` with L and I held, each latched by its press, then `fate` for
+/// three ticks with every command refused, as a fate that takes no input
+/// refuses them, then flying again with both still held: the commands
+/// sent from then on.
+fn latched_through(fate: nova_sim::PlayerFate) -> Vec<FlightCommand> {
+    let mut view = faked(super::frames::sol());
+    requests(&mut view);
+    view.input(&key(LAND_KEY, true));
+    view.input(&key(MISSION_INFO_KEY, true));
+    view.change_sim(|sim| {
+        sim.frame_mut().fate = fate;
+        sim.refuse(PlayerCommand::Land);
+        sim.refuse(PlayerCommand::MissionInfo);
+    });
+    for _ in 0..3 {
+        view.tick(TICK);
+    }
+    view.change_sim(|sim| {
+        sim.frame_mut().fate = nova_sim::PlayerFate::Flying;
+        sim.take(PlayerCommand::Land);
+        sim.take(PlayerCommand::MissionInfo);
+    });
+    let from = sent_count(&view);
+    view.tick(TICK);
+    view.tick(TICK);
+    sent(&view, from)
+}
+
+#[test]
+fn l_and_i_held_through_the_pod_keep_their_latches() {
+    let sent = latched_through(nova_sim::PlayerFate::Ejected { ticks_left: 30 });
+    assert_eq!(sent, [], "both still latched");
+}
+
+#[test]
+fn l_and_i_held_while_dead_keep_their_latches() {
+    let sent = latched_through(nova_sim::PlayerFate::Exploded);
+    assert_eq!(sent, [], "both still latched");
+}
+
+#[test]
+fn l_and_i_let_go_after_the_pod_and_pressed_again_act() {
+    let mut view = faked(super::frames::sol());
+    requests(&mut view);
+    view.input(&key(LAND_KEY, true));
+    view.change_sim(|sim| {
+        sim.frame_mut().fate = nova_sim::PlayerFate::Ejected { ticks_left: 30 };
+        sim.refuse(PlayerCommand::Land);
+    });
+    view.tick(TICK);
+    view.change_sim(|sim| {
+        sim.frame_mut().fate = nova_sim::PlayerFate::Flying;
+        sim.take(PlayerCommand::Land);
+    });
+    view.input(&key(LAND_KEY, false));
+    view.tick(TICK);
+    let from = sent_count(&view);
+    requests(&mut view);
+    view.input(&key(LAND_KEY, true));
+    view.input(&key(MISSION_INFO_KEY, true));
+    assert_eq!(
+        sent(&view, from),
+        [FlightCommand::Land, FlightCommand::PressMissionInfo]
+    );
+}
