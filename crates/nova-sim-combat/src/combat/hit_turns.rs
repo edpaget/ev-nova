@@ -44,7 +44,9 @@
 //!
 //! 1. settles and answers the hits the stretch landed, in the order they
 //!    landed ([`Combat::take_landed`], [`HitTurns::answer`]), so the
-//!    next lend's fight holds none of them;
+//!    next lend's fight holds none of them, and sets the velocities the
+//!    stretch's pushes left ([`Combat::take_shoves`]), as a fighter's
+//!    state is a copy;
 //! 2. lends the same ships, in the same order, afresh from wherever it
 //!    keeps them ([`HitTurns::lend`]): what the stretch wrote through the
 //!    borrows kept, and what the answers wrote read.
@@ -101,7 +103,9 @@ pub trait HitTurns {
     fn lend(&mut self, stretch: &mut StretchFn<'_>) -> Stretch;
 
     /// Settles and answers the hits the last stretch landed
-    /// ([`Combat::take_landed`]), in the order they landed.
+    /// ([`Combat::take_landed`]), in the order they landed, and sets the
+    /// velocity of each ship the stretch pushed ([`Combat::take_shoves`]),
+    /// which the next lend reads.
     fn answer(&mut self);
 }
 

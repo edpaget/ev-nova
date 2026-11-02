@@ -49,7 +49,8 @@ fn turning(strike: &Strike, ships: &mut [Ship]) {
 fn silent(_: &Strike, _: &mut [Ship]) {}
 
 /// A fake keeper of the test ships: it lends each stretch fighters built
-/// afresh from its ships, and answers each strike with its rewrite,
+/// afresh from its ships, and at each answer sets the velocities the
+/// stretch's pushes left and answers each strike with its rewrite,
 /// recording what it saw.
 struct Keeper {
     combat: Combat,
@@ -96,6 +97,11 @@ impl HitTurns for Keeper {
 
     fn answer(&mut self) {
         self.answers += 1;
+        for shove in self.combat.take_shoves() {
+            if let Some(ship) = self.ships.iter_mut().find(|ship| ship.id == shove.ship) {
+                ship.state.velocity = shove.velocity;
+            }
+        }
         let (strikes, _, _) = self.combat.take_landed();
         for strike in strikes {
             let armour = self
@@ -122,6 +128,63 @@ fn run_in_turn_lends_until_a_stretch_runs_to_the_end_answering_each_stop() {
     let mut keeper = Keeper::of(vec![Ship::at(1, 0.0, 0.0)], silent);
     run_in_turn(&mut keeper, |_, _, _, _| Stretch::Done);
     assert_eq!((keeper.lends, keeper.answers), (1, 0), "no stop, no answer");
+}
+
+/// How a broken keeper breaks the contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flaw {
+    /// Its lends give every stretch's end as the phase's.
+    Done,
+    /// Its answers leave the strikes landed.
+    Hoards,
+    /// Its lends lend copies of the ships, losing what a stretch wrote.
+    Forgets,
+    /// Its lends lend the ships the other way about.
+    Reverses,
+}
+
+/// A [`Keeper`] broken by its flaw.
+struct Broken(Keeper, Flaw);
+
+impl HitTurns for Broken {
+    fn lend(&mut self, stretch: &mut StretchFn<'_>) -> Stretch {
+        let Self(keeper, flaw) = self;
+        match flaw {
+            Flaw::Done => {
+                let _ = keeper.lend(stretch);
+                Stretch::Done
+            }
+            Flaw::Hoards => keeper.lend(stretch),
+            Flaw::Forgets => {
+                let reserves: Vec<Reserves> =
+                    keeper.ships.iter().map(|ship| ship.reserves).collect();
+                let lent = keeper.lend(stretch);
+                for (ship, reserves) in keeper.ships.iter_mut().zip(reserves) {
+                    ship.reserves = reserves;
+                }
+                lent
+            }
+            Flaw::Reverses => {
+                keeper.ships.reverse();
+                keeper.lend(stretch)
+            }
+        }
+    }
+
+    fn answer(&mut self) {
+        if self.1 != Flaw::Hoards {
+            self.0.answer();
+        }
+    }
+}
+
+#[test]
+fn a_keeper_that_breaks_the_contract_fails_its_check() {
+    for flaw in [Flaw::Done, Flaw::Hoards, Flaw::Forgets, Flaw::Reverses] {
+        let ships = vec![Ship::at(1, 0.0, 0.0), Ship::at(2, 100.0, 0.0)];
+        let mut broken = Broken(Keeper::of(ships, silent), flaw);
+        assert!(hit_turns::check_contract(&mut broken).is_err(), "{flaw:?}");
+    }
 }
 
 #[test]
