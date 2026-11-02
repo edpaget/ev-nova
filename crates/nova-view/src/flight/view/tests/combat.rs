@@ -1,7 +1,9 @@
 use super::faked_hud::{barred, barred_by, flown, hud_tick};
 use super::faked_world::{shows, world, world_list};
 use super::*;
-use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, ShipPlace, StepReport, StepRun};
+use nova_sim::flight_frame::{
+    FrameShip, FrameTarget, PassReport, RaisedLine, ShipPlace, StepReport, StepRun,
+};
 
 // Traffic.
 
@@ -322,11 +324,13 @@ fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_the_next_frame() {
 }
 
 #[test]
-fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
+fn a_quote_said_on_a_second_pass_is_on_the_message_line_the_frame_after() {
     // `_DamageShip`'s reaction on the second pass turns it on the
     // player, and `_AIMakeShipAttackPlayer` says its quote there
-    // (`_ShowPersonHailQuote` @0x89ce1), before the next frame: the
-    // session's (nova-sim's `the_quotes_said_before_a_pass_come_with_that_pass`).
+    // (`_ShowPersonHailQuote` @0x89ce1). `_DisplayComm` draws it off
+    // screen, so it shows on the next frame: the session holds it for
+    // that frame (nova-sim's
+    // `double_times_second_pass_lines_are_held_off_the_steps_streams`).
     let mut view = world(
         volleying(),
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
@@ -336,17 +340,20 @@ fn a_quote_said_on_a_second_pass_is_on_the_message_line_that_frame() {
         text: "Ace: Prepare to die, !".to_owned(),
     };
     let frame = view.frame.clone();
-    let pass = |quotes| PassReport {
+    let pass = || PassReport {
         ships: frame.ships.clone(),
         double_time: true,
-        quotes,
         ..PassReport::default()
     };
-    view.sim.queue_report(super::stepping::doubled(
-        pass(Vec::new()),
-        pass(vec![quote]),
-        frame.clone(),
-    ));
+    let mut report = super::stepping::doubled(pass(), pass(), frame.clone());
+    report.steps[0].second_pass_lines = vec![RaisedLine::Quote(quote)];
+    view.sim.queue_report(report);
+    view.step_frame(1, view.anchor());
+    assert_eq!(view.message(), None, "not on its own frame");
+    view.sim.queue_report(StepReport {
+        steps: vec![],
+        stopped: true,
+    });
     view.step_frame(1, view.anchor());
     assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
 }

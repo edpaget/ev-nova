@@ -46,12 +46,22 @@
 //!    asked after it
 //!    ([`Session::rescue_if_due`]), the strikes answered, the quote roll
 //!    on the clock unmoved ([`Session::tick_quotes_again`]), and its own
-//!    report. Its comm notes are taken with the step's, so the frame that
-//!    raised them relays them.
+//!    report. The lines the second pass raises, the rescue's among them,
+//!    are held apart while it runs ([`StepRun::second_pass_lines`]), off
+//!    the step's comm, its quotes, the messages and its last line. The
+//!    original's `_DisplayComm` draws its line into the background and
+//!    work frames at once (@0x90294-0x90390), and the line reaches the
+//!    screen only at the next frame's draw (`_FloaterDrawCallback`
+//!    @0x38b52-0x38b90), so the view shows them on the frame after. Only
+//!    the frame's last step holds them: as the next step begins, an
+//!    earlier step's are folded back into its own streams, its messages
+//!    onto those not yet drained, so the view replays that step in full.
+//!    A step the warp's end or the hold's expiry stops after keeps them.
 //! 5. the line the step raised last, whatever its kind
 //!    ([`StepRun::last_line`]): `_DisplayComm` replaces its one slot with
 //!    each line (@0x90251-0x90265), so the frame ends on the last raised,
-//!    and the view shows it last. The frame clears the record before its
+//!    and the view shows it last. On a step holding second-pass lines it
+//!    is the slot as the first pass left it. The frame clears the record before its
 //!    first step: a line raised before it (a press the view says at once,
 //!    a note or quote the inbox held) is older than any the steps raise.
 //!    With it, whether the step's passes cleared an escort class's kept
@@ -71,15 +81,16 @@
 //! fight events wait for the next frame's take; its comm and its last
 //! line are taken all the same, on either pass, so a note shows before
 //! the `dësc` opens. A rescue on the second pass reports no frame between
-//! the passes, as the view shows the new layout at once.
+//! the passes, as the view shows the new layout at once, and folds the
+//! lines that pass held back into its streams at once.
 
 use crate::ai::Behaviour;
 use crate::catalog::{CommCatalog, PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::{Rules, ShipRef};
-#[cfg(doc)]
-use crate::flight_frame::RaisedLine;
-use crate::flight_frame::{FlightFrame, PassReport, ShipPlace, StepInput, StepReport, StepRun};
+use crate::flight_frame::{
+    FlightFrame, PassReport, RaisedLine, ShipPlace, StepInput, StepReport, StepRun,
+};
 
 use super::Session;
 
@@ -120,6 +131,9 @@ impl Session {
             if self.warp_end_due() || self.hold_expired() {
                 into.stopped = true;
                 return;
+            }
+            if let Some(earlier) = into.steps.last_mut() {
+                self.fold_back_held_lines(earlier);
             }
             let run = self.run_step(input, collab);
             let rescued = run.rescued.is_some();
@@ -178,6 +192,7 @@ impl Session {
             return run;
         }
         run.between_passes = Some(self.frame_between_passes());
+        self.out.second_pass = Some(Vec::new());
         self.tick_again(
             input.controls,
             collab.behaviour,
@@ -185,11 +200,11 @@ impl Session {
             &mut *collab.chance,
         );
         #[cfg(test)]
-        for note in std::mem::take(&mut self.out.second_pass_comm) {
-            self.space
-                .raise_line(&mut self.out, crate::flight_frame::RaisedLine::Comm(note));
-        }
+        self.raise_test_second_pass_lines();
         if self.rescue_if_due(catalog, &mut *collab.chance) {
+            for line in self.close_second_pass() {
+                self.out.raise(line);
+            }
             run.between_passes = None;
             run.comm.extend(self.take_comm());
             run.rescued = Some(ShipPlace::from(*self.player()));
@@ -201,8 +216,51 @@ impl Session {
         self.tick_quotes_again(catalog, &mut *collab.chance);
         run.passes.push(self.pass_report());
         run.comm.extend(self.take_comm());
+        run.second_pass_lines = self.close_second_pass();
         self.take_step_ends(&mut run);
         run
+    }
+
+    /// Ends double time's second pass's hold on its lines: the lines it
+    /// raised, in order (see the module docs).
+    fn close_second_pass(&mut self) -> Vec<RaisedLine> {
+        self.out.second_pass.take().unwrap_or_default()
+    }
+
+    /// Folds the lines `run`'s second pass held back into its streams,
+    /// as a step after it begins: its messages onto the messages not yet
+    /// drained, its comm notes onto the step's comm, its quotes onto that
+    /// pass's, and the last of them as the line the step raised last (see
+    /// the module docs).
+    fn fold_back_held_lines(&mut self, run: &mut StepRun) {
+        let held = std::mem::take(&mut run.second_pass_lines);
+        if let Some(last) = held.last() {
+            run.last_line = Some(last.clone());
+        }
+        for line in held {
+            match line {
+                RaisedLine::Message(message) => self.out.messages.push(message),
+                RaisedLine::Comm(note) => run.comm.push(note),
+                RaisedLine::Quote(quote) => {
+                    if let Some(pass) = run.passes.last_mut() {
+                        pass.quotes.push(quote);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Raises the next batch of the lines a test set for a second pass
+    /// to raise (`Outbox::second_pass_lines`), each as the session raises
+    /// a line.
+    #[cfg(test)]
+    fn raise_test_second_pass_lines(&mut self) {
+        if self.out.second_pass_lines.is_empty() {
+            return;
+        }
+        for line in self.out.second_pass_lines.remove(0) {
+            self.space.raise_line(&mut self.out, line);
+        }
     }
 
     /// The flight as it stands, between double time's two passes.
@@ -370,11 +428,7 @@ mod tests {
             passes.push((session.take_quotes(), session.take_combat_events()));
             if session.double_time() {
                 session.tick_again(input.controls, &behaviour, Rules::default(), chance);
-                for note in std::mem::take(&mut session.out.second_pass_comm) {
-                    session
-                        .space
-                        .raise_line(&mut session.out, RaisedLine::Comm(note));
-                }
+                session.raise_test_second_pass_lines();
                 if session.rescue_if_due(catalog, chance) {
                     comm.extend(session.take_comm());
                     took.push(step_took(session, comm, passes));
@@ -798,7 +852,9 @@ mod tests {
         steps(&mut session, &catalog, &input, 0);
         session.ship.fate.rescue_due = false;
         let mut copy = session.clone();
-        copy.out.second_pass_comm.push(repaired());
+        copy.out
+            .second_pass_lines
+            .push(vec![RaisedLine::Comm(repaired())]);
         let report = steps(&mut copy, &catalog, &input, 1);
         assert_eq!(
             copy.take_rescue_desc().map(|desc| desc.id),
@@ -823,20 +879,135 @@ mod tests {
         }
     }
 
-    #[test]
-    fn comm_raised_on_the_second_pass_comes_with_its_step() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        let input = StepInput {
+    /// The input of a frame in double time.
+    fn doubled() -> StepInput {
+        StepInput {
             double_time_key: true,
             ..StepInput::default()
+        }
+    }
+
+    /// A message, a comm note and a quote, as a second pass raises them.
+    fn three_lines() -> Vec<RaisedLine> {
+        vec![
+            RaisedLine::Comm(repaired()),
+            RaisedLine::Message(crate::SimMessage::NoActiveMissions),
+            RaisedLine::Quote(halt()),
+        ]
+    }
+
+    /// A person's "Halt!".
+    fn halt() -> PersonQuote {
+        PersonQuote {
+            npc: crate::traffic::npc::NpcId(0),
+            text: "Halt!".to_owned(),
+        }
+    }
+
+    /// The messages `session` has raised since they were last drained.
+    fn messages_drained(session: &mut Session) -> Vec<crate::SimMessage> {
+        let mut events = Vec::new();
+        session.drain_events(&mut events);
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::flight_frame::FlightEvent::Message(message) => Some(message),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn double_times_second_pass_lines_are_held_off_the_steps_streams() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        steps(&mut session, &catalog, &doubled(), 1);
+        messages_drained(&mut session);
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 1);
+        let run = &report.steps[0];
+        assert_eq!(run.passes.len(), 2, "both passes");
+        assert_eq!(run.second_pass_lines, three_lines(), "in the order raised");
+        assert_eq!(run.comm, [], "not on the step's comm");
+        assert_eq!(run.passes[1].quotes, [], "nor on its pass's quotes");
+        assert_eq!(messages_drained(&mut session), [], "nor drained");
+        assert_eq!(run.last_line, None, "the slot as the first pass left it");
+        assert!(
+            !session.space.comm_line.free_for_calls(),
+            "the count set at once"
+        );
+    }
+
+    #[test]
+    fn only_the_frames_last_step_holds_its_second_passs_lines() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        steps(&mut session, &catalog, &doubled(), 1);
+        messages_drained(&mut session);
+        let own = vec![RaisedLine::Comm(CommNote {
+            ship_name: "Lightning".to_owned(),
+            ..repaired()
+        })];
+        session.out.second_pass_lines = vec![three_lines(), own.clone()];
+        let report = steps(&mut session, &catalog, &doubled(), 2);
+        let [earlier, last] = &report.steps[..] else {
+            panic!("two steps: {report:?}");
         };
-        steps(&mut session, &catalog, &input, 1);
-        session.out.second_pass_comm.push(repaired());
-        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(earlier.second_pass_lines, [], "folded back");
+        assert_eq!(earlier.comm, [repaired()]);
+        assert_eq!(earlier.passes[1].quotes, [halt()]);
+        assert_eq!(earlier.last_line, Some(three_lines()[2].clone()));
+        assert_eq!(
+            messages_drained(&mut session),
+            [crate::SimMessage::NoActiveMissions]
+        );
+        assert_eq!(last.second_pass_lines, own, "its own held");
+        assert_eq!(last.comm, []);
+        assert_eq!(last.last_line, None);
+    }
+
+    #[test]
+    fn a_step_the_warps_end_stops_after_keeps_its_lines_held() {
+        use crate::session::warp_stage::tests::{frames, jumping_in_double_time, with_a_warp_out};
+        let catalog = with_a_warp_out();
+        let mut session = jumping_in_double_time(&catalog);
+        frames(&mut session, 96);
+        session.out.second_pass_lines.push(three_lines());
+        let report = steps(&mut session, &catalog, &doubled(), 3);
+        assert_eq!(report.steps.len(), 1, "stopped before the next");
+        assert!(report.stopped);
+        assert_eq!(report.steps[0].second_pass_lines, three_lines());
+    }
+
+    #[test]
+    fn a_single_time_step_holds_no_lines() {
+        let (catalog, mut session) = fight();
+        let report = steps(&mut session, &catalog, &firing(false), 30);
+        assert!(
+            report
+                .steps
+                .iter()
+                .all(|run| run.second_pass_lines.is_empty())
+        );
+    }
+
+    #[test]
+    fn comm_raised_on_the_second_pass_is_held_with_its_step() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        steps(&mut session, &catalog, &doubled(), 1);
+        session
+            .out
+            .second_pass_lines
+            .push(vec![RaisedLine::Comm(repaired())]);
+        let report = steps(&mut session, &catalog, &doubled(), 1);
         assert_eq!(report.steps[0].passes.len(), 2, "both passes");
-        assert_eq!(report.steps[0].comm, [repaired()], "taken with its step");
-        let report = steps(&mut session, &catalog, &input, 1);
+        assert_eq!(report.steps[0].comm, [], "held");
+        assert_eq!(
+            report.steps[0].second_pass_lines,
+            [RaisedLine::Comm(repaired())]
+        );
+        let report = steps(&mut session, &catalog, &doubled(), 1);
         assert_eq!(report.steps[0].comm, [], "none left for the next");
     }
 
@@ -850,18 +1021,17 @@ mod tests {
         let report = steps(&mut session, &catalog, &StepInput::default(), 2);
         assert_eq!(report.steps[0].last_line, None, "said before the frame");
         assert_eq!(report.steps[1].last_line, None);
-        let input = StepInput {
-            double_time_key: true,
-            ..StepInput::default()
-        };
-        steps(&mut session, &catalog, &input, 1);
-        session.out.second_pass_comm.push(repaired());
-        let report = steps(&mut session, &catalog, &input, 2);
+        steps(&mut session, &catalog, &doubled(), 1);
+        session
+            .out
+            .second_pass_lines
+            .push(vec![RaisedLine::Comm(repaired())]);
+        let report = steps(&mut session, &catalog, &doubled(), 2);
         assert_eq!(report.steps[0].comm, [repaired()]);
         assert_eq!(
             report.steps[0].last_line,
             Some(RaisedLine::Comm(repaired())),
-            "raised on the second pass"
+            "raised on the second pass, folded back as the next step began"
         );
         assert_eq!(report.steps[1].last_line, None, "taken with its step");
     }

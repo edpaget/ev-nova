@@ -1648,8 +1648,21 @@ pub struct StepRun {
     pub rescue_texts: Option<RescueTexts>,
     /// The line the step raised last, whatever its kind: what
     /// `_DisplayComm`'s slot holds at the step's end (@0x90251); `None`
-    /// when it raised none.
+    /// when it raised none. On a step that holds second-pass lines
+    /// ([`StepRun::second_pass_lines`]), the slot as the first pass left
+    /// it.
     pub last_line: Option<RaisedLine>,
+    /// The lines double time's second pass raised, in the order raised,
+    /// every kind in one list. They are kept off the step's comm, its
+    /// second pass's quotes, the drained messages and its last line,
+    /// because the original shows them on the next frame: `_DisplayComm`
+    /// fills the slot at once (@0x9024b-0x90265), but into the background
+    /// and work frames, which reach the screen only at the next frame's
+    /// draw (`_FloaterDrawCallback` @0x38b52-0x38b90, `_QDFlushPortBuffer`
+    /// @0x45e82). Only the frame's last step holds them: an earlier step's
+    /// are folded back into its own streams as the next step begins.
+    /// Empty in single time.
+    pub second_pass_lines: Vec<RaisedLine>,
     /// Whether `_HandlePlayer`'s class-order bookkeeping cleared an escort
     /// class's kept order on this step's passes (@0x6e37d, @0x6e43f), each
     /// clear showing the escort menu in full again, unstamped, while it

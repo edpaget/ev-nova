@@ -26,6 +26,10 @@
 //! after them; then the line the steps raised last, whatever its kind
 //! ([`StepRun::last_line`], [`FlightView::relay_last_line`]), so the
 //! line shows it, as `_DisplayComm` replaces its slot with each line.
+//! The lines a double-time last step's second pass raised are not among
+//! them: the hold keeps them for the frame after
+//! ([`StepRun::second_pass_lines`], the `between_passes` module), and the
+//! release relays them before the next report's.
 //!
 //! **The presentation rules** the effects, stars, world, HUD and wording
 //! read ([`Presentation`]) are the view's own, held from the rulebook the
@@ -203,8 +207,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// pass reported, relays the comm and quotes they raised and fills the
     /// kept frame afresh. A step or a stop first lets go what the last
     /// double-time frame held, and a double-time last step holds its
-    /// frame and its second pass, whose quotes it says now (see the
-    /// `between_passes` module). Whether the escape pod's rescue ended the
+    /// frame and its second pass, heard now, its lines worded for the
+    /// frame after (see the `between_passes` module). Whether the escape pod's rescue ended the
     /// stepping.
     pub(super) fn step_frame(&mut self, steps: u32, anchor: Anchor) -> bool {
         let input = self.step_input(anchor);
@@ -245,11 +249,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if let Some(held) = &mut held {
             self.hear_held_pass(held);
         }
-        quotes.extend(held.iter().flat_map(BetweenPasses::quotes).cloned());
         self.between_passes = held.or_else(|| self.between_passes.take());
+        let lines = report
+            .steps
+            .last_mut()
+            .map(|run| std::mem::take(&mut run.second_pass_lines))
+            .unwrap_or_default();
         self.step_report = report;
         self.relay_comm_and_quotes(&notes, quotes);
         self.refresh_frame();
+        self.hold_lines(lines);
         rescued
     }
 

@@ -124,8 +124,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`FlightView::clear_message`], [`FlightView::cut_message`],
     /// [`FlightView::acknowledge_message`] or
     /// [`FlightView::blank_message`], so the flight's line stays in step
-    /// with the slot.
+    /// with the slot. Each of them but `relay` first relays the lines a
+    /// double-time frame's second pass held
+    /// ([`FlightView::relay_held_lines`]), as the original drew them
+    /// before any write that comes after the frame (see the
+    /// `between_passes` module).
     pub(super) fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
+        self.relay_held_lines();
         self.relay(text, ticks);
         self.send(FlightCommand::CommShown(ticks));
     }
@@ -135,6 +140,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// @0x6dedb-0x6df29): it shows an empty line for 1 tick, the
     /// flight's line too.
     pub(super) fn clear_message(&mut self, text: &str) {
+        self.relay_held_lines();
         if self
             .message
             .as_ref()
@@ -151,6 +157,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// 0 as it turns the readout on, which empties the line at once, and
     /// 1 as it turns it off, which keeps the text for that tick.
     pub(super) fn cut_message(&mut self, ticks: u16) {
+        self.relay_held_lines();
         let now = crate::time::ticks(self.elapsed);
         match &mut self.message {
             // A line already run out stays gone.
@@ -168,6 +175,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// `nova_sim::Session::comm_acknowledged`, `_HandlePlayer`
     /// @0x6dd22-0x6dd65).
     pub(super) fn acknowledge_message(&mut self) {
+        self.relay_held_lines();
         self.message = None;
         self.send(FlightCommand::CommAcknowledged);
     }
@@ -178,6 +186,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// that 0; and an arrival, whose own line the flight raised and the
     /// view shows next ([`FlightView::say_for`]).
     pub(super) fn blank_message(&mut self) {
+        self.relay_held_lines();
         self.message = None;
     }
 

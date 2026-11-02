@@ -49,10 +49,15 @@ pub(super) struct Outbox {
     /// What the NPCs assisting the player have done since this was last
     /// taken.
     pub(super) comm: Vec<CommNote>,
-    /// What a test raises as double time's second pass would, raised
-    /// onto [`Outbox::comm`] as that pass ends (see the `step` module).
+    /// What a test raises as double time's second passes would, a batch a
+    /// pass, raised as each pass ends (see the `step` module).
     #[cfg(test)]
-    pub(super) second_pass_comm: Vec<CommNote>,
+    pub(super) second_pass_lines: Vec<Vec<RaisedLine>>,
+    /// The lines double time's second pass has raised so far, in order,
+    /// while that pass runs: held off their kinds' lists and the line
+    /// raised last, for the frame after (see the `step` module); `None`
+    /// outside it. Never saved.
+    pub(super) second_pass: Option<Vec<RaisedLine>>,
     /// What the player's fighters met as it left systems since this was
     /// last taken.
     pub(super) fighter_notes: Vec<FighterNote>,
@@ -110,7 +115,13 @@ impl Outbox {
     /// Raises `line`: puts it on its kind's list (the messages, the comm
     /// notes or the quotes) and records it as the line raised last, as
     /// `_DisplayComm` replaces its slot with each line (@0x90251-0x90265).
+    /// While double time's second pass runs, it is held there instead
+    /// ([`Outbox::second_pass`]).
     pub(super) fn raise(&mut self, line: RaisedLine) {
+        if let Some(held) = &mut self.second_pass {
+            held.push(line);
+            return;
+        }
         match &line {
             RaisedLine::Message(message) => self.messages.push(message.clone()),
             RaisedLine::Comm(note) => self.comm.push(note.clone()),

@@ -20,20 +20,33 @@
 //! so a tick with no step, the open map and a background pause go on
 //! showing it. A command leaves it: what it changed shows on the next step,
 //! as the original's key reads act on the next pass. The three places that
-//! seat the ship afresh drop it unreplayed (`FlightView::lay_out`,
-//! [`FlightView::place_ship`] and a Use As My Ship takeover,
-//! `FlightView::assigned`). A hold is not drawn docked or once the hold
+//! seat the ship afresh drop it unreplayed ([`FlightView::drop_between_passes`]
+//! from `FlightView::lay_out`, [`FlightView::place_ship`] and a Use As My
+//! Ship takeover, `FlightView::assigned`). A hold is not drawn docked or once the hold
 //! after the player's explosion has run out, as neither reaches a step to
 //! let it go ([`shows_hold`]).
 //!
 //! **The view's own effects wait with it.** The last step's second pass is
 //! not replayed that frame: its wrap and its effects, flashes, glows, shot
 //! looks and stars run as the hold goes, before the next report's first
-//! pass. Its sounds are the exception (see below). So they never disagree with the frame shown, across a wrap too.
-//! Earlier steps of a many-step frame replay in full: nothing draws them.
-//! A second pass's quotes, comm and last line stay on their own frame; a
-//! line the original draws a frame later is left out, as the phase body
-//! says (rdm:phase/play-feel-6/phase-9-double-time-draws-between-its-passes).
+//! pass. Its sounds are the exception (see below). So they never disagree
+//! with the frame shown, across a wrap too. Earlier steps of a many-step
+//! frame replay in full: nothing draws them.
+//!
+//! **Its lines wait with it.** `_DisplayComm` fills the slot at once but
+//! draws its line into the background and work frames (@0x90294-0x90390),
+//! which reach the screen at the next frame's draw (`_FloaterDrawCallback`
+//! @0x38b52-0x38b90). So a line the second pass raised shows on the frame
+//! after, unless that frame's first pass raises one of its own. The
+//! session holds them apart (`StepRun::second_pass_lines`), the frame's own
+//! last line being the first pass's. The hold words them as it is taken
+//! ([`FlightView::hold_lines`]), against the frame its own messages are
+//! worded against, and relays them once ([`FlightView::relay_held_lines`]):
+//! at the release, before the next report's lines; at a drop; or before
+//! any other write to the slot, a line said between the frames among
+//! them. The original reads a press on the next first pass, after the
+//! held line was drawn, so the press's line stands over it, and a cut or
+//! a clear acts on the line the held one left.
 //!
 //! **The smoothing.** A double-time frame's target is the first pass's
 //! state, reached at alpha 1, but its alpha spans two passes, as the
@@ -65,14 +78,13 @@
 //! shown"). A hold dropped unreplayed drops its breakups, and its sounds
 //! have played, as the original's have.
 
-use nova_sim::PersonQuote;
-use nova_sim::flight_frame::{FlightFrame, PassReport, StepRun};
+use nova_sim::flight_frame::{FlightFrame, PassReport, RaisedLine, StepRun};
 
 use crate::flight::effects::Breakups;
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 
-use super::{FlightView, dying};
+use super::{FlightView, Said, comm_message, dying};
 
 /// What a double-time frame holds until the next step (see the module
 /// docs).
@@ -85,6 +97,10 @@ pub(super) struct BetweenPasses {
     /// The second pass's breakups, once its sounds are heard
     /// ([`FlightView::hear_held_pass`]), to set off as the hold goes.
     heard: Option<Breakups>,
+    /// The lines the second pass raised ([`StepRun::second_pass_lines`]),
+    /// worded as the hold was taken, to relay as it goes or before the
+    /// slot is next written ([`FlightView::relay_held_lines`]).
+    said: Said,
 }
 
 impl BetweenPasses {
@@ -101,12 +117,8 @@ impl BetweenPasses {
             frame,
             second,
             heard: None,
+            said: Said::new(),
         })
-    }
-
-    /// The quotes the held pass said, which stay on their own frame.
-    pub(super) fn quotes(&self) -> &[PersonQuote] {
-        self.second.as_ref().map_or(&[], |pass| &pass.quotes)
     }
 }
 
@@ -161,6 +173,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// pass, its wrap first, as [`FlightView::step_frame`] replays any (see
     /// the module docs). Nothing held does nothing.
     pub(super) fn release_between_passes(&mut self, anchor: Anchor) {
+        self.relay_held_lines();
         let Some(held) = self.between_passes.take() else {
             return;
         };
@@ -169,6 +182,55 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 self.carry_wrap(&wrap);
             }
             self.step_effects(&pass, None, anchor, held.heard);
+        }
+    }
+
+    /// Drops the hold unreplayed, where the ship is seated afresh, its
+    /// lines relayed first (see the module docs).
+    pub(super) fn drop_between_passes(&mut self) {
+        self.relay_held_lines();
+        self.between_passes = None;
+    }
+
+    /// Words the lines `lines` a second pass held, against the kept frame
+    /// and scene, for the hold to relay on the frame after: the messages
+    /// as [`FlightView::word`] words them (an arrival's lead kept for its
+    /// arrival), the comm notes and the quotes by their own words. With no
+    /// hold to keep them they are relayed at once.
+    pub(super) fn hold_lines(&mut self, lines: Vec<RaisedLine>) {
+        let mut said = Said::new();
+        for line in lines {
+            match line {
+                RaisedLine::Message(message) => said.extend(self.word(vec![message])),
+                RaisedLine::Comm(note) => said.push((comm_message(&note), note.ticks())),
+                RaisedLine::Quote(quote) => {
+                    let ticks = quote.ticks();
+                    said.push((quote.text, ticks));
+                }
+            }
+        }
+        match &mut self.between_passes {
+            Some(held) => held.said.extend(said),
+            None => {
+                for (text, ticks) in said {
+                    self.relay(text, ticks);
+                }
+            }
+        }
+    }
+
+    /// Relays the lines the hold keeps, in the order raised, once: at its
+    /// release, at its drop, and before any write to the slot but the
+    /// frame's own relays, so a line said between the frames, which the
+    /// original's next first pass reads after the held one, stands over
+    /// it (see the module docs).
+    pub(super) fn relay_held_lines(&mut self) {
+        let Some(held) = &mut self.between_passes else {
+            return;
+        };
+        let said = std::mem::take(&mut held.said);
+        for (text, ticks) in said {
+            self.relay(text, ticks);
         }
     }
 

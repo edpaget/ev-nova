@@ -7,7 +7,8 @@ use super::faked_hud::{barred, flown, npc_of_140};
 use super::*;
 use crate::flight::hud::NavDisplay;
 use crate::system::camera::Anchor;
-use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, StepReport, StepRun};
+use nova_sim::CommNote;
+use nova_sim::flight_frame::{FrameShip, FrameTarget, PassReport, RaisedLine, StepReport, StepRun};
 use nova_sim::{AlertIcon, JumpReadiness, TargetStatus};
 
 /// The ship a frame draws the player's as.
@@ -169,4 +170,112 @@ fn a_target_met_only_in_the_frame_drawn_is_taken_for_the_panel_as_the_hud_advanc
     view.advance_hud();
     let drawn = view.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
     assert_eq!(drawn.map(|drawn| drawn.npc), Some(NpcId(0)));
+}
+
+// The lines a second pass raised, shown on the frame after.
+
+/// An ally's note that it has repaired the player.
+fn repaired(ship: &str) -> CommNote {
+    CommNote {
+        from: NpcId(0),
+        comm_name: "Ally".to_owned(),
+        ship_name: ship.to_owned(),
+        done: nova_sim::Help::Repair,
+    }
+}
+
+/// A frame of one double-time step whose first pass raised `first`, its
+/// line raised last, and whose second pass raised `held`.
+fn holding(first: Option<CommNote>, held: Vec<RaisedLine>) -> StepReport {
+    let mut report = super::stepping::doubled(PassReport::default(), PassReport::default(), sol());
+    let run = &mut report.steps[0];
+    run.comm.extend(first.clone());
+    run.last_line = first.map(RaisedLine::Comm);
+    run.second_pass_lines = held;
+    report
+}
+
+/// A frame whose stepping stopped before its first step.
+fn stopped() -> StepReport {
+    StepReport {
+        steps: vec![],
+        stopped: true,
+    }
+}
+
+/// A view over Sol that ran [`holding`]`(first, held)`.
+fn held_lines(first: Option<CommNote>, held: Vec<RaisedLine>) -> Faked {
+    let mut view = super::stepping::stepping(armed(1, &[BLASTER]));
+    super::stepping::frame(&mut view, holding(first, held));
+    view
+}
+
+#[test]
+fn a_line_raised_on_a_second_pass_shows_on_the_frame_after() {
+    let first = repaired("Shuttle");
+    let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
+    let mut view = held_lines(Some(first.clone()), held);
+    let shown = comm_message(&first);
+    assert_eq!(
+        view.message(),
+        Some(shown.as_str()),
+        "the first pass's line"
+    );
+    super::stepping::frame(&mut view, stopped());
+    assert_eq!(
+        view.message(),
+        Some(NO_ACTIVE_MISSIONS),
+        "the held one after"
+    );
+}
+
+#[test]
+fn the_next_frames_own_line_replaces_the_held_one() {
+    let held = vec![RaisedLine::Comm(repaired("Shuttle"))];
+    let mut view = held_lines(None, held);
+    let own = repaired("Lightning");
+    let mut next = holding(Some(own.clone()), Vec::new());
+    next.steps[0].between_passes = None;
+    next.steps[0].passes.pop();
+    super::stepping::frame(&mut view, next);
+    let shown = comm_message(&own);
+    assert_eq!(view.message(), Some(shown.as_str()));
+}
+
+#[test]
+fn a_line_said_between_the_frames_stands_over_the_held_one() {
+    let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
+    let mut view = held_lines(None, held);
+    view.say_for("Pressed", 600);
+    super::stepping::frame(&mut view, stopped());
+    assert_eq!(view.message(), Some("Pressed"));
+}
+
+#[test]
+fn a_hold_dropped_by_place_ship_relays_its_lines() {
+    let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
+    let mut view = held_lines(None, held);
+    view.place_ship();
+    assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+}
+
+#[test]
+fn a_held_message_is_worded_once() {
+    let mut view = super::stepping::stepping(armed(1, &[BLASTER]));
+    let (script, chance) = crate::flight::fake_catalog::scripted(&[2, 1]);
+    view.words_chance = chance;
+    let request = SimMessage::DockRequested {
+        stellar: StellarId(128),
+        kind: nova_sim::DockKind::Planet,
+    };
+    super::stepping::frame(&mut view, holding(None, vec![RaisedLine::Message(request)]));
+    let worded = view.message().map(str::to_owned);
+    super::stepping::frame(&mut view, stopped());
+    assert_eq!(script.borrow().asked, [3, 2], "Rand(3), then Rand(2), once");
+    assert_ne!(
+        view.message().map(str::to_owned),
+        worded,
+        "shown the frame after"
+    );
+    assert!(view.message().is_some());
 }
