@@ -1284,4 +1284,39 @@ pub(super) mod tests {
             at + trig::accel(90, half.times(50.0))
         );
     }
+
+    #[test]
+    fn at_half_gain_the_warp_stages_turn_takes_half_a_turn_and_the_ship_moves_half_its_velocity() {
+        let mut session = jumping(&catalog());
+        tick(&mut session);
+        // Facing north, far off the bearing east: no move-off.
+        session.ship.player.heading = 0.0;
+        session.ship.player.velocity = Vec2::new(1.0, -0.5);
+        let half = SpeedMult::new(0.5);
+        session.at_gain(half);
+        let before = session.ship.player;
+        let handling =
+            session
+                .ship
+                .flying_handling(&session.pilot, &session.setup, session.mode.jump());
+        let rule = session.setup.flight_rules().player_turn;
+        tick(&mut session);
+        let (heading, _) = turn(0.0, handling.turn_rate, Some(90), Turn::None, rule, half);
+        let (full, _) = turn(
+            0.0,
+            handling.turn_rate,
+            Some(90),
+            Turn::None,
+            rule,
+            SpeedMult::FULL,
+        );
+        assert_ne!(heading, full);
+        assert_eq!(session.ship.player.heading, heading);
+        let velocity = session.ship.player.velocity;
+        assert_ne!(velocity, Vec2::ZERO);
+        assert_eq!(
+            session.ship.player.position,
+            crate::flight::moved(before.position, velocity, half)
+        );
+    }
 }

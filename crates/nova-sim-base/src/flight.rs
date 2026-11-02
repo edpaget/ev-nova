@@ -1961,4 +1961,60 @@ mod tests {
         );
         assert!((speed - 1.95).abs() < 1e-6, "{speed}");
     }
+
+    #[test]
+    fn at_half_gain_the_players_step_turns_half_its_whole_degree_rate() {
+        // PEGASUS turns 2.5° a frame: 2 whole degrees, 1 at half gain.
+        let mut state = heading(90.0);
+        player_step(
+            &mut state,
+            &PEGASUS,
+            turning(Turn::Right),
+            None,
+            TOP,
+            FlightRules::default(),
+            HALF,
+        );
+        assert_eq!(state.heading, 91.0);
+        let mut aimed = heading(90.0);
+        player_step(
+            &mut aimed,
+            &PEGASUS,
+            Controls::default(),
+            Some(180),
+            TOP,
+            FlightRules::default(),
+            HALF,
+        );
+        assert_eq!(aimed.heading, 91.0, "the auto-turn too");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_players_step_turns_half_its_whole_degree_rate() {
+        let mut state = heading(90.0);
+        let mut speed = 0.0;
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &PEGASUS,
+            turning(Turn::Left),
+            None,
+            TOP,
+            FlightRules::default(),
+            HALF,
+        );
+        assert_eq!(state.heading, 89.0);
+        let mut aimed = heading(90.0);
+        inertialess_player_step(
+            &mut aimed,
+            &mut speed,
+            &PEGASUS,
+            Controls::default(),
+            Some(0),
+            TOP,
+            FlightRules::default(),
+            HALF,
+        );
+        assert_eq!(aimed.heading, 89.0, "the auto-turn too");
+    }
 }

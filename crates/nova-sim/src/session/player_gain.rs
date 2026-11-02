@@ -99,4 +99,24 @@ mod tests {
         session.at_gain(HALF);
         assert_eq!(session.field().speed_mult, HALF);
     }
+
+    #[test]
+    fn at_half_gain_a_turning_pass_turns_the_player_by_the_turn_at_that_gain() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.at_gain(HALF);
+        let before = session.player().heading;
+        let rate = session.handling().turn_rate;
+        let rule = session.setup.flight_rules().player_turn;
+        let right = Controls {
+            turn: Turn::Right,
+            ..Controls::default()
+        };
+        work(&mut session, &catalog, right);
+        let (expected, _) = crate::player_turn::turn(before, rate, None, Turn::Right, rule, HALF);
+        let (full, _) =
+            crate::player_turn::turn(before, rate, None, Turn::Right, rule, SpeedMult::FULL);
+        assert_ne!(expected, full);
+        assert_eq!(session.player().heading, expected);
+    }
 }
