@@ -82,8 +82,12 @@
 //!   or fleet test. Its +0x50 gate is
 //!   rdm:phase/escort-fleet-fidelity-followups-followups/phase-3-hunt-warp-and-wait-gates's.
 //! - **Goals 1, 0x14 and 2** (@0x8bb56-0x8bba2): +0x70 set gives goal 4
-//!   (@0x8bba2), -1 the search (@0x8bb96). **The wait** (@0x8bbab-0x8bc37)
-//!   sets +0x70 -1 first (@0x8bbb9) and then searches.
+//!   (@0x8bba2), -1 the search (@0x8bb96), each with +0x50 at or below 0;
+//!   with it above, neither (@0x8bb75-0x8bb7c, @0x8bb8a-0x8bb91), and so
+//!   for goal 0's search (@0x8b865-0x8b86c), which a warship leaving by
+//!   hyperspace meets. **The wait** (@0x8bbab-0x8bc37) sets +0x70 -1 first
+//!   (@0x8bbb9) and then searches, whatever +0x50. No other goal searches:
+//!   with +0x70 -1 the think jumps to @0x8bf8c (@0x8bc48), its goal kept.
 //! - **The own drop**, goal 4 only (@0x8bc4e-0x8bcaf): a target inactive
 //!   (+0xb8 @0x8bc67), breaking up (@0x8bc73), or disabled while it has no
 //!   destroying weapon (@0x8bc8b-0x8bc9e) gives goal 0 and +0x70 -1
@@ -92,7 +96,8 @@
 //! - **The retreats**, which see the rewritten goal 4: the odds retreat
 //!   (@0x8bcba-0x8bdf5: a government @0x8bcc5, goal 4 @0x8bccb, `Flags`
 //!   0x0010 @0x8bcea); the late goal-4 write for any goal but 7 and 3 with
-//!   +0x50 at or below 0 (@0x8be09-0x8be2d); the shield retreat
+//!   +0x50 at or below 0 (@0x8be09-0x8be2d), which reaches every goal with
+//!   +0x70 set that the blocks above left alone; the shield retreat
 //!   (@0x8be36-0x8bf35: no fleet lead @0x8beea, `Flags` 0x0010 @0x8bf12,
 //!   a goal not 2, 3 or 0xb @0x8bf19-0x8bf33); the out-of-ammo retreat
 //!   (@0x8bf3e-0x8bf83). Each gives goal 3 on +0x70.
@@ -363,15 +368,25 @@ pub fn warship_attack(
 /// 2. provoked with a target, goal 4 on it ([`warship_attack`],
 ///    @0x8bb0c-0x8bb44);
 /// 3. unprovoked in goal 4, the same on the ship it attacks or snipes at;
-/// 4. unprovoked idle, landing, entering a gate or leaving with a target,
-///    goal 4 on it (@0x8b843-0x8b860, @0x8bb6e-0x8bba2), or with its warp
-///    under way its goal kept (@0x8b84a-0x8b851, @0x8bb75-0x8bb7c);
-/// 5. unprovoked holding or drifting with a target, the late goal-4 write
-///    (@0x8be09-0x8be2d): past its own drop and its odds retreat, which
-///    need goal 4, its shield and out-of-ammo retreats judged as the goal
-///    it holds, then its fully-dry drop and goal 4's high level; with its
-///    warp under way, nothing;
-/// 6. holding with no target, nothing.
+/// 4. waiting, the wait's search, whatever its warp; following or in
+///    formation (the other reading of
+///    [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)), the search
+///    as before;
+/// 5. unprovoked with a target and its warp under way, no goal-4 write
+///    (@0x8b84a-0x8b851, @0x8bb75-0x8bb7c, @0x8be24-0x8be2b): its shield
+///    and out-of-ammo retreats judged as the goal it holds, which skip goal
+///    2 (@0x8bf19-0x8bf33), or its goal kept;
+/// 6. unprovoked idle, landing, entering a gate or leaving with a target,
+///    goal 4 on it (@0x8b843-0x8b860, @0x8bb6e-0x8bba2);
+/// 7. unprovoked in any other goal with a target, holding or drifting
+///    among them, the late goal-4 write (@0x8be09-0x8be2d): past its own
+///    drop and its odds retreat, which need goal 4, its shield and
+///    out-of-ammo retreats judged as the goal it holds, then its fully-dry
+///    drop and goal 4's high level;
+/// 8. with no target, idle, landing, entering a gate or leaving, the
+///    search, but with its warp under way (@0x8b865-0x8b86c,
+///    @0x8bb8a-0x8bb91); in any other goal, holding among them, its goal
+///    kept with no search and no idle block (@0x8bc48 → @0x8bf8c).
 ///
 /// None leaves it the search.
 #[must_use]
@@ -393,25 +408,44 @@ pub fn warship_hunt(
         return Some(attack(ship));
     }
     let warping = npc.warp.stage > 0.0;
-    match (npc.goal, npc.target) {
-        (Goal::Idle | Goal::Land(_) | Goal::EnterGate(_) | Goal::JumpOut, Some(ship)) => {
-            Some(if warping {
-                Hunt::of(npc.goal)
-            } else {
-                attack(ship)
-            })
-        }
-        (Goal::Hold | Goal::Drift, Some(_)) if warping => Some(Hunt::default()),
-        (Goal::Hold | Goal::Drift, Some(ship)) => Some(
-            if retreats(npc, around, retreat) || (retreat.out_of_ammo && out_of_ammo::retreats(npc))
-            {
-                Hunt::of(Goal::Flee(ship))
-            } else {
-                warship_high_level(npc, ship, around, rules, always_attacks)
-            },
+    // The shield and out-of-ammo retreats, judged as the goal it holds, so
+    // with no odds retreat (it needs goal 4, @0x8bccb), and for no goal 2
+    // (@0x8bf19-0x8bf33, @0x8bf67-0x8bf83).
+    let worn = |ship| {
+        (npc.goal != Goal::JumpOut
+            && (retreats(npc, around, retreat)
+                || (retreat.out_of_ammo && out_of_ammo::retreats(npc))))
+        .then(|| Hunt::of(Goal::Flee(ship)))
+    };
+    let searches = matches!(
+        npc.goal,
+        Goal::Idle | Goal::Land(_) | Goal::EnterGate(_) | Goal::JumpOut
+    );
+    let waits = matches!(
+        npc.goal,
+        Goal::Wait | Goal::Follow { .. } | Goal::Formation { .. }
+    );
+    match npc.target {
+        // The wait writes +0x70 -1 first and searches, whatever +0x50
+        // (@0x8bbab-0x8bbc2); a follow or formation (the other reading of
+        // `RuleKey::NpcEscortAi`) is `_EscortAI`'s.
+        _ if waits => None,
+        // With the warp under way no goal-4 write comes (@0x8b84a-0x8b851,
+        // @0x8bb75-0x8bb7c, @0x8be24-0x8be2b).
+        Some(ship) if warping => Some(worn(ship).unwrap_or_else(|| Hunt::of(npc.goal))),
+        // Goal 4 at once (@0x8b843-0x8b860, @0x8bba2).
+        Some(ship) if searches => Some(attack(ship)),
+        // The late write (@0x8be09-0x8be2d), past the own drop and the
+        // odds retreat.
+        Some(ship) => Some(
+            worn(ship)
+                .unwrap_or_else(|| warship_high_level(npc, ship, around, rules, always_attacks)),
         ),
-        (Goal::Hold, None) => Some(Hunt::default()),
-        _ => None,
+        // The search (@0x8b875, @0x8bb96), but with the warp under way
+        // (@0x8b865-0x8b86c, @0x8bb8a-0x8bb91).
+        None if searches && !warping => None,
+        // No search and no idle block: the jump to @0x8bf8c (@0x8bc48).
+        None => Some(Hunt::of(npc.goal)),
     }
 }
 
@@ -918,6 +952,87 @@ mod tests {
         worn.reserves.shield.now = 4.4;
         let (decision, _) = warship_decided(&[worn, neutral], WARSHIPS_RETREAT, RuleSource::Engine);
         assert_eq!(decision.goal, Goal::Flee(n(2)), "the shield retreat");
+    }
+
+    #[test]
+    fn a_warship_warping_out_with_no_target_searches_nothing() {
+        // With +0x70 -1 and +0x50 above 0 the goal-0 block skips
+        // `_SelectWarshipTarget` and the idle block (@0x8b865-0x8b86c), and
+        // so do goals 1, 0x14 and 2 (@0x8bb8a-0x8bb91).
+        for goal in [
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
+            Goal::JumpOut,
+        ] {
+            let mut warping = warship(goal, None, 0.0);
+            warping.warp.stage = 10.0;
+            let (decision, asked) = warship_decided(&[warping], 0, RuleSource::Engine);
+            assert_eq!(decision.goal, goal, "{goal:?}");
+            assert_eq!(
+                decision.travel,
+                TravelWrite::Keep,
+                "{goal:?}: no idle block"
+            );
+            assert!(asked.is_empty(), "{goal:?}: no search");
+        }
+        let mut waiting = warship(Goal::Wait, Some(n(2)), 0.0);
+        waiting.warp.stage = 10.0;
+        let (decision, _) = warship_decided(&[waiting], 0, RuleSource::Engine);
+        assert_eq!(
+            decision.goal,
+            Goal::Attack(P),
+            "the wait searches whatever +0x50 (@0x8bbab-0x8bbc2)"
+        );
+    }
+
+    #[test]
+    fn a_warship_searches_only_from_goals_0_1_0x14_2_and_6() {
+        // `_SelectWarshipTarget` runs for goals 0 (@0x8b875), 1, 0x14 and 2
+        // (@0x8bb96) and 6 (@0x8bbc2) alone: in any other goal with +0x70
+        // -1 the think jumps to @0x8bf8c (@0x8bc48), keeping it.
+        for goal in [Goal::Drift, Goal::Mine, Goal::Scoop] {
+            let (decision, asked) =
+                warship_decided(&[warship(goal, None, 0.0)], 0, RuleSource::Engine);
+            assert_eq!(decision.goal, goal, "{goal:?}");
+            assert!(asked.is_empty(), "{goal:?}: no search");
+        }
+    }
+
+    #[test]
+    fn a_warship_in_any_other_goal_with_a_target_takes_the_late_goal_4_write() {
+        // Any goal but 7 and 3 with +0x70 set and +0x50 at or below 0
+        // (@0x8be09-0x8be2d).
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for goal in [Goal::Mine, Goal::Scoop, Goal::CountWait] {
+            let npcs = [warship(goal, Some(n(2)), 0.0), neutral.clone()];
+            assert_eq!(by_engine(&npcs).goal, Goal::Attack(n(2)), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_warship_warping_with_a_target_retreats_for_its_shields_but_leaving_does_not() {
+        // With +0x50 above 0 no goal-4 write comes (@0x8be24-0x8be2b), but
+        // the shield retreat runs for any goal but 2, 3 and 0xb
+        // (@0x8bf19-0x8bf33).
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        for (goal, flees) in [
+            (Goal::Idle, true),
+            (Goal::Hold, true),
+            (Goal::Land(StellarId(128)), true),
+            (Goal::JumpOut, false),
+        ] {
+            let mut worn = warship(goal, Some(n(2)), 0.0);
+            worn.reserves.shield.now = 4.4;
+            worn.warp.stage = 10.0;
+            let (decision, _) = warship_decided(
+                &[worn, neutral.clone()],
+                WARSHIPS_RETREAT,
+                RuleSource::Engine,
+            );
+            let expected = if flees { Goal::Flee(n(2)) } else { goal };
+            assert_eq!(decision.goal, expected, "{goal:?}");
+        }
     }
 
     #[test]
