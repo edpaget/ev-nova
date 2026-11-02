@@ -510,6 +510,22 @@ fn a_hail_key_held_from_before_a_mission_text_waits_for_its_release() {
 }
 
 #[test]
+fn a_hail_key_down_at_the_poll_before_a_mission_text_waits_though_let_go_and_pressed_again() {
+    // The poll read Y down; its release, before the text opened, and its
+    // press under it, no poll saw.
+    let mut screen = texted_after(|screen| {
+        screen.input(&key(HAIL_KEY, true));
+        screen.tick(TICK);
+        screen.input(&key(HAIL_KEY, false));
+        let _ = screen.take_sounds();
+    });
+    screen.input(&key(HAIL_KEY, true));
+    close_text(&mut screen);
+    screen.tick(TICK * 4);
+    assert!(!refused(&screen.take_sounds()), "no second hail");
+}
+
+#[test]
 fn p_and_y_pressed_under_a_mission_text_open_the_player_info_and_y_waits() {
     // P's dialog runs `_SetAllKeyCmdFlags` (@0x70393) before Y's read
     // (@0x703e9).

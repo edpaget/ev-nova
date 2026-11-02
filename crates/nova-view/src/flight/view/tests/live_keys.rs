@@ -395,3 +395,13 @@ fn a_dialog_closing_over_flights_map_leaves_the_latched_keys_to_the_maps_latch()
     assert_eq!(back(&mut view, [JUMP_KEY, Key::Enter], [], false), []);
     assert!(view.latched_down.contains(&JUMP_KEY));
 }
+
+#[test]
+fn the_fixtures_site_mark_latches_the_close_as_a_site_does() {
+    // `FlightView::mark_site`, for the router's tests that open a site's
+    // dialog themselves.
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    view.mark_site();
+    latches_its_close(&mut view);
+}
