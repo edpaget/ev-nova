@@ -506,3 +506,83 @@ fn a_kept_press_is_dropped_when_flight_lets_go_before_the_poll() {
         &sent(&view)[from..]
     );
 }
+
+/// The commands `view` sent from `from` on, but those the message line
+/// rides along with.
+fn sent_from(view: &Faked, from: usize) -> Vec<FlightCommand> {
+    sent(view)[from..]
+        .iter()
+        .filter(|command| {
+            !matches!(
+                command,
+                FlightCommand::CommShown(_)
+                    | FlightCommand::CommAcknowledged
+                    | FlightCommand::CommTicked
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_kept_press_that_opens_a_dialog_ends_the_poll_and_drops_the_rest() {
+    // The block picks (@0x69d3f), B boards into the plunder dialog
+    // (@0x6a98b), whose `_SetAllKeyCmdFlags` (@0x659f1) latches P.
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [slot, BOARD_KEY, PLAYER_INFO_KEY], [], false);
+    for input in &replay {
+        view.input(input);
+    }
+    let from = sent(&view).len();
+    view.sim.queue_answer(Answer::Done);
+    super::faked_board::opened(&mut view);
+    view.tick(TICK);
+    let sent_now = sent_from(&view, from);
+    let picked = sent_now
+        .iter()
+        .position(|command| matches!(command, FlightCommand::SelectStellar(_)));
+    let boarded = sent_now
+        .iter()
+        .position(|command| *command == FlightCommand::Board);
+    assert!(
+        matches!((picked, boarded), (Some(p), Some(b)) if p < b),
+        "the pick, then B: {sent_now:?}"
+    );
+    assert!(
+        !sent_now.contains(&FlightCommand::PressPlayerInfo),
+        "P dropped: {sent_now:?}"
+    );
+    assert!(view.after_poll.is_empty());
+    assert!(view.take_boarding().is_some(), "the plunder dialog");
+}
+
+#[test]
+fn a_kept_p_that_opens_its_dialog_leaves_y_unread() {
+    // P's dialog runs `_SetAllKeyCmdFlags` (@0x70393) before Y's read
+    // (@0x703e9).
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [slot, PLAYER_INFO_KEY, HAIL_KEY], [], false);
+    for input in &replay {
+        view.input(input);
+    }
+    let from = sent(&view).len();
+    view.sim.queue_answer(Answer::Done);
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.tick(TICK);
+    let sent_now = sent_from(&view, from);
+    assert!(
+        sent_now.contains(&FlightCommand::PressPlayerInfo),
+        "{sent_now:?}"
+    );
+    assert!(
+        !sent_now
+            .iter()
+            .any(|command| matches!(command, FlightCommand::Hail { .. })),
+        "Y unread: {sent_now:?}"
+    );
+    assert!(view.take_player_info_request());
+}

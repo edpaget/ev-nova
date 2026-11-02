@@ -283,7 +283,6 @@ impl<
         for key in kept {
             let _ = self.input(&press(key));
             if self.opened_something() {
-                self.after_poll.clear();
                 return true;
             }
         }
