@@ -1145,6 +1145,55 @@ mod tests {
         }
     }
 
+    /// The decision of a provoked `cop` attacking NPC 2, `quarry`.
+    fn provoked_attacking(quarry: Npc) -> (Decision, Vec<u32>) {
+        let mut cop = police();
+        cop.goal = Goal::Attack(n(2));
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        attacking_with(Interceptor::default(), cop, Some(quarry))
+    }
+
+    #[test]
+    fn a_provoked_interceptor_attacking_a_dying_ally_idles_keeping_its_provocation() {
+        // The ally drop (@0x8e277-0x8e2e4) comes before the breaking-up
+        // test (@0x8e3ef) and returns with goal 0, +0x70 and +0x96 kept
+        // (@0x8e2d2 → @0x8fb47).
+        let mut ally = ship(2, TRADERS, AiType::Warship, 0.0, 300.0);
+        ally.condition = DYING;
+        let (decision, asked) = provoked_attacking(ally);
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, false, false)
+        );
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_provoked_interceptor_attacking_a_dying_escort_of_its_fleet_idles_keeping_its_provocation()
+    {
+        // The fleet drop (@0x8e2e9-0x8e399) comes before the breaking-up
+        // test (@0x8e3ef) and returns with goal 0, +0x70 -1 and +0x96 kept
+        // (@0x8e381 → @0x8fb47).
+        let mut escort = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        escort.leader = Some(crate::traffic::npc::NpcId(1));
+        escort.condition = DYING;
+        let (decision, asked) = provoked_attacking(escort);
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, true, false)
+        );
+        assert!(asked.is_empty());
+    }
+
     #[test]
     fn an_unprovoked_interceptor_attacking_a_ship_breaking_up_idles_forgetting_its_provocation() {
         // @0x8e3ef → @0x8e714-0x8e726.
