@@ -48,6 +48,25 @@
 //! engine's keeps the double sum and counts on, a float's width not
 //! replicated.
 //!
+//! # Its readers
+//!
+//! Each pass that reads `_gSpeedMult` takes the gain as a value, never
+//! from a global: [`SpeedMult::times`] for a product the original passes
+//! on as a float (an acceleration, a strength), [`SpeedMult::add_times`]
+//! for a field that gains a scaled step in doubles, narrowed back to a
+//! float. `_HandlePlayer`'s, `_AdjustInertialessShipVelocity`'s and
+//! `_HandleGravity`'s readers (rdm:phase/play-feel-8/phase-21-handle-player-reads-the-gain)
+//! are here in [`flight`](crate::flight), [`inertialess`](crate::inertialess),
+//! [`player_turn`](crate::player_turn), [`ionization`](crate::ionization),
+//! [`fuel`](crate::fuel), [`afterburner`](crate::afterburner) and
+//! [`gravity`](crate::gravity); in `nova_sim_combat`, through the pass's
+//! `Field::speed_mult` and `StellarHazards::speed_mult` (the player's
+//! regeneration, reloads, repair inhibit, sabotage clock, self-destruct
+//! count and cloak upkeep); and in `nova_sim`'s session, through
+//! `Session::speed_mult`. The NPCs' readers (`_HandleShip`) run at
+//! [`SpeedMult::FULL`] until
+//! rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain.
+//!
 //! # Its writers
 //!
 //! - [`TimeAdjustment::frame`]: `_HandleTimeAdjustment` @0x33424.
@@ -140,6 +159,26 @@ impl SpeedMult {
     #[allow(clippy::cast_possible_truncation)]
     pub const fn as_f32(self) -> f32 {
         self.0 as f32
+    }
+
+    /// `x` × the gain, a product the original works in doubles and passes
+    /// on as a float (an acceleration handed to `_AdjustedAccel`, a
+    /// strength to `_ApplyGravity`): `(double)x × g`, narrowed.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn times(self, x: f32) -> f32 {
+        (f64::from(x) * self.0) as f32
+    }
+
+    /// `value` after it gains `by` × the gain, as the original adds a
+    /// scaled step to a float field (a position, a heading, a gauge, a
+    /// timer): `(double)value + (double)by × g`, narrowed. At
+    /// [`FULL`](Self::FULL) it is the float sum `value + by`, as one
+    /// double add narrowed rounds as the float add does.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn add_times(self, value: f32, by: f32) -> f32 {
+        (f64::from(value) + f64::from(by) * self.0) as f32
     }
 
     /// `timer` after it takes the gain, as a pass adds it to a timer the
@@ -389,6 +428,63 @@ mod tests {
         assert!(!holds_after(Duration::from_millis(333)));
         assert!(holds_after(Duration::from_millis(334)));
         assert!(holds_after(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn times_is_the_product_in_doubles_narrowed() {
+        assert_eq!(SpeedMult::new(0.5).times(0.3), 0.15);
+        assert_eq!(SpeedMult::new(0.25).times(6.0), 1.5);
+        let third = 1.0_f32 / 3.0;
+        assert_eq!(
+            SpeedMult::new(0.1).times(third),
+            (f64::from(third) * 0.1) as f32
+        );
+    }
+
+    #[test]
+    fn add_times_adds_the_scaled_step_in_doubles_narrowed() {
+        assert_eq!(SpeedMult::new(0.5).add_times(10.0, 3.0), 11.5);
+        assert_eq!(SpeedMult::new(0.25).add_times(100.0, -1.0), 99.75);
+        let big = 16_777_216.0_f32;
+        assert_eq!(
+            SpeedMult::new(0.75).add_times(big, 1.0),
+            (f64::from(big) + 0.75) as f32
+        );
+    }
+
+    #[test]
+    fn at_full_gain_both_are_the_plain_float_arithmetic() {
+        let values = [0.0_f32, 0.3, -1.25, 149.0, 1.0e7, 0.033_33, 6.1e-5];
+        for &x in &values {
+            assert_eq!(SpeedMult::FULL.times(x), x, "{x}");
+            for &by in &values {
+                assert_eq!(SpeedMult::FULL.add_times(x, by), x + by, "{x} + {by}");
+            }
+        }
+    }
+
+    #[test]
+    fn at_no_gain_the_value_stays() {
+        assert_eq!(SpeedMult::ZERO.times(7.5), 0.0);
+        for x in [0.0_f32, 1.5, -300.0, 1.0e-3] {
+            assert_eq!(SpeedMult::ZERO.add_times(x, 2.75), x);
+        }
+    }
+
+    #[test]
+    fn at_the_settled_gain_a_whole_timer_still_gains_a_whole_frame() {
+        for x in [0.0_f32, 2.0, 29.0, 299.0, -1.0, 149.0] {
+            assert_eq!(SpeedMult::SETTLED.add_times(x, -1.0), x - 1.0, "{x}");
+        }
+        for x in [0.0_f32, 1.0, 29.0, 299.0, -2.0, 149.0] {
+            assert_eq!(SpeedMult::SETTLED.add_times(x, 1.0), x + 1.0, "{x}");
+        }
+        // Only a sum that lands on none keeps the ulp, as a float can.
+        assert_eq!(
+            SpeedMult::SETTLED.add_times(-1.0, 1.0),
+            -f64::EPSILON as f32
+        );
+        assert_eq!(SpeedMult::SETTLED.add_times(1.0, -1.0), f64::EPSILON as f32);
     }
 
     #[test]
