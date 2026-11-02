@@ -268,6 +268,11 @@ mod tests {
         let mut bribed = follower.clone();
         bribed.take_bribe();
         assert!(!escorted(&[lead.clone(), bribed.clone()]), "bribed");
+        // A word of 4 is no escort either: the pass's `jle`.
+        let mut four = bribed.clone();
+        four.ai_type = AiType::Interceptor;
+        assert_eq!(four.original_ai_type(), 4);
+        assert!(!escorted(&[lead.clone(), four]), "AI type 4");
         follower.id = NpcId(3);
         assert!(escorted(&[lead, bribed, follower]), "and an unbribed one");
     }

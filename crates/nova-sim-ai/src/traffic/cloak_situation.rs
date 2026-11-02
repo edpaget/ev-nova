@@ -532,6 +532,10 @@ mod tests {
         let mut bribed = led_close();
         bribed.take_bribe();
         assert!(!situation(&bribed, around).close_to_cloaked_parent);
+        // A word of 4 fails the `jle` too.
+        bribed.ai_type = crate::traffic::npc::AiType::Interceptor;
+        assert_eq!(bribed.original_ai_type(), 4);
+        assert!(!situation(&bribed, around).close_to_cloaked_parent);
     }
 
     #[test]

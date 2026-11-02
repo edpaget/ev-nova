@@ -213,15 +213,19 @@ mod tests {
         // (@0x89b71); the bribe's word is 1 (`_DoCommDialog` @0x961f8).
         let mut bribed = led(EscortClass::Fighter);
         bribed.take_bribe();
-        let mut traffic = traffic([leader(), led(EscortClass::Fighter), bribed]);
+        // A word of 4 fails the `jle` too.
+        let mut four = bribed.clone();
+        four.ai_type = AiType::Interceptor;
+        assert_eq!(four.original_ai_type(), 4);
+        let mut traffic = traffic([leader(), led(EscortClass::Fighter), bribed, four]);
         issue(&mut traffic, 0);
-        assert_eq!(words(&traffic), [-1, 2, -1]);
+        assert_eq!(words(&traffic), [-1, 2, -1, -1]);
         let marks: Vec<bool> = traffic
             .npcs()
             .iter()
             .map(|npc| npc.ordered_by_lead)
             .collect();
-        assert_eq!(marks, [false, true, false]);
+        assert_eq!(marks, [false, true, false, false]);
     }
 
     #[test]

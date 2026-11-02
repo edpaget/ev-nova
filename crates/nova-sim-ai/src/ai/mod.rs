@@ -1931,6 +1931,14 @@ mod tests {
             decide(&spared, &sites(), &together, &mut chance),
             Goal::JumpOut
         );
+        // A word of 4 follows no lead either.
+        spared.ai_type = AiType::Interceptor;
+        assert_eq!(spared.original_ai_type(), 4);
+        let together = [together[0].clone(), spared.clone()];
+        assert_eq!(
+            decide(&spared, &sites(), &together, &mut chance),
+            Goal::JumpOut
+        );
     }
 
     #[test]
