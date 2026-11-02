@@ -241,6 +241,8 @@ mod hit_goal_tests;
 mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
+#[cfg(test)]
+mod interceptor_goal4_tests;
 pub mod ionization;
 #[cfg(test)]
 mod jump_out_hit_tests;

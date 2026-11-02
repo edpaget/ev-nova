@@ -318,7 +318,10 @@ pub struct Npc {
     pub pick: Option<WeaponId>,
     /// The ship it targets (+0x70), as it last decided, until its step's
     /// slot test lets go of one whose slot is inactive
-    /// ([`Traffic::let_go_at_step`](super::Traffic::let_go_at_step)).
+    /// ([`Traffic::let_go_at_step`](super::Traffic::let_go_at_step)). An
+    /// idle interceptor keeps the ally goal 4's drop spared
+    /// ([`held_attack`](crate::ai::held_attack), @0x8e2d2), searching
+    /// nothing while it holds it.
     pub target: Option<ShipRef>,
     /// Its provocation (the original's +0x96): the nominal damage of the
     /// hits it answered while it fights, each mass and energy arg above

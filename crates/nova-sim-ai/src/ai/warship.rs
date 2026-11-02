@@ -60,6 +60,10 @@
 //!   each think. The word plays no sound of its own.
 //! - **Fleeing**, it keeps fleeing while its attacker is live; then it
 //!   decides again.
+//! - **An interceptor's goal 4** ([`Retreat::search_gate`]): its provoked
+//!   branch, an attack it holds, a target it kept idle and its closed
+//!   gate are [`held_attack`](super::held_attack)'s, before the target
+//!   below.
 //! - **Its target**: provoked, the attacker it took on being hit;
 //!   otherwise the ship [`select_target`] gives, keeping the one it
 //!   attacks. A target is dropped as [`dropped`] says, a fresh pick
@@ -140,7 +144,8 @@
 //! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
-use crate::ai::interceptor::{gate_closed, inspection_holds};
+use crate::ai::held_attack::interceptor_hunt;
+use crate::ai::interceptor::inspection_holds;
 use crate::ai::odds::{cached_odds, state4_attack};
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
@@ -190,8 +195,10 @@ pub struct Retreat {
     /// (`_InterceptorAI` @0x8cc6d-0x8cc7d,
     /// [`gate_closed`](super::interceptor::gate_closed)), so one waiting,
     /// leaving, plundering or drifting searches nothing. Its provoked
-    /// branch comes first (@0x8cbf3-0x8cc31): provoked, it takes goal 4
-    /// on its target, which the drops then end. A warship's own gates
+    /// branch comes first (@0x8cbf6-0x8cc31): provoked, it takes goal 4
+    /// on its target, as it holds goal 4 unprovoked, and the think's tail
+    /// and goal 4's drops then fly or end it with no search
+    /// ([`held_attack`](super::held_attack)). A warship's own gates
     /// (`_SelectWarshipTarget` for goals 0, 1, 2, 6 and 0x14) are not this:
     /// it searches waiting (@0x8bbc2) and holds only its hold.
     pub search_gate: bool,
@@ -283,34 +290,13 @@ pub fn hunt(
                     ..nothing(false)
                 };
             }
-            // Behind an interceptor's gate the provoked branch writes goal
-            // 4 on +0x70 first (@0x8cbf3-0x8cc31), whose drops then end
-            // it: a target gone or breaking up (@0x8e263, @0x8e3ef), one
-            // disabled with no destroying weapon (@0x8d2fa-0x8d33a) or
-            // spared (@0x8e277). Unprovoked it searches nothing.
-            if retreat.search_gate && gate_closed(npc, around) {
-                let Some(ship) = npc.target.filter(|_| npc.provoked > 0.0) else {
-                    return nothing(false);
-                };
-                if !held(ship) {
-                    return Hunt {
-                        goal: Some(Goal::Idle),
-                        clears_target: true,
-                        forgets_provocation: matches!(
-                            around.condition_of(ship),
-                            Some(crate::combat::hull::Condition::Dying { .. })
-                        ),
-                        ..nothing(false)
-                    };
-                }
-                let judged = Npc {
-                    goal: Goal::Attack(ship),
-                    ..npc.clone()
-                };
-                return Hunt {
-                    goal: Some(hunted(&judged, ship, around, retreat)),
-                    ..nothing(false)
-                };
+            // An interceptor's provoked branch and goal 4, its kept target
+            // and its closed gate (`held_attack`): goal 4's drops end the
+            // attack with no search that think.
+            if retreat.search_gate
+                && let Some(hunt) = interceptor_hunt(npc, around, retreat, rules, always_attacks)
+            {
+                return hunt;
             }
             if let Some(ship) = provoker {
                 return Hunt::of(hunted(npc, ship, around, retreat));
@@ -350,7 +336,7 @@ pub fn hunt(
 /// before the blessing came, as the kept target or as the provoker (the
 /// word's provocation of 1 can't be told from a hit's), so the ship fights
 /// a blessed player only on the hit's own reaction. Never by the engine.
-fn releases_blessed(
+pub(crate) fn releases_blessed(
     npc: &Npc,
     ship: ShipRef,
     around: &Surroundings,
@@ -378,9 +364,10 @@ pub struct Hunt {
     /// Whether the government's 0x0004 word set its provocation to 1
     /// ([`Decision::provokes`](crate::ai::Decision::provokes)).
     pub provokes: bool,
-    /// Whether goal 4's drops ended the attack behind an interceptor's
-    /// gate, its target -1
-    /// ([`Decision::clears_target`](crate::ai::Decision::clears_target)).
+    /// Whether an interceptor's goal 4 ended with its target -1: the
+    /// disabled drop and goal 4's drops but the ally's
+    /// ([`held_attack`](super::held_attack),
+    /// [`Decision::clears_target`](crate::ai::Decision::clears_target)).
     pub clears_target: bool,
     /// Whether that drop was of a ship breaking up, which zeroes its
     /// provocation (@0x8e714-0x8e726,
@@ -390,7 +377,7 @@ pub struct Hunt {
 
 impl Hunt {
     /// A hunt for `goal` that makes no call and drops nothing.
-    fn of(goal: Goal) -> Self {
+    pub(crate) fn of(goal: Goal) -> Self {
         Self {
             goal: Some(goal),
             ..Self::default()
@@ -472,7 +459,7 @@ fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource)
 }
 
 /// Whether `npc` retreats as `retreat` says (see the module docs).
-fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
+pub(crate) fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
     let govts = around.govts;
     let shield = npc.reserves.shield;
     let below = |share: f32| shield.now < share * shield.max;

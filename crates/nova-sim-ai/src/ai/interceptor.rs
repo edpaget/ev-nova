@@ -62,12 +62,22 @@
 //!   (@0x8cc6d-0x8cc7d, [`gate_closed`]). So does one holding, leaving
 //!   (goal 2), plundering (0xd), drifting (0xe), mining or scooping: it
 //!   keeps the goal, a lost lead's that the succession copied included,
-//!   with a hostile player in view though it is. Only provocation
-//!   (@0x8cbf6-0x8cc28) or its government's word lifts it: provoked, it
-//!   takes goal 4 on its target, which goal 4's drops end at once, with no
-//!   search that think, when the target is gone, breaking up, disabled
-//!   with no destroying weapon (@0x8d2fa-0x8d33a) or spared (@0x8e277).
-//!   Short of ammunition, a waiting interceptor goes idle as a stopped
+//!   with a hostile player in view though it is. Only provocation or its
+//!   government's word lifts it.
+//! - **Goal 4** ([`held_attack`](super::held_attack)): provoked with a
+//!   target, any goal but 3, 7, 9 and 0xf becomes goal 4 on it
+//!   (@0x8cbf6-0x8cc31), an idle or patrolling one's too, and goal 4 closes
+//!   the gate, provoked or not. So it runs no search: its retreats, its
+//!   disabled drop (@0x8d2fa-0x8d33a) and its out-of-ammo retreat, then
+//!   goal 4's drops end the attack that think, each with its own writes:
+//!   a target gone (@0x8e263), its fleet's (@0x8e2e9-0x8e399) or breaking
+//!   up (@0x8e3ef) is cleared, and an ally it spares (@0x8e277-0x8e2db) is
+//!   kept. Idle with a target it kept, unprovoked, it searches, inspects
+//!   and patrols nothing ([`searches_nothing`], @0x8cc93-0x8ccc9 →
+//!   @0x8d13f), and targets it; provoked, it takes goal 4 on it again
+//!   each think, which the ally drop idles again, until the ally's slot
+//!   goes.
+//! - Short of ammunition, a waiting interceptor goes idle as a stopped
 //!   one does (state 6 to 3 to 0, @0x8d391 and @0x8e228; see
 //!   [`out_of_ammo`]), and a plundering one flees its ship. In its count
 //!   wait (goal 0x16) it returns at once (@0x8c8be).
@@ -145,11 +155,12 @@ pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
 /// (6), a hold (0xa), a jump out (2), a plunder (0xd), a drift (0xe), a
 /// count wait (0x16), a mine, scoop or stellar attack (0x10-0x12), a
 /// fighter's return (5), a help (9, 0xf), the regroup pause (0x13), or an
-/// inspection that holds ([`inspection_holds`]). An attack, snipe or
-/// flight keeps the hunt's own path: its pick keeps a live ship it fights
-/// as the gate's skip does, and a fight on a ship gone is ended by the
-/// high level that frame (@0x8e263, @0x8dff6), so the next think's search
-/// is taken in this one. An inspection this think ends, and a follow or
+/// inspection that holds ([`inspection_holds`]). An attack or snipe is
+/// goal 4, which closes the gate too, but is flown before it
+/// ([`held_attack`](super::held_attack)). A flight keeps the hunt's own
+/// path: a flight from a ship gone is ended by the high level that frame
+/// (@0x8dff6), so the next think's search is taken in this one. An
+/// inspection this think ends, and a follow or
 /// formation (the other reading of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)'s led ship), stay
 /// open too.
@@ -186,6 +197,17 @@ pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
         | Goal::Follow { .. }
         | Goal::Formation { .. } => false,
     }
+}
+
+/// Whether `npc`, behind `_InterceptorAI`'s open gate, searches, inspects
+/// and patrols nothing for the target it kept: idle, landing or entering a
+/// gate (the engine's goal 0 and 1) with +0x70 set goes to @0x8d13f
+/// unprovoked or with the slot inactive (@0x8cc93-0x8ccc9), as an ally
+/// goal 4 spared leaves it ([`held_attack`](super::held_attack)). A
+/// provoked one has taken goal 4 on it already.
+#[must_use]
+pub fn searches_nothing(npc: &Npc) -> bool {
+    matches!(npc.goal, Goal::Idle | Goal::Land(_) | Goal::EnterGate(_)) && npc.target.is_some()
 }
 
 /// An interceptor's retreat: when outnumbered, by `Flags` 0x0100, and
@@ -228,9 +250,10 @@ impl Behaviour for Interceptor {
     /// through each; then an inspection of a ship it no longer sees is
     /// dropped ([`lost_sight::after_inspection`], @0x8d39a-0x8d3ee). The
     /// high level ends with its provocation a retreat with no target
-    /// ([`out_of_ammo::stops`]) and an attack on a ship breaking up
-    /// ([`attack_breaking_up`]: `_InterceptorAI` has no drop of its own,
-    /// so goal 4 reaches @0x8e714).
+    /// ([`out_of_ammo::stops`]); goal 4's drops write theirs
+    /// ([`held_attack`](super::held_attack)), and a think left with
+    /// nothing to fight is tested for an attack on a ship breaking up
+    /// ([`attack_breaking_up`], @0x8e714).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if npc.goal == Goal::CountWait {
             // It returns for goal 0x16 at once (@0x8c8be).
@@ -253,6 +276,9 @@ impl Behaviour for Interceptor {
         );
         let mut comm_call = None;
         let mut stops = false;
+        // Goal 4's own drops write their provocation (`held_attack`); only
+        // a think left with nothing to fight meets @0x8e714 here.
+        let patrols = hunt.goal.is_none();
         let decision = hunt.or(|| {
             let (goal, call) = self.patrol(npc, around, chance);
             comm_call = call;
@@ -271,7 +297,7 @@ impl Behaviour for Interceptor {
         Decision {
             forgets_provocation: decision.forgets_provocation
                 || stops
-                || attack_breaking_up(npc, decision.goal, around),
+                || (patrols && attack_breaking_up(npc, decision.goal, around)),
             ..decision
         }
     }
@@ -285,8 +311,15 @@ impl Behaviour for Interceptor {
         fire::trigger(npc, around, self.fire)
     }
 
+    /// Its goal's quarry; idle, the target it kept, as goal 4's ally drop
+    /// leaves +0x70 (@0x8e2d2, see [`held_attack`](super::held_attack)).
+    /// A think that let its target go has cleared it first
+    /// ([`Decision::clears_target`]).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
-        npc.goal.quarry()
+        match npc.goal {
+            Goal::Idle => npc.target,
+            goal => goal.quarry(),
+        }
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
@@ -308,11 +341,12 @@ impl Interceptor {
         if inspection_holds(npc, around) {
             return (npc.goal, None);
         }
-        if gate_closed(npc, around) {
+        if gate_closed(npc, around) || searches_nothing(npc) {
             // The patrol and inspect block needs goal 1 or below, or
             // 0x14 (`_InterceptorAI` @0x8cc6d-0x8cc7d): a held ship
             // holds, a waiting one (state 6) waits, and a leaving,
-            // plundering or drifting one keeps at it.
+            // plundering or drifting one keeps at it. Inside the gate a
+            // kept +0x70 skips it too (@0x8cc93-0x8ccc9 → @0x8d13f).
             return (super::kept(npc, around).unwrap_or(npc.goal), None);
         }
         match inspect(npc, around, chance) {
@@ -905,8 +939,8 @@ mod tests {
         let decision = Interceptor::default().decision(&ally[0], &around, &mut Draws::of(&[0]));
         assert_eq!(
             (decision.goal, decision.clears_target),
-            (Goal::Idle, true),
-            "an ally it spares (@0x8e277)"
+            (Goal::Idle, false),
+            "an ally it spares, +0x70 kept (@0x8e277-0x8e2db)"
         );
         pirate.condition = Condition::Disabled;
         let npcs = [cop, pirate];
@@ -1045,8 +1079,235 @@ mod tests {
         for goal in [Goal::Wait, Goal::Hold] {
             let (decision, asked) = provoked_in(goal, ally.clone());
             assert_eq!(decision.goal, Goal::Idle, "{goal:?}");
+            assert!(!decision.clears_target, "{goal:?}: +0x70 kept (@0x8e2d2)");
             assert!(asked.is_empty(), "{goal:?}: no search that think");
         }
+    }
+
+    /// The decision of an unprovoked `cop` attacking NPC 2, `quarry` (none
+    /// for a ship gone), by `cop_ai`, a hostile player in view (record
+    /// -10, 300 below); and the draws asked.
+    fn attacking_with(cop_ai: Interceptor, cop: Npc, quarry: Option<Npc>) -> (Decision, Vec<u32>) {
+        let npcs: Vec<Npc> = std::iter::once(cop).chain(quarry).collect();
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let mut chance = Draws::of(&[0]);
+        let decision = cop_ai.decision(&npcs[0], &around, &mut chance);
+        (decision, chance.asked)
+    }
+
+    fn attacking(quarry: Option<Npc>) -> (Decision, Vec<u32>) {
+        let mut cop = police();
+        cop.goal = Goal::Attack(n(2));
+        cop.target = Some(n(2));
+        attacking_with(Interceptor::default(), cop, quarry)
+    }
+
+    const DYING: Condition = Condition::Dying {
+        ticks_left: 3,
+        starting: false,
+    };
+
+    #[test]
+    fn an_unprovoked_interceptor_whose_attack_the_disabled_drop_ends_searches_nothing_that_think() {
+        // Goal 4 closes the gate (@0x8cc6d-0x8cc7d); the disabled drop
+        // (@0x8d2fa-0x8d33a) writes goal 0 and +0x70 -1.
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.condition = Condition::Disabled;
+        let (decision, asked) = attacking(Some(pirate));
+        assert_eq!((decision.goal, decision.clears_target), (Goal::Idle, true));
+        assert!(asked.is_empty(), "no search that think");
+    }
+
+    #[test]
+    fn an_unprovoked_interceptor_attacking_an_ally_it_spares_idles_keeping_it_as_its_target() {
+        // @0x8e277-0x8e2db: goal 0, sub 0, +0x70 kept.
+        for led_ally in [RuleSource::Engine, RuleSource::Bible] {
+            let ai = Interceptor {
+                target: TargetRules {
+                    led_ally,
+                    ..TargetRules::default()
+                },
+                ..Interceptor::default()
+            };
+            let mut cop = police();
+            cop.goal = Goal::Attack(n(2));
+            cop.target = Some(n(2));
+            let ally = ship(2, TRADERS, AiType::Warship, 0.0, 300.0);
+            let (decision, asked) = attacking_with(ai, cop, Some(ally));
+            assert_eq!(
+                (decision.goal, decision.clears_target),
+                (Goal::Idle, false),
+                "{led_ally:?}"
+            );
+            assert!(asked.is_empty(), "{led_ally:?}: no search");
+        }
+    }
+
+    #[test]
+    fn an_unprovoked_interceptor_attacking_a_ship_breaking_up_idles_forgetting_its_provocation() {
+        // @0x8e3ef → @0x8e714-0x8e726.
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.condition = DYING;
+        let (decision, asked) = attacking(Some(pirate));
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, true, true)
+        );
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn an_unprovoked_interceptor_attacking_one_of_its_fleet_idles_clearing_its_target() {
+        // @0x8e2e9-0x8e399 → @0x8e381.
+        let mut escort = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        escort.leader = Some(crate::traffic::npc::NpcId(1));
+        let (decision, asked) = attacking(Some(escort));
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, true, false)
+        );
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn an_unprovoked_interceptor_attacking_a_ship_gone_idles() {
+        // The slot test makes +0x70 -1 (@0x8d4e4-0x8d50d), goal 4 then 0
+        // (@0x8e263 → @0x8e731), +0x96 kept.
+        let (decision, asked) = attacking(None);
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, true, false)
+        );
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_dry_interceptor_whose_disabled_drop_ends_its_attack_stops_forgetting_its_provocation() {
+        // The disabled drop makes +0x70 -1, the out-of-ammo retreat then
+        // goal 3 on it (@0x8d343-0x8d391), which the high level stops
+        // (@0x8dff6 → @0x8e228: goal 0, +0x96 0).
+        let mut cop = short_of_ammo(police(), AmmoLeft::Dry, true);
+        cop.goal = Goal::Attack(n(2));
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        pirate.condition = Condition::Disabled;
+        let (decision, asked) = attacking_with(Interceptor::default(), cop, Some(pirate));
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, true, true)
+        );
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_provoked_idle_interceptor_spared_its_provoker_idles_with_it_as_its_target_and_no_search() {
+        // The provoked branch writes goal 4 on +0x70 (@0x8cbf6-0x8cc31)
+        // and the ally drop idles it again, keeping +0x70 (@0x8e2d2).
+        let ally = ship(2, TRADERS, AiType::Warship, 0.0, 300.0);
+        let (decision, asked) = provoked_in(Goal::Idle, ally);
+        assert_eq!(
+            (
+                decision.goal,
+                decision.clears_target,
+                decision.forgets_provocation
+            ),
+            (Goal::Idle, false, false)
+        );
+        assert!(asked.is_empty(), "no search, inspection or patrol");
+    }
+
+    #[test]
+    fn a_provoked_idle_interceptor_is_judged_by_its_new_goal_4_for_the_odds_retreat() {
+        // The provoked branch writes goal 4 before the retreats, which need
+        // it (@0x8cbf6-0x8cc31, @0x8d14d-0x8d2e4).
+        let mut cop = police();
+        cop.goal = Goal::Idle;
+        cop.target = Some(n(2));
+        cop.provoked = 3.0;
+        cop.reserves.shield.now = 1.0;
+        cop.odds = 5.0;
+        let npcs = [cop, ship(2, PIRATES, AiType::Warship, 0.0, 300.0)];
+        let sites = sites();
+        let govts = govts(0, INTERCEPTORS_RETREAT);
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        let decision = Interceptor::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn an_unprovoked_idle_interceptor_with_a_kept_target_searches_inspects_and_patrols_nothing() {
+        // +0x70 set inside the open gate, unprovoked: @0x8cc93-0x8ccc9 →
+        // @0x8d13f, past the search, the inspection and the patrol.
+        for goal in [
+            Goal::Idle,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
+        ] {
+            let mut cop = police();
+            cop.goal = goal;
+            cop.target = Some(n(2));
+            let ally = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+            let (decision, asked) = attacking_with(Interceptor::default(), cop, Some(ally));
+            assert_eq!(
+                (decision.goal, decision.clears_target),
+                (goal, false),
+                "{goal:?}"
+            );
+            assert_eq!(decision.comm_call, None, "{goal:?}: no pre-scan hail");
+            assert!(asked.is_empty(), "{goal:?}: no search or pick");
+        }
+    }
+
+    #[test]
+    fn a_dry_unprovoked_idle_interceptor_with_a_kept_target_flees_it() {
+        // The out-of-ammo retreat still runs, goal 3 on +0x70
+        // (@0x8d343-0x8d391).
+        let mut cop = short_of_ammo(police(), AmmoLeft::Dry, true);
+        cop.goal = Goal::Idle;
+        cop.target = Some(n(2));
+        let ally = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0);
+        let (decision, asked) = attacking_with(Interceptor::default(), cop, Some(ally));
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.forgets_provocation, "it flees a ship");
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn an_idle_interceptors_target_is_the_one_it_kept() {
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut cop = police();
+        cop.goal = Goal::Idle;
+        cop.target = Some(n(2));
+        let npcs = [cop, ship(2, TRADERS, AiType::WimpyTrader, 0.0, 300.0)];
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        assert_eq!(Interceptor::default().target(&npcs[0], &around), Some(n(2)));
+        let mut waiting = npcs[0].clone();
+        waiting.goal = Goal::Wait;
+        assert_eq!(
+            Interceptor::default().target(&waiting, &around),
+            None,
+            "any other goal's quarry"
+        );
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub mod fire_untargeted;
 pub(crate) mod fixture;
 pub mod flee_drop;
 pub mod fleet_escort;
+pub mod held_attack;
 pub mod idle_block;
 pub mod interceptor;
 pub mod leave;
