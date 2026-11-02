@@ -309,7 +309,8 @@ pub const SHIELDS_LABEL: &str = "Shields:";
 /// @0x71ddb-0x71e01).
 pub const ARMOR_LABEL: &str = "Armor:";
 /// `STR#` 2002 #7, the info panel's fuel label (`_fuelString` + 0x400,
-/// @0x71d8f-0x71db3).
+/// @0x71d8f-0x71db3); the plunder dialog's energy label too
+/// (`_fuelString[4]`, `ui::plunder`).
 pub const ENERGY_LABEL: &str = "Energy:";
 /// `STR#` 2002 #335: a value of none.
 pub const NONE: &str = "None";

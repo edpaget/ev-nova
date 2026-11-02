@@ -17,7 +17,7 @@ use crate::ui::PlunderShown;
 
 use super::{
     BOARD_LINE_TICKS, BOARD_REFUSAL_TICKS, FlightView, GRANT_TICKS, MESSAGE_TICKS, REPELLED,
-    Wording, board_refusal_message, grant_message, mission_board_message, names, plunder_message,
+    Wording, board_refusal_message, grant_message, mission_board_message, plunder_message,
 };
 
 impl<C, S: FlightSim> FlightView<C, S> {
@@ -170,9 +170,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             Answer::Plundered { taken, open } => (taken, open),
             _ => (Taken::Nothing, false),
         };
+        // The salvage messages' names; the dialog names its lines itself
+        // (`plunder_shown`).
         let (good, outfit) = match taken {
-            Taken::Cargo { good, .. } => names(&self.names, Some(good), None),
-            Taken::Ammo { outfit, .. } => names(&self.names, None, Some(outfit)),
+            Taken::Cargo { good, .. } => (self.names.good_lc(good), None),
+            Taken::Ammo { outfit, .. } => (None, self.names.outfit_lc(outfit)),
             _ => (None, None),
         };
         if let Some(text) = plunder_message(taken, good, outfit) {

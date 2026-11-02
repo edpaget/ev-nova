@@ -554,20 +554,50 @@ fn a_take_names_its_cargo_and_its_rounds_as_the_flight_names_them() {
     view.plunder_held(Take::Cargo, Duration::ZERO);
     assert_eq!(
         view.message(),
-        Some("You salvaged 13 tons of Food from this ship.")
+        Some("You salvaged 13 tons of food from this ship."),
+        "the good in lower case (`_DoPlunderDialog` @0x93922)"
     );
-    view.sim.queue_answer(plundered(
+    // #115, `_StrcatOrdinalNumber`, `LCName` at 1 or less else `LCPlural`,
+    // #108 (@0x93ded-0x93ec8).
+    for (count, said) in [
+        (1, "You salvaged one rocket pack from this ship."),
+        (2, "You salvaged two rocket packs from this ship."),
+        (10, "You salvaged ten rocket packs from this ship."),
+        (11, "You salvaged 11 rocket packs from this ship."),
+    ] {
+        view.sim.queue_answer(plundered(
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count,
+            },
+            true,
+        ));
+        view.plunder_held(Take::Ammo, Duration::ZERO);
+        assert_eq!(view.message(), Some(said), "{count}");
+    }
+}
+
+#[test]
+fn rounds_or_a_good_the_flight_does_not_name_say_nothing() {
+    // The original's Ammo press takes nothing when no outfit names the
+    // rounds (@0x93d0a-0x93d2f), and every good has a name, so it has no
+    // fallback words.
+    for taken in [
         Taken::Ammo {
-            outfit: OutfitId(310),
-            count: 2,
+            outfit: OutfitId(999),
+            count: 3,
         },
-        true,
-    ));
-    view.plunder_held(Take::Ammo, Duration::ZERO);
-    assert_eq!(
-        view.message(),
-        Some("You salvaged 2 Rockets from this ship.")
-    );
+        Taken::Cargo {
+            good: Good::Commodity(5),
+            stored: 3,
+        },
+    ] {
+        let mut view = sol();
+        view.say_for(MISSION_FAILED, 240);
+        view.sim.queue_answer(plundered(taken, true));
+        view.plunder_held(Take::Ammo, Duration::ZERO);
+        assert_eq!(view.message(), Some(MISSION_FAILED), "{taken:?}");
+    }
 }
 
 #[test]

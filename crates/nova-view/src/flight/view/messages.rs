@@ -13,8 +13,8 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::screens::NO_ACTIVE_MISSIONS;
 use nova_sim::text_tags::comma_number;
 use nova_sim::{
-    Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, Good, HailRefusal, Help,
-    JumpRefusal, LandingRefusal, OutfitId, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
+    Assigned, BoardRefusal, Chance, CommNote, DockKind, GateKind, HailRefusal, Help, JumpRefusal,
+    LandingRefusal, SelfDestructLine, ShipId, SimMessage, StellarId, Taken,
 };
 use nova_sim::{MissionBoardLine, PayNote, RuleSource, TutorialHint};
 
@@ -22,7 +22,7 @@ use nova_sim::flight_frame::{FlightFrame, Names};
 
 use crate::Key;
 use crate::flight::escorts::NUMBER_WORDS;
-use crate::spaceport::credits::{TON, TONS};
+use crate::spaceport::credits::{OF, TON, TONS};
 use crate::system::scene::SystemScene;
 use crate::ui::comm::grouped;
 
@@ -166,8 +166,6 @@ pub const FIGHTER: &str = "Fighter";
 pub const CARGO: &str = "cargo";
 /// `STR#` 2002 #374: how a plunder's lines end (@0x84719, @0x848c9).
 pub const STOLEN: &str = "stolen!";
-/// `STR#` 2002 #391: between the tons and the cargo (@0x8463f).
-pub const OF: &str = "of";
 /// `STR#` 2002 #392: between the cargo and the credits (@0x84698).
 pub const AND: &str = "and";
 
@@ -1294,25 +1292,41 @@ pub fn board_refusal_message(refusal: BoardRefusal) -> Option<&'static str> {
     })
 }
 
+/// `STR#` 2002 #115: a cargo or ammunition take's message starts so
+/// (`_DoPlunderDialog` @0x9381a, @0x93ded).
+pub const SALVAGED: &str = "You salvaged";
+
 /// What the player is told of a press in the plunder dialog that did
-/// `taken`, in the original's words (`_DoPlunderDialog`): the cargo's
-/// `good` and the ammunition's `outfit` by name, and the energy by
-/// whether it filled the tank; nothing for a capture awaiting its
-/// assignment, an abort or a press that did nothing.
+/// `taken`, in the original's words (`_DoPlunderDialog`): the cargo by
+/// the good's lower-case name `good` (@0x9380d-0x93986: [`SALVAGED`],
+/// the tons in digits, [`TON`] at exactly 1 else [`TONS`], [`OF`], the
+/// name, [`FROM_THIS_SHIP`]); the ammunition by its outfit's `LCName`
+/// and `LCPlural` (@0x93ded-0x93ed8: [`SALVAGED`], the count as
+/// [`count_words`] writes it, `LCName` at 1 or less else `LCPlural`,
+/// [`FROM_THIS_SHIP`]); the energy by whether it filled the tank; nothing
+/// for a capture awaiting its assignment, an abort or a press that did
+/// nothing. A good or rounds with no name also say nothing: the
+/// original names every good, and takes no rounds no outfit names
+/// (@0x93d0a-0x93d2f), so it has no words for them.
 #[must_use]
-pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -> Option<String> {
+pub fn plunder_message(
+    taken: Taken,
+    good: Option<&str>,
+    outfit: Option<(&str, &str)>,
+) -> Option<String> {
     let text = match taken {
         Taken::Cargo { stored: 0, .. } => NO_CARGO_STORED.to_owned(),
         Taken::Cargo { stored, .. } => {
-            let tons = if stored == 1 { "ton" } else { "tons" };
-            let good = good.unwrap_or("cargo");
-            format!("You salvaged {stored} {tons} of {good} from this ship.")
+            let tons = if stored == 1 { TON } else { TONS };
+            let good = good?;
+            format!("{SALVAGED} {stored} {tons} {OF} {good} {FROM_THIS_SHIP}")
         }
         Taken::Credits(_) => STOLE_CREDITS.to_owned(),
         Taken::Ammo { count: 0, .. } => NO_AMMO_STORED.to_owned(),
         Taken::Ammo { count, .. } => {
-            let outfit = outfit.unwrap_or("rounds");
-            format!("You salvaged {count} {outfit} from this ship.")
+            let (lc_name, lc_plural) = outfit?;
+            let name = if count <= 1 { lc_name } else { lc_plural };
+            format!("{SALVAGED} {} {name} {FROM_THIS_SHIP}", count_words(count))
         }
         Taken::Energy { stored: 0, .. } => NO_ENERGY_STORED.to_owned(),
         Taken::Energy { full: true, .. } => ENERGY_FILLED.to_owned(),
@@ -1360,27 +1374,20 @@ pub fn grant_message(count: u16, lc_name: &str, lc_plural: &str) -> String {
     let (number, name) = if count == 1 {
         (article(lc_name).to_owned(), lc_name)
     } else {
-        let words = usize::from(count)
-            .checked_sub(1)
-            .and_then(|index| NUMBER_WORDS.get(index));
-        let number = words.map_or_else(|| count.to_string(), |word| (*word).to_owned());
-        (number, lc_plural)
+        (count_words(u32::from(count)), lc_plural)
     };
     format!("{RETRIEVED}{number} {name} {FROM_THIS_SHIP}")
 }
 
-/// The names `names` gives `good` and `outfit`: one rule for the
-/// plunder dialog ([`FlightView::plunder_shown`](super::FlightView::plunder_shown)) and the messages
-/// ([`FlightView::plunder`](super::FlightView::plunder)).
-pub(super) fn names(
-    names: &Names,
-    good: Option<Good>,
-    outfit: Option<OutfitId>,
-) -> (Option<&str>, Option<&str>) {
-    (
-        good.and_then(|good| names.good(good)),
-        outfit.and_then(|outfit| names.outfit(outfit)),
-    )
+/// `count` as `_StrcatOrdinalNumber` (@0x8ab4) writes it, uncapitalised:
+/// one to ten in words ([`NUMBER_WORDS`], `STR#` 137 #29-#38), else in
+/// digits.
+fn count_words(count: u32) -> String {
+    usize::try_from(count)
+        .ok()
+        .and_then(|count| count.checked_sub(1))
+        .and_then(|index| NUMBER_WORDS.get(index))
+        .map_or_else(|| count.to_string(), |word| (*word).to_owned())
 }
 
 /// What the player is told of an assignment, or a rename, that did
