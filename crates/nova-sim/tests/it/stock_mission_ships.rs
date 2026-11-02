@@ -663,3 +663,60 @@ fn the_wraith_of_misn_155_is_boarded_through_session_board_and_its_goal_met() {
         Err(nova_sim::BoardRefusal::CantBoard)
     );
 }
+
+/// `mïsn` 603, "Observe Cloak-Ship": `ShipDude` 200 (a Zephyr, `shïp`
+/// 375/376, `Flags2` 0x5282 and miner bit `Flags3` 0x0001), `ShipSyst`
+/// 246 (Ver'roqi, `Asteroids` 2), `ShipStart` 2.
+const OBSERVE_CLOAK_SHIP: i16 = 603;
+/// Ver'roqi.
+const VER_ROQI: SystemId = SystemId(246);
+
+#[test]
+fn the_zephyr_of_603_cloaks_chasing_ver_roqis_rock_and_uncloaks_inside_its_box() {
+    // `_AIHandleCloaking`: 0x0200 cloaks on goal 0x10 sub 0x13 (@0x834d6);
+    // 0x1000 keeps a cloaked miner's cloak on any sub but 0x14
+    // (@0x835dd-0x835fd); inside the box (0x14) neither holds and it has
+    // no parent, so it uncloaks. With `NeverFires` the Zephyr comes in,
+    // cloaks on its chase and closes within about 450 ticks; 900 is the
+    // budget.
+    use nova_sim::ai::Goal;
+    use nova_sim::ai::mine_orders::MineOrder;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let (session, _) = started_docked(&data, OBSERVE_CLOAK_SHIP);
+    let mut flying = in_flight(&data, session.pilot(), VER_ROQI);
+    let zephyrs = [ShipId(375), ShipId(376)];
+    let mut chased_cloaked = false;
+    let mut uncloaked_inside = false;
+    for _ in 0..900 {
+        crate::passes::work_with(
+            &mut flying,
+            &data,
+            nova_sim::Controls::default(),
+            &NovaAi::default(),
+            nova_sim::Rules::default(),
+            &mut NeverFires,
+        );
+        let Some(zephyr) = flying.npcs().iter().find(|npc| zephyrs.contains(&npc.ship)) else {
+            continue;
+        };
+        if zephyr.goal != Goal::Mine {
+            continue;
+        }
+        let cloak = zephyr.cloak;
+        match zephyr.mine_order {
+            MineOrder::Chase if cloak.direction == 1 || cloak.is_cloaked() => {
+                chased_cloaked = true;
+            }
+            MineOrder::Kill if chased_cloaked && cloak.direction == -1 => {
+                uncloaked_inside = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(chased_cloaked, "cloaks on its chase (0x13)");
+    assert!(uncloaked_inside, "then uncloaks inside the box (0x14)");
+}
