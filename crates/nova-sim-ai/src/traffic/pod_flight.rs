@@ -5,7 +5,7 @@
 //! - **It decides nothing**: no goal, fire command or target is taken on
 //!   the AI timer (see [`Traffic::tick_in`](super::Traffic::tick_in)'s
 //!   step 4).
-//! - **It flies at full thrust along its heading** ([`controls`]):
+//! - **It flies at full thrust along its heading** ([`flight()`]):
 //!   `_AIDispatch` sets its thrust to `_ShipAccelRate` (+0x30), its top
 //!   speed to `_ShipMaxSpeed` (+0x34) and the heading it steers to to its
 //!   own, truncated (+0x68 = `trunc(+0x44)`), so `_HandleShip` puts it on
@@ -41,7 +41,12 @@
 use super::autopilot::Outcome;
 use super::npc::{Mode, Npc, NpcId};
 use crate::combat::hull::ESCAPE_POD_SHIP;
-use crate::flight::{self, Controls};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::Controls;
+use crate::traffic::held_burst::Flight;
+use crate::traffic::slot_word::Cap;
+use crate::trig;
 
 /// Whether `npc` is an escape pod, of class [`ESCAPE_POD_SHIP`].
 #[must_use]
@@ -49,19 +54,25 @@ pub fn is_pod(npc: &Npc) -> bool {
     npc.ship == ESCAPE_POD_SHIP
 }
 
-/// The controls `npc`, a pod, flies by: full thrust, its heading put on
-/// its own whole degree, the +0x68 `_AIDispatch` writes, as `_HandleShip`
-/// turns it ([`flight::turn_to_own`]); while its wait runs
-/// ([`Mode::Adrift`] above none, +0x4c > 0) the turn is skipped
-/// (@0x3443f-0x34446), as a pod is never in a count wait.
-pub fn controls(npc: &mut Npc) -> Controls {
-    if !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0) {
-        flight::turn_to_own(&mut npc.state);
-    }
-    Controls {
+/// The word `_AIDispatch` writes for `npc`, a pod, at its slot
+/// (@0x8fb62-0x8fbba): full thrust (+0x30 = `_ShipAccelRate`), +0x34 its
+/// slot's `_ShipMaxSpeed`, and its own whole heading (+0x68 =
+/// trunc(+0x44)), which `_HandleShip` puts it on ([`flight::turn_to`])
+/// unless its wait runs ([`turns`]).
+pub(crate) fn flight(npc: &Npc) -> Flight {
+    let controls = Controls {
         thrust: true,
         ..Controls::default()
-    }
+    };
+    Flight::writes(controls, trig::whole(npc.state.heading), Cap::Slot)
+}
+
+/// Whether `_HandleShip` turns `npc`, a pod, to its +0x68: not while its
+/// wait runs ([`Mode::Adrift`] above none, +0x4c > 0, @0x3443f-0x34446),
+/// as a pod is never in a count wait.
+#[must_use]
+pub fn turns(npc: &Npc) -> bool {
+    !matches!(npc.mode, Mode::Adrift { ticks_left } if ticks_left > 0)
 }
 
 /// `_AIDispatch` for each pod among `npcs` that `picks` picks, its slot's
@@ -234,20 +245,20 @@ mod tests {
     }
 
     #[test]
-    fn a_pods_controls_are_full_thrust_its_heading_put_on_its_whole_degree_with_no_wait() {
+    fn a_pods_word_is_full_thrust_at_its_slots_top_speed_toward_its_whole_heading() {
         let full = Controls {
             thrust: true,
             ..Controls::default()
         };
+        let word = flight(&pod(45.9, Mode::Flying));
+        assert_eq!(word.controls, full);
+        assert_eq!(word.wanted, Some(45));
+        assert_eq!(word.cap, Cap::Slot, "+0x34 = `_ShipMaxSpeed` (@0x8fb90)");
         for mode in [Mode::Flying, Mode::Adrift { ticks_left: 0 }] {
-            let mut flying = pod(45.9, mode);
-            assert_eq!(controls(&mut flying), full, "{mode:?}");
-            assert_eq!(flying.state.heading, 45.0, "{mode:?}");
+            assert!(turns(&pod(45.9, mode)), "{mode:?}");
         }
         // While its wait runs, its turn is skipped.
-        let mut waiting = pod(45.9, Mode::Adrift { ticks_left: 3 });
-        assert_eq!(controls(&mut waiting), full);
-        assert_eq!(waiting.state.heading, 45.9);
+        assert!(!turns(&pod(45.9, Mode::Adrift { ticks_left: 3 })));
         assert!(!is_pod(&npc(0, ShipStats::default())));
     }
 }

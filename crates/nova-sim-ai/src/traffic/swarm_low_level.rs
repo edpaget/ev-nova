@@ -523,10 +523,22 @@ mod tests {
         let ship = ship.expect("there");
         change(ship);
         ship.display.drive.glow = GlowCopy::None;
+        // The same ship with no frame to branch on: what its low level at
+        // its slot does besides (the regroup pause's kept formation runs
+        // sub 0xb's own swarm branch, @0x87364-0x873a3).
+        let mut unframed = traffic.clone();
+        let twin = unframed.npcs_mut().iter_mut().find(|npc| npc.id == id);
+        twin.expect("there").pursuit.frame = None;
         think_in(&mut traffic, &world);
+        think_in(&mut unframed, &world);
         assert_eq!(bodies(&traffic, id), [Manoeuvre::Approach], "kept");
-        assert_eq!(of(&traffic, id).state.position, nudged);
-        assert_eq!(of(&traffic, id).display.drive.glow, GlowCopy::None);
+        let unbranched = of(&unframed, id);
+        let ship = of(&traffic, id);
+        assert_eq!(ship.state.position, unbranched.state.position);
+        assert_eq!(ship.display.drive.glow, unbranched.display.drive.glow);
+        if ship.goal == Goal::Hold || !matches!(ship.goal, Goal::Regroup { .. }) {
+            assert_eq!(ship.state.position, nudged, "no other low level moves it");
+        }
     }
 
     #[test]

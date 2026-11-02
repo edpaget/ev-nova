@@ -539,7 +539,7 @@ pub fn fly(npc: &mut Npc, handling: &Handling, flight: FlightRules, inertia: Ine
     };
     match inertia {
         // A turn alone writes neither word.
-        Inertia::Inertial => plain_step(npc, handling, controls, flight, inertia),
+        Inertia::Inertial => plain_step(npc, handling, controls, flight, (inertia, handling.accel)),
         Inertia::Inertialess { .. } => {
             npc.state.heading = turned(npc.state.heading, controls.turn, handling.turn_rate);
             inertialess::drift(npc, handling);
@@ -708,7 +708,9 @@ pub fn leader_of(
 /// as its goal says, whether sub 0xd kept formation at its slot on the
 /// advance pass when `formation` says, by its leader's stage otherwise
 /// (double time's second pass, which runs no low level). It takes no
-/// thrust, so its top speed plays no part.
+/// thrust, so its top speed plays no part; an inertialess ship's velocity
+/// follows its speed at `adjust`, its `_AdjustInertialessShipVelocity`'s
+/// `_ShipAccelRate` at its step (@0x334e1), before the frame's ion block.
 ///
 /// A ship `paused` in the regroup pause (goal 0x13, its sub 0xd kept) runs
 /// no goal block (`_HighLevelAIHandler` has none for 0x13), and its low
@@ -718,28 +720,41 @@ pub fn fly_jump(
     npc: &mut Npc,
     leaders: &BTreeMap<NpcId, LeaderWarp>,
     world: &World,
-    formation: Option<bool>,
-    paused: bool,
+    (formation, paused): (Option<bool>, bool),
+    adjust: f32,
 ) -> Option<Outcome> {
-    if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
-        return None;
-    }
-    npc.warp.goal?;
     let formation = formation.unwrap_or_else(|| {
         leader_of(npc, leaders, &world.warp).is_some_and(|(_, leader)| leader.stage <= 1.0)
     });
-    if formation || !npc.jumping() {
+    if !flies_jump(npc, formation) {
         return None;
     }
     let jumping = !paused;
-    let handling = npc
-        .ionization()
-        .slows(world.flight.handling(npc.own_handling()));
+    let handling = Handling {
+        accel: adjust,
+        ..npc
+            .ionization()
+            .slows(world.flight.handling(npc.own_handling()))
+    };
     // No leader passed: close formation needs one, so the sight is moot.
     let inertia = Inertia::of(npc, None, true, world.flight);
     fly(npc, &handling, world.flight, inertia);
     warp_block(npc, led(npc, leaders), &world.warp, jumping);
     Some(Outcome::Flying)
+}
+
+/// Whether `npc` flies its jump by `_HandleShip`'s warp-out rather than by
+/// the word its low level leaves ([`fly_jump`]): flying intact on a jump,
+/// and not keeping formation on its leader's (`formation`, see
+/// [`fly_jump`]). Its low level leaves the head's word for it (the
+/// traffic's `dispatch_autopilot`).
+#[must_use]
+pub fn flies_jump(npc: &Npc, formation: bool) -> bool {
+    npc.mode == Mode::Flying
+        && npc.condition == Condition::Intact
+        && npc.warp.goal.is_some()
+        && !formation
+        && npc.jumping()
 }
 
 #[cfg(test)]
@@ -809,7 +824,10 @@ mod tests {
                 follow_jump(npc, leader, player) == FollowStep::Formation
             })
         });
-        fly_jump(npc, leaders, world, formation, paused)
+        let adjust = (npc.ionization())
+            .slows(world.flight.handling(npc.own_handling()))
+            .accel;
+        fly_jump(npc, leaders, world, (formation, paused), adjust)
     }
 
     /// d 364 out of double time, the player at rest in no warp.

@@ -40,6 +40,12 @@
 //! [`fly_pass`](super::fly_pass)): double time's second pass runs no
 //! `_AIDispatch`, so its low level can't dock or jump either.
 //!
+//! A ship that stays, its docking's low level aside, then runs the
+//! autopilot's low level at its slot
+//! ([`dispatch_autopilot`](super::dispatch_autopilot)), which leaves the
+//! word its step flies; a ship that detaches at sub 0xd, or whose warp the
+//! warp-out flies, leaves the head's.
+//!
 //! **A leader's warp, by slot.** A follower on its leader's jump reads
 //! the leader's +0x50 live in its own low level (sub 0xd @0x859c5-0x85c5f):
 //! one below its leader reads it as the tick began, one above after the
@@ -64,34 +70,32 @@ impl Traffic {
     /// The loop's opening, after the passes before the first slot: every
     /// ship's warp clock moves on, as `TickCount` does between advance
     /// passes; each ship's warp is kept as the tick opened, for the
-    /// followers below it, and its state, for the flights of the lower
-    /// slots (see [`fly_pass`](super::fly_pass)); and the last tick's
-    /// leavers and docking flights are forgotten.
+    /// followers below it; and the last tick's leavers and the flights
+    /// that ended at their slot are forgotten. Each ship's word stands
+    /// until its slot writes it ([`slot_word`](super::slot_word)).
     pub(super) fn open_dispatch(&mut self) {
         for npc in &mut self.npcs {
             npc.warp.tick_clock();
         }
         self.open_leaders = warp_out::leaders(&self.npcs);
-        self.open_states = (self.npcs.iter())
-            .map(|npc| (npc.id, (npc.berth, npc.state)))
-            .collect();
         self.left_in_dispatch.clear();
-        self.dock_flights.clear();
+        self.slot_outcomes.clear();
         self.followed.clear();
     }
 
     /// The high level's and low level's work at the slot of each NPC
     /// `picks` picks, in berth order, in `world`, rolling on `chance` (see
     /// the module docs): its warp's hold and a fighter's turn-back, a gate
-    /// entrant's box and release, its low level's read of its accel for
-    /// `_HandleShip`'s thrust ([`Npc::read_at_slot`], see
-    /// [`slot_accel`](super::slot_accel); none for a ship a test holds
-    /// still), a docking ship's low level (its match,
-    /// creep, dock start and completion, [`dispatch_dock`](super::dispatch_dock)), and its leaves,
-    /// its own jump-out and a fighter's dock with its carrier unless
-    /// `no_bay` names it. Each leaver is recorded among the ships gone,
-    /// freed in the AI loop, and taken out of the traffic at once. The
-    /// ships that left, and how, in order.
+    /// entrant's box and release, a docking ship's low level (its match,
+    /// creep, dock start and completion,
+    /// [`dispatch_dock`](super::dispatch_dock)), its leaves, its own
+    /// jump-out and a fighter's dock with its carrier unless `no_bay`
+    /// names it, and, for one that stays, the autopilot's low level and
+    /// the word it leaves `_HandleShip`
+    /// ([`dispatch_autopilot`](super::dispatch_autopilot)); none of the
+    /// low level for a ship a test holds still. Each leaver is recorded
+    /// among the ships gone, freed in the AI loop, and taken out of the
+    /// traffic at once. The ships that left, and how, in order.
     pub(super) fn leave_in_dispatch(
         &mut self,
         world: &World,
@@ -116,17 +120,21 @@ impl Traffic {
             // detaches there runs no sub 4 that frame. A ship a test holds
             // still runs no low level.
             let still = self.held_still.contains(&id);
-            // The low level's `_ShipAccelRate`, read at its slot before its
-            // other work, for `_HandleShip`'s thrust ([`slot_accel`]).
-            if !still {
-                self.npcs[index].read_at_slot(world);
-            }
             let detached = self.follow_in_dispatch(index, world, still);
-            if still || detached {
+            if still {
                 continue;
             }
-            self.dock_in_dispatch(index, world, chance);
+            if detached {
+                // Sub 0xd's detach writes no word: the head's stands
+                // (@0x851f1, @0x8522d), and the warp-out flies it.
+                self.keep_head_word(index, world);
+                continue;
+            }
+            let docked = self.dock_in_dispatch(index, world, chance);
             let Some(outcome) = self.leaves(index, world, no_bay) else {
+                if !docked {
+                    self.autopilot_in_dispatch(index, world, chance);
+                }
                 continue;
             };
             let mut record = self.npcs.remove(index);

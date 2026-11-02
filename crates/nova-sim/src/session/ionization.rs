@@ -522,7 +522,7 @@ mod tests {
     fn a_session_tick_flies_an_ionised_npc_by_the_accel_its_slot_read_before_the_shed() {
         // Wiring: the slot read in the session's slot-by-slot
         // `dispatch_npcs`, the thrust in its ship loop
-        // (`nova_sim_ai::traffic::slot_accel`).
+        // (`nova_sim_ai::traffic::slot_word`).
         use crate::ai::Goal;
         use crate::flight::FlightRules;
         use crate::session::tests::{arming, blaster, with_an_npc_at};
@@ -548,7 +548,8 @@ mod tests {
         work(&mut session, &catalog, Controls::default());
         let npc = session.space.npc(id).expect("there");
         assert_eq!(npc.ion.charge, 200.0);
-        assert_eq!(npc.slot_accel, Some(slot));
+        let word = session.space.traffic.word_of(id).expect("its slot's");
+        assert_eq!(word.flown().accel, slot);
         assert_eq!(npc.state.velocity, Vec2::new(0.0, -slot));
     }
 

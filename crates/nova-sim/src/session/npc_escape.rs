@@ -1224,15 +1224,20 @@ mod tests {
     fn an_escape_fighter_launched_above_its_carrier_is_drawn_on_its_launch_frame() {
         // `_LaunchFighter` makes its slot active at once (@0x3c90b,
         // @0x3d680), so the ship loop (@0x4445c-0x444c4) reaches berth 2
-        // after the carrier's: its `_HandleShip` moves it, unsteered, and
-        // its display shows it before the frame.
+        // after the carrier's: its `_HandleShip` moves it, with no low
+        // level to steer it, unthrust and turning toward its berth's last
+        // heading, 0 for a berth no ship has held, and its display shows it
+        // before the frame.
         let (catalog, mut session, carrier) = dying_carrier(1, 100, HALFWAY);
         launch_pass(&mut session, &catalog);
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.berth, 2);
         let from = session.space.npc(carrier).expect("dying").state.position;
         assert_eq!(fighter.state.position, from + fighter.state.velocity);
-        assert_eq!(fighter.state.heading, 90.0, "unsteered");
+        let turn = (session.setup.flight_rules())
+            .handling(fighter.stats.handling)
+            .turn_rate;
+        assert_eq!(fighter.state.heading, 90.0 - turn, "toward 0, unthrust");
         assert!(
             session.draw_order().contains(&ShipRef::Npc(fighter.id)),
             "{:?}",

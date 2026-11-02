@@ -35,9 +35,13 @@
 //! plays no sound.
 
 use crate::ai::fire;
-use crate::flight::{self, Controls, ShipState};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::traffic::held_burst::Flight;
+use crate::traffic::slot_word::Cap;
 use crate::trig;
 
 /// How far beyond a turn, in degrees, a ship closing in still thrusts
@@ -50,17 +54,16 @@ pub const NEAR: f32 = 500.0;
 pub const NEAR_CAP: f32 = 0.25;
 
 /// Substate 2's controls for a ship at `state` on `handling` closing in on
-/// a stellar at `stellar`, and the handling they fly by: its top speed
-/// capped near the stellar as it thrusts (see the module docs). `state` is turned as
-/// `_HandleShip` turns it ([`flight::turn_to`]).
+/// a stellar at `stellar`, the handling they fly by, and the heading it
+/// wants: its top speed capped near the stellar as it thrusts (see the
+/// module docs), which `_HandleShip` turns it to ([`flight::turn_to`]).
 #[must_use]
-pub fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling) {
+pub fn toward(state: &ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling, i16) {
     let bearing = trig::intercept_angle(state.position, stellar);
     // The low level reads its thrust before `_HandleShip` turns it.
     let thrust = fire::off_by(state.heading, bearing) < handling.turn_rate + TURN_SLACK;
     let controls = Controls {
         thrust,
-        turn: flight::turn_to(state, bearing, handling.turn_rate),
         ..Controls::default()
     };
     let off = state.position - stellar;
@@ -72,14 +75,38 @@ pub fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Con
     } else {
         *handling
     };
-    (controls, flown)
+    (controls, flown, bearing)
+}
+
+/// Substate 2 ([`toward`]) as its flight, which writes +0x34 as it
+/// thrusts ([`Word::Writes`](crate::traffic::held_burst::Word::Writes)):
+/// near the stellar the quarter of its slot's top speed, farther off none,
+/// so its step's ([`Cap`]); not thrusting, the head's.
+pub(crate) fn flight(state: &ShipState, stellar: Vec2, handling: &Handling) -> Flight {
+    let (controls, flown, wanted) = toward(state, stellar, handling);
+    let capped = flown.max_speed < handling.max_speed;
+    let cap = if controls.thrust && !capped {
+        Cap::Step
+    } else {
+        Cap::Slot
+    };
+    Flight::writes(controls, wanted, cap).by(flown)
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::flight::Turn;
+    use crate::flight::{self, Turn};
+
+    /// [`super::toward`]'s controls and handling, `state` turned as
+    /// `_HandleShip` turns it to the heading it wants
+    /// ([`flight::turn_to`]), the turn in the controls.
+    fn toward(state: &mut ShipState, stellar: Vec2, handling: &Handling) -> (Controls, Handling) {
+        let (controls, flown, wanted) = super::toward(state, stellar, handling);
+        let turn = flight::turn_to(state, wanted, handling.turn_rate);
+        (Controls { turn, ..controls }, flown)
+    }
 
     const HANDLING: Handling = Handling {
         max_speed: 8.0,

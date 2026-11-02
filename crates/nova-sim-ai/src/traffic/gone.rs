@@ -864,15 +864,17 @@ mod tests {
             fly_in(traffic, id, &World::new(&[]));
         }
 
-        /// NPC `id`'s flight, alone, in a fly half of `traffic` over planet
-        /// 140, a mission ship that lands leaving as `landed_leaves` says:
-        /// what became of it.
+        /// NPC `id`'s low level at its slot, then its flight, alone, in a
+        /// fly half of `traffic` over planet 140, a mission ship that lands
+        /// leaving as `landed_leaves` says: what became of it.
         fn land(traffic: &mut Traffic, id: NpcId, landed_leaves: RuleSource) -> Option<Outcome> {
             let sites = [planet(140, 0.0, 0.0)];
             let world = World {
                 landed_leaves,
                 ..World::new(&sites)
             };
+            let index = traffic.npcs.iter().position(|npc| npc.id == id)?;
+            traffic.autopilot_in_dispatch(index, &world, &mut NeverFires);
             fly_in(traffic, id, &world)
         }
 

@@ -39,9 +39,9 @@
 //! names whatever tick freed it, and which stands until a ship takes the
 //! berth (see [`repair_dock`]).
 //!
-//! The flight the low level leaves `_HandleShip`, its heading wanted
+//! The word the low level leaves `_HandleShip`, its heading wanted
 //! (+0x68) and its thrust word (+0x30), is kept for the fly half
-//! ([`DockFlight`]), which flies it ([`plunder_dock::handle_ship`]) and
+//! ([`SlotWord`]), which flies it ([`slot_word::handle_ship`]) and
 //! decides nothing. Double time's second pass runs no `_AIDispatch`
 //! (@0x44350), so it matches and creeps nothing: it flies the same flight
 //! again, as `_HandleShip` reads the words the low level left, thrusting
@@ -60,7 +60,7 @@
 use super::plunder::{self, PirateEvent};
 use super::plunder_dock::DockOutcome;
 #[cfg(doc)]
-use super::plunder_dock::{self, DockFlight};
+use super::slot_word::{self, SlotWord};
 use super::{Traffic, World, repair_dock};
 use crate::ai::{Surroundings, swarm};
 use crate::chance::Chance;
@@ -69,20 +69,20 @@ use crate::combat::ShipRef;
 impl Traffic {
     /// The low level of the docking of the NPC at `index` in `world`,
     /// rolling a dock's wait on `chance` (see the module docs): none for a
-    /// ship with no docking, or one not flying intact. The flight it
-    /// leaves is kept for the fly half; one whose low level flew no
-    /// docking keeps none.
+    /// ship with no docking, or one not flying intact. The word it leaves
+    /// is kept for the fly half ([`Traffic::keep_word`]). Whether it flew
+    /// a docking, so the autopilot's low level doesn't
+    /// ([`dispatch_autopilot`](super::dispatch_autopilot)).
     pub(super) fn dock_in_dispatch(
         &mut self,
         index: usize,
         world: &World,
         chance: &mut (impl Chance + ?Sized),
-    ) {
+    ) -> bool {
         let npc = &self.npcs[index];
         let id = npc.id;
-        self.dock_flights.remove(&id);
         let Some(docking) = npc.docking else {
-            return;
+            return false;
         };
         let victim = match docking.ship {
             ShipRef::Player => world.player.map(|player| player.state),
@@ -104,9 +104,9 @@ impl Traffic {
         let Some((flown, outcome)) =
             plunder::dock_low_level(npc, victim.as_ref(), own, flight, swarm, chance)
         else {
-            return;
+            return false;
         };
-        self.dock_flights.insert(id, flown);
+        self.keep_word(index, flown);
         match outcome {
             DockOutcome::Started => match docking.ship {
                 ShipRef::Player => self.queue_pirate(PirateEvent::PlayerDockedWith { pirate: id }),
@@ -143,6 +143,7 @@ impl Traffic {
             }
             DockOutcome::Flying => {}
         }
+        true
     }
 }
 

@@ -27,7 +27,7 @@ use crate::stats::{INERTIALESS_HULL, ShipStats};
 use crate::traffic::plunder;
 use crate::traffic::plunder_dock::{DockSub, Docking};
 use nova_sim_base::fixture::FAST;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// A ship of [`FAST`] held at its gate for `ticks_left` more ticks, with
 /// `goal`, at `state`, its target the player.
@@ -496,7 +496,7 @@ fn swarm_pair(reading: RuleSource) -> (Traffic, World<'static>) {
 fn a_held_swarmer_bursts_out_slowing_by_its_thrust_and_stops_jumping_at_its_cap() {
     let (mut traffic, world) = swarm_pair(RuleSource::Engine);
     let tick = |traffic: &mut Traffic| {
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         traffic.npcs[1].clone()
     };
     let released = tick(&mut traffic);
@@ -548,7 +548,7 @@ fn by_the_other_reading_a_held_swarmer_flies_its_swarm_from_its_hold_with_no_bur
     let top = traffic.npcs[1].stats.handling.max_speed;
     let accel = traffic.npcs[1].stats.handling.accel;
     for tick in 0..200 {
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         let ship = &traffic.npcs[1];
         assert!(
             ship.state.velocity.length() <= top + accel + 1e-3,
@@ -575,8 +575,8 @@ fn a_held_sniper_pushed_moving_bursts_out_and_stops_jumping_at_its_cap() {
         player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
         ..World::new(&[])
     };
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    traffic.fly_tick(&world, &mut NeverFires);
+    traffic.fly_tick(&world, &mut NeverFires);
     let first = &traffic.npcs[0];
     assert!(
         close(first.state.velocity, facing(270.0) * 30.0),
@@ -586,7 +586,7 @@ fn a_held_sniper_pushed_moving_bursts_out_and_stops_jumping_at_its_cap() {
     let mut ticks = 0;
     while traffic.npcs[0].owed_burst.is_some() {
         assert_eq!(traffic.npcs[0].goal, Goal::Snipe(ShipRef::Player));
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         ticks += 1;
         assert!(ticks < 50_000, "never ended");
     }
@@ -624,7 +624,7 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
         player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
         ..World::new(&[])
     };
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    traffic.fly_tick(&world, &mut NeverFires);
     assert_eq!(traffic.npcs[0].owed_burst, Some(30.0));
     let mut ticks = 0;
     while traffic.npcs[0].owed_burst.is_some() {
@@ -634,7 +634,7 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
             "tick {ticks}: {:?}",
             traffic.npcs[0].state
         );
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         ticks += 1;
         assert!(ticks < 50_000, "never ended");
     }
@@ -644,7 +644,7 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
     assert_eq!(ended.state.velocity, Vec2::ZERO, "stopped dead");
     assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59 });
     for left in (1..59).rev() {
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         assert_eq!(traffic.npcs[0].mode, Mode::Coasting { ticks_left: left });
     }
 }

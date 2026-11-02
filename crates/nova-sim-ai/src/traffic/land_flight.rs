@@ -79,13 +79,12 @@ use crate::ai::leave::Leg;
 use crate::ai::miner::SCOOPS;
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
-use crate::flight::FlightRules;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::landing;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::held_burst::{self, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
 use crate::traffic::{approach_flight, leave_flight, ship_display};
@@ -94,32 +93,45 @@ use crate::traffic::{approach_flight, leave_flight, ship_display};
 /// velocity and its speed each pass (the double 0.98 @0xdd988).
 pub const LANDING_DRAG: f64 = 0.98;
 
-/// Flies `npc`, landing on `site` (not a gate), one tick on `handling`
-/// under `flight`, as `inertia` says, by `_HighLevelAIHandler` state 1
-/// (see the module docs): outside its box it approaches, inside it
-/// unfolds and brakes while it moves 0.35 or more on an axis, and
-/// otherwise lands.
-pub fn fly(
+/// The low level of `npc`, landing on `site` (not a gate), one tick on
+/// `handling`, as `inertia` says, by `_HighLevelAIHandler` state 1 (see
+/// the module docs): outside its box it approaches, inside it unfolds and
+/// brakes while it moves 0.35 or more on an axis, and otherwise lands, its
+/// wait rolled on `chance`, with no step that pass ([`Outcome::Landed`]).
+pub(crate) fn low_level(
     npc: &mut Npc,
     site: &LandingSite,
     handling: &Handling,
-    flight: FlightRules,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
-) -> Outcome {
+) -> Result<Flight, Outcome> {
     let turn = handling.turn_rate;
     if !landing::npc_over(site, npc.state.position, turn, RuleSource::Engine) {
-        let (controls, flown) = approach_flight::toward(&mut npc.state, site.position, handling);
-        held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
-        return Outcome::Flying;
+        return Ok(approach_flight::flight(&npc.state, site.position, handling));
     }
     ship_display::landing_unfold(npc);
     if inertialess::moving(npc.state.velocity) {
         npc.drag_in_doubles(LANDING_DRAG);
-        return leave_flight::fly(npc, Leg::Brake, handling, flight, inertia);
+        return leave_flight::low_level(npc, Leg::Brake, handling, inertia);
     }
     stay(npc, site.id, chance);
-    Outcome::Landed(site.id)
+    Err(Outcome::Landed(site.id))
+}
+
+/// `npc`'s low level landing on `site` on `handling`, flown at once by
+/// `_HandleShip` under `flight`, as `inertia` says: what became of it,
+/// for the tests.
+#[cfg(test)]
+pub(crate) fn fly(
+    npc: &mut Npc,
+    site: &LandingSite,
+    handling: &Handling,
+    flight: crate::flight::FlightRules,
+    inertia: Inertia,
+    chance: &mut (impl Chance + ?Sized),
+) -> Outcome {
+    let low = low_level(npc, site, handling, inertia, chance);
+    crate::traffic::slot_word::fly_low(npc, low, handling, flight, inertia)
 }
 
 /// Whether `npc`, landed, leaves the system as it lands, under
@@ -174,7 +186,7 @@ pub fn stay(npc: &mut Npc, stellar: StellarId, chance: &mut (impl Chance + ?Size
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::flight::ShipState;
+    use crate::flight::{FlightRules, ShipState};
     use crate::stats::ShipStats;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
@@ -239,15 +251,13 @@ mod tests {
     /// `npc`'s twin flown a tick of sub 2's approach on `handling`.
     fn approached(npc: &Npc, handling: &Handling) -> Npc {
         let mut twin = npc.clone();
-        let (controls, capped) =
-            approach_flight::toward(&mut twin.state, site().position, handling);
-        held_burst::step(
+        let flight = approach_flight::flight(&twin.state, site().position, handling);
+        crate::traffic::slot_word::fly_at_once(
             &mut twin,
-            &capped,
-            controls,
+            flight,
+            handling,
             FlightRules::default(),
             Inertia::Inertial,
-            Word::Writes,
         );
         twin
     }

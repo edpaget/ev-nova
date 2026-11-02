@@ -604,18 +604,16 @@ mod tests {
     fn a_ship_released_on_a_pass_turns_and_thrusts_held_on_that_pass() {
         // `_HandleShip` releases (@0x353ba-0x35421) after its turn
         // (@0x34460-0x3458e) and thrust (@0x34a54-0x34d93), whose
-        // `_ShipTurnRate` and `_ShipAccelRate` read +0xc8dc: so the pass
-        // that lets go of a disabled holder still flies held.
+        // `_ShipTurnRate` and the +0x30 its low level read at its slot from
+        // `_ShipAccelRate` read +0xc8dc: so the pass that lets go of a
+        // disabled holder still flies held.
         let other = Some(ShipRef::Npc(HOLDER));
         for fly in [
-            (|traffic: &mut Traffic| again(traffic, &pulling(0.5))) as fn(&mut Traffic),
-            |traffic| {
-                traffic.fly_holding(
-                    pulling(0.5),
-                    &std::collections::BTreeSet::new(),
-                    &mut Draws::of(&[]),
-                );
-            },
+            (|traffic: &mut Traffic| {
+                traffic.low_levels(&pulling(0.5), &mut Draws::of(&[]));
+                again(traffic, &pulling(0.5));
+            }) as fn(&mut Traffic),
+            |traffic| traffic.fly_tick(&pulling(0.5), &mut Draws::of(&[])),
         ] {
             let (plain_speed, ..) = speed_and_turn(running_out(None, 0.0, true), fly);
             let (held_speed, _, kept) = speed_and_turn(running_out(other, 0.0, true), fly);

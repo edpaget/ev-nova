@@ -127,11 +127,13 @@ use crate::ai::fire::off_by;
 #[cfg(doc)]
 use crate::escort::FormationSlot;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
-use crate::flight::{self, Controls, FlightRules, ShipState};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::autopilot::Beside;
-use crate::traffic::held_burst::{self, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
@@ -139,6 +141,7 @@ use crate::traffic::plunder_dock::{self, THRUST_SLACK};
 #[cfg(doc)]
 use crate::traffic::plunder_dock::{DAMP_BELOW, DAMPING, MATCH_SLACK};
 use crate::traffic::ship_display::GlowCopy;
+use crate::traffic::slot_word::Cap;
 use crate::trig;
 
 /// The share of its thrust close formation counter-thrusts at (the double
@@ -218,44 +221,38 @@ pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
 }
 
 /// Sub 0xc for `npc` beside its leader at `leader`, its slot at `slot`,
-/// on `handling` under `flight` (see the module docs): the controls, and
-/// the handling they fly by, its velocity, heading, position and glow
-/// copy set as the substate sets them.
+/// on `handling` under `flight` (see the module docs), at its slot: its
+/// flight, its velocity, position and glow copy set as the substate sets
+/// them.
 fn keep(
     npc: &mut Npc,
     leader: &ShipState,
     slot: Vec2,
     handling: &Handling,
     flight: FlightRules,
-) -> (Controls, Handling) {
+) -> Flight {
     let rate = handling.turn_rate;
     let mismatched = plunder_dock::mismatched(npc.state.velocity - leader.velocity);
     if mismatched && !npc.hull_inertialess(flight.inertial_dampener) {
         let wanted = plunder_dock::counter(&mut npc.state, leader.velocity);
-        // Off by its heading before `_HandleShip` turns it (@0x87a24).
+        // Off by its heading before `_HandleShip` turns it, its turn rate
+        // the slot's (@0x87a24-0x87a40).
         let thrust = off_by(npc.state.heading, wanted) < rate + THRUST_SLACK;
-        let turn = flight::turn_to(&mut npc.state, wanted, rate);
         // `_ShipAccelRate` × the double 0.66, back to a float, and +0x34 =
-        // 0, its own top speed (@0x87a70-0x87a9d).
+        // 0, its own top speed at its step (@0x87a70-0x87a9d).
         #[allow(clippy::cast_possible_truncation)]
         let accel = (f64::from(handling.accel) * COUNTER_THRUST) as f32;
         let controls = Controls {
             thrust,
-            turn,
             ..Controls::default()
         };
-        return (controls, Handling { accel, ..*handling });
+        return Flight::writes(controls, wanted, Cap::Step).by(Handling { accel, ..*handling });
     }
     npc.state.velocity = leader.velocity;
     let wanted = matched_heading(npc.state.heading, leader.heading, npc.skill);
-    let turn = flight::turn_to(&mut npc.state, wanted, rate);
     maintain(npc, slot, handling, false);
     npc.display.drive.glow = GlowCopy::Leader;
-    let controls = Controls {
-        turn,
-        ..Controls::default()
-    };
-    (controls, *handling)
+    Flight::writes(Controls::default(), wanted, Cap::Slot)
 }
 
 /// The whole heading a matched escort at `heading` of skill `skill` wants
@@ -303,10 +300,10 @@ fn matched_heading(heading: f32, theirs: f32, skill: f32) -> i16 {
     wanted
 }
 
-/// Flies `npc` one tick of goal 0xa beside its leader at `leader`, with
-/// `beside` its guard, its sight of its leader and its swarm lead, on
-/// `handling` under `flight`, as `inertia` says (see the module docs).
-/// With no leader or no slot it brakes.
+/// The low level of `npc` on one tick of goal 0xa beside its leader at
+/// `leader`, with `beside` its guard, its sight of its leader and its
+/// swarm lead, on `handling` under `flight`, as `inertia` says (see the
+/// module docs): its flight. With no leader or no slot it brakes.
 pub(crate) fn fly(
     npc: &mut Npc,
     leader: Option<&ShipState>,
@@ -314,7 +311,7 @@ pub(crate) fn fly(
     handling: &Handling,
     flight: FlightRules,
     inertia: Inertia,
-) {
+) -> Flight {
     let flying = match (leader, npc.formation_slot()) {
         (Some(leader), Some(place)) => {
             let sub = sub(npc.state.position, leader.position, beside.leader_seen);
@@ -324,13 +321,10 @@ pub(crate) fn fly(
     };
     // With no leader or slot, or in sub 1: a stop, which keeps +0x34.
     let Some((leader, place, sub)) = flying else {
-        let stop = leave_flight::stop_flight(npc, handling, inertia);
-        let flown = stop.flown.unwrap_or(*handling);
-        held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
-        return;
+        return leave_flight::stop_flight(npc, handling, inertia);
     };
     let slot = place.position(leader);
-    let (controls, flown) = match sub {
+    match sub {
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
             let close = sub == Sub::Close;
@@ -339,17 +333,44 @@ pub(crate) fn fly(
             }
             let target = beside.guard.unwrap_or(*leader);
             let (controls, flown, wanted) = plunder_dock::approach(npc, &target, handling, close);
-            let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
-            (Controls { turn, ..controls }, flown)
+            // Sub 9 and 0xb outside their box write +0x34 = 0; closing
+            // within it, half its slot's.
+            let cap = if flown.max_speed < handling.max_speed {
+                Cap::Slot
+            } else {
+                Cap::Step
+            };
+            Flight::writes(controls, wanted, cap).by(flown)
         }
-    };
-    held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// Sub 0xc's flight ([`super::keep`]) as its controls and handling,
+    /// the escort turned as `_HandleShip` turns it to the heading it wants
+    /// ([`crate::flight::turn_to`]), the turn in the controls.
+    fn keep(
+        npc: &mut Npc,
+        leader: &ShipState,
+        slot: Vec2,
+        handling: &Handling,
+        flight: FlightRules,
+    ) -> (Controls, Handling) {
+        let kept = super::keep(npc, leader, slot, handling, flight);
+        let wanted = kept.wanted.expect("sub 0xc wants a heading");
+        let turn = crate::flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        (
+            Controls {
+                turn,
+                ..kept.controls
+            },
+            kept.flown.unwrap_or(*handling),
+        )
+    }
     use crate::ai::Goal;
     use crate::ai::swarm::SwarmLead;
     use crate::escort::{EscortDuty, FormationSlot};

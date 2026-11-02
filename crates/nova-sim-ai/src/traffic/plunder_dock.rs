@@ -83,11 +83,12 @@
 //!   (+0x68; sub 1's is [`leave_flight::stop_wanting`]'s), and
 //!   `_HandleShip` turns the ship to it ([`flight::turn_to`],
 //!   @0x34460-0x3458e): by its turn while it is off by more than that,
-//!   whole degrees, and onto it otherwise ([`handle_ship`], in the fly
-//!   half, on both passes, by the [`DockFlight`] the low level left). The
-//!   turn is `_ShipTurnRate` read at `_HandleShip`'s own step (@0x344b0,
-//!   @0x34510, @0x34554), after that pass's ion block, with the hold as
-//!   it stands then ([`AtStep`]).
+//!   whole degrees, and onto it otherwise ([`slot_word::handle_ship`], in
+//!   the fly half, on both passes, by the [`SlotWord`] the low level
+//!   left). The turn is `_ShipTurnRate` read at `_HandleShip`'s own step
+//!   (@0x344b0, @0x34510, @0x34554), after that pass's ion block, with the
+//!   hold as it stands then ([`AtStep`](slot_word::AtStep)); each window
+//!   reads the slot's.
 //! - **The thrust** (@0x34a7b-0x34d93) reads no `_ShipAccelRate`: it is
 //!   the +0x30 the low level wrote at its slot, before the frame's ion
 //!   block, and double time's second pass thrusts by the advance pass's
@@ -118,11 +119,14 @@ use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
 use crate::traffic::formation_flight;
-use crate::traffic::held_burst::{self, Word};
-use crate::traffic::inertialess::{self, Inertia};
+use crate::traffic::held_burst::Flight;
+use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
 use crate::traffic::ship_display::GlowCopy;
+#[cfg(doc)]
+use crate::traffic::slot_word;
+use crate::traffic::slot_word::{Cap, SlotWord};
 use crate::traffic::swarm_low_level;
 use nova_sim_base::trig;
 
@@ -292,109 +296,14 @@ pub enum DockOutcome {
     Repaired,
 }
 
-/// What a docking ship's low level leaves `_HandleShip` to fly: its
-/// heading wanted (+0x68) and its thrust word (+0x30, +0x34), with the
-/// thrust and the inertia it flies them by. `_HandleShip` flies it on
-/// both of double time's passes, the second running no low level
-/// ([`handle_ship`]), turning by its turn rate at its own step.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DockFlight {
-    /// The controls but the turn.
-    controls: Controls,
-    /// The thrust (+0x30) and the top speed (+0x34) the low level read at
-    /// its slot: closing's cap within [`CLOSE_CAP_BOX`], sub 1's brake.
-    /// Its turn rate is unread: `_HandleShip` reads its own.
-    flown: Handling,
-    /// Where the thrust's top speed is read.
-    cap: Cap,
-    /// The heading it wants, +0x68.
-    wanted: i16,
-    /// How it flies.
-    inertia: Inertia,
-    /// What it does to +0x34: sub 1, the refuel's stop, leaves it alone, so
-    /// its brake bursts an owed burst out.
-    word: Word,
-}
-
-/// Where a docking ship's thrust reads its top speed, as its low level
-/// left +0x34 (`_HandleShip` @0x34a8a-0x34aab).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cap {
-    /// +0x34 above none: the top speed its low level read at its slot,
-    /// the head's `_ShipMaxSpeed` (@0x85200-0x8520d) or closing's half
-    /// of it (@0x8765d-0x8767b).
-    Slot,
-    /// +0x34 none: `_ShipMaxSpeed` at `_HandleShip`'s step, which reads the
-    /// hold as it stands then and no charge. Sub 9's thrust (@0x878e4),
-    /// sub 0xb's outside [`CLOSE_CAP_BOX`] (@0x87685) and sub 0xf's match
-    /// (%edi none, @0x86b45, @0x86c02) write it.
-    Step,
-}
-
-/// What `_HandleShip` reads of a docking ship at its own step, after the
-/// frame's ion block: its turn rate (`_ShipTurnRate`, @0x344b0, @0x34510,
-/// @0x34554) and its top speed (`_ShipMaxSpeed`, @0x34aab).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AtStep {
-    /// Its turn rate.
-    pub turn_rate: f32,
-    /// Its top speed.
-    pub top_speed: f32,
-}
-
-impl AtStep {
-    /// What `_HandleShip` reads of `npc` at its step under `flight`, the
-    /// ships the player leads at `led_speed`: its turn rate after the
-    /// frame's ion block ([`Npc::flying_handling`], whose top speed it
-    /// doesn't read) and its `_ShipMaxSpeed` with the hold as it stands
-    /// then and no charge ([`Npc::top_speed`]). Every caller that flies a
-    /// docking reads it here.
-    #[must_use]
-    pub fn of_npc(npc: &Npc, led_speed: f32, flight: FlightRules) -> Self {
-        let top_speed = npc.top_speed(led_speed);
-        Self {
-            turn_rate: npc.flying_handling(top_speed, flight).turn_rate,
-            top_speed,
-        }
-    }
-
-    /// The turn rate and top speed of `handling`: for tests that hand in
-    /// a canned handling.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn of(handling: &Handling) -> Self {
-        Self {
-            turn_rate: handling.turn_rate,
-            top_speed: handling.max_speed,
-        }
-    }
-}
-
-impl DockFlight {
-    /// The flight of a ship whose low level set no heading and no thrust
-    /// (the low level's default +0x68, its own whole heading, @0x8522d):
-    /// `npc`'s on `handling`, under `flight`.
-    #[must_use]
-    pub fn none(npc: &Npc, handling: &Handling, flight: FlightRules) -> Self {
-        Self {
-            controls: Controls::default(),
-            flown: *handling,
-            cap: Cap::Slot,
-            wanted: trig::whole(npc.state.heading),
-            inertia: Inertia::of(npc, None, true, flight),
-            word: Word::Writes,
-        }
-    }
-}
-
 /// `npc`'s low level of its docking with a victim at `victim`, on
 /// `handling` under `flight` (an inertialess ship as the autopilot flies
 /// one, see [`inertialess`](crate::traffic::inertialess)), with `swarm`
 /// its swarm lead, rolling a dock's wait on `chance` (see the module
 /// docs): its writes to its own velocity, speed and place (matching, the
-/// creep, the start), the flight it leaves `_HandleShip`
-/// ([`handle_ship`]), and what became of the docking. It runs at the
-/// ship's own slot of `_AIDispatch`'s loop (the traffic's
+/// creep, the start), the word it leaves `_HandleShip`
+/// ([`slot_word::handle_ship`]), and what became of the docking. It runs
+/// at the ship's own slot of `_AIDispatch`'s loop (the traffic's
 /// `dispatch_dock`). With no docking it sets nothing.
 pub fn low_level(
     npc: &mut Npc,
@@ -403,12 +312,13 @@ pub fn low_level(
     flight: FlightRules,
     swarm: Option<SwarmLead>,
     chance: &mut (impl Chance + ?Sized),
-) -> (DockFlight, DockOutcome) {
-    let Some(docking) = npc.docking else {
-        return (DockFlight::none(npc, handling, flight), DockOutcome::Flying);
-    };
+) -> (SlotWord, DockOutcome) {
     // A plunderer holds no formation goal, so the sight is moot.
     let inertia = Inertia::of(npc, Some(victim), true, flight);
+    let Some(docking) = npc.docking else {
+        let inertia = Inertia::of(npc, None, true, flight);
+        return (SlotWord::none(npc, handling, inertia), DockOutcome::Flying);
+    };
     let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
             let (controls, flown, wanted) =
@@ -432,62 +342,16 @@ pub fn low_level(
     // Sub 1 keeps the head's +0x34; closing within the box writes half
     // the slot's, lowering what it flies by; every other thrust here
     // writes none.
-    let halved = flown.max_speed < handling.max_speed;
-    let cap = if docking.sub == DockSub::Stop || halved {
-        Cap::Slot
+    let flight = if docking.sub == DockSub::Stop {
+        // The refuel's stop is sub 1, which leaves +0x34 alone: its brake
+        // bursts an owed burst out.
+        Flight::stop(controls, &flown, inertia, wanted)
     } else {
-        Cap::Step
+        let halved = flown.max_speed < handling.max_speed;
+        let cap = if halved { Cap::Slot } else { Cap::Step };
+        Flight::writes(controls, wanted, cap).by(flown)
     };
-    // The refuel's stop is sub 1, which leaves +0x34 alone: its brake
-    // bursts an owed burst out.
-    let word = if docking.sub == DockSub::Stop {
-        Word::stop(controls, &flown, inertia)
-    } else {
-        Word::Writes
-    };
-    let flight = DockFlight {
-        controls,
-        flown,
-        cap,
-        wanted,
-        inertia,
-        word,
-    };
-    (flight, outcome)
-}
-
-/// `_HandleShip`'s turn and thrust of `npc` by the `flown` its low level
-/// left ([`low_level`]), with what it reads `at_step`, under `flight`:
-/// while its AI wait runs it only moves on at its velocity (inertialess,
-/// by its speed along its heading), as `_HandleShip` skips its turn and
-/// thrust (@0x3443f-0x34454, @0x34a54-0x34a72); otherwise it turns to the
-/// heading wanted ([`flight::turn_to`]) by its turn rate at its step, and
-/// thrusts as the low level said, by the thrust its low level read at its
-/// slot, before the frame's ion block, capped as the low level left the
-/// cap ([`Cap`]).
-pub fn handle_ship(npc: &mut Npc, flown: &DockFlight, at_step: AtStep, flight: FlightRules) {
-    if npc.ai_wait > 0 {
-        match flown.inertia {
-            Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
-            Inertia::Inertialess { .. } => inertialess::drift(npc, &flown.flown),
-        }
-    } else {
-        let turn = flight::turn_to(&mut npc.state, flown.wanted, at_step.turn_rate);
-        let controls = Controls {
-            turn,
-            ..flown.controls
-        };
-        let handling = Handling {
-            turn_rate: at_step.turn_rate,
-            max_speed: match flown.cap {
-                Cap::Slot => flown.flown.max_speed,
-                Cap::Step => at_step.top_speed,
-            },
-            ..flown.flown
-        };
-        let (inertia, word) = (flown.inertia, flown.word);
-        held_burst::step(npc, &handling, controls, flight, inertia, word);
-    }
+    (SlotWord::of(flight, handling, inertia), outcome)
 }
 
 /// The swarm branch of subs 5, 7, 0xb and 0x11 (@0x85c87-0x85cbf,
@@ -674,6 +538,7 @@ mod tests {
     use crate::inertialess::InertialDampener;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
+    use crate::traffic::slot_word::{AtStep, handle_ship};
     use nova_sim_base::fixture::{FAST, Scripted};
 
     const VICTIM: ShipRef = ShipRef::Npc(NpcId(9));
@@ -1489,7 +1354,7 @@ mod tests {
         });
         let held = ship.own_handling();
         assert!(held.max_speed < ship.class_handling().max_speed, "held");
-        let at_step = AtStep::of_npc(&ship, 1.5, flight);
+        let at_step = AtStep::of_npc(&ship, 1.5, flight, 0.0);
         assert_eq!(at_step.top_speed, held.max_speed * 1.5);
         let ionized = ship.flying_handling(held.max_speed, flight);
         assert!(
@@ -1585,7 +1450,8 @@ mod tests {
             &mut nova_sim_base::chance::NeverFires,
         );
         assert_eq!((&ship, outcome), (&before, DockOutcome::Flying));
-        assert_eq!(flown, DockFlight::none(&ship, &HANDLING, flight));
+        let inertia = Inertia::of(&ship, None, true, flight);
+        assert_eq!(flown, SlotWord::none(&ship, &HANDLING, inertia));
         // `_HandleShip` keeps its whole heading and doesn't thrust.
         handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
         assert_eq!(ship.state.heading, 0.0);

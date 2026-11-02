@@ -1539,6 +1539,9 @@ impl Session {
             .set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
         self.space
             .traffic
+            .set_reused_slot_heading(rules.source_for(RuleKey::ReusedSlotHeading));
+        self.space
+            .traffic
             .set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
         self.space
             .traffic

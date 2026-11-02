@@ -3,8 +3,6 @@
 //! (@0x8fc9e-0x8fcaa), which it is through a hyperspace arrival's glide
 //! and a gate burst (see [`cloak_situation`](super::cloak_situation)).
 
-use std::collections::BTreeSet;
-
 use super::{Traffic, World};
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::chance::{Chance, NeverFires};
@@ -152,11 +150,11 @@ fn escort_thought(device: bool, at: Vec2, player_cloak: Cloak) -> Cloak {
     traffic.npcs()[0].cloak
 }
 
-/// A fly half of `traffic` in `world`, which marks each escort's close
-/// formation ([`Npc::close_form`]), then a think half, whose parent rule
-/// reads the mark.
+/// Each ship's low level at its slot in `world`, which marks each escort's
+/// close formation ([`Npc::close_form`]), and a fly half, then a think
+/// half, whose parent rule reads the mark.
 fn fly_then_think(traffic: &mut Traffic, world: &World) {
-    traffic.fly_holding(*world, &BTreeSet::new(), &mut NeverFires);
+    traffic.fly_tick(world, &mut NeverFires);
     traffic.think_holding(&Keep, *world, &[], &mut Draws::of(&[]));
 }
 

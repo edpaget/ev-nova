@@ -94,6 +94,9 @@ use crate::rulebook::RuleSource;
 use crate::traffic::npc::{NPC_COMMODITIES, Npc, NpcHold, NpcId};
 use crate::traffic::plunder_dock::{self, DockOutcome, DockStep, Docking};
 use crate::traffic::repair_dock;
+#[cfg(test)]
+use crate::traffic::slot_word;
+use crate::traffic::slot_word::SlotWord;
 use crate::traffic::{Traffic, World};
 use nova_sim_base::trig;
 use nova_sim_catalog::catalog::ShipId;
@@ -285,7 +288,7 @@ pub fn take_high_level(npc: &mut Npc, high: HighLevel) {
 /// The low level of `npc`'s docking at `victim` (none when that ship is
 /// gone, which drops the docking), at its own top speed `own` under
 /// `flight`, with `swarm` its swarm lead, rolling a dock's wait on
-/// `chance` ([`plunder_dock::low_level`]): the flight it leaves
+/// `chance` ([`plunder_dock::low_level`]): the word it leaves
 /// `_HandleShip` and what became of the docking, or none when it has no
 /// docking to fly, is not intact or not flying, for the autopilot to fly
 /// it instead. It runs at the ship's slot of the AI loop (the traffic's
@@ -297,7 +300,7 @@ pub fn dock_low_level(
     flight: FlightRules,
     swarm: Option<SwarmLead>,
     chance: &mut (impl Chance + ?Sized),
-) -> Option<(plunder_dock::DockFlight, DockOutcome)> {
+) -> Option<(SlotWord, DockOutcome)> {
     npc.docking?;
     if npc.condition != Condition::Intact || npc.mode != crate::traffic::npc::Mode::Flying {
         return None;
@@ -313,12 +316,12 @@ pub fn dock_low_level(
 }
 
 /// `npc`'s whole tick of its docking at `victim`, its low level then
-/// `_HandleShip` ([`dock_low_level`], [`plunder_dock::handle_ship`]), the
+/// `_HandleShip` ([`dock_low_level`], [`slot_word::handle_ship`]), the
 /// ships the player leads at `led_speed`, under `flight` with `swarm` its
 /// swarm lead, a dock's wait rolling 0: for the tests of the flight it
 /// shares. Each half reads its top speed as the traffic's does: the low
 /// level at its slot (`dispatch_dock`), `_HandleShip` at its step
-/// ([`plunder_dock::AtStep::of_npc`]).
+/// ([`slot_word::AtStep::of_npc`]).
 #[cfg(test)]
 pub(crate) fn fly_docking(
     npc: &mut Npc,
@@ -330,8 +333,9 @@ pub(crate) fn fly_docking(
     let chance = &mut crate::chance::NeverFires;
     let own = npc.top_speed(led_speed);
     let (flown, outcome) = dock_low_level(npc, victim, own, flight, swarm, chance)?;
-    let at_step = plunder_dock::AtStep::of_npc(npc, led_speed, flight);
-    plunder_dock::handle_ship(npc, &flown, at_step, flight);
+    let adjust = npc.flying_handling(own, flight).accel;
+    let at_step = slot_word::AtStep::of_npc(npc, led_speed, flight, adjust);
+    slot_word::handle_ship(npc, &flown, at_step, flight);
     Some(outcome)
 }
 

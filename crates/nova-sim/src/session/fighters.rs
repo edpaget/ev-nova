@@ -723,7 +723,6 @@ fn fighter(
         swarm_leader: None,
         owed_burst: None,
         fled_hopeless: None,
-        slot_accel: None,
         close_form: false,
         fleet_slot: None,
         form_parent: None,

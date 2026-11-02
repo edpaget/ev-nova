@@ -136,16 +136,15 @@
 //!    them in the session (`nova_sim::Session::dispatch_npcs`) and none in
 //!    [`Traffic::think_holding`];
 //! 6. every NPC's cloak held and faded: one cloaked that can no longer
-//!    cloak uncloaks (`_HandleShip` @0x3413d), and its fade steps; then the
-//!    autopilot and a flight step for every NPC, a pod at full thrust
-//!    along its heading, each other ship flying towards
-//!    the ship its goal is about, the player's included (the one it
-//!    assists, or escorts in formation), a fighter flying in to its
-//!    carrier, a jumping ship turning and warping out,
-//!    a pirate docking with its victim by the flight its low level left
-//!    ([`plunder_dock::handle_ship`]), a gate entrant counting its entry
-//!    down, and a tick off each flying ship's AI wait, a pirate's count
-//!    wait's included ([`plunder::count_down`]);
+//!    cloak uncloaks (`_HandleShip` @0x3413d), and its fade steps; then
+//!    each NPC flies the word its low level left at its slot in step 5
+//!    ([`slot_word::handle_ship`], see [`slot_word`]), deciding nothing: a
+//!    pod at full thrust along its heading, each other ship turning toward
+//!    the heading it wanted there and thrusting as it said, a ship with no
+//!    word since its spawn turning toward its berth's last heading with no
+//!    thrust; a jumping ship turning and warping out, a gate entrant
+//!    counting its entry down, and a tick off each flying ship's AI wait,
+//!    a pirate's count wait's included ([`plunder::count_down`]);
 //! 7. the removal of those that entered a gate, each in
 //!    [`Traffic::departed`] with how it left, the pods freed and the ships
 //!    that jumped out or docked in step 5 after them (the docked fighters
@@ -207,6 +206,7 @@ mod comm_call_tests;
 mod count_wait_turn_tests;
 pub mod destination;
 pub mod disabled_reset;
+pub mod dispatch_autopilot;
 pub mod dispatch_dock;
 pub mod dispatch_follow;
 pub mod dispatch_head;
@@ -303,10 +303,12 @@ pub mod skill;
 #[cfg(test)]
 mod skill_rolls;
 pub mod skipped_high_level;
-mod slot_accel;
 #[cfg(test)]
 mod slot_stellar_tests;
 pub mod slot_stellars;
+pub mod slot_word;
+#[cfg(test)]
+mod slot_word_tests;
 pub mod snipe;
 pub mod spawn;
 pub mod stellar_attack;
@@ -333,6 +335,8 @@ pub mod vacated;
 mod voice_cue_tests;
 pub mod warp_out;
 pub mod weigh;
+#[cfg(test)]
+mod window_tests;
 mod wrap_carry;
 
 use crate::ai::interceptor::within_reach;
@@ -971,10 +975,22 @@ pub struct Traffic {
     /// they left ([`dispatch_leave`]), which the fly half's followers and
     /// lower slots still read.
     left_in_dispatch: Vec<Npc>,
-    /// The flight each docking ship's low level left `_HandleShip` at its
-    /// slot this tick ([`dispatch_dock`]), which both of double time's
-    /// passes fly.
-    dock_flights: BTreeMap<NpcId, plunder_dock::DockFlight>,
+    /// The word each ship's low level left `_HandleShip` at its last slot
+    /// of the AI loop ([`slot_word`]; a docking ship's [`dispatch_dock`],
+    /// any other's [`dispatch_autopilot`]), which both of double time's
+    /// passes fly: kept until the ship's next slot, so a ship the loop
+    /// doesn't reach flies its last, and cleared as the system is entered
+    /// or left. Never saved.
+    words: BTreeMap<NpcId, slot_word::SlotWord>,
+    /// How each ship's flight ended at its slot of this tick's AI loop
+    /// ([`dispatch_autopilot`]: a landing, a jump begun), which its step
+    /// on the advance pass reports, flying nothing: cleared as the loop
+    /// opens.
+    slot_outcomes: BTreeMap<NpcId, Outcome>,
+    /// What each ship's low level read at its last slot
+    /// ([`Traffic::reads_at_slot`]), for the tests of when it reads.
+    #[cfg(test)]
+    slot_reads: BTreeMap<NpcId, (Option<ShipState>, bool, autopilot::Beside)>,
     /// The berths taken since the session last read them, in order
     /// ([`Traffic::take_berths_taken`]), for the player's hold.
     berth_takes: Vec<tractor_hold::BerthTaken>,
@@ -989,10 +1005,6 @@ pub struct Traffic {
     /// Each ship's warp as the tick's think opened, which a follower below
     /// its leader reads ([`dispatch_leave`]).
     open_leaders: BTreeMap<NpcId, warp_out::LeaderWarp>,
-    /// Each ship's slot and state as `_AIDispatch`'s loop opened, before
-    /// any slot's work: what the advance pass's flight of a lower slot
-    /// reads of it, as that slot's low level came first ([`fly_pass`]).
-    open_states: BTreeMap<NpcId, (u32, ShipState)>,
     /// The records of the freed slots not taken again, which a think or a
     /// flight may still read ([`gone`]).
     gone: GoneShips,
@@ -1041,6 +1053,12 @@ pub struct Traffic {
     /// there takes ([`berth_picks`]): written as each ship's pick changes,
     /// kept as it dies or leaves, and across systems.
     berth_picks: BerthPicks,
+    /// The heading (+0x68) the ship last at each berth wanted, which a new
+    /// ship there turns toward until its first low level
+    /// ([`slot_word::spawn_heading`]): written as each word is kept and by
+    /// `_HandleShip`'s warp-out (@0x347ba), kept as its ship dies or
+    /// leaves, and across systems.
+    berth_headings: berth_kept::BerthKept<i16>,
     /// The exit cursors (+0xc8fe-+0xc905) of the ship last at each berth,
     /// which a new ship there takes ([`berth_exits`]): written after each
     /// fight, kept as it dies or leaves, and across systems.
@@ -1134,12 +1152,14 @@ impl Traffic {
             departed: Vec::new(),
             freed: Vec::new(),
             left_in_dispatch: Vec::new(),
-            dock_flights: BTreeMap::new(),
+            words: BTreeMap::new(),
+            slot_outcomes: BTreeMap::new(),
+            #[cfg(test)]
+            slot_reads: BTreeMap::new(),
             berth_takes: Vec::new(),
             followed: BTreeMap::new(),
             held_still: BTreeSet::new(),
             open_leaders: BTreeMap::new(),
-            open_states: BTreeMap::new(),
             gone: GoneShips::default(),
             skipped: skipped_high_level::SkippedReads::default(),
             ship_loop: false,
@@ -1152,6 +1172,7 @@ impl Traffic {
             strength_timer: StrengthTimer::default(),
             berth_persons: BTreeMap::new(),
             berth_picks: BerthPicks::default(),
+            berth_headings: berth_kept::BerthKept::default(),
             berth_exits: BerthExits::default(),
             berth_blink: BerthBlink::default(),
             first_class: ship_display::FirstClass::default(),
@@ -1224,10 +1245,10 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.left_in_dispatch.clear();
-        self.dock_flights.clear();
+        self.words.clear();
+        self.slot_outcomes.clear();
         self.berth_takes.clear();
         self.followed.clear();
-        self.open_states.clear();
         self.gone.clear();
         self.skipped = skipped_high_level::SkippedReads::default();
         self.vacated.clear();
@@ -1349,10 +1370,10 @@ impl Traffic {
         self.departed.clear();
         self.freed.clear();
         self.left_in_dispatch.clear();
-        self.dock_flights.clear();
+        self.words.clear();
+        self.slot_outcomes.clear();
         self.berth_takes.clear();
         self.followed.clear();
-        self.open_states.clear();
         self.gone.clear();
         self.skipped = skipped_high_level::SkippedReads::default();
         self.vacated.clear();
@@ -2273,6 +2294,22 @@ impl Traffic {
         self.berth_picks.reading()
     }
 
+    /// Turns each new ship toward its berth's last heading until its first
+    /// low level by `reading`
+    /// ([`RuleKey::ReusedSlotHeading`](crate::RuleKey::ReusedSlotHeading)):
+    /// by the engine, as no spawn writes +0x68; its own whole heading by
+    /// the other reading ([`slot_word::spawn_heading`]).
+    pub fn set_reused_slot_heading(&mut self, reading: RuleSource) {
+        self.berth_headings.set_reading(reading);
+    }
+
+    /// The reading new ships take their berth's last heading by (see
+    /// [`Traffic::set_reused_slot_heading`]).
+    #[must_use]
+    pub fn reused_slot_heading(&self) -> RuleSource {
+        self.berth_headings.reading()
+    }
+
     /// NPC `id` turns on the player: its person's hail quote is queued
     /// ([`Traffic::take_attack_quotes`]) when `_AIMakeShipAttackPlayer`'s
     /// gate lets it through (@0x89c50-0x89c9b, [`persons::turns_with_quote`],
@@ -2430,8 +2467,9 @@ impl Traffic {
         npc.display.frames.lights.timer = self.berth_blink_timer(berth);
         // Nor the search timer (+0xc90c): it is the berth's.
         npc.lost_sight = self.berth_search.seed(berth);
-        // Every spawn zeroes +0x30 (@0x3cb54, [`slot_accel`]).
-        npc.slot_accel = None;
+        // Every spawn zeroes +0x30 and +0x34 (@0x3cb54-0x3cb5a) and writes
+        // no +0x68: with no word, its step flies the spawn's
+        // ([`slot_word::SlotWord::spawned`]).
         // Every spawn marks its slot stale (`_RandomShipSpawn` @0x3c657,
         // `_GenericRandomShipSpawn` @0x3cb6a, `_RespawnEscort` @0x3d4fb).
         npc.odds = odds_cache::STALE;
@@ -2974,7 +3012,6 @@ impl Traffic {
                 swarm_leader: None,
                 owed_burst: None,
                 fled_hopeless: None,
-                slot_accel: None,
                 close_form: false,
                 fleet_slot: None,
                 form_parent: None,
@@ -4714,6 +4751,9 @@ mod tests {
             snipe_brake_lead: lead,
             ..World::new(&[])
         };
+        // Its low level reads the reading at its slot; the second pass
+        // flies the word it left.
+        traffic.low_levels(&world, &mut Draws::of(&[]));
         traffic.move_in(world, &mut Draws::of(&[]));
         traffic.npcs()[0].state.heading
     }

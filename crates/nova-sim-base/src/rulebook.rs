@@ -243,6 +243,7 @@
 //! | [`StrayTextBrace`](RuleKey::StrayTextBrace) | `stray_text_brace` | a `{` not followed by `G`, `P`, `B` or `!` drops the text up to the next of those letters (`_ParseTextDescription` @0x14efa; see `nova_sim::text_parse`) | the `{` and the text after it are copied as written\* |
 //! | [`SnipeBrakeLead`](RuleKey::SnipeBrakeLead) | `snipe_brake_lead` | a sniper moving 0.35 or more on an axis that has fired a gun turns to its target's lead angle for that gun and thrusts within its turn rate plus 1: toward its target, not a brake (`_LowLevelAIHandler` @0x8716a-0x871b0, @0x871ef-0x87255; see `nova_sim::traffic::snipe`) | it turns to its retro heading and thrusts there, braking, as one that has fired no gun does\* |
 //! | [`ReusedSlotPick`](RuleKey::ReusedSlotPick) | `reused_slot_pick` | a ship brought into a ship-table slot holds the pick (+0x72) the slot's last ship left, as no spawn writes it and only a fired primary (`_HandleShip` @0x35012) and a capture (`_DoShipCapture` @0x41207) clear it: its first gun pass that finds nothing fires that pick if it carries the weapon, and a secondary it doesn't carry is kept, firing nothing (see `nova_sim::traffic::berth_picks`) | every ship starts with no pick\* |
+//! | [`ReusedSlotHeading`](RuleKey::ReusedSlotHeading) | `reused_slot_heading` | a ship brought into a ship-table slot turns, with no thrust, toward the heading (+0x68) the slot's last ship wanted until its first low level, as no spawn writes +0x68 (`_GenericRandomShipSpawn` @0x3cb54-0x3cb5a) and `_InitObjects` sets 0 as the game starts (@0x1c315): a fighter launched below its carrier's slot, an escape ship launched in the ship loop (see `nova_sim::traffic::slot_word`) | it keeps its own whole heading until its first low level\* |
 //! | [`ReusedSlotExits`](RuleKey::ReusedSlotExits) | `reused_slot_exits` | a ship brought into a ship-table slot fires each `ExitType`'s first shot or beam from the exit after the one the slot's last ship used, and the player's turn of exits goes on through a ship change and an eject, as no writer but the exit routines touches +0xc8fe-+0xc905 (`_ModifyShotStartPosition` @0x742c-0x74bc, `_SpawnBeam` @0x450ff-0x4523d; see `nova_sim_ai::traffic::berth_exits`) | every new ship, the player's new ship included, starts each `ExitType` at exit 0\* |
 //! | [`StrayBeamExit`](RuleKey::StrayBeamExit) | `stray_beam_exit` | a beam of `ExitType` -1 steps its ship's fold set (+0xc8fc), one of `ExitType` 4 steps +0xc906 (an NPC's swarm leader), one of 5 steps +0xc908 (an NPC's crew pods left, the player's escape-pod countdown) and one of 6 steps +0xc90a (the order word of a ship the player doesn't lead) as a cursor, as `_SpawnBeam` indexes its cursors with no range check (@0x450fa-0x4523d), and starts at the centre (see `nova_sim::combat::exits::StrayWord`) | a beam of `ExitType` outside 0-3 steps nothing\* |
 //! | [`SoundVoices`](RuleKey::SoundVoices) | `sound_voices` | 8 voices, kept by priority and loudness: a sound goes before the first voice whose priority and loudness it is each at least, the last voice is evicted when all 8 are taken, and a sound with no place isn't played (`ST_Open(8, 0)` @0x3a136, `ST_PlaySoundParam` @0xe3dc2; see `nova_audio::voices`) | every sound plays and none is evicted: **the default, uncapped like `combat_caps`**†††††††††††††††† |
@@ -345,7 +346,7 @@
 //! `smuggling_ship_name`,
 //! `pay_slot_offset`,
 //! `missionless_tags`,
-//! `stray_text_brace`, `snipe_brake_lead`, `reused_slot_pick`,
+//! `stray_text_brace`, `snipe_brake_lead`, `reused_slot_pick`, `reused_slot_heading`,
 //! `reused_slot_exits`, `reused_slot_search`, `stray_beam_exit`,
 //! `sound_voices`, `looped_sound_wait`, `bomb_heading_wrap`, `translucent_shot_fade`,
 //! `lightning_zig_zag`, `independent_kin`,
@@ -1933,6 +1934,18 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says (see
     /// `nova_sim::Session`).
     StaleSecondary => "stale_secondary",
+    /// Which heading a ship brought into a ship-table slot turns toward
+    /// until its first low level (see `nova_sim_ai::traffic::slot_word`).
+    /// By the engine, as no spawn writes +0x68 (`_GenericRandomShipSpawn`
+    /// @0x3cb54-0x3cb5a zeroes only the thrust and its cap) and
+    /// `_InitObjects` sets it to 0 as the game starts (@0x1c315): the
+    /// heading the slot's last ship wanted, 0 for a slot no ship has held,
+    /// so a fighter launched below its carrier's slot or an escape ship
+    /// launched in the ship loop turns toward it with no thrust. By the
+    /// other reading it keeps its own whole heading, so it doesn't turn.
+    /// The Bible says nothing of it, so the other reading is the port's
+    /// earlier flight, not anything the Bible says.
+    ReusedSlotHeading => "reused_slot_heading",
     /// When the outfitter's sale lets go of the secondary selected. By the
     /// engine, when the sold outfit's own count falls to 0 and one of its
     /// `ModType` 1 slots names it (`_DoOutfitDialog` @0x5cf73-0x5cf8c,
@@ -6698,6 +6711,26 @@ mod tests {
     }
 
     #[test]
+    fn the_reused_slot_heading_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::ReusedSlotHeading;
+        assert_eq!(rule.key(), "reused_slot_heading");
+        assert_eq!(RuleKey::from_key("reused_slot_heading"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(203),
+            Some(&rule),
+            "before secondary_sale"
+        );
+    }
+
+    #[test]
     fn the_secondary_selection_rules_are_found_by_their_keys() {
         assert_eq!(RuleKey::StaleSecondary.key(), "stale_secondary");
         assert_eq!(
@@ -6870,6 +6903,7 @@ mod tests {
                 RuleKey::PurchaseCarry,
                 RuleKey::ShipInfoRounding,
                 RuleKey::StaleSecondary,
+                RuleKey::ReusedSlotHeading,
                 RuleKey::SecondarySale,
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,

@@ -30,7 +30,7 @@
 //!   inertialess ship would turn away to brake and speed up instead. A
 //!   moving sniper doesn't: it brakes as substate 0xe does, a whole tick's
 //!   acceleration off its speed
-//!   ([`snipe::inertialess_brake`](crate::traffic::snipe::inertialess_brake)).
+//!   (its word's brake, see [`slot_word`](crate::traffic::slot_word)).
 //! - **Holding still.** Where the original only stops reading the
 //!   ship's controls, while it waits on its course after its glide in or
 //!   burst out (@0x34a54) and while it fades into a gate (@0x3501f), its
@@ -48,7 +48,9 @@
 //!
 //! None of these blocks plays a sound.
 
-use crate::flight::{self, Controls, ShipState, heading_of, shortest_turn};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, ShipState, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::inertialess::{ADJUST_RATE, BRAKE, adjust_velocity};
@@ -161,34 +163,35 @@ pub fn braking_speed(distance: f32, handling: &Handling) -> f32 {
 /// than half a tick's thrust short of `desired`'s length; it brakes
 /// (reverse) while its speed is more than that past it, or while it faces
 /// more than a quarter turn away, each by its heading before the turn.
-/// Wanting to be at rest, it brakes and wants no heading, its heading
-/// truncated ([`flight::turn_to_own`]).
+/// Wanting to be at rest, it brakes and wants its own whole heading. The
+/// controls but their turn, and the heading it wants.
+#[must_use]
 pub fn match_speed(
-    state: &mut ShipState,
+    state: &ShipState,
     speed: f32,
     handling: &Handling,
     desired: Vec2,
-) -> Controls {
+) -> (Controls, i16) {
     let target = desired.length();
     let slack = handling.accel / 2.0;
     if target <= slack {
-        flight::turn_to_own(state);
-        return Controls {
+        let controls = Controls {
             reverse: speed > slack,
             ..Controls::default()
         };
+        return (controls, trig::whole(state.heading));
     }
     let off = shortest_turn(state.heading, heading_of(desired)).abs();
     let aligned = off <= ALIGNED.max(handling.turn_rate);
     let thrust = aligned && speed < target - slack;
     let reverse = speed > target + slack || (off > 90.0 && speed > slack);
     let wanted = trig::intercept_angle(Vec2::ZERO, desired * 100.0);
-    Controls {
+    let controls = Controls {
         thrust,
-        turn: flight::turn_to(state, wanted, handling.turn_rate),
         reverse,
         ..Controls::default()
-    }
+    };
+    (controls, wanted)
 }
 
 /// One tick of an inertialess `npc` whose controls nothing reads: its
@@ -284,7 +287,21 @@ mod tests {
     /// [`super::match_speed`] of a ship at `state`, which it leaves as it
     /// was.
     fn match_speed(state: &ShipState, speed: f32, handling: &Handling, desired: Vec2) -> Controls {
-        super::match_speed(&mut state.clone(), speed, handling, desired)
+        turned_match(&mut state.clone(), speed, handling, desired)
+    }
+
+    /// [`super::match_speed`]'s controls, `state` turned as `_HandleShip`
+    /// turns it to the heading it wants ([`crate::flight::turn_to`]), the
+    /// turn in the controls.
+    fn turned_match(
+        state: &mut ShipState,
+        speed: f32,
+        handling: &Handling,
+        desired: Vec2,
+    ) -> Controls {
+        let (controls, wanted) = super::match_speed(state, speed, handling, desired);
+        let turn = crate::flight::turn_to(state, wanted, handling.turn_rate);
+        Controls { turn, ..controls }
     }
 
     #[test]
@@ -931,12 +948,12 @@ mod tests {
         };
         // Wanting (4, 4): the table's heading is 134, the float's 135.
         let mut state = at(0.0, 0.0, 0.0, 0.0, 135.4);
-        let controls = super::match_speed(&mut state, 1.0, &handling, Vec2::new(4.0, 4.0));
+        let controls = turned_match(&mut state, 1.0, &handling, Vec2::new(4.0, 4.0));
         assert_eq!((controls.turn, state.heading), (Turn::None, 134.0));
         // Wanting rest, it wants no heading: +0x68's default (@0x8522d).
         for speed in [0.0, 1.0] {
             let mut resting = at(0.0, 0.0, 0.0, 0.0, 37.6);
-            let controls = super::match_speed(&mut resting, speed, &handling, Vec2::ZERO);
+            let controls = turned_match(&mut resting, speed, &handling, Vec2::ZERO);
             assert_eq!((controls.turn, resting.heading), (Turn::None, 37.0));
         }
     }
@@ -963,7 +980,7 @@ mod tests {
             turn_rate: rate,
         };
         let mut state = at(0.0, 0.0, 0.0, 0.0, heading);
-        let controls = super::match_speed(&mut state, 1.0, &handling, Vec2::new(4.0, 0.0));
+        let controls = turned_match(&mut state, 1.0, &handling, Vec2::new(4.0, 0.0));
         let mut speed = 1.0;
         crate::flight::inertialess_step(
             &mut state,

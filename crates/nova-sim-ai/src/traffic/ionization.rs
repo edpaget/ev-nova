@@ -30,11 +30,11 @@
 //! flight, before the next move, which makes the same sequence of moves
 //! and pulls; the charge it leaves is what the turn that follows reads, as
 //! in the original. `_HandleShip`'s thrust reads no `_ShipAccelRate` but
-//! the +0x30 the low level wrote at its slot, before the shed: a docking
-//! ship's flight thrusts so ([`plunder_dock`](super::plunder_dock)), and
-//! so does the autopilot, by the accel its low level read at its slot
-//! ([`Npc::slot_accel`], see [`slot_accel`](super::slot_accel)), on both
-//! passes.
+//! the +0x30 the low level wrote at its slot, before the shed: every NPC
+//! flies the word its low level left there
+//! ([`slot_word`](super::slot_word)), on both passes, turning by its turn
+//! rate after the shed; its inertialess adjustment reads its accel at its
+//! step before it.
 //! The pull's cap is the NPC's own `_ShipMaxSpeed`. None of this plays a
 //! sound.
 

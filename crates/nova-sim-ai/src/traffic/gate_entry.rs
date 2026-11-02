@@ -107,7 +107,7 @@ use crate::handling::Handling;
 use crate::landing::{TypeWidth, stellar_width};
 use crate::traffic::approach_flight;
 use crate::traffic::emerge::FULL_LEVEL;
-use crate::traffic::held_burst::{Flight, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::npc::AiType;
 
 /// The wait a ship entering a gate starts at, as it reaches the box: 16.0
@@ -136,17 +136,12 @@ pub fn gate_reach(site: &LandingSite, type_widths: &BTreeMap<StellarId, TypeWidt
 }
 
 /// State 20's flight outside the gate's box (@0x8dc42-0x8dc55): sub 2,
-/// [`approach_flight::toward`] the gate at `gate` for a ship at `state` on
-/// `handling`, whose thrust writes +0x34 ([`Word::Writes`]) and which
-/// flies by the handling it hands back, capped near the gate as it
+/// [`approach_flight::flight`] toward the gate at `gate` for a ship at
+/// `state` on `handling`, whose thrust writes +0x34 (`Word::Writes`) and
+/// which flies by the handling it hands back, capped near the gate as it
 /// thrusts. It never brakes: inside the box the velocity is zeroed.
-pub(crate) fn approach(state: &mut ShipState, gate: Vec2, handling: &Handling) -> Flight {
-    let (controls, flown) = approach_flight::toward(state, gate, handling);
-    Flight {
-        controls,
-        word: Word::Writes,
-        flown: Some(flown),
-    }
+pub(crate) fn approach(state: &ShipState, gate: Vec2, handling: &Handling) -> Flight {
+    approach_flight::flight(state, gate, handling)
 }
 
 /// Whether a ship at `ship` is inside the box of the gate at `gate`, of

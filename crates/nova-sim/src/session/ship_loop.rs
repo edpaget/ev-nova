@@ -45,8 +45,9 @@
 //! - **An escape ship's fighter** (`_LaunchFighter` @0x354ea, its slot
 //!   active at once @0x3c90b, @0x3d680) launched into a slot above its
 //!   carrier's is reached later in the same loop, as the loop reads each
-//!   next NPC afresh: it moves by its launch velocity alone, unsteered, as
-//!   `_AIDispatch` ran before the loop
+//!   next NPC afresh: as `_AIDispatch` ran before the loop it has had no
+//!   low level, so it moves by its launch velocity with no thrust, turning
+//!   toward its berth's last heading, the words its spawn left
 //!   ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)), takes
 //!   its step and is displayed, so it is drawn on its launch frame. One
 //!   launched below waits for the next pass. Its carrier's display comes
@@ -57,10 +58,10 @@
 //!   whose target names the old ship then fights the newcomer
 //!   ([`Traffic::set_ship_loop`](crate::traffic::Traffic::set_ship_loop)).
 //!
-//! Each flight steers by the other ships where the pass found them, as the
-//! original's steering is `_AIDispatch`'s (`_LowLevelAIHandler`), before
-//! the loop moves any ship; `_HandleShip` itself reads no other ship's
-//! position. Each slot's hits are settled at its step
+//! Each flight flies the word its low level left at its slot of the AI
+//! loop, which read the other ships there, as the original's steering is
+//! `_AIDispatch`'s (`_LowLevelAIHandler`), before the loop moves any ship;
+//! `_HandleShip` itself reads no other ship's position. Each slot's hits are settled at its step
 //! ([`Session::land_phase`]), closer to `_DamageShip` settling each as it
 //! lands.
 //!
@@ -233,14 +234,13 @@ impl Session {
     }
 
     /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
-    /// flight; or, for one launched since the half began, its move alone,
-    /// unsteered
+    /// flight; or, for one launched since the half began, its spawn's word
     /// ([`Traffic::coast_npc`](crate::traffic::Traffic::coast_npc)). No
     /// flight docks a fighter: it docks at its slot of the AI loop
     /// ([`Session::dispatch_npcs`]).
     fn fly_in_loop(&mut self, fly: &mut FlyPass, id: NpcId, chance: &mut dyn Chance) {
         if !fly.order().contains(&id) {
-            self.step_traffic(|traffic, world| traffic.coast_npc(fly, id, &world));
+            self.step_traffic(|traffic, world| traffic.coast_npc(fly, id, &world, &mut *chance));
             return;
         }
         self.step_traffic(|traffic, world| traffic.fly_npc(fly, id, &world, &mut *chance));
