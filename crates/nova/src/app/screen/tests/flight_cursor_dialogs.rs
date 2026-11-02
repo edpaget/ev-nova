@@ -3,6 +3,7 @@
 //! (see `AppScreen::hide_flight_cursor` for the addresses), so the pointer's
 //! resync at its unchanged point after the close doesn't show it again.
 
+use super::dialog_maps::offer_job;
 use super::encounters::{board, boardable, boarding_data, hailable};
 use super::jump_white::flying_on_a_mission;
 use super::planet_comm::planet_data;
@@ -137,6 +138,19 @@ fn a_text_over_flight_hides_its_cursor_until_the_pointer_moves() {
         movie: None,
     }]);
     hidden_until_moved(&mut screen, Showing::MissionText, |screen| {
+        tap(screen, Key::Enter);
+    });
+}
+
+#[test]
+fn the_offer_hides_flights_cursor_until_the_pointer_moves() {
+    // Enter accepts. `_HandlePlayerCommunication` @0x6225a,
+    // `_HandlePlayerBoardAttempt` @0x658d6.
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    pointed(&mut screen);
+    offer_job(&mut screen);
+    hidden_until_moved(&mut screen, Showing::Offer, |screen| {
         tap(screen, Key::Enter);
     });
 }

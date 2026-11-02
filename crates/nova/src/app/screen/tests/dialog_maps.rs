@@ -14,7 +14,7 @@ fn offered_in_flight() -> AppScreen {
 }
 
 /// Opens a person's offer of mission 130 on `screen`.
-fn offer_job(screen: &mut AppScreen) {
+pub(super) fn offer_job(screen: &mut AppScreen) {
     screen.open_offer(nova_sim::OfferPrompt {
         mission: MissionId(130),
         text: "Job.".to_owned(),
