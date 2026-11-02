@@ -952,16 +952,16 @@ fn the_mission_info_screen_lays_out_with_its_items_where_recorded() {
         }
         let screen = MissionInfoScreen::new(
             Ok((info, mono())),
-            MissionInfo {
-                rows: vec![InfoRow {
+            MissionInfo::shown(
+                vec![InfoRow {
                     slot: 0,
                     name: "Run".to_owned(),
                     failed: false,
                     text: "Go.".to_owned(),
                     abortable: true,
                 }],
-                today: "June 23rd, 1177 NC".to_owned(),
-            },
+                "June 23rd, 1177 NC".to_owned(),
+            ),
             ButtonStyle::STOCK,
         );
         let dialog = screen.dialog().expect("laid out");

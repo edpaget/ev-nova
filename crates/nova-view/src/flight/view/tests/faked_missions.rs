@@ -42,16 +42,16 @@ fn walk() -> ComputerRow {
 
 /// The mission info listing mission 130 in slot 0.
 fn info() -> MissionInfo {
-    MissionInfo {
-        rows: vec![InfoRow {
+    MissionInfo::shown(
+        vec![InfoRow {
             slot: 0,
             name: "Run".to_owned(),
             failed: false,
             text: "Quick.".to_owned(),
             abortable: true,
         }],
-        today: "June 23rd, 1177 NC".to_owned(),
-    }
+        "June 23rd, 1177 NC".to_owned(),
+    )
 }
 
 /// A refusal of an offer whose dialog was hidden.

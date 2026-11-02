@@ -6052,8 +6052,8 @@ pub(in crate::spaceport) mod tests {
     }
 
     pub(in crate::spaceport) fn actives(rows: usize) -> MissionInfo {
-        MissionInfo {
-            rows: (0..rows)
+        MissionInfo::shown(
+            (0..rows)
                 .map(|n| InfoRow {
                     slot: n as u8,
                     name: format!("Mission {n}"),
@@ -6062,8 +6062,8 @@ pub(in crate::spaceport) mod tests {
                     abortable: true,
                 })
                 .collect(),
-            today: "June 23rd, 1177 NC".to_owned(),
-        }
+            "June 23rd, 1177 NC".to_owned(),
+        )
     }
 
     #[test]

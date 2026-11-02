@@ -726,10 +726,7 @@ impl MissionInfoScreen {
         });
         let mut screen = Self {
             laid,
-            info: MissionInfo {
-                rows: Vec::new(),
-                today: String::new(),
-            },
+            info: MissionInfo::shown(Vec::new(), String::new()),
             abort: None,
             text_request: None,
             map_allowed: true,
@@ -1840,13 +1837,13 @@ mod tests {
 
     /// Slot 0's run, abortable, and slot 3's stay, failed and not.
     fn info() -> MissionInfo {
-        MissionInfo {
-            rows: vec![
+        MissionInfo::shown(
+            vec![
                 info_row(0, "Run to Mars", false, "By June 30th.", true),
                 info_row(3, "Stay", true, "Hold on.", false),
             ],
-            today: "June 23rd, 1177 NC".to_owned(),
-        }
+            "June 23rd, 1177 NC".to_owned(),
+        )
     }
 
     fn info_screen() -> MissionInfoScreen {
@@ -2733,8 +2730,8 @@ mod tests {
 
     /// `count` missions in slots 0 on, the even ones abortable.
     fn many_info(count: u8) -> MissionInfo {
-        MissionInfo {
-            rows: (0..count)
+        MissionInfo::shown(
+            (0..count)
                 .map(|slot| {
                     info_row(
                         slot,
@@ -2745,8 +2742,8 @@ mod tests {
                     )
                 })
                 .collect(),
-            today: "June 23rd, 1177 NC".to_owned(),
-        }
+            "June 23rd, 1177 NC".to_owned(),
+        )
     }
 
     /// The info screen's item 2 on screen: (285, 330) to (480, 414), seven

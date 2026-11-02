@@ -2232,16 +2232,16 @@ fn player_infos_and_mission_infos_close_over_flight_redraw_the_whole_bar() {
                 Rc::new(MonoMetrics),
                 screen.data.button_style(),
             );
-            missions.open_info(nova_sim::MissionInfo {
-                rows: vec![nova_sim::InfoRow {
+            missions.open_info(nova_sim::MissionInfo::shown(
+                vec![nova_sim::InfoRow {
                     slot: 0,
                     name: "Run".to_owned(),
                     failed: false,
                     text: "Go.".to_owned(),
                     abortable: true,
                 }],
-                today: String::new(),
-            });
+                String::new(),
+            ));
             assert!(missions.info().is_some(), "open");
             screen.missions = Some(missions);
             screen.input(&key(Key::Escape, true));

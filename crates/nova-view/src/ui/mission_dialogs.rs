@@ -832,23 +832,20 @@ mod tests {
 
     /// Slot 2's run, abortable.
     fn info() -> MissionInfo {
-        MissionInfo {
-            rows: vec![InfoRow {
+        MissionInfo::shown(
+            vec![InfoRow {
                 slot: 2,
                 name: "Run".to_owned(),
                 failed: false,
                 text: "Go.".to_owned(),
                 abortable: true,
             }],
-            today: "June 23rd, 1177 NC".to_owned(),
-        }
+            "June 23rd, 1177 NC".to_owned(),
+        )
     }
 
     fn none() -> MissionInfo {
-        MissionInfo {
-            rows: Vec::new(),
-            today: String::new(),
-        }
+        MissionInfo::shown(Vec::new(), String::new())
     }
 
     fn key(key: Key) -> Input {
@@ -1210,10 +1207,7 @@ mod tests {
                 abortable: true,
             })
             .collect();
-        dialogs.open_info(MissionInfo {
-            rows,
-            today: String::new(),
-        });
+        dialogs.open_info(MissionInfo::shown(rows, String::new()));
         let first = |dialogs: &MissionDialogs| {
             dialogs
                 .info()
