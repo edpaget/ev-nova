@@ -19,7 +19,8 @@
 //! same way. The collision passes and the beams stop after each direct
 //! hit for it to be answered ([`hit_turns`](super::hit_turns)); the next
 //! stretch builds its lineup afresh from the fighters lent after the
-//! answer, each ship struck since the walk began read again as here.
+//! answer. Each ship struck before the stop has already settled its
+//! condition there, so it reads as [`reread`] would read it.
 
 use super::hull::DisableRule;
 use super::planet_type::BeamPlanetFlag;

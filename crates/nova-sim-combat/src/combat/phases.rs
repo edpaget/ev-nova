@@ -97,6 +97,14 @@ impl Combat {
     /// answered, its walk kept for the next stretch to resume among the
     /// ships lent afresh; or to the passes' end ([`Stretch::Done`]) (see
     /// `Combat::hit_stretch`).
+    ///
+    /// After [`Stretch::Answer`] the caller must call this again, with the
+    /// ships lent afresh, until it gives [`Stretch::Done`], before starting
+    /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
+    /// the intended driver. Between stretches the passes' held shots are
+    /// missing from [`Combat::shots`] (and [`Combat::targeted_damage`]).
+    /// Starting another phase mid-walk is a logic error: a debug assertion
+    /// catches it, and in release the walk and its held shots are dropped.
     pub fn test_hits_in_turn(
         &mut self,
         fighters: &mut [Fighter],
@@ -390,6 +398,14 @@ impl Combat {
     /// plunder, as the answers of the hits before it left them. The beams'
     /// moves, stamps and point defence run once, at the first stretch; the
     /// late steps at the last, which runs to the end ([`Stretch::Done`]).
+    ///
+    /// After [`Stretch::Answer`] the caller must call this again, with the
+    /// ships lent afresh, until it gives [`Stretch::Done`], before starting
+    /// any other phase; [`run_in_turn`](super::hit_turns::run_in_turn) is
+    /// the intended driver. Between stretches the pass's held shots are
+    /// missing from [`Combat::shots`] (and [`Combat::targeted_damage`]).
+    /// Starting another phase mid-walk is a logic error: a debug assertion
+    /// catches it, and in release the walk and its held shots are dropped.
     pub fn close_tick_in_turn(
         &mut self,
         fighters: &mut [Fighter],
