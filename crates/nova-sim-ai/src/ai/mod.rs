@@ -694,8 +694,9 @@ pub struct Surroundings<'a> {
     pub govts: &'a Governments,
     /// The system's government, or `None` when it is independent.
     pub system_govt: Option<GovtId>,
-    /// The player's legal record in the system: its record with the
-    /// system's government, none in an independent system.
+    /// The player's legal record in the system, as `RuleKey::LegalRecords`
+    /// reads it: the system's own record under the original's reading, 0
+    /// in an independent system under the Bible's.
     pub record: i16,
     /// The damage the shots in flight aim at each ship
     /// ([`Combat::targeted_damage`](crate::combat::Combat::targeted_damage)):
