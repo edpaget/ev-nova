@@ -87,7 +87,9 @@
 //!   ([`Escort::person`](crate::Escort)), with no wage and its reserves as
 //!   they are, of no government, its AI type its `InherentAI`, keeping
 //!   formation; every other NPC lets it go, and so does the player's
-//!   target. A save is due, and the hail stays open as the escort's. A
+//!   target, but the ships it leads keep it as their leader, as Use As
+//!   Escort's `_DoPlunderDialog` leaves their +0x9a (@0x9459b-0x947cf).
+//!   A save is due, and the hail stays open as the escort's. A
 //!   hail lists it ([`Hail::joins`](crate::Hail)) for a person whose
 //!   record allows it ([`offers_to_join`]) and whose `LinkMission` is
 //!   available from a ship (`_HandlePlayerCommunication` @0x6220d) while
@@ -3869,6 +3871,40 @@ pub(super) mod tests {
             .expect("open");
         assert!(session.is_escort(NpcId(0)), "joined");
         assert_eq!(session.space.npc(NpcId(0)).expect("here").cloak, fading);
+    }
+
+    /// The hail's join has no routine of the original's; it follows Use As
+    /// Escort's in-place join, `_DoPlunderDialog` @0x9459b-0x947cf, which
+    /// writes no other ship's +0x9a: the person's followers keep it.
+    #[test]
+    fn a_person_joining_by_hail_keeps_its_followers_led_by_it() {
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        let mut led = session.space.npc(NpcId(0)).expect("here").clone();
+        led.person = None;
+        led.leader = Some(NpcId(0));
+        led.goal = Goal::Follow {
+            lead: NpcId(0),
+            guard: None,
+        };
+        let led = session.space.traffic.add_npc(led);
+        opened(&mut session, &catalog, &bible);
+        session
+            .answer(2, &catalog, &bible, &mut Draws::of(&[]))
+            .expect("open");
+        assert!(session.is_escort(NpcId(0)), "joined");
+        let led = session.space.npc(led).expect("here");
+        assert_eq!(
+            (led.leader, led.goal),
+            (
+                Some(NpcId(0)),
+                Goal::Follow {
+                    lead: NpcId(0),
+                    guard: None
+                }
+            )
+        );
     }
 
     /// A hail's join calls no `_AISetup` (@0x62509), so the person keeps

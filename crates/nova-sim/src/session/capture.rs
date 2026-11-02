@@ -1017,6 +1017,24 @@ mod tests {
         assert_eq!(led.provoked, 3.0);
     }
 
+    #[test]
+    fn use_as_escort_keeps_the_prizes_followers_led_by_it() {
+        // `_DoPlunderDialog` @0x9459b-0x947cf writes no other ship's +0x9a,
+        // and `_AIShipCapturedByPlayer`'s loop @0x896b6-0x89704 tests +0x70
+        // alone: the prize, intact in its slot, still leads them.
+        let catalog = boardable();
+        let mut session = crate::session::tests::captured(&catalog);
+        let led = led_by_the_prize(&mut session);
+        let goal = session.space.npc(led).expect("here").goal;
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::default()),
+            Some(Assigned::Escort)
+        );
+        let led = session.space.npc(led).expect("here");
+        assert_eq!(led.leader, Some(ON_BOARD.npc));
+        assert_eq!(led.goal, goal);
+    }
+
     // The paint.
 
     /// Government 150, whose ships are painted (31, 2, 1).

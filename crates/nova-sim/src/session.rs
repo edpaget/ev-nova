@@ -5721,9 +5721,11 @@ impl Session {
     /// NPC `id` joins the fleet where it is (`_AIMakeEscortFlyInForm`
     /// @0x89b8e), the escort of `person` when it is one: of no
     /// government, its AI type its ship type's `InherentAI`, keeping
-    /// formation with no standing order. Every other NPC lets it go, its
-    /// own escorts leave it, and so does the player's target; a save is
-    /// due. A mission's special ship, captured with its mark kept, falls
+    /// formation with no standing order. Every other NPC lets it go, and
+    /// so does the player's target; a save is due. The ships it leads
+    /// keep it as their leader, as `_DoPlunderDialog` leaves their +0x9a
+    /// (@0x9459b-0x947cf): only Use As My Ship's `_DoShipCapture` lets
+    /// them go (`Space::release_led`). A mission's special ship, captured with its mark kept, falls
     /// in as a mission escort instead, with no escort record
     /// ([`Session::join_as_mission_escort`]).
     fn fleet_up(&mut self, id: NpcId, person: Option<PersonId>) {
@@ -5754,11 +5756,6 @@ impl Session {
         // so its slot's.
         self.space.traffic.clear_pick(id);
         self.space.drop_quarry(id);
-        for other in self.space.traffic.npcs_mut() {
-            if other.leader == Some(id) {
-                other.leader = None;
-            }
-        }
         if self.chart.target == Some(id) {
             self.chart.target = None;
         }
@@ -26674,7 +26671,11 @@ pub(super) mod tests {
             (None, None),
             "_AISetup (@0x9478f)"
         );
-        assert_eq!(session.npcs()[1].leader, None, "its own escort let go");
+        assert_eq!(
+            session.npcs()[1].leader,
+            Some(NpcId(0)),
+            "its own escort kept: the crewless path reaches the same block (@0x9439d -> @0x9459b)"
+        );
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());

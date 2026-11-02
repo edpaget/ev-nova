@@ -1194,7 +1194,9 @@ rule_keys! {
     /// it (`nova_sim::person::offers_to_join`), its
     /// `LinkMission` available, opens the comm dialog listing Use As
     /// Escort while the fleet has room, and joins the fleet as itself,
-    /// for good. The Bible is silent here, so the other reading is the
+    /// for good, keeping the ships it leads as Use As Escort's in-place
+    /// join does (`_DoPlunderDialog` @0x9459b-0x947cf writes no other
+    /// ship's +0x9a). The Bible is silent here, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
     /// `nova_sim::hail::nova::JoinFleet`).
     PersonJoin => "person_join",
