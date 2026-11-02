@@ -287,6 +287,62 @@ pub(super) mod tests {
         assert!(session.space.strikes.is_empty(), "none kept");
     }
 
+    /// Fires one shot at NPC 0, the player's target, and works passes
+    /// until it lands, the NPCs answering it in that pass. The fight's
+    /// events over those passes, in order.
+    fn events_of_one_shot(session: &mut Session) -> Vec<crate::combat::CombatEvent> {
+        session.chart.target = Some(NpcId(0));
+        session.hold_trigger(FIRE);
+        let mut events = Vec::new();
+        for _ in 0..60 {
+            nova_pass(session);
+            session.hold_trigger(Trigger::default());
+            events.extend(session.take_combat_events());
+            if session.npcs()[0].reserves.shield.now < 30.0 {
+                break;
+            }
+        }
+        assert!(session.npcs()[0].reserves.shield.now < 30.0, "never hit");
+        events
+    }
+
+    /// Whether `events` hold a hit on NPC 0, the shield flash
+    /// `_DamageShip` writes after its reaction block (@0x3bef9-0x3bf0c).
+    fn flashes_npc_0(events: &[crate::combat::CombatEvent]) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                crate::combat::CombatEvent::Hit {
+                    ship: ShipRef::Npc(NpcId(0)),
+                    ..
+                }
+            )
+        })
+    }
+
+    #[test]
+    fn a_hit_the_answer_flag_clears_still_raises_its_flash_event() {
+        // The jump-out gate (@0x3b467-0x3b46e) skips the reaction block
+        // to 0x3bef9, the flash's write.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.begin_own_jump();
+        npc.warp.stage = 2.0;
+        let events = events_of_one_shot(&mut session);
+        assert_eq!(session.npcs()[0].target, None, "unanswered");
+        assert!(flashes_npc_0(&events), "{events:?}");
+    }
+
+    #[test]
+    fn an_answered_hit_raises_its_flash_event_too() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let events = events_of_one_shot(&mut session);
+        assert_eq!(session.npcs()[0].target, Some(ShipRef::Player), "answered");
+        assert!(flashes_npc_0(&events), "{events:?}");
+    }
+
     /// The player fires its beam (`player_fires`), then the stellars' and
     /// the beams' phase runs alone (`beams_phase`), with no
     /// `answer_strikes` and no fight housekeeping after it.

@@ -585,9 +585,14 @@ pub enum CombatEvent {
     /// reaches, a beam tick, a death's shockwave, or a missile lock, which
     /// does no damage but flashes its target's shield all the same
     /// (@0x35855). Every path past `_DamageShip`'s entry guards reaches the
-    /// write, a breaking-up ship's too; the escape pod and every class
+    /// write, which follows the reaction block's skip target: a hit
+    /// answered or not, the hit that takes a ship's last armour, and a hit
+    /// on a disabled or breaking-up ship; the escape pod and every class
     /// after it take none ([`immune`], @0x3a87c-0x3a882). The sabotage
-    /// bomb passes shields (@0x699b2) and raises none.
+    /// bomb passes shields (@0x699b2) and raises none. The mark that
+    /// follows for a hit on the player, `_statusRedraw[1] = 1`
+    /// (@0x3bf0c-0x3bf1b), is left out: the cockpit reads the reserves
+    /// every frame in flight, where every hit lands.
     Hit {
         /// The ship hit.
         ship: ShipRef,
@@ -3711,6 +3716,7 @@ mod tests {
     mod escort_lost_in_place;
     mod exit_steps;
     mod finishing_hits;
+    mod flash_hits;
     mod fold_stamp;
     mod hidden_shots;
     mod idle_bays;

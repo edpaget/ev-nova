@@ -6,7 +6,17 @@
 //! - A hit that reaches `_DamageShip`'s flash write
 //!   ([`CombatEvent::Hit`](nova_sim::CombatEvent::Hit)) sets the ship's
 //!   timer (+0xc8f0) to [`FLASH_TICKS`], unless its weapon passes shields
-//!   ([`ShieldFlash::hit`]).
+//!   ([`ShieldFlash::hit`]). The write follows the reaction block's skip
+//!   target, so a hit sets it whether the ship answers it or not: a
+//!   blast, a hit on a ship with no AI, jumping out or led by one, and a
+//!   hit on a disabled or breaking-up ship flash it all the same.
+//! - The original zeroes the timer as it sets a ship up (`_InitObjects`
+//!   @0x1c4c7, `_ResetPlayer` @0x1d583, `_RandomShipSpawn` @0x3c4f2,
+//!   `_GenericRandomShipSpawn` @0x3ca68, `_LaunchFighter` @0x3d940,
+//!   `_HandlePlayerDockRequest` @0x66ffc, `_HandlePlayer` @0x6c581,
+//!   `_LoadPilotData` @0x76385). The view keeps a flash only for a ship
+//!   hit since it came into the fight, from [`ShieldFlash::default`], and
+//!   clears them all as the player lands.
 //! - Each frame, while the timer is above none, the ship's shield above
 //!   none and its class has a shield layer, the timer is first held down
 //!   to `L = trunc(shield × 32 / base)`, where `base` is the class's own
