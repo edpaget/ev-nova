@@ -765,3 +765,81 @@ fn l_held_from_before_a_dialog_waits_but_stays_held() {
     assert!(step.land_key, "L down");
     assert!(step.dock_try, "its latch set");
 }
+
+#[test]
+fn every_waiting_key_under_an_unlatching_dialog_reads_its_latch_set() {
+    // Each latched key down at the poll before the dialog had its latch
+    // set by that poll, so it waits for its release.
+    let acted = |view: &Faked, from: usize| {
+        sent(view)[from..].iter().any(|command| {
+            matches!(
+                command,
+                FlightCommand::NavModeKeys { .. }
+                    | FlightCommand::SelectNextSystem
+                    | FlightCommand::SelectStellar(_)
+                    | FlightCommand::PressMissionInfo
+                    | FlightCommand::SelectTarget(_)
+            )
+        })
+    };
+    for k in [
+        HYPERSPACE_MODE_KEY,
+        NAV_OFF_KEY,
+        HYPER_SELECT_KEY,
+        STELLAR_SLOT_KEYS[0][0],
+        STELLAR_SLOT_KEYS[2][1],
+        MISSION_INFO_KEY,
+    ] {
+        let mut view = in_flight();
+        unlatching_dialog_opens(&mut view);
+        assert_eq!(back(&mut view, [k], [k], false), [], "{k:?}");
+        let from = sent(&view).len();
+        view.tick(TICK);
+        view.tick(TICK);
+        assert!(!acted(&view, from), "{k:?}: {:?}", &sent(&view)[from..]);
+    }
+    // Tab's latch, which the button held keeps from clearing.
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let _ = back(&mut view, [TARGET_KEY], [TARGET_KEY], true);
+    view.input(&key(TARGET_KEY, false));
+    let from = sent(&view).len();
+    view.input(&key(TARGET_KEY, true));
+    assert!(!acted(&view, from), "Tab: {:?}", &sent(&view)[from..]);
+}
+
+#[test]
+fn i_held_across_a_sites_close_waits_for_its_release() {
+    // `_SetAllKeyCmdFlags` sets `_missionInfoFlag` (0xdee00).
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    let _ = back(&mut view, [MISSION_INFO_KEY], [], false);
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert!(
+        !sent(&view)[from..].contains(&FlightCommand::PressMissionInfo),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+}
+
+#[test]
+fn a_waiting_key_sets_only_its_own_latch() {
+    // R's latch is no view latch: a slot key flight still holds, its
+    // latch clear, picks at the next poll.
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    view.held.insert(slot);
+    unlatching_dialog_opens(&mut view);
+    view.held.insert(slot);
+    let _ = back(&mut view, [slot, NEAREST_KEY], [NEAREST_KEY], false);
+    let from = sent(&view).len();
+    view.held_keys_frame();
+    assert!(
+        sent(&view)[from..]
+            .iter()
+            .any(|command| matches!(command, FlightCommand::SelectStellar(_))),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+}
