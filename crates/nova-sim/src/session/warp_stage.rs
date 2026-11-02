@@ -74,7 +74,7 @@
 
 use super::{Jump, Mode, PlayerShip, Session, Setup, Statics};
 use crate::catalog::{StellarId, SystemId};
-use crate::flight::{Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
+use crate::flight::{Adjusted, Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
 use crate::glow::{Follow, JumpRaises, ramp_jump_glow};
 use crate::pilot::Pilot;
 use crate::player_turn::brake_aim;
@@ -217,7 +217,7 @@ impl Session {
                 &mut self.ship.player,
                 &mut self.ship.player_speed,
                 &handling,
-                0.0,
+                Adjusted::by_own(0.0, &handling),
                 caps,
                 flight,
                 Flyer::Player,
@@ -755,7 +755,7 @@ pub(super) mod tests {
             &mut inertialess,
             &mut followed,
             &handling,
-            0.0,
+            Adjusted::by_own(0.0, &handling),
             caps,
             flight,
             Flyer::Player,

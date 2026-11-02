@@ -392,6 +392,23 @@ pub fn inertialess_step(
     controls: Controls,
     rules: FlightRules,
 ) {
+    inertialess_step_with(state, speed, handling, controls, handling.accel, rules);
+}
+
+/// [`inertialess_step`], its velocity pulled toward heading x speed by
+/// `adjust_accel`'s [`ADJUST_RATE`] ticks rather than its thrust's
+/// acceleration: `_HandleShip`'s `_AdjustInertialessShipVelocity` reads its
+/// own `_ShipAccelRate` at the ship's step (@0x334e1), while the thrust is
+/// the word its low level left at its slot (see
+/// [`inertialess_advance`]).
+pub fn inertialess_step_with(
+    state: &mut ShipState,
+    speed: &mut f32,
+    handling: &Handling,
+    controls: Controls,
+    adjust_accel: f32,
+    rules: FlightRules,
+) {
     state.heading = turned(state.heading, controls.turn, handling.turn_rate);
     let thrust = if controls.thrust {
         THRUST
@@ -401,7 +418,11 @@ pub fn inertialess_step(
         0.0
     };
     let caps = Caps::top(handling.max_speed);
-    inertialess_advance(state, speed, handling, thrust, caps, rules, Flyer::Npc);
+    let by = Adjusted {
+        thrust,
+        adjust_accel,
+    };
+    inertialess_advance(state, speed, handling, by, caps, rules, Flyer::Npc);
 }
 
 /// Advances the player's inertialess ship, `state`, holding `speed` along
@@ -433,17 +454,46 @@ pub fn inertialess_player_step(
         *speed = step_speed(*speed, REVERSE, handling.accel, handling.max_speed);
     }
     let thrust = if controls.thrust { THRUST } else { 0.0 };
-    inertialess_advance(state, speed, handling, thrust, caps, rules, Flyer::Player);
+    // `_HandlePlayer` adjusts by the same rate it thrusts by (@0x6d43a).
+    let by = Adjusted::by_own(thrust, handling);
+    inertialess_advance(state, speed, handling, by, caps, rules, Flyer::Player);
+}
+
+/// What an inertialess ship's tick moves it by ([`inertialess_advance`]):
+/// its thrust, in ticks of its acceleration, and the acceleration its
+/// velocity's pull toward heading x speed reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Adjusted {
+    /// Ticks of `handling.accel` its speed moves by, none for no thrust.
+    pub thrust: f32,
+    /// The acceleration its velocity is pulled by, [`ADJUST_RATE`] ticks of
+    /// it ([`adjust_velocity`]).
+    pub adjust_accel: f32,
+}
+
+impl Adjusted {
+    /// `thrust` ticks, pulled by `handling`'s own acceleration: the
+    /// player's ship, and any flight that reads one rate for both.
+    #[must_use]
+    pub fn by_own(thrust: f32, handling: &Handling) -> Self {
+        Self {
+            thrust,
+            adjust_accel: handling.accel,
+        }
+    }
 }
 
 /// The rest of an inertialess ship's tick after its turn: `state`,
 /// `flyer`'s ship, holding `speed` along its heading, moves its speed by
-/// `thrust` ticks of its acceleration when that is not none
+/// [`Adjusted::thrust`] ticks of its acceleration when that is not none
 /// ([`step_speed`], at the top speed); the player's speed is then capped
 /// at `caps`' box (@0x6d356-0x6d369). Its velocity is pulled toward
-/// heading x speed by [`ADJUST_RATE`] ticks' acceleration
-/// ([`adjust_velocity`], @0x6d43a, @0x3425f), capped as [`advance`] caps
-/// it, and it moves.
+/// heading x speed by [`ADJUST_RATE`] ticks of [`Adjusted::adjust_accel`]
+/// ([`adjust_velocity`], @0x6d43a, @0x3425f): an NPC's own
+/// `_ShipAccelRate` at its step (`_AdjustInertialessShipVelocity`
+/// @0x334e1), which its thrust word, read at its slot, need not match;
+/// the player's thrust's. It is then capped as [`advance`] caps it, and
+/// it moves.
 ///
 /// The original's NPC is adjusted and moved (@0x34250-0x342aa) before its
 /// thrust word moves the speed (@0x34acc-0x34b6d), so an NPC's thrust
@@ -453,7 +503,10 @@ pub fn inertialess_advance(
     state: &mut ShipState,
     speed: &mut f32,
     handling: &Handling,
-    thrust: f32,
+    Adjusted {
+        thrust,
+        adjust_accel,
+    }: Adjusted,
     caps: Caps,
     rules: FlightRules,
     flyer: Flyer,
@@ -469,7 +522,7 @@ pub fn inertialess_advance(
         state.velocity,
         state.heading,
         *speed,
-        handling.accel * ADJUST_RATE,
+        adjust_accel * ADJUST_RATE,
     );
     state.velocity = match (rules.speed_cap, flyer) {
         (SpeedCap::PerAxis, Flyer::Player) => speed_limit(state.velocity, top),
@@ -518,9 +571,7 @@ const HALF_TURN: f32 = 180.0;
 /// The caller skips it while the ship's AI wait runs, but for a count
 /// wait (@0x3443f-0x34454).
 pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
-    let off = trig::angular_difference(wanted, trig::whole(state.heading));
-    // × `_gSpeedMult`, 1.0, in doubles.
-    if f64::from(off) > f64::from(rate) {
+    if !turns_onto(state.heading, wanted, rate) {
         let mut way = f32::from(wanted) - state.heading;
         if way >= 360.0 {
             way -= 360.0;
@@ -536,6 +587,19 @@ pub fn turn_to(state: &mut ShipState, wanted: i16, rate: f32) -> Turn {
     }
     state.heading = f32::from(wanted);
     Turn::None
+}
+
+/// Whether [`turn_to`] puts a ship heading `heading` on `wanted` this tick
+/// at `rate`: it is off it by no more than `rate`, in whole degrees
+/// (@0x34460-0x3458e). A low level that thrusts once its turn puts it on
+/// its heading reads it at its slot, before `_HandleShip` turns it.
+#[must_use]
+pub fn turns_onto(heading: f32, wanted: i16, rate: f32) -> bool {
+    let off = trig::angular_difference(wanted, trig::whole(heading));
+    // × `_gSpeedMult`, 1.0, in doubles: a NaN rate puts it on.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let on = !(f64::from(off) > f64::from(rate));
+    on
 }
 
 /// [`turn_to`] for a substate that wants no heading of its own:
@@ -1597,6 +1661,36 @@ mod tests {
             );
         }
         assert_eq!(speed, 3.0, "up to the top speed");
+    }
+
+    #[test]
+    fn an_inertialess_npcs_adjustment_pulls_by_its_own_accel_apart_from_its_thrust() {
+        // `_AdjustInertialessShipVelocity` reads its own `_ShipAccelRate`
+        // (@0x334e1), apart from the thrust word: the speed moves by the
+        // thrust's 0.1, the velocity toward heading x speed by 0.05 x 4.
+        let mut state = moving(Vec2::new(1.0, 0.0), 0.0);
+        let mut speed = 2.0;
+        inertialess_step_with(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            THRUST,
+            0.05,
+            FlightRules::default(),
+        );
+        assert!((speed - 2.1).abs() < 1e-6, "{speed}");
+        assert!(near(state.velocity, Vec2::new(0.8, -0.2)), "{state:?}");
+        // `inertialess_step` adjusts by its thrust's own accel.
+        let mut state = moving(Vec2::new(1.0, 0.0), 0.0);
+        let mut speed = 2.0;
+        inertialess_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            THRUST,
+            FlightRules::default(),
+        );
+        assert!(near(state.velocity, Vec2::new(0.6, -0.4)), "{state:?}");
     }
 
     #[test]
