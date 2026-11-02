@@ -184,6 +184,7 @@ impl NovaAi {
                 fire,
                 patrol_uninhabited: rulebook.source_for(RuleKey::PatrolUninhabited),
                 target,
+                inspection_hit: rulebook.source_for(RuleKey::InspectionHit),
             }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
@@ -2679,6 +2680,32 @@ mod tests {
         let inhabited =
             Rulebook::default().with_override(RuleKey::PatrolUninhabited, RuleSource::Bible);
         assert_eq!(decide(&inhabited), Goal::Land(StellarId(128)));
+    }
+
+    #[test]
+    fn nova_ai_reads_inspection_hit_from_the_rulebook() {
+        use crate::ai::fixture::{NEUTRAL, POLICE, TRADERS, govts, n, ship, sites};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut cop = ship(1, POLICE, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Inspect(n(2));
+        cop.target = Some(n(3));
+        cop.provoked = 3.0;
+        let npcs = [
+            cop,
+            ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0),
+            ship(3, NEUTRAL, AiType::Warship, 0.0, 800.0),
+        ];
+        let seen = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&sites, &npcs)
+        };
+        let decide = |rulebook: &Rulebook| {
+            NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[]))
+        };
+        assert_eq!(decide(&Rulebook::default()), Goal::Inspect(n(3)));
+        let at_once = Rulebook::default().with_override(RuleKey::InspectionHit, RuleSource::Bible);
+        assert_eq!(decide(&at_once), Goal::Attack(n(3)));
     }
 
     /// Looks the player over in each decision.

@@ -445,7 +445,9 @@ fn unworded(
     // Inspecting (state 7: its search needs state 1 or below, or 0x14,
     // @0x8cc6d-0x8cc7d, and its provoked branch leaves state 7 out,
     // @0x8cc0d; its re-pick comes after, see `interceptor`), it answers
-    // only a provoker it keeps. An inspection this think ends (within
+    // only a provoker it keeps, which only `inspection_hit`'s other
+    // reading leaves it: by the engine the interceptor reads a hit's target
+    // as its inspection's ship. An inspection this think ends (within
     // reach or gone) leaves it the search.
     if inspection_holds(npc, around) {
         return Err(Hunt {

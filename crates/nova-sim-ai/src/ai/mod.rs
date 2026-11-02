@@ -1150,7 +1150,9 @@ pub struct Decision {
     /// Whether the inspection's ship moved before its reach: an
     /// inspecting interceptor's re-pick gave its goal (`_InterceptorAI`
     /// @0x8d41e, see [`interceptor`]), or a kept inspection moved to the
-    /// ship a hit made its target ([`inspect_high`]). The state-7 block's
+    /// ship a hit made its target: in an interceptor's own think
+    /// ([`interceptor`]'s "A hit on an inspection"), or in the high level's
+    /// fold for any other ship ([`inspect_high`]). The state-7 block's
     /// reach then reads the new target (@0x8f11e), and a state-4 pick runs
     /// no reach at all, so the ship it was inspecting is not looked over
     /// and the player is not scanned. A re-pick already within reach is

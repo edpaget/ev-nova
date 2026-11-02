@@ -268,6 +268,8 @@ mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
 #[cfg(test)]
+mod inspection_hit_tests;
+#[cfg(test)]
 mod interceptor_goal4_tests;
 pub mod ionization;
 #[cfg(test)]

@@ -17,10 +17,12 @@
 //!   think. A provoked warship keeps goal 7 (`_WarshipAI` @0x8bb2d,
 //!   @0x8be10), so an NPC's hit sends it to its attacker, whose reach then
 //!   ends it; the move scans no player it was inspecting before
-//!   ([`Decision::re_picked`]). An interceptor meets it only unprovoked,
-//!   after a hit of no nominal damage, as its provoked hunt answers the
-//!   provoker first; its provoked inspection is
-//!   rdm:phase/play-feel-9/phase-6-inspection-redirected-by-a-hit's.
+//!   ([`Decision::re_picked`]). An interceptor moves its own inspection
+//!   in its think by the engine's reading of
+//!   [`RuleKey::InspectionHit`](crate::RuleKey::InspectionHit)
+//!   ([`interceptor`](super::interceptor)), so the fold never sees it move;
+//!   by the other reading it meets it only unprovoked, after a hit of no
+//!   nominal damage, as its provoked hunt answers the provoker first.
 //! - **Under its AI wait** the handler returns first (@0x8d4b9-0x8d4d2), so
 //!   nothing is written. The block's own +0x4c test (@0x8f141) can't be
 //!   reached behind that gate.

@@ -1212,7 +1212,8 @@ impl Npc {
     /// interceptor lead's inspection (`traffic::succession`, which copies
     /// the lead's target too) holds no target, where the original's holds
     /// the inspected ship. The thinks that read +0x70 with a copied goal 7
-    /// read this: the provoked branches ([`provoked_by`](crate::ai::provoked_by)),
+    /// read this, as does an interceptor's inspection a hit redirected
+    /// (`interceptor`'s "A hit on an inspection"): the provoked branches ([`provoked_by`](crate::ai::provoked_by)),
     /// the pirate's ([`pirate::think`](crate::ai::pirate::think)), the
     /// defence ship's ([`defence_ship::think`](crate::ai::defence_ship::think))
     /// and goal 7's high level
