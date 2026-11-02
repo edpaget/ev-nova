@@ -18,12 +18,12 @@
 //!   ([`Surroundings::by_slot`]).
 //!
 //! **Has escorts** is the ship's +0xc0, which `_DoPlayGameWork` sets each
-//! frame on the leader of every active ship of AI type above 4 in the
-//! system (@0x44064-0x44129). Every ship the original gives a leader is
-//! of such a type (a fleet's escorts are AI type 6, `_HyperSpawnFleet`
-//! @0x421dc/0x421ef; fighters 5), but the engine's fleet escorts still fly
-//! their own type (rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts),
-//! so it is read here as any ship in the system whose leader is the ship.
+//! frame on the parent of every active ship of AI type above 4 in the
+//! system (`cmpw $4, 0x88` @0x440d8, the mark @0x44108-0x4411d). A
+//! fleet's escorts are AI type 6 (`_HyperSpawnFleet` @0x421dc/0x421ef)
+//! and fighters 5, read through [`Npc::original_ai_type`], so a bribed
+//! follower (+0x88 1 with its parent kept, `_DoCommDialog` @0x961f8)
+//! leaves its leader without it.
 
 use crate::ai::Surroundings;
 use crate::ai::odds::friend_strength;
@@ -45,17 +45,20 @@ pub fn distance(from: Vec2, to: Vec2) -> i64 {
     x * x + y * y
 }
 
-/// Whether `npc` has escorts among `around`: some ship there whose leader
-/// is `npc` (see the module docs). It stands for the original's +0xc0,
-/// "has escorts", which `_DoPlayGameWork`'s marking pass clears and sets
-/// on each ship's parent every frame (@0x4405e-0x44129): the same set,
-/// as a led ship is the original's AI type 5 or 6 and every NPC is in the
-/// player's system. It is read live where the original reads the mark as
-/// the frame began, so a leader change mid-think (a capture) shows a tick
+/// Whether `npc` has escorts among `around`: some ship there of AI type
+/// above 4 ([`Npc::original_ai_type`]) whose leader is `npc` (see the
+/// module docs). It stands for the original's +0xc0, "has escorts", which
+/// `_DoPlayGameWork`'s marking pass clears and sets on each ship's parent
+/// every frame (@0x4405e-0x44129), every NPC being in the player's
+/// system. It is read live where the original reads the mark as the
+/// frame began, so a leader change mid-think (a capture) shows a tick
 /// early here: settled before the frame is drawn, crossing no boundary.
 #[must_use]
 pub fn has_escorts(npc: &Npc, around: &Surroundings) -> bool {
-    around.npcs.iter().any(|other| other.leader == Some(npc.id))
+    around
+        .npcs
+        .iter()
+        .any(|other| other.leader == Some(npc.id) && other.original_ai_type() > 4)
 }
 
 /// The candidates of `candidates`, in slot order, whose friend strength
@@ -247,6 +250,26 @@ mod tests {
             &npcs[1],
             &around(&sites, &npcs, &govts, (0.0, 0.0), 0)
         ));
+    }
+
+    #[test]
+    fn a_bribed_follower_leaves_its_leader_without_escorts() {
+        // The marking pass skips a ship of AI type 4 or less
+        // (@0x440d8), and the bribe's is 1 with its parent kept
+        // (`_DoCommDialog` @0x961f8).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let lead = ship(1, TRADERS, AiType::Warship, 0.0, 0.0);
+        let mut follower = ship(2, TRADERS, AiType::Warship, 100.0, 0.0);
+        follower.leader = Some(NpcId(1));
+        let escorted =
+            |npcs: &[Npc]| has_escorts(&npcs[0], &around(&sites, npcs, &govts, (0.0, 0.0), 0));
+        assert!(escorted(&[lead.clone(), follower.clone()]));
+        let mut bribed = follower.clone();
+        bribed.take_bribe();
+        assert!(!escorted(&[lead.clone(), bribed.clone()]), "bribed");
+        follower.id = NpcId(3);
+        assert!(escorted(&[lead, bribed, follower]), "and an unbribed one");
     }
 
     #[test]
