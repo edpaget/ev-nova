@@ -530,6 +530,7 @@ mod gravity;
 mod hail;
 mod hail_advice;
 mod hire;
+mod hit_turns;
 mod hooks;
 mod hover;
 mod iff_scramblers;

@@ -122,6 +122,7 @@
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
+use super::hit_turns::Turns;
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
@@ -129,7 +130,7 @@ use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::asteroid_walk::AsteroidField;
-use crate::combat::hit_turns::Stretch;
+use crate::combat::hit_turns::run_in_turn;
 use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
@@ -576,13 +577,16 @@ impl Session {
     /// escort scored up to that strike in the phase still counts and one
     /// after it does not ([`Space::credit_kills`]).
     ///
-    /// The original's `_DamageShip` settles each hit as it lands; here a
-    /// phase's hits settle together after it, before the next phase or
-    /// the frame. The fight itself already clears a lost escort's leader
-    /// as its hit lands (see the fight's `escort_loss` module), so the
-    /// rest of the phase reads it unled; only the session's part of the
-    /// loss waits for the phase's end.
-    fn settle_landed(
+    /// The original's `_DamageShip` settles each hit as it lands. Here the
+    /// collision passes and the beams settle each direct hit, and the
+    /// blasts before it, as the fight stops after it, before the next
+    /// lands (see the `hit_turns` module); `_HandleShot`'s hits settle
+    /// together after its phase, before the next phase or the frame. The
+    /// fight itself already clears a lost escort's leader as its hit lands
+    /// (see the fight's `escort_loss` module), so the rest of the phase
+    /// reads it unled; only the session's part of the loss waits for the
+    /// settle.
+    pub(super) fn settle_landed(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
         was: &[NpcBefore],
@@ -623,21 +627,25 @@ impl Session {
     /// The pass's stellar hazards and its `_HandleBeams` on `pass` by
     /// `rules`, drawing on `chance`: gravity pulls and the deadly stellars
     /// kill (`_HandleGravity` @0x44509, `_HandleDeadlyStellars` @0x4450e;
-    /// [`Combat::hazards`]), then the beams' step and the late steps
-    /// ([`Combat::close_tick_in`]), among one set of fighters, so a ship a
-    /// deadly stellar kills is out of the beams. The kills' hold starts
-    /// before the beams' hits settle (see the `deadly_stellars` module),
-    /// as a phase that lands hits settles ([`Session::settle_landed`]).
-    /// The beams meet the stellars shown that shots can hit, which only
-    /// the Bible's reading of
-    /// [`RuleKey::BeamStellars`](crate::rulebook::RuleKey::BeamStellars)
+    /// [`Combat::hazards`]), the pulls set in the ships' velocities; then
+    /// the beams' step and the late steps
+    /// ([`Combat::close_tick_in_turn`]), each beam's hit settled and
+    /// answered before the next beam is tested, as `_HandleBeams` answers
+    /// it in its loop (@0x316a1), the fighters lent afresh after it (see
+    /// the `hit_turns` module). A ship a deadly stellar kills stays
+    /// destroyed through the beams, so it is out of them. The kills' hold
+    /// starts after the last beam and before the last stretch's hits
+    /// settle (see the `deadly_stellars` module), as a phase that lands
+    /// hits settles ([`Session::settle_landed`]). The beams meet the
+    /// stellars shown that shots can hit, which only the Bible's reading
+    /// of [`RuleKey::BeamStellars`](crate::rulebook::RuleKey::BeamStellars)
     /// lets them strike; each a beam shoots down runs its `OnDestroy` (see
     /// the `stellars` module) once the hits have settled.
     ///
     /// The asteroid field is lent to the beams for the phase
-    /// ([`Combat::close_tick_in`]), which cut, wear down, break, push and
-    /// tractor its asteroids, destroying each at once; the boxes of each
-    /// one destroyed are spawned after it (see the `asteroid_beams`
+    /// ([`Combat::close_tick_in_turn`]), which cut, wear down, break, push
+    /// and tractor its asteroids, destroying each at once; the boxes of
+    /// each one destroyed are spawned after it (see the `asteroid_beams`
     /// module).
     pub(super) fn beams_phase(
         &mut self,
@@ -648,24 +656,21 @@ impl Session {
     ) {
         let hazards = self.stellar_hazards();
         let mut stellars = self.stellar_targets();
-        let was = self.space.npcs_before();
-        let player_was = self.ship.condition;
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
-        let mut asteroids = std::mem::take(&mut self.space.asteroids);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
+        self.with_fighters(pass, rules, chance, |combat, fighters, _, _| {
             combat.hazards(fighters, &hazards);
-            loop {
-                let field = AsteroidField {
-                    asteroids: &mut asteroids,
-                    types: &types,
-                };
-                let stretch =
-                    combat.close_tick_in_turn(fighters, arena, &mut stellars, Some(field), chance);
-                if stretch == Stretch::Done {
-                    break;
-                }
-            }
         });
+        self.take_shoves();
+        let mut asteroids = std::mem::take(&mut self.space.asteroids);
+        let mut turns = Turns::new(self, behaviour, (pass, rules), &mut *chance);
+        run_in_turn(&mut turns, |combat, fighters, arena, chance| {
+            let field = AsteroidField {
+                asteroids: &mut asteroids,
+                types: &types,
+            };
+            combat.close_tick_in_turn(fighters, arena, &mut stellars, Some(field), chance)
+        });
+        let (was, player_was) = turns.last();
         self.space.asteroids = asteroids;
         self.space.settle_asteroid_remains(&mut *chance);
         let killed = self.hold_stellar_kills();
@@ -674,12 +679,15 @@ impl Session {
     }
 
     /// The fight's collision passes on `pass` by `rules`, drawing on
-    /// `chance` ([`Combat::test_hits`]), among the stellars shown that
-    /// shots can hit and the asteroid field, lent whole, then their
-    /// settling: the hits' ([`Session::settle_landed`]), each stellar shot
-    /// down running its `OnDestroy` (see the `stellars` module), and the
-    /// boxes of each asteroid the shots destroyed (see the `asteroid_hits`
-    /// module).
+    /// `chance` ([`Combat::test_hits_in_turn`]), among the stellars shown
+    /// that shots can hit and the asteroid field, lent whole, each direct
+    /// hit settled and answered before the next lands, as `_DamageShip`'s
+    /// reaction block runs in `_HandleShipHit` (@0x36c7a), the fighters
+    /// lent afresh after it (see the `hit_turns` module); then the last
+    /// stretch's settling: its hits' ([`Session::settle_landed`]), each
+    /// stellar shot down running its `OnDestroy` (see the `stellars`
+    /// module), and the boxes of each asteroid the shots destroyed (see
+    /// the `asteroid_hits` module).
     pub(super) fn collision_passes(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
@@ -688,25 +696,21 @@ impl Session {
         chance: &mut dyn Chance,
     ) {
         let mut stellars = self.stellar_targets();
-        let was = self.space.npcs_before();
-        let player_was = self.ship.condition;
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
         let mut asteroids = std::mem::take(&mut self.space.asteroids);
-        self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            loop {
-                let scenery = Scenery {
-                    stellars: &mut stellars,
-                    asteroids: Some(AsteroidField {
-                        asteroids: &mut asteroids,
-                        types: &types,
-                    }),
-                    hazards: None,
-                };
-                if combat.test_hits_in_turn(fighters, arena, scenery, chance) == Stretch::Done {
-                    break;
-                }
-            }
+        let mut turns = Turns::new(self, behaviour, (pass, rules), &mut *chance);
+        run_in_turn(&mut turns, |combat, fighters, arena, chance| {
+            let scenery = Scenery {
+                stellars: &mut stellars,
+                asteroids: Some(AsteroidField {
+                    asteroids: &mut asteroids,
+                    types: &types,
+                }),
+                hazards: None,
+            };
+            combat.test_hits_in_turn(fighters, arena, scenery, chance)
         });
+        let (was, player_was) = turns.last();
         self.space.asteroids = asteroids;
         self.settle_landed(behaviour, &was, (player_was, None), rules, chance);
         self.strike_stellars(&stellars, rules.law, chance);
@@ -759,7 +763,7 @@ impl Session {
 impl Space {
     /// Every NPC as it is now, for the strikes that follow to be read
     /// against.
-    fn npcs_before(&self) -> Vec<NpcBefore> {
+    pub(super) fn npcs_before(&self) -> Vec<NpcBefore> {
         self.traffic.npcs().iter().map(NpcBefore::of).collect()
     }
 }
