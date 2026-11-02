@@ -213,6 +213,31 @@ fn cancelling_the_pointer_abandons_a_drag_on_the_open_map() {
     assert!(view.map_open());
 }
 
+#[test]
+fn hiding_the_cursor_abandons_a_drag_on_the_open_map() {
+    let mut view = in_flight();
+    tap(&mut view, MAP);
+    let empty = Point::new(250.0, 150.0);
+    let left = |pressed| Input::PointerButton {
+        button: MouseButton::Left,
+        pressed,
+        at: empty,
+    };
+    view.input(&left(true));
+    view.hide_cursor();
+    let place = view.course_map().place().expect("in flight").scroll();
+    let from = sent_count(&view);
+    view.input(&Input::PointerMoved(Point::new(300.0, 150.0)));
+    view.input(&left(false));
+    assert_eq!(
+        view.course_map().place().expect("in flight").scroll(),
+        place,
+        "no drag"
+    );
+    assert_eq!(sent_since(&view, from), [], "no click on the map");
+    assert!(view.map_open());
+}
+
 // The jump's filter.
 
 #[test]
