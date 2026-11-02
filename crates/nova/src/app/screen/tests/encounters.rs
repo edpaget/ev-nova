@@ -215,7 +215,7 @@ pub(super) fn boardable(screen: AppScreen) -> AppScreen {
 
 /// Ticks once (the system is set up and the trader disabled), targets
 /// the trader with Tab and boards it with B.
-fn board(screen: &mut AppScreen) {
+pub(super) fn board(screen: &mut AppScreen) {
     screen.tick(TICK);
     screen.input(&key(Key::Tab, true));
     screen.input(&key(Key::Tab, false));

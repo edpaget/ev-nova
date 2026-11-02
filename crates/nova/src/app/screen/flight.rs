@@ -601,7 +601,9 @@ impl AppScreen {
     }
 
     /// Queues what `show` queues on the mission dialogs over flight, first
-    /// cancelling flight's pointer gesture and letting go of its keys
+    /// hiding flight's cursor (`_HideCursorSprite` before `_ShowTextDialog`,
+    /// @0x687a0; [`AppScreen::hide_flight_cursor`]), cancelling flight's
+    /// pointer gesture and letting go of its keys
     /// (their releases will go to the dialogs), as any dialog over flight
     /// does: the last one's close hands back what is still down (see
     /// `live_input`). Without dialogs nothing is queued.
@@ -609,6 +611,7 @@ impl AppScreen {
         if self.flight_missions().is_none() {
             return;
         }
+        self.hide_flight_cursor();
         let below = self.shown_mut();
         below.cancel_pointer();
         below.release_keys();

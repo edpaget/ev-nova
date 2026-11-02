@@ -101,6 +101,7 @@ mod encounters;
 mod entry;
 mod escort_defection;
 mod flight;
+mod flight_cursor_dialogs;
 mod game;
 mod info_dialog_gain;
 mod jump_white;

@@ -48,6 +48,21 @@ impl AppScreen {
         self.movies.set_view(self.movie_view());
     }
 
+    /// Hides flight's cursor, if flight is built, with a zero fade
+    /// ([`FlightView::hide_cursor`]), as the original calls
+    /// `_HideCursorSprite` before each dialog over flight: the comm
+    /// (`_HandlePlayerCommunication` @0x62561, @0x625c1, the escort dialog
+    /// inside it @0x95742), the planet comm (@0x62035), the offer
+    /// (@0x6225a, @0x658d6), the plunder (`_HandlePlayerBoardAttempt`
+    /// @0x659d0, @0x65f1d), a text (`_HandlePlayer` @0x687a0, and the
+    /// mission cargo pickup's @0x65311), the player info (@0x70343) and the
+    /// mission info (@0x704d4).
+    pub(super) fn hide_flight_cursor(&mut self) {
+        if let Some(flight) = &mut self.flight {
+            flight.hide_cursor();
+        }
+    }
+
     /// Shows flight, building it the first time, and remembers the side to
     /// go back to.
     pub(super) fn enter_flight(&mut self) {
@@ -441,9 +456,12 @@ impl AppScreen {
             .flight
             .as_mut()
             .and_then(FlightView::take_mission_info_request)
-            && let Some(missions) = self.flight_missions()
+            && self.flight_missions().is_some()
         {
-            missions.open_info(info);
+            self.hide_flight_cursor();
+            if let Some(missions) = &mut self.missions {
+                missions.open_info(info);
+            }
             self.load_flight_info_text();
         }
     }
@@ -575,7 +593,9 @@ impl AppScreen {
     /// first; nothing opens in a jump or while the ship breaks up): laid out by
     /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
     /// saying why not, over the game data's background pictures
-    /// ([`BackgroundSizes::read`]). The screen below lets go of its keys. With no
+    /// ([`BackgroundSizes::read`]). Flight's cursor hides, as
+    /// `_HandlePlayer` hides its sprite before `_DoPlayerInfoDialog`
+    /// (@0x70343). The screen below lets go of its keys. With no
     /// dialogs, nothing opens, as the mission info does not.
     fn open_flight_player_info(&mut self) {
         let Some(dialogs) = &self.dialogs else {
@@ -589,6 +609,7 @@ impl AppScreen {
             .dialog_template(PLAYER_INFO_DIALOG)
             .map(|template| (template, Rc::clone(&dialogs.metrics)));
         let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
+        self.hide_flight_cursor();
         self.cancel_pointer();
         self.let_go_of_keys();
         self.player_info = Some(
@@ -661,9 +682,7 @@ impl AppScreen {
     /// ([`OfferDialog::with_missions_listed`]), and again after an abort
     /// ([`AppScreen::missions_input`]).
     pub(super) fn open_offer(&mut self, prompt: OfferPrompt) {
-        if let Some(flight) = &mut self.flight {
-            flight.cancel_pointer();
-        }
+        self.hide_flight_cursor();
         let layout = match (&self.dialogs, self.metrics()) {
             (Some(dialogs), Some(metrics)) => OfferTemplates {
                 plain: dialogs.resources.dialog_template(OFFER_DIALOG),
@@ -803,8 +822,11 @@ impl AppScreen {
     /// Opens the comm dialog on `view` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the hail is hung up, with a warning.
+    /// the hail is hung up, with a warning. Flight's cursor hides first,
+    /// as `_HandlePlayerCommunication` hides its sprite before
+    /// `_DoCommDialog` (@0x62561, @0x625c1).
     fn open_comm(&mut self, view: &HailView) {
+        self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.hang_up();
@@ -936,8 +958,11 @@ impl AppScreen {
     /// Opens the plunder dialog on `shown` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the boarding is let go silently, with a warning.
+    /// the boarding is let go silently, with a warning. Flight's cursor
+    /// hides first, as `_HandlePlayerBoardAttempt` hides its sprite before
+    /// `_DoPlunderDialog` (@0x659d0, @0x65f1d).
     fn open_plunder(&mut self, shown: &PlunderShown) {
+        self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.let_go_of_boarding();

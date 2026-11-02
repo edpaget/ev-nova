@@ -36,8 +36,11 @@ impl AppScreen {
     /// Opens the escort dialog on `view` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
-    /// the dialog is closed at once, with a warning.
+    /// the dialog is closed at once, with a warning. Flight's cursor hides
+    /// first: `_DoEscortDialog` runs inside `_DoCommDialog` (@0x95742),
+    /// after `_HandlePlayerCommunication` hid its sprite (@0x62561).
     pub(super) fn open_escort_dialog(&mut self, view: &EscortDialogView) {
+        self.hide_flight_cursor();
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.press_escort(nova_sim::escort_dialog::EscortButton::Close);
