@@ -203,6 +203,8 @@ pub mod berth_picks;
 pub mod berth_search;
 pub mod berth_voices;
 pub mod board_wait;
+#[cfg(test)]
+mod bribed_led_tests;
 pub mod burst_word;
 pub mod cloak_situation;
 #[cfg(test)]
