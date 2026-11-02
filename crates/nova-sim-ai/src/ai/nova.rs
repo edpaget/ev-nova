@@ -9,11 +9,15 @@
 //! mission escort, a `ShipBehav` 1 mission ship that has joined the
 //! player's formation (`_AIDispatch` @0x8fc03-0x8fc22 gives it AI type 6
 //! and leader 0 on every think), with no standing order. A ship with an
-//! NPC parent, whatever its AI type, goes to [`FleetEscortAi`], which
+//! NPC parent and an AI type above 4 ([`Npc::original_ai_type`],
+//! `_AIDispatch` @0x8ff9b-0x90016) goes to [`FleetEscortAi`], which
 //! flies `_EscortAI` under its lead: a fleet's escort or a ship a pirate
 //! took into its fleet (a [`leader`](Npc::leader), the original's AI type
-//! 5), until it leaves its fleet ([`Decision::leaves_fleet`]) or its
-//! lead's loss gives it another lead (`traffic::succession`). By
+//! 6), or an NPC carrier's fighter (5), until it leaves its fleet
+//! ([`Decision::leaves_fleet`]) or its lead's loss gives it another lead
+//! (`traffic::succession`). A bribed one (+0x88 1, `_DoCommDialog`
+//! @0x961f8) thinks as a wimpy trader with its parent kept, and so fires
+//! nothing unprovoked (`_AIEscortFireUnprovoked` @0x80e59). By
 //! the other reading of the rulebook's [`RuleKey::NpcEscortAi`], the
 //! port's earlier routing, a fighter goes to [`CarriedAi`] and a led ship
 //! to its AI type's behaviour, following its lead.
@@ -273,24 +277,33 @@ impl NovaAi {
 
     /// The behaviour for `npc` among `around`: the escorts' for the
     /// player's escort (its fighters too) and for a mission escort, let go
-    /// or not ([`Npc::thinks_as_escort`]); for a ship with an NPC parent, a leader
-    /// or a carrier (the original's AI types 6 and 5, `_AIDispatch`
-    /// @0x90011-0x90016), the fleet escorts' ([`FleetEscortAi`]) by the
-    /// engine's reading of [`RuleKey::NpcEscortAi`], and by its other
-    /// reading the carried fighters' for one an NPC launched and its own
-    /// AI type's for a led ship; the pirate's for a leaderless warship of
-    /// a government with `Flags` 0x1000 ([`PLUNDERS`], `_AIDispatch`
-    /// @0x8ffc8-0x8fff0); otherwise the one for its AI type.
+    /// or not ([`Npc::thinks_as_escort`]); by the engine's reading of
+    /// [`RuleKey::NpcEscortAi`], the fleet escorts' ([`FleetEscortAi`])
+    /// for a ship with an NPC parent, a leader or a carrier, whose AI type
+    /// is above 4 ([`Npc::original_ai_type`], the original's 6 and 5,
+    /// `_AIDispatch` @0x8ff9b-0x90016), so a bribed one (+0x88 1,
+    /// `_DoCommDialog` @0x961f8) thinks as a wimpy trader with its parent
+    /// kept and fires nothing unprovoked (`_AIEscortFireUnprovoked`
+    /// @0x80e59), and a fighter the player carries but doesn't lead
+    /// thinks as its type; by its other reading the carried fighters' for
+    /// one an NPC launched and its own AI type's for a led ship; the
+    /// pirate's for a leaderless warship of a government with `Flags`
+    /// 0x1000 ([`PLUNDERS`], `_AIDispatch` @0x8ffc8-0x8fff0); otherwise
+    /// the one for its AI type.
+    ///
+    /// A former escort that keeps 6 with no parent
+    /// ([`Npc::kept_escort_ai`]) thinks as its type: the engine settles
+    /// `_EscortAI`'s lost-parent write at that think
+    /// ([`Npc::settle_original_ai_type`]).
     fn of(&self, npc: &Npc, around: &Surroundings) -> &dyn Behaviour {
         if npc.thinks_as_escort() {
             return &*self.escorts;
         }
-        if (npc.leader.is_some() || npc.carrier.is_some())
-            && self.npc_escort_ai == RuleSource::Engine
-        {
-            return &*self.fleet_escorts;
-        }
-        if npc.carrier.is_some() {
+        if self.npc_escort_ai == RuleSource::Engine {
+            if npc.original_ai_type() > 4 && (npc.leader.is_some() || npc.carrier.is_some()) {
+                return &*self.fleet_escorts;
+            }
+        } else if npc.carrier.is_some() {
             return &*self.carried;
         }
         match npc.ai_type {
@@ -991,6 +1004,85 @@ mod tests {
     }
 
     #[test]
+    fn by_default_a_bribed_led_ship_or_npc_fighter_thinks_as_a_wimpy_trader() {
+        // The bribe writes +0x88 = 1 and keeps the parent +0x9a
+        // (`_DoCommDialog` @0x961f8), so `_AIDispatch`'s chain calls
+        // `_WimpyTraderAI` (@0x8ff9b-0x8ffab), not `_EscortAI` (@0x90016).
+        let (ai, marks, [fighters, fleet]) = fleet_marked(&Rulebook::default());
+        for (i, ai_type) in TYPES.into_iter().enumerate() {
+            let id = 10 + 4 * i as u32;
+            let mut npcs = [
+                led_by_30(of(id, ai_type)),
+                carried(of(id + 1, ai_type), ShipRef::Npc(NpcId(30))),
+                led_by_30(of(id + 2, ai_type)),
+                carried(of(id + 3, ai_type), ShipRef::Npc(NpcId(30))),
+            ];
+            npcs[0].take_bribe();
+            npcs[1].take_bribe();
+            let around = Surroundings::new(&[], &npcs);
+            for npc in &npcs[..2] {
+                assert_eq!(
+                    routed(&ai, npc, &around),
+                    all_of(&marks[0]),
+                    "{ai_type:?} {:?}",
+                    npc.id
+                );
+            }
+            for npc in &npcs[2..] {
+                assert_eq!(
+                    routed(&ai, npc, &around),
+                    all_of(&fleet),
+                    "{ai_type:?} {:?}",
+                    npc.id
+                );
+            }
+        }
+        assert!(fighters.asked.borrow().is_empty());
+        assert!(marks[1..].iter().all(|mark| mark.asked.borrow().is_empty()));
+    }
+
+    #[test]
+    fn by_default_a_fighter_the_player_carries_but_does_not_lead_thinks_as_its_type() {
+        // Its class's `InherentAI` (`_DamageShip` @0x3b0d7), at most 4, so
+        // `_AIDispatch` calls its type's think, not `_EscortAI` (@0x90016).
+        let (ai, marks, [fighters, fleet]) = fleet_marked(&Rulebook::default());
+        for (ai_type, mark) in TYPES.into_iter().zip(&marks) {
+            let npcs = [carried(of(10, ai_type), ShipRef::Player)];
+            let around = Surroundings::new(&[], &npcs);
+            assert_eq!(routed(&ai, &npcs[0], &around), all_of(mark), "{ai_type:?}");
+        }
+        assert!(fighters.asked.borrow().is_empty());
+        assert!(fleet.asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn by_the_other_reading_a_bribed_led_ship_flies_its_bribes_type_and_a_bribed_fighter_stays_carried()
+     {
+        let bible = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        let (ai, marks, [fighters, fleet]) = fleet_marked(&bible);
+        for ai_type in TYPES {
+            let mut npcs = [
+                led_by_30(of(10, ai_type)),
+                carried(of(11, ai_type), ShipRef::Npc(NpcId(30))),
+            ];
+            npcs[0].take_bribe();
+            npcs[1].take_bribe();
+            let around = Surroundings::new(&[], &npcs);
+            assert_eq!(
+                routed(&ai, &npcs[0], &around),
+                all_of(&marks[0]),
+                "{ai_type:?}"
+            );
+            assert_eq!(
+                routed(&ai, &npcs[1], &around),
+                all_of(&fighters),
+                "{ai_type:?}"
+            );
+        }
+        assert!(fleet.asked.borrow().is_empty());
+    }
+
+    #[test]
     fn nova_ai_flies_a_fleet_escort_under_its_lead_as_its_rulebook_says() {
         use crate::ai::fixture::{PIRATES, TRADERS, ship};
         let mut lead = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
@@ -1484,6 +1576,45 @@ mod tests {
                 ai.gate_wait(&other, &around),
                 GateWait::default(),
                 "{ai_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bribed_led_ship_or_npc_fighter_fires_nothing_unprovoked() {
+        // `_AIEscortFireUnprovoked` returns for AI type 4 or less
+        // (@0x80e59), and the bribe's is 1 (`_DoCommDialog` @0x961f8).
+        use crate::ai::fixture::{PIRATES, player, ship};
+        let pirate = ship(2, PIRATES, AiType::Warship, 300.0, 0.0);
+        let target = |mut npc: Npc| {
+            npc.target = Some(ShipRef::Npc(NpcId(2)));
+            npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30 };
+            npc
+        };
+        let led = target(led_by_30(ship(1, PIRATES, AiType::Warship, 0.0, 0.0)));
+        let fighter = target(carried(
+            ship(3, PIRATES, AiType::Interceptor, 50.0, 0.0),
+            ShipRef::Npc(NpcId(30)),
+        ));
+        let npcs = [led, pirate, fighter];
+        let around = Surroundings {
+            player: Some(player(0.0, 300.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let ai = NovaAi::default();
+        for i in [0, 2] {
+            assert!(
+                ai.gate_wait(&npcs[i], &around).trigger.point_defence,
+                "{:?} unbribed",
+                npcs[i].id
+            );
+            let mut bribed = npcs[i].clone();
+            bribed.take_bribe();
+            assert_eq!(
+                ai.gate_wait(&bribed, &around),
+                GateWait::default(),
+                "{:?} bribed",
+                npcs[i].id
             );
         }
     }
