@@ -84,7 +84,9 @@ use nova_render::{Batch, Frame};
 use nova_rsrc::ResType;
 use nova_rsrc::fixture::ForkBuilder;
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::{Chance, MissionId, Pilot, PilotKeeper, PilotStore, Session};
+use nova_sim::{
+    Chance, MissionId, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session,
+};
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
@@ -858,6 +860,28 @@ impl Game {
         data: Rc<GameData>,
         chance: Rc<RefCell<dyn Chance>>,
     ) -> Self {
+        Self::built(store, pilot, data, chance, Rulebook::default())
+    }
+
+    /// [`Game::with_data`] with the flights' disputed rules read as
+    /// `rules` say.
+    fn with_rules(
+        store: &MemoryPilots,
+        pilot: &Pilot,
+        data: Rc<GameData>,
+        rules: Rulebook,
+    ) -> Self {
+        Self::built(store, pilot, data, Rc::new(RefCell::new(Nothing)), rules)
+    }
+
+    /// [`Game::with_chance`] by `rules`.
+    fn built(
+        store: &MemoryPilots,
+        pilot: &Pilot,
+        data: Rc<GameData>,
+        chance: Rc<RefCell<dyn Chance>>,
+        rules: Rulebook,
+    ) -> Self {
         PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
             .save(pilot)
             .expect("saved");
@@ -865,7 +889,8 @@ impl Game {
         let screen: AppScreen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
-            .with_chance(SharedChance::new(chance));
+            .with_chance(SharedChance::new(chance))
+            .with_rules(rules);
         let mut game = Self {
             app: App::new(&FakeWindow, data, crate::common::appeared(screen)),
             gpu: RecordingGpu::new(),
@@ -1758,6 +1783,62 @@ fn i_opens_mission_info_whose_abort_reaches_the_session_and_the_info_comes_back(
     game.tap(Key::Escape);
     assert!(game.spaceport().mission_info().is_none());
     assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+/// `mission` with `Flags` 0x0400: the mission info screen doesn't list it.
+fn hidden(mut mission: Vec<u8>) -> Vec<u8> {
+    mission[0x50..0x52].copy_from_slice(&0x0400_u16.to_be_bytes());
+    mission
+}
+
+/// Landed with the run, mission 128, hidden in slot 0 and the bar job,
+/// 130, in each of `shown`, by `rules`, mission info open, the first
+/// shown row selected and aborted.
+fn aborted_by(rules: Rulebook, shown: &[usize]) -> Game {
+    let data = game_data_from(&hidden(timed(mission(128, 200, 201))), bar_job());
+    let mut held = vec![(0, 128, None, None)];
+    held.extend(shown.iter().map(|&slot| (slot, 130, None, None)));
+    let store = MemoryPilots::new();
+    let mut game = Game::with_rules(&store, &holding(&ada(), &held), data, rules);
+    game.frame();
+    game.land();
+    game.tap(Key::Char('i'));
+    let info = game.spaceport().mission_info().expect("open");
+    assert_eq!(
+        info.info().rows.len(),
+        shown.len(),
+        "the hidden one unlisted"
+    );
+    game.click_info(ABORT_ITEM);
+    game
+}
+
+#[test]
+fn an_abort_with_a_hidden_mission_active_hands_back_the_info_the_rule_reads() {
+    let engine = Rulebook::default().with_override(RuleKey::MissionInfoRebuild, RuleSource::Engine);
+    let slots = |rows: &[nova_sim::InfoRow]| rows.iter().map(|row| row.slot).collect::<Vec<_>>();
+    let game = aborted_by(Rulebook::default(), &[1, 2]);
+    let info = game.spaceport().mission_info().expect("still open").info();
+    assert_eq!(slots(&info.rows), [2], "slot 1 aborted");
+    assert_eq!(info.table, None, "each row picks its own, by default");
+    let game = aborted_by(engine, &[1, 2]);
+    let info = game.spaceport().mission_info().expect("still open").info();
+    assert_eq!(slots(&info.rows), [2]);
+    assert_eq!(
+        info.table.as_deref().map(slots),
+        Some(vec![0, 2]),
+        "by the engine, every active slot (@0x9e69f-0x9e6d8)"
+    );
+    let game = aborted_by(engine, &[1]);
+    assert!(
+        game.spaceport().mission_info().is_some(),
+        "by the engine, open while the hidden one is active"
+    );
+    let game = aborted_by(Rulebook::default(), &[1]);
+    assert!(
+        game.spaceport().mission_info().is_none(),
+        "closed by default"
+    );
 }
 
 #[test]

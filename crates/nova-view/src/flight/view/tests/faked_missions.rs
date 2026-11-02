@@ -468,6 +468,18 @@ fn the_mission_info_its_rows_and_an_abort_go_through_the_flight() {
         view.sim.screens_asked(),
         [ScreenAsk::MissionInfo, ScreenAsk::MissionInfo]
     );
+    assert_eq!(view.mission_info_after_abort().rows, [], "nothing answered");
+    let table = info().with_table(Vec::new());
+    view.sim
+        .queue_screen(ScreenAnswer::MissionInfoAfterAbort(table.clone()));
+    assert_eq!(view.mission_info_after_abort(), table);
+    assert_eq!(
+        view.sim.screens_asked()[2..],
+        [
+            ScreenAsk::MissionInfoAfterAbort,
+            ScreenAsk::MissionInfoAfterAbort
+        ]
+    );
     view.sim
         .queue_answer(Answer::InfoRow(Some("Quick.".to_owned())));
     assert_eq!(view.show_info_row(0).as_deref(), Some("Quick."));

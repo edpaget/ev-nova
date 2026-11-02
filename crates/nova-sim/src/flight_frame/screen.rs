@@ -139,9 +139,12 @@ pub enum ScreenAsk {
     /// What the bar's Gamble opens, asked as it is pressed
     /// ([`ScreenAnswer::Gamble`]). Answered nothing where there is no bar.
     Gamble,
-    /// What the mission info screen lists, asked as it opens and after
-    /// an abort ([`ScreenAnswer::MissionInfo`]).
+    /// What the mission info screen lists, asked as it opens
+    /// ([`ScreenAnswer::MissionInfo`]).
     MissionInfo,
+    /// What the mission info screen lists after an abort, by the
+    /// `mission_info_rebuild` rule ([`ScreenAnswer::MissionInfoAfterAbort`]).
+    MissionInfoAfterAbort,
     /// Whether the mission's offer dialog has a refuse button, asked
     /// before a docked offer is answered ([`ScreenAnswer::RefusableOffer`]).
     RefusableOffer(MissionId),
@@ -329,6 +332,8 @@ pub enum ScreenAnswer {
     Gamble(GambleOpening),
     /// [`ScreenAsk::MissionInfo`]'s.
     MissionInfo(MissionInfo),
+    /// [`ScreenAsk::MissionInfoAfterAbort`]'s.
+    MissionInfoAfterAbort(MissionInfo),
     /// [`ScreenAsk::RefusableOffer`]'s.
     RefusableOffer(bool),
     /// [`ScreenAsk::OfferText`]'s.
@@ -371,6 +376,7 @@ impl ScreenAnswer {
             ScreenAsk::News => matches!(self, Self::News(_)),
             ScreenAsk::Gamble => matches!(self, Self::Gamble(_)),
             ScreenAsk::MissionInfo => matches!(self, Self::MissionInfo(_)),
+            ScreenAsk::MissionInfoAfterAbort => matches!(self, Self::MissionInfoAfterAbort(_)),
             ScreenAsk::RefusableOffer(_) => matches!(self, Self::RefusableOffer(_)),
             ScreenAsk::OfferText { .. } => matches!(self, Self::OfferText(_)),
             ScreenAsk::Hail => matches!(self, Self::Hail(_)),
@@ -416,6 +422,7 @@ mod tests {
             ScreenAsk::News,
             ScreenAsk::Gamble,
             ScreenAsk::MissionInfo,
+            ScreenAsk::MissionInfoAfterAbort,
             ScreenAsk::RefusableOffer(MissionId(128)),
             ScreenAsk::OfferText {
                 mission: MissionId(128),
@@ -494,6 +501,7 @@ mod tests {
             ScreenAnswer::News(BarNews::default()),
             ScreenAnswer::Gamble(GambleOpening::NoCash),
             ScreenAnswer::MissionInfo(MissionInfo::default()),
+            ScreenAnswer::MissionInfoAfterAbort(MissionInfo::default()),
             ScreenAnswer::RefusableOffer(false),
             ScreenAnswer::OfferText(String::new()),
             ScreenAnswer::Hail(Box::new(HailView {

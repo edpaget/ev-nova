@@ -68,8 +68,9 @@ impl AppScreen {
             let info = self.flight.as_mut().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
         }
-        // An abort frees the slot, and the info goes back, closing once
-        // nothing is left; a refusal (greyed) changes nothing.
+        // An abort frees the slot, and the info goes back as the
+        // `mission_info_rebuild` rule reads it, closing once nothing is
+        // left; a refusal changes nothing.
         abort_and_refresh(spaceport, self.flight.as_mut());
         // The bar draws the visit's news as it opens, before News can
         // show it; News shows what was drawn.

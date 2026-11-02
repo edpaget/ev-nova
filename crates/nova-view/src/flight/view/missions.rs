@@ -69,11 +69,23 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// The mission info screen's view ([`ScreenAsk::MissionInfo`]), asked
-    /// as the screen opens and after an abort: nothing listed for a flight
-    /// with nothing to answer.
+    /// as the screen opens: nothing listed for a flight with nothing to
+    /// answer.
     pub fn mission_info(&mut self) -> MissionInfo {
         match self.sim.screen(ScreenAsk::MissionInfo) {
             ScreenAnswer::MissionInfo(info) => info,
+            _ => MissionInfo::default(),
+        }
+    }
+
+    /// The mission info screen's view after an abort
+    /// ([`ScreenAsk::MissionInfoAfterAbort`]), its rows picking as the
+    /// `mission_info_rebuild` rule says
+    /// (`nova_sim::Session::mission_info_after_abort`): nothing listed for
+    /// a flight with nothing to answer.
+    pub fn mission_info_after_abort(&mut self) -> MissionInfo {
+        match self.sim.screen(ScreenAsk::MissionInfoAfterAbort) {
+            ScreenAnswer::MissionInfoAfterAbort(info) => info,
             _ => MissionInfo::default(),
         }
     }

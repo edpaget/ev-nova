@@ -48,7 +48,12 @@
 //! ([`MissionInfoScreen::take_abort`]), with no confirmation, and whoever
 //! holds the session aborts it and hands the info back
 //! ([`MissionInfoScreen::set_info`]), which closes the screen once
-//! nothing is listed (@0x9e5eb-0x9e610). With missions left, an abort
+//! nothing is listed (@0x9e5eb-0x9e610). By the engine reading of the
+//! `mission_info_rebuild` rule the info handed back carries the
+//! original's table, every active slot hidden ones included
+//! ([`MissionInfo::table`]): each row then picks the slot at its place,
+//! a step can select past the rows, and the screen stays open while any
+//! mission is active (@0x9e5f9-0x9e60a, @0x9e69f-0x9e6d8). With missions left, an abort
 //! leaves nothing selected (@0x9e62d-0x9e632, @0x9e66a-0x9e680): item 4 is
 //! an empty black box (@0x987d1-0x987e6), Abort is greyed, and M asks for
 //! the map marked for nothing (@0x9e3e5-0x9e3f1). A refused abort keeps
@@ -810,14 +815,19 @@ impl MissionInfoScreen {
 
     /// Shows `info` in place of the one shown: the first row selected as
     /// the screen opens, and after that the selected slot kept while it is
-    /// listed, as a refused abort leaves it (@0x9e583). When an abort takes
-    /// it, nothing is selected (`_DoMissionInfoDialog` @0x9e62d-0x9e632,
-    /// @0x9e66a-0x9e680). It closes once nothing is listed
+    /// listed. When an abort takes it, nothing is selected
+    /// (`_DoMissionInfoDialog` @0x9e62d-0x9e632, @0x9e66a-0x9e680). The
+    /// list's labels are `info`'s rows, and each place picks from
+    /// [`MissionInfo::picks`]: the rows, or the table an abort left by the
+    /// engine reading of `mission_info_rebuild`, which the steps wrap over
+    /// past the rows ([`RowList::with_extent`]). The selection, its text,
+    /// Abort's grey, Abort, M's mark and the text asked for all read the
+    /// pick at the selected place. It closes once nothing is picked
     /// (@0x9e5eb-0x9e610).
     pub fn set_info(&mut self, info: MissionInfo) {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
-        if self.info.rows.is_empty() {
+        if self.info.picks().is_empty() {
             self.close();
         }
         let Ok(laid) = &mut self.laid else {
@@ -830,9 +840,10 @@ impl MissionInfoScreen {
                 row.name.clone()
             }
         });
-        laid.rows = info_rows(&laid.dialog, names.collect(), &*laid.metrics.0);
+        laid.rows = info_rows(&laid.dialog, names.collect(), &*laid.metrics.0)
+            .with_extent(self.info.picks().len());
         if let Some(slot) = kept {
-            match self.info.rows.iter().position(|row| row.slot == slot) {
+            match self.info.picks().iter().position(|row| row.slot == slot) {
                 Some(index) => laid.rows.select(index),
                 None => laid.rows.clear_selection(),
             }
@@ -841,10 +852,10 @@ impl MissionInfoScreen {
         self.show_selected();
     }
 
-    /// The row selected, if any.
+    /// The pick at the selected place, if any.
     fn selected_row(&self) -> Option<&InfoRow> {
         let index = self.rows()?.selected()?;
-        self.info.rows.get(index)
+        self.info.picks().get(index)
     }
 
     /// Shows the selected mission's text, and greys Abort unless it can
@@ -856,7 +867,7 @@ impl MissionInfoScreen {
         let row = laid
             .rows
             .selected()
-            .and_then(|index| self.info.rows.get(index));
+            .and_then(|index| self.info.picks().get(index));
         laid.dialog
             .set_text(INFO_TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
         laid.dialog
@@ -2711,6 +2722,100 @@ mod tests {
         assert!(!off.closed(), "the info screen");
         assert_eq!(off.take_abort(), None);
         assert_eq!(off.dialog().and_then(Dialog::focus), None);
+    }
+
+    // The table an abort leaves by the engine reading of
+    // `mission_info_rebuild`.
+
+    /// Rows for slots 1 and 2 over a table of 0 (hidden, not abortable),
+    /// 1 and 2: what the engine's rebuild leaves after an abort with a
+    /// hidden mission in slot 0.
+    fn tabled() -> MissionInfo {
+        MissionInfo::shown(
+            vec![
+                info_row(1, "Run", false, "Go.", true),
+                info_row(2, "Walk", false, "Stroll.", true),
+            ],
+            "June 23rd, 1177 NC",
+        )
+        .with_table(vec![
+            info_row(0, "Hidden", false, "Shh.", false),
+            info_row(1, "Run", false, "Go.", true),
+            info_row(2, "Walk", false, "Stroll.", true),
+        ])
+    }
+
+    #[test]
+    fn with_a_table_a_row_selects_the_slot_at_its_position() {
+        let mut screen = info_screen_of(tabled());
+        assert_eq!(
+            screen.rows().map(RowList::rows),
+            Some(&["Run".to_owned(), "Walk".to_owned()][..])
+        );
+        assert_eq!(screen.take_text_request(), Some(0), "row 0 picks slot 0");
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Shh.");
+        assert!(!info_enabled(&screen, ABORT_LABEL), "slot 0's grey");
+        screen.input(&key(Key::Char('m')));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(Some(0)))
+        );
+        screen.input(&key(Key::Down));
+        assert_eq!(
+            screen.take_text_request(),
+            Some(1),
+            "row 1, named Walk, picks slot 1"
+        );
+        click_info(&mut screen, ABORT_ITEM);
+        assert_eq!(screen.take_abort(), Some(1));
+    }
+
+    #[test]
+    fn with_a_table_a_step_can_select_past_the_rows() {
+        let mut screen = info_screen_of(tabled());
+        let _ = screen.take_text_request();
+        screen.input(&key(Key::Down));
+        screen.input(&key(Key::Down));
+        assert_eq!(
+            screen.rows().and_then(RowList::selected),
+            Some(2),
+            "past the rows"
+        );
+        assert_eq!(screen.take_text_request(), Some(2));
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Stroll.");
+        let highlights = info_drawn(&screen)
+            .into_iter()
+            .filter(|command| {
+                *command
+                    == fill_command(
+                        Bounds::at(Point::new(285.0, 354.0), 195.0, 12.0),
+                        crate::ui::row_list::SELECTED,
+                    )
+            })
+            .count();
+        assert_eq!(highlights, 0, "no row highlighted");
+        screen.input(&key(Key::Down));
+        assert_eq!(
+            screen.rows().and_then(RowList::selected),
+            Some(0),
+            "wrapped over three"
+        );
+    }
+
+    #[test]
+    fn with_a_table_and_no_rows_the_screen_stays_open() {
+        let mut screen = info_screen();
+        screen.set_info(
+            MissionInfo::shown(Vec::new(), "June 23rd, 1177 NC")
+                .with_table(vec![info_row(0, "Hidden", false, "Shh.", false)]),
+        );
+        assert!(
+            !screen.closed(),
+            "a hidden mission is still active (@0x9e5f9-0x9e60a)"
+        );
+        assert_eq!(screen.rows().map(|rows| rows.rows().len()), Some(0));
+        screen.set_info(MissionInfo::shown(Vec::new(), "").with_table(Vec::new()));
+        assert!(screen.closed(), "nothing active");
     }
 
     // The lists' scroll bars and pressed tracking.

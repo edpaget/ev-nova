@@ -172,6 +172,7 @@ pub(in crate::session) mod tests {
     use crate::landing::StellarFlags;
     use crate::legal::NovaLaw;
     use crate::mission::screens::BAR;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::apply::ApplyCollaborators;
     use crate::session::frame::tests::filled;
     use crate::session::hail::tests::{hail, hailable, targeting};
@@ -491,6 +492,27 @@ pub(in crate::session) mod tests {
     }
 
     #[test]
+    fn the_mission_info_after_an_abort_is_the_sessions_by_the_rule() {
+        let catalog = port();
+        for rules in [
+            Rulebook::default(),
+            Rulebook::default().with_override(RuleKey::MissionInfoRebuild, RuleSource::Engine),
+        ] {
+            let mut session = docked(&catalog).with_rules(rules);
+            let expected = session.mission_info_after_abort();
+            assert_eq!(
+                asked(
+                    &mut session,
+                    None,
+                    &mut NeverFires,
+                    ScreenAsk::MissionInfoAfterAbort
+                ),
+                ScreenAnswer::MissionInfoAfterAbort(expected)
+            );
+        }
+    }
+
+    #[test]
     fn the_mission_info_is_the_sessions() {
         let catalog = port();
         let mut session = docked(&catalog);
@@ -646,6 +668,7 @@ pub(in crate::session) mod tests {
                     ScreenAsk::ShipNaming(FOR_SALE),
                     ScreenAsk::News,
                     ScreenAsk::MissionInfo,
+                    ScreenAsk::MissionInfoAfterAbort,
                     ScreenAsk::RefusableOffer(MissionId(141)),
                     ScreenAsk::OfferText {
                         mission: MissionId(300),

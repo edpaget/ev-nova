@@ -713,6 +713,7 @@ mod tests {
             ScreenAsk::ShipNaming(ShipId(129)),
             ScreenAsk::News,
             ScreenAsk::MissionInfo,
+            ScreenAsk::MissionInfoAfterAbort,
             ScreenAsk::RefusableOffer(MissionId(130)),
             ScreenAsk::OfferText {
                 mission: MissionId(130),
