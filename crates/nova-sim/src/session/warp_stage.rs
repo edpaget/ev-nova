@@ -1319,4 +1319,146 @@ pub(super) mod tests {
             crate::flight::moved(before.position, velocity, half)
         );
     }
+
+    // The frame's gain on the jump's other paths.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// Moving up fast, facing east: J begins a pre-jump that brakes.
+    fn braking(catalog: &FakePilotCatalog) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::new(0.0, -5.0), 90.0);
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        assert!(matches!(
+            session.mode.jump(),
+            Some(Jump::PreJump { warp: None, .. })
+        ));
+        session
+    }
+
+    /// At rest facing north, the bearing east: J begins a pre-jump that
+    /// turns inside the warp stage.
+    fn turning(catalog: &FakePilotCatalog) -> Session {
+        let mut session = bound_for_131(catalog, OUT, Vec2::ZERO, 0.0);
+        session.statics_mut().warp_sounds = [364, 252];
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        session
+    }
+
+    fn ionizing() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(crate::handling::ShipFields {
+                    ionize_max: 400,
+                    deionize: 50,
+                    ..FAST
+                }),
+            )],
+            ..catalog()
+        }
+    }
+
+    /// The charge left after a pass at half gain from 100.
+    fn shed_at_half(session: &mut Session) -> (f32, Option<f32>) {
+        session.ship.ion.charge = 100.0;
+        let rate = session.ion_rate();
+        session.at_gain(HALF);
+        tick(session);
+        (
+            session.ion().charge,
+            crate::ionization::deionize(100.0, rate, HALF),
+        )
+    }
+
+    #[test]
+    fn at_half_gain_an_ionized_player_sheds_half_its_rate_braking_turning_and_in_hyperspace() {
+        let catalog = ionizing();
+        let mut brake = braking(&catalog);
+        let (charge, expected) = shed_at_half(&mut brake);
+        assert!(matches!(
+            brake.mode.jump(),
+            Some(Jump::PreJump { warp: None, .. })
+        ));
+        assert_eq!(Some(charge), expected, "braking");
+        let mut turn = turning(&catalog);
+        let (charge, expected) = shed_at_half(&mut turn);
+        assert!(matches!(
+            turn.mode.jump(),
+            Some(Jump::PreJump { warp: Some(_), .. })
+        ));
+        assert_eq!(Some(charge), expected, "turning in the warp stage");
+        let mut hyper = jumping(&catalog);
+        let (charge, expected) = shed_at_half(&mut hyper);
+        assert!(hyper.jumping().is_some());
+        assert_eq!(Some(charge), expected, "in hyperspace");
+        assert_ne!(
+            expected,
+            crate::ionization::deionize(100.0, hyper.ion_rate(), SpeedMult::FULL)
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_banking_hull_banks_half_a_frame_braking_and_in_the_warp_stage() {
+        let catalog =
+            crate::session::ship_display::tests::displaying(crate::combat::ship_frames::BANKS, 3);
+        let mut brake = braking(&catalog);
+        brake.at_gain(HALF);
+        tick(&mut brake);
+        assert_eq!(brake.ship.ship_display.frames.bank, 0.5, "braking");
+        let mut turn = turning(&catalog);
+        turn.at_gain(HALF);
+        tick(&mut turn);
+        assert_eq!(turn.ship.ship_display.frames.bank, 0.5, "in the warp stage");
+    }
+
+    #[test]
+    fn at_half_gain_the_pre_jump_brake_flies_as_pre_jump_fly_at_that_gain() {
+        for inertialess in [false, true] {
+            let catalog = if inertialess {
+                FakePilotCatalog {
+                    ships: vec![(
+                        ShipId(128),
+                        Ok(crate::handling::ShipFields {
+                            flags2: crate::stats::INERTIALESS_HULL,
+                            ..FAST
+                        }),
+                    )],
+                    ..catalog()
+                }
+            } else {
+                catalog()
+            };
+            let mut session = braking(&catalog);
+            if inertialess {
+                session.ship.player_speed = 5.0;
+            }
+            session.at_gain(HALF);
+            let Some(Jump::PreJump { bearing, .. }) = session.mode.jump() else {
+                panic!("in the pre-jump");
+            };
+            let handling =
+                session
+                    .ship
+                    .flying_handling(&session.pilot, &session.setup, session.mode.jump());
+            let mut expected = session.ship.player;
+            let mut speed = session.ship.player_speed;
+            pre_jump::fly(
+                &mut expected,
+                &handling,
+                bearing,
+                !session.ship.fit.stats.fast_jump,
+                session.player_caps(),
+                session.setup.flight_rules(),
+                inertialess.then_some(&mut speed),
+                HALF,
+            );
+            tick(&mut session);
+            assert_eq!(session.ship.player, expected, "inertialess {inertialess}");
+            if inertialess {
+                assert_eq!(session.ship.player_speed, speed);
+            }
+        }
+    }
 }

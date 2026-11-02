@@ -514,7 +514,7 @@ impl Space {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::{HullRecord, ShipDisplay, ShipExits, ShipId, SystemId};
     use crate::chance::NeverFires;
@@ -532,7 +532,7 @@ mod tests {
     /// The test catalog, the player's ship 128 of `shän` `Flags` `flags`
     /// and `sets` base sets, `AnimDelay` 5, 36 frames a turn; ship 129 of
     /// the Asteroid Miner's 0xc2 and six sets.
-    fn displaying(flags: u16, sets: i16) -> FakePilotCatalog {
+    pub(in crate::session) fn displaying(flags: u16, sets: i16) -> FakePilotCatalog {
         let shän = |id, flags, sets| HullRecord {
             display: Some(ShipDisplay {
                 flags,
