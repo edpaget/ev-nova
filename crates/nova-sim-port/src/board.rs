@@ -170,6 +170,12 @@ pub enum BoardRefusal {
     NoTarget,
     /// "You can't board this ship." (`STR#` 2002 #130).
     CantBoard,
+    /// A `PickupMode` 2 mission's special ship whose cargo has no room:
+    /// `_DoMissionCargoPickup`'s refusal text (@0x982ff), then #130 as
+    /// [`BoardRefusal::CantBoard`] says it (@0x65366 → @0x65fdb), and
+    /// `_SetAllKeyCmdFlags` between them
+    /// ([`BoardRefusal::sets_every_latch`]).
+    NoRoomForCargo,
     /// "You're moving too fast to board this ship." (#132).
     TooFast,
     /// "You're not close enough to board this ship." (#131).
@@ -234,6 +240,17 @@ impl BoardRefusal {
     #[must_use]
     pub fn latches(self) -> bool {
         !matches!(self, Self::NoTarget | Self::Cloaked)
+    }
+
+    /// Whether `_SetAllKeyCmdFlags` (@0x61e6d) ran before the refusal,
+    /// latching every key down, so the dialog it showed closes on them
+    /// latched: the pickup refused for room alone, as
+    /// `_HandlePlayerBoardAttempt` calls it after `_DoMissionCargoPickup`
+    /// whatever it answered (@0x6535a). Every other refusal returns
+    /// before any site.
+    #[must_use]
+    pub fn sets_every_latch(self) -> bool {
+        self == Self::NoRoomForCargo
     }
 }
 
@@ -1191,11 +1208,30 @@ mod tests {
         assert!(!BoardRefusal::Cloaked.latches());
         for refusal in [
             BoardRefusal::CantBoard,
+            BoardRefusal::NoRoomForCargo,
             BoardRefusal::TooFast,
             BoardRefusal::TooFar,
             BoardRefusal::Misaligned,
         ] {
             assert!(refusal.latches(), "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_pickup_refused_for_room_is_followed_by_set_all_key_cmd_flags() {
+        // `_DoMissionCargoPickup` @0x6533d, then `_SetAllKeyCmdFlags`
+        // @0x6535a, then #130 (@0x65366 → @0x65fdb); every other refusal
+        // returns before any site.
+        assert!(BoardRefusal::NoRoomForCargo.sets_every_latch());
+        for refusal in [
+            BoardRefusal::NoTarget,
+            BoardRefusal::CantBoard,
+            BoardRefusal::TooFast,
+            BoardRefusal::TooFar,
+            BoardRefusal::Misaligned,
+            BoardRefusal::Cloaked,
+        ] {
+            assert!(!refusal.sets_every_latch(), "{refusal:?}");
         }
     }
 
@@ -2292,6 +2328,7 @@ mod tests {
         assert!(BoardRefusal::Misaligned.silent());
         for loud in [
             BoardRefusal::CantBoard,
+            BoardRefusal::NoRoomForCargo,
             BoardRefusal::TooFast,
             BoardRefusal::TooFar,
         ] {

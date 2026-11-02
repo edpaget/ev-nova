@@ -5197,7 +5197,7 @@ impl Session {
     /// began (the original's ship sits braking in the old system then,
     /// its velocity × 0.98 a frame, @0x6bb32-0x6bb59). A `PickupMode`
     /// 2 mission's special ship whose cargo has no room is
-    /// [`BoardRefusal::CantBoard`], and the pickup's refusal is queued
+    /// [`BoardRefusal::NoRoomForCargo`], and the pickup's refusal is queued
     /// as a mission text, as `_DoMissionCargoPickup` shows its dialog
     /// (@0x982ff); nothing else changes, the velocity not matched
     /// (@0x65fdb).

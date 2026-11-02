@@ -477,7 +477,7 @@ mod tests {
         }
         let _ = session.take_sounds();
         let (boarding, _) = board_at(&mut session, 0, DRIFT);
-        assert_eq!(boarding, Err(BoardRefusal::CantBoard));
+        assert_eq!(boarding, Err(BoardRefusal::NoRoomForCargo));
         assert_eq!(refusal_beeps(&mut session), 1, "@0x65366 → @0x65ffe");
     }
 

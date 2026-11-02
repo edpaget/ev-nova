@@ -1066,7 +1066,7 @@ impl Session {
     /// counts the ship boarded, whatever its goal (@0x653a7), and the
     /// comm line names the cargo, its `STR#` 4001 name resolved here, as
     /// the session holds the string lists; a pickup refused refuses the board
-    /// ([`BoardRefusal::CantBoard`], @0x65fdb), its dialog shown and
+    /// ([`BoardRefusal::NoRoomForCargo`], @0x65fdb), its dialog shown and
     /// nothing else changed. Any other takes the assist path
     /// ([`assists`]), on which its slot counts it boarded, the comm line
     /// is said and the ship holds its course for 100 ticks (its AI wait
@@ -1096,7 +1096,7 @@ impl Session {
             let goal = ShipGoal::from_code(record.ships.goal);
             let counts = if record.pickup_mode == PICKUP_BOARDING {
                 if !self.pick_up_boarded_cargo(mark.slot) {
-                    return Some(Err(BoardRefusal::CantBoard));
+                    return Some(Err(BoardRefusal::NoRoomForCargo));
                 }
                 let cargo = cargo
                     .and_then(|cargo| u8::try_from(cargo).ok())
@@ -5294,8 +5294,8 @@ pub(super) mod tests {
     }
 
     /// `_DoMissionCargoPickup` refuses (@0x98292-0x9830b) and the board
-    /// jumps to @0x65fdb: the dialog, then #130, and nothing else: no
-    /// count, no mark, no velocity match.
+    /// jumps to @0x65fdb: the dialog, `_SetAllKeyCmdFlags` (@0x6535a),
+    /// then #130, and nothing else: no count, no mark, no velocity match.
     #[test]
     fn a_pickup_refused_for_room_refuses_the_board_and_changes_nothing_else() {
         let catalog = picking_up(2, 1, 0x0001);
@@ -5306,7 +5306,7 @@ pub(super) mod tests {
         }
         let _ = session.take_sounds();
         let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
-        assert_eq!(boarding, Err(crate::board::BoardRefusal::CantBoard));
+        assert_eq!(boarding, Err(crate::board::BoardRefusal::NoRoomForCargo));
         assert_eq!(
             boarded_beeps(&mut session),
             0,
