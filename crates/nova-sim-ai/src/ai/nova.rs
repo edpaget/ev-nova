@@ -620,6 +620,62 @@ mod tests {
         assert!(!decision.calls_reinforcements);
     }
 
+    /// A hunter of `ai_type` (NPC 1, police) at the centre fleeing NPC 2,
+    /// its target, beside `npcs`, a pirate NPC 3 in view 400 below; its
+    /// decision by Nova's AI and the draws asked.
+    fn fled(ai_type: AiType, npcs: &[Npc]) -> (Decision, Vec<u32>) {
+        use crate::ai::fixture::{PIRATES, POLICE, around, govts, n, ship, sites};
+        let mut runner = ship(1, POLICE, ai_type, 0.0, 0.0);
+        runner.goal = Goal::Flee(n(2));
+        runner.target = Some(n(2));
+        runner.provoked = 5.0;
+        let mut all = vec![runner];
+        all.extend_from_slice(npcs);
+        all.push(ship(3, PIRATES, AiType::Warship, 0.0, 400.0));
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &all, &govts, (0.0, -3000.0), 0);
+        let mut chance = Draws::of(&[0; 4]);
+        let decision = NovaAi::default().decision(&all[0], &around, &mut chance);
+        (decision, chance.asked)
+    }
+
+    #[test]
+    fn a_hunter_fleeing_a_ship_gone_idles_with_no_search_that_think() {
+        // The think keeps goal 3 (@0x8bb34, @0x8cc6d), the slot test makes
+        // +0x70 -1 (@0x8d4e4-0x8d50d), and goal 3's block writes goal 0,
+        // sub 0 and +0x96 0 with no call (@0x8dff6 → @0x8e228-0x8e23d).
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let (decision, asked) = fled(ai_type, &[]);
+            assert_eq!(decision.goal, Goal::Idle, "{ai_type:?}");
+            assert!(decision.clears_target, "{ai_type:?}");
+            assert!(decision.forgets_provocation, "{ai_type:?}");
+            assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Keep);
+            assert!(!decision.calls_reinforcements, "{ai_type:?}");
+            assert!(asked.is_empty(), "{ai_type:?}: no search");
+        }
+    }
+
+    #[test]
+    fn a_hunter_fleeing_a_ship_breaking_up_flees_on_calling_within_250() {
+        // Goal 3's block never tests the fled ship's condition: within 250
+        // it calls for reinforcements (@0x8e0d7).
+        use crate::ai::fixture::{PIRATES, n, ship};
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 200.0);
+            dying.condition = Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            };
+            let (decision, asked) = fled(ai_type, &[dying]);
+            assert_eq!(decision.goal, Goal::Flee(n(2)), "{ai_type:?}");
+            assert!(!decision.clears_target, "{ai_type:?}");
+            assert!(!decision.forgets_provocation, "{ai_type:?}");
+            assert!(decision.calls_reinforcements, "{ai_type:?}");
+            assert!(asked.is_empty(), "{ai_type:?}: no search");
+        }
+    }
+
     #[test]
     fn each_ai_type_is_routed_to_its_own_behaviour() {
         let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();

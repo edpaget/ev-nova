@@ -1,8 +1,22 @@
-//! A fleeing ship giving up fleeing an ally it spares, as
-//! `_HighLevelAIHandler` does after every type's think (state 3,
-//! @0x8df75-0x8e0c3 → @0x8e81d in the `EV Nova` executable).
+//! Goal 3's block of `_HighLevelAIHandler`, after every type's think
+//! (state 3, @0x8df75-0x8e0dc in the `EV Nova` executable): a flight from
+//! a ship gone ends, and a fleeing ship gives up fleeing an ally it
+//! spares (@0x8e0c3 → @0x8e81d).
 //!
-//! A ship fleeing a ship within [`FLEEING_REACH`] on both axes, each
+//! **The ship gone.** The handler's slot test makes +0x70 -1 when its
+//! slot is inactive (@0x8d4e4-0x8d50d), and the block then writes goal 0,
+//! sub 0 and +0x96 0 (@0x8dff6 → @0x8e228-0x8e23d): [`Goal::Idle`] with
+//! [`Decision::clears_target`] and [`Decision::forgets_provocation`]. It
+//! writes no +0x6c and makes no call, and nothing searches until the next
+//! think. It is tested before the reach and the ally stop, whatever the
+//! type. The block never tests the fled ship's condition, so a disabled
+//! or breaking-up one is fled on until its slot goes. The hunters reach it
+//! from their own flight, which they keep on +0x70 whatever that ship's
+//! state ([`warship::hunt`](super::warship::hunt)); a flight a trader
+//! keeps unprovoked ([`trader_keep`](super::trader_keep)) from a ship
+//! destroyed but still listed ends here too.
+//!
+//! **The ally.** A ship fleeing a ship within [`FLEEING_REACH`] on both axes, each
 //! offset cut to a whole number (@0x8e025-0x8e050), stops fleeing it
 //! (state 0, sub 0, target -1, @0x8e81d-0x8e838: [`Goal::Idle`] with
 //! [`Decision::clears_target`]) and makes no call for
@@ -24,6 +38,7 @@
 use crate::ai::target::spares_ally;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::combat::ShipRef;
+use crate::combat::hull::Condition;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
@@ -67,9 +82,11 @@ fn flees_a_spared_ally(
         .is_some_and(|quarry| spares_ally(npc, quarry, around, led_ally))
 }
 
-/// `decision` with `_HighLevelAIHandler`'s state-3 stop applied (see the
-/// module docs): a flight from an ally within reach that `npc` spares by
-/// `led_ally`'s reading becomes [`Goal::Idle`], its target cleared
+/// `decision` with `_HighLevelAIHandler`'s state-3 stops applied (see the
+/// module docs): a flight from a ship gone from its slot becomes
+/// [`Goal::Idle`], its target and provocation cleared; and a flight from
+/// an ally within reach that `npc` spares by `led_ally`'s reading becomes
+/// [`Goal::Idle`], its target cleared
 /// (@0x8e832: +0x70 -1, which a think that reads its kept target for goal
 /// 0, the escorts', the pirate's or the interceptor's, would otherwise
 /// keep).
@@ -81,6 +98,14 @@ pub fn with_flee_drop(
     led_ally: RuleSource,
 ) -> Decision {
     match decision.goal {
+        // The slot test made +0x70 -1 (@0x8d4e4-0x8d50d): goal 0, sub 0,
+        // +0x96 0 (@0x8dff6 → @0x8e228-0x8e23d), before the reach.
+        Goal::Flee(from) if !around.condition_of(from).is_some_and(Condition::active) => Decision {
+            goal: Goal::Idle,
+            clears_target: true,
+            forgets_provocation: true,
+            ..decision
+        },
         Goal::Flee(from)
             if within_reach(npc, from, around)
                 && flees_a_spared_ally(npc, from, around, led_ally) =>
@@ -99,6 +124,8 @@ pub fn with_flee_drop(
 mod tests {
     use super::*;
     use crate::ai::fixture::{NEUTRAL, POLICE, TRADERS, around, govts, n, ship, sites};
+    use crate::ai::travel::TravelWrite;
+    use crate::catalog::StellarId;
     use crate::escort::{EscortDuty, FormationSlot};
     use crate::traffic::npc::AiType;
 
@@ -195,6 +222,51 @@ mod tests {
         };
         let dropped = with_flee_drop(&npcs[0], flight, &around, RuleSource::Engine);
         assert_eq!((dropped.goal, dropped.clears_target), (Goal::Idle, true));
+    }
+
+    #[test]
+    fn a_flight_from_a_ship_gone_from_its_slot_ends_clearing_its_target_and_provocation() {
+        // The slot test makes +0x70 -1 (@0x8d4e4-0x8d50d), and goal 3's
+        // block then writes goal 0, sub 0 and +0x96 0 (@0x8dff6 →
+        // @0x8e228-0x8e23d), no +0x6c and no call, before its reach and
+        // its ally stop.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let flight = Decision {
+            goal: Goal::Flee(n(2)),
+            travel: TravelWrite::Set(StellarId(128)),
+            ..Decision::default()
+        };
+        let ends = |npcs: &[Npc]| {
+            let around = around(&sites, npcs, &govts, (0.0, -3000.0), 0);
+            with_flee_drop(&npcs[0], flight, &around, RuleSource::Engine)
+        };
+        let mut destroyed = ship(2, NEUTRAL, AiType::Warship, 500.0, 0.0);
+        destroyed.condition = Condition::Destroyed;
+        for npcs in [vec![trader()], vec![trader(), destroyed]] {
+            assert_eq!(
+                ends(&npcs),
+                Decision {
+                    goal: Goal::Idle,
+                    clears_target: true,
+                    forgets_provocation: true,
+                    ..flight
+                },
+                "{} ships",
+                npcs.len()
+            );
+        }
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
+            let mut there = ship(2, NEUTRAL, AiType::Warship, 500.0, 0.0);
+            there.condition = condition;
+            assert_eq!(ends(&[trader(), there]), flight, "{condition:?}");
+        }
     }
 
     #[test]

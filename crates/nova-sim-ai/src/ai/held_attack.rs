@@ -198,7 +198,7 @@ pub fn interceptor_attack(
 /// it attacks or snipes at; and nothing to fight, searching nothing, idle
 /// with a target it kept ([`searches_nothing`]) or behind a closed gate
 /// ([`gate_closed`]). None leaves it the hunt's own path: an inspection
-/// this think ends, or a flight from a ship no longer here.
+/// this think ends.
 #[must_use]
 pub fn interceptor_hunt(
     npc: &Npc,

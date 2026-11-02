@@ -77,6 +77,11 @@
 //!   @0x8d13f), and targets it; provoked, it takes goal 4 on it again
 //!   each think, which the ally drop idles again, until the ally's slot
 //!   goes.
+//! - **Fleeing** (goal 3) behind its closed gate, it keeps the flight on
+//!   its target whatever that ship's state, searching nothing, as the
+//!   warship does ([`hunt`]): goal 3's block ends a flight from a ship
+//!   gone that think (@0x8dff6 → @0x8e228, [`flee_drop`](super::flee_drop)),
+//!   and the next think searches.
 //! - Short of ammunition, a waiting interceptor goes idle as a stopped
 //!   one does (state 6 to 3 to 0, @0x8d391 and @0x8e228; see
 //!   [`out_of_ammo`]), and a plundering one flees its ship. In its count
@@ -157,10 +162,11 @@ pub fn inspection_holds(npc: &Npc, around: &Surroundings) -> bool {
 /// fighter's return (5), a help (9, 0xf), the regroup pause (0x13), or an
 /// inspection that holds ([`inspection_holds`]). An attack or snipe is
 /// goal 4, which closes the gate too, but is flown before it
-/// ([`held_attack`](super::held_attack)). A flight keeps the hunt's own
-/// path: a flight from a ship gone is ended by the high level that frame
-/// (@0x8dff6), so the next think's search is taken in this one. An
-/// inspection this think ends, and a follow or
+/// ([`held_attack`](super::held_attack)). A flight (3) closes it too, and
+/// [`hunt`] keeps it on its target whatever that ship's state, searching
+/// nothing: one from a ship gone is ended by goal 3's block that frame
+/// (@0x8dff6 → @0x8e228, [`flee_drop`](super::flee_drop)), and the search
+/// waits for the next think. An inspection this think ends, and a follow or
 /// formation (the other reading of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)'s led ship), stay
 /// open too.
@@ -187,13 +193,13 @@ pub fn gate_closed(npc: &Npc, around: &Surroundings) -> bool {
         | Goal::AttackStellar(_)
         | Goal::Dock(_)
         | Goal::Assist(_)
-        | Goal::Regroup { .. } => true,
+        | Goal::Regroup { .. }
+        | Goal::Flee(_) => true,
         Goal::Idle
         | Goal::Land(_)
         | Goal::EnterGate(_)
         | Goal::Attack(_)
         | Goal::Snipe(_)
-        | Goal::Flee(_)
         | Goal::Follow { .. }
         | Goal::Formation { .. } => false,
     }
@@ -888,6 +894,7 @@ mod tests {
             Goal::Regroup {
                 kept: crate::ai::regroup::Kept::Coast,
             },
+            Goal::Flee(P),
         ];
         let open = [
             Goal::Idle,
@@ -895,7 +902,6 @@ mod tests {
             Goal::EnterGate(StellarId(128)),
             Goal::Attack(P),
             Goal::Snipe(P),
-            Goal::Flee(P),
             Goal::Follow {
                 lead: crate::traffic::npc::NpcId(2),
                 guard: None,
@@ -912,6 +918,32 @@ mod tests {
                 let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
                 assert_eq!(gate_closed(&npcs[0], &around), shut, "{goal:?}");
             }
+        }
+    }
+
+    #[test]
+    fn a_fleeing_interceptor_searches_nothing_behind_its_gate() {
+        // Its provoked branch skips goal 3 (@0x8cc07) and its gate closes
+        // for it (@0x8cc6d-0x8cc7d → @0x8d13f): fleeing a ship breaking
+        // up or gone, with a pirate in view the search would take, it
+        // flees on, and goal 3's block ends a flight from a ship gone
+        // (`flee_drop`).
+        let mut runner = police();
+        runner.goal = Goal::Flee(n(2));
+        runner.target = Some(n(2));
+        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let other = ship(3, PIRATES, AiType::Warship, 0.0, 400.0);
+        for npcs in [
+            vec![runner.clone(), dying, other.clone()],
+            vec![runner.clone(), other],
+        ] {
+            let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[0]);
+            assert_eq!(goal, Goal::Flee(n(2)), "{} ships", npcs.len());
+            assert!(asked.is_empty(), "no search");
         }
     }
 

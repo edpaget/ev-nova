@@ -240,6 +240,8 @@ mod hit_goal_tests;
 #[cfg(test)]
 mod hopeless_flee_tests;
 #[cfg(test)]
+mod hunter_flight_tests;
+#[cfg(test)]
 mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;

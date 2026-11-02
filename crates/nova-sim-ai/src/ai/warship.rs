@@ -58,8 +58,15 @@
 //!   ([`Hunt::dropped_target`]), so a person whose grudge then takes the
 //!   player again is no threat to the gate, and says its quote again
 //!   each think. The word plays no sound of its own.
-//! - **Fleeing**, it keeps fleeing while its attacker is live; then it
-//!   decides again.
+//! - **Fleeing** (goal 3), it keeps fleeing the ship its target names
+//!   (+0x70, which a hit rewrites, `_DamageShip` @0x3bcf6), whatever that
+//!   ship's state, and searches nothing: the provoked branches skip goal 3
+//!   (@0x8bb34, @0x8cc07), the warship's searches need goals 0, 1, 0x14, 2
+//!   or 6 and goal 3 jumps past its retreats (@0x8be1a), and the
+//!   interceptor's gate closes for it (@0x8cc6d-0x8cc7d). Goal 3's block
+//!   ends a flight from a ship gone from its slot that think, with no
+//!   search ([`flee_drop`](super::flee_drop), @0x8dff6), so a disabled or
+//!   breaking-up attacker is fled on until its slot goes.
 //! - **An interceptor's goal 4** ([`Retreat::search_gate`]): its provoked
 //!   branch, an attack it holds, a target it kept idle and its closed
 //!   gate are [`held_attack`](super::held_attack)'s, before the target
@@ -281,10 +288,12 @@ pub fn hunt(
             Err(turns_on_player) => return nothing(turns_on_player),
         },
         None => {
-            if let Goal::Flee(attacker) = npc.goal
-                && around.live(attacker)
-            {
-                return Hunt::of(Goal::Flee(attacker));
+            // Goal 3 is kept on +0x70 whatever that ship's state: the
+            // provoked branches skip it (@0x8bb34, @0x8cc07), no search
+            // or retreat runs for it, and goal 3's block ends it once the
+            // slot goes (`flee_drop`).
+            if let Goal::Flee(attacker) = npc.goal {
+                return Hunt::of(Goal::Flee(npc.target.unwrap_or(attacker)));
             }
             let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
             let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
@@ -1096,12 +1105,58 @@ mod tests {
     }
 
     #[test]
-    fn a_fleeing_warship_flees_until_its_attacker_is_gone() {
+    fn a_fleeing_warship_flees_on_from_a_ship_breaking_up_disabled_or_gone_until_the_high_level_ends_it()
+     {
+        // The provoked branch skips goal 3 (@0x8bb34), no search runs for
+        // it, and goal 3 jumps past the retreats (@0x8be1a): the think
+        // keeps the flight on +0x70 whatever that ship's state. Goal 3's
+        // block ends it once the slot goes (@0x8dff6, `flee_drop`).
         let mut runner = police();
         runner.goal = Goal::Flee(n(2));
+        runner.target = Some(n(2));
         let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
-        assert_eq!(decided(&[runner.clone(), pirate], 0), Goal::Flee(n(2)));
-        assert_eq!(decided(&[runner], 0), Goal::Land(StellarId(128)));
+        let other = ship(3, PIRATES, AiType::Warship, 0.0, 400.0);
+        let mut dying = pirate.clone();
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let mut disabled = pirate.clone();
+        disabled.condition = Condition::Disabled;
+        for npcs in [
+            vec![runner.clone(), pirate, other.clone()],
+            vec![runner.clone(), dying, other.clone()],
+            vec![runner.clone(), disabled, other.clone()],
+            vec![runner.clone(), other],
+        ] {
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            let mut chance = Draws::of(&[0]);
+            let decision = Warship::default().decision(&npcs[0], &around, &mut chance);
+            assert_eq!(decision.goal, Goal::Flee(n(2)), "{:?}", npcs[1].id);
+            assert!(!decision.clears_target);
+            assert!(chance.asked.is_empty(), "no search");
+        }
+    }
+
+    #[test]
+    fn a_fleeing_hunter_whose_target_a_hit_moved_flees_the_hitter() {
+        // A hit rewrites +0x70 (`_DamageShip` @0x3bcf6) and goal 3's block
+        // reads it alone (@0x8dfeb-0x8e0dc): the flight follows it.
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut runner = ship(1, POLICE, ai_type, 0.0, 0.0);
+            runner.goal = Goal::Flee(n(2));
+            runner.target = Some(n(3));
+            runner.provoked = 5.0;
+            let hitter = ship(3, PIRATES, AiType::Warship, 0.0, 400.0);
+            let npcs = [runner, hitter];
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            let goal = crate::ai::NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[0]));
+            assert_eq!(goal, Goal::Flee(n(3)), "{ai_type:?}");
+        }
     }
 
     #[test]

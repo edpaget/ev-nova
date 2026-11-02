@@ -400,8 +400,14 @@ mod tests {
     fn fleeing_a_gone_ship_and_hit_by_another_it_keeps_fleeing_the_other_and_its_provocation() {
         // `_DamageShip` makes Y the target and adds to +0x96; the think
         // writes goal 3 on Y, whose slot is live, so the zero at
-        // @0x8e228-0x8e23d never runs.
-        for ai_type in [AiType::WimpyTrader, AiType::BraveTrader] {
+        // @0x8e228-0x8e23d never runs. A hunter's think keeps goal 3
+        // (@0x8bb34, @0x8cc07), which flies to +0x70.
+        for ai_type in [
+            AiType::WimpyTrader,
+            AiType::BraveTrader,
+            AiType::Warship,
+            AiType::Interceptor,
+        ] {
             let mut fleeing = ship(1, TRADERS, ai_type, 0.0, 0.0);
             fleeing.goal = Goal::Flee(n(2));
             fleeing.target = Some(n(3));
