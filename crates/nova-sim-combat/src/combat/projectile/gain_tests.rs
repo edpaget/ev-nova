@@ -424,3 +424,50 @@ fn at_half_gain_a_decay_of_1_takes_its_first_step_on_its_3rd_visit_and_by_the_bi
     assert_eq!(first(DecayStep::EveryDecayPlusOne), Some(3));
     assert_eq!(first(DecayStep::EveryDecay), Some(2));
 }
+
+#[test]
+fn at_half_gain_a_fading_out_shot_steps_its_fade_once_its_life_after_the_count_down_is_below_32() {
+    // Count 33, Falloff 4: the life after the count-down is 32.5, 32.0,
+    // then 31.5 on the 3rd visit, which steps the fade; the 4th reads it.
+    let fading = WeaponSpec {
+        falloff: 4,
+        ..spec(-1, 33)
+    };
+    let mut flying = shot(fading);
+    let mut visits = Vec::new();
+    for _ in 0..5 {
+        visit_at(&mut flying, &[], HALF);
+        visits.push((flying.life, flying.fade, flying.fade_shown));
+    }
+    assert_eq!(
+        visits,
+        [
+            (32.5, 0.0, 0.0),
+            (32.0, 0.0, 0.0),
+            (31.5, 2.0, 0.0),
+            (31.0, 4.0, 2.0),
+            (30.5, 6.0, 4.0),
+        ]
+    );
+}
+
+#[test]
+fn the_fades_full_gain_builder_agrees_with_stepping_a_shot_at_full_gain() {
+    use super::super::shot_fade::at_full_gain;
+    for (count, falloff) in [(100, -5), (40, 2), (5, 4), (33, 4), (32, 13), (50, 0)] {
+        let weapon = WeaponSpec {
+            falloff,
+            ..spec(-1, count)
+        };
+        let count = u32::try_from(count).expect("a Count");
+        let mut flying = shot(weapon);
+        for frames in 0..=count + 1 {
+            assert_eq!(
+                at_full_gain(count, falloff, frames),
+                (flying.life, flying.fade_shown),
+                "Count {count}, Falloff {falloff}, {frames} frames"
+            );
+            visit(&mut flying, &[]);
+        }
+    }
+}

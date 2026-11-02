@@ -390,6 +390,32 @@ mod tests {
     }
 
     #[test]
+    fn at_half_gain_an_asteroid_locked_shot_steers_by_its_whole_turn_from_age_15() {
+        // Far off to the right, 45 degrees off its heading all the way.
+        let rocks = [at(1000.0, -1000.0)];
+        let guide = Guide {
+            asteroids: &rocks,
+            speed_mult: crate::speed_mult::SpeedMult::new(0.5),
+            ..Guide::among(&[])
+        };
+        let mut shot = locked(Some(0), 0);
+        let mut first = None;
+        for n in 1..=31 {
+            let heading = shot.heading;
+            shot.step(&guide, &mut NeverFires);
+            if shot.heading != heading && first.is_none() {
+                first = Some((n, shot.heading - heading));
+            }
+        }
+        assert_eq!(
+            first,
+            Some((31, shot.weapon.turn)),
+            "age 15.5 > 15, unscaled, by all of its turn"
+        );
+        assert_eq!(shot.weapon.turn, 7.0);
+    }
+
+    #[test]
     fn a_locked_shot_steers_from_the_tick_after_its_lock() {
         // About 11 degrees right: in the cone, and further off than the
         // turn.
