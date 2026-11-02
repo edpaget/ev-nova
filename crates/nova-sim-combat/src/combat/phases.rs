@@ -277,8 +277,9 @@ impl Combat {
     /// ([`Combat::handle_shots`]), among `fighters`, drawing on `chance`:
     /// at each slot's visit a held slot is freed, a shot its last move
     /// spent comes to its end of life (@0x36195), its sub-munitions
-    /// released and then its blast landed, and any other shot flies a tick
-    /// and lands its missile lock ([`Strike::lock`](super::Strike::lock),
+    /// released and then its blast landed, and any other shot flies a
+    /// visit at the frame's gain ([`Field::speed_mult`]) and lands its
+    /// missile lock ([`Strike::lock`](super::Strike::lock),
     /// @0x35855). Each ship struck settles its condition as in the
     /// collision passes, so every later visit reads what the earlier ones
     /// landed, an escort's cleared leader included. Then each

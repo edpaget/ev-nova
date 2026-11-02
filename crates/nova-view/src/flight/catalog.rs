@@ -348,7 +348,9 @@ pub struct WeaponLook {
     pub li_density: i16,
     /// `LiAmplitude` as loaded: none or below is 1 (@0x79625-0x7967c).
     pub li_amplitude: i16,
-    /// `Count`: a shot's life in ticks.
+    /// `Count`: a shot's life at launch, in frames, which the simulation
+    /// counts down by the frame's gain; the view reads the life the frame
+    /// carries, not this.
     pub count: i16,
     /// `Particles`: the trail's particles a tick, none for no trail.
     pub particles: i16,

@@ -42,7 +42,7 @@ fn shooting(catalog: FakeCatalog) -> Faked {
 
 /// The player's blaster shot as the session flies it on the frame `tick`
 /// ticks after the one it is fired on: 20 pixels a tick up from the
-/// player, aged one more pass than the ticks it has flown, of the
+/// player, one more visit old than the frames it has flown, of the
 /// [`armed`] blaster's `Count` and `Falloff`, none.
 fn blaster_shot(tick: u32) -> FrameShot {
     let flown = 20.0 * f32::from(u16::try_from(tick + 1).expect("a short life"));

@@ -32,7 +32,8 @@
 //! - **The steering** (@0x3277c-0x32917, [`Shot::steer_at_asteroid`]): the
 //!   bearing is `_CalcInterceptAngle` of its slot's asteroid, whatever
 //!   asteroid that is now, a fragment or slot 0's refill included. Past
-//!   [`HOMING_DELAY`] ticks (`Count − life > 15.0`, unscaled, @0x327eb)
+//!   an age of [`HOMING_DELAY`] (`Count − life > 15.0`, unscaled by the
+//!   frame's gain, @0x327eb)
 //!   it turns its whole `GuidedTurn` when `|_AngularDifference|` is above
 //!   the untruncated turn, the way [`turned`] says. Its heading is then
 //!   wrapped and its velocity is its speed along it. A slot found empty
@@ -163,8 +164,9 @@ impl Shot {
     }
 
     /// The jam-1 steering of a shot locked onto `slot` (see the module
-    /// docs): at the bearing of the asteroid `guide` has in it, past
-    /// [`HOMING_DELAY`] ticks ([`turned`]); a slot found empty is let go,
+    /// docs): at the bearing of the asteroid `guide` has in it, past an
+    /// age of [`HOMING_DELAY`], unscaled ([`turned`]); a slot found empty
+    /// is let go,
     /// and the shot keeps its heading that tick and every tick after, as
     /// with no slot. Then its velocity is its speed along its heading.
     pub(super) fn steer_at_asteroid(&mut self, slot: Option<usize>, guide: &Guide) {

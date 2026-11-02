@@ -219,7 +219,7 @@
 //! | [`FuseIgnoresAsteroids`](RuleKey::FuseIgnoresAsteroids) | `fuse_ignores_asteroids` | every armed proximity fuse is set off by the first asteroid in reach, as no code reads `Flags2` 0x0004 (`_CheckShotProximities` @0x376ab-0x37758; `nova_sim::combat::asteroid_hit::AsteroidFuse::Original`) | the fuse of a weapon with `Flags2` 0x0004 ignores asteroids: "proximity detonator ignores asteroids" (`nova_sim::combat::asteroid_hit::AsteroidFuse::Bible`) |
 //! | [`AsteroidCountByWidth`](RuleKey::AsteroidCountByWidth) | `asteroid_count_by_width` | a system's `Asteroids` is stored × the window's width / 640, truncated, at most 16, and 0 when 0 or less (`_LoadObjectData` @0x77c72-0x77ce7; see `nova_sim::asteroid::FieldSpec::stored`): the field's spawn and the map's hazard words read it | the raw `Asteroids`, as the Bible gives it, whatever the window's size |
 //! | [`PlayerPassThrough`](RuleKey::PlayerPassThrough) | `player_pass_through` | the whole player side passes through ships of `gövt` `Flags` 0x0008 and `düde` `Booty` 0x0100, a player-side firer of `Flags` 0x0040 hits nothing, the player's and its direct escorts' shots pass through `Flags` 0x0040 ships, and a `Booty` 0x0100 ship's fire (or its led ships' of no `düde`) passes through every ship allied with the player (`_ShotCanHitShip` @0x4496d-0x44a4e, @0x44ad2-0x44b2f; `_HandleBeams` @0x30c3c-0x30cf2; see `nova_sim::combat::sides`) | the player alone: its own shots pass through those ships, its beams through the 0x0040 and 0x0100 ones, and a 0x0100 ship's own fire through the player |
-//! | [`ShotDecay`](RuleKey::ShotDecay) | `shot_decay` | a decaying shot loses a point of its direct hit's mass and energy damage every `Decay` + 1 ticks, each floored at none, its blasts whole (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit` @0x36add-0x36afd; see `nova_sim::combat::projectile::DecayStep`) | every `Decay` ticks |
+//! | [`ShotDecay`](RuleKey::ShotDecay) | `shot_decay` | a decaying shot loses a point of its direct hit's mass and energy damage each time its decay timer, gaining the frame's gain a visit, passes `Decay`, so every `Decay` + 1 frames at full gain, each floored at none, its blasts whole (`_HandleShot` @0x35eb2-0x35efc, `_HandleShipHit` @0x36add-0x36afd; see `nova_sim::combat::projectile::DecayStep`) | once the timer reaches `Decay`, every `Decay` frames at full gain |
 //! | [`PlunderAmmoBays`](RuleKey::PlunderAmmoBays) | `plunder_ammo_bays` | a fighter bay the player carries, of a fighter other than the launcher's `AmmoType`, ends the search for a weapon that fires a boarded ship's rounds, so none are offered when it comes before every such weapon by ID (`_PlayerCanUseAmmoType` @0x58bb-0x58df; see `nova_sim::board::player_fires`) | the bay is passed by\* |
 //! | [`AiSpendWithoutShot`](RuleKey::AiSpendWithoutShot) | `ai_spend_without_shot` | every copy of an NPC's pick that has its ammunition spends its round or fuel whether or not it spawns: a turret with its target in a blind spot or outside the box of its reach, a quadrant turret out of its arc, a missile or turret with no target, a bomb, and a fighter bay kept as the pick, which drains a fighter a frame with no launch (`_FireAIShipWeapon` @0x88cd8-0x88dac; see `nova_sim::combat::armament::Armament::fire_pick`) | only a copy that spawns spends\* |
 //! | [`ExitCompression`](RuleKey::ExitCompression) | `exit_compression` | a weapon exit point takes its `shän`'s up compression when, turned to the frame its ship is drawn on, it lies up the screen, and the down one otherwise, so an exit behind a ship facing up takes the down one (`_ModifyShotStartPosition2` @0x717d-0x71f2; see `nova_sim::combat::exits`) | by the heading: up for 0-90 and 270-359, down for 91-269 (the Bible's `UpCompressX`) |
@@ -251,7 +251,7 @@
 //! | [`BombHeadingWrap`](RuleKey::BombHeadingWrap) | `bomb_heading_wrap` | a freefall bomb's heading is never wrapped after it turns ±1.0 into the wind, so one crossing up stops up to a degree and a half short of its bearing, below 0 or past 360, and is drawn on the end frame its frame index is clamped to (`_HandleShotGuidance` @0x32a41-0x32a98, `_HandleShot` @0x3593a-0x3596c; see `nova_sim::combat::projectile`) | the heading is wrapped into 0..360 after each turn\* |
 //! | [`LoopedSoundWait`](RuleKey::LoopedSoundWait) | `looped_sound_wait` | a looped weapon's sound (`Flags` 0x0010) waits while its `snd ` plays on any voice, from any ship (`ST_IsSoundPlaying` @0xe40c0, asked by `_FireAIShipWeapon` @0x88e00-0x88e1d, `_FirePlayerWeapon` @0x62d98-0x62dbf, `_HandleShipPointDefense` @0x39981-0x3999e and `_SpawnShotSubmunitions` @0x3f25b-0x3f26c; see the view's `effects`) | each firer's weapon waits out its own sound's length, so two ships' chainguns are each heard\* |
 //! | [`LowMurk`](RuleKey::LowMurk) | `low_murk` | a system's `Murk` of 1 to 7 loads as none, so 96 stock systems show no murk (`_LoadObjectData` @0x77ee6-0x77ef8; see `nova_sim::murk::loaded_murk`) | every `Murk` above 0 murks, as the Bible gives it 0-100 |
-//! | [`TranslucentShotFade`](RuleKey::TranslucentShotFade) | `translucent_shot_fade` | a translucent shot (`Flags3` 0x0002) with a `Falloff` is drawn opaque until its last 32 ticks, as nothing sets its translucency before them, and its fade-in never steps, so it stays at level 0, unseen (`_HandleShot` @0x359f0-0x35c07; see the view's `shot_fade`) | it is additive at level 32 wherever the engine leaves it opaque, and its fade-in steps by the `Falloff` a tick as a plain shot's does\* |
+//! | [`TranslucentShotFade`](RuleKey::TranslucentShotFade) | `translucent_shot_fade` | a translucent shot (`Flags3` 0x0002) with a `Falloff` is drawn opaque until its life is below 32, as nothing sets its translucency before then, and its fade-in never steps, so it stays at level 0, unseen (`_HandleShot` @0x359f0-0x35c07; see the view's `shot_fade`) | it is additive at level 32 wherever the engine leaves it opaque, and its fade-in steps by the `Falloff` times the frame's gain a visit as a plain shot's does\* |
 //! | [`LightningZigZag`](RuleKey::LightningZigZag) | `lightning_zig_zag` | a lightning beam's jitter runs from −3a to a, as `Random() % (2a + 1)` keeps `Random()`'s sign, and a beam of one step or none draws nothing, so the Child's graviton beam (168) draws nothing under 100 pixels (`_DrawLightningBeam` @0xc40c4-0xc4220, @0xc47e4-0xc482e; see the view's `lightning`) | the jitter runs from −a to a, and a beam of one step or none is one straight segment\* |
 //! | [`StrayShootPenalty`](RuleKey::StrayShootPenalty) | `stray_shoot_penalty` | the player's stray hit on a governed ship is forgiven 3 times in 4 only when the ship's government's `ShootPenalty` is 0 or below (`_DamageShip` @0x3b80a-0x3b847; see `nova_sim::ai::answer_flag`) | `ShootPenalty` is "currently ignored": every governed ship rolls |
 //! | [`IndependentKin`](RuleKey::IndependentKin) | `independent_kin` | two independents are kin, as their governments compare -1 to -1, so an independent NPC lets another independent's hit, or the player's, pass (`_DamageShip` @0x3b4cd-0x3b4fc; see `nova_sim::ai::answer_flag`) | independents are no government, and answer each other\* |
@@ -2995,10 +2995,12 @@ rule_keys! {
     /// How often a decaying shot (`wëap` `Decay` above 0) loses a point
     /// of its direct hit's mass and energy damage (see
     /// `nova_sim::combat::projectile::DecayStep`). By the
-    /// engine, every `Decay` + 1 ticks, as `_HandleShot` takes a step only
-    /// once its count is above `Decay` (@0x35eb2-0x35efc). By the Bible
-    /// ("Remove one point of mass & energy damage every time this number
-    /// of frames goes by"), every `Decay` ticks. Either way the steps come
+    /// engine, as `_HandleShot` takes a step only once its timer, gaining
+    /// the frame's gain each visit (@0x35ecd), is above `Decay`
+    /// (@0x35eb2-0x35efc): every `Decay` + 1 frames at full gain. By the
+    /// Bible ("Remove one point of mass & energy damage every time this
+    /// number of frames goes by"), once it reaches `Decay`: every `Decay`
+    /// frames at full gain. Either way the steps come
     /// off the direct hit alone, each floored at none (`_HandleShipHit`
     /// @0x36add-0x36afd); a blast takes the weapon's whole damage.
     ShotDecay => "shot_decay",
@@ -3354,13 +3356,13 @@ rule_keys! {
     LowMurk => "low_murk",
     /// How a translucent shot (`Flags3` 0x0002) with a `Falloff` is drawn
     /// (the view's `shot_fade`). By the engine, as `_HandleShot` sets its
-    /// sprite (@0x359f0-0x35c07): opaque until its last 32 ticks, as
-    /// nothing sets its translucency (+0xa8) before them, then additive
+    /// sprite (@0x359f0-0x35c07): opaque until its life is below 32, as
+    /// nothing sets its translucency (+0xa8) before then, then additive
     /// fading out; and with a negative `Falloff`, additive at level 0,
     /// unseen, all its life, as its fade-in never steps (the jump
     /// @0x35a59). By the other reading, additive at level 32 wherever the
     /// engine leaves it opaque, and its fade-in stepping by the `Falloff`
-    /// a tick as a plain shot's does. Stock 143, 144, 156-159, 162, 197
+    /// times the frame's gain a visit as a plain shot's does. Stock 143, 144, 156-159, 162, 197
     /// and 233 differ. The Bible says nothing of it, so the other reading
     /// is the intended behaviour, not anything the Bible says.
     TranslucentShotFade => "translucent_shot_fade",
@@ -3651,7 +3653,8 @@ rule_keys! {
     /// `nova_sim::combat::spin_timer` and `nova_sim::combat::shot_slots`).
     /// By the engine, as `_SpawnShot` never writes a shot's spin timer
     /// (+0x1c; no store to it @0x3e550-0x3f143) and only `_HandleShot`'s
-    /// step does (@0x35884-0x358c4): the timer its shot slot's last
+    /// step does, gaining the frame's gain a visit (@0x35884-0x358c4): the
+    /// timer its shot slot's last
     /// spinning shot left, so its first frame step can come early. By the
     /// other reading, every shot starts its timer on 0, and the slot's is
     /// put back to 0 as the shot takes it. The Bible says nothing of it,

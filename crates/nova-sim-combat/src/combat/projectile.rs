@@ -1,5 +1,6 @@
-//! Shots: launched from a ship, flown a tick at a time, and checked
-//! against the ships they pass.
+//! Shots: launched from a ship, flown a visit at a time at the frame's
+//! gain (`_gSpeedMult`, [`Guide::speed_mult`]), and checked against the
+//! ships they pass.
 //!
 //! The values are the original's (`_SpawnShot`, `_HandleShotGuidance`,
 //! `_HandleShot` and `_ShotCanHitShip` in the `EV Nova` executable):
@@ -13,17 +14,20 @@
 //!   goes as [`BombLaunch`] says: an NPC's as any other shot by the
 //!   engine, the player's, and every ship's by the Bible, with no speed
 //!   added, a freefall bomb with [`BOMB_LAUNCH`] of the velocity.
-//! - Each tick an unguided shot keeps its velocity. A rocket's velocity
+//! - Each visit a shot moves its velocity times the frame's gain
+//!   ([`flight::moved`](crate::flight::moved), @0x356d5-0x3570f). An
+//!   unguided shot keeps its velocity. A rocket's velocity
 //!   becomes [`ROCKET_KEEP`] of itself and [`ROCKET_PUSH`] of its top
 //!   speed along its heading, so it closes on its top speed
 //!   ([`rocket_push`]). A bomb keeps
 //!   its velocity and turns its heading a whole degree ([`BOMB_TURN`]) a
 //!   tick towards the table's bearing of it while its truncated heading
 //!   is off it, towards up at rest (see `Shot::weathervane`).
-//! - A homing shot flies at its speed along its heading every tick. Once
-//!   it has flown [`HOMING_DELAY`] ticks it steers at its target, turning
-//!   `GuidedTurn` a tick while the table's whole-degree bearing of it is
-//!   further off its truncated heading than the truncated turn, the way
+//! - A homing shot flies at its speed along its heading every visit. Once
+//!   its age is above [`HOMING_DELAY`] times the frame's gain (@0x32198)
+//!   it steers at its target, turning `GuidedTurn` times the gain a visit
+//!   while the table's whole-degree bearing of it is further off its
+//!   truncated heading than the truncated turn, an unscaled gate, the way
 //!   [`homing_turn`] says, and keeping its heading otherwise, a target
 //!   breaking up included; the heading is then taken round once
 //!   ([`wrap_turned`]). One fired with no target flies straight.
@@ -57,8 +61,10 @@
 //! - A homing shot of `Seeker` 0x0008 is confused by sensor interference
 //!   ([`Jam::Interfered`]) when, as it is launched, `below(100) + 1` is at
 //!   most the player's system's `Interference` (`_SpawnShot`
-//!   @0x3eab2-0x3eb66). Confused, it flies straight for its
-//!   [`HOMING_DELAY`] ticks, then turns `GuidedTurn` a tick, back for 150
+//!   @0x3eab2-0x3eb66), the range at the frame's gain
+//!   ([`interference_range`]). Confused, it flies straight until its age
+//!   is above [`HOMING_DELAY`], unscaled, then turns the whole
+//!   `GuidedTurn` a visit, unscaled, back for 150
 //!   frames of the frame counter and on for 150 ([`CIRCLE_FRAMES`]),
 //!   whatever its target, and under 0x8000 clears and turns on its firer
 //!   at one in [`BLINDED_TURNS_ON_FIRER`] each tick. It hits as a clear
@@ -70,7 +76,9 @@
 //!   ([`Jam::Lost`]) before it next moves: it flies on, aimed at nothing,
 //!   and hits no ship for the rest of its life (`_HandleShot`
 //!   @0x355e0-0x35621). A homing one then flies straight.
-//! - A shot lives its weapon's `Count` ticks, then detonates if its weapon
+//! - A shot lives while its float life ([`Shot::life`]), its weapon's
+//!   `Count` less the frame's gain at each visit, is above 0, then
+//!   detonates if its weapon
 //!   says so (`Flags` 0x8000) and otherwise vanishes, a lost one too.
 //! - It hits the first ship ([`Target`]) it touches, within the ship's hit
 //!   radius, swept from where it was to where it is so that a fast shot
@@ -80,8 +88,9 @@
 //!   sprite width in whole pixels ([`Shot::fused`]), as
 //!   [`RuleKey::ProximityFuse`](crate::RuleKey::ProximityFuse) says: its
 //!   other reading sweeps the fuse along the move as the touch is.
-//!   `ProxSafety` holds a touch until its age reaches it and the fuse
-//!   until its age is past it ([`Shot::hit`]). The fight tests a move in
+//!   `ProxSafety` holds a touch while the life is above `Count` −
+//!   `ProxSafety`, and the fuse until the life is below that, so until the
+//!   age reaches it and is past it ([`Shot::hit`]). The fight tests a move in
 //!   the next tick's hit pass (see [`Combat`](super::Combat)), and never
 //!   its last. A point-defence shot (9) touches none, and meets a ship
 //!   only by its proximity fuse. Which ships it can hit is
@@ -124,7 +133,10 @@ const ROCKET_KEEP_PER_CENT: f32 = 95.0;
 const ROCKET_PUSH_PER_CENT: f32 = 5.0;
 /// How far a bomb turns into the wind each tick, in degrees.
 pub const BOMB_TURN: f32 = 1.0;
-/// How many ticks a homing shot flies straight before it steers.
+/// The age a homing shot steers past, in whole frames at full gain: its
+/// age, `Count` less its life, is compared with 15.0 (0xdd5d0) times the
+/// frame's gain (@0x3218c-0x321b1), and unscaled for an interfered shot
+/// and one locked on an asteroid (@0x3261d, @0x327cd).
 pub const HOMING_DELAY: u32 = 15;
 /// The odds, one in this, that a jammed `Seeker` 0x8000 shot turns on its
 /// firer (`_Rand(500)` @0x32250).
@@ -145,12 +157,14 @@ pub const CIRCLE_FRAMES: i32 = 300;
 /// The last frame of the circle an interfered shot turns back on (149,
 /// @0x32663).
 pub const CIRCLE_BACK: i32 = 149;
-/// The range sensor interference rolls in at launch: interfered when
-/// `below(INTERFERENCE_ROLL) + 1` is at most the system's `Interference`
-/// (`_SpawnShot` @0x3ead4, 100 at `_gSpeedMult` 1.0).
+/// The range sensor interference rolls in at launch at full gain, or at a
+/// gain of none: interfered when `below(range) + 1` is at most the
+/// system's `Interference` (`_SpawnShot` @0x3ead4), the range 100 over the
+/// frame's gain ([`interference_range`]).
 pub const INTERFERENCE_ROLL: u32 = 100;
-/// The age a player's homing missile locks on its target past (the 30.0
-/// @0xdd638, tested "> 30" @0x357ab).
+/// The age a player's homing missile locks on its target past, in whole
+/// frames at full gain: the 30.0 @0xdd638 times the frame's gain, tested
+/// "> 30 × g" (@0x35669, @0x35796).
 pub const LOCK_AGE: u32 = 30;
 /// The life a shot is put at on the visit that takes its life to 0 or
 /// below, NaN included (`_HandleShot` @0x356bb-0x356c1).
@@ -542,7 +556,8 @@ pub struct Shot {
     pub source: Source,
     /// Where it is.
     pub position: Vec2,
-    /// How far it moves each tick.
+    /// How far it moves each visit at full gain: each visit moves it this
+    /// times the frame's gain.
     pub velocity: Vec2,
     /// Which way it faces, in degrees.
     pub heading: f32,
@@ -997,15 +1012,17 @@ impl Shot {
         }
     }
 
-    /// Steers a homing shot a tick, as `_HandleShotGuidance` does
+    /// Steers a homing shot a visit, as `_HandleShotGuidance` does
     /// (@0x320dc-0x32aa4; see the module docs): an interfered one circles
     /// ([`Shot::circle`]); one locked onto an asteroid steers at it
-    /// ([`Shot::steer_at_asteroid`]); any other, past [`HOMING_DELAY`] ticks with its
+    /// ([`Shot::steer_at_asteroid`]); any other, its age past
+    /// [`HOMING_DELAY`] times `guide`'s gain (@0x32198) with its
     /// target active among `guide`'s ships, breaking up included, is
     /// tested in order for its target's jamming ([`Shot::jammed`]), its
     /// firer's sight of the target ([`Shot::blinded`]) and a `Seeker`
     /// 0x4000 lock ([`Shot::lock_holds`]), then turns at the bearing it
-    /// read before them; then its velocity is its speed along its heading,
+    /// read before them, by its turn times the gain ([`homing_turn`]);
+    /// then its velocity is its speed along its heading,
     /// and one that began the tick not jammed may lock onto an asteroid
     /// ([`Shot::seek_asteroid`]). Draws are made on `chance`.
     fn home(&mut self, guide: &Guide, chance: &mut dyn Chance) {
@@ -1128,8 +1145,9 @@ impl Shot {
         guide.lock_angle.off_ahead(angle) <= LOCK_CONE
     }
 
-    /// Sensor interference's flight (@0x32613-0x32769): past
-    /// [`HOMING_DELAY`] ticks it turns its turn a tick, back while the
+    /// Sensor interference's flight (@0x32613-0x32769): its age past
+    /// [`HOMING_DELAY`], unscaled (@0x3261d-0x32635), it turns its whole
+    /// turn a visit, unscaled (@0x3266a-0x32680), back while the
     /// `frame` counter's truncated remainder by [`CIRCLE_FRAMES`] is at
     /// most [`CIRCLE_BACK`] and on otherwise, whatever its target; its
     /// velocity is its speed along its heading. Then, every tick, under
@@ -1174,8 +1192,9 @@ impl Shot {
     /// jamming type ([`jamming::roll`](super::jamming::roll),
     /// @0x3f051-0x3f0a7), and for a homing shot of `Seeker` 0x0008
     /// ([`SENSOR_INTERFERENCE`]) whether it is [`Jam::Interfered`]:
-    /// `below(`[`INTERFERENCE_ROLL`]`) + 1` at most the `interference`
-    /// (@0x3eab2-0x3eb66); and a spinning shot's spin start
+    /// `below(`[`interference_range`]`(gain)) + 1` at most the
+    /// `interference`, at the frame's `gain` (@0x3eab2-0x3eb66); and a
+    /// spinning shot's spin start
     /// ([`shot_frame::spin_start`](super::shot_frame::spin_start),
     /// @0x3e96e-0x3e9b4). A sub-munition rolls its own weapon's.
     pub fn roll_at_launch(&mut self, interference: i16, gain: SpeedMult, chance: &mut dyn Chance) {
@@ -1243,12 +1262,16 @@ impl Shot {
         !above(self.life, 0.0)
     }
 
-    /// Whether the tick it has just flown took it past [`LOCK_AGE`], as
-    /// `_HandleShot` reads its age, `Count` less its life: once before the
-    /// life is counted down (@0x3565b) and once after the move (@0x3578a).
-    /// The life of a shot just spent is put at -1 between the two
-    /// (@0x356c1), so its last move reads an age of its `Count` + 1, and a
-    /// shot of `Count` 30 passes it on that move.
+    /// Whether the visit it has just flown took it past [`LOCK_AGE`] times
+    /// the frame's `gain`, as `_HandleShot` reads its age, `Count` less its
+    /// life: once before the life is counted down ([`Shot::prior_life`],
+    /// @0x3565b), which, past the line, holds the lock off, and once after
+    /// the move (@0x3578a). The life of a shot just spent is put at -1
+    /// between the two (@0x356c1), so its last move reads an age of its
+    /// `Count` + 1, and a shot of `Count` 30 passes it on that move. The
+    /// line moves with the gain, so a rising gain can take the age back
+    /// under it and past it again, and the lock fires again, as the
+    /// original's does.
     #[must_use]
     pub fn passes_lock_age(&self, gain: SpeedMult) -> bool {
         let before = f64::from(self.weapon.lifetime) - f64::from(self.prior_life);
@@ -1271,8 +1294,8 @@ impl Shot {
     /// its way here from `was`, within the ship's hit radius, and where:
     /// the original's sprite collision passes (`_ShipCollisionHandler`
     /// @0x36f87-0x370a6), swept so that a fast shot cannot pass through a
-    /// ship between ticks. `ProxSafety` holds a touch until its age has
-    /// reached it (@0x37066-0x37086). A shot in point defence's layer
+    /// ship between ticks. `ProxSafety` holds a touch while its life is
+    /// above `Count` − `ProxSafety` (@0x37066-0x37086). A shot in point defence's layer
     /// ([`ShotLayer::PointDefence`]) never touches a ship: that layer
     /// (0x3b53bc) is collided with the ships' only by
     /// `_ShipCollisionHandler`, which acts on a shot in the other shot
@@ -1317,7 +1340,9 @@ impl Shot {
 
     /// Whether it can touch a ship at all: it is not in point defence's
     /// layer, one no ship's collision proc acts on (see
-    /// [`Shot::touched`]), and its age has reached its `ProxSafety`.
+    /// [`Shot::touched`]), and no `ProxSafety` holds it: with one above
+    /// none, its life is not above `Count` − `ProxSafety`, as a float
+    /// (@0x37066-0x37086).
     pub(super) fn touches_ships(&self) -> bool {
         let held = self.weapon.prox_safety > 0 && self.life > self.safe_life();
         self.layer != ShotLayer::PointDefence && !held

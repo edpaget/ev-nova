@@ -167,7 +167,8 @@ pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks, fade:
 
 /// Draws `shot` as the frame of its weapon's sheet the simulation gives,
 /// the first where it gives none, shaded as it
-/// fades ([`shot_shade`], by `fade`'s reading of
+/// fades by the fade and life the frame carries ([`shot_shade`], by
+/// `fade`'s reading of
 /// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade)):
 /// opaque; translucent by t, crossfaded by OR,
 /// [`Blend::OrCrossfade`](crate::draw::Blend::OrCrossfade) at alpha

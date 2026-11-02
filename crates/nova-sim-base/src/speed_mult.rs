@@ -75,6 +75,15 @@
 //! counts down); in `nova_sim_combat`, through the pass's
 //! `Field::speed_mult` (an NPC's reloads and regeneration); and in
 //! `nova_sim_port`'s `npc_escape`, the crew pods' interval.
+//! `_HandleShot`'s, `_HandleShotGuidance`'s and `_SpawnShot`'s readers
+//! (rdm:phase/play-feel-8/phase-23-shots-read-the-gain), a shot's float
+//! life, move, homing delay and turn, missile lock, spin, fade and decay
+//! and the interference roll at launch, are in `nova_sim_combat`, through
+//! the pass's `Field::speed_mult`, which each visit's
+//! `Guide::speed_mult` carries to the shot's own rules
+//! (`combat::projectile`, `combat::spin_timer`, `combat::shot_fade` and
+//! `combat::shot_decay`), and here in [`flight`](crate::flight)'s
+//! `moved`.
 //!
 //! # Its writers
 //!

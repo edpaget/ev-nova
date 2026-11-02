@@ -233,7 +233,9 @@ pub struct WeaponSpec {
     pub guidance: Guidance,
     /// Ticks between one copy's shots.
     pub reload: f32,
-    /// A shot's or a beam's life, in ticks.
+    /// A shot's or a beam's life, in frames: a shot's float life starts at
+    /// it and loses the frame's gain at each visit
+    /// ([`Shot::life`](super::projectile::Shot::life)).
     pub lifetime: u32,
     /// Damage to armour.
     pub mass_damage: f32,
@@ -265,8 +267,9 @@ pub struct WeaponSpec {
     /// A beam's length, in pixels.
     pub beam_length: f32,
     /// Its `BeamWidth` as it is: a spinning shot steps its frame once its
-    /// spin timer reaches it, every pass at 0 or less (`_HandleShot`
-    /// @0x358a7-0x358bb; see [`spin_timer`](super::spin_timer)).
+    /// spin timer, gaining the frame's gain at each visit, reaches it,
+    /// every visit at 0 or less (`_HandleShot` @0x358a7-0x358bb; see
+    /// [`spin_timer`](super::spin_timer)).
     pub beam_width: i16,
     /// Its `Falloff` as the original loads it ([`loaded_falloff`]): how
     /// fast a beam's corona fades, and how long a decaying beam fades for
@@ -302,15 +305,19 @@ pub struct WeaponSpec {
     /// [`Arsenal`](super::armament::Arsenal) has read every weapon
     /// ([`chain_range`]).
     pub chain_range: f32,
-    /// Its `ProxSafety`, none when that is below none: a shot of it hits
-    /// no ship by contact until it has flown this many ticks, and none by
-    /// its proximity fuse, nor a stellar, until it has flown more
-    /// ([`Shot::hit`](super::projectile::Shot::hit)).
+    /// Its `ProxSafety`, none when that is below none (no stock weapon's
+    /// is): a shot of it hits no ship by contact while its life is above
+    /// `Count` less this, so until it has flown this many frames at full
+    /// gain, and none by its proximity fuse, nor a stellar, until its life
+    /// is below that ([`Shot::hit`](super::projectile::Shot::hit)).
     pub prox_safety: u32,
     /// Its `Decay`, none when that is at or below none: a shot of it loses
     /// a point of mass and of energy damage from its direct hit for each
-    /// `Decay` + 1 ticks it has flown, by the original's reading
-    /// ([`DecayStep`](super::projectile::DecayStep)).
+    /// step its decay timer takes, the timer gaining the frame's gain at
+    /// each visit and stepping once above `Decay`, so every `Decay` + 1
+    /// frames at full gain by the original's reading
+    /// ([`shot_decay`](super::shot_decay),
+    /// [`DecayStep`](super::projectile::DecayStep)).
     pub decay: u32,
     /// The weapon whose rounds the secondary weapon line counts for it,
     /// if it counts any ([`line_count`]).
