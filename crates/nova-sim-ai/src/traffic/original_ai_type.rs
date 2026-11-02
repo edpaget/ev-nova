@@ -73,7 +73,17 @@
 //! (`_InterceptorAI` @0x8cd4e, @0x8cdfe), the Good Samaritan
 //! (`_DoGoodSamaritan` @0x8289f), and the plunder candidate and lost-sight
 //! search (`_AIFindShipToPlunder` @0x7fdad, `_HighLevelAIHandler`
-//! @0x8d748).
+//! @0x8d748). Then the fleet escort's, each reading the bribe's 1 as no
+//! escort with its parent kept: `_AIDispatch`'s type chain, which calls
+//! `_EscortAI` above 4 (@0x8ff9b-0x90016; `NovaAi::of`, whose routing
+//! carries `_AIEscortFireUnprovoked`'s own test @0x80e59, and the idle
+//! block's lead-follow); `_DoPlayGameWork`'s marking pass (@0x440d8:
+//! [`has_escorts`](crate::ai::candidates::has_escorts) and the
+//! [`succession`](super::succession)) and swarm reset (@0x44160,
+//! [`swarm`](crate::ai::swarm)); `_AIIssueEscortOrders`' follower loop
+//! (@0x89b39, [`escort_orders`](super::escort_orders)); and
+//! `_AIHandleCloaking`'s parent rule (@0x83633,
+//! [`cloak_situation`](super::cloak_situation)).
 //!
 //! Nothing here plays a sound or draws a random number.
 
