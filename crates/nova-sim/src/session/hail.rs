@@ -2207,6 +2207,28 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_fleet_escort_paid_off_stops_escorting_and_leaves() {
+        // The bribe writes AI type 1 and keeps the parent (`_DoCommDialog`
+        // @0x961f8), so the ship thinks as a wimpy trader, which keeps its
+        // leave (@0x8b06c), not as its lead's escort.
+        let catalog = hailable();
+        let mut session = pirate(&catalog, PIRATES);
+        let mut lead = session.npcs()[0].clone();
+        lead.state.position.x += 3000.0;
+        let lead = session.space.traffic.add_npc(lead);
+        npc(&mut session).leader = Some(lead);
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 99);
+        let view = haggle(&mut session, &catalog, Haggle::Accept);
+        assert_eq!(view.reply, "A pleasure doing business with you.");
+        decide(&mut session, &catalog, 3, |npc| {
+            assert_eq!(npc.goal, Goal::JumpOut, "never Follow");
+            assert!(npc.spared);
+            assert_eq!(npc.leader, Some(lead), "its parent kept");
+        });
+    }
+
+    #[test]
     fn a_price_the_player_cannot_pay_is_refused_and_the_ship_keeps_attacking() {
         let catalog = hailable();
         let mut session = pirate(&catalog, PIRATES);
