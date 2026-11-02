@@ -764,6 +764,21 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_warship_turns_on_its_attacker_from_a_wait_or_a_hold() {
+        // The provoked branch writes goal 4 for any goal but 7 and 3
+        // (@0x8bb26-0x8bb44), before the wait's search (@0x8bbb9) and the
+        // odds retreat that needs goal 4 (@0x8bccb).
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        let npcs = [warship(Goal::Wait, Some(n(2)), 5.0), neutral.clone()];
+        let (decision, asked) = warship_decided(&npcs, 0, RuleSource::Engine);
+        assert_eq!(decision.goal, Goal::Attack(n(2)), "not the wait's search");
+        assert!(asked.is_empty());
+        let npcs = [outnumbered(warship(Goal::Hold, Some(n(2)), 5.0)), neutral];
+        let (decision, _) = warship_decided(&npcs, WARSHIPS_RETREAT, RuleSource::Engine);
+        assert_eq!(decision.goal, Goal::Flee(n(2)), "judged as goal 4");
+    }
+
+    #[test]
     fn an_unprovoked_idle_warship_with_a_kept_target_takes_goal_4_on_it_with_no_search() {
         // The goal-0 block writes goal 4 on a +0x70 that is set
         // (@0x8b843-0x8b860), with no `_SelectWarshipTarget` (@0x8b875).
@@ -780,6 +795,20 @@ mod tests {
             "an ally it spares is idled on again"
         );
         assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn an_idle_warship_with_a_kept_target_takes_it_through_its_own_drop_and_odds_retreat() {
+        // The goal-0 block's goal 4 comes before the own drop (@0x8bc4e) and
+        // the odds retreat (@0x8bccb), which the late write skips.
+        let mut wreck = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        wreck.condition = Condition::Disabled;
+        let decision = by_engine(&[warship(Goal::Idle, Some(n(2)), 0.0), wreck]);
+        assert_eq!((decision.goal, decision.clears_target), (Goal::Idle, true));
+        let neutral = ship(2, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        let npcs = [outnumbered(warship(Goal::Idle, Some(n(2)), 0.0)), neutral];
+        let (decision, _) = warship_decided(&npcs, WARSHIPS_RETREAT, RuleSource::Engine);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
     }
 
     #[test]

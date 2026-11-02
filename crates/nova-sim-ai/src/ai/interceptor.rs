@@ -1983,6 +1983,28 @@ mod tests {
     }
 
     #[test]
+    fn an_inspecting_interceptor_answers_only_a_provoker_it_holds() {
+        // Its search needs state 1 or below, or 0x14 (@0x8cc6d-0x8cc7d):
+        // while the inspection holds, a target a hit of no damage set is
+        // kept unanswered, and so is a provoker it spares; one it holds is
+        // answered (its provoked inspection is
+        // rdm:phase/play-feel-9/phase-6-inspection-redirected-by-a-hit's).
+        let (cop, trader) = trader_cop_inspecting();
+        let hitter = |govt| ship(3, govt, AiType::Warship, 0.0, 300.0);
+        let with = |provoked: f32| Npc {
+            target: Some(n(3)),
+            provoked,
+            ..cop.clone()
+        };
+        let (decision, _) = re_picked(with(0.0), &[trader.clone(), hitter(NEUTRAL)], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)), "unprovoked");
+        let (decision, _) = re_picked(with(5.0), &[trader.clone(), hitter(POLICE)], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)), "an ally it spares");
+        let (decision, _) = re_picked(with(5.0), &[trader, hitter(NEUTRAL)], 0, None, &[]);
+        assert_eq!(decision.goal, Goal::Attack(n(3)), "a provoker it holds");
+    }
+
+    #[test]
     fn an_inspecting_interceptor_does_not_hunt_at_its_first_search() {
         // `_SelectWarshipTarget` @0x8cce6 needs state 1 or below, or 0x14
         // (@0x8cc6d-0x8cc7d).
