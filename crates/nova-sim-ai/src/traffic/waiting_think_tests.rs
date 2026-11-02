@@ -9,6 +9,7 @@
 
 use super::autopilot::Outcome;
 use super::board_wait::BOARD_WAIT;
+use super::emerge::EXIT_SPEED;
 use super::npc::{AiType, Mode, Npc, NpcId};
 use super::{Traffic, World};
 use crate::ai::fixture::{PIRATES, TRADERS, govts, n, ship};
@@ -19,6 +20,7 @@ use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
 use crate::govt::{Governments, PLUNDERS};
+use crate::rulebook::RuleSource;
 use nova_sim_catalog::fixture::{govt, planet};
 
 const GATE: StellarId = StellarId(300);
@@ -325,6 +327,40 @@ fn a_pirate_turned_out_of_its_entry_into_the_count_wait_waits_120_once() {
     let ship = of(&traffic, id);
     assert_eq!(ship.ai_wait, BOARD_WAIT - 11, "one wait, counting down");
     assert_eq!(ship.mode, Mode::Flying);
+}
+
+#[test]
+fn a_ship_held_at_its_gate_taking_the_count_wait_leaves_its_hold_owing_its_burst_as_read() {
+    // +0x4c = 120.0 over the hold's wait (@0x8c71c): the hold ends, its
+    // emerge's burst word owed by the engine's reading of
+    // `RuleKey::HeldGateBurst`, none by the other.
+    let count = Decision {
+        goal: Goal::CountWait,
+        writes_sub: true,
+        ..Decision::default()
+    };
+    for (held_burst, owed) in [
+        (RuleSource::Engine, Some(EXIT_SPEED)),
+        (RuleSource::Bible, None),
+    ] {
+        let (mut traffic, id) = waiting(
+            Mode::HeldAtGate { ticks_left: 40 },
+            Goal::Attack(ShipRef::Player),
+        );
+        let world = World {
+            held_burst,
+            ..player_world(&[])
+        };
+        traffic.think_holding(&Deciding(count), world, &[], &mut NeverFires);
+        let ship = of(&traffic, id);
+        assert_eq!(ship.goal, Goal::CountWait, "{held_burst:?}");
+        assert_eq!(
+            (ship.mode, ship.ai_wait),
+            (Mode::Flying, BOARD_WAIT),
+            "{held_burst:?}"
+        );
+        assert_eq!(ship.owed_burst, owed, "{held_burst:?}");
+    }
 }
 
 /// An inertialess fighter at the centre attacking the player 200 to its
