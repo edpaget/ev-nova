@@ -473,8 +473,9 @@ fn leader_glow(pass: &FlyPass, npc: &Npc, world: &World) -> Option<i16> {
 /// `adjust` (its step's `_ShipAccelRate` before the ion block), at
 /// `speeds`, rolling on `chance`; on the advance pass, a flight that
 /// ended at its slot (a landing, a jump begun) reports it and flies
-/// nothing. Its turn rate and top speed are read at its step
-/// ([`AtStep::of_npc`]).
+/// nothing, its jump neither, though a warp under way settles
+/// ([`warp_out::settle`]). Its turn rate and top speed are read at its
+/// step ([`AtStep::of_npc`]).
 fn fly_steered(
     npc: &mut Npc,
     pass: &mut FlyPass,
@@ -489,13 +490,14 @@ fn fly_steered(
     // traffic's `dispatch_follow`).
     let formation = pass.followed.get(&npc.id).copied();
     let by = (formation, paused);
-    if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, by, adjust) {
+    // A flight that ended at its slot flies nothing, not even a jump begun
+    // there, whose warp-out would read an aim its leaves wrote before it.
+    let outcome = if let Some(&ended) = pass.slot_outcomes.get(&npc.id) {
+        ended
+    } else if let Some(outcome) = warp_out::fly_jump(npc, &pass.leaders, world, by, adjust) {
         // `_HandleShip`'s warp-out writes +0x68 (@0x347ba).
         pass.step_writes.1.push((npc.berth, npc.warp.aim));
         return outcome;
-    }
-    let outcome = if let Some(&ended) = pass.slot_outcomes.get(&npc.id) {
-        ended
     } else {
         let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, adjust);
         let rules = (world.flight, world.held_burst);
