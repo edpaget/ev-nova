@@ -278,19 +278,30 @@ fn a_think_ending_a_coasting_or_entering_ships_wait_flies_it_that_tick() {
         ),
     ] {
         let (mut traffic, id) = waiting(mode, goal);
-        for _ in 0..6 {
+        let before = of(&traffic, id).state;
+        traffic.tick_in(
+            &Deciding(attack),
+            player_world(&sites),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, id);
+        assert_eq!(ship.mode, Mode::Flying, "{mode:?}");
+        assert!(ship.pursuit.frame.is_some(), "{mode:?}: its fight frame");
+        assert!(
+            ship.state.heading != before.heading || ship.state.velocity != before.velocity,
+            "{mode:?}: it flies on the think's own tick"
+        );
+        for _ in 0..5 {
+            assert_eq!(traffic.departed(), [], "{mode:?}");
             traffic.tick_in(
                 &Deciding(attack),
                 player_world(&sites),
                 &[],
                 &mut NeverFires,
             );
-            assert_eq!(traffic.departed(), [], "{mode:?}");
         }
-        let ship = of(&traffic, id);
-        assert_eq!(ship.mode, Mode::Flying, "{mode:?}");
-        assert!(ship.pursuit.frame.is_some(), "{mode:?}: its fight frame");
-        assert_ne!(ship.state.heading, 0.0, "{mode:?}: it turns to the player");
+        assert_eq!(traffic.departed(), [], "{mode:?}");
     }
 }
 
