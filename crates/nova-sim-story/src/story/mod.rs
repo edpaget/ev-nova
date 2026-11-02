@@ -2486,8 +2486,8 @@
 //!   @0x8db19-0x8db3a), else `Rand(200)` + 300 (@0x8db41-0x8db5a). Its
 //!   slot stays active (+0xb8 is not cleared), so it still counts toward
 //!   the system's ships and `AvgShips` and keeps its berth.
-//! - **The wait.** `_HandleShip` counts +0x4c down by `_gSpeedMult` (1.0
-//!   a frame) for any class but the escape pod (@0x35025-0x35048), and
+//! - **The wait.** `_HandleShip` counts +0x4c down by the frame's gain,
+//!   `_gSpeedMult`, for any class but the escape pod (@0x35025-0x35048), and
 //!   skips the ship's turn, thrust and fire meanwhile (@0x34a54-0x34a72):
 //!   the engine's AI wait, counted down at the end of the fly half,
 //!   holding its flight and its guns. `_AIDispatch` runs its type's think

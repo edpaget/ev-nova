@@ -143,8 +143,8 @@
 //!    the heading it wanted there and thrusting as it said, a ship with no
 //!    word since its spawn turning toward its berth's last heading with no
 //!    thrust; a jumping ship turning and warping out, a gate entrant
-//!    counting its entry down, and a tick off each flying ship's AI wait,
-//!    a pirate's count wait's included ([`plunder::count_down`]);
+//!    counting its entry down, and the frame's gain off each flying ship's
+//!    AI wait, a pirate's count wait's included ([`plunder::count_down`]);
 //! 7. the removal of those that entered a gate, each in
 //!    [`Traffic::departed`] with how it left, the pods freed and the ships
 //!    that jumped out or docked in step 5 after them (the docked fighters
