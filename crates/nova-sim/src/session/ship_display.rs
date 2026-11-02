@@ -1211,6 +1211,73 @@ mod tests {
     }
 
     #[test]
+    fn the_tail_steps_a_fleet_arriving_after_the_loop_by_the_other_reading_and_no_ship_twice() {
+        use crate::session::reinforcements::tests::{FED, TIME, fight, flying, reinforced};
+        // The second pass's `_HandleReinforcements` (@0x44504) brings the
+        // fleet in after the ship loop (@0x4445c-0x444c4). An animated class
+        // of two sets, `AnimDelay` 0, moves a set at every step: a ship the
+        // loop displayed moves exactly one a pass, and the fleet, by the
+        // other reading of `UndisplayedShips`, one in its arrival pass's
+        // tail; by the engine's none until its slot's next display.
+        let animated = FrameSpec {
+            flags: ANIMATED,
+            base_sets: 2,
+            anim_delay: 0,
+            ..FrameSpec::NONE
+        };
+        let mut catalog = reinforced();
+        catalog.hulls.retain(|hull| hull.id != ShipId(128));
+        catalog.hulls.push(HullRecord {
+            display: Some(ShipDisplay {
+                flags: ANIMATED,
+                base_sets: 2,
+                anim_delay: 0,
+                ..ShipDisplay::default()
+            }),
+            exits: Some(ShipExits {
+                frames: 36,
+                ..ShipExits::default()
+            }),
+            ..hull(128)
+        });
+        for (reading, arrived_set) in [(RuleSource::Engine, 0), (RuleSource::Bible, 1)] {
+            let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, reading);
+            let mut session = flying(&catalog).with_rules(rules);
+            let warship = fight(&mut session, FED, 100.0);
+            session.space.npc_mut(warship).expect("there").hull.frames = animated;
+            session.call_for_reinforcements(warship, false, None);
+            let set =
+                |session: &Session| session.space.npc(warship).expect("there").display.drawn.set;
+            for pass in 0..TIME - 1 {
+                let before = set(&session);
+                work(&mut session, &catalog, Controls::default());
+                assert_eq!(
+                    set(&session),
+                    1 - before,
+                    "{reading:?}: pass {pass}, one step"
+                );
+            }
+            let before = (session.npcs().len(), set(&session));
+            session.tick_again(
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            assert_eq!(set(&session), 1 - before.1, "{reading:?}: one step");
+            let fleet = &session.npcs()[before.0..];
+            assert!(!fleet.is_empty(), "{reading:?}: arrived");
+            for npc in fleet {
+                assert_eq!(npc.display.drawn.set, arrived_set, "{reading:?}");
+                if reading == RuleSource::Engine {
+                    assert_eq!(npc.display.frames.anim_timer, 0.0, "untouched");
+                    assert_eq!(npc.display.drawn, Drawn::default(), "untouched");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_player_its_display_destroys_steps_its_lights_as_disabled() {
         // The lights (@0x2c2ea) read the `_IsDisabled` kept before the
         // dying block (@0x2d7ef) explodes the player: a lit 0x0040 class
