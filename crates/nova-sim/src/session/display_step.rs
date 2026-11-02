@@ -87,6 +87,7 @@ impl Session {
             self.out.sounds.push(SimSound::Klaxon);
         }
         self.eject_check(chance);
+        self.held_jettison_tick(chance);
         self.self_destruct_tick(head.dying);
         self.player_cloak_tick(head.disabled);
         self.ship.step_cloak_fade(&self.pilot, &self.statics);

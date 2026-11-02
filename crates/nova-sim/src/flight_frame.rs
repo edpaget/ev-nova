@@ -1588,9 +1588,17 @@ pub struct StepInput {
     /// The Hyperspace Effects preference
     /// ([`Session::set_hyperspace_effects`](crate::Session::set_hyperspace_effects)).
     pub hyperspace_effects: bool,
-    /// The land key
+    /// The land key held, which L's pass reads to pick a stellar
     /// ([`Session::set_land_key`](crate::Session::set_land_key)).
     pub land_key: bool,
+    /// L's latch, `_dockTryFlag` (0xdee34), set by a dock request and
+    /// cleared on a pass L is up: it holds the dock approach back
+    /// ([`Session::set_dock_try`](crate::Session::set_dock_try)).
+    pub dock_try: bool,
+    /// The jettison chord, Command and K, while it is down: `Some(all)`,
+    /// `all` unless Option is down too, jettisoning on every pass
+    /// ([`Session::hold_jettison`](crate::Session::hold_jettison)).
+    pub jettison: Option<bool>,
     /// Whether the view went 334 ms or more of the wall time it was handed
     /// without a step: the next frame keeps the gain, as
     /// `_HandleTimeAdjustment` leaves it after a frame that long (see

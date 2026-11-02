@@ -272,6 +272,7 @@ fn the_keys_no_latch_guards_read_down_after_the_close() {
     assert!(step.weapon_safety, "S");
     assert!(step.eject, "Command-X");
     assert!(step.self_destruct, "Command--");
+    assert_eq!(step.jettison, Some(true), "Command-K");
 }
 
 // A dialog no `_SetAllKeyCmdFlags` follows (the mission handler's texts,
@@ -740,4 +741,27 @@ fn a_press_key_after_a_fresh_l_waits_for_the_poll() {
         back(&mut view, [LAND_KEY, NEAREST_KEY], [LAND_KEY], false),
         [press(NEAREST_KEY)]
     );
+}
+
+#[test]
+fn l_held_from_before_a_dialog_waits_but_stays_held() {
+    // L's latch set by its request before the dialog (@0x6a953): no
+    // request, but L reads down for the pick, and the latch holds the
+    // approach back.
+    let mut view = in_flight();
+    super::faded_keys::requests(&mut view);
+    view.press_land();
+    dialog_opens(&mut view);
+    let _ = back(&mut view, [LAND_KEY], [LAND_KEY], false);
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert!(
+        !sent(&view)[from..].contains(&FlightCommand::Land),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+    assert!(view.held.contains(&LAND_KEY));
+    let step = view.sim.inputs().last().copied().expect("a step");
+    assert!(step.land_key, "L down");
+    assert!(step.dock_try, "its latch set");
 }

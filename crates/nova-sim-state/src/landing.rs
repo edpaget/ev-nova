@@ -616,6 +616,36 @@ pub struct DockPress {
     pub outcome: Result<LandOutcome, LandingRefusal>,
 }
 
+/// The stellar the land key reads with the navigation target `target`
+/// (the stellar held, wherever it is now), for a ship at `position` among
+/// the system's stellars `sites`, the gate limit by `gates`, as
+/// `_HandlePlayer`'s L block picks it (@0x6a8ed-0x6a932): the target, or
+/// with none the nearest ([`nearest_stellar`]), which the key selects
+/// (`Some` of its ID); with none of those [`LandingRefusal::NoStellars`]
+/// for a system with no stellars, else [`LandingRefusal::NothingLandable`]
+/// (`_FindNearestStellar` gave -1, @0x6a90f). Both the press
+/// ([`land_or_select`]) and the pass with L held (`nova_sim`'s
+/// `land_key` module) pick so.
+///
+/// # Errors
+///
+/// Why nothing was picked, as above.
+pub fn land_key_pick<'a>(
+    target: Option<&'a LandingSite>,
+    position: Vec2,
+    sites: &'a [LandingSite],
+    gates: RuleSource,
+) -> Result<(&'a LandingSite, Option<StellarId>), LandingRefusal> {
+    match target {
+        Some(site) => Ok((site, None)),
+        None => match nearest_stellar_site(position, sites, gates) {
+            Some(site) => Ok((site, Some(site.id))),
+            None if sites.is_empty() => Err(LandingRefusal::NoStellars),
+            None => Err(LandingRefusal::NothingLandable),
+        },
+    }
+}
+
 /// What the land key does with the navigation target `target` (the
 /// stellar held, wherever it is now) and the dock request `dock`, for the
 /// ship `player`, its pilot holding `cash`, among the system's stellars
@@ -648,13 +678,9 @@ pub fn land_or_select(
         said: None,
         outcome: Err(refusal),
     };
-    let (site, selected) = match target {
-        Some(site) => (site, None),
-        None => match nearest_stellar_site(player.position, sites, gates) {
-            Some(site) => (site, Some(site.id)),
-            None if sites.is_empty() => return refused(LandingRefusal::NoStellars),
-            None => return refused(LandingRefusal::NothingLandable),
-        },
+    let (site, selected) = match land_key_pick(target, player.position, sites, gates) {
+        Ok(picked) => picked,
+        Err(refusal) => return refused(refusal),
     };
     if !is_landable(site) || !held(site) {
         return DockPress {
@@ -1573,6 +1599,33 @@ mod tests {
         assert_eq!(
             nearest_stellar_station(Vec2::ZERO, &[], RuleSource::Engine),
             None
+        );
+    }
+
+    /// `_HandlePlayer`'s L block (@0x6a8ed-0x6a932): the target held,
+    /// else the nearest stellar, newly selected, else why nothing.
+    #[test]
+    fn the_land_keys_pick_keeps_the_target_or_selects_the_nearest() {
+        let sites = [site(128, 500.0, 0.0), site(129, 0.0, 100.0)];
+        let picked = |target: Option<&LandingSite>, sites: &[LandingSite]| {
+            land_key_pick(target, Vec2::ZERO, sites, RuleSource::Engine)
+                .map(|(site, selected)| (site.id, selected))
+        };
+        assert_eq!(
+            picked(Some(&sites[0]), &sites),
+            Ok((StellarId(128), None)),
+            "the target kept"
+        );
+        assert_eq!(
+            picked(None, &sites),
+            Ok((StellarId(129), Some(StellarId(129)))),
+            "the nearest selected"
+        );
+        assert_eq!(picked(None, &[]), Err(LandingRefusal::NoStellars));
+        assert_eq!(
+            picked(None, &[with_flags(0)]),
+            Err(LandingRefusal::NothingLandable),
+            "@0x6a90f"
         );
     }
 

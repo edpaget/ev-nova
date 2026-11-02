@@ -632,6 +632,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             jump_latch: false,
             board_latch: false,
             target_latch: false,
+            jettison_tapped: None,
             faded_keys: super::faded_keys::FadedKeys::default(),
             pending_landing: None,
             movies: crate::movie::Movies::none(),

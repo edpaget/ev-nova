@@ -55,6 +55,9 @@ pub(super) fn flying_on_a_mission(store: &MemoryPilots) -> AppScreen {
         )
         .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job 130."));
     let mut screen = landed_at_venues(store, loaded_bytes(jump_ready(&fork).bytes));
+    // L, which landed, let go: held past the take-off it would pick a
+    // stellar on every pass (`_HandlePlayer` @0x6a8c5-0x6a932).
+    screen.input(&key(Key::Char('l'), false));
     screen.input(&key(Key::Enter, true));
     screen.input(&key(Key::Enter, false));
     assert_eq!(active(&screen), [MissionId(130)]);

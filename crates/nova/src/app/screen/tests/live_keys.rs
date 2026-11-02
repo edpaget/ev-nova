@@ -586,6 +586,8 @@ fn a_slot_key_pressed_in_the_spaceport_and_held_past_the_take_off_waits_for_its_
     // `_PlayerLandOnStellar` @0x63583.
     let mut screen = with_dialogs(game_data_fork_loaded());
     land(&mut screen);
+    // L, which landed, let go: held, it would pick a stellar of its own.
+    screen.input(&key(Key::Char('l'), false));
     screen.input(&key(SLOT_1, true));
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::Flight, "took off");
@@ -638,4 +640,43 @@ fn a_slot_key_and_p_pressed_under_a_mission_text_select_then_open_the_player_inf
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::PlayerInfo, "P on the first step");
     assert_ne!(nav(&screen), None, "picked first");
+}
+
+// B's and L's latches are no site's (0xdee18, 0xdee34): each is read on
+// every pass it is down, across every close.
+
+#[test]
+fn l_held_across_the_take_off_with_no_stellar_targeted_targets_the_nearest() {
+    // The take-off lets the selection go and is a site (@0x63583), but L's
+    // block picks the nearest on every pass L is down (@0x6a8c5-0x6a932),
+    // its latch set by the landing's request (@0x6a953) holding the
+    // request back.
+    let mut screen = with_dialogs(data());
+    land(&mut screen);
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Flight, "took off");
+    assert_eq!(nav(&screen), None, "the take-off let it go");
+    let said = flight(&screen).message().map(str::to_owned);
+    screen.tick(TICK);
+    assert_ne!(nav(&screen), None, "the nearest");
+    assert_eq!(
+        flight(&screen).message().map(str::to_owned),
+        said,
+        "no request said"
+    );
+}
+
+#[test]
+fn b_pressed_under_a_dialog_boards_at_its_close() {
+    // A site's dialog latches what is down at its close, but not B's own
+    // latch (0xdee18), which the last pass before it read up.
+    let mut screen = boardable(with_dialogs(boarding_data()));
+    fly(&mut screen);
+    screen.tick(TICK);
+    tap(&mut screen, Key::Tab);
+    offer_as_a_hail_would(&mut screen);
+    screen.input(&key(Key::Char('b'), true));
+    refuse(&mut screen);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Plunder, "B boarded");
 }

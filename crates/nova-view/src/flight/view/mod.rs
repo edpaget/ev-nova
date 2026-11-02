@@ -1468,6 +1468,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// no-target and cloak returns, cleared on a frame B is up
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
+    /// A tap of the jettison chord since the last step, `Some(all)`, for
+    /// the next step to jettison once ([`FlightView::jettison`]).
+    jettison_tapped: Option<bool>,
     /// `_weapTargetSelectFlag` (0xdede8), the latch Tab and the click in
     /// space share: set as either acts, cleared on a frame both are up
     /// (the `target_latch` module).

@@ -525,6 +525,7 @@ mod grant_explorations;
 mod gravity;
 mod hail;
 mod hail_advice;
+mod held_jettison;
 mod hire;
 mod hooks;
 mod hover;
@@ -540,6 +541,7 @@ mod jump_moves;
 mod kept_berths;
 mod kept_rescues;
 mod killed_explosions;
+mod land_key;
 mod land_on_stellar;
 #[cfg(test)]
 mod landed_work;
@@ -1725,7 +1727,9 @@ impl Session {
         // (@0x6a97a) before its position step (@0x6d4b0); @0x6864d, which
         // the `clearance` module reads as the move, is
         // `_WrapPlayerPosition`, in the `player_wrap` module (filed as
-        // hud-fidelity-followups' dock approach phase).
+        // hud-fidelity-followups' dock approach phase). L's pick
+        // (@0x6a8c5) runs before it.
+        self.land_key_pass();
         self.dock_approach();
     }
 
@@ -3569,9 +3573,7 @@ impl Session {
         // request's recheck of it (@0x6699a-0x669aa): its owner word the
         // player's system ([`Chart::held_here`]), and active, which the
         // stellars shown hold as the last rebuild point left them.
-        let target = self
-            .nav_target()
-            .and_then(|id| self.chart.listed.iter().find(|site| site.id == id));
+        let target = self.chart.land_key_target();
         let held = |site: &LandingSite| {
             self.chart.sites.iter().any(|shown| shown.id == site.id)
                 && self.chart.held_here(&self.pilot, &self.statics, site.id)

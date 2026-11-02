@@ -199,6 +199,10 @@ pub(super) struct Fate {
     /// Whether the player holds the self-destruct chord, Command and `-`
     /// together (see the `self_destruct` module); never saved.
     pub(super) self_destruct_held: bool,
+    /// The jettison chord, Command and K, while it is held: `Some(all)`,
+    /// `all` unless Option is down too (see the `held_jettison` module);
+    /// never saved.
+    pub(super) jettison_held: Option<bool>,
     /// Whether a pirate has docked with the player's disabled ship (its
     /// slot's +0xb9; see the `pirate_plunder` module): never saved.
     pub(super) player_boarded: bool,
@@ -292,6 +296,7 @@ impl PlayerShip {
                 eject_held: false,
                 self_destruct: crate::self_destruct::SelfDestruct::default(),
                 self_destruct_held: false,
+                jettison_held: None,
                 player_boarded: false,
             },
             warp: Warp {

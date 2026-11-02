@@ -467,17 +467,16 @@ fn hail_is_refused_silently_through_a_jump() {
 
 #[test]
 fn command_k_jettisons_through_a_jump() {
+    // Its block reads no +0x50 (@0x6fd54-0x6fdaf): a tap during the jump
+    // is the next step's.
     for mut view in faked_through_a_jump() {
         let stage = faked_stage(&view);
         let from = sent_count(&view);
         view.input(&key(Key::Command, true));
         tap(&mut view, JETTISON_KEY);
         view.input(&key(Key::Command, false));
-        assert_eq!(
-            sent_since(&view, from),
-            [FlightCommand::Jettison { all: true }],
-            "{stage}"
-        );
+        assert_eq!(sent_since(&view, from), [], "{stage}: no command");
+        assert_eq!(view.jettison_tapped, Some(true), "{stage}");
     }
 }
 

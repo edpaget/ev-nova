@@ -161,6 +161,8 @@ impl Session {
         self.set_double_time_key(input.double_time_key);
         self.set_hyperspace_effects(input.hyperspace_effects);
         self.set_land_key(input.land_key);
+        self.set_dock_try(input.dock_try);
+        self.hold_jettison(input.jettison);
         if input.held {
             self.hold_time();
         }
@@ -404,6 +406,8 @@ mod tests {
         session.set_double_time_key(input.double_time_key);
         session.set_hyperspace_effects(input.hyperspace_effects);
         session.set_land_key(input.land_key);
+        session.set_dock_try(input.dock_try);
+        session.hold_jettison(input.jettison);
         session.out.last_line = None;
         session.out.class_orders_cleared = false;
         let mut took = Vec::new();
@@ -535,6 +539,8 @@ mod tests {
             double_time_key: true,
             hyperspace_effects: true,
             land_key: true,
+            dock_try: true,
+            jettison: Some(false),
             window_width: 640,
             play_area: crate::cloak::Area {
                 left: -1.0,

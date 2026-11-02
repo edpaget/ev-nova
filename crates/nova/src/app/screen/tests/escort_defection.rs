@@ -171,6 +171,9 @@ fn lit_with_a_defector() -> (AppScreen, Rc<MockMoviePlayer>) {
 fn plotted_with_a_defector(prefs: Prefs) -> (AppScreen, Rc<MockMoviePlayer>) {
     let built = jump_ready(&port_fork());
     let (mut screen, reel) = empty_shops_built(kept_wage(), prefs, built, paying(1, WAGE));
+    // L, which landed, let go: held past the take-off it would pick a
+    // stellar on every pass (`_HandlePlayer` @0x6a8c5-0x6a932).
+    screen.input(&key(Key::Char('l'), false));
     screen.input(&key(Key::Escape, true));
     until_flight(&mut screen);
     assert_eq!(pilot(&screen).escorts().len(), 1, "paid at take-off");
@@ -303,6 +306,8 @@ fn an_arrivals_own_text_fades_in_first_and_the_defection_follows_unfaded() {
         timed(ada);
     };
     let (mut screen, _) = empty_shops_built(kept_wage(), Prefs::default(), built, kit);
+    // L, which landed, let go (see `plotted_with_a_defector`).
+    screen.input(&key(Key::Char('l'), false));
     screen.input(&key(Key::Escape, true));
     until_flight(&mut screen);
     for _ in 0..120 {

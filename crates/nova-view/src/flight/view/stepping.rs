@@ -74,8 +74,8 @@ use crate::system::catalog::SystemCatalog;
 use super::between_passes::{self, BetweenPasses};
 use super::{
     AFTERBURNER_KEY, CLOAK_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FlightView,
-    LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point, show_combat,
-    show_frozen_frames, show_gate_frames, stars, window_width,
+    JETTISON_KEY, LAND_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY, dying, glow_decay, play_area, point,
+    show_combat, show_frozen_frames, show_gate_frames, stars, window_width,
 };
 
 /// The rules the view shows the steps' effects, the stars, the world, the
@@ -180,12 +180,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// chord, the cloak and the safety only while the flight takes its
     /// command (the cloak key needs no Command, `_QuickKeyCheck`
     /// @0x705b7); double time and Hyperspace Effects as the screen was
-    /// told; the land key; and whether 334 ms or more of the wall time
-    /// handed to the view went by without a step, which holds the next
-    /// step's gain.
+    /// told; the land key held and L's latch, `_dockTryFlag`, which holds
+    /// the dock approach back (the `faded_keys` module); the jettison
+    /// chord, `Some(all)` while Command and K are down and the flight
+    /// takes it, `all` unless Option is down too, or a tap of it since
+    /// the last step ([`FlightView::jettison`]); and whether 334 ms or
+    /// more of the wall time handed to the view went by without a step,
+    /// which holds the next step's gain.
     pub(super) fn step_input(&self, anchor: Anchor) -> StepInput {
         let held = |key| self.held.contains(&key);
         let chord = |command, key| self.takes(command) && held(Key::Command) && held(key);
+        let jettison = chord(PlayerCommand::Jettison, JETTISON_KEY)
+            .then(|| !held(Key::Alt))
+            .or(self.jettison_tapped);
         StepInput {
             controls: self.controls(),
             play_area: play_area(self.view, anchor),
@@ -198,6 +205,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             double_time_key: self.double_time,
             hyperspace_effects: self.hyperspace_effects,
             land_key: held(LAND_KEY),
+            dock_try: self.faded_keys.land_latched(),
+            jettison,
             held: nova_sim::speed_mult::holds_after(self.since_step),
         }
     }
@@ -216,6 +225,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.sim.step(&input, steps, &mut report);
         if !report.steps.is_empty() {
             self.since_step = std::time::Duration::ZERO;
+            // A step has read the tap (`FlightView::jettison`).
+            self.jettison_tapped = None;
         }
         let mut notes = Vec::new();
         let mut quotes = Vec::new();

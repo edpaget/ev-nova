@@ -214,6 +214,8 @@ fn each_frame_hands_the_flight_the_keys_held_steps_or_none() {
             double_time_key: true,
             hyperspace_effects: true,
             land_key: true,
+            dock_try: false,
+            jettison: None,
             held: false,
         }
     );
@@ -242,6 +244,59 @@ fn command_and_minus_hold_the_self_destruct_and_command_and_x_the_eject() {
         let input = held(keys);
         assert!(!input.self_destruct && !input.eject, "{keys:?}");
     }
+}
+
+#[test]
+fn the_step_input_carries_the_held_jettison_chord_while_taken() {
+    // `_HandlePlayer`'s Command-K block has no latch (@0x6fd54-0x6fda1):
+    // Command and K down jettison on every pass, `!Option` all.
+    let mut view = stepping(catalog());
+    view.held.extend([Key::Command, JETTISON_KEY]);
+    assert_eq!(view.step_input(anchor()).jettison, Some(true));
+    view.held.insert(Key::Alt);
+    assert_eq!(view.step_input(anchor()).jettison, Some(false), "Option");
+    view.change_sim(|sim| sim.refuse(PlayerCommand::Jettison));
+    assert_eq!(view.step_input(anchor()).jettison, None, "refused");
+}
+
+#[test]
+fn k_without_command_carries_nothing() {
+    let mut view = stepping(catalog());
+    view.held.insert(JETTISON_KEY);
+    assert_eq!(view.step_input(anchor()).jettison, None);
+    view.held.insert(Key::Alt);
+    assert_eq!(view.step_input(anchor()).jettison, None);
+}
+
+#[test]
+fn a_command_k_tapped_between_steps_jettisons_on_the_next_step_once() {
+    // A pass would have read it down, as the slot block counts a tap.
+    let mut view = stepping(catalog());
+    view.input(&key(Key::Command, true));
+    view.input(&key(JETTISON_KEY, true));
+    view.input(&key(JETTISON_KEY, false));
+    view.input(&key(Key::Command, false));
+    assert_eq!(sent(&view), [], "the press sends nothing");
+    assert_eq!(view.step_input(anchor()).jettison, Some(true), "the tap");
+    frame(&mut view, one_step(Vec::new()));
+    assert_eq!(
+        view.sim.inputs().last().map(|input| input.jettison),
+        Some(Some(true))
+    );
+    assert_eq!(view.step_input(anchor()).jettison, None, "once");
+}
+
+#[test]
+fn the_step_input_carries_ls_latch_as_the_dock_try() {
+    // `_dockTryFlag` (0xdee34) holds the approach back (@0x6a970).
+    let mut view = stepping(catalog());
+    assert!(!view.step_input(anchor()).dock_try);
+    super::faded_keys::requests(&mut view);
+    view.press_land();
+    let input = view.step_input(anchor());
+    assert!(input.dock_try, "set by the request");
+    view.held.insert(LAND_KEY);
+    assert!(view.step_input(anchor()).land_key);
 }
 
 #[test]
