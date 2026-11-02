@@ -11,10 +11,9 @@
 use super::asteroid_walk::AsteroidField;
 use super::hit_turns::Stretch;
 use super::ion::IonLockout;
-use super::lineup::reread;
 use super::stellar::StellarTarget;
 use super::stellar_hazards::StellarHazards;
-use super::walk::{BeamWalk, Walk, note_struck};
+use super::walk::{BeamWalk, Walk};
 use super::{
     Combat, Field, Fighter, Firers, GamePass, Rules, Scenery, ShipRef, Sides, Target, regenerate,
     regenerate_player,
@@ -405,16 +404,12 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let pass = arena.pass;
         let rule = arena.rules.disable;
-        let mut targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        // A resumed walk's struck ships settled at their stops, so they
+        // read afresh as the loop's refresh would read them (see the
+        // `walk` module).
+        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         let mut walk = match self.walk.take() {
-            Some(Walk::Beams(walk)) => {
-                for (fighter, target) in fighters.iter().zip(&mut targets) {
-                    if walk.struck.contains(&fighter.ship) {
-                        reread(fighter, target, rule);
-                    }
-                }
-                walk
-            }
+            Some(Walk::Beams(walk)) => walk,
             other => {
                 debug_assert!(other.is_none(), "a phase began amid {other:?}");
                 let walk = BeamWalk::open(self.beams.len());
@@ -452,7 +447,6 @@ impl Combat {
                 };
                 self.land(fighters, vec![hit], rule);
                 self.settle_struck(fighters, first_strike, rule);
-                note_struck(&mut walk.struck, &self.strikes[first_strike..]);
                 self.walk = Some(Walk::Beams(walk));
                 return Stretch::Answer;
             }

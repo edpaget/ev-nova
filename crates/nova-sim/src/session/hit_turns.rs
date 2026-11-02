@@ -400,4 +400,39 @@ mod wired {
             Some(ShipRef::Player)
         );
     }
+
+    #[test]
+    fn the_last_stretch_settles_a_blast_its_stop_left_to_come() {
+        // The player's bomb hits E, and the walk stops there; its blast
+        // lands in the last stretch, disabling Y, which the phase's own
+        // settle raises the fate of, against Y as the last stretch was lent.
+        let catalog = crate::session::tests::armed();
+        let (mut session, e, y) = plunder_scene(&catalog, 5, 2);
+        let npc = session.space.npc_mut(e).expect("there");
+        npc.goal = Goal::Idle;
+        npc.target = None;
+        let e_at = npc.state.position;
+        let bystander = session.space.npc_mut(y).expect("there");
+        bystander.state.position = e_at + Vec2::new(0.0, 20.0);
+        bystander.reserves.shield.now = 0.0;
+        bystander.reserves.armor.now = 12.0;
+        let step = Vec2::new(10.0, 0.0);
+        let shots = session.space.combat.shots_mut();
+        shots[0].moved_from = Some(e_at - step);
+        shots[0].position = e_at;
+        shots[0].aimed_at = Some(ShipRef::Npc(e));
+        shots[0].weapon.blast_radius = 40.0;
+        shots[0].weapon.mass_damage = 5.0;
+        shots[0].weapon.energy_damage = 0.0;
+        let far = Vec2::new(-3000.0, -3000.0);
+        shots[1].moved_from = Some(far - step);
+        shots[1].position = far;
+        let pass = GamePass::Advance { double_time: false };
+        session.collision_passes(&NovaAi::default(), pass, Rules::default(), &mut NeverFires);
+        assert_eq!(
+            session.space.npc(y).expect("there").condition,
+            Condition::Disabled
+        );
+        assert_eq!(fates_of(&session, y), [crate::story::Fate::Disabled]);
+    }
 }

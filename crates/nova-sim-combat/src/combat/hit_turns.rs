@@ -150,9 +150,8 @@ pub fn check_contract(turns: &mut dyn HitTurns) -> Result<(), String> {
                 "lend gave {got:?} for a stretch that gave {want:?}"
             ));
         }
-        if got == Stretch::Answer {
-            turns.answer();
-        }
+        // Nothing landed: the answer settles nothing.
+        turns.answer();
     }
     let _ = turns.lend(&mut |combat, fighters, _, _| {
         let ship = fighters
@@ -218,7 +217,8 @@ pub fn check_contract(turns: &mut dyn HitTurns) -> Result<(), String> {
         .enumerate()
         .all(|(index, (&(_, was), &(_, now)))| {
             let wrote = if index == 0 { 1.0 } else { 0.0 };
-            (was - wrote - now).abs() < f32::EPSILON
+            // Exactly what the stretch left: a point off a whole shield.
+            (was - wrote).to_bits() == now.to_bits()
         });
     if !kept {
         return Err(format!(

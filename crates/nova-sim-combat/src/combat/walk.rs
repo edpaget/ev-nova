@@ -9,23 +9,27 @@
 //! in its own locals:
 //!
 //! - **The beams**: the next beam to test, how many beams the tick held as
-//!   it opened (for [`Combat::beam_room`]'s count of ended beams), and the
-//!   ships struck since it opened. The opening (the beams' moves and
-//!   stamps, and point defence's beams on their missiles) runs once.
+//!   it opened (for [`Combat::beam_room`]'s count of ended beams). The
+//!   opening (the beams' moves and stamps, and point defence's beams on
+//!   their missiles) runs once.
 //! - **The collision passes**: the pass's shots, taken out of flight for
 //!   the contact passes, which of them are spent and the order each layer
 //!   keeps them in; the asteroids shown as the passes began ([`Shown`]);
 //!   the ships' walk order, by [`ShipRef`], as their sprites stood when
 //!   the passes began ([`walk_order`], the original's layers, which no
-//!   answer reorders); where contact meets each ship; the ships struck
-//!   since it opened; where it stopped; and what of the hit it stopped
-//!   after is still to come: its blast and, in the proximity pass, its
-//!   sub-munitions ([`Pending`]).
+//!   answer reorders); where contact meets each ship; where it stopped;
+//!   and what of the hit it stopped after is still to come: its blast
+//!   and, in the proximity pass, its sub-munitions ([`Pending`]).
 //!
-//! On resume a walk reads its ships afresh from the fighters, each struck
-//! ship again as its loop's own refresh reads it ([`Lineup::refresh`],
-//! [`reread`](super::lineup::reread)), and finds each by [`ShipRef`],
-//! never by its place among the fighters. No index into the fight's
+//! On resume a walk reads its ships afresh from the fighters
+//! ([`Lineup::new`]) and finds each by [`ShipRef`], never by its place
+//! among the fighters. Each stop settles the ships its stretch struck
+//! before it stops (`Combat::settle_struck`), so a ship read afresh reads
+//! as the loop's own refresh reads a struck one
+//! ([`reread`](super::lineup::reread)): what `_IsDisabled` makes of its
+//! armour is settled into its condition, and the rest of its record is
+//! read whole either way. So the walk keeps no list of the ships struck.
+//! No index into the fight's
 //! strikes is kept across a stop: the keeper's answer takes them
 //! ([`Combat::take_landed`]), so each stretch settles from its own first
 //! strike.
@@ -43,7 +47,7 @@ use super::hit_turns::Stretch;
 use super::hull::DisableRule;
 use super::lineup::Lineup;
 use super::projectile::Shot;
-use super::{Arsenal, Combat, Fighter, Landed, Scenery, ShipRef, Strike};
+use super::{Arsenal, Combat, Fighter, Landed, Scenery, ShipRef};
 use crate::asteroid::Asteroids;
 use crate::chance::Chance;
 use crate::geometry::Vec2;
@@ -65,8 +69,6 @@ pub(super) struct BeamWalk {
     pub(super) next: usize,
     /// How many beams the tick held as the walk opened.
     pub(super) beams_held: usize,
-    /// The ships struck since the walk opened.
-    pub(super) struck: Vec<ShipRef>,
 }
 
 impl BeamWalk {
@@ -75,7 +77,6 @@ impl BeamWalk {
         Self {
             next: 0,
             beams_held,
-            struck: Vec::new(),
         }
     }
 }
@@ -97,8 +98,6 @@ pub(super) struct HitWalk {
     pub(super) order: Vec<ShipRef>,
     /// Where contact meets each ship, as the passes began.
     pub(super) places: Vec<(ShipRef, Vec2)>,
-    /// The ships struck since the walk opened.
-    pub(super) struck: Vec<ShipRef>,
     /// Where the walk is.
     pub(super) stage: Stage,
     /// What is still to come of the hit it stopped after.
@@ -138,15 +137,6 @@ pub(super) struct Pending {
     /// The shot that hit, where it hit, and the ship it hit, whose
     /// sub-munitions it releases at that ship: a proximity hit's.
     pub(super) release: Option<(Shot, ShipRef)>,
-}
-
-/// Adds each ship among `strikes` to `struck` that it lacks.
-pub(super) fn note_struck(struck: &mut Vec<ShipRef>, strikes: &[Strike]) {
-    for strike in strikes {
-        if !struck.contains(&strike.ship) {
-            struck.push(strike.ship);
-        }
-    }
 }
 
 impl Combat {
@@ -250,7 +240,6 @@ impl Combat {
             })
             .collect();
         let mut lineup = Lineup::new(fighters, &places, govts, self.hit_readings());
-        lineup.refresh(fighters, &walk.struck, rule);
         let terms = WalkTerms { arsenal, rule };
         if let Some(pending) = walk.pending.take() {
             self.land_pending(pending, (fighters, &mut lineup), &terms, chance);
@@ -264,7 +253,6 @@ impl Combat {
         );
         self.settle_struck(fighters, first_strike, rule);
         if stopped {
-            note_struck(&mut walk.struck, &self.strikes[first_strike..]);
             self.walk = Some(Walk::Hits(walk));
             return Stretch::Answer;
         }
@@ -295,7 +283,6 @@ impl Combat {
             shown: Shown::of(asteroids),
             order,
             places,
-            struck: Vec::new(),
             stage: Stage::Contact {
                 layer: 0,
                 ship: 0,
