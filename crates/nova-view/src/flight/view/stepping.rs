@@ -226,6 +226,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
             quotes.extend(self.inbox.take_quotes());
         }
         if !report.steps.is_empty() || report.stopped {
+            // A stop for the warp's end leaves them for the steps its
+            // arrival runs, which relay them over the arrival's line.
+            if !(report.steps.is_empty() && self.frame.warp_end_due) {
+                self.release_held_lines();
+            }
             self.release_between_passes(anchor);
         }
         let mut held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
@@ -382,7 +387,7 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
             // frame between its passes, its lines under the first text.
             let pod = match self.pod_frame_between_passes() {
                 Some(between) => {
-                    self.relay_held_lines();
+                    self.release_held_lines();
                     Some(between)
                 }
                 None => pod,

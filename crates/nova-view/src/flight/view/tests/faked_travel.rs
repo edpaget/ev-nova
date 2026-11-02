@@ -596,12 +596,69 @@ fn a_double_time_held_arrival_draws_one_pass_in_the_new_system_on_its_frame() {
 }
 
 #[test]
+fn a_second_pass_line_stands_over_its_own_passs_arrival() {
+    // The second pass's warp end runs the arrival inside its
+    // `_HandlePlayer` (@0x6bbb8-0x6c625), its line raised there; the rest
+    // of that pass raises the held line after it, so frame 98 shows it.
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    let mut report = doubled_from(under_way(true));
+    report.steps[0].second_pass_lines = vec![nova_sim::flight_frame::RaisedLine::Message(
+        SimMessage::NoActiveMissions,
+    )];
+    view.sim.queue_report(report);
+    view.tick(TICK);
+    view.sim.queue_report(StepReport {
+        steps: Vec::new(),
+        stopped: true,
+    });
+    view.sim.queue_report(doubled_from(in_alpha()));
+    view.tick(TICK);
+    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert_eq!(
+        view.message(),
+        Some(NO_ACTIVE_MISSIONS),
+        "over the arrival's"
+    );
+}
+
+#[test]
 fn a_held_arrival_on_a_tick_with_no_step_still_waits() {
     let mut view = held_at_the_warps_end();
     let called = view.sim.steps();
     view.tick(ms(1));
     assert!(!sent_but_lines(&view).contains(&FlightCommand::Arrive));
     assert_eq!(view.sim.steps(), called + 1, "the tick's own call alone");
+}
+
+#[test]
+fn a_second_pass_line_stands_over_a_first_pass_arrival_on_the_frame_after() {
+    // The arrival settles inside the first pass (`_HandlePlayer`
+    // @0x6bbb8-0x6c625), its line raised there; the second pass's line
+    // comes after it, so it shows on the next frame.
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    let mut report = doubled_from(FlightFrame {
+        warp_end_due: true,
+        ..under_way(true)
+    });
+    report.steps[0].second_pass_lines = vec![nova_sim::flight_frame::RaisedLine::Message(
+        SimMessage::NoActiveMissions,
+    )];
+    view.sim.queue_report(report);
+    view.tick(TICK);
+    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert_eq!(view.message(), None, "the arrival's line on its frame");
+    view.sim.queue_report(StepReport {
+        steps: vec![nova_sim::flight_frame::StepRun::default()],
+        stopped: false,
+    });
+    view.tick(TICK);
+    assert_eq!(
+        view.message(),
+        Some(NO_ACTIVE_MISSIONS),
+        "the held line after"
+    );
 }
 
 #[test]

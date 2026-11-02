@@ -266,6 +266,8 @@ impl<
         let keyed = self.cursor_keyed();
         let jumping = self.jump_under_way();
         self.run_steps(steps, pod);
+        // From here the frame's own writes come before the held lines.
+        self.writing_in_frame = true;
         self.settle_faded_keys(jumping);
         // After the lines the steps relayed, as `_PlayGame`'s readout
         // comes after `_DoPlayGameWork`.
@@ -279,6 +281,7 @@ impl<
         }
         self.arrival_frame(steps);
         self.advance_hud();
+        self.writing_in_frame = false;
     }
 
     /// `press`, if a jump under way lets it through and the flight takes

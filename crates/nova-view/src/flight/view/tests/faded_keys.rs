@@ -942,3 +942,44 @@ fn a_held_l_or_i_shut_out_while_latched_acts_when_the_gate_opens() {
         [FlightCommand::Land, FlightCommand::PressMissionInfo]
     );
 }
+
+#[test]
+fn a_second_pass_line_stands_over_a_refusal_the_keys_said_after_the_steps() {
+    // A kept Y is read on the pass that collapses the jump, in
+    // `_HandlePlayer`, ahead of the routines that raise the second pass's
+    // line, so that line shows over the refusal on the next frame.
+    let mut view = under_the_white();
+    tap(&mut view, HAIL_KEY);
+    view.sim
+        .queue_answer(Answer::HailRefused(HailRefusal::NoResponse));
+    let collapsed = StepReport {
+        steps: vec![StepRun {
+            lit_collapse: true,
+            between_passes: Some(Box::new(super::frames::sol())),
+            passes: vec![PassReport::default(), PassReport::default()],
+            second_pass_lines: vec![nova_sim::flight_frame::RaisedLine::Message(
+                SimMessage::NoActiveMissions,
+            )],
+            ..StepRun::default()
+        }],
+        stopped: false,
+    };
+    view.sim
+        .queue_report_showing(collapsed, super::frames::sol());
+    view.tick(TICK);
+    assert_eq!(
+        view.message(),
+        Some(NO_RESPONSE),
+        "the refusal on its frame"
+    );
+    view.sim.queue_report(StepReport {
+        steps: Vec::new(),
+        stopped: true,
+    });
+    view.tick(TICK);
+    assert_eq!(
+        view.message(),
+        Some(NO_ACTIVE_MISSIONS),
+        "the held line after"
+    );
+}

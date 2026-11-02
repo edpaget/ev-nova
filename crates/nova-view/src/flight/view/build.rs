@@ -595,6 +595,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             jump: None,
             fade_in: None,
             arrival_waited: false,
+            held_lines: Vec::new(),
+            writing_in_frame: false,
             death_fade: None,
             hyperspace_effects: true,
             smoke_trails: true,

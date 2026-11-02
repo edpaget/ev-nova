@@ -1567,6 +1567,15 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.
     fade_in: Option<JumpEffect>,
+    /// The lines a double-time frame's second pass raised, worded, for the
+    /// frame after (see the `between_passes` module): relayed once, at the
+    /// next frame's steps or before a write to the slot.
+    held_lines: Said,
+    /// Whether the frame's own work after its steps is under way
+    /// (`Screen::tick` from its steps to its end): a write to the slot
+    /// then leaves the held lines to stand over it (see the
+    /// `between_passes` module).
+    writing_in_frame: bool,
     /// Whether the warp's end waited for a double-time frame between its
     /// passes to go ([`FlightView::arrival_frame`]): its arrival then runs
     /// the tick's steps in the new system.

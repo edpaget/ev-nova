@@ -314,3 +314,27 @@ fn a_held_message_is_worded_once() {
     );
     assert!(view.message().is_some());
 }
+
+#[test]
+fn a_held_line_stands_over_the_frame_rate_readout_said_on_its_frame() {
+    // The readout is said between the first pass and the draw
+    // (`_PlayGame` @0x45bcd-0x45d57), before the second pass raises its
+    // line (after @0x45f31), so that line shows over it on the next frame.
+    let mut view = super::stepping::stepping(armed(1, &[BLASTER]));
+    view.toggle_frame_rate();
+    let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
+    view.sim.queue_report(holding(None, held));
+    view.tick(TICK);
+    assert_eq!(
+        view.message(),
+        Some(crate::flight::frame_rate::CALCULATING_FPS),
+        "the readout on its frame"
+    );
+    view.sim.queue_report(stopped());
+    view.tick(TICK);
+    assert_eq!(
+        view.message(),
+        Some(NO_ACTIVE_MISSIONS),
+        "the held line after"
+    );
+}
