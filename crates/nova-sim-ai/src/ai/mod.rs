@@ -1386,11 +1386,16 @@ pub(crate) fn random_stellar(
 /// anything: an escort follows its lead while the lead is in the system,
 /// guarding nothing, and a goal it can still fly is kept. The traders
 /// keep more of their own before their idle block ([`trader_keep`]). A led ship
-/// reaches its type's idle block only by the other reading of
-/// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the port's
-/// earlier routing; by the engine's it flies [`FleetEscortAi`] instead.
+/// of AI type above 4 reaches its type's idle block only by the other
+/// reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the
+/// port's earlier routing; by the engine's it flies [`FleetEscortAi`]
+/// instead. A bribed one (AI type 1 with its parent kept,
+/// [`Npc::original_ai_type`], `_DoCommDialog` @0x961f8) is no escort by
+/// either reading: it thinks as a wimpy trader, which follows no lead
+/// (`_WimpyTraderAI` @0x8b029-0x8b201).
 pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
     if let Some(lead) = npc.leader
+        && npc.original_ai_type() > 4
         && around.npc(lead).is_some()
     {
         return Some(Goal::Follow { lead, guard: None });
@@ -1908,6 +1913,24 @@ mod tests {
                 "{ai_type:?} without its lead"
             );
         }
+    }
+
+    #[test]
+    fn a_bribed_led_ship_keeps_its_leave_not_its_lead() {
+        // The bribe's AI type 1 (`_DoCommDialog` @0x961f8) reaches
+        // `_WimpyTraderAI`, which keeps any goal but 0 (@0x8b06c) and
+        // follows no lead.
+        let lead = npc(1, AiType::WimpyTrader);
+        let mut spared = npc(2, AiType::Warship);
+        spared.leader = Some(NpcId(1));
+        spared.take_bribe();
+        spared.goal = Goal::JumpOut;
+        let together = [lead, spared.clone()];
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            decide(&spared, &sites(), &together, &mut chance),
+            Goal::JumpOut
+        );
     }
 
     #[test]
