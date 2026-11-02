@@ -149,12 +149,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// fade out over in place of the frame drawn as the tick began (see
     /// the module docs). It is drawn at the hold's target, alpha 1, so
     /// neither the rescue's place nor the tick's alpha moves the pod, and
-    /// read while the frame drawn still shows the pod. None without a hold
-    /// or out of the pod.
+    /// read while the frame drawn still shows the pod. None without a
+    /// hold: a rescue holds one only on the second pass, as a rescue ends
+    /// the stepping and one on an advance pass reports no frame between.
     pub(super) fn pod_frame_between_passes(&mut self) -> Option<PodFrame> {
-        if !self.holding_between_passes()
-            || !matches!(self.drawn().fate, PlayerFate::Ejected { .. })
-        {
+        if !self.holding_between_passes() {
             return None;
         }
         let alpha = std::mem::replace(&mut self.alpha, 1.0);
