@@ -190,7 +190,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// - With none, those also down before the input went away
     ///   (`live.down_before`) wait, and every other latched key of
     ///   `live.down` comes back as a fresh press, in
-    ///   `_HandlePlayer`'s poll order ([`POLL_ORDER`]), for the router to
+    ///   `_HandlePlayer`'s poll order (the module's `POLL_ORDER`), for the router to
     ///   give flight as it gives any key. A held-polled key (J, B, the slot
     ///   keys) then acts on the next step, and a press key (Y, P, Tab) at
     ///   once. One flight still holds is no fresh press.
