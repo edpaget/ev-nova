@@ -214,6 +214,39 @@ fn cancelling_the_pointer_abandons_a_drag_on_the_open_map() {
 }
 
 #[test]
+fn a_held_move_outside_the_game_drags_ms_widened_map_as_a_move_inside() {
+    let open = || {
+        let mut view = in_flight();
+        view.set_widened_size((1365.0, 768.0));
+        tap(&mut view, MAP);
+        view
+    };
+    let (mut outside, mut inside) = (open(), open());
+    let offset = outside.map_offset();
+    assert!(offset.x > 0.0, "widened: the map is moved right");
+    let start = outside.course_map().place().expect("in flight").scroll();
+    let empty = Point::new(250.0 + offset.x, 150.0);
+    for view in [&mut outside, &mut inside] {
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: empty,
+        });
+    }
+    outside.input(&Input::PointerLeft);
+    let past = Point::new(-30.0, -20.0);
+    outside.input(&Input::PointerMovedOutside(past));
+    inside.input(&Input::PointerMoved(past));
+    let scroll = outside.course_map().place().expect("in flight").scroll();
+    assert_ne!(scroll, start, "dragged past the edge");
+    assert_eq!(
+        scroll,
+        inside.course_map().place().expect("in flight").scroll(),
+        "translated into the map's frame as a move inside is"
+    );
+}
+
+#[test]
 fn hiding_the_cursor_abandons_a_drag_on_the_open_map() {
     let mut view = in_flight();
     tap(&mut view, MAP);

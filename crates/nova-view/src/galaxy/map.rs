@@ -34,6 +34,13 @@
 //!   the owner accepts nothing of, or one that hits nothing, drags the map
 //!   by the travel from the press times the zoom ([`MapPlace::drag`]). The
 //!   release only ends a drag.
+//! - Either drag follows the pointer off the content, into a letterbox
+//!   bar or off the window, while the button is held
+//!   ([`Input::PointerMovedOutside`], taken as a move), as `_DoSystemMap`'s
+//!   loop polls `_GetMouse` with no rect test until `_StillDown` goes
+//!   false (@0x137e9-0x138d8). A release off the content reaches the map
+//!   as [`GalaxyMap::cancel_pointer`], which ends the drag and clicks
+//!   nothing.
 //! - A press outside the map area is a panel's or a button's.
 //! - Return (a press, not its repeats), or a click on the "Enter system"
 //!   button the panel shows while a system is selected, asks to enter the
@@ -1985,7 +1992,10 @@ impl GalaxyMap {
                     }
                 }
             }
-            Input::PointerMoved(to) => self.pointer_moved(to),
+            // A held move outside the game drags as one inside: the
+            // original's loop polls `_GetMouse` with no rect test until
+            // `_StillDown` goes false (@0x13851-0x138d8).
+            Input::PointerMoved(to) | Input::PointerMovedOutside(to) => self.pointer_moved(to),
             _ => {}
         }
     }
@@ -3222,6 +3232,98 @@ mod tests {
             scroll,
             "a cancelled press answered starts no drag"
         );
+    }
+
+    // A held move outside the game (`Input::PointerMovedOutside`).
+
+    fn outside(x: f32, y: f32) -> Input {
+        Input::PointerMovedOutside(at(x, y))
+    }
+
+    #[test]
+    fn an_in_flight_drag_follows_a_held_move_outside_as_a_move_inside() {
+        let (mut map, beta) = on_beta();
+        let mut inside = map.clone();
+        let start = map.place().expect("in flight").scroll();
+        let empty = at(beta.x - 40.0, beta.y);
+        for map in [&mut map, &mut inside] {
+            map.input(&button(MouseButton::Left, true, empty));
+            map.input(&moved(empty, 10.0, 0.0));
+        }
+        map.input(&outside(-40.0, -30.0));
+        inside.input(&Input::PointerMoved(at(-40.0, -30.0)));
+        let scroll = map.place().expect("in flight").scroll();
+        assert_ne!(scroll, start, "dragged past the edge");
+        assert_eq!(scroll, inside.place().expect("in flight").scroll());
+        map.input(&outside(-80.0, 900.0));
+        inside.input(&Input::PointerMoved(at(-80.0, 900.0)));
+        assert_eq!(
+            map.place().expect("in flight").scroll(),
+            inside.place().expect("in flight").scroll(),
+            "and on"
+        );
+        map.input(&button(MouseButton::Left, false, empty));
+        let released = map.place().expect("in flight").scroll();
+        map.input(&outside(-200.0, -200.0));
+        assert_eq!(map.place().expect("in flight").scroll(), released);
+        assert_eq!(map.selected(), None, "a drag selects nothing");
+    }
+
+    #[test]
+    fn the_viewer_pans_by_held_moves_outside() {
+        let mut map = map();
+        let mut inside = map.clone();
+        let start = view_of(&map).center();
+        for map in [&mut map, &mut inside] {
+            map.input(&button(MouseButton::Left, true, at(300.0, 300.0)));
+        }
+        for (x, y) in [(-20.0, 300.0), (-20.0, -10.0)] {
+            map.input(&outside(x, y));
+            inside.input(&Input::PointerMoved(at(x, y)));
+        }
+        assert_ne!(view_of(&map).center(), start, "panned");
+        assert_eq!(view_of(&map), view_of(&inside));
+    }
+
+    #[test]
+    fn a_move_outside_with_no_press_or_after_a_cancel_changes_nothing() {
+        let mut viewer = map();
+        let view = view_of(&viewer);
+        viewer.input(&outside(-20.0, 300.0));
+        assert_eq!(view_of(&viewer), view, "no press");
+        viewer.input(&button(MouseButton::Left, true, at(300.0, 300.0)));
+        viewer.cancel_pointer();
+        viewer.input(&outside(-20.0, 300.0));
+        assert_eq!(view_of(&viewer), view, "cancelled");
+
+        let (mut course, beta) = on_beta();
+        let scroll = course.place().expect("in flight").scroll();
+        course.input(&outside(-20.0, 300.0));
+        assert_eq!(course.place().expect("in flight").scroll(), scroll);
+        course.input(&button(MouseButton::Left, true, at(beta.x - 40.0, beta.y)));
+        course.cancel_pointer();
+        course.input(&outside(-20.0, 300.0));
+        assert_eq!(course.place().expect("in flight").scroll(), scroll);
+    }
+
+    #[test]
+    fn a_move_outside_leaves_the_buttons_as_the_leave_left_them() {
+        let done = MapButtons::new(DIALOG_ORIGIN)
+            .rect(MapButton::Done)
+            .center();
+        let mut map = flown_map();
+        let mut today = map.clone();
+        for map in [&mut map, &mut today] {
+            map.input(&button(MouseButton::Left, true, done));
+            map.input(&Input::PointerLeft);
+        }
+        map.input(&outside(-10.0, -10.0));
+        assert_eq!(drawn(&map), drawn(&today), "drawn as after the leave");
+        for map in [&mut map, &mut today] {
+            map.input(&Input::PointerMoved(done));
+            map.input(&button(MouseButton::Left, false, done));
+        }
+        assert!(map.take_close() && today.take_close(), "Done, as today");
     }
 
     #[test]
