@@ -129,6 +129,7 @@ use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::armament::{OutfitRounds, Trigger};
 use crate::combat::asteroid_walk::AsteroidField;
+use crate::combat::hit_turns::Stretch;
 use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
@@ -653,11 +654,17 @@ impl Session {
         let mut asteroids = std::mem::take(&mut self.space.asteroids);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
             combat.hazards(fighters, &hazards);
-            let field = AsteroidField {
-                asteroids: &mut asteroids,
-                types: &types,
-            };
-            combat.close_tick_in(fighters, arena, &mut stellars, Some(field), chance);
+            loop {
+                let field = AsteroidField {
+                    asteroids: &mut asteroids,
+                    types: &types,
+                };
+                let stretch =
+                    combat.close_tick_in_turn(fighters, arena, &mut stellars, Some(field), chance);
+                if stretch == Stretch::Done {
+                    break;
+                }
+            }
         });
         self.space.asteroids = asteroids;
         self.space.settle_asteroid_remains(&mut *chance);
@@ -686,15 +693,19 @@ impl Session {
         let types = std::rc::Rc::clone(&self.statics.asteroid_types);
         let mut asteroids = std::mem::take(&mut self.space.asteroids);
         self.with_fighters(pass, rules, chance, |combat, fighters, arena, chance| {
-            let scenery = Scenery {
-                stellars: &mut stellars,
-                asteroids: Some(AsteroidField {
-                    asteroids: &mut asteroids,
-                    types: &types,
-                }),
-                hazards: None,
-            };
-            combat.test_hits(fighters, arena, scenery, chance);
+            loop {
+                let scenery = Scenery {
+                    stellars: &mut stellars,
+                    asteroids: Some(AsteroidField {
+                        asteroids: &mut asteroids,
+                        types: &types,
+                    }),
+                    hazards: None,
+                };
+                if combat.test_hits_in_turn(fighters, arena, scenery, chance) == Stretch::Done {
+                    break;
+                }
+            }
         });
         self.space.asteroids = asteroids;
         self.settle_landed(behaviour, &was, (player_was, None), rules, chance);

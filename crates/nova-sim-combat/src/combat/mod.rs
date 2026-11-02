@@ -410,6 +410,7 @@ pub mod finishing_hit;
 pub mod fixture;
 pub mod flags;
 pub mod hidden;
+pub mod hit_turns;
 pub mod hull;
 pub mod impact;
 pub mod ion;
@@ -438,6 +439,7 @@ pub mod stellar_guns;
 pub mod stellar_hazards;
 pub mod submunition;
 pub mod tractor_hold;
+mod walk;
 pub mod weapon;
 mod wrap_carry;
 
@@ -461,7 +463,6 @@ use hull::{
 use impact::{Body, Tractor, TractorLock};
 use ion::{Burst, Dose, Ion, IonLockout};
 use jamming::Jamming;
-use lineup::Lineup;
 pub use phases::Arena;
 use planet_type::{BeamPlanetFlag, BlastKind, PlanetBlasts};
 use plunder::Plunderer;
@@ -478,7 +479,6 @@ use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
 use weapon::{Explosion, Guidance};
 
-use crate::asteroid::Asteroids;
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, StellarId, WeaponId};
 use crate::chance::Chance;
@@ -823,8 +823,11 @@ pub struct Strike {
     pub by: Option<ShipRef>,
     /// The shield and armour it took.
     pub damage: f32,
-    /// How it left the ship, for the last hit on a ship whose condition
-    /// changed that tick; none otherwise.
+    /// How it left the ship, for the last hit on a ship before its
+    /// condition settled, when that changed it; none otherwise. The
+    /// collision passes and the beams settle each ship a direct hit strikes
+    /// as that hit lands, as `_DamageShip` does, and a blast's at the next
+    /// direct hit or the phase's end (see the `hit_turns` module).
     pub downed: Option<Downed>,
     /// Whether it was a direct hit, which the ship hit may answer: the
     /// original's `_DamageShip` arg +0x20 ("real"). A shot's or beam's hit
@@ -1395,6 +1398,9 @@ pub struct Combat {
     /// What the contact walks read of a wrap of the player on the pass it
     /// ran ([`wrap_carry`]), until the pass's hit pass ends.
     wrap_pass: Option<wrap_carry::WrapPass>,
+    /// The walk of a phase stopped after a direct hit, for its next
+    /// stretch to resume ([`hit_turns`], the `walk` module).
+    walk: Option<walk::Walk>,
 }
 
 /// The original's shot table (`_SpawnShot` @0x3e5a3-0x3e5d5): under the
@@ -2487,98 +2493,6 @@ impl Combat {
                 firer.armament.hold(shot.weapon.id);
             }
         }
-    }
-
-    /// Steps 2 and 3, the hit pass: each shot's last move, made the tick
-    /// before (its [`Shot::moved_from`]), is tested as the original's next
-    /// frame tests it, before `_HandleShot` moves it again
-    /// (`_DoPlayGameWork` @0x43e70-0x44015, @0x44385). A shot that has not
-    /// moved yet is not tested, as its sprite is not shown. The tests go
-    /// in the original's order ([`collision`]):
-    ///
-    /// 1. the contact passes, each shot layer against the ships, walked by
-    ///    layer and entry, then the asteroids, walked by slot, against the
-    ///    layer; then the asteroids against point defence's layer;
-    /// 2. point defence's layer against the missiles
-    ///    ([`Combat::intercept`]): a shot spent in 1 is hidden by then and
-    ///    never met, and each it ends is kept hidden at life 0 ([`hidden`]);
-    /// 3. the proximity pass ([`Combat::proximity_pass`]), slot by slot,
-    ///    the shots point defence ended, this pass's and the last tick's
-    ///    beam kills, among the live ones: each slot's stellar, then, live,
-    ///    its fuse's ship, then its fuse's asteroid.
-    ///
-    /// All three run in [`Combat::resolve`]. A shot whose move spent it
-    /// meets only the asteroids it touches and point defence, and is kept
-    /// for its end of life in `_HandleShot` ([`Combat::handle_shots`]).
-    /// Point defence's [`CombatEvent::ShotDown`] follows the contact
-    /// passes' events.
-    ///
-    /// The pass meets each NPC where it is, as its last `_HandleShip` left
-    /// it (@0x3428f-0x342aa), and the player where it is now, as
-    /// `_HandlePlayer` has moved it. Contact and the point-defence layer
-    /// meet the player where it stood as the last tick closed, or where it
-    /// is if it was not in that tick's fight: their sprites are placed
-    /// relative to the player as it stood when the shots moved
-    /// (`_HandleShot` @0x35c48-0x35cc0), and the player's own is always
-    /// at the screen's centre (@0x2cd32-0x2cd9d). The fuse, the blasts
-    /// and the hits' pushes and ionization read world positions, the
-    /// player's where it is now. Each sub-munition's weapon is read from
-    /// `arsenal`, its spread drawn on `chance`; the relations between
-    /// governments are `govts`'. On the pass of a wrap of the player, the
-    /// contact walks meet what it left where its sprite stood, and the
-    /// pass ends that ([`wrap_carry`]).
-    ///
-    /// Each hit lands as the walk finds it ([`Combat::land`]), as
-    /// `_HandleShipHit` lands it before the walk's next pair, so a later
-    /// test reads the armour it left ([`Target::disabled`]). Each ship
-    /// struck then settles its condition as step 9 does but for a
-    /// breakup's countdown, its last strike marked as downing it, as
-    /// `rule` says: so an NPC downed by a shot fires nothing more that
-    /// tick, as `_HandleShip`'s fire reads `_IsDisabled` after the passes.
-    /// It keeps the ships whose breakup it began, whose first tick takes no
-    /// tick off (step 9, see `Combat::settle_struck`). The original
-    /// settles each in `_DamageShip`; nothing in the pass reads the
-    /// condition but whether a ship is destroyed, which no hit there
-    /// changes, so settling after it crosses no boundary.
-    fn hit_pass(
-        &mut self,
-        fighters: &mut [Fighter],
-        (govts, arsenal): (&Governments, &Arsenal),
-        rule: &dyn DisableRule,
-        scenery: Scenery<'_>,
-        chance: &mut dyn Chance,
-    ) {
-        let Scenery {
-            stellars,
-            asteroids,
-            hazards: _,
-        } = scenery;
-        let mut none = Asteroids::default();
-        let mut field = asteroids.unwrap_or(AsteroidField {
-            asteroids: &mut none,
-            types: &asteroid_walk::NO_TYPES,
-        });
-        let player_stood = self.player_stood;
-        let touchable_at: Vec<Vec2> = fighters
-            .iter()
-            .map(|fighter| match player_stood {
-                Some(position) if fighter.ship == ShipRef::Player => position,
-                _ => self.ship_sprite(fighter.ship, fighter.state.position),
-            })
-            .collect();
-        let mut lineup = Lineup::new(fighters, &touchable_at, govts, self.hit_readings());
-        let first_strike = self.strikes.len();
-        let entry = self.entry_order();
-        let terms = collision::WalkTerms { arsenal, rule };
-        self.resolve(
-            (fighters, &mut lineup),
-            &entry,
-            &terms,
-            chance,
-            (stellars, &mut field),
-        );
-        self.wrap_pass = None;
-        self.settle_struck(fighters, first_strike, rule);
     }
 
     /// Each ship among `fighters` struck since `first_strike` and still
@@ -3719,6 +3633,7 @@ mod tests {
     mod flash_hits;
     mod fold_stamp;
     mod hidden_shots;
+    mod hit_turns;
     mod idle_bays;
     mod interfered_hits;
     mod ion_lockout_tick;
@@ -8654,7 +8569,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_last_strike_on_a_ship_downed_that_tick_says_so() {
+    fn the_strike_that_disables_a_ship_says_so_and_no_later_one_that_tick() {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 100.0, 0.0);
         target.reserves.shield.now = 0.0;
@@ -8664,7 +8579,9 @@ mod tests {
             target,
             Ship::at(3, 200.0, 0.0).armed(blaster()).facing(270.0),
         ];
-        // Each shot's sixth move reaches B, from either side.
+        // Each shot's sixth move reaches B, from either side. Each direct
+        // hit settles B as it lands, as `_DamageShip` does, so A's, the
+        // first, disables it.
         let strikes = strikes_on_move(&mut combat, &mut ships, &Arsenal::default(), 6);
         assert_eq!(
             strikes,
@@ -8673,7 +8590,7 @@ mod tests {
                     ship: B,
                     by: Some(A),
                     damage: 5.0,
-                    downed: None,
+                    downed: Some(Downed::Disabled),
                     direct: true,
                     intended: false,
                     lock: false,
@@ -8688,7 +8605,7 @@ mod tests {
                     ship: B,
                     by: Some(C),
                     damage: 4.0,
-                    downed: Some(Downed::Disabled),
+                    downed: None,
                     direct: true,
                     intended: false,
                     lock: false,
@@ -8700,7 +8617,7 @@ mod tests {
                     answered: false,
                 }
             ],
-            "12 armour less 8 is below a third of 30"
+            "12 armour less 5 is below a third of 30"
         );
     }
 

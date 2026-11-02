@@ -165,6 +165,7 @@ use super::lineup::Lineup;
 use super::planet_type::BlastKind;
 use super::projectile::{Shot, ShotLayer, Target};
 use super::stellar::StellarTarget;
+use super::walk::{HitWalk, Pending, Stage};
 use super::{
     Arsenal, Combat, CombatEvent, Fighter, Landed, Push, ShipRef, blasted, defence, position_of,
 };
@@ -260,30 +261,83 @@ impl Combat {
     /// as is every shot that met nothing.
     pub(super) fn resolve(
         &mut self,
+        walk: &mut HitWalk,
         (fighters, lineup): Among,
-        entry: &[usize],
         terms: &WalkTerms,
         chance: &mut dyn Chance,
         (stellars, field): (&mut [StellarTarget], &mut AsteroidField),
-    ) {
-        let mut shots = std::mem::take(&mut self.shots);
-        let mut shown = Shown::of(field.asteroids);
-        // A shot spent this pass, on a ship or an asteroid, or by point
-        // defence.
-        let mut spent = vec![false; shots.len()];
-        let ranks: Vec<_> = fighters.iter().map(|fighter| fighter.sprite).collect();
-        let order = walk_order(&ranks);
-        for layer in SHOT_LAYER_WALK {
-            for &ship in &order {
-                for &index in entry {
-                    let shot = &shots[index];
-                    if spent[index] || shot.layer != layer || shot.expired() {
+    ) -> bool {
+        if let Stage::Contact { .. } = walk.stage {
+            if self.contact_walk(walk, (fighters, lineup), terms.rule, (field, chance)) {
+                return true;
+            }
+            let point_defence = |shot: &Shot| shot.layer == ShotLayer::PointDefence;
+            self.meet_asteroids(
+                (&walk.shots, &mut walk.spent, &walk.entry),
+                point_defence,
+                (fighters, lineup),
+                terms.rule,
+                (field, &mut walk.shown, chance),
+            );
+            let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
+            self.intercept((&mut walk.shots, &mut walk.spent, &walk.entry), camera);
+            // Every shot of the pass holds its slot through the proximity
+            // pass, as only `_HandleShot` frees a spent one (@0x3617c), so a
+            // sub-munition released mid-pass is seated as the original
+            // seats it.
+            self.keep_unspent(std::mem::take(&mut walk.shots), &walk.spent);
+            walk.stage = Stage::Proximity { next: 0 };
+        }
+        let Stage::Proximity { next } = walk.stage else {
+            return false;
+        };
+        let among = (fighters, lineup);
+        match self.proximity_pass(next, among, terms, chance, (stellars, field)) {
+            Some((next, pending)) => {
+                walk.stage = Stage::Proximity { next };
+                walk.pending = Some(pending);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The contact passes of `walk` from where it is: a shot layer at a
+    /// time in [`SHOT_LAYER_WALK`]'s order, each walking the ships in the
+    /// walk's order, found among `fighters` by [`ShipRef`], and for each
+    /// the layer's shots in its entry order, then the asteroids against
+    /// the layer ([`Combat::meet_asteroids`]), as `rule` says, drawing on
+    /// `chance`. Whether it stopped: just after a direct hit lands
+    /// ([`Combat::land_direct`]), its blast kept for the walk's next
+    /// stretch, the walk left at the shot after it.
+    fn contact_walk(
+        &mut self,
+        walk: &mut HitWalk,
+        (fighters, lineup): Among,
+        rule: &dyn DisableRule,
+        (field, chance): (&mut AsteroidField, &mut dyn Chance),
+    ) -> bool {
+        let Stage::Contact {
+            mut layer,
+            mut ship,
+            mut entry,
+        } = walk.stage
+        else {
+            return false;
+        };
+        while let Some(&shot_layer) = SHOT_LAYER_WALK.get(layer) {
+            while let Some(&walked) = walk.order.get(ship) {
+                let found = fighters.iter().position(|fighter| fighter.ship == walked);
+                while let (Some(found), Some(&index)) = (found, walk.entry.get(entry)) {
+                    entry += 1;
+                    let shot = &walk.shots[index];
+                    if walk.spent[index] || shot.layer != shot_layer || shot.expired() {
                         continue;
                     }
                     let Some(from) = shot.moved_from else {
                         continue;
                     };
-                    let target = &lineup.seen[ship];
+                    let target = &lineup.seen[found];
                     let met = Target {
                         position: target.position - self.left_back(shot),
                         ..*target
@@ -294,35 +348,33 @@ impl Combat {
                     if !lineup.seen_sides().shot_can_hit(shot, target) {
                         continue;
                     }
-                    spent[index] = true;
+                    walk.spent[index] = true;
                     let met = (target.ship, at);
-                    self.land_hit(&mut shots[index], met, (fighters, lineup), terms.rule);
+                    let shot = &mut walk.shots[index];
+                    let blast = self.land_direct(shot, met, (fighters, lineup), rule);
+                    walk.pending = Some(Pending {
+                        blast,
+                        release: None,
+                    });
+                    walk.stage = Stage::Contact { layer, ship, entry };
+                    return true;
                 }
+                ship += 1;
+                entry = 0;
             }
-            let in_layer = |shot: &Shot| shot.layer == layer;
+            let in_layer = |shot: &Shot| shot.layer == shot_layer;
             self.meet_asteroids(
-                (&shots, &mut spent, entry),
+                (&walk.shots, &mut walk.spent, &walk.entry),
                 in_layer,
                 (fighters, lineup),
-                terms.rule,
-                (field, &mut shown, chance),
+                rule,
+                (field, &mut walk.shown, chance),
             );
+            layer += 1;
+            ship = 0;
         }
-        let point_defence = |shot: &Shot| shot.layer == ShotLayer::PointDefence;
-        self.meet_asteroids(
-            (&shots, &mut spent, entry),
-            point_defence,
-            (fighters, lineup),
-            terms.rule,
-            (field, &mut shown, chance),
-        );
-        let camera = position_of(&lineup.seen, ShipRef::Player).unwrap_or(Vec2::ZERO);
-        self.intercept((&mut shots, &mut spent, entry), camera);
-        // Every shot of the pass holds its slot through the proximity pass,
-        // as only `_HandleShot` frees a spent one (@0x3617c), so a
-        // sub-munition released mid-pass is seated as the original seats it.
-        self.keep_unspent(shots, &spent);
-        self.proximity_pass((fighters, lineup), terms, chance, (stellars, field));
+        walk.stage = Stage::Contact { layer, ship, entry };
+        false
     }
 
     /// Takes the shot in flight at `index` out, its slot held until
@@ -500,20 +552,25 @@ impl Combat {
         lineup.refresh(fighters, &hit, rule);
     }
 
-    /// `shot`'s hit on a ship at a point, landed at once, as
-    /// `_HandleShipHit` lands it (see the module docs): it explodes and
-    /// sprays its hit particles there, and its direct hit, its decay
-    /// taken off, and its blast's hits on the ships around land
-    /// ([`Combat::land`]), as `rule` says; each ship struck is then read
-    /// again ([`Lineup::refresh`]). The shot is left where it hit, which
-    /// its sub-munitions leave from.
-    pub(super) fn land_hit(
+    /// The direct half of `shot`'s hit on a ship at a point, landed at
+    /// once, as `_HandleShipHit` lands it (see the module docs): it
+    /// explodes and sprays its hit particles there, and its direct hit,
+    /// its decay taken off, lands on the ship ([`Combat::land`]), as `rule`
+    /// says; the ship is then read again ([`Lineup::refresh`]). The shot is
+    /// left where it hit, which its sub-munitions leave from. Gives its
+    /// blast's hits on the ships around, worked out where the ships stand
+    /// at the direct hit, for [`Combat::land_blast`] to land after the
+    /// direct hit's answer, as `_HandleShipHit` damages them (@0x36ec0)
+    /// after the direct hit's `_DamageShip` returns (@0x36c7a). Only
+    /// positions, slots and planet-type ties decide whom a blast reaches,
+    /// and no answer writes those.
+    pub(super) fn land_direct(
         &mut self,
         shot: &mut Shot,
         (ship, at): (ShipRef, Vec2),
         (fighters, lineup): Among,
         rule: &dyn DisableRule,
-    ) {
+    ) -> Vec<Landed> {
         let hit = Hit {
             cant_kill: shot.disable_only,
             ..Hit::of(&shot.weapon)
@@ -541,10 +598,23 @@ impl Combat {
         // Once a hit, where the shot is (`_HandleShipHit`
         // @0x36b44-0x36bae); the ships its blast reaches spray none.
         self.spray(&shot.weapon, at, asteroid_hit::HIT_PART_VARIATION);
-        let mut hits = vec![direct];
         // A blast on a hit weighs nothing (`_HandleShipHit` @0x36e80).
         let planet = (BlastKind::OnHit, self.planet_blasts);
-        hits.extend(blasted(shot, &blast, (hit, 0.0), &lineup.world, planet));
+        let around = blasted(shot, &blast, (hit, 0.0), &lineup.world, planet);
+        self.land(fighters, vec![direct], rule);
+        lineup.refresh(fighters, &[ship], rule);
+        around
+    }
+
+    /// The blast half of a shot's hit on a ship ([`Combat::land_direct`]):
+    /// `hits` land on the ships around ([`Combat::land`]), as `rule` says,
+    /// each ship struck read again after them ([`Lineup::refresh`]).
+    pub(super) fn land_blast(
+        &mut self,
+        hits: Vec<Landed>,
+        (fighters, lineup): Among,
+        rule: &dyn DisableRule,
+    ) {
         let hit: Vec<ShipRef> = hits.iter().map(|landed| landed.ship).collect();
         self.land(fighters, hits, rule);
         lineup.refresh(fighters, &hit, rule);

@@ -57,6 +57,7 @@ use super::asteroid_walk::{AsteroidField, Struck};
 use super::collision::{Among, WalkTerms};
 use super::projectile::Shot;
 use super::stellar::{self, StellarStrike, StellarTarget};
+use super::walk::Pending;
 use super::{Combat, CombatEvent, asteroid_hit};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
@@ -81,21 +82,26 @@ impl Combat {
     /// it before any later pass; its slot stays held until then.
     pub(super) fn proximity_pass(
         &mut self,
+        mut next: usize,
         (fighters, lineup): Among,
         terms: &WalkTerms,
         chance: &mut dyn Chance,
         (stellars, asteroids): (&mut [StellarTarget], &mut AsteroidField),
-    ) {
-        let mut next = 0;
+    ) -> Option<(usize, Pending)> {
         while let Some((slot, turn)) = self.next_turn(next) {
             next = slot + 1;
             match turn {
-                Turn::Live(index) => self.live_turn(
-                    index,
-                    (fighters, lineup),
-                    (terms, chance),
-                    (stellars, asteroids),
-                ),
+                Turn::Live(index) => {
+                    let pending = self.live_turn(
+                        index,
+                        (fighters, lineup),
+                        (terms, chance),
+                        (stellars, asteroids),
+                    );
+                    if let Some(pending) = pending {
+                        return Some((next, pending));
+                    }
+                }
                 Turn::Hidden(index) => {
                     let shot = self.hidden[index];
                     self.hidden_turn(
@@ -108,6 +114,7 @@ impl Combat {
             }
         }
         self.hidden.clear();
+        None
     }
 
     /// The lowest slot from `next` on that a shot in flight or a hidden
@@ -151,29 +158,24 @@ impl Combat {
         (fighters, lineup): Among,
         (terms, chance): (&WalkTerms, &mut dyn Chance),
         (stellars, asteroids): (&mut [StellarTarget], &mut AsteroidField),
-    ) {
+    ) -> Option<Pending> {
         let shot = self.shots[index];
         if shot.expired() {
-            return;
+            return None;
         }
-        let Some(from) = shot.moved_from else {
-            return;
-        };
+        let from = shot.moved_from?;
         if let Some((met, at)) = stellar::met(&shot, from, stellars) {
             self.spend(index);
             self.strike_stellar(&shot, &mut stellars[met], at);
         } else if let Some(met) = shot.fused(from, &lineup.sides(), self.proximity_fuse) {
             self.spend(index);
             let mut parent = shot;
-            self.land_hit(
-                &mut parent,
-                (met.ship, met.at),
-                (fighters, lineup),
-                terms.rule,
-            );
-            let sides = lineup.sides();
-            let target = (Some(met.ship), &*fighters);
-            self.release(&parent, target, &sides, terms.arsenal, chance);
+            let met_at = (met.ship, met.at);
+            let blast = self.land_direct(&mut parent, met_at, (fighters, lineup), terms.rule);
+            return Some(Pending {
+                blast,
+                release: Some((parent, met.ship)),
+            });
         } else if let Some(slot) =
             asteroid_hit::fused(&shot, asteroids.asteroids, self.asteroid_fuse)
         {
@@ -186,6 +188,7 @@ impl Combat {
                 (asteroids, chance),
             );
         }
+        None
     }
 
     /// The turn of `shot`, hidden at life 0 (see the
