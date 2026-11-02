@@ -1096,11 +1096,13 @@ pub struct Decision {
     /// [`miner`]). The traffic sets [`Npc::visited`] so as it takes the
     /// goal; none leaves it as it was.
     pub visits: Option<StellarId>,
-    /// Whether an inspecting interceptor's re-pick gave its goal
-    /// (`_InterceptorAI` @0x8d41e, see [`interceptor`]): the state-7
-    /// block's reach then reads the new target (@0x8f11e), and a state-4
-    /// pick runs no reach at all, so the ship it was inspecting is not
-    /// looked over and the player is not scanned.
+    /// Whether the inspection's ship moved before its reach: an
+    /// inspecting interceptor's re-pick gave its goal (`_InterceptorAI`
+    /// @0x8d41e, see [`interceptor`]), or a kept inspection moved to the
+    /// ship a hit made its target ([`inspect_high`]). The state-7 block's
+    /// reach then reads the new target (@0x8f11e), and a state-4 pick runs
+    /// no reach at all, so the ship it was inspecting is not looked over
+    /// and the player is not scanned.
     pub re_picked: bool,
     /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
     /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,

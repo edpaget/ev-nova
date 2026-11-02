@@ -828,6 +828,30 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_warship_keeps_an_inspection() {
+        // The provoked branch skips goal 7 (@0x8bb2d), its own drop needs
+        // goal 4 (@0x8bc4e), and goal 7 jumps past the retreats
+        // (@0x8be10): the state-7 block reads +0x70 (`inspect_high`).
+        let mut inspector = police();
+        inspector.goal = Goal::Inspect(n(2));
+        inspector.target = Some(n(3));
+        inspector.provoked = 5.0;
+        let npcs = [
+            inspector,
+            ship(2, TRADERS, AiType::WimpyTrader, 0.0, 500.0),
+            ship(3, PIRATES, AiType::Warship, 0.0, -500.0),
+        ];
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let mut chance = Draws::of(&[0]);
+        let decision = Warship::default().decision(&npcs[0], &around, &mut chance);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
+        assert!(!decision.clears_target);
+        assert!(chance.asked.is_empty(), "no search or pick");
+    }
+
+    #[test]
     fn a_warship_attacks_a_wanted_player_a_pirate_or_whoever_provoked_it() {
         // The traders' allied police tolerate -9 at most.
         assert_eq!(decided(&[police()], -10), Goal::Attack(P));

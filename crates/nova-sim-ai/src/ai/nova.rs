@@ -677,6 +677,36 @@ mod tests {
     }
 
     #[test]
+    fn a_provoked_warship_inspecting_a_trader_flies_to_its_attacker_and_lets_it_go_within_reach() {
+        // `_WarshipAI` keeps goal 7 provoked (@0x8bb2d, @0x8be10), and the
+        // state-7 block reads +0x70, the attacker since the hit
+        // (@0x8f11e): beyond reach it flies there, within it goal 0 and
+        // +0x70 -1 (@0x8f391).
+        use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
+        let mut inspector = ship(1, POLICE, AiType::Warship, 0.0, 0.0);
+        inspector.goal = Goal::Inspect(n(2));
+        inspector.target = Some(n(3));
+        inspector.provoked = 5.0;
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 50.0);
+        let govts = govts(0, 0);
+        let sites = sites();
+        for (y, goal, clears) in [
+            (500.0, Goal::Inspect(n(3)), false),
+            (-90.0, Goal::Idle, true),
+        ] {
+            let pirate = ship(3, PIRATES, AiType::Warship, 0.0, y);
+            let npcs = [inspector.clone(), trader.clone(), pirate];
+            let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]));
+            assert_eq!(
+                (decision.goal, decision.clears_target),
+                (goal, clears),
+                "{y}"
+            );
+        }
+    }
+
+    #[test]
     fn each_ai_type_is_routed_to_its_own_behaviour() {
         let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
         let ai = TYPES

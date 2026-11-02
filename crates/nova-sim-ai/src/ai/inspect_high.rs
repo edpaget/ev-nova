@@ -11,6 +11,16 @@
 //! @0x893b0-0x893e1), is flown and ended as the interceptor's is. In
 //! order:
 //!
+//! - **Its ship** is the one +0x70 names, which a hit rewrites
+//!   (`_DamageShip` @0x3bcf6): here the inspection's own ship, or the
+//!   target the ship holds when it names another, a hit's since its last
+//!   think. A provoked warship keeps goal 7 (`_WarshipAI` @0x8bb2d,
+//!   @0x8be10), so an NPC's hit sends it to its attacker, whose reach then
+//!   ends it; the move scans no player it was inspecting before
+//!   ([`Decision::re_picked`]). An interceptor meets it only unprovoked,
+//!   after a hit of no nominal damage, as its provoked hunt answers the
+//!   provoker first; its provoked inspection is
+//!   rdm:phase/play-feel-9/phase-6-inspection-redirected-by-a-hit's.
 //! - **Under its AI wait** the handler returns first (@0x8d4b9-0x8d4d2), so
 //!   nothing is written. The block's own +0x4c test (@0x8f141) can't be
 //!   reached behind that gate.
@@ -46,28 +56,38 @@ use crate::ai::{Decision, Goal, Surroundings};
 use crate::traffic::npc::Npc;
 
 /// `decision`, `npc`'s think among `around`, with goal 7's high level
-/// folded in when it kept an inspection (see the module docs): a ship gone
-/// or within [`INSPECT_REACH`] ends it, [`Goal::Idle`] with its target
-/// cleared and its travel stellar as it was. Any other decision stands.
+/// folded in when it kept an inspection (see the module docs): its ship is
+/// the one its target names, when that is another ship (a hit's since the
+/// last think), and its inspection moves there ([`Decision::re_picked`]);
+/// that ship gone or within [`INSPECT_REACH`] ends it, [`Goal::Idle`] with
+/// its target cleared and its travel stellar as it was. Any other
+/// decision stands.
 #[must_use]
 pub fn after_think(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
-    let Goal::Inspect(ship) = decision.goal else {
+    let Goal::Inspect(kept) = decision.goal else {
         return decision;
     };
     if decision.goal != npc.goal || npc.high_level_waits_under(decision.goal) {
         return decision;
     }
+    // The block reads +0x70 (@0x8f11e), which a hit rewrites.
+    let ship = npc.target.unwrap_or(kept);
+    let moved = Decision {
+        goal: Goal::Inspect(ship),
+        re_picked: decision.re_picked || ship != kept,
+        ..decision
+    };
     let ends = around
         .state_of(ship)
         .is_none_or(|state| within_reach(state.position - npc.state.position));
     if !ends {
-        return decision;
+        return moved;
     }
     Decision {
         goal: Goal::Idle,
         clears_target: true,
         travel: TravelWrite::Keep,
-        ..decision
+        ..moved
     }
 }
 
@@ -188,6 +208,51 @@ mod tests {
                 "{ai_type:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_kept_inspection_moves_to_the_ship_its_target_names() {
+        // A hit rewrites +0x70 (`_DamageShip` @0x3bcf6), and the state-7
+        // block reads it (@0x8f11e): the inspection flies to that ship and
+        // ends there, its reach read on it, as a re-pick's does.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Inspect(n(2));
+        trader.target = Some(n(3));
+        let inspected = ship(2, TRADERS, AiType::WimpyTrader, 10.0, 0.0);
+        let thought = Decision {
+            goal: Goal::Inspect(n(2)),
+            travel: TravelWrite::Set(StellarId(128)),
+            ..Decision::default()
+        };
+        let fold = |trader: &Npc, hitter: Option<Npc>| {
+            let mut npcs = vec![trader.clone(), inspected.clone()];
+            npcs.extend(hitter);
+            let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            after_think(&npcs[0], thought, &around)
+        };
+        let near = fold(
+            &trader,
+            Some(ship(3, TRADERS, AiType::Warship, INSPECT_REACH, 0.0)),
+        );
+        assert!(ended(near), "within reach of the hitter");
+        assert!(near.re_picked, "the reach read on the hitter");
+        let gone = fold(&trader, None);
+        assert!(ended(gone), "the hitter gone");
+        assert!(gone.re_picked);
+        let far = fold(
+            &trader,
+            Some(ship(3, TRADERS, AiType::Warship, INSPECT_REACH + 1.0, 0.0)),
+        );
+        assert_eq!(far.goal, Goal::Inspect(n(3)), "flown to the hitter");
+        assert!(far.re_picked);
+        assert!(!far.clears_target);
+        assert_eq!(far.travel, TravelWrite::Set(StellarId(128)));
+        trader.target = Some(n(2));
+        let same = fold(&trader, Some(ship(3, TRADERS, AiType::Warship, 500.0, 0.0)));
+        assert!(ended(same), "its own ship, within reach");
+        assert!(!same.re_picked, "not moved");
     }
 
     #[test]

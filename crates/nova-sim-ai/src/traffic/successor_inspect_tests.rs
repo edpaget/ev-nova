@@ -14,11 +14,12 @@
 
 use super::on_line::OnLine;
 use super::{Traffic, World};
-use crate::ai::fixture::{POLICE, TRADERS, govts, n, player, ship};
+use crate::ai::fixture::{PIRATES, POLICE, TRADERS, govts, n, player, ship};
 use crate::ai::interceptor::within_reach;
 use crate::ai::{Goal, NovaAi};
 use crate::catalog::StellarId;
 use crate::combat::ShipRef;
+use crate::combat::fixture::strike;
 use crate::combat::hull::Condition;
 use crate::govt::Governments;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -66,6 +67,11 @@ fn destroy(traffic: &mut Traffic, id: NpcId) {
 /// police too (berth 2), 40 to its side: the traffic, the lead, the
 /// follower and the ship inspected.
 fn fleet(inspected: Option<Npc>) -> (Traffic, NpcId, NpcId, ShipRef) {
+    fleet_of(AiType::WimpyTrader, inspected)
+}
+
+/// [`fleet`], its follower of `ai_type`.
+fn fleet_of(ai_type: AiType, inspected: Option<Npc>) -> (Traffic, NpcId, NpcId, ShipRef) {
     let mut traffic = Traffic::with_interval(1);
     let inspected = inspected.map_or(ShipRef::Player, |mut other| {
         other.no_ai = true;
@@ -77,8 +83,13 @@ fn fleet(inspected: Option<Npc>) -> (Traffic, NpcId, NpcId, ShipRef) {
     lead.goal = Goal::Inspect(inspected);
     lead.travel = Some(StellarId(128));
     let lead = traffic.add_npc_at(lead, 1);
-    let mut follower = ship(0, POLICE, AiType::WimpyTrader, 40.0, 0.0);
-    follower.hull.inherent_ai = 1;
+    let mut follower = ship(0, POLICE, ai_type, 40.0, 0.0);
+    follower.hull.inherent_ai = match ai_type {
+        AiType::WimpyTrader => 1,
+        AiType::BraveTrader => 2,
+        AiType::Warship => 3,
+        AiType::Interceptor => 4,
+    };
     follower.hull.signed_mass = 10;
     follower.leader = Some(lead);
     follower.goal = Goal::Follow { lead, guard: None };
@@ -143,5 +154,74 @@ fn a_trader_successor_inspecting_a_ship_that_leaves_lets_it_go() {
         successor.travel,
         Some(StellarId(128)),
         "+0x6c kept (@0x8f3a5)"
+    );
+}
+
+#[test]
+fn a_warship_successor_hit_while_inspecting_flies_to_its_attacker_and_lets_it_go() {
+    // `_WarshipAI` keeps goal 7 provoked (@0x8bb2d, @0x8be10); the hit
+    // rewrites +0x70 (`_DamageShip` @0x3bcf6), and the state-7 block flies
+    // to it and ends there: goal 0, +0x70 -1 (@0x8f11e, @0x8f391). The
+    // pirate sits off-axis, as the approach settles about 104 off when it
+    // comes straight on.
+    let govts = govts(0, 0);
+    let far = ship(0, TRADERS, AiType::WimpyTrader, 0.0, 2000.0);
+    let (mut traffic, lead, follower, inspected) = fleet_of(AiType::Warship, Some(far));
+    let mut pirate = ship(0, PIRATES, AiType::Warship, 600.0, -500.0);
+    pirate.no_ai = true;
+    let pirate = traffic.add_npc_at(pirate, 6);
+    destroy(&mut traffic, lead);
+    tick(&mut traffic, &govts);
+    assert_eq!(of(&traffic, follower).goal, Goal::Inspect(inspected));
+    traffic.answer(
+        &NovaAi::default(),
+        &world(&govts),
+        &[strike(n(follower.0), n(pirate.0))],
+    );
+    assert_eq!(of(&traffic, follower).target, Some(n(pirate.0)));
+    tick(&mut traffic, &govts);
+    assert_eq!(
+        of(&traffic, follower).goal,
+        Goal::Inspect(n(pirate.0)),
+        "flown to the attacker"
+    );
+    let mut ended = None;
+    for at in 0..600 {
+        let at_pirate = of(&traffic, pirate).state.position;
+        let off = at_pirate - of(&traffic, follower).state.position;
+        tick(&mut traffic, &govts);
+        let now = of(&traffic, follower);
+        if now.goal != Goal::Inspect(n(pirate.0)) {
+            ended = Some((at, within_reach(off), now.goal, now.target));
+            break;
+        }
+    }
+    let (at, near, goal, target) = ended.expect("it closes in and lets it go");
+    assert!(at > 10, "it flies the approach first, ending at tick {at}");
+    assert!(near, "it ended within reach");
+    assert_eq!((goal, target), (Goal::Idle, None));
+}
+
+#[test]
+fn an_inspection_of_the_player_moved_away_within_its_reach_scans_nothing() {
+    // The state-7 block reads the hitter on +0x70 (@0x8f11e), not the
+    // player within reach: no `_ScanPlayer` (@0x8f38a).
+    let govts = govts(0, 0);
+    let mut traffic = Traffic::with_interval(1);
+    let mut pirate = ship(0, PIRATES, AiType::Warship, -600.0, -500.0);
+    pirate.no_ai = true;
+    let pirate = traffic.add_npc_at(pirate, 6);
+    let mut inspector = ship(0, POLICE, AiType::Warship, 380.0, 380.0);
+    inspector.goal = Goal::Inspect(ShipRef::Player);
+    inspector.target = Some(n(pirate.0));
+    inspector.provoked = 5.0;
+    let inspector = traffic.add_npc_at(inspector, 2);
+    traffic.take_on_line();
+    tick(&mut traffic, &govts);
+    assert_eq!(of(&traffic, inspector).goal, Goal::Inspect(n(pirate.0)));
+    let line = traffic.take_on_line();
+    assert!(
+        !line.contains(&OnLine::Scan(inspector)),
+        "no scan of the player: {line:?}"
     );
 }
