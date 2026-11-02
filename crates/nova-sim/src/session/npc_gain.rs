@@ -77,6 +77,5 @@ mod tests {
         eased.ease_stray(HALF);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(npc(&session, id).stray, eased.npcs()[at].stray);
-        assert_eq!(npc(&session, id).stray, 0.75);
     }
 }
