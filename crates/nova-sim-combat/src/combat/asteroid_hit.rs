@@ -423,7 +423,7 @@ mod tests {
             flags2,
             ..weapon(128)
         });
-        shot.age = age;
+        shot.set_age(age);
         shot
     }
 

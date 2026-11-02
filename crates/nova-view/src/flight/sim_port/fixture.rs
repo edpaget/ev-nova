@@ -810,7 +810,10 @@ pub mod record {
             position: Vec2::ZERO,
             velocity: Vec2::ZERO,
             heading: 0.0,
-            age: 0,
+            // Not yet visited, of the fake looks' `Count` and `Falloff`,
+            // none.
+            life: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).0,
+            fade: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).1,
             frame: Some(0),
             layer: nova_sim::combat::shot_layer::ShotLayer::Shots,
         }

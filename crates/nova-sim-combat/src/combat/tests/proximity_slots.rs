@@ -47,10 +47,10 @@ fn hide_in(combat: &mut Combat, (record, firer, at): (WeaponRecord, ShipRef, Vec
         id: combat.next_id(),
         position: at,
         moved_from: Some(at),
-        age: 1,
         slot,
         ..Shot::launch(WeaponSpec::new(&record), firer, firer, &state, 0.0)
-    };
+    }
+    .aged(1);
     combat.slots.hold(slot);
     combat.hide(ended);
 }

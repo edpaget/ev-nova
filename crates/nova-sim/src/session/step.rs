@@ -1176,7 +1176,8 @@ mod tests {
                 position: shot.position,
                 velocity: shot.velocity,
                 heading: shot.heading,
-                age: shot.age,
+                life: shot.life,
+                fade: shot.fade_shown,
                 frame: session
                     .space
                     .sprite_masks

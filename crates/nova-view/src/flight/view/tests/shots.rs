@@ -11,6 +11,7 @@ use super::faked_world::{beam, shot_of, world, world_by};
 use super::*;
 use crate::Colorize;
 use crate::system::camera::Anchor;
+use nova_sim::combat::shot_fade::at_full_gain;
 
 /// The blaster's look set by `edit`, in [`armed`]'s catalog.
 fn with_blaster(edit: impl FnOnce(&mut WeaponLook)) -> FakeCatalog {
@@ -41,13 +42,29 @@ fn shooting(catalog: FakeCatalog) -> Faked {
 
 /// The player's blaster shot as the session flies it on the frame `tick`
 /// ticks after the one it is fired on: 20 pixels a tick up from the
-/// player, aged one more pass than the ticks it has flown.
+/// player, aged one more pass than the ticks it has flown, of the
+/// [`armed`] blaster's `Count` and `Falloff`, none.
 fn blaster_shot(tick: u32) -> FrameShot {
     let flown = 20.0 * f32::from(u16::try_from(tick + 1).expect("a short life"));
+    let (life, fade) = at_full_gain(0, 0, tick + 1);
     FrameShot {
         velocity: Vec2::new(0.0, -20.0),
-        age: tick + 1,
+        life,
+        fade,
         ..shot_of(0, BLASTER, Vec2::new(0.0, -flown), 0.0)
+    }
+}
+
+/// [`blaster_shot`] of the `Count` and `Falloff` `view`'s blaster looks
+/// by.
+fn blaster_shot_in(view: &Faked, tick: u32) -> FrameShot {
+    let look = view.looks.weapon(BLASTER).expect("the blaster's look");
+    let count = u32::try_from(look.count).expect("a Count");
+    let (life, fade) = at_full_gain(count, look.shot_falloff, tick + 1);
+    FrameShot {
+        life,
+        fade,
+        ..blaster_shot(tick)
     }
 }
 
@@ -174,7 +191,7 @@ fn one_shot_draws(view: &mut Faked, ticks: u32, life: u32) -> Vec<Option<(Color,
     (0..ticks)
         .map(|tick| {
             let shots = if tick < life {
-                vec![blaster_shot(tick)]
+                vec![blaster_shot_in(view, tick)]
             } else {
                 Vec::new()
             };
@@ -212,6 +229,38 @@ fn a_shot_is_drawn_count_times_on_its_live_ticks_fading_from_its_first() {
         .map(|level| (crate::draw::lights_tint(level), true))
         .collect();
     assert_eq!(shown, expected, "32 on its first tick, then 30, 28 … 4");
+}
+
+#[test]
+fn a_shot_is_drawn_by_the_fade_and_life_its_frame_carries() {
+    // A fade of 3.5, read between whole steps at a gain below 1, and a
+    // life of 10.25: the shade `shot_shade` gives them, whatever the age.
+    let catalog = with_blaster(|look| {
+        look.count = 100;
+        look.shot_falloff = 2;
+    });
+    let mut view = shooting(catalog);
+    let look = view.looks.weapon(BLASTER).expect("the look").clone();
+    let shot = FrameShot {
+        fade: 3.5,
+        life: 10.25,
+        ..blaster_shot(0)
+    };
+    pass_with(&mut view, vec![shot], false, Vec::new());
+    let drawn = super::faked_world::world_list(&view)
+        .iter()
+        .find_map(|command| match *command {
+            DrawCommand::Sprite {
+                image, tint, blend, ..
+            } if image.id == 3500 => Some((tint, blend)),
+            _ => None,
+        });
+    let shade = crate::flight::shot_fade::shot_shade(&look, 3.5, 10.25, RuleSource::Engine);
+    assert_eq!(shade, crate::flight::shot_fade::ShotShade::Translucent(3));
+    assert_eq!(
+        drawn,
+        Some((weapons::see_through(3), crate::draw::Blend::OrCrossfade))
+    );
 }
 
 #[test]

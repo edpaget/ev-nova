@@ -58,7 +58,8 @@ mod tests {
             frame: Some(0),
             colorize: crate::Colorize::default(),
             at: Point::new(0.0, 0.0),
-            age: 0,
+            life: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).0,
+            fade: nova_sim::combat::shot_fade::at_full_gain(0, 0, 0).1,
             weapon: WeaponId(weapon),
             layer,
         }

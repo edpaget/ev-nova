@@ -1959,8 +1959,13 @@ pub struct FrameShot {
     pub velocity: Vec2,
     /// Which way it faces, in degrees.
     pub heading: f32,
-    /// How many steps it has flown.
-    pub age: u32,
+    /// Its life ([`Shot::life`]): its weapon's `Count` at launch, less
+    /// the frame's gain at each visit, which the view's fade-out window
+    /// reads.
+    pub life: f32,
+    /// The fade its last visit read ([`Shot::fade_shown`]), which the view
+    /// shades it by: 0 before its first visit.
+    pub fade: f32,
     /// The frame it shows on its weapon's sheet ([`Shot::frame_on`]), as
     /// the view draws it and the contact passes touch it; none where the
     /// simulation read no sheet of frames for its `Graphic`.
@@ -1980,7 +1985,8 @@ impl FrameShot {
             position: shot.position,
             velocity: shot.velocity,
             heading: shot.heading,
-            age: shot.age,
+            life: shot.life,
+            fade: shot.fade_shown,
             frame: sheet.and_then(|sheet| shot.frame_on(sheet)),
             layer: shot.layer,
         }
@@ -2532,5 +2538,34 @@ mod tests {
             npcs: vec![(NpcId(1), square(1.0))],
         };
         assert!(!npc_only.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_shot_visited_at_half_gain_carries_its_life_and_the_fade_its_visit_read() {
+        use crate::combat::projectile::Guide;
+        let weapon = crate::combat::weapon::WeaponSpec {
+            falloff: -6,
+            lifetime: 100,
+            ..crate::combat::weapon::WeaponSpec::new(&nova_sim_catalog::fixture::weapon(128))
+        };
+        let mut shot = Shot::launch(
+            weapon,
+            ShipRef::Player,
+            ShipRef::Player,
+            &crate::flight::ShipState::default(),
+            0.0,
+        );
+        let guide = Guide {
+            speed_mult: crate::SpeedMult::new(0.5),
+            ..Guide::among(&[])
+        };
+        for _ in 0..2 {
+            shot.step(&guide, &mut crate::NeverFires);
+        }
+        let carried = FrameShot::of(&shot, None);
+        assert_eq!((carried.life, carried.fade), (shot.life, shot.fade_shown));
+        assert_eq!(carried.fade, 3.0, "half of 6 read on the 2nd visit");
+        assert_eq!(carried.life, 99.0);
     }
 }

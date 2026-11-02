@@ -289,7 +289,9 @@ pub(super) mod tests {
                 position: Vec2::new(9.0, 9.0),
                 velocity: Vec2::new(9.0, 9.0),
                 heading: 9.0,
-                age: 9,
+                // A shot of `Count` 99 and `Falloff` 9, 9 frames old.
+                life: crate::combat::shot_fade::at_full_gain(99, 9, 9).0,
+                fade: crate::combat::shot_fade::at_full_gain(99, 9, 9).1,
                 frame: Some(9),
                 layer: ShotLayer::OverShips,
             }],

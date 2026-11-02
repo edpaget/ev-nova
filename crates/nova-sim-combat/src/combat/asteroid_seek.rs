@@ -177,7 +177,7 @@ impl Shot {
             }
             None => trig::whole(self.heading),
         };
-        if self.age >= HOMING_DELAY {
+        if self.age() > f64::from(HOMING_DELAY) {
             self.heading = turned(self.heading, bearing, self.weapon.turn);
         }
         self.heading = wrap_turned(self.heading);
@@ -365,9 +365,9 @@ mod tests {
             jam: Jam::Asteroid(slot),
             target: None,
             aimed_at: None,
-            age,
             ..fired(missile(SEEKS_ASTEROIDS))
         }
+        .aged(age)
     }
 
     #[test]
@@ -393,11 +393,11 @@ mod tests {
         // turn.
         let rocks = [at(30.0, -150.0)];
         let mut shot = Shot {
-            age: HOMING_DELAY,
             target: None,
             aimed_at: None,
             ..fired(missile(SEEKS_ASTEROIDS))
-        };
+        }
+        .aged(HOMING_DELAY);
         fly(&mut shot, &[], &rocks, &mut seeks());
         assert_eq!(shot.jam, Jam::Asteroid(Some(0)));
         assert_eq!(shot.heading, 0.0, "the lock's tick");

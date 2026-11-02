@@ -621,7 +621,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
                         shot.velocity.y.mul_add(-behind, shot.position.y),
                     ),
                 ),
-                age: shot.age,
+                life: shot.life,
+                fade: shot.fade,
                 weapon: shot.weapon,
                 layer: SpriteLayer::from(shot.layer),
             })

@@ -508,10 +508,7 @@ fn a_planet_type_sub_munition_a_fuse_releases_over_a_stellar_strikes_it_the_tick
 /// A shot of C's of `record`, at `at`, whose last move spent it.
 fn spent_by_c(record: WeaponRecord, at: Vec2) -> Shot {
     let shot = flown_by_c(record, at);
-    Shot {
-        age: shot.weapon.lifetime,
-        ..shot
-    }
+    Shot { ..shot }.aged(shot.weapon.lifetime)
 }
 
 #[test]

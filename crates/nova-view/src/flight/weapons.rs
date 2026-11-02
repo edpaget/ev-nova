@@ -129,7 +129,7 @@ fn faded(raw: u32, alpha: i32) -> Color {
 }
 
 /// A shot to draw: which it is, where on screen, which way it heads, how
-/// old it is, its weapon, the sprite layer it is drawn in, the index its
+/// far it has faded, its weapon, the sprite layer it is drawn in, the index its
 /// spin started on and how murky it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShotShown {
@@ -137,8 +137,13 @@ pub struct ShotShown {
     pub id: ShotId,
     /// Where its centre is drawn, on screen.
     pub at: Point,
-    /// The ticks it has flown.
-    pub age: u32,
+    /// Its life after its last visit
+    /// ([`FrameShot::life`](nova_sim::flight_frame::FrameShot::life)),
+    /// which its fade-out window reads.
+    pub life: f32,
+    /// The fade its last visit read
+    /// ([`FrameShot::fade`](nova_sim::flight_frame::FrameShot::fade)).
+    pub fade: f32,
     /// Its weapon.
     pub weapon: WeaponId,
     /// The layer it is drawn in among the ships
@@ -181,7 +186,7 @@ pub fn draw_shot(list: &mut DrawList, shot: &ShotShown, looks: &Looks, fade: Rul
         Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
         Some(Ok(sheet)) => {
             let image = sheet.image.frame(shot.frame.unwrap_or(0));
-            let (tint, blend) = match shot_shade(look, shot.age, fade) {
+            let (tint, blend) = match shot_shade(look, shot.fade, shot.life, fade) {
                 ShotShade::Opaque => (Color::WHITE, Blend::Normal),
                 ShotShade::Translucent(t) => (see_through(t), Blend::OrCrossfade),
                 ShotShade::Additive(n) => (lights_tint(n), Blend::Or),
@@ -264,6 +269,7 @@ mod tests {
     use crate::DrawCommand;
     use crate::ImageKey;
     use crate::flight::catalog::EffectSheet;
+    use nova_sim::combat::shot_fade::at_full_gain;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -521,12 +527,15 @@ mod tests {
                 },
             ),
         ]);
+        // 3 full frames old, of the looks' `Count` and `Falloff` of none.
+        let (life, fade) = at_full_gain(0, 0, 3);
         let shot = |x, weapon| ShotShown {
             id: ShotId(1),
             frame: Some(9),
             colorize: Colorize::default(),
             at: at(x, 5.0),
-            age: 3,
+            life,
+            fade,
             weapon: WeaponId(weapon),
             layer: SpriteLayer::Shots,
         };
@@ -561,7 +570,7 @@ mod tests {
     /// A stock system's murk colour.
     const COLOUR: u16 = 0x1081;
 
-    /// How a shot of `look` is drawn at `age`, `murk` 32nds murky, by
+    /// How a shot of `look` is drawn `age` full frames old, `murk` 32nds murky, by
     /// `rule`: its tint, its blend and its colorize, if it mixes.
     fn shaded(
         look: WeaponLook,
@@ -576,10 +585,13 @@ mod tests {
                 ..look
             },
         )]);
+        let count = u32::try_from(look.count).unwrap_or(0);
+        let (life, fade) = at_full_gain(count, look.shot_falloff, age);
         let shot = ShotShown {
             id: ShotId(1),
             at: at(0.0, 0.0),
-            age,
+            life,
+            fade,
             weapon: WeaponId(128),
             layer: SpriteLayer::Shots,
             frame: Some(0),

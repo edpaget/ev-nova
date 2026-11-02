@@ -1,25 +1,27 @@
-//! How a shot fades, as `_HandleShot` sets its sprite each live tick
-//! (@0x359ac-0x35c07): out over its last 32 ticks by its `Falloff`, in
-//! over its first by a negative one, and a translucent shot (`Flags3`
-//! 0x0002) added to what is under it.
+//! How a shot fades, as `_HandleShot` sets its sprite each live visit
+//! (@0x359ac-0x35c07): out over the visits its life is below 32 by its
+//! `Falloff`, in over its first by a negative one, and a translucent shot
+//! (`Flags3` 0x0002) added to what is under it.
 //!
-//! Each tick first zeroes the sprite's translucency (+0xa8) and channel
+//! Each visit first zeroes the sprite's translucency (+0xa8) and channel
 //! levels (+0xaa-+0xae, @0x359ac-0x359d8). F is the weapon's shot fade
 //! `Falloff` ([`WeaponLook::shot_falloff`]) and f the shot's fade (+0x24),
-//! 0 at its spawn (@0x3e81c). A shot is on its n-th tick when drawn at
-//! age n ([`Shot::age`](nova_sim::combat::projectile::Shot::age), the
-//! ticks it has flown), and its life is then `Count` − n, counted down
-//! before the fade (@0x35696-0x356a3).
+//! 0 at its spawn (@0x3e81c), which the simulation steps at the frame's
+//! gain (`nova_sim::combat::shot_fade`). The view shades a shot by the f
+//! its last visit read, before that visit's step
+//! ([`FrameShot::fade`](nova_sim::flight_frame::FrameShot::fade)), and
+//! its life after that visit's count-down
+//! ([`FrameShot::life`](nova_sim::flight_frame::FrameShot::life)): a
+//! shot not yet visited by its full life and a fade of 0.
 //!
 //! - **Fade-in, F < 0** (@0x359f0-0x35aa4), while f < 32: a plain shot is
-//!   translucent by 32 − f, then f rises by |F|; a translucent one is
-//!   additive at level f, and by the engine f never steps (the jump
+//!   translucent by trunc(32 − f), in floats; a translucent one is
+//!   additive at level trunc(f), and by the engine f never steps (the jump
 //!   @0x35a59 skips the step @0x35a72-0x35aa4), so it stays at level 0,
 //!   unseen, all its life. Once f is 32 or more the shot is opaque.
-//! - **Fade-out, F > 0, life below 32** (@0x35aa9-0x35ba4): a plain shot
-//!   is translucent by min(f, 31); a translucent one additive at 32 − f,
-//!   at least 4 (@0x35b11-0x35b24); then f rises by F while below 32. On
-//!   the k-th tick of the window, from 0, f = F × min(k, ⌈32/F⌉).
+//! - **Fade-out, F > 0, life below 32.0** (@0x35aa9-0x35ba4): a plain
+//!   shot is translucent by min(trunc(f), 31); a translucent one additive
+//!   at trunc(32 − f), at least 4 (@0x35b11-0x35b24).
 //! - **No `Falloff`** (@0x35bad-0x35c07): a translucent shot is additive
 //!   at 32, the full `AddOver`; a plain one opaque.
 //!
@@ -41,6 +43,7 @@
 //! path (@0x35a21, @0x35ae5, @0x35bd3): the engine draws at 16-bit only.
 
 use nova_sim::RuleSource;
+use nova_sim::combat::shot_fade::FADE_FULL;
 
 use super::catalog::WeaponLook;
 use super::weapons::TRANSLUCENT;
@@ -67,11 +70,12 @@ pub enum ShotShade {
     Additive(u8),
 }
 
-/// How a shot of a weapon that looks as `look` says is drawn at `age`
-/// (see the module docs), by `rule`'s reading of
+/// How a shot of a weapon that looks as `look` says is drawn, its last
+/// visit having read the fade `fade` and left it the life `life` (see the
+/// module docs), by `rule`'s reading of
 /// [`RuleKey::TranslucentShotFade`](nova_sim::RuleKey::TranslucentShotFade).
 #[must_use]
-pub fn shot_shade(look: &WeaponLook, age: u32, rule: RuleSource) -> ShotShade {
+pub fn shot_shade(look: &WeaponLook, fade: f32, life: f32, rule: RuleSource) -> ShotShade {
     let additive = look.flags3 & TRANSLUCENT != 0;
     let mended = rule == RuleSource::Bible;
     // Outside its fade, a translucent shot with a `Falloff` is left
@@ -81,42 +85,36 @@ pub fn shot_shade(look: &WeaponLook, age: u32, rule: RuleSource) -> ShotShade {
     } else {
         ShotShade::Opaque
     };
-    let falloff = i64::from(look.shot_falloff);
-    let tick = i64::from(age.max(1));
-    if falloff < 0 {
-        let fade = if additive && !mended {
-            0
-        } else {
-            -falloff * (tick - 1)
-        };
-        if fade >= i64::from(FADE_STEPS) {
+    let full = FADE_FULL;
+    if look.shot_falloff < 0 {
+        let fade = if additive && !mended { 0.0 } else { fade };
+        if fade >= full {
             return rest;
         }
-        // Below 32: within an `i32`.
-        let fade = fade as i32;
         return if additive {
-            ShotShade::Additive(level(fade))
+            ShotShade::Additive(level(truncated(fade)))
         } else {
-            ShotShade::Translucent(level(FADE_STEPS - fade))
+            ShotShade::Translucent(level(truncated(full - fade)))
         };
     }
-    let life = i64::from(look.count) - tick;
-    if falloff == 0 || life >= i64::from(FADE_STEPS) {
+    // A NaN life is outside the window, as `jbe` reads it.
+    let in_window = life < full;
+    if look.shot_falloff == 0 || !in_window {
         return rest;
     }
-    // The window's first tick, from 1: life first below 32.
-    let first = (i64::from(look.count) - i64::from(FADE_STEPS - 1)).max(1);
-    // The original stops f at the first step at or past 32, F × ⌈32/F⌉;
-    // past 32 every level is the same (4 added, 31 translucent), so f
-    // runs on here. The window is under 32 ticks long, so f stays below
-    // 32 × 32767: within an `i32`.
-    let into = tick - first;
-    let fade = i32::try_from(falloff * into).unwrap_or(i32::MAX);
     if additive {
-        ShotShade::Additive(level((FADE_STEPS - fade).max(FADE_OUT_FLOOR)))
+        ShotShade::Additive(level(truncated(full - fade).max(FADE_OUT_FLOOR)))
     } else {
-        ShotShade::Translucent(level(fade.min(FADE_OUT_MOST)))
+        ShotShade::Translucent(level(truncated(fade).min(FADE_OUT_MOST)))
     }
+}
+
+/// `value` truncated toward 0, as `cvttss2si` does, saturated.
+fn truncated(value: f32) -> i32 {
+    // Saturated into an `i32`: a fade stays within a few hundred.
+    #[allow(clippy::cast_possible_truncation)]
+    let whole = value as i32;
+    whole
 }
 
 /// `steps` 32nds as a level, 0 to 32.
@@ -125,8 +123,10 @@ fn level(steps: i32) -> u8 {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use nova_sim::combat::shot_fade::at_full_gain;
 
     const ENGINE: RuleSource = RuleSource::Engine;
     const MENDED: RuleSource = RuleSource::Bible;
@@ -145,7 +145,15 @@ mod tests {
         ages: std::ops::RangeInclusive<u32>,
         rule: RuleSource,
     ) -> Vec<ShotShade> {
-        ages.map(|age| shot_shade(look, age, rule)).collect()
+        ages.map(|age| shade_at(look, age, rule)).collect()
+    }
+
+    /// How a shot of `look` is drawn `age` full frames old
+    /// ([`at_full_gain`]).
+    fn shade_at(look: &WeaponLook, age: u32, rule: RuleSource) -> ShotShade {
+        let count = u32::try_from(look.count).unwrap_or(0);
+        let (life, fade) = at_full_gain(count, look.shot_falloff, age);
+        shot_shade(look, fade, life, rule)
     }
 
     use ShotShade::{Additive, Opaque, Translucent};
@@ -171,9 +179,7 @@ mod tests {
     fn an_additive_shot_fades_out_by_its_falloff_to_a_floor_of_4() {
         // Count 40, F 2: the window opens on tick 9, life 31.
         let fading = look(40, 2, TRANSLUCENT);
-        let window: Vec<ShotShade> = (9..=40)
-            .map(|age| shot_shade(&fading, age, ENGINE))
-            .collect();
+        let window: Vec<ShotShade> = (9..=40).map(|age| shade_at(&fading, age, ENGINE)).collect();
         let mut expected: Vec<ShotShade> = (0..14).map(|k| Additive(32 - 2 * k)).collect();
         expected.extend([Additive(4); 18]);
         assert_eq!(window, expected, "32, 30, 28 … 6, then 4");
@@ -217,12 +223,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            shot_shade(&look(32, 4, 0), 1, ENGINE),
+            shade_at(&look(32, 4, 0), 1, ENGINE),
             Translucent(0),
             "life 31 on its first tick"
         );
-        assert_eq!(shot_shade(&look(33, 4, 0), 1, ENGINE), Opaque, "life 32");
-        assert_eq!(shot_shade(&look(33, 4, 0), 2, ENGINE), Translucent(0));
+        assert_eq!(shade_at(&look(33, 4, 0), 1, ENGINE), Opaque, "life 32");
+        assert_eq!(shade_at(&look(33, 4, 0), 2, ENGINE), Translucent(0));
     }
 
     #[test]
@@ -270,14 +276,14 @@ mod tests {
         let fading = look(110, 2, TRANSLUCENT);
         assert_eq!(shades(&fading, 1..=78, ENGINE), [Opaque; 78]);
         assert_eq!(shades(&fading, 1..=78, MENDED), [Additive(32); 78]);
-        assert_eq!(shot_shade(&fading, 79, ENGINE), Additive(32), "the window");
+        assert_eq!(shade_at(&fading, 79, ENGINE), Additive(32), "the window");
     }
 
     #[test]
     fn a_stock_shaped_156_fades_on_its_last_32_ticks() {
         // `wëap` 156: Count 110, Falloff 2, `Flags3` 0x0002.
         let shot = look(110, 2, TRANSLUCENT);
-        let at = |age| shot_shade(&shot, age, ENGINE);
+        let at = |age| shade_at(&shot, age, ENGINE);
         assert_eq!(at(70), Opaque);
         assert_eq!(at(78), Opaque, "life 32");
         assert_eq!(at(79), Additive(32), "life 31: the window's first tick");
@@ -289,8 +295,46 @@ mod tests {
     #[test]
     fn an_age_of_0_reads_as_the_first_tick() {
         assert_eq!(
-            shot_shade(&look(100, -5, 0), 0, ENGINE),
-            shot_shade(&look(100, -5, 0), 1, ENGINE)
+            shade_at(&look(100, -5, 0), 0, ENGINE),
+            shade_at(&look(100, -5, 0), 1, ENGINE)
         );
+    }
+
+    #[test]
+    fn a_fade_read_between_whole_steps_shades_by_its_truncation() {
+        assert_eq!(
+            shot_shade(&look(100, -2, 0), 3.5, 90.0, ENGINE),
+            Translucent(28),
+            "fading in: trunc(32 - 3.5)"
+        );
+        assert_eq!(
+            shot_shade(&look(100, 2, 0), 3.5, 10.0, ENGINE),
+            Translucent(3),
+            "fading out: trunc(3.5)"
+        );
+        assert_eq!(
+            shot_shade(&look(100, 2, TRANSLUCENT), 3.5, 10.0, ENGINE),
+            Additive(28)
+        );
+    }
+
+    #[test]
+    fn the_fade_out_window_is_a_life_below_32() {
+        let fading = look(100, 2, 0);
+        assert_eq!(shot_shade(&fading, 0.0, 31.9, ENGINE), Translucent(0));
+        assert_eq!(shot_shade(&fading, 0.0, 32.0, ENGINE), Opaque, "not below");
+    }
+
+    #[test]
+    fn a_shot_drawn_before_its_first_visit_shades_by_its_full_life_and_no_fade() {
+        // Count 32: its full life is not below 32, so out of the window,
+        // where its first visit's life, 31, is in it.
+        let fading = look(32, 4, 0);
+        let (life, fade) = at_full_gain(32, 4, 0);
+        assert_eq!((life, fade), (32.0, 0.0));
+        assert_eq!(shot_shade(&fading, fade, life, ENGINE), Opaque);
+        assert_eq!(shade_at(&fading, 1, ENGINE), Translucent(0));
+        // Count 31: in the window from its full life.
+        assert_eq!(shade_at(&look(31, 4, 0), 0, ENGINE), Translucent(0));
     }
 }

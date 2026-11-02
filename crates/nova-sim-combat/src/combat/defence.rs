@@ -740,16 +740,10 @@ mod tests {
         // life in the next `_HandleShot`.
         let fresh = missile(1, 0.0, -100.0, Some(DEFENDER));
         let lifetime = fresh.weapon.lifetime;
-        let spent = Shot {
-            age: lifetime,
-            ..fresh
-        };
+        let spent = Shot { ..fresh }.aged(lifetime);
         assert!(spent.expired());
         assert_eq!(picked(&[spent], 0, 0), None, "spent");
-        let last = Shot {
-            age: lifetime - 1,
-            ..fresh
-        };
+        let last = Shot { ..fresh }.aged(lifetime - 1);
         assert_eq!(picked(&[last], 0, 0), Some(ShotId(1)), "a tick left");
     }
 

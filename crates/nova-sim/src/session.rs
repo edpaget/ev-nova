@@ -643,6 +643,7 @@ mod ship_display;
 mod ship_loop;
 mod ship_paint;
 mod shipyard_listing;
+mod shot_gain;
 mod shot_slots;
 #[cfg(test)]
 mod slot_search;
@@ -22719,6 +22720,7 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
+        session.at_gain(crate::SpeedMult::FULL);
         session.hold_trigger(FIRE);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(

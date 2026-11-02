@@ -2905,6 +2905,7 @@ pub(super) mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let mut session = accepted(&catalog);
             take_off(&mut session, &catalog);
+            session.at_gain(crate::SpeedMult::FULL);
             session.setup.rules = session
                 .setup
                 .rules

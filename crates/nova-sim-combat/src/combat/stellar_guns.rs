@@ -372,6 +372,8 @@ impl Combat {
         let heading =
             trig::wrap_once(f32::from(aim) + armament::inaccuracy(spec.inaccuracy, chance));
         let ship = target.suspect.ship;
+        // Its life is its `Count` (@0x2f20c-0x2f210).
+        let lifetime = super::projectile::whole_frames(spec.lifetime);
         let mut shot = Shot {
             weapon: spec,
             firer: ship,
@@ -380,7 +382,8 @@ impl Combat {
             position: gun.position,
             velocity: trig::accel(trig::whole(heading), spec.speed),
             heading,
-            age: 0,
+            life: lifetime,
+            prior_life: lifetime,
             id: ShotId::default(),
             target: Some(ship),
             aimed_at: Some(ship),
@@ -394,15 +397,24 @@ impl Combat {
             jam_rolls: jamming::roll(spec.jam_vuln, chance),
             moved_from: None,
             slot: 0,
-            spin_timer: 0,
+            spin_timer: 0.0,
             spin_start: shot_frame::spin_start(FrameRule::of(&spec), chance),
+            spin_steps: 0,
+            spin_shown: 0,
+            spin_still: shot_frame::still(FrameRule::of(&spec), lifetime, spec.lifetime),
+            // Its fade and decay as @0x2f225 and @0x2f278-0x2f29d write
+            // them.
+            fade: 0.0,
+            fade_shown: 0.0,
+            decay_timer: 0.0,
+            decay_steps: 0,
             firer_slot: None,
         };
         let Some(taken) = self.seat(&mut shot) else {
             return;
         };
         self.slots.reset_spin(taken);
-        shot.spin_timer = 0;
+        shot.spin_timer = 0.0;
         shot.id = self.next_id();
         self.insert_seated(&shot);
     }
@@ -1063,7 +1075,7 @@ mod tests {
         assert_eq!((shot.firer_slot, shot.generation), (None, 0));
         assert_eq!(shot.attacker(), None);
         assert_eq!(shot.jam, Jam::Clear);
-        assert_eq!(shot.age, 0);
+        assert_eq!(shot.age(), 0.0);
         assert_eq!(shot.moved_from, None);
     }
 
@@ -1133,8 +1145,8 @@ mod tests {
                 turret(),
                 &mut NeverFires,
             );
-            assert_eq!(combat.shots()[0].spin_timer, 0, "{reading:?}");
-            assert_eq!(combat.slots.spin(0), 0, "{reading:?}: the slot's too");
+            assert_eq!(combat.shots()[0].spin_timer, 0.0, "{reading:?}");
+            assert_eq!(combat.slots.spin(0), 0.0, "{reading:?}: the slot's too");
         }
     }
 

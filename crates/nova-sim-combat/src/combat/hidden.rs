@@ -46,7 +46,7 @@ impl Combat {
     /// (life -1) is put back to 0 too, as `_PointDefenseCollisionHandler`
     /// tests no life before it writes 0 (@0x377fa).
     pub(super) fn hide(&mut self, mut shot: Shot) {
-        shot.age = shot.weapon.lifetime;
+        shot.life = 0.0;
         self.hidden.push(shot);
     }
 }

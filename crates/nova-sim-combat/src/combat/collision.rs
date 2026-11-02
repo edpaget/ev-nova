@@ -531,7 +531,7 @@ impl Combat {
             by: shot.attacker(),
             weapon: Some(shot.weapon.id),
             at,
-            hit: hit.decayed(shot.decay_steps(self.decay)),
+            hit: hit.decayed(shot.decay_steps),
             direct: true,
             intended: shot.aimed_at == Some(ship),
             lock: false,

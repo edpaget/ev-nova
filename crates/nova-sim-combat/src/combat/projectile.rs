@@ -105,10 +105,11 @@ use super::weapon::{
 use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
 use crate::cloak::{self, Observer};
-use crate::flight::{ShipState, normalized};
+use crate::flight::{ShipState, moved, normalized};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::ship_layer::Slot;
+use crate::speed_mult::SpeedMult;
 use crate::trig;
 
 /// A freefall bomb's share of its firer's velocity at launch.
@@ -151,6 +152,21 @@ pub const INTERFERENCE_ROLL: u32 = 100;
 /// The age a player's homing missile locks on its target past (the 30.0
 /// @0xdd638, tested "> 30" @0x357ab).
 pub const LOCK_AGE: u32 = 30;
+/// The life a shot is put at on the visit that takes its life to 0 or
+/// below, NaN included (`_HandleShot` @0x356bb-0x356c1).
+pub const SPENT: f32 = -1.0;
+
+/// Whether `value` is above `line`: false for a NaN, as the original's
+/// `ucomiss`/`ucomisd` and `jbe` read it, so its negation holds for one.
+pub(super) fn above<T: PartialOrd + Copy>(value: T, line: T) -> bool {
+    value > line
+}
+
+/// `frames` as a float, as `_SpawnShot` converts a `Count` (@0x3e7fd).
+#[allow(clippy::cast_precision_loss)]
+pub(super) fn whole_frames(frames: u32) -> f32 {
+    frames as f32
+}
 
 /// A ship a shot or beam might hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -414,11 +430,19 @@ pub struct Guide<'a> {
     /// ([`RuleKey::BombHeadingWrap`](crate::RuleKey::BombHeadingWrap)): by
     /// the engine, never.
     pub bomb_heading_wrap: RuleSource,
+    /// The frame's gain, `_gSpeedMult`, which the visit counts the life
+    /// down by, moves by and hands each of its timed rules
+    /// ([`Shot::step`]): the fight's `Field::speed_mult`.
+    pub speed_mult: SpeedMult,
+    /// How often a decaying shot takes a step, the fight's reading of
+    /// [`RuleKey::ShotDecay`](crate::RuleKey::ShotDecay).
+    pub decay_step: DecayStep,
 }
 
 impl<'a> Guide<'a> {
     /// `targets`, with no sights and no asteroids, at frame 0, by the
-    /// default lock angle and the engine's unwrapped bomb heading.
+    /// default lock angle and the engine's unwrapped bomb heading, at
+    /// full gain and by the original's decay step.
     #[must_use]
     pub fn among(targets: &'a [Target]) -> Self {
         Self {
@@ -428,6 +452,8 @@ impl<'a> Guide<'a> {
             frame: 0,
             lock_angle: LockAngle::default(),
             bomb_heading_wrap: RuleSource::Engine,
+            speed_mult: SpeedMult::FULL,
+            decay_step: DecayStep::EveryDecayPlusOne,
         }
     }
 
@@ -520,8 +546,17 @@ pub struct Shot {
     pub velocity: Vec2,
     /// Which way it faces, in degrees.
     pub heading: f32,
-    /// The ticks it has flown.
-    pub age: u32,
+    /// Its life, the original's +0x14, a float: its weapon's `Count` at
+    /// launch (`_SpawnShot` @0x3e7fd-0x3e808), less the frame's gain at
+    /// each visit (`_HandleShot` @0x35691-0x356a3), and [`SPENT`] from the
+    /// visit that takes it to 0 or below (@0x356bb-0x356c1). It has flown
+    /// its life once it is not above 0 ([`Shot::expired`]). Its age is
+    /// `Count` less it ([`Shot::age`]).
+    pub life: f32,
+    /// Its life as its last visit began, before the count-down, which the
+    /// missile lock's first test reads (@0x3565b; see
+    /// [`Shot::passes_lock_age`]): its `Count` until its first visit.
+    pub prior_life: f32,
     /// Its number in its fight.
     pub id: ShotId,
     /// The ship it was fired at, if any: a homing shot's quarry.
@@ -579,17 +614,42 @@ pub struct Shot {
     /// [`Combat`](super::Combat) gives it as it puts it in flight: the
     /// shots in flight are kept in slot order.
     pub slot: usize,
-    /// The spin timer it started on (the original's +0x1c as it took its
-    /// slot, which `_SpawnShot` never writes), in passes: its slot's
-    /// leftover ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)),
-    /// which [`Combat`](super::Combat) gives it as it puts it in flight.
-    /// The view counts its frame steps from it
-    /// ([`spin_timer::steps`](super::spin_timer::steps)).
-    pub spin_timer: u32,
+    /// Its spin timer, the original's +0x1c, a float: it starts on its
+    /// slot's leftover, as `_SpawnShot` never writes it
+    /// ([`ShotSlots::spin`](super::shot_slots::ShotSlots::spin)), which
+    /// [`Combat`](super::Combat) gives it as it puts it in flight, and
+    /// gains the frame's gain at each visit of a spinning shot
+    /// ([`spin_timer::pass`](super::spin_timer::pass)).
+    pub spin_timer: f32,
     /// The index its spin started on (the original's +0x34): drawn as it
     /// is launched for a spinning shot, 0 for any other
-    /// ([`shot_frame::spin_start`](super::shot_frame::spin_start)).
+    /// ([`shot_frame::spin_start`](super::shot_frame::spin_start)), and 0
+    /// once a still test puts it back (@0x35932).
     pub spin_start: u8,
+    /// The steps its spin's index has taken since its start or its last
+    /// put-back, unwrapped ([`Spin`](super::shot_frame::Spin)).
+    pub spin_steps: u32,
+    /// The steps before its last visit's step, the index that visit shows
+    /// (@0x35894).
+    pub spin_shown: u32,
+    /// Whether its last visit's still test held (@0x35914-0x35929), or,
+    /// before its first visit, whether it holds at its full life
+    /// ([`shot_frame::still`](super::shot_frame::still)).
+    pub spin_still: bool,
+    /// Its fade, the original's +0x24, a float: 0 at launch (@0x3e81c),
+    /// stepped at each visit at the frame's gain
+    /// ([`shot_fade::step`](super::shot_fade::step)).
+    pub fade: f32,
+    /// Its fade as its last visit read it, before that visit's step, which
+    /// the view shades it by (@0x35a14-0x35b57): 0 before its first visit.
+    pub fade_shown: f32,
+    /// Its decay timer, the original's +0x18, a float
+    /// ([`shot_decay`](super::shot_decay)).
+    pub decay_timer: f32,
+    /// The decay steps it has taken, the original's +0x32: each takes a
+    /// point off its direct hit's mass and energy damage. A sub-munition
+    /// counts from its release, by its own weapon's `Decay`.
+    pub decay_steps: u32,
     /// The ship slot its firer fired from, which a sub-munition takes from
     /// its parent (the original's source slot, shot +0x2c): none for a
     /// shot no ship fired. As it spawns, a sub-munition reads whatever
@@ -672,11 +732,11 @@ pub fn rocket_push(velocity: Vec2, heading: f32, speed: f32) -> Vec2 {
 /// `|_AngularDifference(wanted, trunc(heading))|` is above `|trunc(turn)|`,
 /// back when `wanted − trunc(heading)`, taken into 0..359 in 16 bits, is
 /// above 180, and on otherwise, half round included. A negative turn, a
-/// jammed 0x0010 shot's, turns the other way. The original multiplies the
-/// turn by `_gSpeedMult`, 1.0 here, in doubles, which rounds as the `f32`
-/// sum does.
+/// jammed 0x0010 shot's, turns the other way. The gate is unscaled; the
+/// step is the turn times the frame's `gain`, added in doubles and
+/// narrowed (@0x3245b, @0x32473).
 #[must_use]
-pub fn homing_turn(heading: f32, wanted: i16, turn: f32) -> f32 {
+pub fn homing_turn(heading: f32, wanted: i16, turn: f32, gain: SpeedMult) -> f32 {
     let facing = trig::whole(heading);
     let off = i32::from(trig::angular_difference(wanted, facing)).abs();
     if off <= i32::from(trig::whole(turn)).abs() {
@@ -690,10 +750,27 @@ pub fn homing_turn(heading: f32, wanted: i16, turn: f32) -> f32 {
         ahead += 360;
     }
     if ahead > 180 {
-        heading - turn
+        gain.add_times(heading, -turn)
     } else {
-        heading + turn
+        gain.add_times(heading, turn)
     }
+}
+
+/// The range `_SpawnShot` rolls sensor interference in at the frame's
+/// `gain` (@0x3eab2-0x3eb33): [`INTERFERENCE_ROLL`] unless the gain is
+/// above 0.0 (`ucomisd` 0xdd118, `jbe`), else trunc(100.0 / gain), at
+/// least 1 (`testw`/`cmovle` @0x3eafc-0x3eaff). The original keeps it in
+/// a short; the width is not replicated.
+#[must_use]
+pub fn interference_range(gain: SpeedMult) -> u32 {
+    let g = gain.get();
+    if !above(g, 0.0) {
+        return INTERFERENCE_ROLL;
+    }
+    // Truncated toward 0 and saturated, as at most `u32::MAX`.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let range = (f64::from(INTERFERENCE_ROLL) / g).trunc() as u32;
+    range.max(1)
 }
 
 /// A turned heading taken round once each way, as `_HandleShotGuidance`
@@ -735,7 +812,8 @@ impl Shot {
             position: from.position,
             velocity,
             heading,
-            age: 0,
+            life: whole_frames(weapon.lifetime),
+            prior_life: whole_frames(weapon.lifetime),
             id: ShotId::default(),
             target: None,
             aimed_at: None,
@@ -749,19 +827,55 @@ impl Shot {
             jam_rolls: [0; JAMMING_TYPES],
             moved_from: None,
             slot: 0,
-            spin_timer: 0,
+            spin_timer: 0.0,
             spin_start: 0,
+            spin_steps: 0,
+            spin_shown: 0,
+            spin_still: super::shot_frame::still(
+                super::shot_frame::FrameRule::of(&weapon),
+                whole_frames(weapon.lifetime),
+                weapon.lifetime,
+            ),
+            fade: 0.0,
+            fade_shown: 0.0,
+            decay_timer: 0.0,
+            decay_steps: 0,
             firer_slot: None,
         }
     }
 
-    /// Flies the shot one tick, a homing one steering at its target among
+    /// Flies the shot one visit, a homing one steering at its target among
     /// `guide`'s ships, its draws made on `chance`, and gives where it
-    /// was, which it keeps as [`Shot::moved_from`]. First, a shot whose
-    /// ship has gone from the fight is lost (see the module docs).
+    /// was, which it keeps as [`Shot::moved_from`]. In `_HandleShot`'s
+    /// order:
+    ///
+    /// 1. a shot whose ship has gone from the fight is lost (@0x355e0-0x35621;
+    ///    see the module docs);
+    /// 2. its life as the visit began is kept ([`Shot::prior_life`]), which
+    ///    the lock's first test reads (@0x3565b);
+    /// 3. its life is counted down (@0x35691-0x356a3), and put at [`SPENT`]
+    ///    once it is not above 0 (@0x356bb-0x356c1);
+    /// 4. it steers (`_HandleShotGuidance` @0x356d0), reading its age after
+    ///    the count-down;
+    /// 5. it moves (@0x356d5-0x3570f);
+    /// 6. a spinning shot's spin runs ([`Shot::spin_visit`],
+    ///    @0x35879-0x35938);
+    /// 7. its fade is read, then stepped
+    ///    ([`shot_fade::step`](super::shot_fade::step), @0x359ac-0x35c07);
+    /// 8. a decaying shot's decay runs, by `guide`'s
+    ///    [`Guide::decay_step`] ([`shot_decay::pass`](super::shot_decay::pass),
+    ///    @0x35eb2-0x35f03).
+    ///
+    /// Each takes the frame's gain from `guide` ([`Guide::speed_mult`]).
     pub fn step(&mut self, guide: &Guide, chance: &mut dyn Chance) -> Vec2 {
         let targets = guide.targets;
         self.lose_a_gone_ship(targets);
+        let gain = guide.speed_mult;
+        self.prior_life = self.life;
+        self.life = gain.add_times(self.life, -1.0);
+        if !above(self.life, 0.0) {
+            self.life = SPENT;
+        }
         match self.weapon.guidance {
             Guidance::Homing => self.home(guide, chance),
             Guidance::Rocket => {
@@ -771,10 +885,42 @@ impl Shot {
             _ => {}
         }
         let was = self.position;
-        self.position = self.position + self.velocity;
-        self.age += 1;
+        self.position = moved(self.position, self.velocity, gain);
         self.moved_from = Some(was);
+        self.spin_visit(gain);
+        self.fade_shown = self.fade;
+        self.fade = super::shot_fade::step(self.fade, self.weapon.falloff, self.life, gain);
+        (self.decay_timer, self.decay_steps) = super::shot_decay::pass(
+            self.decay_timer,
+            self.decay_steps,
+            self.weapon.decay,
+            guide.decay_step,
+            gain,
+        );
         was
+    }
+
+    /// Its age, `Count` less its life in doubles, as `_HandleShot` and
+    /// `_HandleShotGuidance` read it (@0x3565b, @0x3218c): the frames it
+    /// has flown at full gain, and `Count` + 1 on the visit that spends
+    /// it ([`SPENT`]).
+    #[must_use]
+    pub fn age(&self) -> f64 {
+        f64::from(self.weapon.lifetime) - f64::from(self.life)
+    }
+
+    /// Sets its life to that of a shot `frames` whole frames old at full
+    /// gain, `Count` less `frames`: the state a test, or a crate
+    /// downstream, puts a shot of an age in.
+    pub fn set_age(&mut self, frames: u32) {
+        self.life = whole_frames(self.weapon.lifetime) - whole_frames(frames);
+    }
+
+    /// The shot with its life set as [`Shot::set_age`] sets it.
+    #[must_use]
+    pub fn aged(mut self, frames: u32) -> Self {
+        self.set_age(frames);
+        self
     }
 
     /// Turns a bomb into the wind, as `_HandleShotGuidance`'s bomb tail
@@ -881,7 +1027,8 @@ impl Shot {
                 .iter()
                 .find(|target| target.ship == ship && target.condition.active())
         });
-        if let Some(target) = target.filter(|_| self.age >= HOMING_DELAY) {
+        let delay = f64::from(HOMING_DELAY) * guide.speed_mult.get();
+        if let Some(target) = target.filter(|_| self.age() > delay) {
             let wanted = trig::intercept_angle(self.position, target.position);
             let mut turn = self.weapon.turn;
             self.jammed(target.ship, &mut turn, guide, chance);
@@ -890,7 +1037,7 @@ impl Shot {
                 self.target = None;
                 self.aimed_at = None;
             }
-            self.heading = homing_turn(self.heading, wanted, turn);
+            self.heading = homing_turn(self.heading, wanted, turn, guide.speed_mult);
         }
         self.heading = wrap_turned(self.heading);
         self.velocity = trig::accel(trig::whole(self.heading), self.weapon.speed);
@@ -989,7 +1136,7 @@ impl Shot {
     /// `Seeker` 0x8000 a [`BLINDED_TURNS_ON_FIRER`] roll of none drawn on
     /// `chance` clears it, turned on its firer.
     fn circle(&mut self, frame: i32, chance: &mut dyn Chance) {
-        if self.age >= HOMING_DELAY {
+        if self.age() > f64::from(HOMING_DELAY) {
             let turn = self.weapon.turn;
             let back = frame % CIRCLE_FRAMES <= CIRCLE_BACK;
             self.heading = if back {
@@ -1031,11 +1178,11 @@ impl Shot {
     /// (@0x3eab2-0x3eb66); and a spinning shot's spin start
     /// ([`shot_frame::spin_start`](super::shot_frame::spin_start),
     /// @0x3e96e-0x3e9b4). A sub-munition rolls its own weapon's.
-    pub fn roll_at_launch(&mut self, interference: i16, chance: &mut dyn Chance) {
+    pub fn roll_at_launch(&mut self, interference: i16, gain: SpeedMult, chance: &mut dyn Chance) {
         let rule = super::shot_frame::FrameRule::of(&self.weapon);
         self.spin_start = super::shot_frame::spin_start(rule, chance);
         if self.weapon.guidance == Guidance::Homing && self.weapon.seeks(SENSOR_INTERFERENCE) {
-            let roll = i64::from(chance.below(INTERFERENCE_ROLL)) + 1;
+            let roll = i64::from(chance.below(interference_range(gain))) + 1;
             if roll <= i64::from(interference) {
                 self.jam = Jam::Interfered;
             }
@@ -1071,32 +1218,29 @@ impl Shot {
         sides.shot_can_hit(self, target)
     }
 
-    /// Whether its proximity fuse is armed: it has flown past its
-    /// weapon's `ProxSafety` (@0x371fc-0x3721e, @0x3720e-0x3721e).
+    /// Whether its proximity fuse is armed: `Count` less its weapon's
+    /// `ProxSafety`, as a float, is above its life (@0x371fc-0x3721e), so
+    /// once it has flown past its `ProxSafety`.
     #[must_use]
     pub fn fuse_armed(&self) -> bool {
-        self.age > self.weapon.prox_safety
+        self.safe_life() > self.life
     }
 
-    /// Whether it has flown its life.
+    /// `Count` less `ProxSafety`, as a float (@0x3720e, @0x37073), the
+    /// life the fuse and the touch read against.
+    fn safe_life(&self) -> f32 {
+        let safe = i64::from(self.weapon.lifetime) - i64::from(self.weapon.prox_safety);
+        // `Count` and `ProxSafety` are shorts in the original.
+        #[allow(clippy::cast_precision_loss)]
+        let safe = safe as f32;
+        safe
+    }
+
+    /// Whether it has flown its life: its life is not above 0
+    /// (@0x355a8-0x355b3).
     #[must_use]
     pub fn expired(&self) -> bool {
-        self.age >= self.weapon.lifetime
-    }
-
-    /// The decay steps it has taken in the ticks it has flown, a step as
-    /// `step` says: none for a weapon of no `Decay`. A sub-munition counts
-    /// from its release, by its own weapon's `Decay`. Every tick of a
-    /// shot's flight reaches the count (`_HandleShot` @0x35eb2), so it is
-    /// read from its age.
-    #[must_use]
-    pub fn decay_steps(&self, step: DecayStep) -> u32 {
-        let decay = self.weapon.decay;
-        match step {
-            _ if decay == 0 => 0,
-            DecayStep::EveryDecayPlusOne => self.age / (decay + 1),
-            DecayStep::EveryDecay => self.age / decay,
-        }
+        !above(self.life, 0.0)
     }
 
     /// Whether the tick it has just flown took it past [`LOCK_AGE`], as
@@ -1106,14 +1250,10 @@ impl Shot {
     /// (@0x356c1), so its last move reads an age of its `Count` + 1, and a
     /// shot of `Count` 30 passes it on that move.
     #[must_use]
-    pub fn passes_lock_age(&self) -> bool {
-        let before = self.age.saturating_sub(1);
-        let after = if self.expired() {
-            self.weapon.lifetime + 1
-        } else {
-            self.age
-        };
-        before <= LOCK_AGE && after > LOCK_AGE
+    pub fn passes_lock_age(&self, gain: SpeedMult) -> bool {
+        let before = f64::from(self.weapon.lifetime) - f64::from(self.prior_life);
+        let line = f64::from(LOCK_AGE) * gain.get();
+        !above(before, line) && above(self.age(), line)
     }
 
     /// The ship among `sides` it hits on its move here from `was`, if
@@ -1179,7 +1319,8 @@ impl Shot {
     /// layer, one no ship's collision proc acts on (see
     /// [`Shot::touched`]), and its age has reached its `ProxSafety`.
     pub(super) fn touches_ships(&self) -> bool {
-        self.layer != ShotLayer::PointDefence && self.age >= self.weapon.prox_safety
+        let held = self.weapon.prox_safety > 0 && self.life > self.safe_life();
+        self.layer != ShotLayer::PointDefence && !held
     }
 
     /// The ship among `sides` that sets its proximity fuse off, its move
@@ -1264,6 +1405,9 @@ impl Shot {
 }
 
 #[cfg(test)]
+mod gain_tests;
+
+#[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
@@ -1319,7 +1463,7 @@ mod tests {
         );
         assert_eq!(shot.position, Vec2::new(10.0, 20.0));
         assert!(close(shot.velocity, Vec2::new(16.0, -2.0)), "{shot:?}");
-        assert_eq!((shot.heading, shot.age), (90.0, 0));
+        assert_eq!((shot.heading, shot.age()), (90.0, 0.0));
         assert_eq!((shot.firer, shot.fleet), (FIRER, FIRER));
     }
 
@@ -1370,7 +1514,7 @@ mod tests {
             0.0,
         );
         for (age, armed) in [(0, false), (3, false), (4, true), (40, true)] {
-            shot.age = age;
+            shot.set_age(age);
             assert_eq!(shot.fuse_armed(), armed, "{age}");
         }
     }
@@ -1388,7 +1532,9 @@ mod tests {
             assert!(!shot.expired(), "{tick}");
             let was = shot.position;
             assert_eq!(step(&mut shot, &[]), was);
-            assert_eq!(shot.age, tick);
+            // The visit that spends it reads `Count` + 1 (@0x356c1).
+            let age = if tick == 13 { tick + 1 } else { tick };
+            assert_eq!(shot.age(), f64::from(age));
         }
         assert!(shot.expired());
         assert!(close(shot.position, Vec2::new(0.0, -195.0)), "{shot:?}");
@@ -1800,10 +1946,10 @@ mod tests {
     fn a_shot_touches_no_ship_before_its_prox_safety() {
         let mut shot = passing(0);
         shot.weapon.prox_safety = 5;
-        shot.age = 4;
+        shot.set_age(4);
         let on_path = target(2, 50.0, 0.0, Condition::Intact);
         assert_eq!(shot.touches(Vec2::ZERO, &on_path), None);
-        shot.age = 5;
+        shot.set_age(5);
         assert!(shot.touches(Vec2::ZERO, &on_path).is_some());
     }
 
@@ -2035,7 +2181,7 @@ mod tests {
         let mut unarmed = passing(3);
         unarmed.weapon.prox_safety = 1;
         assert!(point(&unarmed, at(100.0, 6.0)).is_none(), "not armed");
-        unarmed.age = 2;
+        unarmed.set_age(2);
         assert!(point(&unarmed, at(100.0, 6.0)).is_some(), "armed");
     }
 
@@ -2095,7 +2241,7 @@ mod tests {
         let aged = |age, prox| {
             let mut shot = passing(prox);
             shot.weapon.prox_safety = 5;
-            shot.age = age;
+            shot.set_age(age);
             shot
         };
         let on_path = [target(2, 50.0, 0.0, Condition::Intact)];
@@ -2892,22 +3038,35 @@ mod tests {
             decay: 2,
             ..spec(-1, 100, 20)
         };
-        let mut shot = Shot::launch(decaying, FIRER, FIRER, &state(0.0, 0.0, 0.0, 0.0, 0.0), 0.0);
-        let mut original = Vec::new();
-        let mut bible = Vec::new();
-        for _ in 1..=9 {
-            step(&mut shot, &[]);
-            original.push(shot.decay_steps(DecayStep::EveryDecayPlusOne));
-            bible.push(shot.decay_steps(DecayStep::EveryDecay));
-        }
+        let launched = Shot::launch(decaying, FIRER, FIRER, &state(0.0, 0.0, 0.0, 0.0, 0.0), 0.0);
+        let stepped = |reading: DecayStep| {
+            let guide = Guide {
+                decay_step: reading,
+                ..Guide::among(&[])
+            };
+            let mut shot = launched;
+            (1..=9)
+                .map(|_| {
+                    shot.step(&guide, &mut NeverFires);
+                    shot.decay_steps
+                })
+                .collect::<Vec<u32>>()
+        };
+        let original = stepped(DecayStep::EveryDecayPlusOne);
+        let bible = stepped(DecayStep::EveryDecay);
         assert_eq!(original, [0, 0, 1, 1, 1, 2, 2, 2, 3]);
         assert_eq!(bible, [0, 1, 1, 2, 2, 3, 3, 4, 4]);
-        let steady = Shot {
-            age: 9,
-            ..Shot::launch(spec(-1, 100, 20), FIRER, FIRER, &ShipState::default(), 0.0)
-        };
+        let steady = Shot::launch(spec(-1, 100, 20), FIRER, FIRER, &ShipState::default(), 0.0);
         for step in [DecayStep::EveryDecayPlusOne, DecayStep::EveryDecay] {
-            assert_eq!(steady.decay_steps(step), 0, "no decay: {step:?}");
+            let guide = Guide {
+                decay_step: step,
+                ..Guide::among(&[])
+            };
+            let mut shot = steady;
+            for _ in 0..9 {
+                shot.step(&guide, &mut NeverFires);
+            }
+            assert_eq!(shot.decay_steps, 0, "no decay: {step:?}");
         }
         assert_eq!(DecayStep::default(), DecayStep::EveryDecayPlusOne);
         assert_eq!(DecayStep::from(RuleSource::Bible), DecayStep::EveryDecay);
@@ -3299,11 +3458,11 @@ mod tests {
     /// at ship 2 `at` off it.
     fn locked(heading: f32, seeker: u16) -> Shot {
         Shot {
-            age: HOMING_DELAY,
             position: Vec2::new(150.0, 0.0),
             heading,
             ..seeking(LOSES_LOCK_OFF_AHEAD | seeker, Some(TARGET))
         }
+        .aged(HOMING_DELAY)
     }
 
     /// Ship 2 at `bearing` from (150, 0), `distance` away.
@@ -3332,10 +3491,7 @@ mod tests {
             at.hit(Vec2::new(-60.0, 0.0), &among(&behind), ProximityFuse::Swept),
             None
         );
-        let mut young = Shot {
-            age: HOMING_DELAY - 1,
-            ..locked(90.0, 0)
-        };
+        let mut young = Shot { ..locked(90.0, 0) }.aged(HOMING_DELAY - 1);
         guided(&mut young, 1, (&behind, &[]), &mut NeverFires);
         assert_eq!(young.target, Some(TARGET), "before its 15 ticks");
         let mut plain = Shot {
@@ -3423,9 +3579,9 @@ mod tests {
     fn interfered(seeker: u16, age: u32) -> Shot {
         Shot {
             jam: Jam::Interfered,
-            age,
             ..seeking(seeker, Some(TARGET))
         }
+        .aged(age)
     }
 
     /// `shot` flown a tick at `frame` among `targets`, its draws on
@@ -3549,7 +3705,6 @@ mod tests {
         // truncates to 0, so a whole degree off is enough to turn.
         let ahead = [target(2, 1000.0, 25.0, Condition::Intact)];
         let mut shot = Shot {
-            age: HOMING_DELAY,
             heading: 90.9,
             ..homing(
                 WeaponSpec {
@@ -3558,16 +3713,17 @@ mod tests {
                 },
                 Some(TARGET),
             )
-        };
+        }
+        .aged(HOMING_DELAY);
         step(&mut shot, &ahead);
         assert!((shot.heading - 91.8).abs() < 1e-4, "{shot:?}");
         assert_eq!(shot.velocity, trig::accel(91, 10.0));
         // On the bearing's whole degree, it holds.
         let mut on = Shot {
-            age: HOMING_DELAY,
             heading: 91.95,
             ..homing(missile(0), Some(TARGET))
-        };
+        }
+        .aged(HOMING_DELAY);
         step(&mut on, &ahead);
         assert_eq!(on.heading, 91.95);
         assert_eq!(on.velocity, trig::accel(91, 10.0));
@@ -3578,17 +3734,17 @@ mod tests {
         // Straight left of a shot heading right: 180 off, turned on.
         let left = [target(2, -1000.0, 0.0, Condition::Intact)];
         let mut shot = Shot {
-            age: HOMING_DELAY,
             ..homing(missile(0), Some(TARGET))
-        };
+        }
+        .aged(HOMING_DELAY);
         step(&mut shot, &left);
         assert!((shot.heading - 97.0).abs() < 1e-4, "{shot:?}");
         // 181 on (the table's 271 from 90) is back.
         let mut back = Shot {
-            age: HOMING_DELAY,
             heading: 90.0,
             ..homing(missile(0), Some(TARGET))
-        };
+        }
+        .aged(HOMING_DELAY);
         let past = [target(2, -1000.0, -20.0, Condition::Intact)];
         assert_eq!(trig::intercept_angle(Vec2::ZERO, past[0].position), 271);
         step(&mut back, &past);
@@ -3599,11 +3755,11 @@ mod tests {
     fn a_homing_turn_takes_its_16_bit_difference_round_once_each_way() {
         // A heading below 0: 355 - (-6) is 361, taken to 1, so on; a turn
         // of 0.5 truncates to 0, under the difference's 1.
-        assert_eq!(homing_turn(-6.0, 355, 0.5), -5.5);
+        assert_eq!(homing_turn(-6.0, 355, 0.5, SpeedMult::FULL), -5.5);
         // 359 - (-182) is 541, taken to 181, so back.
-        assert_eq!(homing_turn(-182.0, 359, 7.0), -189.0);
+        assert_eq!(homing_turn(-182.0, 359, 7.0, SpeedMult::FULL), -189.0);
         // 10 - 350 is -340, taken to 20, so on.
-        assert_eq!(homing_turn(350.0, 10, 7.0), 357.0);
+        assert_eq!(homing_turn(350.0, 10, 7.0, SpeedMult::FULL), 357.0);
         assert_eq!(wrap_turned(0.0), 0.0, "0 stays 0");
         assert_eq!(wrap_turned(360.0), 0.0);
         assert_eq!(wrap_turned(-1.0), 359.0);
@@ -3613,10 +3769,10 @@ mod tests {
     fn a_homing_shots_turn_wraps_its_heading_once() {
         let right = [target(2, 1000.0, 0.0, Condition::Intact)];
         let mut shot = Shot {
-            age: HOMING_DELAY,
             heading: 358.5,
             ..homing(missile(0), Some(TARGET))
-        };
+        }
+        .aged(HOMING_DELAY);
         step(&mut shot, &right);
         assert!((shot.heading - 5.5).abs() < 1e-4, "{shot:?}");
         assert_eq!(shot.velocity, trig::accel(5, 10.0));

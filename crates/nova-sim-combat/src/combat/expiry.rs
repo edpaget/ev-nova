@@ -73,7 +73,7 @@ impl Combat {
     ///   ships where they are now, with each ship's jamming and sight as
     ///   the hits so far left them
     ///   ([`Sight`](super::projectile::Sight)), and runs a spinning
-    ///   shot's spin timer in its slot (`ShotSlots::spin_pass`,
+    ///   shot's spin timer in its slot (`ShotSlots::keep_spin`,
     ///   @0x35879-0x358c4); then its missile lock, if it makes one
     ///   ([`lock`]), lands at once (@0x35855), reading the target where it
     ///   is now. A homing shot reads the `asteroids`, by slot, where they
@@ -118,7 +118,9 @@ impl Combat {
                     self.move_shot(index, &lineup, asteroids, chance);
                     let sides = lineup.seen_sides();
                     let locked: Vec<Landed> =
-                        lock(&self.shots[index], &sides).into_iter().collect();
+                        lock(&self.shots[index], &sides, self.field.speed_mult)
+                            .into_iter()
+                            .collect();
                     self.land_at_visit(fighters, locked, &mut lineup, rule);
                 }
             }
@@ -150,12 +152,14 @@ impl Combat {
             frame: self.field.frame,
             lock_angle: self.lock_angle,
             bomb_heading_wrap: self.bomb_heading_wrap,
+            speed_mult: self.field.speed_mult,
+            decay_step: self.decay,
             ..Guide::among(&lineup.seen)
         };
         let shot = &mut self.shots[index];
         shot.step(&guide, chance);
         if shot.weapon.spins() {
-            self.slots.spin_pass(shot.slot, shot.weapon.beam_width);
+            self.slots.keep_spin(shot.slot, shot.spin_timer);
         }
     }
 

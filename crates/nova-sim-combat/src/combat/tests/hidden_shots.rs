@@ -185,7 +185,7 @@ fn a_life_zero_fuse_is_armed_by_count_above_prox_safety_not_by_age() {
             ..fused_missile(30)
         };
         pd_meets(&mut combat, record);
-        combat.shots[1].age = 3;
+        combat.shots[1].set_age(3);
         let mut ships = beside_the_missile();
         let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
         test_amid(&mut combat, &mut ships, &mut rocks, &mut []);
@@ -199,7 +199,7 @@ fn a_spent_missile_point_defence_meets_is_put_back_to_life_zero_and_tested() {
     // (@0x377fa); the hidden shot then has no end of life (@0x35f0a).
     let mut combat = Combat::default();
     pd_meets(&mut combat, fused_missile(30));
-    combat.shots[1].age = 100;
+    combat.shots[1].set_age(100);
     let mut ships = beside_the_missile();
     let mut rocks = Rocks::of([rock(0, 23.0, 0.0)]);
     test_amid(&mut combat, &mut ships, &mut rocks, &mut []);

@@ -9,17 +9,22 @@
 //!   shot's (`Flags` 0x0001) start is ever shown, so only a spinning one
 //!   draws it here, on the fight's chance, and the others start at 0
 //!   ([`Shot::spin_start`](super::projectile::Shot::spin_start)).
-//! - **The frame** ([`shot_frame`], [`Shot::frame`]). A shot that does not
-//!   spin shows its heading's frame, `trunc(n × heading / 360)` clamped to
-//!   the sheet (@0x3593a-0x3596c). A spinning one shows the index
-//!   `_HandleShot` holds before its pass's step (@0x35894), clamped to the
-//!   sheet (@0x35956-0x3596c): the shot drawn at age `k` is on its `k`-th
-//!   pass, so it has stepped on each pass before at which its spin timer
-//!   reached `BeamWidth` ([`spin_timer`](super::spin_timer)). A step past
-//!   the last frame wraps to 0, or holds the last under `Flags2` 0x0002
+//! - **The frame** ([`spin_frame`], [`Shot::frame`]). A shot that does
+//!   not spin shows its heading's frame, `trunc(n × heading / 360)`
+//!   clamped to the sheet (@0x3593a-0x3596c). A spinning one shows the
+//!   index `_HandleShot` holds before its visit's step (@0x35894), clamped
+//!   to the sheet (@0x35956-0x3596c): the shot keeps its spin
+//!   ([`Spin`]), whose index steps on each visit at which its timer
+//!   reaches `BeamWidth`, the timer gaining the frame's gain
+//!   ([`spin_timer`](super::spin_timer)). A step past the last frame
+//!   wraps to 0, or holds the last under `Flags2` 0x0002
 //!   (@0x358cb-0x358f6); under `Flags2` 0x0001 it shows frame 0 while its
-//!   age is below `ProxSafety`, the index running on beneath, put back to
-//!   0 on each of those passes with 0x0002 too (@0x35914-0x35932).
+//!   life is above `Count` − `ProxSafety`, so until its age reaches
+//!   `ProxSafety`, the index running on beneath, put back to 0 on each of
+//!   those visits with 0x0002 too (@0x35914-0x35932) ([`still`]). A shot
+//!   not yet visited shows its start, or frame 0 when that still test
+//!   holds at its full life. [`shot_frame`] is the frame of a shot of an
+//!   age at full gain, a builder over the same visits.
 //!
 //! The view draws the frame this gives it, and the contact passes touch
 //! by it (see [`contact`](super::contact)). None of this plays a sound.
@@ -31,6 +36,7 @@ use super::spin_timer;
 pub use super::weapon::SPINS;
 use super::weapon::WeaponSpec;
 use crate::chance::Chance;
+use crate::speed_mult::SpeedMult;
 use crate::sprite_mask::RleSheet;
 
 /// `Flags`: the shot's frames start on the first (@0x3e976-0x3e985).
@@ -85,17 +91,77 @@ pub fn spin_start(rule: FrameRule, chance: &mut dyn Chance) -> u8 {
     }
 }
 
-/// The frame of a shot heading `heading` degrees, `age` ticks old, on a
-/// sheet of `frames` frames, by `rule`, whose spin started on index
-/// `start` and timer `timer` (see the module docs).
+/// Whether a shot of `rule`'s weapon, of `Count` `count`, shows frame 0
+/// at life `life`, `_HandleShot`'s still test (@0x358fc-0x35929): under
+/// `Flags2` [`STILL_UNTIL_SAFE`], while its life is above `Count` −
+/// `ProxSafety` as a float, so until its age reaches `ProxSafety`.
 #[must_use]
-pub fn shot_frame(
+pub fn still(rule: FrameRule, life: f32, count: u32) -> bool {
+    let safe = i64::from(count) - i64::from(rule.prox_safety);
+    // `Count` and `ProxSafety` are shorts in the original.
+    #[allow(clippy::cast_precision_loss)]
+    let safe = safe as f32;
+    rule.flags2 & STILL_UNTIL_SAFE != 0 && life > safe
+}
+
+/// A spinning shot's spin as `_HandleShot` keeps it: the shot's
+/// [`spin_timer`](Shot::spin_timer), [`spin_start`](Shot::spin_start),
+/// [`spin_steps`](Shot::spin_steps), [`spin_shown`](Shot::spin_shown) and
+/// [`spin_still`](Shot::spin_still).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Spin {
+    /// The timer, +0x1c.
+    pub timer: f32,
+    /// The index it started on, or 0 once put back.
+    pub start: u8,
+    /// The steps since its start or its last put-back, unwrapped.
+    pub steps: u32,
+    /// The steps before its last visit's step, the index shown
+    /// (@0x35894).
+    pub shown: u32,
+    /// Whether its last visit's still test held.
+    pub still: bool,
+}
+
+impl Spin {
+    /// One live visit of a shot of `rule`'s weapon at the frame's `gain`
+    /// (@0x35879-0x35938), its still test `still`, read on its life after
+    /// the count-down: the index before the step is shown (@0x35894); the
+    /// timer runs ([`spin_timer::pass`]) and may step the index; and under
+    /// `Flags2` [`HOLDS_LAST_FRAME`] the still test puts the index back to
+    /// 0 (@0x35932). The wrap past the sheet (@0x358cb-0x358f6) is done
+    /// where the frame is read ([`spin_frame`]), which is equivalent.
+    pub fn visit(&mut self, rule: FrameRule, still: bool, gain: SpeedMult) {
+        self.shown = self.steps;
+        let (timer, stepped) = spin_timer::pass(self.timer, rule.beam_width, gain);
+        self.timer = timer;
+        if stepped {
+            self.steps += 1;
+        }
+        self.still = still;
+        if still && rule.flags2 & HOLDS_LAST_FRAME != 0 {
+            self.start = 0;
+            self.steps = 0;
+        }
+    }
+}
+
+/// The frame of a shot heading `heading` degrees on a sheet of `frames`
+/// frames, by `rule`, whose spin started on index `start` (or was put
+/// back to 0), has stepped `shown` times before its last visit's step,
+/// and whose last still test is `still` (see the module docs): a shot
+/// that does not spin, its heading's frame; a still one 0; one that holds
+/// its last frame, `min(start + shown, last)`; any other `(start + shown)
+/// mod frames`, or, from a start past the sheet, the last frame until its
+/// first step and then `(shown − 1) mod frames`.
+#[must_use]
+pub fn spin_frame(
     heading: f32,
-    age: u32,
     frames: NonZeroU16,
     rule: FrameRule,
     start: u8,
-    timer: u32,
+    shown: u32,
+    still: bool,
 ) -> u16 {
     let count = u32::from(frames.get());
     let last = count - 1;
@@ -109,46 +175,91 @@ pub fn shot_frame(
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         return (turned as i64).clamp(0, i64::from(last)) as u16;
     }
-    let holds = rule.flags2 & HOLDS_LAST_FRAME != 0;
-    let safety = if rule.flags2 & STILL_UNTIL_SAFE == 0 {
-        0
-    } else {
-        rule.prox_safety
-    };
-    if age < safety {
+    if still {
         return 0;
     }
-    // The steps made on passes `from` to `to`.
-    let steps = |from: u32, to: u32| spin_timer::steps(timer, rule.beam_width, from, to);
-    let before = age.saturating_sub(1);
-    let index = if holds && safety > 1 {
-        // Put back to 0 on every pass below the safety; the timer runs on.
-        steps(safety, before).min(last)
-    } else {
-        let stepped = steps(1, before);
-        let start = u32::from(start);
-        match (start < count, holds) {
-            (true, false) => (start + stepped) % count,
-            (true, true) => (start + stepped).min(last),
-            (false, _) if stepped == 0 => last,
-            (false, false) => (stepped - 1) % count,
-            (false, true) => last,
-        }
+    let holds = rule.flags2 & HOLDS_LAST_FRAME != 0;
+    let start = u32::from(start);
+    let index = match (start < count, holds) {
+        (_, true) => start.saturating_add(shown).min(last),
+        (true, false) => (start + shown) % count,
+        (false, false) if shown == 0 => last,
+        (false, false) => (shown - 1) % count,
     };
     u16::try_from(index).unwrap_or(u16::MAX)
 }
 
+/// The frame of a shot heading `heading` degrees, `age` frames old at
+/// full gain, on a sheet of `frames` frames, by `rule`, whose spin
+/// started on index `start` and timer `timer`: a full-gain builder, which
+/// folds `age` visits at [`SpeedMult::FULL`] through [`Spin::visit`] and
+/// the [`still`] test from a life of `age` + 1, so none of them spends it,
+/// and maps the spin with [`spin_frame`].
+#[must_use]
+pub fn shot_frame(
+    heading: f32,
+    age: u32,
+    frames: NonZeroU16,
+    rule: FrameRule,
+    start: u8,
+    timer: u32,
+) -> u16 {
+    let count = age.saturating_add(1);
+    let mut life = super::projectile::whole_frames(count);
+    let mut spin = Spin {
+        timer: super::projectile::whole_frames(timer),
+        start,
+        still: still(rule, life, count),
+        ..Spin::default()
+    };
+    for _ in 0..age {
+        life = SpeedMult::FULL.add_times(life, -1.0);
+        spin.visit(rule, still(rule, life, count), SpeedMult::FULL);
+    }
+    spin_frame(heading, frames, rule, spin.start, spin.shown, spin.still)
+}
+
 impl Shot {
-    /// The frame it shows now on a sheet of `frames` frames ([`shot_frame`]).
+    /// Its spin as it holds it ([`Spin`]).
+    #[must_use]
+    pub fn spin(&self) -> Spin {
+        Spin {
+            timer: self.spin_timer,
+            start: self.spin_start,
+            steps: self.spin_steps,
+            shown: self.spin_shown,
+            still: self.spin_still,
+        }
+    }
+
+    /// Its spin's visit at the frame's `gain`, for a spinning weapon only
+    /// (`Flags` 0x0001, @0x35879-0x3587e): [`Spin::visit`], its still test
+    /// read on its life after the count-down.
+    pub fn spin_visit(&mut self, gain: SpeedMult) {
+        let rule = FrameRule::of(&self.weapon);
+        if !rule.spins() {
+            return;
+        }
+        let mut spin = self.spin();
+        spin.visit(rule, still(rule, self.life, self.weapon.lifetime), gain);
+        self.spin_timer = spin.timer;
+        self.spin_start = spin.start;
+        self.spin_steps = spin.steps;
+        self.spin_shown = spin.shown;
+        self.spin_still = spin.still;
+    }
+
+    /// The frame it shows now on a sheet of `frames` frames, by its spin
+    /// ([`spin_frame`]).
     #[must_use]
     pub fn frame(&self, frames: NonZeroU16) -> u16 {
-        shot_frame(
+        spin_frame(
             self.heading,
-            self.age,
             frames,
             FrameRule::of(&self.weapon),
             self.spin_start,
-            self.spin_timer,
+            self.spin_shown,
+            self.spin_still,
         )
     }
 
@@ -163,6 +274,7 @@ impl Shot {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use nova_sim_base::fixture::Draws;
@@ -391,9 +503,14 @@ mod tests {
         let mut shot = Shot::launch(spec, ship, ship, &from, 0.0);
         shot.weapon.flags = SPINS;
         shot.weapon.beam_width = 2;
-        shot.age = 5;
         shot.spin_start = 3;
-        shot.spin_timer = 1;
+        shot.spin_timer = 1.0;
+        for _ in 0..5 {
+            shot.step(
+                &super::super::projectile::Guide::among(&[]),
+                &mut crate::chance::NeverFires,
+            );
+        }
         assert_eq!(
             shot.frame(n(8)),
             shot_frame(0.0, 5, n(8), spinning(2, 0, 0), 3, 1)
@@ -424,5 +541,109 @@ mod tests {
             ..four
         };
         assert_eq!(shot.frame_on(&empty), None);
+    }
+
+    /// A shot of `rule`'s weapon, `Count` 100, started on index `start`
+    /// and timer `timer`.
+    fn flying(rule: FrameRule, start: u8, timer: f32) -> Shot {
+        let spec = WeaponSpec {
+            flags: rule.flags,
+            flags2: rule.flags2,
+            prox_safety: rule.prox_safety,
+            beam_width: rule.beam_width,
+            lifetime: 100,
+            ..WeaponSpec::new(&nova_sim_catalog::fixture::weapon(128))
+        };
+        let ship = super::super::ShipRef::Player;
+        let mut shot = Shot::launch(spec, ship, ship, &crate::flight::ShipState::default(), 90.0);
+        shot.spin_start = start;
+        shot.spin_timer = timer;
+        shot
+    }
+
+    /// The frames `shot` shows after each of `visits` visits at `gain`,
+    /// on a sheet of `frames`.
+    fn visited(mut shot: Shot, frames: u16, visits: u32, gain: SpeedMult) -> Vec<u16> {
+        let guide = super::super::projectile::Guide {
+            speed_mult: gain,
+            ..super::super::projectile::Guide::among(&[])
+        };
+        (0..visits)
+            .map(|_| {
+                shot.step(&guide, &mut crate::chance::NeverFires);
+                shot.frame(n(frames))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_full_gain_builder_agrees_with_visiting_a_shot_at_full_gain() {
+        let rules = [
+            spinning(2, 0, 0),
+            spinning(1, HOLDS_LAST_FRAME, 0),
+            spinning(1, STILL_UNTIL_SAFE, 3),
+            spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 3),
+            spinning(2, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 4),
+            spinning(4, 0, 0),
+            spinning(0, 0, 0),
+        ];
+        for rule in rules {
+            for (start, timer) in [(0, 0_u16), (3, 1), (20, 2), (2, 5)] {
+                let shot = flying(rule, start, f32::from(timer));
+                let built: Vec<u16> = (1..=20)
+                    .map(|age| shot_frame(90.0, age, n(8), rule, start, u32::from(timer)))
+                    .collect();
+                assert_eq!(
+                    visited(shot, 8, 20, SpeedMult::FULL),
+                    built,
+                    "{rule:?} from {start}, {timer}"
+                );
+                assert_eq!(
+                    shot.frame(n(8)),
+                    shot_frame(90.0, 0, n(8), rule, start, u32::from(timer)),
+                    "unvisited: {rule:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_beam_width_2_shots_frames_step_every_4_visits() {
+        let shot = flying(spinning(2, 0, 0), 0, 0.0);
+        assert_eq!(
+            visited(shot, 8, 13, SpeedMult::new(0.5)),
+            [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3],
+            "stepped on visits 4, 8 and 12, each shown on the next"
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_still_shot_shows_frame_0_until_its_life_drops_to_count_less_prox_safety() {
+        // Count 100, ProxSafety 3: still while the life is above 97, until
+        // its 6th visit, where the age reaches 3. `BeamWidth` 1 steps every
+        // 2 visits at 0.5: on the 2nd, 4th and 6th, from start 1.
+        let rule = spinning(1, STILL_UNTIL_SAFE, 3);
+        let shot = flying(rule, 1, 0.0);
+        assert_eq!(
+            visited(shot, 8, 8, SpeedMult::new(0.5)),
+            [0, 0, 0, 0, 0, 3, 4, 4],
+            "the index running on beneath, a step every 2 visits"
+        );
+        assert!(still(rule, 97.5, 100));
+        assert!(!still(rule, 97.0, 100), "not above the line");
+        assert!(!still(spinning(1, 0, 3), 99.0, 100), "only with the flag");
+    }
+
+    #[test]
+    fn at_half_gain_a_holding_still_shot_is_put_back_on_each_still_visit() {
+        // ProxSafety 2: still for the visits where the life is above 98,
+        // the first three at 0.5, each putting the index back to 0.
+        let rule = spinning(1, STILL_UNTIL_SAFE | HOLDS_LAST_FRAME, 2);
+        let shot = flying(rule, 5, 0.0);
+        assert_eq!(
+            visited(shot, 4, 7, SpeedMult::new(0.5)),
+            [0, 0, 0, 0, 1, 1, 2],
+            "its start forgotten, it runs from 0 at its 4th, stepping on it"
+        );
     }
 }
