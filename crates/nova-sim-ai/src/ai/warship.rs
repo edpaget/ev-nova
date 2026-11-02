@@ -698,6 +698,50 @@ mod tests {
     }
 
     #[test]
+    fn a_warship_assisting_or_drifting_after_a_repair_fires_nothing() {
+        // The help's sub 0 (@0x82e17, @0x82de0) and subs 0, 1, 9, 0xb and
+        // 0xc end in `_AIEscortFireUnprovoked`, which returns for AI type 4
+        // or below (@0x80e59-0x80e61); sub 0xf fires nothing
+        // (@0x86a0b-0x8709d). Here the help's goals have no quarry
+        // (`Goal::quarry`), so the pick fires at none, a hostile ship in
+        // range though there is.
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut helper = police();
+        helper.target = Some(P);
+        helper.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                speed: 1000,
+                count: 20,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 100.0);
+        let docking = Some(Docking {
+            ship: P,
+            sub: DockSub::Dock,
+        });
+        for (goal, docking) in [
+            (Goal::Assist(crate::ai::Help::Repair), docking),
+            (Goal::Assist(crate::ai::Help::Repair), None),
+            (Goal::Assist(crate::ai::Help::Refuel), None),
+            (Goal::Drift, None),
+        ] {
+            helper.goal = goal;
+            helper.docking = docking;
+            let npcs = [helper.clone(), pirate.clone()];
+            let around = around(&sites, &npcs, &govts, (0.0, -50.0), -10);
+            assert_eq!(
+                Warship::default().trigger(&npcs[0], &around),
+                Trigger::default(),
+                "{goal:?} {docking:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_warship_unprovoked_keeps_an_inspection() {
         // `_WarshipAI` runs no block for goal 7: the goal-0 block needs
         // goal 0 (@0x8b835), the search goals 1, 0x14 or 2 (@0x8bb56) or

@@ -2385,6 +2385,27 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_ship_given_help_while_firing_holds_no_fire() {
+        // `_AIMakeShipRepairPlayer` and `_AIMakeShipRefuelPlayer` write sub
+        // 0 (@0x82e17, @0x82de0), whose low level fires through
+        // `_AIEscortFireUnprovoked`, nothing for AI type 4 or below
+        // (@0x80e59-0x80e61): the engine holds no fire between thinks.
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.pilot.reserves.fuel.now = 40.0;
+        npc(&mut session).trigger = Trigger {
+            primary: true,
+            ..Trigger::default()
+        };
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 99);
+        haggle(&mut session, &catalog, Haggle::Accept);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.trigger, Trigger::default());
+    }
+
+    #[test]
     fn by_the_other_reading_a_held_ship_asked_for_help_owes_no_burst() {
         let catalog = hailable();
         let rules = Rulebook::default().with_override(RuleKey::HeldGateBurst, RuleSource::Bible);
