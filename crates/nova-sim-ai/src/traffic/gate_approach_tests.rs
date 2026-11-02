@@ -9,7 +9,6 @@
 #![allow(clippy::float_cmp)]
 
 use super::autopilot::{self, Beside, Outcome, Readings, TopSpeeds};
-use super::held_burst::{self, Word};
 use super::inertialess::Inertia;
 use super::npc::{Mode, Npc};
 use super::{approach_flight, gate_entry};
@@ -56,8 +55,12 @@ fn entering(fields: ShipFields, (dx, dy): (f32, f32), (vx, vy): (f32, f32), head
 }
 
 /// Flies `npc` a tick toward the gate under `flight`, by `reading` of
-/// `npc_landing`.
+/// `npc_landing`, its high level's gate block at its slot of the AI loop
+/// first ([`autopilot::reach_gate_box`]).
 fn fly_by(npc: &mut Npc, flight: FlightRules, reading: RuleSource) -> Outcome {
+    if npc.mode == Mode::Flying {
+        autopilot::reach_gate_box(npc, &[gate()], &BTreeMap::new());
+    }
     let speeds = TopSpeeds::own_of(npc);
     autopilot::fly(
         npc,
@@ -88,8 +91,8 @@ fn approached(npc: &Npc, flight: FlightRules) -> Npc {
     let mut twin = npc.clone();
     let handling = twin.flying_handling(TopSpeeds::own_of(&twin).own, flight);
     let inertia = Inertia::of(&twin, None, false, flight);
-    let (controls, capped) = approach_flight::toward(&mut twin.state, gate().position, &handling);
-    held_burst::step(&mut twin, &capped, controls, flight, inertia, Word::Writes);
+    let flown = approach_flight::flight(&twin.state, gate().position, &handling);
+    crate::traffic::slot_word::fly_at_once(&mut twin, flown, &handling, flight, inertia);
     twin
 }
 

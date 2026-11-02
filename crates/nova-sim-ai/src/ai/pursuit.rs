@@ -30,7 +30,10 @@
 //!   fight: it docks (@0x8e873-0x8ea44, see
 //!   [`plunder_dock`](crate::traffic::plunder_dock)).
 //!   Fleeing, within [`FLEE_REACH`] of its attacker on both axes, the
-//!   offsets truncated, it flees close (5, @0x8e017-0x8e06b); beyond, it
+//!   offsets truncated, it flees close (5, @0x8e017-0x8e06b), and so it
+//!   does whatever the reach on the first frame of a hopeless flee, whose
+//!   sub 5 goal 4's or goal 0xd's high level wrote after that reach
+//!   ([`Npc::fled_hopeless`], [`hopeless_flee`](super::hopeless_flee)); beyond, it
 //!   runs out (substates 1, 3 and 4: past 1000 of the centre and able to
 //!   jump it brakes unless it expedites, then jumps, as
 //!   [`leave::flee_leg`](crate::ai::leave::flee_leg) says), which run no
@@ -102,14 +105,14 @@
 //! - Every facing test is the original's: `_AngularDifference` of the
 //!   whole-degree heading and the heading wanted
 //!   ([`fire::faces`](crate::ai::fire::faces)).
+//! - The swarm branch of subs 5, 0x11 and 7, its `_AIMaintainFormation`
+//!   and +0xc8d4 copy (@0x85c87-0x85cbf, @0x8660b-0x8663d,
+//!   @0x867e0-0x86818), runs off the frame this step writes, once for each
+//!   such body (`Traffic`'s `swarm_low_level` module).
 //! - None of these blocks calls `PlaySound` or `_beepSnd`.
 //!
 //! # Not modelled
 //!
-//! - The swarm's `_AIMaintainFormation` and +0xc8d4 copy in subs 5, 0x11
-//!   and 7 (@0x85c87-0x85cbf, @0x8660b-0x8663d, @0x867e0-0x86818): rdm
-//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14, after NPC
-//!   formation parents and glow.
 //! - The order of the joust's draws: the rolls come after its other
 //!   gates here, which decides the same.
 
@@ -327,9 +330,9 @@ pub fn high_level(
                 (false, None) => Start::Sub(Manoeuvre::Dogfight),
             })
         }
-        // The attack block's hopeless chase writes sub 5 itself
-        // (@0x8e62e), with no reach test.
-        Goal::Flee(_) if npc.flees_hopeless || within_whole(off, FLEE_REACH) => {
+        // A hopeless flee's first frame: sub 5, written after goal 3's
+        // reach (@0x8e62e, @0x8eafb; `hopeless_flee`).
+        Goal::Flee(_) if npc.fled_hopeless.is_some() || within_whole(off, FLEE_REACH) => {
             Some(Start::Sub(Manoeuvre::Flee))
         }
         Goal::Flee(_) => Some(Start::RunningOut),
@@ -1355,11 +1358,30 @@ mod tests {
     }
 
     #[test]
+    fn the_first_frame_of_a_hopeless_flee_flies_flee_close_whatever_the_reach() {
+        // Goal 3 with sub 5, written after goal 3's block (@0x8e622-0x8e62e,
+        // @0x8eaef-0x8eafb): no reach chooses the sub that frame.
+        use crate::ai::hopeless_flee::HopelessFlee;
+        for marker in [HopelessFlee::Attack, HopelessFlee::Plunder] {
+            let mut npc = fighter(Goal::Flee(ShipRef::Player), 0.0);
+            npc.fled_hopeless = Some(marker);
+            let at = player_off(Vec2::new(0.0, 600.0), 0.0);
+            assert_eq!(
+                high_level(&npc, &at.state, false, None),
+                Some(Start::Sub(Manoeuvre::Flee)),
+                "{marker:?}"
+            );
+            let fled = stepped_at_player(&npc, &at, 0, &mut Ranged::of(&[]));
+            assert_eq!(bodies(&fled), [Manoeuvre::Flee], "{marker:?}");
+        }
+    }
+
+    #[test]
     fn a_hopeless_chases_flight_flees_close_at_any_distance() {
         // Goal 3 on sub 5 from the attack block (@0x8e625-0x8e62e): the
         // state-3 block's reach test isn't run that frame.
         let npc = Npc {
-            flees_hopeless: true,
+            fled_hopeless: Some(crate::ai::hopeless_flee::HopelessFlee::Attack),
             ..fighter(Goal::Flee(ShipRef::Player), 0.0)
         };
         for off in [Vec2::new(251.0, 0.0), Vec2::new(0.0, -3000.0)] {

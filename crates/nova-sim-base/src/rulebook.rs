@@ -244,8 +244,9 @@
 //! | [`StrayTextBrace`](RuleKey::StrayTextBrace) | `stray_text_brace` | a `{` not followed by `G`, `P`, `B` or `!` drops the text up to the next of those letters (`_ParseTextDescription` @0x14efa; see `nova_sim::text_parse`) | the `{` and the text after it are copied as written\* |
 //! | [`SnipeBrakeLead`](RuleKey::SnipeBrakeLead) | `snipe_brake_lead` | a sniper moving 0.35 or more on an axis that has fired a gun turns to its target's lead angle for that gun and thrusts within its turn rate plus 1: toward its target, not a brake (`_LowLevelAIHandler` @0x8716a-0x871b0, @0x871ef-0x87255; see `nova_sim::traffic::snipe`) | it turns to its retro heading and thrusts there, braking, as one that has fired no gun does\* |
 //! | [`ReusedSlotPick`](RuleKey::ReusedSlotPick) | `reused_slot_pick` | a ship brought into a ship-table slot holds the pick (+0x72) the slot's last ship left, as no spawn writes it and only a fired primary (`_HandleShip` @0x35012) and a capture (`_DoShipCapture` @0x41207) clear it: its first gun pass that finds nothing fires that pick if it carries the weapon, and a secondary it doesn't carry is kept, firing nothing (see `nova_sim::traffic::berth_picks`) | every ship starts with no pick\* |
+//! | [`ReusedSlotHeading`](RuleKey::ReusedSlotHeading) | `reused_slot_heading` | a ship brought into a ship-table slot turns, with no thrust, toward the heading (+0x68) the slot's last ship wanted until its first low level, as no spawn writes +0x68 (`_GenericRandomShipSpawn` @0x3cb54-0x3cb5a) and `_InitObjects` sets 0 as the game starts (@0x1c315): a fighter launched below its carrier's slot, an escape ship launched in the ship loop (see `nova_sim::traffic::slot_word`) | it keeps its own whole heading until its first low level\* |
 //! | [`ReusedSlotExits`](RuleKey::ReusedSlotExits) | `reused_slot_exits` | a ship brought into a ship-table slot fires each `ExitType`'s first shot or beam from the exit after the one the slot's last ship used, and the player's turn of exits goes on through a ship change and an eject, as no writer but the exit routines touches +0xc8fe-+0xc905 (`_ModifyShotStartPosition` @0x742c-0x74bc, `_SpawnBeam` @0x450ff-0x4523d; see `nova_sim_ai::traffic::berth_exits`) | every new ship, the player's new ship included, starts each `ExitType` at exit 0\* |
-//! | [`StrayBeamExit`](RuleKey::StrayBeamExit) | `stray_beam_exit` | a beam of `ExitType` -1 steps its ship's fold set (+0xc8fc) and one of `ExitType` 5 steps +0xc908 (an NPC's crew pods left, the player's escape-pod countdown) and one of 6 steps +0xc90a (the order word of any NPC, the player's stepping nothing) as a cursor, as `_SpawnBeam` indexes its cursors with no range check (@0x450fa-0x4523d), and starts at the centre (see `nova_sim::combat::exits::StrayWord`) | a beam of `ExitType` outside 0-3 steps nothing\* |
+//! | [`StrayBeamExit`](RuleKey::StrayBeamExit) | `stray_beam_exit` | a beam of `ExitType` -1 steps its ship's fold set (+0xc8fc), one of `ExitType` 4 steps +0xc906 (an NPC's swarm leader), one of 5 steps +0xc908 (an NPC's crew pods left, the player's escape-pod countdown) and one of 6 steps +0xc90a (the order word of any NPC, the player's stepping nothing) as a cursor, as `_SpawnBeam` indexes its cursors with no range check (@0x450fa-0x4523d), and starts at the centre (see `nova_sim::combat::exits::StrayWord`) | a beam of `ExitType` outside 0-3 steps nothing\* |
 //! | [`SoundVoices`](RuleKey::SoundVoices) | `sound_voices` | 8 voices, kept by priority and loudness: a sound goes before the first voice whose priority and loudness it is each at least, the last voice is evicted when all 8 are taken, and a sound with no place isn't played (`ST_Open(8, 0)` @0x3a136, `ST_PlaySoundParam` @0xe3dc2; see `nova_audio::voices`) | every sound plays and none is evicted: **the default, uncapped like `combat_caps`**†††††††††††††††† |
 //! | [`BombHeadingWrap`](RuleKey::BombHeadingWrap) | `bomb_heading_wrap` | a freefall bomb's heading is never wrapped after it turns ±1.0 into the wind, so one crossing up stops up to a degree and a half short of its bearing, below 0 or past 360, and is drawn on the end frame its frame index is clamped to (`_HandleShotGuidance` @0x32a41-0x32a98, `_HandleShot` @0x3593a-0x3596c; see `nova_sim::combat::projectile`) | the heading is wrapped into 0..360 after each turn\* |
 //! | [`LoopedSoundWait`](RuleKey::LoopedSoundWait) | `looped_sound_wait` | a looped weapon's sound (`Flags` 0x0010) waits while its `snd ` plays on any voice, from any ship (`ST_IsSoundPlaying` @0xe40c0, asked by `_FireAIShipWeapon` @0x88e00-0x88e1d, `_FirePlayerWeapon` @0x62d98-0x62dbf, `_HandleShipPointDefense` @0x39981-0x3999e and `_SpawnShotSubmunitions` @0x3f25b-0x3f26c; see the view's `effects`) | each firer's weapon waits out its own sound's length, so two ships' chainguns are each heard\* |
@@ -277,7 +278,7 @@
 //! | [`ReusedShotSlotSpin`](RuleKey::ReusedShotSlotSpin) | `reused_shot_slot_spin` | a new shot starts on the spin timer its shot slot's last spinning shot left, as `_SpawnShot` never writes +0x1c (@0x3e550-0x3f143), so its first frame step can come early (`_HandleShot` @0x35884-0x358c4; see `nova_sim::combat::spin_timer`) | every shot starts its spin timer on 0\* |
 //! | [`HitFocus`](RuleKey::HitFocus) | `hit_focus` | a ship attacking (goal 4) its target (+0x70, as the pass's earlier hits left it) within 44° of the heading it last wanted as the pass began keeps its target when hit, unless the attacker is nearer than half its target's distance (dist² not above 0.25 × its target's); its lead's answer, the turn on the player, the wait cut and the grudge go with it (`_DamageShip` @0x3bbf3-0x3bcac; see `nova_sim::ai::react`) | it keeps its target only when that target is nearer than half the attacker's distance and ahead, by its float heading against the bearing; the lead of an escort hit tests its own target; every answered player hit holds the grudge\* |
 //! | [`UndisplayedShips`](RuleKey::UndisplayedShips) | `undisplayed_ships` | a ship its slot has not displayed since it came (a fighter the player launches, the eject's hulk, a ship spawned below its spawner's slot) is neither walked by the collision passes nor drawn until its slot's display step, as an inactive slot's display hides its sprites (@0x2b555-0x2b60a) and the walk skips a hidden sprite (@0xacba3); it is hovered and clicked where its slot's last ship was last laid out, in that ship's frames, as only a display places the slot's rect (@0x2cd9d, `_HandleMouse` @0x38177; see `nova_sim::Session::hover_place`); `_PrepareAllSprites` (@0x3a75a) displays every slot at each entry into flight (see `nova_sim::Session::prepare_all_sprites`) | walked, drawn and boxed where it is from the moment it is in the system\* |
-//! | [`LaunchFrameAi`](RuleKey::LaunchFrameAi) | `launch_frame_ai` | a fighter an NPC launches is in the system at once: `_AIDispatch`'s loop (@0x44270-0x442ae) stops after the slot that launched, a fighter in a slot above its carrier's thinks and takes its own turn in its launch frame, and every later slot's point defence can choose it (`_GenericRandomShipSpawn` @0x3c90b; see `nova_sim::Session::dispatch_npcs`) | put in the system after the whole loop, neither thinking nor a candidate until the next tick\* |
+//! | [`LaunchFrameAi`](RuleKey::LaunchFrameAi) | `launch_frame_ai` | each slot of `_AIDispatch`'s loop (@0x44270-0x442ae) runs its whole think and its turn in the fight before the next, so a slot reads what the slots below it wrote; a fighter an NPC launches is in the system at once, a fighter in a slot above its carrier's thinks and takes its own turn in its launch frame, and every later slot can choose it (`_GenericRandomShipSpawn` @0x3c90b; see `nova_sim::Session::dispatch_npcs`) | every NPC decides in one batch, from the tick as it began, and a fighter is put in the system after the whole loop, neither thinking nor a candidate until the next tick\* |
 //! | [`CapturedPerson`](RuleKey::CapturedPerson) | `captured_person` | a person whose ship is captured with Use As Escort lives on, keeping its grudge, and can appear again; only its ship's person slot is cleared (`_DoPlunderDialog` @0x9459b-0x947cf, `_AIShipCapturedByPlayer` @0x89741; only `_DoShipCapture` @0x41180 clears the person; see `nova_sim::Session::assign`) | it is gone for good, as with Use As My Ship\* |
 //! | [`ShipAnimationDoubleStep`](RuleKey::ShipAnimationDoubleStep) | `ship_animation_double_step` | a `shän` `Flags` 0x0008 ship of more than one base set with an alt sprite steps its animation timer twice a frame, in the set block and the alt block (`_HandleShipDisplay` @0x2ba64, @0x2c9c1; see `nova_sim::combat::ship_frames`); no stock ship has both | once a frame, as `AnimDelay` says |
 //! | [`LoadedEscortFoldSet`](RuleKey::LoadedEscortFoldSet) | `loaded_escort_fold_set` | a loaded pilot's escort of `shän` `Flags` 0x0080 takes the player's class's last base set as its fold set (`_LoadPilotData` @0x763d4-0x763e7) | its own class's\* |
@@ -347,7 +348,7 @@
 //! `smuggling_ship_name`,
 //! `pay_slot_offset`,
 //! `missionless_tags`,
-//! `stray_text_brace`, `snipe_brake_lead`, `reused_slot_pick`,
+//! `stray_text_brace`, `snipe_brake_lead`, `reused_slot_pick`, `reused_slot_heading`,
 //! `reused_slot_exits`, `reused_slot_search`, `stray_beam_exit`,
 //! `sound_voices`, `looped_sound_wait`, `bomb_heading_wrap`, `translucent_shot_fade`,
 //! `lightning_zig_zag`, `independent_kin`,
@@ -1947,6 +1948,18 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says (see
     /// `nova_sim::Session`).
     StaleSecondary => "stale_secondary",
+    /// Which heading a ship brought into a ship-table slot turns toward
+    /// until its first low level (see `nova_sim_ai::traffic::slot_word`).
+    /// By the engine, as no spawn writes +0x68 (`_GenericRandomShipSpawn`
+    /// @0x3cb54-0x3cb5a zeroes only the thrust and its cap) and
+    /// `_InitObjects` sets it to 0 as the game starts (@0x1c315): the
+    /// heading the slot's last ship wanted, 0 for a slot no ship has held,
+    /// so a fighter launched below its carrier's slot or an escape ship
+    /// launched in the ship loop turns toward it with no thrust. By the
+    /// other reading it keeps its own whole heading, so it doesn't turn.
+    /// The Bible says nothing of it, so the other reading is the port's
+    /// earlier flight, not anything the Bible says.
+    ReusedSlotHeading => "reused_slot_heading",
     /// When the outfitter's sale lets go of the secondary selected. By the
     /// engine, when the sold outfit's own count falls to 0 and one of its
     /// `ModType` 1 slots names it (`_DoOutfitDialog` @0x5cf73-0x5cf8c,
@@ -3668,18 +3681,22 @@ rule_keys! {
     /// Bible says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says.
     UndisplayedShips => "undisplayed_ships",
-    /// Whether a fighter an NPC launches is in the system for the rest of
-    /// its launch frame's AI loop (see `nova_sim::Session::dispatch_npcs`).
+    /// Whether each slot of the AI loop thinks and fights in turn, and so
+    /// whether a fighter an NPC launches is in the system for the rest of
+    /// its launch frame's loop (see `nova_sim::Session::dispatch_npcs`).
     /// By the engine, as `_AIDispatch`'s loop rereads each slot as it comes
     /// (`_DoPlayGameWork` @0x44270-0x442ae) and `_LaunchFighter` marks the
     /// fighter's slot active at once (`_GenericRandomShipSpawn` @0x3c90b,
-    /// @0x3d680): the loop stops after the slot that launched, the fighter
-    /// is put in the system, one in a slot above its carrier's thinks then
-    /// and takes its own turn when its slot comes, and every later slot's
-    /// point defence can choose it (@0x394ce-0x3969d). By the other
-    /// reading, the engine's before weapons-fidelity phase 44, every
-    /// fighter an NPC launches is put in the system after the whole loop,
-    /// and neither thinks nor is a candidate until the next tick. The
+    /// @0x3d680): each occupied slot runs its whole think and its turn in
+    /// the fight before the next, so it reads what the slots below it wrote
+    /// this frame; a fighter is put in the system as its carrier's turn
+    /// ends, one in a slot above its carrier's thinks and takes its own turn
+    /// when its slot comes, and every later slot can choose it, its point
+    /// defence among them (@0x394ce-0x3969d). By the other reading, the
+    /// engine's before weapons-fidelity phase 44, every NPC decides in one
+    /// batch from the tick as it began, every fighter an NPC launches is
+    /// put in the system after the whole loop, and neither thinks nor is
+    /// a candidate until the next tick. The
     /// Bible says nothing of it, so the other reading is the intended
     /// behaviour, not anything the Bible says.
     LaunchFrameAi => "launch_frame_ai",
@@ -6755,6 +6772,26 @@ mod tests {
     }
 
     #[test]
+    fn the_reused_slot_heading_rule_is_found_by_its_key_and_reads_the_engine() {
+        let rule = RuleKey::ReusedSlotHeading;
+        assert_eq!(rule.key(), "reused_slot_heading");
+        assert_eq!(RuleKey::from_key("reused_slot_heading"), Some(rule));
+        assert_eq!(rule.default_source(), RuleSource::Engine);
+        assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        assert_eq!(
+            Rulebook::default()
+                .with_override(rule, RuleSource::Bible)
+                .source_for(rule),
+            RuleSource::Bible
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(204),
+            Some(&rule),
+            "before secondary_sale"
+        );
+    }
+
+    #[test]
     fn the_secondary_selection_rules_are_found_by_their_keys() {
         assert_eq!(RuleKey::StaleSecondary.key(), "stale_secondary");
         assert_eq!(
@@ -6928,6 +6965,7 @@ mod tests {
                 RuleKey::PurchaseCarry,
                 RuleKey::ShipInfoRounding,
                 RuleKey::StaleSecondary,
+                RuleKey::ReusedSlotHeading,
                 RuleKey::SecondarySale,
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
@@ -8306,7 +8344,7 @@ mod tests {
                 .source_for(rule),
             RuleSource::Bible
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(286), Some(&rule));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(287), Some(&rule));
     }
 
     #[test]

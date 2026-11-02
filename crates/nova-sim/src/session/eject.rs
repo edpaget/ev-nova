@@ -110,19 +110,17 @@
 //! ([`Npc::leave_carrier`]), its shield and armour holding and recharging
 //! as its class's, what they hold now kept.
 //!
-//! The walk's second half, a threat whose +0x6c is 0 pointed at the hulk
-//! (@0x6f6ff-0x6f70d), is left out. For a ship +0x6c is the destination
-//! the AI flies to: a stellar for the landing states (`_WarshipAI`
-//! @0x8b90b), the leader or carrier for following and docking (states 10
-//! and 5: `_EscortAI` @0x83dac, `_AIMakeFighterReturn` @0x82e4e), the
-//! boarded ship for plundering (state 15, `_HighLevelAIHandler`
-//! @0x8f74c). `_IsThreatToPlayer` excludes all of those states
-//! (@0x7f536-0x7f56b), and the attack states a threat is in set +0x6c to
-//! -1 (`_AIMakeShipAttackPlayer` @0x89d47, `_AIFightThreatToPlayer`
-//! @0x81949), so a threat's +0x6c of 0 can only be a stellar index 0 left
-//! over from an earlier state. The engine's goal keeps one ship for a
-//! threat, its quarry, and no destination beside it, so there is nothing
-//! for the half to move.
+//! The walk's second half (`cmpw $0x0, 0x6c` @0x6f6ff, the write
+//! @0x6f70d), tested apart from the target: a threat whose +0x6c is 0
+//! holds the hulk's slot there instead, the -0x2f8 local
+//! `_GenericRandomShipSpawn` gave (@0x6f2f8-0x6f301), on both the escape
+//! ship's path and the pod's. It is built through
+//! [`Npc::travel`](crate::traffic::npc::Npc::travel), where a +0x6c of 0
+//! reads as `Some(travel::of_slot(0))` (`nova_sim_ai::ai::travel`): the
+//! player's slot as well as stellar 128, as the test is of the raw word.
+//! A threat can hold the player's slot: a pirate mission escort released
+//! from formation keeps it (`_AIMakeShipLeave` @0x7e2b0 writes none), and
+//! its pirate attack writes no +0x6c.
 //!
 //! **The new ship** (0x6f74d-0x6f969). Every outfit without `Flags`
 //! 0x0004 is dropped (@0x6f7ae-0x6f7db), the class's stock weapons and
@@ -179,8 +177,8 @@ use super::hooks::ShipHook;
 use super::player_led::slot_of;
 use super::ship_change::ClassChange;
 use super::{PlayerShip, Session, Setup, Space, Statics};
-use crate::ai::Goal;
 use crate::ai::pursuit::Pursuit;
+use crate::ai::{Goal, travel};
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::combat::ion::Ion;
@@ -377,10 +375,12 @@ impl Session {
     }
 
     /// The threat walk (see the module docs): each threat to the player
-    /// that targets it targets the `hulk` instead; in the `pod`, every
-    /// other ship the player leads is released.
+    /// that targets it targets the `hulk` instead, and one whose travel
+    /// stellar holds slot 0 holds the hulk's; in the `pod`, every other
+    /// ship the player leads is released.
     fn walk_the_threats(&mut self, hulk: NpcId, pod: bool) {
         let to = ShipRef::Npc(hulk);
+        let hulks_slot = self.space.npc(hulk).map(|hulk| travel::of_slot(hulk.berth));
         for index in 0..self.space.traffic.npcs().len() {
             let npcs = self.space.traffic.npcs();
             let npc = &npcs[index];
@@ -388,6 +388,11 @@ impl Session {
                 let npc = &mut self.space.traffic.npcs_mut()[index];
                 if npc.target == Some(ShipRef::Player) {
                     npc.target = Some(to);
+                }
+                // Tested apart from the target: the raw word 0, the
+                // player's slot or stellar 128 (@0x6f6ff-0x6f70d).
+                if npc.travel == Some(travel::of_slot(0)) && hulks_slot.is_some() {
+                    npc.travel = hulks_slot;
                 }
                 npc.goal = retargeted(npc.goal, to);
             } else if pod && npc.escorts_player() {
@@ -529,7 +534,7 @@ impl PlayerShip {
             led_out: false,
             emerges_from: None,
             visited: None,
-            travel_set: false,
+            travel: None,
             self_repair: kind.self_repair,
             immobile: kind.immobile,
             // `_GenericRandomShipSpawn` rolls it (@0x3cad1).
@@ -546,17 +551,18 @@ impl PlayerShip {
             afterburner: false,
             voice: None,
             pursuit: Pursuit::default(),
-            flees_hopeless: false,
             ai_wait: 0,
             docking: None,
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             owed_burst: None,
+            fled_hopeless: None,
             bursts_own_word: false,
             fires_on_burst_end: false,
             close_form: false,
             stopping: false,
             fleet_slot: None,
+            form_parent: None,
             slot_place: None,
             order_word: crate::fleet::OrderWord::NONE,
             ordered_by_lead: false,
@@ -2104,6 +2110,66 @@ mod tests {
             "kept"
         );
         assert_eq!(session.space.escorts.fleet, [Some(hired)]);
+    }
+
+    #[test]
+    fn a_threat_holding_slot_0_takes_the_hulks_slot() {
+        // The walk's second half (`cmpw $0x0, 0x6c` @0x6f6ff, the write
+        // @0x6f70d) on the escape ship's path (@0x6f640) and the pod's
+        // (@0x6f642-0x6f6a9): a threat's +0x6c of 0 takes the hulk's slot,
+        // whatever its target.
+        use crate::ai::travel;
+        use crate::catalog::StellarId;
+        const OTHER: StellarId = StellarId(140);
+        for pod in [false, true] {
+            let catalog = if pod { ejecting(100) } else { escaping() };
+            let mut session = flying(&catalog, if pod { &[POD] } else { &[] });
+            if !pod {
+                session.pilot.outfits.insert(OutfitId(FIGHTERS), 2);
+            }
+            session.ship.condition = Condition::Disabled;
+            let holding = |session: &mut Session, goal, target, travel| {
+                let id = aimed(session, goal, target);
+                session.space.npc_mut(id).expect("here").travel = travel;
+                id
+            };
+            let slot_0 = Some(travel::of_slot(0));
+            let on_player = holding(&mut session, Goal::Idle, None, slot_0);
+            let elsewhere = holding(&mut session, Goal::Idle, None, Some(OTHER));
+            let bystander = holding(&mut session, Goal::Idle, None, slot_0);
+            // The pod's loop lets the player go first, so a threat there
+            // fights a ship the player leads, in a later slot than its own
+            // (the walk releases a led ship it reaches first).
+            let quarry = if pod {
+                ShipRef::Npc(escort(&mut session))
+            } else {
+                ShipRef::Player
+            };
+            for id in [on_player, elsewhere] {
+                let threat = session.space.npc_mut(id).expect("here");
+                threat.goal = Goal::Attack(quarry);
+                threat.target = Some(quarry);
+            }
+            session.hold_eject(true);
+            work_with(
+                &mut session,
+                &catalog,
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut crate::testkit::Scripted::rolling(&[0; 3]),
+            );
+            assert_eq!(session.pilot.ship == ESCAPE_POD_SHIP, pod, "the path");
+            let berth = hulk(&session).berth;
+            let travel_of = |id| session.space.npc(id).expect("here").travel;
+            assert_eq!(
+                travel_of(on_player),
+                Some(travel::of_slot(berth)),
+                "pod {pod}"
+            );
+            assert_eq!(travel_of(elsewhere), Some(OTHER), "pod {pod}");
+            assert_eq!(travel_of(bystander), slot_0, "pod {pod}: no threat");
+        }
     }
 
     #[test]

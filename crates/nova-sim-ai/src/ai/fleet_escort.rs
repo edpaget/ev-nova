@@ -81,6 +81,11 @@
 //!    sound or rolls `Rand(3)` under an NPC parent: the voice is the
 //!    player's escorts'.
 //!
+//!    Each writes its travel stellar (+0x6c, [`travel::order_block`]):
+//!    formation, Return and a fight with nothing to fight the lead's
+//!    slot, Hold and Attack's new threat -1, a kept target and Defend's
+//!    fight none. A kept goal and the lost parent write none.
+//!
 //! **Its fire** ([`Behaviour::trigger`]). In formation, the think runs
 //! `_AIFireGun(ship, 0)` and `_AIFireTurret` on its guard (@0x83f3c,
 //! @0x83f4e), whose finds become its pick (+0x72) and raise its fire flag
@@ -113,9 +118,10 @@
 //! sub 4 or 0xd, goal 2's brake, or +0x50 above 0) puts it on goal 0xb:
 //! its target dropped, following the lead's jump
 //! ([`Decision::follows_jump`]), or leaving its fleet when it flies
-//! inertialess. The order word is still written under a lead that is the
-//! player's escort; no order block runs, so its AI wait is kept. Once goal
-//! 0xb is written under a wait
+//! inertialess. It copies the lead's travel stellar (@0x83a77-0x83a7c,
+//! [`travel::copied`]). The order word is still written under a lead that
+//! is the player's escort; no order block runs, so its AI wait is kept.
+//! Once goal 0xb is written under a wait
 //! ([`Npc::joins_leaders_jump`](crate::traffic::npc::Npc::joins_leaders_jump))
 //! it stays in that block until the wait ends, whether or not its lead
 //! still draws. Defend, Attack and formation write +0x50 = -1.0 beside
@@ -134,6 +140,7 @@
 use crate::ai::fire::FireRules;
 use crate::ai::{
     Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, escort, fire, out_of_ammo, react,
+    travel,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -228,11 +235,13 @@ pub fn decide_by(
             clears_target: true,
             follows_jump: true,
             order_word: writes,
+            travel: travel::copied(lead),
             ..Decision::default()
         };
     }
-    let goal = |goal: Goal, ends_wait: bool| Decision {
+    let goal = |goal: Goal, ends_wait: bool, new_threat: bool| Decision {
         order_word: writes,
+        travel: travel::order_block(goal, order, new_threat, lead.berth),
         ..goal_of(goal, ends_wait)
     };
     let follow = |guard: Option<ShipRef>| Goal::Follow {
@@ -244,12 +253,12 @@ pub fn decide_by(
     match (order, npc.carrier) {
         (Some(fighting @ (EscortOrder::Defend | EscortOrder::Attack)), _) => {
             let radius = (fighting == EscortOrder::Defend).then_some(DEFEND_RADIUS);
-            let kept = escort::kept_by_order(order, target, lead.state.position, around)
-                .or_else(|| nearest_threat(npc, Parent::Npc(lead), around, radius));
-            goal(attack_or_follow(kept), true)
+            let kept = escort::kept_by_order(order, target, lead.state.position, around);
+            let fought = kept.or_else(|| nearest_threat(npc, Parent::Npc(lead), around, radius));
+            goal(attack_or_follow(fought), true, kept.is_none())
         }
-        (Some(EscortOrder::Hold), _) => goal(Goal::Wait, false),
-        (Some(EscortOrder::Dock), Some(bay)) => goal(Goal::Dock(bay.ship), false),
+        (Some(EscortOrder::Hold), _) => goal(Goal::Wait, false, false),
+        (Some(EscortOrder::Dock), Some(bay)) => goal(Goal::Dock(bay.ship), false, false),
         _ => {
             let in_reach = |ship: &ShipRef| {
                 around
@@ -262,6 +271,7 @@ pub fn decide_by(
             goal(
                 follow(guard.filter(|&ship| ship != ShipRef::Npc(lead.id))),
                 true,
+                false,
             )
         }
     }
@@ -387,6 +397,7 @@ mod tests {
     use super::*;
     use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{PIRATES, TRADERS, govts, n, player, ship};
+    use crate::ai::travel::TravelWrite;
     use crate::ai::{Help, escort, fire, react};
     use crate::bay::Carrier;
     use crate::catalog::{EscortClass, WeaponId, WeaponRecord};
@@ -410,9 +421,15 @@ mod tests {
         Some(EscortOrder::Dock),
     ];
 
-    /// The lead, a medium pirate warship at the centre with `goal`.
+    /// The lead's berth: the slot its escorts hold as their travel
+    /// stellar.
+    const LEAD_BERTH: u32 = 3;
+
+    /// The lead, a medium pirate warship at the centre with `goal`, in
+    /// berth [`LEAD_BERTH`].
     fn lead(goal: Goal) -> Npc {
         let mut npc = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
+        npc.berth = LEAD_BERTH;
         npc.class = EscortClass::Medium;
         npc.goal = goal;
         npc
@@ -858,6 +875,109 @@ mod tests {
         let (decision, asked) = decided_with(&npcs, Some(EscortOrder::Hold), (0.0, 0.0), &[0]);
         assert_eq!((decision.goal, asked), (Goal::Wait, vec![]));
         assert!(!decision.ends_wait);
+    }
+
+    // +0x6c, its travel stellar (`travel::order_block`).
+
+    /// How the decision of `npcs[1]` under `order` writes its travel
+    /// stellar, the player far off.
+    fn travel(npcs: &[Npc], order: Option<EscortOrder>) -> TravelWrite {
+        decided_with(npcs, order, (0.0, 5000.0), &[0]).0.travel
+    }
+
+    #[test]
+    fn formation_and_a_fighters_return_write_the_leads_slot() {
+        // Formation @0x83f09, Return @0x83e9f, a fight with nothing to
+        // fight @0x83dac and @0x83e9f.
+        let npcs = [lead(Goal::Idle), escort()];
+        for order in [
+            None,
+            Some(EscortOrder::Defend),
+            Some(EscortOrder::Attack),
+            Some(EscortOrder::Dock),
+        ] {
+            assert_eq!(
+                travel(&npcs, order),
+                TravelWrite::Set(travel::of_slot(LEAD_BERTH)),
+                "{order:?}"
+            );
+        }
+        let npcs = [lead(Goal::Idle), fighter(n(1))];
+        assert_eq!(
+            travel(&npcs, Some(EscortOrder::Dock)),
+            TravelWrite::Set(travel::of_slot(LEAD_BERTH)),
+            "docking"
+        );
+    }
+
+    #[test]
+    fn an_attack_order_clears_it_for_a_new_threat_and_keeps_it_for_a_kept_target() {
+        let attack = Some(EscortOrder::Attack);
+        let threat = raider(3, 0.0, 100.0, n(1));
+        let npcs = [lead(Goal::Idle), escort(), threat.clone()];
+        assert_eq!(decided(&npcs, attack, &[]).0, Goal::Attack(n(3)));
+        assert_eq!(travel(&npcs, attack), TravelWrite::Clear, "@0x83d83");
+        let npcs = [lead(Goal::Idle), targeting(escort(), n(3)), threat];
+        assert_eq!(travel(&npcs, attack), TravelWrite::Keep, "@0x83d6d");
+    }
+
+    #[test]
+    fn a_defend_order_writes_nothing_while_it_fights() {
+        let defend = Some(EscortOrder::Defend);
+        let threat = raider(3, 0.0, 100.0, n(1));
+        let npcs = [lead(Goal::Idle), escort(), threat.clone()];
+        assert_eq!(decided(&npcs, defend, &[]).0, Goal::Attack(n(3)));
+        assert_eq!(travel(&npcs, defend), TravelWrite::Keep, "@0x83e4b");
+        let npcs = [lead(Goal::Idle), targeting(escort(), n(3)), threat];
+        assert_eq!(travel(&npcs, defend), TravelWrite::Keep, "@0x83cd6");
+    }
+
+    #[test]
+    fn hold_clears_it() {
+        let npcs = [lead(Goal::Idle), escort()];
+        assert_eq!(
+            travel(&npcs, Some(EscortOrder::Hold)),
+            TravelWrite::Clear,
+            "@0x83e65"
+        );
+    }
+
+    #[test]
+    fn following_a_jump_copies_the_leads() {
+        // @0x83a77-0x83a7c, through what +0x6c reads as for the lead: its
+        // flag, or a stellar goal.
+        let on_jump = |lead: &mut Npc| lead.begin_own_jump();
+        assert_eq!(entering(on_jump).0.travel, TravelWrite::Clear);
+        let (decision, _) = entering(|lead: &mut Npc| {
+            on_jump(lead);
+            lead.travel = Some(crate::catalog::StellarId(150));
+        });
+        assert!(decision.follows_jump);
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(crate::catalog::StellarId(150))
+        );
+        let (decision, _) = entering(|lead: &mut Npc| {
+            lead.goal = Goal::Land(crate::catalog::StellarId(128));
+            lead.warp.stage = 0.5;
+        });
+        assert!(decision.follows_jump);
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(crate::catalog::StellarId(128))
+        );
+    }
+
+    #[test]
+    fn a_kept_goal_and_the_lost_parent_write_nothing() {
+        for goal in [Goal::CountWait, Goal::Assist(Help::Refuel)] {
+            let mut kept = escort();
+            kept.goal = goal;
+            let npcs = [lead(Goal::Idle), kept];
+            assert_eq!(travel(&npcs, None), TravelWrite::Keep, "{goal:?}");
+        }
+        let npcs = [bystander(9, 3000.0, 0.0), escort()];
+        assert_eq!(travel(&npcs, None), TravelWrite::Keep, "the lost parent");
     }
 
     #[test]

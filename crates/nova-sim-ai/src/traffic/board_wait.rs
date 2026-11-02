@@ -20,9 +20,12 @@
 //!   so it reads the ships of lower slots as their thinks this frame left
 //!   them and the higher ones as last frame's: of two pirates on one
 //!   boarded victim, the lower waits and the higher attacks. The traffic
-//!   decides every NPC from one view, so [`resolve`] replays that order
-//!   as a pass over the decisions, by berth: a lower berth's new goal, a
-//!   higher berth's goal as the tick found it. A lower berth's sub-goal
+//!   thinks each slot in its own run, so a lower berth reads as its goal
+//!   stands, this tick's; a run of several slots
+//!   ([`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)'s other
+//!   reading) decides them from one view, so [`resolve`] replays that
+//!   order as a pass over the decisions, by berth: a lower berth's new
+//!   goal, a higher berth's goal as the tick found it. A lower berth's sub-goal
 //!   0xe is read from its goal and the frame it flew last tick, its new
 //!   frame being worked out after the decisions
 //!   ([`pursuit`](crate::ai::pursuit)): a stand-off ship that took up its
@@ -100,6 +103,8 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
                 plunders: None,
                 // +0x6c -1 (@0x8c70d).
                 travel: TravelWrite::Clear,
+                // Sub 0 (@0x8c6fe), ending a dock under its wait.
+                writes_sub: true,
                 ..*decision
             };
         }
@@ -276,7 +281,10 @@ mod tests {
         assert_eq!(waited.goal, WAIT);
         assert!(!waited.calls_reinforcements, "@0x8d4b9-0x8d4d2");
         assert!(waited.turns_on_player, "made before the loop");
-        assert!(waited.clears_target, "target -1");
+        assert!(
+            waited.clears_target && waited.writes_sub,
+            "target -1, sub 0 (@0x8c6fe)"
+        );
         assert_eq!(waited.travel, TravelWrite::Clear, "+0x6c -1, @0x8c70d");
         let lone = [ship(1, 1, Goal::Idle), victim()];
         let mut decisions = vec![Some(waiting_on(n(9))), None];

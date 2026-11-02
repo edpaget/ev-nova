@@ -60,6 +60,7 @@
 //! module).
 
 use crate::ai::flee_drop::{flees_a_stranger_ally, within_reach};
+use crate::ai::hopeless_flee::HopelessFlee;
 use crate::ai::{Decision, Goal, Surroundings};
 use crate::catalog::GovtId;
 use crate::traffic::npc::Npc;
@@ -102,12 +103,21 @@ pub fn odds_factor(npc: &Npc, around: &Surroundings) -> f32 {
 }
 
 /// `decision` with `_HighLevelAIHandler`'s call added (see
-/// [`high_level_calls`]): what every think of `npc` ends with.
+/// [`high_level_calls`]): what every think of `npc` ends with. A hopeless
+/// flee written this frame ([`Decision::hopeless_flee`]) came after goal
+/// 3's block: goal 4's calls as the state-4 tail on the ship it flees
+/// (@0x8e70d), whatever the reach, and goal 0xd's makes none (@0x8eb6b).
 #[must_use]
 pub fn with_high_level_call(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
+    let calls = match (decision.hopeless_flee, decision.goal) {
+        (Some(HopelessFlee::Attack), Goal::Flee(ship)) => {
+            high_level_calls(npc, Goal::Attack(ship), around)
+        }
+        (Some(_), _) => false,
+        (None, goal) => high_level_calls(npc, goal, around),
+    };
     Decision {
-        calls_reinforcements: decision.calls_reinforcements
-            || high_level_calls(npc, decision.goal, around),
+        calls_reinforcements: decision.calls_reinforcements || calls,
         ..decision
     }
 }

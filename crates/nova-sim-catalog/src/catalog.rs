@@ -2090,6 +2090,14 @@ pub trait PilotCatalog {
     /// The stellars of system `id` that can be read, in its `nav_def`
     /// order; none for a system that cannot be read.
     fn landing_sites(&self, system: SystemId) -> Vec<LandingSite>;
+    /// Stellar `id` as a landing site, of whichever system holds it, when
+    /// it can be read: what a ship's +0x6c names read as a stellar's
+    /// table index (`_MinerAI`'s read and goal 1's, @0x8d8d7-0x8d8e8),
+    /// which may be another system's. None by default.
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        let _ = id;
+        None
+    }
     /// Every system that can be read, by ascending ID, with its map
     /// position and hyperlinks.
     fn star_map(&self) -> Vec<StarSystem>;
@@ -2289,6 +2297,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).landing_sites(system)
     }
 
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        (**self).landing_site(id)
+    }
+
     fn star_map(&self) -> Vec<StarSystem> {
         (**self).star_map()
     }
@@ -2447,6 +2459,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
         (**self).landing_sites(system)
+    }
+
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        (**self).landing_site(id)
     }
 
     fn star_map(&self) -> Vec<StarSystem> {
@@ -2865,6 +2881,14 @@ mod tests {
             id == SystemId(130)
         }
 
+        /// Stellar 140, of no system it lists, unlike the default's none.
+        fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+            (id == StellarId(140)).then(|| LandingSite {
+                id,
+                ..self.landing_sites(SystemId(130))[0]
+            })
+        }
+
         /// System 130 holds stellar 128 at (1, 2); no other system has
         /// any.
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -3219,6 +3243,10 @@ mod tests {
             format!("{:?}", catalog.desc_text(130)),
             format!("{:?}", catalog.stellar_scripts()),
             format!("{:?}", catalog.nav_def_slots()),
+            format!(
+                "{:?}",
+                catalog.landing_site(StellarId(140)).map(|site| site.id)
+            ),
         ]
     }
 
@@ -3480,6 +3508,10 @@ mod tests {
         assert!(
             direct[42].starts_with("[(SystemId(130), [None, Some(StellarId(129)), None"),
             "forwarded, not the default's numbering: {direct:?}"
+        );
+        assert_eq!(
+            direct[43], "Some(StellarId(140))",
+            "forwarded, not the default's none"
         );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);

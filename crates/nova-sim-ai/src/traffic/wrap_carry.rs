@@ -101,7 +101,7 @@ mod tests {
         let gone = traffic.add_npc(ship_at(near));
         traffic.remove_destroyed(gone);
         traffic.carry(&wrap());
-        let kept = traffic.gone.take();
+        let kept = traffic.gone.ships();
         assert_eq!(kept[0].freed, Freed::InShipPass);
         assert_eq!(
             kept[0].ship.state.position,

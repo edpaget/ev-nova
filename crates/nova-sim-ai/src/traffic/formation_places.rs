@@ -47,6 +47,8 @@
 //!
 //! None of these routines plays a sound or draws a random number.
 
+use std::collections::BTreeSet;
+
 use super::Traffic;
 use super::berth_kept::BerthKept;
 use super::fleet_formation::{self, Written};
@@ -61,7 +63,9 @@ pub type BerthPlaces = BerthKept<Vec2>;
 impl Traffic {
     /// One frame's writes of the places (see the module docs), the player
     /// at `player` if it is here.
-    pub(crate) fn write_places(&mut self, player: Option<&ShipState>) {
+    /// `dropped` names the ships the check dropped this pass, which mark
+    /// their parents too ([`fleet_formation::slots`]).
+    pub(crate) fn write_places(&mut self, player: Option<&ShipState>, dropped: &BTreeSet<NpcId>) {
         for npc in &mut self.npcs {
             if let Some(word) = self.berth_places.left(npc.berth) {
                 npc.slot_place = Some(word);
@@ -70,7 +74,7 @@ impl Traffic {
         if let Some(player) = player {
             self.write_players_places(player);
         }
-        for written in fleet_formation::written(&self.npcs, None) {
+        for written in fleet_formation::written(&self.npcs, None, dropped) {
             let Written {
                 follower,
                 berth,
@@ -90,7 +94,7 @@ impl Traffic {
     fn write_players_places(&mut self, player: &ShipState) {
         for npc in &mut self.npcs {
             if swarm::formation_parent(npc) == Some(FormationParent::Player)
-                && let Some(slot) = npc.formation()
+                && let Some(slot) = npc.formation().or(npc.fleet_slot)
             {
                 let place = slot.position(player);
                 self.berth_places.write(npc.berth, Some(place));
@@ -103,7 +107,7 @@ impl Traffic {
     /// docs): only the berths' words, which its followers read at the next
     /// pass, and none for a pod.
     pub fn dispatch_places(&mut self, parent: NpcId) {
-        for written in fleet_formation::written(&self.npcs, Some(parent)) {
+        for written in fleet_formation::written(&self.npcs, Some(parent), &BTreeSet::new()) {
             self.berth_places.write(written.berth, Some(written.place));
         }
     }
@@ -243,7 +247,7 @@ mod tests {
     fn nudged_after_a_jump_of_the_lead(berth: u32) -> f32 {
         let (mut traffic, lead, followers) = fleet(&[berth]);
         let follower = followers[0];
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         let old = of(&traffic, lead).state;
         let was = place_of(&traffic, follower, &old);
         shift(&mut traffic, lead, 100.0);
@@ -311,7 +315,7 @@ mod tests {
 
     /// A dispatch of the parent writes them, before it stops.
     fn dispatched(traffic: &mut Traffic, lead: NpcId, stops: &dyn Fn(&mut Npc)) {
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         stops(of_mut(traffic, lead));
     }
 
@@ -348,7 +352,7 @@ mod tests {
         ] {
             of_mut(&mut traffic, lead).condition = condition;
             let state = shift(&mut traffic, lead, 40.0);
-            traffic.form_fleets(None);
+            traffic.form_fleets(None, &BTreeSet::new());
             assert_eq!(
                 of(&traffic, followers[0]).slot_place,
                 Some(place_of(&traffic, followers[0], &state)),
@@ -377,21 +381,21 @@ mod tests {
     #[test]
     fn a_new_ship_below_its_parent_reads_what_its_berth_last_held() {
         let (mut traffic, lead, followers) = fleet(&[BELOW]);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         let word = traffic.berth_place(BELOW);
         assert!(word.is_some(), "the scene");
         traffic.npcs.retain(|npc| npc.id != followers[0]);
         let new = traffic.add_npc_at(follower(lead), BELOW);
         assert_eq!(of(&traffic, new).slot_place, None, "until the pass");
         shift(&mut traffic, lead, 60.0);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         assert_eq!(of(&traffic, new).slot_place, word);
     }
 
     #[test]
     fn a_never_used_berth_reads_zero() {
         let (mut traffic, _, followers) = fleet(&[BELOW]);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         let ship = of(&traffic, followers[0]);
         assert_eq!(ship.slot_place, None);
         assert_eq!(ship.parent_word(), Some(Vec2::ZERO));
@@ -434,14 +438,14 @@ mod tests {
         let world = world_with(Condition::Intact);
         let player = world.player.expect("the player").state;
         let on_player = Some(HIRED.position(&player));
-        traffic.form_fleets(Some(&player));
+        traffic.form_fleets(Some(&player), &BTreeSet::new());
         assert_eq!(of(&traffic, hired).slot_place, on_player);
         assert_eq!(traffic.berth_place(BELOW), on_player);
         // A pirate takes it, and it joins the fleet above it.
         let ship = of_mut(&mut traffic, hired);
         ship.escort = None;
         ship.leader = Some(lead);
-        traffic.form_fleets(Some(&player));
+        traffic.form_fleets(Some(&player), &BTreeSet::new());
         assert_eq!(
             of(&traffic, hired).slot_place,
             on_player,
@@ -450,7 +454,7 @@ mod tests {
         let state = of(&traffic, lead).state;
         let next = Some(place_of(&traffic, hired, &state));
         assert_eq!(traffic.berth_place(BELOW), next);
-        traffic.form_fleets(Some(&player));
+        traffic.form_fleets(Some(&player), &BTreeSet::new());
         assert_eq!(of(&traffic, hired).slot_place, next);
     }
 
@@ -461,9 +465,9 @@ mod tests {
         let world = world_with(Condition::Intact);
         let player = world.player.expect("the player").state;
         let on_player = Some(HIRED.position(&player));
-        traffic.form_fleets(Some(&player));
+        traffic.form_fleets(Some(&player), &BTreeSet::new());
         assert_eq!(of(&traffic, hired).slot_place, on_player, "the scene");
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         assert_eq!(of(&traffic, hired).slot_place, on_player);
         assert_eq!(traffic.berth_place(BELOW), on_player);
     }
@@ -476,7 +480,7 @@ mod tests {
         let loner = traffic.add_npc_at(hired, BELOW);
         let world = world_with(Condition::Intact);
         let player = world.player.expect("the player").state;
-        traffic.form_fleets(Some(&player));
+        traffic.form_fleets(Some(&player), &BTreeSet::new());
         assert_eq!(of(&traffic, loner).slot_place, None, "no parent");
         let lead_state = traffic.npcs()[0].state;
         assert_eq!(
@@ -491,20 +495,20 @@ mod tests {
         let (mut traffic, lead, followers) = fleet(&[BELOW]);
         let follower = followers[0];
         let later = traffic.add_npc_at(lead_at(900.0), ABOVE);
-        traffic.form_fleets(None);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
+        traffic.form_fleets(None, &BTreeSet::new());
         let word = of(&traffic, follower).slot_place;
         assert!(word.is_some(), "the scene");
         traffic.npcs.retain(|npc| npc.id != lead);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         let left = of(&traffic, follower);
         assert_eq!(left.fleet_slot, None, "no parent");
         assert_eq!(left.slot_place, word);
         assert_eq!(traffic.berth_place(BELOW), word);
         of_mut(&mut traffic, follower).leader = Some(later);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         assert_eq!(of(&traffic, follower).slot_place, word, "a frame late");
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         let state = of(&traffic, later).state;
         assert_eq!(
             of(&traffic, follower).slot_place,
@@ -516,24 +520,27 @@ mod tests {
     fn a_follower_gone_leaves_the_late_word_to_the_next_ship_there() {
         let (mut traffic, lead, followers) = fleet(&[BELOW]);
         let state = of(&traffic, lead).state;
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         let word = Some(place_of(&traffic, followers[0], &state));
         traffic.npcs.retain(|npc| npc.id != followers[0]);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         assert_eq!(traffic.berth_place(BELOW), word);
     }
 
     /// A matched [`FAST`] ship far enough off its slot to be nudged by the
     /// advance pass, near a leader moving (1, 0), facing 3 degrees off the
-    /// leader's 30: the second pass moves it and steps its heading, and
-    /// nudges it not at all.
+    /// leader's 30: the second pass moves it and steps its heading by the
+    /// word the advance pass's slot left (its low level read with the ship
+    /// put back after), and nudges it not at all.
     fn second_pass_moves(mut traffic: Traffic, id: NpcId, world: &World) {
-        let ship = of_mut(&mut traffic, id);
-        ship.state = ShipState {
+        let state = ShipState {
             position: Vec2::new(20.0, 0.0),
             velocity: Vec2::new(1.0, 0.0),
             heading: 27.0,
         };
+        of_mut(&mut traffic, id).state = state;
+        traffic.low_levels(world, &mut Draws::of(&[]));
+        of_mut(&mut traffic, id).state = state;
         traffic.move_in(*world, &mut Draws::of(&[]));
         let ship = of(&traffic, id);
         assert_eq!(ship.state.heading, 28.0, "still turning");
@@ -552,7 +559,7 @@ mod tests {
     fn the_second_pass_nudges_no_fleet_escort() {
         let (mut traffic, lead, followers) = fleet(&[ABOVE]);
         of_mut(&mut traffic, lead).state = LEADING;
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         of_mut(&mut traffic, followers[0]).slot_place = Some(Vec2::ZERO);
         second_pass_moves(traffic, followers[0], &World::new(&[]));
     }
@@ -586,8 +593,8 @@ mod tests {
     fn dispatch_places_writes_the_word_for_the_next_frame() {
         let (mut traffic, lead, followers) = fleet(&[BELOW]);
         let follower = followers[0];
-        traffic.form_fleets(None);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
+        traffic.form_fleets(None, &BTreeSet::new());
         let frame_before = of(&traffic, follower).slot_place;
         let released = shift(&mut traffic, lead, 60.0);
         traffic.dispatch_places(lead);
@@ -595,7 +602,7 @@ mod tests {
         assert_eq!(traffic.berth_place(BELOW), word);
         assert_eq!(of(&traffic, follower).slot_place, frame_before, "not yet");
         shift(&mut traffic, lead, 60.0);
-        traffic.form_fleets(None);
+        traffic.form_fleets(None, &BTreeSet::new());
         assert_eq!(of(&traffic, follower).slot_place, word);
     }
 

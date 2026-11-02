@@ -55,9 +55,9 @@
 //!     burst goes on, goal 5 kept, and the next frame's sub 8 writes the
 //!     word again, or lowers it by another pull outside the window.
 //!   - Double time's second pass runs no `_LowLevelAIHandler`
-//!     (`_DoPlayGameWork(0)`), so no word is written
-//!     ([`Beside::second_pass`]): `_HandleShip` bursts on what the advance
-//!     pass left, as [`Word::Keeps`] does.
+//!     (`_DoPlayGameWork(0)`), so no word is written: `_HandleShip` bursts
+//!     on what the advance pass left, as the kept word
+//!     ([`slot_word`](crate::traffic::slot_word)) does.
 //!
 //!   By the other reading it thrusts as the port flew it before
 //!   ([`Word::Writes`]), owing nothing.
@@ -73,36 +73,30 @@
 //!   autopilot's dock records.
 //! - **The player's slot branch** (@0x87fbb-0x87fe3, @0x886f6-0x88711):
 //!   no fighter is slot 0.
-//! - **The pull, the dock test and the window on double time's second
-//!   pass** (@0x87e74-0x880b8): the engine flies them again where the
-//!   original runs no low level, so a fighter whose advance pass ended
-//!   its burst flies goal 0, and one whose window opens on the second
-//!   pass thrusts plainly. That is
-//!   rdm:phase/play-feel-9/phase-13-double-time-second-pass-runs-no-low-level's.
 
 use crate::ai::fire;
 use crate::bay::DOCK_TURN_SLACK;
 use crate::escort::FORMATION_NUDGE;
-use crate::flight::{self, Controls, FlightRules, ShipState};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 #[cfg(doc)]
-use crate::traffic::autopilot::{self, Beside, TopSpeeds};
-use crate::traffic::held_burst::{self, Word};
-use crate::traffic::inertialess::Inertia;
+use crate::traffic::autopilot::{self, TopSpeeds};
+#[cfg(doc)]
+use crate::traffic::held_burst;
+use crate::traffic::held_burst::{Flight, Word};
 use crate::traffic::npc::Npc;
 #[cfg(doc)]
 use crate::traffic::return_flight;
+use crate::traffic::slot_word::Cap;
 use crate::trig;
 
 /// What sub 8's flight flies by beside its handling.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct By {
-    /// The flight rules.
-    pub flight: FlightRules,
-    /// How it flies this tick.
-    pub inertia: Inertia,
     /// Its own top speed, `_ShipMaxSpeed`
     /// ([`TopSpeeds::own`](crate::traffic::autopilot::TopSpeeds::own)),
     /// which the preamble writes as its word.
@@ -111,65 +105,42 @@ pub(crate) struct By {
     /// [`RuleKey::HeldGateBurst`](crate::RuleKey::HeldGateBurst): by the
     /// engine's it flies the word (see the module docs).
     pub word: RuleSource,
-    /// Whether it flies double time's second pass, which writes no word.
-    pub second_pass: bool,
     /// Whether it is within its carrier's reach with no bay for it:
     /// `_AIAddFighterToParent` writes nothing (@0x80384) and sub 8 exits
     /// to @0x88111, past the pull and the word.
     pub unpulled: bool,
 }
 
-/// One tick of `npc` docking with a carrier at `carrier`, inside its dock
-/// window, on `handling` (see the module docs): it turns to the carrier's
-/// table bearing, thrusting within its window by its heading before the
-/// turn, its word as `by` says, flies ([`held_burst::step`]), and is
-/// [`pulled`] towards the carrier.
-pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: By) {
+/// One tick of `npc`'s sub 8 docking with a carrier at `carrier`, inside
+/// its dock window, on `handling`, at its slot (see the module docs): it
+/// wants the carrier's table bearing, thrusting within its window by its
+/// heading at the slot, its burst word written as `by` says, and is
+/// [`pulled`] towards the carrier. Its flight, which `_HandleShip` flies
+/// at its step ([`held_burst::step`]): by the engine's reading a burst
+/// along its heading at its pull within the window ([`Word::Keeps`]), by
+/// the other a plain thrust ([`Word::Writes`]). Double time's second pass
+/// flies the advance pass's word again, writing none.
+pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: By) -> Flight {
     // +0x68, the table's bearing of the carrier (@0x87e81-0x87e9d).
     let wanted = trig::intercept_angle(npc.state.position, carrier.position);
     // Off it by less than a turn and the slack, strictly, by its heading
-    // before `_HandleShip` turns it (@0x87ea9-0x87ee4).
+    // before `_HandleShip` turns it (@0x87ea9-0x87ee4), its turn rate read
+    // at the slot (@0x87eb6).
     let window = fire::off_by(npc.state.heading, wanted) < handling.turn_rate + DOCK_TURN_SLACK;
     let controls = Controls {
         thrust: window,
-        turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
         ..Controls::default()
     };
     let pull = handling.accel * FORMATION_NUDGE;
     let thrust = if window { handling.accel } else { 0.0 };
-    match by.word {
-        RuleSource::Engine if by.second_pass => {
-            held_burst::step(
-                npc,
-                handling,
-                controls,
-                by.flight,
-                by.inertia,
-                Word::Keeps { thrust },
-            );
-        }
+    let word = match by.word {
         RuleSource::Engine if window => {
             // +0x34 = 0, then less the pull (@0x87ef8, @0x880c0), unless
             // it exits before the pull.
             npc.owed_burst = (pull > 0.0 && !by.unpulled).then_some(pull);
-            held_burst::step(
-                npc,
-                handling,
-                controls,
-                by.flight,
-                by.inertia,
-                Word::Keeps { thrust },
-            );
+            Word::Keeps { thrust }
         }
         RuleSource::Engine => {
-            held_burst::step(
-                npc,
-                handling,
-                controls,
-                by.flight,
-                by.inertia,
-                Word::Keeps { thrust },
-            );
             // The preamble's word, less the pull (@0x851e9-0x8520d,
             // @0x880c0), unless it exits before the pull.
             if !by.unpulled {
@@ -178,14 +149,14 @@ pub(crate) fn fly(npc: &mut Npc, carrier: &ShipState, handling: &Handling, by: B
                     None => (pull > by.top).then_some(pull - by.top),
                 };
             }
+            Word::Keeps { thrust }
         }
-        RuleSource::Bible => {
-            held_burst::step(npc, handling, controls, by.flight, by.inertia, Word::Writes);
-        }
-    }
+        RuleSource::Bible => Word::Writes,
+    };
     if !by.unpulled {
         npc.state.position = pulled(npc.state.position, carrier.position, pull);
     }
+    Flight::writes(controls, wanted, Cap::Step).doing(word)
 }
 
 /// `at` pulled by `pull` towards `to` on each axis, as sub 8 tests it
@@ -337,14 +308,6 @@ mod tests {
         }
     }
 
-    /// Double time's second pass.
-    fn second_pass() -> Beside {
-        Beside {
-            second_pass: true,
-            ..Beside::default()
-        }
-    }
-
     fn pull_of(npc: &Npc) -> f32 {
         npc.stats.handling.accel * FORMATION_NUDGE
     }
@@ -471,36 +434,6 @@ mod tests {
     }
 
     // Double time's second pass.
-
-    #[test]
-    fn on_the_second_pass_it_writes_no_word_and_bursts_on_what_the_advance_pass_left() {
-        // `_DoPlayGameWork(0)` runs no `_LowLevelAIHandler`, so no sub 8.
-        let left = 9.0
-            * docking(FAST, ShipState::default(), None)
-                .stats
-                .handling
-                .accel;
-        let mut ship = docking(FAST, at(0.0, -60.0, 0.0, 0.0, 180.0), Some(left));
-        let accel = ship.stats.handling.accel;
-        let rules = FlightRules::default();
-        fly_by(&mut ship, Readings::default(), second_pass(), rules);
-        assert!(
-            close(ship.state.velocity, facing(180.0) * left),
-            "at what it owed, not its pull: {:?}",
-            ship.state
-        );
-        assert!(near(ship.owed_burst, left - accel), "{:?}", ship.owed_burst);
-        // Outside its window its word is not lowered.
-        let away = at(0.0, -60.0, 0.0, 0.0, 0.0);
-        let mut ship = docking(FAST, away, Some(5.0));
-        fly_by(&mut ship, Readings::default(), second_pass(), rules);
-        assert_eq!(ship.owed_burst, Some(5.0));
-        let mut ship = docking(SLOW_TOP, away, None);
-        fly_by(&mut ship, Readings::default(), second_pass(), rules);
-        assert_eq!(ship.owed_burst, None);
-    }
-
-    // By the other reading.
 
     #[test]
     fn by_the_other_reading_it_thrusts_dropping_what_it_owed_and_lowers_nothing() {

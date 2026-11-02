@@ -561,7 +561,7 @@ pub(super) mod tests {
         assert_eq!(session.space.traffic.berth_place(berth), None, "the scene");
         opened(&mut session, &catalog);
         session.press_escort(EscortButton::Close);
-        let (_, slot) = fleet_formation::slots(session.npcs())
+        let (_, slot) = fleet_formation::slots(session.npcs(), &std::collections::BTreeSet::new())
             .into_iter()
             .find(|&(follower, _)| follower == id)
             .expect("a slot");

@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(victor(&[trader.clone()]), None, "a trader");
         let carried = Npc {
             carrier: Some(Carrier {
-                ship: ShipRef::Player,
+                ship: ShipRef::Npc(NpcId(5)),
                 window: 100.0,
                 reach: 40.0,
             }),

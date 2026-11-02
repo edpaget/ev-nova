@@ -9,6 +9,24 @@
 //! toward its holder's velocity (rest when it holds itself) unless it was
 //! released, then the age, on the advance pass alone, and the lapse.
 //!
+//! The holder is a slot (+0xc8dc), which the release tests (+0xb8
+//! @0x68468, `_IsDisabled` @0x68474, `_IsDying` @0x68498) and the pull
+//! reads. A spawn rewrites a slot and leaves the player's +0xc8dc
+//! (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), so a player whose
+//! holder's berth is taken before its next hold is held, and pulled, by
+//! the newcomer. Before the release, the lock follows each berth the
+//! traffic says was taken since the last hold, in order
+//! ([`Traffic::take_berths_taken`], see
+//! [`tractor_hold`](crate::traffic::tractor_hold)). A take can come between
+//! two holds through a free in a dialog (the hail's swap @0x62520), in the
+//! AI loop or in the ship loop (a gate entry @0x2c078, a wreck's display
+//! @0x2dee0), before a later arrival (`_EnterMoreShips` @0x44237), a launch
+//! in the AI loop (@0x3c8c6-0x3c8e9) or an escape ship's launch
+//! (@0x354ea). A deadly stellar's kill (@0x4450e) comes after the ship
+//! loop, so the next hold releases first. Double time's second pass
+//! skips the arrivals and the AI loop, but its ship loop can still launch.
+//! A berth freed and not taken still reads as gone, and releases.
+//!
 //! **The step** ([`PlayerShip::tractor_step`]): a quarter of slot 0's
 //! `_ShipAccelRate`, for the player's hold and every NPC's
 //! ([`World::tractor_step`](crate::traffic::World::tractor_step)): the
@@ -35,6 +53,9 @@ use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::combat::tractor_hold::{Holder, held_by_other, player_pass, step};
 use crate::pilot::Pilot;
+#[cfg(doc)]
+use crate::traffic::Traffic;
+use crate::traffic::tractor_hold::BerthTaken;
 
 impl Session {
     /// Whether a ship other than the player holds it in a tractor beam
@@ -44,8 +65,12 @@ impl Session {
         self.ship.held_by_other()
     }
 
-    /// The player's frame's hold on `pass` (see the module docs).
+    /// The player's frame's hold on `pass` (see the module docs): its lock
+    /// follows each berth taken since the last hold first
+    /// ([`Traffic::take_berths_taken`]).
     pub(super) fn hold_player(&mut self, pass: GamePass) {
+        let takes = self.space.traffic.take_berths_taken();
+        self.ship.follow_berths(&takes);
         let step = self
             .ship
             .tractor_step(&self.pilot, &self.setup, self.mode.jump());
@@ -99,6 +124,20 @@ impl PlayerShip {
         self.tractor = lock;
     }
 
+    /// Its lock follows each of `takes` in order: a holder whose berth a
+    /// newcomer took is the newcomer, so a chain of takes follows to the
+    /// last (see the module docs).
+    fn follow_berths(&mut self, takes: &[BerthTaken]) {
+        let Some(lock) = self.tractor.as_mut() else {
+            return;
+        };
+        for take in takes {
+            if lock.holder == ShipRef::Npc(take.old) {
+                lock.holder = ShipRef::Npc(take.new);
+            }
+        }
+    }
+
     /// Drops the player's lock, as a landing completes and as a jump
     /// arrives (see the module docs).
     pub(super) fn clear_tractor(&mut self) {
@@ -119,7 +158,7 @@ mod tests {
     use crate::session::tests::{OUT, armed, bound_for_131, facing_an_npc, knocking, tractor_beam};
     use crate::testkit::catalog;
     use crate::testkit::{work, work_with};
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{Npc, NpcId};
     use nova_sim_base::NeverFires;
 
     const NPC: ShipRef = ShipRef::Npc(NpcId(0));
@@ -308,6 +347,102 @@ mod tests {
         work(&mut gone, &crate::testkit::catalog(), Controls::default());
         assert_eq!(gone.tractor(), None);
         assert_eq!(gone.player().velocity, Vec2::ZERO);
+    }
+
+    /// `old`, wrecked, its slot freed at its display in the ship loop
+    /// (@0x2dee0) and taken there by `newcomer`, a later slot's escape
+    /// launch (@0x354ea), then taken out after the loop: the newcomer's
+    /// number. The wreck is in the system, with no record, as the take
+    /// reads it.
+    fn wreck_taken(session: &mut Session, old: NpcId, newcomer: Npc) -> NpcId {
+        let traffic = &mut session.space.traffic;
+        let wreck = (traffic.npcs_mut().iter_mut())
+            .find(|npc| npc.id == old)
+            .expect("there");
+        wreck.condition = Condition::Destroyed;
+        let berth = wreck.berth;
+        traffic.set_ship_loop(true);
+        let newcomer = traffic.add_npc_at(newcomer, berth);
+        traffic.set_ship_loop(false);
+        traffic.remove_destroyed(old);
+        newcomer
+    }
+
+    /// `held`'s session with NPC 0's berth taken by a newcomer moving at
+    /// `velocity` before the player's next hold, in the ship loop, by a
+    /// later slot's escape launch past NPC 0's wreck ([`wreck_taken`]):
+    /// the session and the newcomer.
+    fn taken(velocity: Vec2) -> (Session, NpcId) {
+        let mut session = held(Vec2::new(-2.0, 2.0));
+        let mut newcomer = session.space.traffic.npcs()[0].clone();
+        newcomer.state.velocity = velocity;
+        let newcomer = wreck_taken(&mut session, NpcId(0), newcomer);
+        (session, newcomer)
+    }
+
+    #[test]
+    fn a_player_held_by_a_ship_whose_berth_is_taken_before_its_next_hold_is_kept_and_pulled_toward_the_newcomer()
+     {
+        // `_HandlePlayer` reads +0xc8dc as a slot (@0x68468-0x684b7), which
+        // the spawn rewrote: the newcomer is intact, and pulls.
+        let (mut session, newcomer) = taken(Vec2::new(3.0, -3.0));
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
+        session.hold_player(GamePass::Advance { double_time: false });
+        assert_eq!(
+            session.tractor().map(|lock| lock.holder),
+            Some(ShipRef::Npc(newcomer))
+        );
+        assert_eq!(session.player().velocity, Vec2::new(step, -step));
+    }
+
+    #[test]
+    fn on_the_second_pass_a_taken_berth_keeps_the_player_held_too() {
+        let (mut session, newcomer) = taken(Vec2::new(3.0, 0.0));
+        session.hold_player(GamePass::Again);
+        assert_eq!(
+            session.tractor().map(|lock| lock.holder),
+            Some(ShipRef::Npc(newcomer))
+        );
+    }
+
+    #[test]
+    fn a_take_of_another_berth_leaves_the_players_hold_alone() {
+        let mut session = held(Vec2::new(-2.0, 2.0));
+        let mut other = session.space.traffic.npcs()[0].clone();
+        other.state.velocity = Vec2::new(3.0, -3.0);
+        let gone = session
+            .space
+            .traffic
+            .add_npc_at(other.clone(), other.berth + 1);
+        wreck_taken(&mut session, gone, other);
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
+        session.hold_player(GamePass::Advance { double_time: false });
+        assert_eq!(session.tractor().map(|lock| lock.holder), Some(NPC));
+        assert_eq!(session.player().velocity, Vec2::new(-step, step));
+    }
+
+    #[test]
+    fn a_player_follows_a_chain_of_takes_of_its_holders_berth() {
+        // Two takes before one hold span two windows (a wreck's in the ship
+        // loop, then a leave and a launch in the next AI loop, say); the
+        // traffic reads each take alike, so both are wrecks' here.
+        let (mut session, first) = taken(Vec2::new(-3.0, 0.0));
+        let mut second = session.space.traffic.npcs()[0].clone();
+        second.state.velocity = Vec2::new(0.0, 3.0);
+        let second = wreck_taken(&mut session, first, second);
+        let step = session
+            .ship
+            .tractor_step(&session.pilot, &session.setup, session.mode.jump());
+        session.hold_player(GamePass::Advance { double_time: false });
+        assert_eq!(
+            session.tractor().map(|lock| lock.holder),
+            Some(ShipRef::Npc(second))
+        );
+        assert_eq!(session.player().velocity, Vec2::new(0.0, step));
     }
 
     #[test]

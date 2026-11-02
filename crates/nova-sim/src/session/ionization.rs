@@ -518,6 +518,41 @@ mod tests {
         assert_eq!(session.space.npc(id).expect("there").ion.charge, 9.0);
     }
 
+    #[test]
+    fn a_session_tick_flies_an_ionised_npc_by_the_accel_its_slot_read_before_the_shed() {
+        // Wiring: the slot read in the session's slot-by-slot
+        // `dispatch_npcs`, the thrust in its ship loop
+        // (`nova_sim_ai::traffic::slot_word`).
+        use crate::ai::Goal;
+        use crate::flight::FlightRules;
+        use crate::session::tests::{arming, blaster, with_an_npc_at};
+        let catalog = arming(blaster(), blaster(), 0);
+        let mut session = with_an_npc_at(&catalog, 750, 850, 0);
+        let id = session.npcs()[0].id;
+        let npc = session.space.npc_mut(id).expect("there");
+        npc.state.position = Vec2::new(0.0, 2000.0);
+        npc.state.heading = 0.0;
+        npc.goal = Goal::Attack(ShipRef::Player);
+        npc.target = Some(ShipRef::Player);
+        npc.stats.ion.class_capacity = 400.0;
+        npc.stats.ion.class_rate = 100.0;
+        npc.ion.charge = 300.0;
+        let accel = |charge: f32| {
+            let mut ship = session.npcs()[0].clone();
+            ship.ion.charge = charge;
+            let top = ship.stats.handling.max_speed;
+            ship.flying_handling(top, FlightRules::default()).accel
+        };
+        let (slot, step) = (accel(300.0), accel(200.0));
+        assert_ne!(slot, step);
+        work(&mut session, &catalog, Controls::default());
+        let npc = session.space.npc(id).expect("there");
+        assert_eq!(npc.ion.charge, 200.0);
+        let word = session.space.traffic.word_of(id).expect("its slot's");
+        assert_eq!(word.flown().accel, slot);
+        assert_eq!(npc.state.velocity, Vec2::new(0.0, -slot));
+    }
+
     // The display.
 
     #[test]

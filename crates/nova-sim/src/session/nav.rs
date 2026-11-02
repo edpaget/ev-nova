@@ -1010,6 +1010,24 @@ impl Chart {
         }
     }
 
+    /// The player's +0x6c as a ship's travel stellar reads it
+    /// (`nova_sim_ai::ai::travel`): the stellar selected in mode 2; in mode
+    /// 3 the Con slot the selection stands in, read as the stellar of ID
+    /// 128 + slot ([`travel::of_slot`](crate::ai::travel::of_slot)); none for
+    /// -1. It reads the raw selection, so one with no visible system at its
+    /// place still holds its slot. During a jump +0x6c is a Con slot: J
+    /// jumps only in mode 3 (@0x6b11e-0x6b131), and every jump leaves +0x6c
+    /// alone until the arrival (@0x6be25-0x6be2b).
+    pub(super) fn held_selection(&self, pilot: &Pilot) -> Option<StellarId> {
+        match self.nav {
+            NavMode::Stellar(stellar) => stellar,
+            NavMode::Hyperspace(_) => u32::try_from(self.mode_3_slot(pilot))
+                .ok()
+                .map(crate::ai::travel::of_slot),
+            NavMode::Off => None,
+        }
+    }
+
     /// The slot +0x6c holds in mode 3, the one the selection stands in, or
     /// −1 with nothing selected there, or in any other mode.
     fn mode_3_slot(&self, pilot: &Pilot) -> i32 {
@@ -1156,6 +1174,43 @@ mod tests {
     fn quiet(mut session: Session) -> Session {
         session.take_sounds();
         session
+    }
+
+    // +0x6c as a ship's travel stellar reads it.
+
+    #[test]
+    fn the_selection_held_is_the_stellar_in_mode_2_and_the_con_slot_in_mode_3() {
+        use crate::ai::travel::of_slot;
+        let mut session = Session::start(&hub()).expect("starts");
+        let held = |session: &Session| session.chart.held_selection(&session.pilot);
+        for (nav, expected) in [
+            (NavMode::Off, None),
+            (NavMode::Stellar(None), None),
+            (stellar(129), Some(StellarId(129))),
+            (NavMode::Hyperspace(None), None),
+            (hyperspace(134), Some(of_slot(0))),
+            (hyperspace(131), Some(of_slot(1))),
+            (hyperspace(135), Some(of_slot(5))),
+        ] {
+            session.chart.set_nav(nav);
+            assert_eq!(held(&session), expected, "{nav:?}");
+        }
+    }
+
+    #[test]
+    fn a_selection_with_no_visible_system_holds_its_con_slot() {
+        // +0x6c is the slot, resolved by place only as it is read.
+        use crate::ai::travel::of_slot;
+        let mut catalog = hub();
+        hideable(&mut catalog);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(hide(&mut session, &catalog, &[135]));
+        session.chart.set_nav(hyperspace(135));
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None), "by place");
+        assert_eq!(
+            session.chart.held_selection(&session.pilot),
+            Some(of_slot(5))
+        );
     }
 
     // Start and load.

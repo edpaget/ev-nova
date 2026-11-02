@@ -216,6 +216,21 @@ pub(super) struct Escorts {
 }
 
 impl Space {
+    /// The traffic's rules of a reused slot and a spawn's animation, as
+    /// `rules` reads them (see `Session::with_rules`).
+    pub(super) fn read_reused_slot_rules(&mut self, rules: &crate::rulebook::Rulebook) {
+        use crate::rulebook::RuleKey;
+        let traffic = &mut self.traffic;
+        traffic.set_reused_slot_pick(rules.source_for(RuleKey::ReusedSlotPick));
+        traffic.set_reused_slot_heading(rules.source_for(RuleKey::ReusedSlotHeading));
+        traffic.set_reused_slot_exits(rules.source_for(RuleKey::ReusedSlotExits));
+        traffic.set_reused_slot_blink_timer(rules.source_for(RuleKey::ReusedSlotBlinkTimer));
+        traffic
+            .set_spawn_anim_rolls_first_class(rules.source_for(RuleKey::SpawnAnimRollsFirstClass));
+        traffic.set_reused_slot_search(rules.source_for(RuleKey::ReusedSlotSearch));
+        traffic.set_reused_slot_voice(rules.source_for(RuleKey::ReusedSlotVoice));
+    }
+
     /// The system's contents as a session starts or loads: an empty
     /// system, to be populated on the first traffic tick in flight.
     pub(super) fn new() -> Self {

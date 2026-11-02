@@ -23,7 +23,10 @@
 //! stays as it is. `_AISetup` (@0x65c76) clears its order word (+0xc90a),
 //! which is also its standing order, so it keeps formation
 //! ([`Npc::order_word`] [`OrderWord::NONE`], the record's order none),
-//! unlike a self-repair's rejoin, which keeps the order. The six
+//! unlike a self-repair's rejoin, which keeps the order, and its swarm
+//! leader and formation parent (+0xc906, +0xc92e,
+//! [`Npc::clear_swarm_words`]), which a self-repair's rejoin keeps too,
+//! running no `_AISetup` (@0x33b11-0x33b51). The six
 //! commodities in its own hold are added to the player's
 //! (@0x65c7b-0x65ca2), with no hold check and no reset, its own hold left
 //! as it is: the share it took as it was lost (see the `escorts`
@@ -110,6 +113,7 @@ impl Session {
             return;
         };
         npc.order_word = OrderWord::NONE;
+        npc.clear_swarm_words();
         let hold: Vec<(Good, u32)> = npc.cargo.held().collect();
         let record = Escort {
             order: None,
@@ -229,6 +233,8 @@ mod tests {
         let trader = &mut session.space.traffic.npcs_mut()[0];
         trader.former = Some(former_trader());
         trader.order_word = OrderWord(3);
+        trader.swarm_leader = Some(2);
+        trader.form_parent = Some(2);
         let _ = (session.take_messages(), session.take_sounds());
         session.take_save_due();
         session
@@ -259,6 +265,7 @@ mod tests {
         assert!(npc.boarded, "marked boarded again at the tail");
         assert_eq!(npc.former, None);
         assert_eq!(npc.order_word, OrderWord::NONE, "`_AISetup`");
+        assert_eq!((npc.swarm_leader, npc.form_parent), (None, None));
         assert_eq!(
             session.pilot().escorts(),
             [Escort {

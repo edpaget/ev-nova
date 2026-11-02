@@ -14,7 +14,9 @@
 //! at a ship in the system and not breaking up, however it arrives
 //! ([`Surroundings::standing`]), it also launches its fighters
 //! ([`Trigger::bays`], `_AILaunchFighter` from the attack state, see
-//! [`bay`](crate::bay)).
+//! [`bay`](crate::bay)), and so it does on the first frame of a flight goal
+//! 4's high level wrote, which jumps to the attack state's tail
+//! (@0x8e6e5-0x8e6fa, [`hopeless_flee`](super::hopeless_flee)).
 //!
 //! - **The passes**, each body of its frame's in turn
 //!   ([`pursuit::Frame`]), each gate outside its call, so a pass whose
@@ -192,7 +194,7 @@
 #[cfg(doc)]
 use crate::ai::PlayerSide;
 use crate::ai::swarm::{self, SwarmLead};
-use crate::ai::{Goal, Surroundings, fire_untargeted, pursuit};
+use crate::ai::{Surroundings, fire_untargeted, hopeless_flee, pursuit};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, blind_spot, quadrant_off};
@@ -555,6 +557,18 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
     }
 }
 
+/// Whether `npc`, of AI type 4 or below, holds its fire as it docks or
+/// drifts: subs 9 and 0xb end in `_AIEscortFireUnprovoked`, which returns
+/// for AI type 4 or below (@0x80e59-0x80e61), sub 0xf fires nothing, and
+/// so does the drift's sub 0; nor does its high level, skipped while the
+/// dock waits, launch fighters. The pirate's, the traders' and the
+/// interceptor's triggers ask it, a docking a copied plunder gave
+/// included.
+#[must_use]
+pub fn quiet(npc: &Npc) -> bool {
+    npc.docking.is_some() || npc.goal == crate::ai::Goal::Drift
+}
+
 /// The weapon `npc` fires now among `around`, if any (see the module
 /// docs), its fighter bays while it attacks or snipes at a ship standing
 /// there ([`launches`]), and its point defence while its manoeuvre reaches a turret
@@ -594,14 +608,16 @@ fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool)
 /// Whether `npc` launches its fighters: attacking or sniping at a ship
 /// the attack block finds standing (+0xb8 @0x8e3df, `_IsDying` @0x8e3ef),
 /// however it arrives (`_AILaunchFighter` from `_HighLevelAIHandler`'s
-/// attack block, @0x8e6fa, which reads no sight), or fleeing it in the
-/// block's hopeless chase ([`Npc::flees_hopeless`], @0x8e625 → @0x8e6e5).
+/// attack block, @0x8e6fa, which reads no sight), or on the first frame of
+/// a flight goal 4's high level wrote, which jumps to that block's tail,
+/// its own `_IsDisabled` test first (@0x8e6e5-0x8e6fa,
+/// [`hopeless_flee`](super::hopeless_flee)).
 fn launches(npc: &Npc, around: &Surroundings) -> bool {
-    let quarry = match npc.goal {
-        Goal::Flee(ship) if npc.flees_hopeless => Some(ship),
-        goal => goal.attacking(),
-    };
-    quarry.is_some_and(|ship| around.standing(ship))
+    let fled = hopeless_flee::attack_fled(npc).filter(|_| npc.active_not_disabled());
+    npc.goal
+        .attacking()
+        .or(fled)
+        .is_some_and(|ship| around.standing(ship))
 }
 
 /// Whether `npc` launches its fighters after its passes, as the snipe
@@ -2895,6 +2911,21 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_docking_or_drifting_is_quiet_and_any_other_is_not() {
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let mut npc = shooter(&[gun(128, 1, 1)], Goal::Attack(ShipRef::Player));
+        assert!(!quiet(&npc));
+        npc.docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Dock,
+        });
+        assert!(quiet(&npc), "docking");
+        npc.docking = None;
+        npc.goal = Goal::Drift;
+        assert!(quiet(&npc), "drifting");
+    }
+
+    #[test]
     fn a_plunderer_docking_with_a_disabled_victim_fires_nothing_and_launches_nothing() {
         let mut npc = shooter(
             &[gun(128, 1, 1), bay(150)],
@@ -3211,12 +3242,34 @@ mod tests {
     }
 
     #[test]
+    fn the_first_frame_of_goal_4s_hopeless_flee_launches_its_fighters_and_goal_0xds_does_not() {
+        // Goal 4's flight jumps to the state-4 tail (@0x8e6e5): its own
+        // `_IsDisabled` test (@0x8e6eb), then `_AILaunchFighter` (@0x8e6fa)
+        // at a target in the system. Goal 0xd's jumps past it (@0x8eb6b).
+        use crate::ai::hopeless_flee::HopelessFlee;
+        let all = [gun(128, 1, 1)];
+        let mut fled = shooter(&all, Goal::Flee(ShipRef::Player));
+        fled.fled_hopeless = Some(HopelessFlee::Attack);
+        assert!(bays(&fled, &[]), "goal 4's");
+        let mut downed = fled.clone();
+        downed.condition = Condition::Disabled;
+        assert!(!bays(&downed, &[]), "disabled");
+        let at = ShipRef::Npc(NpcId(7));
+        let mut gone = fled.clone();
+        gone.goal = Goal::Flee(at);
+        assert!(!bays(&gone, &[]), "its quarry gone");
+        fled.fled_hopeless = Some(HopelessFlee::Plunder);
+        assert!(!bays(&fled, &[]), "goal 0xd's");
+    }
+
+    #[test]
     fn a_trader_fleeing_a_hopeless_chase_launches_its_fighters() {
         // The attack block's goal 3 goes on to `_AILaunchFighter` (@0x8e625
         // → @0x8e6e5-0x8e6fa), at its quarry standing.
+        use crate::ai::hopeless_flee::HopelessFlee;
         let all = [gun(128, 1, 1)];
         let hopeless = Npc {
-            flees_hopeless: true,
+            fled_hopeless: Some(HopelessFlee::Attack),
             ..shooter(&all, Goal::Flee(ShipRef::Player))
         };
         assert!(bays(&hopeless, &[]));
@@ -3224,7 +3277,7 @@ mod tests {
         let mut wreck = crate::traffic::fixture::npc(7, ShipStats::new(FAST, &[]));
         breaking_up(&mut wreck);
         let fleeing_wreck = Npc {
-            flees_hopeless: true,
+            fled_hopeless: Some(HopelessFlee::Attack),
             ..shooter(&all, Goal::Flee(at))
         };
         assert!(!bays(&fleeing_wreck, &[wreck]), "not standing");

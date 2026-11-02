@@ -21,7 +21,7 @@ use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
 use crate::stats::{INERTIALESS_HULL, ShipStats};
 use nova_sim_base::fixture::FAST;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 const BREAKING_UP: Condition = Condition::Dying {
     ticks_left: 300,
@@ -319,7 +319,7 @@ fn a_ship_disabled_owing_a_burst_keeps_it_through_its_reset_and_bursts_it_out_on
         ship.condition = Condition::Intact;
         ship.goal = Goal::Wait;
         let accel = ship.stats.handling.accel;
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         let ship = &traffic.npcs[1];
         assert!(
             close(ship.state.velocity, facing(270.0) * owed),
@@ -331,7 +331,7 @@ fn a_ship_disabled_owing_a_burst_keeps_it_through_its_reset_and_bursts_it_out_on
         // faces its retro heading, until it is down to its cap.
         let mut ticks = 0;
         while traffic.npcs[1].owed_burst.is_some() {
-            traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+            traffic.fly_tick(&world, &mut NeverFires);
             ticks += 1;
             assert!(ticks < 50_000, "{owed}: never ended");
         }

@@ -8,15 +8,18 @@
 //! `Rand(trunc(100.0 / _gSpeedMult))` (doubles 0xdd0e0 = 100.0, 0xdd118 =
 //! 0.0): [`RELEASE_DRAW`], as the engine's speed factor is always 1. At 0
 //! its goal becomes 0 ([`Goal::Idle`]), its substate kept, and the dispatch
-//! goes on: it thinks in the same tick. The think half runs the draws
-//! after the leaders' orders and before the disabled reset, as the
-//! dispatch does (@0x8fdb3, @0x8fe73, @0x8fece).
+//! goes on: it thinks in the same tick. Each ship draws at the head of its
+//! own slot's run, after the leaders' orders and before the disabled
+//! reset, as the dispatch does (@0x8fdb3, @0x8fe73, @0x8fece; see
+//! [`dispatch_head`](super::dispatch_head)).
 //!
 //! **What it skips.** Held, a ship skips the disabled reset, the type
 //! think and `_HighLevelAIHandler` (@0x9002d → @0x900c6 → @0x901ea): in
 //! [`Traffic::think_holding`] it is never due ([`paused`]), so it decides
 //! nothing and runs no high level, and no swarm check. Its cloak still
-//! thinks, as `_AIHandleCloaking` comes first (@0x8fcaa).
+//! thinks, as `_AIHandleCloaking` comes first, at the head of its dispatch
+//! before the release draw (@0x8fcaa before @0x8fe73), so a ship released
+//! at its head thinks its cloak still paused.
 //!
 //! **What it flies and fires.** `_LowLevelAIHandler` runs its kept
 //! substate, sub 0, 4 or 0xd ([`regroup`](crate::ai::regroup) says why no
@@ -40,14 +43,18 @@ use crate::chance::Chance;
 pub const RELEASE_DRAW: u32 = 100;
 
 impl Traffic {
-    /// Each NPC in the regroup pause that passes the dispatch's gates draws
-    /// its release, rolling on `chance`: released, it idles (see the module
-    /// docs).
-    pub(crate) fn release_regroups(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        for npc in self
-            .npcs
-            .iter_mut()
-            .filter(|npc| paused(npc) && dispatch_gate::reaches_think(npc))
+    /// Each NPC `picked` picks (one flag an NPC) in the regroup pause that
+    /// passes the dispatch's gates draws its release, rolling on `chance`:
+    /// released, it idles (see the module docs).
+    pub(crate) fn release_regroups(
+        &mut self,
+        picked: &[bool],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        for (npc, _) in
+            self.npcs.iter_mut().zip(picked).filter(|(npc, picked)| {
+                **picked && paused(npc) && dispatch_gate::reaches_think(npc)
+            })
         {
             if chance.below(RELEASE_DRAW) == 0 {
                 npc.goal = Goal::Idle;
@@ -219,7 +226,8 @@ mod tests {
             let mut traffic = Traffic::with_interval(1);
             let id = traffic.add_npc(ship);
             let mut chance = Draws::of(&[]).keyed(RELEASE_DRAW, 0);
-            traffic.think_holding(&Recording::default(), World::new(&[]), &[], &mut chance);
+            // A warp sound of some length: its sub 4 runs at its slot.
+            traffic.think_holding(&Recording::default(), warp_world(), &[], &mut chance);
             assert_eq!(chance.times_asked(RELEASE_DRAW), 0);
             assert!(paused(of(&traffic, id)));
         }
@@ -465,7 +473,8 @@ mod tests {
             held.target = Some(ShipRef::Player);
             held.trigger = MARKED;
             let id = traffic.add_npc(held);
-            traffic.think_holding(&Recording::default(), World::new(&[]), &[], &mut NeverFires);
+            // A warp sound of some length: its sub 4 runs at its slot.
+            traffic.think_holding(&Recording::default(), warp_world(), &[], &mut NeverFires);
             let held = of(&traffic, id);
             assert_eq!(held.trigger, Trigger::default(), "{kept:?}");
             assert_eq!(held.target, Some(ShipRef::Player), "{kept:?}");

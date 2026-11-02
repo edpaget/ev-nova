@@ -47,7 +47,7 @@ use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::autopilot::Beside;
 use crate::traffic::formation_flight;
-use crate::traffic::held_burst::{Flight, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::npc::Npc;
 
 /// The substate goal 5 flies (see the module docs).
@@ -77,8 +77,9 @@ pub fn sub(at: Vec2, carrier: Vec2, window: f32, seen: bool) -> Sub {
 }
 
 /// Sub 0xb of `npc` closing on its carrier at `carrier` on `handling`,
-/// with `beside` its swarm lead and whether it flies double time's second
-/// pass, which nudges nothing (see the module docs).
+/// with `beside` its swarm lead, at its slot (see the module docs): its
+/// flight. Double time's second pass runs no low level, so it nudges
+/// nothing there, flying the advance pass's word.
 pub(crate) fn close(
     npc: &mut Npc,
     carrier: &ShipState,
@@ -88,15 +89,8 @@ pub(crate) fn close(
     let slot = npc
         .formation()
         .map(|place| place.position(carrier))
-        .or_else(|| npc.parent_word())
-        .filter(|_| !beside.second_pass);
-    let (controls, flown) =
-        formation_flight::steer(npc, carrier, true, beside.swarm, slot, handling);
-    Flight {
-        controls,
-        word: Word::Writes,
-        flown: Some(flown),
-    }
+        .or_else(|| npc.parent_word());
+    formation_flight::steer(npc, carrier, true, beside.swarm, slot, handling)
 }
 
 #[cfg(test)]
@@ -210,6 +204,32 @@ mod tests {
             Beside::default(),
             FlightRules::default(),
         )
+    }
+
+    /// Whether `npc`, alone with the player at the carrier's place, cloaked
+    /// when `cloaked`, docks at its slot under `rules` (the traffic's
+    /// `dispatch_leave`).
+    fn docks_at_slot(npc: Npc, cloaked: bool, rules: FlightRules) -> bool {
+        let mut player = crate::ai::fixture::player(CARRIER.position.x, CARRIER.position.y);
+        if cloaked {
+            player = crate::ai::fixture::cloaked_player(player);
+        }
+        let world = crate::traffic::World {
+            player: Some(player),
+            flight: rules,
+            ..crate::traffic::World::new(&[])
+        };
+        let mut traffic = crate::traffic::Traffic::with_interval(1);
+        traffic.add_npc(npc);
+        traffic.open_dispatch();
+        let left = traffic.leave_in_dispatch(
+            &world,
+            &|_| true,
+            &crate::traffic::NoBay::new(),
+            &mut crate::chance::NeverFires,
+        );
+        left.iter()
+            .any(|(_, outcome)| matches!(outcome, Outcome::Docked { .. }))
     }
 
     /// Its carrier unseen.
@@ -378,21 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn on_the_second_pass_a_returning_swarmer_is_not_nudged() {
-        let start = at(450.0, 0.0, 0.0, 0.0, 90.0);
-        let mut ship = returning(100.0, start);
-        ship.fleet_slot = Some(FormationSlot::default());
-        ship.slot_place = Some(Vec2::new(900.0, 300.0));
-        ship.swarm_leader = Some(5);
-        let second = Beside {
-            second_pass: true,
-            ..Beside::default()
-        };
-        flown_under(&mut ship, Some(&CARRIER), second, FlightRules::default());
-        assert_eq!(ship.state.position, start.position);
-    }
-
-    #[test]
     fn a_returning_swarmer_with_a_word_but_no_parent_is_not_nudged() {
         let word = Vec2::new(900.0, 300.0);
         assert_eq!(
@@ -428,14 +433,9 @@ mod tests {
             flown_under(&mut blind, Some(&CARRIER), unseen(), rules),
             Outcome::Flying
         );
-        let mut sighted = returning(100.0, start);
-        assert_eq!(
-            flown(&mut sighted),
-            Outcome::Docked {
-                carrier: ShipRef::Player,
-                ship: sighted.ship
-            }
-        );
+        // Sub 1 over sub 8 (@0x8ed00): no dock at its slot.
+        assert!(!docks_at_slot(returning(100.0, start), true, rules));
+        assert!(docks_at_slot(returning(100.0, start), false, rules));
     }
 
     #[test]
@@ -447,14 +447,8 @@ mod tests {
         let mut blind = sluggish(returning(100.0, start));
         flown_under(&mut blind, Some(&CARRIER), unseen(), earlier());
         assert_eq!(blind.state, seen.state, "sight unread");
-        let mut there = returning(100.0, at(10.0, 10.0, 0.0, 0.0, 0.0));
-        assert_eq!(
-            flown_under(&mut there, Some(&CARRIER), unseen(), earlier()),
-            Outcome::Docked {
-                carrier: ShipRef::Player,
-                ship: there.ship
-            }
-        );
+        let there = returning(100.0, at(10.0, 10.0, 0.0, 0.0, 0.0));
+        assert!(docks_at_slot(there, true, earlier()));
     }
 
     #[test]

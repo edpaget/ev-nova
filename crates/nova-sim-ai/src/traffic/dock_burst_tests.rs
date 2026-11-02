@@ -62,11 +62,13 @@ fn fighter(id: u32, carrier: ShipRef) -> Npc {
 }
 
 /// One think half then one fly half of `traffic` in `world`: `NPC id` as
-/// the think left it, then as the flight left it, if it is still there.
-fn tick(traffic: &mut Traffic, world: &World, id: NpcId) -> (Npc, Option<Npc>) {
+/// the think left it, then as the flight left it, each if it is still
+/// there: a fighter docks at its slot of the think half
+/// ([`dispatch_leave`](super::dispatch_leave)).
+fn tick(traffic: &mut Traffic, world: &World, id: NpcId) -> (Option<Npc>, Option<Npc>) {
     let ai = NovaAi::default();
     traffic.think_holding(&ai, *world, &[], &mut NoDraws);
-    let thought = of(traffic, id).unwrap_or_else(|| panic!("{id:?} gone"));
+    let thought = of(traffic, id);
     traffic.fly_holding(*world, &BTreeSet::new(), &mut NoDraws);
     (thought, of(traffic, id))
 }
@@ -98,15 +100,16 @@ fn the_players_fighter_returning_bursts_at_its_pull_and_drops_to_goal_0_each_fra
     let mut frames = 0;
     loop {
         let (thought, flown) = tick(&mut traffic, &world, id);
-        assert_eq!(thought.goal, Goal::Dock(ShipRef::Player), "frame {frames}");
-        let Some(flown) = flown else {
+        let Some(thought) = thought else {
             break;
         };
+        assert_eq!(thought.goal, Goal::Dock(ShipRef::Player), "frame {frames}");
+        let flown = flown.expect("it docks at its slot");
         frames += 1;
         // 9 × 0.18 is within its cap, the lower of its own top speed and
         // the player's, 6: `_AIMakeShipStopJumping` (@0x82e77-0x82eba).
         assert_eq!(flown.goal, Goal::Idle, "frame {frames}");
-        assert!(!flown.travel_set, "frame {frames}: +0x6c = -1");
+        assert!(!flown.travel_set(), "frame {frames}: +0x6c = -1");
         assert_eq!(flown.warp.stage, 0.0, "frame {frames}: +0x50 = 0");
         assert_eq!(flown.owed_burst, None, "frame {frames}");
         assert_eq!(flown.mode, Mode::Flying, "frame {frames}: no wait");
@@ -160,7 +163,7 @@ fn an_npc_carriers_fighter_returning_to_a_slow_carrier_keeps_its_burst_and_goal_
     };
     for frame in 1..=3 {
         let (thought, flown) = tick(&mut traffic, &world, id);
-        let flown = flown.expect("not docked");
+        let (thought, flown) = (thought.expect("not docked"), flown.expect("not docked"));
         assert_eq!(
             thought.goal,
             Goal::Dock(ShipRef::Npc(carrier_id)),

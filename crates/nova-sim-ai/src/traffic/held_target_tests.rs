@@ -1,5 +1,5 @@
 //! Tests of a warship provoked by an ally as the traffic's tick runs it
-//! (see [`held_target`](crate::ai::held_target)): the attack block drops
+//! (see [`held_attack`](crate::ai::held_attack)): the attack block drops
 //! the attack to goal 0 holding the ally (@0x8e2d2), the frame ends with
 //! it held, and the next think takes it again (@0x8b843), so the warship
 //! coasts on sub 0, firing nothing, until the ally goes. These pin the

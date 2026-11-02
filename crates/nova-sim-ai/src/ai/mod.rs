@@ -35,9 +35,11 @@
 //!   next.
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
-//!   NPC to the one for its type; [`held_target`], what a warship's and an
+//!   NPC to the one for its type; [`trader_keep`], the goals the two
+//!   traders keep unprovoked; [`held_attack`], what a warship's and an
 //!   interceptor's think do with the target they hold and the one they
-//!   drop.
+//!   drop; [`handler_head`], [`attack_drop`], [`plunder_high`] and
+//!   [`inspect_high`], the high level every type's think meets.
 //! - [`escort`]: [`EscortAi`], how the player's escorts fly and fight by
 //!   their standing orders; [`NovaAi`] routes every escort to it.
 //! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
@@ -64,8 +66,10 @@ pub(crate) mod fixture;
 pub mod flee_drop;
 pub mod fleet_escort;
 pub mod handler_head;
-pub mod held_target;
+pub mod held_attack;
+pub mod hopeless_flee;
 pub mod idle_block;
+pub mod inspect_high;
 pub mod interceptor;
 pub mod leave;
 pub mod lost_sight;
@@ -76,6 +80,7 @@ pub mod odds;
 pub mod out_of_ammo;
 pub mod pirate;
 pub mod plunder_contents;
+pub mod plunder_high;
 pub mod plunder_target;
 pub mod pursuit;
 pub mod react;
@@ -86,6 +91,7 @@ pub mod stand_off;
 pub mod swarm;
 pub mod target;
 pub mod threatened;
+pub mod trader_keep;
 pub mod travel;
 pub mod wait;
 pub mod warship;
@@ -440,6 +446,24 @@ impl Goal {
         }
     }
 
+    /// This goal with `ship` as its ship, as a new target (+0x70) leaves
+    /// the goal number as it was: an attack, snipe, flight, inspection or
+    /// plunder moves to it; a goal of no such ship is kept, the regroup
+    /// pause among them, as no kept substate of it names a ship
+    /// ([`regroup`]). The original's goals hold no ship, so whichever
+    /// ship +0x70 names is the one they are about.
+    #[must_use]
+    pub fn with_quarry(self, ship: ShipRef) -> Self {
+        match self {
+            Self::Attack(_) => Self::Attack(ship),
+            Self::Snipe(_) => Self::Snipe(ship),
+            Self::Flee(_) => Self::Flee(ship),
+            Self::Inspect(_) => Self::Inspect(ship),
+            Self::Plunder { hopeless, .. } => Self::Plunder { ship, hopeless },
+            other => other,
+        }
+    }
+
     /// The ship it plunders, `_AIShipIsPlundering` (@0x89841, goal 0xd),
     /// if any.
     #[must_use]
@@ -741,19 +765,34 @@ pub struct Surroundings<'a> {
     /// it carries the weapon (@0x85e4c-0x85e59, @0x2b06a-0x2b075; see
     /// [`fire::dogfight_lead`]).
     pub weapons: &'a Arsenal,
-    /// The ships gone from the system since the last decision pass, their
-    /// records as they left, whose slots a ship's target may still name
-    /// ([`gone`](crate::traffic::gone)): what a brave trader reads of a
-    /// gone attacker ([`Surroundings::held_gone`]).
+    /// The records of the freed slots, one a slot, each as its ship left
+    /// ([`gone`](crate::traffic::gone)). A record stands, as the
+    /// original's slot keeps it, until a ship takes its berth or the
+    /// system is left, so it may be many ticks old. Read a gone ship
+    /// through a reader whose target still names its slot
+    /// ([`Surroundings::held_gone`], [`GoneShip::held_by`]), not by its id:
+    /// a reader lets go of a gone target at its step (@0x33865-0x33888),
+    /// and a record from an earlier tick is then no ship its +0x70 names.
+    /// What a brave trader reads of a gone attacker, and a leader of its
+    /// gone target.
     pub gone: &'a [GoneShip],
     /// The player's warp stage, +0x50: above 0 from the brake of its jump
     /// on, when every ship it leads takes its jump (`_EscortAI`
     /// @0x83a41-0x83a5f, [`EscortAi`]).
     pub player_warp_stage: f32,
+    /// The player's +0x6c ([`LeaderWarp::travel`](crate::traffic::warp_out::LeaderWarp::travel)):
+    /// the selection it holds, which every ship it leads copies as it takes
+    /// its jump (`_EscortAI` @0x83a77-0x83a7c, [`EscortAi`]).
+    pub player_travel: Option<StellarId>,
     /// The stellars shots can shoot down, those of `Strength` above 0
     /// (`nova_sim::story::wreck::destroyable`), among which a stellar
     /// attacker picks its quarry ([`death_star`]).
     pub destroyable: &'a BTreeSet<StellarId>,
+    /// The stellars of IDs 128 to 191, whichever system holds them
+    /// ([`World::slot_stellars`](crate::traffic::World::slot_stellars)):
+    /// a goal naming one the system doesn't list is still flown
+    /// ([`kept`]). [`Surroundings::new`] gives none.
+    pub slot_stellars: &'a [LandingSite],
 }
 
 /// No government marked by an IFF scrambler.
@@ -802,7 +841,9 @@ impl<'a> Surroundings<'a> {
             weapons: &NO_WEAPONS,
             gone: &[],
             player_warp_stage: 0.0,
+            player_travel: None,
             destroyable: &NO_DESTROYABLE,
+            slot_stellars: &[],
         }
     }
 
@@ -888,19 +929,10 @@ impl<'a> Surroundings<'a> {
         self.npcs.iter().find(|npc| npc.id == id)
     }
 
-    /// NPC `id`'s record as it left, if it is gone from the system since
-    /// the last decision pass ([`Surroundings::gone`]).
-    #[must_use]
-    pub fn gone_npc(&self, id: NpcId) -> Option<&'a Npc> {
-        self.gone
-            .iter()
-            .find(|gone| gone.ship.id == id)
-            .map(|gone| &gone.ship)
-    }
-
     /// The record of the gone ship `npc`'s target still names, no slot
-    /// test having cleared it ([`GoneShip::held_by`]): what `npc`'s think
-    /// reads of its target, though the ship has left.
+    /// test having cleared it before the think this stands for
+    /// ([`GoneShip::held_by`]): what `npc`'s think reads of its target,
+    /// though the ship has left.
     #[must_use]
     pub fn held_gone(&self, npc: &Npc) -> Option<&'a Npc> {
         self.gone
@@ -1043,8 +1075,8 @@ pub struct Decision {
     /// The call the think makes on the message line, if any: a distress
     /// call (`_AICallForHelp`) or a pre-scan hail (see
     /// [`call_for_help`]). The session answers it in slot order with the
-    /// frame's other work on the line, after `_HandlePlayer`'s part of the
-    /// frame (`Session::settle_line_queue`; see [`crate::traffic::on_line`]).
+    /// frame's other work on the line, as its slot's run ends
+    /// (`Session::settle_line_through`; see [`crate::traffic::on_line`]).
     pub comm_call: Option<CommCall>,
     /// Whether the think calls for its system's reinforcement fleet
     /// (`_AICallForReinforcements(ship, 0)`, see [`reinforcements`]): a
@@ -1068,22 +1100,24 @@ pub struct Decision {
     /// so the next think finds no target, whatever its thinker's target
     /// step works out afresh (the attack block's -1, @0x8e717).
     pub clears_target: bool,
+    /// Whether the think writes the sub-goal (+0xc8ca) itself, ending any
+    /// docking ([`Npc::docking`]) even while the AI wait skips the high
+    /// level: `_PirateWarshipAI`'s count wait entry (@0x8c6fe), its plunder
+    /// (@0x8c788) and its dry drop (@0x8c878), and `_AIFindShipToPlunder`'s
+    /// find (@0x7fea5). A think that writes it not leaves a docking under
+    /// the wait whatever goal it writes (see
+    /// [`plunder_dock::kept_by`](crate::traffic::plunder_dock::kept_by)).
+    pub writes_sub: bool,
     /// The target the frame ends with on goal 0, when the high level
     /// dropped the attack keeping it: the attack block's wait test and its
     /// ally drop write goal 0 alone (@0x8e26d → @0x8e731, @0x8e2d2;
     /// [`attack_drop`]). The traffic writes it over
     /// [`Behaviour::target`]'s answer, so the threat tests read it
     /// ([`Npc::fought`]) and the next think finds it: a warship attacks it
-    /// again and an interceptor holds it ([`held_target`]). An
+    /// again and an interceptor holds it ([`held_attack`]). An
     /// interceptor's think writes it too, for the target it holds
     /// unprovoked on its goal.
     pub holds_target: Option<ShipRef>,
-    /// Whether its flight is the attack block's hopeless chase for a ship
-    /// of AI type 2 or below: goal 3, sub 5 (@0x8e625-0x8e62e), which flies
-    /// close at any distance and launches and calls as goal 4 does
-    /// (@0x8e6e5-0x8e70d; [`attack_drop`]). The traffic sets
-    /// [`Npc::flees_hopeless`] so as it takes the goal.
-    pub flees_hopeless: bool,
     /// The ship it plunders now: `_PirateWarshipAI`'s plunder
     /// (@0x8c74c-0x8c7ae), a pirate docked (goal 4, sub 0xf) with its wait
     /// out, its [`goal`](Self::goal) the drift that follows
@@ -1097,19 +1131,21 @@ pub struct Decision {
     pub lost_sight: Option<lost_sight::LostSight>,
     /// How the think writes its travel stellar, the original's +0x6c (see
     /// [`travel`]): the traffic [`take`](travel::take)s it into
-    /// [`Npc::travel_set`] as it takes the goal.
+    /// [`Npc::travel`] as it takes the goal.
     pub travel: travel::TravelWrite,
     /// The stellar the think records as visited, its +0x92, if it writes
     /// one: a miner's shuttle as it sets off (`_MinerAI` @0x8b3ae, see
     /// [`miner`]). The traffic sets [`Npc::visited`] so as it takes the
     /// goal; none leaves it as it was.
     pub visits: Option<StellarId>,
-    /// Whether an inspecting interceptor's re-pick gave its goal
-    /// (`_InterceptorAI` @0x8d41e, see [`interceptor`]): the state-7
-    /// block's reach then reads the new target (@0x8f11e), and a state-4
-    /// pick runs no reach at all, so the ship it was inspecting is not
-    /// looked over and the player is not scanned. A re-pick already within
-    /// reach is looked over ([`looked_over`](Self::looked_over)).
+    /// Whether the inspection's ship moved before its reach: an
+    /// inspecting interceptor's re-pick gave its goal (`_InterceptorAI`
+    /// @0x8d41e, see [`interceptor`]), or a kept inspection moved to the
+    /// ship a hit made its target ([`inspect_high`]). The state-7 block's
+    /// reach then reads the new target (@0x8f11e), and a state-4 pick runs
+    /// no reach at all, so the ship it was inspecting is not looked over
+    /// and the player is not scanned. A re-pick already within reach is
+    /// looked over ([`looked_over`](Self::looked_over)).
     pub re_picked: bool,
     /// The ship an interceptor's think picked, or re-picked, and looked
     /// over at once, already within reach: goal 7's block runs after the
@@ -1168,6 +1204,13 @@ pub struct Decision {
     /// [`VoiceCue::Thought`]: crate::escort_voice::VoiceCue::Thought
     /// [`VoiceCue::NewThreat`]: crate::escort_voice::VoiceCue::NewThreat
     pub voice: Option<crate::escort_voice::VoiceCue>,
+    /// Which high level turned a chase into a flight this frame, goal 4's
+    /// or goal 0xd's (goal 3 with sub 5, @0x8e622-0x8e62e,
+    /// @0x8eaef-0x8eafb; see [`hopeless_flee`]): its sub flies flee close
+    /// whatever the reach, after goal 3's block, so no flee drop runs and
+    /// no goal-3 call is made that frame. The traffic keeps it on the ship
+    /// until its next decision ([`Npc::fled_hopeless`]).
+    pub hopeless_flee: Option<hopeless_flee::HopelessFlee>,
 }
 
 impl Decision {
@@ -1252,7 +1295,8 @@ impl Behaviour for Peaceful {
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
 ///   landable, a gate it enters that is still there, a jump out, a hold,
-///   or a wait. A leaving ship (state 2) keeps leaving whether or not it
+///   or a wait. A trader's think keeps more before it reaches the block
+///   (a plunder, a fight on a ship still here, [`trader_keep`]). A leaving ship (state 2) keeps leaving whether or not it
 ///   can jump: no type's idle block tests it again (`_WimpyTraderAI`
 ///   @0x8b06c, `_BraveTraderAI` @0x8b4d6 and `_InterceptorAI` @0x8d010
 ///   pick only in state 0); the warship's and the pirate's own re-tests
@@ -1328,7 +1372,8 @@ pub(crate) fn random_stellar(
 
 /// What `npc` keeps to among `around` before its idle block runs, if
 /// anything: an escort follows its lead while the lead is in the system,
-/// guarding nothing, and a goal it can still fly is kept. A led ship
+/// guarding nothing, and a goal it can still fly is kept. The traders
+/// keep more of their own before their idle block ([`trader_keep`]). A led ship
 /// reaches its type's idle block only by the other reading of
 /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi), the port's
 /// earlier routing; by the engine's it flies [`FleetEscortAi`] instead.
@@ -1346,10 +1391,13 @@ pub(crate) fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
 /// miner's and the warship's thinks read +0x96 and +0x70 alone
 /// (`_WimpyTraderAI` @0x8b1ac, `_BraveTraderAI` @0x8b616, `_MinerAI`
 /// @0x8b254, `_WarshipAI` @0x8bb0c), and a dead slot's +0x70 is cleared
-/// (@0x8d500), so an attacker arriving or breaking up provokes.
+/// (@0x8d500), so an attacker arriving or breaking up provokes. It reads
+/// the ship's [`Npc::slot_target`]: a successor still provoked from before
+/// that holds a copied inspection and no target flees or fights the
+/// inspected ship.
 #[must_use]
 pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-    npc.target
+    npc.slot_target()
         .filter(|&attacker| npc.provoked > 0.0 && around.active(attacker))
 }
 
@@ -1361,14 +1409,21 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 /// drift (goal 0xe, which its high level ends: the trader AIs' idle blocks
 /// run only on goal 0, `_WimpyTraderAI` @0x8b06c, `_BraveTraderAI`
 /// @0x8b4d6). Idling, following once the lead is gone, fighting and
-/// inspecting are no goals to keep.
+/// inspecting are no goals for the idle block to keep; the traders keep
+/// a fight, a plunder and the rest of their own ([`trader_keep`]).
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
         Goal::Land(stellar) => around
             .listed
             .iter()
-            .any(|site| site.id == stellar && landable(site)),
-        Goal::EnterGate(gate) => around.listed.iter().any(|site| site.id == gate),
+            .chain(around.slot_stellars)
+            .find(|site| site.id == stellar)
+            .is_some_and(landable),
+        Goal::EnterGate(gate) => around
+            .listed
+            .iter()
+            .chain(around.slot_stellars)
+            .any(|site| site.id == gate),
         Goal::JumpOut | Goal::Hold | Goal::Wait | Goal::Drift => true,
         _ => false,
     }
@@ -1896,6 +1951,43 @@ mod tests {
     }
 
     #[test]
+    fn a_trader_keeps_flying_a_slot_stellar() {
+        // A successor copying a `Land` its lead took from a slot keeps
+        // flying it: states 1 and 20 read the record by +0x6c whatever the
+        // system lists (@0x8d8d7, @0x8db8a).
+        let mut lander = npc(1, AiType::WimpyTrader);
+        lander.goal = Goal::Land(StellarId(140));
+        let gate = LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..planet(141, 0.0, 0.0)
+        };
+        let slots = [planet(140, 500.0, 0.0), gate];
+        let listed = sites();
+        let npcs = [lander.clone()];
+        let around = Surroundings {
+            slot_stellars: &slots,
+            ..Surroundings::new(&listed, &npcs)
+        };
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&lander, &around, &mut chance), lander.goal);
+        let entering = Npc {
+            goal: Goal::EnterGate(StellarId(141)),
+            ..lander.clone()
+        };
+        assert_eq!(idle(&entering, &around, &mut chance), entering.goal);
+        assert!(chance.asked.is_empty(), "no new pick");
+        let lost = Npc {
+            goal: Goal::Land(StellarId(150)),
+            ..lander
+        };
+        assert_ne!(
+            idle(&lost, &around, &mut Draws::of(&[0])),
+            lost.goal,
+            "a stellar in neither"
+        );
+    }
+
+    #[test]
     fn a_goal_it_can_still_fly_is_kept() {
         let mut lander = npc(1, AiType::WimpyTrader);
         lander.goal = Goal::Land(StellarId(130));
@@ -2130,6 +2222,39 @@ mod tests {
         }
         for other in [Goal::Attack(n), Goal::Snipe(n), Goal::Flee(n), Goal::Idle] {
             assert_eq!(other.plundering(), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn with_quarry_moves_each_fight_goal_and_no_other() {
+        let (old, new) = (ShipRef::Npc(NpcId(3)), ShipRef::Npc(NpcId(4)));
+        for (goal, moved) in [
+            (Goal::Attack(old), Goal::Attack(new)),
+            (Goal::Snipe(old), Goal::Snipe(new)),
+            (Goal::Flee(old), Goal::Flee(new)),
+            (Goal::Inspect(old), Goal::Inspect(new)),
+            (
+                Goal::Plunder {
+                    ship: old,
+                    hopeless: true,
+                },
+                Goal::Plunder {
+                    ship: new,
+                    hopeless: true,
+                },
+            ),
+        ] {
+            assert_eq!(goal.with_quarry(new), moved, "{goal:?}");
+        }
+        for kept in [
+            Goal::Idle,
+            Goal::Wait,
+            Goal::JumpOut,
+            Goal::Dock(old),
+            Goal::Assist(Help::Repair),
+            Goal::Formation { guard: Some(old) },
+        ] {
+            assert_eq!(kept.with_quarry(new), kept, "a goal of no quarry");
         }
     }
 

@@ -413,15 +413,7 @@ fn a_released_refueller_on_its_stop_bursts_out() {
         sub: DockSub::Stop,
     });
     let accel = npc.stats.handling.accel;
-    let speeds = TopSpeeds::own_of(&npc);
-    plunder::fly_docking(
-        &mut npc,
-        Some(&FAR),
-        speeds,
-        FlightRules::default(),
-        None,
-        &mut NeverFires,
-    );
+    plunder::fly_docking(&mut npc, Some(&FAR), 1.0, FlightRules::default(), None);
     assert!(
         close(npc.state.velocity, facing(270.0) * 30.0),
         "{:?}",
@@ -507,7 +499,7 @@ fn swarm_pair(reading: RuleSource) -> (Traffic, World<'static>) {
 fn a_held_swarmer_bursts_out_slowing_by_its_thrust_and_stops_jumping_at_its_cap() {
     let (mut traffic, world) = swarm_pair(RuleSource::Engine);
     let tick = |traffic: &mut Traffic| {
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         traffic.npcs[1].clone()
     };
     let released = tick(&mut traffic);
@@ -532,7 +524,7 @@ fn a_held_swarmer_bursts_out_slowing_by_its_thrust_and_stops_jumping_at_its_cap(
             // `_AIMakeShipStopJumping` (@0x82e77-0x82eba), then
             // Rand(30) + 30 (@0x34d5c-0x34d8b): 29 + 30.
             assert_eq!(ship.goal, Goal::Idle);
-            assert!(!ship.travel_set);
+            assert!(!ship.travel_set());
             assert_eq!(ship.owed_burst, None);
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
             break;
@@ -559,7 +551,7 @@ fn by_the_other_reading_a_held_swarmer_flies_its_swarm_from_its_hold_with_no_bur
     let top = traffic.npcs[1].stats.handling.max_speed;
     let accel = traffic.npcs[1].stats.handling.accel;
     for tick in 0..200 {
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         let ship = &traffic.npcs[1];
         assert!(
             ship.state.velocity.length() <= top + accel + 1e-3,
@@ -586,8 +578,8 @@ fn a_held_sniper_pushed_moving_bursts_out_and_stops_jumping_at_its_cap() {
         player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
         ..World::new(&[])
     };
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    traffic.fly_tick(&world, &mut NeverFires);
+    traffic.fly_tick(&world, &mut NeverFires);
     let first = &traffic.npcs[0];
     assert!(
         close(first.state.velocity, facing(270.0) * 30.0),
@@ -597,7 +589,7 @@ fn a_held_sniper_pushed_moving_bursts_out_and_stops_jumping_at_its_cap() {
     let mut ticks = 0;
     while traffic.npcs[0].owed_burst.is_some() {
         assert_eq!(traffic.npcs[0].goal, Goal::Snipe(ShipRef::Player));
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         ticks += 1;
         assert!(ticks < 50_000, "never ended");
     }
@@ -635,7 +627,7 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
         player: Some(crate::ai::fixture::player(0.0, -50_000.0)),
         ..World::new(&[])
     };
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    traffic.fly_tick(&world, &mut NeverFires);
     assert_eq!(traffic.npcs[0].owed_burst, Some(30.0));
     let mut ticks = 0;
     while traffic.npcs[0].owed_burst.is_some() {
@@ -645,7 +637,7 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
             "tick {ticks}: {:?}",
             traffic.npcs[0].state
         );
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         ticks += 1;
         assert!(ticks < 50_000, "never ended");
     }
@@ -655,9 +647,20 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
     assert_eq!(ended.state.velocity, Vec2::ZERO, "stopped dead");
     assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59 });
     for left in (1..59).rev() {
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        traffic.fly_tick(&world, &mut NeverFires);
         assert_eq!(traffic.npcs[0].mode, Mode::Coasting { ticks_left: left });
     }
+}
+
+/// A tick of `world` with no think, the NPCs in `still` held: each NPC's
+/// work at its slot, its warp's hold, its follow and its low level
+/// ([`Traffic::leave_in_dispatch`]), then the fly half.
+fn dispatched(traffic: &mut Traffic, world: &World, still: &BTreeSet<NpcId>) {
+    traffic.open_dispatch();
+    traffic.held_still.clone_from(still);
+    traffic.leave_in_dispatch(world, &|_| true, &super::NoBay::new(), &mut NeverFires);
+    traffic.held_still.clear();
+    traffic.fly_holding(*world, still, &mut NeverFires);
 }
 
 // Sub 0xd's burst word (@0x85bcf-0x85c53).
@@ -710,7 +713,7 @@ fn a_follower_on_its_stage_owes_1_by_the_engine_only_over_anything_it_owed() {
         let (mut traffic, lead) = following();
         traffic.npcs[1].owed_burst = owed;
         let goal = traffic.npcs[1].goal;
-        traffic.fly_holding(world_by(reading), &lead, &mut NeverFires);
+        dispatched(&mut traffic, &world_by(reading), &lead);
         let ship = &traffic.npcs[1];
         assert_eq!(ship.owed_burst, now, "{reading:?} {owed:?}");
         // The word is no burst: nothing ended (@0x34a84).
@@ -740,7 +743,7 @@ fn a_ship_the_player_leads_owes_1_every_frame_of_its_stage() {
     world.warp.player.aim = 90;
     for frame in 0..3 {
         traffic.npcs[0].owed_burst = Some(20.0);
-        traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+        dispatched(&mut traffic, &world, &BTreeSet::new());
         assert_eq!(traffic.npcs[0].owed_burst, Some(1.0), "frame {frame}");
         assert_eq!(
             traffic.npcs[0].goal,
@@ -774,7 +777,7 @@ fn a_followers_formation_waiting_and_detach_frames_write_no_burst_word() {
             let (mut traffic, lead) = following();
             setup(&mut traffic);
             traffic.npcs[1].owed_burst = owed;
-            traffic.fly_holding(world_by(RuleSource::Engine), &lead, &mut NeverFires);
+            dispatched(&mut traffic, &world_by(RuleSource::Engine), &lead);
             assert_eq!(traffic.npcs[1].owed_burst, owed, "{name}");
             let detached = traffic.npcs[1].warp.goal == Some(WarpGoal::Own);
             assert_eq!(detached, name == "detach", "{name}");
@@ -795,7 +798,7 @@ fn every_given_up_jump_keeps_the_word() {
     let (mut traffic, lead) = owing();
     traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
     traffic.npcs[0].warp.goal = None;
-    traffic.fly_holding(world, &lead, &mut NeverFires);
+    dispatched(&mut traffic, &world, &lead);
     assert_eq!(traffic.npcs[1].goal, Goal::Idle);
     assert_eq!(traffic.npcs[1].warp.goal, None);
     assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "goal 0xb's give-up");
@@ -803,13 +806,13 @@ fn every_given_up_jump_keeps_the_word() {
     let (mut traffic, _) = owing();
     traffic.npcs[0].goal = Goal::Attack(ShipRef::Player);
     traffic.npcs[1].warp.stage = 1.0;
-    traffic.cancel_jump_follows(&world);
+    traffic.cancel_jump_follows(&world, &[true; 64]);
     assert_eq!(traffic.npcs[1].warp.stage, GIVEN_UP_STAGE);
     assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the cancel");
     // Sub 0xd's own give-up while its leader turns (@0x85ba5).
     let (mut traffic, lead) = owing();
     traffic.npcs[0].warp.aim = 270;
-    traffic.fly_holding(world, &lead, &mut NeverFires);
+    dispatched(&mut traffic, &world, &lead);
     assert_eq!(traffic.npcs[1].warp.stage, GIVEN_UP_STAGE);
     assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the turning lead");
     // The fighter turn-back (@0x8d605-0x8d621).
@@ -821,7 +824,7 @@ fn every_given_up_jump_keeps_the_word() {
         reach: 40.0,
     });
     fighter.class_fuel = 0;
-    jump_with_leader::turn_back(fighter, RuleSource::Engine);
+    jump_with_leader::turn_back(fighter, RuleSource::Engine, Some(0));
     assert_eq!(fighter.goal, Goal::Dock(ShipRef::Player));
     assert_eq!(fighter.owed_burst, Some(1.0), "the turn-back");
     // An inertialess follower's detach (@0x83c11-0x83c51).
@@ -840,7 +843,7 @@ fn every_given_up_jump_keeps_the_word() {
     let (mut traffic, _) = owing();
     traffic.npcs[1].condition = Condition::Disabled;
     traffic.npcs[1].warp.stage = 3.0;
-    traffic.reset_disabled(RuleSource::Engine);
+    traffic.cancel_warps(&[true; 64]);
     assert_eq!(traffic.npcs[1].warp.stage, GIVEN_UP_STAGE);
     assert_eq!(traffic.npcs[1].owed_burst, Some(1.0), "the warp cancel");
 }
@@ -859,15 +862,15 @@ fn gave_up(goal: Goal, state: ShipState) -> Npc {
     npc
 }
 
-/// `npc` after a tick of the traffic's fly half, alone with the player
+/// `npc` after a tick with no think ([`dispatched`]), alone with the player
 /// far above.
 fn flown(npc: Npc) -> Npc {
     let mut traffic = Traffic::with_interval(1);
     traffic.npcs = vec![npc];
-    traffic.fly_holding(
-        world_by(RuleSource::Engine),
+    dispatched(
+        &mut traffic,
+        &world_by(RuleSource::Engine),
         &BTreeSet::new(),
-        &mut NeverFires,
     );
     traffic.npcs.remove(0)
 }
@@ -896,7 +899,7 @@ fn its_next_swarm_thrust_bursts_at_1_and_stops_jumping() {
     ship.mode = Mode::Flying;
     ship.owed_burst = Some(1.0);
     ship.warp.stage = GIVEN_UP_STAGE;
-    traffic.fly_holding(world, &BTreeSet::new(), &mut NeverFires);
+    dispatched(&mut traffic, &world, &BTreeSet::new());
     let ship = &traffic.npcs[1];
     assert!(
         close(ship.state.velocity, Vec2::new(0.0, -1.0)),
@@ -917,7 +920,7 @@ fn with_a_lead_it_flies_on_from_the_burst_at_1() {
     ship.warp.stage = GIVEN_UP_STAGE;
     ship.owed_burst = Some(1.0);
     ship.state = at(3000.0, 0.0, 2.0, 0.0, 270.0);
-    traffic.fly_holding(world_by(RuleSource::Engine), &lead, &mut NeverFires);
+    dispatched(&mut traffic, &world_by(RuleSource::Engine), &lead);
     let ship = &traffic.npcs[1];
     assert!(
         close(ship.state.velocity, facing(270.0) * 1.0),

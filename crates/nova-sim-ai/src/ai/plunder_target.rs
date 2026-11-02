@@ -34,8 +34,10 @@
 //! so a tie goes to the earlier slot and the player wins a tie with any
 //! NPC. That is the float square truncated once, not the per-axis
 //! truncation [`candidates::nearest`](super::candidates::nearest) reads.
-//! The original sets the target and goal 0xd itself (@0x7fe91-0x7fea5);
-//! here [`pirate`](super::pirate) does. It turns no ship on the player
+//! The original sets the target, goal 0xd and sub 0 itself
+//! (@0x7fe91-0x7fea5); here [`pirate`](super::pirate) does, its sub 0
+//! ending a dock under its AI wait and the plunder's sub-0xf test after it
+//! ([`Decision::writes_sub`](crate::ai::Decision::writes_sub)). It turns no ship on the player
 //! (no `_AIMakeShipAttackPlayer`) and plays no sound.
 
 use crate::ai::{Surroundings, fire};

@@ -32,20 +32,21 @@
 //! - A ship of a derelict government (`_ShipIsDerelict` @0x8225) holds its
 //!   glow at 0 every frame (@0x35449-0x3545b).
 //!
-//! Four copies come before, each recorded by the flight in its drive
-//! ([`Drive::glow`], [`GlowCopy`]): sub-goal 0xc, close formation, takes
-//! its leader's glow (@0x87dce-0x87deb, [`GlowCopy::Leader`], the
-//! player's for the player's escorts); sub-goal 0xb with a swarm leader
-//! takes the swarm leader's, as the pass began (@0x87364-0x873a3,
+//! Five copies come before, each recorded in its drive ([`Drive::glow`],
+//! [`GlowCopy`]) by its flight or, for the fight's substates, by the
+//! think half's low level: sub-goal 0xc, close formation, takes its
+//! leader's glow (@0x87dce-0x87deb, [`GlowCopy::Leader`], the player's
+//! for the player's escorts); sub-goal 0xb with a swarm leader takes the
+//! swarm leader's, as the pass began (@0x87364-0x873a3,
 //! [`GlowCopy::Swarm`], see
-//! [`formation_flight`](crate::traffic::formation_flight)); sub-goal 0xd,
+//! [`formation_flight`](crate::traffic::formation_flight)); sub-goals 5,
+//! 0x11 and 7 with a swarm leader the same (@0x85cb7, @0x86632, @0x86810,
+//! see [`swarm_low_level`](crate::traffic::swarm_low_level)); sub-goal 0xd,
 //! following a leader's jump, the leader's while the leader's stage is
 //! 1.0 or below (@0x85a2d-0x85a4a,
 //! [`warp_out::follow_jump`](crate::traffic::warp_out::follow_jump)); and
 //! the warp-out raises it by 3 to 32 as it moves the ship
-//! (@0x349fc-0x34a25, [`warp_glow`]). The swarm leader's copies in
-//! sub-goals 5, 0x11 and 7 (@0x85cb7, @0x86632, @0x86810) are
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-1-left-out-of-combat-ai-fidelity-14's.
+//! (@0x349fc-0x34a25, [`warp_glow`]).
 //!
 //! **The fold's writers** ([`dispatch_fold`], each advance pass, and
 //! [`landing_unfold`]), each for a ship of 0x0002 with no direction
@@ -173,8 +174,8 @@ pub enum GlowCopy {
     /// close formation (@0x87dce-0x87deb), the player's for the player's
     /// escorts.
     Leader,
-    /// This glow, its swarm leader's as the pass began: sub-goal 0xb's
-    /// swarm branch (@0x87364-0x873a3).
+    /// This glow, its swarm leader's as the pass began: the swarm branch
+    /// of sub-goals 0xb (@0x87364-0x873a3), 5, 0x11 and 7.
     Swarm(i16),
 }
 

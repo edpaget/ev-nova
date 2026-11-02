@@ -1,10 +1,22 @@
-//! A fleeing ship giving up fleeing an ally it spares, as
-//! `_HighLevelAIHandler` does after every type's think (state 3,
-//! @0x8df75-0x8e0c3 → @0x8e81d in the `EV Nova` executable).
+//! Goal 3's block of `_HighLevelAIHandler`, after every type's think
+//! (state 3, @0x8df75-0x8e0dc in the `EV Nova` executable): a flight from
+//! a ship gone ends, and a fleeing ship gives up fleeing an ally it
+//! spares (@0x8e0c3 → @0x8e81d).
 //!
-//! A ship fleeing a ship within [`FLEEING_REACH`] on both axes, each
+//! **The ship gone.** A flight from a ship gone from its slot ends first,
+//! goal 0, sub 0 and +0x96 0 (@0x8dff6 → @0x8e228-0x8e23d), before the
+//! reach and the ally stop, whatever the type:
+//! [`provocation::with_flight_end`](crate::traffic::provocation::with_flight_end),
+//! which `NovaAi` runs before this block. The block never tests the fled
+//! ship's condition, so a disabled or breaking-up one is fled on until its
+//! slot goes. The hunters keep their own flight on +0x70 whatever that
+//! ship's state, and end it themselves when +0x70 is already -1, whatever
+//! the goal's quarry ([`warship::hunt`](super::warship::hunt)).
+//!
+//! **The ally.** A ship fleeing a ship within [`FLEEING_REACH`] on both axes, each
 //! offset cut to a whole number (@0x8e025-0x8e050), stops fleeing it
-//! (state 0, target -1: [`Goal::Idle`]) and makes no call for
+//! (state 0, sub 0, target -1, @0x8e81d-0x8e838: [`Goal::Idle`] with
+//! [`Decision::clears_target`]) and makes no call for
 //! reinforcements when it has a government, isn't led by the player, and
 //! the ship it flees is allied with it and isn't led by the player either
 //! (@0x8e077-0x8e0c3). Which allies those are is
@@ -66,9 +78,12 @@ fn flees_a_spared_ally(
         .is_some_and(|quarry| spares_ally(npc, quarry, around, led_ally))
 }
 
-/// `decision` with `_HighLevelAIHandler`'s state-3 stop applied (see the
-/// module docs): a flight from an ally within reach that `npc` spares by
-/// `led_ally`'s reading becomes [`Goal::Idle`].
+/// `decision` with `_HighLevelAIHandler`'s state-3 ally stop applied (see
+/// the module docs): a flight from an ally within reach that `npc` spares
+/// by `led_ally`'s reading becomes [`Goal::Idle`], its target cleared
+/// (@0x8e832: +0x70 -1, which a think that reads its kept target for goal
+/// 0, the escorts', the pirate's or the interceptor's, would otherwise
+/// keep).
 #[must_use]
 pub fn with_flee_drop(
     npc: &Npc,
@@ -83,6 +98,7 @@ pub fn with_flee_drop(
         {
             Decision {
                 goal: Goal::Idle,
+                clears_target: true,
                 ..decision
             }
         }
@@ -175,6 +191,21 @@ mod tests {
             Goal::Flee(n(2))
         );
         assert_eq!(after(&independent, &other, RuleSource::Bible), Goal::Idle);
+    }
+
+    #[test]
+    fn giving_up_fleeing_an_ally_clears_the_target() {
+        // State 0, sub 0, +0x70 -1 (@0x8e81d-0x8e838, @0x8e832).
+        let npcs = [trader(), ship(2, POLICE, AiType::Warship, 10.0, 0.0)];
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        let flight = Decision {
+            goal: Goal::Flee(n(2)),
+            ..Decision::default()
+        };
+        let dropped = with_flee_drop(&npcs[0], flight, &around, RuleSource::Engine);
+        assert_eq!((dropped.goal, dropped.clears_target), (Goal::Idle, true));
     }
 
     #[test]

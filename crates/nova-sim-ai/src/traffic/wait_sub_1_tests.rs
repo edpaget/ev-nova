@@ -18,7 +18,7 @@ use crate::handling::ShipFields;
 use crate::stats::{INERTIALESS_HULL, ShipStats};
 use crate::traffic::{Traffic, World};
 use nova_sim_base::fixture::{Draws, FAST};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// [`FAST`] with an inertialess hull.
 const RAVEN: ShipFields = ShipFields {
@@ -162,7 +162,7 @@ fn the_traffic_clears_a_ship_below_0_35_in_a_mode_wait_or_a_count_wait() {
     for ship in [coasting, counting] {
         let mut traffic = Traffic::with_interval(1);
         traffic.add_npc(ship);
-        traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
+        traffic.fly_tick(&World::new(&[]), &mut Draws::of(&[]));
         let ship = &traffic.npcs()[0];
         assert!(!ship.stopping, "{:?}", ship.mode);
     }
@@ -174,7 +174,7 @@ fn the_traffic_leaves_a_waiting_ships_sub_1_for_its_low_level_to_settle() {
     let ship = waiting(FAST, Goal::Wait, Vec2::new(0.0, -0.2), 180.0);
     let start = ship.state;
     traffic.add_npc(ship);
-    traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut Draws::of(&[]));
+    traffic.fly_tick(&World::new(&[]), &mut Draws::of(&[]));
     let ship = &traffic.npcs()[0];
     assert_eq!(
         ship.state.velocity,

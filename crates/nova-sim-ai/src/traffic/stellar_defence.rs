@@ -482,7 +482,7 @@ impl Traffic {
         // player, its travel stellar -1.
         npc.goal = Goal::Attack(ShipRef::Player);
         npc.target = Some(ShipRef::Player);
-        npc.travel_set = false;
+        npc.travel = None;
         self.turn_with_quote(id, world.gate_view());
         self.defences.alarm(site.id);
         Some(id)

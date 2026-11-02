@@ -6,17 +6,14 @@
 //! ship's condition or mode, as `_AIIssueEscortOrders` tests neither
 //! (@0x89b10-0x89b84). Each order sets the ship's mark too
 //! ([`Npc::ordered_by_lead`](super::npc::Npc::ordered_by_lead), +0xc4,
-//! @0x89b71). The think half of a tick runs it before the decisions
-//! ([`Traffic::think_holding`]).
+//! @0x89b71). Each leader issues at the head of its own slot's run, before
+//! its decision ([`dispatch_head`](super::dispatch_head)).
 //!
 //! **Ordering.** The original issues at each leader's own `_AIDispatch`,
 //! in slot order, so a ship in a lower slot than its leader thinks on the
-//! old word that frame and flies the new one the next. Here every leader
-//! issues before any decision of the tick: such an escort flies the new
-//! order a tick earlier than in the original, and a fleeing leader's leg
-//! is read from its state now, not from its last high level. Both are one-tick differences, settled before the frame is
-//! drawn, as [`fleet_escort`](crate::ai::fleet_escort)'s docs note for
-//! the lead's goal.
+//! old word that frame and flies the new one the next, and so does the
+//! engine. A fleeing leader's leg is read from its state as its slot
+//! comes, as the original reads its last high level's substate.
 
 use super::{Traffic, World};
 use crate::ai::Surroundings;
@@ -24,15 +21,17 @@ use crate::ai::candidates::has_escorts;
 use crate::ai::escort_orders::{for_class, issues, issues_on, orders};
 
 impl Traffic {
-    /// Each leader due on `world`'s frame issues its escorts' orders (see
-    /// the module docs). A leader reads the ships gone since the last
-    /// decision pass by their records, leaving them for the decisions to
-    /// take.
+    /// Each leader `picked` picks (one flag an NPC) that is due on
+    /// `world`'s frame issues its escorts' orders (see the module docs). A
+    /// leader reads a gone target by its slot's record while its target
+    /// still names the slot ([`Surroundings::held_gone`]); a record stands
+    /// until a ship takes its berth, so the leaders only read the records
+    /// and leave them for the tick's thinks.
     ///
     /// Every due leader's table is worked out, then written: the leaders
     /// read the NPCs while the writes need them mutably. No table reads an
     /// order word, so the order of the two makes no difference.
-    pub(crate) fn issue_escort_orders(&mut self, world: &World) {
+    pub(crate) fn issue_escort_orders(&mut self, world: &World, picked: &[bool]) {
         let around = Surroundings {
             gone: self.gone.ships(),
             ..world.around(&self.npcs)
@@ -40,6 +39,9 @@ impl Traffic {
         let tables: Vec<_> = self
             .npcs
             .iter()
+            .zip(picked)
+            .filter(|&(_, &picked)| picked)
+            .map(|(leader, _)| leader)
             .filter(|leader| {
                 issues_on(world.frame, leader.berth)
                     && issues(leader)
@@ -112,12 +114,21 @@ mod tests {
         traffic.npcs().iter().map(|npc| npc.order_word.0).collect()
     }
 
-    /// `traffic` issuing on `frame`.
+    /// `traffic` issuing on `frame`, every NPC picked.
     fn issue(traffic: &mut Traffic, frame: i16) {
-        traffic.issue_escort_orders(&World {
+        let picked = vec![true; traffic.npcs().len()];
+        let world = World {
             frame,
             ..World::new(&[])
-        });
+        };
+        traffic.issue_escort_orders(&world, &picked);
+    }
+
+    #[test]
+    fn a_leader_not_picked_issues_nothing() {
+        let mut traffic = traffic([leader(), led(EscortClass::Fighter)]);
+        traffic.issue_escort_orders(&World::new(&[]), &[false, true]);
+        assert_eq!(words(&traffic), [-1, -1]);
     }
 
     #[test]
@@ -219,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leader_reads_a_target_gone_since_the_last_decisions_by_its_record() {
+    fn a_leader_reads_a_target_gone_since_the_last_think_closed_by_its_record() {
         // Its shield low, a disabled target sends fighters in (2).
         let mut low = leader();
         low.reserves.shield.now = 0.0;
@@ -235,7 +246,7 @@ mod tests {
         assert_eq!(
             traffic.gone.ships().len(),
             1,
-            "left for the decisions to take"
+            "left for the tick's thinks to read"
         );
     }
 

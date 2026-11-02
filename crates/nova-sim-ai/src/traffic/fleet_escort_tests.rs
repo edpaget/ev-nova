@@ -458,6 +458,7 @@ fn a_fleet_escort_follows_its_leads_jump_takes_its_own_leave_once_under_way_and_
     let mut traffic = leaving_fleet(false);
     let mut entered = None;
     let mut started = None;
+    let mut own_leave = None;
     let mut departed = Vec::new();
     for tick in 0..2000 {
         jump_tick(&mut traffic);
@@ -483,19 +484,23 @@ fn a_fleet_escort_follows_its_leads_jump_takes_its_own_leave_once_under_way_and_
                 "sub 0xd started its stage: tick {tick}"
             );
             assert!(npc(&traffic, LEAD).warp.stage > 1.0, "its lead warps");
-        } else if let Some(at) = started
-            && tick == at + 1
-        {
-            assert_eq!(escort.goal, Goal::JumpOut, "goal 2 at its next high level");
-            assert_eq!(
-                escort.warp.goal,
-                Some(WarpGoal::Own),
-                "its own leave's sub 4"
-            );
+        } else if let Some(at) = started {
+            if tick == at + 1 {
+                assert_eq!(escort.goal, Goal::JumpOut, "goal 2 at its next high level");
+            }
+            // Its leave's leg comes to sub 4 as its velocity allows. Above
+            // its lead, it read the lead's stage after the lead's own step
+            // (@0x859c5-0x85c5f), so its velocity is its own from the lead's
+            // first stage on.
+            if own_leave.is_none() && escort.warp.goal == Some(WarpGoal::Own) {
+                assert_eq!(escort.goal, Goal::JumpOut, "its own leave's sub 4");
+                own_leave = Some(tick);
+            }
         }
     }
     assert_eq!(entered, Some(0), "the lead brakes from the first tick");
     assert!(started.is_some(), "its stage started");
+    assert!(own_leave.is_some(), "its own leave's sub 4");
     let mut gone: Vec<(NpcId, Outcome)> = departed;
     gone.sort_by_key(|(id, _)| *id);
     assert_eq!(
@@ -529,7 +534,10 @@ fn a_lead_turning_to_attack_cancels_its_escorts_early_follow() {
     traffic.think_holding(&jumping_ai(), world, &[], &mut Draws::of(&[0; 64]));
     let escort = npc(&traffic, ESCORT);
     assert_eq!(escort.warp.goal, None, "cancelled (@0x90125-0x9019c)");
-    assert!(escort.warp.stage < 0.0, "given up: {}", escort.warp.stage);
+    // Given up, and the high level's hold zeroes it in the same dispatch
+    // (@0x8d513).
+    assert!(!escort.warp.under_way(), "{}", escort.warp.stage);
+    assert!(escort.warp.stage >= 0.0, "{}", escort.warp.stage);
 }
 
 #[test]

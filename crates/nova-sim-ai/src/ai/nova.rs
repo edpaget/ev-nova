@@ -74,9 +74,11 @@ use crate::ai::defence_ship::DefenceShipAi;
 use crate::ai::fire::FireRules;
 use crate::ai::flee_drop;
 use crate::ai::handler_head;
+use crate::ai::inspect_high;
 use crate::ai::lost_sight;
 use crate::ai::miner::{self, MinerAi};
 use crate::ai::pirate::PirateWarship;
+use crate::ai::plunder_high;
 use crate::ai::target::TargetRules;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, Decision, EscortAi, FleetEscortAi, GateWait, Goal,
@@ -382,13 +384,16 @@ impl Behaviour for NovaAi {
     /// follows ([`lost_sight::after_think`], @0x8d6ef-0x8d8ae): a ship
     /// that can't see its target searches, gives up, leaves or waits.
     /// Unless that search or give-up ended the handler
-    /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), a flight
+    /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), a plunder
+    /// is flown by goal 0xd's high level, whatever type holds it
+    /// ([`plunder_high::after_think`]), a kept inspection is ended by goal
+    /// 7's ([`inspect_high::after_think`]), a flight
     /// from a ship gone from its slot ends with its provocation
     /// ([`provocation::with_flight_end`], @0x8d4e4-0x8d50d →
     /// @0x8e228-0x8e23d) for a ship the hunt left alone, and its flee
     /// drop ([`flee_drop::with_flee_drop`]), its state-4 block
-    /// ([`attack_drop::attack_block`]) and its call
-    /// for reinforcements end the think
+    /// ([`attack_drop::attack_block`]), goal 0xd's and goal 7's blocks and
+    /// its call for reinforcements end the think
     /// ([`reinforcements::with_high_level_call`]), whatever type decided,
     /// as the handler runs after every type's think (`_AIDispatch`
     /// @0x901e5).
@@ -429,6 +434,11 @@ impl Behaviour for NovaAi {
         };
         let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
         let decision = attack_drop::attack_block(npc, decision, around, self.led_ally);
+        // Goal 0xd's block, whoever holds the plunder (@0x8e740), then goal
+        // 7's, whoever keeps the inspection (@0x8f11e). Each comes after the
+        // flee block, so a hopeless flee either writes meets no flee drop.
+        let decision = plunder_high::after_think(npc, decision, around);
+        let decision = inspect_high::after_think(npc, decision, around);
         reinforcements::with_high_level_call(npc, decision, around)
     }
 
@@ -579,6 +589,174 @@ mod tests {
         Npc {
             ai_type,
             ..crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]))
+        }
+    }
+
+    /// A heavy wimpy trader (NPC 1) of the traders at the centre holding
+    /// `goal` on NPC 2, a ship of `govt` at (0, `y`) fleeing it, opening
+    /// the gap: a hopeless chase. Its decision by Nova's AI.
+    fn hopeless(goal: Goal, govt: crate::catalog::GovtId, y: f32) -> Decision {
+        use crate::ai::fixture::{TRADERS, around, govts, n, ship, sites};
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.hull.mass = 100.0;
+        trader.goal = goal;
+        trader.target = Some(n(2));
+        let mut quarry = ship(2, govt, AiType::Warship, 0.0, y);
+        quarry.goal = Goal::Flee(n(1));
+        quarry.state.velocity = crate::geometry::Vec2::new(0.0, 1.0);
+        let npcs = [trader, quarry];
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]))
+    }
+
+    #[test]
+    fn a_wimpy_traders_kept_hopeless_attack_calls_as_goal_4s_tail_at_any_distance() {
+        // Goal 3, sub 5, then the state-4 tail's call (@0x8e622-0x8e62e →
+        // @0x8e70d): no goal-3 reach (@0x8e025-0x8e050) that frame.
+        use crate::ai::fixture::{PIRATES, n};
+        let decision = hopeless(Goal::Attack(n(2)), PIRATES, 600.0);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(decision.calls_reinforcements, "600 off");
+    }
+
+    #[test]
+    fn a_hopeless_plunder_fled_makes_no_call_within_250() {
+        // Goal 3, sub 5, then @0x8eb6b past every call (@0x8eaef-0x8eafb).
+        use crate::ai::fixture::{PIRATES, n};
+        let plunder = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        let decision = hopeless(plunder, PIRATES, 200.0);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.calls_reinforcements, "200 off");
+    }
+
+    #[test]
+    fn a_hopeless_plunder_of_an_ally_fled_passes_no_flee_drop_that_frame() {
+        // Goal 3's block, its stop for an ally within 250
+        // (@0x8e077-0x8e0c3), came before goal 0xd's write. Goal 4's ally
+        // drop (@0x8e277) takes an ally before its hopeless chase, and a
+        // trader's kept attack is never on one, so only goal 0xd's flight
+        // meets an ally here.
+        use crate::ai::fixture::{POLICE, n};
+        let plunder = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        let decision = hopeless(plunder, POLICE, 200.0);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.clears_target);
+        assert!(!decision.calls_reinforcements);
+    }
+
+    /// A hunter of `ai_type` (NPC 1, police) at the centre fleeing NPC 2,
+    /// its target, beside `npcs`, a pirate NPC 3 in view 400 below; its
+    /// decision by Nova's AI and the draws asked.
+    fn fled(ai_type: AiType, npcs: &[Npc]) -> (Decision, Vec<u32>) {
+        use crate::ai::fixture::{PIRATES, POLICE, around, govts, n, ship, sites};
+        let mut runner = ship(1, POLICE, ai_type, 0.0, 0.0);
+        runner.goal = Goal::Flee(n(2));
+        runner.target = Some(n(2));
+        runner.provoked = 5.0;
+        let mut all = vec![runner];
+        all.extend_from_slice(npcs);
+        all.push(ship(3, PIRATES, AiType::Warship, 0.0, 400.0));
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &all, &govts, (0.0, -3000.0), 0);
+        let mut chance = Draws::of(&[0; 4]);
+        let decision = NovaAi::default().decision(&all[0], &around, &mut chance);
+        (decision, chance.asked)
+    }
+
+    #[test]
+    fn a_hunter_fleeing_a_ship_gone_idles_with_no_search_that_think() {
+        // The think keeps goal 3 (@0x8bb34, @0x8cc6d), the slot test makes
+        // +0x70 -1 (@0x8d4e4-0x8d50d), and goal 3's block writes goal 0,
+        // sub 0 and +0x96 0 with no call (@0x8dff6 → @0x8e228-0x8e23d).
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let (decision, asked) = fled(ai_type, &[]);
+            assert_eq!(decision.goal, Goal::Idle, "{ai_type:?}");
+            assert!(decision.clears_target, "{ai_type:?}");
+            assert!(decision.forgets_provocation, "{ai_type:?}");
+            assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Keep);
+            assert!(!decision.calls_reinforcements, "{ai_type:?}");
+            assert!(asked.is_empty(), "{ai_type:?}: no search");
+        }
+    }
+
+    #[test]
+    fn a_hunter_fleeing_a_ship_breaking_up_flees_on_calling_within_250() {
+        // Goal 3's block never tests the fled ship's condition: within 250
+        // it calls for reinforcements (@0x8e0d7).
+        use crate::ai::fixture::{PIRATES, n, ship};
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 200.0);
+            dying.condition = Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            };
+            let (decision, asked) = fled(ai_type, &[dying]);
+            assert_eq!(decision.goal, Goal::Flee(n(2)), "{ai_type:?}");
+            assert!(!decision.clears_target, "{ai_type:?}");
+            assert!(!decision.forgets_provocation, "{ai_type:?}");
+            assert!(decision.calls_reinforcements, "{ai_type:?}");
+            assert!(asked.is_empty(), "{ai_type:?}: no search");
+        }
+    }
+
+    #[test]
+    fn a_provoked_warship_inspecting_a_trader_flies_to_its_attacker_and_lets_it_go_within_reach() {
+        // `_WarshipAI` keeps goal 7 provoked (@0x8bb2d, @0x8be10), and the
+        // state-7 block reads +0x70, the attacker since the hit
+        // (@0x8f11e): beyond reach it flies there, within it goal 0 and
+        // +0x70 -1 (@0x8f391).
+        use crate::ai::fixture::{PIRATES, POLICE, TRADERS, around, govts, n, ship, sites};
+        let mut inspector = ship(1, POLICE, AiType::Warship, 0.0, 0.0);
+        inspector.goal = Goal::Inspect(n(2));
+        inspector.target = Some(n(3));
+        inspector.provoked = 5.0;
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 50.0);
+        let govts = govts(0, 0);
+        let sites = sites();
+        for (y, goal, clears) in [
+            (500.0, Goal::Inspect(n(3)), false),
+            (-90.0, Goal::Idle, true),
+        ] {
+            let pirate = ship(3, PIRATES, AiType::Warship, 0.0, y);
+            let npcs = [inspector.clone(), trader.clone(), pirate];
+            let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]));
+            assert_eq!(
+                (decision.goal, decision.clears_target),
+                (goal, clears),
+                "{y}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pirate_successor_keeping_a_copied_inspection_ends_it_within_reach() {
+        // `_PirateWarshipAI` keeps goal 7 on a +0x70 in its slot
+        // (@0x8c5e8), and the state-7 block ends it within reach: goal 0,
+        // +0x70 -1 (@0x8f391). Beyond reach it flies on.
+        use crate::ai::fixture::{POLICE, TRADERS, around, n, ship, sites};
+        let govts = crate::ai::fixture::govts(0, PLUNDERS);
+        let sites = sites();
+        let mut pirate = ship(1, POLICE, AiType::Warship, 0.0, 0.0);
+        pirate.goal = Goal::Inspect(n(2));
+        for (x, goal) in [(60.0, Goal::Idle), (600.0, Goal::Inspect(n(2)))] {
+            let mut trader = ship(2, TRADERS, AiType::WimpyTrader, x, -60.0);
+            trader.hull.crew = 1;
+            trader.hull.inherent_ai = 2;
+            let npcs = [pirate.clone(), trader];
+            let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+            let decision = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]));
+            assert_eq!(decision.goal, goal, "{x}");
+            assert_eq!(decision.clears_target, goal == Goal::Idle, "{x}");
         }
     }
 
@@ -2420,7 +2598,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 holds_target: None,
-                flees_hopeless: false,
+                writes_sub: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
@@ -2432,6 +2610,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             }
         }
     }
@@ -2457,10 +2636,12 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 holds_target: None,
-                flees_hopeless: false,
+                writes_sub: false,
                 plunders: None,
                 lost_sight: Some(crate::ai::lost_sight::LostSight::Seen),
-                travel: crate::ai::travel::TravelWrite::Keep,
+                // The idle block's -1 (@0x8b8ed), with no candidate, which
+                // the mission hunt leaves.
+                travel: crate::ai::travel::TravelWrite::Clear,
                 visits: None,
                 re_picked: false,
                 looked_over: None,
@@ -2469,6 +2650,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );

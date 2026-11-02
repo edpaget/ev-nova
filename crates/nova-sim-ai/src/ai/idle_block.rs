@@ -42,6 +42,12 @@
 //!   keeps the stellar through a fight and the drops that leave it (see
 //!   [`travel`]), and a waiting or leaving pirate whose pick failed picks
 //!   again once a stellar it may pick appears.
+//! - **+0x6c**: the block writes -1 before its pick and then the pick's
+//!   result, -1 for none (`_WimpyTraderAI` @0x8b0d1, @0x8b0ef; `_BraveTraderAI`
+//!   @0x8b53b, @0x8b559; `_WarshipAI` @0x8b8ed, @0x8b90b and its second copy
+//!   @0x8ba31, @0x8ba4f), so a failed pick clears it and a visited ship
+//!   writes none ([`pick_write`]). The interceptor's patrol writes nothing
+//!   unless it heads off (@0x8d132), and the pirate's copy reads it.
 //! - **+0x92's writers**: every spawn starts it at -2 (@0x1c3d6, @0x3d4dc,
 //!   @0x3d7ef, @0x41ed4, @0x423ed, @0x42565, @0x42a85, @0x43108, @0x436bd,
 //!   @0x43a38, @0x7f3fa), [`Npc::visited`]'s `None`. A ship with a fuel tank
@@ -75,9 +81,11 @@
 //! - The interceptor's +0x92 = -2 (@0x8d01e): no reader for AI type 4.
 //! - The emerge's gate-index test (@0x8952d): every stellar passes it.
 
-use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, travel};
+use crate::ai::travel::{self, TravelWrite};
+use crate::ai::{Admit, Goal, Surroundings, leave, random_stellar, trader_keep};
 use crate::catalog::StellarId;
 use crate::chance::Chance;
+use crate::traffic::destination;
 use crate::traffic::npc::Npc;
 
 /// Whether `npc` has visited a stellar of the system among `around`, so the
@@ -139,6 +147,42 @@ pub fn pirate_idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) ->
     random_stellar(npc, around, chance, Admit::All).unwrap_or_else(|| leave_or_wait(npc, around))
 }
 
+/// How the idle block of the traders and the warship writes `npc`'s travel
+/// stellar (+0x6c) in a think that reached `thought`: the -1 before the
+/// pick and the pick's own result (`_WimpyTraderAI` @0x8b0d1, @0x8b0ef;
+/// `_BraveTraderAI` @0x8b53b, @0x8b559; `_WarshipAI` @0x8b8ed, @0x8b90b).
+///
+/// The block ran when the think fled or fought from state 0 (the pick
+/// comes before the provoked test, @0x8b1ac), or, for any other `thought`,
+/// when the ship kept no goal: neither the block's own (`ai::kept`) nor
+/// the one a trader keeps as its `thought` ([`trader_keep::kept`],
+/// read only of the goal the think gave, so the warship's are its own).
+/// It writes nothing
+/// when it didn't run or the ship has visited ([`visited_here`]), and
+/// nothing of its own for a pick, which [`travel::take`] writes as it takes
+/// the `Land` or `EnterGate`. Otherwise the pick failed, -1, when there is
+/// no candidate; with one, the think was provoked, and its value is a draw
+/// the engine doesn't make, so the first candidate stands in. Only a
+/// reader of set-or-not sees that value in play: a provoked ship in state
+/// 0 holds a target with goal 0, which no successor's miner reads before
+/// its next think rewrites it.
+#[must_use]
+pub fn pick_write(npc: &Npc, around: &Surroundings, thought: Goal) -> TravelWrite {
+    let ran = match thought {
+        Goal::Flee(_) | Goal::Attack(_) => npc.goal == Goal::Idle,
+        _ => super::kept(npc, around).is_none() && trader_keep::kept(npc, around) != Some(thought),
+    };
+    if !ran || visited_here(npc, around) {
+        return TravelWrite::Keep;
+    }
+    if matches!(thought, Goal::Land(_) | Goal::EnterGate(_)) {
+        return TravelWrite::Keep;
+    }
+    destination::candidates(npc.govt, around.listed, around.govts, Admit::All)
+        .first()
+        .map_or(TravelWrite::Clear, |site| TravelWrite::Set(site.id))
+}
+
 /// Whether `stellar` among those `around` lists is destroyed
 /// (`_StellarIsDestroyed`, which reads the stellar's record).
 fn destroyed(stellar: StellarId, around: &Surroundings) -> bool {
@@ -182,6 +226,114 @@ mod tests {
 
     fn sites() -> Vec<LandingSite> {
         vec![planet(128, 0.0, 0.0), planet(129, 0.0, 0.0)]
+    }
+
+    // The pick's +0x6c.
+
+    /// A stellar held before the think.
+    const HELD: Option<StellarId> = Some(StellarId(150));
+
+    /// `npc` holding [`HELD`] in `goal`.
+    fn holding(npc: Npc, goal: Goal) -> Npc {
+        Npc {
+            goal,
+            travel: HELD,
+            ..npc
+        }
+    }
+
+    /// A system listing one stellar no ship may land on.
+    fn unlandable() -> [LandingSite; 1] {
+        [LandingSite {
+            flags: 0,
+            ..planet(128, 0.0, 0.0)
+        }]
+    }
+
+    #[test]
+    fn a_failed_pick_clears_the_travel_stellar() {
+        // +0x6c = -1 before the pick (@0x8b0d1), and the pick's -1
+        // written (@0x8b0ef).
+        let sites = unlandable();
+        let around = Surroundings::new(&sites, &[]);
+        let npc = holding(ship(), Goal::Idle);
+        let thought = idle(&npc, &around, &mut Draws::of(&[]));
+        assert_eq!(thought, Goal::JumpOut);
+        assert_eq!(pick_write(&npc, &around, thought), TravelWrite::Clear);
+        let stranded = holding(stranded(ship()), Goal::Idle);
+        assert_eq!(
+            pick_write(&stranded, &around, Goal::Wait),
+            TravelWrite::Clear,
+            "the wait after it"
+        );
+    }
+
+    #[test]
+    fn a_pick_writes_none_of_its_own() {
+        // `take` writes the goal's stellar.
+        let sites = sites();
+        let around = Surroundings::new(&sites, &[]);
+        let npc = holding(ship(), Goal::Idle);
+        for thought in [Goal::Land(StellarId(129)), Goal::EnterGate(StellarId(129))] {
+            assert_eq!(pick_write(&npc, &around, thought), TravelWrite::Keep);
+        }
+    }
+
+    #[test]
+    fn a_visited_ship_writes_none() {
+        // The visited test skips the pick and its writes (@0x8b0cf).
+        let sites = sites();
+        let around = Surroundings::new(&sites, &[]);
+        let npc = holding(visited(128), Goal::Idle);
+        assert_eq!(pick_write(&npc, &around, Goal::JumpOut), TravelWrite::Keep);
+        let none = Surroundings::new(&[], &[]);
+        assert_eq!(
+            pick_write(&holding(ship(), Goal::Idle), &none, Goal::JumpOut),
+            TravelWrite::Keep,
+            "no nav slot at all"
+        );
+    }
+
+    #[test]
+    fn a_goal_it_keeps_writes_none() {
+        // State 6 is sticky: the block needs state 0 (@0x8b06c).
+        let sites = unlandable();
+        let around = Surroundings::new(&sites, &[]);
+        let npc = holding(ship(), Goal::Wait);
+        assert_eq!(pick_write(&npc, &around, Goal::Wait), TravelWrite::Keep);
+    }
+
+    #[test]
+    fn a_provoked_ship_in_state_0_writes_what_its_pick_found() {
+        // The pick comes before the provoked test (@0x8b1ac); the engine
+        // makes no draw for it, so the first candidate stands in.
+        let sites = sites();
+        let around = Surroundings::new(&sites, &[]);
+        let npc = holding(ship(), Goal::Idle);
+        let flee = Goal::Flee(crate::combat::ShipRef::Player);
+        assert_eq!(
+            pick_write(&npc, &around, flee),
+            TravelWrite::Set(StellarId(128))
+        );
+        let attack = Goal::Attack(crate::combat::ShipRef::Player);
+        assert_eq!(
+            pick_write(&npc, &around, attack),
+            TravelWrite::Set(StellarId(128))
+        );
+        let sites = unlandable();
+        let around = Surroundings::new(&sites, &[]);
+        assert_eq!(pick_write(&npc, &around, flee), TravelWrite::Clear);
+    }
+
+    #[test]
+    fn a_provoked_ship_in_another_state_writes_none() {
+        let sites = sites();
+        let around = Surroundings::new(&sites, &[]);
+        let flee = Goal::Flee(crate::combat::ShipRef::Player);
+        for goal in [Goal::Wait, flee, Goal::Land(StellarId(129))] {
+            let npc = holding(ship(), goal);
+            assert_eq!(pick_write(&npc, &around, flee), TravelWrite::Keep);
+        }
     }
 
     #[test]
@@ -349,7 +501,7 @@ mod tests {
         );
         assert_eq!(chance.asked, [2]);
         let dropped = Npc {
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..ship()
         };
         let emerging = Npc {

@@ -975,6 +975,48 @@ mod tests {
         }
     }
 
+    /// A ship led by the prize, added to `session`: its travel stellar set,
+    /// provoked.
+    fn led_by_the_prize(session: &mut Session) -> NpcId {
+        let mut led = session.space.npc(ON_BOARD.npc).expect("aboard").clone();
+        led.leader = Some(ON_BOARD.npc);
+        led.condition = crate::combat::hull::Condition::Intact;
+        led.travel = Some(crate::catalog::StellarId(150));
+        led.provoked = 3.0;
+        session.space.traffic.add_npc(led)
+    }
+
+    #[test]
+    fn a_captured_leads_followers_leave_with_no_travel_stellar() {
+        // `_DoShipCapture` @0x41353-0x41398, on Use As My Ship alone. The
+        // wiring only: what the follower loses is
+        // `Npc::lose_captured_lead`'s, pinned in `nova-sim-ai`.
+        let catalog = boardable();
+        let mut session = crate::session::tests::captured(&catalog);
+        let led = led_by_the_prize(&mut session);
+        use_as_my_ship(&mut session, "Prize", &mut Draws::of(&[0]));
+        let led = session.space.npc(led).expect("here");
+        assert_eq!(led.leader, None);
+        assert!(!led.travel_set(), "lose_captured_lead, not leader = None");
+    }
+
+    #[test]
+    fn use_as_escort_writes_no_followers_travel_stellar() {
+        // `_DoPlunderDialog` writes the ship itself (@0x9461f-0x94774) and
+        // `_AIShipCapturedByPlayer` resets the ships targeting it
+        // (@0x896b6-0x89704): no follower's +0x6c.
+        let catalog = boardable();
+        let mut session = crate::session::tests::captured(&catalog);
+        let led = led_by_the_prize(&mut session);
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::default()),
+            Some(Assigned::Escort)
+        );
+        let led = session.space.npc(led).expect("here");
+        assert!(led.travel_set());
+        assert_eq!(led.provoked, 3.0);
+    }
+
     // The paint.
 
     /// Government 150, whose ships are painted (31, 2, 1).

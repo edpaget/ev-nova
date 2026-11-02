@@ -60,10 +60,10 @@ impl Space {
     /// fate and no event: nothing ever sees it go from not disabled to
     /// disabled (`_DamageShip`'s -0x17a is set from the start).
     ///
-    /// The session runs it as a system fills, after the AI's arrivals
-    /// and as a pass's fight ends; a ship that arrives in the AI's step
-    /// after the ships before it have thought is held before the frame
-    /// is drawn, a lag no player sees.
+    /// The session runs it as a system fills, after the AI's arrivals,
+    /// before any slot's think (`_EnterMoreShips` @0x44237 comes before the
+    /// loop, and `_IsDisabled` reads the government from the start), and
+    /// as a pass's fight ends.
     pub(super) fn hold_derelicts(&mut self, statics: &Statics) {
         let govts = &statics.govts;
         for npc in self.traffic.npcs_mut() {
@@ -77,7 +77,9 @@ impl Space {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::catalog::GovtRecord;
+    use crate::chance::Chance;
 
     use crate::combat::hull::Condition;
     use crate::combat::{CombatEvent, Rules, ShipRef};
@@ -90,7 +92,7 @@ mod tests {
     use crate::target_panel::TargetStatus;
     use crate::testkit::{Draws, FakePilotCatalog};
     use crate::testkit::{Passive, work, work_with};
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{Npc, NpcId};
     use nova_sim_catalog::fixture::govt;
 
     /// [`armed`], its one NPC's government (140) of `flags`.
@@ -220,6 +222,41 @@ mod tests {
             "{:?}",
             session.draw_layers()
         );
+    }
+
+    /// Records each NPC that decides, keeping its goal.
+    #[derive(Debug, Default)]
+    struct Deciding(std::cell::RefCell<Vec<NpcId>>);
+
+    impl Behaviour for Deciding {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.0.borrow_mut().push(npc.id);
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_derelict_arrival_is_held_before_any_think() {
+        // `_EnterMoreShips` (@0x44237) comes before the loop and
+        // `_IsDisabled` reads the government from the start (@0x2cf1), so
+        // a ship new in the system on this pass is never seen intact.
+        let (catalog, mut session) = derelict();
+        let govt = session.npcs()[0].govt;
+        let arrival = session
+            .space
+            .traffic
+            .add_npc(crate::testkit::npc(0, crate::stats::ShipStats::default()));
+        session.space.npc_mut(arrival).expect("here").govt = govt;
+        let deciding = Deciding::default();
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &deciding,
+            Rules::default(),
+            &mut Draws::of(&[0; 16]),
+        );
+        assert_eq!(deciding.0.into_inner(), []);
     }
 
     #[test]

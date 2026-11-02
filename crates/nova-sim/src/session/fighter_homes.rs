@@ -8,12 +8,15 @@
 //! the fighter stays active with its parent and goal, the call skipping
 //! the pull (@0x88111) after the steering and thrust have run
 //! (@0x87ed1-0x87f02), and it retries next tick. The original's `AmmoType`
-//! walks read the carrier's weapons, which the flight can't see, so the
-//! session lists such fighters as each fly half begins
-//! ([`Session::fighters_staying_out`], [`FlyPass::with_no_bay`]), asking
-//! afresh, so one docks the first tick a bay is there. By the other reading
-//! of [`RuleKey::FighterNoBay`] none stays out: it docks, and is lost
-//! ([`Session::dock_fighter`]).
+//! walks read the carrier's weapons, which the traffic can't see, so the
+//! session lists such fighters as each tick's AI loop begins, every fighter
+//! out whose carrier has no bay for it, whatever its goal, as a think at
+//! its own slot may send it home ([`Session::fighters_staying_out`],
+//! [`Traffic::think_run`](crate::traffic::Traffic::think_run)'s `no_bay`).
+//! It asks afresh each tick, so one docks the first tick a bay is there; no
+//! bay comes or goes inside the loop, the walks reading the bays and not
+//! their counts. By the other reading of [`RuleKey::FighterNoBay`] none
+//! stays out: it docks, and is lost ([`Session::dock_fighter`]).
 //!
 //! **Use As My Ship** (`_DoShipCapture` @0x41120). The player's own
 //! fighters are written nothing, no loop reading parent 0: slot 0 is still
@@ -24,7 +27,7 @@
 //! The ships the captured ship leads are released
 //! ([`Space::release_led`]): the loop @0x41300-0x413b4 writes, for each
 //! but the captured ship and the old ship's new slot (whose leader is the
-//! player here), +0x6c -1 ([`Npc::travel_set`](crate::traffic::npc::Npc::travel_set)),
+//! player here), +0x6c -1 ([`Npc::travel`](crate::traffic::npc::Npc::travel)),
 //! +0x70 -1 (the target), +0x96 0 (the provocation), +0x9a -1 and +0x88
 //! its `InherentAI`, and nothing else, so its pick stays. So the captured
 //! carrier's fighters stop being fighters
@@ -40,17 +43,16 @@
 use std::collections::BTreeSet;
 
 use super::{Session, Space, Statics};
+#[cfg(any(test, doc))]
 use crate::ai::Goal;
 use crate::combat::ShipRef;
 use crate::combat::armament::Armament;
 use crate::rulebook::{RuleKey, RuleSource};
-#[cfg(doc)]
-use crate::traffic::fly_pass::FlyPass;
 use crate::traffic::npc::NpcId;
 
 impl Session {
-    /// The fighters that stay out at their carrier this fly half (see the
-    /// module docs).
+    /// The fighters that stay out at their carrier this tick's AI loop (see
+    /// the module docs).
     pub(super) fn fighters_staying_out(&self) -> BTreeSet<NpcId> {
         match self.setup.rules.source_for(RuleKey::FighterNoBay) {
             RuleSource::Engine => self
@@ -62,25 +64,24 @@ impl Session {
 }
 
 impl Space {
-    /// The fighters docking whose carrier has no
-    /// [`dock_bay`](Armament::dock_bay) for them, the player's carrying
-    /// `player`'s armament. One whose carrier is gone isn't among them: it
-    /// brakes, with nothing to dock with.
+    /// The fighters out whose carrier has no
+    /// [`dock_bay`](Armament::dock_bay) for them, whatever their goal, the
+    /// player's carrying `player`'s armament. One whose carrier is gone
+    /// isn't among them: it brakes, with nothing to dock with.
     fn fighters_without_a_bay(&self, player: &Armament, statics: &Statics) -> BTreeSet<NpcId> {
         let npcs = self.traffic.npcs().iter();
-        npcs.filter(|npc| matches!(npc.goal, Goal::Dock(_)))
-            .filter_map(|npc| {
-                let armament = match npc.carrier?.ship {
-                    ShipRef::Player => player,
-                    ShipRef::Npc(carrier) => &self.npc(carrier)?.armament,
-                };
-                let base = statics.arsenal.sprite_base(npc.ship);
-                armament
-                    .dock_bay(npc.ship, base)
-                    .is_none()
-                    .then_some(npc.id)
-            })
-            .collect()
+        npcs.filter_map(|npc| {
+            let armament = match npc.carrier?.ship {
+                ShipRef::Player => player,
+                ShipRef::Npc(carrier) => &self.npc(carrier)?.armament,
+            };
+            let base = statics.arsenal.sprite_base(npc.ship);
+            armament
+                .dock_bay(npc.ship, base)
+                .is_none()
+                .then_some(npc.id)
+        })
+        .collect()
     }
 
     /// Every fighter out of the player's reads `reach`, its carrier's new
@@ -98,22 +99,12 @@ impl Space {
     }
 
     /// The ships NPC `id` leads are released, as it is taken as the
-    /// player's own (see the module docs).
+    /// player's own (see the module docs), each by
+    /// [`Npc::lose_captured_lead`](crate::traffic::npc::Npc::lose_captured_lead).
     pub(super) fn release_led(&mut self, id: NpcId) {
         for npc in self.traffic.npcs_mut() {
-            if npc.leader != Some(id) {
-                continue;
-            }
-            npc.travel_set = false;
-            npc.target = None;
-            npc.provoked = 0.0;
-            // +0x88 is written with no test (@0x41398), over a bribe too,
-            // so `leave_fleet` writes its `InherentAI` once the bribe's
-            // word is gone.
-            npc.overwrite_bribe();
-            npc.leave_fleet();
-            if npc.goal.quarry().is_some() {
-                npc.goal = Goal::Idle;
+            if npc.leader == Some(id) {
+                npc.lose_captured_lead();
             }
         }
     }
@@ -124,7 +115,7 @@ impl Space {
 mod tests {
     use super::*;
     use crate::bay::Carrier;
-    use crate::catalog::{OutfitRecord, ShipId, ShipRecord, WeaponId};
+    use crate::catalog::{OutfitRecord, ShipId, ShipRecord, StellarId, WeaponId};
     use crate::chance::NeverFires;
     use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
     use crate::combat::weapon::WeaponSpec;
@@ -241,12 +232,10 @@ mod tests {
         assert_eq!(session.fighters_staying_out(), BTreeSet::new(), "a bay");
         session.space.npc_mut(raider).expect("there").armament = Armament::default();
         assert_eq!(session.fighters_staying_out(), BTreeSet::from([fighter]));
+        // Listed whatever its goal: a think at its own slot may send it
+        // home before its low level docks it.
         session.space.npc_mut(fighter).expect("there").goal = Goal::Idle;
-        assert_eq!(
-            session.fighters_staying_out(),
-            BTreeSet::new(),
-            "not going home"
-        );
+        assert_eq!(session.fighters_staying_out(), BTreeSet::from([fighter]));
     }
 
     #[test]
@@ -461,7 +450,7 @@ mod tests {
         npc.leader = Some(NpcId(0));
         npc.target = Some(ShipRef::Player);
         npc.provoked = 30.0;
-        npc.travel_set = true;
+        npc.travel = Some(StellarId(128));
         npc.pick = Some(WeaponId(5));
         npc.state.position = Vec2::new(300.0, 300.0);
         change(&mut npc);
@@ -491,7 +480,7 @@ mod tests {
         assert_eq!(npc.carrier, None);
         assert_eq!(npc.target, None);
         assert_eq!(npc.provoked, 0.0);
-        assert!(!npc.travel_set);
+        assert!(!npc.travel_set());
         assert_eq!(npc.ai_type, AiType::Interceptor, "its `InherentAI`");
         assert!(!npc.kept_escort_ai);
         assert_eq!(npc.reserves.armor.max, npc.stats.armor, "its class's");
@@ -542,7 +531,7 @@ mod tests {
         let npc = session.space.npc(other).expect("there");
         assert_eq!(npc.target, Some(ShipRef::Player));
         assert_eq!(npc.provoked, 30.0);
-        assert!(npc.travel_set);
+        assert!(npc.travel_set());
         assert_eq!(npc.ai_type, AiType::Warship);
         assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
     }

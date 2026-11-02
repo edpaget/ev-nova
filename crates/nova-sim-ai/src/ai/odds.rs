@@ -1007,6 +1007,51 @@ mod tests {
         assert!(!hopeless(&chaser, target), "the chaser's class is faster");
     }
 
+    /// `chaser`'s goal on the player, `target`, after the state-4 block
+    /// ([`attack_block`](crate::ai::attack_drop::attack_block)).
+    fn state4(chaser: &Npc, target: &PlayerSide) -> Goal {
+        let npcs = [chaser.clone()];
+        let around = Surroundings {
+            player: Some(*target),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let attack = crate::ai::Decision {
+            goal: Goal::Attack(ShipRef::Player),
+            ..crate::ai::Decision::default()
+        };
+        crate::ai::attack_drop::attack_block(
+            chaser,
+            attack,
+            &around,
+            crate::rulebook::RuleSource::Engine,
+        )
+        .goal
+    }
+
+    #[test]
+    fn a_hopeless_chase_snipes_above_ai_type_2_and_flees_at_or_below_it() {
+        // Sub 0xe for +0x88 > 2, goal 3 with sub 5 otherwise
+        // (@0x8e60a-0x8e62e).
+        use crate::traffic::npc::AiType;
+        let (mut chaser, target) = chase(1.0);
+        for (ai_type, goal) in [
+            (AiType::WimpyTrader, Goal::Flee(ShipRef::Player)),
+            (AiType::BraveTrader, Goal::Flee(ShipRef::Player)),
+            (AiType::Warship, Goal::Snipe(ShipRef::Player)),
+            (AiType::Interceptor, Goal::Snipe(ShipRef::Player)),
+        ] {
+            chaser.ai_type = ai_type;
+            assert_eq!(state4(&chaser, &target), goal, "{ai_type:?}");
+        }
+        chaser.ai_type = AiType::WimpyTrader;
+        chaser.hull.stands_off = true;
+        assert_eq!(
+            state4(&chaser, &target),
+            Goal::Attack(ShipRef::Player),
+            "a stand-off hull never asks (@0x8e48e)"
+        );
+    }
+
     #[test]
     fn a_light_chaser_is_never_hopeless() {
         let (mut chaser, target) = chase(1.0);

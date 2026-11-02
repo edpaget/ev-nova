@@ -118,7 +118,7 @@
 
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, fire, out_of_ammo, react,
+    Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, fire, out_of_ammo, react, travel,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -234,6 +234,12 @@ impl Behaviour for EscortAi {
     /// ([`Decision::voice`]): a [`VoiceCue::Thought`], at which a ship with
     /// no variant rolls one (@0x83980-0x839f6), or a
     /// [`VoiceCue::NewThreat`] when the order block took a new threat.
+    ///
+    /// The order block writes its travel stellar ([`Decision::travel`],
+    /// [`travel::order_block`]), the player's slot or -1, which a pirate
+    /// mission escort's release reads. The lost parent writes none, and
+    /// the jump's entry copies the player's own +0x6c
+    /// ([`Surroundings::player_travel`], @0x83a77-0x83a7c, see [`travel`]).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         if player_breaking_up(around) {
             // Goal 0 ([`Goal::Idle`], the default), its target kept.
@@ -249,6 +255,7 @@ impl Behaviour for EscortAi {
                 clears_target: true,
                 follows_jump: true,
                 voice: Some(VoiceCue::Thought),
+                travel: travel::copying(around.player_travel),
                 order_word: Some(word),
                 ..Decision::default()
             };
@@ -260,6 +267,7 @@ impl Behaviour for EscortAi {
             goal,
             ends_wait: !keeps_wait,
             voice: Some(cue),
+            travel: travel::order_block(goal, order, cue == VoiceCue::NewThreat, 0),
             order_word: Some(word),
             ..Decision::default()
         }
@@ -550,6 +558,7 @@ mod tests {
     use crate::ai::PlayerSide;
     use crate::ai::fire::AmmoLeft;
     use crate::ai::fixture::{PIRATES, govts, n, player, ship};
+    use crate::ai::travel::TravelWrite;
     use crate::catalog::WeaponId;
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
@@ -2496,6 +2505,90 @@ mod tests {
         });
         let npcs = [fighter, pirate(2, 0.0, 100.0)];
         assert_eq!(cue(ENGINE, &npcs, 0.0), Some(VoiceCue::Thought), "docking");
+    }
+
+    #[test]
+    fn the_players_escort_writes_the_order_blocks_travel() {
+        // The player's slot, 0.
+        const PLAYERS_SLOT: crate::catalog::StellarId = travel::of_slot(0);
+        let write = |npc: Npc, threat: bool| {
+            let threat = threat.then(|| pirate(2, 0.0, 100.0));
+            let npcs: Vec<Npc> = std::iter::once(npc).chain(threat).collect();
+            decision_of(ENGINE, &npcs, 0.0, &[0]).travel
+        };
+        let attack = Some(EscortOrder::Attack);
+        let defend = Some(EscortOrder::Defend);
+        let kept = |order| having(escort(order), Goal::Attack(n(2)), Some(n(2)));
+        assert_eq!(write(escort(attack), true), TravelWrite::Clear, "@0x83d83");
+        assert_eq!(write(kept(attack), true), TravelWrite::Keep, "@0x83d6d");
+        assert_eq!(write(escort(defend), true), TravelWrite::Keep, "@0x83e4b");
+        assert_eq!(write(kept(defend), true), TravelWrite::Keep, "@0x83cd6");
+        assert_eq!(
+            write(escort(attack), false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83dac"
+        );
+        assert_eq!(
+            write(escort(defend), false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83e9f"
+        );
+        assert_eq!(
+            write(escort(None), false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83f09"
+        );
+        assert_eq!(
+            write(escort(Some(EscortOrder::Hold)), false),
+            TravelWrite::Clear,
+            "@0x83e65"
+        );
+        let mut fighter = escort(Some(EscortOrder::Dock));
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Player,
+            window: 100.0,
+            reach: 40.0,
+        });
+        assert_eq!(
+            write(fighter, false),
+            TravelWrite::Set(PLAYERS_SLOT),
+            "@0x83e9f"
+        );
+    }
+
+    #[test]
+    fn the_players_jump_copies_its_travel_stellar_and_its_breaking_up_writes_none() {
+        // The entry copies the player's +0x6c (@0x83a77-0x83a7c).
+        let npcs = [escort(None)];
+        let govts = govts(0, 0);
+        let jumping = |player_travel| {
+            let around = Surroundings {
+                player: Some(player(0.0, 0.0)),
+                govts: &govts,
+                player_warp_stage: 1.0,
+                player_travel,
+                ..Surroundings::new(&[], &npcs)
+            };
+            ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]))
+        };
+        let held = Some(crate::catalog::StellarId(129));
+        let jump = jumping(held);
+        assert!(jump.follows_jump);
+        assert_eq!(
+            jump.travel,
+            TravelWrite::Set(crate::catalog::StellarId(129))
+        );
+        assert_eq!(jumping(None).travel, TravelWrite::Clear, "-1 copied");
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                condition: Condition::Destroyed,
+                ..player(0.0, 0.0)
+            }),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let lost = ENGINE.decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(lost.travel, TravelWrite::Keep);
     }
 
     #[test]

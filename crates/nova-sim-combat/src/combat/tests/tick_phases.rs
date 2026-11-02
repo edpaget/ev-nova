@@ -308,7 +308,7 @@ fn double_times_second_pass_runs_the_players_point_defence_and_no_npcs() {
     };
     let npcs_defend = |combat: &mut Combat, ships: &mut [Ship], pass: GamePass| {
         phase::run_on(combat, ships, pass, |combat, fighters, arena, chance| {
-            combat.defend_npcs(fighters, arena, None, false, chance);
+            combat.defend_npcs(fighters, arena, None, None, chance);
         });
         quad_firers(&combat.take_events())
     };

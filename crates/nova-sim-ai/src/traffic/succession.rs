@@ -8,10 +8,13 @@
 //! @0x440f4-0x44101), so not a bribed one
 //! ([`Npc::original_ai_type`]), which keeps its lost parent, though the
 //! search below may pick it. It then works out the formation parents
-//! (@0x4415c). The think half runs
-//! it after the answers to the last tick's hits and before the formation
-//! pass ([`fleet_formation`](super::fleet_formation)), so a successor's
-//! followers take slots in its formation in the same tick. It runs by the
+//! (@0x4415c). The think half runs it after the answers to the last
+//! tick's hits (the collision passes', `_CheckShotProximities` @0x44015)
+//! and before the formation pass
+//! ([`fleet_formation`](super::fleet_formation)), so a successor's
+//! followers take slots in its formation in the same tick, and both
+//! before the arrivals (`_EnterMoreShips` @0x44237), so a lost lead's
+//! record is read before an arrival can take its berth. It runs by the
 //! engine's reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
 //! alone; by the other, the session's earlier lost-lead pass stands
 //! (`nova_sim`'s `lost_lead` module).
@@ -40,10 +43,12 @@
 //! 3. **It leads** (@0x8934a-0x89474): it leaves its fleet, +0x50 = -1.0.
 //!    Under the lost lead's own government (both not independent and
 //!    equal, @0x8938a-0x893ae), it takes over the lead's goal and
-//!    substate, target and travel stellar (@0x893b0-0x893e1), read from
-//!    the lead's record, there or gone ([`gone`](super::gone)); goal 0xa
-//!    with no leader is a hold ([`Goal::Hold`]). Otherwise its own goal
-//!    maps (@0x893ea-0x8945f):
+//!    substate, target and travel stellar (@0x893b0-0x893e1, as
+//!    [`travel::held`] reads it, so a lead emerging or bound for a
+//!    stellar gives that stellar), read from the lead's record, there or gone
+//!    ([`gone`](super::gone)); goal 0xa with no leader is a hold
+//!    ([`Goal::Hold`]). Otherwise its own goal maps, and it keeps its own
+//!    travel stellar (@0x893ea-0x8945f):
 //!    - following its lead's jump (goal 0xb) → its own jump (goal 2, sub
 //!      4);
 //!    - a fighter's return or a formation (goals 5, 0xa, 0xc) → goal 0;
@@ -56,6 +61,27 @@
 //!
 //!    Each writes sub 0 (pursuit and docking none) but the jump's sub 4,
 //!    and clears the warp's sub-goal but in the jump.
+//!
+//!    The successor thinks as its class's type in the same tick, as the
+//!    marking pass runs before the dispatch, and that think decides what
+//!    it keeps of the copy: a trader keeps a copied fight, plunder, count
+//!    wait or inspection unprovoked ([`trader_keep`](crate::ai::trader_keep)),
+//!    a warship or a pirate an inspection, provoked or not, which goal 7's
+//!    high level ends whatever the type ([`inspect_high`](crate::ai::inspect_high)), an
+//!    interceptor any goal behind its gate
+//!    ([`gate_closed`](crate::ai::interceptor::gate_closed)), and goal
+//!    0xd's high level then flies a plunder whoever holds it
+//!    ([`plunder_high`](crate::ai::plunder_high)): a pirate fleet's Pirate
+//!    Viper or Thunderhead successor (`InherentAI` 4) docks with its lost
+//!    lead's victim and plunders it.
+//!
+//!    A copied inspection carries no target: an inspecting interceptor's
+//!    is none ([`Interceptor`](crate::ai::Interceptor)'s target is its
+//!    goal's quarry), where the original's +0x70 holds the inspected
+//!    ship. So the thinks that read +0x70 read [`Npc::slot_target`], the
+//!    target or the inspected ship: the provoked branches flee or fight
+//!    that ship, the pirate keeps the inspection or drops it, and the
+//!    defence ship keeps one of the player and moves one of an NPC.
 //!
 //!    The lead's word is copied in the marking pass, before the lead's own
 //!    dispatch can reset it (@0x8fece), and the engine's order matches: on
@@ -160,9 +186,9 @@ use std::collections::BTreeSet;
 use super::npc::{AiType, Mode, Npc, NpcId};
 use super::warp_out::WarpGoal;
 use super::{Traffic, World};
-use crate::ai::Goal;
 use crate::ai::pursuit::Pursuit;
 use crate::ai::regroup::Kept;
+use crate::ai::{Goal, travel};
 use crate::catalog::StellarId;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -172,23 +198,31 @@ use crate::rulebook::RuleSource;
 impl Traffic {
     /// Each ship whose lead is lost takes a new lead, leads, or is left
     /// alone, in `world` (see the module docs): by the engine's reading of
-    /// its [`npc_escort_ai`](World::npc_escort_ai) alone.
-    pub(crate) fn succeed_leaders(&mut self, world: &World) {
+    /// its [`npc_escort_ai`](World::npc_escort_ai) alone. The ships it
+    /// dropped, each of which marks the parent it now holds on this pass
+    /// alone ([`fleet_formation`](super::fleet_formation)).
+    pub(crate) fn succeed_leaders(&mut self, world: &World) -> BTreeSet<NpcId> {
+        let mut dropped = BTreeSet::new();
         if world.npc_escort_ai != RuleSource::Engine {
-            return;
+            return dropped;
         }
         let lost: BTreeSet<NpcId> = self
             .npcs
             .iter()
-            .filter(|npc| npc.condition.active())
+            .filter(|npc| checked(npc))
             .filter_map(|npc| npc.leader)
             .filter(|&lead| !self.intact(lead))
             .collect();
         if lost.is_empty() {
-            return;
+            return dropped;
         }
         let before = self.npcs.clone();
         for lead in lost {
+            // A gone lead is read by its record whatever tick freed it:
+            // the check reads the parent's slot (+0x9a), which no slot
+            // test clears, and the record stands until a ship takes it.
+            // A ship taking it becomes the parent of every ship the lead
+            // led (`parent_slot`), so no lead whose berth is taken is lost.
             let record = before
                 .iter()
                 .find(|npc| npc.id == lead)
@@ -201,16 +235,29 @@ impl Traffic {
                 })
                 .cloned();
             let successor = successor(&before, lead);
-            for npc in self.npcs.iter_mut().filter(|npc| {
-                npc.condition.active() && npc.leader == Some(lead) && npc.original_ai_type() > 4
-            }) {
+            for npc in self
+                .npcs
+                .iter_mut()
+                .filter(|npc| checked(npc) && npc.leader == Some(lead))
+            {
                 match successor {
                     None => npc.leave_alone(world.held_burst),
                     Some(id) if id == npc.id => npc.take_over(record.as_ref(), world),
-                    Some(id) => npc.follow_successor(id),
+                    Some(id) => {
+                        npc.follow_successor(id);
+                        continue;
+                    }
+                }
+                // Its type is down, so the pass gives it +0xc906 for its
+                // parent (@0x441b9-0x441c0). A bribed ship's type was down
+                // before, and the pass skips it (@0x440d8).
+                if !npc.spared {
+                    npc.form_parent = npc.swarm_leader;
+                    dropped.insert(npc.id);
                 }
             }
         }
+        dropped
     }
 
     /// Whether NPC `id` is here and intact.
@@ -219,6 +266,16 @@ impl Traffic {
             .iter()
             .any(|npc| npc.id == id && npc.condition == Condition::Intact)
     }
+}
+
+/// Whether the marking pass checks `npc`'s parent (@0x440cb-0x440e0):
+/// active and of AI type above 4 (+0x88, [`Npc::original_ai_type`]), so
+/// not a bribed follower (+0x88 1, `_DoCommDialog` @0x961f8), which keeps
+/// its parent, goal and sub through its lead's loss. Its fellows'
+/// successor may still be it: the candidates' test reads no AI type
+/// (@0x892c5-0x8933d, [`successor`]).
+fn checked(npc: &Npc) -> bool {
+    npc.condition.active() && npc.original_ai_type() > 4
 }
 
 /// The successor of `lead` among `npcs`: of the intact ships it led, the
@@ -251,6 +308,24 @@ impl Npc {
             self.ai_type = AiType::from_raw(self.hull.inherent_ai);
         }
         self.kept_escort_ai = false;
+    }
+
+    /// It loses a lead the player captured, `_DoShipCapture`'s block for
+    /// each ship of that lead (@0x41353-0x41398): its travel stellar,
+    /// target and provocation go, and it leaves its fleet, its class's AI
+    /// type written over a bribe's, as that write reads no AI type. Its
+    /// goal is kept, but for one that holds its target ([`Goal::quarry`]),
+    /// which idles, as the original's high level idles a fight with no
+    /// target.
+    pub fn lose_captured_lead(&mut self) {
+        self.overwrite_bribe();
+        self.leave_fleet();
+        self.target = None;
+        self.travel = None;
+        self.provoked = 0.0;
+        if self.goal.quarry().is_some() {
+            self.goal = Goal::Idle;
+        }
     }
 
     /// It follows `successor`, its lost lead's successor (see the module
@@ -388,7 +463,7 @@ impl Npc {
                 self.goal = Goal::JumpOut;
                 self.warp.goal = Some(WarpGoal::Own);
                 self.target = None;
-                self.travel_set = false;
+                self.travel = None;
                 self.pursuit = Pursuit::default();
                 self.docking = None;
                 return;
@@ -408,7 +483,7 @@ impl Npc {
                     goal => goal,
                 };
             }
-            self.travel_set = lead.travel_set;
+            self.travel = travel::held(lead);
             self.warp.goal = lead.warp.goal;
             self.stopping = lead.stopping;
             self.pursuit = lead.pursuit;
@@ -449,6 +524,7 @@ mod tests {
     use crate::catalog::GovtId;
     use crate::chance::{Chance, NeverFires};
     use crate::escort::FormationSlot;
+    use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::autopilot::TopSpeeds;
@@ -536,19 +612,30 @@ mod tests {
     }
 
     /// `traffic`'s think half by `reading` of `npc_escort_ai` and
-    /// `repairer` of `successor_repairer`, never releasing a pause.
+    /// `repairer` of `successor_repairer`, never releasing a pause, the
+    /// warp sound 600 Mac ticks long, so no jump ends at its slot.
     fn think_by(traffic: &mut Traffic, reading: RuleSource, repairer: RuleSource) {
-        let world = World {
+        let mut world = World {
             npc_escort_ai: reading,
             successor_repairer: repairer,
             ..World::new(&[])
         };
+        world.warp.durations = [600, 600];
         traffic.think_holding(&Keep, world, &[], &mut NeverFires);
     }
 
     /// `traffic`'s think half by the engine.
     fn think(traffic: &mut Traffic) {
         think_by(traffic, RuleSource::Engine, RuleSource::Engine);
+    }
+
+    /// `traffic`'s passes before the first slot's dispatch, the marking
+    /// pass's succession among them (@0x44101), by the engine: what the
+    /// succession wrote, before any ship's own goal block reads it.
+    fn succeed(traffic: &mut Traffic) {
+        let mut world = World::new(&[]);
+        world.warp.durations = [600, 600];
+        traffic.open_think(&Keep, world, &[], &mut NeverFires);
     }
 
     const DISABLED: Condition = Condition::Disabled;
@@ -668,6 +755,8 @@ mod tests {
         let lead = of(&jumped, 0).clone();
         jumped.remove(LEAD);
         jumped.gone.record(lead, Freed::InDispatch);
+        let mut killed = holding(Condition::Intact);
+        killed.remove_killed(LEAD);
         let mut missing = holding(Condition::Intact);
         missing.remove(LEAD);
         for (name, mut traffic, goal) in [
@@ -675,13 +764,16 @@ mod tests {
             ("dying", holding(dying), Goal::Hold),
             ("destroyed", destroyed, Goal::Hold),
             ("jumped", jumped, Goal::Hold),
+            ("killed by a stellar", killed, Goal::Hold),
             ("missing", missing, Goal::Idle),
         ] {
             think(&mut traffic);
             let successor = of(&traffic, 1);
             assert_eq!(successor.leader, None, "{name}");
             assert_eq!(successor.goal, goal, "{name}");
-            assert_eq!(successor.warp.stage, GIVEN_UP_STAGE, "{name}");
+            // Its -1.0 the high level's hold zeroes in its dispatch
+            // (@0x8d513).
+            assert_eq!(successor.warp.stage, 0.0, "{name}");
         }
     }
 
@@ -712,7 +804,8 @@ mod tests {
 
     // The successor leads.
 
-    /// The lead of `govt`, disabled, attacking NPC 9 with a travel
+    /// The lead of `govt`, disabled, targeting the player (a slot the
+    /// successor's high level finds active, @0x8d4e4) with a travel
     /// stellar, a rush kept and a docking, on its own jump, its goal
     /// `goal`; and its one follower, a warship of the rebels, a fighter of
     /// the lead, idle, with its own rush and docking.
@@ -730,8 +823,8 @@ mod tests {
         let mut traffic = fleet(govt, DISABLED, vec![taker]);
         let lead = of_mut(&mut traffic, 0);
         lead.goal = goal;
-        lead.target = Some(ShipRef::Npc(NpcId(9)));
-        lead.travel_set = true;
+        lead.target = Some(PLAYER);
+        lead.travel = Some(crate::catalog::StellarId(150));
         lead.warp.goal = Some(WarpGoal::Own);
         lead.pursuit = Pursuit {
             kept: Some(PursuitKept::Rush),
@@ -748,17 +841,125 @@ mod tests {
     fn under_its_leads_government_the_successor_takes_over_the_leads_job() {
         let mut traffic = taking_over(REBELS, Goal::Attack(ShipRef::Npc(NpcId(9))));
         let lead = of(&traffic, 0).clone();
-        think(&mut traffic);
+        succeed(&mut traffic);
         let taker = of(&traffic, 1);
         assert_eq!(taker.goal, Goal::Attack(ShipRef::Npc(NpcId(9))));
         assert_eq!(taker.target, lead.target);
-        assert!(taker.travel_set);
+        assert!(taker.travel_set());
         assert_eq!(taker.warp.goal, lead.warp.goal);
         assert_eq!(taker.leader, None);
         assert_eq!(taker.carrier, None);
         assert_eq!(taker.ai_type, AiType::Warship);
         assert_eq!(taker.reserves.shield.max, 30.0, "its class's capacity");
         assert_eq!(taker.warp.stage, GIVEN_UP_STAGE);
+    }
+
+    #[test]
+    fn a_successor_copies_a_lead_coming_out_of_a_gate() {
+        // The lead's +0x6c holds its gate (@0x8954a), which the engine
+        // keeps in `emerges_from`, not the flag.
+        let mut traffic = taking_over(REBELS, Goal::Hold);
+        let lead = of_mut(&mut traffic, 0);
+        lead.travel = None;
+        lead.emerges_from = Some(crate::catalog::StellarId(129));
+        succeed(&mut traffic);
+        assert_eq!(of(&traffic, 1).travel, Some(crate::catalog::StellarId(129)));
+    }
+
+    #[test]
+    fn a_successor_takes_the_stellar_its_lead_held() {
+        use crate::ai::travel;
+        use crate::catalog::StellarId;
+        // @0x893b0-0x893e1 copies the number, whatever it names.
+        let mut traffic = taking_over(REBELS, Goal::Land(StellarId(133)));
+        succeed(&mut traffic);
+        assert_eq!(of(&traffic, 1).travel, Some(StellarId(133)), "bound for it");
+        let mut traffic = taking_over(REBELS, Goal::Hold);
+        of_mut(&mut traffic, 0).travel = Some(travel::of_slot(6));
+        succeed(&mut traffic);
+        assert_eq!(
+            of(&traffic, 1).travel,
+            Some(travel::of_slot(6)),
+            "a slot it held"
+        );
+    }
+
+    #[test]
+    fn a_successor_of_a_lead_on_a_follow_jumps_on_its_own_losing_its_target() {
+        // The take-over copies goal 0xb and its sub-goal (@0x893c6-0x893e1),
+        // then +0x9a = -1 (@0x8946b): its next high level takes the
+        // leaderless branch, +0x70 and +0x6c -1, goal 2 sub 4
+        // (@0x8df54-0x8df6c).
+        let mut traffic = fleet(REBELS, DISABLED, vec![follower(REBELS, 300)]);
+        let mut far = ship(REBELS, 900);
+        far.begin_own_jump();
+        let far = traffic.add_npc_at(far, 5);
+        let lead = of_mut(&mut traffic, 0);
+        lead.leader = Some(far);
+        lead.goal = Goal::Follow {
+            lead: far,
+            guard: None,
+        };
+        lead.target = Some(PLAYER);
+        lead.travel = Some(crate::catalog::StellarId(150));
+        lead.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(far)));
+        // The marking pass's take-over: its goal 2 block at its slot then
+        // runs it out inside 1000 (@0x8fb1e).
+        succeed(&mut traffic);
+        let taker = of(&traffic, 1);
+        assert_eq!(taker.leader, None);
+        assert_eq!(taker.warp.goal, Some(WarpGoal::Own));
+        assert_eq!(taker.goal, Goal::JumpOut);
+        assert_eq!((taker.target, taker.travel), (None, None));
+    }
+
+    #[test]
+    fn under_another_government_a_successor_keeps_its_own() {
+        for own in [false, true] {
+            let mut traffic = taking_over(FEDS, Goal::Hold);
+            let (lead, mine) = if own {
+                (None, Some(crate::catalog::StellarId(150)))
+            } else {
+                (Some(crate::catalog::StellarId(151)), None)
+            };
+            of_mut(&mut traffic, 0).travel = lead;
+            of_mut(&mut traffic, 1).travel = mine;
+            think(&mut traffic);
+            assert_eq!(of(&traffic, 1).leader, None);
+            assert_eq!(of(&traffic, 1).travel_set(), own);
+        }
+    }
+
+    #[test]
+    fn a_ship_whose_lead_was_captured_loses_its_stellar_target_provocation_and_bribe() {
+        // `_DoShipCapture` @0x41353-0x41398: +0x6c, +0x70, +0x96 and +0x9a,
+        // and +0x88 its class's whatever a bribe wrote.
+        let mut led = follower(FEDS, 300);
+        led.target = Some(PLAYER);
+        led.travel = Some(crate::catalog::StellarId(150));
+        led.provoked = 5.0;
+        led.take_bribe();
+        let goal = led.goal;
+        led.lose_captured_lead();
+        assert_eq!(led.leader, None);
+        assert_eq!(led.target, None);
+        assert!(!led.travel_set());
+        assert_eq!(led.provoked, 0.0);
+        assert!(!led.spared);
+        assert_eq!(led.ai_type, AiType::Warship, "its class's, not the bribe's");
+        assert_eq!(led.goal, goal, "no goal is written");
+    }
+
+    #[test]
+    fn a_ship_whose_lead_was_captured_lets_go_of_a_quarry_its_goal_held() {
+        // The engine's fight holds +0x70 in the goal: with no target the
+        // original's high level idles it (goal 3 @0x8e228-0x8e234).
+        for goal in [Goal::Attack(PLAYER), Goal::Flee(PLAYER)] {
+            let mut led = follower(FEDS, 300);
+            led.goal = goal;
+            led.lose_captured_lead();
+            assert_eq!(led.goal, Goal::Idle, "{goal:?}");
+        }
     }
 
     #[test]
@@ -798,7 +999,7 @@ mod tests {
             Goal::Formation { guard: None },
         ] {
             let mut traffic = taking_over(REBELS, goal);
-            think(&mut traffic);
+            succeed(&mut traffic);
             assert_eq!(of(&traffic, 1).goal, Goal::Hold, "{goal:?}");
         }
     }
@@ -873,7 +1074,7 @@ mod tests {
         let taker = of(&traffic, 1);
         assert_eq!(taker.goal, Goal::Attack(PLAYER));
         assert_eq!(taker.target, Some(PLAYER), "its own target, not the lead's");
-        assert!(!taker.travel_set, "not the lead's travel stellar");
+        assert!(!taker.travel_set(), "not the lead's travel stellar");
         assert_eq!(taker.warp.goal, None, "not the lead's warp");
         assert_eq!(taker.pursuit, Pursuit::default());
         assert_eq!(taker.docking, None);
@@ -882,13 +1083,15 @@ mod tests {
 
     #[test]
     fn following_its_leads_jump_it_jumps_on_its_own() {
-        let taker = mapped(
-            FEDS,
-            Goal::Idle,
-            None,
-            Some(WarpGoal::Follow(ShipRef::Npc(LEAD))),
-            RuleSource::Engine,
-        );
+        // The take-over, in the marking pass; its goal 2 block at its slot
+        // then runs it out inside 1000 (@0x8fb1e).
+        let mut traffic = taking_over(FEDS, Goal::Attack(ShipRef::Npc(NpcId(9))));
+        let taker = of_mut(&mut traffic, 1);
+        taker.goal = Goal::Idle;
+        taker.target = None;
+        taker.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
+        succeed(&mut traffic);
+        let taker = of(&traffic, 1);
         assert_eq!(taker.goal, Goal::JumpOut);
         assert_eq!(taker.warp.goal, Some(WarpGoal::Own));
     }
@@ -1495,13 +1698,14 @@ mod tests {
         // (@0x8fda0-0x8fdaa), and the high level sub 0 (@0x8fb09-0x8fb13).
         for lead_mode in [Mode::JumpingIn { tick: 3 }, Mode::LeavingGate { tick: 2 }] {
             let mut traffic = under_a_lead_in(lead_mode, FEDS, |_| {});
+            // A target the slot test keeps (@0x8d4e4-0x8d50d).
             let lead = of_mut(&mut traffic, 0);
-            lead.goal = Goal::Attack(ShipRef::Npc(NpcId(9)));
-            lead.target = Some(ShipRef::Npc(NpcId(9)));
+            lead.goal = Goal::Attack(PLAYER);
+            lead.target = Some(PLAYER);
             think(&mut traffic);
             let leads = of(&traffic, 1);
             assert_eq!(leads.goal, Goal::Idle, "{lead_mode:?}");
-            assert_eq!(leads.target, Some(ShipRef::Npc(NpcId(9))), "{lead_mode:?}");
+            assert_eq!(leads.target, Some(PLAYER), "{lead_mode:?}");
             assert_eq!(leads.mode, Mode::Flying, "{lead_mode:?}");
         }
     }
@@ -1568,7 +1772,13 @@ mod tests {
             let taker = of_mut(&mut traffic, 1);
             taker.mode = mode;
             taker.emerges_from = taker.emerging().then_some(StellarId(310));
-            think_bursting(&mut traffic, burst);
+            // The marking pass's take-over alone: the ship's own goal 2
+            // block at its slot runs it out inside 1000 (@0x8fb1e).
+            let world = World {
+                held_burst: burst,
+                ..World::new(&[])
+            };
+            traffic.open_think(&Keep, world, &[], &mut NeverFires);
             of(&traffic, 1).clone()
         };
         let held = |ticks_left| Mode::HeldAtGate { ticks_left };
@@ -1596,7 +1806,7 @@ mod tests {
                 assert_eq!(taker.goal, Goal::JumpOut, "{mode:?} {burst:?}");
                 assert_eq!(taker.warp.goal, Some(WarpGoal::Own), "{mode:?} {burst:?}");
                 assert_eq!(taker.target, None, "{mode:?} {burst:?}");
-                assert!(!taker.travel_set, "{mode:?} {burst:?}");
+                assert!(!taker.travel_set(), "{mode:?} {burst:?}");
                 assert_eq!(taker.pursuit, Pursuit::default(), "{mode:?} {burst:?}");
                 assert_eq!(taker.docking, None, "{mode:?} {burst:?}");
                 assert_eq!(taker.leader, None, "{mode:?} {burst:?}");
@@ -1680,6 +1890,58 @@ mod tests {
     }
 
     #[test]
+    fn a_bribed_follower_is_left_out_of_the_succession() {
+        // The marking pass checks a ship only above AI type 4 (@0x440d8),
+        // so a bribed follower (+0x88 1, `_DoCommDialog` @0x961f8) keeps
+        // its parent, its goal and its jump. The candidates' test reads no
+        // AI type (@0x892c5-0x8933d): it may still be the successor.
+        let bribed = || {
+            let mut ship = follower(FEDS, 900);
+            ship.take_bribe();
+            ship
+        };
+        let mut traffic = fleet(FEDS, DISABLED, vec![bribed(), follower(FEDS, 100)]);
+        succeed(&mut traffic);
+        let spared = of(&traffic, 1);
+        assert_eq!(spared.leader, Some(LEAD), "left alone");
+        assert_eq!(
+            spared.goal,
+            Goal::Follow {
+                lead: LEAD,
+                guard: None
+            }
+        );
+        assert_eq!(of(&traffic, 2).leader, Some(NpcId(1)), "its successor");
+        // A lead that jumped out at its slot, the same.
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![bribed()]);
+        let lead = traffic.npcs()[0].clone();
+        traffic.remove(lead.id);
+        traffic.left_the_system(lead, crate::traffic::gone::Freed::InDispatch);
+        succeed(&mut traffic);
+        assert_eq!(of(&traffic, 1).leader, Some(LEAD), "jumped out");
+    }
+
+    #[test]
+    fn the_marking_pass_checks_a_parent_above_ai_type_4_alone() {
+        // `cmpw $0x4, 0x88; jle` (@0x440d8-0x440e0): a word of 4 is left
+        // out, 5 and 6 are checked.
+        let word = |ai_type: AiType| {
+            let mut ship = follower(FEDS, 900);
+            ship.take_bribe();
+            ship.ai_type = ai_type;
+            let mut traffic = fleet(FEDS, DISABLED, vec![ship]);
+            succeed(&mut traffic);
+            of(&traffic, 1).leader
+        };
+        assert_eq!(AiType::Interceptor.raw(), 4);
+        assert_eq!(word(AiType::Interceptor), Some(LEAD), "AI type 4");
+        let mut escort = fleet(FEDS, DISABLED, vec![follower(FEDS, 900)]);
+        assert!(of(&escort, 1).original_ai_type() > 4);
+        succeed(&mut escort);
+        assert_eq!(of(&escort, 1).leader, None, "AI type 6: it leads");
+    }
+
+    #[test]
     fn a_follower_on_a_jump_follows_the_successors_and_keeps_its_goal() {
         let mut jumping = follower(FEDS, 100);
         jumping.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
@@ -1690,7 +1952,7 @@ mod tests {
             DISABLED,
             vec![follower(FEDS, 300), jumping, under_way],
         );
-        think(&mut traffic);
+        succeed(&mut traffic);
         let jumping = of(&traffic, 2);
         assert_eq!(
             jumping.warp.goal,
@@ -1921,6 +2183,263 @@ mod tests {
             })
         );
         assert_eq!(of(&traffic, 1).fleet_slot, None);
+    }
+
+    // The stale parent (@0x441b9-0x441c0, @0x441de).
+
+    /// The ship at berth 9 of `traffic`, a stranger of no fleet at (100,
+    /// 200), facing up.
+    fn stranger(traffic: &mut Traffic) -> NpcId {
+        let mut other = ship(REBELS, 100);
+        other.state.position = Vec2::new(100.0, 200.0);
+        traffic.add_npc_at(other, 9)
+    }
+
+    #[test]
+    fn the_heaviest_follower_swarming_leads_and_holds_its_swarm_leader_as_its_parent() {
+        let mut heavy = follower(FEDS, 300);
+        heavy.swarm_leader = Some(9);
+        let mut traffic = fleet(FEDS, DISABLED, vec![heavy, follower(FEDS, 100)]);
+        let parent = stranger(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).leader, None);
+        assert_eq!(of(&traffic, 1).form_parent, Some(9));
+        // The same pass marks it (@0x441de), though no other ship names
+        // it: it counts, and takes its place.
+        let slot = FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 38.0,
+        };
+        let state = of(&traffic, parent.0).state;
+        assert_eq!(of(&traffic, 1).fleet_slot, Some(slot));
+        // Its parent's calc, in a higher berth, writes its berth's word
+        // after its own dispatch: it reads it at the next pass
+        // (`formation_places`).
+        assert_eq!(of(&traffic, 1).slot_place, None);
+        // No later pass marks it, so its place stands as its parent moves.
+        of_mut(&mut traffic, parent.0).state.position = Vec2::new(-700.0, 10.0);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(9));
+        assert_eq!(of(&traffic, 1).slot_place, Some(slot.position(&state)));
+    }
+
+    #[test]
+    fn the_lone_disabled_ship_holds_its_swarm_leader_as_its_parent_too() {
+        let mut alone = follower(FEDS, 300);
+        alone.condition = DISABLED;
+        alone.swarm_leader = Some(9);
+        let mut traffic = fleet(FEDS, DISABLED, vec![alone]);
+        stranger(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(9));
+        assert!(of(&traffic, 1).fleet_slot.is_some());
+    }
+
+    #[test]
+    fn with_no_word_it_holds_no_parent_and_word_0_is_the_player() {
+        let mut clear = follower(FEDS, 300);
+        clear.form_parent = Some(1);
+        let mut traffic = fleet(FEDS, DISABLED, vec![clear]);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, None);
+        let mut zero = follower(FEDS, 300);
+        zero.swarm_leader = Some(0);
+        let mut traffic = fleet(FEDS, DISABLED, vec![zero]);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(0), "a word of 0 kept");
+    }
+
+    /// `traffic`'s think half by the engine, the player at `at`: the
+    /// player's state.
+    fn think_by_player(traffic: &mut Traffic, at: Vec2) -> ShipState {
+        let side = crate::ai::fixture::player(at.x, at.y);
+        let world = World {
+            player: Some(side),
+            ..World::new(&[])
+        };
+        traffic.think_holding(&Keep, world, &[], &mut NeverFires);
+        side.state
+    }
+
+    #[test]
+    fn a_ship_dropped_on_word_0_marks_the_player_on_that_pass_alone() {
+        // The check's pass sets the player's +0xc2 (@0x441c7-0x441de), and
+        // no ship above AI type 4 is on the player to set it again.
+        let slot = FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 38.0,
+        };
+        let mut zero = follower(FEDS, 300);
+        zero.swarm_leader = Some(0);
+        zero.fleet_slot = Some(slot);
+        let mut traffic = fleet(FEDS, DISABLED, vec![zero]);
+        let player = think_by_player(&mut traffic, Vec2::new(500.0, -300.0));
+        assert_eq!(of(&traffic, 1).leader, None);
+        assert_eq!(of(&traffic, 1).form_parent, Some(0));
+        let place = slot.position(&player);
+        assert_eq!(of(&traffic, 1).slot_place, Some(place));
+        // No later pass marks the player, so the place stands as it moves.
+        think_by_player(&mut traffic, Vec2::new(-700.0, 10.0));
+        assert_eq!(of(&traffic, 1).form_parent, Some(0));
+        assert_eq!(of(&traffic, 1).fleet_slot, Some(slot));
+        assert_eq!(of(&traffic, 1).slot_place, Some(place));
+    }
+
+    #[test]
+    fn a_bribed_ship_keeps_the_parent_it_holds() {
+        let mut bribed = follower(FEDS, 300);
+        bribed.take_bribe();
+        bribed.form_parent = Some(5);
+        bribed.swarm_leader = Some(9);
+        let mut traffic = fleet(FEDS, DISABLED, vec![bribed]);
+        stranger(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, Some(5));
+        assert_eq!(of(&traffic, 1).fleet_slot, None, "it marks nothing");
+    }
+
+    #[test]
+    fn a_ship_the_disabled_reset_keeps_at_ai_6_reads_no_parent_at_the_next_pass() {
+        // The reset drops its leader and leaves +0x88, so the pass still
+        // runs for it, and answers -1 (@0x8feda-0x8ff0a).
+        let mut down = follower(FEDS, 300);
+        down.condition = DISABLED;
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![down]);
+        think(&mut traffic);
+        assert!(of(&traffic, 1).kept_escort_ai);
+        assert_eq!(of(&traffic, 1).form_parent, Some(1), "the reset came after");
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).form_parent, None);
+    }
+
+    // A lead's berth taken (+0x9a names the slot, not the ship).
+
+    /// A spawn table whose one arrival, on [`ARRIVAL_DRAWS`], comes into
+    /// the lowest free berth.
+    fn arriving() -> crate::traffic::table::SpawnTable {
+        use crate::catalog::{DudeId, ShipId};
+        use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable};
+        use std::collections::BTreeMap;
+        SpawnTable {
+            avg_ships: 5,
+            dudes: vec![(DudeId(128), 100)],
+            dude_records: BTreeMap::from([(
+                DudeId(128),
+                SpawnDude {
+                    ai_type: 1,
+                    govt: Some(GovtId(130)),
+                    ships: vec![(ShipId(200), 1)],
+                    booty: 0,
+                    info_types: 0,
+                },
+            )]),
+            ships: BTreeMap::from([(
+                ShipId(200),
+                ShipKind {
+                    stats: ShipStats::new(FAST, &[]),
+                    ..ShipKind::default()
+                },
+            )]),
+            ..SpawnTable::default()
+        }
+    }
+
+    /// The draws that bring [`arriving`]'s one arrival.
+    const ARRIVAL_DRAWS: [u32; 6] = [0, 6, 6, 0, 0, 90];
+
+    /// The ship at `berth` of `traffic`.
+    fn at_berth(traffic: &Traffic, berth: u32) -> NpcId {
+        (traffic.npcs().iter())
+            .find(|npc| npc.berth == berth)
+            .map(|npc| npc.id)
+            .expect("a ship at the berth")
+    }
+
+    #[test]
+    fn a_lead_destroyed_last_tick_is_succeeded_from_its_record_before_an_arrival_takes_its_berth() {
+        // The marking pass (@0x4405e-0x441f7, its check @0x44101) runs
+        // before `_EnterMoreShips` (@0x44237): the check reads the lead's
+        // record, which the arrival then rewrites.
+        let mut traffic = fleet(
+            FEDS,
+            Condition::Destroyed,
+            vec![follower(FEDS, 300), follower(FEDS, 100)],
+        );
+        let lead = of_mut(&mut traffic, 0);
+        lead.goal = Goal::Attack(PLAYER);
+        lead.target = Some(PLAYER);
+        traffic.remove_destroyed(LEAD);
+        traffic.table = arriving();
+        let mut world = World::new(&[]);
+        world.warp.durations = [600, 600];
+        let mut draws = nova_sim_base::fixture::Draws::of(&ARRIVAL_DRAWS);
+        traffic.open_think(&Keep, world, &[], &mut draws);
+        let arrival = at_berth(&traffic, 1);
+        assert_ne!(arrival, LEAD, "the arrival takes the lead's berth");
+        let successor = of(&traffic, 1);
+        assert_eq!(successor.goal, Goal::Attack(PLAYER), "the lead's job");
+        assert_eq!(successor.target, Some(PLAYER));
+        assert_eq!(of(&traffic, 2).leader, Some(NpcId(1)), "not the arrival");
+    }
+
+    #[test]
+    fn a_follower_whose_leads_berth_was_taken_follows_the_newcomer_and_is_not_succeeded() {
+        // The check reads the parent by its slot (+0x9a, @0x89276-0x892a9):
+        // a newcomer there, active and not disabled, is the parent, so no
+        // successor is chosen and the followers stay on it.
+        let mut jumping = follower(FEDS, 100);
+        jumping.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(LEAD)));
+        let mut traffic = fleet(FEDS, Condition::Intact, vec![follower(FEDS, 300), jumping]);
+        let lead = traffic.npcs()[0].clone();
+        traffic.remove(LEAD);
+        traffic.left_the_system(lead, Freed::InDispatch);
+        let newcomer = traffic.add_npc_at(ship(REBELS, 100), 1);
+        succeed(&mut traffic);
+        for id in [1, 2] {
+            let kept = of(&traffic, id);
+            assert_eq!(kept.leader, Some(newcomer), "NPC {id}");
+            assert_eq!(
+                kept.goal,
+                Goal::Follow {
+                    lead: newcomer,
+                    guard: None
+                },
+                "NPC {id}"
+            );
+        }
+        assert_eq!(
+            of(&traffic, 2).warp.goal,
+            Some(WarpGoal::Follow(ShipRef::Npc(newcomer)))
+        );
+    }
+
+    #[test]
+    fn a_bribed_followers_parent_names_a_ship_that_takes_its_lost_leads_berth_later() {
+        // The pass skips a bribed follower (@0x440d8), so its +0x9a names
+        // the lost lead's slot until a spawn rewrites the slot, ticks
+        // later.
+        let mut bribed = follower(FEDS, 900);
+        bribed.take_bribe();
+        let mut traffic = fleet(FEDS, Condition::Destroyed, vec![bribed]);
+        traffic.remove_destroyed(LEAD);
+        think(&mut traffic);
+        think(&mut traffic);
+        assert_eq!(of(&traffic, 1).leader, Some(LEAD), "the berth stands free");
+        traffic.table = arriving();
+        let mut draws = nova_sim_base::fixture::Draws::of(&ARRIVAL_DRAWS);
+        traffic.open_think(&Keep, World::new(&[]), &[], &mut draws);
+        let arrival = at_berth(&traffic, 1);
+        let spared = of(&traffic, 1);
+        assert_eq!(spared.leader, Some(arrival));
+        assert_eq!(
+            spared.goal,
+            Goal::Follow {
+                lead: arrival,
+                guard: None
+            }
+        );
     }
 
     #[test]

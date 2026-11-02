@@ -4,6 +4,7 @@
 //! next think finds no target, and a held one stands the same way.
 #![allow(clippy::float_cmp)]
 
+use crate::ai::hopeless_flee::HopelessFlee;
 use std::collections::BTreeSet;
 
 use super::{Traffic, World};
@@ -135,12 +136,13 @@ fn tick_deciding(traffic: &mut Traffic, decision: crate::ai::Decision) {
 #[test]
 fn a_held_target_ends_the_frame_over_the_target_steps_answer() {
     let mut traffic = traffic_of(vec![ship(1, PIRATES, AiType::Warship, 0.0, 0.0)]);
+    // A ship the slot test keeps (@0x8d4e4-0x8d50d): the player.
     let held = crate::ai::Decision {
-        holds_target: Some(n(9)),
+        holds_target: Some(ShipRef::Player),
         ..crate::ai::Decision::default()
     };
     tick_deciding(&mut traffic, held);
-    assert_eq!(first(&traffic), (Goal::Idle, Some(n(9))));
+    assert_eq!(first(&traffic), (Goal::Idle, Some(ShipRef::Player)));
 }
 
 #[test]
@@ -148,19 +150,23 @@ fn each_decision_writes_whether_its_flight_is_a_hopeless_chase() {
     let mut traffic = traffic_of(vec![ship(1, PIRATES, AiType::BraveTrader, 0.0, 0.0)]);
     let hopeless = crate::ai::Decision {
         goal: Goal::Flee(ShipRef::Player),
-        flees_hopeless: true,
+        hopeless_flee: Some(HopelessFlee::Attack),
         ..crate::ai::Decision::default()
     };
     tick_deciding(&mut traffic, hopeless);
-    assert!(traffic.npcs()[0].flees_hopeless);
+    assert_eq!(traffic.npcs()[0].fled_hopeless, Some(HopelessFlee::Attack));
     tick_deciding(
         &mut traffic,
         crate::ai::Decision {
-            flees_hopeless: false,
+            hopeless_flee: None,
             ..hopeless
         },
     );
-    assert!(!traffic.npcs()[0].flees_hopeless, "the flee block's own");
+    assert_eq!(
+        traffic.npcs()[0].fled_hopeless,
+        None,
+        "the flee block's own"
+    );
 }
 
 #[test]
@@ -371,7 +377,7 @@ fn a_traders_hopeless_flight_flies_close_beyond_250_launching_and_calling() {
     tick(&mut traffic, &player(0.0, 90_000.0));
     let fleeing = &traffic.npcs()[0];
     assert_eq!(fleeing.goal, Goal::Flee(n(2)));
-    assert!(fleeing.flees_hopeless);
+    assert_eq!(fleeing.fled_hopeless, Some(HopelessFlee::Attack));
     let last = fleeing
         .pursuit
         .frame

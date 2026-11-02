@@ -24,7 +24,7 @@
 //!    `_GovtAllies`. Goal and sub 0, then @0x8fb47: +0x70 and +0x96 stay,
 //!    so a dying ally keeps both. A warship's or an interceptor's next
 //!    think reads the target held and takes it again
-//!    ([`held_target`](crate::ai::held_target)), as their thinks spare no
+//!    ([`held_attack`](crate::ai::held_attack)), as their thinks spare no
 //!    ally, so it stays on goal 0 while the ally lasts. The player is never an ally: its +0x98 is
 //!    -1 (`_ResetPlayer` @0x1d46f), which `_GovtAllies` turns down
 //!    (@0x4e5e-0x4e69).
@@ -55,10 +55,12 @@
 //!    ([`hopeless_chase`], @0x8e5fe). A ship of AI type above 2
 //!    ([`Npc::original_ai_type`], @0x8e60a) keeps goal 4 on sub 0xe
 //!    ([`Goal::Snipe`], @0x8e614); any other flees, goal 3 and sub 5
-//!    (@0x8e625-0x8e62e, [`Decision::flees_hopeless`]), which flies close
-//!    at any distance. Both go on to the launch and the call, unless the
-//!    ship is disabled (@0x8e6e5-0x8e70d), so the flight calls for
-//!    reinforcements here, beyond the flee block's reach.
+//!    (@0x8e625-0x8e62e, [`HopelessFlee::Attack`], see
+//!    [`hopeless_flee`](crate::ai::hopeless_flee)), which flies close at
+//!    any distance. Both go on to the launch and the call, unless the ship
+//!    is disabled (@0x8e6e5-0x8e70d), so the flight calls for
+//!    reinforcements beyond the flee block's reach
+//!    ([`reinforcements::with_high_level_call`](crate::ai::reinforcements::with_high_level_call)).
 //! 6. **Anything else** is goal 4 on sub 7, 6 or 0x12
 //!    (@0x8e63c-0x8e6dc): [`Goal::Attack`], over a think's
 //!    [`Goal::Snipe`], as a chase can stop being hopeless.
@@ -76,6 +78,7 @@
 //! @0x8e263 has passed. A plunder (goal 0xd) has its own block. No sound
 //! and no draw.
 
+use crate::ai::hopeless_flee::HopelessFlee;
 use crate::ai::odds::{hopeless_chase, outside_box};
 use crate::ai::target::spares_ally;
 use crate::ai::{Decision, Goal, Surroundings};
@@ -140,8 +143,7 @@ pub fn attack_block(
         } else {
             Decision {
                 goal: Goal::Flee(ship),
-                flees_hopeless: true,
-                calls_reinforcements: decision.calls_reinforcements || npc.active_not_disabled(),
+                hopeless_flee: Some(HopelessFlee::Attack),
                 ..decision
             }
         };
@@ -650,6 +652,12 @@ mod tests {
             comm_call: Some(CommCall::Distress),
             ..of(Goal::Attack(n(2)))
         };
+        let called = |npcs: &[Npc]| {
+            let (govts, sites) = (govts(0, 0), sites());
+            let around = around(&sites, npcs, &govts, (0.0, -500.0), 0);
+            let blocked = attack_block(&npcs[0], attack, &around, RuleSource::Engine);
+            crate::ai::reinforcements::with_high_level_call(&npcs[0], blocked, &around)
+        };
         for ai_type in [AiType::WimpyTrader, AiType::BraveTrader] {
             let trader = Npc {
                 ai_type,
@@ -659,23 +667,30 @@ mod tests {
                 by_engine(&chase(trader.clone(), -300.0), attack),
                 Decision {
                     goal: Goal::Flee(n(2)),
-                    flees_hopeless: true,
-                    calls_reinforcements: true,
+                    hopeless_flee: Some(HopelessFlee::Attack),
                     ..attack
                 },
                 "{ai_type:?}"
+            );
+            assert!(
+                called(&chase(trader.clone(), -300.0)).calls_reinforcements,
+                "{ai_type:?}: the state-4 tail's call (@0x8e70d)"
             );
             let downed = Npc {
                 condition: Condition::Disabled,
                 ..trader.clone()
             };
             assert_eq!(
-                by_engine(&chase(downed, -300.0), attack),
+                by_engine(&chase(downed.clone(), -300.0), attack),
                 Decision {
                     goal: Goal::Flee(n(2)),
-                    flees_hopeless: true,
+                    hopeless_flee: Some(HopelessFlee::Attack),
                     ..attack
                 },
+                "{ai_type:?}"
+            );
+            assert!(
+                !called(&chase(downed, -300.0)).calls_reinforcements,
                 "{ai_type:?}: disabled, no call (@0x8e6eb)"
             );
             assert_eq!(

@@ -78,7 +78,8 @@
 //!   past. Nothing moves while its warp stage runs. The nudge comes
 //!   before `_HandleShip`'s move, so it is nudged, then moves. Double
 //!   time's second pass runs no `_LowLevelAIHandler` (`je 0x44350`
-//!   @0x4402a), so no nudge ([`Beside::second_pass`]).
+//!   @0x4402a), so no nudge: it flies the advance pass's word
+//!   ([`slot_word`](crate::traffic::slot_word)).
 //! - **The slot** ([`Npc::slot_at`]): under [`Goal::Follow`], the word of
 //!   its berth as the frame's dispatches left it
 //!   ([`Npc::slot_place`], see
@@ -114,8 +115,11 @@
 //!   traffic's arrival snap
 //!   ([`fleet_formation::snap`](crate::traffic::fleet_formation::snap))
 //!   cover.
-//!   Its formation-parent gate (+0xc92e above 63) stands as the slot:
-//!   a ship with none is never nudged.
+//!   Its formation-parent gate (+0xc92e above 63) stands as the slot: a
+//!   ship with none is passed none and is never nudged, here by
+//!   [`Npc::slot_at`], in a fight or a dock by
+//!   [`swarm_low_level::slot_place`](crate::traffic::swarm_low_level::slot_place),
+//!   which a stale parent passes.
 //! - Sub 0xc's tail under goal 7, the inspection hold (@0x87c7e-0x87db9):
 //!   it needs goal 7 and sub 0xc together on entry to `_LowLevelAIHandler`,
 //!   which can't happen, on any data. Goal 7's block runs just before the
@@ -132,11 +136,13 @@ use crate::ai::swarm::SwarmLead;
 #[cfg(doc)]
 use crate::escort::FormationSlot;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
-use crate::flight::{self, Controls, FlightRules, ShipState};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, FlightRules, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::autopilot::Beside;
-use crate::traffic::held_burst::{self, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
@@ -144,6 +150,7 @@ use crate::traffic::plunder_dock::{self, THRUST_SLACK};
 #[cfg(doc)]
 use crate::traffic::plunder_dock::{DAMP_BELOW, DAMPING, MATCH_SLACK};
 use crate::traffic::ship_display::GlowCopy;
+use crate::traffic::slot_word::Cap;
 use crate::trig;
 
 /// The share of its thrust close formation counter-thrusts at (the double
@@ -222,48 +229,41 @@ pub fn maintain(npc: &mut Npc, slot: Vec2, handling: &Handling, snap: bool) {
     npc.state.position = Vec2::new(towards(at.x, slot.x), towards(at.y, slot.y));
 }
 
-/// Sub 0xc for `npc` beside its leader at `leader`, nudged toward `slot`
-/// when it has one (double time's second pass has none), on `handling`
-/// under `flight` (see the module docs): the controls, and the handling
-/// they fly by, its velocity, heading, position and glow copy set as the
-/// substate sets them.
+/// Sub 0xc for `npc` beside its leader at `leader`, its slot at `slot`,
+/// on `handling` under `flight` (see the module docs), at its slot: its
+/// flight, its velocity, position and glow copy set as the substate sets
+/// them. Double time's second pass runs no `_LowLevelAIHandler` (`je
+/// 0x44350` @0x4402a), so it is neither nudged nor matched there: it flies
+/// the advance pass's word ([`slot_word`](crate::traffic::slot_word)).
 fn keep(
     npc: &mut Npc,
     leader: &ShipState,
-    slot: Option<Vec2>,
+    slot: Vec2,
     handling: &Handling,
     flight: FlightRules,
-) -> (Controls, Handling) {
+) -> Flight {
     let rate = handling.turn_rate;
     let mismatched = plunder_dock::mismatched(npc.state.velocity - leader.velocity);
     if mismatched && !npc.hull_inertialess(flight.inertial_dampener) {
         let wanted = plunder_dock::counter(&mut npc.state, leader.velocity);
-        // Off by its heading before `_HandleShip` turns it (@0x87a24).
+        // Off by its heading before `_HandleShip` turns it, its turn rate
+        // the slot's (@0x87a24-0x87a40).
         let thrust = off_by(npc.state.heading, wanted) < rate + THRUST_SLACK;
-        let turn = flight::turn_to(&mut npc.state, wanted, rate);
         // `_ShipAccelRate` × the double 0.66, back to a float, and +0x34 =
-        // 0, its own top speed (@0x87a70-0x87a9d).
+        // 0, its own top speed at its step (@0x87a70-0x87a9d).
         #[allow(clippy::cast_possible_truncation)]
         let accel = (f64::from(handling.accel) * COUNTER_THRUST) as f32;
         let controls = Controls {
             thrust,
-            turn,
             ..Controls::default()
         };
-        return (controls, Handling { accel, ..*handling });
+        return Flight::writes(controls, wanted, Cap::Step).by(Handling { accel, ..*handling });
     }
     npc.state.velocity = leader.velocity;
     let wanted = matched_heading(npc.state.heading, leader.heading, npc.skill);
-    let turn = flight::turn_to(&mut npc.state, wanted, rate);
-    if let Some(slot) = slot {
-        maintain(npc, slot, handling, false);
-    }
+    maintain(npc, slot, handling, false);
     npc.display.drive.glow = GlowCopy::Leader;
-    let controls = Controls {
-        turn,
-        ..Controls::default()
-    };
-    (controls, *handling)
+    Flight::writes(Controls::default(), wanted, Cap::Slot)
 }
 
 /// The whole heading a matched escort at `heading` of skill `skill` wants
@@ -311,10 +311,10 @@ fn matched_heading(heading: f32, theirs: f32, skill: f32) -> i16 {
     wanted
 }
 
-/// Flies `npc` one tick of goal 0xa beside its leader at `leader`, with
-/// `beside` its guard, its sight of its leader and its swarm lead, on
-/// `handling` under `flight`, as `inertia` says (see the module docs).
-/// With no leader or no slot it brakes.
+/// The low level of `npc` on one tick of goal 0xa beside its leader at
+/// `leader`, with `beside` its guard, its sight of its leader and its
+/// swarm lead, on `handling` under `flight`, as `inertia` says (see the
+/// module docs): its flight. With no leader or no slot it brakes.
 pub(crate) fn fly(
     npc: &mut Npc,
     leader: Option<&ShipState>,
@@ -322,7 +322,7 @@ pub(crate) fn fly(
     handling: &Handling,
     flight: FlightRules,
     inertia: Inertia,
-) {
+) -> Flight {
     let flying = leader.and_then(|leader| {
         let slot = npc.slot_at(leader)?;
         let sub = sub(npc.state.position, leader.position, beside.leader_seen);
@@ -330,29 +330,25 @@ pub(crate) fn fly(
     });
     // With no leader or slot, or in sub 1: a stop, which keeps +0x34.
     let Some((leader, slot, sub)) = flying else {
-        let stop = leave_flight::stop_flight(npc, handling, inertia);
-        let flown = stop.flown.unwrap_or(*handling);
-        held_burst::step(npc, &flown, stop.controls, flight, inertia, stop.word);
-        return;
+        return leave_flight::stop_flight(npc, handling, inertia);
     };
-    let slot = (!beside.second_pass).then_some(slot);
-    let (controls, flown) = match sub {
+    match sub {
         Sub::Keep => keep(npc, leader, slot, handling, flight),
         sub => {
             let target = beside.guard.unwrap_or(*leader);
             let close = sub == Sub::Close;
-            steer(npc, &target, close, beside.swarm, slot, handling)
+            steer(npc, &target, close, beside.swarm, Some(slot), handling)
         }
-    };
-    held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
+    }
 }
 
 /// Sub 9, or sub 0xb when `close`, of `npc` steering at a ship at
-/// `target` on `handling` (see the module docs): closing, the swarm
-/// branch first ([`plunder_dock::swarm_branch`], with `swarm` its swarm
-/// lead and `slot` its slot), then [`plunder_dock::approach`], turned as
-/// `_HandleShip` turns it ([`flight::turn_to`]). The controls, and the
-/// handling they fly by.
+/// `target` on `handling` (see the module docs), at its slot: closing, the
+/// swarm branch first ([`plunder_dock::swarm_branch`], with `swarm` its
+/// swarm lead and `slot` its slot), then [`plunder_dock::approach`], the
+/// heading it wants left for `_HandleShip` to turn to at its step. Sub 9
+/// and 0xb outside their box write +0x34 = 0, and closing within it, half
+/// its slot's top speed.
 pub(crate) fn steer(
     npc: &mut Npc,
     target: &ShipState,
@@ -360,19 +356,45 @@ pub(crate) fn steer(
     swarm: Option<SwarmLead>,
     slot: Option<Vec2>,
     handling: &Handling,
-) -> (Controls, Handling) {
+) -> Flight {
     if close {
         plunder_dock::swarm_branch(npc, swarm, slot, handling);
     }
     let (controls, flown, wanted) = plunder_dock::approach(npc, target, handling, close);
-    let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
-    (Controls { turn, ..controls }, flown)
+    let cap = if flown.max_speed < handling.max_speed {
+        Cap::Slot
+    } else {
+        Cap::Step
+    };
+    Flight::writes(controls, wanted, cap).by(flown)
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// Sub 0xc's flight ([`super::keep`]) as its controls and handling,
+    /// the escort turned as `_HandleShip` turns it to the heading it wants
+    /// ([`crate::flight::turn_to`]), the turn in the controls.
+    fn keep(
+        npc: &mut Npc,
+        leader: &ShipState,
+        slot: Vec2,
+        handling: &Handling,
+        flight: FlightRules,
+    ) -> (Controls, Handling) {
+        let kept = super::keep(npc, leader, slot, handling, flight);
+        let wanted = kept.wanted.expect("sub 0xc wants a heading");
+        let turn = crate::flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        (
+            Controls {
+                turn,
+                ..kept.controls
+            },
+            kept.flown.unwrap_or(*handling),
+        )
+    }
     use crate::ai::Goal;
     use crate::ai::swarm::SwarmLead;
     use crate::escort::{EscortDuty, FormationSlot};
@@ -593,7 +615,7 @@ mod tests {
         let (controls, flown) = keep(
             &mut ship,
             &leader,
-            Some(Vec2::new(50.0, 0.0)),
+            Vec2::new(50.0, 0.0),
             &HANDLING,
             FlightRules::default(),
         );
@@ -658,7 +680,7 @@ mod tests {
         keep(
             &mut ship,
             &leader,
-            Some(Vec2::new(80.0, 30.0)),
+            Vec2::new(80.0, 30.0),
             &HANDLING,
             FlightRules::default(),
         );
@@ -682,7 +704,7 @@ mod tests {
         let (controls, ..) = keep(
             &mut ship,
             &leader,
-            Some(Vec2::new(50.0, 0.0)),
+            Vec2::new(50.0, 0.0),
             &handling,
             FlightRules::default(),
         );
@@ -730,7 +752,7 @@ mod tests {
         let (controls, flown) = keep(
             &mut ship,
             &leader,
-            Some(Vec2::new(100.0, 0.0)),
+            Vec2::new(100.0, 0.0),
             &GENTLE,
             FlightRules::default(),
         );
@@ -756,7 +778,7 @@ mod tests {
         keep(
             &mut ship,
             &leader,
-            Some(Vec2::new(50.0, 0.0)),
+            Vec2::new(50.0, 0.0),
             &HANDLING,
             FlightRules::default(),
         );
@@ -932,60 +954,6 @@ mod tests {
         #[allow(clippy::cast_possible_truncation)]
         let nudge = (f64::from(handling.accel * 10.0) * 0.5) as f32;
         assert_eq!(ship.state.position.x, slot.x + 20.0 - nudge);
-    }
-
-    #[test]
-    fn on_the_second_pass_close_formation_steers_and_matches_with_no_nudge() {
-        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
-        let slot = slot_of(&leader);
-        let second = Beside {
-            second_pass: true,
-            ..Beside::default()
-        };
-        let mut ship = escort(at(slot.x + 20.0, slot.y, 1.0, -2.0, 27.0));
-        flown(&mut ship, Some(&leader), second);
-        assert_eq!(ship.state.velocity, leader.velocity);
-        assert_eq!(ship.state.heading, 28.0);
-        assert!(
-            near(
-                ship.state.position,
-                Vec2::new(slot.x + 20.0, slot.y) + leader.velocity
-            ),
-            "{:?}",
-            ship.state
-        );
-    }
-
-    #[test]
-    fn on_the_second_pass_a_closing_swarmer_takes_no_nudge() {
-        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
-        let swarm = Some(SwarmLead {
-            aim: Vec2::ZERO,
-            leads_it: false,
-            glow: 12,
-        });
-        let start = at(450.0, 0.0, 0.0, 0.0, 90.0);
-        let second = Beside {
-            swarm,
-            second_pass: true,
-            ..Beside::default()
-        };
-        let mut ship = escort(start);
-        ship.swarm_leader = Some(5);
-        flown(&mut ship, Some(&leader), second);
-        assert_eq!(ship.state.position, start.position, "no nudge");
-        // Its advance pass nudges it.
-        let mut ship = escort(start);
-        ship.swarm_leader = Some(5);
-        flown(
-            &mut ship,
-            Some(&leader),
-            Beside {
-                second_pass: false,
-                ..second
-            },
-        );
-        assert_ne!(ship.state.position, start.position);
     }
 
     // A fleet escort ([`Goal::Follow`]).
@@ -1186,5 +1154,26 @@ mod tests {
         #[allow(clippy::cast_possible_truncation)]
         let settled = (f64::from(0.2_f32) * 0.95) as f32;
         assert_eq!(lost.speed, settled);
+    }
+
+    #[test]
+    fn approaching_it_caps_at_its_step_and_closing_near_at_its_slot() {
+        // Sub 9 writes +0x34 = 0 (@0x878e4); sub 0xb within 100 half its
+        // slot's (@0x8765d-0x8767b).
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let cap = |start: ShipState| {
+            let mut ship = escort(start);
+            fly(
+                &mut ship,
+                Some(&leader),
+                Beside::default(),
+                &HANDLING,
+                FlightRules::default(),
+                Inertia::Inertial,
+            )
+            .cap
+        };
+        assert_eq!(cap(at(0.0, 2000.0, 0.0, 0.0, 0.0)), Cap::Step, "sub 9");
+        assert_eq!(cap(at(0.0, 90.0, 0.0, 0.0, 0.0)), Cap::Slot, "sub 0xb near");
     }
 }

@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::catalog::{
-    BoomId, CronRecord, DateAffixes, DudeId, ListedStellar, MissionId, MissionRecord, MissionTexts,
-    NavDefSlots, NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord, ShipRecord, SoundId,
-    StellarId, StellarLife, SystemId, SystemVisibility, WeaponId,
+    BoomId, CronRecord, DateAffixes, DudeId, LandingSite, ListedStellar, MissionId, MissionRecord,
+    MissionTexts, NavDefSlots, NebulaRecord, OutfitId, OutfitRecord, PlaceNames, RankRecord,
+    ShipRecord, SoundId, StellarId, StellarLife, SystemId, SystemVisibility, WeaponId,
 };
 use crate::combat::armament::Arsenal;
 use crate::geometry::Vec2;
@@ -131,6 +131,12 @@ pub(super) struct Statics {
     /// when the session starts: what a `Y`'s explosion sounds (see the
     /// `y_explosion` module).
     pub(super) boom_sounds: BTreeMap<BoomId, SoundId>,
+    /// The landing sites of the stellars of IDs 128 to 191 that can be
+    /// read, whichever system holds them, read when the session starts:
+    /// what a ship's or a Con's slot names as a stellar (the traffic's
+    /// `slot_stellars` module), which the traffic flies a goal naming one
+    /// the system doesn't list among.
+    pub(super) slot_stellars: Vec<LandingSite>,
 }
 
 impl Statics {
@@ -205,6 +211,43 @@ mod tests {
         assert_eq!(session.weapon_ids(), [WeaponId(128), WeaponId(130)]);
         let unarmed = Session::start(&crate::testkit::catalog()).expect("starts");
         assert_eq!(unarmed.weapon_ids(), [], "an unarmed catalog lists none");
+    }
+
+    #[test]
+    fn the_slot_stellars_are_the_readable_sites_a_slot_names_of_every_system() {
+        // Which stellars a slot names is the traffic's
+        // (`traffic::slot_stellars::ids`); the session holds the sites the
+        // catalog can read among them, whichever system lists each.
+        use crate::catalog::{PilotCatalog, SystemId};
+        use crate::testkit::planet;
+        use crate::traffic::slot_stellars;
+        let some = slot_stellars::ids().nth(20).expect("a slot");
+        let last = slot_stellars::ids().last().expect("a slot");
+        let past = StellarId(last.0 + 1);
+        let mut catalog = crate::testkit::catalog();
+        catalog
+            .sites
+            .push((SystemId(132), vec![planet(some.0, 0.0, 0.0)]));
+        catalog.sites.push((
+            SystemId(133),
+            vec![planet(last.0, 0.0, 0.0), planet(past.0, 0.0, 0.0)],
+        ));
+        let session = Session::start(&catalog).expect("starts");
+        let held: Vec<StellarId> = session
+            .statics
+            .slot_stellars
+            .iter()
+            .map(|site| site.id)
+            .collect();
+        let readable: Vec<StellarId> = slot_stellars::ids()
+            .filter(|&id| catalog.landing_site(id).is_some())
+            .collect();
+        assert_eq!(held, readable);
+        assert!(
+            held.contains(&some) && held.contains(&last),
+            "every system's: {held:?}"
+        );
+        assert!(!held.contains(&past), "none a slot doesn't name");
     }
 
     #[test]

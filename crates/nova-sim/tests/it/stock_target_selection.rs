@@ -19,7 +19,7 @@
 //! - The Auroran Empire (129) is allied with Family Moash (131) and
 //!   Family Vella (133), which are at war: its warship helps a Moash ship
 //!   against a Vella one, and the attack block's ally drop leaves it on
-//!   goal 0 holding the Vella ship (see `nova_sim::ai::held_target`).
+//!   goal 0 holding the Vella ship (see `nova_sim::ai::held_attack`).
 
 use crate::common;
 

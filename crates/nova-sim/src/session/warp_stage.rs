@@ -56,18 +56,25 @@
 //!
 //! **Ordering against the original.** The warp end is decided in the
 //! player's pass, as the original's is, and the view arrives
-//! ([`Session::arrive`]) in the same step, before the frame is drawn: no
-//! boundary falls between them. On double time's second pass the frame
+//! ([`Session::arrive`]) in the same step, before the frame is drawn, so
+//! no frame falls between them. On double time's second pass the frame
 //! between the passes is drawn first, as the original draws it, and the
-//! view arrives on the next step, which stops before it runs.
+//! view arrives on the next step, which stops before it runs. The
+//! original, though, arrives inside `_HandlePlayer` on that pass
+//! (@0x6bc0d-0x6c620, then `jmp 0x71113` @0x6c625), so the rest of its
+//! pass runs among the new system and the AI loop's +0x74 test (@0x4428c)
+//! skips the old system's ships. The engine only marks the end due, so
+//! that whole pass still runs over the old system. That crosses the
+//! arrival's boundary, and is filed as
+//! rdm:task/warp-end-pass-runs-the-old-system.
 //!
 //! Left out: the disabled player's warp-stage branch (@0x6c70d-0x6c723,
 //! +0x50 of −999.0 to 0), which no engine state reaches: a disabled
 //! player's jump collapses first (see the `jump_collapse` module).
 
 use super::{Jump, Mode, PlayerShip, Session, Setup, Statics};
-use crate::catalog::SystemId;
-use crate::flight::{Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
+use crate::catalog::{StellarId, SystemId};
+use crate::flight::{Adjusted, Controls, Flyer, Turn, advance, drag_by, inertialess_advance};
 use crate::glow::{Follow, JumpRaises, ramp_jump_glow};
 use crate::pilot::Pilot;
 use crate::player_turn::brake_aim;
@@ -211,7 +218,7 @@ impl Session {
                 &mut self.ship.player,
                 &mut self.ship.player_speed,
                 &handling,
-                0.0,
+                Adjusted::by_own(0.0, &handling),
                 caps,
                 flight,
                 Flyer::Player,
@@ -422,12 +429,14 @@ impl PlayerShip {
     }
 
     /// What the traffic's warp-outs read of the player's warp, the warp
-    /// sounds and double time ([`WarpWorld`]).
+    /// sounds and double time ([`WarpWorld`]), the player's +0x6c `nav`
+    /// (the selection held, `Chart::held_selection`) among it.
     pub(super) fn warp_world(
         &self,
         pilot: &Pilot,
         statics: &Statics,
         jump: Option<Jump>,
+        nav: Option<StellarId>,
     ) -> WarpWorld {
         WarpWorld {
             player: LeaderWarp {
@@ -439,6 +448,9 @@ impl PlayerShip {
                 velocity: self.player.velocity,
                 leaving: false,
                 glow: self.engine_glow,
+                // The selection held, which goal 0xb and sub 0xd copy onto
+                // a follower of the player's jump (see `traffic::warp_out`).
+                travel: nav,
             },
             durations: statics.warp_sounds,
             double_time: self.warp.double_time,
@@ -580,6 +592,62 @@ pub(super) mod tests {
         work(session, &crate::testkit::catalog(), Controls::default());
     }
 
+    // The player's +0x6c.
+
+    #[test]
+    fn warp_world_shows_the_selection_held() {
+        let session = jumping(&catalog());
+        let shown = |nav| {
+            session
+                .ship
+                .warp_world(&session.pilot, &session.statics, session.mode.jump(), nav)
+                .player
+                .travel
+        };
+        let held = Some(crate::catalog::StellarId(133));
+        assert_eq!(shown(held), held);
+        assert_eq!(shown(None), None);
+    }
+
+    #[test]
+    fn an_escort_on_the_players_jump_holds_it() {
+        // Mode 3 with 131 in Con slot 0: +0x6c 0, read as stellar 128;
+        // `_EscortAI`'s entry copies it (@0x83a77-0x83a7c), as do goal
+        // 0xb's check under parent 0 (@0x8de9d-0x8deb0) and sub 0xd
+        // (@0x85bf1-0x85bf6).
+        let mut session = jumping(&catalog());
+        assert_eq!(
+            session.chart.held_selection(&session.pilot),
+            Some(crate::ai::travel::of_slot(0))
+        );
+        // The system set up, so the traffic thinks and flies.
+        session.space.traffic_due = false;
+        let escort = session.space.traffic.add_npc(crate::traffic::npc::Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            travel: Some(crate::catalog::StellarId(150)),
+            ..crate::testkit::npc(1, crate::stats::ShipStats::new(FAST, &[]))
+        });
+        // Displayed, as a system entry displays every slot
+        // (`_PrepareAllSprites` @0x3a75a).
+        session.prepare_all_sprites();
+        for _ in 0..3 {
+            crate::testkit::work_with(
+                &mut session,
+                &catalog(),
+                Controls::default(),
+                &crate::ai::NovaAi::default(),
+                crate::combat::Rules::default(),
+                &mut NeverFires,
+            );
+        }
+        let npc = session.space.npc(escort).expect("on the jump");
+        assert!(npc.follows_leaders_jump(), "{:?}", npc.goal);
+        assert_eq!(npc.travel, Some(crate::ai::travel::of_slot(0)));
+    }
+
     // The stage.
 
     #[test]
@@ -691,7 +759,7 @@ pub(super) mod tests {
             &mut inertialess,
             &mut followed,
             &handling,
-            0.0,
+            Adjusted::by_own(0.0, &handling),
             caps,
             flight,
             Flyer::Player,

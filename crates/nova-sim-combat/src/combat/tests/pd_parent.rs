@@ -71,7 +71,7 @@ fn allegiance_reads_the_root_of_a_fighter_led_below_it() {
             &mut ships,
             rules,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         let answered = combat

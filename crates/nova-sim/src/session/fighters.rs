@@ -9,17 +9,17 @@
 //! right after its carrier's turn in the NPCs' point-defence loop
 //! ([`Session::dispatch_npcs`]), before `_HandleShot`
 //! ([`Session::game_work`]), so each moves on its launch tick. An NPC's
-//! fighter in a slot above its carrier's thinks then and takes its turn
-//! in the rest of the loop, and every later slot's point defence can
-//! choose it, as [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
+//! fighter in a slot above its carrier's is reached as its slot comes,
+//! and every later slot's think and point defence can choose it, as
+//! [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
 //! a ship slot free below the reserve it leaves (8 @0x3d648, so none at
 //! 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]):
 //! the player's bay attempts a copy only while one is free, spending,
 //! counting, sounding and reloading nothing for the rest
 //! ([`Space::count_player_berths`], `_FirePlayerWeapon`
-//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as the
-//! traffic counts the free slots as its NPCs fire (see
-//! `nova_sim::traffic`'s room ledger). A fighter whose ship type has no
+//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as each
+//! slot's think reads the slots free as it comes (see `nova_sim::traffic`'s
+//! `launch_room`). A fighter whose ship type has no
 //! record goes back into its bay, a round again. The player's glow bay
 //! lights the weapon glow only for a fighter put in the system.
 //!
@@ -713,7 +713,7 @@ fn fighter(
         led_out: false,
         emerges_from: None,
         visited: None,
-        travel_set: false,
+        travel: None,
         self_repair: kind.self_repair,
         immobile: kind.immobile,
         skill: 1.0,
@@ -729,17 +729,18 @@ fn fighter(
         afterburner: false,
         voice: None,
         pursuit: Pursuit::default(),
-        flees_hopeless: false,
         ai_wait: 0,
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
         owed_burst: None,
+        fled_hopeless: None,
         bursts_own_word: false,
         fires_on_burst_end: false,
         close_form: false,
         stopping: false,
         fleet_slot: None,
+        form_parent: None,
         slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,
         ordered_by_lead: false,
@@ -2261,8 +2262,40 @@ pub(super) mod tests {
         assert!(!session.take_save_due(), "as rounds are");
     }
 
+    /// Double time's pairs of passes of `session`, each second pass first,
+    /// until the fighters out are `docked` many fewer than `out`, at most
+    /// 600: whether they docked, never on a second pass. That pass runs no
+    /// `_AIDispatch` (@0x44350), and its low level docks a fighter
+    /// (@0x87fef → @0x80404).
+    fn docked_in_double_time(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        out: usize,
+        docked: usize,
+    ) -> bool {
+        (1..=600).any(|_| {
+            session.tick_again(
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            let left = session.pilot().escorts().len();
+            assert_eq!(left, out, "not on the second pass");
+            work_with(
+                session,
+                catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().len() == out - docked
+        })
+    }
+
     #[test]
-    fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
+    fn a_fighter_docking_in_double_time_is_aboard_again_from_an_advance_pass() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
         let id = session.space.escorts.fleet[0].expect("placed");
@@ -2277,16 +2310,8 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
-        let docked = (1..=600).find(|_| {
-            session.tick_again(
-                Controls::default(),
-                &crate::ai::NovaAi::default(),
-                crate::Rules::default(),
-                &mut NeverFires,
-            );
-            session.pilot().escorts().is_empty()
-        });
-        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        let docked = docked_in_double_time(&mut session, &catalog, 1, 1);
+        assert!(docked, "{:?}", fleet_npcs(&session));
         assert_eq!(session.npcs(), []);
         assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
     }
@@ -2343,7 +2368,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fighter_docking_on_double_times_second_pass_below_another_slot_makes_no_save_due() {
+    fn a_fighter_docking_in_double_time_below_another_slot_makes_no_save_due() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
         let fighter = session.space.escorts.fleet[0].expect("placed");
@@ -2360,16 +2385,8 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         session.take_save_due();
-        let docked = (1..=600).find(|_| {
-            session.tick_again(
-                Controls::default(),
-                &NovaAi::default(),
-                Rules::default(),
-                &mut NeverFires,
-            );
-            session.pilot().escorts().len() == 1
-        });
-        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        let docked = docked_in_double_time(&mut session, &catalog, 2, 1);
+        assert!(docked, "{:?}", fleet_npcs(&session));
         assert_eq!(
             session.space.escorts.fleet,
             [Some(escort)],

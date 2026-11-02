@@ -28,10 +28,14 @@
 //! [`TractorLock::age`] counts it up on each advance pass alone, as
 //! double time's second pass doesn't move `TickCount`.
 //!
-//! An NPC's release comes after its pull, so a ship whose holder is
-//! disabled or dying is pulled once more first; one whose holder is gone
-//! is not pulled, as the original would read a slot no ship holds
-//! ([`npc_pass`]). The player's release comes first, and it is not pulled
+//! An NPC's release comes after its pull, and after the turn, thrust,
+//! glow and fire between them (@0x34460-0x35048), whose `_ShipTurnRate`,
+//! `_ShipAccelRate` and `_ShipMaxSpeed` read the lock: so a ship whose
+//! holder is disabled or dying is pulled once more first, and flies held
+//! on the pass it is released ([`npc_pull`], [`npc_release`]). One whose
+//! holder is gone is not pulled, as the original would read a slot no
+//! ship holds; the caller gives a freed slot's record where the original
+//! still reads one. The player's release comes first, and it is not pulled
 //! on the frame it is released ([`player_pass`]). The original pulls it
 //! anyway, toward "slot −1", memory before the ship array (@0x684b7 →
 //! 0x684c5): an original bug with nothing meaningful to replicate.
@@ -141,45 +145,60 @@ pub enum Holder {
     },
 }
 
-/// One pass of an NPC's hold (`_HandleShip`, see the module docs): `me`,
-/// moving at `velocity`, held by `lock`, its holder as `holder_of` gives it,
-/// the pull's [`step`] `step`, aging on an `advance` pass alone. Pulled
-/// toward its holder's velocity, or rest when it holds itself, unless the
-/// holder is gone; then released when the holder is gone, disabled or
-/// dying; then aged, and lapsed.
-pub fn npc_pass(
-    lock: &mut Option<TractorLock>,
+/// An NPC's pull (`_HandleShip` @0x33fc0-0x3413d, see the module docs):
+/// `me`, moving at `velocity`, held by `lock`, its holder as `holder_of`
+/// gives it, by the pull's [`step`] `step`. Pulled toward its holder's
+/// velocity, or rest when it holds itself, unless the holder is gone. The
+/// lock is left to [`npc_release`], after the ship's turn, thrust and fire.
+pub fn npc_pull(
+    lock: Option<TractorLock>,
     me: ShipRef,
     velocity: &mut Vec2,
     holder_of: impl FnOnce(ShipRef) -> Holder,
     step: f32,
+) {
+    let Some(held) = lock else {
+        return;
+    };
+    let target = if held.holder == me {
+        Vec2::ZERO
+    } else {
+        match holder_of(held.holder) {
+            Holder::Gone => return,
+            Holder::There { velocity, .. } => velocity,
+        }
+    };
+    *velocity = pull(*velocity, target, step);
+}
+
+/// An NPC's release and lapse (`_HandleShip` @0x353ba-0x35449, see the
+/// module docs), after its pull ([`npc_pull`]) and its flight: `me`'s
+/// `lock` dropped when its holder, as `holder_of` gives it, is gone,
+/// disabled or dying, unless it holds itself (@0x353ca-0x353d1); then aged
+/// on an `advance` pass alone, and lapsed.
+pub fn npc_release(
+    lock: &mut Option<TractorLock>,
+    me: ShipRef,
+    holder_of: impl FnOnce(ShipRef) -> Holder,
     advance: bool,
 ) {
     let Some(held) = *lock else {
         return;
     };
-    if held.holder == me {
-        *velocity = pull(*velocity, Vec2::ZERO, step);
-    } else {
-        match holder_of(held.holder) {
-            Holder::Gone => *lock = None,
-            Holder::There {
-                velocity: target,
-                intact,
-            } => {
-                *velocity = pull(*velocity, target, step);
-                if !intact {
-                    *lock = None;
-                }
-            }
-        }
+    if held.holder != me
+        && matches!(
+            holder_of(held.holder),
+            Holder::Gone | Holder::There { intact: false, .. }
+        )
+    {
+        *lock = None;
     }
     lapse(lock, advance);
 }
 
 /// One pass of the player's hold (`_HandlePlayer`, see the module docs):
-/// as [`npc_pass`], but released first, and not pulled on the pass it is
-/// released.
+/// as an NPC's ([`npc_pull`], [`npc_release`]), but released first, and
+/// not pulled on the pass it is released.
 pub fn player_pass(
     lock: &mut Option<TractorLock>,
     velocity: &mut Vec2,
@@ -299,21 +318,33 @@ mod tests {
         assert!(!held_by_other(None, ME));
     }
 
-    fn there(velocity: Vec2, intact: bool) -> impl FnOnce(ShipRef) -> Holder {
+    fn there(velocity: Vec2, intact: bool) -> impl Fn(ShipRef) -> Holder {
         move |_| Holder::There { velocity, intact }
+    }
+
+    /// One whole pass of an NPC's hold: its pull, then, with nothing
+    /// between, its release and lapse.
+    fn npc_pass(
+        lock: &mut Option<TractorLock>,
+        velocity: &mut Vec2,
+        holder: impl Fn(ShipRef) -> Holder,
+        step: f32,
+        advance: bool,
+    ) {
+        npc_pull(*lock, ME, velocity, &holder, step);
+        npc_release(lock, ME, &holder, advance);
     }
 
     #[test]
     fn an_npc_is_pulled_toward_its_holders_velocity_and_aged() {
         let mut lock = Some(TractorLock::by(OTHER));
         let mut velocity = Vec2::new(5.0, 0.0);
-        let mut asked = None;
+        let asked = std::cell::RefCell::new(Vec::new());
         npc_pass(
             &mut lock,
-            ME,
             &mut velocity,
             |ship| {
-                asked = Some(ship);
+                asked.borrow_mut().push(ship);
                 Holder::There {
                     velocity: Vec2::new(0.0, 3.0),
                     intact: true,
@@ -322,7 +353,11 @@ mod tests {
             1.0,
             true,
         );
-        assert_eq!(asked, Some(OTHER));
+        assert_eq!(
+            asked.into_inner(),
+            [OTHER, OTHER],
+            "the pull and the release"
+        );
         assert_eq!(velocity, Vec2::new(4.0, 1.0));
         assert_eq!(lock.map(|lock| lock.ticks_since_touch), Some(1));
     }
@@ -333,7 +368,6 @@ mod tests {
         let mut velocity = Vec2::new(5.0, -0.5);
         npc_pass(
             &mut lock,
-            ME,
             &mut velocity,
             |_| panic!("no holder to holder_of at"),
             1.0,
@@ -349,7 +383,6 @@ mod tests {
         let mut velocity = Vec2::new(5.0, 0.0);
         npc_pass(
             &mut lock,
-            ME,
             &mut velocity,
             there(Vec2::ZERO, false),
             1.0,
@@ -363,8 +396,55 @@ mod tests {
     fn an_npc_whose_holder_is_gone_is_released_unpulled() {
         let mut lock = Some(TractorLock::by(OTHER));
         let mut velocity = Vec2::new(5.0, 0.0);
-        npc_pass(&mut lock, ME, &mut velocity, |_| Holder::Gone, 1.0, true);
+        npc_pass(&mut lock, &mut velocity, |_| Holder::Gone, 1.0, true);
         assert_eq!(velocity, Vec2::new(5.0, 0.0));
+        assert_eq!(lock, None);
+    }
+
+    #[test]
+    fn the_pull_leaves_the_lock_to_the_release_after_the_flight() {
+        // `_HandleShip` pulls (@0x33fc0-0x3413d), then turns, thrusts and
+        // fires, then releases and lapses (@0x353ba-0x35449): the lock
+        // stands through the flight between them.
+        for holder in [
+            Holder::Gone,
+            Holder::There {
+                velocity: Vec2::ZERO,
+                intact: false,
+            },
+        ] {
+            let lock = Some(TractorLock {
+                holder: OTHER,
+                ticks_since_touch: 14,
+            });
+            let mut velocity = Vec2::new(5.0, 0.0);
+            npc_pull(lock, ME, &mut velocity, |_| holder, 1.0);
+            let mut released = lock;
+            npc_release(&mut released, ME, |_| holder, true);
+            assert_eq!(released, None, "{holder:?}");
+        }
+        let mut lapsing = Some(TractorLock {
+            holder: OTHER,
+            ticks_since_touch: 14,
+        });
+        npc_release(&mut lapsing, ME, there(Vec2::ZERO, true), false);
+        assert!(lapsing.is_some(), "not aged on the second pass");
+        npc_release(&mut lapsing, ME, there(Vec2::ZERO, true), true);
+        assert_eq!(lapsing, None, "lapsed on the 15th");
+        let mut none = None;
+        npc_release(&mut none, ME, |_| panic!("no lock"), true);
+        let mut velocity = Vec2::new(5.0, 0.0);
+        npc_pull(None, ME, &mut velocity, |_| panic!("no lock"), 1.0);
+        assert_eq!(velocity.x, 5.0);
+    }
+
+    #[test]
+    fn a_self_held_npcs_release_asks_for_no_holder_and_still_lapses() {
+        let mut lock = Some(TractorLock {
+            holder: ME,
+            ticks_since_touch: 14,
+        });
+        npc_release(&mut lock, ME, |_| panic!("itself"), true);
         assert_eq!(lock, None);
     }
 
@@ -377,7 +457,6 @@ mod tests {
         let mut velocity = Vec2::new(5.0, 0.0);
         npc_pass(
             &mut lock,
-            ME,
             &mut velocity,
             there(Vec2::ZERO, true),
             1.0,
@@ -389,33 +468,12 @@ mod tests {
             "not aged"
         );
         assert_eq!(velocity.x, 4.0, "pulled on the second pass");
-        npc_pass(
-            &mut lock,
-            ME,
-            &mut velocity,
-            there(Vec2::ZERO, true),
-            1.0,
-            true,
-        );
+        npc_pass(&mut lock, &mut velocity, there(Vec2::ZERO, true), 1.0, true);
         assert_eq!(lock.map(|lock| lock.ticks_since_touch), Some(14));
-        npc_pass(
-            &mut lock,
-            ME,
-            &mut velocity,
-            there(Vec2::ZERO, true),
-            1.0,
-            true,
-        );
+        npc_pass(&mut lock, &mut velocity, there(Vec2::ZERO, true), 1.0, true);
         assert_eq!(velocity.x, 2.0, "still pulled on the 15th");
         assert_eq!(lock, None, "lapsed");
-        npc_pass(
-            &mut lock,
-            ME,
-            &mut velocity,
-            there(Vec2::ZERO, true),
-            1.0,
-            true,
-        );
+        npc_pass(&mut lock, &mut velocity, there(Vec2::ZERO, true), 1.0, true);
         assert_eq!(velocity.x, 2.0, "no lock, no pull");
     }
 

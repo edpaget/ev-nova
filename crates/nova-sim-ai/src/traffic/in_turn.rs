@@ -147,7 +147,7 @@ impl Traffic {
                 // `_AIMakeShipAttackPlayer`'s +0x6c = -1 (@0x89d47),
                 // whatever the ship was doing: a ship held at its gate
                 // loses its gate there too (`Npc::hold_at_gate`).
-                npc.travel_set = false;
+                npc.travel = None;
             }
             if on_itself {
                 autopilot::cut_wait(npc);

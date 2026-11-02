@@ -22,7 +22,12 @@
 //!    the stellar; no warship think runs.
 //! 5. **Otherwise** (@0x8c293-0x8c2c5): a ship in goal 0x12 drops it (goal
 //!    and sub-goal 0, target and travel stellar -1), and then the
-//!    warship's think runs, whatever the ship's own type. A landing or a
+//!    warship's think runs, whatever the ship's own type. So a goal 7 a
+//!    successor copied from a lost interceptor lead is kept, provoked or
+//!    not, as the warship keeps it (`_WarshipAI` @0x8bb2d, @0x8be10), and
+//!    goal 7's high level ends it ([`inspect_high`](super::inspect_high));
+//!    with an enemy stellar and a planet gun, step 4 takes goal 0x12
+//!    first. A landing or a
 //!    gate entry the warship keeps flies to the travel stellar the scan
 //!    left, as the high level reads +0x6c for goals 1 and 0x14 (@0x8d8c9,
 //!    @0x8daea, @0x8db70): a landing on an enemy gate is entered, by the
@@ -79,7 +84,7 @@ impl Behaviour for DeathStar {
             return Decision {
                 goal: Goal::AttackStellar(stellar.id),
                 clears_target: true,
-                travel: TravelWrite::Set,
+                travel: TravelWrite::Set(stellar.id),
                 ..Decision::default()
             };
         }
@@ -88,7 +93,7 @@ impl Behaviour for DeathStar {
             Npc {
                 goal: Goal::Idle,
                 target: None,
-                travel_set: false,
+                travel: None,
                 ..npc.clone()
             }
         } else {
@@ -99,7 +104,7 @@ impl Behaviour for DeathStar {
         let travel_to = enemy.filter(|_| !reset);
         let travel = match (decision.travel, reset, travel_to) {
             (TravelWrite::Keep, true, _) => TravelWrite::Clear,
-            (TravelWrite::Keep, false, Some(_)) => TravelWrite::Set,
+            (TravelWrite::Keep, false, Some(stellar)) => TravelWrite::Set(stellar.id),
             (written, _, _) => written,
         };
         let kept = decision.goal == asked.goal && decision.travel == TravelWrite::Keep;
@@ -356,7 +361,7 @@ mod tests {
         fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
             self.asked
                 .borrow_mut()
-                .push((npc.goal, npc.target, npc.travel_set));
+                .push((npc.goal, npc.target, npc.travel_set()));
             self.goal
         }
 
@@ -460,6 +465,49 @@ mod tests {
     }
 
     #[test]
+    fn a_stellar_attacker_with_no_stellar_to_attack_keeps_a_copied_inspection_provoked_or_not() {
+        // With nothing to attack it tail-calls `_WarshipAI` (@0x8c2c5),
+        // which keeps goal 7 provoked or not (@0x8bb2d, @0x8be10); with an
+        // enemy stellar and a planet gun it takes goal 0x12 first
+        // (@0x8c26f).
+        let warship: Rc<dyn Behaviour> = Rc::new(crate::ai::Warship::default());
+        let decide = |npc: &Npc, sites: &[LandingSite], arsenal: &Arsenal| {
+            let govts: Governments = govts(0, 0);
+            let destroyable = destroyable();
+            let npcs = [npc.clone()];
+            let around = Surroundings {
+                govts: &govts,
+                weapons: arsenal,
+                destroyable: &destroyable,
+                ..Surroundings::new(sites, &npcs)
+            };
+            DeathStar {
+                warship: warship.clone(),
+            }
+            .decision(npc, &around, &mut Draws::of(&[0; 4]))
+        };
+        let gun = planet_gun(130, -1);
+        let mut inspecting = attacker(&[gun]);
+        inspecting.ai_type = AiType::Warship;
+        inspecting.goal = Goal::Inspect(ShipRef::Npc(crate::traffic::npc::NpcId(2)));
+        for (provoked, target) in [(0.0, None), (5.0, Some(ShipRef::Player))] {
+            let npc = Npc {
+                target,
+                provoked,
+                ..inspecting.clone()
+            };
+            let decision = decide(&npc, &[], &arsenal(&[gun], &[(130, 1)]));
+            assert_eq!(decision.goal, inspecting.goal, "provoked {provoked}");
+            let decision = decide(&npc, &sites(), &arsenal(&[gun], &[(130, 1)]));
+            assert_eq!(
+                decision.goal,
+                Goal::AttackStellar(StellarId(131)),
+                "provoked {provoked}"
+            );
+        }
+    }
+
+    #[test]
     fn a_marked_ship_with_a_planet_gun_attacks_the_first_enemy_stellar_it_can_shoot_down() {
         let gun = planet_gun(130, -1);
         let warship = Recording::answering(Goal::JumpOut);
@@ -471,7 +519,11 @@ mod tests {
         );
         assert_eq!(decision.goal, Goal::AttackStellar(StellarId(131)));
         assert!(decision.clears_target);
-        assert_eq!(decision.travel, TravelWrite::Set);
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(StellarId(131)),
+            "its quarry"
+        );
         assert_eq!(*warship.asked.borrow(), [], "no warship think");
         let govts = govts(0, 0);
         let destroyable = destroyable();
@@ -584,7 +636,7 @@ mod tests {
         let warship = Recording::answering(Goal::Land(StellarId(128)));
         let decision = decided(&landing, &sites(), &armed, warship.clone());
         assert_eq!(decision.goal, Goal::Land(StellarId(131)), "@0x8d8c9");
-        assert_eq!(decision.travel, TravelWrite::Set);
+        assert_eq!(decision.travel, TravelWrite::Set(StellarId(131)));
         assert_eq!(warship.asked.borrow().len(), 1);
         let mut gate_sites = sites();
         gate_sites[3].flags2 = 0x1000;
@@ -660,7 +712,7 @@ mod tests {
         let mut npc = attacker(&[gun]);
         npc.goal = Goal::AttackStellar(StellarId(131));
         npc.target = Some(ShipRef::Player);
-        npc.travel_set = true;
+        npc.travel = Some(StellarId(150));
         let no_enemy: Vec<LandingSite> = sites()[..3].to_vec();
         let warship = Recording::answering(Goal::Wait);
         let decision = decided(&npc, &no_enemy, &armed, warship.clone());
@@ -669,7 +721,8 @@ mod tests {
         assert_eq!(decision.travel, TravelWrite::Clear);
         assert!(decision.clears_target);
         let dry = arsenal(&[gun], &[(130, 0)]);
-        let warship = Recording::writing(Goal::Land(StellarId(128)), TravelWrite::Set);
+        let warship =
+            Recording::writing(Goal::Land(StellarId(128)), TravelWrite::Set(StellarId(128)));
         let decision = decided(&npc, &sites(), &dry, warship.clone());
         assert_eq!(*warship.asked.borrow(), [(Goal::Idle, None, false)]);
         assert_eq!(
@@ -677,7 +730,11 @@ mod tests {
             Goal::Land(StellarId(128)),
             "no redirect: +0x6c was cleared"
         );
-        assert_eq!(decision.travel, TravelWrite::Set, "the warship's write");
+        assert_eq!(
+            decision.travel,
+            TravelWrite::Set(StellarId(128)),
+            "the warship's write"
+        );
         let fighting = Recording::answering(Goal::Attack(ShipRef::Player));
         let decision = decided(&npc, &no_enemy, &armed, fighting);
         assert!(

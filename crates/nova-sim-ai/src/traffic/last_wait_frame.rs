@@ -65,18 +65,29 @@ use super::npc::{Mode, NpcId};
 pub(super) struct TurnedOut(BTreeSet<NpcId>);
 
 impl Traffic {
-    /// Turns each ship whose wait at its gate has run out out of goal
-    /// 0x15, as this pass's dispatch does (@0x8dd61-0x8dd93): its target
-    /// goes (+0x70 = -1, @0x8dd7b), its provocation stays, and it is noted.
-    pub(super) fn turn_out_of_waits(&mut self) {
-        let mut turned_out = BTreeSet::new();
-        for npc in &mut self.npcs {
+    /// Forgets the ships the last pass's dispatches turned out, as a new
+    /// pass's dispatches begin.
+    pub(super) fn open_turn_outs(&mut self) {
+        self.turned_out = TurnedOut(BTreeSet::new());
+    }
+
+    /// Turns each ship `picked` picks (one flag an NPC) whose wait at its
+    /// gate has run out out of goal 0x15, as its dispatch does at its slot
+    /// (@0x8dd61-0x8dd93): its target goes (+0x70 = -1, @0x8dd7b), its
+    /// provocation stays, and it is noted.
+    pub(super) fn turn_out_of_waits(&mut self, picked: &[bool]) {
+        let turned_out = &mut self.turned_out.0;
+        for (npc, _) in self
+            .npcs
+            .iter_mut()
+            .zip(picked)
+            .filter(|&(_, &picked)| picked)
+        {
             if npc.mode == (Mode::LeavingGate { tick: 0 }) {
                 npc.target = None;
                 turned_out.insert(npc.id);
             }
         }
-        self.turned_out = TurnedOut(turned_out);
     }
 
     /// Whether the last dispatch turned NPC `id` out of its gate wait

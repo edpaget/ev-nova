@@ -17,7 +17,7 @@
 //! defended stellar +0x8c = -1, its provocation +0x96 = 0, goal and
 //! substate 0. Here:
 //!
-//! - [`Npc::target`] none, [`Npc::travel_set`] cleared, [`Npc::defends`]
+//! - [`Npc::target`] none, [`Npc::travel`] cleared, [`Npc::defends`]
 //!   none (a defence ship held disabled stops defending; one breaking up
 //!   is not disabled, @0x2d6f, so it keeps defending and counts for its
 //!   stellar's wave until it is gone), [`Npc::provoked`]
@@ -72,10 +72,10 @@
 //! fades that frame, and may be freed then, as the fly half has it.
 //!
 //! **Ordering.** The original runs each step per ship in slot order, the
-//! cancel and the reset inside each dispatch; the engine runs each over
-//! all ships after the regroup pause's draws. A lower slot's think that
-//! reads a higher slot's reset a tick early crosses no boundary the player
-//! sees. The reset drops a disabled follower's leader after the formation
+//! cancel and the reset inside each dispatch, and so does the engine, at
+//! the head of each slot's run ([`dispatch_head`](super::dispatch_head)):
+//! a lower slot's think reads a higher slot's ship as the tick began, and
+//! a higher slot's reads it reset. The reset drops a disabled follower's leader after the formation
 //! pass has numbered it ([`fleet_formation`](super::fleet_formation)), so
 //! for that one tick its fleet's slots still count it, as the original's
 //! do (it numbers disabled followers too, and the parent's slot
@@ -94,12 +94,20 @@ use crate::ai::{Goal, dispatch_gate};
 use crate::rulebook::RuleSource;
 
 impl Traffic {
-    /// Each disabled NPC's warp cancelled and its AI reset, by `reading` of
+    /// Each disabled NPC's warp cancelled, of those `picked` picks (one
+    /// flag an NPC; see the module docs).
+    pub(crate) fn cancel_warps(&mut self, picked: &[bool]) {
+        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(_, p)| **p) {
+            cancel_warp(npc);
+        }
+    }
+
+    /// Each disabled NPC's AI reset, of those `picked` picks (one flag an
+    /// NPC), by `reading` of
     /// [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi) (see the module
     /// docs).
-    pub(crate) fn reset_disabled(&mut self, reading: RuleSource) {
-        for npc in &mut self.npcs {
-            cancel_warp(npc);
+    pub(crate) fn reset_disabled(&mut self, reading: RuleSource, picked: &[bool]) {
+        for (npc, _) in self.npcs.iter_mut().zip(picked).filter(|(_, p)| **p) {
             if resets(npc) {
                 reset(npc, reading);
             }
@@ -126,7 +134,7 @@ pub(crate) fn reset(npc: &mut Npc, reading: RuleSource) {
     npc.leaves_gate_goal();
     npc.ends_gate_entry();
     npc.target = None;
-    npc.travel_set = false;
+    npc.travel = None;
     npc.defends = None;
     npc.provoked = 0.0;
     npc.goal = Goal::Idle;
@@ -211,7 +219,7 @@ mod tests {
         led.hull.inherent_ai = 3;
         led.goal = Goal::Attack(ShipRef::Player);
         led.target = Some(ShipRef::Player);
-        led.travel_set = true;
+        led.travel = Some(crate::catalog::StellarId(150));
         led.provoked = 9.0;
         led.pursuit = Pursuit {
             kept: Some(PursuitKept::Rush),
@@ -251,7 +259,7 @@ mod tests {
     /// pursuit or docking, and idle.
     fn was_reset(npc: &Npc) -> bool {
         npc.target.is_none()
-            && !npc.travel_set
+            && !npc.travel_set()
             && npc.provoked == 0.0
             && npc.goal == Goal::Idle
             && npc.pursuit == Pursuit::default()
@@ -375,14 +383,14 @@ mod tests {
                     led.target,
                     led.goal,
                     led.provoked,
-                    led.travel_set
+                    led.travel_set()
                 ),
                 (
                     before.leader,
                     before.target,
                     before.goal,
                     before.provoked,
-                    before.travel_set
+                    before.travel_set()
                 ),
                 "{reading:?}"
             );
@@ -451,7 +459,7 @@ mod tests {
             let led = of(&traffic, LED);
             assert_eq!(led.leader, Some(NpcId(0)), "{name}");
             assert_eq!(led.target, Some(ShipRef::Player), "{name}");
-            assert!(led.travel_set, "{name}");
+            assert!(led.travel_set(), "{name}");
         }
     }
 
@@ -585,10 +593,15 @@ mod tests {
 
     #[test]
     fn a_disabled_ship_on_its_jump_has_its_warp_cancelled_all_the_same() {
-        // @0x8fcc8-0x8fce9, before the jump path (@0x8fd83).
+        // @0x8fcc8-0x8fce9, before the jump path (@0x8fd83). On its own
+        // jump's goal 2, which the high level's hold keeps, with no target
+        // to turn it to goal 3 (@0x8d513-0x8d56b), as any other goal's +0x50
+        // is 0 there.
         let mut traffic = fleet(Condition::Disabled);
         let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
         let led = led.expect("there");
+        led.goal = crate::ai::Goal::JumpOut;
+        led.target = None;
         led.warp.goal = Some(WarpGoal::Own);
         led.warp.stage = 12.0;
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
@@ -610,6 +623,11 @@ mod tests {
             let led = led.expect("there");
             led.warp.stage = stage;
             led.no_ai = no_ai;
+            // A jump's goal with no target, so an intact ship's high level
+            // holds its stage rather than ending it (@0x8d513), or ending it
+            // as goal 3 does inside 1000 (@0x8fb2f-0x8fb42).
+            led.goal = crate::ai::Goal::JumpOut;
+            led.target = None;
             traffic.think_holding(&Keep, World::new(&[]), &[], &mut NeverFires);
             assert_eq!(
                 of(&traffic, LED).warp.stage,

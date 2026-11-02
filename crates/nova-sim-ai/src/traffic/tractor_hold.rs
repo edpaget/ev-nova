@@ -3,20 +3,61 @@
 //! `_HandleShip` does with its lock each frame, and the third of its
 //! speed, turn and thrust while another ship holds it.
 //!
-//! **The frame's hold** ([`hold`], `_HandleShip` @0x33fc0-0x3413d and
-//! @0x353ba-0x35449): its velocity pulled toward its holder's by the
-//! world's [`tractor_step`](super::World::tractor_step), then released
-//! when its holder is gone, disabled or dying, then aged and lapsed. It
-//! runs for every NPC the flight reaches, on both passes, aging on the
-//! advance pass alone, before the ship moves and after its ion block.
+//! **The frame's hold**, for every NPC the flight reaches, on both passes:
 //!
-//! Two ordering notes, neither crossing a boundary the player sees. The
-//! hold reads its holder's velocity as the pass began, where the original
-//! reads the holder's slot live, so a holder of a lower slot has already
-//! moved this frame: a one-pass lag settled before the frame is drawn.
-//! And the release and lapse run before the move rather than after it;
-//! the pull still comes before both, so the ship is pulled on as many
-//! frames as the original's.
+//! - **The pull** ([`pull`], `_HandleShip` @0x33fc0-0x3413d), after its
+//!   ion block and before it moves: its velocity pulled toward its
+//!   holder's by the world's [`tractor_step`](super::World::tractor_step).
+//! - **The release and lapse** ([`release`], @0x353ba-0x35449), after its
+//!   turn (@0x34460-0x3458e), thrust (@0x34a54-0x34d93), glow's rush test
+//!   (@0x34f57) and fire (@0x34ffd): released when its holder is gone,
+//!   disabled or dying, then aged, on the advance pass alone, and lapsed.
+//!   `_ShipTurnRate`, `_ShipAccelRate` and `_ShipMaxSpeed` read the lock
+//!   (+0xc8dc), so a ship released or lapsed on a pass turns, thrusts and
+//!   glows held on that pass. Only the two early exits for a ship type
+//!   above 0x2ff and type +0xa 0xd8f1 (@0x33594-0x335c8) skip both, and
+//!   no path between them leaves `_HandleShip`.
+//!
+//! **A freed holder** ([`Holders::and_gone`]): the pull reads the holder's
+//! slot (+0x20/+0x24, @0x3401f-0x34032) with no +0xb8 test, so a ship
+//! whose holder's slot was freed is pulled once more by the slot's record,
+//! then released, at its next step. Every standing record of the gone
+//! ships ([`GoneShips`](super::gone::GoneShips)) is a holder so, whatever
+//! freed it: a leave at its slot of the AI loop (pulled and released at
+//! every slot on that pass), a deadly stellar's kill after the ship loop
+//! or a swap on the hail in a dialog (at the next pass, double time's
+//! second when there is one), a gate entry or a wreck at its display in
+//! the ship loop (a later slot on that pass, by [`Holders::freed`]; an
+//! earlier one at the next pass). The release lets go of every such lock
+//! at the held ship's first step after the free, so a lock naming a gone
+//! ship is always one whose step hasn't come since. A dying holder lets
+//! go of every ship it holds at that ship's next step (@0x3540c), so a
+//! wreck's free reaches a hold only through a lock laid after that step,
+//! by a beam its firer's death doesn't end, which the record pulls and
+//! releases alike.
+//!
+//! **A berth taken** ([`Traffic::holds_follow_berth`]): +0xc8dc is a slot
+//! index, which a spawn rewrites and no free or spawn clears on another
+//! ship (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), so a ship whose
+//! holder's berth is taken before its step is held, and pulled, by the
+//! newcomer. A launch into a berth since the pass began (an escape ship's
+//! `_LaunchFighter` @0x354ea) is read as it stands ([`Holders::launched`]).
+//! Each take is read out in order ([`Traffic::take_berths_taken`], a
+//! [`BerthTaken`]) for the player's hold, as `_HandlePlayer` reads its
+//! +0xc8dc as a slot too (@0x68468-0x684b7): a player held by a ship whose
+//! berth is taken before its next hold is held, and pulled, by the
+//! newcomer (`nova_sim`'s session `tractor_hold`).
+//!
+//! The player's
+//! hold releases first and isn't pulled on the frame it is released
+//! (`_HandlePlayer` @0x68436-0x684b7, see
+//! [`player_pass`](crate::combat::tractor_hold::player_pass)), so a
+//! holder gone that way pulls the player not at all.
+//!
+//! The hold reads its holder's velocity as the pass began, where the
+//! original reads the holder's slot live, so a holder of a lower slot has
+//! already moved this frame: a one-pass lag settled before the frame is
+//! drawn, crossing no boundary the player sees.
 //!
 //! **The held handling** ([`Npc::own_handling`]): every reader of an
 //! NPC's `_ShipMaxSpeed`, `_ShipTurnRate` and `_ShipAccelRate` reads it,
@@ -27,10 +68,11 @@
 
 use std::collections::BTreeMap;
 
-use super::World;
+use super::gone::GoneShip;
+use super::{Traffic, World};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
-use crate::combat::tractor_hold::{Holder, held_by_other, held_handling, npc_pass};
+use crate::combat::tractor_hold::{Holder, held_by_other, held_handling, npc_pull, npc_release};
 use crate::handling::Handling;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -72,19 +114,39 @@ impl Holders {
     /// The holders among `npcs` and the player of `world`.
     #[must_use]
     pub fn of(world: &World, npcs: &[Npc]) -> Self {
-        let there = |velocity, condition| Holder::There {
-            velocity,
-            intact: condition == Condition::Intact,
-        };
         Self {
-            player: world
-                .player
-                .map(|player| there(player.state.velocity, player.condition)),
-            npcs: npcs
-                .iter()
-                .map(|npc| (npc.id, there(npc.state.velocity, npc.condition)))
-                .collect(),
+            player: world.player.map(|player| Holder::There {
+                velocity: player.state.velocity,
+                intact: player.condition == Condition::Intact,
+            }),
+            npcs: npcs.iter().map(|npc| (npc.id, there(npc))).collect(),
         }
+    }
+
+    /// The holders, `gone` among them, the freed slots' standing records
+    /// ([`GoneShips`](super::gone::GoneShips)), each by its record:
+    /// `_HandleShip`'s pull reads the holder's slot (+0x20/+0x24,
+    /// @0x3401f-0x34032) with no +0xb8 test, and its release tests the slot
+    /// (@0x353ba-0x35449), so a ship held by one is pulled by its record,
+    /// then released (see the module docs).
+    #[must_use]
+    pub fn and_gone(mut self, gone: &[GoneShip]) -> Self {
+        for gone in gone {
+            self.npcs.entry(gone.ship.id).or_insert(record(&gone.ship));
+        }
+        self
+    }
+
+    /// `freed`, freed at its own step of the ship loop, is read by its
+    /// record from there on (see the module docs).
+    pub fn freed(&mut self, freed: &Npc) {
+        self.npcs.insert(freed.id, record(freed));
+    }
+
+    /// `launched`, launched into a berth since the pass began, is read as
+    /// it stands, unless the pass already holds it (see the module docs).
+    pub fn launched(&mut self, launched: &Npc) {
+        (self.npcs.entry(launched.id)).or_insert_with(|| there(launched));
     }
 
     /// `ship` as a hold reads it: gone when it is not in the system.
@@ -97,18 +159,76 @@ impl Holders {
     }
 }
 
-/// `npc`'s frame's hold among `holders` at the pull's `step`, aging on an
-/// `advance` pass alone (see the module docs).
-pub fn hold(npc: &mut Npc, holders: &Holders, step: f32, advance: bool) {
+/// `npc` as a hold reads it in the system: its velocity, and intact
+/// unless disabled or dying.
+fn there(npc: &Npc) -> Holder {
+    Holder::There {
+        velocity: npc.state.velocity,
+        intact: npc.condition == Condition::Intact,
+    }
+}
+
+/// `npc`'s freed slot as a hold reads it: its record's velocity, and
+/// inactive, so the release lets go.
+fn record(npc: &Npc) -> Holder {
+    Holder::There {
+        velocity: npc.state.velocity,
+        intact: false,
+    }
+}
+
+impl Traffic {
+    /// Every NPC's hold by `old`, whose berth `new` takes, is held by `new`:
+    /// +0xc8dc is a slot, which a spawn rewrites, leaving every other
+    /// ship's (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b). This is the
+    /// original's slot link, whatever the reading of the parent link
+    /// ([`parent_slot`](super::parent_slot)), which is the escort port's
+    /// routing. Each such hold is one whose step hasn't come since `old`'s
+    /// slot was freed, as that step lets go (see the module docs). The
+    /// take is read out for the player's hold
+    /// ([`Traffic::take_berths_taken`]).
+    pub(super) fn holds_follow_berth(&mut self, old: NpcId, new: NpcId) {
+        self.berth_takes.push(BerthTaken { old, new });
+        let (old, new) = (ShipRef::Npc(old), ShipRef::Npc(new));
+        for lock in self.npcs.iter_mut().filter_map(|npc| npc.tractor.as_mut()) {
+            if lock.holder == old {
+                lock.holder = new;
+            }
+        }
+    }
+
+    /// Each berth taken since the last call, in order, each old ship
+    /// whose berth a newcomer took: the readout the session's player hold
+    /// follows (`_HandlePlayer` @0x68436-0x684b7, see the module docs).
+    pub fn take_berths_taken(&mut self) -> Vec<BerthTaken> {
+        std::mem::take(&mut self.berth_takes)
+    }
+}
+
+/// A berth taken: `new` took the berth `old` left, its record or its wreck
+/// ([`Traffic::take_berths_taken`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BerthTaken {
+    /// The ship whose berth was taken.
+    pub old: NpcId,
+    /// The newcomer.
+    pub new: NpcId,
+}
+
+/// `npc`'s frame's pull among `holders` at the pull's `step` ([`npc_pull`],
+/// see the module docs), before its move.
+pub fn pull(npc: &mut Npc, holders: &Holders, step: f32) {
     let me = ShipRef::Npc(npc.id);
-    npc_pass(
-        &mut npc.tractor,
-        me,
-        &mut npc.state.velocity,
-        |ship| holders.holder(ship),
-        step,
-        advance,
-    );
+    let holder = |ship| holders.holder(ship);
+    npc_pull(npc.tractor, me, &mut npc.state.velocity, holder, step);
+}
+
+/// `npc`'s frame's release among `holders` and lapse, aging on an
+/// `advance` pass alone ([`npc_release`], see the module docs), after its
+/// flight.
+pub fn release(npc: &mut Npc, holders: &Holders, advance: bool) {
+    let me = ShipRef::Npc(npc.id);
+    npc_release(&mut npc.tractor, me, |ship| holders.holder(ship), advance);
 }
 
 #[cfg(test)]
@@ -121,9 +241,11 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::traffic::Traffic;
     use crate::traffic::fixture::npc;
+    use crate::traffic::gone::Freed;
     use nova_sim_base::fixture::{Draws, FAST};
 
     const HOLDER: NpcId = NpcId(2);
+    const LAPSE: u32 = crate::combat::tractor_hold::LAPSE_TICKS;
 
     /// NPC `id` moving at `velocity`.
     fn moving(id: u32, velocity: Vec2) -> Npc {
@@ -191,6 +313,25 @@ mod tests {
         };
         again(&mut traffic, &world);
         assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.5)));
+        assert!(
+            traffic.npcs[0].tractor.is_some(),
+            "kept by an intact player"
+        );
+    }
+
+    #[test]
+    fn a_held_npc_is_pulled_then_released_by_a_disabled_player() {
+        // The release tests slot 0 too: `_IsDisabled` (@0x353ee).
+        let mut traffic = traffic_of(vec![held_by(ShipRef::Player, Vec2::new(5.0, 0.0))]);
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.condition = Condition::Disabled;
+        let world = World {
+            player: Some(player),
+            ..pulling(0.5)
+        };
+        again(&mut traffic, &world);
+        assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.0)));
+        assert_eq!(traffic.npcs[0].tractor, None, "released after its pull");
     }
 
     #[test]
@@ -198,6 +339,40 @@ mod tests {
         let mut traffic = traffic_of(vec![held_by(ShipRef::Npc(NpcId(1)), Vec2::new(5.0, -0.25))]);
         again(&mut traffic, &pulling(0.5));
         assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.0)));
+    }
+
+    #[test]
+    fn a_ship_held_by_a_holder_that_left_at_its_slot_is_pulled_by_its_record_then_released() {
+        // `_HandleShip`'s pull reads the holder's slot (+0x20/+0x24,
+        // @0x3401f-0x34032) with no +0xb8 test, after the whole AI loop,
+        // and its release tests the slot later (@0x353ba-0x35449): every
+        // ship held by a ship that left in the AI loop, at any slot, is
+        // pulled once by the record, then let go.
+        for berth in [1, 5] {
+            let mut held = held_by(ShipRef::Npc(HOLDER), Vec2::new(5.0, 0.0));
+            held.berth = berth;
+            let mut traffic = traffic_of(vec![held]);
+            let mut holder = moving(2, Vec2::new(1.0, 0.0));
+            holder.berth = 3;
+            // Recorded at its slot, as `dispatch_leave` records a leaver.
+            traffic.left_the_system(holder.clone(), Freed::InDispatch);
+            traffic.left_in_dispatch.push(holder);
+            traffic.fly_holding(
+                pulling(0.5),
+                &std::collections::BTreeSet::new(),
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(velocity(&traffic), drifted(Vec2::new(4.5, 0.0)), "{berth}");
+            assert_eq!(traffic.npcs[0].tractor, None, "{berth}: let go");
+            // Double time's second pass has no AI loop: the advance pass
+            // let go, so it pulls nothing.
+            again(&mut traffic, &pulling(0.5));
+            assert_eq!(
+                velocity(&traffic),
+                drifted(drifted(Vec2::new(4.5, 0.0))),
+                "{berth}"
+            );
+        }
     }
 
     #[test]
@@ -399,6 +574,114 @@ mod tests {
         assert_eq!(self_speed, plain_speed, "a self-held ship isn't slowed");
     }
 
+    /// NPC 1 running out up the screen from (0, -100), heading `heading`,
+    /// at rest, its class turning 9° a tick, held by `holder` if any; NPC 2
+    /// at rest, intact or disabled as `holder_disabled` says.
+    fn running_out(holder: Option<ShipRef>, heading: f32, holder_disabled: bool) -> Traffic {
+        let mut ship = holding(holder);
+        ship.stats.handling.turn_rate = 9.0;
+        ship.state.position = Vec2::new(0.0, -100.0);
+        ship.state.heading = heading;
+        ship.goal = crate::ai::Goal::JumpOut;
+        let mut other = moving(2, Vec2::ZERO);
+        other.state.position = Vec2::new(500.0, 500.0);
+        if holder_disabled {
+            other.condition = Condition::Disabled;
+        }
+        traffic_of(vec![ship, other])
+    }
+
+    /// NPC 1's speed and the degrees it turned after `fly` flew `traffic`.
+    fn speed_and_turn(mut traffic: Traffic, fly: impl Fn(&mut Traffic)) -> (f32, f32, bool) {
+        let heading = traffic.npcs[0].state.heading;
+        fly(&mut traffic);
+        let ship = &traffic.npcs[0];
+        let turned = crate::flight::shortest_turn(heading, ship.state.heading).abs();
+        (ship.state.velocity.length(), turned, ship.tractor.is_some())
+    }
+
+    #[test]
+    fn a_ship_released_on_a_pass_turns_and_thrusts_held_on_that_pass() {
+        // `_HandleShip` releases (@0x353ba-0x35421) after its turn
+        // (@0x34460-0x3458e) and thrust (@0x34a54-0x34d93), whose
+        // `_ShipTurnRate` and the +0x30 its low level read at its slot from
+        // `_ShipAccelRate` read +0xc8dc: so the pass that lets go of a
+        // disabled holder still flies held.
+        let other = Some(ShipRef::Npc(HOLDER));
+        for fly in [
+            (|traffic: &mut Traffic| {
+                traffic.low_levels(&pulling(0.5), &mut Draws::of(&[]));
+                again(traffic, &pulling(0.5));
+            }) as fn(&mut Traffic),
+            |traffic| traffic.fly_tick(&pulling(0.5), &mut Draws::of(&[])),
+        ] {
+            let (plain_speed, ..) = speed_and_turn(running_out(None, 0.0, true), fly);
+            let (held_speed, _, kept) = speed_and_turn(running_out(other, 0.0, true), fly);
+            assert!(plain_speed > 0.0);
+            assert!(
+                (held_speed - plain_speed * 0.1665).abs() < 1e-6,
+                "{held_speed} of {plain_speed}"
+            );
+            assert!(!kept, "released after the flight");
+            let (_, plain_turn, _) = speed_and_turn(running_out(None, 90.0, true), fly);
+            let (_, held_turn, _) = speed_and_turn(running_out(other, 90.0, true), fly);
+            assert_eq!(plain_turn, 9.0);
+            assert!((held_turn - 9.0 * 0.333).abs() < 1e-4, "{held_turn}");
+        }
+    }
+
+    #[test]
+    fn a_docking_ship_released_on_a_pass_turns_held_on_that_pass() {
+        // The docking flight turns by `_ShipTurnRate` at `_HandleShip`'s
+        // step (@0x344b0), which still reads the lock the release lets go
+        // of after it (@0x353ba-0x35421).
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let turned = |holder: Option<ShipRef>| {
+            let mut traffic = running_out(holder, 90.0, true);
+            traffic.npcs[0].goal = crate::ai::Goal::Idle;
+            traffic.npcs[0].docking = Some(Docking {
+                ship: ShipRef::Npc(NpcId(3)),
+                sub: DockSub::Approach,
+            });
+            let mut victim = moving(3, Vec2::ZERO);
+            victim.state.position = Vec2::new(0.0, -2100.0);
+            traffic.npcs.push(victim);
+            traffic.dock_in_dispatch(0, &pulling(0.5), &mut crate::chance::NeverFires);
+            speed_and_turn(traffic, |traffic| again(traffic, &pulling(0.5)))
+        };
+        let (_, plain, _) = turned(None);
+        let (_, held, kept) = turned(Some(ShipRef::Npc(HOLDER)));
+        assert_eq!(plain, 9.0);
+        assert!((held - 9.0 * 0.333).abs() < 1e-4, "{held}");
+        assert!(!kept, "released after the flight");
+    }
+
+    #[test]
+    fn a_lapsed_hold_still_slows_the_pass_it_lapses_on() {
+        // The lapse (@0x3542b-0x35440) comes after the thrust too.
+        let lapsing = |holder| {
+            let mut traffic = running_out(holder, 0.0, false);
+            if let Some(lock) = traffic.npcs[0].tractor.as_mut() {
+                lock.ticks_since_touch = LAPSE - 1;
+            }
+            traffic
+        };
+        let advance = |traffic: &mut Traffic| {
+            traffic.fly_holding(
+                pulling(0.5),
+                &std::collections::BTreeSet::new(),
+                &mut Draws::of(&[]),
+            );
+        };
+        let (plain_speed, ..) = speed_and_turn(lapsing(None), advance);
+        let (held_speed, _, kept) = speed_and_turn(lapsing(Some(ShipRef::Npc(HOLDER))), advance);
+        assert!(!kept, "lapsed");
+        assert!(
+            (held_speed - plain_speed * 0.1665).abs() < 1e-6,
+            "{held_speed} of {plain_speed}"
+        );
+    }
+
     #[test]
     fn a_held_npcs_rush_is_measured_against_its_held_thrust() {
         use crate::flight::{Controls, FlightRules};
@@ -419,5 +702,66 @@ mod tests {
         assert_eq!(ship.display.drive.thrust, Thrust::Rush);
         record(&mut ship, &own, thrust, flight);
         assert_eq!(ship.display.drive.thrust, Thrust::Plain);
+    }
+
+    #[test]
+    fn a_berth_taken_is_read_out_once_old_to_new() {
+        // `_HandlePlayer` reads +0xc8dc as a slot (@0x68468), so the
+        // session's player hold follows the take.
+        let mut traffic = Traffic::new();
+        let old = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.add_npc_at(moving(0, Vec2::ZERO), 4);
+        assert_eq!(traffic.take_berths_taken(), []);
+        traffic.remove_killed(old);
+        let new = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        assert_eq!(traffic.take_berths_taken(), [BerthTaken { old, new }]);
+        assert_eq!(traffic.take_berths_taken(), [], "drained");
+    }
+
+    #[test]
+    fn a_wrecks_berth_taken_in_the_ship_loop_is_read_out_old_to_new() {
+        // A wreck's display frees its slot (@0x2dee0) and an escape ship's
+        // launch later in the loop takes it (@0x354ea): the wreck is still
+        // in the system, not yet taken out, and no record names it.
+        let mut traffic = Traffic::new();
+        let old = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.npcs[0].condition = Condition::Destroyed;
+        traffic.set_ship_loop(true);
+        let new = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        assert!(traffic.gone.ships().is_empty(), "no record");
+        assert!(traffic.npcs.iter().any(|npc| npc.id == old), "still there");
+        assert_eq!(traffic.take_berths_taken(), [BerthTaken { old, new }]);
+    }
+
+    #[test]
+    fn a_spawn_into_a_berth_no_ship_left_reads_out_nothing() {
+        let mut traffic = Traffic::new();
+        let gone = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.remove_killed(gone);
+        traffic.add_npc_at(moving(0, Vec2::ZERO), 5);
+        assert_eq!(traffic.take_berths_taken(), []);
+    }
+
+    #[test]
+    fn a_chain_of_takes_is_read_out_in_order() {
+        let mut traffic = Traffic::new();
+        let first = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.remove_killed(first);
+        let second = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.remove_killed(second);
+        let third = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        assert_eq!(
+            traffic.take_berths_taken(),
+            [
+                BerthTaken {
+                    old: first,
+                    new: second
+                },
+                BerthTaken {
+                    old: second,
+                    new: third
+                }
+            ]
+        );
     }
 }

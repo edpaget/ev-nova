@@ -32,8 +32,10 @@
 //!     @0x8e714-0x8e726), which `NovaAi` runs after every type's think
 //!     ([`attack_drop`]). The brave trader's and the interceptor's thinks
 //!     leave it in that state, having no drop of their own, and so
-//!     do an escort's on the Attack order and a mission hunt, the hunt on
-//!     a destroyed player too, as its target 0 comes after the slot test.
+//!     do an escort's on the Attack order, a mission hunt (the hunt on a
+//!     destroyed player too, as its target 0 comes after the slot test) and
+//!     a wimpy trader's attack it keeps unprovoked, a lost lead's copied one
+//!     included ([`trader_keep`](crate::ai::trader_keep)).
 //!     The warship and the pirate drop such a target themselves, writing
 //!     goal 0 and target -1 but no +0x96 (`_WarshipAI` @0x8bc67-0x8bca9,
 //!     `_PirateWarshipAI` @0x8c315-0x8c330), so theirs is kept.
@@ -396,8 +398,14 @@ mod tests {
     fn fleeing_a_gone_ship_and_hit_by_another_it_keeps_fleeing_the_other_and_its_provocation() {
         // `_DamageShip` makes Y the target and adds to +0x96; the think
         // writes goal 3 on Y, whose slot is live, so the zero at
-        // @0x8e228-0x8e23d never runs.
-        for ai_type in [AiType::WimpyTrader, AiType::BraveTrader] {
+        // @0x8e228-0x8e23d never runs. A hunter's think keeps goal 3
+        // (@0x8bb34, @0x8cc07), which flies to +0x70.
+        for ai_type in [
+            AiType::WimpyTrader,
+            AiType::BraveTrader,
+            AiType::Warship,
+            AiType::Interceptor,
+        ] {
             let mut fleeing = ship(1, TRADERS, ai_type, 0.0, 0.0);
             fleeing.goal = Goal::Flee(n(2));
             fleeing.target = Some(n(3));

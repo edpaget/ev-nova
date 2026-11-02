@@ -244,56 +244,55 @@ impl PilotCatalog for GameData {
             .nav_def
             .into_iter()
             .flatten()
-            .filter_map(|id| {
-                let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
-                let frame_size = self
-                    .stellar_sprite(id)
-                    .ok()
-                    .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
-                let dead_frame_size = match self.stellar_dead_sprite(id) {
-                    Ok(Some(sprite)) => {
-                        Some((sprite.sheet.frame_width(), sprite.sheet.frame_height()))
-                    }
-                    _ => None,
-                };
-                let mut special_tech = [0; 8];
-                special_tech[..3].copy_from_slice(&stellar.special_tech1_3);
-                special_tech[3..].copy_from_slice(&stellar.special_tech4_8);
-                Some(LandingSite {
-                    id,
-                    position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
-                    frame_size,
-                    flags: stellar.flags.bits(),
-                    min_status: stellar.min_status,
-                    tech_level: stellar.tech_level,
-                    special_tech,
-                    govt: stellar.govt,
-                    flags2: stellar.flags2.bits(),
-                    destroyed: false,
-                    dominated_at_run_time: false,
-                    graphic: stellar.graphic_type,
-                    dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
-                    dead_frame_size,
-                    type_counts_frames: counts_frames(self, stellar.graphic_type),
-                    dead_counts_frames: dead_frame_size
-                        .is_none_or(|_| counts_frames(self, stellar.dead_type)),
-                    exit_angle: stellar.cust_snd_id,
-                    tribute: stellar.tribute,
-                    gravity: stellar.gravity,
-                    fee: stellar.fee,
-                    animation: SiteAnimation {
-                        delay: stellar.anim_delay,
-                        frame0_bias: stellar.frame0_bias,
-                        open_frame: stellar.cust_pic_id,
-                        type_frames: frame_count(self, stellar.graphic_type),
-                        dead_frames: dead_frame_size
-                            .map_or(0, |_| frame_count(self, stellar.dead_type)),
-                    },
-                    defense_dude: stellar.defense_dude.filter(|dude| dude.0 >= 128),
-                    def_count: stellar.def_count,
-                })
-            })
+            .filter_map(|id| self.landing_site(id))
             .collect()
+    }
+
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
+        let frame_size = self
+            .stellar_sprite(id)
+            .ok()
+            .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
+        let dead_frame_size = match self.stellar_dead_sprite(id) {
+            Ok(Some(sprite)) => Some((sprite.sheet.frame_width(), sprite.sheet.frame_height())),
+            _ => None,
+        };
+        let mut special_tech = [0; 8];
+        special_tech[..3].copy_from_slice(&stellar.special_tech1_3);
+        special_tech[3..].copy_from_slice(&stellar.special_tech4_8);
+        Some(LandingSite {
+            id,
+            position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
+            frame_size,
+            flags: stellar.flags.bits(),
+            min_status: stellar.min_status,
+            tech_level: stellar.tech_level,
+            special_tech,
+            govt: stellar.govt,
+            flags2: stellar.flags2.bits(),
+            destroyed: false,
+            dominated_at_run_time: false,
+            graphic: stellar.graphic_type,
+            dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
+            dead_frame_size,
+            type_counts_frames: counts_frames(self, stellar.graphic_type),
+            dead_counts_frames: dead_frame_size
+                .is_none_or(|_| counts_frames(self, stellar.dead_type)),
+            exit_angle: stellar.cust_snd_id,
+            tribute: stellar.tribute,
+            gravity: stellar.gravity,
+            fee: stellar.fee,
+            animation: SiteAnimation {
+                delay: stellar.anim_delay,
+                frame0_bias: stellar.frame0_bias,
+                open_frame: stellar.cust_pic_id,
+                type_frames: frame_count(self, stellar.graphic_type),
+                dead_frames: dead_frame_size.map_or(0, |_| frame_count(self, stellar.dead_type)),
+            },
+            defense_dude: stellar.defense_dude.filter(|dude| dude.0 >= 128),
+            def_count: stellar.def_count,
+        })
     }
 
     fn star_map(&self) -> Vec<StarSystem> {
@@ -2758,6 +2757,32 @@ mod tests {
                 name: name.to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn landing_site_reads_a_stellar_of_any_system() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128])),
+            (Stellar::TYPE, 128, stellar(1, 2, 0, 1, 0)),
+            (Stellar::TYPE, 140, stellar(-300, 450, 0, 1, 0)),
+        ]);
+        let site = data.landing_site(StellarId(140)).expect("no system's");
+        assert_eq!(
+            (site.id, site.position),
+            (StellarId(140), Vec2::new(-300.0, 450.0))
+        );
+        assert_eq!(data.landing_site(StellarId(999)), None, "never loaded");
+    }
+
+    #[test]
+    fn landing_sites_still_reads_the_systems_in_nav_order() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[129, 999, 128])),
+            (Stellar::TYPE, 128, stellar(1, 2, 0, 1, 0)),
+            (Stellar::TYPE, 129, stellar(3, 4, 0, 1, 0)),
+        ]);
+        let each = [129, 128].map(|id| data.landing_site(StellarId(id)).expect("read"));
+        assert_eq!(data.landing_sites(SystemId(130)), each);
     }
 
     #[test]

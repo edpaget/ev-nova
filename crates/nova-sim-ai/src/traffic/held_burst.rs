@@ -76,7 +76,8 @@
 //!   no word and bursts on what the advance pass left.
 //! - **Goal 0 keeps it**: sub 0 writes no +0x30, so a ship that gave up to
 //!   goal 0 bursts nothing on its own (@0x34a84). The engine's
-//!   [`Goal::Idle`] flies sub 0 itself ([`autopilot::sub_0`]), keeping
+//!   [`Goal::Idle`] flies sub 0 itself, the head's word
+//!   ([`SlotWord::none`](crate::traffic::slot_word::SlotWord::none)), keeping
 //!   what it owes.
 //! - **A ship disabled keeps it**: its +0x50 is -1.0, so it takes the
 //!   ordinary path and the disabled reset, goal 0 every frame
@@ -109,6 +110,7 @@ use crate::traffic::autopilot::{self, TopSpeeds};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::Npc;
 use crate::traffic::ship_display::{self, Thrust};
+use crate::traffic::slot_word::Cap;
 #[cfg(doc)]
 use crate::traffic::warp_out::FOLLOW_BURST;
 
@@ -157,46 +159,83 @@ pub(crate) fn writes_thrust(controls: Controls, inertia: Inertia) -> bool {
     controls.thrust || (matches!(inertia, Inertia::Inertialess { .. }) && controls.reverse)
 }
 
-/// What a flight flies this tick: its controls, its [`Word`], and the
-/// handling it flies by when that isn't its goal's.
+/// What a low level leaves its ship this tick (see
+/// [`slot_word`](crate::traffic::slot_word)): its controls but their
+/// turn, its [`Word`], the handling it flies by when that isn't its
+/// goal's, the heading it wants (+0x68) and where its thrust's top speed
+/// is read.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Flight {
-    /// The controls.
+    /// The controls but their turn.
     pub controls: Controls,
     /// What it does to +0x34.
     pub word: Word,
     /// The handling it flies by, sub 1's (half thrust on its soft brake,
-    /// [`leave_flight::stop`](crate::traffic::leave_flight::stop)); none
-    /// flies by the goal's.
+    /// [`leave_flight::stop`](crate::traffic::leave_flight::stop)) or a
+    /// sub's multiple of its thrust or top speed; none flies by the
+    /// goal's.
     pub flown: Option<Handling>,
+    /// The heading it wants, +0x68: none keeps its heading.
+    pub wanted: Option<i16>,
+    /// Where its thrust's top speed is read.
+    pub cap: Cap,
+    /// Sub 0xe's inertialess brake (see [`SlotWord`](crate::traffic::slot_word::SlotWord)).
+    pub speed_off: bool,
 }
 
 impl Flight {
-    /// Sub 1's flight under `controls`, flown on `flown` as `inertia` says
-    /// ([`Word::stop`]).
-    pub(crate) fn stop(controls: Controls, flown: &Handling, inertia: Inertia) -> Self {
-        Self {
-            controls,
-            word: Word::stop(controls, flown, inertia),
-            flown: Some(*flown),
-        }
-    }
-}
-
-/// A flight that writes +0x34 as it thrusts ([`Word::Writes`]).
-impl From<Controls> for Flight {
-    fn from(controls: Controls) -> Self {
+    /// A flight of `controls` wanting `wanted`, its thrust capped as `cap`
+    /// says, writing +0x34 as it thrusts ([`Word::Writes`]).
+    pub(crate) fn writes(controls: Controls, wanted: i16, cap: Cap) -> Self {
         Self {
             controls,
             word: Word::Writes,
             flown: None,
+            wanted: Some(wanted),
+            cap,
+            speed_off: false,
         }
+    }
+
+    /// Sub 1's flight under `controls` wanting `wanted`, flown on `flown`
+    /// as `inertia` says ([`Word::stop`]), keeping the head's +0x34.
+    pub(crate) fn stop(
+        controls: Controls,
+        flown: &Handling,
+        inertia: Inertia,
+        wanted: i16,
+    ) -> Self {
+        Self {
+            controls,
+            word: Word::stop(controls, flown, inertia),
+            flown: Some(*flown),
+            wanted: Some(wanted),
+            cap: Cap::Slot,
+            speed_off: false,
+        }
+    }
+
+    /// This flight flown by `flown`.
+    #[must_use]
+    pub(crate) fn by(self, flown: Handling) -> Self {
+        Self {
+            flown: Some(flown),
+            ..self
+        }
+    }
+
+    /// This flight doing `word` to +0x34.
+    #[must_use]
+    pub(crate) fn doing(self, word: Word) -> Self {
+        Self { word, ..self }
     }
 }
 
 /// Flies `npc` one tick under `controls` on `handling` under `flight`, as
 /// `inertia` says, its substate doing `word` to +0x34 (see the module
-/// docs): owing a burst under a [`Word::Keeps`] that thrusts, it bursts
+/// docs), an inertialess ship's velocity pulled by `adjust`
+/// ([`AtStep::adjust_accel`](crate::traffic::slot_word::AtStep::adjust_accel)):
+/// owing a burst under a [`Word::Keeps`] that thrusts, it bursts
 /// ([`burst`]), marking that it did
 /// ([`Drive::burst`](ship_display::Drive::burst)); under one that doesn't, it flies keeping what it owes
 /// ([`autopilot::plain_step`]); under [`Word::Writes`] it flies as ever,
@@ -206,19 +245,27 @@ pub(crate) fn step(
     handling: &Handling,
     controls: Controls,
     flight: FlightRules,
-    inertia: Inertia,
-    word: Word,
+    (inertia, word, adjust): (Inertia, Word, f32),
 ) {
     match (word, npc.owed_burst) {
         (Word::Keeps { thrust }, Some(speed)) if thrust > 0.0 => {
-            burst(npc, handling, controls, flight, inertia, (speed, thrust));
+            burst(
+                npc,
+                handling,
+                controls,
+                flight,
+                (inertia, adjust),
+                (speed, thrust),
+            );
         }
-        (Word::Keeps { .. }, _) => autopilot::plain_step(npc, handling, controls, flight, inertia),
+        (Word::Keeps { .. }, _) => {
+            autopilot::plain_step(npc, handling, controls, flight, (inertia, adjust));
+        }
         (Word::Writes, _) => {
             if writes_thrust(controls, inertia) {
                 npc.owed_burst = None;
             }
-            autopilot::plain_step(npc, handling, controls, flight, inertia);
+            autopilot::plain_step(npc, handling, controls, flight, (inertia, adjust));
         }
     }
 }
@@ -227,18 +274,23 @@ pub(crate) fn step(
 /// it records its drive and turns as [`autopilot::plain_step`] would under
 /// `controls` on `handling` under `flight`, as `inertia` says, then moves
 /// along its new heading at `speed` in place of its thrust
-/// ([`autopilot::burst_motion`]), and owes `thrust` less.
+/// ([`autopilot::burst_motion`], an inertialess one's velocity pulled by
+/// `adjust`), and owes `thrust` less.
 fn burst(
     npc: &mut Npc,
     handling: &Handling,
     controls: Controls,
     flight: FlightRules,
-    inertia: Inertia,
+    (inertia, adjust): (Inertia, f32),
     (speed, thrust): (f32, f32),
 ) {
     ship_display::record(npc, handling, controls, flight);
     npc.state.heading = flight::turned(npc.state.heading, controls.turn, handling.turn_rate);
-    autopilot::burst_motion(npc, speed, handling, inertia);
+    let pulled = Handling {
+        accel: adjust,
+        ..*handling
+    };
+    autopilot::burst_motion(npc, speed, &pulled, inertia);
     npc.owed_burst = Some(speed - thrust);
     npc.display.drive.burst = true;
 }
@@ -257,18 +309,22 @@ fn burst(
 /// runs, as it tests no wait: a ship now waiting keeps the trigger
 /// [`autopilot::after_burst`] released, marked
 /// ([`Npc::fires_on_burst_end`]). A ship with a lead takes no wait.
+/// Whether it stopped jumping, so the caller zeroes the word it flies by
+/// ([`SlotWord::stop_jumping`](crate::traffic::slot_word::SlotWord::stop_jumping)):
+/// `_AIMakeShipStopJumping` zeroes +0x30 and +0x34 (@0x82eb3-0x82eb6), so
+/// double time's second pass, which runs no low level, thrusts nothing.
 pub(crate) fn settle(
     npc: &mut Npc,
     burst: bool,
     speeds: TopSpeeds,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
-) {
+) -> bool {
     let Some(now) = npc.owed_burst.filter(|_| burst) else {
-        return;
+        return false;
     };
     if now > speeds.burst_cap() {
-        return;
+        return false;
     }
     stop_jumping(npc);
     npc.display.drive.thrust = Thrust::None;
@@ -278,6 +334,7 @@ pub(crate) fn settle(
         npc.trigger = trigger;
         npc.fires_on_burst_end = true;
     }
+    true
 }
 
 /// `_AIMakeShipStopJumping` (@0x82e77-0x82eba, F3): goal and sub-goal 0
@@ -292,7 +349,7 @@ fn stop_jumping(npc: &mut Npc) {
         npc.docking = None;
         npc.warp.goal = None;
     }
-    npc.travel_set = false;
+    npc.travel = None;
     npc.warp.stage = 0.0;
     npc.owed_burst = None;
 }
@@ -352,8 +409,7 @@ mod tests {
             &flown,
             controls,
             FlightRules::default(),
-            Inertia::Inertial,
-            Word::Keeps { thrust: 0.25 },
+            (Inertia::Inertial, Word::Keeps { thrust: 0.25 }, flown.accel),
         );
         let heading = 90.0 + flown.turn_rate;
         assert_eq!(npc.state.heading, heading);
@@ -387,8 +443,7 @@ mod tests {
             &flown,
             controls,
             FlightRules::default(),
-            INERTIALESS,
-            Word::Keeps { thrust: 0.5 },
+            (INERTIALESS, Word::Keeps { thrust: 0.5 }, flown.accel),
         );
         assert_eq!(npc.state.heading, 90.0 - flown.turn_rate);
         assert_eq!(npc.speed, 30.0, "+0x48 = |+0x34|");
@@ -412,15 +467,14 @@ mod tests {
                 &flown,
                 controls,
                 FlightRules::default(),
-                inertia,
+                (inertia, flown.accel),
             );
             step(
                 &mut npc,
                 &flown,
                 controls,
                 FlightRules::default(),
-                inertia,
-                Word::Keeps { thrust: 0.0 },
+                (inertia, Word::Keeps { thrust: 0.0 }, flown.accel),
             );
             assert_eq!(npc.owed_burst, Some(30.0), "{inertia:?}: kept");
             assert_eq!(npc.state, plain.state, "{inertia:?}");
@@ -442,15 +496,14 @@ mod tests {
             &flown,
             controls,
             FlightRules::default(),
-            Inertia::Inertial,
+            (Inertia::Inertial, flown.accel),
         );
         step(
             &mut npc,
             &flown,
             controls,
             FlightRules::default(),
-            Inertia::Inertial,
-            Word::Keeps { thrust: 0.3 },
+            (Inertia::Inertial, Word::Keeps { thrust: 0.3 }, flown.accel),
         );
         assert_eq!(npc.state, plain.state);
         assert_eq!(npc.owed_burst, None);
@@ -479,15 +532,14 @@ mod tests {
                 &flown,
                 controls,
                 FlightRules::default(),
-                inertia,
+                (inertia, flown.accel),
             );
             step(
                 &mut npc,
                 &flown,
                 controls,
                 FlightRules::default(),
-                inertia,
-                Word::Writes,
+                (inertia, Word::Writes, flown.accel),
             );
             assert_eq!(npc.owed_burst, None, "{inertia:?} {controls:?}");
             assert_eq!(npc.state, plain.state, "{inertia:?} {controls:?}");
@@ -504,8 +556,7 @@ mod tests {
                 &flown,
                 controls,
                 FlightRules::default(),
-                inertia,
-                Word::Writes,
+                (inertia, Word::Writes, flown.accel),
             );
             assert_eq!(npc.owed_burst, Some(30.0), "{inertia:?} {controls:?}");
         }
@@ -545,20 +596,27 @@ mod tests {
         assert_eq!(Word::thrusting(thrust, &flown), keeps(0.4));
         assert_eq!(Word::thrusting(reverse, &flown), keeps(0.0));
         assert_eq!(
-            Flight::from(thrust),
+            Flight::writes(thrust, 90, Cap::Step),
             Flight {
                 controls: thrust,
                 word: Word::Writes,
                 flown: None,
+                wanted: Some(90),
+                cap: Cap::Step,
+                speed_off: false,
             }
         );
         assert_eq!(
-            Flight::stop(thrust, &soft, Inertia::Inertial),
+            Flight::stop(thrust, &soft, Inertia::Inertial, 45),
             Flight {
                 controls: thrust,
                 word: keeps(0.2),
                 flown: Some(soft),
-            }
+                wanted: Some(45),
+                cap: Cap::Slot,
+                speed_off: false,
+            },
+            "sub 1 keeps the head's +0x34"
         );
     }
 
@@ -580,7 +638,7 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Close,
         });
-        npc.travel_set = true;
+        npc.travel = Some(crate::catalog::StellarId(150));
         npc.display.drive.thrust = Thrust::Plain;
         settle(&mut npc, burst, speeds, inertia, draws);
         npc
@@ -601,7 +659,7 @@ mod tests {
             "sub-goal 0"
         );
         assert_eq!(ended.target, Some(ShipRef::Player), "+0x70 kept");
-        assert!(!ended.travel_set, "+0x6c = -1");
+        assert!(!ended.travel_set(), "+0x6c = -1");
         assert_eq!(ended.owed_burst, None);
         assert_eq!(ended.display.drive.thrust, Thrust::None, "+0x30 = 0");
         assert_eq!(ended.mode, Mode::Coasting { ticks_left: 37 });
@@ -687,7 +745,7 @@ mod tests {
             assert_eq!(going.owed_burst, Some(now), "{now} {burst}");
             assert_eq!(going.goal, Goal::Attack(ShipRef::Player));
             assert_eq!(going.mode, Mode::Flying);
-            assert!(going.travel_set);
+            assert!(going.travel_set());
             assert!(draws.asked.is_empty());
         }
         // Nothing owed now: no burst to end.
@@ -720,8 +778,7 @@ mod tests {
             &flown,
             controls,
             FlightRules::default(),
-            Inertia::Inertial,
-            keeps,
+            (Inertia::Inertial, keeps, flown.accel),
         );
         assert!(npc.display.drive.burst, "it burst");
         let burst = npc.display.drive.burst;
@@ -748,8 +805,7 @@ mod tests {
                 &flown,
                 thrust,
                 FlightRules::default(),
-                Inertia::Inertial,
-                word,
+                (Inertia::Inertial, word, flown.accel),
             );
             assert!(!npc.display.drive.burst, "{owed:?} {word:?}");
         }
@@ -789,7 +845,7 @@ mod tests {
             sub: DockSub::Stop,
         });
         npc.docking = docking;
-        npc.travel_set = true;
+        npc.travel = Some(crate::catalog::StellarId(150));
         let own = TopSpeeds {
             own: 6.0,
             lead: None,
@@ -799,8 +855,34 @@ mod tests {
             (npc.goal, npc.docking),
             (Goal::Assist(Help::Refuel), docking)
         );
-        assert!(!npc.travel_set);
+        assert!(!npc.travel_set());
         assert_eq!(npc.owed_burst, None);
         assert_eq!(npc.mode, Mode::Coasting { ticks_left: 30 });
+    }
+
+    #[test]
+    fn an_inertialess_burst_pulls_its_velocity_by_its_steps_adjust_accel() {
+        let mut npc = owing(Some(30.0));
+        // Off heading × speed, so the pull shows.
+        npc.state.velocity = Vec2::new(0.0, 1.0);
+        let flown = handling(&npc);
+        let mut drifted = npc.clone();
+        let pulled = Handling {
+            accel: 0.01,
+            ..flown
+        };
+        crate::traffic::inertialess::drift(&mut drifted, &pulled);
+        step(
+            &mut npc,
+            &flown,
+            Controls::default(),
+            FlightRules::default(),
+            (INERTIALESS, Word::Keeps { thrust: 0.5 }, 0.01),
+        );
+        assert!(close(npc.state.velocity, drifted.state.velocity));
+        assert!(
+            !close(npc.state.velocity, Vec2::new(2.0, 0.0)),
+            "pulled a little"
+        );
     }
 }

@@ -58,27 +58,50 @@
 //!   ([`Hunt::dropped_target`]), so a person whose grudge then takes the
 //!   player again is no threat to the gate, and says its quote again
 //!   each think. The word plays no sound of its own.
-//! - **Fleeing**, it keeps fleeing while its attacker holds its slot
-//!   (@0x89eae, [`Surroundings::active`]); then it decides again.
-//! - **Its target**: provoked, the attacker it took on being hit; idle or
-//!   travelling, the target it holds (+0x70, [`held_target`]), an ally or
-//!   a fleet-mate as much as any; otherwise the ship [`select_target`]
-//!   gives, keeping the one it attacks. A target is dropped as [`dropped`]
-//!   says, a fresh pick included: `_WarshipAI` sets state 4 for the target
+//! - **Fleeing** (goal 3), it keeps fleeing the ship its target names
+//!   (+0x70, which a hit rewrites, `_DamageShip` @0x3bcf6), whatever that
+//!   ship's state, and searches nothing: the provoked branches skip goal 3
+//!   (@0x8bb34, @0x8cc07), the warship's searches need goals 0, 1, 0x14, 2
+//!   or 6 and goal 3 jumps past its retreats (@0x8be1a), and the
+//!   interceptor's gate closes for it (@0x8cc6d-0x8cc7d). Goal 3's block
+//!   ends a flight from a ship gone from its slot that think, with no
+//!   search ([`flee_drop`](super::flee_drop), @0x8dff6), so a disabled or
+//!   breaking-up attacker is fled on until its slot goes. A target the
+//!   slot test already cleared (a hit moved +0x70 to a ship whose slot
+//!   went since) ends the flight the same way, whatever the goal's quarry:
+//!   the thinks pass +0x70 -1 by (@0x8bdfe, @0x8d13f → @0x8d343), and the
+//!   block writes goal 0, sub 0 and +0x96 0 (@0x8e228-0x8e23d).
+//! - **Goal 4** ([`held_attack`](super::held_attack)), before any search:
+//!   - a warship's: its provoked branch (any goal but 7 and 3, the
+//!     attacker it took on being hit, ally or not), an attack it holds,
+//!     and a target it holds idle, landing, entering a gate, leaving,
+//!     holding or drifting, are goal 4 on that ship, taken through its own
+//!     drop, its retreats and its fully-dry drop with no search that think
+//!     ([`warship_hunt`](super::held_attack::warship_hunt));
+//!   - an interceptor's ([`Retreat::search_gate`]): its provoked branch,
+//!     an attack it holds, a target it kept idle and its closed gate
+//!     ([`interceptor_hunt`](super::held_attack::interceptor_hunt)).
+//!
+//!   An ally or a fleet-mate it takes is dropped by the high level's
+//!   state-4 block in the same dispatch, which keeps the target
+//!   ([`attack_drop`](super::attack_drop)), so the next think takes it
+//!   again.
+//! - **Its target** with none held: the ship [`select_target`] gives, the
+//!   interceptor's keeping the one it attacks. A fresh pick is dropped as
+//!   [`dropped`] says: `_WarshipAI` sets state 4 for the target
 //!   `_SelectWarshipTarget` gives and at once drops one inactive, breaking
 //!   up, or disabled while it has no destroying weapons (@0x8bc4e-0x8bca9),
 //!   and `_HighLevelAIHandler` drops a breaking-up one too (@0x8e3ef). A
 //!   dropped target, held, provoker, the word's or a fresh pick (a
 //!   breaking-up NPC a ship with destroying weapons hunts, or a downed
 //!   ally's quarry it helps against), leaves it in [`Goal::Idle`] with no
-//!   target that think, past the idle block (@0x8bcb4 → @0x8bf8c), and no
-//!   other candidate is tried. An ally or a fleet-mate it takes is dropped
-//!   by the high level's state-4 block in the same dispatch, which keeps
-//!   the target ([`attack_drop`](super::attack_drop)), so the next think
-//!   takes it again.
+//!   target that think, +0x70 -1 (@0x8bca9), past the idle block (@0x8bcb4
+//!   → @0x8bf8c), and no other candidate is tried.
 //! - **Retreat**, only when its government says so (a warship's `Flags`
 //!   0x0010; the Bible: "retreat when shields drop below 25%"):
-//!   - the odds retreat (@0x8bcea): while attacking, with its shields
+//!   - the odds retreat (@0x8bcea): while attacking (a provoker or a
+//!     target it holds is judged as attacked, goal 4 written first; a fresh
+//!     pick waits a think, see [`hunt`]), with its shields
 //!     below [`ODDS_RETREAT_SHIELDS`] of their most and the odds against
 //!     it above its government's `MaxOdds`, twice that while a
 //!     reinforcement fleet allied with it is coming to the system
@@ -115,7 +138,8 @@
 //!   the bit first and jumps past `_AIEvalHopelessChase` (@0x8e48e),
 //!   keeping its band instead (see [`stand_off`](super::stand_off)).
 //! - **Fully dry** (@0x8c0e7-0x8c117), an attack or snipe is dropped: it
-//!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]).
+//!   stops ([`Goal::Idle`], [`out_of_ammo::drop_when_dry`]), its
+//!   target and travel stellar -1 (@0x8c111, @0x8c117).
 //! - With no target, held or found, it goes about its business ([`idle`](super::idle)),
 //!   short of ammunition or not: the out-of-ammo retreat needs a target.
 //!   Once it has visited a stellar of the system, it leaves, or stops and
@@ -127,14 +151,29 @@
 //! - **Leaving with no way to jump** (@0x8bf8c-0x8c0de), last: a warship
 //!   whose think ends in leaving ([`Goal::JumpOut`], state 2) but cannot
 //!   jump ([`leave::can_jump`]) lands on or enters a stellar picked at
-//!   random, or stops and waits with none ([`grounded`]). The other types keep
+//!   random, or stops and waits with none ([`grounded`]), its travel
+//!   stellar -1 with none (@0x8c00c, @0x8c02a). The other types keep
 //!   leaving (see [`idle`](super::idle)).
 //!
 //! A held ship ([`Goal::Hold`], the original's goal 10 with no leader)
 //! still hears its government's word and answers its attacker, but looks
 //! for no target: `_SelectWarshipTarget` runs only for goals 0, 1, 2,
 //! 6 and 0x14 (@0x8b835-0x8b875, @0x8bb56-0x8bba2, @0x8bbab-0x8bbc2), so
-//! with no word and no provocation it holds ([`idle`](super::idle)).
+//! with no word, no provocation and no target it holds
+//! ([`idle`](super::idle)). With a target, unprovoked, the late goal-4
+//! write (@0x8be09-0x8be2d) turns it on that ship, after its shield and
+//! out-of-ammo retreats ([`held_attack`](super::held_attack)).
+//!
+//! An inspecting warship (goal 7, a lost interceptor lead's that the
+//! succession copied) looks for no target either, provoked or not:
+//! `_WarshipAI` runs no block for it, its provoked branch skipping goal 7
+//! (@0x8bb2d), the goal-0 block needing goal 0 (@0x8b835), the searches
+//! goals 1, 0x14, 2 (@0x8bb56) or 6 (@0x8bbab), its own drop goal 4
+//! (@0x8bc4e), and goal 7 jumping past the retreats (@0x8be10). So it
+//! keeps the inspection, ended or not, and goal 7's high level flies and
+//! ends it whatever the type ([`inspect_high`](super::inspect_high)), on
+//! +0x70: a hit that moved the target since moves the inspection to the
+//! attacker.
 //!
 //! A fleet's escort of a government with `Flags` 0x1000 thinks here,
 //! word and retreats included, as every fleet escort does until
@@ -142,16 +181,17 @@
 //! `_EscortAI`; a leaderless one is a pirate ([`pirate`](super::pirate)).
 
 use crate::ai::fire::FireRules;
-use crate::ai::held_target::{self, Held, HeldTarget};
+use crate::ai::held_attack::{interceptor_hunt, warship_hunt};
 use crate::ai::interceptor::inspection_holds;
 use crate::ai::odds::cached_odds;
 use crate::ai::reinforcements::odds_factor;
 #[cfg(doc)]
 use crate::ai::target::select_target;
 use crate::ai::target::{Pick, TargetRules, dropped, let_go, pick_target};
+use crate::ai::travel::TravelWrite;
 use crate::ai::{
-    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, leave, out_of_ammo,
-    react, wait,
+    Admit, Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle, idle_block, leave,
+    out_of_ammo, react, wait,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -187,17 +227,21 @@ pub struct Retreat {
     /// Whether it retreats when its weapons run out of ammunition, by its
     /// hull's `Flags2` 0x0080 ([`out_of_ammo::retreats`]).
     pub out_of_ammo: bool,
-    /// Whether it looks for a target while it waits ([`Goal::Wait`], state
-    /// 6): a warship does (`_SelectWarshipTarget` @0x8bbc2), an interceptor
-    /// doesn't, as its search needs a goal of 1 or below, or 0x14
-    /// (`_InterceptorAI` @0x8cc6d-0x8cc7d). One that doesn't still answers
-    /// its attacker, as a held ship does.
-    pub searches_waiting: bool,
+    /// Whether it looks for a target only from a goal of 1 or below, or
+    /// 0x14: an interceptor's search, inspection and patrol need one
+    /// (`_InterceptorAI` @0x8cc6d-0x8cc7d,
+    /// [`gate_closed`](super::interceptor::gate_closed)), so one waiting,
+    /// leaving, plundering or drifting searches nothing. Its provoked
+    /// branch comes first (@0x8cbf6-0x8cc31): provoked, it takes goal 4
+    /// on its target, as it holds goal 4 unprovoked, and the think's tail
+    /// then flies or ends it with no search
+    /// ([`held_attack`](super::held_attack)). A warship's own gates
+    /// (`_SelectWarshipTarget` for goals 0, 1, 2, 6 and 0x14) are not this:
+    /// it searches waiting (@0x8bbc2) and, with no target, holds only its
+    /// hold.
+    pub search_gate: bool,
     /// What its think does with a target breaking up.
     pub breaking_up: BreakingUp,
-    /// What its think does with the target it holds unprovoked
-    /// ([`held_target`]).
-    pub held_target: HeldTarget,
 }
 
 /// What a hunter's think does with a target breaking up.
@@ -217,6 +261,10 @@ pub enum BreakingUp {
 /// ([`RuleKey::BlessingAlwaysAttacks`](crate::RuleKey::BlessingAlwaysAttacks)):
 /// its goal, or none when it has nothing to fight (see the module docs).
 ///
+/// A warship's provoker and a target it holds are judged as attacked,
+/// as `_WarshipAI` writes goal 4 on them before its retreats
+/// ([`held_attack`](super::held_attack)).
+///
 /// After a word, the retreat judges the ship by the goal the word has
 /// just given it, an attack on its new target: the original sets the
 /// target and state 4 at once (@0x8b7da-0x8b7e5; @0x8b800 then
@@ -225,8 +273,9 @@ pub enum BreakingUp {
 /// against a ship the word turns on it, and not against one the word
 /// turns off a ship the player leads.
 ///
-/// Without a word, the retreat judges the ship by the goal it held, so
-/// the odds retreat waits for a ship that was not attacking to attack.
+/// Without a word, the retreat judges a fresh pick by the goal the ship
+/// held, so the odds retreat waits for a ship that was not attacking to
+/// attack.
 /// The original's gate is state 4, which a ship has as soon as it takes
 /// a target (@0x8b857, @0x8b881), so a ship outnumbered as it picks a
 /// target retreats one think later here than in the original: a
@@ -249,16 +298,26 @@ pub fn hunt(
 ) -> Hunt {
     let word = government_word(npc, around, always_attacks);
     let found = match word {
+        // The word's player let go at once: the think's own drop, goal 0
+        // and +0x70 -1, past the idle block (@0x8bc58-0x8bcb4) or past the
+        // patrol (@0x8d2fd-0x8d33a; the word wrote goal 4, which closes the
+        // interceptor's gate, @0x8cc6d-0x8cc7d).
         Some(Word::TakePlayer) if !keeps(npc, ShipRef::Player, around, retreat) => {
             Err(Hunt::dropped(true))
         }
         Some(Word::TakePlayer) => Ok((ShipRef::Player, true)),
+        // The 0x0040 word's -1 and goal 0 (@0x8b800, @0x8cbc0), then the
+        // search from goal 0: with no pick, the -1 stands.
         Some(Word::DropTarget) => picked(
             npc,
             pick_target(npc, None, around, rules, chance),
             around,
             retreat,
-        ),
+        )
+        .map_err(|hunt| Hunt {
+            target: HuntTarget::Cleared,
+            ..hunt
+        }),
         None => unworded(npc, around, retreat, always_attacks, rules, chance),
     };
     let hunt = match found {
@@ -289,7 +348,7 @@ pub fn hunt(
 /// Whether `npc`'s think, retreating as `retreat` says, keeps `ship` as
 /// its target among `around`: a warship's [`dropped`] or an interceptor's
 /// [`let_go`] doesn't let it go (@0x8bc4e-0x8bcaf, @0x8d2fd-0x8d33a).
-fn keeps(npc: &Npc, ship: ShipRef, around: &Surroundings, retreat: Retreat) -> bool {
+pub(crate) fn keeps(npc: &Npc, ship: ShipRef, around: &Surroundings, retreat: Retreat) -> bool {
     match retreat.breaking_up {
         BreakingUp::Drops => !dropped(npc, ship, around),
         BreakingUp::LeavesToHighLevel => !let_go(npc, ship, around),
@@ -315,9 +374,30 @@ fn picked(
     }
 }
 
+/// [`picked`] for a search from +0x70 -1: the warship's ends with +0x70 -1
+/// when it picks nothing (@0x8bca9, `_SelectWarshipTarget` writing no
+/// target), and the interceptor's goes on to its patrol.
+fn searched(
+    npc: &Npc,
+    pick: Option<Pick>,
+    around: &Surroundings,
+    retreat: Retreat,
+) -> Result<(ShipRef, bool), Hunt> {
+    picked(npc, pick, around, retreat).map_err(|hunt| {
+        if retreat.search_gate {
+            hunt
+        } else {
+            Hunt {
+                target: HuntTarget::Cleared,
+                ..hunt
+            }
+        }
+    })
+}
+
 /// [`hunt`] with no government's word: the target `npc` attacks and
 /// whether it turns on the player, or the hunt that ends the think (see
-/// [`held_target`]).
+/// [`held_attack`](super::held_attack)).
 fn unworded(
     npc: &Npc,
     around: &Surroundings,
@@ -326,72 +406,66 @@ fn unworded(
     rules: TargetRules,
     chance: &mut dyn Chance,
 ) -> Result<(ShipRef, bool), Hunt> {
-    if let Goal::Flee(attacker) = npc.goal
-        && around.active(attacker)
-    {
-        return Err(Hunt::of(Goal::Flee(attacker)));
+    // Goal 3 is kept on +0x70 whatever that ship's state: the provoked
+    // branches skip it (@0x8bb34, @0x8cc07), no search or retreat runs
+    // for it, and goal 3's block ends it once the slot goes
+    // (`provocation::with_flight_end`). With +0x70 already -1 (the slot
+    // test's, after a hit moved it off the goal's quarry), the thinks pass
+    // it by (@0x8bdfe, @0x8d13f → @0x8d343) and the block writes goal 0,
+    // sub 0 and +0x96 0 (@0x8dff6 → @0x8e228-0x8e23d), whatever the
+    // quarry: no search that think.
+    if let Goal::Flee(_) = npc.goal {
+        return Err(match npc.target {
+            Some(ship) => Hunt::of(Goal::Flee(ship)),
+            None => Hunt {
+                target: HuntTarget::Cleared,
+                forgets_provocation: true,
+                ..Hunt::of(Goal::Idle)
+            },
+        });
+    }
+    if !retreat.search_gate {
+        // The warship's target section (`held_attack`): a target it holds
+        // or was provoked by is attacked, fled or dropped with no search
+        // that think.
+        if let Some(hunt) = warship_hunt(npc, around, retreat, always_attacks) {
+            return Err(hunt);
+        }
+        return searched(
+            npc,
+            pick_target(npc, None, around, rules, chance),
+            around,
+            retreat,
+        );
     }
     let keep = |ship: ShipRef| keeps(npc, ship, around, retreat);
     let lets_go = |ship: ShipRef| releases_blessed(npc, ship, around, always_attacks);
-    let holding = npc.target.filter(|&ship| !lets_go(ship));
-    let provoker = holding.filter(|_| npc.provoked > 0.0);
-    // Inspecting (an interceptor's state 7: its search needs state 1 or
-    // below, or 0x14, @0x8cc6d-0x8cc7d, and its provoked branch leaves
-    // state 7 out, @0x8cc0d; its re-pick comes after, see `interceptor`),
-    // it answers only a provoker it keeps. An inspection this think ends
-    // (within reach or gone) leaves it the search.
+    let held = |ship: ShipRef| keep(ship) && !lets_go(ship);
+    let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && held(ship));
+    // Inspecting (state 7: its search needs state 1 or below, or 0x14,
+    // @0x8cc6d-0x8cc7d, and its provoked branch leaves state 7 out,
+    // @0x8cc0d; its re-pick comes after, see `interceptor`), it answers
+    // only a provoker it keeps. An inspection this think ends (within
+    // reach or gone) leaves it the search.
     if inspection_holds(npc, around) {
         return Err(Hunt {
-            goal: provoker
-                .filter(|&ship| keep(ship))
-                .map(|ship| hunted(npc, ship, around, retreat)),
+            goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
             ..Hunt::default()
         });
     }
-    let ended = |held: Held| {
-        Err(match held {
-            Held::Attack(ship) => Hunt::of(hunted(npc, ship, around, retreat)),
-            Held::Drop => Hunt::dropped(false),
-            Held::Hold(ship) => Hunt {
-                target: HuntTarget::Holds(ship),
-                ..Hunt::of(npc.goal)
-            },
-            Held::Clear => Hunt {
-                target: HuntTarget::Cleared,
-                ..Hunt::of(npc.goal)
-            },
-        })
-    };
-    // The provoked branch (@0x8bb0c-0x8bb44, @0x8cbf6-0x8cc31). It leaves
-    // state 3 out: a flight from a ship gone drops nothing here, and goes
-    // on to the high level's flee block (`provocation::with_flight_end`),
-    // turning on a provoker kept.
+    // Its provoked branch and goal 4, its kept target and its closed gate
+    // (`held_attack`): the think's tail ends or flies the attack with no
+    // search that think.
+    if let Some(hunt) = interceptor_hunt(npc, around, retreat, always_attacks) {
+        return Err(hunt);
+    }
     if let Some(ship) = provoker {
-        if !matches!(npc.goal, Goal::Flee(_)) {
-            return ended(held_target::provoked(ship, keep));
-        }
-        if keep(ship) {
-            return Err(Hunt::of(hunted(npc, ship, around, retreat)));
-        }
+        return Err(Hunt::of(hunted(npc, ship, around, retreat)));
     }
-    // Held, or waiting without a search, it answers only its provoker.
-    if npc.goal == Goal::Hold || (npc.goal == Goal::Wait && !retreat.searches_waiting) {
-        return Err(Hunt::default());
-    }
-    if let Some(held) = holding
-        .and_then(|ship| held_target::unprovoked(npc, ship, around, retreat.held_target, keep))
-    {
-        return ended(held);
-    }
-    // The ship it attacks (state 4 on +0x70) the think's drop lets go ends
-    // the think so too.
-    let attacking = npc.goal.attacking().filter(|&ship| !lets_go(ship));
-    if attacking.is_some_and(|ship| !keep(ship)) {
-        return Err(Hunt::dropped(false));
-    }
+    let current = npc.goal.attacking().filter(|&ship| held(ship));
     picked(
         npc,
-        pick_target(npc, attacking, around, rules, chance),
+        pick_target(npc, current, around, rules, chance),
         around,
         retreat,
     )
@@ -406,7 +480,7 @@ fn unworded(
 /// before the blessing came, as the kept target or as the provoker (the
 /// word's provocation of 1 can't be told from a hit's), so the ship fights
 /// a blessed player only on the hit's own reaction. Never by the engine.
-fn releases_blessed(
+pub(crate) fn releases_blessed(
     npc: &Npc,
     ship: ShipRef,
     around: &Surroundings,
@@ -419,6 +493,8 @@ fn releases_blessed(
 }
 
 /// What a hunter's think gives ([`hunt`]).
+// Each flag is its own write or call of the original's think.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Hunt {
     /// Its goal, or none when it has nothing to fight.
@@ -432,18 +508,23 @@ pub struct Hunt {
     /// Whether the government's 0x0004 word set its provocation to 1
     /// ([`Decision::provokes`](crate::ai::Decision::provokes)).
     pub provokes: bool,
-    /// The target the frame ends with ([`held_target`]).
+    /// The target the frame ends with ([`held_attack`](super::held_attack)).
     pub target: HuntTarget,
+    /// Whether the high level ends the flight the think left with no
+    /// target, zeroing its provocation (@0x8dff6 → @0x8e228-0x8e23d,
+    /// [`Decision::forgets_provocation`](crate::ai::Decision::forgets_provocation)).
+    pub forgets_provocation: bool,
 }
 
 /// The target a hunter's think leaves the frame to end with
-/// ([`held_target`]).
+/// ([`held_attack`](super::held_attack)).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HuntTarget {
     /// Its goal's quarry, as [`Behaviour::target`] answers.
     #[default]
     Quarry,
-    /// The target an interceptor holds unprovoked, keeping its goal
+    /// The target it holds on a goal that names none: an interceptor
+    /// unprovoked, or a warship whose warp is under way
     /// ([`Decision::holds_target`](crate::ai::Decision::holds_target)).
     Holds(ShipRef),
     /// None: its think dropped its target, or the one it held is gone
@@ -453,7 +534,7 @@ pub enum HuntTarget {
 
 impl Hunt {
     /// A hunt for `goal` that makes no call and drops nothing.
-    fn of(goal: Goal) -> Self {
+    pub(crate) fn of(goal: Goal) -> Self {
         Self {
             goal: Some(goal),
             ..Self::default()
@@ -463,7 +544,7 @@ impl Hunt {
     /// A hunt whose think drops its target (@0x8bc4e-0x8bcaf,
     /// @0x8d2fd-0x8d33a): [`Goal::Idle`] with no target, past its idle
     /// block or patrol, turning on the player as `turns_on_player` says.
-    fn dropped(turns_on_player: bool) -> Self {
+    pub(crate) fn dropped(turns_on_player: bool) -> Self {
         Self {
             turns_on_player,
             target: HuntTarget::Cleared,
@@ -479,7 +560,7 @@ impl Hunt {
             turns_on_player: self.turns_on_player,
             dropped_target: self.dropped_target,
             provokes: self.provokes,
-            forgets_provocation: false,
+            forgets_provocation: self.forgets_provocation,
             comm_call: None,
             calls_reinforcements: false,
             board_wait: None,
@@ -488,7 +569,7 @@ impl Hunt {
                 HuntTarget::Holds(ship) => Some(ship),
                 HuntTarget::Quarry | HuntTarget::Cleared => None,
             },
-            flees_hopeless: false,
+            writes_sub: false,
             plunders: None,
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,
@@ -500,6 +581,7 @@ impl Hunt {
             leaves_fleet: false,
             follows_jump: false,
             voice: None,
+            hopeless_flee: None,
         }
     }
 }
@@ -510,7 +592,7 @@ impl Hunt {
 /// @0x8bf3e-0x8bf83), or attacks it (goal 4), which the high level's
 /// state-4 block may then make a snipe in a hopeless chase
 /// ([`attack_drop`](crate::ai::attack_drop)).
-fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
+pub(crate) fn hunted(npc: &Npc, target: ShipRef, around: &Surroundings, retreat: Retreat) -> Goal {
     if retreats(npc, around, retreat) || (retreat.out_of_ammo && out_of_ammo::retreats(npc)) {
         Goal::Flee(target)
     } else {
@@ -551,7 +633,7 @@ fn government_word(npc: &Npc, around: &Surroundings, always_attacks: RuleSource)
 }
 
 /// Whether `npc` retreats as `retreat` says (see the module docs).
-fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
+pub(crate) fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
     let govts = around.govts;
     let shield = npc.reserves.shield;
     let below = |share: f32| shield.now < share * shield.max;
@@ -597,12 +679,25 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
 /// none (@0x8c0de). The
 /// original tests the fuel again before it stops (@0x8c058-0x8c0b2), which
 /// cannot pass after the first test failed, so its leave there
-/// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands.
-fn grounded(npc: &Npc, goal: Goal, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+/// (@0x8c0b4-0x8c0dc) is never taken. Any other goal stands, writing no
+/// travel stellar.
+///
+/// Its +0x6c: -1 before the pick (@0x8c00c) and the pick's result
+/// (@0x8c02a), so `Clear` with none; a pick writes none of its own, as
+/// [`travel::take`](super::travel::take) writes the goal's stellar.
+fn grounded(
+    npc: &Npc,
+    goal: Goal,
+    around: &Surroundings,
+    chance: &mut dyn Chance,
+) -> (Goal, Option<TravelWrite>) {
     if goal != Goal::JumpOut || leave::can_jump(npc, around.jump_fuel) {
-        return goal;
+        return (goal, None);
     }
-    super::random_stellar(npc, around, chance, Admit::All).unwrap_or(Goal::Wait)
+    match super::random_stellar(npc, around, chance, Admit::All) {
+        Some(pick) => (pick, Some(TravelWrite::Keep)),
+        None => (Goal::Wait, Some(TravelWrite::Clear)),
+    }
 }
 
 /// Nova's warship (see the module docs).
@@ -629,9 +724,8 @@ pub const WARSHIP_RETREAT: Retreat = Retreat {
     shields: true,
     person_coward: RuleSource::Engine,
     out_of_ammo: true,
-    searches_waiting: true,
+    search_gate: false,
     breaking_up: BreakingUp::Drops,
-    held_target: HeldTarget::Attacks,
 };
 
 impl Behaviour for Warship {
@@ -643,30 +737,59 @@ impl Behaviour for Warship {
     /// waiting ([`Goal::Wait`]) its wait for its fighters
     /// ([`wait::warship_waits`]), the hunt's call on the player kept
     /// either way; an attack fully dry is dropped
-    /// ([`out_of_ammo::drop_when_dry`]).
+    /// ([`out_of_ammo::drop_when_dry`]), its target with it. An
+    /// inspection, provoked or not, is kept: the state-7 block flies and
+    /// ends it ([`inspect_high`](super::inspect_high)). An ally or a
+    /// fleet-mate it attacks is dropped by the high level's state-4 block
+    /// in the same dispatch, keeping the target
+    /// ([`attack_drop`](super::attack_drop)), so its next think takes it
+    /// again.
+    ///
+    /// Its travel stellar: the idle block's pick ([`idle_block::pick_write`],
+    /// standing for both copies, @0x8b8ed-0x8b90b and @0x8ba31-0x8ba4f), then
+    /// the pick of a leave with no way to jump ([`grounded`]), then the
+    /// fully-dry drop's -1 (@0x8c117), each over the one before.
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
         let retreat = Retreat {
             person_coward: self.person_coward,
             ..WARSHIP_RETREAT
         };
-        let decision = hunt(
+        let hunt = hunt(
             npc,
             around,
             retreat,
             self.always_attacks,
             self.target,
             chance,
-        )
-        .or(|| {
-            if npc.goal == Goal::Wait {
-                wait::warship_waits(npc, around)
-            } else {
-                idle(npc, around, chance)
-            }
+        );
+        let idles = hunt.goal.is_none() && npc.goal != Goal::Wait;
+        let decision = hunt.or(|| match npc.goal {
+            Goal::Wait => wait::warship_waits(npc, around),
+            // Provoked or not it keeps goal 7 (@0x8bb2d, @0x8be10), which
+            // the state-7 block flies and ends whatever the type
+            // (`inspect_high`).
+            Goal::Inspect(_) => npc.goal,
+            _ => idle(npc, around, chance),
         });
-        let goal = grounded(npc, decision.goal, around, chance);
+        let picked = if idles {
+            idle_block::pick_write(npc, around, decision.goal)
+        } else {
+            decision.travel
+        };
+        let (goal, grounded_write) = grounded(npc, decision.goal, around, chance);
+        let dropped = out_of_ammo::drop_when_dry(npc, goal);
+        let dry = dropped != goal;
+        let travel = if dry {
+            TravelWrite::Clear
+        } else {
+            grounded_write.unwrap_or(picked)
+        };
         Decision {
-            goal: out_of_ammo::drop_when_dry(npc, goal),
+            goal: dropped,
+            travel,
+            // The fully-dry drop's +0x70 -1 (@0x8c111).
+            clears_target: decision.clears_target || dry,
+            holds_target: decision.holds_target.filter(|_| !dry),
             ..decision
         }
     }
@@ -675,6 +798,9 @@ impl Behaviour for Warship {
         fire::trigger(npc, around, self.fire)
     }
 
+    /// Its goal's quarry: a target it keeps on a goal that names none is
+    /// its think's ([`Decision::holds_target`]), or the high level's
+    /// ([`attack_drop`](super::attack_drop)).
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
         npc.goal.quarry()
     }
@@ -724,9 +850,14 @@ mod tests {
 
     /// [`decided`] through Nova's AI: the think, then the high level.
     fn flown(npcs: &[Npc], record: i16) -> Goal {
+        flown_decision(npcs, record).goal
+    }
+
+    /// [`flown`]'s whole decision.
+    fn flown_decision(npcs: &[Npc], record: i16) -> Decision {
         let (sites, govts) = (sites(), govts(0, 0));
         let around = around(&sites, npcs, &govts, (0.0, -100.0), record);
-        crate::ai::NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
+        crate::ai::NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0]))
     }
 
     #[test]
@@ -752,6 +883,106 @@ mod tests {
     }
 
     #[test]
+    fn a_warship_assisting_or_drifting_after_a_repair_fires_nothing() {
+        // The help's sub 0 (@0x82e17, @0x82de0) and subs 0, 1, 9, 0xb and
+        // 0xc end in `_AIEscortFireUnprovoked`, which returns for AI type 4
+        // or below (@0x80e59-0x80e61); sub 0xf fires nothing
+        // (@0x86a0b-0x8709d). Here the help's goals have no quarry
+        // (`Goal::quarry`), so the pick fires at none, a hostile ship in
+        // range though there is.
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut helper = police();
+        helper.target = Some(P);
+        helper.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                speed: 1000,
+                count: 20,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 100.0);
+        let docking = Some(Docking {
+            ship: P,
+            sub: DockSub::Dock,
+        });
+        for (goal, docking) in [
+            (Goal::Assist(crate::ai::Help::Repair), docking),
+            (Goal::Assist(crate::ai::Help::Repair), None),
+            (Goal::Assist(crate::ai::Help::Refuel), None),
+            (Goal::Drift, None),
+        ] {
+            helper.goal = goal;
+            helper.docking = docking;
+            let npcs = [helper.clone(), pirate.clone()];
+            let around = around(&sites, &npcs, &govts, (0.0, -50.0), -10);
+            assert_eq!(
+                Warship::default().trigger(&npcs[0], &around),
+                Trigger::default(),
+                "{goal:?} {docking:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_warship_unprovoked_keeps_an_inspection() {
+        // `_WarshipAI` runs no block for goal 7: the goal-0 block needs
+        // goal 0 (@0x8b835), the search goals 1, 0x14 or 2 (@0x8bb56) or
+        // 6 (@0x8bbab), and goal 7 jumps past the retreats (@0x8be10); the
+        // state-7 block ends it (`inspect_high`). A wanted player in view,
+        // the ship inspected there, out of reach, or gone.
+        let mut inspector = police();
+        inspector.goal = Goal::Inspect(n(2));
+        inspector.target = Some(n(2));
+        for npcs in [
+            vec![
+                inspector.clone(),
+                ship(2, TRADERS, AiType::WimpyTrader, 0.0, 500.0),
+            ],
+            vec![
+                inspector.clone(),
+                ship(2, TRADERS, AiType::WimpyTrader, 0.0, 50.0),
+            ],
+            vec![inspector.clone()],
+        ] {
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+            let mut chance = Draws::of(&[0]);
+            let decision = Warship::default().decision(&npcs[0], &around, &mut chance);
+            assert_eq!(decision.goal, Goal::Inspect(n(2)), "{} ships", npcs.len());
+            assert_eq!(decision.travel, TravelWrite::Keep);
+            assert!(chance.asked.is_empty(), "no search or pick");
+        }
+    }
+
+    #[test]
+    fn a_provoked_warship_keeps_an_inspection() {
+        // The provoked branch skips goal 7 (@0x8bb2d), its own drop needs
+        // goal 4 (@0x8bc4e), and goal 7 jumps past the retreats
+        // (@0x8be10): the state-7 block reads +0x70 (`inspect_high`).
+        let mut inspector = police();
+        inspector.goal = Goal::Inspect(n(2));
+        inspector.target = Some(n(3));
+        inspector.provoked = 5.0;
+        let npcs = [
+            inspector,
+            ship(2, TRADERS, AiType::WimpyTrader, 0.0, 500.0),
+            ship(3, PIRATES, AiType::Warship, 0.0, -500.0),
+        ];
+        let sites = sites();
+        let govts = govts(0, 0);
+        let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+        let mut chance = Draws::of(&[0]);
+        let decision = Warship::default().decision(&npcs[0], &around, &mut chance);
+        assert_eq!(decision.goal, Goal::Inspect(n(2)));
+        assert!(!decision.clears_target);
+        assert!(chance.asked.is_empty(), "no search or pick");
+    }
+
+    #[test]
     fn a_warship_attacks_a_wanted_player_a_pirate_or_whoever_provoked_it() {
         // The traders' allied police tolerate -9 at most.
         assert_eq!(decided(&[police()], -10), Goal::Attack(P));
@@ -772,6 +1003,9 @@ mod tests {
 
     #[test]
     fn a_warship_turns_on_the_ship_it_holds_provoked_or_not_an_ally_too() {
+        // The goal-0 block writes goal 4 on a +0x70 that is set, provoked
+        // or not (@0x8b843-0x8b860), and the state-4 block's ally drop then
+        // idles it, keeping +0x70 (@0x8e277-0x8e2db).
         let neutral = ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0);
         let mut calm = police();
         calm.target = Some(n(3));
@@ -782,10 +1016,17 @@ mod tests {
         );
         let trader = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 500.0);
         calm.provoked = 5.0;
+        let npcs = [calm, trader];
         assert_eq!(
-            decided(&[calm, trader], 0),
+            decided(&npcs, 0),
             Goal::Attack(n(3)),
             "provoked by an ally (@0x8bb0c-0x8bb44 asks no ally)"
+        );
+        let decision = flown_decision(&npcs, 0);
+        assert_eq!(
+            (decision.goal, decision.holds_target),
+            (Goal::Idle, Some(n(3))),
+            "the ally kept"
         );
     }
 
@@ -802,7 +1043,7 @@ mod tests {
             starting: false,
         };
         // The drop (@0x8bc4e-0x8bcaf) leaves goal 0 past the idle block
-        // (@0x8bcb4 → @0x8bf8c).
+        // (@0x8bca0-0x8bcb4 → @0x8bf8c).
         assert_eq!(decided(&[hunter.clone(), dying], 0), Goal::Idle);
         let mut wreck = neutral.clone();
         wreck.condition = Condition::Disabled;
@@ -822,14 +1063,27 @@ mod tests {
     #[test]
     fn a_warship_keeps_an_allied_target_or_one_of_its_fleet_for_the_attack_block() {
         // `_WarshipAI`'s drop (@0x8bc4e-0x8bcaf) asks no ally or fleet;
-        // the attack block's drops do (`attack_drop`).
+        // the attack block's drops do (`attack_drop`): the ally drop keeps
+        // +0x70 (@0x8e277-0x8e2db).
         let mut hunter = police();
         hunter.goal = Goal::Attack(n(3));
+        hunter.target = Some(n(3));
         let trader = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 500.0);
-        assert_eq!(decided(&[hunter.clone(), trader], 0), Goal::Attack(n(3)));
+        assert_eq!(
+            decided(&[hunter.clone(), trader.clone()], 0),
+            Goal::Attack(n(3))
+        );
+        let ally = flown_decision(&[hunter.clone(), trader], 0);
+        assert_eq!((ally.goal, ally.holds_target), (Goal::Idle, Some(n(3))));
         let mut escort = ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0);
         escort.leader = Some(NpcId(1));
-        assert_eq!(decided(&[hunter, escort], 0), Goal::Attack(n(3)));
+        assert_eq!(
+            decided(&[hunter.clone(), escort.clone()], 0),
+            Goal::Attack(n(3))
+        );
+        // The fleet walk drops nothing for a ship with no parent
+        // (@0x8e2f7): a leader on its own follower attacks it.
+        assert_eq!(flown(&[hunter, escort], 0), Goal::Attack(n(3)));
     }
 
     #[test]
@@ -1078,19 +1332,105 @@ mod tests {
     }
 
     #[test]
-    fn a_fleeing_warship_flees_until_its_attacker_is_gone() {
+    fn a_fleeing_warship_flees_on_from_a_ship_breaking_up_disabled_or_gone_until_the_high_level_ends_it()
+     {
+        // The provoked branch skips goal 3 (@0x8bb34), no search runs for
+        // it, and goal 3 jumps past the retreats (@0x8be1a): the think
+        // keeps the flight on +0x70 whatever that ship's state. Goal 3's
+        // block ends it once the slot goes (@0x8dff6, `flee_drop`).
         let mut runner = police();
         runner.goal = Goal::Flee(n(2));
+        runner.target = Some(n(2));
         let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
-        assert_eq!(decided(&[runner.clone(), pirate], 0), Goal::Flee(n(2)));
-        assert_eq!(decided(&[runner], 0), Goal::Land(StellarId(128)));
+        let other = ship(3, PIRATES, AiType::Warship, 0.0, 400.0);
+        let mut dying = pirate.clone();
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let mut disabled = pirate.clone();
+        disabled.condition = Condition::Disabled;
+        for npcs in [
+            vec![runner.clone(), pirate, other.clone()],
+            vec![runner.clone(), dying, other.clone()],
+            vec![runner.clone(), disabled, other.clone()],
+            vec![runner.clone(), other],
+        ] {
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            let mut chance = Draws::of(&[0]);
+            let decision = Warship::default().decision(&npcs[0], &around, &mut chance);
+            assert_eq!(decision.goal, Goal::Flee(n(2)), "{:?}", npcs[1].id);
+            assert!(!decision.clears_target);
+            assert!(chance.asked.is_empty(), "no search");
+        }
+    }
+
+    #[test]
+    fn a_fleeing_hunter_whose_target_a_hit_moved_flees_the_hitter() {
+        // A hit rewrites +0x70 (`_DamageShip` @0x3bcf6) and goal 3's block
+        // reads it alone (@0x8dfeb-0x8e0dc): the flight follows it.
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut runner = ship(1, POLICE, ai_type, 0.0, 0.0);
+            runner.goal = Goal::Flee(n(2));
+            runner.target = Some(n(3));
+            runner.provoked = 5.0;
+            let hitter = ship(3, PIRATES, AiType::Warship, 0.0, 400.0);
+            let npcs = [runner, hitter];
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            let goal = crate::ai::NovaAi::default().decide(&npcs[0], &around, &mut Draws::of(&[0]));
+            assert_eq!(goal, Goal::Flee(n(3)), "{ai_type:?}");
+        }
+    }
+
+    #[test]
+    fn a_fleeing_hunter_whose_target_was_cleared_idles_with_no_search_though_its_quarry_stays() {
+        // A hit moved +0x70 to a ship whose slot then went, so the slot
+        // test made it -1 while the goal's quarry is still flying. The
+        // warship's think jumps past everything for +0x70 -1 (@0x8bdfe),
+        // the interceptor's returns (@0x8d13f → @0x8d343 → @0x8d448), and
+        // goal 3's block writes goal 0, sub 0 and +0x96 0 (@0x8dff6 →
+        // @0x8e228-0x8e23d): the flight ends that think, with no search.
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            let mut runner = ship(1, POLICE, ai_type, 0.0, 0.0);
+            runner.goal = Goal::Flee(n(2));
+            runner.target = None;
+            runner.provoked = 5.0;
+            let quarry = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+            let pirate = ship(3, PIRATES, AiType::Warship, 0.0, 400.0);
+            let npcs = [runner, quarry, pirate];
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+            let mut chance = Draws::of(&[0]);
+            let decision = crate::ai::NovaAi::default().decision(&npcs[0], &around, &mut chance);
+            assert_eq!(
+                (
+                    decision.goal,
+                    decision.clears_target,
+                    decision.forgets_provocation,
+                    decision.travel,
+                ),
+                (Goal::Idle, true, true, TravelWrite::Keep),
+                "{ai_type:?}"
+            );
+            assert!(chance.asked.is_empty(), "no search: {ai_type:?}");
+        }
     }
 
     #[test]
     fn a_warship_keeps_fleeing_a_ship_gliding_in_or_breaking_up() {
-        // The keep reads goal 3 and the slot alone (@0x89eae).
+        // The keep reads goal 3 and the slot alone (@0x89eae). The think
+        // keeps goal 3 on +0x70 whatever that ship's state (@0x8bb34,
+        // @0x8bdfe); a slot freed is the high level's to end, its slot
+        // test clearing +0x70 and goal 3's block writing goal 0
+        // (`provocation::with_flight_end`).
         let mut runner = police();
         runner.goal = Goal::Flee(n(2));
+        runner.target = Some(n(2));
         let mut gliding = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         gliding.mode = Mode::JumpingIn { tick: 1 };
         assert_eq!(decided(&[runner.clone(), gliding], 0), Goal::Flee(n(2)));
@@ -1102,7 +1442,9 @@ mod tests {
         assert_eq!(decided(&[runner.clone(), dying], 0), Goal::Flee(n(2)));
         let mut destroyed = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         destroyed.condition = Condition::Destroyed;
-        assert_eq!(decided(&[runner, destroyed], 0), Goal::Land(StellarId(128)));
+        let gone = [runner, destroyed];
+        assert_eq!(decided(&gone, 0), Goal::Flee(n(2)));
+        assert_eq!(flown(&gone, 0), Goal::Idle);
     }
 
     #[test]
@@ -1524,7 +1866,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 holds_target: None,
-                flees_hopeless: false,
+                writes_sub: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
@@ -1536,6 +1878,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             }
         );
         assert!(
@@ -1656,6 +1999,7 @@ mod tests {
         let fleeing = [
             Npc {
                 goal: Goal::Flee(n(3)),
+                target: Some(n(3)),
                 ..police()
             },
             hired(),
@@ -1752,13 +2096,25 @@ mod tests {
         assert_eq!(worded(flags, &npcs, INTACT), Goal::Flee(P), "odds");
         // Fleeing the player is a threat to it (state 3 is none
         // `_IsThreatToPlayer` excludes), so the word passes it by.
-        let fled = [outnumbered(worn(14.9, 3, Goal::Flee(P))), strong];
+        let fled = [
+            outnumbered(Npc {
+                target: Some(P),
+                ..worn(14.9, 3, Goal::Flee(P))
+            }),
+            strong,
+        ];
         assert_eq!(
             worded(flags, &fled, INTACT),
             Goal::Flee(P),
             "it keeps fleeing"
         );
-        let rested = [worn(30.0, 3, Goal::Flee(P)), pirate()];
+        let rested = [
+            Npc {
+                target: Some(P),
+                ..worn(30.0, 3, Goal::Flee(P))
+            },
+            pirate(),
+        ];
         assert_eq!(
             worded(flags, &rested, INTACT),
             Goal::Flee(P),
@@ -1937,7 +2293,8 @@ mod tests {
             let bible = RuleSource::Bible;
             assert_eq!(
                 blessed_word(ALWAYS, std::slice::from_ref(&npc), true, bible),
-                IDLE
+                Goal::Idle,
+                "goal 4's drop of the engine's own, as the fleet drop idles it"
             );
             assert_eq!(
                 blessed_word(ALWAYS, std::slice::from_ref(&npc), true, RuleSource::Engine),
@@ -2044,7 +2401,14 @@ mod tests {
             turning(Goal::Attack(n(2)), false),
             "it keeps its NPC fight"
         );
-        assert_eq!(decide(&[police()]), turning(IDLE, false), "nothing");
+        assert_eq!(
+            decide(&[police()]),
+            Decision {
+                clears_target: true,
+                ..turning(IDLE, false)
+            },
+            "nothing: the idle block runs with +0x70 -1 (@0x8b865)"
+        );
         let scanned = [crate::ai::fixture::scanning(attacking(n(2))), pirate()];
         assert_eq!(
             decide(&scanned),
@@ -2068,7 +2432,7 @@ mod tests {
             board_wait: None,
             clears_target: false,
             holds_target: None,
-            flees_hopeless: false,
+            writes_sub: false,
             plunders: None,
             lost_sight: None,
             travel: crate::ai::travel::TravelWrite::Keep,
@@ -2080,6 +2444,7 @@ mod tests {
             leaves_fleet: false,
             follows_jump: false,
             voice: None,
+            hopeless_flee: None,
         }
     }
 
@@ -2124,7 +2489,7 @@ mod tests {
                 clears_target: true,
                 ..turning(DROPPED, true)
             },
-            "a disabled player let go (@0x8bc58-0x8bca9), past the idle block"
+            "a disabled player let go, +0x70 -1 (@0x8bc58-0x8bca9), past the idle block"
         );
         assert_eq!(
             worded_decision(ALWAYS, &[attacking(P), pirate()], intact, 0.0),
@@ -2176,7 +2541,7 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 holds_target: None,
-                flees_hopeless: false,
+                writes_sub: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
@@ -2188,6 +2553,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             }
         );
         let mut calm = grudger;
@@ -2206,9 +2572,9 @@ mod tests {
                 comm_call: None,
                 calls_reinforcements: false,
                 board_wait: None,
-                clears_target: false,
+                clears_target: true,
                 holds_target: None,
-                flees_hopeless: false,
+                writes_sub: false,
                 plunders: None,
                 lost_sight: None,
                 travel: crate::ai::travel::TravelWrite::Keep,
@@ -2220,8 +2586,9 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             },
-            "no grudge: dropped, and nothing picked"
+            "no grudge: dropped, +0x70 -1 (@0x8b800), and nothing picked"
         );
     }
 
@@ -2296,7 +2663,16 @@ mod tests {
             worded(0, &[short(Goal::Hold, DRY, true)], INTACT),
             Goal::Hold
         );
-        let fleeing = short(Goal::Flee(n(2)), DRY, true);
+        // Fleeing with +0x70 -1, goal 3's block ends the flight
+        // (@0x8dff6 → @0x8e228-0x8e23d); with its target, it is state 3
+        // already.
+        let mut fleeing = short(Goal::Flee(n(2)), DRY, true);
+        assert_eq!(
+            worded(0, &[fleeing.clone(), pirate()], INTACT),
+            Goal::Idle,
+            "no target"
+        );
+        fleeing.target = Some(n(2));
         assert_eq!(
             worded(0, &[fleeing, pirate()], INTACT),
             Goal::Flee(n(2)),
@@ -2314,8 +2690,12 @@ mod tests {
         let npcs = [short(Goal::Attack(n(2)), DRY, false), pirate()];
         assert_eq!(
             worded_decision(ALWAYS, &npcs, Condition::Intact, 0.0),
-            turning(Goal::Idle, true),
-            "fully dry without 0x0080, it drops the player at once"
+            Decision {
+                travel: TravelWrite::Clear,
+                clears_target: true,
+                ..turning(Goal::Idle, true)
+            },
+            "fully dry without 0x0080, it drops the player at once, +0x70 and +0x6c -1 (@0x8c111, @0x8c117)"
         );
     }
 
@@ -2355,6 +2735,87 @@ mod tests {
             leaving(99, &[gate], &mut Draws::of(&[0])),
             Goal::EnterGate(StellarId(300))
         );
+    }
+
+    // Its +0x6c.
+
+    /// A stellar held before the think.
+    const HELD: Option<StellarId> = Some(StellarId(150));
+
+    #[test]
+    fn its_decision_clears_the_travel_stellar_when_its_pick_fails() {
+        // The idle block's -1 (@0x8b8ed, @0x8b90b).
+        let unlandable = [LandingSite {
+            flags: 0,
+            ..planet(128, 0.0, 0.0)
+        }];
+        let govts = govts(0, 0);
+        let warship = Npc {
+            travel: HELD,
+            ..police()
+        };
+        let npcs = [warship.clone()];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&unlandable, &npcs)
+        };
+        let decision = Warship::default().decision(&warship, &around, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::JumpOut);
+        assert_eq!(decision.travel, TravelWrite::Clear);
+        let sites = sites();
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&sites, &npcs)
+        };
+        let decision = Warship::default().decision(&warship, &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, IDLE);
+        assert_eq!(decision.travel, TravelWrite::Keep, "the pick's, as taken");
+    }
+
+    #[test]
+    fn leaving_with_no_way_to_jump_and_no_pick_clears_it() {
+        // -1 (@0x8c00c), then the failed pick's -1 (@0x8c02a).
+        let govts = govts(0, 0);
+        let decide = |sites: &[LandingSite], chance: &mut Draws| {
+            let warship = Npc {
+                goal: Goal::JumpOut,
+                class_fuel: 0,
+                travel: HELD,
+                ..police()
+            };
+            let npcs = [warship.clone()];
+            let around = Surroundings {
+                govts: &govts,
+                ..Surroundings::new(sites, &npcs)
+            };
+            Warship::default().decision(&warship, &around, chance)
+        };
+        let decision = decide(&[], &mut Draws::of(&[]));
+        assert_eq!(
+            (decision.goal, decision.travel),
+            (Goal::Wait, TravelWrite::Clear)
+        );
+        let one = [planet(128, -300.0, -300.0)];
+        let decision = decide(&one, &mut Draws::of(&[0]));
+        assert_eq!(
+            (decision.goal, decision.travel),
+            (Goal::Land(StellarId(128)), TravelWrite::Keep),
+            "a pick writes none of its own"
+        );
+    }
+
+    #[test]
+    fn the_fully_dry_drop_clears_it() {
+        // State 0, target and +0x6c -1 (@0x8c0ff-0x8c117).
+        let mut dry = short(Goal::Attack(n(2)), DRY, false);
+        dry.travel = HELD;
+        let decision = worded_decision(0, &[dry, pirate()], Condition::Intact, 0.0);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert_eq!(decision.travel, TravelWrite::Clear);
+        let mut armed = short(Goal::Attack(n(2)), ONLY_UNLIMITED, false);
+        armed.travel = HELD;
+        let decision = worded_decision(0, &[armed, pirate()], Condition::Intact, 0.0);
+        assert_eq!(decision.travel, TravelWrite::Keep, "an attack writes none");
     }
 
     #[test]
@@ -2436,6 +2897,86 @@ mod tests {
             );
             assert!(chance.asked.is_empty(), "no pick");
         }
+    }
+
+    #[test]
+    fn a_warships_target_step_reads_its_goals_quarry() {
+        // Goal 4's ally drop keeps +0x70 (@0x8e2d2) by its own decision
+        // (`Decision::holds_target`); the target step reads the goal's
+        // quarry alone.
+        let sites = sites();
+        let govts = govts(0, 0);
+        let mut idle = police();
+        idle.target = Some(n(2));
+        let npcs = [idle.clone()];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        assert_eq!(Warship::default().target(&npcs[0], &around), None);
+        idle.goal = Goal::Land(StellarId(128));
+        assert_eq!(Warship::default().target(&idle, &around), None);
+        idle.goal = Goal::Attack(n(3));
+        assert_eq!(Warship::default().target(&idle, &around), Some(n(3)));
+    }
+
+    /// The police warship's decision among `npcs` (it first), its police of
+    /// `police_flags`, the player 100 above of record `record`.
+    fn decision_of(police_flags: u16, npcs: &[Npc], record: i16) -> Decision {
+        let govts = govts(0, police_flags);
+        let sites = sites();
+        let around = around(&sites, npcs, &govts, (0.0, -100.0), record);
+        Warship::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]))
+    }
+
+    #[test]
+    fn a_word_that_drops_the_target_with_nothing_to_pick_clears_it() {
+        // The 0x0040 word writes +0x70 -1 and goal 0 (@0x8b800), and a
+        // failed pick leaves it so.
+        let mut threat = police();
+        threat.goal = Goal::Attack(P);
+        threat.target = Some(P);
+        let decision = decision_of(NEVER_ATTACKS_PLAYER, &[threat], 0);
+        assert!(decision.dropped_target);
+        assert_eq!(decision.goal, IDLE);
+        assert!(decision.clears_target);
+    }
+
+    #[test]
+    fn a_fresh_pick_dropped_at_once_clears_the_target() {
+        // The own drop writes goal 0 and +0x70 -1 (@0x8bca0-0x8bca9) after
+        // the idle block, and the think goes on past it (@0x8bcaf →
+        // @0x8bf8c, which reads only state 2).
+        let mut dying = ship(2, PIRATES, AiType::Warship, 0.0, 50.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        let decision = decision_of(0, &[trader_cop(true), dying], 0);
+        assert_eq!(decision.goal, Goal::Idle);
+        assert!(decision.clears_target);
+    }
+
+    #[test]
+    fn a_waiting_warship_that_finds_nothing_clears_its_target() {
+        // The wait writes +0x70 -1 before its search (@0x8bbb9).
+        for others in [vec![fighter(2, 1, Condition::Intact)], Vec::new()] {
+            let mut stopped = waiting();
+            stopped.target = Some(n(3));
+            let npcs: Vec<Npc> = std::iter::once(stopped).chain(others).collect();
+            let decision = decision_of(0, &npcs, 0);
+            assert!(decision.clears_target, "{:?}", decision.goal);
+        }
+    }
+
+    #[test]
+    fn a_fully_dry_warship_drops_its_attack_and_its_target() {
+        // Goal 0, sub 0, +0x70 -1 (@0x8c111) and +0x6c -1 (@0x8c117).
+        let mut hunter = short_of_ammo(trader_cop(false), AmmoLeft::Dry, false);
+        hunter.goal = Goal::Attack(n(2));
+        hunter.target = Some(n(2));
+        let decision = decision_of(0, &[hunter, pirate()], 0);
+        assert_eq!(
+            (decision.goal, decision.travel, decision.clears_target),
+            (Goal::Idle, TravelWrite::Clear, true)
+        );
     }
 
     #[test]

@@ -22,8 +22,9 @@
 //!     patrol and inspection (@0x8cc6d-0x8d136) and its odds retreat: it
 //!     flees the ship it attacks, snipes at or inspects (an inspection
 //!     holds its ship as the target, @0x8ce34-0x8ce42), and with none,
-//!     patrolling, holding or idle, it stops ([`after_patrol`]); leaving
-//!     by hyperspace (state 2) it leaves.
+//!     patrolling, holding or idle, it flees the target it kept (+0x70,
+//!     such as an ally goal 4's drop spared) or with none stops
+//!     ([`after_patrol`]); leaving by hyperspace (state 2) it leaves.
 //!   - A leaderless warship of a government with `Flags` 0x1000
 //!     ([`PLUNDERS`]) thinks as `_PirateWarshipAI` (`_AIDispatch`
 //!     @0x8ffc8-0x8fff0, [`pirate`](super::pirate)), which has no `Flags2`
@@ -95,19 +96,22 @@ pub fn drop_when_dry(npc: &Npc, goal: Goal) -> Goal {
 }
 
 /// The goal of an interceptor `npc` that, with nothing to fight, has
-/// decided on `goal` by its patrol, inspection or hold, after its
-/// out-of-ammo retreat (see the module docs): retreating, it flees the
-/// ship it inspects, and stops ([`Goal::Idle`]) otherwise, but leaving by
-/// hyperspace ([`Goal::JumpOut`], state 2) it leaves.
+/// decided on `goal` by its patrol, inspection or hold, or kept behind its
+/// gate, after its out-of-ammo retreat (see the module docs): retreating,
+/// it flees the ship it inspects or plunders (+0x70, a plunder kept
+/// behind the gate, @0x8d343-0x8d391), or the target it kept with any
+/// other goal ([`Npc::target`], such as the ally goal 4's drop spared,
+/// [`held_attack`](super::held_attack)), and stops ([`Goal::Idle`]) with
+/// none, but leaving by hyperspace ([`Goal::JumpOut`], state 2) it leaves.
 #[must_use]
 pub fn after_patrol(npc: &Npc, goal: Goal) -> Goal {
     if !retreats(npc) {
         return goal;
     }
     match goal {
-        Goal::Inspect(ship) => Goal::Flee(ship),
+        Goal::Inspect(ship) | Goal::Plunder { ship, .. } => Goal::Flee(ship),
         Goal::JumpOut => goal,
-        _ => Goal::Idle,
+        _ => npc.target.map_or(Goal::Idle, Goal::Flee),
     }
 }
 
@@ -117,7 +121,7 @@ pub fn after_patrol(npc: &Npc, goal: Goal) -> Goal {
 /// once, its provocation zeroed (@0x8dff6 → @0x8e228-0x8e23d).
 #[must_use]
 pub fn stops(npc: &Npc, goal: Goal) -> bool {
-    retreats(npc) && !matches!(goal, Goal::Inspect(_) | Goal::JumpOut)
+    retreats(npc) && after_patrol(npc, goal) == Goal::Idle
 }
 
 #[cfg(test)]
@@ -173,6 +177,22 @@ mod tests {
         }
         let armed = police(AmmoLeft::Armed, true);
         assert_eq!(after_patrol(&armed, Goal::Inspect(p)), Goal::Inspect(p));
+    }
+
+    #[test]
+    fn after_its_patrol_a_retreating_interceptor_flees_the_target_it_kept_and_does_not_stop() {
+        // Goal 3 on +0x70 whatever the goal (@0x8d343-0x8d391): an ally
+        // goal 4's drop spared is fled.
+        let mut dry = police(AmmoLeft::Dry, true);
+        dry.target = Some(n(2));
+        for goal in [Goal::Idle, Goal::Land(crate::catalog::StellarId(128))] {
+            assert_eq!(after_patrol(&dry, goal), Goal::Flee(n(2)), "{goal:?}");
+            assert!(!stops(&dry, goal), "{goal:?}");
+        }
+        let mut armed = police(AmmoLeft::Armed, true);
+        armed.target = Some(n(2));
+        assert_eq!(after_patrol(&armed, Goal::Idle), Goal::Idle);
+        assert!(!stops(&armed, Goal::Idle), "no retreat, no stop");
     }
 
     #[test]
