@@ -721,6 +721,21 @@ mod tests {
     }
 
     #[test]
+    fn a_wrecks_berth_taken_in_the_ship_loop_is_read_out_old_to_new() {
+        // A wreck's display frees its slot (@0x2dee0) and an escape ship's
+        // launch later in the loop takes it (@0x354ea): the wreck is still
+        // in the system, not yet taken out, and no record names it.
+        let mut traffic = Traffic::new();
+        let old = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        traffic.npcs[0].condition = Condition::Destroyed;
+        traffic.set_ship_loop(true);
+        let new = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);
+        assert!(traffic.gone.ships().is_empty(), "no record");
+        assert!(traffic.npcs.iter().any(|npc| npc.id == old), "still there");
+        assert_eq!(traffic.take_berths_taken(), [BerthTaken { old, new }]);
+    }
+
+    #[test]
     fn a_spawn_into_a_berth_no_ship_left_reads_out_nothing() {
         let mut traffic = Traffic::new();
         let gone = traffic.add_npc_at(moving(0, Vec2::ZERO), 3);

@@ -158,7 +158,7 @@ mod tests {
     use crate::session::tests::{OUT, armed, bound_for_131, facing_an_npc, knocking, tractor_beam};
     use crate::testkit::catalog;
     use crate::testkit::{work, work_with};
-    use crate::traffic::npc::NpcId;
+    use crate::traffic::npc::{Npc, NpcId};
     use nova_sim_base::NeverFires;
 
     const NPC: ShipRef = ShipRef::Npc(NpcId(0));
@@ -349,17 +349,34 @@ mod tests {
         assert_eq!(gone.player().velocity, Vec2::ZERO);
     }
 
-    /// `held`'s session with NPC 0 freed through the traffic and its berth
-    /// taken by a newcomer moving at `velocity`, before the player's next
-    /// hold, as a gate entry and a later slot's escape launch in the ship
-    /// loop would: the session and the newcomer.
+    /// `old`, wrecked, its slot freed at its display in the ship loop
+    /// (@0x2dee0) and taken there by `newcomer`, a later slot's escape
+    /// launch (@0x354ea), then taken out after the loop: the newcomer's
+    /// number. The wreck is in the system, with no record, as the take
+    /// reads it.
+    fn wreck_taken(session: &mut Session, old: NpcId, newcomer: Npc) -> NpcId {
+        let traffic = &mut session.space.traffic;
+        let wreck = (traffic.npcs_mut().iter_mut())
+            .find(|npc| npc.id == old)
+            .expect("there");
+        wreck.condition = Condition::Destroyed;
+        let berth = wreck.berth;
+        traffic.set_ship_loop(true);
+        let newcomer = traffic.add_npc_at(newcomer, berth);
+        traffic.set_ship_loop(false);
+        traffic.remove_destroyed(old);
+        newcomer
+    }
+
+    /// `held`'s session with NPC 0's berth taken by a newcomer moving at
+    /// `velocity` before the player's next hold, in the ship loop, by a
+    /// later slot's escape launch past NPC 0's wreck ([`wreck_taken`]):
+    /// the session and the newcomer.
     fn taken(velocity: Vec2) -> (Session, NpcId) {
         let mut session = held(Vec2::new(-2.0, 2.0));
         let mut newcomer = session.space.traffic.npcs()[0].clone();
-        let berth = newcomer.berth;
         newcomer.state.velocity = velocity;
-        session.space.traffic.remove_killed(NpcId(0));
-        let newcomer = session.space.traffic.add_npc_at(newcomer, berth);
+        let newcomer = wreck_taken(&mut session, NpcId(0), newcomer);
         (session, newcomer)
     }
 
@@ -399,11 +416,7 @@ mod tests {
             .space
             .traffic
             .add_npc_at(other.clone(), other.berth + 1);
-        session.space.traffic.remove_killed(gone);
-        session
-            .space
-            .traffic
-            .add_npc_at(other.clone(), other.berth + 1);
+        wreck_taken(&mut session, gone, other);
         let step = session
             .ship
             .tractor_step(&session.pilot, &session.setup, session.mode.jump());
@@ -414,14 +427,13 @@ mod tests {
 
     #[test]
     fn a_player_follows_a_chain_of_takes_of_its_holders_berth() {
+        // Two takes before one hold span two windows (a wreck's in the ship
+        // loop, then a leave and a launch in the next AI loop, say); the
+        // traffic reads each take alike, so both are wrecks' here.
         let (mut session, first) = taken(Vec2::new(-3.0, 0.0));
         let mut second = session.space.traffic.npcs()[0].clone();
         second.state.velocity = Vec2::new(0.0, 3.0);
-        session.space.traffic.remove_killed(first);
-        let second = session
-            .space
-            .traffic
-            .add_npc_at(second.clone(), second.berth);
+        let second = wreck_taken(&mut session, first, second);
         let step = session
             .ship
             .tractor_step(&session.pilot, &session.setup, session.mode.jump());
