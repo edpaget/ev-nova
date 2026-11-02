@@ -1600,6 +1600,21 @@ mod tests {
     }
 
     #[test]
+    fn display_frames_shorter_than_a_tick_count_ticks_rounded_to_the_nearest() {
+        let player = MockMoviePlayer::playing((160, 120), 100);
+        let mut stage = staged(&player, 0);
+        stage.begin();
+        for _ in 0..25 {
+            stage.tick(Duration::from_millis(10));
+        }
+        assert_eq!(
+            player.presented(),
+            [1, 13, 25],
+            "0.6 ticks a frame: ticks 1, 8 and 15 once rounded"
+        );
+    }
+
+    #[test]
     fn the_clock_runs_between_services() {
         let player = MockMoviePlayer::playing((160, 120), 100);
         let mut stage = staged(&player, 0);
