@@ -1182,6 +1182,56 @@ fn the_mission_computers_selected_text_is_loaded_through_flight() {
     assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
 }
 
+#[test]
+fn a_press_dragged_onto_the_computers_row_loads_its_text_at_the_release() {
+    // As above, only a loaded text draws its letters as 4s.
+    let offer = "a".repeat(24);
+    let data = game_data_built(&timed(mission(128, 200, 201)), bar_job(), &offer, |fork| {
+        fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+    });
+    let store = MemoryPilots::new();
+    let pilot = Pilot::new(data.as_ref(), "Ada").expect("a pilot");
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    let shown = |game: &Game| {
+        game.spaceport()
+            .mission_computer()
+            .and_then(|computer| computer.dialog())
+            .and_then(|dialog| dialog.text(COMPUTER_TEXT_ITEM))
+            .expect("the text item")
+            .lines()
+            .concat()
+    };
+    let row = game
+        .spaceport()
+        .mission_computer()
+        .and_then(|computer| computer.rows())
+        .and_then(|rows| rows.row_bounds(0))
+        .expect("row 0 shown");
+    let below = Point::new(row.center().x, row.max.y + 20.0);
+    game.click(below);
+    assert_eq!(shown(&game), "", "a click on no row selects nothing");
+    let pointer = |at: Point| WindowEvent::PointerMoved {
+        px: (f64::from(at.x), f64::from(at.y)),
+    };
+    let button = |pressed| WindowEvent::PointerButton {
+        button: nova_view::MouseButton::Left,
+        pressed,
+    };
+    game.send(pointer(below));
+    game.send(button(true));
+    game.send(pointer(row.center()));
+    assert_eq!(shown(&game), "", "nothing loads while the press is held");
+    game.send(button(false));
+    assert_eq!(
+        shown(&game),
+        "4".repeat(24),
+        "loaded through flight in the release's pass"
+    );
+}
+
 /// Whether the frame drew `text`, and drew no conditional text left
 /// unresolved.
 fn shows_resolved(frame: &Frame, text: &str) -> bool {
