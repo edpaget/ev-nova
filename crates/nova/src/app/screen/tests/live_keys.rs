@@ -501,9 +501,8 @@ fn a_hail_key_held_from_before_a_mission_text_waits_for_its_release() {
     });
     close_text(&mut screen);
     screen.tick(TICK * 4);
-    let s = screen.take_sounds();
-    eprintln!("SOUNDS {s:?}");
-    assert!(!refused(&s), "no second hail");
+    let sounds = screen.take_sounds();
+    assert!(!refused(&sounds), "no second hail: {sounds:?}");
     screen.input(&key(HAIL_KEY, false));
     screen.input(&key(HAIL_KEY, true));
     assert!(refused(&screen.take_sounds()), "pressed afresh, it hails");
