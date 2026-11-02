@@ -20,6 +20,12 @@
 //!   jump's effect, and the session has put the white out
 //!   (@0x40298-0x402aa), so none fades back (@0x6840b-0x6841f).
 //!
+//! No `_SetAllKeyCmdFlags` follows either dialog (`_DoEscortLand` runs
+//! inside the port's loop, and @0x6c620 has no site after it in
+//! `_HandlePlayer`'s pass), so over flight a latched key pressed under the
+//! defection and still down at its close acts on the next step (see
+//! `live_input`); over the spaceport the take-off's own site latches it.
+//!
 //! On any other side (a map or info screen over flight) they stay kept
 //! until flight shows again. Without the dialogs' "Desc Dialog" they are
 //! dropped, as every text without it is.

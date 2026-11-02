@@ -11,6 +11,7 @@
 //! which is large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines};
+use super::live_keys::{back, latches_its_close};
 use super::*;
 use nova_sim::board_repair::Recovery;
 use nova_sim::flight_frame::FlightEvent;
@@ -236,6 +237,92 @@ fn a_recovery_latches_with_no_plunder_and_leaves_its_line_to_the_flights_message
     assert!(view.board());
     assert_eq!(view.take_boarding(), None, "no plunder");
     assert_eq!(view.message(), None, "the flight's message says it");
+}
+
+// `_HandlePlayerBoardAttempt`'s sites: the plunder (@0x659f1, @0x65f3e),
+// the boarding offer (@0x65956) and the cargo pickup (@0x6535a), which
+// `_SetAllKeyCmdFlags` follows whatever `_DoMissionCargoPickup` answered.
+
+#[test]
+fn the_plunder_dialogs_and_the_boarding_offers_close_latch_every_key() {
+    let mut view = sol();
+    opened(&mut view);
+    assert!(view.board());
+    latches_its_close(&mut view);
+
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::Boarded(Boarding::Offered(VenueOffer::Prompt(
+            super::faked_hail::prompt("Help?"),
+        ))));
+    assert!(view.board());
+    latches_its_close(&mut view);
+}
+
+#[test]
+fn the_pickup_refused_for_room_latches_its_texts_close() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::NoRoomForCargo));
+    assert!(view.board(), "it latches the board");
+    assert_eq!(view.message(), Some(CANT_BOARD), "#130");
+    latches_its_close(&mut view);
+}
+
+#[test]
+fn the_other_refusals_mark_no_site() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::CantBoard));
+    view.board();
+    unlatched_close(&mut view);
+}
+
+#[test]
+fn a_pickup_that_fits_latches_the_keys_held_at_the_next_pass() {
+    let picked = MissionBoardLine::Retrieved { cargo: None };
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::Boarded(Boarding::MissionShip(Some(picked.clone()))));
+    view.held.insert(JUMP_KEY);
+    view.board();
+    view.tick(TICK);
+    assert!(view.latched_down.contains(&JUMP_KEY), "latched");
+    // A failed mission's ship takes the same pickup, then the plunder.
+    let mut view = sol();
+    view.sim.queue_event(FlightEvent::BoardLine(picked));
+    view.sim.queue_answer(Answer::Boarded(Boarding::Repelled));
+    view.held.insert(JUMP_KEY);
+    view.board();
+    view.tick(TICK);
+    assert!(
+        view.latched_down.contains(&JUMP_KEY),
+        "latched by the pickup"
+    );
+}
+
+#[test]
+fn the_assist_paths_line_and_a_recovery_mark_no_site() {
+    let answers = [
+        Boarding::MissionShip(Some(MissionBoardLine::Boarded)),
+        Boarding::MissionShip(None),
+        Boarding::Recovered(Recovery::EscortRepaired),
+        Boarding::Repelled,
+    ];
+    for answer in answers {
+        let mut view = sol();
+        view.sim.queue_answer(Answer::Boarded(answer));
+        view.board();
+        unlatched_close(&mut view);
+    }
+}
+
+/// Asserts that `view`'s next close reads by the latches, no site marked:
+/// J pressed under it comes back as a press.
+fn unlatched_close(view: &mut Faked) {
+    view.let_go_of_input();
+    let replay = back(view, [JUMP_KEY], [], false);
+    assert_eq!(replay, [key(JUMP_KEY, true)], "no site");
 }
 
 #[test]

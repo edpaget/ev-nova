@@ -396,3 +396,29 @@ fn a_q_leave_settles_the_escorts_once_though_the_cash_covers_a_mark_left() {
     );
     assert_eq!(pilot(&screen).cash, 10_000_000, "no upgrade charged");
 }
+
+#[test]
+fn a_player_info_key_pressed_under_an_arrivals_defection_and_still_down_opens_it_after() {
+    // `_DoEscortPayment` (@0x6c620) shows the text with no
+    // `_SetAllKeyCmdFlags` after it, so P's latch is clear at the next
+    // pass.
+    let (mut screen, _) = lit_with_a_defector();
+    tick_past_the_arrival(&mut screen);
+    assert_eq!(flight_text(&screen).as_deref(), Some(DEFECTED_ONE));
+    let frame = Duration::from_nanos(1_000_000_000 / 60);
+    let mut faded_for = Duration::ZERO;
+    while faded_for < TEXT_FADE_IN_FOR + frame {
+        screen.tick(frame);
+        faded_for += frame;
+    }
+    screen.input(&key(nova_view::ui::player_info::PLAYER_INFO_KEY, true));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    for _ in 0..600 {
+        if screen.showing() == Showing::PlayerInfo {
+            return;
+        }
+        screen.tick(frame);
+    }
+    panic!("no player info: {:?}", screen.showing());
+}

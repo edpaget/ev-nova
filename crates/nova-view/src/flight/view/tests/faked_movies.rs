@@ -635,6 +635,73 @@ fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
     assert!(!view.held.contains(&BOARD_KEY), "latched (@0x6429c)");
 }
 
+/// J and B pressed and let go, and the zoom tapped, under the movie
+/// playing in front of `view`.
+fn pressed_under_the_movie(view: &mut Faked) {
+    assert!(view.playing());
+    for k in [JUMP_KEY, BOARD_KEY, ZOOM_IN_KEY] {
+        view.input(&key(k, true));
+        view.input(&key(k, false));
+    }
+}
+
+#[test]
+fn a_gates_movie_leaves_nothing_to_replay() {
+    // Flight reads no queued key (`_IterateInGameEventLoop` @0x56a6b),
+    // and `_SetAllKeyCmdFlags` follows each gate's movie (@0x639f2,
+    // @0x6429c).
+    let (mut view, _) = at_the_filmed_hypergate(filmed(&[131], &[]), true);
+    view.sim
+        .queue_screen(ScreenAnswer::GateEntryDesc(Some(131)));
+    view.close_map();
+    pressed_under_the_movie(&mut view);
+    came_out_in_alpha(&mut view, SimMessage::ExitedHypergate(SystemId(131)));
+    view.sim.queue_answer(arrived());
+    run_out(&mut view);
+    assert_eq!(view.take_movie_replay(), [], "the hypergate");
+
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    pressed_under_the_movie(&mut view);
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    assert_eq!(view.take_movie_replay(), [], "the wormhole");
+}
+
+#[test]
+fn a_jump_key_pressed_under_a_gates_movie_jumps_only_once_let_go_and_pressed_again() {
+    let (mut view, _) = filming(filmed(&[300], &[]), true);
+    into_the_wormhole(
+        &mut view,
+        Some(ScreenAnswer::GateEntryDesc(Some(300))),
+        arrived(),
+    );
+    assert!(view.playing());
+    view.input(&key(JUMP_KEY, true));
+    came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
+    run_out(&mut view);
+    let from = sent_count(&view);
+    for _ in 0..3 {
+        view.input(&held(JUMP_KEY));
+        view.tick(TICK);
+    }
+    assert!(
+        !sent_since(&view, from).contains(&FlightCommand::Jump),
+        "{:?}",
+        sent_since(&view, from)
+    );
+    view.input(&key(JUMP_KEY, false));
+    view.input(&key(JUMP_KEY, true));
+    assert!(
+        sent_since(&view, from).contains(&FlightCommand::Jump),
+        "let go and pressed afresh"
+    );
+}
+
 // The wormhole.
 
 /// L pressed over Sol's cleared wormhole (300) on `view`, the flight

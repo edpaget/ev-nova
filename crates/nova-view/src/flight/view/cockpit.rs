@@ -507,7 +507,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// keys read with no latch ([`FlightView::open_map_as`],
     /// `FlightView::came_through`). The latched keys flight saw down are
     /// forgotten too, as their releases go elsewhere: the next hand-back
-    /// says again which are down.
+    /// says again which are down. It marks no `_SetAllKeyCmdFlags` site,
+    /// so a dialog it alone opens closes by the latches as they were
+    /// (the `dialog_latch` module); a site's dialog opens through
+    /// [`FlightView::let_go_into_dialog`].
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
         self.latched_down.clear();

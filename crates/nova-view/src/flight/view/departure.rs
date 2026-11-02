@@ -74,9 +74,13 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     }
 
     /// Catches the screen up with `departure`: the take-off's line, then
-    /// what settling it did; gives the stellar left.
+    /// what settling it did; gives the stellar left. `_PlayerLandOnStellar`
+    /// runs `_SetAllKeyCmdFlags` after the port's loop (@0x63583), so the
+    /// spaceport's close, and the take-off's texts over flight, latch
+    /// every key down ([`FlightView::latch_at_close`]).
     fn departed(&mut self, departure: Departure) -> StellarId {
         let Departure { stellar, settled } = departure;
+        self.latch_at_close();
         // The take-off shuts the escort menu (`_HandlePlayerDockRequest`
         // @0x6705a).
         self.shut_escort_menu();

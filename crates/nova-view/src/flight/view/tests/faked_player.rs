@@ -7,6 +7,7 @@
 //! `session::apply::player_info`).
 
 use super::faked_travel::sent_but_lines;
+use super::live_keys::latches_its_close;
 use super::*;
 use nova_sim::PlayerInfo;
 use nova_sim::flight_frame::FlightEvent;
@@ -63,6 +64,15 @@ fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
     assert!(view.held.is_empty(), "the flight keys let go");
     assert_eq!(view.message(), None, "nothing said");
     assert_eq!(view.drained_sounds(), [], "silent");
+}
+
+#[test]
+fn the_player_infos_close_latches_every_key() {
+    // `_SetAllKeyCmdFlags` @0x70393.
+    let mut view = faked(in_sol());
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    let _ = view.ask_player_info();
+    latches_its_close(&mut view);
 }
 
 #[test]

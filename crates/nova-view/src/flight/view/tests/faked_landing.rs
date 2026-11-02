@@ -7,6 +7,7 @@
 
 use super::faked_travel::{faked_lasts, sent_but_lines, shown_to_flight};
 use super::faked_world::{raise, world};
+use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::flash::ShieldFlash;
 use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR, JumpPhase};
@@ -801,6 +802,15 @@ fn taking_off_gives_the_stellar_and_draws_the_ship_there_on_the_next_frame() {
     assert_eq!(view.shown_position(), at(6.0, -8.0));
     assert_eq!(view.camera().center(), at(6.0, -8.0));
     assert_eq!(view.take_off(), None, "not landed: refused");
+}
+
+#[test]
+fn the_take_off_latches_every_key_at_the_spaceports_close() {
+    // `_PlayerLandOnStellar` @0x63583, after `_DoPortDialog`.
+    let mut view = faked(docked_at(128, Vec2::ZERO));
+    view.sim.queue_answer_showing(departed(128), sol());
+    assert_eq!(view.take_off(), Some(StellarId(128)));
+    latches_its_close(&mut view);
 }
 
 #[test]

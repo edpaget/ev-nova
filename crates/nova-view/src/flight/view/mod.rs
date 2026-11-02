@@ -715,6 +715,7 @@ mod build;
 mod cockpit;
 mod death;
 mod departure;
+mod dialog_latch;
 mod dialog_map;
 mod docked;
 mod drawing;
@@ -747,6 +748,7 @@ mod stepping;
 mod travel;
 mod world;
 
+pub use dialog_latch::LiveKeys;
 pub use dialog_map::MapOpener;
 pub(crate) use dialog_map::is_map_press;
 pub use gamble::RaceShown;
@@ -1436,6 +1438,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// from `GetKeys`, so their OS repeats are no presses and stay out of
     /// `held` (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
     latched_down: HashSet<Key>,
+    /// Whether a `_SetAllKeyCmdFlags` site ran since the last hand-back or
+    /// key poll, so the dialogs it opened latch every key down at their
+    /// close (see the `dialog_latch` module).
+    latch_at_close: bool,
     /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
     /// Hyperspace Mode block and Option-\` share: set as one of them acts,
     /// so a key held acts once; cleared on a frame neither \` without

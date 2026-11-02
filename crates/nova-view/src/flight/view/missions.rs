@@ -116,7 +116,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// ([`FlightCommand::PressMissionInfo`],
     /// `nova_sim::Session::press_mission_info`): with an active mission
     /// shown, asks the router for the mission info screen, letting go of
-    /// the flight keys; with none, says the flight's #354 on the message
+    /// the flight keys, its close latched by `_SetAllKeyCmdFlags`
+    /// (@0x70524, [`FlightView::let_go_into_dialog`]); with none, says the flight's #354 on the message
     /// line, after its refusal beep; refused by the
     /// flight itself, nothing. A flight that refuses the command, one
     /// that never started, says #354 alone, with no session to beep, as
@@ -126,7 +127,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match self.send(FlightCommand::PressMissionInfo) {
             Answer::MissionInfo(MissionInfoPress::Opens(info)) => {
                 self.pending_mission_info = Some(info);
-                self.let_go_of_input();
+                self.let_go_into_dialog();
             }
             Answer::MissionInfo(MissionInfoPress::NoActiveMissions) => self.say_messages(),
             Answer::Refused => self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS),

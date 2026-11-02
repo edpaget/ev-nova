@@ -1144,6 +1144,32 @@ fn a_flight_key_pressed_under_a_hypergates_movie_reaches_flight_after_the_come_o
     );
 }
 
+#[test]
+fn a_latched_key_pressed_under_a_hypergates_movie_acts_only_once_pressed_again_after_the_come_out()
+{
+    // `_SetAllKeyCmdFlags` follows the movie (@0x639f2), and flight reads
+    // no queued key (`_IterateInGameEventLoop` @0x56a6b): the slot key's
+    // latch waits for its release.
+    let (mut harness, _) = gamma_picked_filmed(true);
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Movie);
+    harness.key(Key::Char('1'), true);
+    harness.settle_until("the movie's end", |harness| {
+        harness.showing() != Showing::Movie
+    });
+    assert_eq!(harness.session().system(), SystemId(130), "entered");
+    for _ in 0..60 {
+        harness.frame();
+    }
+    assert_eq!(harness.session().nav_target(), None, "latched");
+    harness.key(Key::Char('1'), false);
+    harness.key(Key::Char('1'), true);
+    for _ in 0..10 {
+        harness.frame();
+    }
+    assert_ne!(harness.session().nav_target(), None, "pressed afresh");
+}
+
 /// In flight over [`wormhole_fork`] with `dësc` 131, the wormhole's own
 /// number, naming "Gate.mov", movies played through a new
 /// [`MockMoviePlayer`] while `on`, L pressed over the wormhole, the dock

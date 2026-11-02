@@ -12,6 +12,7 @@ use super::faked_shops::{
     full, leaves, load, purchase, stale, writes_nav,
 };
 use super::faked_travel::{faked_lasts, sent_but_lines};
+use super::live_keys::latches_its_close;
 use super::*;
 use crate::flight::radar::RadarScene;
 use nova_sim::flight_frame::FlightEvent;
@@ -564,6 +565,16 @@ fn i_with_an_active_mission_asks_for_the_info_screen_once_letting_go_of_the_keys
     assert_eq!(view.take_mission_info_request(), None, "once");
     assert_eq!(view.message(), None);
     assert!(view.held.is_empty(), "the flight keys let go");
+}
+
+#[test]
+fn the_mission_info_screens_close_latches_every_key() {
+    // `_SetAllKeyCmdFlags` @0x70524.
+    let mut view = faked(in_sol());
+    view.sim
+        .queue_answer(Answer::MissionInfo(MissionInfoPress::Opens(info())));
+    view.ask_mission_info();
+    latches_its_close(&mut view);
 }
 
 #[test]

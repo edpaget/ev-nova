@@ -118,4 +118,6 @@ pub use jump::{JumpEffect, JumpPhase};
 pub use sim_adapter::{Collaborators, SessionFlight};
 pub use sim_port::FlightSim;
 pub use sprite::rotation_frame;
-pub use view::{FlightOverlays, FlightView, MapOpener, PortScreen, RaceShown, SharedChance};
+pub use view::{
+    FlightOverlays, FlightView, LiveKeys, MapOpener, PortScreen, RaceShown, SharedChance,
+};

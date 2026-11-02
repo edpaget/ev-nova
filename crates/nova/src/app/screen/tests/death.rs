@@ -1479,3 +1479,27 @@ fn a_sabotage_descs_after_movie_holds_the_fade_until_the_tick_it_ends() {
         "on the tick the movie ended"
     );
 }
+
+#[test]
+fn a_player_info_key_pressed_under_the_rescues_text_and_still_down_opens_it_after_the_rescue() {
+    // The rescue's text (`_HandlePlayer` @0x68eac) is followed by no
+    // `_SetAllKeyCmdFlags` before the rescue leaves `_HandlePlayer`
+    // (@0x692ce), so P's latch is clear at the next pass; none reads it
+    // before.
+    let store = MemoryPilots::new();
+    let mut screen = ejected(&store, Some(RESCUE_TEXT));
+    until_rescue_text(&mut screen);
+    screen.input(&key(nova_view::ui::player_info::PLAYER_INFO_KEY, true));
+    screen.input(&key(Key::Enter, true));
+    screen.input(&key(Key::Enter, false));
+    assert_eq!(screen.showing(), Showing::Flight, "the text closed");
+    assert!(flight(&screen).rescuing(), "the second fade");
+    for _ in 0..rescue_bound() {
+        if screen.showing() == Showing::PlayerInfo {
+            assert!(!flight(&screen).rescuing(), "after the rescue");
+            return;
+        }
+        screen.tick(TICK);
+    }
+    panic!("no player info: {:?}", screen.showing());
+}

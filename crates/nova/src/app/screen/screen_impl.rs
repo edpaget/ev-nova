@@ -132,7 +132,8 @@ impl Screen for AppScreen {
     /// While the app is in the background, and on the first tick after it
     /// comes back, none of that runs: the time is counted, and the main
     /// menu idles in the background where a tick would idle it (see
-    /// `background`).
+    /// `background`). A tick in which flight's input is its own notes
+    /// what is down as its poll (see `live_input`).
     fn tick(&mut self, dt: Duration) {
         if self.tick_away(dt) {
             return;
@@ -146,6 +147,7 @@ impl Screen for AppScreen {
                 }
             }
         }
+        self.note_flight_poll();
         self.advance_white_under_texts(dt);
         if let Some(overlay) = self.overlay_mut() {
             overlay.tick(dt);

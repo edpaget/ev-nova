@@ -226,7 +226,10 @@ impl AppScreen {
     /// warning, saying why as the catalog reads it. The rescue settled
     /// before it, and flight gives it once the rescue's screen has faded
     /// out and shown black; the screen fades out again once it closes
-    /// (the `rescue_fades` module).
+    /// (the `rescue_fades` module). No `_SetAllKeyCmdFlags` follows it
+    /// before the rescue leaves `_HandlePlayer` (@0x692ce), so a latched
+    /// key pressed under it and still down acts once the rescue is over
+    /// (see `live_input`).
     fn show_rescue_desc(&mut self, desc: LoadedDesc) {
         let id = desc.id;
         if let Some(text) = desc.text {
@@ -289,10 +292,11 @@ impl AppScreen {
 
     /// Takes what a stellar's movie in front of flight left once it has
     /// ended ([`FlightView::playing`]): the landing it held back shows the
-    /// spaceport, and what was pressed under it goes to what is shown
-    /// next, the spaceport or flight
+    /// spaceport, and what was pressed under it goes to the spaceport
     /// ([`FlightView::take_movie_replay`]), as the original's queued
-    /// events reach the next event loop. Nothing while it plays.
+    /// events reach the port's loop. A gate's leaves nothing: flight
+    /// reads no queued key, and `_SetAllKeyCmdFlags` follows the movie
+    /// (@0x639f2, @0x6429c). Nothing while it plays.
     ///
     /// After a landing, the land checks' texts the movie held
     /// ([`FlightView::take_mission_texts`]) and the venues' offers settle
@@ -551,6 +555,12 @@ impl AppScreen {
     /// Then the escorts' defections flight kept show after them, in the
     /// same place (`AppScreen::show_defections`), as `_DoEscortPayment`
     /// is an arrival's last call (@0x6c620).
+    ///
+    /// Over flight, whether their close latches every key is flight's to
+    /// say: the texts a `_SetAllKeyCmdFlags` site queued (a boarding's
+    /// pickup @0x6535a, a take-off's @0x63583, an offer's answer
+    /// @0x622ac) latch, and the mission handler's, the rescue's and a
+    /// defection's don't (the `live_input` module).
     pub(super) fn show_mission_texts(&mut self) {
         self.show_queued_mission_texts();
         self.show_defections();
@@ -606,7 +616,9 @@ impl AppScreen {
     /// pointer gesture and letting go of its keys
     /// (their releases will go to the dialogs), as any dialog over flight
     /// does: the last one's close hands back what is still down (see
-    /// `live_input`). Without dialogs nothing is queued.
+    /// `live_input`). Letting go marks no `_SetAllKeyCmdFlags` site, so
+    /// the close latches every key only when flight marked one for what
+    /// queued the texts. Without dialogs nothing is queued.
     fn over_flight(&mut self, show: impl FnOnce(&mut MissionDialogs)) {
         if self.flight_missions().is_none() {
             return;

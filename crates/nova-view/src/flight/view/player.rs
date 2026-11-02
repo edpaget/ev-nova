@@ -101,12 +101,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// outside a jump, its [`PlayerCommand`] taken: when the flight takes
     /// the press too ([`FlightView::press_player_info`]), asks the router
     /// for the player info screen, letting go of the flight keys
-    /// (`_HandlePlayer` @0x702bf-0x703c9); when it refuses, with its beep,
-    /// nothing more.
+    /// (`_HandlePlayer` @0x702bf-0x703c9), its close latched by
+    /// `_SetAllKeyCmdFlags` (@0x70393, [`FlightView::let_go_into_dialog`]);
+    /// when it refuses, with its beep, nothing more, as the refusal jumps
+    /// past the site (@0x7039a-0x703bd).
     pub(super) fn ask_player_info(&mut self) -> ScreenAction {
         if self.press_player_info() {
             self.pending_player_info = true;
-            self.let_go_of_input();
+            self.let_go_into_dialog();
         }
         ScreenAction::None
     }

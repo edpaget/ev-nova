@@ -29,9 +29,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// keys, whose releases go to the dialog: as it closes, the router
     /// gives back those still down that `_HandlePlayer` polls
     /// ([`FlightView::take_back_live_input`]), and `_SetAllKeyCmdFlags`
-    /// latches the rest (@0x62062, @0x622ac, @0x6258e, @0x625ee); a
-    /// mission accepted at once shows nothing. A refusal's beep is the
-    /// flight's, drained with its sounds.
+    /// latches the rest (@0x62062, @0x622ac, @0x6258e, @0x625ee), each
+    /// dialog marked as a site's ([`FlightView::let_go_into_dialog`]); a
+    /// mission accepted at once shows nothing. A refusal reaches no site,
+    /// and its beep is the flight's, drained with its sounds.
     pub(super) fn hail(&mut self) {
         let option = self.held.contains(&Key::Alt);
         let answer = self.send_gated(FlightCommand::Hail { option });
@@ -59,15 +60,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
         match answer {
             Answer::Hailed(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
-                self.let_go_of_input();
+                self.let_go_into_dialog();
             }
             Answer::Hailed(Hailed::Escort(view)) => {
                 self.pending_escort_dialog = Some(view);
-                self.let_go_of_input();
+                self.let_go_into_dialog();
             }
             Answer::Hailed(Hailed::Stellar(view)) => {
                 self.pending_planet_comm = Some(view);
-                self.let_go_of_input();
+                self.let_go_into_dialog();
             }
             Answer::Hailed(Hailed::Offer(offer)) => self.hold_offer(offer),
             Answer::HailRefused(refusal) => {
@@ -95,11 +96,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// those still down ([`FlightView::take_back_live_input`]); a mission
     /// accepted at once shows nothing here, its texts
     /// queued in the flight, its before-movie first, for the router to
-    /// show over flight.
+    /// show over flight. Either way `_SetAllKeyCmdFlags` follows
+    /// `_OfferOneMission` (@0x622ac, @0x65956 through the board), so the
+    /// close latches every key down ([`FlightView::latch_at_close`]): the
+    /// offer's, its accept texts', or with neither the next pass's.
     pub(super) fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
-            self.let_go_of_input();
+            self.let_go_into_dialog();
+        } else {
+            self.latch_at_close();
         }
     }
 

@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use nova_sim::flight_frame::{Answer, FlightCommand, ScreenAnswer, ScreenAsk};
-use nova_sim::{Boarding, PlunderView, Take, Taken};
+use nova_sim::{Boarding, MissionBoardLine, PlunderView, Take, Taken};
 
 use crate::flight::sim_port::FlightSim;
 use crate::time::sixtieths;
@@ -34,11 +34,19 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the board latch
     /// ([`BoardRefusal::latches`](nova_sim::board::BoardRefusal::latches);
     /// every board that passes does, and one the flight refused does not).
+    ///
+    /// `_HandlePlayerBoardAttempt`'s sites mark the close
+    /// ([`FlightView::latch_at_close`]): the plunder's (@0x659f1,
+    /// @0x65f3e) and the offer's (@0x65956) as they open, and the cargo
+    /// pickup's (@0x6535a), which follows `_DoMissionCargoPickup` whatever
+    /// it answered: a pickup that fits, whose line names the cargo and
+    /// which opens nothing, and one refused for room, whose text the
+    /// flight queues
+    /// ([`BoardRefusal::sets_every_latch`](nova_sim::board::BoardRefusal::sets_every_latch)).
     pub(super) fn board(&mut self) -> bool {
         let answer = self.send(FlightCommand::Board);
         if let Some(line) = self.board_line_drained() {
-            let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
-            self.say_for(said, BOARD_LINE_TICKS);
+            self.said_board_line(line);
         }
         match answer {
             Answer::Boarded(boarding) => {
@@ -46,6 +54,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 true
             }
             Answer::BoardRefused(refusal) => {
+                if refusal.sets_every_latch() {
+                    self.latch_at_close();
+                }
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say_for(text, BOARD_REFUSAL_TICKS);
                 }
@@ -55,12 +66,22 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Says a mission ship's board `line`, named by the flight: a pickup's
+    /// marks its site (@0x6535a).
+    fn said_board_line(&mut self, line: MissionBoardLine) {
+        if matches!(line, MissionBoardLine::Retrieved { .. }) {
+            self.latch_at_close();
+        }
+        let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
+        self.say_for(said, BOARD_LINE_TICKS);
+    }
+
     /// What a board that passed the checks shows, named by the flight.
     fn boarded(&mut self, boarding: Boarding) {
         match boarding {
             Boarding::Opened(_) => {
                 self.pending_boarding = true;
-                self.let_go_of_input();
+                self.let_go_into_dialog();
                 if let Some(granted) = self.grant_drained() {
                     let (name, plural) = self.names.outfit_lc(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
@@ -69,10 +90,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             }
             Boarding::Repelled => self.say_for(REPELLED, MESSAGE_TICKS),
             Boarding::Offered(offer) => self.hold_offer(offer),
-            Boarding::MissionShip(Some(line)) => {
-                let said = mission_board_message(line, Wording::of(&self.names, &self.frame));
-                self.say_for(said, BOARD_LINE_TICKS);
-            }
+            Boarding::MissionShip(Some(line)) => self.said_board_line(line),
             // Its line is the flight's message (`FlightEvent::Message`).
             Boarding::MissionShip(None) | Boarding::Recovered(_) => {}
         }

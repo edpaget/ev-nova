@@ -257,6 +257,7 @@ impl<
         }
         let pod = self.pod_frame();
         self.step_stellars(dt);
+        self.settle_dialog_latch();
         if self.faded_keys_frame() {
             return;
         }

@@ -1,6 +1,7 @@
 use super::encounters::{boardable, boarding_data, hailable};
 use super::map_wait_keys::{game_data_fork_loaded, job, offered_over_flight};
 use super::*;
+use nova_view::flight::view::HAIL_KEY;
 use nova_view::ui::player_info::PLAYER_INFO_KEY;
 
 // The keys and the button down under a dialog over flight, handed back as
@@ -36,11 +37,13 @@ fn offered_thrusting() -> AppScreen {
 }
 
 /// Opens a person's offer over flight as its hail does: flight lets go
-/// of its keys and the button (`FlightView::hold_offer`), then the router
-/// opens it; a tick over it follows, as the original's next frame does.
+/// of its keys and the button and marks the site (`FlightView::hold_offer`,
+/// @0x622ac), then the router opens it; a tick over it follows, as the
+/// original's next frame does.
 fn offer_as_a_hail_would(screen: &mut AppScreen) {
     flight_mut(screen).cancel_pointer();
     flight_mut(screen).release_keys();
+    flight_mut(screen).mark_site();
     screen.open_offer(job());
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::Offer);
@@ -301,21 +304,36 @@ fn left(pressed: bool, at: Point) -> Input {
     }
 }
 
-/// Flight in Sol with a mission text over it, and a click held on its
-/// Okay.
-fn texted_and_held() -> AppScreen {
+/// Flight in Sol, `before` run on it, then a mission text queued over it
+/// as the session's texts are (`AppScreen::over_flight`), shown by a
+/// tick: no `_SetAllKeyCmdFlags` follows it (`_MissionHandler`,
+/// `_DoPlayGameWork` @0x44214).
+fn texted_after(before: impl FnOnce(&mut AppScreen)) -> AppScreen {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(game_data_fork_loaded())
         .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
+    before(&mut screen);
     screen.show_over_flight(vec![nova_view::ui::mission_dialogs::DescShown::str_text(
         "Well done.",
         None,
     )]);
     screen.tick(TICK);
     assert_eq!(screen.showing(), Showing::MissionText);
+    screen
+}
+
+/// [`texted_after`] nothing.
+fn texted() -> AppScreen {
+    texted_after(|_| {})
+}
+
+/// Flight in Sol with a mission text over it, and a click held on its
+/// Okay.
+fn texted_and_held() -> AppScreen {
+    let mut screen = texted();
     let text = screen
         .flight_mission_text()
         .expect("shown")
@@ -430,4 +448,136 @@ fn an_i_and_a_return_held_back_on_the_flight_offer_answer_it_with_no_mission_act
     screen.input(&left(false, Point::new(1.0, 1.0)));
     assert!(screen.flight_mission_info().is_none(), "nothing to list");
     assert!(screen.offer().is_none(), "the Return answered it");
+}
+
+// A latched key pressed under a dialog no `_SetAllKeyCmdFlags` follows,
+// and still down at its close, acts on the first step after it: the
+// router replays what flight gives back (the `live_input` module).
+
+/// The navigation target `screen`'s flight has selected.
+fn nav(screen: &AppScreen) -> Option<nova_sim::StellarId> {
+    flight(screen).session().expect("flying").nav_target()
+}
+
+/// Closes the mission text in front with Return, let go after.
+fn close_text(screen: &mut AppScreen) {
+    tap(screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::Flight, "closed");
+}
+
+const SLOT_1: Key = Key::Char('1');
+
+#[test]
+fn a_slot_key_pressed_under_a_mission_text_and_still_down_selects_after_its_close() {
+    let mut screen = texted();
+    screen.input(&key(SLOT_1, true));
+    close_text(&mut screen);
+    screen.tick(TICK);
+    assert_ne!(nav(&screen), None, "selected on the first step");
+}
+
+#[test]
+fn a_slot_key_pressed_and_let_go_under_a_mission_text_selects_nothing() {
+    let mut screen = texted();
+    tap(&mut screen, SLOT_1);
+    close_text(&mut screen);
+    screen.tick(TICK * 8);
+    assert_eq!(nav(&screen), None);
+}
+
+/// Whether `sounds` hold the flight's refusal beep, as a hail with
+/// nothing to hail beeps.
+fn refused(sounds: &[Sound]) -> bool {
+    sounds.contains(&Sound::Sim(nova_sim::SimSound::Refused))
+}
+
+#[test]
+fn a_hail_key_held_from_before_a_mission_text_waits_for_its_release() {
+    // Y pressed before the text: the original's poll before it read Y
+    // down, and none sees its release.
+    let mut screen = texted_after(|screen| {
+        screen.input(&key(HAIL_KEY, true));
+        assert!(refused(&screen.take_sounds()), "nothing to hail");
+    });
+    close_text(&mut screen);
+    screen.tick(TICK * 4);
+    let s = screen.take_sounds();
+    eprintln!("SOUNDS {s:?}");
+    assert!(!refused(&s), "no second hail");
+    screen.input(&key(HAIL_KEY, false));
+    screen.input(&key(HAIL_KEY, true));
+    assert!(refused(&screen.take_sounds()), "pressed afresh, it hails");
+}
+
+#[test]
+fn p_and_y_pressed_under_a_mission_text_open_the_player_info_and_y_waits() {
+    // P's dialog runs `_SetAllKeyCmdFlags` (@0x70393) before Y's read
+    // (@0x703e9).
+    let mut screen = texted_after(|screen| {
+        tap(screen, SLOT_1);
+        screen.tick(TICK);
+        assert_ne!(nav(screen), None, "Earth to hail");
+    });
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    screen.input(&key(HAIL_KEY, true));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(
+        screen.showing(),
+        Showing::PlayerInfo,
+        "P acted at the close"
+    );
+    screen.input(&key(PLAYER_INFO_KEY, false));
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight, "Y latched");
+    screen.tick(TICK * 4);
+    assert_eq!(screen.showing(), Showing::Flight, "Y still latched");
+    screen.input(&key(HAIL_KEY, false));
+    screen.input(&key(HAIL_KEY, true));
+    assert_ne!(
+        screen.showing(),
+        Showing::Flight,
+        "pressed afresh, it hails"
+    );
+}
+
+#[test]
+fn a_slot_key_pressed_under_the_preferences_and_still_down_selects_after_its_close() {
+    let mut screen = texted();
+    close_text(&mut screen);
+    command_comma(&mut screen);
+    assert_eq!(screen.showing(), Showing::Preferences);
+    screen.input(&key(SLOT_1, true));
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK);
+    assert_ne!(nav(&screen), None, "selected on the first step");
+}
+
+#[test]
+fn a_slot_key_pressed_under_the_about_text_and_still_down_selects_after_its_close() {
+    let mut screen = texted();
+    close_text(&mut screen);
+    screen.menu_command(MenuCommand::About);
+    assert_eq!(screen.showing(), Showing::About);
+    screen.input(&key(SLOT_1, true));
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight);
+    screen.tick(TICK);
+    assert_ne!(nav(&screen), None, "selected on the first step");
+}
+
+#[test]
+fn a_slot_key_pressed_in_the_spaceport_and_held_past_the_take_off_waits_for_its_release() {
+    // `_PlayerLandOnStellar` @0x63583.
+    let mut screen = with_dialogs(game_data_fork_loaded());
+    land(&mut screen);
+    screen.input(&key(SLOT_1, true));
+    screen.input(&key(Key::Escape, true));
+    assert_eq!(screen.showing(), Showing::Flight, "took off");
+    screen.tick(TICK * 8);
+    assert_eq!(nav(&screen), None, "latched");
+    screen.input(&key(SLOT_1, false));
+    screen.input(&key(SLOT_1, true));
+    screen.tick(TICK * 8);
+    assert_ne!(nav(&screen), None, "pressed afresh");
 }

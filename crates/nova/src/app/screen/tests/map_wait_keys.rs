@@ -39,7 +39,8 @@ pub(super) fn job() -> nova_sim::OfferPrompt {
     }
 }
 
-/// Flight with a person's offer open over it, laid out.
+/// Flight with a person's offer open over it, laid out, as a hail opens
+/// it: `_SetAllKeyCmdFlags` follows it (@0x622ac).
 pub(super) fn offered_over_flight() -> AppScreen {
     let store = MemoryPilots::new();
     let mut screen = AppScreen::new(game_data_fork_loaded())
@@ -47,6 +48,7 @@ pub(super) fn offered_over_flight() -> AppScreen {
         .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics))
         .appeared();
     create(&mut screen, "Ada");
+    flight_mut(&mut screen).mark_site();
     screen.open_offer(job());
     assert_eq!(screen.showing(), Showing::Offer);
     screen

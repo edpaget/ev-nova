@@ -8,6 +8,7 @@
 //! large.
 
 use super::faked_travel::{faked_lasts, sent_but_lines};
+use super::live_keys::{back, latches_its_close};
 use super::*;
 use nova_sim::escort_dialog::{EscortButton, EscortDialogView, UpgradeLine};
 use nova_sim::flight_frame::FlightEvent;
@@ -391,8 +392,45 @@ fn y_on_a_person_offering_its_mission_holds_the_offer_once_till_its_close_gives_
     assert!(view.held.is_empty(), "let go for the dialog");
     // The offer closes with Up and J down: `_HandlePlayer` polls Up, and
     // `_SetAllKeyCmdFlags` (@0x622ac) latches J.
-    view.take_back_live_input([Key::Up, JUMP_KEY], false);
+    let replay = back(&mut view, [Key::Up, JUMP_KEY], [], false);
+    assert_eq!(replay, [], "J latched");
     assert_eq!(view.held, [Key::Up].into_iter().collect());
+}
+
+// Each of `_HandlePlayerCommunication`'s dialogs is followed by
+// `_SetAllKeyCmdFlags`, so its close latches every key down.
+
+#[test]
+fn each_hails_dialog_latches_every_key_at_its_close() {
+    let answers = [
+        Answer::Hailed(Hailed::Comm(hail_view("Channel open."))),
+        Answer::Hailed(Hailed::Escort(escort_view(None))),
+        Answer::Hailed(Hailed::Stellar(planet_view(128))),
+        Answer::Hailed(Hailed::Offer(VenueOffer::Prompt(prompt("Help?")))),
+    ];
+    for answer in answers {
+        let mut view = sol();
+        view.sim.queue_answer(answer.clone());
+        view.hail();
+        latches_its_close(&mut view);
+    }
+}
+
+#[test]
+fn an_offer_accepted_at_once_latches_the_keys_held_at_the_next_pass() {
+    // `_SetAllKeyCmdFlags` follows `_OfferOneMission` whatever it showed
+    // (@0x622ac).
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::Hailed(Hailed::Offer(VenueOffer::Accepted {
+            mission: MissionId(130),
+            accepted: Ok(0),
+        })));
+    view.held.insert(JUMP_KEY);
+    view.hail();
+    view.tick(TICK);
+    assert!(view.latched_down.contains(&JUMP_KEY), "latched");
+    assert!(!view.held.contains(&JUMP_KEY));
 }
 
 #[test]

@@ -25,8 +25,10 @@
 //!   poll reads them after every other dialog over flight, which takes
 //!   flight's input from the router instead: the router keeps what is
 //!   physically down under it and hands it back as the last one closes
-//!   ([`FlightView::take_back_live_input`]), and a gate's movie, which
-//!   flight plays, keeps them as the map does (`FlightView::came_through`).
+//!   ([`FlightView::take_back_live_input`]), which latches the rest only
+//!   when a site followed the dialog (the `dialog_latch` module). A
+//!   gate's movie, which flight plays, keeps them as the map does
+//!   (`FlightView::came_through`), and leaves nothing queued to replay.
 //! - **A screen reads the queue.** Every screen's loop takes it through
 //!   `_MyModalDialog` (@0x5999a), and no caller flushes between
 //!   `_DoSystemMap` and that loop. So over a screen the view keeps what the
@@ -193,7 +195,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Notes `keys` down as latched, those flight reads with a latch
     /// `_SetAllKeyCmdFlags` sets: the flight keys beyond
     /// [`UNLATCHED_KEYS`].
-    fn latch_held_keys(&mut self, keys: impl IntoIterator<Item = Key>) {
+    pub(super) fn latch_held_keys(&mut self, keys: impl IntoIterator<Item = Key>) {
         let latched = keys
             .into_iter()
             .filter(|key| FLIGHT_KEYS.contains(key) && !UNLATCHED_KEYS.contains(key));
@@ -209,7 +211,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// close, so one first seen here by a repeat, its press gone
     /// elsewhere, is latched as a pressed one is. A gate's movie starts
     /// with the keys flight held, which its come-out sorts
-    /// (`FlightView::came_through`).
+    /// (`FlightView::came_through`), and its queue is no replay to flight
+    /// ([`FlightView::take_movie_replay`]), so a latched key pressed under
+    /// it acts only once let go and pressed again.
     pub(super) fn track_unlatched(&mut self, input: &Input) {
         let Input::Key { key, pressed, .. } = *input else {
             return;
@@ -228,29 +232,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if UNLATCHED_KEYS.contains(&key) {
             self.held.insert(key);
         }
-    }
-
-    /// Takes back flight's input as the last dialog over it closes, `down`
-    /// the keys physically down and `button` whether the primary button
-    /// is: `_HandlePlayer` polls the keys (`_QuickKeyCheck` @0xa0f5) and
-    /// `_HandleMouse` reads `_Button` (@0x3801c-0x3803b) each frame, so
-    /// what is down reads as down whenever it went down, and
-    /// `_SetAllKeyCmdFlags` (@0x61e6d) latches the rest. The unlatched
-    /// keys held become exactly those of `down` ([`UNLATCHED_KEYS`]); no
-    /// latched key is taken from `down`, as its latch waits for its
-    /// release, and none flight holds is let go. The latched keys of
-    /// `down` become exactly those whose repeats flight drops until their
-    /// release ([`FlightView::latched_down`]), as `down` is the whole of
-    /// what is down. A button still down keeps the cursor whole.
-    pub fn take_back_live_input(&mut self, down: impl IntoIterator<Item = Key>, button: bool) {
-        self.held.retain(|key| !UNLATCHED_KEYS.contains(key));
-        self.latched_down.clear();
-        let down: Vec<Key> = down.into_iter().collect();
-        for &key in &down {
-            self.hold_live_key(key);
-        }
-        self.latch_held_keys(down);
-        self.cursor.button(button);
     }
 
     /// What the last map over a screen left for the screen under it, in
