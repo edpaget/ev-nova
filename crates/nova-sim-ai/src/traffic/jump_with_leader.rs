@@ -1548,7 +1548,7 @@ mod tests {
         use crate::traffic::npc::Mode;
         let mut ship = players_ship(Goal::Idle, Mode::LeavingGate { tick: 0 }, 0);
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
-        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1.0 });
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 0.0 });
         assert!(ship.joins_leaders_jump());
     }
 

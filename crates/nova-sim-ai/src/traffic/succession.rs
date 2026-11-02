@@ -1216,7 +1216,7 @@ mod tests {
     fn a_follower_on_the_frame_its_wait_ran_out_pauses_and_bursts_no_more() {
         let paused = beside_a_successor(|ship| ship.mode = Mode::LeavingGate { tick: 0 });
         assert_eq!(paused.goal, Goal::Regroup { kept: Kept::Coast });
-        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 1.0 });
+        assert_eq!(paused.mode, Mode::HeldAtGate { ticks_left: 0.0 });
         assert_eq!(paused.emerges_from, None);
     }
 
@@ -1796,7 +1796,7 @@ mod tests {
             for (mode, left, owed) in [
                 (Mode::Flying, Mode::Flying, None),
                 (Mode::Emerging { ticks_left: 30.0 }, held(30.0), None),
-                (Mode::LeavingGate { tick: 0 }, held(1.0), None),
+                (Mode::LeavingGate { tick: 0 }, held(0.0), None),
                 (
                     Mode::JumpingIn { tick: 3 },
                     Mode::Flying,

@@ -790,4 +790,24 @@ mod tests {
             "0.75: gone, though its wait still runs"
         );
     }
+
+    #[test]
+    fn a_ship_held_on_the_frame_its_wait_ran_out_flies_its_goal_on_the_next_step_at_any_gain() {
+        // Its +0x4c is already out (@0x3502a), so the hold ends at once.
+        for gain in [
+            HALF,
+            SpeedMult::new(0.25),
+            SpeedMult::SETTLED,
+            SpeedMult::FULL,
+        ] {
+            let mut held = ship(Vec2::ZERO, Mode::LeavingGate { tick: 0 });
+            held.leaves_gate_goal();
+            assert!(matches!(held.mode, Mode::HeldAtGate { .. }), "{gain:?}");
+            let word = SlotWord::none(&held, &HANDLING, Inertia::Inertial);
+            let at_step = AtStep::of(&HANDLING).at_gain(gain);
+            let by = (FlightRules::default(), RuleSource::Engine, false);
+            step(&mut held, &word, at_step, LED, by, &mut NeverFires);
+            assert_eq!(held.mode, Mode::Flying, "{gain:?}");
+        }
+    }
 }

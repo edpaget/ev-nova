@@ -1541,7 +1541,7 @@ mod tests {
         let mut ship = ship();
         ship.mode = Mode::LeavingGate { tick: 0 };
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
-        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1.0 });
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 0.0 });
         assert_eq!(ship.owed_burst, None);
     }
 

@@ -173,7 +173,7 @@ fn double_times_second_pass_neither_starts_its_burst_nor_lets_a_hit_pass() {
         &mut |_, _| {},
     );
     let held = of(&hit_in_it, 0);
-    assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 1.0 });
+    assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 0.0 });
     assert_eq!(held.goal, Goal::Attack(ShipRef::Player));
     traffic.tick_in(&Answering, world, &[], &mut NeverFires);
     assert_eq!(
@@ -203,7 +203,7 @@ fn a_ship_whose_wait_runs_out_in_the_ship_loop_is_held_by_a_later_hit_in_it() {
         &mut NeverFires,
         &mut |_, _| {},
     );
-    assert_eq!(of(&held, 0).mode, Mode::HeldAtGate { ticks_left: 1.0 });
+    assert_eq!(of(&held, 0).mode, Mode::HeldAtGate { ticks_left: 0.0 });
     traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
     traffic.end_fly(pass);
     traffic.answer_in_turn(
@@ -213,7 +213,7 @@ fn a_ship_whose_wait_runs_out_in_the_ship_loop_is_held_by_a_later_hit_in_it() {
         &mut NeverFires,
         &mut |_, _| {},
     );
-    assert_eq!(of(&traffic, 0).mode, Mode::HeldAtGate { ticks_left: 1.0 });
+    assert_eq!(of(&traffic, 0).mode, Mode::HeldAtGate { ticks_left: 0.0 });
 }
 
 // Goal 0x15's turn-out drops the target (@0x8dd7b).
