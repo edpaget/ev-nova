@@ -1892,7 +1892,7 @@ mod tests {
         for (mode, goal) in [
             (Mode::JumpingIn { tick: 2 }, Goal::Attack(n(2))),
             (Mode::LeavingGate { tick: 2 }, Goal::Attack(n(2))),
-            (Mode::HeldAtGate { ticks_left: 5 }, Goal::Attack(P)),
+            (Mode::HeldAtGate { ticks_left: 5.0 }, Goal::Attack(P)),
             (Mode::Flying, Goal::Attack(P)),
         ] {
             let hunter = Npc {

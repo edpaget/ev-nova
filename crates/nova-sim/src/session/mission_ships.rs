@@ -3506,7 +3506,7 @@ pub(super) mod tests {
         npc.goal = Goal::EnterGate(StellarId(300));
         npc.mode = Mode::EnteringGate {
             gate: StellarId(300),
-            ticks_left: 1,
+            ticks_left: 1.0,
         };
         work_with(
             session,
@@ -3654,6 +3654,8 @@ pub(super) mod tests {
     fn a_chase_off_ship_leaving_through_a_gate_departs_but_counts_nothing_by_the_engine() {
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         let id = session.npcs()[0].id;
         gate_out(&mut session, &catalog, 0);
         assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
@@ -3674,6 +3676,8 @@ pub(super) mod tests {
             crate::Rulebook::default()
                 .with_override(crate::RuleKey::GateExitCounts, crate::RuleSource::Bible),
         );
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         let id = session.npcs()[0].id;
         gate_out(&mut session, &catalog, 0);
         assert!(departed(&session, id));

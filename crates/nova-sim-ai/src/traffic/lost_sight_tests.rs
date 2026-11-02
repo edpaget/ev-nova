@@ -166,7 +166,7 @@ fn a_searching_ship_whose_ai_wait_runs_skips_its_high_level() {
     });
     traffic.npcs[0].pursuit = kept;
     traffic.npcs[0].docking = docking;
-    traffic.npcs[0].ai_wait = 5;
+    traffic.npcs[0].ai_wait = 5.0;
     tick(&mut traffic, &attack(None));
     let ship = &traffic.npcs()[0];
     assert_eq!(ship.lost_sight, SearchTimer::Searching(10));

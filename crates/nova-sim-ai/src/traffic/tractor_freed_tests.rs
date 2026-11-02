@@ -130,7 +130,7 @@ fn entering(traffic: &mut Traffic, id: NpcId) {
     let entrant = traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
     entrant.expect("there").mode = Mode::EnteringGate {
         gate: StellarId(130),
-        ticks_left: 1,
+        ticks_left: 1.0,
     };
 }
 

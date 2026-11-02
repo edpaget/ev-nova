@@ -244,7 +244,7 @@ pub(super) mod tests {
             frames: FrameSpec::NONE,
             shown: ShipDrawn::Hidden,
             cloak: CloakShown::Hidden,
-            gate: GateFade::Entering { ticks_left: 99 },
+            gate: GateFade::Entering { ticks_left: 99.0 },
             hover: HoverPlace::Unplaced,
             framed: Some(ShipId(999)),
             on_radar: true,

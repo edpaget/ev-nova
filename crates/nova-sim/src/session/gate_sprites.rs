@@ -236,7 +236,9 @@ mod tests {
                 velocity: Vec2::ZERO,
                 heading: 90.0,
             },
-            mode: Mode::Emerging { ticks_left: wait },
+            mode: Mode::Emerging {
+                ticks_left: crate::traffic::ai_wait::ticks(wait),
+            },
             emerges_from: Some(StellarId(300)),
             ..crate::testkit::npc(0, fields)
         });

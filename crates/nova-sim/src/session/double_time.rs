@@ -930,7 +930,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
         // @0x686a4), so the hit is a stray one: provoked past forgiving
@@ -948,7 +948,7 @@ mod tests {
         }
         assert_eq!(
             session.npcs()[0].mode,
-            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 19 }
+            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 19.0 }
         );
     }
 

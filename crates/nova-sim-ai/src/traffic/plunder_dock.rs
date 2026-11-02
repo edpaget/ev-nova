@@ -121,6 +121,7 @@ use crate::geometry::Vec2;
 use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
+use crate::traffic::ai_wait;
 use crate::traffic::formation_flight;
 use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::Inertia;
@@ -172,7 +173,7 @@ pub const DOCKED_BOX: f32 = 3.0;
 pub const CREEP: f32 = 1.0;
 /// The least of the dock's wait, and the wait above which it holds
 /// (+0x4c = `Rand(80)` + 100 @0x86fcf-0x86fea; the float 100.0 @0xdd060).
-pub const DOCK_WAIT: u32 = 100;
+pub const DOCK_WAIT: f32 = 100.0;
 /// `Rand(80)`: the spread of the dock's wait.
 pub const DOCK_WAIT_SPREAD: u16 = 80;
 /// How many times the docking box an inertialess ship's is (`leal
@@ -262,7 +263,7 @@ pub enum DockStep {
 /// dampener counting as `rule` says (see the module docs).
 #[must_use]
 pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool, rule: InertialDampener) -> DockStep {
-    if boarded && npc.ai_wait == 0 {
+    if boarded && !ai_wait::running(npc.ai_wait) {
         return DockStep::GiveUp;
     }
     // f32: the box is converted back to a float for the test.
@@ -509,17 +510,26 @@ fn dock(
         npc.state.position = npc.state.position + flight::facing(f32::from(towards)) * CREEP;
         return (controls, wanted, DockOutcome::Flying);
     }
-    let outcome = match npc.ai_wait {
-        wait if wait > DOCK_WAIT => DockOutcome::Flying,
-        1.. if matches!(npc.goal, Goal::Plunder { .. }) => DockOutcome::Completed,
-        1.. if npc.goal == Goal::Assist(Help::Repair) => DockOutcome::Repaired,
-        1.. => DockOutcome::Flying,
-        // Unless drifting (goal 0xe, @0x86fa7-0x86faf).
-        0 if npc.goal == Goal::Drift => DockOutcome::Flying,
-        0 => {
-            start(npc, victim, chance);
-            DockOutcome::Started
+    // The wait as floats (@0x86d4f-0x86d6d): above 100.0 (or NaN) it
+    // waits on, then its last 100.0 runs the goal's end, and once it no
+    // longer runs the dock starts.
+    let wait = npc.ai_wait;
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let waits_on = !(wait <= DOCK_WAIT);
+    let outcome = if waits_on {
+        DockOutcome::Flying
+    } else if ai_wait::running(wait) {
+        match npc.goal {
+            Goal::Plunder { .. } => DockOutcome::Completed,
+            Goal::Assist(Help::Repair) => DockOutcome::Repaired,
+            _ => DockOutcome::Flying,
         }
+    } else if npc.goal == Goal::Drift {
+        // Unless drifting (goal 0xe, @0x86fa7-0x86faf).
+        DockOutcome::Flying
+    } else {
+        start(npc, victim, chance);
+        DockOutcome::Started
     };
     (controls, wanted, outcome)
 }
@@ -528,7 +538,7 @@ fn dock(
 /// `Rand(80)` (@0x86fcf-0x86fea), rolled on `chance`, and its velocity the
 /// victim's (@0x86ff1-0x87007). The victim's boarded flag is its caller's.
 fn start(npc: &mut Npc, victim: &ShipState, chance: &mut (impl Chance + ?Sized)) {
-    npc.ai_wait = DOCK_WAIT + u32::from(chance.roll(DOCK_WAIT_SPREAD));
+    npc.ai_wait = DOCK_WAIT + ai_wait::ticks(u32::from(chance.roll(DOCK_WAIT_SPREAD)));
     npc.state.velocity = victim.velocity;
 }
 
@@ -609,12 +619,12 @@ mod tests {
             high_level(&ship, Vec2::ZERO, true, InertialDampener::PlayerOnly),
             DockStep::GiveUp
         );
-        ship.ai_wait = 1;
+        ship.ai_wait = 1.0;
         assert_eq!(
             high_level(&ship, Vec2::ZERO, true, InertialDampener::PlayerOnly),
             DockStep::Sub(DockSub::Dock)
         );
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         assert_eq!(
             high_level(&ship, Vec2::ZERO, false, InertialDampener::PlayerOnly),
             DockStep::Sub(DockSub::Dock)
@@ -912,14 +922,14 @@ mod tests {
             Vec2::new(0.5, 9.0),
             "a pixel up, then its velocity"
         );
-        assert_eq!(ship.ai_wait, 0, "no dock outside 3");
+        assert_eq!(ship.ai_wait, 0.0, "no dock outside 3");
     }
 
     #[test]
     fn inside_3_with_no_wait_it_starts_the_dock_for_100_to_179_ticks() {
         // @0x86fa4-0x8700a, at its slot of the AI loop.
         let victim = at(0.0, 0.0, 0.5, 0.0, 0.0);
-        for (roll, wait) in [(0, 100), (79, 179)] {
+        for (roll, wait) in [(0, 100.0), (79, 179.0)] {
             let mut ship = pirate(at(3.0, -3.0, 0.5, 0.0, 0.0), DockSub::Dock);
             let mut chance = Scripted::rolling(&[roll]);
             let flight = FlightRules::default();
@@ -957,7 +967,7 @@ mod tests {
         assert!(!starting(&|ship| ship.state.position.y = -3.5), "outside 3");
         assert!(!starting(&|ship| ship.state.velocity.x = 2.0), "mismatched");
         assert!(!starting(&|ship| ship.state.velocity.y = 1.0), "mismatched");
-        assert!(!starting(&|ship| ship.ai_wait = 1), "its wait");
+        assert!(!starting(&|ship| ship.ai_wait = 1.0), "its wait");
         assert!(!starting(&|ship| ship.goal = Goal::Drift), "goal 0xe");
     }
 
@@ -967,7 +977,7 @@ mod tests {
         let docked = |goal: Goal, wait: u32| {
             let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
             ship.goal = goal;
-            ship.ai_wait = wait;
+            ship.ai_wait = crate::traffic::ai_wait::ticks(wait);
             flown(ship, &victim).1
         };
         let plunder = Goal::Plunder {
@@ -993,12 +1003,39 @@ mod tests {
     }
 
     #[test]
+    fn docked_its_wait_reads_as_a_float_above_100_running_and_out() {
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let docked = |goal: Goal, wait: f32| {
+            let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
+            ship.goal = goal;
+            ship.ai_wait = wait;
+            flown(ship, &victim).1
+        };
+        let plunder = Goal::Plunder {
+            ship: VICTIM,
+            hopeless: false,
+        };
+        assert_eq!(docked(plunder, 100.5), DockOutcome::Flying, "above 100");
+        assert_eq!(
+            docked(plunder, 0.5),
+            DockOutcome::Completed,
+            "still running"
+        );
+        assert_eq!(docked(plunder, -0.25), DockOutcome::Started, "out");
+        assert_eq!(
+            docked(plunder, f32::NAN),
+            DockOutcome::Flying,
+            "a NaN waits on"
+        );
+    }
+
+    #[test]
     fn docked_under_a_repair_it_repairs_at_100_or_below_holds_above_and_starts_at_none() {
         let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let docked = |wait: u32| {
             let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
             ship.goal = Goal::Assist(Help::Repair);
-            ship.ai_wait = wait;
+            ship.ai_wait = crate::traffic::ai_wait::ticks(wait);
             flown(ship, &victim).1
         };
         assert_eq!(docked(101), DockOutcome::Flying);
@@ -1028,7 +1065,7 @@ mod tests {
         // the damped velocity.
         let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let mut ship = pirate(at(50.0, 0.0, 0.0, 2.0, 90.0), DockSub::Dock);
-        ship.ai_wait = 150;
+        ship.ai_wait = 150.0;
         let (ship, _) = flown(ship, &victim);
         assert_eq!(ship.state.heading, 90.0);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.9));
@@ -1036,7 +1073,7 @@ mod tests {
         // Docked and holding, a fraction off the victim's heading: not
         // put on it.
         let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.5), DockSub::Dock);
-        ship.ai_wait = 150;
+        ship.ai_wait = 150.0;
         let (ship, _) = flown(ship, &victim);
         assert_eq!(ship.state.heading, 0.5);
         // Stopping (sub 1) within its turn of its retro heading, 0: put on
@@ -1045,7 +1082,7 @@ mod tests {
         let (ship, _) = flown(stopping(), &victim);
         assert_eq!(ship.state.heading, 0.0);
         let mut waiting = stopping();
-        waiting.ai_wait = 150;
+        waiting.ai_wait = 150.0;
         let (ship, _) = flown(waiting, &victim);
         assert_eq!(ship.state.heading, 1.5);
     }

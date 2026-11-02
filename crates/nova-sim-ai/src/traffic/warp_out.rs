@@ -184,7 +184,7 @@ pub const FOLLOW_ARC: i32 = 10;
 
 /// The AI wait a follower takes while its leader turns within its own
 /// turn (+0x4c = 180.0, @0x85bc3).
-pub const FOLLOW_WAIT: u32 = 180;
+pub const FOLLOW_WAIT: f32 = 180.0;
 
 /// The stage past which a ship an NPC leads leaves it to jump on its
 /// own (30.0, f32 @0xdd084).
@@ -1347,7 +1347,7 @@ mod tests {
             gone.goal = Goal::Flee(ShipRef::Npc(NpcId(77)));
             gone.target = Some(ShipRef::Npc(NpcId(77)));
             gone.warp.stage = 3.0;
-            gone.ai_wait = wait;
+            gone.ai_wait = crate::traffic::ai_wait::ticks(wait);
             let gone = traffic.add_npc(gone);
             let mut seen = ship();
             seen.begin_own_jump();
@@ -1470,7 +1470,7 @@ mod tests {
             "disabled"
         );
         assert!(
-            kept(&|ship| ship.mode = Mode::Coasting { ticks_left: 3 }),
+            kept(&|ship| ship.mode = Mode::Coasting { ticks_left: 3.0 }),
             "coasting"
         );
     }
@@ -1541,7 +1541,7 @@ mod tests {
         let mut ship = ship();
         ship.mode = Mode::LeavingGate { tick: 0 };
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
-        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1.0 });
         assert_eq!(ship.owed_burst, None);
     }
 
@@ -1607,7 +1607,7 @@ mod tests {
         assert_eq!(follow_jump(&mut ship, turning, true), FollowStep::Waiting);
         assert_eq!(ship.warp.stage, -1.0);
         assert_eq!(ship.warp.aim, 101, "its leader's +0x68");
-        assert_eq!(ship.ai_wait, 0);
+        assert_eq!(ship.ai_wait, 0.0);
         let mut nimble = ship.clone();
         nimble.stats.handling.turn_rate = 11.0;
         nimble.warp.stage = 4.0;
@@ -1727,7 +1727,7 @@ mod tests {
     fn at_half_gain_a_jumping_ship_turns_and_moves_half_waiting_or_not_either_inertia() {
         let rules = FlightRules::default();
         let mut waiting = warping(3.0, 0);
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         let handling = waiting.stats.handling;
         fly(&mut waiting, &handling, rules, Inertia::Inertial, HALF);
         assert_eq!(
@@ -1944,7 +1944,7 @@ mod tests {
             pushes(&|npc| npc.condition = Condition::Disabled),
             "disabled too: the jump path's high level has no disabled test (@0x901e5)"
         );
-        assert!(!pushes(&|npc| npc.mode = Mode::Coasting { ticks_left: 3 }));
+        assert!(!pushes(&|npc| npc.mode = Mode::Coasting { ticks_left: 3.0 }));
         assert!(!pushes(&Npc::begin_own_jump), "an own jump follows no one");
         assert!(
             !pushes(&|npc| npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player))),
@@ -1952,7 +1952,7 @@ mod tests {
         );
         assert!(!pushes(&|npc| npc.leader = None), "+0x9a -1: its own jump");
         assert!(
-            !pushes(&|npc| npc.ai_wait = 5),
+            !pushes(&|npc| npc.ai_wait = 5.0),
             "its high level waits (@0x8d4b9)"
         );
         assert_eq!(
@@ -2113,7 +2113,7 @@ mod tests {
             (ship.ai_wait, ship.warp.aim)
         };
         assert_eq!(followed(false), (FOLLOW_WAIT, 90), "it waits");
-        assert_eq!(followed(true), (0, 101), "it gives up");
+        assert_eq!(followed(true), (0.0, 101), "it gives up");
     }
 
     #[test]
@@ -2369,7 +2369,7 @@ mod tests {
             assert_eq!(ship.travel, set.then_some(LEAD_STELLAR), "@0x8df18-0x8df22");
             assert_eq!(ship.warp.goal, Some(WarpGoal::Follow(ShipRef::Npc(LEAD))));
             let mut ship = following_lead(!set);
-            ship.ai_wait = 1;
+            ship.ai_wait = 1.0;
             fly_jump_by(&mut ship, &views_of(set), &world, true);
             assert_eq!(
                 ship.travel,
@@ -2532,7 +2532,7 @@ mod tests {
         let world = in_world(world());
         let mut waiting = following_lead(false);
         waiting.target = Some(QUARRY);
-        waiting.ai_wait = 1;
+        waiting.ai_wait = 1.0;
         fly_jump_by(&mut waiting, &views_of(false), &world, true);
         assert_eq!(waiting.target, Some(QUARRY));
         let mut paused = following_lead(false);
@@ -2586,7 +2586,7 @@ mod tests {
     fn a_jumping_ship_in_its_ai_wait_moves_on_without_turning() {
         let mut ship = warping(3.0, 0);
         ship.warp.aim = 180;
-        ship.ai_wait = 5;
+        ship.ai_wait = 5.0;
         let handling = ship.stats.handling;
         fly(
             &mut ship,
@@ -2601,7 +2601,7 @@ mod tests {
         for inertia in [Inertia::Inertial, Inertia::Inertialess { speed: 0.0 }] {
             let mut near = warping(3.0, 0);
             near.state.heading = 89.4;
-            near.ai_wait = 5;
+            near.ai_wait = 5.0;
             fly(
                 &mut near,
                 &handling,

@@ -1566,7 +1566,7 @@ mod tests {
         let mut gliding = ship(3, ENEMY, 150.0, 0.0);
         gliding.mode = Mode::JumpingIn { tick: 0 };
         let mut emerging = ship(5, ENEMY, 120.0, 0.0);
-        emerging.mode = Mode::Emerging { ticks_left: 3 };
+        emerging.mode = Mode::Emerging { ticks_left: 3.0 };
         let mut last_frame = ship(6, ENEMY, 130.0, 0.0);
         last_frame.mode = Mode::LeavingGate { tick: 0 };
         let npcs = [
@@ -2025,7 +2025,7 @@ mod tests {
         for mode in [
             Mode::Flying,
             Mode::JumpingIn { tick: 1 },
-            Mode::Emerging { ticks_left: 5 },
+            Mode::Emerging { ticks_left: 5.0 },
             Mode::LeavingGate { tick: 0 },
             Mode::LeavingGate { tick: 1 },
         ] {
@@ -3156,7 +3156,7 @@ mod tests {
             (Mode::JumpingIn { tick: 0 }, true),
             (Mode::LeavingGate { tick: 1 }, true),
             (Mode::LeavingGate { tick: 0 }, false),
-            (Mode::Emerging { ticks_left: 3 }, false),
+            (Mode::Emerging { ticks_left: 3.0 }, false),
         ] {
             let mut arriving = ship(2, ENEMY, 100.0, 0.0);
             arriving.mode = mode;

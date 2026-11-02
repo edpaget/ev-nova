@@ -386,7 +386,7 @@ mod tests {
         // its person still holds the grudge.
         let by_player = strike(n(1), ShipRef::Player);
         let mut waiting = ship(1, 0.0, 0.0);
-        waiting.mode = Mode::Emerging { ticks_left: 60 };
+        waiting.mode = Mode::Emerging { ticks_left: 60.0 };
         let world = World {
             arrival_hits: RuleSource::Bible,
             ..World::new(&[])

@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn a_running_ai_wait_skips_the_handler_unless_the_think_ended_it() {
         let waiting = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..fighter()
         };
         assert!(skips(&waiting, &of(ATTACK)), "@0x8d4d2");
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn a_wait_kept_in_the_gate_hold_skips_the_handler_unless_the_think_ended_it() {
         let held = Npc {
-            mode: Mode::HeldAtGate { ticks_left: 20 },
+            mode: Mode::HeldAtGate { ticks_left: 20.0 },
             ..fighter()
         };
         assert!(skips(&held, &of(ATTACK)), "@0x8d4d2");
@@ -122,11 +122,11 @@ mod tests {
     #[test]
     fn goals_0xa_and_0xe_pass_the_wait_exit_whatever_the_wait() {
         let waiting = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..fighter()
         };
         let held = Npc {
-            mode: Mode::HeldAtGate { ticks_left: 20 },
+            mode: Mode::HeldAtGate { ticks_left: 20.0 },
             ..fighter()
         };
         for goal in FORM {

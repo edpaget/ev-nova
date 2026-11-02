@@ -1910,19 +1910,21 @@ impl From<ShipState> for ShipPlace {
 /// An NPC's fade at a gate: what tints and washes it as it comes out of
 /// a hypergate or wormhole, or enters one to leave (the NPC's
 /// `traffic::npc::Mode`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GateFade {
     /// At no gate.
     None,
-    /// Waiting at the gate it comes out of, for this many more ticks.
+    /// Waiting at the gate it comes out of, for this much more of its
+    /// wait.
     Emerging {
-        /// The ticks of the wait left.
-        ticks_left: u32,
+        /// The wait left, in frames: a float, counted down by the frame's
+        /// gain (`nova_sim_ai`'s `traffic::ai_wait`).
+        ticks_left: f32,
     },
-    /// Entering a gate to leave, for this many more ticks.
+    /// Entering a gate to leave, for this much more of its wait.
     Entering {
-        /// The ticks of the entry left.
-        ticks_left: u32,
+        /// The wait left, in frames, as [`GateFade::Emerging`]'s.
+        ticks_left: f32,
     },
 }
 
@@ -2414,20 +2416,20 @@ mod tests {
     #[test]
     fn an_npcs_gate_fade_follows_its_mode() {
         assert_eq!(
-            GateFade::of(&Mode::Emerging { ticks_left: 7 }),
-            GateFade::Emerging { ticks_left: 7 }
+            GateFade::of(&Mode::Emerging { ticks_left: 7.0 }),
+            GateFade::Emerging { ticks_left: 7.0 }
         );
         let entering = Mode::EnteringGate {
             gate: StellarId(130),
-            ticks_left: 5,
+            ticks_left: 5.0,
         };
         assert_eq!(
             GateFade::of(&entering),
-            GateFade::Entering { ticks_left: 5 }
+            GateFade::Entering { ticks_left: 5.0 }
         );
         assert_eq!(GateFade::of(&Mode::Flying), GateFade::None);
-        assert!(GateFade::Entering { ticks_left: 0 }.at_gate());
-        assert!(GateFade::Emerging { ticks_left: 0 }.at_gate());
+        assert!(GateFade::Entering { ticks_left: 0.0 }.at_gate());
+        assert!(GateFade::Emerging { ticks_left: 0.0 }.at_gate());
         assert!(!GateFade::None.at_gate());
     }
 

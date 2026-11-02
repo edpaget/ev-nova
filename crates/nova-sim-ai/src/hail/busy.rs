@@ -192,7 +192,7 @@ mod tests {
         for (mode, original) in [
             (Mode::JumpingIn { tick: 0 }, 8),
             (Mode::LeavingGate { tick: 3 }, 8),
-            (Mode::Emerging { ticks_left: 10 }, 0x15),
+            (Mode::Emerging { ticks_left: 10.0 }, 0x15),
             (Mode::LeavingGate { tick: 0 }, 0x15),
         ] {
             let mut npc = flying(1, Goal::Idle);
@@ -200,7 +200,7 @@ mod tests {
             assert!(ai_is_ship_busy(&npc), "{mode:?}: goal {original:#x}");
         }
         for mode in [
-            Mode::Coasting { ticks_left: 10 },
+            Mode::Coasting { ticks_left: 10.0 },
             Mode::Adrift { ticks_left: 10 },
             Mode::Flying,
         ] {

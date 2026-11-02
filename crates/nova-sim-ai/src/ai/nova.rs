@@ -1457,7 +1457,7 @@ mod tests {
         let pirate = ship(2, PIRATES, AiType::Warship, 300.0, 0.0);
         let target = |mut npc: Npc| {
             npc.target = Some(ShipRef::Npc(NpcId(2)));
-            npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30 };
+            npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 30.0 };
             npc
         };
         let escort = target(escorting(ship(1, PIRATES, AiType::Warship, 0.0, 0.0)));
@@ -2106,7 +2106,7 @@ mod tests {
         let attack = of_goal(Goal::Attack(ShipRef::Player));
         let ai = thinking(attack);
         let mut hunter = gunned(mission_ship(of(1, AiType::Warship), 0));
-        hunter.ai_wait = 3;
+        hunter.ai_wait = 3.0;
         let npcs = [hunter];
         let around = with_player(&npcs, BREAKING_UP);
         assert_eq!(ai.decision(&npcs[0], &around, &mut Draws::of(&[])), attack);
@@ -2121,7 +2121,7 @@ mod tests {
         let attack = of_goal(Goal::Attack(ShipRef::Player));
         let ai = thinking(attack);
         let mut hunter = gunned(mission_ship(of(1, AiType::Warship), 0));
-        hunter.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 };
+        hunter.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20.0 };
         hunter.goal = Goal::Attack(ShipRef::Player);
         hunter.target = Some(ShipRef::Player);
         hunter.provoked = 5.0;
@@ -2855,11 +2855,11 @@ mod tests {
         let mut npc = ship(1, TRADERS, AiType::Warship, 0.0, 0.0);
         npc.goal = Goal::Flee(ShipRef::Npc(NpcId(9)));
         let waiting = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..npc.clone()
         };
         let held = Npc {
-            mode: crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 },
+            mode: crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20.0 },
             ..npc
         };
         let govts = crate::ai::fixture::govts(0, 0);
@@ -2891,7 +2891,7 @@ mod tests {
         // The head's exit comes before the hunt (@0x8d4b9-0x8d4d2,
         // @0x8d625-0x8d6e9).
         let hunter = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..gunned(mission_ship(of(1, AiType::Warship), 0))
         };
         let npcs = [hunter];
@@ -2938,7 +2938,7 @@ mod tests {
         // state-4 block's wait test then drops the hunt to goal 0, its
         // target 0 kept (@0x8e26d → @0x8e731).
         let hunter = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..gunned(mission_ship(of(1, AiType::Warship), 0))
         };
         let npcs = [hunter];
@@ -2967,7 +2967,7 @@ mod tests {
     fn a_think_that_ended_its_wait_reaches_the_handler() {
         // `_EscortAI` writes +0x4c first (@0x83d62), so the head lets it by.
         let waiting = Npc {
-            ai_wait: 3,
+            ai_wait: 3.0,
             ..of(1, AiType::Warship)
         };
         let npcs = [waiting, of(2, AiType::Warship)];

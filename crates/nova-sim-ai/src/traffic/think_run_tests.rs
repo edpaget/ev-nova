@@ -118,7 +118,7 @@ fn a_run_leaves_every_ship_outside_it_as_it_was() {
     };
     traffic.add_npc_at(flying, 1);
     let held = Npc {
-        mode: Mode::HeldAtGate { ticks_left: 5 },
+        mode: Mode::HeldAtGate { ticks_left: 5.0 },
         target: Some(ShipRef::Player),
         ..fixture::npc(0, ShipStats::default())
     };
@@ -126,7 +126,7 @@ fn a_run_leaves_every_ship_outside_it_as_it_was() {
     // Coasting with a kept launch: settled again with no room, it
     // would lose it.
     let coasting = Npc {
-        mode: Mode::Coasting { ticks_left: 5 },
+        mode: Mode::Coasting { ticks_left: 5.0 },
         trigger: LAUNCHING,
         ..carrier(0)
     };

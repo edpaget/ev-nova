@@ -671,7 +671,7 @@ mod tests {
         };
         assert_eq!(inspects_alone(dying), Goal::Inspect(n(2)));
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 0 },
         ] {
             assert_ne!(inspects_alone(with(mode)), Goal::Inspect(n(2)), "{mode:?}");
@@ -807,8 +807,8 @@ mod tests {
     fn an_interceptor_whose_wait_runs_keeps_its_attack_on_a_ship_breaking_up() {
         // The handler jumps out at its head while +0x4c runs (@0x8d4b9
         // -0x8d4d2 → 0x8fb47), the think having run first (@0x901e5).
-        let waiting = on_the_wreck(|cop| cop.ai_wait = 3);
-        let held = on_the_wreck(|cop| cop.mode = Mode::HeldAtGate { ticks_left: 20 });
+        let waiting = on_the_wreck(|cop| cop.ai_wait = 3.0);
+        let held = on_the_wreck(|cop| cop.mode = Mode::HeldAtGate { ticks_left: 20.0 });
         for npc in [waiting, held] {
             let decision = high_level(0, &[npc, wreck()], None);
             assert_eq!(decision.goal, Goal::Attack(n(2)), "goal 4");

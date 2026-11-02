@@ -484,15 +484,15 @@ mod tests {
         };
         for condition in [Condition::Disabled, dying] {
             for reading in RuleSource::ALL {
-                let mut traffic = in_gate(condition, Mode::Emerging { ticks_left: 3 });
+                let mut traffic = in_gate(condition, Mode::Emerging { ticks_left: 3.0 });
                 ticked(&mut traffic, reading, &mut NeverFires);
                 let reset = of(&traffic, LED);
                 assert!(was_reset(reset), "{condition:?} {reading:?}");
-                assert_eq!(reset.mode, Mode::HeldAtGate { ticks_left: 2 });
+                assert_eq!(reset.mode, Mode::HeldAtGate { ticks_left: 2.0 });
                 assert_eq!(reset.emerges_from, None, "{condition:?} {reading:?}");
                 assert!(!reset.emerging(), "{condition:?} {reading:?}");
                 ticked(&mut traffic, reading, &mut NeverFires);
-                assert_eq!(of(&traffic, LED).mode, Mode::HeldAtGate { ticks_left: 1 });
+                assert_eq!(of(&traffic, LED).mode, Mode::HeldAtGate { ticks_left: 1.0 });
                 ticked(&mut traffic, reading, &mut NeverFires);
                 let out = of(&traffic, LED);
                 assert_eq!(out.mode, Mode::Flying, "{condition:?} {reading:?}");
@@ -517,10 +517,10 @@ mod tests {
 
     #[test]
     fn an_intact_ship_in_its_gate_keeps_its_mode() {
-        let mut traffic = in_gate(Condition::Intact, Mode::Emerging { ticks_left: 3 });
+        let mut traffic = in_gate(Condition::Intact, Mode::Emerging { ticks_left: 3.0 });
         ticked(&mut traffic, RuleSource::Engine, &mut NeverFires);
         let waiting = of(&traffic, LED);
-        assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2 });
+        assert_eq!(waiting.mode, Mode::Emerging { ticks_left: 2.0 });
         assert!(waiting.emerges_from.is_some());
     }
 
@@ -534,7 +534,7 @@ mod tests {
         let led = traffic.npcs_mut().iter_mut().find(|npc| npc.id == LED);
         led.expect("there").mode = Mode::EnteringGate {
             gate: ENTERED,
-            ticks_left: 9,
+            ticks_left: 9.0,
         };
         traffic
     }
@@ -559,7 +559,7 @@ mod tests {
             traffic.fly_holding(World::new(&[]), &BTreeSet::new(), &mut NeverFires);
             assert_eq!(
                 of(&traffic, LED).mode,
-                Mode::Coasting { ticks_left: 8 },
+                Mode::Coasting { ticks_left: 8.0 },
                 "{condition:?}: its wait counts down"
             );
             let mut departed = Vec::new();

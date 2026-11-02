@@ -281,7 +281,7 @@ struct Watch {
 impl Behaviour for Watch {
     fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
         if let Some(watched) = around.npcs.iter().find(|ship| ship.id == self.watched) {
-            let seen = (npc.id, watched.goal, watched.ai_wait > 0);
+            let seen = (npc.id, watched.goal, watched.ai_wait > 0.0);
             self.seen.borrow_mut().push(seen);
         }
         npc.goal
@@ -329,7 +329,7 @@ fn under_its_ai_wait_its_low_level_leaves_the_heads_word() {
     // the wait (@0x34a54-0x34a72).
     let mut traffic = Traffic::with_interval(1);
     let attacker = attacking(&mut traffic, 0.0);
-    of_mut(&mut traffic, attacker).ai_wait = 5;
+    of_mut(&mut traffic, attacker).ai_wait = 5.0;
     of_mut(&mut traffic, attacker).state.heading = 33.6;
     traffic.think_holding(&Keeps, World::new(&[]), &[], &mut NeverFires);
     let word = traffic.word_of(attacker).expect("kept");
@@ -875,7 +875,7 @@ mod gain {
     #[test]
     fn at_half_gain_a_waiting_ship_moves_half_its_velocity() {
         let mut waiting = ship(90.0);
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         let moved = flown(waiting, &word(180, true), HALF);
         assert_eq!(moved.state.position, Vec2::new(1.0, 0.0));
         assert_eq!(moved.state.heading, 90.0, "no turn in its wait");

@@ -136,6 +136,7 @@ use crate::handling::Handling;
 use crate::inertialess::{REVERSE, step_speed};
 use crate::rulebook::RuleSource;
 use crate::speed_mult::SpeedMult;
+use crate::traffic::ai_wait;
 use crate::traffic::berth_kept::BerthKept;
 use crate::traffic::held_burst::{self, Flight, Word};
 #[cfg(doc)]
@@ -391,7 +392,7 @@ pub fn spawn_heading(headings: &BerthKept<i16>, berth: u32) -> Option<i16> {
 /// velocity pulled by its adjustment's own acceleration at its step.
 /// Each moves, turns and thrusts at the frame's gain ([`AtStep::gain`]).
 pub fn handle_ship(npc: &mut Npc, word: &SlotWord, at_step: AtStep, flight: FlightRules) {
-    if npc.ai_wait > 0 && !npc.count_wait() {
+    if ai_wait::running(npc.ai_wait) && !npc.count_wait() {
         let unthrust = at_step.unthrust();
         super::autopilot::position_step(npc, &unthrust, word.inertia, at_step.gain);
         return;
@@ -610,7 +611,7 @@ mod tests {
     #[test]
     fn in_its_ai_wait_it_moves_on_with_no_turn_or_thrust_but_in_a_count_wait() {
         let mut waiting = ship(1.0, 0.0);
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         handle_ship(
             &mut waiting,
             &word(90, true, Cap::Slot),
@@ -633,7 +634,7 @@ mod tests {
     #[test]
     fn an_inertialess_ship_in_its_wait_drifts_by_the_steps_adjust_accel() {
         let mut waiting = ship(1.0, 90.0);
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         waiting.speed = 2.0;
         let inertialess = SlotWord {
             inertia: Inertia::Inertialess { speed: 2.0 },

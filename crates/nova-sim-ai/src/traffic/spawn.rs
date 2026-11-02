@@ -327,7 +327,7 @@ pub const AGGRESSION_DRAW: u32 = 3;
 const AGGRESSION_XOR: u32 = 2;
 
 /// How a ship added to the system comes into it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Entry {
     /// Placed in the system already, flying.
     Placed,
@@ -336,8 +336,8 @@ pub enum Entry {
     /// Coming out of a hypergate or wormhole, after a wait of this many
     /// ticks (see [`emerge`](crate::traffic::emerge)).
     Emerging {
-        /// The ticks of the wait.
-        ticks_left: u32,
+        /// The wait, in frames ([`ai_wait`](crate::traffic::ai_wait)).
+        ticks_left: f32,
         /// The gate it comes out of.
         gate: StellarId,
     },
@@ -1256,8 +1256,9 @@ pub fn fleet(
                     state,
                     Entry::Emerging {
                         ticks_left: EMERGE_TICKS
-                            + ESCORT_EMERGE_EXTRA
-                            + chance.below(ESCORT_EMERGE_SPREAD),
+                            + crate::traffic::ai_wait::ticks(
+                                ESCORT_EMERGE_EXTRA + chance.below(ESCORT_EMERGE_SPREAD),
+                            ),
                         gate,
                     },
                 ),
@@ -1493,7 +1494,7 @@ mod tests {
     fn an_entry_from_a_gate_names_it_and_a_tank_visits_it() {
         let gate = StellarId(129);
         let emerging = Entry::Emerging {
-            ticks_left: 3,
+            ticks_left: 3.0,
             gate,
         };
         assert_eq!(emerging.gate(), Some(gate));
@@ -4670,15 +4671,15 @@ mod tests {
             out.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
             [
                 Entry::Emerging {
-                    ticks_left: 60,
+                    ticks_left: 60.0,
                     gate: StellarId(129)
                 },
                 Entry::Emerging {
-                    ticks_left: 72,
+                    ticks_left: 72.0,
                     gate: StellarId(129)
                 },
                 Entry::Emerging {
-                    ticks_left: 79,
+                    ticks_left: 79.0,
                     gate: StellarId(129)
                 },
             ]
@@ -4718,15 +4719,15 @@ mod tests {
             ships.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
             [
                 Entry::Emerging {
-                    ticks_left: 60,
+                    ticks_left: 60.0,
                     gate: StellarId(129)
                 },
                 Entry::Emerging {
-                    ticks_left: 70,
+                    ticks_left: 70.0,
                     gate: StellarId(129)
                 },
                 Entry::Emerging {
-                    ticks_left: 74,
+                    ticks_left: 74.0,
                     gate: StellarId(129)
                 },
             ]

@@ -6,6 +6,8 @@
 //! is out. Its slot still counts toward the system's `AvgShips`
 //! (`_EnterMoreShips` @0x43b14-0x43b5c), and its berth stays taken.
 
+#![allow(clippy::float_cmp)]
+
 use super::tests::{placed, table};
 use super::{Traffic, spawn};
 use crate::ai::{Behaviour, Goal, Surroundings};
@@ -62,15 +64,15 @@ fn a_landing_npc_stays_still_through_its_wait_then_takes_its_new_goal() {
     let landed: ShipState = the_ship(&traffic).state;
     assert_eq!(the_ship(&traffic).id, id);
     assert_eq!(the_ship(&traffic).visited, Some(StellarId(140)));
-    assert_eq!(the_ship(&traffic).ai_wait, 301, "counted once");
+    assert_eq!(the_ship(&traffic).ai_wait, 301.0, "counted once");
     assert_eq!(landed.velocity, Vec2::ZERO);
-    for left in (1..=301).rev() {
+    for left in (1..=301).rev().map(crate::traffic::ai_wait::ticks) {
         assert_eq!(the_ship(&traffic).ai_wait, left);
         traffic.tick(&LandThenLeave, &sites, &mut Draws::of(&[]));
         let ship = the_ship(&traffic);
         assert_eq!(ship.goal, Goal::JumpOut, "its think runs through the wait");
         assert_eq!(ship.state, landed, "{left}: still");
-        assert_eq!(ship.ai_wait, left - 1);
+        assert_eq!(ship.ai_wait, left - 1.0);
         assert_eq!(traffic.departed(), []);
     }
     // Its wait out, it begins to leave: sub 3's run out from the centre.

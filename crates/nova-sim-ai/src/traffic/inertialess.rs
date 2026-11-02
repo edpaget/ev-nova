@@ -840,7 +840,7 @@ mod tests {
         let mut ship = npc(RAVEN, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 90.0), 2.0);
         ship.mode = Mode::EnteringGate {
             gate: StellarId(300),
-            ticks_left: 10,
+            ticks_left: 10.0,
         };
         fly(&mut ship, &[], None);
         assert!(
@@ -852,7 +852,7 @@ mod tests {
         let mut inertial = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 90.0), 2.0);
         inertial.mode = Mode::EnteringGate {
             gate: StellarId(300),
-            ticks_left: 10,
+            ticks_left: 10.0,
         };
         fly(&mut inertial, &[], None);
         assert_eq!(
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn an_inertialess_ship_holding_its_course_after_its_burst_follows_its_speed() {
         let mut ship = npc(RAVEN, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 90.0), 3.0);
-        ship.mode = Mode::Coasting { ticks_left: 5 };
+        ship.mode = Mode::Coasting { ticks_left: 5.0 };
         fly(&mut ship, &[], None);
         assert!(
             near(ship.state.velocity, Vec2::new(0.72, 0.0)),
@@ -873,7 +873,7 @@ mod tests {
             ship.state
         );
         assert!(near(ship.state.position, Vec2::new(0.72, 0.0)));
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 4 });
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 4.0 });
         assert_eq!(ship.speed, 3.0, "no brake while it waits");
     }
 

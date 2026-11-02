@@ -164,7 +164,7 @@ fn each_flight_steps_the_glow_and_the_wait_holds_the_bank() {
     let shown = traffic.npcs()[0].display;
     assert_eq!(shown.glow, 9, "braking at rest: coasting");
     assert_eq!(shown.frames.bank, 5.0, "levelling");
-    traffic.npcs[0].ai_wait = 10;
+    traffic.npcs[0].ai_wait = 10.0;
     traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
     let shown = traffic.npcs()[0].display;
     assert_eq!(

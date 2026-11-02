@@ -545,7 +545,7 @@ mod tests {
     fn a_frame_kept_from_the_last_tick_runs_no_branch_under_an_ai_wait() {
         // The engine's pursuit runs nothing under a wait, where the
         // original's low level runs on (see the phase's left-out items).
-        assert_a_kept_frame_runs_no_branch(|ship| ship.ai_wait = 50);
+        assert_a_kept_frame_runs_no_branch(|ship| ship.ai_wait = 50.0);
     }
 
     #[test]

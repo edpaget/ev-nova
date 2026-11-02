@@ -137,7 +137,7 @@ fn a_painted_npc_is_drawn_in_its_paint_even_at_its_gate() {
     );
     // A gate's fade writes the translucency and leaves the paint
     // (@0x2c090-0x2c18e).
-    npc.gate = GateFade::Emerging { ticks_left: 3 };
+    npc.gate = GateFade::Emerging { ticks_left: 3.0 };
     let faded = npc_tint(npc.gate).expect("shown").a;
     let t = translucency(faded);
     assert!(t > 4, "faded past the blue: {t}");

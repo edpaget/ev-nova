@@ -17,6 +17,7 @@ use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::speed_mult::SpeedMult;
+use crate::traffic::ai_wait;
 #[cfg(doc)]
 use crate::traffic::emerge::exit_speed;
 use crate::traffic::inertialess::{self, Inertia};
@@ -26,6 +27,10 @@ use crate::traffic::ship_display;
 use crate::traffic::slot_word::{self, AtStep, SlotWord};
 #[cfg(doc)]
 use crate::traffic::spawn::glide_speed;
+
+/// The wait below which a ship entering a gate is gone: the float 1.0
+/// `_HandleShipDisplay` frees its slot under (0xdd068, @0x2c066).
+const GATE_GONE_BELOW: f32 = 1.0;
 
 /// `_HandleShip`'s flight of `npc` at its step by the `word` its low level
 /// left at its slot (see the module docs), with what it reads `at_step`,
@@ -212,7 +217,7 @@ pub(super) fn unsteered(
                 }
                 // `_HandleShip` counts +0x4c down for a disabled ship too
                 // (@0x34424 → @0x34679 → @0x34a54 → @0x35026).
-                Mode::Coasting { ticks_left } => count_down(npc, ticks_left),
+                Mode::Coasting { ticks_left } => count_down(npc, ticks_left, flown.gain),
                 _ => {}
             }
             disabled_drag(npc);
@@ -250,14 +255,16 @@ pub(super) fn steered(npc: &Npc) -> bool {
 
 /// One tick of `npc` entering `gate`, `ticks_left` of its wait left
 /// (see [`gate_entry`](crate::traffic::gate_entry)): still, whatever its
-/// condition and goal, as `_HandleShip` counts +0x4c down for every ship
-/// and the fade reads only the sub-goal; and gone once the wait is out. An
-/// inertialess ship's velocity follows its speed meanwhile, as `flown`
-/// says ([`inertialess::drift`]).
-fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32, flown: Flown) -> Outcome {
+/// condition and goal, as `_HandleShip` counts +0x4c down by the frame's
+/// gain for every ship ([`ai_wait::counted_down`]) and the fade reads
+/// only the sub-goal; and gone once the wait is below 1.0, as
+/// `_HandleShipDisplay` frees its slot (`1.0 > +0x4c`, @0x2c066-0x2c07f)
+/// after that frame's count-down. An inertialess ship's velocity follows
+/// its speed meanwhile, as `flown` says ([`inertialess::drift`]).
+fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: f32, flown: Flown) -> Outcome {
     flown.hold(npc);
-    let left = ticks_left.saturating_sub(1);
-    if left == 0 {
+    let left = ai_wait::counted_down(ticks_left, flown.gain);
+    if left < GATE_GONE_BELOW {
         return Outcome::EnteredGate(gate);
     }
     npc.mode = Mode::EnteringGate {
@@ -293,15 +300,17 @@ fn drift_in_wait(npc: &mut Npc, flown: Flown) {
 /// it left: moving on its velocity ([`drift_in_wait`]), and bursting out
 /// once it is over, its trigger (the point defence it may hold while it
 /// waits) released, as the burst's sub-goal 0xa makes no
-/// `_AIEscortFireUnprovoked` call (@0x8f3d9).
-fn wait_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown) {
+/// `_AIEscortFireUnprovoked` call (@0x8f3d9). The wait counts down by the
+/// frame's gain ([`ai_wait::counted_down`]) and is over once it no longer
+/// runs.
+fn wait_at_gate(npc: &mut Npc, ticks_left: f32, flown: Flown) {
     drift_in_wait(npc, flown);
-    let left = ticks_left.saturating_sub(1);
-    npc.mode = if left == 0 {
+    let left = ai_wait::counted_down(ticks_left, flown.gain);
+    npc.mode = if ai_wait::running(left) {
+        Mode::Emerging { ticks_left: left }
+    } else {
         npc.trigger = Trigger::default();
         Mode::LeavingGate { tick: 0 }
-    } else {
-        Mode::Emerging { ticks_left: left }
     };
 }
 
@@ -312,14 +321,15 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown) {
 /// steering, thrust and fire while it runs (@0x34a54-0x34a72); and
 /// flying its goal once the wait is out, from the next tick, owing its
 /// gate burst as `burst` reads ([`Npc::end_wait`]), as the original flies
-/// it on the frame after +0x4c reaches 0.
-fn hold_at_gate(npc: &mut Npc, ticks_left: u32, flown: Flown, burst: RuleSource) {
+/// it on the frame after +0x4c no longer runs. It counts down by the
+/// frame's gain ([`ai_wait::counted_down`]).
+fn hold_at_gate(npc: &mut Npc, ticks_left: f32, flown: Flown, burst: RuleSource) {
     drift_in_wait(npc, flown);
-    let left = ticks_left.saturating_sub(1);
-    if left == 0 {
-        npc.end_wait(burst);
-    } else {
+    let left = ai_wait::counted_down(ticks_left, flown.gain);
+    if ai_wait::running(left) {
         npc.mode = Mode::HeldAtGate { ticks_left: left };
+    } else {
+        npc.end_wait(burst);
     }
 }
 
@@ -438,7 +448,7 @@ pub(crate) fn after_burst(
     } else {
         npc.trigger = Trigger::default();
         Mode::Coasting {
-            ticks_left: POST_BURST_WAIT + chance.below(POST_BURST_SPREAD),
+            ticks_left: POST_BURST_WAIT + ai_wait::ticks(chance.below(POST_BURST_SPREAD)),
         }
     };
 }
@@ -450,9 +460,9 @@ pub(crate) fn after_burst(
 /// first (@0x34274-0x342aa), and flies once the wait is over
 /// (@0x3501f-0x35048). An inertialess ship's velocity follows its speed
 /// as it moves (@0x3425f; [`inertialess::drift`]).
-fn coast(npc: &mut Npc, ticks_left: u32, flown: Flown) {
+fn coast(npc: &mut Npc, ticks_left: f32, flown: Flown) {
     position_step(npc, flown.handling, flown.inertia, flown.gain);
-    count_down(npc, ticks_left);
+    count_down(npc, ticks_left, flown.gain);
 }
 
 /// `_HandleShip`'s move alone (@0x34274-0x342aa), with neither turn nor
@@ -494,14 +504,15 @@ impl Flown<'_> {
     }
 }
 
-/// Counts `npc`'s wait on its course down a tick from `ticks_left`
-/// (@0x35026-0x35048): it flies once the wait is out.
-fn count_down(npc: &mut Npc, ticks_left: u32) {
-    let left = ticks_left.saturating_sub(1);
-    npc.mode = if left == 0 {
-        Mode::Flying
-    } else {
+/// Counts `npc`'s wait on its course down from `ticks_left` by the
+/// frame's `gain` (@0x35026-0x35048, [`ai_wait::counted_down`]): it flies
+/// once the wait no longer runs.
+fn count_down(npc: &mut Npc, ticks_left: f32, gain: SpeedMult) {
+    let left = ai_wait::counted_down(ticks_left, gain);
+    npc.mode = if ai_wait::running(left) {
         Mode::Coasting { ticks_left: left }
+    } else {
+        Mode::Flying
     };
 }
 
@@ -639,14 +650,14 @@ mod tests {
 
     #[test]
     fn at_half_gain_a_coasting_ship_moves_half_its_velocity() {
-        let mut coasting = ship(Vec2::new(2.0, 0.0), Mode::Coasting { ticks_left: 5 });
+        let mut coasting = ship(Vec2::new(2.0, 0.0), Mode::Coasting { ticks_left: 5.0 });
         step_at_half(&mut coasting, Inertia::Inertial);
         assert_eq!(coasting.state.position, Vec2::new(1.0, 0.0));
     }
 
     #[test]
     fn at_half_gain_a_disabled_coasting_ship_drifts_half_its_dragged_velocity() {
-        let mut disabled = ship(Vec2::new(2.0, 0.0), Mode::Coasting { ticks_left: 5 });
+        let mut disabled = ship(Vec2::new(2.0, 0.0), Mode::Coasting { ticks_left: 5.0 });
         disabled.condition = Condition::Disabled;
         step_at_half(&mut disabled, Inertia::Inertial);
         let dragged = Vec2::new(2.0, 0.0) * DISABLED_DRAG;
@@ -656,8 +667,8 @@ mod tests {
     #[test]
     fn at_half_gain_a_ship_emerging_or_held_at_its_gate_drifts_half() {
         for mode in [
-            Mode::Emerging { ticks_left: 5 },
-            Mode::HeldAtGate { ticks_left: 5 },
+            Mode::Emerging { ticks_left: 5.0 },
+            Mode::HeldAtGate { ticks_left: 5.0 },
         ] {
             let mut waiting = ship(Vec2::new(2.0, 0.0), mode);
             step_at_half(&mut waiting, Inertia::Inertial);
@@ -688,7 +699,7 @@ mod tests {
         let gate = StellarId(300);
         let mode = Mode::EnteringGate {
             gate,
-            ticks_left: 5,
+            ticks_left: 5.0,
         };
         let mut entering = ship(Vec2::ZERO, mode);
         entering.speed = 3.0;
@@ -713,5 +724,70 @@ mod tests {
         let by = (FlightRules::default(), RuleSource::Engine, false);
         step(&mut pod, &word, at_step, LED, by, &mut NeverFires);
         assert_eq!(pod.state.heading, 92.5);
+    }
+
+    // The AI wait, counted down by the frame's gain.
+
+    /// The mode and outcome of a ship of `condition` in `mode` after a
+    /// step at half gain.
+    fn waited(mode: Mode, condition: Condition) -> (Mode, Outcome) {
+        let mut ship = ship(Vec2::ZERO, mode);
+        ship.condition = condition;
+        let outcome = step_at_half(&mut ship, Inertia::Inertial);
+        (ship.mode, outcome)
+    }
+
+    #[test]
+    fn at_half_gain_a_wait_at_or_out_of_a_gate_drops_half_a_frame_and_ends_once_out() {
+        let intact = Condition::Intact;
+        assert_eq!(
+            waited(Mode::Emerging { ticks_left: 0.75 }, intact).0,
+            Mode::Emerging { ticks_left: 0.25 }
+        );
+        assert_eq!(
+            waited(Mode::Emerging { ticks_left: 0.25 }, intact).0,
+            Mode::LeavingGate { tick: 0 },
+            "-0.25: out"
+        );
+        assert_eq!(
+            waited(Mode::HeldAtGate { ticks_left: 0.75 }, intact).0,
+            Mode::HeldAtGate { ticks_left: 0.25 }
+        );
+        assert_eq!(
+            waited(Mode::HeldAtGate { ticks_left: 0.25 }, intact).0,
+            Mode::Flying
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_wait_on_course_drops_half_a_frame_and_ends_once_out_intact_or_not() {
+        for condition in [Condition::Intact, Condition::Disabled] {
+            assert_eq!(
+                waited(Mode::Coasting { ticks_left: 0.75 }, condition).0,
+                Mode::Coasting { ticks_left: 0.25 },
+                "{condition:?}"
+            );
+            assert_eq!(
+                waited(Mode::Coasting { ticks_left: 0.25 }, condition).0,
+                Mode::Flying,
+                "{condition:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn at_half_gain_a_ship_entering_a_gate_drops_half_a_frame_and_is_gone_below_1() {
+        let gate = StellarId(300);
+        let entering = |ticks_left| Mode::EnteringGate { gate, ticks_left };
+        assert_eq!(
+            waited(entering(1.5), Condition::Intact),
+            (entering(1.0), Outcome::Flying),
+            "at 1.0: still there"
+        );
+        assert_eq!(
+            waited(entering(1.25), Condition::Intact).1,
+            Outcome::EnteredGate(gate),
+            "0.75: gone, though its wait still runs"
+        );
     }
 }

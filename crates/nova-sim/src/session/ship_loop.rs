@@ -908,7 +908,7 @@ mod tests {
         let gate = session.chart.sites[0].id;
         session.space.npc_mut(leaving).expect("there").mode = Mode::EnteringGate {
             gate,
-            ticks_left: 1,
+            ticks_left: 1.0,
         };
         let aim = ShipRef::Npc(leaving);
         let earlier = holding(&mut session, 2, aim);

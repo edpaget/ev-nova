@@ -121,13 +121,13 @@ mod tests {
         disabled.condition = Condition::Disabled;
         assert!(reaches_think(&disabled));
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
-            Mode::HeldAtGate { ticks_left: 3 },
-            Mode::Coasting { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
+            Mode::Coasting { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 0 },
             Mode::EnteringGate {
                 gate: crate::catalog::StellarId(300),
-                ticks_left: 3,
+                ticks_left: 3.0,
             },
         ] {
             assert!(reaches_think(&Npc { mode, ..ship() }), "{mode:?}");
@@ -188,13 +188,13 @@ mod tests {
     fn an_escort_think_is_reached_off_the_gate_the_glide_the_jump_and_a_count_wait() {
         assert!(reaches_escort_think(&ship()));
         for mode in [
-            Mode::HeldAtGate { ticks_left: 3 },
-            Mode::Coasting { ticks_left: 3 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
+            Mode::Coasting { ticks_left: 3.0 },
         ] {
             assert!(reaches_escort_think(&Npc { mode, ..ship() }), "{mode:?}");
         }
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 0 },
             Mode::LeavingGate { tick: 1 },
             Mode::JumpingIn { tick: 0 },

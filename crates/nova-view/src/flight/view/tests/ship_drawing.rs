@@ -522,7 +522,7 @@ fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
         "opaque: 22/32"
     );
     // Waiting at its gate, fading in, its fade's alpha in place of it.
-    for ticks_left in [1, 3] {
+    for ticks_left in [1.0, 3.0] {
         npc.gate = GateFade::Emerging { ticks_left };
         let faded = npc_tint(npc.gate).expect("shown").a;
         assert_ne!(faded, base, "{ticks_left}");
@@ -532,7 +532,7 @@ fn an_npcs_base_transp_gives_way_to_its_gate_fade_and_cloak() {
             "{ticks_left}"
         );
     }
-    npc.gate = GateFade::Entering { ticks_left: 8 };
+    npc.gate = GateFade::Entering { ticks_left: 8.0 };
     let entering = npc_tint(npc.gate).expect("shown").a;
     assert_ne!(entering, base);
     assert_eq!(npc_hull(&view, &npc).map(|tint| tint.a), Some(entering));
@@ -625,7 +625,7 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
     );
     // Waiting at its gate, uncloaked, it draws nothing, lit glow or not.
     npc.cloak = CloakShown::Opaque;
-    npc.gate = GateFade::Emerging { ticks_left: 100 };
+    npc.gate = GateFade::Emerging { ticks_left: 100.0 };
     assert_eq!(npc_tint(npc.gate), None);
     let mut list = DrawList::new();
     view.draw_npc(&mut list, &npc, &|_| VIEW_CENTER, npc.heading);
@@ -934,7 +934,7 @@ fn an_ionized_npc_at_its_gate_shows_the_gates_white_colorize_not_its_tint() {
     let view = murky_ionizing(None);
     let (list, _) = npc_drawn_ionized(
         &view,
-        |npc| npc.gate = GateFade::Emerging { ticks_left: 3 },
+        |npc| npc.gate = GateFade::Emerging { ticks_left: 3.0 },
         Some(ION),
         nova_sim::Vec2::new(100.0, -100.0),
     );
@@ -958,7 +958,7 @@ fn an_npc_entering_a_gate_is_colorized_white_and_its_glow_held_out() {
     lit_at_28(&mut view, NPC_0);
     let (list, _) = npc_drawn_ionized(
         &view,
-        |npc| npc.gate = GateFade::Entering { ticks_left: 4 },
+        |npc| npc.gate = GateFade::Entering { ticks_left: 4.0 },
         None,
         nova_sim::Vec2::new(100.0, -100.0),
     );
@@ -1000,7 +1000,7 @@ fn a_murked_npc_at_its_gate_takes_the_gates_colorize_in_place_of_its_murk() {
     let view = murky_ionizing(None);
     let (list, murk) = npc_drawn_ionized(
         &view,
-        |npc| npc.gate = GateFade::Emerging { ticks_left: 3 },
+        |npc| npc.gate = GateFade::Emerging { ticks_left: 3.0 },
         None,
         nova_sim::Vec2::new(100.0, -100.0),
     );

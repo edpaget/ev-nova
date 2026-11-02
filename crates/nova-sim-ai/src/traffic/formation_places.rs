@@ -366,7 +366,7 @@ mod tests {
         let (mut traffic, lead, followers) = fleet(&[ABOVE]);
         let there = of_mut(&mut traffic, lead);
         there.goal = Goal::Drift;
-        there.ai_wait = 10;
+        there.ai_wait = 10.0;
         let start = there.state;
         think(&mut traffic);
         let lead = of(&traffic, lead);

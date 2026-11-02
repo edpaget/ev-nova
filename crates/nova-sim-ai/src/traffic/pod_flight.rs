@@ -231,15 +231,15 @@ mod tests {
         let behaviour = Recording::default();
         let mut other = npc(0, ShipStats::new(FAST, &[]));
         other.state.position = Vec2::new(500.0, 0.0);
-        other.ai_wait = 3;
+        other.ai_wait = 3.0;
         let mut traffic = holding(vec![other, pod(0.0, Mode::Adrift { ticks_left: 3 })]);
         let waits = |traffic: &Traffic| (traffic.npcs()[0].ai_wait, traffic.npcs()[1].mode);
         tick(&mut traffic, &behaviour);
-        assert_eq!(waits(&traffic), (2, Mode::Adrift { ticks_left: 2 }));
+        assert_eq!(waits(&traffic), (2.0, Mode::Adrift { ticks_left: 2 }));
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         assert_eq!(
             waits(&traffic),
-            (1, Mode::Adrift { ticks_left: 2 }),
+            (1.0, Mode::Adrift { ticks_left: 2 }),
             "the fight's countdown runs on both passes, the pod's on the advance pass alone"
         );
     }

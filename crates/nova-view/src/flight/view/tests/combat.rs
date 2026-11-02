@@ -58,7 +58,7 @@ fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint() {
     // a held ship is at no gate (`GateFade::of`, nova-sim's
     // `an_npcs_gate_fade_follows_its_mode`).
     assert_eq!(
-        npc_tint(GateFade::Emerging { ticks_left: 30 }),
+        npc_tint(GateFade::Emerging { ticks_left: 30.0 }),
         None,
         "hidden at its gate"
     );
@@ -214,12 +214,12 @@ fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in() {
         npc_tints(&world_list(view))
     };
     assert_eq!(
-        at_gate(&mut view, GateFade::Emerging { ticks_left: 40 }),
+        at_gate(&mut view, GateFade::Emerging { ticks_left: 40.0 }),
         [],
         "hidden"
     );
     assert_eq!(
-        at_gate(&mut view, GateFade::Emerging { ticks_left: 8 }),
+        at_gate(&mut view, GateFade::Emerging { ticks_left: 8.0 }),
         [Color::rgba(255, 255, 255, 128)],
         "half in"
     );
@@ -231,7 +231,7 @@ fn an_npc_coming_out_of_a_gate_is_on_the_radar_all_along() {
     // When it comes out is the session's (nova-sim's emerge tests); its
     // record keeps it on the radar.
     let emerging = FrameShip {
-        gate: GateFade::Emerging { ticks_left: 40 },
+        gate: GateFade::Emerging { ticks_left: 40.0 },
         ..lit_npc(0.0)
     };
     let view = barred(trafficked(&[130], 1, 129, 3), among(vec![emerging]));
@@ -274,7 +274,7 @@ fn a_ship_held_at_its_gate_is_drawn_plain_on_the_frame_it_is_held() {
         in_sol_with(vec![the_player_at(Vec2::ZERO, 0.0), lit_npc(0.0)]),
     );
     let mut frame = view.frame.clone();
-    frame.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
+    frame.ships[1].gate = GateFade::Emerging { ticks_left: 40.0 };
     shows(&mut view, frame.clone());
     assert_eq!(npc_tints(&world_list(&view)), [], "hidden");
     frame.ships[1].gate = GateFade::None;
@@ -302,7 +302,7 @@ fn a_ship_held_at_its_gate_on_the_second_pass_is_drawn_on_the_next_frame() {
         ..PassReport::default()
     };
     let mut waiting = held.clone();
-    waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40 };
+    waiting.ships[1].gate = GateFade::Emerging { ticks_left: 40.0 };
     view.sim.set_frame(held.clone());
     view.sim.queue_report(super::stepping::doubled(
         pass(&waiting),
@@ -388,21 +388,21 @@ fn gate_frames(list: &DrawList) -> Vec<u16> {
 fn a_ship_entering_a_gate_fades_out_by_two_32nds_a_tick() {
     let entering = |ticks_left| GateFade::Entering { ticks_left };
     assert_eq!(
-        npc_tint(entering(15)),
+        npc_tint(entering(15.0)),
         Some(Color::rgba(255, 255, 255, 239)),
         "30/32"
     );
     assert_eq!(
-        npc_tint(entering(8)),
+        npc_tint(entering(8.0)),
         Some(Color::rgba(255, 255, 255, 128)),
         "half"
     );
     assert_eq!(
-        npc_tint(entering(1)),
+        npc_tint(entering(1.0)),
         Some(Color::rgba(255, 255, 255, 16)),
         "2/32"
     );
-    assert_eq!(npc_tint(entering(16)), Some(Color::WHITE));
+    assert_eq!(npc_tint(entering(16.0)), Some(Color::WHITE));
 }
 
 #[test]
@@ -419,7 +419,7 @@ fn a_hypergate_is_drawn_on_the_frame_its_record_gives_and_an_npc_entering_it_fad
     assert_eq!(gate_frames(&world_list(&view)), [0], "closed at first");
     let mut shown = Vec::new();
     let mut tints = Vec::new();
-    for (open, ticks_left) in [(1, 15), (2, 8), (3, 1)] {
+    for (open, ticks_left) in [(1, 15.0), (2, 8.0), (3, 1.0)] {
         let mut frame = view.frame.clone();
         frame.stellars[2].gate_frame = Some(open);
         frame.ships[1].gate = GateFade::Entering { ticks_left };

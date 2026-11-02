@@ -36,7 +36,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `goal`, at `state`, its target the player.
 fn held(goal: Goal, state: ShipState, ticks_left: u32) -> Npc {
     let mut npc = crate::traffic::fixture::npc(1, ShipStats::new(FAST, &[]));
-    npc.mode = Mode::HeldAtGate { ticks_left };
+    npc.mode = Mode::HeldAtGate {
+        ticks_left: crate::traffic::ai_wait::ticks(ticks_left),
+    };
     npc.goal = goal;
     npc.state = state;
     npc.target = Some(ShipRef::Player);
@@ -484,7 +486,7 @@ fn swarm_pair(reading: RuleSource) -> (Traffic, World<'static>) {
     leader.immobile = true;
     let mut held = swarming(1, 2, 5000.0);
     held.swarm_leader = Some(1);
-    held.mode = Mode::HeldAtGate { ticks_left: 1 };
+    held.mode = Mode::HeldAtGate { ticks_left: 1.0 };
     let mut traffic = Traffic::with_interval(1);
     traffic.npcs = vec![leader, held];
     let world = World {
@@ -526,7 +528,7 @@ fn a_held_swarmer_bursts_out_slowing_by_its_thrust_and_stops_jumping_at_its_cap(
             assert_eq!(ship.goal, Goal::Idle);
             assert!(!ship.travel_set());
             assert_eq!(ship.owed_burst, None);
-            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
+            assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 });
             break;
         }
         assert_eq!(ship.goal, Goal::Attack(ShipRef::Player), "burst {bursts}");
@@ -539,7 +541,7 @@ fn a_held_swarmer_bursts_out_slowing_by_its_thrust_and_stops_jumping_at_its_cap(
         speed = next;
         assert!(bursts < 500, "never ended");
     }
-    for left in (1..59).rev() {
+    for left in (1..59).rev().map(crate::traffic::ai_wait::ticks) {
         assert_eq!(tick(&mut traffic).mode, Mode::Coasting { ticks_left: left });
     }
     assert_eq!(tick(&mut traffic).mode, Mode::Flying);
@@ -595,7 +597,7 @@ fn a_held_sniper_pushed_moving_bursts_out_and_stops_jumping_at_its_cap() {
     }
     let ended = &traffic.npcs[0];
     assert_eq!(ended.goal, Goal::Idle);
-    assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59 });
+    assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59.0 });
     assert!(
         ended.state.velocity.length() > ended.stats.handling.max_speed,
         "it keeps the burst's last speed: {:?}",
@@ -645,8 +647,8 @@ fn a_held_inertialess_sniper_bursts_out_and_stops_dead_at_its_cap() {
     assert!(ticks > 1, "it burst out: {ticks}");
     assert_eq!(ended.goal, Goal::Idle);
     assert_eq!(ended.state.velocity, Vec2::ZERO, "stopped dead");
-    assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59 });
-    for left in (1..59).rev() {
+    assert_eq!(ended.mode, Mode::Coasting { ticks_left: 59.0 });
+    for left in (1..59).rev().map(crate::traffic::ai_wait::ticks) {
         traffic.fly_tick(&world, &mut NeverFires);
         assert_eq!(traffic.npcs[0].mode, Mode::Coasting { ticks_left: left });
     }
@@ -765,7 +767,7 @@ fn a_followers_formation_waiting_and_detach_frames_write_no_burst_word() {
     // goal 2.
     let past_30: fn(&mut Traffic) = |traffic| {
         traffic.npcs[1].warp.stage = 31.0;
-        traffic.npcs[1].ai_wait = 5;
+        traffic.npcs[1].ai_wait = 5.0;
     };
     for (name, setup) in [
         ("formation", lead_at_1),
@@ -888,7 +890,7 @@ fn its_next_stop_or_snipe_thrust_bursts_at_1_and_stops_jumping() {
         assert_eq!(ship.owed_burst, None, "{goal:?}");
         assert_eq!(ship.warp.stage, 0.0, "{goal:?}: +0x50 = 0 (@0x82eb0)");
         assert_eq!(ship.warp.goal, None, "{goal:?}");
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 }, "{goal:?}");
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 }, "{goal:?}");
     }
 }
 
@@ -908,7 +910,7 @@ fn its_next_swarm_thrust_bursts_at_1_and_stops_jumping() {
     );
     assert_eq!(ship.goal, Goal::Idle);
     assert_eq!(ship.warp.stage, 0.0);
-    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
+    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 });
 }
 
 #[test]
@@ -946,7 +948,7 @@ fn an_inertialess_ship_ends_its_burst_at_1_stopped_dead() {
     assert_eq!(ship.state.velocity, Vec2::ZERO);
     assert_eq!(ship.goal, Goal::Idle);
     assert_eq!(ship.warp.stage, 0.0);
-    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 });
+    assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 });
 }
 
 #[test]

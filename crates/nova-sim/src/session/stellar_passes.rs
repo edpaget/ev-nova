@@ -250,7 +250,7 @@ mod tests {
                 velocity: Vec2::ZERO,
                 heading: 90.0,
             },
-            mode: Mode::Emerging { ticks_left: 1000 },
+            mode: Mode::Emerging { ticks_left: 1000.0 },
             emerges_from: Some(StellarId(gate)),
             ..crate::testkit::npc(0, fields)
         });

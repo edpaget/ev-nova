@@ -89,7 +89,7 @@ mod tests {
         Npc {
             berth,
             goal,
-            ai_wait,
+            ai_wait: crate::traffic::ai_wait::ticks(ai_wait),
             target: Some(ShipRef::Npc(NpcId(7))),
             ..npc(id, ShipStats::default())
         }

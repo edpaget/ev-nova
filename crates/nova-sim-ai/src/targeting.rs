@@ -333,12 +333,12 @@ mod tests {
     #[test]
     fn a_ship_emerging_from_a_gate_is_neither_targetable_nor_a_candidate() {
         let mut emerging = intact(1, 10.0, 0.0);
-        emerging.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 9 };
+        emerging.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 9.0 };
         assert!(!targetable(&emerging, false));
         let mut arriving = intact(1, 10.0, 0.0);
         arriving.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert!(targetable(&arriving, false), "a ship jumping in still is");
-        arriving.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30 };
+        arriving.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30.0 };
         assert!(targetable(&arriving, false), "so is one holding its course");
         let npcs = [emerging, intact(2, 300.0, 0.0)];
         assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
@@ -387,7 +387,7 @@ mod tests {
     fn a_ship_waiting_at_its_gate_is_skipped_but_not_one_bursting_out() {
         use crate::traffic::npc::Mode;
         let mut waiting = intact(1, 10.0, 0.0);
-        waiting.mode = Mode::Emerging { ticks_left: 30 };
+        waiting.mode = Mode::Emerging { ticks_left: 30.0 };
         let mut leaving = intact(2, 20.0, 0.0);
         leaving.mode = Mode::LeavingGate { tick: 1 };
         // Its wait just out, its goal still 0x15 (`Npc::emerging`).

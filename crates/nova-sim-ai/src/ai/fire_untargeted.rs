@@ -350,7 +350,7 @@ mod tests {
         let mut waiting = mining_at(100.0, 100.0, 314.0);
         waiting.trigger = fired_at(&waiting, Some(rock(0.0, 0.0)));
         assert_eq!(waiting.trigger.only, id(128));
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         assert_eq!(crate::ai::fire::gated(&waiting).only, None);
     }
 

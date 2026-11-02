@@ -233,7 +233,7 @@ mod tests {
         let npcs = scene(AiType::Warship, 300.0, true);
         assert_eq!(folded(&npcs[..1]), (PLAIN, TravelWrite::Keep), "gone");
         let mut waiting = npcs;
-        waiting[0].ai_wait = 30;
+        waiting[0].ai_wait = 30.0;
         assert_eq!(
             folded(&waiting),
             (PLAIN, TravelWrite::Keep),

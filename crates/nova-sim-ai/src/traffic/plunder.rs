@@ -94,6 +94,8 @@ use crate::flight::{self, FlightRules, ShipState};
 use crate::hail::Help;
 use crate::inertialess::InertialDampener;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
+use crate::traffic::ai_wait;
 use crate::traffic::npc::{NPC_COMMODITIES, Npc, NpcHold, NpcId};
 use crate::traffic::plunder_dock::{self, DockOutcome, DockStep, Docking};
 use crate::traffic::repair_dock;
@@ -350,11 +352,16 @@ pub(crate) fn fly_docking(
     Some(outcome)
 }
 
-/// A tick off each AI wait among `npcs` that has any left (`_HandleShip`
-/// @0x35037-0x35048), on each of double time's passes.
-pub fn count_down(npcs: &mut [Npc]) {
+/// The frame's `gain` off each AI wait among `npcs` that still runs
+/// (`_HandleShip` @0x35037-0x35048, [`ai_wait::counted_down`]), on each
+/// of double time's passes. A pod's wait is its [`Mode::Adrift`]'s, which
+/// `_AIDispatch` counts (see [`pod_flight`](super::pod_flight)), so no
+/// pod's is counted here, as @0x3502f skips class 0x2ff.
+///
+/// [`Mode::Adrift`]: crate::traffic::npc::Mode::Adrift
+pub fn count_down(npcs: &mut [Npc], gain: SpeedMult) {
     for npc in npcs {
-        npc.ai_wait = npc.ai_wait.saturating_sub(1);
+        npc.ai_wait = ai_wait::counted_down(npc.ai_wait, gain);
     }
 }
 
@@ -369,7 +376,8 @@ pub fn drift(npcs: &mut [Npc], due: &[bool]) {
         npc.docking = None;
         let along = flight::facing(f32::from(trig::whole(npc.state.heading)));
         npc.state.position = npc.state.position + along * DRIFT;
-        if npc.ai_wait == 0 {
+        // Once +0x4c no longer runs (@0x8ebc5-0x8ebcb).
+        if !ai_wait::running(npc.ai_wait) {
             npc.goal = Goal::Idle;
         }
     }
@@ -706,7 +714,7 @@ mod tests {
                 sub: DockSub::Dock
             })
         );
-        assert_eq!(docked.ai_wait, 99, "Rand(80) of 0 + 100, a tick off");
+        assert_eq!(docked.ai_wait, 99.0, "Rand(80) of 0 + 100, a tick off");
         assert!(ship(&traffic, VICTIM).boarded);
         assert_eq!(traffic.take_pirate_events(), [], "no dock with the player");
     }
@@ -757,11 +765,11 @@ mod tests {
                 Goal::Attack(ShipRef::Npc(VICTIM))
             );
         }
-        assert_eq!(ship(&traffic, PIRATE).ai_wait, 0);
+        assert_eq!(ship(&traffic, PIRATE).ai_wait, 0.0);
         tick(&mut traffic, 0);
         let pirate = ship(&traffic, PIRATE);
         assert_eq!(pirate.goal, Goal::Drift, "the 100th tick after the start");
-        assert_eq!(pirate.ai_wait, PLUNDER_HOLD - 1);
+        assert_eq!(pirate.ai_wait, PLUNDER_HOLD - 1.0);
         assert_eq!((pirate.target, pirate.docking), (None, None));
         assert_eq!(pirate.cargo.tons(2), 20, "its free holds");
         assert_eq!(ship(&traffic, VICTIM).cargo.tons(2), 10);
@@ -915,7 +923,7 @@ mod tests {
         alone.tick_in(&nova, World::new(&[]), &[], &mut Draws::of(&[0; 64]));
         let taken = ship(&alone, VICTIM);
         assert_eq!(taken.goal, Goal::Land(crate::catalog::StellarId(128)));
-        assert_eq!(taken.ai_wait, 0, "its wait ended");
+        assert_eq!(taken.ai_wait, 0.0, "its wait ended");
         assert_eq!(taken.leader, Some(PIRATE), "still the pirate's");
         let world = World {
             player: Some(crate::ai::fixture::player(0.0, 300.0)),
@@ -944,7 +952,7 @@ mod tests {
         let mut traffic = traffic_of(vec![docked, boarded]);
         tick(&mut traffic, 0);
         assert_eq!(ship(&traffic, VICTIM).leader, Some(PIRATE));
-        assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 1);
+        assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 1.0);
         traffic
     }
 
@@ -960,7 +968,7 @@ mod tests {
             &mut Draws::of(&[0; 64]),
         );
         let taken = ship(&traffic, VICTIM);
-        assert_eq!(taken.ai_wait, 0);
+        assert_eq!(taken.ai_wait, 0.0);
         assert_eq!(
             taken.goal,
             Goal::Follow {
@@ -980,7 +988,7 @@ mod tests {
             &[],
             &mut Draws::of(&[0; 64]),
         );
-        assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 2);
+        assert_eq!(ship(&traffic, VICTIM).ai_wait, CAPTURED_WAIT - 2.0);
     }
 
     /// The pirate thinks as one, and every other ship as Nova's AI has it.
@@ -1034,7 +1042,7 @@ mod tests {
         // wait (@0x83ea8-0x83eb0).
         let taken = taken_on_the_tick(1);
         assert_eq!(taken.leader, Some(PIRATE));
-        assert_eq!(taken.ai_wait, 0);
+        assert_eq!(taken.ai_wait, 0.0);
         assert_eq!(
             taken.goal,
             Goal::Follow {
@@ -1049,7 +1057,7 @@ mod tests {
         // Its slot came before the pirate's, disabled.
         let taken = taken_on_the_tick(12);
         assert_eq!(taken.leader, Some(PIRATE));
-        assert_eq!(taken.ai_wait, CAPTURED_WAIT - 1);
+        assert_eq!(taken.ai_wait, CAPTURED_WAIT - 1.0);
         assert_eq!(taken.goal, Goal::Idle);
     }
 
@@ -1144,14 +1152,14 @@ mod tests {
                 guard: None
             }
         );
-        assert_eq!(taken.ai_wait, CAPTURED_WAIT - 1);
+        assert_eq!(taken.ai_wait, CAPTURED_WAIT - 1.0);
         assert_eq!(taken.reserves.armor.now, 66.0);
         assert_eq!(taken.reserves.shield.now, 0.0);
         assert_eq!(taken.condition, Condition::Intact);
         assert_eq!(traffic.berth_person(9), None);
         let pirate = ship(&traffic, PIRATE);
         assert_eq!(pirate.goal, Goal::Idle, "dropped with the rest: no drift");
-        assert_eq!(pirate.ai_wait, PLUNDER_HOLD - 1);
+        assert_eq!(pirate.ai_wait, PLUNDER_HOLD - 1.0);
         // The capture's walk (@0x84872-0x8489b) runs in the pirate's think,
         // before the onlooker's in a higher slot, which starts from goal 0
         // with no target and nothing to hunt, and leaves.
@@ -1273,7 +1281,7 @@ mod tests {
             (Condition::Disabled, crate::traffic::npc::Mode::Flying),
             (
                 Condition::Intact,
-                crate::traffic::npc::Mode::Coasting { ticks_left: 3 },
+                crate::traffic::npc::Mode::Coasting { ticks_left: 3.0 },
             ),
         ] {
             let mut down = far.clone();
@@ -1318,7 +1326,7 @@ mod tests {
             ship: ShipRef::Npc(VICTIM),
             hopeless: false,
         };
-        docked.ai_wait = 150;
+        docked.ai_wait = 150.0;
         docked.docking = Some(Docking {
             ship: ShipRef::Npc(VICTIM),
             sub: DockSub::Dock,
@@ -1452,7 +1460,7 @@ mod tests {
         let mut docked = pirate(1);
         docked.goal = Goal::Attack(ShipRef::Npc(NpcId(5)));
         docked.target = Some(ShipRef::Npc(NpcId(5)));
-        docked.ai_wait = 50;
+        docked.ai_wait = 50.0;
         docked.state.position = Vec2::new(2.0, 0.0);
         docked.docking = Some(Docking {
             ship: ShipRef::Npc(VICTIM),
@@ -1478,7 +1486,7 @@ mod tests {
         let mut helper = npc(1, ShipStats::new(FAST, &[]));
         helper.goal = Goal::Assist(Help::Repair);
         helper.target = Some(ShipRef::Player);
-        helper.ai_wait = 5;
+        helper.ai_wait = 5.0;
         let downed = crate::ai::PlayerSide {
             condition: Condition::Disabled,
             ..crate::ai::fixture::player(2.0, 0.0)
@@ -1492,7 +1500,7 @@ mod tests {
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
             HighLevel::Skipped
         );
-        helper.ai_wait = 0;
+        helper.ai_wait = 0.0;
         let npcs = [helper.clone()];
         assert_eq!(
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly,),
@@ -1580,7 +1588,7 @@ mod tests {
         let mut held = npc(1, ShipStats::new(FAST, &[]));
         held.goal = Goal::Attack(ShipRef::Player);
         held.target = Some(ShipRef::Player);
-        held.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20 };
+        held.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 20.0 };
         let world = World {
             player: Some(crate::ai::fixture::player(300.0, 0.0)),
             ..World::new(&[])
@@ -1626,7 +1634,7 @@ mod tests {
         let mut helper = npc(1, ShipStats::new(FAST, &[]));
         helper.goal = Goal::Assist(Help::Refuel);
         helper.target = Some(ShipRef::Player);
-        helper.ai_wait = 5;
+        helper.ai_wait = 5.0;
         helper.docking = Some(Docking {
             ship: ShipRef::Player,
             sub: DockSub::Close,
@@ -1640,7 +1648,7 @@ mod tests {
             high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly)
         };
         assert_eq!(high(&helper), HighLevel::Skipped);
-        helper.ai_wait = 0;
+        helper.ai_wait = 0.0;
         assert_eq!(high(&helper), HighLevel::Refuels);
         let mut kept = helper.clone();
         take_high_level(&mut kept, HighLevel::Refuels);
@@ -1843,11 +1851,11 @@ mod tests {
     fn double_times_second_pass_counts_the_ai_wait_down_and_drifts_nothing() {
         let mut waiting = pirate(100);
         waiting.goal = Goal::Drift;
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         let mut traffic = traffic_of(vec![waiting]);
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         let moved = ship(&traffic, PIRATE);
-        assert_eq!(moved.ai_wait, 4);
+        assert_eq!(moved.ai_wait, 4.0);
         assert_eq!(moved.state.position, Vec2::ZERO, "no high level");
     }
 
@@ -1860,7 +1868,7 @@ mod tests {
         pod.ship = crate::combat::hull::ESCAPE_POD_SHIP;
         pod.mode = Mode::Adrift { ticks_left: 3 };
         let mut npcs = [pod];
-        count_down(&mut npcs);
+        count_down(&mut npcs, crate::speed_mult::SpeedMult::FULL);
         assert_eq!(npcs[0].mode, Mode::Adrift { ticks_left: 3 });
     }
 

@@ -807,17 +807,17 @@ mod tests {
     fn the_wait_that_holds_it_is_not_a_count_wait_nor_a_pods() {
         let mut ship = folding(0, 1);
         assert!(!held(&ship));
-        ship.ai_wait = 5;
+        ship.ai_wait = 5.0;
         assert!(held(&ship));
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         ship.goal = crate::ai::Goal::CountWait;
-        ship.ai_wait = 9;
+        ship.ai_wait = 9.0;
         assert!(!held(&ship), "a count wait thrusts on");
         ship.goal = crate::ai::Goal::Idle;
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         ship.mode = Mode::Adrift { ticks_left: 50 };
         assert!(!held(&ship), "an escape pod");
-        ship.mode = Mode::Coasting { ticks_left: 3 };
+        ship.mode = Mode::Coasting { ticks_left: 3.0 };
         assert!(held(&ship));
     }
 
@@ -1339,10 +1339,10 @@ mod tests {
         assert_eq!(ship.armament.fold().dir, -1, "near: unfold");
         ship.goal = crate::ai::Goal::Idle;
         ship.armament.fold_mut().dir = 0;
-        ship.ai_wait = 5;
+        ship.ai_wait = 5.0;
         dispatch_fold(&mut ship);
         assert_eq!(ship.armament.fold().dir, 0, "waiting: no fold");
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         ship.armament.fold_mut().dir = -1;
         dispatch_fold(&mut ship);
         assert_eq!(ship.armament.fold().dir, -1, "a direction kept");

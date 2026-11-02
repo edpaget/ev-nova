@@ -961,7 +961,7 @@ mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = Mode::Emerging { ticks_left: 60 };
+        npc.mode = Mode::Emerging { ticks_left: 60.0 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         // Emerging, it is no target the pass's head keeps (`_HandlePlayer`
         // @0x686a4), so the hit is a stray one: provoked past forgiving
@@ -969,7 +969,10 @@ mod tests {
         npc.stray = 2.0 * crate::ai::answer_flag::STRAY_THRESHOLD;
         let behaviour = Recording::default();
         until_hit(&mut session, &catalog, &behaviour);
-        assert_eq!(session.npcs()[0].mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(
+            session.npcs()[0].mode,
+            Mode::HeldAtGate { ticks_left: 19.0 }
+        );
     }
 
     #[test]
@@ -1329,7 +1332,7 @@ mod tests {
         npc.state.velocity = Vec2::new(0.3, 0.0);
         // The warm-up pass landed it on planet 128, within its box; a lead
         // drifting on, and its escort cloned from it, wait for nothing.
-        npc.ai_wait = 0;
+        npc.ai_wait = 0.0;
         let mut escort = npc.clone();
         escort.leader = Some(lead);
         escort.goal = Goal::Follow { lead, guard: None };
@@ -1381,7 +1384,7 @@ mod tests {
         let npc = &mut session.space.traffic.npcs_mut()[0];
         npc.goal = Goal::Hold;
         // The warm-up pass landed it on planet 128; neither ship waits.
-        npc.ai_wait = 0;
+        npc.ai_wait = 0.0;
         let mut stays = npc.clone();
         stays.state.position.x += 250.0;
         npc.begin_own_jump();

@@ -406,13 +406,13 @@ pub const FLEE_THRUST: f32 = 20.0;
 pub const SWARM_THRUST: f32 = 20.0;
 /// The least a leaderless ship holds its course after its glide in or
 /// burst out of a gate, in ticks (`Rand(30) + 30`, @0x34d74-0x34d81).
-pub const POST_BURST_WAIT: u32 = 30;
+pub const POST_BURST_WAIT: f32 = 30.0;
 /// `Rand(30)`: the spread of that wait.
 pub const POST_BURST_SPREAD: u32 = 30;
 /// The most of that wait a ship hit while it holds its course has left,
 /// in ticks: `_DamageShip` cuts its AI wait (+0x4c) to 20.0 (const
 /// @0xdd668) when the victim answers the hit (@0x3be6e-0x3be7c).
-pub const HIT_WAIT: u32 = 20;
+pub const HIT_WAIT: f32 = 20.0;
 
 /// The readings of the disputed rules the autopilot flies by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -692,9 +692,17 @@ pub(crate) fn cut_wait(npc: &mut Npc) {
     | Mode::Emerging { ticks_left }
     | Mode::HeldAtGate { ticks_left } = &mut npc.mode
     {
-        *ticks_left = (*ticks_left).min(HIT_WAIT);
+        cut(ticks_left);
     }
-    npc.ai_wait = npc.ai_wait.min(HIT_WAIT);
+    cut(&mut npc.ai_wait);
+}
+
+/// `wait` cut to [`HIT_WAIT`] when above it, as floats (`ucomiss` 20.0
+/// @0x3be73, `jbe`), so a NaN wait is left.
+fn cut(wait: &mut f32) {
+    if *wait > HIT_WAIT {
+        *wait = HIT_WAIT;
+    }
 }
 
 #[cfg(test)]
@@ -1366,7 +1374,7 @@ mod tests {
         assert_eq!(ship.state.velocity, Vec2::ZERO);
         assert_eq!(ship.goal, Goal::Idle);
         assert_eq!(ship.visited, Some(StellarId(140)));
-        assert_eq!(ship.ai_wait, 499);
+        assert_eq!(ship.ai_wait, 499.0);
         let mut fast = lander(1.5, 0.0);
         assert_eq!(
             fly_reading(&mut fast, &sites, None, by_circle()),
@@ -1599,7 +1607,7 @@ mod tests {
 
     /// A ship of `fields` coming out of a gate at (100, -200), heading 90°,
     /// `ticks_left` of its wait to go, bent on landing.
-    fn emerging(fields: ShipFields, ticks_left: u32) -> Npc {
+    fn emerging(fields: ShipFields, ticks_left: f32) -> Npc {
         let mut ship = npc(
             fields,
             Goal::Land(StellarId(140)),
@@ -1614,7 +1622,10 @@ mod tests {
         let sites = [planet(140, 0.0, 0.0)];
         let mut ship = emerging(AVERAGE, EMERGE_TICKS);
         assert!(ship.emerging());
-        for left in (1..EMERGE_TICKS).rev() {
+        for left in (1..crate::traffic::ai_wait::frames(EMERGE_TICKS))
+            .rev()
+            .map(crate::traffic::ai_wait::ticks)
+        {
             assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
             assert_eq!(ship.mode, Mode::Emerging { ticks_left: left });
             assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "still");
@@ -1635,7 +1646,7 @@ mod tests {
     /// The last tick of a burst out of a gate, flown at `speeds`.
     fn burst_ends(speeds: TopSpeeds) -> u32 {
         let sites = [planet(140, 0.0, 0.0)];
-        let mut ship = emerging(AVERAGE, 1);
+        let mut ship = emerging(AVERAGE, 1.0);
         fly(&mut ship, &sites, None);
         for _ in 0..64 {
             let Mode::LeavingGate { tick } = ship.mode else {
@@ -1720,7 +1731,7 @@ mod tests {
             own: 3.0,
             lead: Some(3.0),
         };
-        let mut ship = emerging(AVERAGE, 1);
+        let mut ship = emerging(AVERAGE, 1.0);
         ship.led_out = true;
         fly(&mut ship, &sites, None);
         let mut x = 100.0;
@@ -1740,7 +1751,7 @@ mod tests {
         let sites = [planet(140, 0.0, 0.0)];
         // Top speed 3: 30 - 1.165t for ticks 0 to 23, then on at 3.205
         // once 2.04 is next.
-        let mut ship = emerging(AVERAGE, 1);
+        let mut ship = emerging(AVERAGE, 1.0);
         fly(&mut ship, &sites, None);
         let mut x = 100.0;
         for tick in 0..=23 {
@@ -1756,18 +1767,18 @@ mod tests {
             assert!((ship.state.position - Vec2::new(x, -200.0)).length() < 1e-3);
             assert_eq!(ship.state.heading, 90.0, "no steering");
         }
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 }, "no lead");
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 }, "no lead");
         // A ship of top speed 30 or more is out after the first tick.
         let mut fast = emerging(
             ShipFields {
                 speed: 3000,
                 ..AVERAGE
             },
-            1,
+            1.0,
         );
         fly(&mut fast, &sites, None);
         fly(&mut fast, &sites, None);
-        assert_eq!(fast.mode, Mode::Coasting { ticks_left: 59 });
+        assert_eq!(fast.mode, Mode::Coasting { ticks_left: 59.0 });
         assert!((fast.state.velocity - Vec2::new(30.0, 0.0)).length() < 1e-4);
         // One of no speed bursts out until its speed would reach 0.
         let mut still = emerging(
@@ -1775,7 +1786,7 @@ mod tests {
                 speed: 0,
                 ..AVERAGE
             },
-            1,
+            1.0,
         );
         fly(&mut still, &sites, None);
         let ticks = (1..64)
@@ -1790,7 +1801,7 @@ mod tests {
     #[test]
     fn a_ship_bursting_out_of_its_gate_is_out_of_it_from_its_first_burst_tick() {
         let sites = [planet(140, 0.0, 0.0)];
-        let mut ship = emerging(AVERAGE, 1);
+        let mut ship = emerging(AVERAGE, 1.0);
         ship.emerges_from = Some(StellarId(129));
         fly(&mut ship, &sites, None);
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
@@ -1806,11 +1817,11 @@ mod tests {
     fn a_ship_not_intact_still_waits_out_its_gate_and_bursts_from_its_first_tick_dragged() {
         // The think would hold it (`Npc::leaves_gate_goal`): this is a hit
         // after its dispatch, whose high level had written goal 8.
-        let mut ship = emerging(AVERAGE, 2);
+        let mut ship = emerging(AVERAGE, 2.0);
         ship.condition = Condition::Disabled;
         ship.emerges_from = Some(StellarId(129));
         fly(&mut ship, &[], None);
-        assert_eq!(ship.mode, Mode::Emerging { ticks_left: 1 });
+        assert_eq!(ship.mode, Mode::Emerging { ticks_left: 1.0 });
         fly(&mut ship, &[], None);
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
         assert_eq!(ship.emerges_from, Some(StellarId(129)));
@@ -1832,10 +1843,10 @@ mod tests {
         // (@0x34274-0x342aa) and nothing in the wait zeroes its velocity.
         let start = at(100.0, 200.0, 3.0, -4.0, 45.0);
         let mut ship = npc(FAST, Goal::Attack(ShipRef::Player), start);
-        ship.mode = Mode::Emerging { ticks_left: 3 };
+        ship.mode = Mode::Emerging { ticks_left: 3.0 };
         let player = at(600.0, 200.0, 0.0, 0.0, 0.0);
         let drift = drifting_in_wait(Condition::Intact, 3);
-        for (left, drifted) in [2, 1, 0].into_iter().zip(&drift) {
+        for (left, drifted) in [2.0, 1.0, 0.0].into_iter().zip(&drift) {
             assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
             assert!(
                 (ship.state.position - drifted.position).length() < 1e-4
@@ -1844,7 +1855,7 @@ mod tests {
                 "{left}: {:?}",
                 ship.state
             );
-            let mode = if left == 0 {
+            let mode = if left == 0.0 {
                 Mode::LeavingGate { tick: 0 }
             } else {
                 Mode::Emerging { ticks_left: left }
@@ -1859,7 +1870,7 @@ mod tests {
         assert_ne!(ship.state.heading, 45.0, "turns on the player");
         let mut wreck = npc(FAST, Goal::Idle, start);
         wreck.condition = Condition::Disabled;
-        wreck.mode = Mode::Emerging { ticks_left: 2 };
+        wreck.mode = Mode::Emerging { ticks_left: 2.0 };
         fly(&mut wreck, &[], None);
         let dragged = drifting_in_wait(Condition::Disabled, 1)[0];
         assert!(
@@ -1868,14 +1879,20 @@ mod tests {
             "dragged, then moved: {:?}",
             wreck.state
         );
-        assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1 });
+        assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1.0 });
     }
 
     #[test]
     fn a_hit_cuts_a_pirates_count_wait_to_20() {
         // `_DamageShip` reads no goal (@0x3be6e-0x3be7c): goal 0x16's
         // +0x4c is cut as any other.
-        for (left, cut) in [(120, 20), (21, 20), (20, 20), (19, 19), (0, 0)] {
+        for (left, cut) in [
+            (120.0, 20.0),
+            (21.0, 20.0),
+            (20.0, 20.0),
+            (19.0, 19.0),
+            (0.0, 0.0),
+        ] {
             let mut pirate = npc(AVERAGE, Goal::CountWait, at(0.0, 0.0, 0.0, 0.0, 0.0));
             pirate.ai_wait = left;
             cut_wait(&mut pirate);
@@ -1886,8 +1903,30 @@ mod tests {
     }
 
     #[test]
+    fn a_hit_cuts_a_fractional_wait_only_above_20() {
+        for (left, cut) in [(20.5, 20.0), (19.5, 19.5), (-0.25, -0.25)] {
+            let mut pirate = npc(AVERAGE, Goal::Drift, at(0.0, 0.0, 0.0, 0.0, 0.0));
+            pirate.ai_wait = left;
+            pirate.mode = Mode::Coasting { ticks_left: left };
+            cut_wait(&mut pirate);
+            assert_eq!(pirate.ai_wait, cut, "{left}");
+            assert_eq!(pirate.mode, Mode::Coasting { ticks_left: cut }, "{left}");
+        }
+        let mut lost = npc(AVERAGE, Goal::Drift, at(0.0, 0.0, 0.0, 0.0, 0.0));
+        lost.ai_wait = f32::NAN;
+        cut_wait(&mut lost);
+        assert!(lost.ai_wait.is_nan(), "a NaN is not above 20");
+    }
+
+    #[test]
     fn a_hit_cuts_a_flying_ships_ai_wait_to_20() {
-        for (left, cut) in [(179, 20), (21, 20), (20, 20), (19, 19), (0, 0)] {
+        for (left, cut) in [
+            (179.0, 20.0),
+            (21.0, 20.0),
+            (20.0, 20.0),
+            (19.0, 19.0),
+            (0.0, 0.0),
+        ] {
             let mut pirate = npc(AVERAGE, Goal::Drift, at(0.0, 0.0, 0.0, 0.0, 0.0));
             pirate.ai_wait = left;
             cut_wait(&mut pirate);
@@ -1904,25 +1943,25 @@ mod tests {
             ship.mode
         };
         assert_eq!(
-            cut(Mode::Emerging { ticks_left: 60 }),
-            Mode::Emerging { ticks_left: 20 }
+            cut(Mode::Emerging { ticks_left: 60.0 }),
+            Mode::Emerging { ticks_left: 20.0 }
         );
         assert_eq!(
-            cut(Mode::Emerging { ticks_left: 10 }),
-            Mode::Emerging { ticks_left: 10 }
+            cut(Mode::Emerging { ticks_left: 10.0 }),
+            Mode::Emerging { ticks_left: 10.0 }
         );
         assert_eq!(
-            cut(Mode::Coasting { ticks_left: 45 }),
-            Mode::Coasting { ticks_left: 20 }
+            cut(Mode::Coasting { ticks_left: 45.0 }),
+            Mode::Coasting { ticks_left: 20.0 }
         );
         assert_eq!(
-            cut(Mode::HeldAtGate { ticks_left: 59 }),
-            Mode::HeldAtGate { ticks_left: 20 },
+            cut(Mode::HeldAtGate { ticks_left: 59.0 }),
+            Mode::HeldAtGate { ticks_left: 20.0 },
             "a Good Samaritan's uncut hold"
         );
         assert_eq!(
-            cut(Mode::HeldAtGate { ticks_left: 19 }),
-            Mode::HeldAtGate { ticks_left: 19 }
+            cut(Mode::HeldAtGate { ticks_left: 19.0 }),
+            Mode::HeldAtGate { ticks_left: 19.0 }
         );
         for mode in [
             Mode::JumpingIn { tick: 2 },
@@ -1970,9 +2009,9 @@ mod tests {
                 at(100.0, 200.0, 3.0, -4.0, 45.0),
             );
             ship.condition = condition;
-            ship.mode = Mode::HeldAtGate { ticks_left: 3 };
+            ship.mode = Mode::HeldAtGate { ticks_left: 3.0 };
             let drift = drifting_in_wait(condition, 3);
-            for (left, drifted) in [2, 1].into_iter().zip(&drift) {
+            for (left, drifted) in [2.0, 1.0].into_iter().zip(&drift) {
                 assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
                 assert!(
                     (ship.state.position - drifted.position).length() < 1e-4
@@ -1996,7 +2035,7 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             at(100.0, 200.0, 0.0, 0.0, 45.0),
         );
-        ship.mode = Mode::HeldAtGate { ticks_left: 1 };
+        ship.mode = Mode::HeldAtGate { ticks_left: 1.0 };
         fly(&mut ship, &[], Some(&player));
         fly(&mut ship, &[], Some(&player));
         assert_ne!(ship.state.heading, 45.0, "turns on the player");
@@ -2015,7 +2054,7 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             at(100.0, 200.0, 0.0, 0.0, 45.0),
         );
-        ship.mode = Mode::HeldAtGate { ticks_left: 2 };
+        ship.mode = Mode::HeldAtGate { ticks_left: 2.0 };
         let top = TopSpeeds::own_of(&ship);
         let mut draws = Draws::of(&[]);
         let mut owed_seen = false;
@@ -2068,7 +2107,7 @@ mod tests {
 
     #[test]
     fn a_ship_whose_gate_wait_ends_lets_go_of_its_trigger_as_it_bursts_out() {
-        let mut ship = emerging(AVERAGE, 1);
+        let mut ship = emerging(AVERAGE, 1.0);
         ship.trigger = Trigger {
             point_defence: true,
             ..Trigger::default()
@@ -2230,7 +2269,7 @@ mod tests {
     #[test]
     fn an_intact_ship_bursting_out_of_a_gate_moves_along_its_truncated_heading() {
         let sites = [planet(140, 0.0, 0.0)];
-        let mut ship = emerging(AVERAGE, 1);
+        let mut ship = emerging(AVERAGE, 1.0);
         ship.mode = Mode::LeavingGate { tick: 0 };
         ship.state.heading = 90.6;
         let start = ship.state;
@@ -2255,15 +2294,15 @@ mod tests {
     fn an_intact_ship_waiting_in_or_at_its_gate_or_coasting_keeps_its_heading() {
         let sites = [planet(140, 0.0, 0.0)];
         for mode in [
-            Mode::Emerging { ticks_left: 3 },
-            Mode::HeldAtGate { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
+            Mode::HeldAtGate { ticks_left: 3.0 },
             Mode::EnteringGate {
                 gate: StellarId(140),
-                ticks_left: 3,
+                ticks_left: 3.0,
             },
-            Mode::Coasting { ticks_left: 3 },
+            Mode::Coasting { ticks_left: 3.0 },
         ] {
-            let mut ship = emerging(AVERAGE, 3);
+            let mut ship = emerging(AVERAGE, 3.0);
             ship.mode = mode;
             ship.state.heading = 90.6;
             fly_at(&mut ship, &sites, None, GOING_ON);
@@ -2276,7 +2315,7 @@ mod tests {
     /// is over, drawing `draws`: its burst's last tick done.
     fn burst_out(fields: ShipFields, speeds: TopSpeeds, draws: &mut Draws) -> Npc {
         let sites = [planet(140, 0.0, 0.0)];
-        let mut ship = emerging(fields, 1);
+        let mut ship = emerging(fields, 1.0);
         ship.trigger = Trigger {
             primary: true,
             ..Trigger::default()
@@ -2319,8 +2358,8 @@ mod tests {
             own: 3.0,
             lead: None,
         };
-        assert_eq!((POST_BURST_WAIT, POST_BURST_SPREAD), (30, 30));
-        for (draw, wait) in [(0, 30), (29, 59)] {
+        assert_eq!((POST_BURST_WAIT, POST_BURST_SPREAD), (30.0, 30));
+        for (draw, wait) in [(0, 30.0), (29, 59.0)] {
             let mut draws = Draws::of(&[draw]);
             let mut ship = burst_out(AVERAGE, speeds, &mut draws);
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: wait });
@@ -2329,7 +2368,10 @@ mod tests {
             // Top speed 3: on at 3.205, its last burst speed.
             let velocity = ship.state.velocity;
             assert!((velocity - Vec2::new(3.205, 0.0)).length() < 1e-4);
-            for left in (0..wait).rev() {
+            for left in (0..crate::traffic::ai_wait::frames(wait))
+                .rev()
+                .map(crate::traffic::ai_wait::ticks)
+            {
                 let before = ship.state;
                 assert_eq!(
                     super::fly(
@@ -2350,7 +2392,7 @@ mod tests {
                 assert_eq!(ship.state.velocity, velocity, "{left}: not slowed");
                 assert_eq!(ship.state.heading, 90.0, "{left}: not turned");
                 assert_eq!(ship.state.position, before.position + velocity);
-                let mode = if left == 0 {
+                let mode = if left == 0.0 {
                     Mode::Flying
                 } else {
                     Mode::Coasting { ticks_left: left }
@@ -2406,7 +2448,7 @@ mod tests {
             own: 6.0,
             lead: None,
         };
-        for (draw, wait) in [(0, 30), (29, 59)] {
+        for (draw, wait) in [(0, 30.0), (29, 59.0)] {
             let mut ship = jumping_in(AVERAGE);
             let mut draws = Draws::of(&[draw]);
             while let Mode::JumpingIn { .. } = ship.mode {
@@ -2454,12 +2496,12 @@ mod tests {
             lead: None,
         };
         let mut ship = burst_out(AVERAGE, speeds, &mut Draws::of(&[0]));
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 30 });
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 30.0 });
         ship.condition = Condition::Disabled;
         fly_at(&mut ship, &[], None, speeds);
         assert_eq!(
             ship.mode,
-            Mode::Coasting { ticks_left: 29 },
+            Mode::Coasting { ticks_left: 29.0 },
             "a disabled ship reaches the countdown too (@0x34424 → @0x34679 → @0x34a54 → @0x35026)"
         );
         assert!(
@@ -2478,15 +2520,15 @@ mod tests {
     #[test]
     fn a_ship_intact_again_before_its_wait_is_out_holds_its_course_for_the_rest() {
         let mut ship = npc(AVERAGE, Goal::JumpOut, at(0.0, 0.0, 1.0, 0.0, 90.0));
-        ship.mode = Mode::Coasting { ticks_left: 3 };
+        ship.mode = Mode::Coasting { ticks_left: 3.0 };
         ship.condition = Condition::Disabled;
         fly(&mut ship, &[], None);
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 2 });
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 2.0 });
         let drifted = ship.state;
         assert!(drifted.velocity.x < 1.0, "slowed as it drifts");
         ship.condition = Condition::Intact;
         fly(&mut ship, &[], None);
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 1 });
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 1.0 });
         assert_eq!(ship.state.velocity, drifted.velocity, "no thrust");
         assert_eq!(ship.state.heading, drifted.heading, "no turn");
         assert_eq!(
@@ -2557,11 +2599,13 @@ mod tests {
             ship.mode,
             Mode::EnteringGate {
                 gate: GATE,
-                ticks_left: ENTRY_TICKS - 1
+                ticks_left: ENTRY_TICKS - 1.0
             },
             "16, counted down this tick"
         );
-        for tick in 2..ENTRY_TICKS {
+        for tick in
+            (2..crate::traffic::ai_wait::frames(ENTRY_TICKS)).map(crate::traffic::ai_wait::ticks)
+        {
             assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying, "{tick}");
             assert_eq!(ship.state.position, start.position);
             assert_eq!(
@@ -2628,7 +2672,7 @@ mod tests {
                 ship.mode,
                 Mode::EnteringGate {
                     gate: StellarId(gate),
-                    ticks_left: 15
+                    ticks_left: 15.0
                 }
             );
             let (outcome, _) = until_gone(&mut ship, &sites, 100);
@@ -2666,7 +2710,7 @@ mod tests {
             let mut ship = npc(FAST, goal, at(500.0, 0.0, 0.0, 0.0, 90.0));
             ship.mode = Mode::EnteringGate {
                 gate: GATE,
-                ticks_left: 3,
+                ticks_left: 3.0,
             };
             ship.condition = condition;
             ship.state.velocity = Vec2::new(2.0, 0.0);
@@ -2683,7 +2727,7 @@ mod tests {
         let mut gone = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 90.0));
         gone.mode = Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 1,
+            ticks_left: 1.0,
         };
         assert_eq!(
             fly(&mut gone, &[], None),
@@ -3713,12 +3757,12 @@ mod tests {
         let start = at(10.0, 20.0, 9.0, -4.0, 30.0);
         for goal in [Goal::Attack(FOE), Goal::Idle, Goal::Drift, Goal::Hold] {
             let mut ship = npc(FAST, goal, start);
-            ship.ai_wait = 1;
+            ship.ai_wait = 1.0;
             let flown = flown_for(ship, &at(0.0, -400.0, 0.0, 0.0, 0.0), false, 1);
             assert_eq!(flown, at(19.0, 16.0, 9.0, -4.0, 30.0), "{goal:?}");
         }
         let mut ship = npc(FAST, Goal::Drift, start);
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         assert_eq!(
             flown_for(ship, &start, false, 1),
             flown_for(npc(FAST, Goal::Hold, start), &start, false, 1),
@@ -3733,13 +3777,13 @@ mod tests {
         let sites = [hypergate()];
         let start = at(0.0, 0.0, 0.0, 0.0, 90.0);
         let mut ship = npc(FAST, Goal::Land(GATE), start);
-        for left in (1..=3).rev() {
+        for left in (1..=3).rev().map(crate::traffic::ai_wait::ticks) {
             ship.ai_wait = left;
             assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
             assert_eq!(ship.goal, Goal::Land(GATE), "{left}");
             assert_eq!(ship.state, start, "{left}: at rest, unmoved");
         }
-        ship.ai_wait = 0;
+        ship.ai_wait = 0.0;
         let mut entering = npc(FAST, Goal::EnterGate(GATE), start);
         fly(&mut ship, &sites, None);
         fly(&mut entering, &sites, None);
@@ -3751,7 +3795,7 @@ mod tests {
     #[test]
     fn a_count_wait_brakes_as_a_waiting_ship_does() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
-        for ticks_left in [0, 1, 120] {
+        for ticks_left in [0.0, 1.0, 120.0] {
             let waiting = Npc {
                 ai_wait: ticks_left,
                 ..npc(FAST, Goal::CountWait, start)

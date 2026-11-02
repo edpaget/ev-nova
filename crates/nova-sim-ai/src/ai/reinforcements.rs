@@ -422,7 +422,7 @@ mod tests {
         // and neither arrival nor sight.
         for mode in [
             Mode::JumpingIn { tick: 1 },
-            Mode::Emerging { ticks_left: 5 },
+            Mode::Emerging { ticks_left: 5.0 },
         ] {
             let mut arriving = npcs.clone();
             arriving[1].mode = mode;

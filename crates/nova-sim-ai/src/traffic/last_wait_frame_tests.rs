@@ -173,7 +173,7 @@ fn double_times_second_pass_neither_starts_its_burst_nor_lets_a_hit_pass() {
         &mut |_, _| {},
     );
     let held = of(&hit_in_it, 0);
-    assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 1 });
+    assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 1.0 });
     assert_eq!(held.goal, Goal::Attack(ShipRef::Player));
     traffic.tick_in(&Answering, world, &[], &mut NeverFires);
     assert_eq!(
@@ -189,7 +189,7 @@ fn a_ship_whose_wait_runs_out_in_the_ship_loop_is_held_by_a_later_hit_in_it() {
     // the dispatch: goal 0x15 until the next one, so a later slot's
     // shockwave holds it, and so do the beams' hits after the loop.
     let mut traffic = traffic();
-    traffic.npcs[0].mode = Mode::Emerging { ticks_left: 1 };
+    traffic.npcs[0].mode = Mode::Emerging { ticks_left: 1.0 };
     let world = World::new(&[]);
     traffic.think_holding(&Answering, world, &[], &mut NeverFires);
     let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), super::FlyHalf::Advance);
@@ -203,7 +203,7 @@ fn a_ship_whose_wait_runs_out_in_the_ship_loop_is_held_by_a_later_hit_in_it() {
         &mut NeverFires,
         &mut |_, _| {},
     );
-    assert_eq!(of(&held, 0).mode, Mode::HeldAtGate { ticks_left: 1 });
+    assert_eq!(of(&held, 0).mode, Mode::HeldAtGate { ticks_left: 1.0 });
     traffic.fly_npc(&mut pass, NpcId(1), &world, &mut NeverFires);
     traffic.end_fly(pass);
     traffic.answer_in_turn(
@@ -213,7 +213,7 @@ fn a_ship_whose_wait_runs_out_in_the_ship_loop_is_held_by_a_later_hit_in_it() {
         &mut NeverFires,
         &mut |_, _| {},
     );
-    assert_eq!(of(&traffic, 0).mode, Mode::HeldAtGate { ticks_left: 1 });
+    assert_eq!(of(&traffic, 0).mode, Mode::HeldAtGate { ticks_left: 1.0 });
 }
 
 // Goal 0x15's turn-out drops the target (@0x8dd7b).
@@ -254,7 +254,9 @@ fn npc_hit(ship: u32) -> Strike {
 /// [`traffic`] with NPC 0 waiting `ticks_left` more ticks in its gate.
 fn waiting(ticks_left: u32) -> Traffic {
     let mut traffic = traffic();
-    traffic.npcs[0].mode = Mode::Emerging { ticks_left };
+    traffic.npcs[0].mode = Mode::Emerging {
+        ticks_left: crate::traffic::ai_wait::ticks(ticks_left),
+    };
     traffic
 }
 
@@ -265,7 +267,7 @@ fn a_ship_hit_in_its_gate_keeps_its_target_until_the_dispatch_that_turns_it_out(
     let mut traffic = waiting(2);
     traffic.tick_in(&Provoked, world, &[npc_hit(0)], &mut NeverFires);
     let hit = of(&traffic, 0);
-    assert_eq!(hit.mode, Mode::Emerging { ticks_left: 1 });
+    assert_eq!(hit.mode, Mode::Emerging { ticks_left: 1.0 });
     assert_eq!(hit.target, Some(ShipRef::Npc(NpcId(1))), "through the wait");
     assert_eq!(hit.provoked, 12.0);
     traffic.tick_in(&Provoked, world, &[], &mut NeverFires);

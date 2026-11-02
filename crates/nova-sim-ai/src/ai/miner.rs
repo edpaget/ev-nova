@@ -546,7 +546,7 @@ mod tests {
     fn a_shuttle_whose_wait_runs_clears_it() {
         // +0x6c -1, state 0 (@0x8b45d-0x8b463).
         let mut waiting = holding(miner(SCOOPS, false), Some(HELD));
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         assert_eq!(wrote(&waiting, None), (Goal::Idle, TravelWrite::Clear));
     }
 
@@ -641,7 +641,7 @@ mod tests {
         travel::take(&mut shuttle, decided.travel, decided.goal);
         shuttle.goal = decided.goal;
         assert_eq!(shuttle.travel, None);
-        shuttle.ai_wait = 0;
+        shuttle.ai_wait = 0.0;
         assert_eq!(
             wrote(&shuttle, None),
             (Goal::Land(StellarId(130)), TravelWrite::Set(StellarId(130)))
@@ -712,11 +712,11 @@ mod tests {
     fn a_shuttle_whose_wait_runs_drops_its_stellar_and_idles() {
         let mut held = miner(SCOOPS, false);
         held.goal = Goal::Land(StellarId(128));
-        held.mode = Mode::HeldAtGate { ticks_left: 5 };
+        held.mode = Mode::HeldAtGate { ticks_left: 5.0 };
         assert_eq!(deciding(&held, &stellars(), None), Goal::Idle, "state 0");
         let mut waiting = miner(SCOOPS, false);
         waiting.goal = Goal::Land(StellarId(128));
-        waiting.ai_wait = 5;
+        waiting.ai_wait = 5.0;
         assert_eq!(
             deciding(&waiting, &stellars(), None),
             Goal::Idle,
@@ -1008,10 +1008,10 @@ mod tests {
             assert!(traffic.departed().iter().all(|&(id, _)| id != shuttle));
             let there = traffic.npcs().iter().find(|npc| npc.id == shuttle);
             let ship = there.expect("a landed shuttle stays");
-            if landed.is_none() && ship.ai_wait > 0 {
+            if landed.is_none() && ship.ai_wait > 0.0 {
                 // Its short stay (100 + `Rand(75)`, the longest), counted
                 // once, stopped where it landed.
-                assert_eq!(ship.ai_wait, 173);
+                assert_eq!(ship.ai_wait, 173.0);
                 assert_eq!(ship.state.velocity, Vec2::ZERO);
                 landed = ship.visited;
             }

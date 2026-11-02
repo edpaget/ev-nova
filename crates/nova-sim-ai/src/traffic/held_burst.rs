@@ -683,7 +683,7 @@ mod tests {
         assert!(!ended.travel_set(), "+0x6c = -1");
         assert_eq!(ended.owed_burst, None);
         assert_eq!(ended.display.drive.thrust, Thrust::None, "+0x30 = 0");
-        assert_eq!(ended.mode, Mode::Coasting { ticks_left: 37 });
+        assert_eq!(ended.mode, Mode::Coasting { ticks_left: 37.0 });
         assert_eq!(draws.asked, [30], "Rand(30)");
         assert!(close(ended.state.velocity, Vec2::new(2.0, 0.0)), "kept");
         // An inertialess ship's velocity is zeroed.
@@ -880,7 +880,7 @@ mod tests {
         );
         assert!(!npc.travel_set());
         assert_eq!(npc.owed_burst, None);
-        assert_eq!(npc.mode, Mode::Coasting { ticks_left: 30 });
+        assert_eq!(npc.mode, Mode::Coasting { ticks_left: 30.0 });
     }
 
     #[test]

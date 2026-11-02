@@ -83,7 +83,7 @@ pub fn npc(id: u32, stats: ShipStats) -> Npc {
         afterburner: false,
         voice: None,
         pursuit: Pursuit::default(),
-        ai_wait: 0,
+        ai_wait: 0.0,
         docking: None,
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
@@ -131,7 +131,7 @@ pub fn breaking_up_guard(npc: Npc) -> Npc {
 #[cfg(test)]
 pub fn count_waiting(npc: &mut Npc, ticks: u32) {
     npc.goal = Goal::CountWait;
-    npc.ai_wait = ticks;
+    npc.ai_wait = crate::traffic::ai_wait::ticks(ticks);
 }
 
 /// A class `Fuel` holding the tank of `stats`, saturating at the word.

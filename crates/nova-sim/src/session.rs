@@ -16727,7 +16727,7 @@ pub(super) mod tests {
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
             let mut ticks = 0;
-            while session.npcs()[0].ai_wait == 0 {
+            while session.npcs()[0].ai_wait == 0.0 {
                 work_with(
                     &mut session,
                     &catalog,
@@ -16742,7 +16742,7 @@ pub(super) mod tests {
             }
             let landed = &session.npcs()[0];
             assert_eq!(landed.visited, Some(StellarId(128)), "AI {ai_type}");
-            assert_eq!(landed.ai_wait, 498, "AI {ai_type}: 300 + Rand(200)");
+            assert_eq!(landed.ai_wait, 498.0, "AI {ai_type}: 300 + Rand(200)");
             // Its stay out, the idle block finds it has visited a stellar
             // here and sends it away by hyperspace.
             let how = first_departure(&mut session, &catalog);
@@ -17500,7 +17500,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         session.hold_trigger(FIRE);
         let mut hit = false;
         for _ in 0..60 {
@@ -17526,7 +17526,7 @@ pub(super) mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.setup.rules = Rulebook::default().with_override(RuleKey::ArrivalHits, arrival_hits);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         npc.ai_type = crate::traffic::npc::AiType::Warship;
         session.chart.target = Some(NpcId(0));
         struck_by_the_player(&mut session, 10.0);
@@ -17795,7 +17795,7 @@ pub(super) mod tests {
         let mut session = facing_an_npc(catalog, 180);
         make_quoting_warship(&mut session);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 60 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 60.0 };
         session.take_sounds();
         session.chart.target = Some(NpcId(0));
         struck_by_the_player(&mut session, 10.0);
@@ -17811,7 +17811,7 @@ pub(super) mod tests {
         let mut session = hit_in_its_gate(&catalog);
         session.answer_strikes(&crate::ai::NovaAi::default());
         let npc = &session.npcs()[0];
-        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 20 });
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 20.0 });
         assert!(npc.arrived());
         session.chart.target = None;
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
@@ -17837,7 +17837,7 @@ pub(super) mod tests {
         );
         let npc = &session.npcs()[0];
         assert_eq!(npc.provoked, provoked);
-        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 19.0 });
     }
 
     #[test]
@@ -17907,7 +17907,7 @@ pub(super) mod tests {
     fn by_the_other_reading_a_ship_the_player_hits_in_its_gate_waits_on_unseen() {
         use crate::traffic::npc::Mode;
         let mut session = the_player_hits_a_ship_in_its_gate(RuleSource::Bible);
-        assert_eq!(session.npcs()[0].mode, Mode::Emerging { ticks_left: 59 });
+        assert_eq!(session.npcs()[0].mode, Mode::Emerging { ticks_left: 59.0 });
         session.chart.target = None;
         assert_eq!(session.select_target(TargetPick::Next), None);
     }
@@ -20237,7 +20237,7 @@ pub(super) mod tests {
         assert!(!session.sees(&session.npcs()[0]));
         session.space.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak::default();
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 5.0 };
         assert!(!session.sees(&session.npcs()[0]));
     }
 
@@ -20246,7 +20246,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 5.0 };
         assert!(session.sees_past_cloak(&session.npcs()[0]), "emerging");
         session.space.traffic.npcs_mut()[0].cloak = CLOAKED;
         assert!(!session.sees_past_cloak(&session.npcs()[0]), "cloaked");
@@ -21073,7 +21073,7 @@ pub(super) mod tests {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         session.space.traffic.npcs_mut()[0].mode =
-            crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+            crate::traffic::npc::Mode::Emerging { ticks_left: 3.0 };
         session.watch_ship(NpcId(0));
         for left in [2, 1] {
             work_with(
@@ -24525,7 +24525,7 @@ pub(super) mod tests {
             !fires(Goal::Idle, |s| {
                 let npc = &mut s.space.traffic.npcs_mut()[0];
                 npc.target = Some(ShipRef::Player);
-                npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30 };
+                npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 30.0 };
             }),
             "its target is the player, but its wait runs"
         );
@@ -24637,7 +24637,7 @@ pub(super) mod tests {
                 npc.cloak = CLOAKED;
             }
             if emerging {
-                npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 50 };
+                npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 50.0 };
             }
             work(&mut session, &catalog, Controls::default());
             quad_fired(&session.take_combat_events(), ShipRef::Player)
@@ -24719,7 +24719,7 @@ pub(super) mod tests {
         assert!(!terms(false).fighter(&mut npc).threatens_player);
         let fighter = terms(false).fighter(&mut npc);
         assert!(!fighter.emerging && !fighter.cloak_scanner);
-        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        npc.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3.0 };
         npc.cloak_gear.scanner.on_screen = true;
         let fighter = terms(false).fighter(&mut npc);
         assert!(fighter.emerging && fighter.cloak_scanner);

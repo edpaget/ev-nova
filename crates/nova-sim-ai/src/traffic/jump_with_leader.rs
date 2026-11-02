@@ -90,6 +90,7 @@ use crate::combat::ShipRef;
 use crate::combat::hull::under_armour_line;
 use crate::flight::FlightRules;
 use crate::rulebook::RuleSource;
+use crate::traffic::ai_wait;
 #[cfg(doc)]
 use crate::traffic::npc::Mode;
 use crate::traffic::npc::{Npc, NpcId};
@@ -129,7 +130,7 @@ impl Npc {
     /// `goal`, the goal its think writes ([`Npc::high_level_waits`]).
     #[must_use]
     pub fn high_level_waits_under(&self, goal: Goal) -> bool {
-        (self.ai_wait > 0 || (self.joins_leaders_jump() && self.wait_running()))
+        (ai_wait::running(self.ai_wait) || (self.joins_leaders_jump() && self.wait_running()))
             && (self.follows_leaders_jump() || !(goal.flies_in_form() || goal == Goal::Drift))
     }
 
@@ -485,7 +486,7 @@ mod tests {
         let waits = |goal: Goal, ai_wait: u32, warp: Option<WarpGoal>| {
             let mut ship = far(1);
             ship.goal = goal;
-            ship.ai_wait = ai_wait;
+            ship.ai_wait = crate::traffic::ai_wait::ticks(ai_wait);
             ship.warp.goal = warp;
             ship.high_level_waits()
         };
@@ -519,7 +520,7 @@ mod tests {
         follower.warp.stage = 3.0;
         follower.warp.since = since;
         follower.warp.aim = 90;
-        follower.ai_wait = ai_wait;
+        follower.ai_wait = crate::traffic::ai_wait::ticks(ai_wait);
         let follower = traffic.add_npc(follower);
         (traffic, lead, follower)
     }
@@ -728,7 +729,7 @@ mod tests {
         let world = jumping_world(0.0);
         traffic.tick_in(&Keep, world, &[], &mut NeverFires);
         assert!(of(&traffic, lead).stopping, "sub 1");
-        traffic.npcs_mut()[0].ai_wait = 5;
+        traffic.npcs_mut()[0].ai_wait = 5.0;
         traffic.tick_in(&Keep, world, &[], &mut NeverFires);
         assert!(of(&traffic, lead).stopping, "no sub written (@0x8d4d2)");
         traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, 0.2);
@@ -743,7 +744,7 @@ mod tests {
         let mut lead = far(0);
         lead.state.velocity = Vec2::new(0.0, 3.0);
         lead.stopping = true;
-        lead.mode = Mode::Coasting { ticks_left: 9 };
+        lead.mode = Mode::Coasting { ticks_left: 9.0 };
         let lead = traffic.add_npc(lead);
         traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
         assert!(of(&traffic, lead).stopping, "+0x4c runs (@0x8d4d2)");
@@ -1205,7 +1206,7 @@ mod tests {
         escort.state.velocity = Vec2::new(0.0, 2.0);
         escort.leader = Some(lead);
         escort.target = Some(ShipRef::Player);
-        escort.ai_wait = wait;
+        escort.ai_wait = crate::traffic::ai_wait::ticks(wait);
         let escort = traffic.add_npc(escort);
         (traffic, lead, escort)
     }
@@ -1289,7 +1290,7 @@ mod tests {
         stopped.warp = crate::traffic::warp_out::Warp::default();
         stopped.goal = Goal::Hold;
         stopped.no_ai = true;
-        assert_eq!(of(&traffic, escort).ai_wait, 0, "the wait is out");
+        assert_eq!(of(&traffic, escort).ai_wait, 0.0, "the wait is out");
         fleet_tick(&mut traffic);
         let ship = of(&traffic, escort);
         assert_eq!((ship.goal, ship.warp.goal), (Goal::Idle, None));
@@ -1304,10 +1305,10 @@ mod tests {
         joining.warp.joining = true;
         assert!(joining.joins_leaders_jump());
         assert!(!joining.high_level_waits(), "its wait is over");
-        joining.mode = Mode::HeldAtGate { ticks_left: 9 };
+        joining.mode = Mode::HeldAtGate { ticks_left: 9.0 };
         assert!(joining.high_level_waits(), "it waits in its mode");
         let mut held = far(1);
-        held.mode = Mode::Coasting { ticks_left: 9 };
+        held.mode = Mode::Coasting { ticks_left: 9.0 };
         assert!(
             !held.high_level_waits(),
             "not joining: the flying wait alone"
@@ -1351,19 +1352,19 @@ mod tests {
             (
                 "a gate arrival",
                 Goal::Idle,
-                Mode::Emerging { ticks_left: 30 },
+                Mode::Emerging { ticks_left: 30.0 },
                 0,
             ),
             (
                 "held at its gate",
                 Goal::Attack(ShipRef::Player),
-                Mode::HeldAtGate { ticks_left: 30 },
+                Mode::HeldAtGate { ticks_left: 30.0 },
                 0,
             ),
             (
                 "holding its course",
                 Goal::Idle,
-                Mode::Coasting { ticks_left: 30 },
+                Mode::Coasting { ticks_left: 30.0 },
                 0,
             ),
             (
@@ -1371,7 +1372,7 @@ mod tests {
                 Goal::Idle,
                 Mode::EnteringGate {
                     gate: crate::catalog::StellarId(128),
-                    ticks_left: 30,
+                    ticks_left: 30.0,
                 },
                 0,
             ),
@@ -1387,7 +1388,7 @@ mod tests {
         });
         ship.goal = goal;
         ship.mode = mode;
-        ship.ai_wait = wait;
+        ship.ai_wait = crate::traffic::ai_wait::ticks(wait);
         ship.warp.aim = 300;
         ship
     }
@@ -1437,10 +1438,10 @@ mod tests {
     #[test]
     fn the_players_warp_stage_ends_a_gate_wait() {
         use crate::traffic::npc::Mode;
-        let mut ship = players_ship(Goal::Idle, Mode::Emerging { ticks_left: 30 }, 0);
+        let mut ship = players_ship(Goal::Idle, Mode::Emerging { ticks_left: 30.0 }, 0);
         ship.emerges_from = Some(crate::catalog::StellarId(128));
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
-        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 30 });
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 30.0 });
         assert_eq!(ship.emerges_from, None);
     }
 
@@ -1463,7 +1464,7 @@ mod tests {
         assert!(!ship.warp.joining);
         let mut led = far(0);
         led.warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(NpcId(4))));
-        led.ai_wait = 180;
+        led.ai_wait = 180.0;
         led.enter_leaders_jump(ShipRef::Npc(NpcId(4)));
         assert_eq!(
             led.warp.goal,
@@ -1486,7 +1487,7 @@ mod tests {
     fn after_a_coast_its_first_think_sets_the_jump() {
         use crate::traffic::npc::Mode;
         let mut traffic = Traffic::with_interval(1);
-        let mut ship = players_ship(Goal::Idle, Mode::Coasting { ticks_left: 1 }, 0);
+        let mut ship = players_ship(Goal::Idle, Mode::Coasting { ticks_left: 1.0 }, 0);
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
         let id = traffic.add_npc(ship);
         let mut world = jumping_world(5.0);
@@ -1547,7 +1548,7 @@ mod tests {
         use crate::traffic::npc::Mode;
         let mut ship = players_ship(Goal::Idle, Mode::LeavingGate { tick: 0 }, 0);
         ship.follow_player_jump(5.0, 7, RuleSource::Engine);
-        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1 });
+        assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: 1.0 });
         assert!(ship.joins_leaders_jump());
     }
 
@@ -1802,7 +1803,7 @@ mod tests {
         let mut waiting = fighter_on_jump(ShipRef::Npc(carrier), true);
         waiting.leader = Some(carrier);
         waiting.warp.stage = 0.0;
-        waiting.ai_wait = 50;
+        waiting.ai_wait = 50.0;
         let waiting = traffic.add_npc(waiting);
         traffic.tick_in(&Keep, jumping_world(0.0), &[], &mut NeverFires);
         let ship = of(&traffic, fighter);

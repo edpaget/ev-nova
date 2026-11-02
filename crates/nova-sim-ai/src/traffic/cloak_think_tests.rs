@@ -307,7 +307,7 @@ fn a_fleet_escort_takes_no_parent_rule_from_a_cloaked_leader_it_cannot_see() {
         "seen: its cloak shows it its cloaked leader"
     );
     let mut emerging = leader_npc(CLOAKED);
-    emerging.mode = Mode::Emerging { ticks_left: 5 };
+    emerging.mode = Mode::Emerging { ticks_left: 5.0 };
     assert_eq!(
         led_thought(emerging, true, false),
         Cloak::default(),
@@ -407,6 +407,6 @@ fn a_ship_whose_ai_wait_runs_does_not_think_its_cloak() {
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
         traffic.npcs()[0].cloak
     };
-    assert_eq!(waiting(10), CLOAKED, "no think");
-    assert_eq!(waiting(0).direction, -1, "nothing keeps it");
+    assert_eq!(waiting(10.0), CLOAKED, "no think");
+    assert_eq!(waiting(0.0).direction, -1, "nothing keeps it");
 }

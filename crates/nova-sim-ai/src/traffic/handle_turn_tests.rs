@@ -384,7 +384,7 @@ fn waited(
         _ => ship(FAST, goal, start, start.velocity.length()),
     };
     npc.state.velocity = start.velocity;
-    npc.ai_wait = wait;
+    npc.ai_wait = crate::traffic::ai_wait::ticks(wait);
     if let Goal::Attack(_) = goal {
         npc.pursuit.frame = Some(Frame {
             goal,

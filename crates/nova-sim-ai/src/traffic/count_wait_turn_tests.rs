@@ -13,6 +13,8 @@
 //! fire (@0x3443f-0x34454, @0x34a54-0x34a72), goal 4 not being exempt as
 //! 0x16 is. So it sits still for what is left, then attacks.
 
+#![allow(clippy::float_cmp)]
+
 use super::{Traffic, World};
 use crate::ai::fire;
 use crate::ai::pirate::PirateWarship;
@@ -134,7 +136,7 @@ fn holds_then_attacks(traffic: &mut Traffic, held: u32) {
             );
         }
     }
-    assert_eq!(traffic.npcs()[0].ai_wait, 0, "the wait is out");
+    assert_eq!(traffic.npcs()[0].ai_wait, 0.0, "the wait is out");
     tick(traffic, &Turned);
     let pirate = &traffic.npcs()[0];
     assert!(pirate.pursuit.frame.is_some(), "it flies its fight");
@@ -147,7 +149,11 @@ fn holds_then_attacks(traffic: &mut Traffic, held: u32) {
 fn a_pirate_the_player_hits_in_its_count_wait_holds_still_for_what_is_left_up_to_20_then_attacks() {
     for left in [120, 21, 20, 7] {
         let mut traffic = answered(left, &Turned, &[strike(n(1), ShipRef::Player)]);
-        assert_eq!(traffic.npcs()[0].ai_wait, left.min(20), "cut from {left}");
+        assert_eq!(
+            traffic.npcs()[0].ai_wait,
+            crate::traffic::ai_wait::ticks(left.min(20)),
+            "cut from {left}"
+        );
         holds_then_attacks(&mut traffic, left.min(20));
     }
 }
@@ -156,7 +162,7 @@ fn a_pirate_the_player_hits_in_its_count_wait_holds_still_for_what_is_left_up_to
 fn a_pirate_a_good_samaritans_call_turns_in_its_count_wait_holds_still_for_its_whole_count() {
     let mut traffic = answered(120, &Turned, &[strike(n(2), ShipRef::Player)]);
     assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
-    assert_eq!(traffic.npcs()[0].ai_wait, 120, "not hit: nothing cut");
+    assert_eq!(traffic.npcs()[0].ai_wait, 120.0, "not hit: nothing cut");
     holds_then_attacks(&mut traffic, 120);
 }
 
@@ -167,7 +173,7 @@ fn the_pirate_warships_own_answer_keeps_its_count_wait() {
     let pirate = &traffic.npcs()[0];
     assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
     assert_eq!(pirate.target, Some(ShipRef::Player));
-    assert_eq!(pirate.ai_wait, 20);
+    assert_eq!(pirate.ai_wait, 20.0);
     let at = pirate.state;
     for tick_after in 1..=20 {
         assert!(traffic.npcs()[0].wait_running(), "tick {tick_after}");

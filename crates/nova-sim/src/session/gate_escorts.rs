@@ -80,7 +80,7 @@ impl Session {
         }
         let heading = self.ship.player.heading;
         for id in led {
-            let wait = chance.below(LEAD_OUT_DRAW) + LEAD_OUT_LEAST;
+            let wait = crate::traffic::ai_wait::ticks(chance.below(LEAD_OUT_DRAW) + LEAD_OUT_LEAST);
             if let Some(npc) = self.space.npc_mut(id) {
                 npc.state = ShipState {
                     position: exit,
@@ -95,6 +95,7 @@ impl Session {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::catalog::{ShipId, SystemId};
@@ -176,7 +177,7 @@ mod tests {
                     heading: session.ship.player.heading,
                 };
                 assert_eq!(npc.state, expected, "{kind:?}");
-                assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34 }, "{kind:?}");
+                assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34.0 }, "{kind:?}");
                 assert_eq!(npc.target, None, "{kind:?}");
                 assert!(npc.led_out, "{kind:?}");
                 assert_eq!(npc.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
@@ -257,15 +258,15 @@ mod tests {
             &mut draws,
         );
         assert_eq!(draws.asked, [LEAD_OUT_DRAW; 3], "one Rand(20) a ship");
-        let mut waits: Vec<u32> = ids
+        let mut waits: Vec<f32> = ids
             .iter()
             .map(|&id| match session.space.npc(id).map(|npc| npc.mode) {
                 Some(Mode::Emerging { ticks_left }) => ticks_left,
                 other => panic!("{other:?}"),
             })
             .collect();
-        waits.sort_unstable();
-        assert_eq!(waits, [15, 22, 34]);
+        waits.sort_by(f32::total_cmp);
+        assert_eq!(waits, [15.0, 22.0, 34.0]);
     }
 
     #[test]
@@ -315,6 +316,8 @@ mod tests {
             },
         );
         let mut session = flying(&catalog, Rulebook::default());
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         assert!((session.top_speed() - 9.0).abs() < 1e-4);
         exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
@@ -571,6 +574,8 @@ mod tests {
         use crate::cloak::{CLOAK_JUMPING, CLOAK_TRAVELLING, CloakGear, FADE_RATE};
         let catalog = catalog();
         let mut session = flying(&catalog, Rulebook::default());
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let hired = session.space.escorts.fleet[0].expect("placed");
         let other = session
@@ -588,7 +593,9 @@ mod tests {
         let Mode::Emerging { ticks_left: wait } = npc.mode else {
             panic!("{:?}", npc.mode)
         };
-        assert_eq!(wait, 34);
+        assert_eq!(wait, 34.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let wait = wait as u32;
         let seeded = Cloak {
             fade: 4.0,
             direction: 1,

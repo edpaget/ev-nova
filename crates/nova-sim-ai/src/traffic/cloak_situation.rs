@@ -248,7 +248,7 @@ mod tests {
                 "tick 0 is still goal 0x15"
             );
             assert_eq!(
-                of(goal, Mode::Emerging { ticks_left: 3 }),
+                of(goal, Mode::Emerging { ticks_left: 3.0 }),
                 cloak::Situation::default(),
             );
         }

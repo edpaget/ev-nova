@@ -106,7 +106,7 @@ fn an_idle_npc_takes_a_stellar_its_system_lists_but_does_not_show_and_lands_on_i
     for _ in 0..3000 {
         pass(&mut session, &catalog);
         let npc = ship_of(&session, id).expect("it stays");
-        if npc.visited.is_some() && npc.ai_wait > 0 {
+        if npc.visited.is_some() && npc.ai_wait > 0.0 {
             assert_eq!(npc.visited, Some(SHARED), "landed on it");
             return;
         }

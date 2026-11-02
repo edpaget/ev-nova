@@ -58,7 +58,7 @@ use crate::traffic::npc::{Npc, NpcId};
 
 /// The AI wait, in ticks, of a ship boarded on a mission's assist path
 /// (the float 100.0 @0x65746).
-pub(super) const BOARDED_WAIT: u32 = 100;
+pub(super) const BOARDED_WAIT: f32 = 100.0;
 
 impl Session {
     /// The comm line a failed mission's ship said as the last board
@@ -710,6 +710,8 @@ mod tests {
     fn a_ship_boarded_on_the_assist_path_holds_still_for_100_ticks_then_flies_on() {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         // A rescue ship held disabled at its full armour, so intact once
         // boarded.
         let armor = &mut session.space.traffic.npcs_mut()[0].reserves.armor;
@@ -719,9 +721,9 @@ mod tests {
             boarding,
             Ok(Boarding::MissionShip(Some(MissionBoardLine::Boarded)))
         );
-        assert_eq!(BOARDED_WAIT, 100);
+        assert_eq!(BOARDED_WAIT, 100.0);
         let held = session.npcs()[0].clone();
-        assert_eq!(held.mode, Mode::Coasting { ticks_left: 100 });
+        assert_eq!(held.mode, Mode::Coasting { ticks_left: 100.0 });
         let tick = |session: &mut Session| {
             work_with(
                 session,
@@ -732,7 +734,9 @@ mod tests {
                 &mut NeverFires,
             );
         };
-        for at in 0..BOARDED_WAIT {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let frames = BOARDED_WAIT as u32;
+        for at in 0..frames {
             assert!(session.npcs()[0].wait_running(), "{at}");
             tick(&mut session);
             let npc = &session.npcs()[0];

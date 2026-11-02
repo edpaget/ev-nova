@@ -276,7 +276,7 @@ mod tests {
         helper.goal = Goal::Assist(Help::Repair);
         helper.target = Some(ShipRef::Npc(patient));
         helper.hull.class_turn = 3.0;
-        helper.ai_wait = wait;
+        helper.ai_wait = crate::traffic::ai_wait::ticks(wait);
         helper.docking = Some(Docking {
             ship: ShipRef::Npc(patient),
             sub: DockSub::Dock,
@@ -381,7 +381,7 @@ mod tests {
         npc.target = Some(ShipRef::Npc(above));
         npc.travel = Some(crate::ai::travel::of_slot(5));
         npc.defends = Some(crate::catalog::StellarId(128));
-        npc.ai_wait = wait;
+        npc.ai_wait = crate::traffic::ai_wait::ticks(wait);
         traffic.remove_destroyed(victim);
         ships
     }

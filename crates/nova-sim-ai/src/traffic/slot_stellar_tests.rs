@@ -91,7 +91,7 @@ fn a_landing_outside_the_system_flies_to_that_stellars_place_and_lands() {
         traffic.tick_in(&ai, world, &[], &mut Ranged::of(&[]));
         assert_eq!(traffic.departed(), [], "it stays");
         let now = ship(&traffic, id).expect("here");
-        if now.ai_wait > 0 {
+        if now.ai_wait > 0.0 {
             assert_eq!(now.visited, Some(FOREIGN));
             assert_eq!(now.travel, Some(FOREIGN), "+0x6c keeps it");
             let turn = now.turn_rate();

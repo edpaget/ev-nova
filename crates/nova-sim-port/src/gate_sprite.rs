@@ -835,7 +835,7 @@ mod tests {
         let gate_id = StellarId(130);
         let flying = crate::traffic::fixture::npc(1, ShipStats::default());
         let emerging = Npc {
-            mode: Mode::Emerging { ticks_left: 9 },
+            mode: Mode::Emerging { ticks_left: 9.0 },
             emerges_from: Some(gate_id),
             ..crate::traffic::fixture::npc(2, ShipStats::default())
         };

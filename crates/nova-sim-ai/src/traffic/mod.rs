@@ -184,6 +184,7 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 mod afterburners;
+pub mod ai_wait;
 pub mod approach_flight;
 #[cfg(test)]
 mod area_cloak_tests;
@@ -2041,7 +2042,7 @@ impl Traffic {
             .zip(pressed)
             .filter(|(((npc, picked), _), _)| {
                 **picked
-                    && npc.ai_wait == 0
+                    && !ai_wait::running(npc.ai_wait)
                     && matches!(
                         npc.mode,
                         Mode::Flying | Mode::JumpingIn { .. } | Mode::LeavingGate { .. }
@@ -3065,7 +3066,7 @@ impl Traffic {
                 afterburner,
                 voice,
                 pursuit: Pursuit::default(),
-                ai_wait: 0,
+                ai_wait: 0.0,
                 docking: None,
                 // No spawn writes the search timer (+0xc90c): it is the
                 // berth's.
@@ -3576,7 +3577,7 @@ mod tests {
             &mut crate::chance::NeverFires,
         );
         traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
-        traffic.npcs[1].mode = Mode::Emerging { ticks_left: 5 };
+        traffic.npcs[1].mode = Mode::Emerging { ticks_left: 5.0 };
         traffic.npcs[2].ship = crate::combat::hull::ESCAPE_POD_SHIP;
         traffic.npcs[2].mode = Mode::Adrift { ticks_left: 2 };
         traffic.npcs[3].goal = Goal::JumpOut;
@@ -3672,7 +3673,7 @@ mod tests {
             fade: FADE_FULL,
             direction: 0,
         };
-        npc.mode = Mode::Coasting { ticks_left: 30 };
+        npc.mode = Mode::Coasting { ticks_left: 30.0 };
         npc.reserves.fuel.now = 0.0;
         traffic.think_holding(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.direction, 0, "not held yet");
@@ -3758,7 +3759,7 @@ mod tests {
     #[test]
     fn a_ship_coming_out_of_a_gate_never_decides_until_it_is_out() {
         let mut traffic = populated(2, 1);
-        traffic.npcs[1].mode = Mode::Emerging { ticks_left: 2 };
+        traffic.npcs[1].mode = Mode::Emerging { ticks_left: 2.0 };
         let firing = Trigger {
             primary: true,
             ..Trigger::default()
@@ -3814,7 +3815,7 @@ mod tests {
         // angle 0, then the gate.
         traffic.tick(&Keep, &sites, &mut Draws::of(&[0, 6, 6, 0, 0, 0, 1]));
         let arrived = &traffic.npcs()[1];
-        assert_eq!(arrived.mode, Mode::Emerging { ticks_left: 59 });
+        assert_eq!(arrived.mode, Mode::Emerging { ticks_left: 59.0 });
         assert_eq!(arrived.emerges_from, Some(StellarId(129)));
         assert_eq!(
             arrived.visited,
@@ -3825,7 +3826,7 @@ mod tests {
         assert_eq!(arrived.target, None);
         assert_eq!(arrived.state.position, Vec2::new(300.0, -400.0));
         assert_eq!(arrived.state.heading, 90.0);
-        for _ in 1..emerge::EMERGE_TICKS {
+        for _ in 1..crate::traffic::ai_wait::frames(emerge::EMERGE_TICKS) {
             traffic.tick(&Keep, &sites, &mut Draws::of(&[2]));
         }
         assert_eq!(traffic.npcs()[1].mode, Mode::LeavingGate { tick: 0 });
@@ -3837,7 +3838,7 @@ mod tests {
         let out = &traffic.npcs()[1];
         assert_eq!(
             out.mode,
-            Mode::Coasting { ticks_left: 32 },
+            Mode::Coasting { ticks_left: 32.0 },
             "top speed 6: 30 down to 6.7, then with no lead 30 + Rand(30), the draw 2"
         );
         assert_eq!(out.emerges_from, None, "the burst over");
@@ -3883,8 +3884,8 @@ mod tests {
                 .map(|npc| npc.mode)
                 .collect::<Vec<_>>(),
             [
-                Mode::Emerging { ticks_left: 60 },
-                Mode::Emerging { ticks_left: 68 }
+                Mode::Emerging { ticks_left: 60.0 },
+                Mode::Emerging { ticks_left: 68.0 }
             ]
         );
         assert!(
@@ -5063,7 +5064,7 @@ mod tests {
         traffic.npcs[0].goal = Goal::EnterGate(GATE);
         traffic.npcs[0].mode = Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 4,
+            ticks_left: 4.0,
         };
         let sites = [gate_at_centre()];
         let recording = Recording::deciding(Goal::JumpOut);
@@ -5289,8 +5290,8 @@ mod tests {
         // says the quote (@0x89ce1) of a ship whose wait runs: no threat.
         let fighting = Fighting::deciding(Goal::Idle);
         for mode in [
-            Mode::Emerging { ticks_left: 60 },
-            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 60.0 },
+            Mode::Coasting { ticks_left: 30.0 },
         ] {
             let mut traffic = quoting_traffic(1);
             traffic.npcs[0].mode = mode;
@@ -5305,7 +5306,7 @@ mod tests {
         }
         let waiting = || {
             let mut traffic = quoting_traffic(2);
-            traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+            traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
             traffic
         };
         let mut traffic = waiting();
@@ -5360,7 +5361,7 @@ mod tests {
         assert_eq!(traffic.npcs[0].target, Some(ShipRef::Player));
         assert_eq!(traffic.take_attack_quotes(), [], "flying");
         let mut traffic = quoting_traffic(1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
         traffic.tick_in(&fighting, World::new(&[]), &twice, &mut Draws::of(&[]));
         assert!(matches!(traffic.npcs[0].mode, Mode::HeldAtGate { .. }));
         assert_eq!(traffic.take_attack_quotes(), [NpcId(0), NpcId(0)]);
@@ -5621,7 +5622,7 @@ mod tests {
             quotes_on_the_hit(traffic, &World::new(&[]))
         };
         assert_eq!(said(Mode::LeavingGate { tick: 0 }), [NpcId(0)]);
-        assert_eq!(said(Mode::Emerging { ticks_left: 60 }), [NpcId(0)]);
+        assert_eq!(said(Mode::Emerging { ticks_left: 60.0 }), [NpcId(0)]);
         assert_eq!(said(Mode::LeavingGate { tick: 1 }), [], "goal 8: seen");
     }
 
@@ -5654,7 +5655,7 @@ mod tests {
         // The escort clause (@0x81cdd-0x81dcc) reads not the lead's wait.
         let led = |escort_goal| {
             let mut traffic = quoting_traffic(2);
-            traffic.npcs[0].mode = Mode::Coasting { ticks_left: 30 };
+            traffic.npcs[0].mode = Mode::Coasting { ticks_left: 30.0 };
             traffic.npcs[1].leader = Some(NpcId(0));
             traffic.npcs[1].goal = escort_goal;
             traffic
@@ -5674,7 +5675,7 @@ mod tests {
     fn entering_another_system_drops_the_queued_quotes() {
         let queued = || {
             let mut traffic = quoting_traffic(1);
-            traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+            traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
             traffic.tick_in(
                 &Fighting::deciding(Goal::Idle),
                 World::new(&[]),
@@ -5699,9 +5700,9 @@ mod tests {
         let mut traffic = populated(7, 1);
         traffic.npcs[1].condition = Condition::Disabled;
         traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
-        traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30 };
-        traffic.npcs[4].mode = Mode::Emerging { ticks_left: 30 };
-        traffic.npcs[5].mode = Mode::HeldAtGate { ticks_left: 30 };
+        traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30.0 };
+        traffic.npcs[4].mode = Mode::Emerging { ticks_left: 30.0 };
+        traffic.npcs[5].mode = Mode::HeldAtGate { ticks_left: 30.0 };
         traffic.npcs[6].mode = Mode::LeavingGate { tick: 0 };
         let fighting = Fighting::deciding(Goal::Idle);
         let world = World {
@@ -5772,7 +5773,7 @@ mod tests {
         // (+0x96, @0x3bcc0-0x3bcf0) and cuts the wait (@0x3be6e-0x3be7c),
         // its goal 0x15 kept.
         let mut traffic = populated(2, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
         traffic.npcs[0].emerges_from = Some(GATE);
         let fighting = Fighting::deciding(Goal::Idle);
         traffic.tick_in(
@@ -5784,7 +5785,7 @@ mod tests {
         let hit = &traffic.npcs()[0];
         assert_eq!(hit.target, Some(ShipRef::Npc(NpcId(1))));
         assert_eq!(hit.provoked, 5.0);
-        assert_eq!(hit.mode, Mode::Emerging { ticks_left: 19 });
+        assert_eq!(hit.mode, Mode::Emerging { ticks_left: 19.0 });
         assert!(hit.emerging(), "still hidden");
         assert!(hit.holds_gate_open(GATE));
         let mut ticks = 1;
@@ -5878,7 +5879,7 @@ mod tests {
         // wait runs on with no steering or fire (@0x34a54-0x34a72), its
         // per-type AI running (@0x8ff26-0x90016).
         let mut traffic = populated(1, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
         traffic.npcs[0].emerges_from = Some(GATE);
         let at = traffic.npcs[0].state.position;
         let world = World {
@@ -5888,7 +5889,7 @@ mod tests {
         let firing = Firing::default();
         traffic.tick_in(&firing, world, &[struck(0, 5.0)], &mut Draws::of(&[]));
         let held = &traffic.npcs()[0];
-        assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(held.mode, Mode::HeldAtGate { ticks_left: 19.0 });
         assert_eq!(held.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(held.target, Some(ShipRef::Player));
         assert_eq!(held.provoked, 5.0);
@@ -5969,7 +5970,7 @@ mod tests {
             }
         }
         let mut traffic = populated(3, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
         traffic.npcs[0].emerges_from = Some(GATE);
         traffic.npcs[1].mode = Mode::JumpingIn { tick: 0 };
         traffic.tick_in(
@@ -5979,7 +5980,7 @@ mod tests {
             &mut Draws::of(&[]),
         );
         let waiting = &traffic.npcs()[0];
-        assert_eq!(waiting.mode, Mode::HeldAtGate { ticks_left: 59 });
+        assert_eq!(waiting.mode, Mode::HeldAtGate { ticks_left: 59.0 });
         assert_eq!(waiting.goal, Goal::Attack(ShipRef::Player));
         assert_eq!(waiting.target, Some(ShipRef::Player));
         assert_eq!(waiting.emerges_from, None);
@@ -6016,8 +6017,8 @@ mod tests {
         // (@0x3bcfa-0x3bd79).
         let mut traffic = populated(2, 1);
         traffic.npcs[1].leader = Some(NpcId(0));
-        traffic.npcs[0].mode = Mode::Coasting { ticks_left: 45 };
-        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45 };
+        traffic.npcs[0].mode = Mode::Coasting { ticks_left: 45.0 };
+        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45.0 };
         traffic.tick_in(
             &Guarding,
             World::new(&[]),
@@ -6028,14 +6029,14 @@ mod tests {
         assert_eq!(lead.target, Some(ShipRef::Player), "the lead answers");
         assert_eq!(
             lead.mode,
-            Mode::Coasting { ticks_left: 44 },
+            Mode::Coasting { ticks_left: 44.0 },
             "the lead's wait only drops by the tick"
         );
         let escort = &traffic.npcs()[1];
         assert_eq!(escort.target, Some(ShipRef::Player));
         assert_eq!(
             escort.mode,
-            Mode::Coasting { ticks_left: 19 },
+            Mode::Coasting { ticks_left: 19.0 },
             "the escort hit: 20, less this tick"
         );
     }
@@ -6047,7 +6048,7 @@ mod tests {
         let mut traffic = populated(2, 1);
         traffic.npcs[1].leader = Some(NpcId(0));
         for npc in &mut traffic.npcs {
-            npc.mode = Mode::Emerging { ticks_left: 60 };
+            npc.mode = Mode::Emerging { ticks_left: 60.0 };
             npc.emerges_from = Some(GATE);
         }
         let goal = traffic.npcs[0].goal;
@@ -6059,12 +6060,12 @@ mod tests {
         );
         let lead = &traffic.npcs()[0];
         assert_eq!(lead.target, Some(ShipRef::Player), "the lead answers");
-        assert_eq!(lead.mode, Mode::Emerging { ticks_left: 59 }, "not held");
+        assert_eq!(lead.mode, Mode::Emerging { ticks_left: 59.0 }, "not held");
         assert_eq!(lead.goal, goal);
         assert!(lead.holds_gate_open(GATE));
         let escort = &traffic.npcs()[1];
         assert_eq!(escort.goal, Goal::Attack(ShipRef::Player));
-        assert_eq!(escort.mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(escort.mode, Mode::HeldAtGate { ticks_left: 19.0 });
     }
 
     #[test]
@@ -6072,12 +6073,15 @@ mod tests {
         // `_DamageShip` cuts the victim's +0x4c to 20 whatever its goal
         // (@0x3be6e-0x3be7c); the Samaritan's hold left it uncut.
         let mut traffic = populated(2, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 60.0 };
         traffic.npcs[0].emerges_from = Some(GATE);
         traffic.npcs[0].hold_at_gate();
         let firing = Firing::default();
         traffic.tick_in(&firing, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].mode, Mode::HeldAtGate { ticks_left: 59 });
+        assert_eq!(
+            traffic.npcs()[0].mode,
+            Mode::HeldAtGate { ticks_left: 59.0 }
+        );
         traffic.tick_in(
             &firing,
             World::new(&[]),
@@ -6086,7 +6090,7 @@ mod tests {
         );
         let hit = &traffic.npcs()[0];
         assert_eq!(hit.provoked, 2.0, "it answered");
-        assert_eq!(hit.mode, Mode::HeldAtGate { ticks_left: 19 });
+        assert_eq!(hit.mode, Mode::HeldAtGate { ticks_left: 19.0 });
     }
 
     /// The point defence a waiting ship's behaviour holds.
@@ -6104,7 +6108,7 @@ mod tests {
         hit: Strike,
     ) -> Vec<(Mode, Trigger, Option<ShipRef>)> {
         let mut traffic = populated(2, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30.0 };
         let mut held = Vec::new();
         let mut strikes = vec![hit];
         while matches!(
@@ -6168,7 +6172,7 @@ mod tests {
             ..Firing::default()
         };
         let mut traffic = populated(1, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30.0 };
         traffic.npcs[0].pick = Some(WeaponId(128));
         traffic.tick_in(&finding, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].pick, Some(WeaponId(140)));
@@ -6207,10 +6211,10 @@ mod tests {
     #[test]
     fn only_a_ship_waiting_in_or_held_at_its_gate_is_asked_for_its_wait() {
         let mut traffic = populated(6, 1);
-        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30 };
-        traffic.npcs[1].mode = Mode::HeldAtGate { ticks_left: 30 };
+        traffic.npcs[0].mode = Mode::Emerging { ticks_left: 30.0 };
+        traffic.npcs[1].mode = Mode::HeldAtGate { ticks_left: 30.0 };
         traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
-        traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30 };
+        traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30.0 };
         traffic.npcs[4].mode = Mode::LeavingGate { tick: 0 };
         let firing = Firing {
             waits: DEFENDING,
@@ -7191,7 +7195,7 @@ mod tests {
                 fade: FADE_FULL,
                 direction: 0,
             };
-            npc.mode = Mode::Coasting { ticks_left: 30 };
+            npc.mode = Mode::Coasting { ticks_left: 30.0 };
             npc.reserves.fuel.now = fuel;
             if disabled {
                 npc.condition = Condition::Disabled;
@@ -7204,8 +7208,8 @@ mod tests {
             );
         }
         for mode in [
-            Mode::Emerging { ticks_left: 30 },
-            Mode::Coasting { ticks_left: 30 },
+            Mode::Emerging { ticks_left: 30.0 },
+            Mode::Coasting { ticks_left: 30.0 },
         ] {
             let mut able = with_mission_ship(ZEPHYR, false, 0.0);
             able.npcs[0].cloak = Cloak {
@@ -7482,7 +7486,7 @@ mod tests {
         assert_eq!(
             lead.mode,
             Mode::Emerging {
-                ticks_left: emerge::EMERGE_TICKS - 1
+                ticks_left: emerge::EMERGE_TICKS - 1.0
             },
             "out of the gate, not by hyperspace"
         );
@@ -8195,7 +8199,7 @@ mod tests {
                 }
             }
         }
-        let held = Mode::Coasting { ticks_left: 100 };
+        let held = Mode::Coasting { ticks_left: 100.0 };
         let mut traffic = quoting_traffic(1);
         traffic.npcs[0].mode = held;
         let call = Strike {

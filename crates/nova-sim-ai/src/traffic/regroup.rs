@@ -303,7 +303,9 @@ mod tests {
     /// as `led_out` says, `ticks_left` of its wait left.
     fn paused_in_gate(ticks_left: u32, led_out: bool) -> Npc {
         Npc {
-            mode: Mode::HeldAtGate { ticks_left },
+            mode: Mode::HeldAtGate {
+                ticks_left: crate::traffic::ai_wait::ticks(ticks_left),
+            },
             led_out,
             ..paused_with(Kept::Coast)
         }

@@ -1130,7 +1130,7 @@ pub(super) mod tests {
     fn a_target_emerging_from_a_gate_cannot_be_hailed_and_is_let_go() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        npc(&mut session).mode = Mode::Emerging { ticks_left: 4 };
+        npc(&mut session).mode = Mode::Emerging { ticks_left: 4.0 };
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert!(hailed.is_err(), "{hailed:?}");
         assert!(asked.is_empty());
@@ -1642,7 +1642,7 @@ pub(super) mod tests {
     fn a_target_holding_its_course_after_its_glide_answers_a_hail() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        npc(&mut session).mode = Mode::Coasting { ticks_left: 30 };
+        npc(&mut session).mode = Mode::Coasting { ticks_left: 30.0 };
         let (hailed, _) = hail_with(&mut session, &catalog, &opening(0));
         assert!(hailed.is_ok(), "{hailed:?}");
     }
@@ -2376,8 +2376,8 @@ pub(super) mod tests {
     fn asked_for_help_while_held(mut session: Session, catalog: &FakePilotCatalog) -> Npc {
         session.pilot.reserves.fuel.now = 40.0;
         let ship = npc(&mut session);
-        ship.ai_wait = 50;
-        ship.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30 };
+        ship.ai_wait = 50.0;
+        ship.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30.0 };
         ship.docking = Some(crate::traffic::plunder_dock::Docking {
             ship: ShipRef::Npc(NpcId(7)),
             sub: crate::traffic::plunder_dock::DockSub::Close,
@@ -2397,7 +2397,7 @@ pub(super) mod tests {
         let catalog = hailable();
         let helper = asked_for_help_while_held(targeting(&catalog), &catalog);
         assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
-        assert_eq!((helper.ai_wait, helper.docking), (0, None));
+        assert_eq!((helper.ai_wait, helper.docking), (0.0, None));
         assert_eq!(
             helper.mode,
             crate::traffic::npc::Mode::Flying,
@@ -3063,7 +3063,7 @@ pub(super) mod tests {
         )]);
         let pirate = npc(&mut session);
         pirate.goal = Goal::CountWait;
-        pirate.ai_wait = 50;
+        pirate.ai_wait = 50.0;
         let mut chance = Draws::of(&opening(0));
         let view = session
             .hail(&catalog, &options, &mut chance)
@@ -3077,7 +3077,7 @@ pub(super) mod tests {
             .expect("open");
         let pirate = &session.npcs()[0];
         assert_eq!(pirate.goal, Goal::Attack(ShipRef::Player));
-        assert_eq!(pirate.ai_wait, 50, "the wait outlives goal 0x16");
+        assert_eq!(pirate.ai_wait, 50.0, "the wait outlives goal 0x16");
         assert!(pirate.wait_running());
         // Through the session's traffic, the wait it kept holds it still
         // (`_HandleShip` @0x34a54-0x34a72). The whole hold and the turn

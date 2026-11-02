@@ -172,7 +172,7 @@ fn with_no_lead_it_ends_in_its_wait() {
             let ended = runs_to_its_cap_dragged(ship(mode, condition), ALONE);
             assert_eq!(
                 ended.mode,
-                Mode::Coasting { ticks_left: 59 },
+                Mode::Coasting { ticks_left: 59.0 },
                 "{mode:?} {condition:?}"
             );
         }
@@ -208,7 +208,7 @@ fn an_inertialess_ship_drags_its_velocity_and_speed_and_takes_the_burst_as_its_s
                 assert_eq!(npc.mode, next(on));
             }
             assert_eq!(npc.state.velocity, Vec2::ZERO, "{mode:?}: stopped dead");
-            assert_eq!(npc.mode, Mode::Coasting { ticks_left: 59 }, "{mode:?}");
+            assert_eq!(npc.mode, Mode::Coasting { ticks_left: 59.0 }, "{mode:?}");
         }
     }
 }
@@ -338,6 +338,6 @@ fn a_ship_disabled_owing_a_burst_keeps_it_through_its_reset_and_bursts_it_out_on
         let ship = &traffic.npcs[1];
         assert_eq!(ship.owed_burst, None, "{owed}");
         assert_eq!(ship.goal, Goal::Idle, "{owed}");
-        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59 }, "{owed}");
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 59.0 }, "{owed}");
     }
 }

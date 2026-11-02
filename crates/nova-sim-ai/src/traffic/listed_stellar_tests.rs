@@ -61,7 +61,7 @@ fn landed(npc: Npc, shown: &[LandingSite], listed: &[LandingSite], pick: u32) ->
         traffic.tick_in(&ai, world, &[], &mut Ranged::of(&[(2, pick)]));
         assert_eq!(traffic.departed(), [], "it stays");
         let now = ship(&traffic, id);
-        if now.ai_wait > 0 {
+        if now.ai_wait > 0.0 {
             return now;
         }
     }

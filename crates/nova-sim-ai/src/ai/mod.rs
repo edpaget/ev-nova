@@ -1925,7 +1925,7 @@ mod tests {
     #[test]
     fn peaceful_traffic_waiting_in_its_gate_fires_nothing_and_keeps_its_target() {
         let mut waiting = npc(1, AiType::Warship);
-        waiting.mode = Mode::Emerging { ticks_left: 30 };
+        waiting.mode = Mode::Emerging { ticks_left: 30.0 };
         waiting.target = Some(ShipRef::Player);
         let around = Surroundings::new(&[], &[]);
         assert_eq!(Peaceful.gate_wait(&waiting, &around), GateWait::default());
@@ -2085,7 +2085,7 @@ mod tests {
         for (ai_type, decider) in deciders {
             let mut drifting = npc(1, ai_type);
             drifting.goal = Goal::Drift;
-            drifting.ai_wait = 50;
+            drifting.ai_wait = 50.0;
             let npcs = [drifting.clone()];
             let mut chance = Draws::of(&[]);
             let goal = decider.decide(&drifting, &Surroundings::new(&sites, &npcs), &mut chance);
@@ -2162,7 +2162,7 @@ mod tests {
         };
         let provoker = Some(ShipRef::Npc(NpcId(2)));
         assert_eq!(at(arriving(Mode::JumpingIn { tick: 1 })), provoker);
-        assert_eq!(at(arriving(Mode::Emerging { ticks_left: 3 })), provoker);
+        assert_eq!(at(arriving(Mode::Emerging { ticks_left: 3.0 })), provoker);
         let condition = |condition| Npc {
             condition,
             ..npc(2, AiType::Warship)
@@ -2302,9 +2302,9 @@ mod tests {
         disabled.condition = Condition::Disabled;
         disabled.state.position = crate::geometry::Vec2::new(5.0, 6.0);
         let mut emerging = npc(5, AiType::Warship);
-        emerging.mode = Mode::Emerging { ticks_left: 3 };
+        emerging.mode = Mode::Emerging { ticks_left: 3.0 };
         let mut coasting = npc(6, AiType::Warship);
-        coasting.mode = Mode::Coasting { ticks_left: 30 };
+        coasting.mode = Mode::Coasting { ticks_left: 30.0 };
         let npcs = [
             npc(1, AiType::Warship),
             jumping,
@@ -2378,7 +2378,7 @@ mod tests {
         let modes = [
             Mode::Flying,
             Mode::JumpingIn { tick: 1 },
-            Mode::Emerging { ticks_left: 3 },
+            Mode::Emerging { ticks_left: 3.0 },
             Mode::LeavingGate { tick: 0 },
             Mode::LeavingGate { tick: 1 },
         ];

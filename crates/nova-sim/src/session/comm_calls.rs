@@ -1901,7 +1901,7 @@ mod tests {
     fn coasting(session: &mut Session, quoting: bool) {
         crate::session::tests::make_quoting_warship(session);
         let npc = &mut session.space.traffic.npcs_mut()[0];
-        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 1000 };
+        npc.mode = crate::traffic::npc::Mode::Coasting { ticks_left: 1000.0 };
         if !quoting {
             npc.person = None;
         }

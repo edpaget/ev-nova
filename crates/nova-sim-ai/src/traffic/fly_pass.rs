@@ -47,7 +47,8 @@
 //!   cleared, @0x8dadc-0x8db5a): only a mission ship under
 //!   [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other
 //!   reading leaves as it lands ([`land_flight::leaves`]).
-//! - **End** counts the AI waits down, and regenerates the fuel; on the
+//! - **End** counts the AI waits down and regenerates the fuel, each at
+//!   the frame's gain the half began at ([`World::speed_mult`]); on the
 //!   advance pass the pods the think half freed join the departures, the
 //!   ships left behind are let go, and the tick is counted on the AI
 //!   timer.
@@ -350,7 +351,7 @@ impl Traffic {
     #[allow(clippy::needless_pass_by_value)]
     pub fn end_fly(&mut self, pass: FlyPass) {
         let half = pass.half;
-        plunder::count_down(&mut self.npcs);
+        plunder::count_down(&mut self.npcs, pass.gain);
         for npc in &mut self.npcs {
             npc.regenerate_fuel(pass.gain);
         }
@@ -629,7 +630,7 @@ mod tests {
         Goal,
         f32,
         Mode,
-        u32,
+        f32,
     );
 
     fn left(traffic: &Traffic) -> Vec<Left> {
@@ -671,7 +672,7 @@ mod tests {
     fn busy_left(flier: ShipState) -> Vec<Left> {
         let entering = Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 15,
+            ticks_left: 15.0,
         };
         let gate = Goal::EnterGate(GATE);
         vec![
@@ -685,7 +686,7 @@ mod tests {
                 Goal::Idle,
                 300.0,
                 Mode::Flying,
-                498,
+                498.0,
             ),
             // The pirate's victim, boarded.
             (
@@ -696,7 +697,7 @@ mod tests {
                 Goal::Idle,
                 300.0,
                 Mode::Flying,
-                0,
+                0.0,
             ),
             // The pirate, its plunder completed at its slot (its wait 100,
             // `PLUNDER_HOLD`) and counted once.
@@ -708,7 +709,7 @@ mod tests {
                 Goal::Drift,
                 300.0,
                 Mode::Flying,
-                99,
+                99.0,
             ),
             (
                 NpcId(4),
@@ -718,7 +719,7 @@ mod tests {
                 gate,
                 300.0,
                 entering,
-                0,
+                0.0,
             ),
             // The follower, released into its lead's gate, inside its box at
             // its slot and counted once.
@@ -730,7 +731,7 @@ mod tests {
                 gate,
                 300.0,
                 entering,
-                0,
+                0.0,
             ),
             (
                 NpcId(6),
@@ -740,7 +741,7 @@ mod tests {
                 Goal::JumpOut,
                 100.5,
                 Mode::Flying,
-                0,
+                0.0,
             ),
         ]
     }
@@ -825,7 +826,7 @@ mod tests {
         let lead = NpcId(4);
         traffic.npcs[3].mode = Mode::EnteringGate {
             gate: GATE,
-            ticks_left: 1,
+            ticks_left: 1.0,
         };
         let mut pass = traffic.begin_fly(&world, &BTreeSet::new(), FlyHalf::Advance);
         let entered = traffic.fly_npc(&mut pass, lead, &world, &mut NeverFires);
@@ -1807,7 +1808,7 @@ mod tests {
     fn at_half_gain_a_coasting_npc_under_way_is_settled_at_half() {
         let world = at_gain(HALF);
         let mut coasting = jumping(mover());
-        coasting.mode = Mode::Coasting { ticks_left: 5 };
+        coasting.mode = Mode::Coasting { ticks_left: 5.0 };
         let flown = flown_alone(coasting.clone(), &world);
         let mut expected = coasting;
         expected.state.position = Vec2::new(1.0, 0.0);
@@ -1870,5 +1871,13 @@ mod tests {
             .expect("here");
         assert_eq!(coasted.state.position, Vec2::new(101.5, 99.0));
         assert_eq!(coasted.state.heading, HALF.add_times(45.0, turn));
+    }
+
+    #[test]
+    fn at_half_gain_a_fly_halfs_end_counts_an_ai_wait_down_half_a_frame() {
+        let mut waiting = mover();
+        waiting.ai_wait = 5.0;
+        let flown = flown_alone(waiting, &at_gain(HALF));
+        assert_eq!(flown.ai_wait, 4.5);
     }
 }

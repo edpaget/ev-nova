@@ -437,7 +437,7 @@ impl Session {
             afterburner: false,
             voice: None,
             pursuit: Pursuit::default(),
-            ai_wait: 0,
+            ai_wait: 0.0,
             docking: None,
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,

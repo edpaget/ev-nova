@@ -55,7 +55,7 @@ fn waiting(mode: Mode) -> (crate::testkit::FakePilotCatalog, Session) {
 
 #[test]
 fn a_ship_holding_its_course_after_its_burst_fires_nothing_then_fires_its_kept_pick() {
-    let (catalog, mut session) = waiting(Mode::Coasting { ticks_left: 3 });
+    let (catalog, mut session) = waiting(Mode::Coasting { ticks_left: 3.0 });
     let pass = |session: &mut Session| {
         work_with(
             session,
@@ -152,7 +152,7 @@ fn a_ship_whose_burst_ends_in_its_wait_fires_that_frame_then_nothing_through_the
 fn a_ship_entering_a_gate_fires_nothing_it_held() {
     let (_, mut session) = waiting(Mode::EnteringGate {
         gate: StellarId(128),
-        ticks_left: 10,
+        ticks_left: 10.0,
     });
     for _ in 0..5 {
         work(

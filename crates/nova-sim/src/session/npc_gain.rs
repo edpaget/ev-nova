@@ -43,7 +43,7 @@ mod tests {
             crate::traffic::fixture::npc(1, ShipStats::new(nova_sim_base::fixture::FAST, &[]));
         coaster.state.position = Vec2::new(600.0, 600.0);
         coaster.state.velocity = Vec2::new(2.0, 1.0);
-        coaster.mode = Mode::Coasting { ticks_left: 50 };
+        coaster.mode = Mode::Coasting { ticks_left: 50.0 };
         let id = session.space.traffic.add_npc(coaster);
         (catalog, session, id)
     }
