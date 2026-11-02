@@ -60,7 +60,9 @@ use crate::traffic::npc::Npc;
 /// `decision`, `npc`'s think among `around`, with goal 7's high level
 /// folded in when it kept an inspection (see the module docs): its ship is
 /// the one its target names, when that is another ship (a hit's since the
-/// last think), and its inspection moves there ([`Decision::re_picked`]);
+/// last think) and the think re-picked nothing, as a re-pick writes +0x70
+/// after the hit (@0x8d41e), and its inspection moves there
+/// ([`Decision::re_picked`]);
 /// that ship gone or within [`INSPECT_REACH`] ends it, [`Goal::Idle`] with
 /// its target cleared and its travel stellar as it was. Any other
 /// decision stands.
@@ -73,8 +75,12 @@ pub fn after_think(npc: &Npc, decision: Decision, around: &Surroundings) -> Deci
         return decision;
     }
     // The block reads +0x70 (@0x8f11e), which a hit rewrites: under goal
-    // 7 it is never none.
-    let ship = npc.slot_target().unwrap_or(kept);
+    // 7 it is never none. A re-pick in the think wrote it last (@0x8d41e).
+    let ship = if decision.re_picked {
+        kept
+    } else {
+        npc.slot_target().unwrap_or(kept)
+    };
     let moved = Decision {
         goal: Goal::Inspect(ship),
         re_picked: decision.re_picked || ship != kept,
@@ -256,6 +262,29 @@ mod tests {
         let same = fold(&trader, Some(ship(3, TRADERS, AiType::Warship, 500.0, 0.0)));
         assert!(ended(same), "its own ship, within reach");
         assert!(!same.re_picked, "not moved");
+    }
+
+    #[test]
+    fn a_re_pick_of_its_own_ship_is_not_moved_to_a_hits_target() {
+        // The interceptor's re-pick writes +0x70 over the hit's (@0x8d41e),
+        // so the block reads the re-picked ship.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut cop = ship(1, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Inspect(n(2));
+        cop.target = Some(n(3));
+        let npcs = [
+            cop,
+            ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0),
+            ship(3, TRADERS, AiType::Warship, 0.0, 800.0),
+        ];
+        let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        let re_picked = Decision {
+            goal: Goal::Inspect(n(2)),
+            re_picked: true,
+            ..Decision::default()
+        };
+        assert_eq!(after_think(&npcs[0], re_picked, &around), re_picked);
     }
 
     #[test]

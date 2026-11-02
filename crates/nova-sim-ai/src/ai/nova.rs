@@ -2708,6 +2708,30 @@ mod tests {
         assert_eq!(decide(&at_once), Goal::Attack(n(3)));
     }
 
+    #[test]
+    fn an_interceptor_whose_re_pick_returns_to_its_ship_after_a_hit_keeps_it() {
+        // The re-pick writes +0x70 over the hit's attacker (@0x8d41e), and
+        // goal 7's block reads that (@0x8f11e): the fold moves nothing.
+        use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, govts, n, ship, sites};
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut cop = ship(1, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Inspect(n(2));
+        cop.target = Some(n(3));
+        cop.provoked = 3.0;
+        let npcs = [
+            cop,
+            ship(2, PIRATES, AiType::Warship, 500.0, 0.0),
+            ship(3, NEUTRAL, AiType::Warship, 0.0, 800.0),
+        ];
+        let seen = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&sites, &npcs)
+        };
+        let decision = NovaAi::default().decision(&npcs[0], &seen, &mut Draws::of(&[]));
+        assert_eq!(decision.goal, Goal::Inspect(n(2)), "the re-pick's");
+    }
+
     /// Looks the player over in each decision.
     #[derive(Debug)]
     struct LooksOver;
