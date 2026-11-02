@@ -1949,7 +1949,8 @@ impl Traffic {
     /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
     /// loses its lead, its carrier and its target, its travel stellar the
     /// lead's, the gate (@0x8dd30), its provocation -1
-    /// ([`gate_entry::RELEASED_PROVOCATION`]), takes
+    /// ([`gate_entry::RELEASED_PROVOCATION`]), defends no stellar (+0x8c
+    /// -1, @0x8dd08), takes
     /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
     /// over a bribe's ([`Npc::overwrite_bribe`], as the original's write
     /// has no AI type test, @0x8dcdf-0x8dcfd),
@@ -1969,6 +1970,7 @@ impl Traffic {
             follower.target = None;
             follower.travel = Some(gate);
             follower.provoked = gate_entry::RELEASED_PROVOCATION;
+            follower.defends = None;
             follower.goal = Goal::EnterGate(gate);
         }
     }
@@ -4974,6 +4976,7 @@ mod tests {
             follower.goal = Goal::Follow { lead, guard: None };
             follower.target = Some(ShipRef::Player);
             follower.provoked = 5.0;
+            follower.defends = Some(StellarId(128));
         }
         traffic.npcs[2].carrier = Some(crate::bay::Carrier {
             ship: ShipRef::Npc(lead),
@@ -4988,6 +4991,7 @@ mod tests {
             lead: NpcId(4),
             guard: None,
         };
+        traffic.npcs[3].defends = Some(StellarId(128));
         let untouched = traffic.npcs[3].clone();
         let sites = [gate_at_centre()];
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
@@ -5000,6 +5004,7 @@ mod tests {
                 follower.id
             );
             assert_eq!(follower.provoked, -1.0, "+0x96 -1 (@0x8dd14)");
+            assert_eq!(follower.defends, None, "+0x8c -1 (@0x8dd08)");
             assert_eq!(follower.goal, Goal::EnterGate(GATE));
             assert_eq!(follower.ai_type, AiType::Warship, "an interceptor's");
             // Released at slot 1, it enters on its own: in the box too, at
@@ -5016,6 +5021,7 @@ mod tests {
         );
         assert_eq!(traffic.npcs[3].goal, untouched.goal);
         assert_eq!(traffic.npcs[3].leader, untouched.leader);
+        assert_eq!(traffic.npcs[3].defends, untouched.defends);
         let mut left = Vec::new();
         for _ in 0..40 {
             traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
