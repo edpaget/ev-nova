@@ -746,6 +746,7 @@ mod sprites;
 mod stars;
 mod stellar_looks;
 mod stepping;
+mod target_latch;
 mod travel;
 mod world;
 

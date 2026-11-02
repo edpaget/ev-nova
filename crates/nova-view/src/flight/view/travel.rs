@@ -72,6 +72,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn held_keys_frame(&mut self) {
         let (jump, board) = (self.reads_down(JUMP_KEY), self.held.contains(&BOARD_KEY));
         self.nav_held_frame();
+        self.target_poll();
         // The Board key's and the jump's frames ask their own gates
         // (`FlightCommand::gate`).
         self.board_frame(board);

@@ -114,6 +114,12 @@ impl HoverCursor {
         self.keyed = true;
     }
 
+    /// Whether a mouse button is down, as `_Button` reads it.
+    #[must_use]
+    pub fn button_down(&self) -> bool {
+        self.button
+    }
+
     /// A mouse button went down or came up: while one is down, each step
     /// shows the cursor whole and counts as the mouse moving.
     pub fn button(&mut self, down: bool) {

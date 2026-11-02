@@ -1017,3 +1017,16 @@ fn the_menu_is_drawn_at_its_fades_level() {
     view.update_escort_menu(16);
     assert_eq!(title_alpha(&view), None, "shut");
 }
+
+#[test]
+fn tab_held_keeps_the_click_off_the_escort_menu() {
+    // With Tab down `_Button` isn't read (@0x69dfd): the menu's click
+    // (@0x6a060-0x6a12b) never runs.
+    let mut view = escorted();
+    press(&mut view, MENU_KEY);
+    let group = view.escort_menu().group();
+    view.track_held(&key(TARGET_KEY, true));
+    click(&mut view, row_at(3));
+    assert_eq!(view.escort_menu().group(), group, "no row taken");
+    assert!(!clicked_in_space(&view));
+}

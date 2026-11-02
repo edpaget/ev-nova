@@ -350,10 +350,8 @@ impl<
             at,
         } = *input
             && self.takes(PlayerCommand::Nav)
-            && !self.click_escort_menu(at)
-            && !self.click_floating_map(at)
         {
-            self.click_in_space(at);
+            self.press_button_latched(at);
         }
         match self.press_taken(press, jumping) {
             Some(LAND_KEY) => {
@@ -407,7 +405,7 @@ impl<
             Some(key @ (ZOOM_OUT_KEY | ZOOM_IN_KEY | ZOOM_IN_KEYPAD_KEY)) => {
                 self.zoom_floating_map(key);
             }
-            Some(TARGET_KEY) => self.press_target_key(),
+            Some(TARGET_KEY) => self.press_target_latched(),
             Some(key) if self.escort_key(key) => {}
             Some(NEAREST_KEY) => self.press_nearest_key(),
             Some(SELECT_KEY) => self.press_weapon_select(),

@@ -2487,3 +2487,19 @@ fn a_latched_key_held_across_a_close_holds_the_zoom_back() {
     floating_tap(&mut view, ZOOM_OUT_KEY);
     assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
 }
+
+#[test]
+fn tab_held_keeps_the_click_off_the_floating_map() {
+    // With Tab down `_Button` isn't read (@0x69dfd): the map's click
+    // (@0x6a130) never runs.
+    let mut view = floating_in(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    view.track_held(&key(TARGET_KEY, true));
+    let pressed = sent(&view).len();
+    view.input(&Input::PointerButton {
+        button: MouseButton::Left,
+        pressed: true,
+        at: FRAME_CENTRE,
+    });
+    assert_eq!(sent(&view)[pressed..], [], "neither the map nor space");
+}
