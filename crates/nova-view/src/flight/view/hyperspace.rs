@@ -229,12 +229,19 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
     /// time's second pass has its frame between the passes drawn first
     /// ([`FlightView::holding_between_passes`]): that frame shows the old
     /// system, and the arrival follows on the next step, which stops
-    /// before it runs. One ended on the first pass is in that frame
-    /// already, so the ship arrives as in single time, and the arrival's
-    /// layout drops the hold.
-    pub(super) fn arrival_frame(&mut self) {
-        let frame_comes_first = self.holding_between_passes() && !self.drawn().warp_end_due;
-        if !self.frame.warp_end_due || frame_comes_first {
+    /// before it runs. That arrival then runs the tick's `steps`, which
+    /// the stop left unrun, in the new system, its arrival line said first:
+    /// the original draws frame 98 after one `_DoPlayGameWork(1)` there
+    /// (@0x45bc1-0x45bc8), so the frame shows that pass, between its
+    /// passes in double time, drawn at its target. One ended on the first
+    /// pass is in that frame already, so the ship arrives as in single
+    /// time, and the arrival's layout drops the hold.
+    pub(super) fn arrival_frame(&mut self, steps: u32) {
+        if !self.frame.warp_end_due {
+            return;
+        }
+        if self.holding_between_passes() && !self.drawn().warp_end_due {
+            self.arrival_waited = true;
             return;
         }
         self.arrive();
@@ -246,6 +253,12 @@ impl<C: SystemCatalog + ShipSprites + CombatLooks + StatusBars, S: FlightSim> Fl
                 effect
             })
             .filter(|effect| !effect.done());
+        if std::mem::take(&mut self.arrival_waited) {
+            self.run_steps(steps, None);
+            // The layout drew from the arrival's place; the frame is the
+            // pass's, at its target.
+            self.alpha = 1.0;
+        }
     }
 
     /// Ends the jump ([`FlightCommand::Arrive`]): the ship arrives in the

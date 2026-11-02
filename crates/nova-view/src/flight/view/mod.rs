@@ -1567,6 +1567,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.
     fade_in: Option<JumpEffect>,
+    /// Whether the warp's end waited for a double-time frame between its
+    /// passes to go ([`FlightView::arrival_frame`]): its arrival then runs
+    /// the tick's steps in the new system.
+    arrival_waited: bool,
     /// The fade to black after the player's death, once begun
     /// ([`FlightView::begin_fade`]).
     death_fade: Option<ScreenFade>,

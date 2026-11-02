@@ -557,6 +557,53 @@ fn a_double_time_warp_end_draws_a_frame_before_the_arrival() {
     assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
 }
 
+/// [`warping`]'s view whose warp ended on double time's second pass, its
+/// frame between the passes drawn, the arrival waiting for the next step.
+fn held_at_the_warps_end() -> Faked {
+    let mut view = warping();
+    super::faked_screen::warp_ends(&mut view);
+    view.sim.queue_report(doubled_from(under_way(true)));
+    view.tick(TICK);
+    assert!(!sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    view
+}
+
+#[test]
+fn a_double_time_held_arrival_draws_one_pass_in_the_new_system_on_its_frame() {
+    let mut view = held_at_the_warps_end();
+    let called = view.sim.steps();
+    let mut between = in_alpha();
+    between.ships[0].position = Vec2::new(12.0, -8.0);
+    view.sim.queue_report(StepReport {
+        steps: Vec::new(),
+        stopped: true,
+    });
+    view.sim
+        .queue_report_showing(doubled_from(between.clone()), in_alpha());
+    view.tick(TICK);
+    assert!(sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert_eq!(
+        view.sim.steps(),
+        called + 2,
+        "the stop, then the steps there"
+    );
+    assert_eq!(view.drawn(), &between, "its first pass in the new system");
+    assert_eq!(
+        view.shown_position(),
+        Point::new(12.0, -8.0),
+        "at its target"
+    );
+}
+
+#[test]
+fn a_held_arrival_on_a_tick_with_no_step_still_waits() {
+    let mut view = held_at_the_warps_end();
+    let called = view.sim.steps();
+    view.tick(ms(1));
+    assert!(!sent_but_lines(&view).contains(&FlightCommand::Arrive));
+    assert_eq!(view.sim.steps(), called + 1, "the tick's own call alone");
+}
+
 #[test]
 fn a_double_time_warp_end_on_the_first_pass_arrives_on_that_tick() {
     let mut view = warping();
@@ -596,7 +643,7 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::Warp)
     );
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(
         sent_but_lines(&view),
         [FlightCommand::Jump],
@@ -615,13 +662,13 @@ fn the_fade_to_white_starts_as_the_frame_lights_the_screen_and_the_arrival_waits
     let mut list = DrawList::new();
     view.draw_fades(&mut list);
     assert!(fade(&list).is_some(), "fading to white");
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert!(matches!(
         view.jump_effect().map(JumpEffect::phase),
         Some(JumpPhase::FadeOut(_))
     ));
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(
         sent_but_lines(&view),
         [FlightCommand::Jump, FlightCommand::Arrive]
@@ -680,7 +727,7 @@ fn with_effects_off_the_arrival_flashes_white_once() {
     assert!(!view.hyperspace_effects());
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     let mut list = DrawList::new();
     view.draw_fades(&mut list);
     assert_eq!(
@@ -709,7 +756,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
     let mut view = warping();
     view.say_for(NO_DESTINATION, 360);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     faked_lasts(&mut view, &alpha_arrival(), 240);
 }
 
@@ -717,7 +764,7 @@ fn arriving_shows_the_arrival_line_with_the_date_and_lets_a_refusal_go() {
 fn j_during_the_arrival_fade_in_begins_the_next_jump_and_the_fade_plays_on() {
     let mut view = warping();
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     let arrival = view.message().expect("the arrival line").to_owned();
     view.sim.queue_answer_showing(
         Answer::Jumped(SystemId(132)),
@@ -857,7 +904,7 @@ fn an_arrivals_pending_explosions_are_drawn_on_its_first_frame_and_unheard_from_
         }],
     );
     view.drained_sounds();
-    view.arrival_frame();
+    view.arrival_frame(0);
     let explosions = view.effects().explosions();
     assert_eq!(explosions.len(), 1, "{explosions:?}");
     assert_eq!(explosions[0].boom, boom.boom);
@@ -889,7 +936,7 @@ fn arriving_lays_out_the_new_system_letting_go_of_the_effects_pods_and_smoke() {
     assert_ne!(*view.effects(), Effects::default());
     jump_now(&mut view);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(*view.effects(), Effects::default());
     assert!(view.effects().pods().is_empty());
     assert_eq!(view.shot_looks.smoke().puffs(), []);
@@ -902,7 +949,7 @@ fn arriving_reads_the_new_systems_traffic_sheets() {
     let read = view.catalog().sheets_asked.borrow().clone();
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().traffic_ships = vec![ShipId(129)];
-    view.arrival_frame();
+    view.arrival_frame(0);
     let asked = view.catalog().sheets_asked.borrow().clone();
     assert_eq!(asked[read.len()..], [ShipId(129)], "read on arrival");
 }
@@ -912,7 +959,7 @@ fn a_jumps_arrival_puts_the_maps_scroll_back_on_the_current_system() {
     let mut view = warping();
     view.map.centre_on_system(SystemId(132));
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     let mut recentred = faked(FlightFrame {
         system: SystemId(131),
         ..FlightFrame::default()
@@ -936,7 +983,7 @@ fn an_arrival_shows_the_new_systems_stellars_on_the_radar_at_once_leaving_the_ca
     at_the_warps_end(&mut view, Vec::new());
     view.sim.frame_mut().stellars = vec![record::stellar(StellarId(140))];
     view.sim.frame_mut().radar_stellars = vec![record::radar_stellar(StellarId(140), Vec2::ZERO)];
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
     let stellars: Vec<Point> = view
         .radar_shown(&view.frame_now())
@@ -1144,7 +1191,7 @@ fn alpha_arrival() -> String {
 fn a_jump_into_a_buoyed_system_shows_the_buoy_for_480_ticks_in_place_of_the_arrival() {
     let buoy = SimMessage::Buoy(HELLO.to_owned());
     let mut view = arriving_with(vec![FlightEvent::Message(buoy.clone())]);
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(buoy.ticks(), 480);
     faked_lasts(&mut view, HELLO, buoy.ticks());
 }
@@ -1156,7 +1203,7 @@ fn an_empty_buoy_replaces_the_line_shown_before_the_jump() {
     at_the_warps_end(&mut view, Vec::new());
     view.sim
         .queue_event(FlightEvent::Message(SimMessage::Buoy(String::new())));
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(view.message(), Some(""));
 }
 
@@ -1165,7 +1212,7 @@ fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
     let mut view = arriving_with(vec![FlightEvent::FighterNote(
         nova_sim::FighterNote::Abandoned(2),
     )]);
-    view.arrival_frame();
+    view.arrival_frame(0);
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
     assert_eq!(view.message(), Some(said.as_str()));
 }
@@ -1181,7 +1228,7 @@ fn a_jumps_arrival_leads_with_what_a_roll_of_three_gives() {
         let mut view = arriving_with(Vec::new());
         let (script, chance) = scripted(&[draw]);
         view.words_chance = chance;
-        view.arrival_frame();
+        view.arrival_frame(0);
         let said = arrival_message_with(lead, "Alpha Centauri", DATE, false);
         assert_eq!(view.message(), Some(said.as_str()));
         assert_eq!(script.borrow().asked, [3], "one roll of three");
@@ -1194,7 +1241,7 @@ fn a_buoyed_arrival_rolls_no_lead() {
     let mut view = arriving_with(vec![FlightEvent::Message(buoy)]);
     let (script, chance) = scripted(&[]);
     view.words_chance = chance;
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(view.message(), Some(HELLO));
     assert_eq!(script.borrow().asked, Vec::<u32>::new());
 }
@@ -1206,7 +1253,7 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
         FlightEvent::Message(SimMessage::CargoJettisoned),
         FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
     ]);
-    view.arrival_frame();
+    view.arrival_frame(0);
     let said = view.message().expect("the arrival").to_owned();
     let tail = format!("{}  {}  ", alpha_arrival(), fighters_abandoned_message(2));
     assert!(said.starts_with(&tail), "{said}");
@@ -1216,7 +1263,7 @@ fn a_flight_message_on_an_arrival_comes_after_the_fighters_abandoned() {
 #[test]
 fn an_escort_left_unpaid_by_a_jump_is_kept_for_a_dialog_off_the_message_line() {
     let mut view = arriving_with(vec![FlightEvent::PayNote(nova_sim::PayNote::Defected(1))]);
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert_eq!(
         view.message(),
         Some(alpha_arrival().as_str()),
@@ -1232,7 +1279,7 @@ fn fighters_abandoned_are_said_and_escorts_defected_kept_on_one_arrival() {
         FlightEvent::PayNote(nova_sim::PayNote::Defected(1)),
         FlightEvent::FighterNote(nova_sim::FighterNote::Abandoned(2)),
     ]);
-    view.arrival_frame();
+    view.arrival_frame(0);
     let said = format!("{}  {}", alpha_arrival(), fighters_abandoned_message(2));
     assert_eq!(view.message(), Some(said.as_str()));
     assert_eq!(view.take_defections(), [DEFECTED_ONE]);
@@ -1318,7 +1365,7 @@ fn a_text_on_the_arrivals_tick_finds_the_white_and_its_fade_in_ends_the_effect()
     let mut view = warping();
     lit(&mut view, 0.5);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert!(view.screen_faded(), "until the next pass's _FadeWhiteOut");
     view.screen_faded_in();
     assert_eq!(view.jump_effect(), None, "nothing left to fade from white");
@@ -1326,7 +1373,7 @@ fn a_text_on_the_arrivals_tick_finds_the_white_and_its_fade_in_ends_the_effect()
     let mut view = warping();
     lit(&mut view, 0.5);
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     view.fade_frame(TICK);
     assert!(!view.screen_faded(), "the next pass cleared it");
     view.advance_white(FADE_IN_FOR);

@@ -74,7 +74,9 @@ impl<
     /// the session says the warp has ended ([`FlightFrame::warp_end_due`](nova_sim::flight_frame::FlightFrame::warp_end_due)),
     /// whose steps stop there, before the frame is drawn, or, on a
     /// double time second pass, on the next step, after the frame between
-    /// its passes is drawn ([`FlightView::holding_between_passes`]). From then on the
+    /// its passes is drawn ([`FlightView::holding_between_passes`]), that
+    /// tick's steps then run in the new system
+    /// ([`FlightView::arrival_frame`]). From then on the
     /// rest of the effect, the fade-in or the white flash, plays over the
     /// new system; that plays on with the map open too, as the original's
     /// display fade does. A jump the session gave up instead is settled at
@@ -275,7 +277,7 @@ impl<
         if let Some(effect) = &mut self.jump {
             effect.advance(dt);
         }
-        self.arrival_frame();
+        self.arrival_frame(steps);
         self.advance_hud();
     }
 

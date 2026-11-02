@@ -594,6 +594,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             floating_picture: None,
             jump: None,
             fade_in: None,
+            arrival_waited: false,
             death_fade: None,
             hyperspace_effects: true,
             smoke_trails: true,

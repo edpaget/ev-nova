@@ -60,7 +60,10 @@
 //! a jump's fallback end on a second pass draws the frame with the warp-ups
 //! halted and the warp-out playing (`_HandlePlayer` @0x6c62a-0x6c706,
 //! @0x6bbb8-0x6bbd9), and the arrival comes on the next step, which stops
-//! before it runs. An end on the first pass waits for nothing: the original
+//! before it runs. That arrival runs the tick's steps the stop left unrun
+//! in the new system, so the new system's first frame is after its first
+//! pass there, as the original's frame 98 is (@0x45bc8), held between its
+//! passes in double time. An end on the first pass waits for nothing: the original
 //! settles it inside that pass, before the draw, so the frame held already
 //! says so and the ship arrives in the same tick, its layout dropping the
 //! hold. A second pass's sounds and white fade do not wait, as

@@ -518,7 +518,7 @@ fn a_jumps_arrival_shuts_the_menu_open_through_the_warp_silently() {
     jump_now(&mut view);
     assert!(view.escort_menu().is_open(), "open through the warp");
     at_the_warps_end(&mut view, Vec::new());
-    view.arrival_frame();
+    view.arrival_frame(0);
     assert!(
         sent(&view).contains(&FlightCommand::Arrive),
         "it arrived: {:?}",
