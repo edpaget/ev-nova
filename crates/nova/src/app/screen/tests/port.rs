@@ -2622,3 +2622,63 @@ fn an_upgrade_bought_in_port_onto_another_bar_redraws_its_fuel_gauge_at_once() {
     let width = fuel_width(&drawn(&screen)).expect("some fuel");
     assert!(width < 149.0, "redrawn at once: {width}");
 }
+
+/// A mission info screen that asks to abort `abort` once and records
+/// every info it is handed.
+struct RecordingHolder {
+    abort: Option<u8>,
+    handed: Vec<nova_sim::MissionInfo>,
+}
+
+impl super::super::port_dialogs::MissionInfoHolder for RecordingHolder {
+    fn take_abort(&mut self) -> Option<u8> {
+        self.abort.take()
+    }
+
+    fn set_info(&mut self, info: nova_sim::MissionInfo) {
+        self.handed.push(info);
+    }
+
+    fn take_info_text_request(&mut self) -> Option<u8> {
+        None
+    }
+
+    fn show_info_text(&mut self, _slot: u8, _text: &str) {}
+}
+
+#[test]
+fn a_refused_abort_hands_the_screen_nothing_and_says_nothing_changed() {
+    let mut screen = with_dialogs(data());
+    fly(&mut screen);
+    assert!(
+        flight(&screen)
+            .session()
+            .expect("flying")
+            .pilot()
+            .missions()
+            .get(7)
+            .is_none(),
+        "precondition: slot 7 is free, so its abort is refused"
+    );
+    let mut holder = RecordingHolder {
+        abort: Some(7),
+        handed: Vec::new(),
+    };
+    let listed =
+        super::super::port_dialogs::abort_and_refresh(&mut holder, Some(flight_mut(&mut screen)));
+    assert_eq!(listed, None, "nothing changed (@0x9e583-0x9e587)");
+    assert_eq!(
+        holder.handed,
+        [],
+        "no rebuild: the screen keeps its rows and selection"
+    );
+    let mut done = RecordingHolder {
+        abort: None,
+        handed: Vec::new(),
+    };
+    assert_eq!(
+        super::super::port_dialogs::abort_and_refresh(&mut done, None),
+        None,
+        "no abort asked"
+    );
+}
