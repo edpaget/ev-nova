@@ -473,6 +473,48 @@ fn a_ship_breaking_up_goes_off_about_where_the_pass_left_it() {
 }
 
 #[test]
+fn a_breakup_on_a_held_second_pass_is_heard_on_its_frame_and_goes_off_the_frame_after() {
+    // NPC 129 is 40 pixels across: its puff goes off within 10 of it.
+    let (asked, effects_chance) = scripted(&[0, 3, 15, 0]);
+    let mut view = stepping(armed(1, &[BLASTER]));
+    view.effects_chance = effects_chance;
+    let breaking = FrameShip {
+        condition: Condition::Dying {
+            ticks_left: 18,
+            starting: false,
+        },
+        breakup: Some(Explosion {
+            boom: BoomId(128),
+            extra: false,
+        }),
+        ..the_npc(Vec2::new(30.0, -100.0))
+    };
+    let second = PassReport {
+        ships: vec![the_player(Vec2::new(10.0, 10.0)), breaking],
+        player_position: Vec2::new(10.0, 10.0),
+        ..PassReport::default()
+    };
+    frame(&mut view, doubled(fight(vec![]), second, sol()));
+    assert_eq!(asked.borrow().asked, [1, 20, 20, 4], "rolled on its frame");
+    let heard = combat_heard(&mut view);
+    assert_eq!(
+        heard
+            .iter()
+            .map(|sound| (sound.sound, sound.offset))
+            .collect::<Vec<_>>(),
+        [(nova_sim::SoundId(302), (13, -105))],
+        "heard from where the held pass left the player"
+    );
+    assert_eq!(view.effects.explosions(), [], "not yet shown");
+    frame(&mut view, stopped());
+    let explosions = view.effects.explosions();
+    assert_eq!(explosions.len(), 1);
+    assert_eq!(explosions[0].at, Point::new(23.0, -95.0), "where it rolled");
+    assert_eq!(asked.borrow().asked.len(), 4, "not rolled again");
+    assert_eq!(combat_heard(&mut view), [], "not heard again");
+}
+
+#[test]
 fn a_ships_weapon_glow_lights_on_its_pass_and_falls_by_its_classs_decay() {
     let mut view = stepping(armed(1, &[BLASTER]));
     let lit = CombatEvent::WeaponGlow {
