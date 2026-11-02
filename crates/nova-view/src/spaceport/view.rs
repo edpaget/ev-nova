@@ -1836,8 +1836,13 @@ impl SpaceportView {
     /// Opens the player info screen on `info` over whatever is open, laid
     /// out by the dialogs given ([`SpaceportView::with_player_info`]); it
     /// says why not without them. Without the spaceport's own dialog,
-    /// nothing opens.
+    /// nothing opens. What it covers lets go of its press and keys first,
+    /// as the screen takes their release.
     pub fn open_player_info(&mut self, info: PlayerInfo) {
+        if self.port.is_err() {
+            return;
+        }
+        self.let_go_under_overlay();
         let Ok(port) = &self.port else {
             return;
         };
@@ -1912,10 +1917,22 @@ impl SpaceportView {
     pub fn open_mission_info(&mut self, info: MissionInfo) {
         let over_mission_dialog =
             self.offer_dialog().is_some() || matches!(self.open, Some(Open::Computer(_)));
+        if self.dialogs.is_some() {
+            self.let_go_under_overlay();
+        }
         if let Some(dialogs) = &mut self.dialogs {
             dialogs.open_info_with_map(info, !over_mission_dialog);
             self.sounds.extend(dialogs.take_sounds());
         }
+    }
+
+    /// Lets go of the press and the keys of what is shown, before an
+    /// overlay covers it and takes their release: a press held on the
+    /// mission computer's or mission info's list would otherwise go on
+    /// scrolling under it, and after it closes.
+    fn let_go_under_overlay(&mut self) {
+        Screen::cancel_pointer(self);
+        Screen::release_keys(self);
     }
 
     /// The mission info screen open, if it is.
@@ -2583,6 +2600,7 @@ impl SpaceportView {
 #[allow(clippy::float_cmp)]
 pub(in crate::spaceport) mod tests {
     mod flushing_layers;
+    mod overlay_pointer;
     mod ship_movies;
 
     use crate::ui::mission_info::MISSION_INFO_KEY;
