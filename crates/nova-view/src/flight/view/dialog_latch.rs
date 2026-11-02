@@ -50,11 +50,15 @@ use super::{
     NEAREST_STELLAR_KEY, SELECT_KEY, STELLAR_SLOT_KEYS, TARGET_KEY, ZOOM_IN_KEY,
     ZOOM_IN_KEYPAD_KEY,
 };
-use crate::flight::escorts::MENU_KEY;
+use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
+use crate::flight::escorts::{EscortMenuLooks, GROUP_KEYS, MENU_KEY};
 use crate::flight::sim_port::FlightSim;
+use crate::galaxy::GalaxyCatalog;
+use crate::system::catalog::SystemCatalog;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::mission_info::MISSION_INFO_KEY;
 use crate::ui::player_info::PLAYER_INFO_KEY;
-use crate::{Input, Key};
+use crate::{Input, Key, Screen as _};
 
 /// What is physically down as the last dialog over flight closes, as the
 /// router saw it: the keys down now, those down before flight's input
@@ -189,11 +193,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///   the movie takes every key.
     /// - With none, those also down before the input went away
     ///   (`live.down_before`) wait, and every other latched key of
-    ///   `live.down` comes back as a fresh press, in
-    ///   `_HandlePlayer`'s poll order (the module's `POLL_ORDER`), for the router to
-    ///   give flight as it gives any key. A held-polled key (J, B, the slot
-    ///   keys) then acts on the next step, and a press key (Y, P, Tab) at
-    ///   once. One flight still holds is no fresh press.
+    ///   `live.down` is read as a fresh press, in `_HandlePlayer`'s poll
+    ///   order (the module's `POLL_ORDER`). One flight still holds is no
+    ///   fresh press. Most act on their press in ours, so they come back
+    ///   for the router to give flight as it gives any key. The slot
+    ///   block's keys and the cloak act only at the next poll, so a press
+    ///   key after the first of them in the order (Tab, M, B, J, Y, P and
+    ///   the rest after the block @0x69d3f) is kept for that poll instead
+    ///   (`FlightView::read_after_poll`): the block picks first, and a
+    ///   dialog the later key opens latches the keys after it, as P's
+    ///   `_SetAllKeyCmdFlags` (@0x70393) does.
     #[must_use]
     pub fn take_back_live_input(&mut self, live: LiveKeys) -> Vec<Input> {
         let latch_all = std::mem::take(&mut self.latch_at_close) || self.map_open;
@@ -213,19 +222,72 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .copied()
             .filter(|key| live.down_before.contains(key));
         self.latch_held_keys(waiting);
-        POLL_ORDER
-            .into_iter()
-            .filter(|key| {
-                live.down.contains(key)
-                    && !live.down_before.contains(key)
-                    && !self.held.contains(key)
-            })
-            .map(|key| Input::Key {
-                key,
-                pressed: true,
-                repeat: false,
-            })
-            .collect()
+        let fresh = POLL_ORDER.into_iter().filter(|key| {
+            live.down.contains(key) && !live.down_before.contains(key) && !self.held.contains(key)
+        });
+        let mut presses = Vec::new();
+        let mut polled_before = false;
+        self.after_poll.clear();
+        for key in fresh {
+            let at_poll = self.acts_at_the_poll(key);
+            if polled_before && !at_poll {
+                self.after_poll.push(key);
+            } else {
+                presses.push(press(key));
+            }
+            polled_before |= at_poll;
+        }
+        presses
+    }
+
+    /// Whether flight acts on `key` only at its next key poll or step,
+    /// not on its press: the slot block's keys
+    /// ([`FlightView::slot_keys_frame`]), but 1-5 while the escort menu
+    /// takes them as its groups, which act on the press, and the cloak,
+    /// whose edge the step reads.
+    fn acts_at_the_poll(&self, key: Key) -> bool {
+        let group = self.escort_menu.is_open() && GROUP_KEYS.contains(&key);
+        (super::slot_block::is_block_key(key) && !group) || key == super::CLOAK_KEY
+    }
+}
+
+/// A fresh press of `key`.
+fn press(key: Key) -> Input {
+    Input::Key {
+        key,
+        pressed: true,
+        repeat: false,
+    }
+}
+
+impl<
+    C: CombatLooks
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog
+        + EscortMenuLooks
+        + DescriptionSource
+        + DescriptionGraphics,
+    S: FlightSim,
+> FlightView<C, S>
+{
+    /// Right after a tick's key poll ([`FlightView::held_keys_frame`]),
+    /// reads the press keys a hand-back kept for it, in order, each still
+    /// down ([`FlightView::take_back_live_input`]): whether one opened
+    /// something, which ends the tick, as `_HandlePlayer`'s modal call
+    /// stops the pass. The ones after it are dropped, as the site that
+    /// follows its dialog latches them.
+    pub(super) fn read_after_poll(&mut self) -> bool {
+        let kept = std::mem::take(&mut self.after_poll);
+        for key in kept {
+            let _ = self.input(&press(key));
+            if self.opened_something() {
+                self.after_poll.clear();
+                return true;
+            }
+        }
+        false
     }
 }
 

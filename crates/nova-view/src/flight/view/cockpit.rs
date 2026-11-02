@@ -483,6 +483,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             } else {
                 self.latched_down.remove(&key);
             }
+            if !pressed {
+                self.after_poll.retain(|kept| *kept != key);
+            }
             if pressed {
                 self.held.insert(key);
             } else {
@@ -514,6 +517,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn let_go_of_input(&mut self) {
         self.held.clear();
         self.latched_down.clear();
+        self.after_poll.clear();
         self.faded_keys.forget();
         self.cursor.button(false);
     }

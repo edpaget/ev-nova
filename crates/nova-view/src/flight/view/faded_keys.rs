@@ -234,10 +234,17 @@ impl<
             return false;
         }
         self.read_keys(&reads, false);
+        self.opened_something()
+    }
+
+    /// Whether a key read opened something that takes flight's input: its
+    /// map, a dialog for the router, a landing or a movie.
+    pub(super) fn opened_something(&self) -> bool {
         self.map_open
             || self.pending_player_info
             || self.pending_mission_info.is_some()
             || self.hail_opened()
+            || self.pending_boarding
             || self.pending_landing.is_some()
             || self.playing()
     }

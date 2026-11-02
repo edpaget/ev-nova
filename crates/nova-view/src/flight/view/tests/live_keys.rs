@@ -308,11 +308,33 @@ fn every_latched_key_pressed_under_an_unlatching_dialog_comes_back_in_handle_pla
     let mut down: Vec<Key> = every_key().collect();
     down.reverse();
     let replay = back(&mut view, down, [], false);
-    let expected: Vec<Input> = POLL_ORDER.into_iter().map(press).collect();
+    // The slot block's keys and the cloak act at the poll; the press keys
+    // after the first of them wait for it.
+    let first_polled = POLL_ORDER
+        .iter()
+        .position(|&k| k == STELLAR_SLOT_KEYS[0][0])
+        .expect("the block");
+    let at_poll = |k: Key| super::super::slot_block::is_block_key(k) || k == CLOAK_KEY;
+    let (now, kept): (Vec<Key>, Vec<Key>) = (
+        POLL_ORDER
+            .into_iter()
+            .enumerate()
+            .filter(|&(at, k)| at < first_polled || at_poll(k))
+            .map(|(_, k)| k)
+            .collect(),
+        POLL_ORDER
+            .into_iter()
+            .enumerate()
+            .filter(|&(at, k)| at >= first_polled && !at_poll(k))
+            .map(|(_, k)| k)
+            .collect(),
+    );
+    let expected: Vec<Input> = now.into_iter().map(press).collect();
     assert_eq!(
         replay, expected,
         "only the latched keys, in the poll's order"
     );
+    assert_eq!(view.after_poll, kept, "the rest for the poll, in order");
 }
 
 #[test]
@@ -404,4 +426,83 @@ fn the_fixtures_site_mark_latches_the_close_as_a_site_does() {
     unlatching_dialog_opens(&mut view);
     view.mark_site();
     latches_its_close(&mut view);
+}
+
+// The slot block acts at the poll, not on its press, so a press key
+// later in `_HandlePlayer`'s order waits for the next poll: the block
+// @0x69d3f picks before P @0x702cb opens its dialog, whose
+// `_SetAllKeyCmdFlags` (@0x70393) then latches the rest.
+
+#[test]
+fn a_press_key_after_a_slot_key_under_an_unlatching_dialog_acts_after_the_blocks_poll() {
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [PLAYER_INFO_KEY, slot], [], false);
+    assert_eq!(replay, [press(slot)], "P waits for the poll");
+    for input in &replay {
+        view.input(input);
+    }
+    let from = sent(&view).len();
+    view.sim.queue_answer(Answer::PlayerInfoPressed(true));
+    view.tick(TICK);
+    let sent_now = &sent(&view)[from..];
+    let picked = sent_now
+        .iter()
+        .position(|command| matches!(command, FlightCommand::SelectStellar(_)));
+    let asked = sent_now
+        .iter()
+        .position(|command| *command == FlightCommand::PressPlayerInfo);
+    assert!(
+        matches!((picked, asked), (Some(p), Some(a)) if p < a),
+        "the pick, then P: {sent_now:?}"
+    );
+    assert!(view.take_player_info_request(), "P's dialog asked for");
+}
+
+#[test]
+fn a_press_key_kept_for_the_poll_and_let_go_before_it_does_nothing() {
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [slot, PLAYER_INFO_KEY], [], false);
+    for input in &replay {
+        view.input(input);
+    }
+    view.input(&key(PLAYER_INFO_KEY, false));
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert!(
+        !sent(&view)[from..].contains(&FlightCommand::PressPlayerInfo),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+}
+
+#[test]
+fn a_press_key_before_any_slot_key_comes_back_at_once() {
+    // \` @0x69aa1 precedes the block, and B @0x6a98b, which follows it,
+    // has no slot key before it to wait on.
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let replay = back(&mut view, [NAV_OFF_KEY, BOARD_KEY], [], false);
+    assert_eq!(replay, [press(NAV_OFF_KEY), press(BOARD_KEY)]);
+}
+
+#[test]
+fn a_kept_press_is_dropped_when_flight_lets_go_before_the_poll() {
+    let slot = STELLAR_SLOT_KEYS[0][0];
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    let _ = back(&mut view, [slot, HAIL_KEY], [], false);
+    unlatching_dialog_opens(&mut view);
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert!(
+        !sent(&view)[from..]
+            .iter()
+            .any(|command| matches!(command, FlightCommand::Hail { .. })),
+        "{:?}",
+        &sent(&view)[from..]
+    );
 }

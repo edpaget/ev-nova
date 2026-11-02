@@ -262,6 +262,9 @@ impl<
             return;
         }
         self.held_keys_frame();
+        if self.read_after_poll() {
+            return;
+        }
         self.floating_frame();
         let Steps { steps, alpha } = self.clock.advance(dt);
         let keyed = self.cursor_keyed();

@@ -1442,6 +1442,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// key poll, so the dialogs it opened latch every key down at their
     /// close (see the `dialog_latch` module).
     latch_at_close: bool,
+    /// The press keys a hand-back left for the next key poll, in
+    /// `_HandlePlayer`'s order, as a slot key before them acts only there
+    /// (see the `dialog_latch` module). A release drops its key.
+    after_poll: Vec<Key>,
     /// `_navModeSelectFlag` (0xdee04), the latch the Nav Off and
     /// Hyperspace Mode block and Option-\` share: set as one of them acts,
     /// so a key held acts once; cleared on a frame neither \` without

@@ -596,3 +596,44 @@ fn a_slot_key_pressed_in_the_spaceport_and_held_past_the_take_off_waits_for_its_
     screen.tick(TICK * 8);
     assert_ne!(nav(&screen), None, "pressed afresh");
 }
+
+/// A mission text shown over `screen`'s flight, as the session's are.
+fn text_over(screen: &mut AppScreen) {
+    screen.show_over_flight(vec![nova_view::ui::mission_dialogs::DescShown::str_text(
+        "Well done.",
+        None,
+    )]);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::MissionText);
+}
+
+#[test]
+fn b_and_p_pressed_under_a_mission_text_board_and_p_waits_on_the_plunders_latch() {
+    // B @0x6a98b before P @0x702cb: the board opens the plunder dialog,
+    // whose `_SetAllKeyCmdFlags` (@0x659f1) latches P.
+    let mut screen = boardable(with_dialogs(boarding_data()));
+    fly(&mut screen);
+    screen.tick(TICK);
+    tap(&mut screen, Key::Tab);
+    text_over(&mut screen);
+    screen.input(&key(Key::Char('b'), true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    tap(&mut screen, Key::Enter);
+    assert_eq!(screen.showing(), Showing::Plunder, "B boarded at the close");
+    tap(&mut screen, Key::Escape);
+    assert_eq!(screen.showing(), Showing::Flight, "aborted");
+    screen.tick(TICK * 4);
+    assert_eq!(screen.showing(), Showing::Flight, "P latched");
+}
+
+#[test]
+fn a_slot_key_and_p_pressed_under_a_mission_text_select_then_open_the_player_info() {
+    // The slot block @0x69d3f picks before P @0x702cb opens its dialog.
+    let mut screen = texted();
+    screen.input(&key(SLOT_1, true));
+    screen.input(&key(PLAYER_INFO_KEY, true));
+    close_text(&mut screen);
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::PlayerInfo, "P on the first step");
+    assert_ne!(nav(&screen), None, "picked first");
+}
