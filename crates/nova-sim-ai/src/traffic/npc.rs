@@ -169,9 +169,13 @@ pub enum Mode {
     /// for this many more ticks: a ship with no lead
     /// (`_HandleShip` @0x34d5c-0x34d8b, its AI wait +0x4c). It moves on at
     /// the velocity the glide or burst left it, with no steering, thrust,
-    /// slowing, fire or decisions, but is seen, targeted and fought as a
-    /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
-    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`]. A ship
+    /// slowing or fire, but is seen, targeted and fought as a flying ship
+    /// is: its goal is 0, not 21, so `_ShipVisibleToShip` (@0x972d) sees it
+    /// and it is drawn. See [`Npc::arrived`]. It decides through the wait,
+    /// as `_AIDispatch` runs its type's think for goal 0 whatever +0x4c
+    /// (@0x8ff18-0x90016), and takes the goal and target it decides; a
+    /// think that ends the wait flies it ([`Npc::end_wait`], see
+    /// [`waiting_think`](crate::traffic::waiting_think)). A ship
     /// boarded on a mission's assist path waits so too
     /// ([`Npc::wait_on_course`]), and so does a ship whose gate entry the
     /// disabled reset ended, for what was left of the entry's wait
@@ -185,10 +189,17 @@ pub enum Mode {
     /// through, for this many more ticks: the original's sub-goal 0x17,
     /// its wait +0x4c counting down (see
     /// [`gate_entry`](crate::traffic::gate_entry)). It holds still and
-    /// fades out, and decides nothing, but is seen, targeted, fought and
-    /// hailed as a flying ship is ([`Npc::arrived`]). The disabled reset's
-    /// sub 0 ends it (@0x8ff0a, [`Npc::ends_gate_entry`]): the ship stays,
-    /// holding its course ([`Mode::Coasting`]) for the wait left.
+    /// fades out, and is seen, targeted, fought and hailed as a flying ship
+    /// is ([`Npc::arrived`]). It decides through the entry, as `_AIDispatch`
+    /// runs its type's think for goal 0x14 whatever +0x4c
+    /// (@0x8ff18-0x90016): a goal written over it leaves the sub 0x17 the
+    /// fade reads (@0x89508), so it still leaves. A sub written over it
+    /// ends it: the disabled reset's sub 0 (@0x8ff0a,
+    /// [`Npc::ends_gate_entry`]) or a think's
+    /// ([`Npc::takes_sub_write`]), and the ship stays, holding its course
+    /// ([`Mode::Coasting`]) for the wait left; a think that ends the wait
+    /// flies it at once ([`Npc::end_wait`], see
+    /// [`waiting_think`](crate::traffic::waiting_think)).
     EnteringGate {
         /// The gate it enters.
         gate: StellarId,
@@ -1595,7 +1606,7 @@ impl Npc {
     /// for an `_AIFire*` call to set again. A waiting ship's fire step is
     /// skipped (`_HandleShip` @0x34a54-0x34a72), and its burst runs under
     /// goal 8, sub-goal 0xa, which fires nothing (@0x8dd61-0x8dd93,
-    /// @0x8f3c8-0x8f3d9). No decision is due until it flies, so the
+    /// @0x8f3c8-0x8f3d9). No decision is due until its burst ends, so the
     /// released trigger holds through both.
     ///
     /// The caller places it, gives it its heading and decides
@@ -1717,7 +1728,8 @@ impl Npc {
     /// `_HandleShipDisplay` reads alone to fade it out and free it
     /// (`_AIShipIsEnteringHypergate` @0x89502, @0x2bf94-0x2c088): the
     /// disabled reset's sub 0 (@0x8ff0a, see
-    /// [`disabled_reset`](super::disabled_reset)). It stays in the system,
+    /// [`disabled_reset`](super::disabled_reset)), or a think's
+    /// ([`Npc::takes_sub_write`], [`Npc::detach_for_own_jump`]). It stays in the system,
     /// drawn unfaded and never freed, while its wait +0x4c runs on
     /// (@0x3501f-0x35048), as a ship holding its course does
     /// ([`Mode::Coasting`]): disabled it drifts, and once whole it moves on

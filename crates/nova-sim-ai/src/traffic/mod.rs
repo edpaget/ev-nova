@@ -85,8 +85,9 @@
 //!    decisions due on the AI timer, never for an escape pod
 //!    ([`pod_flight`]), nor for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it,
-//!    but held at it, [`Mode::HeldAtGate`], it decides), one entering a
-//!    gate to leave, one that is not intact, one held in the regroup pause
+//!    but held at it, [`Mode::HeldAtGate`], it decides, and so does one
+//!    holding its course or entering a gate to leave, through its wait,
+//!    [`waiting_think`]), one that is not intact, one held in the regroup pause
 //!    (which holds its gate wait's fire in place of a decision's, and
 //!    flies its kept substate in step 6), or one assisting the player
 //!    whose type's think returns at once for the help, provoked or not
@@ -102,7 +103,9 @@
 //!    ship's swarm check ([`swarm::pass`], which a coasting ship, one
 //!    entering a gate or one assisting the player runs too);
 //!    then each NPC's high level, a
-//!    docking or its fight, none while its AI wait runs, and each drift's
+//!    docking or its fight, none while its AI wait runs, where the fight
+//!    sub its last frame left runs with no high level
+//!    ([`waiting_pursuit`](crate::ai::waiting_pursuit)), and each drift's
 //!    step, [`plunder::drift`]; a ship repairing a ship flies its high
 //!    level, its docking with the ship it targets, though it decides
 //!    nothing, [`repair_dock`], and so does one refuelling a ship,
@@ -2672,8 +2675,12 @@ impl Traffic {
     /// records as visited ([`Decision::visits`]) is its
     /// [`Npc::visited`]. A decision that ends its AI wait
     /// ([`Decision::ends_wait`]) zeroes [`Npc::ai_wait`] and ends a hold at
-    /// its gate ([`Npc::end_wait`], owing its burst as
-    /// [`World::held_burst`] reads), so it flies this tick; it, and one that
+    /// its gate, a coast or a gate entry ([`Npc::end_wait`], owing its
+    /// burst as [`World::held_burst`] reads), so it flies this tick; one
+    /// that writes the sub itself ([`Decision::writes_sub`]) ends a gate
+    /// entry and drops its kept pursuit ([`Npc::takes_sub_write`]), first
+    /// among the writes of the mode, so a count wait or an end of the wait
+    /// in the same think leaves it flying ([`waiting_think`]); it, and one that
     /// leaves its fleet, gives up its warp stage ([`Warp::give_up`](warp_out::Warp::give_up)),
     /// as `_EscortAI` writes +0x50 = -1.0 with them (see
     /// [`jump_with_leader`]); and one that

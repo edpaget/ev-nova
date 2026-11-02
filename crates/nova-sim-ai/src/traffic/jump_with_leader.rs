@@ -62,9 +62,12 @@
 //! A launched fighter in its glide meets this as its carrier jumps, and any
 //! ship the player leads under the player's warp stage, whose write
 //! (`_AIMakeShipJumpWithParent` @0x82bb6-0x82bf3) tests no goal
-//! ([`Npc::follow_player_jump`]). A ship that runs no think, in
-//! [`Mode::Coasting`] or [`Mode::EnteringGate`], meets the entry only by that
-//! write, its first think setting the warp goal after its wait.
+//! ([`Npc::follow_player_jump`]). A ship holding its course
+//! ([`Mode::Coasting`]) or entering a gate ([`Mode::EnteringGate`]) thinks
+//! through its wait, so it meets the entry by its own think too, goal 0xb
+//! alone, its first think after the wait setting the warp goal; an
+//! inertialess one's detach writes sub 4 over an entry's 0x17, so it stays
+//! ([`Npc::detach_for_own_jump`]).
 //!
 //! **The fighter turn-back** ([`turn_back`], `_HighLevelAIHandler`
 //! @0x8d575-0x8d625), after the hold and before the goal blocks: a

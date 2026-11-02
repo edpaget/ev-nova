@@ -84,13 +84,12 @@
 //!   [`BREAK_EXIT_BOX`] whole pixels on an axis, never by its facing
 //!   ([`leaves_break_off`], @0x864bd-0x86513). The high level, which runs
 //!   first on the same positions, keeps 0x10 only inside 165.0 on both
-//!   axes, so in the engine's tick the exit beyond 165 is never reached:
-//!   the original reaches it when the low level runs under an AI wait
-//!   without the high level (@0x8d4b9-0x8d4d2, @0x901f4), which the
-//!   engine's pursuit doesn't (rdm task
-//!   waiting-ships-run-their-per-type-ai). What shows is that an
-//!   inertialess ship never leaves the break-off by facing its break
-//!   heading.
+//!   axes, so with the high level the exit beyond 165 is never reached:
+//!   it is reached when the low level runs under an AI wait without the
+//!   high level (@0x8d4b9-0x8d4d2, @0x901f4;
+//!   [`waiting_pursuit`](super::waiting_pursuit), from [`chain`]). Without
+//!   a wait, what shows is that an inertialess ship never leaves the
+//!   break-off by facing its break heading.
 //! - **Rush** (0x11, [`Manoeuvre::Rush`]): it wants the table bearing to
 //!   its target, thrusts every tick at [`RUSH_THRUST`] times its
 //!   acceleration up to [`RUSH_SPEED`] times its top speed; inside

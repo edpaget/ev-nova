@@ -1104,10 +1104,17 @@ pub struct Decision {
     /// Whether the think writes the sub-goal (+0xc8ca) itself, ending any
     /// docking ([`Npc::docking`]) even while the AI wait skips the high
     /// level: `_PirateWarshipAI`'s count wait entry (@0x8c6fe), its plunder
-    /// (@0x8c788) and its dry drop (@0x8c878), and `_AIFindShipToPlunder`'s
-    /// find (@0x7fea5). A think that writes it not leaves a docking under
+    /// (@0x8c788) and its dry drop (@0x8c878), `_AIFindShipToPlunder`'s
+    /// find (@0x7fea5), `_WarshipAI`'s fully-dry drop (@0x8c108),
+    /// `_DeathStarAI`'s drop of goal 0x12 (@0x8c2b2) and `_EscortAI`'s lost
+    /// parent (@0x8396b). A think that writes it not leaves a docking under
     /// the wait whatever goal it writes (see
     /// [`plunder_dock::kept_by`](crate::traffic::plunder_dock::kept_by)).
+    /// The write also ends a gate entry, which the fade reads by sub 0x17
+    /// alone, the ship staying and holding its course for the wait left,
+    /// and drops the pursuit it kept
+    /// ([`Npc::takes_sub_write`], see
+    /// [`waiting_think`](crate::traffic::waiting_think)).
     pub writes_sub: bool,
     /// The target the frame ends with on goal 0, when the high level
     /// dropped the attack keeping it: the attack block's wait test and its
@@ -1163,8 +1170,12 @@ pub struct Decision {
     /// think. [`CarriedAi`] sets it as it attacks, by the Attack block
     /// alone. The traffic ends the wait as it takes the goal
     /// ([`Npc::end_wait`]): [`Npc::ai_wait`] zeroed, and a hold at its gate
-    /// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate))
-    /// ended, so it flies this tick. It gives up its warp stage, as the blocks write +0x50 = -1.0 with it
+    /// ([`Mode::HeldAtGate`](crate::traffic::npc::Mode::HeldAtGate)), a
+    /// coast ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) or a
+    /// gate entry
+    /// ([`Mode::EnteringGate`](crate::traffic::npc::Mode::EnteringGate))
+    /// ended, so it flies this tick, the high level writing its goal's own
+    /// sub over an entry's 0x17. It gives up its warp stage, as the blocks write +0x50 = -1.0 with it
     /// (see [`jump_with_leader`](crate::traffic::jump_with_leader)); the
     /// high level's hold zeroes the stage again in the same tick.
     pub ends_wait: bool,
