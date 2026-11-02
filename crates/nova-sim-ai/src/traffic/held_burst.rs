@@ -679,6 +679,8 @@ mod tests {
     #[test]
     fn an_inertialess_burst_pulls_its_velocity_by_its_steps_adjust_accel() {
         let mut npc = owing(Some(30.0));
+        // Off heading × speed, so the pull shows.
+        npc.state.velocity = Vec2::new(0.0, 1.0);
         let flown = handling(&npc);
         let mut drifted = npc.clone();
         let pulled = Handling {
@@ -694,5 +696,9 @@ mod tests {
             (INERTIALESS, Word::Keeps { thrust: 0.5 }, 0.01),
         );
         assert!(close(npc.state.velocity, drifted.state.velocity));
+        assert!(
+            !close(npc.state.velocity, Vec2::new(2.0, 0.0)),
+            "pulled a little"
+        );
     }
 }
