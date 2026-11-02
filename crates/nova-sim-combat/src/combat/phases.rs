@@ -239,14 +239,14 @@ impl Combat {
             .target
             .is_none_or(|target| fighters.iter().all(|other| other.ship != target));
         let fighter = &mut fighters[index];
-        // At full gain until `_HandleShip` reads the frame's
-        // (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
-        self.ion_lockout
-            .reload_one(fighter, crate::speed_mult::SpeedMult::FULL);
+        // Its reloads and regeneration at the frame's gain (@0x338b3,
+        // @0x345da, @0x3464c).
+        let gain = arena.field.speed_mult;
+        self.ion_lockout.reload_one(fighter, gain);
         if idle {
             fighter.armament.hold_idle_bays();
         }
-        regenerate(fighter, arena.rules.disable);
+        regenerate(fighter, arena.rules.disable, gain);
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire_one(&mut fighters[index], &targets, chance);
         fighters[index].condition.count_down();

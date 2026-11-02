@@ -1447,9 +1447,9 @@ impl Armament {
     /// (@0x6ae25-0x6ae61) do at full gain: a timer above none loses a
     /// frame, unfloored, so one of 0.5 reads -0.5 for a frame, which point
     /// defence's reload adds to ([`Armament::fire_point_defence`]); one at
-    /// or below none is set to none. An NPC's countdown, at full gain until
-    /// `_HandleShip` reads the frame's
-    /// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
+    /// or below none is set to none. Only tests call it, for a full
+    /// frame's countdown: the fight counts down at the frame's gain
+    /// ([`Armament::reload_holding`], through the ion lockout).
     pub fn reload(&mut self) {
         self.reload_holding(SpeedMult::FULL, |_| false);
     }

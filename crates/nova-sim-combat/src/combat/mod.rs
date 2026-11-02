@@ -3657,15 +3657,12 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
 /// destroyed ship regenerates neither. It comes before that frame's
 /// `_HandleBeams`, so a beam that disables the ship after it leaves it
 /// regenerated. A ship whose shield and armour are full has nothing to
-/// regenerate, and the rule is not asked of it.
-///
-/// At full gain until `_HandleShip` reads the frame's
-/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
-fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
+/// regenerate, and the rule is not asked of it. Each gauge gains its rate
+/// × the frame's `gain` (`_gSpeedMult` @0x345da, @0x3464c).
+fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule, gain: SpeedMult) {
     let reserves = &fighter.reserves;
     let short = below_full(reserves.shield) || below_full(reserves.armor);
     if short && !fighter.disabled_now(rule) {
-        let gain = SpeedMult::FULL;
         recharge(&mut fighter.reserves.shield, fighter.shield_regen, gain);
         recharge(&mut fighter.reserves.armor, fighter.armor_regen, gain);
     }
@@ -3743,6 +3740,7 @@ mod tests {
     mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
+    mod npc_gain;
     mod pd_parent;
     mod phase;
     mod pick_at_breakup;
