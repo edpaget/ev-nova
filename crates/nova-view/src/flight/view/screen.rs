@@ -358,7 +358,9 @@ impl<
                 // A fresh press follows a release, which clears the latch.
                 self.board_latch = false;
                 self.board_frame(true);
-                if self.pending_boarding {
+                // The plunder screen or a boarding offer's dialog opened:
+                // it takes B's release, so B isn't held.
+                if self.pending_boarding || self.pending_offer.is_some() {
                     return ScreenAction::None;
                 }
             }

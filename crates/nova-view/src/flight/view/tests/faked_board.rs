@@ -369,6 +369,36 @@ fn b_on_a_person_offering_on_boarding_holds_the_offer_and_no_plunder() {
     assert_eq!(view.message(), None, "nothing granted");
 }
 
+#[test]
+fn b_answered_with_an_offer_leaves_no_key_held_as_the_offer_takes_its_release() {
+    let mut view = sol();
+    let prompt = nova_sim::OfferPrompt {
+        mission: MissionId(130),
+        text: "Aboard.".to_owned(),
+        labels: nova_sim::mission::screens::offer_labels("", "", true),
+        graphic: None,
+        movie: None,
+    };
+    view.sim
+        .queue_answer(Answer::Boarded(Boarding::Offered(VenueOffer::Prompt(
+            prompt.clone(),
+        ))));
+    view.input(&key(BOARD_KEY, true));
+    assert!(!view.holds_keys(), "the offer dialog takes B's release");
+    assert_eq!(view.take_offer(), Some(prompt));
+}
+
+#[test]
+fn b_refused_stays_held_until_its_release() {
+    let mut view = sol();
+    view.sim
+        .queue_answer(Answer::BoardRefused(BoardRefusal::NoTarget));
+    view.input(&key(BOARD_KEY, true));
+    assert!(view.holds_keys(), "held");
+    view.input(&key(BOARD_KEY, false));
+    assert!(!view.holds_keys(), "released");
+}
+
 // The Board key's latch (`*0xdee18`).
 
 #[test]
