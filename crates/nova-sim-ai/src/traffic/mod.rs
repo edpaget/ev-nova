@@ -3772,7 +3772,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_coming_out_of_a_gate_never_decides_until_it_is_out() {
+    fn an_emerging_ship_never_decides_in_its_gate_or_burst_and_decides_as_it_holds_its_course() {
         // Goal 0x15 skips the type AI (@0x8ff18) and the burst is goal 8's
         // glide-in path (@0x8fcf5); the coast after it is goal 0, which
         // decides through its wait, its fire held (`waiting_think`).
