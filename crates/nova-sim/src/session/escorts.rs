@@ -418,6 +418,7 @@ impl Session {
             lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
             swarm_leader: None,
             owed_burst: None,
+            fled_hopeless: None,
             slot_accel: None,
             close_form: false,
             fleet_slot: None,

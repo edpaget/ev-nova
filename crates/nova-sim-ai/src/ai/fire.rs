@@ -13,7 +13,9 @@
 //! does ([`ai_fire`](crate::combat::ai_fire)). While it attacks or snipes
 //! at a ship that is live in the system, it also launches its fighters
 //! ([`Trigger::bays`], `_AILaunchFighter` from the attack state, see
-//! [`bay`](crate::bay)).
+//! [`bay`](crate::bay)), and so it does on the first frame of a flight goal
+//! 4's high level wrote, which jumps to the attack state's tail
+//! (@0x8e6e5-0x8e6fa, [`hopeless_flee`](super::hopeless_flee)).
 //!
 //! - **The passes**, each body of its frame's in turn
 //!   ([`pursuit::Frame`]), each gate outside its call, so a pass whose
@@ -184,7 +186,7 @@
 #[cfg(doc)]
 use crate::ai::PlayerSide;
 use crate::ai::swarm::{self, SwarmLead};
-use crate::ai::{Surroundings, fire_untargeted, pursuit};
+use crate::ai::{Surroundings, fire_untargeted, hopeless_flee, pursuit};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, blind_spot, quadrant_off};
@@ -608,9 +610,16 @@ fn fight_trigger(npc: &Npc, around: &Surroundings, rules: FireRules, bays: bool)
 
 /// Whether `npc` launches its fighters: attacking or sniping at a ship
 /// live in the system (`_AILaunchFighter` from `_HighLevelAIHandler`'s
-/// attack block, @0x8e6fa).
+/// attack block, @0x8e6fa), or on the first frame of a flight goal 4's
+/// high level wrote, which jumps to that block's tail, its own
+/// `_IsDisabled` test first (@0x8e6e5-0x8e6fa,
+/// [`hopeless_flee`](super::hopeless_flee)).
 fn launches(npc: &Npc, around: &Surroundings) -> bool {
-    npc.goal.attacking().is_some_and(|ship| around.live(ship))
+    let fled = hopeless_flee::attack_fled(npc).filter(|_| npc.active_not_disabled());
+    npc.goal
+        .attacking()
+        .or(fled)
+        .is_some_and(|ship| around.live(ship))
 }
 
 /// Whether `npc` launches its fighters after its passes, as the snipe
@@ -3085,6 +3094,27 @@ mod tests {
             starting: false,
         };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
+    }
+
+    #[test]
+    fn the_first_frame_of_goal_4s_hopeless_flee_launches_its_fighters_and_goal_0xds_does_not() {
+        // Goal 4's flight jumps to the state-4 tail (@0x8e6e5): its own
+        // `_IsDisabled` test (@0x8e6eb), then `_AILaunchFighter` (@0x8e6fa)
+        // at a target in the system. Goal 0xd's jumps past it (@0x8eb6b).
+        use crate::ai::hopeless_flee::HopelessFlee;
+        let all = [gun(128, 1, 1)];
+        let mut fled = shooter(&all, Goal::Flee(ShipRef::Player));
+        fled.fled_hopeless = Some(HopelessFlee::Attack);
+        assert!(bays(&fled, &[]), "goal 4's");
+        let mut downed = fled.clone();
+        downed.condition = Condition::Disabled;
+        assert!(!bays(&downed, &[]), "disabled");
+        let at = ShipRef::Npc(NpcId(7));
+        let mut gone = fled.clone();
+        gone.goal = Goal::Flee(at);
+        assert!(!bays(&gone, &[]), "its quarry gone");
+        fled.fled_hopeless = Some(HopelessFlee::Plunder);
+        assert!(!bays(&fled, &[]), "goal 0xd's");
     }
 
     /// A launcher of `id` firing rounds of weapon `id + 10`.

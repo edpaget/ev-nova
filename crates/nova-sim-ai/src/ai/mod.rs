@@ -57,6 +57,7 @@ pub(crate) mod fixture;
 pub mod flee_drop;
 pub mod fleet_escort;
 pub mod held_attack;
+pub mod hopeless_flee;
 pub mod idle_block;
 pub mod inspect_high;
 pub mod interceptor;
@@ -1147,6 +1148,13 @@ pub struct Decision {
     /// [`VoiceCue::Thought`]: crate::escort_voice::VoiceCue::Thought
     /// [`VoiceCue::NewThreat`]: crate::escort_voice::VoiceCue::NewThreat
     pub voice: Option<crate::escort_voice::VoiceCue>,
+    /// Which high level turned a chase into a flight this frame, goal 4's
+    /// or goal 0xd's (goal 3 with sub 5, @0x8e622-0x8e62e,
+    /// @0x8eaef-0x8eafb; see [`hopeless_flee`]): its sub flies flee close
+    /// whatever the reach, after goal 3's block, so no flee drop runs and
+    /// no goal-3 call is made that frame. The traffic keeps it on the ship
+    /// until its next decision ([`Npc::fled_hopeless`]).
+    pub hopeless_flee: Option<hopeless_flee::HopelessFlee>,
 }
 
 /// How NPCs decide what to do.

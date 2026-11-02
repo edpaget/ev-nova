@@ -66,6 +66,7 @@ impl Behaviour for WimpyTrader {
             },
             comm_call: when_fleeing(thought),
             clears_target: ended,
+            hopeless_flee: trader_keep::hopeless_flee(npc, thought, around).filter(|_| !ended),
             forgets_provocation: attack_breaking_up(npc, thought, around),
             travel: idle_block::pick_write(npc, around, thought),
             ..Decision::default()
@@ -508,8 +509,18 @@ mod tests {
         npcs[1].state.velocity = crate::geometry::Vec2::new(0.0, 1.0);
         let decision = decision_among(&npcs);
         assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert_eq!(
+            decision.hopeless_flee,
+            Some(crate::ai::hopeless_flee::HopelessFlee::Attack),
+            "goal 4's high level wrote it"
+        );
         assert_eq!(decision.comm_call, None, "the think saw goal 4");
         npcs[0].goal = decision.goal;
+        assert_eq!(
+            decision_among(&npcs).hopeless_flee,
+            None,
+            "a flight kept is no hopeless chase"
+        );
         assert_eq!(
             decision_among(&npcs).comm_call,
             Some(CommCall::Distress),

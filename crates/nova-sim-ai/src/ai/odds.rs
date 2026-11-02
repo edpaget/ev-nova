@@ -365,6 +365,15 @@ pub fn state4_attack(npc: &Npc, target: ShipRef, around: &Surroundings) -> Goal 
     }
 }
 
+/// Whether [`state4_attack`] flees `target`: goal 4's high level writes
+/// goal 3 with sub 5 for a hopeless chase of a ship of AI type 2 or below
+/// (@0x8e622-0x8e62e), the first frame of a flight
+/// ([`hopeless_flee`](super::hopeless_flee)).
+#[must_use]
+pub fn flees_hopeless(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
+    state4_attack(npc, target, around) == Goal::Flee(target)
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {

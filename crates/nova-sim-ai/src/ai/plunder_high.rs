@@ -24,14 +24,17 @@
 //!   on either axis, `_AIEvalHopelessChase` decides (@0x8eace): a hopeless
 //!   chase snipes (sub 0xe) for AI type above 2 and flees (goal 3, sub 5)
 //!   for 2 or below (`cmpw $0x2, 0x88` @0x8ead7-0x8eafb), a trader that
-//!   keeps a copied plunder. Otherwise it approaches or dogfights, the
-//!   pursuit's.
+//!   keeps a copied plunder, then jumps past every call (@0x8eb6b): that
+//!   frame's sub 5 flies flee close whatever the reach
+//!   ([`hopeless_flee`](super::hopeless_flee)). Otherwise it approaches or
+//!   dogfights, the pursuit's.
 //!
 //! The fleet drops (@0x8e771-0x8e838) need a leader (+0x9a set): a
 //! plunderer has none, as a led ship thinks as `FleetEscortAi`, which
 //! never holds goal 0xd. The block plays no sound and draws nothing.
 
 use crate::ai::fire::DOGFIGHT_BOX;
+use crate::ai::hopeless_flee::HopelessFlee;
 use crate::ai::odds::hopeless_chase;
 use crate::ai::travel::{self, TravelWrite};
 use crate::ai::{Decision, Goal, Surroundings};
@@ -73,7 +76,9 @@ pub fn fold(npc: &Npc, ship: ShipRef, around: &Surroundings) -> (Goal, TravelWri
 /// `decision`, `npc`'s think among `around`, with goal 0xd's high level
 /// folded in when it holds a plunder ([`fold`]): its goal the fold's, and
 /// its travel stellar the fold's write over the think's, the think's when
-/// the fold writes none. Any other decision stands.
+/// the fold writes none; a flight the fold wrote is goal 0xd's first frame
+/// of a hopeless flee ([`HopelessFlee::Plunder`]), which makes no call.
+/// Any other decision stands.
 #[must_use]
 pub fn after_think(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
     let Goal::Plunder { ship, .. } = decision.goal else {
@@ -86,6 +91,8 @@ pub fn after_think(npc: &Npc, decision: Decision, around: &Surroundings) -> Deci
             TravelWrite::Keep => decision.travel,
             write => write,
         },
+        // The fold flees only a hopeless chase (@0x8eaef-0x8eafb).
+        hopeless_flee: matches!(goal, Goal::Flee(_)).then_some(HopelessFlee::Plunder),
         ..decision
     }
 }
@@ -104,6 +111,7 @@ fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
 mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, TRADERS, around, govts, n, ship, sites};
+    use crate::ai::hopeless_flee::HopelessFlee;
     use crate::ai::{Behaviour, CommCall, NovaAi};
     use crate::catalog::StellarId;
     use crate::geometry::Vec2;
@@ -186,6 +194,33 @@ mod tests {
     }
 
     #[test]
+    fn a_traders_hopeless_plunder_fled_is_goal_0xds_and_a_snipe_is_none() {
+        // Goal 3 with sub 5 (@0x8eaef-0x8eafb), then @0x8eb6b past every
+        // call.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let thought = Decision {
+            goal: PLAIN,
+            ..Decision::default()
+        };
+        for (ai_type, marked) in [
+            (AiType::WimpyTrader, Some(HopelessFlee::Plunder)),
+            (AiType::Warship, None),
+        ] {
+            let npcs = scene(ai_type, 300.0, true);
+            let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+            assert_eq!(
+                after_think(&npcs[0], thought, &around).hopeless_flee,
+                marked,
+                "{ai_type:?}"
+            );
+        }
+        let npcs = scene(AiType::WimpyTrader, 300.0, false);
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        assert_eq!(after_think(&npcs[0], thought, &around).hopeless_flee, None);
+    }
+
+    #[test]
     fn a_disabled_ships_plunder_holds_its_slot_and_is_never_hopeless() {
         // @0x8e8c9.
         let mut npcs = scene(AiType::WimpyTrader, 300.0, true);
@@ -246,6 +281,7 @@ mod tests {
         assert_eq!(decision.goal, Goal::Flee(n(2)));
         assert_eq!(decision.travel, TravelWrite::Clear);
         assert_eq!(decision.comm_call, None);
+        assert_eq!(decision.hopeless_flee, Some(HopelessFlee::Plunder));
         npcs[0].goal = decision.goal;
         let around = crate::ai::fixture::around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
         let next = NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]));

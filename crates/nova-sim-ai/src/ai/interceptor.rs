@@ -1500,6 +1500,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             },
             "@0x8cb8f-0x8cb9d"
         );

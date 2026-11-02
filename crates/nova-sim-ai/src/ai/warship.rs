@@ -424,6 +424,7 @@ impl Hunt {
             leaves_fleet: false,
             follows_jump: false,
             voice: None,
+            hopeless_flee: None,
         }
     }
 }
@@ -1459,6 +1460,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             }
         );
         assert!(
@@ -1995,6 +1997,7 @@ mod tests {
             leaves_fleet: false,
             follows_jump: false,
             voice: None,
+            hopeless_flee: None,
         }
     }
 
@@ -2086,6 +2089,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             }
         );
         let mut calm = grudger;
@@ -2117,6 +2121,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             },
             "no grudge: dropped, and nothing picked"
         );

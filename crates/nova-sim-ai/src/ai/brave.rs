@@ -18,7 +18,9 @@
 //! [`call_for_help`](super::call_for_help)), and fleeing it calls for
 //! reinforcements too, after the call for help (@0x8b6dc; see
 //! [`reinforcements`](super::reinforcements)). So a hopeless chase is goal
-//! 4 to its calls, and its flight calls from the next think. A stand-off
+//! 4 to its calls, and its flight calls from the next think; the high
+//! level's state-4 tail calls for reinforcements in the frame it flees
+//! ([`hopeless_flee`](super::hopeless_flee)). A stand-off
 //! ship (`shïp` `Flags2` 0x0002) never asks whether the chase is hopeless:
 //! `_HighLevelAIHandler` tests the bit first and jumps past
 //! `_AIEvalHopelessChase` (@0x8e48e), keeping its band instead (see
@@ -128,6 +130,7 @@ impl Behaviour for BraveTrader {
             forgets_provocation: on_gone.unwrap_or(false)
                 || attack_breaking_up(npc, thought, around),
             clears_target: ended,
+            hopeless_flee: trader_keep::hopeless_flee(npc, thought, around).filter(|_| !ended),
             travel: idle_block::pick_write(npc, around, thought),
             ..Decision::default()
         }
@@ -351,6 +354,16 @@ mod tests {
         npcs[1].goal = Goal::Flee(n(1));
         npcs[1].state.velocity = Vec2::new(0.0, -1.0);
         assert_eq!(decided(&npcs), Goal::Flee(n(2)));
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        assert_eq!(
+            BraveTrader::default()
+                .decision(&npcs[0], &around, &mut Draws::of(&[0]))
+                .hopeless_flee,
+            Some(crate::ai::hopeless_flee::HopelessFlee::Attack),
+            "goal 4's high level wrote it"
+        );
         assert!(!calls_reinforcements(&npcs), "the think saw goal 4");
         assert_eq!(call(&npcs), Some(CommCall::Distress), "a warship");
         npcs[1].ai_type = AiType::WimpyTrader;

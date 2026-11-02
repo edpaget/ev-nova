@@ -674,6 +674,12 @@ pub struct Npc {
     /// a new emerge (see [`held_burst`](crate::traffic::held_burst)).
     /// None at every spawn. Never saved.
     pub owed_burst: Option<f32>,
+    /// Which high level turned its chase into a flight at its last
+    /// decision, if any ([`Decision::hopeless_flee`](crate::ai::Decision::hopeless_flee)):
+    /// its sub 5 flies flee close whatever the reach until its next high
+    /// level rewrites it ([`hopeless_flee`](crate::ai::hopeless_flee)).
+    /// Taken at each decision; none at every spawn. Never saved.
+    pub fled_hopeless: Option<crate::ai::hopeless_flee::HopelessFlee>,
     /// The `_ShipAccelRate` its low level last read at its slot of
     /// `_AIDispatch`'s loop, the source of the thrust word +0x30 that
     /// `_HandleShip`'s thrust reads (@0x34a7b-0x34d93), slowed by its

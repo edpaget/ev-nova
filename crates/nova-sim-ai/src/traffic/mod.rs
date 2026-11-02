@@ -238,6 +238,8 @@ mod held_burst_tests;
 #[cfg(test)]
 mod hit_goal_tests;
 #[cfg(test)]
+mod hopeless_flee_tests;
+#[cfg(test)]
 mod idle_block_tests;
 pub mod in_turn;
 pub mod inertialess;
@@ -2670,6 +2672,7 @@ impl Traffic {
             if decision.leaves_fleet {
                 npc.leave_fleet();
             }
+            npc.fled_hopeless = decision.hopeless_flee;
             npc.goal = goal;
         }
     }
@@ -2970,6 +2973,7 @@ impl Traffic {
                 lost_sight: self.berth_search.seed(berth),
                 swarm_leader: None,
                 owed_burst: None,
+                fled_hopeless: None,
                 slot_accel: None,
                 close_form: false,
                 fleet_slot: None,
@@ -5374,6 +5378,7 @@ mod tests {
             leaves_fleet: false,
             follows_jump: false,
             voice: None,
+            hopeless_flee: None,
         });
         traffic.tick_in(&after_drop, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(

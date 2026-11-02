@@ -376,7 +376,8 @@ impl Behaviour for NovaAi {
     /// from a ship gone from its slot ends with its provocation
     /// ([`flight_ended`](crate::traffic::provocation::flight_ended),
     /// @0x8d4e4-0x8d50d → @0x8e228-0x8e23d), and its flee
-    /// drop ([`flee_drop::with_flee_drop`]) and its call for
+    /// drop ([`flee_drop::with_flee_drop`], none for a hopeless flee written
+    /// this frame, [`Decision::hopeless_flee`]) and its call for
     /// reinforcements end the think
     /// ([`reinforcements::with_high_level_call`]), whatever type decided,
     /// as the handler runs after every type's think (`_AIDispatch`
@@ -405,6 +406,7 @@ impl Behaviour for NovaAi {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             },
             Some(false) => Decision {
                 goal: Goal::JumpOut,
@@ -430,7 +432,13 @@ impl Behaviour for NovaAi {
                     && crate::traffic::provocation::flight_ended(npc, decision.goal, around)),
             ..decision
         };
-        let decision = flee_drop::with_flee_drop(npc, decision, around, self.led_ally);
+        // A hopeless flee written this frame came after goal 3's block
+        // (`hopeless_flee`): no flee drop.
+        let decision = if decision.hopeless_flee.is_some() {
+            decision
+        } else {
+            flee_drop::with_flee_drop(npc, decision, around, self.led_ally)
+        };
         reinforcements::with_high_level_call(npc, decision, around)
     }
 
@@ -550,6 +558,66 @@ mod tests {
             ai_type,
             ..crate::traffic::fixture::npc(id, ShipStats::new(FAST, &[]))
         }
+    }
+
+    /// A heavy wimpy trader (NPC 1) of the traders at the centre holding
+    /// `goal` on NPC 2, a ship of `govt` at (0, `y`) fleeing it, opening
+    /// the gap: a hopeless chase. Its decision by Nova's AI.
+    fn hopeless(goal: Goal, govt: crate::catalog::GovtId, y: f32) -> Decision {
+        use crate::ai::fixture::{TRADERS, around, govts, n, ship, sites};
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.hull.mass = 100.0;
+        trader.goal = goal;
+        trader.target = Some(n(2));
+        let mut quarry = ship(2, govt, AiType::Warship, 0.0, y);
+        quarry.goal = Goal::Flee(n(1));
+        quarry.state.velocity = crate::geometry::Vec2::new(0.0, 1.0);
+        let npcs = [trader, quarry];
+        let govts = govts(0, 0);
+        let sites = sites();
+        let around = around(&sites, &npcs, &govts, (0.0, -3000.0), 0);
+        NovaAi::default().decision(&npcs[0], &around, &mut Draws::of(&[0; 4]))
+    }
+
+    #[test]
+    fn a_wimpy_traders_kept_hopeless_attack_calls_as_goal_4s_tail_at_any_distance() {
+        // Goal 3, sub 5, then the state-4 tail's call (@0x8e622-0x8e62e →
+        // @0x8e70d): no goal-3 reach (@0x8e025-0x8e050) that frame.
+        use crate::ai::fixture::{PIRATES, n};
+        let decision = hopeless(Goal::Attack(n(2)), PIRATES, 600.0);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(decision.calls_reinforcements, "600 off");
+    }
+
+    #[test]
+    fn a_hopeless_plunder_fled_makes_no_call_within_250() {
+        // Goal 3, sub 5, then @0x8eb6b past every call (@0x8eaef-0x8eafb).
+        use crate::ai::fixture::{PIRATES, n};
+        let plunder = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        let decision = hopeless(plunder, PIRATES, 200.0);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.calls_reinforcements, "200 off");
+    }
+
+    #[test]
+    fn a_hopeless_plunder_of_an_ally_fled_passes_no_flee_drop_that_frame() {
+        // Goal 3's block, its stop for an ally within 250
+        // (@0x8e077-0x8e0c3), came before goal 0xd's write. Goal 4's ally
+        // drop (@0x8e277) takes an ally before its hopeless chase, and a
+        // trader's kept attack is never on one, so only goal 0xd's flight
+        // meets an ally here.
+        use crate::ai::fixture::{POLICE, n};
+        let plunder = Goal::Plunder {
+            ship: n(2),
+            hopeless: false,
+        };
+        let decision = hopeless(plunder, POLICE, 200.0);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert!(!decision.clears_target);
+        assert!(!decision.calls_reinforcements);
     }
 
     #[test]
@@ -2207,6 +2275,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             }
         }
     }
@@ -2243,6 +2312,7 @@ mod tests {
                 leaves_fleet: false,
                 follows_jump: false,
                 voice: None,
+                hopeless_flee: None,
             },
             "the mission hunt (@0x8d6b7), the player seen (@0x8d8ae)"
         );

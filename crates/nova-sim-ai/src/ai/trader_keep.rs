@@ -46,7 +46,10 @@
 //! block takes it that frame. An attack on a ship breaking up ends
 //! ([`ends_attack`], @0x8e3ef → @0x8e714: goal 0, target -1, +0x96 0), and
 //! a hopeless chase is fled, as a trader is of AI type 2 or below
-//! ([`state4_attack`], @0x8e60a-0x8e62e). The think's calls read the goal
+//! ([`state4_attack`], @0x8e60a-0x8e62e), that flight's first frame goal
+//! 4's ([`hopeless_flee`], see [`hopeless_flee`](super::hopeless_flee)):
+//! flee close whatever the reach, the state-4 tail's fighter launch and
+//! call, and no flee drop. The think's calls read the goal
 //! it wrote, before the high level. Goal 4's ally and fleet drops
 //! (@0x8e277-0x8e399) never meet a kept attack: a copied target was the
 //! lead's own, under the same government and fleet, so the lead's high
@@ -56,7 +59,8 @@
 //!
 //! Nothing here plays a sound or draws a random number.
 
-use crate::ai::odds::state4_attack;
+use crate::ai::hopeless_flee::HopelessFlee;
+use crate::ai::odds::{flees_hopeless, state4_attack};
 use crate::ai::{Goal, Surroundings, idle};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -114,6 +118,18 @@ pub fn high_level(npc: &Npc, thought: Goal, around: &Surroundings) -> Goal {
     thought
         .attacking()
         .map_or(thought, |ship| state4_attack(npc, ship, around))
+}
+
+/// Whether goal 4's high level turned `thought`, trader `npc`'s think,
+/// into a flight among `around` ([`high_level`]): a hopeless chase fled,
+/// whose first frame is goal 4's ([`HopelessFlee::Attack`]). None for any
+/// other goal.
+#[must_use]
+pub fn hopeless_flee(npc: &Npc, thought: Goal, around: &Surroundings) -> Option<HopelessFlee> {
+    thought
+        .attacking()
+        .filter(|&ship| flees_hopeless(npc, ship, around))
+        .map(|_| HopelessFlee::Attack)
 }
 
 #[cfg(test)]
@@ -283,6 +299,34 @@ mod tests {
         let npcs = holding(Goal::Flee(n(2)), dying);
         let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
         assert!(!ends_attack(Goal::Flee(n(2)), &around), "no attack");
+    }
+
+    #[test]
+    fn a_hopeless_chase_fled_is_goal_4s_and_any_other_goal_is_none() {
+        // Goal 3 with sub 5 (@0x8e622-0x8e62e), written after goal 3's
+        // block: the first frame of the flight is goal 4's.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut npcs = holding(Goal::Attack(n(2)), Condition::Intact);
+        npcs[0].hull.mass = 100.0;
+        npcs[1].goal = Goal::Flee(n(1));
+        npcs[1].state.velocity = Vec2::new(0.0, 1.0);
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        for goal in [Goal::Attack(n(2)), Goal::Snipe(n(2))] {
+            assert_eq!(
+                hopeless_flee(&npcs[0], goal, &around),
+                Some(HopelessFlee::Attack),
+                "{goal:?}"
+            );
+        }
+        assert_eq!(hopeless_flee(&npcs[0], Goal::Flee(n(2)), &around), None);
+        npcs[0].hull.mass = 10.0;
+        let around = crate::ai::fixture::around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        assert_eq!(
+            hopeless_flee(&npcs[0], Goal::Attack(n(2)), &around),
+            None,
+            "a chase that isn't hopeless"
+        );
     }
 
     #[test]
