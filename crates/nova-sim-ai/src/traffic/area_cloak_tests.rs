@@ -89,7 +89,7 @@ fn tick(traffic: &mut Traffic, world: &World, id: NpcId) -> (bool, Cloak) {
         traffic.fly_npc(&mut pass, each, world, &mut NeverFires);
     }
     traffic.end_fly(pass);
-    traffic.step_fades();
+    traffic.step_fades(crate::speed_mult::SpeedMult::FULL);
     (cloaked, held)
 }
 

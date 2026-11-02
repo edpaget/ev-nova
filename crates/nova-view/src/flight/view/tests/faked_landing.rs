@@ -297,7 +297,11 @@ fn landing_lets_go_of_the_line_the_effects_the_flashes_and_the_glows() {
     let mut flash = ShieldFlash::default();
     flash.hit(false);
     view.flashes.insert(ShipRef::Player, flash);
-    view.glows.step(&[(ShipRef::Player, false)], |_| Some(1.0));
+    view.glows.step(
+        &[(ShipRef::Player, false)],
+        |_| Some(1.0),
+        nova_sim::SpeedMult::FULL,
+    );
     assert!(view.glows.drawn(ShipRef::Player).is_some(), "a glow lit");
     let alt = crate::flight::held_alt::AltLayer {
         image: ImageKey::sprite(2100, 0),

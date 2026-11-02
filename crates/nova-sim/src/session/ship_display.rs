@@ -58,7 +58,10 @@
 //! `_HandlePlayer` (@0x43e29, [`PlayerShip::display_frames`] in
 //! `Session::player_display_step`) and for each NPC right after its own
 //! `_HandleShip` in the ship loop (@0x444ad, [`Space::display_npc_frames`]
-//! in `Session::ship_loop`), on both passes. So each ship's frame reads the
+//! in `Session::ship_loop`), on both passes, each at the frame's gain
+//! (`Session::speed_mult`, which those `Session` methods read and pass on:
+//! `Moment::gain`, which its fold, animation, alt and lights timers take;
+//! see the `display_gain` module). So each ship's frame reads the
 //! fold its flight and fire left, and every reader later in the pass sees
 //! this pass's set: the collision passes and the scoop the player's (the
 //! NPCs display after them, so those read each NPC's last display, as the
@@ -113,10 +116,13 @@
 //! app quits, which is recorded only. As a flight is entered the player's
 //! lights block runs once before the first frame, as `_PrepareAllSprites`
 //! runs `_HandleShipDisplay` (@0x3a776-0x3a78e;
-//! [`PlayerShip::prepare_player_lights`]). Its layers, visibility and fades
-//! are the `slot_visibility` module's (`Session::prepare_all_sprites`); its
-//! set step, the NPCs' lights and every ship's ion tint there are
-//! rdm:phase/play-feel-8-fidelity/phase-10-prepare-all-sprites-steps-ship-frames's.
+//! [`PlayerShip::prepare_player_lights`]), at the session's gain at
+//! construction, full; the original's entry runs it at the gain the last
+//! game left (`_EnterGameFromMainScreen` @0x1a36c). Its layers, visibility
+//! and fades are the `slot_visibility` module's
+//! (`Session::prepare_all_sprites`); its set step, the NPCs' lights, every
+//! ship's ion tint and the entry's gain there are
+//! rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames's.
 //! Each display ends with the ship's ion tint
 //! (`nova_sim::combat::ion_tint`), its colour cleared once its charge is
 //! gone ([`Session::player_ion_tint`]). No sound plays in any of it: the
@@ -248,7 +254,7 @@ impl Session {
 impl Setup {
     /// The readings every ship's display runs by, from the session's
     /// rulebook.
-    fn display_rules(&self) -> DisplayRules {
+    pub(super) fn display_rules(&self) -> DisplayRules {
         DisplayRules {
             double_step: self.rules.source_for(RuleKey::ShipAnimationDoubleStep),
             alt_held: self.rules.source_for(RuleKey::DisabledAltHeld),
@@ -379,16 +385,17 @@ impl PlayerShip {
         }
     }
 
-    /// `_HandleShipDisplay`'s frame for the player, read as `disabled`
-    /// (the `_IsDisabled` its display kept, @0x2b61f): its sets, its
-    /// lights, random lights rolling on `chance`, then its ion tint on its
-    /// own capacity (see the module docs).
+    /// `_HandleShipDisplay`'s frame for the player at the frame's gain
+    /// `gain`, read as `disabled` (the `_IsDisabled` its display kept,
+    /// @0x2b61f): its sets, its lights, random lights rolling on `chance`,
+    /// then its ion tint on its own capacity (see the module docs).
     pub(super) fn display_frames(
         &mut self,
         pilot: &mut Pilot,
         statics: &Statics,
         setup: &Setup,
         disabled: bool,
+        gain: SpeedMult,
         chance: &mut (impl Chance + ?Sized),
     ) {
         let spec = self.fit.hull.frames;
@@ -403,6 +410,7 @@ impl PlayerShip {
                 .armament
                 .key_ship_aboard(self.fit.hull.key_carried, &rounds),
             rules: setup.display_rules(),
+            gain,
         };
         let fold = self.fit.armament.fold_mut();
         let frames = &mut self.ship_display.frames;
@@ -419,14 +427,15 @@ impl PlayerShip {
     /// first step from rest, and each step's display the next. A random
     /// light's first roll is the stateless solver's first, on
     /// [`HashedRolls`](crate::blink::HashedRolls) from seed 0, as no
-    /// chance is to hand.
-    pub(super) fn prepare_player_lights(&mut self, setup: &Setup) {
+    /// chance is to hand. The lights step at `gain`, the session's.
+    pub(super) fn prepare_player_lights(&mut self, setup: &Setup, gain: SpeedMult) {
         use crate::blink::BlinkChance;
         let spec = self.fit.hull.frames;
         let moment = Moment {
             disabled: self.condition.disabled(),
             key_aboard: false,
             rules: setup.display_rules(),
+            gain,
         };
         let rolls = crate::blink::HashedRolls::new(0);
         let frames = &mut self.ship_display.frames;
@@ -449,9 +458,9 @@ impl PlayerShip {
 }
 
 impl Space {
-    /// `_HandleShipDisplay`'s frame for NPC `id`, read as `disabled` (the
-    /// `_IsDisabled` its display kept, @0x2b61f), right after its own step
-    /// in the ship loop: its sets, lights and ion tint, a derelict
+    /// `_HandleShipDisplay`'s frame for NPC `id` at the frame's gain
+    /// `gain`, read as `disabled` (the `_IsDisabled` its display kept,
+    /// @0x2b61f), right after its own step in the ship loop: its sets, lights and ion tint, a derelict
     /// government's ship glowing 0 from its spawn, its spawn's rolls and
     /// its random lights rolled on `chance`; then its blink timer kept as
     /// its berth's (`Traffic::display_npc`).
@@ -459,6 +468,7 @@ impl Space {
         &mut self,
         id: NpcId,
         disabled: bool,
+        gain: SpeedMult,
         statics: &Statics,
         setup: &Setup,
         chance: &mut (impl Chance + ?Sized),
@@ -469,6 +479,7 @@ impl Space {
             disabled,
             |govt| govts.derelict(govt),
             setup.display_rules(),
+            gain,
             chance,
         );
     }
@@ -476,7 +487,8 @@ impl Space {
     /// The frames of each NPC no display of the ship loop reached this
     /// pass (one not in `displayed`: a fighter launched below its carrier
     /// or from a bay after the loop, an arrival or reinforcement after
-    /// it), stepped once, read as disabled as it is now, by the other
+    /// it), stepped once at the frame's gain `gain`, read as disabled as
+    /// it is now, by the other
     /// reading of [`RuleKey::UndisplayedShips`] alone, under which it is
     /// drawn at once; by the engine's it is neither walked nor drawn until
     /// its slot's next display, which steps it (see the module docs).
@@ -485,6 +497,7 @@ impl Space {
         displayed: &BTreeSet<NpcId>,
         statics: &Statics,
         setup: &Setup,
+        gain: SpeedMult,
         chance: &mut (impl Chance + ?Sized),
     ) {
         if setup.rules.source_for(RuleKey::UndisplayedShips) == RuleSource::Engine {
@@ -498,7 +511,7 @@ impl Space {
             .map(|npc| (npc.id, npc.is_disabled()))
             .collect();
         for (id, disabled) in undisplayed {
-            self.display_npc_frames(id, disabled, statics, setup, &mut *chance);
+            self.display_npc_frames(id, disabled, gain, statics, setup, &mut *chance);
         }
     }
 
@@ -1169,7 +1182,7 @@ pub(in crate::session) mod tests {
         let (statics, setup) = (&session.statics, &session.setup);
         session
             .space
-            .display_npc_frames(id, false, statics, setup, &mut first);
+            .display_npc_frames(id, false, SpeedMult::FULL, statics, setup, &mut first);
         assert_eq!(first.times_asked(4), 1);
         let npc = session.space.npc_mut(id).expect("in the system");
         assert_eq!(npc.display.rolls.anim, AnimRoll::None, "spent");
@@ -1182,7 +1195,7 @@ pub(in crate::session) mod tests {
         let (statics, setup) = (&session.statics, &session.setup);
         session
             .space
-            .display_npc_frames(id, false, statics, setup, &mut again);
+            .display_npc_frames(id, false, SpeedMult::FULL, statics, setup, &mut again);
         assert_eq!((again.times_asked(4), again.times_asked(6)), (0, 0));
         assert_eq!(
             session
@@ -1234,9 +1247,13 @@ pub(in crate::session) mod tests {
             *ship.armament.fold_mut() = Fold::default().at(1);
             let late = session.space.traffic.add_npc(ship);
             let (statics, setup) = (&session.statics, &session.setup);
-            session
-                .space
-                .display_undisplayed(&BTreeSet::new(), statics, setup, &mut NeverFires);
+            session.space.display_undisplayed(
+                &BTreeSet::new(),
+                statics,
+                setup,
+                SpeedMult::FULL,
+                &mut NeverFires,
+            );
             let drawn =
                 |session: &Session| session.space.npc(late).expect("there").display.drawn.set;
             assert_eq!(drawn(&session), tail_set, "{reading:?}: after the tail");
@@ -1253,6 +1270,7 @@ pub(in crate::session) mod tests {
                 &BTreeSet::from([late]),
                 statics,
                 setup,
+                SpeedMult::FULL,
                 &mut NeverFires,
             );
             assert_eq!(drawn(&session), 0, "{reading:?}: displayed already");
@@ -1284,9 +1302,13 @@ pub(in crate::session) mod tests {
         let well = lit(&mut session);
         crate::fixture::disable(&mut session, downed);
         let (statics, setup) = (&session.statics, &session.setup);
-        session
-            .space
-            .display_undisplayed(&BTreeSet::new(), statics, setup, &mut NeverFires);
+        session.space.display_undisplayed(
+            &BTreeSet::new(),
+            statics,
+            setup,
+            SpeedMult::FULL,
+            &mut NeverFires,
+        );
         let lights = |id| session.space.npc(id).expect("there").display.drawn.lights;
         assert_eq!(lights(downed), None, "out while disabled");
         assert_eq!(lights(well), Some(32), "steady");

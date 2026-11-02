@@ -334,10 +334,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let sheets = (&self.sheet, &self.npc_sheets);
         let fight = (pass.combat.as_slice(), pass.ships.as_slice());
         let looks = (&self.looks, sheets);
-        let lit = show_combat(fight, &scene, shown, looks, was_heard, chance);
+        // The pass's gain, `_HandleShipDisplay`'s `_gSpeedMult` for the
+        // flashes (@0x2c964) and the glows (@0x2c7ed).
+        let gain = pass.speed_mult;
+        let heard_at = (was_heard, gain);
+        let lit = show_combat(fight, &scene, shown, looks, heard_at, chance);
         let (player, sheets) = (&self.sheet, &self.npc_sheets);
-        self.glows
-            .step(&lit, |ship| glow_decay(&pass.ships, player, sheets, ship));
+        self.glows.step(
+            &lit,
+            |ship| glow_decay(&pass.ships, player, sheets, ship),
+            gain,
+        );
         let effects = (&mut self.effects, scene.caps);
         let trails = self.smoke_trails;
         self.shot_looks

@@ -797,8 +797,13 @@ impl Session {
         self.see_stellars();
         self.space.hold_derelicts(&self.statics);
         self.lay_out_ships();
-        self.space
-            .display_undisplayed(displayed, &self.statics, &self.setup, &mut *chance);
+        self.space.display_undisplayed(
+            displayed,
+            &self.statics,
+            &self.setup,
+            self.speed_mult(),
+            &mut *chance,
+        );
         self.note_drawn();
     }
 }

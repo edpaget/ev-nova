@@ -683,7 +683,7 @@ use nova_sim::{
     NpcId, OutfitRefusal, OutfitRun, Reselection, Reserves, ShipId, ShipRef, SimMessage, StellarId,
     SystemId, Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, TextBar};
+use nova_sim::{InterfaceLoad, MissionInfo, OfferPrompt, SpeedMult, TextBar};
 
 use super::cadence::{Drawn, HudCadence};
 use super::catalog::{Looks, ShipSheet, TargetCard};
@@ -2022,7 +2022,7 @@ fn point(v: Vec2) -> Point {
 /// Shows the fight's events a pass raised, `combat`, in `scene`: each on
 /// `effects`, as `looks` says, drawing on `chance`, and each hit on its
 /// ship's flash among `flashes`, which then step a frame by the pass's
-/// `ships` ([`step_flashes`]). An NPC's shot hits land before its
+/// `ships` at the pass's gain `gain` ([`step_flashes`]). An NPC's shot hits land before its
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
 /// next. Gives the weapon glows the fight lit, each ship's and whether it
@@ -2035,7 +2035,7 @@ fn show_combat(
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     (looks, sheets): (&Looks, Sheets<'_>),
-    heard: bool,
+    (heard, gain): (bool, SpeedMult),
     chance: &mut dyn Chance,
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
@@ -2063,7 +2063,7 @@ fn show_combat(
             effects.apply(event, scene, looks, chance);
         }
     }
-    step_flashes(flashes, ships, sheets);
+    step_flashes(flashes, ships, sheets, gain);
     for (ship, passes_shields) in late {
         flashes.entry(ship).or_default().hit(passes_shields);
     }
@@ -2097,8 +2097,8 @@ type Sheets<'a> = (
     &'a BTreeMap<ShipId, Result<ShipSheet, String>>,
 );
 
-/// Steps each ship's shield flash among `flashes` a frame by its shield
-/// among a pass's `ships` ([`ShieldFlash::step`]), whether its class's
+/// Steps each ship's shield flash among `flashes` a frame at the pass's
+/// gain `gain` by its shield among a pass's `ships` ([`ShieldFlash::step`]), whether its class's
 /// sheet among `sheets` has a shield layer, and its class's own loaded
 /// `Shield` (class +0x5c @0x2c8aa, [`FrameShip::class_shield`]), dropping
 /// the flashes of ships no longer in the system and those run out.
@@ -2106,6 +2106,7 @@ fn step_flashes(
     flashes: &mut BTreeMap<ShipRef, ShieldFlash>,
     ships: &[FrameShip],
     (player, sheets): Sheets<'_>,
+    gain: SpeedMult,
 ) {
     flashes.retain(|&ship, flash| {
         let Some(shown) = ships.iter().find(|shown| shown.ship == ship) else {
@@ -2119,7 +2120,7 @@ fn step_flashes(
         };
         let has_layer = sheet.is_some_and(|sheet| sheet.shield.is_some());
         let base = shown.class_shield.unwrap_or(shown.shield.max);
-        flash.step(shown.shield.now, base, has_layer);
+        flash.step(shown.shield.now, base, has_layer, gain);
         flash.shown() > 0.0
     });
 }

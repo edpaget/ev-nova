@@ -196,13 +196,7 @@ impl Session {
                         combat.handle_npc(fighters, arena, ship, &mut shown, chance);
                     },
                 );
-                self.space.step_displayed_npc(
-                    id,
-                    &mut displayed,
-                    &self.statics,
-                    &self.setup,
-                    chance,
-                );
+                self.display_looped_npc(id, &mut displayed, chance);
                 continue;
             };
             // `_HandleShip`'s dying block (@0x35080-0x3557b) comes between
@@ -229,8 +223,7 @@ impl Session {
                     combat.display_npc(fighters, arena, ship, &mut shown);
                 },
             );
-            self.space
-                .step_displayed_npc(id, &mut displayed, &self.statics, &self.setup, chance);
+            self.display_looped_npc(id, &mut displayed, chance);
         }
         self.space.traffic.set_ship_loop(false);
         if let Some(fly) = fly {
@@ -253,9 +246,23 @@ impl Session {
             }
         }
         self.lay_out_displayed();
-        self.space.traffic.step_fades();
+        self.space.traffic.step_fades(self.speed_mult());
         self.space.traffic.after_firing(&self.statics.arsenal);
         displayed
+    }
+
+    /// NPC `id`'s frames stepped at its display in the ship loop, on
+    /// either branch, at the frame's gain (`Session::speed_mult`), `id`
+    /// noted in `displayed` ([`Space::step_displayed_npc`]).
+    fn display_looped_npc(
+        &mut self,
+        id: NpcId,
+        displayed: &mut BTreeSet<NpcId>,
+        chance: &mut dyn Chance,
+    ) {
+        let gain = self.speed_mult();
+        self.space
+            .step_displayed_npc(id, gain, displayed, &self.statics, &self.setup, chance);
     }
 
     /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
@@ -279,8 +286,9 @@ impl Session {
 }
 
 impl Space {
-    /// NPC `id`'s frames, lights and ion tint stepped right after its
-    /// display in the ship loop (`_HandleShipDisplay` @0x444ad), read as
+    /// NPC `id`'s frames, lights and ion tint stepped at the frame's gain
+    /// `gain` right after its display in the ship loop
+    /// (`_HandleShipDisplay` @0x444ad), read as
     /// that display's `_IsDisabled` (@0x2b61f), and `id` noted in
     /// `displayed`, drawing on `chance`; nothing for an NPC its display
     /// didn't reach, already destroyed (the original's inactive-slot
@@ -292,6 +300,7 @@ impl Space {
     fn step_displayed_npc(
         &mut self,
         id: NpcId,
+        gain: crate::SpeedMult,
         displayed: &mut BTreeSet<NpcId>,
         statics: &Statics,
         setup: &Setup,
@@ -301,7 +310,7 @@ impl Space {
             return;
         };
         displayed.insert(id);
-        self.display_npc_frames(id, shown.disabled, statics, setup, chance);
+        self.display_npc_frames(id, shown.disabled, gain, statics, setup, chance);
     }
 
     /// The NPC in the lowest berth above `after` (any, with none), and

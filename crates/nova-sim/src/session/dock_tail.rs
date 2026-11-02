@@ -31,6 +31,12 @@
 //! frames (@0x675ce-0x675fa; see the `takeoff_frames` module) between
 //! the halves, the population first.
 //!
+//! The take-off zeroes the frame's gain before the first half
+//! (`_PlayerLandOnStellar`'s tail @0x6375e, which returns @0x66f29 before
+//! this tail runs), so both `_PrepareAllSprites` there, the ships'
+//! display steps and the stellar passes, run at 0; a gate exit and the
+//! wormhole with no exit run them at the gain of the moment.
+//!
 //! The order within each half is the take-off's. Only the deselect
 //! before the cue, and the population before the frames' reset, the
 //! rebuild and the sprites' preparation, matter: everything settles
@@ -60,7 +66,7 @@ impl Session {
     /// reset (see the module docs): the stellars rebuilt, the dock request
     /// dropped, both `_PrepareAllSprites`' stellar passes run at the
     /// session's gain (0 after a take-off's zero), their random picks drawn
-    /// on `chance`, every sprite prepared again,
+    /// on `chance`, every sprite prepared again at that gain,
     /// the nav selection let go and the course cued.
     pub(super) fn end_dock_tail(&mut self, chance: &mut (impl Chance + ?Sized)) {
         // The rebuild point (@0x674c7, @0x67653).

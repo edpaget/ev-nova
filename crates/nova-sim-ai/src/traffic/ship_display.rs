@@ -91,15 +91,17 @@
 //! [`Traffic::display_npc`]): right after its own step in the ship loop,
 //! as `_HandleShipDisplay` runs for each slot right after its
 //! `_HandleShip` (@0x444ad), [`ShipFrames::step`] on its class's
-//! [`FrameSpec`], its fold, whether it is disabled and its key ship
-//! aboard. Its caller passes the disabled: the `_IsDisabled` that display
+//! [`FrameSpec`], its fold, whether it is disabled, its key ship aboard
+//! and the frame's gain ([`Moment::gain`], which its fold, animation and
+//! alt timers and its lights take, `_HandleShipDisplay`'s `_gSpeedMult`
+//! reads). Its caller passes the disabled and the gain: the `_IsDisabled` that display
 //! kept (@0x2b61f), read by the set step and the lights before the dying
 //! block, so one its display destroys steps as disabled. Then its lights
 //! ([`ShipFrames::light`], random lights rolling on the traffic's chance;
 //! a new ship's blink timer is its berth's,
 //! [`berth_blink`](crate::traffic::berth_blink)); then its ion tint
 //! ([`ion_tint::display`]), on its class's capacity, its colour cleared
-//! once its charge is gone; then its blink timer kept as its berth's. No
+//! once its charge is gone, unscaled by the gain; then its blink timer kept as its berth's. No
 //! sound plays in any of it.
 
 use crate::catalog::GovtId;
@@ -532,14 +534,16 @@ pub fn settle_spawn(
 /// `_HandleShipDisplay`'s frame for `npc` by `rules`, what its spawn owes
 /// made first: its glow of 0 when its government is `derelict`, and its
 /// rolls on `chance`, its anim rolls on the class `first` says; then its
-/// sets and its lights, read as `disabled` (the `_IsDisabled` its display
-/// kept, @0x2b61f), random lights rolling on `chance`; then its ion tint
-/// (see the module docs).
+/// sets and its lights at the frame's gain `gain` ([`Moment::gain`]),
+/// read as `disabled` (the `_IsDisabled` its display kept, @0x2b61f),
+/// random lights rolling on `chance`; then its ion tint, unscaled (see
+/// the module docs).
 pub fn display(
     npc: &mut Npc,
     disabled: bool,
     derelict: bool,
     rules: DisplayRules,
+    gain: SpeedMult,
     first: &FirstClass,
     chance: &mut (impl Chance + ?Sized),
 ) {
@@ -551,6 +555,7 @@ pub fn display(
             .armament
             .key_ship_aboard(npc.hull.key_carried, &npc.rounds),
         rules,
+        gain,
     };
     let fold = npc.armament.fold_mut();
     let frames = &mut npc.display.frames;
@@ -583,9 +588,9 @@ impl Traffic {
         self.first_class
     }
 
-    /// NPC `id`'s display ([`display`]) by `rules`, read as `disabled`,
-    /// right after its own step in the ship loop (`_HandleShipDisplay`
-    /// @0x444ad): a ship of a government `derelict` says is derelict
+    /// NPC `id`'s display ([`display`]) by `rules` at the frame's gain
+    /// `gain`, read as `disabled`, right after its own step in the ship
+    /// loop (`_HandleShipDisplay` @0x444ad): a ship of a government `derelict` says is derelict
     /// glowing 0 from its spawn, its spawn's rolls and its random lights
     /// rolled on `chance`; then its blink timer kept as its berth's
     /// ([`Traffic::keep_berth_blink_of`]). No other NPC is touched; none
@@ -596,6 +601,7 @@ impl Traffic {
         disabled: bool,
         derelict: impl Fn(Option<GovtId>) -> bool,
         rules: DisplayRules,
+        gain: SpeedMult,
         chance: &mut (impl Chance + ?Sized),
     ) {
         let first = self.first_class;
@@ -603,7 +609,7 @@ impl Traffic {
             return;
         };
         let derelict = derelict(npc.govt);
-        display(npc, disabled, derelict, rules, &first, chance);
+        display(npc, disabled, derelict, rules, gain, &first, chance);
         self.keep_berth_blink_of(id);
     }
 }
@@ -1045,6 +1051,7 @@ mod tests {
                 false,
                 derelict,
                 DisplayRules::ENGINE,
+                crate::speed_mult::SpeedMult::FULL,
                 &FirstClass::default(),
                 &mut Draws::of(&[]),
             );
@@ -1055,6 +1062,7 @@ mod tests {
                 false,
                 derelict,
                 DisplayRules::ENGINE,
+                crate::speed_mult::SpeedMult::FULL,
                 &FirstClass::default(),
                 &mut Draws::of(&[]),
             );
@@ -1087,6 +1095,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut draws,
         );
@@ -1100,6 +1109,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut draws,
         );
@@ -1263,9 +1273,120 @@ mod tests {
         traffic.set_spawn_anim_rolls_first_class(RuleSource::Engine);
         let mut draws = Draws::of(&[2]);
         let id = traffic.npcs[0].id;
-        traffic.display_npc(id, false, |_| false, DisplayRules::ENGINE, &mut draws);
+        traffic.display_npc(
+            id,
+            false,
+            |_| false,
+            DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
+            &mut draws,
+        );
         assert_eq!(draws.asked, [3]);
         assert_eq!(traffic.npcs()[0].display.drawn.set, 2);
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    /// The moment `display` builds for `ship`, shown, at `gain`.
+    fn moment_of(ship: &Npc, gain: SpeedMult) -> Moment {
+        Moment {
+            disabled: false,
+            key_aboard: ship
+                .armament
+                .key_ship_aboard(ship.hull.key_carried, &ship.rounds),
+            rules: DisplayRules::ENGINE,
+            gain,
+        }
+    }
+
+    /// An animated NPC of `AnimDelay` 1 with the Shuttle's square-wave
+    /// lights, its blink timer at 3.
+    fn animated_and_lit() -> Npc {
+        let mut ship = folding(ANIMATED, 4);
+        ship.hull.frames.anim_delay = 1;
+        ship.hull.frames.lights = true;
+        ship.hull.frames.blink = nova_sim_base::blink::Blink {
+            mode: 1,
+            a: 4,
+            b: 1,
+            c: 2,
+            d: 20,
+        };
+        ship.display.frames.lights.timer = 3.0;
+        ship
+    }
+
+    #[test]
+    fn a_display_steps_the_sets_at_the_frames_gain() {
+        let mut ship = animated_and_lit();
+        let mut expected = ship.display.frames;
+        let mut fold = ship.armament.fold();
+        let spec = ship.hull.frames;
+        for _ in 0..3 {
+            expected.step(&spec, &mut fold, moment_of(&ship, HALF));
+            display(
+                &mut ship,
+                false,
+                false,
+                DisplayRules::ENGINE,
+                HALF,
+                &FirstClass::default(),
+                &mut Draws::of(&[]),
+            );
+        }
+        assert_eq!(ship.display.frames.anim_timer, expected.anim_timer);
+        assert_eq!(ship.display.frames.anim_set, expected.anim_set);
+        assert_eq!(ship.display.drawn.set, 1, "1.5 > 1 on the 3rd display");
+    }
+
+    #[test]
+    fn a_display_steps_the_lights_at_the_frames_gain() {
+        let mut ship = animated_and_lit();
+        let mut expected = ship.display.frames;
+        let spec = ship.hull.frames;
+        expected.light(&spec, &moment_of(&ship, HALF), |_| 0);
+        display(
+            &mut ship,
+            false,
+            false,
+            DisplayRules::ENGINE,
+            HALF,
+            &FirstClass::default(),
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(ship.display.frames.lights, expected.lights);
+        assert_eq!(ship.display.frames.lights.timer, 2.5);
+    }
+
+    #[test]
+    fn display_npc_steps_at_the_frames_gain_and_keeps_that_timer_for_its_berth() {
+        let mut traffic = Traffic::new();
+        let id = traffic.add_npc(animated_and_lit());
+        // Its berth's timer, not its own, is the one it starts on.
+        traffic.npcs_mut()[0].display.frames.lights.timer = 3.0;
+        let ship = &traffic.npcs()[0];
+        let mut expected = ship.display.frames;
+        let mut fold = ship.armament.fold();
+        let spec = ship.hull.frames;
+        let moment = moment_of(ship, HALF);
+        let mut drawn = expected.step(&spec, &mut fold, moment);
+        drawn.lights = expected.light(&spec, &moment, |_| 0);
+        traffic.display_npc(
+            id,
+            false,
+            |_| false,
+            DisplayRules::ENGINE,
+            HALF,
+            &mut Draws::of(&[]),
+        );
+        let shown = &traffic.npcs()[0];
+        assert_eq!(shown.display.frames, expected);
+        assert_eq!(shown.display.drawn, drawn);
+        assert_eq!(
+            traffic.berth_blink_timer(shown.berth),
+            expected.lights.timer,
+            "its berth keeps the timer stepped at the gain"
+        );
     }
 
     #[test]
@@ -1277,6 +1398,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
@@ -1289,6 +1411,7 @@ mod tests {
             true,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
@@ -1303,6 +1426,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );

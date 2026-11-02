@@ -22,7 +22,7 @@ use crate::system::camera::{Anchor, Camera};
 use super::*;
 
 /// The NPC the reports carry, beside the player.
-const NPC: ShipRef = ShipRef::Npc(NpcId(0));
+pub(super) const NPC: ShipRef = ShipRef::Npc(NpcId(0));
 
 /// Where a frame's steps draw the ship: the original's play area centre.
 fn anchor() -> Anchor {
@@ -59,7 +59,7 @@ pub(super) fn frame(view: &mut Faked, report: StepReport) -> bool {
 }
 
 /// A frame of one step of `passes`.
-fn one_step(passes: Vec<PassReport>) -> StepReport {
+pub(super) fn one_step(passes: Vec<PassReport>) -> StepReport {
     StepReport {
         steps: vec![step(passes)],
         stopped: false,
@@ -116,7 +116,7 @@ fn the_npc(at: Vec2) -> FrameShip {
 
 /// A pass of the player at the origin and [`NPC`] 100 above it, raising
 /// `combat`.
-fn fight(combat: Vec<CombatEvent>) -> PassReport {
+pub(super) fn fight(combat: Vec<CombatEvent>) -> PassReport {
     PassReport {
         ships: vec![the_player(Vec2::ZERO), the_npc(Vec2::new(0.0, -100.0))],
         combat,
@@ -125,7 +125,7 @@ fn fight(combat: Vec<CombatEvent>) -> PassReport {
 }
 
 /// A hit on `ship`, shown `late` or not.
-fn hit(ship: ShipRef, late: bool) -> CombatEvent {
+pub(super) fn hit(ship: ShipRef, late: bool) -> CombatEvent {
     CombatEvent::Hit {
         ship,
         weapon: Some(BLASTER),

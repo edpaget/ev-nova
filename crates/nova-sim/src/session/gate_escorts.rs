@@ -96,7 +96,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(in crate::session) mod tests {
     use super::*;
     use crate::catalog::{ShipId, SystemId};
     use crate::chance::NeverFires;
@@ -138,7 +138,7 @@ mod tests {
 
     /// In flight in 130 with a hired escort and mission 140's escorts,
     /// under `rules`.
-    fn flying(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog, rules: Rulebook) -> Session {
         let mut session = accepted(catalog).with_rules(rules);
         session.pilot.escorts.push(hired());
         take_off(&mut session, catalog);
@@ -386,20 +386,20 @@ mod tests {
     }
 
     /// An escort fading in at 10.
-    const FADING_IN: Cloak = Cloak {
+    pub(in crate::session) const FADING_IN: Cloak = Cloak {
         fade: 10.0,
         direction: 1,
     };
 
     /// Fades the hired escort in from 10 ([`FADING_IN`]): its NPC.
-    fn fade_in_hired(session: &mut Session) -> NpcId {
+    pub(in crate::session) fn fade_in_hired(session: &mut Session) -> NpcId {
         let before = session.space.escorts.fleet[0].expect("placed");
         session.space.npc_mut(before).expect("here").cloak = FADING_IN;
         before
     }
 
     /// The hired escort's cloak, from a new NPC than `before`.
-    fn hired_cloak(session: &Session, before: NpcId) -> Cloak {
+    pub(in crate::session) fn hired_cloak(session: &Session, before: NpcId) -> Cloak {
         let hired = session.space.escorts.fleet[0].expect("placed");
         assert_ne!(hired, before, "a new NPC");
         session.space.npc(hired).expect("here").cloak
@@ -424,6 +424,7 @@ mod tests {
         for kind in [GateKind::Hypergate, GateKind::Wormhole] {
             let catalog = catalog();
             let mut session = flying(&catalog, Rulebook::default());
+            session.at_gain(crate::SpeedMult::FULL);
             let before = fade_in_hired(&mut session);
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             assert_eq!(hired_cloak(&session, before), stepped(2), "{kind:?}");
@@ -432,7 +433,7 @@ mod tests {
 
     /// [`catalog`] with hypergate 300 linked to 320 too, a hypergate in
     /// 130, the system it is in, at (500, 500).
-    fn gated_into_130() -> FakePilotCatalog {
+    pub(in crate::session) fn gated_into_130() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.gates[0].links[1] = Some(StellarId(320));
         catalog.gates.push(crate::catalog::GateSite {
@@ -456,7 +457,7 @@ mod tests {
     }
 
     /// Takes hypergate 300 to 320, in 130, the system gone in.
-    fn exit_into_130(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn exit_into_130(session: &mut Session, catalog: &FakePilotCatalog) {
         session.ship.player.position = Vec2::new(-3000.0, 0.0);
         session.ship.player.velocity = Vec2::ZERO;
         session.chart.nav = crate::navigation::NavMode::Off;
@@ -478,6 +479,7 @@ mod tests {
     fn a_gate_exit_into_the_system_gone_in_steps_the_old_ships_fades_once_more() {
         let catalog = gated_into_130();
         let mut session = flying(&catalog, Rulebook::default());
+        session.at_gain(crate::SpeedMult::FULL);
         let before = fade_in_hired(&mut session);
         exit_into_130(&mut session, &catalog);
         assert_eq!(session.space.npc(before), None, "the old NPC gone");
@@ -493,12 +495,14 @@ mod tests {
         for kind in [GateKind::Hypergate, GateKind::Wormhole] {
             let catalog = catalog();
             let mut session = flying(&catalog, Rulebook::default());
+            session.at_gain(crate::SpeedMult::FULL);
             session.ship.cloak.cloak = FADING_IN;
             exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
             assert_eq!(session.player_cloak(), stepped(3), "{kind:?}");
         }
         let catalog = gated_into_130();
         let mut session = flying(&catalog, Rulebook::default());
+        session.at_gain(crate::SpeedMult::FULL);
         session.ship.cloak.cloak = FADING_IN;
         exit_into_130(&mut session, &catalog);
         assert_eq!(

@@ -53,14 +53,17 @@
 //!
 //! **The fade.** Each [`Session::prepare_all_sprites`] steps the player's
 //! cloak fade (slot 0) and then every NPC's once (`Traffic::step_fades`),
-//! so before the first frame a take-off and a gate exit step it twice
-//! (`Session::lift_off`, and `Session::come_out`) and a jump's arrival
-//! once ([`Session::arrive`]). A gate entry steps the player's fade once
+//! at the frame's gain (`Session::speed_mult`), so before the first frame
+//! a take-off and a gate exit step it twice (`Session::lift_off`, and
+//! `Session::come_out`) and a jump's arrival once ([`Session::arrive`]).
+//! A take-off's two run at its gain of 0 (`_PlayerLandOnStellar`
+//! @0x6375e zeroes it before the dock request's tail): a fade with a
+//! direction holds there, and only a drifting one, unscaled, falls. A gate entry steps the player's fade once
 //! more first, whatever the exit, as the player's slot always passes the
 //! display's system test (@0x2b7d8-0x2b7e0); and when its exit is in the
 //! system gone in, the old ships' fades too
-//! ([`Space::step_fades_at_gate_entry`]), which an escort's respawn then
-//! carries; any other gate entry steps no NPC's. Every NPC in the traffic
+//! ([`Space::step_fades_at_gate_entry`]), at the same gain, which an
+//! escort's respawn then carries; any other gate entry steps no NPC's. Every NPC in the traffic
 //! is of the player's system and active, so each passes the system test
 //! there.
 //!
@@ -216,8 +219,9 @@ impl Session {
                     .put(slot, ShipLayer::of(disabled, led));
             }
         }
-        self.ship.step_cloak_fade(&self.pilot, &self.statics);
-        self.space.traffic.step_fades();
+        let gain = self.speed_mult();
+        self.ship.step_cloak_fade(&self.pilot, &self.statics, gain);
+        self.space.traffic.step_fades(gain);
         self.lay_out_ships();
     }
 }
@@ -240,9 +244,10 @@ impl Space {
         &mut self,
         exit: crate::catalog::SystemId,
         here: crate::catalog::SystemId,
+        gain: crate::SpeedMult,
     ) {
         if exit == here {
-            self.traffic.step_fades();
+            self.traffic.step_fades(gain);
         }
     }
 
@@ -644,6 +649,7 @@ mod tests {
         use crate::cloak::Cloak;
         use crate::combat::hull::Condition;
         let (_, mut session) = flying(Rulebook::default());
+        session.at_gain(crate::SpeedMult::FULL);
         session.ship.cloak.cloak = Cloak {
             fade: 4.0,
             direction: 1,
@@ -668,6 +674,7 @@ mod tests {
             "the player's, dying"
         );
         let (_, mut session) = flying(Rulebook::default());
+        session.at_gain(crate::SpeedMult::FULL);
         let cloaks = [
             (
                 Cloak {
@@ -722,7 +729,7 @@ mod tests {
         session.prepare_all_sprites();
         for (&id, &(cloak, dying)) in ids.iter().zip(&cloaks) {
             let mut stepped = cloak;
-            stepped.display_step(false, dying);
+            stepped.display_step(false, dying, crate::SpeedMult::FULL);
             assert_eq!(session.space.npc(id).expect("there").cloak, stepped);
         }
         assert_eq!(

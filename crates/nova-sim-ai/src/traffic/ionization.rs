@@ -281,6 +281,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[3]),
         );
@@ -297,6 +298,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
@@ -308,6 +310,7 @@ mod tests {
             false,
             false,
             DisplayRules::ENGINE,
+            crate::speed_mult::SpeedMult::FULL,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );

@@ -105,7 +105,7 @@ fn tick(traffic: &mut Traffic, govts: &Governments, draws: &mut Draws) {
     traffic.tick_holding(&ai, world, &[], &still, draws);
     // Each cloak's fade steps at its ship's display, after the traffic's
     // tick (see `Traffic::step_fades`).
-    traffic.step_fades();
+    traffic.step_fades(crate::speed_mult::SpeedMult::FULL);
 }
 
 fn hunter(traffic: &Traffic) -> &Npc {

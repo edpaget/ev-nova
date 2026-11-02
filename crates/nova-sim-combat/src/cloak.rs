@@ -14,15 +14,20 @@
 //!   @0x2d088-0x2d164, once a frame, right after the ship's own
 //!   `_HandleShip` and so after its pick; the traffic's `step_fades`,
 //!   which the session runs after the NPCs' step): with a direction it moves by
-//!   [`FADE_RATE`] (0.75) a tick that way, or [`FAST_FADE_RATE`] (1.5)
+//!   [`FADE_RATE`] (0.75) that way, or [`FAST_FADE_RATE`] (1.5)
 //!   for a ship type whose `Flags2` has [`FAST_FADE`] (shïp +0x9ea bit
-//!   0x1, @0x2d0aa). Going down it stops at 0, and going up at
-//!   [`FADE_FULL`] (32), the direction then 0. With no direction a fade
-//!   between 0 and 32 drifts down by [`DRIFT`] (1) a tick. A ship starts
-//!   at 0, with no direction. `_PrepareAllSprites` (@0x3a776-0x3a78e)
-//!   steps it too, for every ship, before the first frame of an entry
+//!   0x1, @0x2d0aa), times the frame's gain (@0x2d0d2): the direction
+//!   times the rate in floats (@0x2d0d7), then added to the fade in
+//!   doubles ([`SpeedMult::add_times`]). Going down it stops at 0, and
+//!   going up at [`FADE_FULL`] (32), the direction then 0, unscaled
+//!   (@0x2d0f3-0x2d130). With no direction a fade between 0 and 32
+//!   drifts down by [`DRIFT`] (1) a frame, unscaled (@0x2d157), whatever
+//!   the gain. A ship starts at 0, with no direction.
+//!   `_PrepareAllSprites` (@0x3a776-0x3a78e) steps it too, for every
+//!   ship, before the first frame of an entry, at the gain of the moment
 //!   (`nova_sim::Session::prepare_all_sprites`): twice at a take-off or
-//!   gate exit, once at a jump's arrival.
+//!   gate exit, once at a jump's arrival. A take-off's two run at its
+//!   gain of 0, so only a drifting fade moves there.
 //! - **`_DoShipCloak`** ([`Cloak::cloak`], @0xde73): nothing when cloaked;
 //!   else a fade at or below 0 starts fading in, and a fade going down
 //!   stops (direction 0, so it drifts down). **`_DoShipUncloak`**
@@ -154,9 +159,9 @@
 //! weapon glow hidden (@0x2d667-0x2d681), as the view draws 16-bit only;
 //! the ship's paint (`_GetShipPaintColor` @0x7d0c-0x7da7), as the engine
 //! draws none (rdm:task/ship-paint-tint-and-capture): the factors take
-//! paint as an argument and the view passes unpainted (32, 32, 32); and
-//! the step's frame-time factor (the double at 0x3b511c, @0x2d0d2-0x2d0df),
-//! as the engine's tick already models frame time.
+//! paint as an argument and the view passes unpainted (32, 32, 32). The
+//! step's gain (the double behind 0x3b511c, @0x2d0d2-0x2d0df) is built:
+//! [`Cloak::step`] takes it, and the drift beside it is unscaled.
 //!
 //! # Seeing a cloaked ship
 //!
@@ -192,11 +197,15 @@ pub const CLOAKED_RISING: f32 = 16.0;
 pub const CLOAKED_FALLING: f32 = 8.0;
 /// The fade of a ship fully cloaked, where fading in stops.
 pub const FADE_FULL: f32 = 32.0;
-/// How far the fade moves a tick.
+/// How far the fade moves a frame at full gain; [`Cloak::step`] scales it
+/// by the frame's gain (0.75 @0xdd658).
 pub const FADE_RATE: f32 = 0.75;
-/// How far the fade moves a tick for a ship type with [`FAST_FADE`].
+/// How far the fade moves a frame at full gain for a ship type with
+/// [`FAST_FADE`]; scaled by the frame's gain as [`FADE_RATE`] is (1.5
+/// @0xdd078).
 pub const FAST_FADE_RATE: f32 = 1.5;
-/// How far a fade with no direction drifts down a tick.
+/// How far a fade with no direction drifts down a frame, unscaled by the
+/// frame's gain (1.0 @0xdd068, `subss` @0x2d157).
 pub const DRIFT: f32 = 1.0;
 /// How near, on each axis, a cloaked ship is seen by a ship with a
 /// cloak scanner.
@@ -373,12 +382,13 @@ impl Cloak {
         sounds
     }
 
-    /// One frame of `_HandleShipDisplay`'s fade: [`Cloak::step`], then,
-    /// for a `dying` ship (`_IsDying`) with any fade left, the direction
-    /// [`DYING_DIRECTION`] whatever it was (@0x2d169-0x2d17e), so the
-    /// next step falls at twice the rate.
-    pub fn display_step(&mut self, fast: bool, dying: bool) {
-        self.step(fast);
+    /// One frame of `_HandleShipDisplay`'s fade at the frame's gain
+    /// `gain`: [`Cloak::step`], then, for a `dying` ship (`_IsDying`) with
+    /// any fade left, the direction [`DYING_DIRECTION`] whatever it was
+    /// (@0x2d169-0x2d17e), unscaled, so the next step falls at twice the
+    /// rate.
+    pub fn display_step(&mut self, fast: bool, dying: bool, gain: SpeedMult) {
+        self.step(fast, gain);
         if dying && self.fade > 0.0 {
             self.direction = DYING_DIRECTION;
         }
@@ -390,9 +400,10 @@ impl Cloak {
         self.fade >= FADE_FULL
     }
 
-    /// One tick of the fade, at [`FAST_FADE_RATE`] when `fast`, else
-    /// [`FADE_RATE`] (see the module docs).
-    pub fn step(&mut self, fast: bool) {
+    /// One frame of the fade at the frame's gain `gain`: a moving fade
+    /// by [`FAST_FADE_RATE`] when `fast`, else [`FADE_RATE`], times the
+    /// gain; the clamps and the [`DRIFT`] unscaled (see the module docs).
+    pub fn step(&mut self, fast: bool, gain: SpeedMult) {
         let rate = if fast { FAST_FADE_RATE } else { FADE_RATE };
         // Matching on the direction's sign, rather than testing it for 0
         // and again for each clamp, leaves no `< 0` or `> 0` whose `<= 0`
@@ -404,14 +415,14 @@ impl Cloak {
                 }
             }
             Ordering::Less => {
-                self.fade += f32::from(self.direction) * rate;
+                self.fade = gain.add_times(self.fade, f32::from(self.direction) * rate);
                 if self.fade <= 0.0 {
                     self.fade = 0.0;
                     self.direction = 0;
                 }
             }
             Ordering::Greater => {
-                self.fade += f32::from(self.direction) * rate;
+                self.fade = gain.add_times(self.fade, f32::from(self.direction) * rate);
                 if self.fade >= FADE_FULL {
                     self.fade = FADE_FULL;
                     self.direction = 0;
@@ -1060,7 +1071,7 @@ mod tests {
         assert_eq!(cloak, at(0.0, 1));
         let mut ticks = 0;
         while !cloak.is_cloaked() {
-            cloak.step(false);
+            cloak.step(false, SpeedMult::FULL);
             ticks += 1;
         }
         assert_eq!(ticks, 22, "16 / 0.75, then one more");
@@ -1070,50 +1081,50 @@ mod tests {
     #[test]
     fn the_fade_stops_at_32_going_in_and_at_0_going_out() {
         let mut cloak = at(31.5, 1);
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(FADE_FULL, 0));
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(FADE_FULL, 0), "full and holding");
         let mut cloak = at(0.5, -1);
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(0.0, 0));
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(0.0, 0), "seen and holding");
         let mut onto_0 = at(0.75, -1);
-        onto_0.step(false);
+        onto_0.step(false, SpeedMult::FULL);
         assert_eq!(onto_0, at(0.0, 0), "stops on reaching 0");
         let mut onto_32 = at(31.25, 1);
-        onto_32.step(false);
+        onto_32.step(false, SpeedMult::FULL);
         assert_eq!(onto_32, at(FADE_FULL, 0), "stops on reaching 32");
     }
 
     #[test]
     fn a_fast_fading_ship_moves_twice_as_far_a_tick() {
         let mut slow = at(10.0, 1);
-        slow.step(false);
+        slow.step(false, SpeedMult::FULL);
         assert_eq!(slow, at(10.75, 1));
         let mut fast = at(10.0, 1);
-        fast.step(true);
+        fast.step(true, SpeedMult::FULL);
         assert_eq!(fast, at(11.5, 1));
         let mut out = at(10.0, -1);
-        out.step(true);
+        out.step(true, SpeedMult::FULL);
         assert_eq!(out, at(8.5, -1));
     }
 
     #[test]
     fn a_fade_with_no_direction_drifts_down_by_1_until_it_is_gone() {
         let mut cloak = at(1.5, 0);
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(0.5, 0));
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(-0.5, 0), "a drift is not stopped at 0");
-        cloak.step(false);
+        cloak.step(false, SpeedMult::FULL);
         assert_eq!(cloak, at(-0.5, 0), "nothing to drift");
         let mut seen = Cloak::default();
-        seen.step(false);
+        seen.step(false, SpeedMult::FULL);
         assert_eq!(seen, Cloak::default(), "nothing to drift at 0");
         let mut full = at(FADE_FULL, 0);
-        full.step(true);
+        full.step(true, SpeedMult::FULL);
         assert_eq!(full, at(FADE_FULL, 0), "a full cloak holds");
     }
 
@@ -1122,8 +1133,8 @@ mod tests {
         let mut full = at(FADE_FULL, 0);
         let mut seen = Cloak::default();
         for _ in 0..40 {
-            full.step(false);
-            seen.step(false);
+            full.step(false, SpeedMult::FULL);
+            seen.step(false, SpeedMult::FULL);
         }
         assert_eq!(full, at(FADE_FULL, 0));
         assert_eq!(seen, Cloak::default());
@@ -1171,25 +1182,87 @@ mod tests {
         // `_HandleShipDisplay` sets -2 after the step (@0x2d169-0x2d17e).
         for start in [at(10.0, 1), at(FADE_FULL, 0), at(20.0, -1)] {
             let mut cloak = start;
-            cloak.display_step(false, true);
+            cloak.display_step(false, true, SpeedMult::FULL);
             let mut plain = start;
-            plain.step(false);
+            plain.step(false, SpeedMult::FULL);
             assert_eq!(cloak, at(plain.fade, -2), "{start:?} moved the old way");
-            cloak.display_step(false, true);
+            cloak.display_step(false, true, SpeedMult::FULL);
             assert_eq!(cloak, at(plain.fade - 1.5, -2), "{start:?} then 2 x 0.75");
         }
         let mut fast = at(20.0, -2);
-        fast.display_step(true, true);
+        fast.display_step(true, true, SpeedMult::FULL);
         assert_eq!(fast, at(17.0, -2), "2 x 1.5");
         let mut gone = Cloak::default();
-        gone.display_step(false, true);
+        gone.display_step(false, true, SpeedMult::FULL);
         assert_eq!(gone, Cloak::default(), "no fade, left alone");
         let mut emptied = at(1.0, -2);
-        emptied.display_step(false, true);
+        emptied.display_step(false, true, SpeedMult::FULL);
         assert_eq!(emptied, Cloak::default(), "faded out on this step");
         let mut alive = at(10.0, 1);
-        alive.display_step(true, false);
+        alive.display_step(true, false, SpeedMult::FULL);
         assert_eq!(alive, at(11.5, 1), "not dying, a plain step");
+    }
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn a_moving_fade_moves_by_the_frames_gain() {
+        let mut rising = at(10.0, 1);
+        rising.step(false, HALF);
+        assert_eq!(rising, at(10.375, 1));
+        let mut fast = at(10.0, 1);
+        fast.step(true, HALF);
+        assert_eq!(fast, at(10.75, 1), "fast: 1.5 x 0.5");
+        let mut falling = at(10.0, -1);
+        falling.step(false, HALF);
+        assert_eq!(falling, at(9.625, -1));
+        for direction in [1, -1] {
+            let mut still = at(10.0, direction);
+            still.step(true, SpeedMult::ZERO);
+            assert_eq!(still, at(10.0, direction), "no gain: {direction}");
+        }
+    }
+
+    #[test]
+    fn a_fade_at_part_gain_still_stops_at_0_and_at_32() {
+        let mut out = at(0.25, -1);
+        out.step(false, HALF);
+        assert_eq!(out, at(0.0, 0), "0.25 less 0.375: held at 0, stopped");
+        let mut onto_0 = at(0.375, -1);
+        onto_0.step(false, HALF);
+        assert_eq!(onto_0, at(0.0, 0), "reaching 0 stops it");
+        let mut full = at(31.75, 1);
+        full.step(false, HALF);
+        assert_eq!(full, at(FADE_FULL, 0), "past 32: held at 32, stopped");
+        let mut short = at(31.5, 1);
+        short.step(false, HALF);
+        assert_eq!(short, at(31.875, 1), "short of 32: still rising");
+    }
+
+    #[test]
+    fn a_drifting_fade_falls_its_whole_drift_at_any_gain() {
+        for gain in [HALF, SpeedMult::ZERO] {
+            let mut drifting = at(10.0, 0);
+            drifting.step(false, gain);
+            assert_eq!(drifting, at(9.0, 0), "{gain:?}");
+        }
+    }
+
+    #[test]
+    fn a_dying_ships_fade_falls_twice_the_rate_times_the_gain() {
+        let mut dying = at(20.0, -2);
+        dying.display_step(false, true, HALF);
+        assert_eq!(dying, at(19.25, -2), "2 x 0.75 x 0.5");
+        let mut rising = at(10.0, 1);
+        rising.display_step(false, true, HALF);
+        assert_eq!(rising, at(10.375, -2), "the step at the gain, then -2");
+    }
+
+    #[test]
+    fn a_fading_in_ships_display_step_rises_by_the_gain() {
+        let mut cloak = at(10.0, 1);
+        cloak.display_step(false, false, HALF);
+        assert_eq!(cloak, at(10.375, 1));
     }
 
     #[test]
@@ -1841,7 +1914,7 @@ mod tests {
         let mut ticks = 0;
         while !cloak.is_cloaked() {
             think(&mut cloak, ZEPHYR, Situation::default(), &mut 0.0);
-            cloak.step(ZEPHYR.fast());
+            cloak.step(ZEPHYR.fast(), SpeedMult::FULL);
             ticks += 1;
         }
         assert_eq!(cloak.direction, 1, "an early uncloak does nothing");
@@ -1849,7 +1922,7 @@ mod tests {
         assert_eq!(cloak.direction, -1);
         let mut cloaked = 0;
         while cloak.is_cloaked() {
-            cloak.step(ZEPHYR.fast());
+            cloak.step(ZEPHYR.fast(), SpeedMult::FULL);
             cloaked += 1;
         }
         assert_eq!((ticks, cloaked), (22, 12));

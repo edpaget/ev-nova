@@ -478,6 +478,7 @@ mod deadly_stellars;
 mod derelicts;
 mod description;
 mod disabled_mission_escorts;
+mod display_gain;
 mod display_step;
 mod dock_tail;
 mod dominated_stellars;
@@ -1454,8 +1455,13 @@ impl Session {
             .space
             .set_first_class(&session.statics, &session.setup);
         // `_PrepareAllSprites`' display of the player's lights before the
-        // first frame (see the `ship_display` module).
-        session.ship.prepare_player_lights(&session.setup);
+        // first frame (see the `ship_display` module), at the session's
+        // gain at construction, full: the original's entry prepares at
+        // the gain the last game left (`_EnterGameFromMainScreen`
+        // @0x1a36c), filed as rdm:phase/rendering/phase-13-prepare-all-sprites-steps-ship-frames.
+        session
+            .ship
+            .prepare_player_lights(&session.setup, crate::SpeedMult::FULL);
         // `_EnterGameFromMainScreen` (@0x1a36c).
         session.prepare_all_sprites();
         Ok(session)
@@ -3953,12 +3959,13 @@ impl Session {
     ) {
         // `_PlayerEnterHypergate` @0x63e91, `_PlayerEnterWormhole`
         // @0x64743: before the old ships go, so before the escorts' cloaks
-        // are carried. The player's slot always passes the display's
-        // system test (@0x2b7d8-0x2b7e0), so its fade steps first,
-        // whatever the exit.
-        self.ship.step_cloak_fade(&self.pilot, &self.statics);
+        // are carried, at the frame's gain, which no gate entry zeroes.
+        // The player's slot always passes the display's system test
+        // (@0x2b7d8-0x2b7e0), so its fade steps first, whatever the exit.
+        let gain = self.speed_mult();
+        self.ship.step_cloak_fade(&self.pilot, &self.statics, gain);
         self.space
-            .step_fades_at_gate_entry(system, self.pilot.system);
+            .step_fades_at_gate_entry(system, self.pilot.system, gain);
         // Its stellar pass reads the old ships and the request where the
         // exit is in the system gone in; otherwise it follows the system's
         // entry, below, and they reach none of its gates.
@@ -4277,6 +4284,14 @@ impl Session {
         // them. The take-off's restart of the auxiliary ships comes
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
+        // The stay's tail zeroes `_gSpeedMult` (`_PlayerLandOnStellar`
+        // @0x6375e-0x63769, after `_DoPortDialog`), which returns
+        // (@0x66f29) before the dock request's tail runs, so both of that
+        // tail's `_PrepareAllSprites` (@0x6764e, @0x67658) and its passes
+        // run at 0 and add nothing, and the first frame holds (see the
+        // `time_adjustment` module). A drifting cloak fade still falls at
+        // each prepare, as its drift is unscaled.
+        self.zero_speed_mult();
         // The dock request's tail before the setup, after the stay's days
         // (see the `dock_tail` module; the glow is already out).
         self.begin_dock_tail(chance);
@@ -4289,14 +4304,10 @@ impl Session {
         // the `in_flight_save` module).
         self.out.save_now();
         self.run.raise(StoryEvent::TookOff { stellar });
-        // The rest of the tail (see the `dock_tail` module). The
-        // original's bar is redrawn before its deselect with the selection
-        // still held (@0x633a0), noted as `takeoff_nav` above; see the
-        // flight view's `took_off`. The stay's tail zeroes `_gSpeedMult`
-        // (`_PlayerLandOnStellar` @0x6375e-0x63769, after `_DoPortDialog`),
-        // so its passes add nothing and the first frame holds (see the
-        // `time_adjustment` module).
-        self.zero_speed_mult();
+        // The rest of the tail (see the `dock_tail` module), at the gain
+        // of 0 zeroed above. The original's bar is redrawn before its
+        // deselect with the selection still held (@0x633a0), noted as
+        // `takeoff_nav` above; see the flight view's `took_off`.
         self.end_dock_tail(chance);
         Some(stellar)
     }

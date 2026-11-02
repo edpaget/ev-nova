@@ -179,13 +179,14 @@ impl PlayerShip {
         }
     }
 
-    /// One step of the player's fade, as its slot's `_HandleShipDisplay`
-    /// steps it (@0x2d088-0x2d17e): a dying player's falls at twice the
-    /// rate.
-    pub(super) fn step_cloak_fade(&mut self, pilot: &Pilot, statics: &Statics) {
+    /// One step of the player's fade at the frame's gain `gain`, as its
+    /// slot's `_HandleShipDisplay` steps it (@0x2d088-0x2d17e): a moving
+    /// fade by the gain (@0x2d0d2), a drift unscaled, a dying player's
+    /// then falling at twice the rate.
+    pub(super) fn step_cloak_fade(&mut self, pilot: &Pilot, statics: &Statics, gain: SpeedMult) {
         let fast = self.cloak_gear(pilot, statics).fast();
         let dying = self.condition.is_dying(pilot.reserves.armor);
-        self.cloak.cloak.display_step(fast, dying);
+        self.cloak.cloak.display_step(fast, dying, gain);
     }
 
     /// Each direct one of `strikes` on the player, as its cloak takes it
@@ -552,10 +553,14 @@ mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
+        let mut stepped = landed;
+        for _ in 0..2 {
+            stepped.display_step(false, false, crate::SpeedMult::ZERO);
+        }
         assert_eq!(
             session.player_cloak(),
-            at(landed.fade + 1.5, 1),
-            "and the take-off's two displays step it"
+            stepped,
+            "and the take-off's two displays step it at its gain of 0"
         );
     }
 

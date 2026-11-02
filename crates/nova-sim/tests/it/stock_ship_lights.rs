@@ -35,7 +35,7 @@ fn every_stock_ships_lights_state_matches_lights_level_from_rest() {
         let mut lights = ShipLights::default();
         let mut change = 0;
         for tick in 0..600 {
-            lights.step(&spec.blink, |sides| {
+            lights.step(&spec.blink, nova_sim::SpeedMult::FULL, |sides| {
                 let roll = rolls.roll(change, sides);
                 change += 1;
                 roll

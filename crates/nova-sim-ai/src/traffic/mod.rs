@@ -2115,9 +2115,10 @@ impl Traffic {
         }
     }
 
-    /// Each NPC's cloak fade a tick on
-    /// ([`Cloak::display_step`](cloak::Cloak::display_step): a dying one
-    /// then falls at twice the rate),
+    /// Each NPC's cloak fade a frame on at the frame's gain `gain`
+    /// ([`Cloak::display_step`](cloak::Cloak::display_step): a moving fade
+    /// by the gain, a drift unscaled, a dying one then falls at twice the
+    /// rate),
     /// as `_HandleShipDisplay` steps it once a frame (@0x2d088-0x2d164),
     /// right after the ship's own `_HandleShip` (@0x444ad): so after its
     /// pick. The session runs it once after the whole NPC loop
@@ -2125,10 +2126,10 @@ impl Traffic {
     /// the loop gives every reader what the per-slot step gives: a pick
     /// reads only its own ship's cloak (`Shooter::cloaked`), and the aim
     /// reads the targets' conditions, not their cloaks.
-    pub fn step_fades(&mut self) {
+    pub fn step_fades(&mut self, gain: SpeedMult) {
         for npc in &mut self.npcs {
             let dying = npc.condition.is_dying(npc.reserves.armor);
-            npc.cloak.display_step(npc.cloak_gear.fast(), dying);
+            npc.cloak.display_step(npc.cloak_gear.fast(), dying, gain);
         }
     }
 
@@ -3665,7 +3666,7 @@ mod tests {
             0.0,
             "not faded in the fly half"
         );
-        traffic.step_fades();
+        traffic.step_fades(SpeedMult::FULL);
         assert_eq!(traffic.npcs()[0].cloak.fade, 0.75, "faded a step");
         let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
         let npc = &mut traffic.npcs[0];
@@ -3695,7 +3696,7 @@ mod tests {
             ticks_left: 10,
             starting: false,
         };
-        traffic.step_fades();
+        traffic.step_fades(SpeedMult::FULL);
         assert_eq!(
             traffic.npcs()[0].cloak,
             Cloak {
@@ -3703,7 +3704,7 @@ mod tests {
                 direction: -2
             }
         );
-        traffic.step_fades();
+        traffic.step_fades(SpeedMult::FULL);
         assert_eq!(traffic.npcs()[0].cloak.fade, FADE_FULL - 1.5);
     }
 
@@ -3720,7 +3721,7 @@ mod tests {
         traffic.move_in(World::new(&[]), &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.fade, 0.75, "not in the move");
         // `_HandleShipDisplay` steps it (@0x2d088), after `_HandleShip`.
-        traffic.step_fades();
+        traffic.step_fades(SpeedMult::FULL);
         assert_eq!(traffic.npcs()[0].cloak.fade, 1.5, "its fade steps");
         let npc = &mut traffic.npcs[0];
         npc.cloak = Cloak {
@@ -7056,7 +7057,7 @@ mod tests {
     /// `_HandleShip` (`_HandleShipDisplay` @0x2d088).
     fn displayed(traffic: &mut Traffic, behaviour: &impl Behaviour) {
         traffic.tick_in(behaviour, World::new(&[]), &[], &mut Draws::of(&[]));
-        traffic.step_fades();
+        traffic.step_fades(SpeedMult::FULL);
     }
 
     #[test]

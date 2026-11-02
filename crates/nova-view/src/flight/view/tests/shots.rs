@@ -540,7 +540,8 @@ fn with_weapon_effects_off_no_ship_draws_its_weapon_glow() {
     let mut view = beside_an_npc(0);
     view.weapon_effects = false;
     let npc = ShipRef::Npc(NpcId(0));
-    view.glows.step(&[(npc, false)], |_| Some(1.0));
+    view.glows
+        .step(&[(npc, false)], |_| Some(1.0), nova_sim::SpeedMult::FULL);
     assert_eq!(glow_layers(&view, 2301), [], "an NPC's neither");
     view.weapon_effects = true;
     assert_eq!(glow_layers(&view, 2301).len(), 1);
@@ -553,7 +554,11 @@ fn an_npcs_weapon_glow_is_held_below_its_murk_and_murked() {
         let npc = view.frame.ships[1];
         let level = crate::flight::murk::sprite_murk(npc.position, Vec2::ZERO, murk);
         assert_eq!(level, sprite_murk, "murk {murk}");
-        view.glows.step(&[(npc.ship, false)], |_| Some(1.0));
+        view.glows.step(
+            &[(npc.ship, false)],
+            |_| Some(1.0),
+            nova_sim::SpeedMult::FULL,
+        );
         let capped = crate::flight::weapon_glow::npc_glow_level(32, level);
         let tint = crate::draw::lights_tint(capped);
         let colorize = (level > 0).then(|| Colorize::toward_pixel(level, 0x1081));

@@ -214,6 +214,7 @@ mod tests {
                         false,
                         |_| false,
                         DisplayRules::ENGINE,
+                        crate::speed_mult::SpeedMult::FULL,
                         &mut Draws::of(&[]),
                     );
                     traffic.npcs()[1].display.drawn.lights.is_some()
@@ -244,6 +245,7 @@ mod tests {
                 false,
                 |_| false,
                 DisplayRules::ENGINE,
+                crate::speed_mult::SpeedMult::FULL,
                 &mut Draws::of(&[]),
             );
         }

@@ -212,6 +212,7 @@ fn an_npcs_display_steps_that_npc_alone() {
         false,
         |govt| govt == Some(GovtId(140)),
         DisplayRules::ENGINE,
+        crate::speed_mult::SpeedMult::FULL,
         &mut draws,
     );
     let shown = traffic.npcs()[0].display;
@@ -248,7 +249,14 @@ fn lights(traffic: &mut Traffic, n: usize, disabled: bool, rules: DisplayRules) 
     let id = traffic.npcs[0].id;
     (0..n)
         .map(|_| {
-            traffic.display_npc(id, disabled, |_| false, rules, &mut Draws::of(&[]));
+            traffic.display_npc(
+                id,
+                disabled,
+                |_| false,
+                rules,
+                crate::speed_mult::SpeedMult::FULL,
+                &mut Draws::of(&[]),
+            );
             traffic.npcs()[0].display.drawn.lights
         })
         .collect()
@@ -294,4 +302,35 @@ fn a_disabled_ship_of_no_0x0040_keeps_its_lights() {
     let lit_throughout = lights(&mut traffic, 30, true, DisplayRules::ENGINE);
     assert_eq!(lit_throughout[29], Some(22));
     assert!(lit_throughout[1..].iter().all(Option::is_some));
+}
+
+#[test]
+fn step_fades_steps_each_npcs_fade_at_the_frames_gain() {
+    use crate::cloak::Cloak;
+    use crate::combat::hull::Condition;
+    use crate::speed_mult::SpeedMult;
+    let half = SpeedMult::new(0.5);
+    let mut fading_in = idle(0);
+    fading_in.cloak = Cloak {
+        fade: 10.0,
+        direction: 1,
+    };
+    let mut dying = idle(0);
+    dying.cloak = Cloak {
+        fade: 20.0,
+        direction: -2,
+    };
+    dying.condition = Condition::Dying {
+        ticks_left: 10,
+        starting: false,
+    };
+    let mut traffic = holding(fading_in);
+    traffic.npcs.push(dying);
+    let mut expected: Vec<Cloak> = traffic.npcs().iter().map(|npc| npc.cloak).collect();
+    expected[0].display_step(false, false, half);
+    expected[1].display_step(false, true, half);
+    traffic.step_fades(half);
+    let stepped: Vec<Cloak> = traffic.npcs().iter().map(|npc| npc.cloak).collect();
+    assert_eq!(stepped, expected);
+    assert_ne!(stepped[0].fade, 10.75, "not the full step");
 }

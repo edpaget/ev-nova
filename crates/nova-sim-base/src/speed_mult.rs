@@ -83,7 +83,17 @@
 //! `Guide::speed_mult` carries to the shot's own rules
 //! (`combat::projectile`, `combat::spin_timer`, `combat::shot_fade` and
 //! `combat::shot_decay`), and here in [`flight`](crate::flight)'s
-//! `moved`.
+//! `moved`. `_HandleShipDisplay`'s readers
+//! (rdm:phase/play-feel-8/phase-24-ship-display-reads-the-gain), each
+//! ship's fold, animation and alt timers, its lights' timer and triangle
+//! step, its weapon glow, its shield flash and its cloak fade, are in
+//! `nova_sim_combat`, through each display's `Moment::gain`
+//! (`combat::ship_frames`, `combat::ship_lights`) and `Cloak::step`'s
+//! gain; in `nova_sim_ai`'s traffic, through `traffic::ship_display`'s
+//! `display` and `Traffic::step_fades`; in the view, through the pass's
+//! `PassReport::speed_mult` (the flash and the glow); and in `nova_sim`'s
+//! session, through `Session::speed_mult` at each ship's display and
+//! each `_PrepareAllSprites`.
 //!
 //! # Its writers
 //!

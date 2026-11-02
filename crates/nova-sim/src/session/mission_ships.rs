@@ -2153,11 +2153,17 @@ pub(super) mod tests {
         take_off(&mut session, &catalog);
         // Set up cloaked (`_SetupShipsInSystem` @0x43121), then stepped
         // twice before the first frame by the take-off's two
-        // `_PrepareAllSprites` (@0x6764e, @0x67658).
+        // `_PrepareAllSprites` (@0x6764e, @0x67658), at its gain of 0.
+        let mut set_up = Cloak::default();
+        set_up.cloak();
+        for _ in 0..2 {
+            set_up.display_step(false, false, crate::SpeedMult::ZERO);
+        }
         assert!(
-            session.npcs().iter().all(|npc| npc.mission.is_some()
-                && npc.cloak.direction == 1
-                && npc.cloak.fade == 2.0 * crate::cloak::FADE_RATE),
+            session
+                .npcs()
+                .iter()
+                .all(|npc| npc.mission.is_some() && npc.cloak == set_up),
             "fading in: {:?}",
             session
                 .npcs()
@@ -4172,6 +4178,7 @@ pub(super) mod tests {
         }));
         let catalog = returning(4, 0);
         let mut session = in_flight(&catalog);
+        session.at_gain(crate::SpeedMult::FULL);
         settle(&mut session, &catalog);
         for npc in session.space.traffic.npcs_mut() {
             npc.cloak = full;

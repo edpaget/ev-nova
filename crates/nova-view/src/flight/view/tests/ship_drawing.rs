@@ -596,7 +596,11 @@ fn a_hidden_cloaked_npc_draws_its_lit_weapon_glow_alone_and_one_at_its_gate_noth
         0.0,
     );
     let mut npc = npc_record(&view, NPC_0);
-    view.glows.step(&[(npc.ship, false)], |_| Some(1.0));
+    view.glows.step(
+        &[(npc.ship, false)],
+        |_| Some(1.0),
+        nova_sim::SpeedMult::FULL,
+    );
     let level = view.glows.drawn(npc.ship).expect("lit");
     npc.cloak = CloakShown::Hidden;
     let mut list = DrawList::new();
@@ -678,7 +682,9 @@ const ION: nova_sim::combat::ion_tint::IonTint = nova_sim::combat::ion_tint::Ion
 fn flashing(view: &mut Faked, ship: ShipRef) -> u8 {
     let mut flash = crate::flight::flash::ShieldFlash::default();
     flash.hit(false);
-    let level = flash.step(100.0, 100.0, true).expect("drawn");
+    let level = flash
+        .step(100.0, 100.0, true, nova_sim::SpeedMult::FULL)
+        .expect("drawn");
     view.flashes.insert(ship, flash);
     level
 }
@@ -1133,8 +1139,10 @@ fn lit_at_28(view: &mut Faked, id: NpcId) {
 
 /// Lights `ship`'s weapon glow in `view`: drawn at 28.
 fn lit_at_28_ship(view: &mut Faked, ship: ShipRef) {
-    view.glows.step(&[(ship, false)], |_| Some(4.0));
-    view.glows.step(&[], |_| Some(4.0));
+    view.glows
+        .step(&[(ship, false)], |_| Some(4.0), nova_sim::SpeedMult::FULL);
+    view.glows
+        .step(&[], |_| Some(4.0), nova_sim::SpeedMult::FULL);
     assert_eq!(view.glows.drawn(ship), Some(28));
 }
 

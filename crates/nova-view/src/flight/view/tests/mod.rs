@@ -76,6 +76,7 @@ mod combat;
 mod comm_line;
 mod controls;
 mod dialog_map;
+mod display_gain;
 mod escorts;
 mod faded_keys;
 mod faked_board;

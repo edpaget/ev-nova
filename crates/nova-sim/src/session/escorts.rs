@@ -1569,7 +1569,7 @@ pub(super) mod tests {
     }
 
     /// [`escorted`]'s session by `source`, its first traffic tick done.
-    fn flying(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+    pub(in crate::session) fn flying(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
         let mut session = Session::fly(catalog, escorted(catalog))
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
@@ -2091,7 +2091,9 @@ pub(super) mod tests {
     /// `_HandlePlayerDockRequest` runs `_PrepareAllSprites` after the
     /// setup (@0x6764e) and again after the stellars' visibility
     /// (@0x67658), and each displays every ship, its fade step included
-    /// (@0x2d088-0x2d164). An escort fading in at 10 takes off at 11.5.
+    /// (@0x2d088-0x2d164). Both run at the take-off's gain of 0
+    /// (`_PlayerLandOnStellar` @0x6375e), so an escort fading in at 10
+    /// takes off at 10.
     #[test]
     fn a_take_off_steps_each_ships_fade_twice_before_the_first_tick() {
         let catalog = crate::testkit::far_129_reachable(fleeted());
@@ -2105,10 +2107,10 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
-        let stepped = Cloak {
-            fade: 10.0 + 2.0 * crate::cloak::FADE_RATE,
-            direction: 1,
-        };
+        let mut stepped = fading;
+        for _ in 0..2 {
+            stepped.display_step(false, false, crate::SpeedMult::ZERO);
+        }
         assert_cloak_kept(&session, before, stepped);
     }
 

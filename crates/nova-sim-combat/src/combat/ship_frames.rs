@@ -25,19 +25,20 @@
 //! - **0x0002, folding** ([`FOLDS`], @0x2b894-0x2b9f1): the fold set
 //!   (+0xc8fc, [`Armament::fold`](super::armament::Armament::fold)) steps
 //!   toward its direction (+0xc8fa):
-//!   with a direction its timer (+0xc8e4, the bank's own field) grows by a
-//!   frame, and past `AnimDelay` it zeroes and the set steps, stopping
+//!   with a direction either way its timer (+0xc8e4, the bank's own
+//!   field) gains the frame's gain (@0x2b8a6, @0x2b914), and past
+//!   `AnimDelay` (a float compare) it zeroes and the set steps, stopping
 //!   at `BaseSets` − 1 going up or 0 going down, where the direction goes
-//!   back to 0; with none the timer zeroes. Then a ship of 0x0080
+//!   back to 0; with none the timer zeroes, unscaled (@0x2b97c). Then a ship of 0x0080
 //!   ([`UNFOLDS_TO_FIRE`]) with no direction up, short of its last set,
 //!   refolds once [`REFOLD_TICKS`] Mac ticks have passed since it last
 //!   fired (+0xa8, @0x2b986-0x2b9e3).
 //! - **0x0004** ([`KEY_CARRIED`], @0x2ba0b-0x2ba42): set 1 while its
 //!   class's `KeyCarried` ship is aboard, else 0.
 //! - **0x0008, animated** ([`ANIMATED`], @0x2ba47-0x2bb5c): the animation
-//!   timer (+0xc8e0) grows by a frame, unless the ship is disabled and of
-//!   0x0010 ([`STILL_WHILE_DISABLED`]); past `AnimDelay` it loses
-//!   `AnimDelay` while above it (or zeroes, with an `AnimDelay` of 0 or
+//!   timer (+0xc8e0) gains the frame's gain (@0x2ba64), unless the ship is
+//!   disabled and of 0x0010 ([`STILL_WHILE_DISABLED`]); past `AnimDelay`
+//!   it loses `AnimDelay`, unscaled (@0x2bac1), while above it (or zeroes, with an `AnimDelay` of 0 or
 //!   less) and the anim set (+0xc8f6) steps, round to 0 at `BaseSets`.
 //!   A set past its last, rolled on another class's `BaseSets` at its
 //!   spawn, is drawn mod `BaseSets`, as `_SWSetCurrentFrameIndex` takes a
@@ -54,13 +55,14 @@
 //!
 //! **The alt layer** (@0x2c97d-0x2cb11), for a class with an alt sprite
 //! ([`Alt`]): the animation timer
-//! grows by a frame again, unless still as above (@0x2c9aa-0x2c9d6).
-//! Unless the set came by the 0x0008 path, past `AnimDelay` the timer
-//! zeroes and the alt set (+0xc8f4) steps; by that path, it steps when the
+//! gains the frame's gain again (@0x2c9c1), unless still as above
+//! (@0x2c9aa-0x2c9d6). Unless the set came by the 0x0008 path, past
+//! `AnimDelay` the timer zeroes, unscaled (@0x2ca08), and the alt set
+//! (+0xc8f4) steps; by that path, it steps when the
 //! anim set did. Either way round to 0 at `AltSetCount`. It is drawn at
 //! alt set × `FramesPer` + the rotation ([`FrameSpec::index`]). So a
 //! 0x0008 ship of more than one set with an alt sprite moves its timer
-//! twice a frame, as the rulebook's
+//! twice a frame (two gains), as the rulebook's
 //! [`RuleKey::ShipAnimationDoubleStep`](crate::RuleKey::ShipAnimationDoubleStep)
 //! says by the engine; by the other reading, once. No stock ship does:
 //! the Thunderforge (380), the one with an alt sprite, has one base set.
@@ -76,8 +78,13 @@
 //! where they stopped on repair. No stock `shän` of 0x0020 has an alt
 //! image.
 //!
-//! The frame's `_gSpeedMult` is 1.0, the engine's fixed step. No sound
-//! plays in any of it.
+//! **The gain.** Each timer takes the frame's gain, `_gSpeedMult`
+//! ([`Moment::gain`]), as a float field gains it: the sum in doubles,
+//! narrowed (`SpeedMult::add_times`). So below full gain a timer steps its
+//! set later, and at the settled gain (one ulp below 1.0) the narrowing
+//! makes each frame a whole one, as at full. The compares against
+//! `AnimDelay`, the losses and the zeroes are unscaled. No sound plays in
+//! any of it.
 //!
 //! **The lights** ([`ShipFrames::light`]): the lights block, after the
 //! alt layer's, steps the ship's lights state ([`ShipFrames::lights`]) and
@@ -100,6 +107,7 @@ use super::ship_lights::ShipLights;
 use crate::catalog::{ShipDisplay, ShipExits};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::trig::{accel, intercept_angle};
 
 /// `Flags` 0x0001: the ship banks as it turns, on sets 1 and 2.
@@ -127,13 +135,6 @@ pub const ANGLE_TABLE: u16 = 0x0100;
 /// The Mac ticks after its last shot a ship of [`UNFOLDS_TO_FIRE`] waits
 /// to refold (`addl $0x2d` @0x2b9cb).
 pub const REFOLD_TICKS: u32 = 45;
-
-/// How far `_HandleShipDisplay`'s fold, animation and lights timers move
-/// a frame: `_gSpeedMult` at the engine's fixed step, until that routine
-/// reads the frame's (rdm:phase/play-feel-8/phase-24-ship-display-reads-the-gain).
-/// An NPC's bank, `_HandleShip`'s, reads the frame's gain already
-/// (`nova_sim_ai`'s `traffic::ship_display`).
-pub const SPEED_MULT: f32 = 1.0;
 
 /// The magnitude of the push each frame-angle table entry turns
 /// (`_Accel(a, 100)`, 100.0 @0x1eff2).
@@ -391,6 +392,12 @@ pub struct Moment {
     pub key_aboard: bool,
     /// The readings it runs by.
     pub rules: DisplayRules,
+    /// The frame's gain at its display, `_gSpeedMult` (see the module
+    /// docs' "The gain"): the fold timer gains it (@0x2b8a6, @0x2b914),
+    /// the animation timer in the set block (@0x2ba64) and the alt block
+    /// (@0x2c9c1), and the lights' timer and step (@0x2c3fe, @0x2c4a5,
+    /// @0x2c523; see [`ship_lights`](super::ship_lights)).
+    pub gain: SpeedMult,
 }
 
 /// What a ship's alt layer shows this frame.
@@ -459,13 +466,13 @@ impl ShipFrames {
                 1.. => 2,
             }
         } else if spec.has(FOLDS) {
-            self.fold(spec, fold);
+            self.fold(spec, fold, moment.gain);
             fold.set
         } else if spec.has(KEY_CARRIED) {
             u16::from(moment.key_aboard)
         } else if spec.has(ANIMATED) {
             animated = true;
-            stepped = self.animate(spec, still);
+            stepped = self.animate(spec, still, moment.gain);
             // A set rolled on another class's `BaseSets` may lie past its
             // own: `_SWSetCurrentFrameIndex` takes the frame mod the
             // sprite's, `BaseSets` x `FramesPer` (@0xa90d4-0xa90ee).
@@ -503,7 +510,7 @@ impl ShipFrames {
     ) -> u16 {
         let again = !animated || moment.rules.double_step == RuleSource::Engine;
         if !still && again {
-            self.anim_timer += SPEED_MULT;
+            self.anim_timer = moment.gain.add_times(self.anim_timer, 1.0);
         }
         let step_alt = if animated {
             stepped
@@ -523,14 +530,15 @@ impl ShipFrames {
     }
 
     /// The 0x0002 block (@0x2b894-0x2b9f1): `fold`'s set steps toward its
-    /// direction on the timer, then a ship of 0x0080 refolds once due.
-    fn fold(&mut self, spec: &FrameSpec, fold: &mut Fold) {
+    /// direction on the timer, which gains `gain`, then a ship of 0x0080
+    /// refolds once due.
+    fn fold(&mut self, spec: &FrameSpec, fold: &mut Fold, gain: SpeedMult) {
         let delay = f32::from(spec.anim_delay);
         let last = i32::from(spec.base_sets) - 1;
         if fold.dir == 0 {
             self.bank = 0.0;
         } else {
-            self.bank += SPEED_MULT;
+            self.bank = gain.add_times(self.bank, 1.0);
             if self.bank > delay {
                 self.bank = 0.0;
                 let set = i32::from(fold.set) + i32::from(fold.dir.signum());
@@ -554,11 +562,12 @@ impl ShipFrames {
         }
     }
 
-    /// The 0x0008 block's timer and anim set (@0x2ba4b-0x2bb55), still
-    /// when `still`: whether the anim set stepped.
-    fn animate(&mut self, spec: &FrameSpec, still: bool) -> bool {
+    /// The 0x0008 block's timer, gaining `gain`, and anim set
+    /// (@0x2ba4b-0x2bb55), still when `still`: whether the anim set
+    /// stepped.
+    fn animate(&mut self, spec: &FrameSpec, still: bool, gain: SpeedMult) -> bool {
         if !still {
-            self.anim_timer += SPEED_MULT;
+            self.anim_timer = gain.add_times(self.anim_timer, 1.0);
         }
         let delay = f32::from(spec.anim_delay);
         if self.anim_timer <= delay {
@@ -603,6 +612,7 @@ mod tests {
         disabled: false,
         key_aboard: false,
         rules: DisplayRules::ENGINE,
+        gain: SpeedMult::FULL,
     };
 
     /// The moment, the double step read by `reading`.
@@ -763,6 +773,188 @@ mod tests {
         );
         assert_eq!(run(&mut ship, &spec, &mut fold, 3), [3, 3, 3]);
         assert_eq!(ship.bank, 0.0, "no direction zeroes the timer");
+    }
+
+    /// The moment at the frame's gain `gain`.
+    fn at(gain: f64) -> Moment {
+        Moment {
+            gain: SpeedMult::new(gain),
+            ..MOMENT
+        }
+    }
+
+    /// The sets `frames` draws over `n` frames of `spec` in `moment`, its
+    /// fold starting at `fold`.
+    fn run_in(
+        frames: &mut ShipFrames,
+        spec: &FrameSpec,
+        fold: &mut Fold,
+        n: usize,
+        moment: Moment,
+    ) -> Vec<u16> {
+        (0..n)
+            .map(|_| frames.step(spec, fold, moment).set)
+            .collect()
+    }
+
+    #[test]
+    fn a_folding_ships_timer_gains_the_frames_gain_either_way() {
+        let spec = spec(FOLDS, 4, 2);
+        let mut ship = ShipFrames::default();
+        let mut up = Fold {
+            dir: 1,
+            ..Fold::default()
+        };
+        assert_eq!(
+            run_in(&mut ship, &spec, &mut up, 5, at(0.5)),
+            [0, 0, 0, 0, 1],
+            "2.5 > 2 on the 5th frame"
+        );
+        assert_eq!(ship.bank, 0.0, "past it, zeroed");
+        let mut ship = ShipFrames::default();
+        let mut down = Fold {
+            set: 3,
+            dir: -1,
+            ..Fold::default()
+        };
+        assert_eq!(
+            run_in(&mut ship, &spec, &mut down, 5, at(0.5)),
+            [3, 3, 3, 3, 2],
+            "folding down too"
+        );
+        let mut ship = ShipFrames::default();
+        let mut up = Fold {
+            dir: 1,
+            ..Fold::default()
+        };
+        assert_eq!(
+            run_in(&mut ship, &spec, &mut up, 6, at(0.0)),
+            [0; 6],
+            "at no gain it never steps"
+        );
+        assert_eq!(ship.bank, 0.0);
+    }
+
+    #[test]
+    fn a_folding_ship_of_no_direction_zeroes_its_timer_at_any_gain() {
+        let spec = spec(FOLDS, 4, 2);
+        for gain in [0.5, 0.0] {
+            let mut ship = ShipFrames {
+                bank: 1.5,
+                ..ShipFrames::default()
+            };
+            let mut fold = Fold::default();
+            ship.step(&spec, &mut fold, at(gain));
+            assert_eq!(ship.bank, 0.0, "{gain}");
+        }
+    }
+
+    #[test]
+    fn an_animated_ships_timer_gains_the_frames_gain_and_loses_a_whole_delay() {
+        let every = spec(ANIMATED, 3, 0);
+        let spec = spec(ANIMATED, 3, 1);
+        let mut ship = ShipFrames::default();
+        let mut fold = Fold::default();
+        assert_eq!(
+            run_in(&mut ship, &spec, &mut fold, 3, at(0.5)),
+            [0, 0, 1],
+            "1.5 > 1 on the 3rd frame"
+        );
+        assert_eq!(ship.anim_timer, 0.5, "it loses 1, unscaled");
+        assert_eq!(
+            run_in(&mut ship, &spec, &mut fold, 2, at(0.5)),
+            [1, 2],
+            "the next 2 frames later"
+        );
+        // An `AnimDelay` of 0 steps every frame at any gain above none.
+        let mut ship = ShipFrames::default();
+        assert_eq!(run_in(&mut ship, &every, &mut fold, 3, at(0.5)), [1, 2, 0]);
+        let mut ship = ShipFrames::default();
+        assert_eq!(
+            run_in(&mut ship, &every, &mut fold, 3, at(0.0)),
+            [0, 0, 0],
+            "at no gain its timer stays 0, not above 0"
+        );
+        assert_eq!(ship.anim_timer, 0.0);
+    }
+
+    #[test]
+    fn a_still_ship_gains_nothing_at_any_gain() {
+        let spec = spec(ANIMATED | STILL_WHILE_DISABLED, 3, 1);
+        for gain in [0.5, 1.0] {
+            let mut ship = ShipFrames::default();
+            let moment = Moment {
+                disabled: true,
+                ..at(gain)
+            };
+            ship.step(&spec, &mut Fold::default(), moment);
+            assert_eq!(ship.anim_timer, 0.0, "{gain}");
+        }
+    }
+
+    #[test]
+    fn the_alt_layers_own_timer_gains_the_frames_gain_and_zeroes_past_its_delay() {
+        let spec = FrameSpec {
+            alt_sets: 6,
+            ..spec(0x0058, 1, 1)
+        };
+        let mut ship = ShipFrames::default();
+        assert_eq!(
+            alts(&mut ship, &spec, 6, at(0.5)),
+            [Some(0), Some(0), Some(1), Some(1), Some(1), Some(2)],
+            "1.5 > 1 on the 3rd frame, then zeroed"
+        );
+        let mut ship = ShipFrames::default();
+        alts(&mut ship, &spec, 3, at(0.5));
+        assert_eq!(ship.anim_timer, 0.0, "zeroed, unscaled");
+    }
+
+    #[test]
+    fn an_animated_ships_alt_block_gains_the_gain_again_by_the_engine() {
+        let spec = FrameSpec {
+            alt_sets: 4,
+            ..spec(ANIMATED, 3, 100)
+        };
+        for (reading, gained) in [(RuleSource::Engine, 1.0), (RuleSource::Bible, 0.5)] {
+            let mut ship = ShipFrames::default();
+            let moment = Moment {
+                gain: SpeedMult::new(0.5),
+                ..double_step(reading)
+            };
+            ship.step(&spec, &mut Fold::default(), moment);
+            assert_eq!(ship.anim_timer, gained, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn at_the_settled_gain_each_timer_steps_on_the_frames_it_does_at_full() {
+        let settled = Moment {
+            gain: SpeedMult::SETTLED,
+            ..MOMENT
+        };
+        for spec in [spec(FOLDS, 4, 2), spec(ANIMATED, 3, 2)] {
+            let (mut full, mut near) = (ShipFrames::default(), ShipFrames::default());
+            let up = Fold {
+                dir: 1,
+                ..Fold::default()
+            };
+            let (mut a, mut b) = (up, up);
+            assert_eq!(
+                run_in(&mut near, &spec, &mut b, 11, settled),
+                run_in(&mut full, &spec, &mut a, 11, MOMENT),
+                "{:#x}",
+                spec.flags
+            );
+        }
+        let alt = FrameSpec {
+            alt_sets: 6,
+            ..spec(0x0058, 1, 5)
+        };
+        let (mut full, mut near) = (ShipFrames::default(), ShipFrames::default());
+        assert_eq!(
+            alts(&mut near, &alt, 12, settled),
+            alts(&mut full, &alt, 12, MOMENT)
+        );
     }
 
     #[test]

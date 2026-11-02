@@ -23,12 +23,13 @@
 //!    player was dying at the top of `_HandlePlayer`; then the cloak key
 //!    and upkeep (@0x705b7-0x70827, see the `player_cloak` module),
 //!    reading whether it was disabled there.
-//! 4. The player's display step: its cloak's fade steps
-//!    (`_HandleShipDisplay` @0x2d088-0x2d17e for slot 0, pod or not; see
-//!    the `player_cloak` module), then [`Combat::display_player`]: its
+//! 4. The player's display step, at the frame's gain
+//!    (`Session::speed_mult`, see the `display_gain` module): its cloak's
+//!    fade steps (`_HandleShipDisplay` @0x2d088-0x2d17e for slot 0, pod or
+//!    not; see the `player_cloak` module), then [`Combat::display_player`]: its
 //!    condition settles from its armour, its breakup's countdown starts,
 //!    or its final explosion goes off, with its shockwave. Then its frame:
-//!    its sets, lights and ion tint step
+//!    its sets and lights step by the gain and its ion tint unscaled
 //!    ([`PlayerShip::display_frames`](super::PlayerShip::display_frames),
 //!    see the `ship_display` module), reading the `_IsDisabled` that
 //!    display kept (@0x2b61f) from the fight's record of it, as the set
@@ -90,7 +91,8 @@ impl Session {
         self.held_jettison_tick(chance);
         self.self_destruct_tick(head.dying);
         self.player_cloak_tick(head.disabled);
-        self.ship.step_cloak_fade(&self.pilot, &self.statics);
+        self.ship
+            .step_cloak_fade(&self.pilot, &self.statics, self.speed_mult());
         let was_destroyed = self.ship.condition == Condition::Destroyed;
         self.land_phase(
             behaviour,
@@ -106,11 +108,13 @@ impl Session {
         // before both (@0x2b61f): the fight's record of it, so stepping
         // after the dying block reads what the original's does.
         if let Some(shown) = self.space.combat.displayed(ShipRef::Player) {
+            let gain = self.speed_mult();
             self.ship.display_frames(
                 &mut self.pilot,
                 &self.statics,
                 &self.setup,
                 shown.disabled,
+                gain,
                 &mut *chance,
             );
         }
