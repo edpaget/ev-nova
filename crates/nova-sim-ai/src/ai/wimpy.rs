@@ -17,8 +17,8 @@
 use crate::ai::call_for_help::when_fleeing;
 use crate::ai::fire::FireRules;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, lost_sight, provoked_by,
-    react, trader_keep,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, provoked_by, react,
+    trader_keep, trader_target,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -50,7 +50,9 @@ fn think(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 impl Behaviour for WimpyTrader {
     /// Its think's goal ([`think`]), with a distress call when the think
     /// flees ([`when_fleeing`]), and its idle block's pick written to its
-    /// travel stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef). The
+    /// travel stellar ([`idle_block::pick_write`], @0x8b0d1, @0x8b0ef), and
+    /// its target cleared by the idle block's leave
+    /// ([`trader_target::idle_leave_clears`], @0x8b190). The
     /// high level, which `NovaAi` runs after it, takes a kept attack
     /// ([`attack_drop`](super::attack_drop)).
     fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
@@ -59,6 +61,7 @@ impl Behaviour for WimpyTrader {
             goal: thought,
             comm_call: when_fleeing(thought),
             travel: idle_block::pick_write(npc, around, thought),
+            clears_target: trader_target::idle_leave_clears(npc, thought),
             ..Decision::default()
         }
     }
@@ -78,7 +81,7 @@ impl Behaviour for WimpyTrader {
     }
 
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-        lost_sight::trader_target(npc, around)
+        trader_target::trader_target(npc, around)
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
@@ -140,6 +143,37 @@ mod tests {
         trader.target = Some(n(2));
         let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
         assert_eq!(decided(&trader, &npcs), Goal::Flee(n(2)), "@0x8b1ac");
+    }
+
+    #[test]
+    fn its_idle_blocks_leave_clears_a_held_target() {
+        // @0x8b190 / @0x8b5fa: the leave writes +0x70 -1; a kept leave,
+        // and the idle block's stop, write none.
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.visited = Some(StellarId(128));
+        trader.target = Some(n(2));
+        let npcs = [
+            trader.clone(),
+            ship(2, PIRATES, AiType::Warship, 5000.0, 0.0),
+        ];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        let leaving = WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[]));
+        assert_eq!(leaving.goal, Goal::JumpOut);
+        assert!(leaving.clears_target);
+        let mut kept = npcs.clone();
+        kept[0].goal = Goal::JumpOut;
+        let around = crate::ai::fixture::around(&sites, &kept, &govts, (0.0, -100.0), 0);
+        let still = WimpyTrader::default().decision(&kept[0], &around, &mut Draws::of(&[]));
+        assert_eq!(still.goal, Goal::JumpOut);
+        assert!(!still.clears_target, "a kept leave");
+        let mut stuck = npcs.clone();
+        stuck[0].class_fuel = 99;
+        let around = crate::ai::fixture::around(&sites, &stuck, &govts, (0.0, -100.0), 0);
+        let stopping = WimpyTrader::default().decision(&stuck[0], &around, &mut Draws::of(&[]));
+        assert_eq!(stopping.goal, Goal::Wait);
+        assert!(!stopping.clears_target, "the stop");
     }
 
     #[test]
@@ -571,8 +605,15 @@ mod tests {
         let idle = around(&sites, &on_npc, &govts, (0.0, -100.0), 0);
         assert_eq!(
             WimpyTrader::default().target(&on_npc[0], &idle),
-            None,
-            "any other goal targets its quarry"
+            Some(n(2)),
+            "goal 0's idle block writes none but its leave's"
+        );
+        on_npc[0].goal = Goal::Flee(ShipRef::Player);
+        let fleeing = around(&sites, &on_npc, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            WimpyTrader::default().target(&on_npc[0], &fleeing),
+            Some(ShipRef::Player),
+            "a flight targets its quarry"
         );
     }
 

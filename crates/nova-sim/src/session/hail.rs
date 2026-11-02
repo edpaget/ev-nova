@@ -2155,6 +2155,11 @@ pub(super) mod tests {
         assert!(!thinks_a_call(&mut session));
         let npc = &session.npcs()[0];
         assert_eq!((npc.goal, npc.provoked), (Goal::JumpOut, 0.0));
+        assert_eq!(
+            npc.target,
+            Some(ShipRef::Npc(attacker)),
+            "kept through the leave (goal-2 block @0x8dd9c-0x8de5e)"
+        );
     }
 
     #[test]

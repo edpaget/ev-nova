@@ -92,6 +92,7 @@ pub mod swarm;
 pub mod target;
 pub mod threatened;
 pub mod trader_keep;
+pub mod trader_target;
 pub mod travel;
 pub mod wait;
 pub mod waiting_pursuit;
@@ -287,7 +288,7 @@ pub enum Goal {
     /// traders and the interceptor: their idle blocks need state 0, so only
     /// provocation, or a hunter's government's word, lifts it. It fights
     /// nothing and scoops nothing. A trader's stop keeps its target
-    /// ([`lost_sight::trader_target`]), and the threat tests spare none of
+    /// ([`trader_target::trader_target`]), and the threat tests spare none of
     /// state 6 (`_IsThreatToPlayer`, `_ExtendedIsThreatToShip`,
     /// `_ExtendedIsThreatToPlayer`): a stopped ship threatens the target it
     /// holds ([`Npc::fought`]). `_AIMakeShipWait` (@0x82c63) and

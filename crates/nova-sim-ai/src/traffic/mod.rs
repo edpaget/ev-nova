@@ -360,6 +360,8 @@ mod think_run_tests;
 #[cfg(test)]
 mod tractor_freed_tests;
 pub mod tractor_hold;
+#[cfg(test)]
+mod trader_hit_target_tests;
 pub mod vacated;
 #[cfg(test)]
 mod voice_cue_tests;

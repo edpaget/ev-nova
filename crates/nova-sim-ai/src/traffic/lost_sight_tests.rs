@@ -254,7 +254,7 @@ impl Behaviour for Stops {
     }
 
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-        crate::ai::lost_sight::trader_target(npc, around)
+        crate::ai::trader_target::trader_target(npc, around)
     }
 }
 

@@ -1223,21 +1223,27 @@ impl Npc {
     }
 
     /// The ship the threat tests read as the one it fights: its goal's
-    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6) or
-    /// idle ([`Goal::Idle`], state 0) the target it holds. The original's
-    /// tests read +0x70 and spare neither state 6 nor state 0
-    /// (`_IsThreatToPlayer` @0x7f536-0x7f56b, `_ExtendedIsThreatToShip`
-    /// @0x81ace-0x81b03): a trader's stop keeps it (@0x8d803-0x8d80f; see
-    /// [`trader_target`](crate::ai::lost_sight::trader_target)), and so
-    /// does the attack block's ally drop for any type it idles (@0x8e2d2,
+    /// quarry ([`Goal::quarry`]), or stopped ([`Goal::Wait`], state 6),
+    /// idle ([`Goal::Idle`], state 0), leaving ([`Goal::JumpOut`], state
+    /// 2), landing ([`Goal::Land`], state 1) or entering a gate
+    /// ([`Goal::EnterGate`], state 0x14) the target it holds. The
+    /// original's tests read +0x70 and spare only states 5, 7, 9, 0xa,
+    /// 0xb, 0xc, 0xf and 0x12 (`_IsThreatToPlayer` @0x7f536-0x7f56b,
+    /// `_IsThreatToShip` @0x82024-0x82055, `_ExtendedIsThreatToShip`
+    /// @0x81ace-0x81b03): a trader keeps a hit's target through its stop,
+    /// idle, leave, landing and gate entry (@0x8d803-0x8d80f, @0x3bcf6; see
+    /// [`trader_target`](crate::ai::trader_target::trader_target)), and the
+    /// attack block's ally drop keeps it for any type it idles (@0x8e2d2,
     /// [`Decision::holds_target`](crate::ai::Decision::holds_target)), so
-    /// such a ship threatens the ally it spared. In the other goals that
-    /// leave the quarry none, +0x70 is -1 or the state is one the tests
-    /// spare.
+    /// such a ship threatens the ally it spared. A pirate's target step
+    /// keeps its target in those goals too. In the other goals that leave
+    /// the quarry none, +0x70 is -1 or the state is one the tests spare.
     #[must_use]
     pub fn fought(&self) -> Option<ShipRef> {
         match self.goal {
-            Goal::Wait | Goal::Idle => self.target,
+            Goal::Wait | Goal::Idle | Goal::JumpOut | Goal::Land(_) | Goal::EnterGate(_) => {
+                self.target
+            }
             goal => goal.quarry(),
         }
     }
@@ -2487,6 +2493,30 @@ mod tests {
         assert_eq!(npc(Goal::Idle, Some(hitter)).slot_target(), Some(hitter));
         assert_eq!(npc(Goal::Attack(trader), None).slot_target(), None);
         assert_eq!(npc(Goal::Idle, None).slot_target(), None);
+    }
+
+    #[test]
+    fn fought_reads_the_held_target_while_leaving_landing_or_entering_a_gate() {
+        // The threat tests spare goals 5, 7, 9, 0xa, 0xb, 0xc, 0xf and 0x12
+        // (`_IsThreatToPlayer` @0x7f536-0x7f56b, `_IsThreatToShip`
+        // @0x82024-0x82055): not 1, 2 or 0x14, whose blocks keep +0x70.
+        for goal in [
+            Goal::JumpOut,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(129)),
+        ] {
+            let held = Npc {
+                goal,
+                target: Some(ShipRef::Npc(NpcId(2))),
+                ..crate::traffic::fixture::npc(4, ShipStats::default())
+            };
+            assert_eq!(held.fought(), Some(ShipRef::Npc(NpcId(2))), "{goal:?}");
+            let none = Npc {
+                target: None,
+                ..held
+            };
+            assert_eq!(none.fought(), None, "{goal:?}");
+        }
     }
 
     #[test]
