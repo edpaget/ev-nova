@@ -7,8 +7,9 @@
 //! frame's gain, `_gSpeedMult` (a [`SpeedMult`]), added to the heading in
 //! doubles and narrowed (@0x6c95b-0x6c990, @0x6ca1e-0x6ca3b,
 //! @0x6ca73-0x6ca90): `Maneuver` 25 turns 2° a full frame, not 2.5
-//! ([`step_of`]). NPCs turn the full rate (`_HandleShip`), so
-//! [`flight::step`](crate::flight::step) keeps theirs.
+//! ([`step_of`]). NPCs turn the full rate, untruncated, × the gain
+//! (`_HandleShip` @0x344b8), so [`flight::step`](crate::flight::step)
+//! keeps theirs ([`flight::turned`](crate::flight::turned)).
 //!
 //! **The auto-turn.** A local of `_HandlePlayer`, −0x2cd, says the ship
 //! turns itself this tick toward its desired heading, +0x68 (the

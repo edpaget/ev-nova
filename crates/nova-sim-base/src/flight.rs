@@ -6,8 +6,9 @@
 //! [`player_turn`](crate::player_turn) module) and then moves as a step
 //! does from step 2 on ([`advance`]). Each [`step`]:
 //!
-//! 1. Turns. Left and right turn by the ship's turn rate, the full rate
-//!    (`_HandleShip`); reverse never turns an NPC. The AI works out which
+//! 1. Turns. Left and right turn by the ship's turn rate, the full rate,
+//!    × the frame's gain (`_HandleShip` @0x344b8, [`turned`]); reverse
+//!    never turns an NPC. The AI works out which
 //!    way: every NPC substate wants a whole-degree heading (+0x68), and
 //!    `_HandleShip` turns the ship to it ([`turn_to`], or [`turn_to_own`]
 //!    for one that wants none), by the rate beyond it and onto it within

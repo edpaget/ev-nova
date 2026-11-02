@@ -18,8 +18,9 @@
 //! - On an NPC's primary or secondary trigger ([`Armament::fire`]), a ship
 //!   carrying n of a weapon fires one shot
 //!   once its reload timer has run out, and sets the timer to `Reload / n`
-//!   ticks; a timer counts down a tick at a time ([`Armament::reload`]),
-//!   so `Reload` 0 fires every tick.
+//!   ticks; a timer counts down the frame's gain a frame (`_HandleShip`
+//!   @0x338b3, [`Armament::reload_holding`]; a full frame's countdown is
+//!   [`Armament::reload`]), so `Reload` 0 fires every tick.
 //! - An NPC fires its pick ([`Trigger::only`]) as `_FireAIShipWeapon`
 //!   does instead ([`Armament::fire_pick`], [`ai_fire`]): its copies
 //!   together under `Flags` 0x0040, each spending whether or not it

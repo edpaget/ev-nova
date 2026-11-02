@@ -63,9 +63,18 @@
 //! `Field::speed_mult` and `StellarHazards::speed_mult` (the player's
 //! regeneration, reloads, repair inhibit, sabotage clock, self-destruct
 //! count and cloak upkeep); and in `nova_sim`'s session, through
-//! `Session::speed_mult`. The NPCs' readers (`_HandleShip`) run at
-//! [`SpeedMult::FULL`] until
-//! rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain.
+//! `Session::speed_mult`. `_HandleShip`'s readers
+//! (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain), an NPC's
+//! move, turn, thrust, ion block, fuel and the shared flight functions,
+//! are here in [`flight`](crate::flight), [`inertialess`](crate::inertialess),
+//! [`ionization`](crate::ionization) and [`fuel`](crate::fuel); in
+//! `nova_sim_ai`'s traffic, through the pass's `World::speed_mult`, the
+//! fly half's `FlyPass` (its end's AI waits and fuel) and each step's
+//! `AtStep::gain` (the cloak's shield upkeep, the bank, the warp-out, the
+//! stray provocation and the AI wait, a float its `ai_wait` module
+//! counts down); in `nova_sim_combat`, through the pass's
+//! `Field::speed_mult` (an NPC's reloads and regeneration); and in
+//! `nova_sim_port`'s `npc_escape`, the crew pods' interval.
 //!
 //! # Its writers
 //!

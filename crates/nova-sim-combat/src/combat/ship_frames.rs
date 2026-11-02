@@ -128,8 +128,11 @@ pub const ANGLE_TABLE: u16 = 0x0100;
 /// to refold (`addl $0x2d` @0x2b9cb).
 pub const REFOLD_TICKS: u32 = 45;
 
-/// How far a timer moves a frame: `_gSpeedMult` at the engine's fixed
-/// step.
+/// How far `_HandleShipDisplay`'s fold, animation and lights timers move
+/// a frame: `_gSpeedMult` at the engine's fixed step, until that routine
+/// reads the frame's (rdm:phase/play-feel-8/phase-24-ship-display-reads-the-gain).
+/// An NPC's bank, `_HandleShip`'s, reads the frame's gain already
+/// (`nova_sim_ai`'s `traffic::ship_display`).
 pub const SPEED_MULT: f32 = 1.0;
 
 /// The magnitude of the push each frame-angle table entry turns
