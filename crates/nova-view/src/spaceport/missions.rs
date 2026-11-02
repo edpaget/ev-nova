@@ -68,6 +68,30 @@
 //! filter plays no sound of its own: only the close's
 //! ([`UiSound::MissionInfoClosed`]). Without its dialog, the screen says
 //! why, and Return or Escape alone closes it.
+//!
+//! Both lists are the List Manager's, as [`RowList`] runs them. A press in
+//! item 2 is held until its release: the one selection follows the
+//! pointer across the rows, and past the list's top or bottom edge the
+//! list scrolls a row at a time, the row scrolled in selected. The text,
+//! Accept's or Abort's grey and M's mark follow the selection at the
+//! release, when `LClick` returns and the filter reads the selection back
+//! (`_MissionFilter` @0xa0003-0xa007c, `_MissionInfoFilter`
+//! @0x9dc5d-0x9dcd8), not at the press; a cancelled press ends as a
+//! release. A press below the last row selects nothing: item 4 is an
+//! empty black box, Accept and A or Abort ask for nothing, and M asks for
+//! the map marked for nothing. The rows don't scroll on their own: when
+//! they don't fit, a scroll bar does. On the mission info screen it is
+//! carved from item 2's right, the rows narrowed by 15
+//! (`_SetupMissionInfoList` @0x9df6f-0x9df90). On the computer it lies in
+//! item 3's column, right of item 2 (`_SetupMissionList` @0xa07a6), and a
+//! press in item 3 goes to it (the second `LClick`, @0xa01c5-0xa01e7);
+//! when the rows fit, the list is widened over item 3 (@0xa07a8-0xa07e3).
+//! A press in item 3 over a list that fits is left out: there the
+//! original's `LClick` moves the highlight and nothing reads it back. The
+//! bar's last column and its top and bottom rows lie outside item 2 (and
+//! item 3), whose `PtInRect` doesn't hand them to `LClick`; the engine's
+//! item test counts the item's right and bottom edges in (the half-open
+//! tests are filed apart). Neither list plays a sound.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -86,7 +110,7 @@ use crate::flight::view::is_map_press;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
-use crate::input::{Input, Key};
+use crate::input::{Input, Key, MouseButton};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
 use crate::text::{TextMetrics, truncate_end};
@@ -95,7 +119,7 @@ use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, FocusRing, Role, TextBacking};
 use crate::ui::mission_info::is_mission_info_press;
 use crate::ui::player_info::is_player_info_press;
-use crate::ui::row_list::RowList;
+use crate::ui::row_list::{BarRoom, ListPress, RowList};
 
 /// The mission computer's `DLOG` (and `DITL`) ID.
 pub const COMPUTER_DIALOG: i16 = 1006;
@@ -106,6 +130,10 @@ pub const COMPUTER_BACKGROUND: ImageKey = ImageKey::picture(8505);
 pub const ACCEPT_ITEM: usize = 1;
 /// The list's item.
 pub const LIST_ITEM: usize = 2;
+/// The item right of the list: the list covers it when its rows fit, and
+/// its scroll bar lies in it when they don't (`_SetupMissionList`
+/// @0xa07a6-0xa07e3).
+pub const BAR_ITEM: usize = 3;
 /// The selected offer's text's item.
 pub const TEXT_ITEM: usize = 4;
 /// The selected offer's name's item.
@@ -167,6 +195,29 @@ fn on_list(dialog: &Dialog, list: usize, input: &Input) -> bool {
             .is_some_and(|bounds| bounds.contains(at)),
         _ => false,
     }
+}
+
+/// What `input` did to `rows`, if it went to them: while they hold a
+/// press, every pointer move and the left release, as `LClick` keeps the
+/// pointer until the button comes up; otherwise a press on one of
+/// `dialog`'s `items`, as each filter's `PtInRect` hands one to `LClick`.
+fn list_pointer(
+    dialog: &Dialog,
+    rows: &mut RowList,
+    items: &[usize],
+    input: &Input,
+) -> Option<ListPress> {
+    let held = rows.tracking()
+        && matches!(
+            input,
+            Input::PointerMoved(_)
+                | Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed: false,
+                    ..
+                }
+        );
+    (held || items.iter().any(|&item| on_list(dialog, item, input))).then(|| rows.input(input))
 }
 
 /// Which way `input` steps a mission list, forward (`true`) or back, if it
@@ -271,9 +322,8 @@ impl MissionComputerScreen {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(LEAVE_ITEM))
                 .with_cancel(Some(LEAVE_ITEM));
-            let list = dialog.item_bounds(LIST_ITEM).unwrap_or(NO_LIST);
             Laid {
-                rows: RowList::new(Vec::new(), list, &metrics),
+                rows: computer_rows(&dialog, Vec::new(), &*metrics),
                 dialog,
                 metrics: MetricsHandle(metrics),
             }
@@ -373,8 +423,7 @@ impl MissionComputerScreen {
             return;
         };
         let names = self.computer.rows.iter().map(|row| row.name.clone());
-        let rect = laid.dialog.item_bounds(LIST_ITEM).unwrap_or(NO_LIST);
-        laid.rows = RowList::new(names.collect(), rect, &laid.metrics.0);
+        laid.rows = computer_rows(&laid.dialog, names.collect(), &*laid.metrics.0);
         if let Some(index) = kept.and_then(|mission| {
             self.computer
                 .rows
@@ -509,8 +558,15 @@ impl Screen for MissionComputerScreen {
             }
             return ScreenAction::None;
         }
-        if on_list(&laid.dialog, LIST_ITEM, input) {
-            if laid.rows.input(input) {
+        // Item 3 goes to the bar (the second `LClick`, @0xa01c5-0xa01e7);
+        // over a list that fits, it is left out (see the module docs).
+        let items: &[usize] = if laid.rows.bar().is_some() {
+            &[LIST_ITEM, BAR_ITEM]
+        } else {
+            &[LIST_ITEM]
+        };
+        if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, items, input) {
+            if press == (ListPress::Released { changed: true }) {
                 self.show_selected();
             }
             return ScreenAction::None;
@@ -522,8 +578,13 @@ impl Screen for MissionComputerScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// A press held on the list's bar steps on, and a drag past its ends
+    /// scrolls on.
+    fn tick(&mut self, dt: Duration) {
+        if let Ok(laid) = &mut self.laid {
+            laid.rows.tick(dt);
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
@@ -546,11 +607,35 @@ impl Screen for MissionComputerScreen {
         }
     }
 
+    /// The dialog lets go of its press, and the list ends its own as a
+    /// release would, loading the row it reached.
     fn cancel_pointer(&mut self) {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
+            if laid.rows.cancel_pointer() == (ListPress::Released { changed: true }) {
+                self.show_selected();
+            }
         }
     }
+}
+
+/// The mission computer's list of `names` in `dialog`'s item 2, its bar
+/// beside it in item 3's column, or, when they fit, the list widened to
+/// item 3's right (`_SetupMissionList` @0xa07a6-0xa07e3).
+fn computer_rows(dialog: &Dialog, names: Vec<String>, metrics: &dyn TextMetrics) -> RowList {
+    let rect = dialog.item_bounds(LIST_ITEM).unwrap_or(NO_LIST);
+    let fitted_right = dialog
+        .item_bounds(BAR_ITEM)
+        .map_or(rect.max.x, |item| item.max.x);
+    RowList::new(names, rect, &metrics, BarRoom::Beside { fitted_right })
+}
+
+/// The mission info screen's list of `names` in `dialog`'s item 2, its
+/// bar carved from the item's right when they don't fit
+/// (`_SetupMissionInfoList` @0x9df6f-0x9df90).
+fn info_rows(dialog: &Dialog, names: Vec<String>, metrics: &dyn TextMetrics) -> RowList {
+    let rect = dialog.item_bounds(INFO_LIST_ITEM).unwrap_or(NO_LIST);
+    RowList::new(names, rect, &metrics, BarRoom::Inside)
 }
 
 /// The mission info screen's `DLOG` (and `DITL`) ID.
@@ -633,9 +718,8 @@ impl MissionInfoScreen {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(INFO_DONE_ITEM))
                 .with_cancel(Some(INFO_DONE_ITEM));
-            let list = dialog.item_bounds(INFO_LIST_ITEM).unwrap_or(NO_LIST);
             InfoLaid {
-                rows: RowList::new(Vec::new(), list, &metrics),
+                rows: info_rows(&dialog, Vec::new(), &*metrics),
                 dialog,
                 metrics: MetricsHandle(metrics),
             }
@@ -749,8 +833,7 @@ impl MissionInfoScreen {
                 row.name.clone()
             }
         });
-        let rect = laid.dialog.item_bounds(INFO_LIST_ITEM).unwrap_or(NO_LIST);
-        laid.rows = RowList::new(names.collect(), rect, &laid.metrics.0);
+        laid.rows = info_rows(&laid.dialog, names.collect(), &*laid.metrics.0);
         if let Some(slot) = kept {
             match self.info.rows.iter().position(|row| row.slot == slot) {
                 Some(index) => laid.rows.select(index),
@@ -859,8 +942,8 @@ impl Screen for MissionInfoScreen {
             }
             return ScreenAction::None;
         }
-        if on_list(&laid.dialog, INFO_LIST_ITEM, input) {
-            if laid.rows.input(input) {
+        if let Some(press) = list_pointer(&laid.dialog, &mut laid.rows, &[INFO_LIST_ITEM], input) {
+            if press == (ListPress::Released { changed: true }) {
                 self.show_selected();
             }
             return ScreenAction::None;
@@ -872,8 +955,13 @@ impl Screen for MissionInfoScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// A press held on the list's bar steps on, and a drag past its ends
+    /// scrolls on.
+    fn tick(&mut self, dt: Duration) {
+        if let Ok(laid) = &mut self.laid {
+            laid.rows.tick(dt);
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
@@ -896,9 +984,14 @@ impl Screen for MissionInfoScreen {
         }
     }
 
+    /// The dialog lets go of its press, and the list ends its own as a
+    /// release would, loading the row it reached.
     fn cancel_pointer(&mut self) {
         if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
+            if laid.rows.cancel_pointer() == (ListPress::Released { changed: true }) {
+                self.show_selected();
+            }
         }
     }
 
@@ -2621,5 +2714,257 @@ mod tests {
         assert!(!off.closed(), "the info screen");
         assert_eq!(off.take_abort(), None);
         assert_eq!(off.dialog().and_then(Dialog::focus), None);
+    }
+
+    // The lists' scroll bars and pressed tracking.
+
+    fn button(pressed: bool, at: Point) -> Input {
+        Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        }
+    }
+
+    /// `n` Mac ticks.
+    fn mac_ticks(n: u32) -> Duration {
+        Duration::from_secs(1) / 60 * n
+    }
+
+    /// `count` missions in slots 0 on, the even ones abortable.
+    fn many_info(count: u8) -> MissionInfo {
+        MissionInfo {
+            rows: (0..count)
+                .map(|slot| {
+                    info_row(
+                        slot,
+                        &format!("Run {slot}"),
+                        false,
+                        &format!("Brief {slot}."),
+                        slot % 2 == 0,
+                    )
+                })
+                .collect(),
+            today: "June 23rd, 1177 NC".to_owned(),
+        }
+    }
+
+    /// The info screen's item 2 on screen: (285, 330) to (480, 414), seven
+    /// rows of 12.
+    const INFO_LIST_AT: Point = Point::new(285.0, 330.0);
+
+    /// A point on the info screen's row `row`, as shown from the top.
+    fn info_row_at(row: f32) -> Point {
+        Point::new(INFO_LIST_AT.x + 50.0, INFO_LIST_AT.y + 12.0 * row + 6.0)
+    }
+
+    /// The info screen's bar's down arrow, with rows that don't fit.
+    const INFO_DOWN_ARROW: Point = Point::new(470.0, 410.0);
+
+    fn first_shown(screen: &MissionInfoScreen) -> Option<usize> {
+        screen.rows().map(RowList::first)
+    }
+
+    #[test]
+    fn a_long_list_shows_its_scroll_bar_and_a_press_on_it_scrolls() {
+        let mut screen = info_screen_of(many_info(10));
+        let _ = screen.take_text_request();
+        assert_eq!(
+            info_screen_of(many_info(7)).rows().and_then(RowList::bar),
+            None
+        );
+        assert_eq!(
+            screen.rows().and_then(RowList::bar),
+            Some(Bounds {
+                min: Point::new(465.0, 329.0),
+                max: Point::new(481.0, 415.0),
+            }),
+            "item 2 less 15, then 16 wide (@0x9df84-0x9df90, GetScSize)"
+        );
+        screen.input(&button(true, INFO_DOWN_ARROW));
+        assert_eq!(first_shown(&screen), Some(1));
+        screen.input(&button(false, INFO_DOWN_ARROW));
+        assert_eq!(screen.take_text_request(), None, "the selection stays");
+        assert_eq!(screen.rows().and_then(RowList::selected), Some(0));
+    }
+
+    #[test]
+    fn a_press_on_the_list_tracks_across_rows_to_its_release() {
+        let mut screen = info_screen_of(many_info(3));
+        let _ = screen.take_text_request();
+        screen.input(&button(true, info_row_at(0.0)));
+        screen.input(&Input::PointerMoved(info_row_at(2.0)));
+        assert_eq!(
+            screen.rows().and_then(RowList::selected),
+            Some(2),
+            "highlighted"
+        );
+        assert_eq!(screen.take_text_request(), None, "not loaded while held");
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Brief 0.");
+        assert!(info_enabled(&screen, ABORT_LABEL), "still row 0's Abort");
+        screen.input(&button(false, info_row_at(2.0)));
+        assert_eq!(screen.rows().and_then(RowList::selected), Some(2));
+        assert_eq!(
+            screen.take_text_request(),
+            Some(2),
+            "loaded at LClick's return (@0x9dcd8)"
+        );
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Brief 2.");
+        assert!(info_enabled(&screen, ABORT_LABEL), "row 2's");
+        screen.input(&button(true, info_row_at(1.0)));
+        screen.input(&button(false, info_row_at(1.0)));
+        assert!(
+            !info_enabled(&screen, ABORT_LABEL),
+            "row 1 can't be aborted"
+        );
+    }
+
+    #[test]
+    fn a_click_below_the_last_row_selects_nothing() {
+        let mut screen = info_screen_of(many_info(2));
+        let _ = screen.take_text_request();
+        screen.input(&button(true, info_row_at(4.0)));
+        screen.input(&button(false, info_row_at(4.0)));
+        assert_eq!(screen.rows().and_then(RowList::selected), None);
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "", "item 4 black");
+        assert!(!info_enabled(&screen, ABORT_LABEL), "Abort greyed");
+        assert_eq!(screen.take_text_request(), None);
+        screen.input(&key(Key::Char('m')));
+        assert_eq!(
+            screen.take_map_request(),
+            Some(MapOpener::MissionInfo(None)),
+            "marked for nothing"
+        );
+    }
+
+    #[test]
+    fn a_step_with_the_selection_scrolled_out_of_view_lands_where_lautoscroll_puts_it() {
+        let mut screen = info_screen_of(many_info(10));
+        for _ in 0..3 {
+            screen.input(&button(true, INFO_DOWN_ARROW));
+            screen.input(&button(false, INFO_DOWN_ARROW));
+        }
+        assert_eq!(first_shown(&screen), Some(3), "row 0 scrolled out above");
+        let _ = screen.take_text_request();
+        screen.input(&key(Key::Down));
+        assert_eq!(screen.rows().and_then(RowList::selected), Some(1));
+        assert_eq!(
+            first_shown(&screen),
+            Some(1),
+            "no LRect scroll (@0x9d7e8), then LAutoScroll to the top (@0x9d8f1)"
+        );
+        assert_eq!(screen.take_text_request(), Some(1));
+    }
+
+    #[test]
+    fn cancelling_a_drag_keeps_the_row_it_reached() {
+        let mut screen = info_screen_of(many_info(3));
+        let _ = screen.take_text_request();
+        screen.input(&button(true, info_row_at(0.0)));
+        screen.input(&Input::PointerMoved(info_row_at(1.0)));
+        screen.cancel_pointer();
+        assert_eq!(screen.rows().and_then(RowList::selected), Some(1));
+        assert_eq!(
+            screen.take_text_request(),
+            Some(1),
+            "read back as a release"
+        );
+        screen.input(&Input::PointerMoved(info_row_at(2.0)));
+        assert_eq!(screen.rows().and_then(RowList::selected), Some(1), "let go");
+    }
+
+    #[test]
+    fn ticks_hold_the_bars_arrow() {
+        let mut screen = info_screen_of(many_info(10));
+        screen.input(&button(true, INFO_DOWN_ARROW));
+        assert_eq!(first_shown(&screen), Some(1));
+        screen.tick(mac_ticks(11));
+        assert_eq!(first_shown(&screen), Some(1));
+        screen.tick(mac_ticks(1));
+        assert_eq!(first_shown(&screen), Some(2), "ScrollDelay's 12 ticks");
+    }
+
+    /// `count` offers, 130 on.
+    fn many_offers(count: i16) -> MissionComputer {
+        MissionComputer {
+            rows: (0..count)
+                .map(|n| row(130 + n, &format!("Offer {n}"), &format!("Text {n}.")))
+                .collect(),
+            today: String::new(),
+        }
+    }
+
+    /// The computer's item 2 on screen: (267, 313) to (462, 457), twelve
+    /// rows of 12; item 3 is (462, 313) to (477, 457).
+    fn computer_row_at(row: f32) -> Point {
+        Point::new(300.0, 313.0 + 12.0 * row + 6.0)
+    }
+
+    #[test]
+    fn the_computers_rows_cover_item_3_when_they_fit() {
+        let screen = screen_of(many_offers(3));
+        let rows = screen.rows().expect("laid out");
+        assert_eq!(rows.bar(), None);
+        assert_eq!(
+            rows.row_bounds(0).map(|row| row.width()),
+            Some(210.0),
+            "item 2's 195 and item 3's 15 (@0xa07a8-0xa07e3)"
+        );
+    }
+
+    #[test]
+    fn the_computers_bar_sits_in_item_3_when_the_rows_dont_fit() {
+        let mut screen = screen_of(many_offers(13));
+        let _ = screen.take_text_request();
+        let rows = screen.rows().expect("laid out");
+        assert_eq!(rows.row_bounds(0).map(|row| row.width()), Some(195.0));
+        assert_eq!(
+            rows.bar(),
+            Some(Bounds {
+                min: Point::new(462.0, 312.0),
+                max: Point::new(478.0, 458.0),
+            })
+        );
+        let down = Point::new(470.0, 450.0);
+        screen.input(&button(true, down));
+        assert_eq!(
+            screen.rows().map(RowList::first),
+            Some(1),
+            "item 3's LClick (@0xa01e7)"
+        );
+        screen.input(&button(false, down));
+        assert_eq!(screen.take_text_request(), None);
+    }
+
+    #[test]
+    fn a_press_on_the_computers_list_tracks_to_its_release() {
+        let mut screen = screen_of(many_offers(3));
+        let _ = screen.take_text_request();
+        screen.input(&button(true, computer_row_at(0.0)));
+        screen.input(&Input::PointerMoved(computer_row_at(2.0)));
+        assert_eq!(screen.take_text_request(), None, "not loaded while held");
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Text 0.");
+        screen.input(&button(false, computer_row_at(2.0)));
+        assert_eq!(
+            screen.take_text_request(),
+            Some(MissionId(132)),
+            "loaded at LClick's return (@0xa007c)"
+        );
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Text 2.");
+    }
+
+    #[test]
+    fn a_click_below_the_computers_last_row_selects_nothing() {
+        let mut screen = screen_of(many_offers(2));
+        let _ = screen.take_text_request();
+        screen.input(&button(true, computer_row_at(5.0)));
+        screen.input(&button(false, computer_row_at(5.0)));
+        assert_eq!(screen.rows().and_then(RowList::selected), None);
+        assert_eq!(item_text(&screen, TEXT_ITEM), "");
+        assert_eq!(screen.take_text_request(), None);
+        screen.input(&key(ACCEPT_KEY));
+        assert_eq!(screen.take_accept(), None, "A accepts nothing");
+        screen.input(&key(Key::Char('m')));
+        assert_eq!(screen.take_map_request(), Some(MapOpener::Computer(None)));
     }
 }

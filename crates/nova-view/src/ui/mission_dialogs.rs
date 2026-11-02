@@ -621,7 +621,8 @@ impl Screen for MissionDialogs {
     }
 
     /// The movie shown, the front text's fade-in, or a press held on the
-    /// text shown's scroll arrow moves on; the rest wait on input. The keys
+    /// text shown's scroll arrow moves on, or, with no text, a press held
+    /// on the mission info screen's list; the rest wait on input. The keys
     /// a cancelled press held back run on the text, which may close it,
     /// and it is dropped as an input's close drops it. Once
     /// the fade-in ends, what was pressed during it reaches the text, and
@@ -647,7 +648,12 @@ impl Screen for MissionDialogs {
                 self.drop_closed_text();
                 self.settle();
             }
-            Some(Stage::Empty | Stage::Closed) | None => {}
+            Some(Stage::Empty | Stage::Closed) => {}
+            None => {
+                if let Some(info) = &mut self.info {
+                    info.tick(dt);
+                }
+            }
         }
     }
 
@@ -716,6 +722,7 @@ mod tests {
     use crate::ui::desc::{DONE_ITEM, SCROLL_DOWN_ITEM};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
     use crate::ui::mission_info::MISSION_INFO_KEY;
+    use crate::ui::row_list::RowList;
     use nova_sim::DescMovie;
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -1189,6 +1196,39 @@ mod tests {
             dialogs.take_sounds(),
             [Sound::Ui(UiSound::MissionInfoClosed)]
         );
+    }
+
+    #[test]
+    fn a_tick_holds_the_info_screens_bar_arrow_with_no_text_over_it() {
+        let mut dialogs = dialogs();
+        let rows = (0..10)
+            .map(|slot| InfoRow {
+                slot,
+                name: format!("Run {slot}"),
+                failed: false,
+                text: String::new(),
+                abortable: true,
+            })
+            .collect();
+        dialogs.open_info(MissionInfo {
+            rows,
+            today: String::new(),
+        });
+        let first = |dialogs: &MissionDialogs| {
+            dialogs
+                .info()
+                .and_then(MissionInfoScreen::rows)
+                .map(RowList::first)
+        };
+        // Item 2 at (285, 330), 84 high: the bar's down arrow at its foot.
+        dialogs.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: Point::new(470.0, 410.0),
+        });
+        assert_eq!(first(&dialogs), Some(1));
+        dialogs.tick(Duration::from_secs(1) / 60 * 12);
+        assert_eq!(first(&dialogs), Some(2), "held");
     }
 
     #[test]
