@@ -68,13 +68,14 @@
 //! Left out: snd 372's priority 5 (`_PlaySoundDistance` @0x351fa,
 //! @0x35300), which the view doesn't play by yet
 //! (rdm:phase/ship-handling-fidelity/phase-20-npc-pod-sound-priority-and-fire-gate);
-//! `_gameFrozen` (@0x35091), which the engine has no state for; and the
-//! `_gSpeedMult` division of the interval (@0x3527a-0x35298), a division
-//! by 1 at the engine's tick.
+//! `_gameFrozen` (@0x35091), which the engine has no state for. The
+//! interval is divided by the frame's gain (`_gSpeedMult`
+//! @0x3527a-0x35298), which `Session::npc_escape` reads and hands on.
 //!
 //! [`PodEjected`]: crate::combat::CombatEvent::PodEjected
 
 use super::{Session, Space, Statics};
+use crate::SpeedMult;
 use crate::chance::Chance;
 use crate::combat::armament::{Rounds, inaccuracy};
 use crate::combat::hull::Condition;
@@ -147,9 +148,10 @@ impl Session {
             return;
         }
         let frame = self.field().frame;
+        let gain = self.speed_mult();
         let (pods, escape) = timers(was, at_step.dying);
         if let Some(timer) = pods {
-            self.space.eject_pods(&self.statics, id, timer, frame);
+            self.space.eject_pods(&self.statics, id, timer, frame, gain);
         }
         if let Some(timer) = escape {
             self.escape_roll(id, timer, chance);
@@ -240,8 +242,15 @@ impl Session {
 
 impl Space {
     /// NPC `id`'s person's pod and crew pod, its death timer at `timer`,
-    /// on `frame`.
-    fn eject_pods(&mut self, statics: &Statics, id: NpcId, timer: i32, frame: i32) {
+    /// on `frame`, the crew pods spaced at the frame's `gain`.
+    fn eject_pods(
+        &mut self,
+        statics: &Statics,
+        id: NpcId,
+        timer: i32,
+        frame: i32,
+        gain: SpeedMult,
+    ) {
         let Some(npc) = self.npc(id) else {
             return;
         };
@@ -258,6 +267,7 @@ impl Space {
             i32::from(npc.hull.pod_count),
             i32::from(npc.pods_left),
             frame,
+            gain,
         );
         let (at, velocity) = (npc.state.position, npc.state.velocity);
         if person {
@@ -489,6 +499,45 @@ mod tests {
             [50, 58, 68, 78, 88, 98],
             "the first at once, the rest on frames a multiple of 10, the last on the explosion tick"
         );
+    }
+
+    #[test]
+    fn at_half_gain_a_dying_liners_later_pods_come_on_twice_the_interval() {
+        // DeathDelay 100 and PodCount 10: an interval of 10, 20 at half
+        // gain. The death timer still counts a whole tick (+0x3c,
+        // @0x3509b).
+        let half = crate::SpeedMult::new(0.5);
+        let interval = crate::npc_escape::pod_interval(100, 10, half);
+        assert_eq!(interval, 20);
+        let catalog = escaping(0);
+        let mut session = flying(&catalog, RuleSource::Engine);
+        session.at_gain(half);
+        let id = session.space.traffic.add_npc(doomed(100, 10));
+        let mut ticks = Vec::new();
+        for tick in 0..400_i16 {
+            if session.space.npc(id).is_none() {
+                break;
+            }
+            session.space.frame = tick + 2;
+            work_with(
+                &mut session,
+                &crate::testkit::catalog(),
+                Controls::default(),
+                &Passive,
+                Rules::default(),
+                &mut Rolls::default(),
+            );
+            for event in session.take_combat_events() {
+                if let CombatEvent::PodEjected { .. } = event {
+                    ticks.push(tick);
+                }
+            }
+        }
+        let later =
+            (51..=98).filter(|tick| (tick + 2) % i16::try_from(interval).expect("short") == 0);
+        let expected: Vec<i16> = std::iter::once(50).chain(later).collect();
+        assert_eq!(expected, [50, 58, 78, 98]);
+        assert_eq!(ticks, expected);
     }
 
     #[test]

@@ -23,15 +23,19 @@
 //!   [`INTERCEPTORS_RETREAT`] (in-memory +0x21 bit 0, `Flags` 0x0100).
 //! - **The crew pods** ([`crew_pod_due`], @0x351ff-0x35300): while pods
 //!   are left and the timer is at or below half, the first at once and
-//!   the rest on each frame a multiple of [`pod_interval`].
+//!   the rest on each frame a multiple of [`pod_interval`], which the
+//!   frame's gain divides when it is above 0.0 (`_gSpeedMult` @0x3527a,
+//!   `ucomisd` 0xdd118, `cvttsd2si` @0x35298), so a slow frame spaces the
+//!   pods wider.
 //! - **The escape ship** ([`escape_roll_due`], @0x35464-0x354b9): a dying
 //!   ship with an escape ship aboard, once the timer is at or below half,
 //!   rolls `Rand(`[`ESCAPE_ROLL_ODDS`]`) == 0`.
 //!
-//! Left out: `_HandleShip` divides the interval by `_gSpeedMult` when
-//! that is above 0.0 (@0x3527a-0x35298), which at the engine's tick is a
-//! division by 1.
+//! Left out: the interval's 16-bit width, as the original takes it into
+//! its `idivl` of `_frameCounter` (@0x352a4): an integer width, not
+//! replicated.
 
+use nova_sim_base::speed_mult::SpeedMult;
 use nova_sim_state::govt::INTERCEPTORS_RETREAT;
 
 use crate::person::ESCAPE_POD;
@@ -46,13 +50,24 @@ pub const POD_INTERVAL_SHARE: f64 = 0.4;
 pub const ESCAPE_ROLL_ODDS: u32 = 3;
 
 /// The frames between a dying ship's crew pods, for a `DeathDelay` of
-/// `death_delay` and a class `PodCount` of `class_pods` (above 0):
-/// `max(10, trunc(trunc(death_delay / class_pods) x 0.4))`, the division
-/// an integer one (`idivl` @0x3525c), truncating toward 0.
+/// `death_delay` and a class `PodCount` of `class_pods` (above 0), at the
+/// frame's `gain`: `max(10, trunc(trunc(death_delay / class_pods) x
+/// 0.4))`, the division an integer one (`idivl` @0x3525c), truncating
+/// toward 0; then, when the gain is above 0.0, `trunc(interval / g)` in
+/// doubles (@0x3527a-0x35298). An `i32`, wider than the original's
+/// short (see the module docs).
 #[must_use]
-pub fn pod_interval(death_delay: i32, class_pods: i32) -> i32 {
+pub fn pod_interval(death_delay: i32, class_pods: i32, gain: SpeedMult) -> i32 {
     let share = f64::from(death_delay / class_pods.max(1)) * POD_INTERVAL_SHARE;
-    (share as i32).max(POD_INTERVAL_FLOOR)
+    let interval = (share as i32).max(POD_INTERVAL_FLOOR);
+    let g = gain.get();
+    if g > 0.0 {
+        #[allow(clippy::cast_possible_truncation)]
+        let divided = (f64::from(interval) / g) as i32;
+        divided
+    } else {
+        interval
+    }
 }
 
 /// Whether the death timer `timer` is at or below half `death_delay`.
@@ -66,13 +81,20 @@ fn at_or_below_half(timer: i32, death_delay: i32) -> bool {
 /// (`_frameCounter`, signed): while pods are left, the timer is at or
 /// below half the `DeathDelay` and the class carries pods, the first at
 /// once (`left == class_pods`) and each later one on a frame that is a
-/// multiple of [`pod_interval`].
+/// multiple of [`pod_interval`] at the frame's `gain`.
 #[must_use]
-pub fn crew_pod_due(timer: i32, death_delay: i32, class_pods: i32, left: i32, frame: i32) -> bool {
+pub fn crew_pod_due(
+    timer: i32,
+    death_delay: i32,
+    class_pods: i32,
+    left: i32,
+    frame: i32,
+    gain: SpeedMult,
+) -> bool {
     left > 0
         && at_or_below_half(timer, death_delay)
         && class_pods > 0
-        && (frame % pod_interval(death_delay, class_pods) == 0 || left == class_pods)
+        && (frame % pod_interval(death_delay, class_pods, gain) == 0 || left == class_pods)
 }
 
 /// Whether a dying ship's person launches its pod this frame, with the
@@ -108,25 +130,76 @@ mod tests {
 
     #[test]
     fn the_interval_is_a_whole_share_of_the_delay_floored_at_10() {
-        assert_eq!(pod_interval(100, 10), 10, "4 floored at 10");
-        assert_eq!(pod_interval(165, 3), 22, "trunc(55 x 0.4)");
-        assert_eq!(pod_interval(1000, 4), 100);
         assert_eq!(
-            pod_interval(129, 2),
+            pod_interval(100, 10, SpeedMult::FULL),
+            10,
+            "4 floored at 10"
+        );
+        assert_eq!(pod_interval(165, 3, SpeedMult::FULL), 22, "trunc(55 x 0.4)");
+        assert_eq!(pod_interval(1000, 4, SpeedMult::FULL), 100);
+        assert_eq!(
+            pod_interval(129, 2, SpeedMult::FULL),
             25,
             "64 x 0.4 = 25.6, not 129 / 2 x 0.4 = 25.8"
         );
-        assert_eq!(pod_interval(139, 2), 27, "69 x 0.4 = 27.6, not 27.8");
-        assert_eq!(pod_interval(149, 2), 29, "74 x 0.4 = 29.6, not 29.8");
-        assert_eq!(pod_interval(175, 7), 10, "25 x 0.4 = 10");
-        assert_eq!(pod_interval(200, 7), 11, "28 x 0.4 = 11.2");
-        assert_eq!(pod_interval(-500, 2), 10, "a negative delay is floored");
-        assert_eq!(pod_interval(250, 1), 100);
+        assert_eq!(
+            pod_interval(139, 2, SpeedMult::FULL),
+            27,
+            "69 x 0.4 = 27.6, not 27.8"
+        );
+        assert_eq!(
+            pod_interval(149, 2, SpeedMult::FULL),
+            29,
+            "74 x 0.4 = 29.6, not 29.8"
+        );
+        assert_eq!(pod_interval(175, 7, SpeedMult::FULL), 10, "25 x 0.4 = 10");
+        assert_eq!(pod_interval(200, 7, SpeedMult::FULL), 11, "28 x 0.4 = 11.2");
+        assert_eq!(
+            pod_interval(-500, 2, SpeedMult::FULL),
+            10,
+            "a negative delay is floored"
+        );
+        assert_eq!(pod_interval(250, 1, SpeedMult::FULL), 100);
+    }
+
+    #[test]
+    fn the_frames_gain_divides_the_interval_when_above_none() {
+        assert_eq!(pod_interval(1000, 4, SpeedMult::new(0.25)), 400);
+        assert_eq!(pod_interval(1000, 4, SpeedMult::new(0.5)), 200);
+        assert_eq!(pod_interval(165, 3, SpeedMult::new(0.5)), 44);
+        assert_eq!(
+            pod_interval(165, 3, SpeedMult::new(0.3)),
+            73,
+            "trunc(73.33)"
+        );
+        assert_eq!(pod_interval(1000, 4, SpeedMult::FULL), 100);
+        assert_eq!(
+            pod_interval(1000, 4, SpeedMult::ZERO),
+            100,
+            "none: no division"
+        );
+        assert_eq!(
+            pod_interval(100, 10, SpeedMult::new(0.5)),
+            20,
+            "after the floor"
+        );
+    }
+
+    #[test]
+    fn at_half_gain_a_later_crew_pod_comes_on_twice_the_interval() {
+        let half = SpeedMult::new(0.5);
+        let due = |frame| crew_pod_due(49, 100, 10, 9, frame, half);
+        assert!(due(20), "a multiple of 20");
+        assert!(!due(10), "not of 10 alone");
+        assert!(
+            crew_pod_due(50, 100, 10, 10, 7, half),
+            "the first still at once"
+        );
     }
 
     #[test]
     fn the_first_crew_pod_comes_at_once_and_the_rest_on_the_interval() {
-        let due = |timer, left, frame| crew_pod_due(timer, 100, 10, left, frame);
+        let due = |timer, left, frame| crew_pod_due(timer, 100, 10, left, frame, SpeedMult::FULL);
         assert!(due(50, 10, 7), "the first at once, any frame");
         assert!(!due(51, 10, 0), "not above half");
         assert!(!due(50, 9, 7), "a later one off the interval");
@@ -135,10 +208,22 @@ mod tests {
         assert!(!due(40, 0, 0), "none left");
         assert!(due(40, 3, -20), "a negative multiple");
         assert!(!due(40, 3, -15), "-15 % 10 is not 0");
-        assert!(!crew_pod_due(40, 100, 0, 3, 0), "a class of no pods");
-        assert!(!crew_pod_due(40, 100, -1, -1, 0), "nor of fewer");
-        assert!(crew_pod_due(50, 101, 10, 9, 10), "50 is below 50.5");
-        assert!(!crew_pod_due(51, 101, 10, 10, 10), "51 above it");
+        assert!(
+            !crew_pod_due(40, 100, 0, 3, 0, SpeedMult::FULL),
+            "a class of no pods"
+        );
+        assert!(
+            !crew_pod_due(40, 100, -1, -1, 0, SpeedMult::FULL),
+            "nor of fewer"
+        );
+        assert!(
+            crew_pod_due(50, 101, 10, 9, 10, SpeedMult::FULL),
+            "50 is below 50.5"
+        );
+        assert!(
+            !crew_pod_due(51, 101, 10, 10, 10, SpeedMult::FULL),
+            "51 above it"
+        );
     }
 
     #[test]
