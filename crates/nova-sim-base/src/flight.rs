@@ -15,7 +15,9 @@
 //!    sub 1, stops by thresholds of its own:
 //!    rdm:phase/play-feel-2/phase-15-brake-leaves-sub-thrust-drift.)
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
-//!    its velocity. By default ([`SpeedCap::PerAxis`], the original's), as
+//!    its velocity, × the frame's gain for the player
+//!    ([`SpeedMult`]; an NPC's [`step`] runs at full gain until
+//!    `_HandleShip` reads it). By default ([`SpeedCap::PerAxis`], the original's), as
 //!    `_AdjustedAccel` adds it ([`adjusted_accel`], @0x2ae4b-0x2af43): on
 //!    each axis only while that axis is short of the top speed's share
 //!    along the heading, and along the heading's whole degree, as the
@@ -41,7 +43,8 @@
 //!    (the session for the player, traffic for NPCs), as the original slows
 //!    a hull `_IsDisabled` reports (0x68abf-0x68af8, 0x33950-0x339a1) before
 //!    that frame's position step.
-//! 4. Moves the ship by its new velocity (semi-implicit Euler).
+//! 4. Moves the ship by its new velocity × the gain (semi-implicit Euler,
+//!    [`moved`]).
 //!
 //! An inertialess ship (see [`inertialess`](crate::inertialess)) holds a
 //! speed along its heading instead, which its owner keeps (the session
@@ -49,9 +52,10 @@
 //! [`inertialess_step`] or [`inertialess_player_step`]: it turns as
 //! above (an NPC's by its keys alone, and the player's reverse gives no
 //! aim). Thrust and reverse move the
-//! speed, not the velocity, up to the top speed; the player's speed is
-//! then capped at its box (@0x6d356). Then the velocity is pulled toward
-//! heading x speed on each axis, capped as in step 3, and the ship moves
+//! speed, not the velocity, by the acceleration × the gain, up to the top
+//! speed; the player's speed is then capped at its box (@0x6d356). Then
+//! the velocity is pulled toward heading x speed on each axis by
+//! [`adjust_rate`], capped as in step 3, and the ship moves
 //! ([`inertialess_advance`]).
 //!
 //! A heading is in degrees: 0 faces up the screen (-y), and it grows
@@ -63,11 +67,12 @@ use core::num::NonZeroU32;
 use crate::geometry::Vec2;
 use crate::handling::{Handling, ORIGINAL_THRUST_DIVISOR};
 use crate::inertialess::{
-    ADJUST_RATE, BRAKE, InertialDampener, REVERSE, THRUST, adjust_velocity, step_speed,
+    BRAKE, InertialDampener, REVERSE, THRUST, adjust_rate, adjust_velocity, step_speed,
 };
 use crate::player_turn::{PlayerTurn, turn};
 use crate::rulebook::{RuleKey, RuleSource, RuleValue, Rulebook};
 use crate::speed_cap::{SpeedCap, adjusted_accel, circle, speed_limit};
+use crate::speed_mult::SpeedMult;
 use crate::trig;
 
 /// The speed, in pixels a tick, at or below which the autopilot's own
@@ -305,7 +310,9 @@ pub struct ShipState {
 }
 
 /// Advances `state`, `flyer`'s ship, one tick under `controls`, flying as
-/// `handling` allows under `rules` (see the module docs): an NPC's tick.
+/// `handling` allows under `rules` (see the module docs): an NPC's tick,
+/// at full gain until `_HandleShip` reads the frame's
+/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
 pub fn step(
     state: &mut ShipState,
     handling: &Handling,
@@ -315,7 +322,15 @@ pub fn step(
 ) {
     state.heading = turned(state.heading, controls.turn, handling.turn_rate);
     let caps = Caps::top(handling.max_speed);
-    advance(state, handling, controls.thrust, caps, rules, flyer);
+    advance(
+        state,
+        handling,
+        controls.thrust,
+        caps,
+        rules,
+        flyer,
+        SpeedMult::FULL,
+    );
 }
 
 /// Advances the player's ship, `state`, one tick under `controls`, flying
@@ -323,7 +338,8 @@ pub fn step(
 /// block does, toward `aim` while the auto-turn aims (reverse or the face
 /// key, which the session works out), the turn keys held off, and by
 /// them otherwise ([`player_turn`](crate::player_turn)); then it thrusts,
-/// is capped by `caps` and moves ([`advance`]).
+/// is capped by `caps` and moves ([`advance`]), each at the frame's
+/// `gain`.
 pub fn player_step(
     state: &mut ShipState,
     handling: &Handling,
@@ -331,6 +347,7 @@ pub fn player_step(
     aim: Option<i16>,
     caps: Caps,
     rules: FlightRules,
+    gain: SpeedMult,
 ) {
     (state.heading, _) = turn(
         state.heading,
@@ -338,14 +355,27 @@ pub fn player_step(
         aim,
         controls.turn,
         rules.player_turn,
+        gain,
     );
-    advance(state, handling, controls.thrust, caps, rules, Flyer::Player);
+    advance(
+        state,
+        handling,
+        controls.thrust,
+        caps,
+        rules,
+        Flyer::Player,
+        gain,
+    );
 }
 
 /// The rest of a tick after the turn (see the module docs, steps 2-4):
 /// `state`, `flyer`'s ship, thrusts along its heading if `thrust`, toward
 /// `caps`' thrust top, is capped to its box and moves, flying as
-/// `handling` allows under `rules`.
+/// `handling` allows under `rules`, at the frame's `gain`: the thrust
+/// pushes the acceleration × the gain, a float as `_HandlePlayer` hands
+/// it to `_AdjustedAccel` (@0x6cca1-0x6ccad, @0x6cd00-0x6cd0c), and the
+/// ship moves its velocity × the gain ([`moved`]). The box clamps the
+/// whole velocity, as the gain moves only the position.
 pub fn advance(
     state: &mut ShipState,
     handling: &Handling,
@@ -353,16 +383,14 @@ pub fn advance(
     caps: Caps,
     rules: FlightRules,
     flyer: Flyer,
+    gain: SpeedMult,
 ) {
+    let accel = gain.times(handling.accel);
     match rules.speed_cap {
         SpeedCap::PerAxis => {
             if thrust {
-                state.velocity = adjusted_accel(
-                    state.velocity,
-                    state.heading,
-                    handling.accel,
-                    caps.thrust_top,
-                );
+                state.velocity =
+                    adjusted_accel(state.velocity, state.heading, accel, caps.thrust_top);
             }
             if flyer == Flyer::Player {
                 state.velocity = speed_limit(state.velocity, caps.max_vel);
@@ -370,12 +398,24 @@ pub fn advance(
         }
         SpeedCap::Circle => {
             if thrust {
-                state.velocity = state.velocity + facing(state.heading) * handling.accel;
+                state.velocity = state.velocity + facing(state.heading) * accel;
             }
             state.velocity = circle(state.velocity, caps.max_vel);
         }
     }
-    state.position = state.position + state.velocity;
+    state.position = moved(state.position, state.velocity, gain);
+}
+
+/// `position` moved by `velocity` × the frame's `gain`: each axis added in
+/// doubles and narrowed, as `_HandlePlayer` moves the player
+/// (@0x6d4b0-0x6d4eb) and the escape pod (@0x68d9c-0x68dd8). At full gain
+/// it is `position + velocity`.
+#[must_use]
+pub fn moved(position: Vec2, velocity: Vec2, gain: SpeedMult) -> Vec2 {
+    Vec2::new(
+        gain.add_times(position.x, velocity.x),
+        gain.add_times(position.y, velocity.y),
+    )
 }
 
 /// Advances `state`, an inertialess NPC's ship holding `speed` along its
@@ -384,7 +424,9 @@ pub fn advance(
 /// reverse never turns an inertialess ship; thrust adds a tick's
 /// [`THRUST`] to its speed and reverse is the AI's brake, [`BRAKE`]
 /// (`_LowLevelAIHandler` substate 1, @0x853d7-0x85403); then
-/// [`inertialess_advance`].
+/// [`inertialess_advance`]. At full gain until `_HandleShip` reads the
+/// frame's (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain);
+/// the brake reads no gain there.
 pub fn inertialess_step(
     state: &mut ShipState,
     speed: &mut f32,
@@ -401,18 +443,28 @@ pub fn inertialess_step(
         0.0
     };
     let caps = Caps::top(handling.max_speed);
-    inertialess_advance(state, speed, handling, thrust, caps, rules, Flyer::Npc);
+    inertialess_advance(
+        state,
+        speed,
+        handling,
+        thrust,
+        caps,
+        rules,
+        Flyer::Npc,
+        SpeedMult::FULL,
+    );
 }
 
 /// Advances the player's inertialess ship, `state`, holding `speed` along
 /// its heading, one tick under `controls`, flying as `handling` allows
-/// under `rules`: it turns as [`player_step`] does, toward `aim` or by the
-/// turn keys (reverse gives an inertialess ship no aim); reverse takes a
-/// tick's acceleration off its speed (@0x6c770-0x6c7d3) and then thrust
-/// adds one (@0x6cbb2-0x6cc3e), each floored and capped as
-/// [`step_speed`] does, at the top speed whatever `caps` say (the thrust
-/// ignores the afterburner, @0x6cbb2-0x6cc3e); then
-/// [`inertialess_advance`], capped by `caps`.
+/// under `rules`, at the frame's `gain`: it turns as [`player_step`]
+/// does, toward `aim` or by the turn keys (reverse gives an inertialess
+/// ship no aim); reverse takes the acceleration × the gain off its speed
+/// (@0x6c770-0x6c7d3) and then thrust adds as much (@0x6cbb2-0x6cc3e),
+/// each floored and capped as [`step_speed`] does, at the top speed
+/// whatever `caps` say (the thrust ignores the afterburner,
+/// @0x6cbb2-0x6cc3e); then [`inertialess_advance`], capped by `caps`.
+#[allow(clippy::too_many_arguments)] // the tick's own state, rules and gain
 pub fn inertialess_player_step(
     state: &mut ShipState,
     speed: &mut f32,
@@ -421,6 +473,7 @@ pub fn inertialess_player_step(
     aim: Option<i16>,
     caps: Caps,
     rules: FlightRules,
+    gain: SpeedMult,
 ) {
     (state.heading, _) = turn(
         state.heading,
@@ -428,27 +481,40 @@ pub fn inertialess_player_step(
         aim,
         controls.turn,
         rules.player_turn,
+        gain,
     );
     if controls.reverse {
-        *speed = step_speed(*speed, REVERSE, handling.accel, handling.max_speed);
+        *speed = step_speed(*speed, REVERSE, handling.accel, handling.max_speed, gain);
     }
     let thrust = if controls.thrust { THRUST } else { 0.0 };
-    inertialess_advance(state, speed, handling, thrust, caps, rules, Flyer::Player);
+    inertialess_advance(
+        state,
+        speed,
+        handling,
+        thrust,
+        caps,
+        rules,
+        Flyer::Player,
+        gain,
+    );
 }
 
-/// The rest of an inertialess ship's tick after its turn: `state`,
-/// `flyer`'s ship, holding `speed` along its heading, moves its speed by
-/// `thrust` ticks of its acceleration when that is not none
-/// ([`step_speed`], at the top speed); the player's speed is then capped
-/// at `caps`' box (@0x6d356-0x6d369). Its velocity is pulled toward
-/// heading x speed by [`ADJUST_RATE`] ticks' acceleration
-/// ([`adjust_velocity`], @0x6d43a, @0x3425f), capped as [`advance`] caps
-/// it, and it moves.
+/// The rest of an inertialess ship's tick after its turn, at the frame's
+/// `gain`: `state`, `flyer`'s ship, holding `speed` along its heading,
+/// moves its speed by `thrust` × its acceleration × the gain when that is
+/// not none ([`step_speed`], at the top speed); the player's speed is
+/// then capped at `caps`' box (@0x6d356-0x6d369). Its velocity is pulled
+/// toward heading x speed by
+/// [`ADJUST_RATE`](crate::inertialess::ADJUST_RATE) × its acceleration × the
+/// gain ([`adjust_rate`], [`adjust_velocity`], @0x6d43a, @0x3425f),
+/// capped as [`advance`] caps it, and it moves its velocity × the gain
+/// ([`moved`]).
 ///
 /// The original's NPC is adjusted and moved (@0x34250-0x342aa) before its
 /// thrust word moves the speed (@0x34acc-0x34b6d), so an NPC's thrust
 /// reaches its velocity a tick later there than here: a one-tick lag the
 /// player never sees, left as it is.
+#[allow(clippy::too_many_arguments)] // the tick's own state, rules and gain
 pub fn inertialess_advance(
     state: &mut ShipState,
     speed: &mut f32,
@@ -457,9 +523,10 @@ pub fn inertialess_advance(
     caps: Caps,
     rules: FlightRules,
     flyer: Flyer,
+    gain: SpeedMult,
 ) {
     if thrust != 0.0 {
-        *speed = step_speed(*speed, thrust, handling.accel, handling.max_speed);
+        *speed = step_speed(*speed, thrust, handling.accel, handling.max_speed, gain);
     }
     let top = caps.max_vel;
     if flyer == Flyer::Player {
@@ -469,14 +536,14 @@ pub fn inertialess_advance(
         state.velocity,
         state.heading,
         *speed,
-        handling.accel * ADJUST_RATE,
+        adjust_rate(handling.accel, gain),
     );
     state.velocity = match (rules.speed_cap, flyer) {
         (SpeedCap::PerAxis, Flyer::Player) => speed_limit(state.velocity, top),
         (SpeedCap::PerAxis, Flyer::Npc) => state.velocity,
         (SpeedCap::Circle, _) => circle(state.velocity, top),
     };
-    state.position = state.position + state.velocity;
+    state.position = moved(state.position, state.velocity, gain);
 }
 
 /// `heading` turned a tick by the turn keys, `turn`, at `rate` degrees a
@@ -1220,6 +1287,7 @@ mod tests {
                 aim,
                 Caps::top(PEGASUS.max_speed),
                 rules,
+                SpeedMult::FULL,
             );
         }
         state
@@ -1282,6 +1350,7 @@ mod tests {
             None,
             TOP,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!(near(state.velocity, Vec2::new(0.1, 0.0)), "{state:?}");
         assert!(near(state.position, Vec2::new(0.1, 0.0)), "{state:?}");
@@ -1293,6 +1362,7 @@ mod tests {
             None,
             TOP,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(fast.velocity, Vec2::new(3.0, 0.0), "the player's box");
         assert_eq!(fast.position, Vec2::new(3.0, 0.0));
@@ -1312,13 +1382,22 @@ mod tests {
             None,
             caps,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!(
             near(state.velocity, Vec2::new(3.1, 0.0)),
             "past the top: {state:?}"
         );
         let mut plain = moving(Vec2::new(3.0, 0.0), 90.0);
-        player_step(&mut plain, &SHIP, THRUST, None, TOP, FlightRules::default());
+        player_step(
+            &mut plain,
+            &SHIP,
+            THRUST,
+            None,
+            TOP,
+            FlightRules::default(),
+            SpeedMult::FULL,
+        );
         assert!(
             near(plain.velocity, Vec2::new(3.0, 0.0)),
             "held at it: {plain:?}"
@@ -1339,6 +1418,7 @@ mod tests {
             None,
             narrow,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(boxed.velocity, Vec2::new(1.0, -1.0), "{boxed:?}");
         let wide = Caps {
@@ -1353,10 +1433,19 @@ mod tests {
             None,
             wide,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(fast.velocity, Vec2::new(4.0, 0.0), "within the box");
         let mut circled = moving(Vec2::new(4.0, 4.0), 90.0);
-        player_step(&mut circled, &SHIP, Controls::default(), None, wide, CIRCLE);
+        player_step(
+            &mut circled,
+            &SHIP,
+            Controls::default(),
+            None,
+            wide,
+            CIRCLE,
+            SpeedMult::FULL,
+        );
         assert!(
             (circled.velocity.length() - 5.0).abs() < 1e-5,
             "{circled:?}"
@@ -1373,6 +1462,7 @@ mod tests {
             None,
             start,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(
             rested.velocity,
@@ -1398,6 +1488,7 @@ mod tests {
             None,
             wide,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(speed, 4.0, "within the box");
         assert!(near(state.velocity, Vec2::new(4.0, 0.0)), "{state:?}");
@@ -1409,6 +1500,7 @@ mod tests {
             None,
             wide,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(speed, 3.0, "thrust caps it at the top speed");
         let narrow = Caps {
@@ -1423,6 +1515,7 @@ mod tests {
             None,
             narrow,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(speed, 2.0, "and the box below it");
     }
@@ -1489,6 +1582,7 @@ mod tests {
                     None,
                     TOP,
                     FlightRules::default(),
+                    SpeedMult::FULL,
                 ),
             }
             assert_eq!(state.heading, 0.0, "{flyer:?}");
@@ -1627,6 +1721,7 @@ mod tests {
             None,
             TOP,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(state.heading, 0.0);
         assert!((speed - 1.9).abs() < 1e-6, "{speed}");
@@ -1643,6 +1738,7 @@ mod tests {
             None,
             TOP,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert!(
             (slow - 0.1).abs() < 1e-6,
@@ -1662,6 +1758,7 @@ mod tests {
             Some(9),
             TOP,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(state.heading, 2.0, "toward 9, the keys held off");
     }
@@ -1678,6 +1775,7 @@ mod tests {
             None,
             TOP,
             FlightRules::default(),
+            SpeedMult::FULL,
         );
         assert_eq!(speed, 3.0, "capped at the top speed");
         assert!(near(state.velocity, Vec2::new(3.0, 0.0)), "{state:?}");
@@ -1711,6 +1809,7 @@ mod tests {
             None,
             TOP,
             CIRCLE,
+            SpeedMult::FULL,
         );
         assert!((player.velocity.length() - 3.0).abs() < 1e-5, "{player:?}");
     }
@@ -1755,5 +1854,111 @@ mod tests {
             .npc_formation,
             NpcFormation::Earlier
         );
+    }
+
+    // The frame's gain.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn a_move_takes_the_velocity_times_the_gain() {
+        let p = Vec2::new(10.0, -4.0);
+        let v = Vec2::new(3.0, 1.5);
+        assert_eq!(moved(p, v, HALF), Vec2::new(11.5, -3.25));
+        assert_eq!(moved(p, v, SpeedMult::FULL), p + v);
+        assert_eq!(moved(p, v, SpeedMult::ZERO), p);
+    }
+
+    #[test]
+    fn at_half_gain_a_thrust_adds_half_an_accel_under_either_cap_and_moves_half() {
+        for rules in [FlightRules::default(), CIRCLE] {
+            let mut state = heading(90.0);
+            advance(&mut state, &SHIP, true, TOP, rules, Flyer::Player, HALF);
+            assert!(
+                near(state.velocity, Vec2::new(0.05, 0.0)),
+                "{rules:?} {state:?}"
+            );
+            assert!(
+                near(state.position, Vec2::new(0.025, 0.0)),
+                "{rules:?} {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn at_half_gain_the_box_still_clamps_the_whole_velocity() {
+        let mut state = moving(Vec2::new(5.0, -5.0), 90.0);
+        let rules = FlightRules::default();
+        advance(&mut state, &SHIP, false, TOP, rules, Flyer::Player, HALF);
+        assert_eq!(state.velocity, Vec2::new(3.0, -3.0));
+        assert_eq!(state.position, Vec2::new(1.5, -1.5));
+    }
+
+    #[test]
+    fn at_half_gain_the_players_step_thrusts_half_an_accel() {
+        let mut state = heading(90.0);
+        player_step(
+            &mut state,
+            &SHIP,
+            THRUST,
+            None,
+            TOP,
+            FlightRules::default(),
+            HALF,
+        );
+        assert!(near(state.velocity, Vec2::new(0.05, 0.0)), "{state:?}");
+        assert!(near(state.position, Vec2::new(0.025, 0.0)), "{state:?}");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_velocity_follows_by_half_its_rate_and_moves_half() {
+        let mut state = moving(Vec2::new(3.0, 0.0), 0.0);
+        let mut speed = 3.0;
+        inertialess_advance(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            0.0,
+            TOP,
+            FlightRules::default(),
+            Flyer::Npc,
+            HALF,
+        );
+        assert!(near(state.velocity, Vec2::new(2.8, -0.2)), "{state:?}");
+        assert!(near(state.position, Vec2::new(1.4, -0.1)), "{state:?}");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_thrust_moves_the_speed_half_an_accel() {
+        let mut state = heading(90.0);
+        let mut speed = 1.0;
+        inertialess_advance(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            crate::inertialess::THRUST,
+            TOP,
+            FlightRules::default(),
+            Flyer::Player,
+            HALF,
+        );
+        assert!((speed - 1.05).abs() < 1e-6, "{speed}");
+    }
+
+    #[test]
+    fn at_half_gain_an_inertialess_players_reverse_takes_half_an_accel_off() {
+        let mut state = moving(Vec2::new(0.0, -2.0), 0.0);
+        let mut speed = 2.0;
+        inertialess_player_step(
+            &mut state,
+            &mut speed,
+            &SHIP,
+            REVERSE,
+            None,
+            TOP,
+            FlightRules::default(),
+            HALF,
+        );
+        assert!((speed - 1.95).abs() < 1e-6, "{speed}");
     }
 }

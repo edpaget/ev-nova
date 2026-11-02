@@ -1940,7 +1940,10 @@ impl Traffic {
                 let keeps = crate::area_cloak::holds(able, ride, world.area_cloak_hold);
                 cloak::hold(&mut npc.cloak, keeps);
                 let usage = npc.cloak_gear.shield_usage;
-                cloak::drain_shield(&mut npc.reserves.shield.now, usage, true);
+                // At full gain until `_HandleShip` reads the frame's
+                // (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
+                let gain = crate::speed_mult::SpeedMult::FULL;
+                cloak::drain_shield(&mut npc.reserves.shield.now, usage, true, gain);
             }
         }
     }
@@ -6909,7 +6912,7 @@ mod tests {
 
     #[test]
     fn a_cloaked_ship_pays_its_cloaks_shield_each_frame_even_the_one_it_must_uncloak() {
-        let paid = 100.0 - 8.0 * crate::cloak::CLOAK_UPKEEP_RATE;
+        let paid = 100.0 - 8.0 * 0.03333_f32;
         for (fuel, mode) in [
             (100.0, Mode::JumpingIn { tick: 0 }),
             (0.0, Mode::JumpingIn { tick: 0 }),

@@ -591,6 +591,7 @@ mod player_cloak;
 mod player_downed;
 #[cfg(test)]
 mod player_exits;
+mod player_gain;
 mod player_info;
 mod player_led;
 mod player_repair;
@@ -1771,6 +1772,7 @@ impl Session {
     /// capped by the box the last tick left ([`Session::player_caps`]).
     fn move_player(&mut self, controls: Controls, pass: GamePass) {
         let again = pass == GamePass::Again;
+        let gain = self.speed_mult();
         self.ship
             .engage_afterburner(&self.pilot, self.mode.jump(), controls);
         let controls = match self.ship.condition {
@@ -1792,11 +1794,14 @@ impl Session {
         match self.mode.jump() {
             None => {
                 let aim = self.steer(controls);
-                self.ship.bank_player(
-                    self.ship
-                        .turn_way(&self.pilot, &self.setup, self.mode.jump(), controls, aim),
-                    aim.is_some(),
+                let way = self.ship.turn_way(
+                    &self.pilot,
+                    &self.setup,
+                    self.mode.jump(),
+                    (controls, aim),
+                    gain,
                 );
+                self.ship.bank_player(way, aim.is_some(), gain);
                 if self.ship.player_inertialess(&self.setup) {
                     self.fly_inertialess(controls, aim);
                 } else {
@@ -1816,9 +1821,10 @@ impl Session {
                         aim,
                         caps,
                         flight,
+                        gain,
                     );
                 }
-                self.ship.ionize_tick(&self.pilot, &self.setup);
+                self.ship.ionize_tick(&self.pilot, &self.setup, gain);
                 self.burn_afterburner();
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
@@ -1832,7 +1838,7 @@ impl Session {
                 });
                 let bearing = self.chart.jump_aim(&self.pilot, to);
                 self.fly_warp_stage(bearing, controls);
-                self.ship.ionize_tick(&self.pilot, &self.setup);
+                self.ship.ionize_tick(&self.pilot, &self.setup, gain);
                 self.burn_afterburner();
                 // `_HandlePlayer` regenerates and clamps the fuel through
                 // the warp stage too (@0x6d96d-0x6d9f2), so a refuel's
@@ -1841,6 +1847,7 @@ impl Session {
                 regenerate(
                     &mut self.pilot.reserves.fuel,
                     self.ship.fit.stats.fuel_regen,
+                    gain,
                 );
                 return;
             }
@@ -1848,6 +1855,7 @@ impl Session {
         regenerate(
             &mut self.pilot.reserves.fuel,
             self.ship.fit.stats.fuel_regen,
+            gain,
         );
         // `_HandlePlayer` reads `_ShipFuelCapacity` right after the
         // regeneration (@0x6d9cd), which caches it (see the `capture`
@@ -2422,11 +2430,13 @@ impl Session {
     }
 
     /// When and where the fight is fought this tick ([`Field`]): the frame
-    /// counter this tick read, and the player's system's raw
-    /// `Interference`, which no anti-interference lessens for a shot
-    /// (`_SpawnShot` @0x3eb1f-0x3eb29).
+    /// counter this tick read, the player's system's raw `Interference`,
+    /// which no anti-interference lessens for a shot (`_SpawnShot`
+    /// @0x3eb1f-0x3eb29), and the frame's gain (see the `player_gain`
+    /// module).
     fn field(&self) -> Field {
         Field {
+            speed_mult: self.speed_mult(),
             frame: i32::from(self.space.pass_frame),
             interference: self.chart.galaxy.map().interference(self.pilot.system),
             // Refreshed each tick, so a kill's rating counts from the next.
@@ -7772,6 +7782,7 @@ pub(super) mod tests {
                 None,
                 crate::flight::Caps::top(session.handling().max_speed),
                 FlightRules::default(),
+                crate::SpeedMult::FULL,
             );
         }
         assert_eq!(*session.player(), expected);
@@ -7880,6 +7891,8 @@ pub(super) mod tests {
         assert_eq!(*session.player(), docked);
         assert_eq!(docked.position, Vec2::new(30.0, -40.0));
         assert_eq!(docked.velocity, Vec2::ZERO);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         work(&mut session, &catalog, THRUST);
         let mut expected = docked;
         player_step(
@@ -7889,6 +7902,7 @@ pub(super) mod tests {
             None,
             crate::flight::Caps::top(session.handling().max_speed),
             FlightRules::default(),
+            crate::SpeedMult::FULL,
         );
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, docked);
@@ -9342,6 +9356,8 @@ pub(super) mod tests {
         }
         assert_eq!(session.reserves().fuel.now, 200.0);
         session.take_off(&catalog, &mut NeverFires);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         work(&mut session, &catalog, Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
     }
@@ -15930,6 +15946,8 @@ pub(super) mod tests {
         session
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         // The first flight tick's box of none holds the ship at rest.
         work(&mut session, &catalog, Controls::default());
         let mut expected = *session.player();
@@ -15946,6 +15964,7 @@ pub(super) mod tests {
                 None,
                 crate::flight::Caps::top(handling.max_speed),
                 FlightRules::default(),
+                crate::SpeedMult::FULL,
             );
         }
         assert_eq!(*session.player(), expected);
@@ -20913,6 +20932,8 @@ pub(super) mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         session.take_off(&catalog, &mut NeverFires);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         session.ship.ion = IONIZED;
         assert_eq!(begin_jump_now(&mut session, &catalog), Ok(SystemId(132)));
         assert_eq!(

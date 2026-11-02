@@ -255,13 +255,17 @@ pub(crate) fn work_with(
     assert!(!rescued, "no rescue ends the pass");
 }
 
-/// One advance pass of the way to a jump under `controls`, the traffic
-/// drawn from `catalog` deciding as Nova's does ([`NovaAi`]), so the
-/// ships the player leads follow it, the fight by the default rules, no
-/// chance firing.
+/// One frame of the way to a jump under `controls`: the frame's ramp
+/// (`Session::adjust_time`, as a step runs it), then an advance pass, the
+/// traffic drawn from `catalog` deciding as Nova's does ([`NovaAi`]), so
+/// the ships the player leads follow it, the fight by the default rules,
+/// no chance firing. The ramp carries a flight just taken off from its
+/// zero gain up toward full, as the frames after a take-off do, where a
+/// bare [`work`] runs at the gain as it stands.
 ///
 /// [`NovaAi`]: crate::ai::NovaAi
 fn fly(session: &mut Session, catalog: &(impl PilotCatalog + TrafficCatalog), controls: Controls) {
+    session.adjust_time();
     work_with(
         session,
         catalog,

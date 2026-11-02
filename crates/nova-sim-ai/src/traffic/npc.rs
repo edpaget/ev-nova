@@ -1067,9 +1067,15 @@ impl Npc {
     /// Regenerates its fuel a tick at its [`ShipStats::fuel_regen`], then
     /// holds it between none and its capacity, every tick whatever its
     /// condition, disabled and breaking up included (`_HandleShip`
-    /// @0x35305-0x35374, `_ShipFuelGenRate` @0x2ffb for an NPC).
+    /// @0x35305-0x35374, `_ShipFuelGenRate` @0x2ffb for an NPC), at full
+    /// gain until `_HandleShip` reads the frame's
+    /// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
     pub fn regenerate_fuel(&mut self) {
-        crate::fuel::regenerate(&mut self.reserves.fuel, self.stats.fuel_regen);
+        crate::fuel::regenerate(
+            &mut self.reserves.fuel,
+            self.stats.fuel_regen,
+            crate::speed_mult::SpeedMult::FULL,
+        );
     }
 
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c) under `reserves`

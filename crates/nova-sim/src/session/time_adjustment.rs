@@ -52,10 +52,20 @@ use super::Session;
 impl Session {
     /// Runs one frame of the ramp before a step's passes, unless landed
     /// (see the module docs).
-    pub(super) fn adjust_time(&mut self) {
+    pub(crate) fn adjust_time(&mut self) {
         if self.mode.landed().is_none() {
             self.time.frame();
         }
+    }
+
+    /// Sets the frame's gain to `gain` and holds the next frame, for the
+    /// tests: a bare `testkit::work`, which runs `game_work` directly, and
+    /// a full step both run at it. A test from before the passes read the
+    /// gain sets [`SpeedMult::FULL`] after a take-off, whose zero would
+    /// otherwise hold every bare pass still.
+    #[cfg(test)]
+    pub(crate) fn at_gain(&mut self, gain: SpeedMult) {
+        self.time.entered(gain);
     }
 
     /// The frame's gain as it stands, `_gSpeedMult`: the last step's, or a
@@ -272,6 +282,14 @@ pub(super) mod tests {
             gains,
             [vec![0.0, 0.0], vec![0.25, 0.25], vec![0.4375, 0.4375]]
         );
+    }
+
+    #[test]
+    fn at_gain_sets_the_gain_a_bare_pass_and_the_next_steps_passes_run_at() {
+        let (catalog, mut session) = took_off(Rulebook::default());
+        session.at_gain(SpeedMult::new(0.5));
+        assert_eq!(session.speed_mult(), SpeedMult::new(0.5));
+        assert_eq!(pass_gains(&mut session, &catalog, 2), [0.5, 0.625]);
     }
 
     #[test]

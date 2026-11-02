@@ -30,9 +30,10 @@
 //!   the count is zeroed (@0x69a0c-0x69a11); a count below none is seeded
 //!   with `Rand(100)` and the tick ends (@0x692ff-0x6931f), a branch
 //!   nothing in play reaches, ported anyway; a dying player's tick ends
-//!   there (@0x69324-0x6932b); else the count grows by `_gSpeedMult`, 1.0
-//!   a tick (@0x69331-0x6933e), and the flag goes off once it is above
-//!   [`FUSE`] (@0x69342-0x6934d): 202 to 301 ticks after the refresh.
+//!   there (@0x69324-0x6932b); else the count grows by the frame's gain,
+//!   `_gSpeedMult`, in doubles and narrowed (@0x69331-0x6934d), and the
+//!   flag goes off once it is above [`FUSE`] (@0x69342-0x6934d): 202 to
+//!   301 full frames after the refresh, more at a lower gain.
 //!
 //! *Ordering against the original.* Most of the engine's refresh points
 //! have no [`Chance`] to draw on, so the refresh only marks the seed due,
@@ -74,6 +75,7 @@ use crate::combat::damage::{Hit, take};
 use crate::combat::hull::{DisableRule, HullSpec};
 use crate::combat::weapon::Explosion;
 use crate::reserves::Reserves;
+use crate::speed_mult::SpeedMult;
 
 /// The count past which the sabotage clock goes off (the float
 /// @0xdd95c, `_HandlePlayer` @0x69342-0x6934d).
@@ -209,9 +211,14 @@ impl SabotageClock {
     }
 
     /// `_HandlePlayer`'s tick of the clock (@0x692e5-0x6934d) for a player
-    /// `dying` or not, drawing on `chance`: the flag that goes off this
-    /// tick, if any (see the module docs).
-    pub fn tick(&mut self, dying: bool, chance: &mut dyn Chance) -> Option<Sabotage> {
+    /// `dying` or not, at the frame's `gain`, drawing on `chance`: the
+    /// flag that goes off this frame, if any (see the module docs).
+    pub fn tick(
+        &mut self,
+        dying: bool,
+        gain: SpeedMult,
+        chance: &mut dyn Chance,
+    ) -> Option<Sabotage> {
         if std::mem::take(&mut self.seed_due) {
             self.counter = seed(chance);
         }
@@ -226,7 +233,7 @@ impl SabotageClock {
         if dying {
             return None;
         }
-        self.counter += 1.0;
+        self.counter = gain.add_times(self.counter, 1.0);
         (self.counter > FUSE).then_some(self.flag)
     }
 
@@ -531,10 +538,10 @@ mod tests {
             clock.refresh(&owning(&[(128, 1)]), &records);
             assert_eq!(clock.counter(), 0.0, "zeroed");
             let mut draws = Draws::of(&[37]);
-            assert_eq!(clock.tick(false, &mut draws), None);
+            assert_eq!(clock.tick(false, SpeedMult::FULL, &mut draws), None);
             assert_eq!(draws.asked, [100]);
             assert_eq!(clock.counter(), 38.0, "seeded 37, and counted");
-            assert_eq!(clock.tick(false, &mut draws), None);
+            assert_eq!(clock.tick(false, SpeedMult::FULL, &mut draws), None);
             assert_eq!(draws.asked, [100], "seeded once");
             assert_eq!(clock.counter(), 39.0);
         }
@@ -559,7 +566,7 @@ mod tests {
         clock.refresh(&owning(&[]), &records);
         assert_eq!(clock.flag(), Sabotage::None);
         let mut draws = Draws::of(&[]);
-        assert_eq!(clock.tick(false, &mut draws), None);
+        assert_eq!(clock.tick(false, SpeedMult::FULL, &mut draws), None);
         assert_eq!(draws.asked, Vec::<u32>::new(), "no seed drawn");
     }
 
@@ -568,7 +575,7 @@ mod tests {
         let mut clock = SabotageClock::default();
         clock.set_counter(400.0);
         let mut draws = Draws::of(&[]);
-        assert_eq!(clock.tick(false, &mut draws), None);
+        assert_eq!(clock.tick(false, SpeedMult::FULL, &mut draws), None);
         assert_eq!(clock.counter(), 0.0);
         assert_eq!(draws.asked, Vec::<u32>::new());
     }
@@ -577,15 +584,15 @@ mod tests {
     fn a_negative_counter_is_seeded_and_the_tick_ends_there() {
         let records = [outfit(128, &[(SABOTAGE_KILL, 0)])];
         let mut clock = refreshed(&records, 128);
-        clock.tick(false, &mut Draws::of(&[0]));
+        clock.tick(false, SpeedMult::FULL, &mut Draws::of(&[0]));
         clock.set_counter(-0.5);
         let mut draws = Draws::of(&[42]);
-        assert_eq!(clock.tick(false, &mut draws), None);
+        assert_eq!(clock.tick(false, SpeedMult::FULL, &mut draws), None);
         assert_eq!(draws.asked, [100]);
         assert_eq!(clock.counter(), 42.0, "seeded, not counted");
         clock.set_counter(0.0);
         let mut draws = Draws::of(&[]);
-        clock.tick(false, &mut draws);
+        clock.tick(false, SpeedMult::FULL, &mut draws);
         assert_eq!(draws.asked, Vec::<u32>::new(), "none is no negative");
         assert_eq!(clock.counter(), 1.0);
     }
@@ -595,11 +602,15 @@ mod tests {
         let records = [outfit(128, &[(SABOTAGE_BOMB, 0)])];
         let mut clock = refreshed(&records, 128);
         let mut draws = Draws::of(&[20]);
-        assert_eq!(clock.tick(true, &mut draws), None);
+        assert_eq!(clock.tick(true, SpeedMult::FULL, &mut draws), None);
         assert_eq!(draws.asked, [100]);
         assert_eq!(clock.counter(), 20.0);
         clock.set_counter(300.5);
-        assert_eq!(clock.tick(true, &mut draws), None, "no count, no firing");
+        assert_eq!(
+            clock.tick(true, SpeedMult::FULL, &mut draws),
+            None,
+            "no count, no firing"
+        );
         assert_eq!(clock.counter(), 300.5);
     }
 
@@ -612,20 +623,52 @@ mod tests {
             let records = [outfit(128, &[(mod_type, 0)])];
             let mut clock = refreshed(&records, 128);
             let mut draws = Draws::of(&[98]);
-            assert_eq!(clock.tick(false, &mut draws), None);
+            assert_eq!(clock.tick(false, SpeedMult::FULL, &mut draws), None);
             let mut fired = None;
             let mut ticks = 1;
             while fired.is_none() {
                 assert!(clock.counter() <= FUSE, "{}", clock.counter());
-                fired = clock.tick(false, &mut draws);
+                fired = clock.tick(false, SpeedMult::FULL, &mut draws);
                 ticks += 1;
             }
             assert_eq!(fired, Some(flag));
             assert_eq!(clock.counter(), 301.0, "300 is not past the fuse");
             assert_eq!(ticks, 203, "seeded 98: 99, then 202 more to 301");
-            assert_eq!(clock.tick(false, &mut draws), Some(flag), "it stays lit");
+            assert_eq!(
+                clock.tick(false, SpeedMult::FULL, &mut draws),
+                Some(flag),
+                "it stays lit"
+            );
         }
         assert_eq!(FUSE, 300.0);
+    }
+
+    /// The frames a clock seeded at 98 takes to go off at `gain`, the
+    /// seeding frame counted.
+    fn frames_to_fire(gain: SpeedMult) -> u32 {
+        let records = [outfit(128, &[(SABOTAGE_KILL, 0)])];
+        let mut clock = refreshed(&records, 128);
+        let mut draws = Draws::of(&[98]);
+        let mut frames = 1;
+        while clock.tick(false, gain, &mut draws).is_none() {
+            frames += 1;
+            assert!(frames < 2000, "it never fired");
+        }
+        frames
+    }
+
+    #[test]
+    fn at_half_gain_the_clock_counts_half_a_frame_a_frame_and_fires_twice_as_late() {
+        assert_eq!(frames_to_fire(SpeedMult::FULL), 203);
+        // Seeded at 98 on the seeding frame's half: 98.5, then 404 more
+        // halves to 300.5.
+        assert_eq!(frames_to_fire(SpeedMult::new(0.5)), 405);
+        let records = [outfit(128, &[(SABOTAGE_KILL, 0)])];
+        let mut clock = refreshed(&records, 128);
+        clock.tick(false, SpeedMult::new(0.5), &mut Draws::of(&[10]));
+        assert_eq!(clock.counter(), 10.5);
+        clock.tick(false, SpeedMult::ZERO, &mut Draws::of(&[]));
+        assert_eq!(clock.counter(), 10.5, "no gain, no count");
     }
 
     #[test]

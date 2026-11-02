@@ -92,10 +92,14 @@ impl Npc {
 /// `shed`, for the fight's lockout ([`Ion::as_block_found`]).
 ///
 /// [`Ion::as_block_found`]: crate::combat::ion::Ion::as_block_found
+///
+/// At full gain until `_HandleShip` reads the frame's
+/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
 pub fn deionize(npc: &mut Npc, top_speed: f32) {
+    let gain = crate::speed_mult::SpeedMult::FULL;
     let rate = npc.stats.ion.rate(Flyer::Npc);
     let found = npc.ion.charge;
-    let Some(charge) = crate::ionization::deionize(found, rate) else {
+    let Some(charge) = crate::ionization::deionize(found, rate, gain) else {
         npc.ion.charge = 0.0;
         npc.ion.shed = found;
         return;
@@ -103,7 +107,7 @@ pub fn deionize(npc: &mut Npc, top_speed: f32) {
     npc.ion.charge = charge;
     npc.ion.shed = found - charge;
     let cap = lowered_top(top_speed, npc.ion_factor());
-    npc.state.velocity = pull(npc.state.velocity, cap);
+    npc.state.velocity = pull(npc.state.velocity, cap, gain);
 }
 
 #[cfg(test)]

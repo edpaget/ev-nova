@@ -491,6 +491,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
 use crate::ship_layer::Slot;
 use crate::speed_cap::SpeedCap;
+use crate::speed_mult::SpeedMult;
 
 /// An NPC's number in its system, unique while the player stays there:
 /// the order it appeared in.
@@ -1130,7 +1131,7 @@ impl Default for Rules<'static> {
 }
 
 /// What a fight reads of when and where it is fought, each tick.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Field {
     /// The frame counter (`_frameCounter`) as `_DoPlayGameWork` sees it,
     /// before `_PlayGame` adds 1: what an interfered shot circles by
@@ -1146,6 +1147,10 @@ pub struct Field {
     /// ([`ai_fire::PlayerRating::stretch`], `_FireAIShipWeapon`
     /// @0x88fb3-0x8901b). The default stretches nothing.
     pub player_rating: ai_fire::PlayerRating,
+    /// The frame's gain, `_gSpeedMult`, as the session's pass runs at it:
+    /// what the player's regeneration and reloads take a frame of
+    /// (`_HandlePlayer` @0x6cfc6, @0x6d063, @0x6ae46). Full by default.
+    pub speed_mult: SpeedMult,
 }
 
 /// A hit that landed on a ship in the hit pass, step 5 or step 8, before it
@@ -3641,12 +3646,16 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
 /// `_HandleBeams`, so a beam that disables the ship after it leaves it
 /// regenerated. A ship whose shield and armour are full has nothing to
 /// regenerate, and the rule is not asked of it.
+///
+/// At full gain until `_HandleShip` reads the frame's
+/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
 fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
     let reserves = &fighter.reserves;
     let short = below_full(reserves.shield) || below_full(reserves.armor);
     if short && !fighter.disabled_now(rule) {
-        recharge(&mut fighter.reserves.shield, fighter.shield_regen);
-        recharge(&mut fighter.reserves.armor, fighter.armor_regen);
+        let gain = SpeedMult::FULL;
+        recharge(&mut fighter.reserves.shield, fighter.shield_regen, gain);
+        recharge(&mut fighter.reserves.armor, fighter.armor_regen, gain);
     }
 }
 
@@ -3659,14 +3668,15 @@ fn regenerate(fighter: &mut Fighter, rule: &dyn DisableRule) {
 /// the frame began (a sabotage kill, a self-destruct) regenerates none.
 /// Its repair inhibit holds the armour back through
 /// [`Fighter::armor_regen`]. As the original tests the capacity first
-/// (@0x6cf99, @0x6d01d), a full gauge asks nothing.
-fn regenerate_player(fighter: &mut Fighter, rule: &dyn DisableRule) {
+/// (@0x6cf99, @0x6d01d), a full gauge asks nothing. Each gauge gains its
+/// rate × the frame's `gain` (@0x6cfc6-0x6cfee, @0x6d063-0x6d089).
+fn regenerate_player(fighter: &mut Fighter, rule: &dyn DisableRule, gain: SpeedMult) {
     let began_whole = !fighter.disabled_as_tick_began();
     if began_whole && below_full(fighter.reserves.shield) {
-        recharge(&mut fighter.reserves.shield, fighter.shield_regen);
+        recharge(&mut fighter.reserves.shield, fighter.shield_regen, gain);
     }
     if began_whole && below_full(fighter.reserves.armor) && !fighter.disabled_now(rule) {
-        recharge(&mut fighter.reserves.armor, fighter.armor_regen);
+        recharge(&mut fighter.reserves.armor, fighter.armor_regen, gain);
     }
 }
 
@@ -3675,9 +3685,13 @@ fn below_full(gauge: Gauge) -> bool {
     gauge.now < gauge.max
 }
 
-/// Adds `rate` to `gauge` up to what it holds, never taking any away.
-fn recharge(gauge: &mut Gauge, rate: f32) {
-    gauge.now = gauge.now.max((gauge.now + rate).min(gauge.max));
+/// Adds `rate` × the frame's `gain` to `gauge`, in doubles and narrowed
+/// as `_HandlePlayer` adds it ([`SpeedMult::add_times`]), up to what it
+/// holds, never taking any away.
+fn recharge(gauge: &mut Gauge, rate: f32, gain: SpeedMult) {
+    gauge.now = gauge
+        .now
+        .max(gain.add_times(gauge.now, rate).min(gauge.max));
 }
 
 #[cfg(test)]
@@ -3720,6 +3734,7 @@ mod tests {
     mod phase;
     mod placed_contact;
     mod planet_hits;
+    mod player_gain;
     mod plunder_fire;
     mod proximity_slots;
     mod rating_stretch;

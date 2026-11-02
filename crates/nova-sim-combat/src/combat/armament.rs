@@ -158,6 +158,7 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, normalized};
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::trig;
 use nova_sim_catalog::warp::MAC_TICKS_PER_TICK;
 
@@ -1430,24 +1431,29 @@ impl Armament {
         }
     }
 
-    /// Counts every weapon's reload timer down a tick, as `_HandleShip`
-    /// (@0x33896-0x338ce) and `_HandlePlayer` (@0x6ae25-0x6ae61) do: a
-    /// timer above none loses a tick, unfloored, so one of 0.5 reads -0.5
-    /// for a tick, which point defence's reload adds to
-    /// ([`Armament::fire_point_defence`]); one at or below none is set to
-    /// none.
+    /// Counts every weapon's reload timer down a full frame, as
+    /// `_HandleShip` (@0x33896-0x338ce) and `_HandlePlayer`
+    /// (@0x6ae25-0x6ae61) do at full gain: a timer above none loses a
+    /// frame, unfloored, so one of 0.5 reads -0.5 for a frame, which point
+    /// defence's reload adds to ([`Armament::fire_point_defence`]); one at
+    /// or below none is set to none. An NPC's countdown, at full gain until
+    /// `_HandleShip` reads the frame's
+    /// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
     pub fn reload(&mut self) {
-        self.reload_holding(|_| false);
+        self.reload_holding(SpeedMult::FULL, |_| false);
     }
 
-    /// [`Armament::reload`], then each weapon `held` says can't fire held
-    /// at [`HELD_RELOAD`](super::ion::HELD_RELOAD), as the player's reload
+    /// Counts every weapon's reload timer down the frame's `gain`, as
+    /// [`Armament::reload`] does a full frame: a timer above none loses
+    /// the gain, in doubles and narrowed (`_HandlePlayer`
+    /// @0x6ae46-0x6ae57); then each weapon `held` says can't fire held at
+    /// [`HELD_RELOAD`](super::ion::HELD_RELOAD), as the player's reload
     /// loop holds an ionized ship's `Seeker` 0x0020 weapons
     /// ([`IonLockout`](super::ion::IonLockout)). The fight decides the
     /// player's hold after its fire, on the charge as its frame's ion
     /// block found it, and applies it here at step 5.
-    pub fn reload_holding(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
-        self.reload_and_hold(true, held);
+    pub fn reload_holding(&mut self, gain: SpeedMult, held: impl Fn(&WeaponSpec) -> bool) {
+        self.reload_and_hold(Some(gain), held);
     }
 
     /// Each weapon `held` says can't fire held at
@@ -1456,14 +1462,20 @@ impl Armament {
     /// the reload step counts down after it
     /// ([`IonLockout`](super::ion::IonLockout)).
     pub fn hold_ionized(&mut self, held: impl Fn(&WeaponSpec) -> bool) {
-        self.reload_and_hold(false, held);
+        self.reload_and_hold(None, held);
     }
 
-    fn reload_and_hold(&mut self, count_down: bool, held: impl Fn(&WeaponSpec) -> bool) {
+    /// Each reload counted down the gain of `count_down`, if any, then
+    /// each weapon `held` says can't fire held.
+    fn reload_and_hold(
+        &mut self,
+        count_down: Option<SpeedMult>,
+        held: impl Fn(&WeaponSpec) -> bool,
+    ) {
         for mount in &mut self.mounts {
-            if count_down {
+            if let Some(gain) = count_down {
                 mount.reload = if mount.reload > 0.0 {
-                    mount.reload - 1.0
+                    gain.add_times(mount.reload, -1.0)
                 } else {
                     0.0
                 };

@@ -460,6 +460,8 @@ mod tests {
             session.pilot.escorts.push(hired());
             session.pilot.strict_play = strict_play;
             take_off(&mut session, &catalog);
+            // The integer days' full gain, not the take-off's zero.
+            session.at_gain(crate::SpeedMult::FULL);
             let mission: Vec<NpcId> = session
                 .npcs()
                 .iter()

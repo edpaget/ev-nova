@@ -3,9 +3,11 @@
 //! ship each tick, and the aims its auto-turn turns to.
 //!
 //! **The rate.** The block takes `_ShipTurnRate` truncated to whole
-//! degrees (`cvttss2si` @0x6c8b1), and each turn moves that times
-//! `_gSpeedMult`, 1 at the engine's tick: `Maneuver` 25 turns 2° a tick,
-//! not 2.5 ([`step_of`]). NPCs turn the full rate (`_HandleShip`), so
+//! degrees (`cvttss2si` @0x6c8b1), and each turn moves that times the
+//! frame's gain, `_gSpeedMult` (a [`SpeedMult`]), added to the heading in
+//! doubles and narrowed (@0x6c95b-0x6c990, @0x6ca1e-0x6ca3b,
+//! @0x6ca73-0x6ca90): `Maneuver` 25 turns 2° a full frame, not 2.5
+//! ([`step_of`]). NPCs turn the full rate (`_HandleShip`), so
 //! [`flight::step`](crate::flight::step) keeps theirs.
 //!
 //! **The auto-turn.** A local of `_HandlePlayer`, −0x2cd, says the ship
@@ -16,12 +18,17 @@
 //! (@0x6b861, aiming as [`brake_aim`] does). With it set ([`turn`]):
 //!
 //! - when |`_AngularDifference`(+0x68, the heading's whole degree)| is
-//!   more than one turn (@0x6c8c2-0x6c8ff) and the ship isn't disabled
-//!   (@0x6c905), it turns one turn: left when +0x68 less the heading,
-//!   brought into [0, 360), is over 180 (@0x6c912-0x6c974), otherwise
-//!   right (@0x6c979-0x6c995);
-//! - within one turn it neither turns nor snaps onto the aim, so it stops
-//!   up to a turn short ([`settled`]).
+//!   more than one turn × the gain, compared in doubles
+//!   (@0x6c8c2-0x6c8ff), and the ship isn't disabled (@0x6c905), it turns
+//!   one turn × the gain: left when +0x68 less the heading, brought into
+//!   [0, 360), is over 180 (@0x6c912-0x6c974), otherwise right
+//!   (@0x6c979-0x6c995). At a gain of none it turns whenever the aim is
+//!   off at all, by none, and the way it turned still feeds the bank;
+//! - within that it neither turns nor snaps onto the aim, so it stops up
+//!   to a turn short. [`settled`], which ends the engine's pre-jump turn,
+//!   reads the whole turn, as no test of the original reads the
+//!   threshold's gain: the warp stage that turns the ship (the session's
+//!   `warp_stage` module) runs the same turn whichever stage it is in.
 //!
 //! **The turn keys** (+0x26 left, +0x28 right) work only out of a jump,
 //! not disabled and with −0x2cd clear (@0x6c99a-0x6c9c0): while reverse
@@ -49,6 +56,7 @@ use crate::geometry::Vec2;
 use crate::rulebook::RuleKey;
 use crate::rulebook::RuleSource;
 use crate::speed_cap::whole_degree;
+use crate::speed_mult::SpeedMult;
 use crate::trig::{angular_difference, intercept_angle};
 
 /// How the player turns, by [`RuleKey::PlayerTurn`].
@@ -112,10 +120,10 @@ fn off_aim(heading: f32, aim: i16) -> i16 {
     angular_difference(aim, whole_degree(heading) as i16).abs()
 }
 
-/// `heading` turned one tick by a ship turning `rate` degrees a tick under
-/// `rule`, and the way it turned (see the module docs): toward `aim` when
-/// the auto-turn aims (`Some`), the turn keys `keys` held off; otherwise
-/// by `keys`.
+/// `heading` turned one frame by a ship turning `rate` degrees a frame
+/// under `rule` at the frame's `gain`, and the way it turned (see the
+/// module docs): toward `aim` when the auto-turn aims (`Some`), the turn
+/// keys `keys` held off; otherwise by `keys`.
 #[must_use]
 pub fn turn(
     heading: f32,
@@ -123,11 +131,12 @@ pub fn turn(
     aim: Option<i16>,
     keys: Turn,
     rule: PlayerTurn,
+    gain: SpeedMult,
 ) -> (f32, Turn) {
     let step = step_of(rate, rule);
     let way = match aim {
         Some(aim) if rule == PlayerTurn::Full => {
-            let turned = turn_toward(heading, f32::from(aim), step);
+            let turned = turn_toward(heading, f32::from(aim), gain.times(step));
             let way = match shortest_turn(heading, turned) {
                 off if off < 0.0 => Turn::Left,
                 off if off > 0.0 => Turn::Right,
@@ -135,7 +144,7 @@ pub fn turn(
             };
             return (turned, way);
         }
-        Some(aim) if !settled(heading, rate, aim, rule) => {
+        Some(aim) if f64::from(off_aim(heading, aim)) > f64::from(step) * gain.get() => {
             // The original brings it into [0, 360) by whole turns
             // (@0x6c912-0x6c94d), as `rem_euclid` does.
             let ahead = (f32::from(aim) - heading).rem_euclid(360.0);
@@ -149,8 +158,8 @@ pub fn turn(
         None => keys,
     };
     let heading = match way {
-        Turn::Left => normalized(heading - step),
-        Turn::Right => normalized(heading + step),
+        Turn::Left => normalized(gain.add_times(heading, -step)),
+        Turn::Right => normalized(gain.add_times(heading, step)),
         Turn::None => heading,
     };
     (heading, way)
@@ -187,6 +196,9 @@ mod tests {
     const WHOLE: PlayerTurn = PlayerTurn::WholeDegrees;
     const FULL: PlayerTurn = PlayerTurn::Full;
 
+    /// A full frame's gain, as every frame of the integer days ran at.
+    const G: SpeedMult = SpeedMult::FULL;
+
     #[test]
     fn the_rule_reads_the_rulebook() {
         assert_eq!(PlayerTurn::default(), WHOLE);
@@ -210,24 +222,33 @@ mod tests {
         assert_eq!(step_of(0.9, WHOLE), 0.0);
         assert_eq!(step_of(3.0, WHOLE), 3.0);
         assert_eq!(
-            turn(90.0, 2.5, None, Turn::Right, WHOLE),
+            turn(90.0, 2.5, None, Turn::Right, WHOLE, G),
             (92.0, Turn::Right)
         );
-        assert_eq!(turn(90.0, 2.5, None, Turn::Left, WHOLE), (88.0, Turn::Left));
         assert_eq!(
-            turn(90.0, 2.5, None, Turn::Right, FULL),
+            turn(90.0, 2.5, None, Turn::Left, WHOLE, G),
+            (88.0, Turn::Left)
+        );
+        assert_eq!(
+            turn(90.0, 2.5, None, Turn::Right, FULL, G),
             (92.5, Turn::Right)
         );
-        assert_eq!(turn(90.0, 2.5, None, Turn::Left, FULL), (87.5, Turn::Left));
-        assert_eq!(turn(90.0, 2.5, None, Turn::None, WHOLE), (90.0, Turn::None));
+        assert_eq!(
+            turn(90.0, 2.5, None, Turn::Left, FULL, G),
+            (87.5, Turn::Left)
+        );
+        assert_eq!(
+            turn(90.0, 2.5, None, Turn::None, WHOLE, G),
+            (90.0, Turn::None)
+        );
     }
 
     #[test]
     fn the_keys_wrap_the_heading_into_0_to_360() {
-        assert_eq!(turn(359.0, 3.0, None, Turn::Right, WHOLE).0, 2.0);
-        assert_eq!(turn(1.0, 3.0, None, Turn::Left, WHOLE).0, 358.0);
-        assert_eq!(turn(357.0, 3.0, None, Turn::Right, WHOLE).0, 0.0);
-        let tiny = turn(0.0, 1e-6, None, Turn::Left, FULL).0;
+        assert_eq!(turn(359.0, 3.0, None, Turn::Right, WHOLE, G).0, 2.0);
+        assert_eq!(turn(1.0, 3.0, None, Turn::Left, WHOLE, G).0, 358.0);
+        assert_eq!(turn(357.0, 3.0, None, Turn::Right, WHOLE, G).0, 0.0);
+        let tiny = turn(0.0, 1e-6, None, Turn::Left, FULL, G).0;
         assert!((0.0..360.0).contains(&tiny), "{tiny}");
     }
 
@@ -238,7 +259,7 @@ mod tests {
         let mut heading = 0.0;
         let mut seen = vec![];
         for _ in 0..6 {
-            let (next, _) = turn(heading, 2.5, Some(9), Turn::None, WHOLE);
+            let (next, _) = turn(heading, 2.5, Some(9), Turn::None, WHOLE, G);
             heading = next;
             seen.push(heading);
         }
@@ -249,7 +270,7 @@ mod tests {
         // By the other reading it lands exactly.
         let mut heading = 0.0;
         for _ in 0..4 {
-            heading = turn(heading, 2.5, Some(9), Turn::None, FULL).0;
+            heading = turn(heading, 2.5, Some(9), Turn::None, FULL, G).0;
         }
         assert_eq!(heading, 9.0);
         assert!(settled(9.0, 2.5, 9, FULL));
@@ -259,9 +280,9 @@ mod tests {
     #[test]
     fn the_auto_turn_reads_the_headings_whole_degree() {
         // 5.9 is whole degree 5, 3 off 8: more than 2, so it turns.
-        assert_eq!(turn(5.9, 2.0, Some(8), Turn::None, WHOLE).0, 7.9);
+        assert_eq!(turn(5.9, 2.0, Some(8), Turn::None, WHOLE, G).0, 7.9);
         // 6.9 is 6, 2 off: within a turn.
-        assert_eq!(turn(6.9, 2.0, Some(8), Turn::None, WHOLE).0, 6.9);
+        assert_eq!(turn(6.9, 2.0, Some(8), Turn::None, WHOLE, G).0, 6.9);
         // A heading a rounding step short of a whole degree is on it.
         assert!(settled(5.999_9, 2.0, 8, WHOLE));
     }
@@ -269,59 +290,65 @@ mod tests {
     #[test]
     fn the_auto_turn_goes_left_past_180_ahead_and_right_at_180_or_less() {
         assert_eq!(
-            turn(0.0, 3.0, Some(180), Turn::None, WHOLE),
+            turn(0.0, 3.0, Some(180), Turn::None, WHOLE, G),
             (3.0, Turn::Right)
         );
         assert_eq!(
-            turn(0.0, 3.0, Some(181), Turn::None, WHOLE),
+            turn(0.0, 3.0, Some(181), Turn::None, WHOLE, G),
             (357.0, Turn::Left)
         );
         assert_eq!(
-            turn(0.0, 3.0, Some(179), Turn::None, WHOLE),
+            turn(0.0, 3.0, Some(179), Turn::None, WHOLE, G),
             (3.0, Turn::Right)
         );
         assert_eq!(
-            turn(350.0, 3.0, Some(10), Turn::None, WHOLE),
+            turn(350.0, 3.0, Some(10), Turn::None, WHOLE, G),
             (353.0, Turn::Right)
         );
         assert_eq!(
-            turn(10.0, 3.0, Some(350), Turn::None, WHOLE),
+            turn(10.0, 3.0, Some(350), Turn::None, WHOLE, G),
             (7.0, Turn::Left)
         );
         // Ahead is measured from the float heading: 0.5 to 180.0 is 179.5.
-        assert_eq!(turn(0.5, 3.0, Some(180), Turn::None, WHOLE).1, Turn::Right);
-        assert_eq!(turn(359.5, 3.0, Some(180), Turn::None, WHOLE).1, Turn::Left);
+        assert_eq!(
+            turn(0.5, 3.0, Some(180), Turn::None, WHOLE, G).1,
+            Turn::Right
+        );
+        assert_eq!(
+            turn(359.5, 3.0, Some(180), Turn::None, WHOLE, G).1,
+            Turn::Left
+        );
     }
 
     #[test]
     fn while_the_auto_turn_aims_the_turn_keys_do_nothing() {
         for keys in [Turn::Left, Turn::Right] {
-            assert_eq!(turn(0.0, 3.0, Some(90), keys, WHOLE), (3.0, Turn::Right));
+            assert_eq!(turn(0.0, 3.0, Some(90), keys, WHOLE, G), (3.0, Turn::Right));
             assert_eq!(
-                turn(89.0, 3.0, Some(90), keys, WHOLE),
+                turn(89.0, 3.0, Some(90), keys, WHOLE, G),
                 (89.0, Turn::None),
                 "settled, and still held off"
             );
-            assert_eq!(turn(90.0, 3.0, Some(90), keys, FULL), (90.0, Turn::None));
+            assert_eq!(turn(90.0, 3.0, Some(90), keys, FULL, G), (90.0, Turn::None));
         }
     }
 
     #[test]
     fn by_the_other_reading_the_auto_turn_gives_the_way_it_turned() {
         assert_eq!(
-            turn(0.0, 2.5, Some(90), Turn::None, FULL),
+            turn(0.0, 2.5, Some(90), Turn::None, FULL, G),
             (2.5, Turn::Right)
         );
         assert_eq!(
-            turn(0.0, 2.5, Some(270), Turn::None, FULL),
+            turn(0.0, 2.5, Some(270), Turn::None, FULL, G),
             (357.5, Turn::Left)
         );
         assert_eq!(
-            turn(89.0, 2.5, Some(90), Turn::Left, FULL),
+            turn(89.0, 2.5, Some(90), Turn::Left, FULL, G),
             (90.0, Turn::Right)
         );
         assert_eq!(
-            turn(91.0, 2.5, Some(90), Turn::Right, FULL),
+            turn(91.0, 2.5, Some(90), Turn::Right, FULL, G),
             (90.0, Turn::Left)
         );
     }
@@ -329,11 +356,14 @@ mod tests {
     #[test]
     fn a_ship_that_cannot_turn_a_whole_degree_never_turns() {
         assert_eq!(
-            turn(0.0, 0.9, Some(90), Turn::None, WHOLE),
+            turn(0.0, 0.9, Some(90), Turn::None, WHOLE, G),
             (0.0, Turn::Right),
             "it turns by none"
         );
-        assert_eq!(turn(0.0, 0.9, None, Turn::Right, WHOLE), (0.0, Turn::Right));
+        assert_eq!(
+            turn(0.0, 0.9, None, Turn::Right, WHOLE, G),
+            (0.0, Turn::Right)
+        );
         assert!(!settled(0.0, 0.9, 90, WHOLE));
     }
 
@@ -355,5 +385,88 @@ mod tests {
         assert_eq!(brake_aim(Vec2::new(0.0, -3.0)), 180);
         assert_eq!(brake_aim(Vec2::new(0.01, 0.0)), 270);
         assert_eq!(brake_aim(Vec2::ZERO), 0);
+    }
+
+    // The frame's gain.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_a_key_turns_half_the_whole_degree_rate() {
+        assert_eq!(
+            turn(90.0, 2.5, None, Turn::Right, WHOLE, HALF),
+            (91.0, Turn::Right)
+        );
+        assert_eq!(
+            turn(90.0, 2.5, None, Turn::Left, WHOLE, HALF),
+            (89.0, Turn::Left)
+        );
+        assert_eq!(
+            turn(90.0, 2.5, None, Turn::Right, FULL, HALF),
+            (91.25, Turn::Right)
+        );
+        assert_eq!(turn(0.5, 3.0, None, Turn::Left, WHOLE, HALF).0, 359.0);
+    }
+
+    #[test]
+    fn at_half_gain_the_auto_turn_turns_while_more_than_half_a_turn_off_and_stops_without_snapping()
+    {
+        // From 0 toward 9 at 2 a full frame, 1 at half: it turns while the
+        // whole degree is more than 1 off, so on to 8, and stops there.
+        let mut heading = 0.0;
+        let mut seen = vec![];
+        for _ in 0..10 {
+            heading = turn(heading, 2.5, Some(9), Turn::None, WHOLE, HALF).0;
+            seen.push(heading);
+        }
+        assert_eq!(seen, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 8.0, 8.0]);
+        // 7 is 2 off: more than half of 2, where a full frame stops.
+        assert_eq!(
+            turn(7.0, 2.5, Some(9), Turn::None, WHOLE, HALF),
+            (8.0, Turn::Right)
+        );
+        assert_eq!(
+            turn(7.0, 2.5, Some(9), Turn::None, WHOLE, G),
+            (7.0, Turn::None)
+        );
+        // By the other reading it lands on the aim by half steps.
+        assert_eq!(
+            turn(8.0, 2.5, Some(9), Turn::None, FULL, HALF),
+            (9.0, Turn::Right)
+        );
+        assert_eq!(
+            turn(0.0, 2.5, Some(9), Turn::None, FULL, HALF),
+            (1.25, Turn::Right)
+        );
+    }
+
+    #[test]
+    fn at_no_gain_the_auto_turn_reads_a_way_whenever_off_but_does_not_move() {
+        let none = SpeedMult::ZERO;
+        assert_eq!(
+            turn(8.0, 2.5, Some(9), Turn::None, WHOLE, none),
+            (8.0, Turn::Right)
+        );
+        assert_eq!(
+            turn(10.0, 2.5, Some(9), Turn::None, WHOLE, none),
+            (10.0, Turn::Left)
+        );
+        assert_eq!(
+            turn(9.5, 2.5, Some(9), Turn::None, WHOLE, none),
+            (9.5, Turn::None),
+            "on the aim's whole degree"
+        );
+        assert_eq!(
+            turn(90.0, 3.0, None, Turn::Right, WHOLE, none),
+            (90.0, Turn::Right)
+        );
+    }
+
+    #[test]
+    fn the_turn_adds_its_step_in_doubles() {
+        // 0.1 + 3 × 0.3 in doubles narrows to the float nearest 1.0.
+        let gain = SpeedMult::new(0.3);
+        let (heading, _) = turn(0.1, 3.0, None, Turn::Right, WHOLE, gain);
+        assert_eq!(heading, (f64::from(0.1_f32) + 3.0 * 0.3) as f32);
     }
 }

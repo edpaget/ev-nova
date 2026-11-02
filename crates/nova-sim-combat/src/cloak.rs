@@ -121,8 +121,9 @@
 //! however it cloaks: a think, a hit, or set up cloaked. A think uncloaks
 //! a ship whose cloak costs shield with none left, before the AI-cloak
 //! conditions (@0x83449-0x83452); and every frame a ship cloaked at its
-//! start pays usage x [`CLOAK_UPKEEP_RATE`] while its shield is at least
-//! its usage ([`drain_shield`], `_HandleShip` @0x341af-0x34204), after
+//! start pays usage x [`CLOAK_UPKEEP`] x the frame's gain while its shield
+//! is at least its usage ([`drain_shield`], `_HandleShip`
+//! @0x341af-0x34204), after
 //! the hold, so even a ship the hold uncloaks pays that frame. Stock: the
 //! Polaris Cloaking Organs 268 (usage 8) and 269 (4) zero nothing.
 //!
@@ -183,6 +184,7 @@ use std::collections::BTreeMap;
 use crate::catalog::{OutfitId, OutfitRecord};
 use crate::geometry::Vec2;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 
 /// The fade above which a ship fading in, or holding, is cloaked.
 pub const CLOAKED_RISING: f32 = 16.0;
@@ -225,10 +227,12 @@ pub const CLOAK_ON_RADAR: i16 = 0x0002;
 /// A cloak's `ModVal` bit: cloaking zeroes the shield
 /// (`_CloakZeroesShields` @0x3edb).
 pub const CLOAK_ZEROES_SHIELDS: i16 = 0x0004;
-/// What a cloak's shield usage costs a tick while cloaked, per unit of
-/// usage (the double at 0xdd600, `_HandleShip` @0x341af-0x34204; its
-/// frame-time factor, 0x3b511c, the engine's tick models).
-pub const CLOAK_UPKEEP_RATE: f32 = 0.03333;
+/// What a cloak's usage adds to the shield or fuel it costs a full frame
+/// while cloaked, per unit of usage: the double −0.03333 at 0xdd600,
+/// multiplied by the usage and then by the frame's gain, `_gSpeedMult`,
+/// in doubles (`_HandleShip` @0x341af-0x34204, `_HandlePlayer`
+/// @0x706ca-0x706f1, @0x707bc-0x707e2).
+pub const CLOAK_UPKEEP: f64 = -0.03333;
 /// A cloak's `ModVal` bit: a hit uncloaks it.
 pub const CLOAK_DECLOAKS_WHEN_HIT: i16 = 0x0008;
 /// A cloak's `ModVal` bit: an area cloak, which an escort in close
@@ -449,10 +453,10 @@ pub struct CloakGear {
     /// The shield its cloak costs, a tick, while cloaked
     /// (`_CloakShieldUsage` @0x4033: `(ModVal >> 8) & 0xf` of the first
     /// cloak, see [`CloakGear::with_upkeep`] and [`CloakGear::player`]),
-    /// times [`CLOAK_UPKEEP_RATE`].
+    /// times [`CLOAK_UPKEEP`].
     pub shield_usage: u8,
     /// The fuel its cloak costs, a tick, while cloaked, times
-    /// [`CLOAK_UPKEEP_RATE`]: the player's first owned cloak's
+    /// [`CLOAK_UPKEEP`]: the player's first owned cloak's
     /// `(ModVal >> 4) & 0xf` (`_CloakFuelUsage` @0x3e25-0x3e73). It is
     /// always 0 for an NPC (@0x3e31-0x3e39).
     pub fuel_usage: u8,
@@ -871,17 +875,28 @@ pub fn think(cloak: &mut Cloak, gear: CloakGear, situation: Situation, shield: &
 }
 
 /// `shield` after a frame's cloak upkeep (`_HandleShip`
-/// @0x341af-0x34204) on a ship `cloaked` at the frame's start whose cloak
-/// costs `usage`: while the shield is at least `usage`, it pays
-/// `usage` x [`CLOAK_UPKEEP_RATE`]. The original floors the result at 0,
-/// which a shield at least `usage` never reaches; so the drain alone
-/// never empties it.
-pub fn drain_shield(shield: &mut f32, usage: u8, cloaked: bool) {
-    let usage = f32::from(usage);
+/// @0x341af-0x34204, `_HandlePlayer` @0x70792-0x70822) at the frame's
+/// `gain` on a ship `cloaked` at the frame's start whose cloak costs
+/// `usage`: while the shield is at least `usage` (unscaled), it pays
+/// ([`upkeep_paid`]). The original floors the result at 0, which a
+/// shield at least `usage` never reaches at a gain of one or less; so the
+/// drain alone never empties it.
+pub fn drain_shield(shield: &mut f32, usage: u8, cloaked: bool, gain: SpeedMult) {
     // A usage of 0 costs nothing, so its `> 0` test (@0x341b6) is subsumed.
-    if cloaked && *shield >= usage {
-        *shield -= usage * CLOAK_UPKEEP_RATE;
+    if cloaked && *shield >= f32::from(usage) {
+        *shield = upkeep_paid(*shield, usage, gain);
     }
+}
+
+/// `field` (a shield or fuel) after it pays a frame's cloak `usage` at the
+/// frame's `gain`: (double)field + (double)usage × [`CLOAK_UPKEEP`] × the
+/// gain, narrowed and floored at none (@0x706ca-0x70731,
+/// @0x707bc-0x707e2).
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn upkeep_paid(field: f32, usage: u8, gain: SpeedMult) -> f32 {
+    let paid = f64::from(field) + f64::from(usage) * CLOAK_UPKEEP * gain.get();
+    (paid as f32).max(0.0)
 }
 
 /// `cloak` after a frame's check that a ship still cloaked `can_cloak`
@@ -1005,6 +1020,9 @@ pub fn on_screen(view: Area, at: Vec2, width: f32, height: f32) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// A full frame's gain, as every frame of the integer days ran at.
+    const G: SpeedMult = SpeedMult::FULL;
     use nova_sim_catalog::fixture::outfit;
 
     fn at(fade: f32, direction: i8) -> Cloak {
@@ -2181,27 +2199,40 @@ mod tests {
     #[test]
     fn a_cloaked_ship_pays_its_shield_usage_a_tick_while_it_can() {
         let mut shield = 100.0;
-        drain_shield(&mut shield, 8, true);
-        assert_eq!(shield, 100.0 - 8.0 * CLOAK_UPKEEP_RATE);
+        drain_shield(&mut shield, 8, true, G);
+        assert_eq!(shield, 100.0 - 8.0 * 0.03333_f32);
         let mut shield = 8.0;
-        drain_shield(&mut shield, 8, true);
+        drain_shield(&mut shield, 8, true, G);
         assert_eq!(
             shield,
-            8.0 - 8.0 * CLOAK_UPKEEP_RATE,
+            8.0 - 8.0 * 0.03333_f32,
             "shield equal to usage pays"
         );
         let mut shield = 7.9;
-        drain_shield(&mut shield, 8, true);
+        drain_shield(&mut shield, 8, true, G);
         assert_eq!(shield, 7.9, "below usage: no drain");
         let mut shield = 100.0;
-        drain_shield(&mut shield, 8, false);
+        drain_shield(&mut shield, 8, false, G);
         assert_eq!(shield, 100.0, "not cloaked");
-        drain_shield(&mut shield, 0, true);
+        drain_shield(&mut shield, 0, true, G);
         assert_eq!(shield, 100.0, "no usage");
         let mut shield = 0.1;
-        drain_shield(&mut shield, 15, true);
+        drain_shield(&mut shield, 15, true, G);
         assert_eq!(shield, 0.1);
-        assert_eq!(CLOAK_UPKEEP_RATE, 0.03333);
+        assert_eq!(CLOAK_UPKEEP, -0.03333);
+    }
+
+    #[test]
+    fn at_half_gain_a_cloaked_ship_pays_half_its_usage_in_doubles() {
+        let half = SpeedMult::new(0.5);
+        let mut shield = 100.0;
+        drain_shield(&mut shield, 8, true, half);
+        assert_eq!(shield, (100.0 - 4.0 * 0.03333_f64) as f32);
+        let mut shield = 7.9;
+        drain_shield(&mut shield, 8, true, half);
+        assert_eq!(shield, 7.9, "the gate reads the whole usage");
+        assert_eq!(upkeep_paid(100.0, 3, SpeedMult::ZERO), 100.0);
+        assert_eq!(upkeep_paid(0.01, 3, G), 0.0, "floored");
     }
 
     /// The cloak after one think of a ship with a cloak and

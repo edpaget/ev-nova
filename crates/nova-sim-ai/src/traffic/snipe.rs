@@ -105,9 +105,17 @@ pub fn facing(npc: &Npc, at: &ShipState) -> bool {
 /// heading (+0x68 stays the handler entry's, its own), so its heading is
 /// truncated ([`flight::turn_to_own`]), and a reversed thrust shows none
 /// (@0x34eef-0x34eff), so the controls are none. The
-/// speed is moved here, as no thrust key is held for the step to move it.
+/// speed is moved here, as no thrust key is held for the step to move it,
+/// at full gain until `_HandleShip` reads the frame's
+/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
 pub fn inertialess_brake(npc: &mut Npc, handling: &Handling) -> Controls {
-    npc.speed = step_speed(npc.speed, REVERSE, handling.accel, handling.max_speed);
+    npc.speed = step_speed(
+        npc.speed,
+        REVERSE,
+        handling.accel,
+        handling.max_speed,
+        crate::speed_mult::SpeedMult::FULL,
+    );
     flight::turn_to_own(&mut npc.state);
     Controls::default()
 }

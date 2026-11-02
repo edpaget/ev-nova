@@ -627,6 +627,8 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         session.pilot.escorts.push(hired());
         take_off(&mut session, &catalog);
+        // The integer days' full gain, not the take-off's zero.
+        session.at_gain(crate::SpeedMult::FULL);
         session.plot_course(SystemId(131)).expect("a route");
         session.ship.player.position = crate::geometry::Vec2::new(5000.0, 0.0);
         let led: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();

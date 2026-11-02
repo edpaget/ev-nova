@@ -19,14 +19,15 @@
 //!   engine's stats are worked out afresh whenever the outfits change, so
 //!   the predicate needs no cache.
 //! - **The speed.** [`step_speed`] moves it by a signed thrust in units
-//!   of the ship's acceleration ([`THRUST`], [`REVERSE`], [`BRAKE`]),
+//!   of the ship's acceleration × the frame's gain ([`THRUST`],
+//!   [`REVERSE`], [`BRAKE`]),
 //!   capped at the top speed and floored at none, as the player's thrust
 //!   and reverse keys (@0x6cbb2-0x6cc3e, @0x6c770-0x6c7d3), its pre-jump
 //!   brake (@0x6b6ba-0x6b719) and an NPC's thrust word (`_HandleShip`
 //!   @0x34ae9-0x34b6d) move it.
 //! - **The velocity.** [`adjust_velocity`]: each axis moves toward the
 //!   heading's whole degree times the speed, by at most [`ADJUST_RATE`]
-//!   ticks' acceleration.
+//!   accelerations × the frame's gain ([`adjust_rate`]).
 
 use crate::flight::{Flyer, facing};
 use crate::geometry::Vec2;
@@ -34,21 +35,25 @@ use crate::geometry::Vec2;
 use crate::rulebook::RuleKey;
 use crate::rulebook::RuleSource;
 use crate::speed_cap::whole_degree;
+use crate::speed_mult::SpeedMult;
 
-/// How many ticks' acceleration an inertialess ship's velocity may move on
-/// each axis a tick: `_ShipAccelRate` x 4.0 (f32 @0xdd680, @0x334f8).
+/// How many accelerations an inertialess ship's velocity may move on each
+/// axis a frame, × the frame's gain ([`adjust_rate`]): `_ShipAccelRate` x
+/// 4.0 (f32 @0xdd680, @0x334f8).
 pub const ADJUST_RATE: f32 = 4.0;
 
-/// The thrust key's and an NPC's thrust: one tick's acceleration added to
-/// the speed (@0x6cbe2-0x6cc05, @0x34aef-0x34b5d).
+/// The thrust key's and an NPC's thrust: the acceleration × the frame's
+/// gain added to the speed (@0x6cbe2-0x6cc05, @0x34aef-0x34b5d).
 pub const THRUST: f32 = 1.0;
 
-/// The player's reverse key and the pre-jump's brake: one tick's
-/// acceleration taken off the speed (@0x6c77c-0x6c7cc, @0x6b6c3-0x6b719).
+/// The player's reverse key and the pre-jump's brake: the acceleration ×
+/// the frame's gain taken off the speed (@0x6c77c-0x6c7cc,
+/// @0x6b6c3-0x6b719).
 pub const REVERSE: f32 = -1.0;
 
-/// An NPC's brake, `_LowLevelAIHandler` substate 1: half a tick's
-/// acceleration taken off the speed (f32 -0.5 @0xdda34, @0x853f6).
+/// An NPC's brake, `_LowLevelAIHandler` substate 1: half an acceleration
+/// taken off the speed (f32 -0.5 @0xdda34, @0x853f6), which reads no
+/// gain.
 pub const BRAKE: f32 = -0.5;
 
 /// The factor a disabled inertialess player's speed is multiplied by each
@@ -98,12 +103,24 @@ pub fn is_inertialess(
     hull || (dampener && (flyer == Flyer::Player || rule == InertialDampener::AnyShip))
 }
 
-/// `speed` moved by `thrust` ticks of `accel` (a signed thrust: see
-/// [`THRUST`], [`REVERSE`] and [`BRAKE`]), capped at `top` and floored at
-/// none.
+/// `speed` moved by `thrust` × `accel` × the frame's `gain` (a signed
+/// thrust: see [`THRUST`], [`REVERSE`] and [`BRAKE`]), in doubles and
+/// narrowed (@0x6cbd7-0x6cc05, @0x6c791-0x6c7c1, @0x6b6d8-0x6b706),
+/// capped at `top` and floored at none.
 #[must_use]
-pub fn step_speed(speed: f32, thrust: f32, accel: f32, top: f32) -> f32 {
-    thrust.mul_add(accel, speed).min(top).max(0.0)
+#[allow(clippy::cast_possible_truncation)]
+pub fn step_speed(speed: f32, thrust: f32, accel: f32, top: f32, gain: SpeedMult) -> f32 {
+    let moved = f64::from(speed) + f64::from(thrust) * f64::from(accel) * gain.get();
+    (moved as f32).min(top).max(0.0)
+}
+
+/// How far an inertialess ship of acceleration `accel` pulls its velocity
+/// on each axis at the frame's `gain`: `accel` × [`ADJUST_RATE`] in
+/// floats, then × the gain in doubles, narrowed
+/// (`_AdjustInertialessShipVelocity` @0x334f8-0x33508).
+#[must_use]
+pub fn adjust_rate(accel: f32, gain: SpeedMult) -> f32 {
+    gain.times(accel * ADJUST_RATE)
 }
 
 /// `velocity` pulled toward heading x `speed`, by at most `rate` on each
@@ -198,23 +215,39 @@ mod tests {
 
     #[test]
     fn thrust_adds_a_ticks_acceleration_up_to_the_top_speed() {
-        assert_eq!(step_speed(1.0, THRUST, 0.5, 3.0), 1.5);
-        assert_eq!(step_speed(2.75, THRUST, 0.5, 3.0), 3.0, "capped");
-        assert_eq!(step_speed(3.0, 0.0, 0.5, 3.0), 3.0, "coasting");
-        assert_eq!(step_speed(4.0, 0.0, 0.5, 3.0), 3.0, "above the top");
+        assert_eq!(step_speed(1.0, THRUST, 0.5, 3.0, SpeedMult::FULL), 1.5);
+        assert_eq!(
+            step_speed(2.75, THRUST, 0.5, 3.0, SpeedMult::FULL),
+            3.0,
+            "capped"
+        );
+        assert_eq!(
+            step_speed(3.0, 0.0, 0.5, 3.0, SpeedMult::FULL),
+            3.0,
+            "coasting"
+        );
+        assert_eq!(
+            step_speed(4.0, 0.0, 0.5, 3.0, SpeedMult::FULL),
+            3.0,
+            "above the top"
+        );
     }
 
     #[test]
     fn reverse_takes_a_ticks_acceleration_off_down_to_none() {
-        assert_eq!(step_speed(1.0, REVERSE, 0.25, 3.0), 0.75);
-        assert_eq!(step_speed(0.1, REVERSE, 0.25, 3.0), 0.0, "floored");
-        assert_eq!(step_speed(0.0, REVERSE, 0.25, 3.0), 0.0);
+        assert_eq!(step_speed(1.0, REVERSE, 0.25, 3.0, SpeedMult::FULL), 0.75);
+        assert_eq!(
+            step_speed(0.1, REVERSE, 0.25, 3.0, SpeedMult::FULL),
+            0.0,
+            "floored"
+        );
+        assert_eq!(step_speed(0.0, REVERSE, 0.25, 3.0, SpeedMult::FULL), 0.0);
     }
 
     #[test]
     fn the_npc_brake_takes_half_a_tick_off() {
-        assert_eq!(step_speed(1.0, BRAKE, 0.25, 3.0), 0.875);
-        assert_eq!(step_speed(0.1, BRAKE, 0.25, 3.0), 0.0);
+        assert_eq!(step_speed(1.0, BRAKE, 0.25, 3.0, SpeedMult::FULL), 0.875);
+        assert_eq!(step_speed(0.1, BRAKE, 0.25, 3.0, SpeedMult::FULL), 0.0);
     }
 
     // Who is inertialess.
@@ -263,5 +296,22 @@ mod tests {
             InertialDampener::AnyShip
         );
         assert_eq!(InertialDampener::default(), InertialDampener::PlayerOnly);
+    }
+
+    #[test]
+    fn at_half_gain_a_thrust_or_reverse_moves_the_speed_half_an_accel() {
+        let half = SpeedMult::new(0.5);
+        assert_eq!(step_speed(1.0, THRUST, 0.5, 3.0, half), 1.25);
+        assert_eq!(step_speed(1.0, REVERSE, 0.5, 3.0, half), 0.75);
+        assert_eq!(step_speed(2.9, THRUST, 0.5, 3.0, half), 3.0, "capped");
+        assert_eq!(step_speed(0.1, REVERSE, 0.5, 3.0, half), 0.0, "floored");
+        assert_eq!(step_speed(1.0, THRUST, 0.5, 3.0, SpeedMult::ZERO), 1.0);
+    }
+
+    #[test]
+    fn the_adjust_rate_is_four_accels_times_the_gain() {
+        assert_eq!(adjust_rate(0.1, SpeedMult::FULL), 0.4);
+        assert_eq!(adjust_rate(0.1, SpeedMult::new(0.5)), 0.2);
+        assert_eq!(adjust_rate(0.1, SpeedMult::ZERO), 0.0);
     }
 }

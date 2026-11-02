@@ -7,10 +7,12 @@
 //! **The bank** ([`PlayerShip::bank_player`], `_HandlePlayer`
 //! @0x6cd59-0x6cf06, right after the thrust's glow step). The flag
 //! (+0xc8f8) is first cleared. A ship of `shän` `Flags` 0x0001 moves its
-//! bank (+0xc8e4) a frame toward ±16 turning that way (its turn keys or
-//! its auto-turn's, @0x6c905-0x6ca9c), and 2 frames back toward 0 turning
-//! neither way, 0 within 2 of it (16.0 @0xdd048, -16.0 @0xdd674, -2.0
-//! @0xdd998). Its flag is 1 past 6 turning right or auto-turning, -1 below
+//! bank (+0xc8e4) the frame's gain toward ±16 turning that way (its turn
+//! keys or its auto-turn's, @0x6c905-0x6ca9c; @0x6cdb1-0x6cdf2), and 2 ×
+//! the gain back toward 0 turning neither way, compared and added in
+//! doubles, 0 within 2 × the gain of it (16.0 @0xdd048, -16.0 @0xdd674,
+//! -2.0 @0xdd998, @0x6ce07-0x6ce61). The gain is
+//! [`Session::speed_mult`]; at a gain of none a bank stays where it is. Its flag is 1 past 6 turning right or auto-turning, -1 below
 //! -6 turning left or auto-turning, else 0 (6.0 @0xdd06c, -6.0 @0xdd964):
 //! auto-turning (local -0x2cd) flags a bank either way. A banked ship of
 //! 0x0002 raises its glow by 2 while it is 23 or less (@0x6cece-0x6cf06),
@@ -126,6 +128,7 @@ use std::collections::BTreeSet;
 use super::{Jump, PlayerShip, Session, Setup, Space, Statics};
 use crate::Chance;
 use crate::RuleKey;
+use crate::SpeedMult;
 use crate::combat::armament::{Fold, OutfitRounds};
 use crate::combat::ion_tint::{self, IonTint};
 use crate::combat::ship_frames::{
@@ -138,8 +141,8 @@ use crate::traffic::npc::NpcId;
 
 /// The most the player banks either way (16.0 @0xdd048).
 pub const PLAYER_BANK_MOST: f32 = 16.0;
-/// How far the player's bank levels a frame turning neither way (-2.0
-/// @0xdd998).
+/// How far the player's bank levels a full frame turning neither way, ×
+/// the frame's gain (-2.0 @0xdd998).
 pub const PLAYER_BANK_LEVEL: f32 = 2.0;
 /// The bank past which the player's flag is set (6.0 @0xdd06c).
 pub const PLAYER_BANK_FLAG: f32 = 6.0;
@@ -161,8 +164,14 @@ pub(super) struct PlayerDisplay {
 
 /// One frame of `_HandlePlayer`'s bank (see the module docs) of a ship of
 /// class `spec`, its display `frames`, turning `way`, auto-turning when
-/// `auto`.
-pub(super) fn bank(frames: &mut ShipFrames, spec: &FrameSpec, way: Turn, auto: bool) {
+/// `auto`, at the frame's `gain`.
+pub(super) fn bank(
+    frames: &mut ShipFrames,
+    spec: &FrameSpec,
+    way: Turn,
+    auto: bool,
+    gain: SpeedMult,
+) {
     frames.flag = 0;
     if !spec.has(BANKS) {
         return;
@@ -171,19 +180,20 @@ pub(super) fn bank(frames: &mut ShipFrames, spec: &FrameSpec, way: Turn, auto: b
     match way {
         Turn::Right => {
             if *bank < PLAYER_BANK_MOST {
-                *bank += 1.0;
+                *bank = gain.add_times(*bank, 1.0);
             }
         }
         Turn::Left => {
             if *bank > -PLAYER_BANK_MOST {
-                *bank -= 1.0;
+                *bank = gain.add_times(*bank, -1.0);
             }
         }
         Turn::None => {
-            if *bank >= PLAYER_BANK_LEVEL {
-                *bank -= PLAYER_BANK_LEVEL;
-            } else if *bank <= -PLAYER_BANK_LEVEL {
-                *bank += PLAYER_BANK_LEVEL;
+            let level = f64::from(PLAYER_BANK_LEVEL) * gain.get();
+            if f64::from(*bank) >= level {
+                *bank = gain.add_times(*bank, -PLAYER_BANK_LEVEL);
+            } else if f64::from(*bank) <= -level {
+                *bank = gain.add_times(*bank, PLAYER_BANK_LEVEL);
             } else {
                 *bank = 0.0;
             }
@@ -265,33 +275,37 @@ impl Statics {
 
 impl PlayerShip {
     /// Which way the player's ship turns this tick out of a jump under
-    /// `controls`, toward `aim` while the auto-turn aims, as its turn
-    /// block does ([`player_turn::turn`](crate::player_turn::turn)).
+    /// `controls`, toward `aim` while the auto-turn aims, at the frame's
+    /// `gain`, as its turn block does
+    /// ([`player_turn::turn`](crate::player_turn::turn)): at a gain of
+    /// none an aim off at all still gives a way.
     pub(super) fn turn_way(
         &self,
         pilot: &Pilot,
         setup: &Setup,
         jump: Option<Jump>,
-        controls: crate::flight::Controls,
-        aim: Option<i16>,
+        (controls, aim): (crate::flight::Controls, Option<i16>),
+        gain: SpeedMult,
     ) -> Turn {
         let rate = self.flying_handling(pilot, setup, jump).turn_rate;
         let rule = setup.flight_rules().player_turn;
-        crate::player_turn::turn(self.player.heading, rate, aim, controls.turn, rule).1
+        let heading = self.player.heading;
+        crate::player_turn::turn(heading, rate, aim, controls.turn, rule, gain).1
     }
 
     /// One frame of the player's bank out of a jump, turning `way`,
-    /// auto-turning when `auto` (see the module docs).
-    pub(super) fn bank_player(&mut self, way: Turn, auto: bool) {
+    /// auto-turning when `auto`, at the frame's `gain` (see the module
+    /// docs).
+    pub(super) fn bank_player(&mut self, way: Turn, auto: bool, gain: SpeedMult) {
         let spec = self.fit.hull.frames;
-        bank(&mut self.ship_display.frames, &spec, way, auto);
+        bank(&mut self.ship_display.frames, &spec, way, auto, gain);
     }
 
-    /// One frame of the player's bank through a jump, its auto-turn turning
-    /// it `way`: a banking ship levels at once past a stage of 30 (see the
-    /// module docs).
-    pub(super) fn bank_through_jump(&mut self, jump: Option<Jump>, way: Turn) {
-        self.bank_player(way, true);
+    /// One frame of the player's bank through a jump at the frame's
+    /// `gain`, its auto-turn turning it `way`: a banking ship levels at
+    /// once past a stage of 30, unscaled (see the module docs).
+    pub(super) fn bank_through_jump(&mut self, jump: Option<Jump>, way: Turn, gain: SpeedMult) {
+        self.bank_player(way, true, gain);
         if self.fit.hull.frames.has(BANKS) && self.warp_stage(jump) > JUMP_LEVEL_STAGE {
             self.ship_display.frames.bank = 0.0;
         }
@@ -563,7 +577,7 @@ mod tests {
     /// The bank and flag after `n` frames turning `way` from `frames`.
     fn turned(frames: &mut ShipFrames, way: Turn, auto: bool, n: usize) -> (f32, i8) {
         for _ in 0..n {
-            bank(frames, &banking(), way, auto);
+            bank(frames, &banking(), way, auto, SpeedMult::FULL);
         }
         (frames.bank, frames.flag)
     }
@@ -640,8 +654,46 @@ mod tests {
             flag: 1,
             ..ShipFrames::default()
         };
-        bank(&mut frames, &FrameSpec::NONE, Turn::Right, true);
+        bank(
+            &mut frames,
+            &FrameSpec::NONE,
+            Turn::Right,
+            true,
+            SpeedMult::FULL,
+        );
         assert_eq!((frames.bank, frames.flag), (9.0, 0));
+    }
+
+    /// The bank after a frame turning `way` from `from` at `gain`.
+    fn banked(from: f32, way: Turn, gain: f64) -> f32 {
+        let mut frames = ShipFrames {
+            bank: from,
+            ..ShipFrames::default()
+        };
+        bank(&mut frames, &banking(), way, false, SpeedMult::new(gain));
+        frames.bank
+    }
+
+    #[test]
+    fn at_half_gain_the_bank_turns_half_a_frame_and_levels_one() {
+        assert_eq!(banked(6.0, Turn::Right, 0.5), 6.5);
+        assert_eq!(banked(-6.0, Turn::Left, 0.5), -6.5);
+        assert_eq!(banked(15.75, Turn::Right, 0.5), 16.25, "below 16: on");
+        assert_eq!(banked(16.0, Turn::Right, 0.5), 16.0, "at 16: held");
+        assert_eq!(banked(5.0, Turn::None, 0.5), 4.0);
+        assert_eq!(banked(-5.0, Turn::None, 0.5), -4.0);
+        assert_eq!(banked(1.5, Turn::None, 0.5), 0.5, "past 2 × 0.5: levels");
+        assert_eq!(banked(1.0, Turn::None, 0.5), 0.0, "on 2 × 0.5: levels");
+        assert_eq!(banked(0.75, Turn::None, 0.5), 0.0, "within it: 0");
+        assert_eq!(banked(-1.0, Turn::None, 0.5), 0.0);
+    }
+
+    #[test]
+    fn at_no_gain_the_bank_stays_put() {
+        assert_eq!(banked(6.0, Turn::Right, 0.0), 6.0);
+        assert_eq!(banked(-6.0, Turn::Left, 0.0), -6.0);
+        assert_eq!(banked(5.0, Turn::None, 0.0), 5.0);
+        assert_eq!(banked(-5.0, Turn::None, 0.0), -5.0);
     }
 
     #[test]
@@ -1343,5 +1395,14 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.class_shield(ShipId(129)), Some(200.0), "5 × 40");
         assert_eq!(session.class_shield(ShipId(999)), None);
+    }
+
+    #[test]
+    fn a_pass_banks_the_player_at_the_sessions_gain() {
+        let catalog = displaying(BANKS, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.at_gain(SpeedMult::new(0.5));
+        step(&mut session, right());
+        assert_eq!(session.ship.ship_display.frames.bank, 0.5);
     }
 }

@@ -101,6 +101,7 @@ impl Session {
             deadly,
             ships,
             walk: MaskWalk::from(self.setup.rules.source_for(RuleKey::RleCollisionWalk)),
+            speed_mult: self.speed_mult(),
         }
     }
 
@@ -283,7 +284,7 @@ mod tests {
             let mut session = among(rules, &catalog, &[east()], 1);
             fight(&mut session);
             let stellar = Vec2::new(2000.0, 0.0);
-            let player = pull(Vec2::ZERO, stellar, 40, 1.0);
+            let player = pull(Vec2::ZERO, stellar, 40, crate::SpeedMult::FULL);
             assert!(player.x > 0.09, "toward it: {player:?}");
             assert!(
                 near(session.ship.player.velocity, player),
@@ -293,7 +294,7 @@ mod tests {
             let at = npc(&session).state.position;
             assert!(near(
                 npc(&session).state.velocity,
-                pull(at, stellar, 40, 1.0)
+                pull(at, stellar, 40, crate::SpeedMult::FULL)
             ));
         }
     }
@@ -308,8 +309,17 @@ mod tests {
             };
             let mut session = among(rules, &catalog, &[east(), west], 1);
             fight(&mut session);
-            let expected = pull(Vec2::ZERO, Vec2::new(2000.0, 0.0), 40, 1.0)
-                + pull(Vec2::ZERO, Vec2::new(-1000.0, 0.0), 30, 1.0);
+            let expected = pull(
+                Vec2::ZERO,
+                Vec2::new(2000.0, 0.0),
+                40,
+                crate::SpeedMult::FULL,
+            ) + pull(
+                Vec2::ZERO,
+                Vec2::new(-1000.0, 0.0),
+                30,
+                crate::SpeedMult::FULL,
+            );
             assert!(expected.x < 0.0, "the west wins: {expected:?}");
             assert!(
                 near(session.ship.player.velocity, expected),
@@ -402,7 +412,7 @@ mod tests {
             // Pulled where its flight in the ship loop (@0x4445c-0x444c4)
             // left it, before `_HandleGravity` (@0x44509).
             let at = npc(&session).state.position;
-            let pulled = pull(at, Vec2::new(2000.0, 0.0), 40, 1.0);
+            let pulled = pull(at, Vec2::new(2000.0, 0.0), 40, crate::SpeedMult::FULL);
             assert!(
                 near(npc(&session).state.velocity, pulled),
                 "not inertialess there"
@@ -448,7 +458,7 @@ mod tests {
                     // Pulled where its flight left it (see
                     // `an_inertialess_escort_in_close_formation_with_the_player_is_pulled`).
                     let at = npc(&session).state.position;
-                    let pulled = pull(at, Vec2::new(2000.0, 0.0), 40, 1.0);
+                    let pulled = pull(at, Vec2::new(2000.0, 0.0), 40, crate::SpeedMult::FULL);
                     assert!(near(velocity, pulled), "{case}: {velocity:?}");
                 } else {
                     assert_eq!(velocity, Vec2::ZERO, "{case}: inertialess");
@@ -491,7 +501,7 @@ mod tests {
         let at = npc(&session).state.position;
         (
             npc(&session).state.velocity,
-            pull(at, Vec2::new(2000.0, 0.0), 40, 1.0),
+            pull(at, Vec2::new(2000.0, 0.0), 40, crate::SpeedMult::FULL),
         )
     }
 
@@ -555,7 +565,7 @@ mod tests {
                 session.ship.player.position,
                 Vec2::new(2000.0, 0.0),
                 40,
-                1.0,
+                crate::SpeedMult::FULL,
             );
             assert!(
                 near(session.ship.player.velocity, once + again),
@@ -581,5 +591,17 @@ mod tests {
             assert!(speed > top + 1.0, "{speed} past {top}");
             assert_eq!(npc(&session).id, NpcId(0));
         }
+    }
+
+    #[test]
+    fn the_hazards_carry_the_sessions_gain() {
+        let catalog = crate::testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.stellar_hazards().speed_mult, crate::SpeedMult::FULL);
+        session.at_gain(crate::SpeedMult::new(0.5));
+        assert_eq!(
+            session.stellar_hazards().speed_mult,
+            crate::SpeedMult::new(0.5)
+        );
     }
 }

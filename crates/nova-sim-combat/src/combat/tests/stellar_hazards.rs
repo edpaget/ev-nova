@@ -8,6 +8,7 @@ use super::*;
 use crate::combat::stellar_hazards::{
     DeadlyDisc, DeadlySprite, GravitySource, HazardResistance, StellarHazards, StellarKill,
 };
+use crate::speed_mult::SpeedMult;
 use crate::sprite_mask::{MaskRect, MaskWalk, PlacedMask};
 
 /// The stellar hazards among `ships` ([`Combat::hazards`]), each shove
@@ -76,8 +77,8 @@ fn the_pull_lands_on_the_velocity_as_a_shove() {
     let mut ships = [Ship::at(1, 0.0, 0.0), Ship::at(2, 0.0, 300.0)];
     let stellar = Vec2::new(2000.0, 0.0);
     let shoves = hazards_among(&mut combat, &mut ships, &pulling(stellar, 40));
-    let a = crate::gravity::pull(Vec2::ZERO, stellar, 40, 1.0);
-    let b = crate::gravity::pull(Vec2::new(0.0, 300.0), stellar, 40, 1.0);
+    let a = crate::gravity::pull(Vec2::ZERO, stellar, 40, SpeedMult::FULL);
+    let b = crate::gravity::pull(Vec2::new(0.0, 300.0), stellar, 40, SpeedMult::FULL);
     assert!(a.x > 0.09, "{a:?}");
     assert_eq!(
         shoves,
@@ -93,6 +94,47 @@ fn the_pull_lands_on_the_velocity_as_a_shove() {
         ]
     );
     assert_eq!(ships[0].state.velocity, a);
+}
+
+#[test]
+fn at_half_gain_the_player_and_an_npc_each_take_half_the_pull_as_a_shove() {
+    let mut combat = Combat::default();
+    let mut ships = [
+        Ship {
+            id: ShipRef::Player,
+            ..Ship::at(9, 0.0, 0.0)
+        },
+        Ship::at(1, 0.0, 300.0),
+    ];
+    let stellar = Vec2::new(2000.0, 0.0);
+    let hazards = StellarHazards {
+        speed_mult: SpeedMult::new(0.5),
+        ..pulling(stellar, 40)
+    };
+    let shoves = hazards_among(&mut combat, &mut ships, &hazards);
+    let half = SpeedMult::new(0.5);
+    let player = crate::gravity::pull(Vec2::ZERO, stellar, 40, half);
+    let npc = crate::gravity::pull(Vec2::new(0.0, 300.0), stellar, 40, half);
+    let full = crate::gravity::pull(Vec2::ZERO, stellar, 40, SpeedMult::FULL);
+    assert_ne!(player, full);
+    assert_eq!(
+        shoves,
+        [
+            Shove {
+                ship: ShipRef::Player,
+                velocity: player
+            },
+            Shove {
+                ship: A,
+                velocity: npc
+            },
+        ]
+    );
+}
+
+#[test]
+fn the_hazards_pull_at_full_gain_by_default() {
+    assert_eq!(StellarHazards::default().speed_mult, SpeedMult::FULL);
 }
 
 #[test]
@@ -112,8 +154,8 @@ fn each_source_pulls_in_turn_adding_to_the_velocity() {
         ..StellarHazards::default()
     };
     let shoves = hazards_among(&mut combat, &mut ships, &hazards);
-    let once = Vec2::new(1.0, 2.0) + crate::gravity::pull(Vec2::ZERO, east.at, 40, 1.0);
-    let twice = once + crate::gravity::pull(Vec2::ZERO, west.at, 30, 1.0);
+    let once = Vec2::new(1.0, 2.0) + crate::gravity::pull(Vec2::ZERO, east.at, 40, SpeedMult::FULL);
+    let twice = once + crate::gravity::pull(Vec2::ZERO, west.at, 30, SpeedMult::FULL);
     assert_eq!(shoves_on(&shoves, A), [once, twice]);
 }
 

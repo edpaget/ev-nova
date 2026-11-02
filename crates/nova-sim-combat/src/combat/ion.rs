@@ -126,16 +126,16 @@ impl IonLockout {
         }
     }
 
-    /// `fighter`'s reload loop: every weapon's reload counts down a tick,
-    /// then each weapon it can't fire ionized is held at
+    /// `fighter`'s reload loop: every weapon's reload counts down the
+    /// frame's `gain`, then each weapon it can't fire ionized is held at
     /// [`HELD_RELOAD`], on its charge as its block found it plus the
     /// pass's doses so far (`_HandlePlayer` @0x6ae25-0x6ae9c, `_HandleShip`
     /// @0x33896-0x338f0).
-    pub(super) fn reload_one(self, fighter: &mut Fighter) {
+    pub(super) fn reload_one(self, fighter: &mut Fighter, gain: crate::speed_mult::SpeedMult) {
         let (flyer, factor) = fighter.lockout_factor();
         fighter
             .armament
-            .reload_holding(|spec| self.holds(spec, flyer, factor));
+            .reload_holding(gain, |spec| self.holds(spec, flyer, factor));
     }
 
     /// As the fight's tick ends: every fighter's [`Ion::shed`] cleared, so
@@ -337,12 +337,18 @@ mod tests {
         let reloads = |armament: &Armament| -> Vec<f32> {
             armament.mounts().iter().map(|mount| mount.reload).collect()
         };
-        armament.reload_holding(|spec| ENGINE.holds(spec, Flyer::Npc, 1.0));
+        armament.reload_holding(crate::speed_mult::SpeedMult::FULL, |spec| {
+            ENGINE.holds(spec, Flyer::Npc, 1.0)
+        });
         assert_eq!(reloads(&armament), [HELD_RELOAD, 4.0]);
-        armament.reload_holding(|spec| ENGINE.holds(spec, Flyer::Npc, 1.0));
+        armament.reload_holding(crate::speed_mult::SpeedMult::FULL, |spec| {
+            ENGINE.holds(spec, Flyer::Npc, 1.0)
+        });
         assert_eq!(reloads(&armament), [1.0, 3.0]);
         // Released: the countdown runs it to none, ready to fire.
-        armament.reload_holding(|spec| ENGINE.holds(spec, Flyer::Npc, 0.99));
+        armament.reload_holding(crate::speed_mult::SpeedMult::FULL, |spec| {
+            ENGINE.holds(spec, Flyer::Npc, 0.99)
+        });
         assert_eq!(reloads(&armament), [0.0, 2.0]);
         armament.reload();
         assert_eq!(reloads(&armament), [0.0, 1.0]);

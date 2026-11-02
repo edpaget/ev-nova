@@ -72,8 +72,8 @@ use super::projectile::{Shot, Target};
 use super::{Combat, ShipRef};
 use crate::asteroid::KINDS;
 use crate::geometry::Vec2;
-use crate::gravity::SPEED_MULT;
 use crate::rulebook::RuleSource;
+use crate::speed_mult::SpeedMult;
 use crate::sprite_mask::{MaskRect, MaskWalk, PlacedMask, RleSheet};
 use crate::sprite_place::{Placement, radius_touch};
 
@@ -163,7 +163,7 @@ impl Default for ContactSprites {
             ships: Vec::new(),
             shots: BTreeMap::new(),
             asteroids: std::array::from_fn(|_| None),
-            speed_mult: SPEED_MULT,
+            speed_mult: SpeedMult::FULL.get(),
             walk: MaskWalk::default(),
             reading: ShotContact::default(),
         }
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(ShotContact::from(RuleSource::Bible), ShotContact::Swept);
         assert_eq!(ShotContact::default(), ShotContact::Placed);
         let lent = ContactSprites::default();
-        assert!((lent.speed_mult - SPEED_MULT).abs() < f64::EPSILON);
+        assert!((lent.speed_mult - SpeedMult::FULL.get()).abs() < f64::EPSILON);
         assert!(lent.asteroids.iter().all(Option::is_none));
     }
 

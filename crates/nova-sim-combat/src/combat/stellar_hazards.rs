@@ -6,10 +6,11 @@
 //! and the beams ([`Combat::hazards`], before [`Combat::close_tick_in`]), on
 //! either pass:
 //!
-//! - **The pull** ([`pull`]) is added to the velocity of each fighter not
-//!   destroyed that does not resist gravity ([`HazardResistance::gravity`]),
-//!   source by source in the system's slot order, and reported as a
-//!   [`Shove`]. A later beam tick's knockback starts from the pulled
+//! - **The pull** ([`pull`]), at the frame's gain
+//!   ([`StellarHazards::speed_mult`]), is added to the velocity of each
+//!   fighter not destroyed that does not resist gravity
+//!   ([`HazardResistance::gravity`]), source by source in the system's
+//!   slot order, and reported as a [`Shove`]. A later beam tick's knockback starts from the pulled
 //!   velocity, so `_SpeedLimit`'s clamp covers the pull, as the original's
 //!   does.
 //! - **A kill**, sprite by sprite in slot order, fighters in their order
@@ -44,7 +45,8 @@ use crate::combat::hull::Condition;
 use crate::deadly_stellar;
 use crate::deadly_stellar::{KILLED_ARMOR, touches};
 use crate::geometry::Vec2;
-use crate::gravity::{SPEED_MULT, pull};
+use crate::gravity::pull;
+use crate::speed_mult::SpeedMult;
 use crate::sprite_mask::{MaskWalk, PlacedMask};
 
 /// A stellar that pulls: where it is and its `spöb` `Gravity`.
@@ -91,6 +93,10 @@ pub struct StellarHazards {
     /// How the masks are walked, by
     /// [`RuleKey::RleCollisionWalk`](crate::RuleKey::RleCollisionWalk).
     pub walk: MaskWalk,
+    /// The frame's gain, `_gSpeedMult`, that each source's `Gravity` is
+    /// multiplied by for every fighter, the player and the NPCs alike
+    /// (`_HandleGravity` @0x39c84-0x39c94). Full by default.
+    pub speed_mult: SpeedMult,
 }
 
 /// Which stellar hazards a fighter resists (`_ShipResistsGravity`,
@@ -126,7 +132,7 @@ impl Combat {
                     fighter.state.position,
                     source.at,
                     source.gravity,
-                    SPEED_MULT,
+                    hazards.speed_mult,
                 );
                 let velocity = fighter.state.velocity + pulled;
                 fighter.state.velocity = velocity;

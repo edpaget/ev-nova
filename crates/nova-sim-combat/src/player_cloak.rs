@@ -32,11 +32,12 @@
 //!
 //! 1. a cloak that can no longer cloak, or a disabled player (-0x2cb),
 //!    uncloaks (`_DoShipUncloak` @0x7068c-0x706a4);
-//! 2. a fuel usage above 0 costs usage × [`CLOAK_UPKEEP_RATE`] fuel,
-//!    floored at 0 (@0x706af-0x70731);
+//! 2. a fuel usage above 0 costs usage × [`CLOAK_UPKEEP`] × the frame's
+//!    gain, `_gSpeedMult`, in doubles, floored at 0 (@0x706af-0x70731,
+//!    [`upkeep_paid`]);
 //! 3. a zeroing cloak stores a shield of 0 every frame (@0x7073c-0x7074d);
-//!    any other drains its shield usage while the shield holds it
-//!    ([`drain_shield`], @0x70792-0x70822).
+//!    any other drains its shield usage × the gain while the shield holds
+//!    the whole usage ([`drain_shield`], @0x70792-0x70822).
 //!
 //! The test was made before step 1, so the frame the cloak drops pays
 //! too.
@@ -47,10 +48,11 @@
 //!   press sets: `nova_sim::key_fade` reads it, not this module.
 //! - The status-redraw flags set every 10 frames (@0x706f6-0x70721,
 //!   @0x70748-0x70783, @0x707e7-0x70812): the HUD is drawn every frame.
-//! - The frame-time factor (`*0x3b511c`, @0x706ce-0x706e0,
-//!   @0x707c0-0x707d1): the engine's tick models frame time.
 
-use crate::cloak::{CLOAK_UPKEEP_RATE, Cloak, CloakGear, cloak_ship, drain_shield};
+#[cfg(doc)]
+use crate::cloak::CLOAK_UPKEEP;
+use crate::cloak::{Cloak, CloakGear, cloak_ship, drain_shield, upkeep_paid};
+use crate::speed_mult::SpeedMult;
 
 /// What a press of the cloak key did, for the session to sound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,11 +105,11 @@ pub fn press(
     }
 }
 
-/// One frame of the player's cloak upkeep on `cloak` of `gear` (see the
-/// module docs), the player able to cloak (`can_cloak`) or not and
-/// `disabled` or not, paid from `fuel` and `shield`. Runs only while the
-/// cloak reads cloaked; returns `Some` with [`Cloak::uncloak`]'s sound
-/// condition when it uncloaked.
+/// One frame of the player's cloak upkeep on `cloak` of `gear` at the
+/// frame's `gain` (see the module docs), the player able to cloak
+/// (`can_cloak`) or not and `disabled` or not, paid from `fuel` and
+/// `shield`. Runs only while the cloak reads cloaked; returns `Some` with
+/// [`Cloak::uncloak`]'s sound condition when it uncloaked.
 pub fn upkeep(
     cloak: &mut Cloak,
     gear: CloakGear,
@@ -115,18 +117,19 @@ pub fn upkeep(
     disabled: bool,
     fuel: &mut f32,
     shield: &mut f32,
+    gain: SpeedMult,
 ) -> Option<bool> {
     if !cloak.is_cloaked() {
         return None;
     }
     let uncloaked = (!can_cloak || disabled).then(|| cloak.uncloak());
     if gear.fuel_usage > 0 {
-        *fuel = (*fuel - f32::from(gear.fuel_usage) * CLOAK_UPKEEP_RATE).max(0.0);
+        *fuel = upkeep_paid(*fuel, gear.fuel_usage, gain);
     }
     if gear.zeroes_shields {
         *shield = 0.0;
     } else {
-        drain_shield(shield, gear.shield_usage, true);
+        drain_shield(shield, gear.shield_usage, true, gain);
     }
     uncloaked
 }
@@ -291,7 +294,15 @@ mod tests {
             let (mut fuel, mut shield) = (100.0, 100.0);
             let cloaked = start.is_cloaked();
             assert_eq!(
-                upkeep(&mut cloak, gear, false, true, &mut fuel, &mut shield),
+                upkeep(
+                    &mut cloak,
+                    gear,
+                    false,
+                    true,
+                    &mut fuel,
+                    &mut shield,
+                    SpeedMult::FULL
+                ),
                 cloaked.then_some(true),
                 "{start:?}"
             );
@@ -308,13 +319,29 @@ mod tests {
         };
         let (mut fuel, mut shield) = (100.0, 100.0);
         assert_eq!(
-            upkeep(&mut full(), gear, true, false, &mut fuel, &mut shield),
+            upkeep(
+                &mut full(),
+                gear,
+                true,
+                false,
+                &mut fuel,
+                &mut shield,
+                SpeedMult::FULL
+            ),
             None
         );
-        assert_eq!(fuel, 100.0 - 3.0 * CLOAK_UPKEEP_RATE);
+        assert_eq!(fuel, 100.0 - 3.0 * 0.03333_f32);
         assert_eq!(shield, 100.0, "no shield usage");
         let mut low = 0.05;
-        upkeep(&mut full(), gear, true, false, &mut low, &mut shield);
+        upkeep(
+            &mut full(),
+            gear,
+            true,
+            false,
+            &mut low,
+            &mut shield,
+            SpeedMult::FULL,
+        );
         assert_eq!(low, 0.0, "floored");
         let mut overdrawn = -1.0;
         upkeep(
@@ -324,6 +351,7 @@ mod tests {
             false,
             &mut overdrawn,
             &mut shield,
+            SpeedMult::FULL,
         );
         assert_eq!(overdrawn, -1.0, "no usage: the fuel is left alone");
     }
@@ -334,7 +362,15 @@ mod tests {
         let mut fuel = 100.0;
         for start in [30.0, -2.0, 0.0] {
             let mut shield = start;
-            upkeep(&mut full(), ZEROING, true, false, &mut fuel, &mut shield);
+            upkeep(
+                &mut full(),
+                ZEROING,
+                true,
+                false,
+                &mut fuel,
+                &mut shield,
+                SpeedMult::FULL,
+            );
             assert_eq!(shield, 0.0, "{start}");
         }
         let draining = CloakGear {
@@ -342,10 +378,26 @@ mod tests {
             ..DEVICE
         };
         let mut shield = 30.0;
-        upkeep(&mut full(), draining, true, false, &mut fuel, &mut shield);
-        assert_eq!(shield, 30.0 - 8.0 * CLOAK_UPKEEP_RATE);
+        upkeep(
+            &mut full(),
+            draining,
+            true,
+            false,
+            &mut fuel,
+            &mut shield,
+            SpeedMult::FULL,
+        );
+        assert_eq!(shield, 30.0 - 8.0 * 0.03333_f32);
         let mut shield = 7.0;
-        upkeep(&mut full(), draining, true, false, &mut fuel, &mut shield);
+        upkeep(
+            &mut full(),
+            draining,
+            true,
+            false,
+            &mut fuel,
+            &mut shield,
+            SpeedMult::FULL,
+        );
         assert_eq!(shield, 7.0, "below its usage");
     }
 
@@ -366,26 +418,68 @@ mod tests {
                     can_cloak,
                     disabled,
                     &mut fuel,
-                    &mut shield
+                    &mut shield,
+                    SpeedMult::FULL
                 ),
                 Some(true),
                 "{can_cloak} {disabled}"
             );
             assert_eq!(cloak, at(FADE_FULL, -1));
-            assert_eq!(fuel, 10.0 - 3.0 * CLOAK_UPKEEP_RATE, "paid that frame");
+            assert_eq!(fuel, 10.0 - 3.0 * 0.03333_f32, "paid that frame");
             assert_eq!(shield, 0.0, "zeroed that frame");
         }
         let mut leaving = at(20.0, -1);
         assert_eq!(
-            upkeep(&mut leaving, gear, false, false, &mut 10.0, &mut 30.0),
+            upkeep(
+                &mut leaving,
+                gear,
+                false,
+                false,
+                &mut 10.0,
+                &mut 30.0,
+                SpeedMult::FULL
+            ),
             Some(false),
             "already fading out: no sound"
         );
         let mut kept = FULL;
         assert_eq!(
-            upkeep(&mut kept, gear, true, false, &mut 10.0, &mut 30.0),
+            upkeep(
+                &mut kept,
+                gear,
+                true,
+                false,
+                &mut 10.0,
+                &mut 30.0,
+                SpeedMult::FULL
+            ),
             None
         );
         assert_eq!(kept, FULL);
+    }
+
+    #[test]
+    fn at_half_gain_the_upkeep_drains_half_the_fuel_and_shield() {
+        let gear = CloakGear {
+            fuel_usage: 3,
+            shield_usage: 8,
+            ..DEVICE
+        };
+        let (mut fuel, mut shield) = (100.0, 30.0);
+        let half = SpeedMult::new(0.5);
+        upkeep(&mut full(), gear, true, false, &mut fuel, &mut shield, half);
+        assert_eq!(fuel, (100.0 - 1.5 * 0.03333_f64) as f32);
+        assert_eq!(shield, (30.0 - 4.0 * 0.03333_f64) as f32);
+        let (mut fuel, mut shield) = (100.0, 30.0);
+        upkeep(
+            &mut full(),
+            gear,
+            true,
+            false,
+            &mut fuel,
+            &mut shield,
+            SpeedMult::ZERO,
+        );
+        assert_eq!((fuel, shield), (100.0, 30.0));
     }
 }

@@ -892,8 +892,12 @@ mod tests {
     fn the_rescue_idles_the_self_destruct() {
         let catalog = rescuing();
         let mut session = due(&catalog);
-        session.ship.fate.self_destruct.step(true, false);
-        assert_eq!(session.ship.fate.self_destruct.count(), Some(149));
+        session
+            .ship
+            .fate
+            .self_destruct
+            .step(true, false, crate::SpeedMult::FULL);
+        assert_eq!(session.ship.fate.self_destruct.count(), Some(149.0));
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert_eq!(
             session.ship.fate.self_destruct.count(),

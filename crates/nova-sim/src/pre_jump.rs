@@ -55,8 +55,8 @@
 //! finish. `slow_down` false skips the brake, as a fast jump does.
 //!
 //! **An inertialess ship** (@0x6b6ba-0x6b719) brakes its speed along its
-//! heading by a tick's acceleration instead, down to none
-//! ([`REVERSE`]), neither turning (it sets no auto-turn, -0x2cd) nor
+//! heading by its acceleration × the frame's gain instead, down to none
+//! ([`REVERSE`], @0x6b6d8-0x6b706), neither turning (it sets no auto-turn, -0x2cd) nor
 //! aiming (+0x68), and its velocity follows the speed (@0x6d43a, which
 //! both stages reach); so it needs only thrust to brake. Both branches
 //! go on to the same code (@0x6b941 and @0x6babc each join @0x6bad1 with
@@ -72,6 +72,7 @@ use crate::handling::Handling;
 use crate::inertialess::REVERSE;
 use crate::player_turn::{PlayerTurn, brake_aim, settled, step_of, turn};
 use crate::speed_cap::SpeedCap;
+use crate::speed_mult::SpeedMult;
 use crate::trig::{self, angular_difference, whole};
 
 /// The speed, in pixels a tick, that each component of a ship's velocity
@@ -130,11 +131,14 @@ pub fn stage(
     }
 }
 
-/// Flies `ship` one tick of the stage it is in (see [`stage`]) under
-/// `flight`, capped by `caps` (the player's box, as the last tick left
-/// it), and gives whether it thrust. A ready ship does not move.
-/// An inertialess ship flies holding `speed` along its heading (see the
-/// module docs), and never thrusts.
+/// Flies `ship` one frame of the stage it is in (see [`stage`]) under
+/// `flight` at the frame's `gain`, capped by `caps` (the player's box, as
+/// the last tick left it), and gives whether it thrust. A ready ship does
+/// not move. An inertialess ship flies holding `speed` along its heading
+/// (see the module docs), and never thrusts. The turn, the inertialess
+/// brake and the move take the gain; the inertial brake's push and its
+/// [`BRAKE_DRAG`] do not (@0x6b7f7-0x6b85c).
+#[allow(clippy::too_many_arguments)] // the frame's own state, rules and gain
 pub fn fly(
     ship: &mut ShipState,
     handling: &Handling,
@@ -143,6 +147,7 @@ pub fn fly(
     caps: Caps,
     flight: FlightRules,
     speed: Option<&mut f32>,
+    gain: SpeedMult,
 ) -> bool {
     let rule = flight.player_turn;
     let stage = stage(ship, handling, bearing, slow_down, rule, speed.is_some());
@@ -152,8 +157,24 @@ pub fn fly(
             PreJump::Turn => (bearing, 0.0),
             PreJump::Ready => return false,
         };
-        (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
-        inertialess_advance(ship, speed, handling, brake, caps, flight, Flyer::Player);
+        (ship.heading, _) = turn(
+            ship.heading,
+            handling.turn_rate,
+            aim,
+            Turn::None,
+            rule,
+            gain,
+        );
+        inertialess_advance(
+            ship,
+            speed,
+            handling,
+            brake,
+            caps,
+            flight,
+            Flyer::Player,
+            gain,
+        );
         return false;
     }
     let (aim, thrust) = match stage {
@@ -169,8 +190,15 @@ pub fn fly(
         PreJump::Turn => (bearing, false),
         PreJump::Ready => return false,
     };
-    (ship.heading, _) = turn(ship.heading, handling.turn_rate, aim, Turn::None, rule);
-    advance(ship, handling, false, caps, flight, Flyer::Player);
+    (ship.heading, _) = turn(
+        ship.heading,
+        handling.turn_rate,
+        aim,
+        Turn::None,
+        rule,
+        gain,
+    );
+    advance(ship, handling, false, caps, flight, Flyer::Player, gain);
     thrust
 }
 
@@ -303,6 +331,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             rules,
             None,
+            SpeedMult::FULL,
         );
         assert_eq!(state.heading, 90.0, "landing on it");
     }
@@ -405,7 +434,8 @@ mod tests {
                     true,
                     Caps::top(SHIP.max_speed),
                     FlightRules::default(),
-                    None
+                    None,
+                    SpeedMult::FULL
                 ),
                 "no thrust"
             );
@@ -436,6 +466,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
+            SpeedMult::FULL,
         );
         assert_eq!(state.heading, 177.0);
         let mut state = ship(Vec2::ZERO, 350.0);
@@ -447,6 +478,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
+            SpeedMult::FULL,
         );
         assert_eq!(state.heading, 353.0);
     }
@@ -462,7 +494,8 @@ mod tests {
             true,
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
-            None
+            None,
+            SpeedMult::FULL
         ));
         assert_eq!(state, ready);
     }
@@ -480,6 +513,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
+            SpeedMult::FULL,
         )
     }
 
@@ -540,6 +574,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
+            SpeedMult::FULL,
         );
         assert!(!thrust);
         assert_eq!(state.velocity, dragged(Vec2::new(0.0, -3.0)));
@@ -555,6 +590,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
+            SpeedMult::FULL,
         ));
         let pushed = Vec2::new(0.0, -3.0) + crate::trig::accel(180, SHIP.accel);
         assert_eq!(state.velocity, dragged(pushed));
@@ -573,6 +609,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             None,
+            SpeedMult::FULL,
         ));
         assert_eq!(state.heading, 182.7);
         let pushed = Vec2::new(0.0, -3.0) + crate::trig::accel(185, SHIP.accel);
@@ -594,6 +631,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             circle,
             None,
+            SpeedMult::FULL,
         ));
         let pushed = Vec2::new(0.0, -3.0) + facing(185.7) * SHIP.accel;
         assert_eq!(state.velocity, dragged(pushed));
@@ -622,6 +660,7 @@ mod tests {
                 Caps::top(SHIP.max_speed),
                 FlightRules::default(),
                 None,
+                SpeedMult::FULL,
             );
             assert_eq!(thrust, off < BRAKE_THRUST_ARC, "tick {k}: {state:?}");
             if thrust {
@@ -655,7 +694,8 @@ mod tests {
             false,
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
-            None
+            None,
+            SpeedMult::FULL
         ));
         assert_eq!(state.heading, 3.0);
         assert_eq!(state.velocity, Vec2::new(0.0, -6.0));
@@ -700,6 +740,7 @@ mod tests {
             Caps::top(SHIP.max_speed),
             FlightRules::default(),
             Some(&mut speed),
+            SpeedMult::FULL,
         );
         assert!(!thrust, "no engine thrust");
         assert_eq!(state.heading, 0.0, "no turn");
@@ -724,6 +765,7 @@ mod tests {
                 Caps::top(SHIP.max_speed),
                 FlightRules::default(),
                 Some(&mut speed),
+                SpeedMult::FULL,
             );
             ticks += 1;
             assert!(ticks < 100, "{state:?}");
@@ -744,6 +786,7 @@ mod tests {
                 Caps::top(SHIP.max_speed),
                 FlightRules::default(),
                 Some(&mut speed),
+                SpeedMult::FULL,
             );
         }
         assert_eq!(
@@ -755,5 +798,62 @@ mod tests {
             (state.velocity - along).length() < 1e-5,
             "along its heading: {state:?}"
         );
+    }
+
+    // The frame's gain.
+
+    const HALF: SpeedMult = SpeedMult::new(0.5);
+
+    #[test]
+    fn at_half_gain_an_inertialess_brake_takes_half_an_acceleration_off() {
+        let mut state = ship(Vec2::new(0.0, -6.0), 0.0);
+        let mut speed = 6.0;
+        fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            Some(&mut speed),
+            HALF,
+        );
+        assert!((speed - 5.85).abs() < 1e-6, "{speed}");
+    }
+
+    #[test]
+    fn at_half_gain_the_inertial_brakes_push_and_drag_are_whole_and_the_move_half() {
+        let mut state = ship(Vec2::new(0.0, -3.0), 180.0);
+        assert!(fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+            HALF,
+        ));
+        let pushed = Vec2::new(0.0, -3.0) + crate::trig::accel(180, SHIP.accel);
+        assert_eq!(state.velocity, dragged(pushed));
+        let moved = crate::flight::moved(Vec2::new(0.0, 1000.0), state.velocity, HALF);
+        assert_eq!(state.position, moved);
+        assert_eq!(state.heading, 180.0, "within a turn of its aim");
+    }
+
+    #[test]
+    fn at_half_gain_the_turn_to_the_bearing_takes_half_a_turn() {
+        let mut state = ship(Vec2::ZERO, 0.0);
+        fly(
+            &mut state,
+            &SHIP,
+            EAST,
+            true,
+            Caps::top(SHIP.max_speed),
+            FlightRules::default(),
+            None,
+            HALF,
+        );
+        assert_eq!(state.heading, 1.5);
     }
 }

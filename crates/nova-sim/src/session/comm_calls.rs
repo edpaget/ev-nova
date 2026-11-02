@@ -1411,11 +1411,12 @@ mod tests {
             .outfits
             .insert(crate::catalog::OutfitId(crate::testkit::BOMB), 1);
         session.reset_precalced();
-        let _ = session
-            .ship
-            .latches
-            .sabotage
-            .tick(false, &mut Draws::of(&[0]));
+        let _ =
+            session
+                .ship
+                .latches
+                .sabotage
+                .tick(false, crate::SpeedMult::FULL, &mut Draws::of(&[0]));
         session
             .ship
             .latches

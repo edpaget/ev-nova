@@ -83,7 +83,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| fighter.ship == ShipRef::Player)
         {
-            lockout.reload_one(fighter);
+            lockout.reload_one(fighter, arena.field.speed_mult);
         }
     }
 
@@ -165,7 +165,7 @@ impl Combat {
             .iter_mut()
             .filter(|fighter| fighter.ship == ShipRef::Player)
         {
-            regenerate_player(fighter, rule);
+            regenerate_player(fighter, rule, arena.field.speed_mult);
         }
     }
 
@@ -245,7 +245,10 @@ impl Combat {
             .target
             .is_none_or(|target| fighters.iter().all(|other| other.ship != target));
         let fighter = &mut fighters[index];
-        self.ion_lockout.reload_one(fighter);
+        // At full gain until `_HandleShip` reads the frame's
+        // (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
+        self.ion_lockout
+            .reload_one(fighter, crate::speed_mult::SpeedMult::FULL);
         if idle {
             fighter.armament.hold_idle_bays();
         }
