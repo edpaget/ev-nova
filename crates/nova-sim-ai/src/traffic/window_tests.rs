@@ -357,3 +357,46 @@ fn every_thrust_window_reads_the_turn_rate_at_the_slot() {
         assert_ne!(heading, turned(from, wanted, step), "{}", row.name);
     }
 }
+
+#[test]
+fn a_docking_ships_window_reads_the_turn_rate_at_its_slot_too() {
+    // Sub 9's window (@0x878a6) was already the slot's
+    // (`plunder_dock::low_level`, the traffic's `dispatch_dock`): charged
+    // at its slot and shed by its step, just outside its slot's turn and
+    // one, it thrusts nothing and turns by its step's rate.
+    use crate::traffic::plunder_dock::{self, DockSub, Docking};
+    use crate::traffic::slot_word;
+    let victim = ShipRef::Npc(NpcId(9));
+    let mut pirate = ship(
+        Goal::Plunder {
+            ship: victim,
+            hopeless: false,
+        },
+        Vec2::ZERO,
+        Vec2::ZERO,
+    );
+    pirate.docking = Some(Docking {
+        ship: victim,
+        sub: DockSub::Approach,
+    });
+    let (slot, step) = (turn_at(&pirate, CHARGED), turn_at(&pirate, 0.0));
+    #[allow(clippy::cast_possible_truncation)]
+    let outside = (slot + plunder_dock::THRUST_SLACK).ceil() as i16;
+    assert!(f32::from(outside) < step + plunder_dock::THRUST_SLACK);
+    pirate.state.heading = f32::from(outside);
+    pirate.ion.charge = CHARGED;
+    let far = ShipState {
+        position: Vec2::new(0.0, -3000.0),
+        ..ShipState::default()
+    };
+    let rules = FlightRules::default();
+    let handling = pirate.flying_handling(pirate.stats.handling.max_speed, rules);
+    let (word, _) =
+        plunder_dock::low_level(&mut pirate, &far, &handling, rules, None, &mut NeverFires);
+    assert!(!word.thrusts());
+    pirate.ion.charge = 0.0;
+    let at_step = AtStep::of_npc(&pirate, 1.0, rules, handling.accel);
+    slot_word::handle_ship(&mut pirate, &word, at_step, rules);
+    assert_eq!(pirate.state.velocity, Vec2::ZERO);
+    assert_eq!(pirate.state.heading, turned(f32::from(outside), 0, step));
+}

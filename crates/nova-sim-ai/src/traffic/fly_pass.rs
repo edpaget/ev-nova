@@ -494,12 +494,13 @@ fn fly_steered(
         pass.step_writes.1.push((npc.berth, npc.warp.aim));
         return outcome;
     }
-    if let Some(&outcome) = pass.slot_outcomes.get(&npc.id) {
-        return outcome;
-    }
-    let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, adjust);
-    let rules = (world.flight, world.held_burst);
-    let outcome = autopilot::step(npc, kept, at_step, speeds, rules, &mut *chance);
+    let outcome = if let Some(&ended) = pass.slot_outcomes.get(&npc.id) {
+        ended
+    } else {
+        let at_step = AtStep::of_npc(npc, world.led_speed, world.flight, adjust);
+        let rules = (world.flight, world.held_burst);
+        autopilot::step(npc, kept, at_step, speeds, rules, &mut *chance)
+    };
     let jumping = npc.jumping() && !paused;
     warp_out::settle(npc, &pass.leaders, &world.warp, jumping);
     outcome
