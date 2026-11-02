@@ -163,6 +163,25 @@
 //! in no layer, last of all, by `_PostDrawCallback`'s
 //! `_DrawParticlesOffscreen` (@0x38c9a) ([`Effects::draw_particles`]).
 //!
+//! # Heard, then shown
+//!
+//! A pass's sounds and its sprites can come on different frames. On double
+//! time's second pass, the original's `PlaySound` comes straight after
+//! the frame's draw (`_HandleShot` @0x44385, `_HandleShip` @0x44483,
+//! `_HandleShipDisplay` @0x444ad, `_CreateExplosion` @0x3f91a). The
+//! sprites that pass writes show only on the next frame. So each half
+//! can run on its own:
+//!
+//! - [`Effects::hear_step`] and [`Effects::hear_event`] make the sounds:
+//!   the looped sounds' countdown, the breakup rolls ([`Breakups`]), and
+//!   each event's sound.
+//! - [`Effects::show_step`] and [`Effects::show_event`] make the
+//!   sprites: the pods and explosions stepped, the breakups set off, and
+//!   each event's explosions, debris, bursts and pods.
+//!
+//! [`Effects::step`] and [`Effects::apply`] run the two halves together,
+//! the sound half first, so each makes the same draws in the same order.
+//!
 //! The effects draw on their own [`Chance`], never on the simulation's.
 
 use std::collections::BTreeMap;
@@ -387,9 +406,17 @@ pub struct Effects {
     pods: EscapePods,
 }
 
+/// Where a pass's breakup explosions go off, each `bööm` and its place, as
+/// [`Effects::hear_step`] rolled them, heard or not, for
+/// [`Effects::show_step`] to set off (see "Heard, then shown" in the
+/// module docs).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Breakups(Vec<(BoomId, Point)>);
+
 impl Effects {
     /// Shows `event` in `scene`, its looks from `looks`, drawing on
-    /// `chance` (see the module docs).
+    /// `chance` (see the module docs): heard ([`Effects::hear_event`]),
+    /// then shown ([`Effects::show_event`]).
     pub fn apply(
         &mut self,
         event: &CombatEvent,
@@ -397,6 +424,16 @@ impl Effects {
         looks: &Looks,
         chance: &mut dyn Chance,
     ) {
+        self.hear_event(event, scene, looks);
+        self.show_event(event, scene, looks, chance);
+    }
+
+    /// Makes `event`'s sound in `scene`, its looks from `looks`, and
+    /// shows nothing: a weapon fired, a looped one waiting as
+    /// [`Scene::looped`] says, a stellar's gun, an explosion's own sound
+    /// and an escape pod's. It draws on no chance (see "Heard, then
+    /// shown" in the module docs).
+    pub fn hear_event(&mut self, event: &CombatEvent, scene: &Scene, looks: &Looks) {
         match *event {
             CombatEvent::Fired {
                 ship,
@@ -442,6 +479,51 @@ impl Effects {
                 self.sounds
                     .push(heard(sound, point(at), scene.player, priority, false));
             }
+            CombatEvent::Exploded { at, explosion, .. }
+            | CombatEvent::Destroyed {
+                at,
+                explosion: Some(explosion),
+                ..
+            } => self.hear_explosion(explosion, point(at), scene, looks),
+            // `_HandleShip` plays the pod's sound whether or not
+            // `_SpawnEscapePod` found it a slot (@0x351fa, @0x35300).
+            CombatEvent::PodEjected { at, .. } => {
+                self.sounds.push(heard(
+                    nova_sim::sound::ESCAPE_POD_SOUND,
+                    point(at),
+                    scene.player,
+                    POD_PRIORITY,
+                    false,
+                ));
+            }
+            // A `Y`'s: the session raised its sound as it went off.
+            CombatEvent::ExplodedHeard { .. }
+            | CombatEvent::ShotDown { .. }
+            | CombatEvent::Fizzled { .. }
+            | CombatEvent::Destroyed {
+                explosion: None, ..
+            }
+            | CombatEvent::Particles(_)
+            | CombatEvent::Fired { sound: None, .. }
+            | CombatEvent::Disabled { .. }
+            | CombatEvent::BreakingUp { .. }
+            | CombatEvent::Hit { .. }
+            | CombatEvent::WeaponGlow { .. } => {}
+        }
+    }
+
+    /// Shows `event` in `scene`, its looks from `looks`, drawing on
+    /// `chance`, and makes no sound: the explosions and their extras,
+    /// debris, bursts and escape pods (see "Heard, then shown" in the
+    /// module docs).
+    pub fn show_event(
+        &mut self,
+        event: &CombatEvent,
+        scene: &Scene,
+        looks: &Looks,
+        chance: &mut dyn Chance,
+    ) {
+        match *event {
             CombatEvent::ShotDown { at } | CombatEvent::Fizzled { at } => {
                 self.spawn(TYPE_ZERO, point(at), 0.0, looks, scene.caps);
             }
@@ -450,9 +532,8 @@ impl Effects {
                 explosion,
                 size,
             } => {
-                self.explode(explosion, point(at), size, scene, looks, chance);
+                self.go_off(explosion, point(at), size, scene, looks, chance);
             }
-            // A `Y`'s: the session raised its sound as it went off.
             CombatEvent::ExplodedHeard { at, explosion } => {
                 self.go_off(explosion, point(at), 0.0, scene, looks, chance);
             }
@@ -464,31 +545,22 @@ impl Effects {
                 ..
             } => {
                 if let Some(explosion) = explosion {
-                    self.explode(explosion, point(at), size, scene, looks, chance);
+                    self.go_off(explosion, point(at), size, scene, looks, chance);
                 }
                 if scene.debris {
                     self.scatter(point(at), point(velocity), scene.caps, chance);
                 }
             }
             CombatEvent::Particles(burst) => self.spray(&burst, scene.caps, chance),
-            // `_HandleShip` plays the pod's sound whether or not
-            // `_SpawnEscapePod` found it a slot (@0x351fa, @0x35300).
             CombatEvent::PodEjected { at, velocity, .. } => {
-                let at = point(at);
-                self.sounds.push(heard(
-                    nova_sim::sound::ESCAPE_POD_SOUND,
-                    at,
-                    scene.player,
-                    POD_PRIORITY,
-                    false,
-                ));
                 self.pods
-                    .spawn(at, point(velocity), scene.caps, looks, chance);
+                    .spawn(point(at), point(velocity), scene.caps, looks, chance);
             }
             // A hit's shield flash is the flight view's
             // ([`ShieldFlash`](super::flash::ShieldFlash)), and so is the
             // weapon glow.
-            CombatEvent::Fired { sound: None, .. }
+            CombatEvent::Fired { .. }
+            | CombatEvent::StellarFired { .. }
             | CombatEvent::Disabled { .. }
             | CombatEvent::BreakingUp { .. }
             | CombatEvent::Hit { .. }
@@ -608,8 +680,13 @@ impl Effects {
         chance: &mut dyn Chance,
     ) {
         self.go_off(explosion, at, size, scene, looks, chance);
-        // Heard whether or not the pool had room for it (`_CreateExplosion`
-        // @0x3f91a).
+        self.hear_explosion(explosion, at, scene, looks);
+    }
+
+    /// Makes `explosion`'s own sound at `at`, heard from the player in
+    /// `scene`: whether or not the pool had room for it
+    /// (`_CreateExplosion` @0x3f91a).
+    fn hear_explosion(&mut self, explosion: Blast, at: Point, scene: &Scene, looks: &Looks) {
         if let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
             self.sounds.push(explosion_heard(sound, at, scene.player));
         }
@@ -673,26 +750,32 @@ impl Effects {
     /// Advances the explosions a step, and the looped sounds
     /// playing, then sets off the explosions of the ships `dying`, but
     /// for those on their breakup's first tick, heard from the player in
-    /// `scene`, under its caps or not.
+    /// `scene`, under its caps or not: heard ([`Effects::hear_step`]),
+    /// then shown ([`Effects::show_step`]).
     pub fn step(&mut self, dying: &[Dying], scene: &Scene, looks: &Looks, chance: &mut dyn Chance) {
+        let breakups = self.hear_step(dying, scene, looks, chance);
+        self.show_step(&breakups, scene, looks);
+    }
+
+    /// Steps the looped sounds playing, then rolls the breakup explosions
+    /// of the ships `dying`, but for those on their breakup's first tick:
+    /// whether one goes off, where, and whether it is heard from the
+    /// player in `scene`. Makes the sounds of those heard and gives where
+    /// each goes off, for [`Effects::show_step`]; shows nothing (see
+    /// "Heard, then shown" in the module docs).
+    pub fn hear_step(
+        &mut self,
+        dying: &[Dying],
+        scene: &Scene,
+        looks: &Looks,
+        chance: &mut dyn Chance,
+    ) -> Breakups {
         let player = scene.player;
-        self.pods.step();
         self.playing.retain(|_, left| {
             *left = left.saturating_sub(1);
             *left > 0
         });
-        self.explosions.retain_mut(|explosion| {
-            let Some(look) = looks.boom(explosion.boom) else {
-                return false;
-            };
-            if explosion.delay > 0.0 {
-                explosion.delay -= look.advance;
-            } else {
-                explosion.frame += look.advance;
-            }
-            let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
-            (explosion.frame as u32) < u32::from(frames)
-        });
+        let mut breakups = Vec::new();
         // The original never reaches its puff branch (0x2dd01) on the
         // frame it sets the timer: both its paths jump past it to 0x2def0.
         for ship in dying.iter().filter(|ship| !ship.starting) {
@@ -714,11 +797,35 @@ impl Effects {
             let at = Point::new(ship.at.x + x, ship.at.y + y);
             // `_CreateExplosion(.., Rand(4) == 0)` @0x2decf: heard whether
             // or not the pool had room for it.
-            self.spawn(explosion.boom, at, 0.0, looks, scene.caps);
+            breakups.push((explosion.boom, at));
             let audible = chance.below(4) == 0;
             if audible && let Some(sound) = looks.boom(explosion.boom).and_then(|look| look.sound) {
                 self.sounds.push(explosion_heard(sound, at, player));
             }
+        }
+        Breakups(breakups)
+    }
+
+    /// Steps the escape pods and advances the explosions a step, then sets
+    /// off the `breakups` [`Effects::hear_step`] rolled, under `scene`'s
+    /// caps or not. Makes no sound and draws on no chance (see "Heard,
+    /// then shown" in the module docs).
+    pub fn show_step(&mut self, breakups: &Breakups, scene: &Scene, looks: &Looks) {
+        self.pods.step();
+        self.explosions.retain_mut(|explosion| {
+            let Some(look) = looks.boom(explosion.boom) else {
+                return false;
+            };
+            if explosion.delay > 0.0 {
+                explosion.delay -= look.advance;
+            } else {
+                explosion.frame += look.advance;
+            }
+            let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
+            (explosion.frame as u32) < u32::from(frames)
+        });
+        for &(boom, at) in &breakups.0 {
+            self.spawn(boom, at, 0.0, looks, scene.caps);
         }
     }
 
@@ -2666,5 +2773,111 @@ mod tests {
         );
         effects.clear();
         assert_eq!(effects, Effects::default());
+    }
+
+    /// A pass of every event with a sound and a sprite: a looped weapon
+    /// fired, an explosion, a ship destroyed and a pod ejected, its
+    /// dying ships one breaking up on its last 19 ticks, so it rolls a
+    /// puff every step.
+    fn a_full_pass() -> (Vec<Dying>, Vec<CombatEvent>) {
+        let events = vec![
+            fired(NPC, 155),
+            CombatEvent::Exploded {
+                at: Vec2::new(40.0, 0.0),
+                explosion: blast(130, true),
+                size: 30.0,
+            },
+            destroyed(Some(blast(135, false)), 20.0),
+            ejected(60.0),
+        ];
+        (vec![dying(10)], events)
+    }
+
+    /// The draws a scripted chance makes in [`a_full_pass`]: every one a
+    /// heard puff, then the rest at their last outcome.
+    fn full_pass_chance() -> Script {
+        Script::of(&[0, 5, 7, 0])
+    }
+
+    #[test]
+    fn hearing_then_showing_a_pass_is_stepping_and_applying_it() {
+        let (dying, events) = a_full_pass();
+        let scene = per_firer();
+        let looks = pod_looks();
+        let mut stepped = Effects::default();
+        let mut chance = full_pass_chance();
+        stepped.step(&dying, &scene, &looks, &mut chance);
+        for event in &events {
+            stepped.apply(event, &scene, &looks, &mut chance);
+        }
+        let mut split = Effects::default();
+        let mut split_chance = full_pass_chance();
+        let breakups = split.hear_step(&dying, &scene, &looks, &mut split_chance);
+        for event in &events {
+            split.hear_event(event, &scene, &looks);
+        }
+        split.show_step(&breakups, &scene, &looks);
+        for event in &events {
+            split.show_event(event, &scene, &looks, &mut split_chance);
+        }
+        assert_eq!(split, stepped);
+        assert_eq!(split_chance.asked, chance.asked, "the same draws");
+        assert_eq!(stepped.take_sounds().len(), 5, "every sound made");
+    }
+
+    #[test]
+    fn a_pass_heard_sounds_and_shows_nothing() {
+        let (dying, events) = a_full_pass();
+        let (scene, looks) = (per_firer(), pod_looks());
+        let mut effects = Effects::default();
+        exploded(&mut effects, 135, at(0.0, 0.0));
+        effects.take_sounds();
+        let shown = (effects.explosions(), effects.particles().to_vec());
+        let pods = effects.pods();
+        let mut chance = full_pass_chance();
+        effects.hear_step(&dying, &scene, &looks, &mut chance);
+        let drawn = chance.asked.len();
+        for event in &events {
+            effects.hear_event(event, &scene, &looks);
+        }
+        assert_eq!(chance.asked.len(), drawn, "the events heard draw nothing");
+        assert_eq!(
+            effects.take_sounds(),
+            [
+                explosion_sound(302, (93, 195)),
+                fire_sound(205, (300, -400)),
+                explosion_sound(302, (40, 0)),
+                explosion_sound(300, (200, 100)),
+                CombatSound {
+                    sound: SoundId(372),
+                    offset: (60, 0),
+                    priority: POD_PRIORITY,
+                    until_stopped: false,
+                },
+            ]
+        );
+        assert_eq!((effects.explosions(), effects.particles().to_vec()), shown);
+        assert_eq!(effects.pods(), pods);
+    }
+
+    #[test]
+    fn a_breakup_heard_goes_off_where_its_roll_put_it_once_shown() {
+        let mut effects = Effects::default();
+        // A quarter of 48 is 12; the offsets draw below 24, less 12.
+        let mut chance = Script::of(&[0, 0, 23, 1]);
+        let breakups = effects.hear_step(&[dying(30)], &scene(), &looks(), &mut chance);
+        assert_eq!(breakups, Breakups(vec![(BoomId(130), at(88.0, 211.0))]));
+        assert_eq!(effects.explosions(), [], "not yet shown");
+        assert_eq!(effects.take_sounds(), [], "rolled unheard");
+        effects.show_step(&breakups, &scene(), &looks());
+        assert_eq!(
+            effects.explosions(),
+            [Explosion {
+                boom: BoomId(130),
+                at: at(88.0, 211.0),
+                frame: 0.0,
+                delay: 0.0,
+            }]
+        );
     }
 }

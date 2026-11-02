@@ -516,8 +516,9 @@ fn an_npcs_weapon_glow_falls_by_its_own_classs_decay() {
     );
 }
 
-/// A view firing the player's looped beam, of a 3-tick sound, by `rules`.
-fn firing_looped(rules: &Rulebook) -> Faked {
+/// A view whose player's looped beam has a 3-tick sound, by `rules`, and
+/// the beam fired.
+fn looped_beam(rules: &Rulebook) -> (Faked, CombatEvent) {
     let mut catalog = armed(0, &[UNDER]);
     catalog.looks[4].1 = Ok(WeaponLook {
         flags: weapons::LOOPED_SOUND,
@@ -525,13 +526,18 @@ fn firing_looped(rules: &Rulebook) -> Faked {
         sound_ticks: Some(3),
         ..WeaponLook::default()
     });
-    let mut view = stepping_by(catalog, rules);
     let fired = CombatEvent::Fired {
         ship: ShipRef::Player,
         weapon: UNDER,
         at: Vec2::ZERO,
         sound: Some(FireSound::at(nova_sim::combat::PLAYER_FIRE_PRIORITY)),
     };
+    (stepping_by(catalog, rules), fired)
+}
+
+/// A view firing the player's looped beam, of a 3-tick sound, by `rules`.
+fn firing_looped(rules: &Rulebook) -> Faked {
+    let (mut view, fired) = looped_beam(rules);
     for _ in 0..4 {
         frame(&mut view, one_step(vec![fight(vec![fired])]));
     }
@@ -595,6 +601,64 @@ fn a_detonation_on_the_second_pass_is_shown_the_frame_after() {
     assert_eq!(view.effects.explosions().len(), 0, "held with its pass");
     frame(&mut view, one_step(vec![fight(vec![])]));
     assert_eq!(view.effects.explosions().len(), 1);
+}
+
+/// The sounds among `heard` of `snd ` `id`.
+fn of_sound(heard: &[CombatSound], id: i16) -> usize {
+    heard
+        .iter()
+        .filter(|sound| sound.sound == nova_sim::SoundId(id))
+        .count()
+}
+
+#[test]
+fn a_detonation_on_the_second_pass_is_heard_on_its_frame_and_shown_the_frame_after() {
+    let mut view = stepping(armed(1, &[BLASTER]));
+    frame(
+        &mut view,
+        doubled(fight(vec![]), fight(vec![detonation()]), sol()),
+    );
+    assert_eq!(
+        of_sound(&combat_heard(&mut view), 302),
+        1,
+        "heard on its frame"
+    );
+    assert_eq!(view.effects.explosions().len(), 0, "shown with its pass");
+    frame(&mut view, one_step(vec![fight(vec![])]));
+    assert_eq!(view.effects.explosions().len(), 1);
+    assert_eq!(combat_heard(&mut view), [], "not heard again");
+}
+
+#[test]
+fn a_weapon_fired_on_a_held_second_pass_is_heard_on_its_frame() {
+    let rules = Rulebook::default().with_override(RuleKey::LoopedSoundWait, RuleSource::Bible);
+    let (mut view, fired) = looped_beam(&rules);
+    frame(&mut view, doubled(fight(vec![]), fight(vec![fired]), sol()));
+    let mut heard = vec![combat_heard(&mut view).len()];
+    for _ in 0..3 {
+        frame(&mut view, one_step(vec![fight(vec![fired])]));
+        heard.push(combat_heard(&mut view).len());
+    }
+    assert_eq!(heard, [1, 0, 0, 1], "its 3 ticks counted from its pass");
+}
+
+#[test]
+fn a_held_pass_dropped_by_a_layout_was_heard() {
+    let mut view = held_a_blast_and_a_wrap();
+    assert_eq!(
+        of_sound(&combat_heard(&mut view), 302),
+        1,
+        "heard on its frame"
+    );
+    super::faked_screen::warp_ends(&mut view);
+    view.arrive();
+    frame(&mut view, stopped());
+    assert_eq!(view.effects.explosions().len(), 0, "never shown");
+    assert_eq!(
+        of_sound(&combat_heard(&mut view), 302),
+        0,
+        "nor heard again"
+    );
 }
 
 // A double-time frame, drawn between its passes.

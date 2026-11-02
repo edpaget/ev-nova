@@ -1986,12 +1986,16 @@ fn point(v: Vec2) -> Point {
 /// `_HandleShipDisplay`, so they show this frame; a hit the original lands
 /// after its ship's display ([`CombatEvent::Hit`]'s `late`) is shown on the
 /// next. Gives the weapon glows the fight lit, each ship's and whether it
-/// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`].
+/// is late ([`CombatEvent::WeaponGlow`]), for [`WeaponGlows::step`]. A
+/// pass `heard` already only shows its events ([`Effects::show_event`]),
+/// as its sounds were made on its own frame (see the `between_passes`
+/// module).
 fn show_combat(
     (combat, ships): (&[CombatEvent], &[FrameShip]),
     scene: &Scene,
     (effects, flashes): (&mut Effects, &mut BTreeMap<ShipRef, ShieldFlash>),
     (looks, sheets): (&Looks, Sheets<'_>),
+    heard: bool,
     chance: &mut dyn Chance,
 ) -> Vec<(ShipRef, bool)> {
     let mut late = Vec::new();
@@ -2013,7 +2017,11 @@ fn show_combat(
                 flashes.entry(ship).or_default().hit(passes_shields);
             }
         }
-        effects.apply(event, scene, looks, chance);
+        if heard {
+            effects.show_event(event, scene, looks, chance);
+        } else {
+            effects.apply(event, scene, looks, chance);
+        }
     }
     step_flashes(flashes, ships, sheets);
     for (ship, passes_shields) in late {

@@ -29,7 +29,7 @@
 //! **The view's own effects wait with it.** The last step's second pass is
 //! not replayed that frame: its wrap and its effects, flashes, glows, shot
 //! looks and stars run as the hold goes, before the next report's first
-//! pass. So they never disagree with the frame shown, across a wrap too.
+//! pass. Its sounds are the exception (see below). So they never disagree with the frame shown, across a wrap too.
 //! Earlier steps of a many-step frame replay in full: nothing draws them.
 //! A second pass's quotes, comm and last line stay on their own frame; a
 //! line the original draws a frame later is left out, as the phase body
@@ -54,20 +54,25 @@
 //! `PlaySound` and `_FadeWhiteIn` (@0x68404) start at once, so the jump's
 //! effect reads the kept frame.
 //!
-//! **Ordering against the original.** A held pass's combat sounds are
-//! raised as its effects step, so they play up to a step late, where the
-//! original's `PlaySound` (`_HandleShot` @0x44385, `_HandleExplods`
-//! @0x444e1) comes straight after the draw. That crosses a frame, so it is
-//! filed with the rest of what this left out
-//! (rdm:phase/play-feel-6-followups/phase-5-second-pass-lines-sounds-and-rescue).
+//! **A held pass is heard on its own frame.** Its combat sounds are made as
+//! the hold is taken ([`FlightView::hear_held_pass`]), because the
+//! original's `PlaySound` comes straight after the draw (`_HandleShot`
+//! @0x44385, `_HandleShip` @0x44483, `_HandleShipDisplay` @0x444ad,
+//! `_CreateExplosion` @0x3f91a, all on both passes). That covers the
+//! looped sounds' countdown, the breakup rolls and each event's sound.
+//! Its sprites, the breakups among them, are set off at the release, with
+//! the rest of its effects (see the `effects` module's "Heard, then
+//! shown"). A hold dropped unreplayed drops its breakups, and its sounds
+//! have played, as the original's have.
 
 use nova_sim::PersonQuote;
 use nova_sim::flight_frame::{FlightFrame, PassReport, StepRun};
 
+use crate::flight::effects::Breakups;
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 
-use super::FlightView;
+use super::{FlightView, dying};
 
 /// What a double-time frame holds until the next step (see the module
 /// docs).
@@ -77,6 +82,9 @@ pub(super) struct BetweenPasses {
     frame: Box<FlightFrame>,
     /// The second pass, to replay as the hold goes.
     second: Option<PassReport>,
+    /// The second pass's breakups, once its sounds are heard
+    /// ([`FlightView::hear_held_pass`]), to set off as the hold goes.
+    heard: Option<Breakups>,
 }
 
 impl BetweenPasses {
@@ -89,7 +97,11 @@ impl BetweenPasses {
         } else {
             None
         };
-        Some(Self { frame, second })
+        Some(Self {
+            frame,
+            second,
+            heard: None,
+        })
     }
 
     /// The quotes the held pass said, which stay on their own frame.
@@ -149,12 +161,32 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// pass, its wrap first, as [`FlightView::step_frame`] replays any (see
     /// the module docs). Nothing held does nothing.
     pub(super) fn release_between_passes(&mut self, anchor: Anchor) {
-        let held = self.between_passes.take();
-        if let Some(pass) = held.and_then(|held| held.second) {
+        let Some(held) = self.between_passes.take() else {
+            return;
+        };
+        if let Some(pass) = held.second {
             if let Some(wrap) = pass.wrap {
                 self.carry_wrap(&wrap);
             }
-            self.step_effects(&pass, None, anchor);
+            self.step_effects(&pass, None, anchor, held.heard);
         }
+    }
+
+    /// Makes the sounds of `held`'s second pass now, as the original's
+    /// `PlaySound` comes straight after the frame's draw, and keeps its
+    /// breakups on the hold for the release to set off (see the module
+    /// docs). Each sound is heard from where the pass left the player.
+    pub(super) fn hear_held_pass(&mut self, held: &mut BetweenPasses) {
+        let Some(pass) = &held.second else {
+            return;
+        };
+        let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+        let scene = self.presentation.scene(pass.player_position);
+        let chance = &mut self.effects_chance;
+        let breakups = self.effects.hear_step(&dying, &scene, &self.looks, chance);
+        for event in &pass.combat {
+            self.effects.hear_event(event, &scene, &self.looks);
+        }
+        held.heard = Some(breakups);
     }
 }

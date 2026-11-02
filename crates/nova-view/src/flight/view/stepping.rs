@@ -62,7 +62,7 @@ use nova_sim::{Controls, Face, PlayerCommand, RuleKey, RuleSource, Rulebook, Shi
 
 use crate::Key;
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
-use crate::flight::effects::{LoopedSounds, Scene};
+use crate::flight::effects::{Breakups, LoopedSounds, Scene};
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 use crate::system::catalog::SystemCatalog;
@@ -224,7 +224,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         if !report.steps.is_empty() || report.stopped {
             self.release_between_passes(anchor);
         }
-        let held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
+        let mut held = report.steps.last_mut().and_then(BetweenPasses::taken_from);
         let mut rescued = false;
         for run in &report.steps {
             notes.extend(run.comm.iter().cloned());
@@ -235,12 +235,15 @@ impl<C, S: FlightSim> FlightView<C, S> {
                     self.carry_wrap(&wrap);
                 }
                 let first = (at == 0).then_some(self.previous.position);
-                self.step_effects(pass, first, anchor);
+                self.step_effects(pass, first, anchor, None);
             }
             if let Some(ship) = run.rescued {
                 self.previous = ship;
                 rescued = true;
             }
+        }
+        if let Some(held) = &mut held {
+            self.hear_held_pass(held);
         }
         quotes.extend(held.iter().flat_map(BetweenPasses::quotes).cloned());
         self.between_passes = held.or_else(|| self.between_passes.take());
@@ -279,19 +282,34 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the ship's position before the step on its first pass, the ship
     /// drawn at `anchor`. The post-animate a frame left moves the
     /// particles first, and a first pass leaves one, as a frame stands
-    /// after it (see the `scroll_offset` module).
-    pub(super) fn step_effects(&mut self, pass: &PassReport, first: Option<Vec2>, anchor: Anchor) {
+    /// after it (see the `scroll_offset` module). A pass `heard` already,
+    /// its breakups rolled, is only shown (see the `between_passes`
+    /// module).
+    pub(super) fn step_effects(
+        &mut self,
+        pass: &PassReport,
+        first: Option<Vec2>,
+        anchor: Anchor,
+        heard: Option<Breakups>,
+    ) {
         if self.scroll.begin_pass() {
             self.effects.move_particles();
         }
-        let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
         let chance = &mut self.effects_chance;
         let scene = self.presentation.scene(pass.player_position);
-        self.effects.step(&dying, &scene, &self.looks, chance);
+        let was_heard = heard.is_some();
+        let breakups = if let Some(breakups) = heard {
+            breakups
+        } else {
+            let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
+            self.effects.hear_step(&dying, &scene, &self.looks, chance)
+        };
+        self.effects.show_step(&breakups, &scene, &self.looks);
         let shown = (&mut self.effects, &mut self.flashes);
         let sheets = (&self.sheet, &self.npc_sheets);
         let fight = (pass.combat.as_slice(), pass.ships.as_slice());
-        let lit = show_combat(fight, &scene, shown, (&self.looks, sheets), chance);
+        let looks = (&self.looks, sheets);
+        let lit = show_combat(fight, &scene, shown, looks, was_heard, chance);
         let (player, sheets) = (&self.sheet, &self.npc_sheets);
         self.glows
             .step(&lit, |ship| glow_decay(&pass.ships, player, sheets, ship));
