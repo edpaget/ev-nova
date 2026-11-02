@@ -2914,14 +2914,28 @@ mod tests {
         assert_eq!(bible.goal, Goal::Attack(n(3)), "the other reading");
     }
 
+    /// [`hit_inspecting`]'s interceptor in state 0, unhit.
+    fn idle_cop() -> Npc {
+        Npc {
+            goal: Goal::Idle,
+            target: None,
+            provoked: 0.0,
+            ..police()
+        }
+    }
+
     #[test]
     fn its_reach_reads_the_attacker_not_the_ship_it_was_inspecting() {
         // The attacker within reach ends the inspection (@0x8f391), and the
         // think goes on as from state 0, as for any inspection within reach:
         // it doesn't attack the attacker it was provoked by.
         let near = [inspected_at(500.0, 0.0), attacker(50.0, 50.0)];
-        let (decision, _) = hit_by_engine(hit_inspecting(3.0), &near, &[0; 4]);
+        let (decision, asked) = hit_by_engine(hit_inspecting(3.0), &near, &[0; 4]);
         assert_ne!(decision.goal, Goal::Attack(n(3)), "{decision:?}");
+        assert_ne!(decision.goal, Goal::Inspect(n(3)), "the reach ends it");
+        let (from_idle, idle_asked) = hit_by_engine(idle_cop(), &near, &[0; 4]);
+        assert_eq!(decision.goal, from_idle.goal, "as from state 0");
+        assert_eq!(asked, idle_asked, "as from state 0");
         assert!(decision.goal.inspecting().is_some(), "{decision:?}");
         assert!(decision.re_picked, "the player is not scanned");
         // The ship it was inspecting within reach is not looked over.
@@ -2962,12 +2976,7 @@ mod tests {
 
     #[test]
     fn its_attacker_gone_ends_the_inspection_and_it_searches_unprovoked() {
-        let idle = Npc {
-            goal: Goal::Idle,
-            target: None,
-            provoked: 0.0,
-            ..police()
-        };
+        let idle = idle_cop();
         let mut destroyed = attacker(0.0, 800.0);
         destroyed.condition = Condition::Destroyed;
         for others in [
@@ -3144,11 +3153,15 @@ mod tests {
         let (decision, _) = hit_by_engine(hit_inspecting(0.0), &unseen, &[]);
         assert_eq!(decision.goal, Goal::Idle, "the tail reads the attacker");
         let near = [inspected_at(500.0, 0.0), attacker(50.0, 50.0)];
-        let (decision, _) = hit_by_engine(hit_inspecting(0.0), &near, &[0; 4]);
+        let (decision, asked) = hit_by_engine(hit_inspecting(0.0), &near, &[0; 4]);
         assert_ne!(
             decision.goal,
             Goal::Inspect(n(2)),
             "its reach reads the attacker"
         );
+        assert_ne!(decision.goal, Goal::Inspect(n(3)), "the reach ends it");
+        let (from_idle, idle_asked) = hit_by_engine(idle_cop(), &near, &[0; 4]);
+        assert_eq!(decision.goal, from_idle.goal, "as from state 0");
+        assert_eq!(asked, idle_asked, "as from state 0");
     }
 }

@@ -91,9 +91,16 @@ fn the_moved_inspection_holds_on_the_next_tick_and_lets_the_attacker_go_within_r
             npc.state.position = at + Vec2::new(40.0, 40.0);
         }
     }
-    for _ in 0..2 {
+    for round in 0..2 {
         tick(&mut traffic, &govts, far);
         let after = of(&traffic, cop);
+        if round == 0 {
+            assert_ne!(
+                after.goal,
+                Goal::Inspect(n(attacker.0)),
+                "the reach ends the inspection"
+            );
+        }
         assert_ne!(after.goal, Goal::Attack(n(attacker.0)), "{:?}", after.goal);
         assert_eq!(after.provoked, 3.0, "+0x96 kept");
     }
