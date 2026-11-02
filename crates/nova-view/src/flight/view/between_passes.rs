@@ -87,7 +87,7 @@ use crate::flight::effects::Breakups;
 use crate::flight::sim_port::FlightSim;
 use crate::system::camera::Anchor;
 
-use super::{FlightView, Said, comm_message, dying};
+use super::{FlightView, Said, dying};
 
 /// What a double-time frame holds until the next step (see the module
 /// docs).
@@ -196,22 +196,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Words the lines `lines` a second pass held, against the kept frame
-    /// and scene, for the hold to relay on the frame after: the messages
-    /// as [`FlightView::word`] words them (an arrival's lead kept for its
-    /// arrival), the comm notes and the quotes by their own words. With no
-    /// hold to keep them they are relayed at once.
+    /// and scene ([`FlightView::said_of`], an arrival's lead kept for its
+    /// arrival), for the hold to relay on the frame after. With no hold to
+    /// keep them they are relayed at once.
     pub(super) fn hold_lines(&mut self, lines: Vec<RaisedLine>) {
-        let mut said = Said::new();
-        for line in lines {
-            match line {
-                RaisedLine::Message(message) => said.extend(self.word(vec![message])),
-                RaisedLine::Comm(note) => said.push((comm_message(&note), note.ticks())),
-                RaisedLine::Quote(quote) => {
-                    let ticks = quote.ticks();
-                    said.push((quote.text, ticks));
-                }
-            }
-        }
+        let said: Said = lines
+            .into_iter()
+            .filter_map(|line| self.said_of(line))
+            .collect();
         match &mut self.between_passes {
             Some(held) => held.said.extend(said),
             None => {

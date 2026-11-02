@@ -299,12 +299,34 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// relayed, not set again. The line the steps raised last is relayed
     /// again after the messages ([`FlightView::relay_last_line`]).
     pub(super) fn relay_comm_and_quotes(&mut self, notes: &[CommNote], quotes: Vec<PersonQuote>) {
-        for note in notes {
-            self.relay(comm_message(note), note.ticks());
+        let lines = notes.iter().cloned().map(RaisedLine::Comm);
+        for line in lines.chain(quotes.into_iter().map(RaisedLine::Quote)) {
+            self.relay_line(line);
         }
-        for quote in quotes {
-            let ticks = quote.ticks();
-            self.relay(quote.text, ticks);
+    }
+
+    /// Relays `line`, worded ([`FlightView::said_of`]), if it has words.
+    pub(super) fn relay_line(&mut self, line: RaisedLine) {
+        if let Some((text, ticks)) = self.said_of(line) {
+            self.relay(text, ticks);
+        }
+    }
+
+    /// The words `line` shows, with its own ticks: a message as
+    /// [`FlightView::word`] words it, none for an arrival's lead, which
+    /// waits for its arrival; a comm note as [`comm_message`] words it; a
+    /// quote by its text.
+    ///
+    /// The match is exhaustive on purpose: the view words every kind of
+    /// line, so a new kind must not compile until it is handled here.
+    pub(super) fn said_of(&mut self, line: RaisedLine) -> Option<(String, u16)> {
+        match line {
+            RaisedLine::Message(message) => self.word(vec![message]).pop(),
+            RaisedLine::Comm(note) => Some((comm_message(&note), note.ticks())),
+            RaisedLine::Quote(quote) => {
+                let ticks = quote.ticks();
+                Some((quote.text, ticks))
+            }
         }
     }
 
@@ -315,10 +337,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// line shows the last raised, whatever its kind, for its own ticks.
     /// A message raised last needs nothing: the messages are relayed
     /// last already, and wording it again would roll the dock request's
-    /// picks a second time.
-    ///
-    /// The match is exhaustive on purpose: the view words every kind of
-    /// line, so a new kind must not compile until it is handled here.
+    /// picks a second time. Every other kind is worded by
+    /// [`FlightView::said_of`].
     ///
     /// [`StepRun::last_line`]: nova_sim::flight_frame::StepRun::last_line
     pub(super) fn relay_last_line(&mut self) {
@@ -329,12 +349,8 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .rev()
             .find_map(|run| run.last_line.clone());
         match last {
-            Some(RaisedLine::Comm(note)) => self.relay(comm_message(&note), note.ticks()),
-            Some(RaisedLine::Quote(quote)) => {
-                let ticks = quote.ticks();
-                self.relay(quote.text, ticks);
-            }
             Some(RaisedLine::Message(_)) | None => {}
+            Some(line) => self.relay_line(line),
         }
     }
 
