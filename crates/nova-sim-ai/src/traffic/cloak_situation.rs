@@ -76,9 +76,12 @@ pub struct Around {
 ///   stored sub-goal 0xc, which the parent rule reads directly at
 ///   @0x83633-0x8366d: the think runs before the high level writes it,
 ///   @0x8fcaa before @0x901e5) with its leader cloaked:
-///   [`close_to_cloaked_parent`](cloak::Situation::close_to_cloaked_parent).
-///   Only a formation flight sets the mark, so the rule's AI type above 4
-///   holds of it. Outside goal 8 and 0xb.
+///   [`close_to_cloaked_parent`](cloak::Situation::close_to_cloaked_parent),
+///   for a ship of AI type above 4 alone ([`Npc::original_ai_type`],
+///   `cmpw $4, 0x88` @0x83633, ahead of the parent and sub-goal tests).
+///   A bribed led ship (+0x88 1, `_DoCommDialog` @0x961f8) fails it,
+///   though its last flight's close formation still stands on its first
+///   think after the bribe. Outside goal 8 and 0xb.
 /// - That, with its leader carrying an area cloak, is a ride on it
 ///   ([`area_cloak::rides`],
 ///   [`area_cloak`](cloak::Situation::area_cloak)): `_HasCloak`'s area
@@ -98,7 +101,8 @@ pub fn situation(npc: &Npc, around: Around) -> cloak::Situation {
         _ => Some(npc.goal),
     };
     let leader_cloaked = around.leader.is_some_and(Cloak::is_cloaked);
-    let close_to_cloaked_parent = goal.is_some() && npc.close_form && leader_cloaked;
+    let close_to_cloaked_parent =
+        goal.is_some() && npc.original_ai_type() > 4 && npc.close_form && leader_cloaked;
     cloak::Situation {
         disabled: npc.condition == Condition::Disabled,
         retreating: matches!(goal, Some(Goal::Flee(_))),
@@ -504,6 +508,44 @@ mod tests {
             ..escort(true)
         };
         assert!(!with(&gliding, CLOAKED), "goal 8 reads no goal term");
+    }
+
+    /// A ship NPC 7 leads, its last flight in close formation.
+    fn led_close() -> Npc {
+        Npc {
+            leader: Some(crate::traffic::npc::NpcId(7)),
+            close_form: true,
+            ..npc(Goal::Formation { guard: None }, FLYING)
+        }
+    }
+
+    #[test]
+    fn a_bribed_led_ship_in_close_formation_does_not_cloak_with_its_cloaked_leader() {
+        // `cmpw $4, 0x88; jle` ahead of the parent rule (@0x83633), and
+        // the bribe's word is 1 (`_DoCommDialog` @0x961f8); its last
+        // flight's close formation still stands on its first think after.
+        let around = Around {
+            leader: Some(CLOAKED),
+            ..Around::default()
+        };
+        assert!(situation(&led_close(), around).close_to_cloaked_parent);
+        let mut bribed = led_close();
+        bribed.take_bribe();
+        assert!(!situation(&bribed, around).close_to_cloaked_parent);
+    }
+
+    #[test]
+    fn a_bribed_led_ship_in_close_formation_still_rides_its_leaders_area_cloak() {
+        // `_HasCloak`'s area branch reads +0x9a, +0xc8ca and the parent's
+        // area cloak, no +0x88 (@0x964c-0x96bf).
+        let mut bribed = led_close();
+        bribed.take_bribe();
+        let around = Around {
+            leader: Some(CLOAKED),
+            leader_area: true,
+            ..Around::default()
+        };
+        assert!(situation(&bribed, around).area_cloak);
     }
 
     #[test]
