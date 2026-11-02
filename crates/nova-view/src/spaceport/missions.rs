@@ -3060,6 +3060,25 @@ mod tests {
     }
 
     #[test]
+    fn a_press_in_item_3_over_a_list_that_fits_is_left_out() {
+        let mut screen = screen_of(many_offers(3));
+        let _ = screen.take_text_request();
+        let in_item_3 = Point::new(470.0, computer_row_at(1.0).y);
+        assert!(
+            screen
+                .rows()
+                .and_then(|rows| rows.row_bounds(1))
+                .is_some_and(|row| row.contains(in_item_3)),
+            "the widened row 1 covers it"
+        );
+        screen.input(&button(true, in_item_3));
+        screen.input(&button(false, in_item_3));
+        assert_eq!(screen.rows().and_then(RowList::selected), Some(0));
+        assert_eq!(screen.take_text_request(), None);
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Text 0.");
+    }
+
+    #[test]
     fn a_press_on_the_computers_list_tracks_to_its_release() {
         let mut screen = screen_of(many_offers(3));
         let _ = screen.take_text_request();
