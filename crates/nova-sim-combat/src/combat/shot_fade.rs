@@ -25,6 +25,8 @@
 //!
 //! None of this plays a sound.
 
+use std::cmp::Ordering;
+
 use crate::speed_mult::SpeedMult;
 
 /// The fade a shot's fade steps to and its window's life, 32.0 (0xdd654).
@@ -36,12 +38,10 @@ pub const FADE_FULL: f32 = 32.0;
 #[must_use]
 pub fn step(fade: f32, falloff: i16, life: f32, gain: SpeedMult) -> f32 {
     let by = f32::from(falloff);
-    if falloff < 0 && fade < FADE_FULL {
-        gain.add_times(fade, -by)
-    } else if falloff > 0 && life < FADE_FULL && fade < FADE_FULL {
-        gain.add_times(fade, by)
-    } else {
-        fade
+    match falloff.cmp(&0) {
+        Ordering::Less if fade < FADE_FULL => gain.add_times(fade, -by),
+        Ordering::Greater if life < FADE_FULL && fade < FADE_FULL => gain.add_times(fade, by),
+        _ => fade,
     }
 }
 
@@ -102,6 +102,7 @@ mod tests {
         assert_eq!(step(0.0, 4, 31.9, HALF), 2.0, "31.9: in the window");
         assert_eq!(step(31.0, 4, 10.0, HALF), 33.0);
         assert_eq!(step(33.0, 4, 10.0, HALF), 33.0, "stops at 32 or more");
+        assert_eq!(step(32.0, 4, 10.0, HALF), 32.0, "at 32: done");
         // Count 33: the life drops below 32 on its 3rd visit (31.5).
         assert_eq!(read(33, 4, 5, HALF), [0.0, 0.0, 0.0, 2.0, 4.0]);
     }

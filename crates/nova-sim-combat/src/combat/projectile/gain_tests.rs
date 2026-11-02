@@ -158,6 +158,10 @@ fn the_fuse_and_the_touch_read_the_life_against_count_less_prox_safety() {
         "no ProxSafety holds nothing"
     );
     assert!(!unsafe_at(10.0).fuse_armed(), "nor arms at its full life");
+    assert!(
+        unsafe_at(10.5).touches_ships(),
+        "only a ProxSafety above none holds, whatever the life"
+    );
     assert!(unsafe_at(9.99).fuse_armed());
 }
 
