@@ -771,6 +771,33 @@ fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
 }
 
 #[test]
+fn hiding_the_cursor_keeps_it_hidden_at_the_same_point() {
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.hide_cursor();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(cursor_sprites(&drawn(&view)), []);
+    assert_eq!(view.cursor_at(), None);
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
+}
+
+#[test]
+fn cancelling_the_pointer_still_shows_the_cursor_on_a_same_point_move() {
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.cancel_pointer();
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    assert_eq!(view.cursor_at(), Some(NOWHERE));
+}
+
+#[test]
 fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() {
     let mut view = in_flight();
     assert!(view.hides_pointer());

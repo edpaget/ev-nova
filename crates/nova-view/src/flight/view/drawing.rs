@@ -193,6 +193,17 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
     }
 
+    /// Hides flight's cursor under a dialog, as `_HideCursorSprite`
+    /// (@0x81d6-0x8202) does before every dialog over flight: the course
+    /// map's gesture is abandoned and the cursor hides with a zero fade,
+    /// so the app's resync at the pointer's unchanged point when the
+    /// dialog closes doesn't show it again ([`HoverCursor::hide`](crate::flight::cursor::HoverCursor::hide)). A
+    /// plain `cancel_pointer` (a focus loss, a side hidden) keeps the fade.
+    pub fn hide_cursor(&mut self) {
+        crate::Screen::cancel_pointer(&mut self.map);
+        self.cursor.hide();
+    }
+
     /// What `input` tells the cursor: a pointer move or button press shows
     /// it where the pointer is, a button holds it whole until its release,
     /// and the pointer leaving the window hides it; a key pressed that
