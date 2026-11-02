@@ -704,11 +704,12 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
                 npc.trigger = Trigger::default();
                 npc.provoked = 0.0;
-                // +0x4c = -1.0 and sub 0 (@0x82de9, @0x82e20): a wait
-                // running is cleared, a hold at its gate too, and any
-                // docking dropped. Its +0x50, the hyperspace state, is 0
-                // already for a ship hailed in flight. A ship held at its
-                // gate owes its burst as the rulebook reads.
+                // +0x4c = -1.0 and sub 0 (@0x82de9, @0x82e20; sub 0
+                // @0x82de0, @0x82e17): a wait running is cleared, a hold at
+                // its gate, a coast and a gate entry too, and any docking
+                // dropped. Its +0x50, the hyperspace state, is 0 already
+                // for a ship hailed in flight. A ship held at its gate owes
+                // its burst as the rulebook reads.
                 npc.end_wait(held_burst);
                 npc.docking = None;
             }
@@ -2351,11 +2352,25 @@ pub(super) mod tests {
 
     /// `session`'s ship, held at its gate with an AI wait and a docking,
     /// once the player has hailed it and accepted its refuel.
-    fn asked_for_help_while_held(mut session: Session, catalog: &FakePilotCatalog) -> Npc {
+    fn asked_for_help_while_held(session: Session, catalog: &FakePilotCatalog) -> Npc {
+        asked_for_help_in(
+            session,
+            catalog,
+            crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30 },
+        )
+    }
+
+    /// [`targeting`]'s idle warship in `mode`, with an AI wait of 50 and a
+    /// docking, paid to refuel the player: the ship after.
+    fn asked_for_help_in(
+        mut session: Session,
+        catalog: &FakePilotCatalog,
+        mode: crate::traffic::npc::Mode,
+    ) -> Npc {
         session.pilot.reserves.fuel.now = 40.0;
         let ship = npc(&mut session);
         ship.ai_wait = 50;
-        ship.mode = crate::traffic::npc::Mode::HeldAtGate { ticks_left: 30 };
+        ship.mode = mode;
         ship.docking = Some(crate::traffic::plunder_dock::Docking {
             ship: ShipRef::Npc(NpcId(7)),
             sub: crate::traffic::plunder_dock::DockSub::Close,
@@ -2382,6 +2397,38 @@ pub(super) mod tests {
             "its hold ended"
         );
         assert_eq!(helper.owed_burst, Some(30.0));
+    }
+
+    #[test]
+    fn a_coasting_ship_asked_for_help_flies_to_the_player() {
+        // +0x4c = -1.0 (@0x82de9): the coast is that wait.
+        let catalog = hailable();
+        let helper = asked_for_help_in(
+            targeting(&catalog),
+            &catalog,
+            crate::traffic::npc::Mode::Coasting { ticks_left: 30 },
+        );
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.mode, crate::traffic::npc::Mode::Flying);
+        assert_eq!(helper.ai_wait, 0);
+    }
+
+    #[test]
+    fn a_ship_entering_a_gate_asked_for_help_stays() {
+        // Sub 0 (@0x82de0) over the entry's 0x17, then +0x4c = -1.0
+        // (@0x82de9): it stays, and flies to the player.
+        let catalog = hailable();
+        let helper = asked_for_help_in(
+            targeting(&catalog),
+            &catalog,
+            crate::traffic::npc::Mode::EnteringGate {
+                gate: crate::catalog::StellarId(128),
+                ticks_left: 9,
+            },
+        );
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.mode, crate::traffic::npc::Mode::Flying);
+        assert!(!helper.entering_gate());
     }
 
     #[test]
