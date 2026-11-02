@@ -64,6 +64,6 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Whether this frame's pass sets the byte with what is held: a jump
     /// or an auto-eject with no key at all, or any key held that fades.
     pub(super) fn cursor_keyed(&self) -> bool {
-        self.frame.key_fades.unbidden() || self.held.iter().any(|&key| self.key_fades_cursor(key))
+        self.frame.key_fades.unbidden() || self.keys_down().any(|key| self.key_fades_cursor(key))
     }
 }

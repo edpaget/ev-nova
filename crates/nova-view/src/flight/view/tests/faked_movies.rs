@@ -624,6 +624,7 @@ fn a_skip_flushes_the_queue_but_not_a_key_still_down() {
 #[test]
 fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
     let (mut view, _) = filming(filmed(&[300], &[]), true);
+    view.held.insert(JUMP_KEY);
     view.held.insert(BOARD_KEY);
     into_the_wormhole(
         &mut view,
@@ -632,7 +633,11 @@ fn a_latched_key_held_into_a_gate_is_let_go_at_the_come_out() {
     );
     came_out_in_alpha(&mut view, SimMessage::PassedWormhole(SystemId(131)));
     run_out(&mut view);
-    assert!(!view.held.contains(&BOARD_KEY), "latched (@0x6429c)");
+    assert!(!view.held.contains(&JUMP_KEY), "latched (@0x6429c)");
+    assert!(
+        view.held.contains(&BOARD_KEY),
+        "B's own latch, never set there"
+    );
 }
 
 /// J and B pressed and let go, and the zoom tapped, under the movie

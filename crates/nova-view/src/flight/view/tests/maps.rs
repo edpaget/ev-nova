@@ -2422,3 +2422,68 @@ fn the_open_maps_panel_follows_a_system_charted_between_frames() {
     view.tick(TICK);
     assert_eq!(panels_asked(&view).len(), asked + 1, "the next frame");
 }
+
+// A latched key held past a site's close still reads down
+// (`_QuickKeyCheck` @0xa0f5): only its command waits for its release.
+
+/// A site's close over `view` with `k` held.
+fn held_across_a_close(view: &mut Faked, k: Key) {
+    super::live_keys::dialog_opens(view);
+    let _ = super::live_keys::back(view, [k], [], false);
+}
+
+/// Whether `view` sent the Nav Off / Hyperspace Mode block's command
+/// from `from` of its commands on.
+fn nav_mode_keys_since(view: &Faked, from: usize) -> bool {
+    sent(view)[from..]
+        .iter()
+        .any(|command| matches!(command, FlightCommand::NavModeKeys { .. }))
+}
+
+#[test]
+fn h_held_across_a_close_keeps_the_floating_map_shown() {
+    // With the latch set the block goes to @0x69b8e, which shows the map
+    // while H is down (@0x69b8e-0x69ba3).
+    let mut view = floating_in(in_sol());
+    floating_key(&mut view, HYPERSPACE_MODE_KEY, true);
+    held_across_a_close(&mut view, HYPERSPACE_MODE_KEY);
+    let from = sent(&view).len();
+    for _ in 0..3 {
+        floating_frame_of(&mut view, mac_ticks(200));
+    }
+    assert_eq!(alpha_of(&view), Some(255), "still up");
+    assert!(
+        !nav_mode_keys_since(&view, from),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+}
+
+#[test]
+fn backslash_held_across_a_close_in_mode_3_keeps_the_floating_map_shown() {
+    // `\`'s latched branch goes to @0x69cdd, which shows it in mode 3
+    // (@0x69ce0-0x69ce7).
+    let mut view = floating_in(FlightFrame {
+        nav_mode: NavMode::Hyperspace(Some(SystemId(131))),
+        ..in_sol()
+    });
+    floating_key(&mut view, HYPER_SELECT_KEY, true);
+    held_across_a_close(&mut view, HYPER_SELECT_KEY);
+    let from = sent(&view).len();
+    for _ in 0..3 {
+        floating_frame_of(&mut view, mac_ticks(200));
+    }
+    assert_eq!(alpha_of(&view), Some(255), "still up");
+    assert_eq!(&sent(&view)[from..], [], "no selection");
+}
+
+#[test]
+fn a_latched_key_held_across_a_close_holds_the_zoom_back() {
+    // J's `_QuickKeyCheck` (@0x6b0e6) sets `_quickKeyCheckResult`, latch
+    // or not (@0xa145-0xa14c), which the zoom reads (@0x70f5d).
+    let mut view = floating_near(in_sol());
+    floating_tap(&mut view, HYPERSPACE_MODE_KEY);
+    held_across_a_close(&mut view, JUMP_KEY);
+    floating_tap(&mut view, ZOOM_OUT_KEY);
+    assert_eq!(near_dot(&view), near_at(16.0 / 9.0));
+}

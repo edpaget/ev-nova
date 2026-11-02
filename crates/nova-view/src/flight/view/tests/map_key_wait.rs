@@ -287,8 +287,9 @@ fn a_flight_key_let_go_on_the_map_reads_up_after_the_close() {
 
 #[test]
 fn a_latched_key_held_past_the_close_waits_for_its_release() {
-    // `_HandlePlayer` sets every latch after M's map (@0x6a898).
-    for k in [JUMP_KEY, BOARD_KEY, LAND_KEY, TARGET_KEY] {
+    // `_HandlePlayer` sets every latch after M's map (@0x6a898), B's and
+    // L's never (the `map_wait` module's `OWN_LATCH_KEYS`).
+    for k in [JUMP_KEY, TARGET_KEY] {
         let mut view = faked_m_open();
         view.input(&key(MAP, true));
         view.input(&key(k, true));
@@ -305,6 +306,24 @@ fn a_latched_key_held_past_the_close_waits_for_its_release() {
         );
         assert!(!view.held.contains(&k), "{k:?} not held");
     }
+}
+
+#[test]
+fn b_pressed_under_the_map_boards_after_its_close() {
+    // `_boardTryFlag` (0xdee18) isn't among `_SetAllKeyCmdFlags`' latches,
+    // and the last pass before the map read B up (@0x6a9a3).
+    let mut view = faked_m_open();
+    view.input(&key(MAP, true));
+    view.input(&key(BOARD_KEY, true));
+    let from = sent_count(&view);
+    view.input(&key(MAP, false));
+    assert!(view.held.contains(&BOARD_KEY), "B held");
+    view.tick(TICK);
+    assert!(
+        sent_since(&view, from).contains(&FlightCommand::Board),
+        "{:?}",
+        sent_since(&view, from)
+    );
 }
 
 /// Whether `view` sent [`FlightCommand::Jump`] since `from` of its

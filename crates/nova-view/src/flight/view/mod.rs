@@ -728,6 +728,7 @@ mod hyperspace;
 mod inbox;
 mod interface;
 mod key_fade;
+mod latched_reads;
 mod map_wait;
 mod messages;
 mod missions;
@@ -1467,6 +1468,10 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     /// no-target and cloak returns, cleared on a frame B is up
     /// ([`FlightView::board_frame`]).
     board_latch: bool,
+    /// `_weapTargetSelectFlag` (0xdede8), the latch Tab and the click in
+    /// space share: set as either acts, cleared on a frame both are up
+    /// (the `target_latch` module).
+    target_latch: bool,
     /// The presses kept through a jump, and L's and I's latches (see the
     /// `faded_keys` module).
     faded_keys: faded_keys::FadedKeys,

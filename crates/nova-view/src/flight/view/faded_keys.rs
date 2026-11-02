@@ -96,6 +96,8 @@
 #[cfg(doc)]
 use nova_sim::flight_frame::{FlightCommand, FlightFrame, StepRun};
 
+use nova_sim::Takes;
+
 use crate::flight::catalog::{CombatLooks, ShipSprites, StatusBars};
 use crate::flight::escorts::EscortMenuLooks;
 use crate::flight::sim_port::FlightSim;
@@ -142,6 +144,17 @@ impl FadedKeys {
         self.kept.clear();
     }
 
+    /// Sets I's latch, as `_SetAllKeyCmdFlags` does (0xdee00); L's is
+    /// not among its latches.
+    pub(super) fn set_mission_latch(&mut self) {
+        self.mission_latch = true;
+    }
+
+    /// Whether L's latch is set.
+    pub(super) fn land_latched(&self) -> bool {
+        self.land_latch
+    }
+
     /// `key`'s latch, L's or else I's.
     fn latch_mut(&mut self, key: Key) -> &mut bool {
         if key == LAND_KEY {
@@ -182,16 +195,20 @@ impl<
 
     /// Each of L and I down with its latch clear, which a pass reads
     /// besides the presses kept; when `clearing`, each latch cleared with
-    /// its key up or its gate shut.
+    /// its key up or its gate shut (@0x6a95d, @0x705af). A pass in the pod
+    /// or dead returns before either block (@0x68ddd, @0x68853), so it
+    /// clears neither: L held from before an eject still waits on its
+    /// latch after the rescue.
     fn waiting_keys(&mut self, clearing: bool) -> Vec<Key> {
+        let reached = self.frame.fate.row().input != Takes::Nothing;
         [LAND_KEY, MISSION_INFO_KEY]
             .into_iter()
             .filter(|&key| {
-                let down = self.held.contains(&key);
+                let down = self.reads_down(key);
                 let taken = self.press_taken(Some(key), false).is_some();
                 let latch = self.faded_keys.latch_mut(key);
                 let waiting = down && !*latch;
-                if clearing && !(down && taken) {
+                if clearing && reached && !(down && taken) {
                     *latch = false;
                 }
                 waiting
@@ -199,11 +216,16 @@ impl<
             .collect()
     }
 
-    /// A press of L read: its latch set, and the land key pressed. It is
+    /// A press of L read: the land key pressed, and its latch set only if
+    /// the press made a dock request (@0x6a938-0x6a953): not when the
+    /// flight refused it before its pick or the pick found nothing
+    /// ([`FlightView::land`]'s answer), so L held with nothing to land
+    /// reads again on every pass, silently, as the original's does. It is
     /// the keyboard's and the polls' alike.
     pub(super) fn press_land(&mut self) {
-        self.faded_keys.land_latch = true;
-        self.land();
+        if self.land() {
+            self.faded_keys.land_latch = true;
+        }
     }
 
     /// A press of I read: its latch set (@0x7047a), and the mission info

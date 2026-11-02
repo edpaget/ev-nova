@@ -7,7 +7,7 @@
 //! flight's names ([`FlightView::word`]).
 
 use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry};
-use nova_sim::landing::LandOutcome;
+use nova_sim::landing::{LandOutcome, LandingRefusal};
 use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress};
 
 use crate::Input;
@@ -50,13 +50,29 @@ impl<
     /// gate ([`FlightView::send_gated`]), so a press the flight doesn't take
     /// sends nothing and says nothing. A flight that failed refuses the
     /// press.
-    pub(super) fn land(&mut self) {
+    ///
+    /// Whether the press made a dock request, which sets L's latch
+    /// (`_dockTryFlag` @0x6a953): every answer but a press not taken, a
+    /// refusal before the pick ([`LandingRefusal::Jumping`]; a dying or
+    /// destroyed ship's press is not taken) and a pick that found nothing
+    /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`],
+    /// @0x6a90f, @0x6a94c).
+    pub(super) fn land(&mut self) -> bool {
         let pressed = self.send_gated(FlightCommand::Land);
         if pressed.is_refused() {
             // Not taken (`FlightView::send_gated`), or a flight that failed:
             // nothing was pressed.
-            return;
+            return false;
         }
+        let requested = !matches!(
+            pressed,
+            Answer::LandRefused {
+                refusal: LandingRefusal::Jumping
+                    | LandingRefusal::NoStellars
+                    | LandingRefusal::NothingLandable,
+                ..
+            }
+        );
         self.say_messages();
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
@@ -103,6 +119,7 @@ impl<
             }
             _ => {}
         }
+        requested
     }
 
     /// The landing on `stellar` reaches the router

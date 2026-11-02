@@ -609,7 +609,8 @@ fn text_over(screen: &mut AppScreen) {
 
 #[test]
 fn b_and_p_pressed_under_a_mission_text_board_and_p_waits_on_the_plunders_latch() {
-    // B @0x6a98b before P @0x702cb: the board opens the plunder dialog,
+    // B @0x6a98b before P @0x702cb: B, held, boards at the next pass on
+    // its own latch (0xdee18), and the board opens the plunder dialog,
     // whose `_SetAllKeyCmdFlags` (@0x659f1) latches P.
     let mut screen = boardable(with_dialogs(boarding_data()));
     fly(&mut screen);
@@ -619,7 +620,8 @@ fn b_and_p_pressed_under_a_mission_text_board_and_p_waits_on_the_plunders_latch(
     screen.input(&key(Key::Char('b'), true));
     screen.input(&key(PLAYER_INFO_KEY, true));
     tap(&mut screen, Key::Enter);
-    assert_eq!(screen.showing(), Showing::Plunder, "B boarded at the close");
+    screen.tick(TICK);
+    assert_eq!(screen.showing(), Showing::Plunder, "B boarded at the pass");
     tap(&mut screen, Key::Escape);
     assert_eq!(screen.showing(), Showing::Flight, "aborted");
     screen.tick(TICK * 4);

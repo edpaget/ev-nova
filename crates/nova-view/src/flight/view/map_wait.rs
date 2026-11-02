@@ -57,8 +57,8 @@
 
 use super::dialog_map::MapOpening;
 use super::{
-    AFTERBURNER_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS, FlightView,
-    JETTISON_KEY, MAP_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
+    AFTERBURNER_KEY, BOARD_KEY, DESELECT_KEY, EJECT_KEY, FACE_TARGET_KEY, FIRE_KEY, FLIGHT_KEYS,
+    FlightView, JETTISON_KEY, LAND_KEY, MAP_KEY, SECONDARY_KEY, SELF_DESTRUCT_KEY,
 };
 use crate::flight::sim_port::FlightSim;
 use crate::ui::mission_info::MISSION_INFO_KEY;
@@ -82,11 +82,9 @@ use crate::{Input, Key};
 /// `_jumpTryFlag` J (0xdee44), `_ackCommFlag` Return (0xdedf4),
 /// `_playerInfoFlag` P (0xdedd4), `_commTryFlag` Y (0xdee0c),
 /// `_missionInfoFlag` I (0xdee00) and `_cloakFlag` U (0xdedfc). B and L
-/// have latches of their own that it doesn't set, `_boardTryFlag`
-/// (0xdee18) and `_dockTryFlag` (0xdee34), set as they act, so one that
-/// acted before a close waits for its release all the same. One first
-/// pressed under the dialog, and the latched keys' reads that skip their
-/// latch, are rdm:phase/play-feel-8/phase-20-latched-keys-read-past-their-latches.
+/// have latches of their own that it doesn't set ([`OWN_LATCH_KEYS`]).
+/// A latched key held past the close still reads down for every read
+/// that skips its latch (the `latched_reads` module).
 pub(super) const UNLATCHED_KEYS: [Key; 15] = [
     Key::Up,
     Key::Left,
@@ -104,6 +102,27 @@ pub(super) const UNLATCHED_KEYS: [Key; 15] = [
     Key::Command,
     Key::Shift,
 ];
+
+/// The keys whose latches `_SetAllKeyCmdFlags` (@0x61e6d) never sets: L's
+/// `_dockTryFlag` (0xdee34), set only as L makes a dock request
+/// (@0x6a953) and cleared on a pass L is up or its gate closed
+/// (@0x6a95d), and B's `_boardTryFlag` (0xdee18), set by a board attempt
+/// past its no-target and cloak returns (@0x6504c) and cleared on a pass
+/// B is up (@0x6a9a3). So across a close, a map or a gate's movie they
+/// are read as the unlatched keys are: held whenever physically down and
+/// read on every pass, their own latches deciding
+/// ([`FlightView::board_latch`], the `faded_keys` module's L latch). One
+/// first pressed under the dialog acts at the next pass, its latch clear;
+/// one that acted before it waits for its release, even let go and
+/// pressed again under it, which no pass saw.
+pub(super) const OWN_LATCH_KEYS: [Key; 2] = [LAND_KEY, BOARD_KEY];
+
+/// Whether flight reads `key` down across a close with no latch of
+/// `_SetAllKeyCmdFlags`' in its way: [`UNLATCHED_KEYS`] and
+/// [`OWN_LATCH_KEYS`].
+pub(super) fn reads_live(key: Key) -> bool {
+    UNLATCHED_KEYS.contains(&key) || OWN_LATCH_KEYS.contains(&key)
+}
 
 /// The keys typed while a map over a screen waits, for the screen under
 /// it: the original's queue of key-downs, auto-keys and key-ups, less what
@@ -178,32 +197,41 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Keeps of the keys held only those flight goes on reading live
-    /// across the map ([`UNLATCHED_KEYS`]), as every path that calls it
-    /// runs `_SetAllKeyCmdFlags`: the latched keys it lets go of wait for
-    /// their release ([`FlightView::latched_down`]), repeats and all.
+    /// across the map ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]), as every
+    /// path that calls it runs `_SetAllKeyCmdFlags`, and sets every latch
+    /// it sets ([`FlightView::set_every_latch`]): the latched keys it lets
+    /// go of wait for their release ([`FlightView::latched_down`]),
+    /// repeats and all, still reading down past their latches.
     pub(super) fn keep_unlatched_keys(&mut self) {
         let latched: Vec<Key> = self
             .held
             .iter()
             .copied()
-            .filter(|key| !UNLATCHED_KEYS.contains(key))
+            .filter(|&key| !reads_live(key))
             .collect();
-        self.held.retain(|key| UNLATCHED_KEYS.contains(key));
+        self.held.retain(|&key| reads_live(key));
         self.latch_held_keys(latched);
+        self.set_every_latch();
     }
 
     /// Notes `keys` down as latched, those flight reads with a latch
-    /// `_SetAllKeyCmdFlags` sets: the flight keys beyond
-    /// [`UNLATCHED_KEYS`].
+    /// `_SetAllKeyCmdFlags` sets: the flight keys beyond [`UNLATCHED_KEYS`]
+    /// and [`OWN_LATCH_KEYS`], each with its latch set
+    /// ([`FlightView::latch_key`]), as the poll that saw it down or the
+    /// site set it.
     pub(super) fn latch_held_keys(&mut self, keys: impl IntoIterator<Item = Key>) {
         let latched = keys
             .into_iter()
-            .filter(|key| FLIGHT_KEYS.contains(key) && !UNLATCHED_KEYS.contains(key));
-        self.latched_down.extend(latched);
+            .filter(|&key| FLIGHT_KEYS.contains(&key) && !reads_live(key));
+        for key in latched {
+            self.latched_down.insert(key);
+            self.latch_key(key);
+        }
     }
 
     /// Tracks `input`'s key as held if it is one flight goes on reading
-    /// live across the map ([`UNLATCHED_KEYS`]). A latched flight key
+    /// live across the map ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]). A
+    /// latched flight key
     /// isn't held, but its press or repeat is noted as latched and its
     /// release lets go of it, so the close leaves latched exactly those
     /// still down ([`FlightView::latched_down`]), however they went down:
@@ -218,7 +246,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         let Input::Key { key, pressed, .. } = *input else {
             return;
         };
-        if UNLATCHED_KEYS.contains(&key) || !pressed {
+        if reads_live(key) || !pressed {
             self.track_held(input);
         } else {
             self.latch_held_keys([key]);
@@ -226,10 +254,10 @@ impl<C, S: FlightSim> FlightView<C, S> {
     }
 
     /// Holds `key` if flight would read it down at once
-    /// ([`UNLATCHED_KEYS`]), for one still down as the last dialog over
-    /// flight closes. Its release comes to flight live.
+    /// ([`UNLATCHED_KEYS`], [`OWN_LATCH_KEYS`]), for one still down as the
+    /// last dialog over flight closes. Its release comes to flight live.
     pub fn hold_live_key(&mut self, key: Key) {
-        if UNLATCHED_KEYS.contains(&key) {
+        if reads_live(key) {
             self.held.insert(key);
         }
     }

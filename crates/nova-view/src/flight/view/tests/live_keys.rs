@@ -8,7 +8,7 @@
 //! in the `nova` crate's `app::screen::tests::live_keys`.
 
 use super::super::dialog_latch::POLL_ORDER;
-use super::super::map_wait::UNLATCHED_KEYS;
+use super::super::map_wait::{OWN_LATCH_KEYS, UNLATCHED_KEYS};
 use super::controls::faked_cursor_alpha;
 use super::faked_flight::{at_rest, hold, last_controls, ticked};
 use super::faked_screen::in_flight;
@@ -90,31 +90,35 @@ fn the_close_drops_an_unlatched_key_no_longer_down() {
 fn the_close_gives_back_no_latched_key() {
     let mut view = in_flight();
     dialog_opens(&mut view);
-    back(&mut view, [BOARD_KEY, JUMP_KEY, Key::Up], [], false);
-    assert!(!view.held.contains(&BOARD_KEY), "B waits for its release");
+    let replay = back(&mut view, [BOARD_KEY, JUMP_KEY, Key::Up], [], false);
+    assert_eq!(replay, [], "nothing to replay");
     assert!(!view.held.contains(&JUMP_KEY), "J waits for its release");
     assert!(view.held.contains(&Key::Up));
+    // B's own latch (0xdee18) is no site's: clear, B boards at the poll.
+    assert!(view.held.contains(&BOARD_KEY), "B held");
     let sent_before = sent(&view).len();
     view.held_keys_frame();
     assert!(
-        !sent(&view)[sent_before..].contains(&FlightCommand::Board),
-        "no board: {:?}",
+        sent(&view)[sent_before..].contains(&FlightCommand::Board),
+        "B boards: {:?}",
         sent(&view)
     );
-    // Let go and pressed afresh, B boards.
-    view.input(&key(BOARD_KEY, false));
-    view.input(&key(BOARD_KEY, true));
-    assert!(sent(&view)[sent_before..].contains(&FlightCommand::Board));
+    assert!(!jumped_since(&view, sent_before), "J latched");
 }
 
 #[test]
 fn the_close_keeps_a_latched_key_flight_still_holds() {
     // The latches are `_SetAllKeyCmdFlags`' to set, not the hand-back's
-    // to clear (rdm:phase/play-feel-8/phase-4-latched-key-repeats).
+    // to clear (rdm:phase/play-feel-8/phase-4-latched-key-repeats). B is
+    // read live, so B not physically down is let go, as Up is.
     let mut view = at_rest(catalog());
+    view.held.insert(JUMP_KEY);
     view.held.insert(BOARD_KEY);
+    view.held.insert(Key::Up);
     back(&mut view, [], [], false);
-    assert!(view.held.contains(&BOARD_KEY));
+    assert!(view.held.contains(&JUMP_KEY));
+    assert!(!view.held.contains(&BOARD_KEY), "B let go");
+    assert!(!view.held.contains(&Key::Up), "Up let go");
 }
 
 #[test]
@@ -178,7 +182,7 @@ fn a_jump_key_held_across_a_dialogs_close_ignores_its_repeats_until_let_go() {
 fn every_latched_key_held_across_the_close_ignores_its_repeats() {
     let latched = FLIGHT_KEYS
         .into_iter()
-        .filter(|k| !super::super::map_wait::UNLATCHED_KEYS.contains(k));
+        .filter(|k| !UNLATCHED_KEYS.contains(k) && !OWN_LATCH_KEYS.contains(k));
     for k in latched {
         let mut view = in_flight();
         dialog_opens(&mut view);
@@ -314,12 +318,15 @@ fn every_latched_key_pressed_under_an_unlatching_dialog_comes_back_in_handle_pla
         .iter()
         .position(|&k| k == STELLAR_SLOT_KEYS[0][0])
         .expect("the block");
-    let at_poll = |k: Key| super::super::slot_block::is_block_key(k) || k == CLOAK_KEY;
+    // B and L are held, read by their own latches at the poll.
+    let at_poll = |k: Key| {
+        super::super::slot_block::is_block_key(k) || k == CLOAK_KEY || OWN_LATCH_KEYS.contains(&k)
+    };
     let (now, kept): (Vec<Key>, Vec<Key>) = (
         POLL_ORDER
             .into_iter()
             .enumerate()
-            .filter(|&(at, k)| at < first_polled || at_poll(k))
+            .filter(|&(at, k)| (at < first_polled || at_poll(k)) && !OWN_LATCH_KEYS.contains(&k))
             .map(|(_, k)| k)
             .collect(),
         POLL_ORDER
@@ -335,6 +342,9 @@ fn every_latched_key_pressed_under_an_unlatching_dialog_comes_back_in_handle_pla
         "only the latched keys, in the poll's order"
     );
     assert_eq!(view.after_poll, kept, "the rest for the poll, in order");
+    for k in OWN_LATCH_KEYS {
+        assert!(view.held.contains(&k), "{k:?} held");
+    }
 }
 
 #[test]
@@ -481,12 +491,12 @@ fn a_press_key_kept_for_the_poll_and_let_go_before_it_does_nothing() {
 
 #[test]
 fn a_press_key_before_any_slot_key_comes_back_at_once() {
-    // \` @0x69aa1 precedes the block, and B @0x6a98b, which follows it,
+    // \` @0x69aa1 precedes the block, and R @0x6a9b7, which follows it,
     // has no slot key before it to wait on.
     let mut view = in_flight();
     unlatching_dialog_opens(&mut view);
-    let replay = back(&mut view, [NAV_OFF_KEY, BOARD_KEY], [], false);
-    assert_eq!(replay, [press(NAV_OFF_KEY), press(BOARD_KEY)]);
+    let replay = back(&mut view, [NAV_OFF_KEY, NEAREST_KEY], [], false);
+    assert_eq!(replay, [press(NAV_OFF_KEY), press(NEAREST_KEY)]);
 }
 
 #[test]
@@ -585,4 +595,149 @@ fn a_kept_p_that_opens_its_dialog_leaves_y_unread() {
         "Y unread: {sent_now:?}"
     );
     assert!(view.take_player_info_request());
+}
+
+// A latched key held past a close reads down past its latch
+// (`_QuickKeyCheck` @0xa0f5): its command waits on the latch, and a
+// failed gate that clears the latch with the key down lets it act once
+// the gate opens.
+
+#[test]
+fn a_latched_jump_key_held_into_a_disable_jumps_once_intact() {
+    // J down while disabled clears `_jumpTryFlag` (@0x6b0f5-0x6b10d to
+    // @0x6bada).
+    let mut view = in_flight();
+    dialog_opens(&mut view);
+    let _ = back(&mut view, [JUMP_KEY], [], false);
+    let from = sent(&view).len();
+    view.held_keys_frame();
+    assert!(!jumped_since(&view, from), "latched");
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.ships[0].condition = nova_sim::Condition::Disabled;
+    });
+    view.held_keys_frame();
+    assert!(!jumped_since(&view, from), "disabled");
+    super::faked_hud::changes(&mut view, |frame| {
+        frame.ships[0].condition = nova_sim::Condition::Intact;
+    });
+    view.held_keys_frame();
+    assert!(jumped_since(&view, from), "{:?}", &sent(&view)[from..]);
+}
+
+#[test]
+fn a_waiting_key_under_an_unlatching_dialog_reads_its_latch_set() {
+    // J down at the poll before the dialog read its latch set, and no
+    // pass saw it since: it reads down now, and waits.
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [JUMP_KEY], [JUMP_KEY], false), []);
+    let from = sent(&view).len();
+    view.held_keys_frame();
+    view.held_keys_frame();
+    assert!(!jumped_since(&view, from), "{:?}", &sent(&view)[from..]);
+    view.input(&key(JUMP_KEY, false));
+    view.held_keys_frame();
+    view.input(&key(JUMP_KEY, true));
+    assert!(jumped_since(&view, from), "let go and pressed afresh");
+}
+
+// B's and L's latches, `_boardTryFlag` (0xdee18) and `_dockTryFlag`
+// (0xdee34), are no `_SetAllKeyCmdFlags` site's: across every close each
+// is held whenever physically down and read by its own latch on every
+// pass.
+
+#[test]
+fn b_pressed_under_a_dialog_boards_at_its_close() {
+    // The last pass before the dialog read B up (@0x6a9a3).
+    for site in [true, false] {
+        let mut view = in_flight();
+        if site {
+            dialog_opens(&mut view);
+        } else {
+            unlatching_dialog_opens(&mut view);
+        }
+        assert_eq!(back(&mut view, [BOARD_KEY], [], false), [], "no replay");
+        let from = sent(&view).len();
+        view.tick(TICK);
+        assert!(
+            sent(&view)[from..].contains(&FlightCommand::Board),
+            "site {site}: {:?}",
+            &sent(&view)[from..]
+        );
+    }
+}
+
+#[test]
+fn b_held_from_before_a_dialog_waits_for_its_release() {
+    // B boarded before the dialog: its latch set (@0x6504c).
+    let mut view = in_flight();
+    view.board_latch = true;
+    dialog_opens(&mut view);
+    let _ = back(&mut view, [BOARD_KEY], [BOARD_KEY], false);
+    let from = sent(&view).len();
+    view.tick(TICK);
+    assert!(
+        !sent(&view)[from..].contains(&FlightCommand::Board),
+        "{:?}",
+        &sent(&view)[from..]
+    );
+    view.input(&key(BOARD_KEY, false));
+    view.tick(TICK);
+    view.input(&key(BOARD_KEY, true));
+    assert!(sent(&view)[from..].contains(&FlightCommand::Board));
+}
+
+#[test]
+fn l_pressed_under_a_dialog_presses_the_land_key_at_its_close() {
+    for site in [true, false] {
+        let mut view = in_flight();
+        if site {
+            dialog_opens(&mut view);
+        } else {
+            unlatching_dialog_opens(&mut view);
+        }
+        assert_eq!(back(&mut view, [LAND_KEY], [], false), [], "no replay");
+        let from = sent(&view).len();
+        view.tick(TICK);
+        assert!(
+            sent(&view)[from..].contains(&FlightCommand::Land),
+            "site {site}: {:?}",
+            &sent(&view)[from..]
+        );
+    }
+}
+
+#[test]
+fn own_latch_keys_never_come_back_as_presses() {
+    for site in [true, false] {
+        let mut view = in_flight();
+        if site {
+            dialog_opens(&mut view);
+        } else {
+            unlatching_dialog_opens(&mut view);
+        }
+        assert_eq!(back(&mut view, OWN_LATCH_KEYS, [], false), []);
+        for k in OWN_LATCH_KEYS {
+            assert!(view.held.contains(&k), "{k:?} held");
+            assert!(!view.latched_down.contains(&k), "{k:?} not latched");
+        }
+    }
+}
+
+#[test]
+fn a_press_key_after_a_fresh_l_waits_for_the_poll() {
+    // L's block (@0x6a8b8) reads it at the poll, before R (@0x6a9b7).
+    let mut view = in_flight();
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(back(&mut view, [LAND_KEY, NEAREST_KEY], [], false), []);
+    assert_eq!(view.after_poll, [NEAREST_KEY]);
+    // With L's latch set, R comes back at once.
+    let mut view = in_flight();
+    super::faded_keys::requests(&mut view);
+    view.press_land();
+    unlatching_dialog_opens(&mut view);
+    assert_eq!(
+        back(&mut view, [LAND_KEY, NEAREST_KEY], [LAND_KEY], false),
+        [press(NEAREST_KEY)]
+    );
 }

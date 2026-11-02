@@ -3,6 +3,8 @@
 //! (its HUD and target parts). The world itself is drawn from the kept
 //! frame (the `drawing` and `world` modules).
 
+use std::collections::HashSet;
+
 use nova_sim::PlayerCommand;
 #[cfg(doc)]
 use nova_sim::Session;
@@ -531,7 +533,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// takes their command: the head of
     /// [`FlightView::held_keys_frame`]'s frame.
     pub(super) fn nav_held_frame(&mut self) {
-        let down = |key: Key| self.held.contains(&key);
+        let down = |key: Key| self.reads_down(key);
         let (nav_off, option, h) = (down(NAV_OFF_KEY), down(Key::Alt), down(HYPERSPACE_MODE_KEY));
         let select = down(HYPER_SELECT_KEY);
         if self.takes(PlayerCommand::Nav) {
@@ -566,7 +568,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
         // The 5 alone goes too: the block picks nothing with it.
         if slot_block::is_block_key(key) {
             let menu_open = self.escort_menu.is_open();
-            self.slot_block.press(key, &self.held, menu_open);
+            let down: HashSet<Key> = self.keys_down().collect();
+            self.slot_block
+                .press(key, |key| down.contains(&key), menu_open);
         } else if key == NAV_OFF_KEY {
             self.press_nav_block(key);
         }
@@ -580,7 +584,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn slot_keys_frame(&mut self) {
         let polled = self.slot_block_polled();
         let menu_open = self.escort_menu.is_open();
-        if let Some(pick) = self.slot_block.frame(&self.held, menu_open, polled) {
+        let down: HashSet<Key> = self.keys_down().collect();
+        let picked = self
+            .slot_block
+            .frame(|key| down.contains(&key), menu_open, polled);
+        if let Some(pick) = picked {
             self.select_stellar(pick);
         }
     }
@@ -603,8 +611,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
     #[cfg(any(test, feature = "fixture"))]
     pub fn input_queued(&self) -> bool {
         let menu_open = self.escort_menu.is_open();
-        self.slot_block
-            .queued(&self.held, menu_open, self.slot_block_polled())
+        self.slot_block.queued(
+            |down| self.reads_down(down),
+            menu_open,
+            self.slot_block_polled(),
+        )
     }
 
     /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
@@ -639,12 +650,12 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// without Option for H). Then the block runs with the key down
     /// ([`FlightView::nav_keys_frame`]).
     fn press_nav_block(&mut self, key: Key) {
-        let down = |held: Key| key == held || self.held.contains(&held);
+        let down = |read: Key| key == read || self.reads_down(read);
         let option = self.held.contains(&Key::Alt);
         let others = if key == NAV_OFF_KEY {
-            self.held.contains(&HYPERSPACE_MODE_KEY)
+            self.reads_down(HYPERSPACE_MODE_KEY)
         } else {
-            self.held.contains(&NAV_OFF_KEY) && !option
+            self.reads_down(NAV_OFF_KEY) && !option
         };
         let (nav_off, h) = (down(NAV_OFF_KEY), down(HYPERSPACE_MODE_KEY));
         if !others {
@@ -773,11 +784,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     pub(super) fn floating_frame(&mut self) {
         let jumping = self.jump_under_way();
         let mode_3 = matches!(self.frame.nav_mode, NavMode::Hyperspace(_));
-        let h =
-            self.held.contains(&HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
-        let backslash = self.held.contains(&HYPER_SELECT_KEY)
-            && mode_3
-            && self.takes(PlayerCommand::SelectSystem);
+        let h = self.reads_down(HYPERSPACE_MODE_KEY) && !jumping && self.takes(PlayerCommand::Nav);
+        let backslash =
+            self.reads_down(HYPER_SELECT_KEY) && mode_3 && self.takes(PlayerCommand::SelectSystem);
         if h || backslash {
             self.show_floating_map();
         }
@@ -832,9 +841,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// [`UiSound::FloatingMapZoomed`] (`_beepSnd[0]`, @0x7103a, @0x710bc);
     /// one at a limit does nothing.
     pub(super) fn zoom_floating_map(&mut self, key: Key) {
-        let holds = self.held.iter().any(|&held| {
-            self.slot_key_polled(held, true).unwrap_or(!matches!(
-                held,
+        let holds = self.keys_down().any(|down| {
+            self.slot_key_polled(down, true).unwrap_or(!matches!(
+                down,
                 SELF_DESTRUCT_KEY | EJECT_KEY | JETTISON_KEY
             ))
         });
@@ -867,7 +876,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         }
         let menu_open = self.escort_menu.is_open();
         let block = !self.jump_under_way()
-            && slot_block::block_polls(key, |down| self.held.contains(&down), menu_open);
+            && slot_block::block_polls(key, |down| self.reads_down(down), menu_open);
         Some(block || (escort_loop && slot_block::escort_loop_polls(key, menu_open)))
     }
 

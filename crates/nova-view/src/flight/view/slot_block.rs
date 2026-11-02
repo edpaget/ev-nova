@@ -26,8 +26,6 @@
 //! next tick ([`FlightView::held_keys_frame`](super::FlightView)), before
 //! any frame is drawn, so all the presses of one frame make one pick.
 
-use std::collections::HashSet;
-
 use nova_sim::StellarPick;
 
 use super::{NEAREST_STELLAR_COMMAND_KEY, NEAREST_STELLAR_KEY, STELLAR_SLOT_KEYS};
@@ -42,27 +40,33 @@ pub(super) struct SlotBlock {
 }
 
 impl SlotBlock {
-    /// An OS press of `key`, one of the block's, with the keys `held`
+    /// An OS press of `key`, one of the block's, with the keys read `down`
     /// before it and the escort menu open or not: the latch cleared unless
     /// another of the block's keys is down, and `key` down at the next
     /// frame, the 5 with the Command it was pressed with.
-    pub(super) fn press(&mut self, key: Key, held: &HashSet<Key>, menu_open: bool) {
-        if pick(|other| other != key && held.contains(&other), menu_open).is_none() {
+    pub(super) fn press(&mut self, key: Key, down: impl Fn(Key) -> bool, menu_open: bool) {
+        if pick(|other| other != key && down(other), menu_open).is_none() {
             self.latch = false;
         }
         self.presses.push(key);
-        if key == NEAREST_STELLAR_COMMAND_KEY && held.contains(&Key::Command) {
+        if key == NEAREST_STELLAR_COMMAND_KEY && down(Key::Command) {
             self.presses.push(Key::Command);
         }
     }
 
-    /// One frame of the block, with the keys `held` and the presses since
-    /// the last, the escort menu open or not, `polled` unless a jump is
-    /// under way or the session refuses the nav keys: the stellar to pick,
-    /// if any (see the module docs).
+    /// Sets the latch, as `_SetAllKeyCmdFlags` (@0x61e6d) does: a block
+    /// key down then picks nothing until a frame finds all of them up.
+    pub(super) fn set_latch(&mut self) {
+        self.latch = true;
+    }
+
+    /// One frame of the block, with the keys read `down` and the presses
+    /// since the last, the escort menu open or not, `polled` unless a jump
+    /// is under way or the session refuses the nav keys: the stellar to
+    /// pick, if any (see the module docs).
     pub(super) fn frame(
         &mut self,
-        held: &HashSet<Key>,
+        down: impl Fn(Key) -> bool,
         menu_open: bool,
         polled: bool,
     ) -> Option<StellarPick> {
@@ -70,10 +74,7 @@ impl SlotBlock {
         if !polled {
             return None;
         }
-        let Some(picked) = pick(
-            |key| held.contains(&key) || presses.contains(&key),
-            menu_open,
-        ) else {
+        let Some(picked) = pick(|key| down(key) || presses.contains(&key), menu_open) else {
             self.latch = false;
             return None;
         };
@@ -85,7 +86,7 @@ impl SlotBlock {
     }
 
     /// Whether the block holds input a later frame will act on, with the
-    /// keys `held`, the escort menu open or not and `polled` as
+    /// keys read `down`, the escort menu open or not and `polled` as
     /// [`SlotBlock::frame`] takes them: whether one more frame would
     /// change it. So a press is queued until the frame that picks or drops
     /// it, and a pick's latch until the frame that clears it; a key held
@@ -95,9 +96,9 @@ impl SlotBlock {
     /// It asks the block's fixed point, not which field holds the presses,
     /// so it stays true for as many frames as the block takes to act.
     #[cfg(any(test, feature = "fixture"))]
-    pub(super) fn queued(&self, held: &HashSet<Key>, menu_open: bool, polled: bool) -> bool {
+    pub(super) fn queued(&self, down: impl Fn(Key) -> bool, menu_open: bool, polled: bool) -> bool {
         let mut next = self.clone();
-        next.frame(held, menu_open, polled);
+        next.frame(down, menu_open, polled);
         next != *self
     }
 }
@@ -155,6 +156,8 @@ pub(super) fn escort_loop_polls(key: Key, menu_open: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     const ONE: Key = Key::Char('1');
@@ -164,6 +167,12 @@ mod tests {
 
     fn set(keys: &[Key]) -> HashSet<Key> {
         keys.iter().copied().collect()
+    }
+
+    /// `keys` as the block's read of what is down.
+    fn down(keys: &HashSet<Key>) -> impl Fn(Key) -> bool + use<> {
+        let keys = keys.clone();
+        move |key: Key| keys.contains(&key)
     }
 
     fn pick_of(keys: &[Key], menu_open: bool) -> Option<StellarPick> {
@@ -232,26 +241,29 @@ mod tests {
     fn a_frame_picks_once_until_a_frame_with_no_key_down() {
         let mut block = SlotBlock::default();
         let none = set(&[]);
-        block.press(TWO, &none, false);
+        block.press(TWO, down(&none), false);
         assert_eq!(
-            block.frame(&none, false, true),
+            block.frame(down(&none), false, true),
             Some(StellarPick::Slot(1)),
             "a tap"
         );
-        block.press(TWO, &none, false);
+        block.press(TWO, down(&none), false);
         let two = set(&[TWO]);
         assert_eq!(
-            block.frame(&two, false, true),
+            block.frame(down(&two), false, true),
             Some(StellarPick::Slot(1)),
             "again"
         );
-        assert_eq!(block.frame(&two, false, true), None, "held: latched");
+        assert_eq!(block.frame(down(&two), false, true), None, "held: latched");
         assert_eq!(
-            block.frame(&none, false, true),
+            block.frame(down(&none), false, true),
             None,
             "up: the latch clears"
         );
-        assert_eq!(block.frame(&two, false, true), Some(StellarPick::Slot(1)));
+        assert_eq!(
+            block.frame(down(&two), false, true),
+            Some(StellarPick::Slot(1))
+        );
     }
 
     #[test]
@@ -259,49 +271,68 @@ mod tests {
         let mut block = SlotBlock::default();
         let none = set(&[]);
         let f1 = set(&[Key::Function(1)]);
-        block.press(Key::Function(1), &none, false);
-        assert_eq!(block.frame(&f1, false, true), Some(StellarPick::Slot(0)));
-        block.press(TWO, &f1, false);
-        assert_eq!(block.frame(&f1, false, true), None, "F1 holds the latch");
+        block.press(Key::Function(1), down(&none), false);
+        assert_eq!(
+            block.frame(down(&f1), false, true),
+            Some(StellarPick::Slot(0))
+        );
+        block.press(TWO, down(&f1), false);
+        assert_eq!(
+            block.frame(down(&f1), false, true),
+            None,
+            "F1 holds the latch"
+        );
         // 5 held without Command holds nothing, so F3 is fresh.
         let five = set(&[FIVE]);
-        block.frame(&none, false, true);
-        block.press(Key::Function(3), &five, false);
-        assert_eq!(block.frame(&five, false, true), Some(StellarPick::Slot(2)));
+        block.frame(down(&none), false, true);
+        block.press(Key::Function(3), down(&five), false);
+        assert_eq!(
+            block.frame(down(&five), false, true),
+            Some(StellarPick::Slot(2))
+        );
         // A key the menu hides holds nothing either.
         let mut block = SlotBlock::default();
         let two = set(&[TWO]);
-        block.press(Key::Function(1), &none, false);
-        block.frame(&set(&[Key::Function(1)]), false, true);
-        block.press(Key::Function(1), &two, true);
-        assert_eq!(block.frame(&two, true, true), Some(StellarPick::Slot(0)));
+        block.press(Key::Function(1), down(&none), false);
+        block.frame(down(&set(&[Key::Function(1)])), false, true);
+        block.press(Key::Function(1), down(&two), true);
+        assert_eq!(
+            block.frame(down(&two), true, true),
+            Some(StellarPick::Slot(0))
+        );
     }
 
     #[test]
     fn presses_in_one_frame_make_one_pick_by_the_blocks_order() {
         let mut block = SlotBlock::default();
         let none = set(&[]);
-        block.press(NEAREST_STELLAR_KEY, &none, false);
-        block.press(TWO, &none, false);
-        assert_eq!(block.frame(&none, false, true), Some(StellarPick::Nearest));
-        block.frame(&none, false, true);
-        block.press(Key::Function(3), &none, false);
-        block.press(ONE, &none, false);
-        assert_eq!(block.frame(&none, false, true), Some(StellarPick::Slot(2)));
-        assert_eq!(block.frame(&none, false, true), None, "taken");
+        block.press(NEAREST_STELLAR_KEY, down(&none), false);
+        block.press(TWO, down(&none), false);
+        assert_eq!(
+            block.frame(down(&none), false, true),
+            Some(StellarPick::Nearest)
+        );
+        block.frame(down(&none), false, true);
+        block.press(Key::Function(3), down(&none), false);
+        block.press(ONE, down(&none), false);
+        assert_eq!(
+            block.frame(down(&none), false, true),
+            Some(StellarPick::Slot(2))
+        );
+        assert_eq!(block.frame(down(&none), false, true), None, "taken");
     }
 
     #[test]
     fn command_5_tapped_counts_with_its_command_at_the_next_frame() {
         let mut block = SlotBlock::default();
-        block.press(FIVE, &set(&[Key::Command]), false);
+        block.press(FIVE, down(&set(&[Key::Command])), false);
         assert_eq!(
-            block.frame(&set(&[]), false, true),
+            block.frame(down(&set(&[])), false, true),
             Some(StellarPick::Nearest)
         );
-        block.frame(&set(&[]), false, true);
-        block.press(FIVE, &set(&[]), false);
-        assert_eq!(block.frame(&set(&[]), false, true), None, "5 alone");
+        block.frame(down(&set(&[])), false, true);
+        block.press(FIVE, down(&set(&[])), false);
+        assert_eq!(block.frame(down(&set(&[])), false, true), None, "5 alone");
     }
 
     #[test]
@@ -311,49 +342,67 @@ mod tests {
         let mut block = SlotBlock::default();
         let none = set(&[]);
         let two = set(&[TWO]);
-        block.press(TWO, &none, false);
-        assert_eq!(block.frame(&none, false, false), None);
-        assert_eq!(block.frame(&none, false, true), None, "the press dropped");
-        assert_eq!(block.frame(&two, false, false), None, "pressed in the jump");
+        block.press(TWO, down(&none), false);
+        assert_eq!(block.frame(down(&none), false, false), None);
         assert_eq!(
-            block.frame(&two, false, true),
+            block.frame(down(&none), false, true),
+            None,
+            "the press dropped"
+        );
+        assert_eq!(
+            block.frame(down(&two), false, false),
+            None,
+            "pressed in the jump"
+        );
+        assert_eq!(
+            block.frame(down(&two), false, true),
             Some(StellarPick::Slot(1)),
             "acts after it"
         );
-        assert_eq!(block.frame(&none, false, false), None, "let go in a jump");
-        assert_eq!(block.frame(&two, false, true), None, "still latched");
+        assert_eq!(
+            block.frame(down(&none), false, false),
+            None,
+            "let go in a jump"
+        );
+        assert_eq!(block.frame(down(&two), false, true), None, "still latched");
     }
 
     #[test]
     fn a_press_is_queued_until_its_pick_then_while_the_latch_clears() {
         let mut block = SlotBlock::default();
         let none = set(&[]);
-        assert!(!block.queued(&none, false, true), "nothing pressed");
-        block.press(TWO, &none, false);
-        assert!(block.queued(&none, false, true), "pressed");
-        assert_eq!(block.frame(&none, false, true), Some(StellarPick::Slot(1)));
-        assert!(block.queued(&none, false, true), "the latch to clear");
-        assert_eq!(block.frame(&none, false, true), None);
-        assert!(!block.queued(&none, false, true), "settled");
+        assert!(!block.queued(down(&none), false, true), "nothing pressed");
+        block.press(TWO, down(&none), false);
+        assert!(block.queued(down(&none), false, true), "pressed");
+        assert_eq!(
+            block.frame(down(&none), false, true),
+            Some(StellarPick::Slot(1))
+        );
+        assert!(block.queued(down(&none), false, true), "the latch to clear");
+        assert_eq!(block.frame(down(&none), false, true), None);
+        assert!(!block.queued(down(&none), false, true), "settled");
     }
 
     #[test]
     fn a_held_key_is_not_queued() {
         let mut block = SlotBlock::default();
         let two = set(&[TWO]);
-        block.press(TWO, &set(&[]), false);
-        assert_eq!(block.frame(&two, false, true), Some(StellarPick::Slot(1)));
-        assert!(!block.queued(&two, false, true));
+        block.press(TWO, down(&set(&[])), false);
+        assert_eq!(
+            block.frame(down(&two), false, true),
+            Some(StellarPick::Slot(1))
+        );
+        assert!(!block.queued(down(&two), false, true));
     }
 
     #[test]
     fn a_press_in_a_jump_is_queued_until_the_frame_that_drops_it() {
         let mut block = SlotBlock::default();
         let none = set(&[]);
-        block.press(TWO, &none, false);
-        assert!(block.queued(&none, false, false));
-        assert_eq!(block.frame(&none, false, false), None);
-        assert!(!block.queued(&none, false, false), "dropped");
+        block.press(TWO, down(&none), false);
+        assert!(block.queued(down(&none), false, false));
+        assert_eq!(block.frame(down(&none), false, false), None);
+        assert!(!block.queued(down(&none), false, false), "dropped");
     }
 
     #[test]
@@ -404,6 +453,23 @@ mod tests {
         ] {
             assert!(!is_block_key(key), "{key:?}");
         }
+    }
+
+    #[test]
+    fn a_latched_block_key_keeps_a_fresh_one_from_picking() {
+        // F1 latched across a close reads down with the latch set
+        // (@0x69e15), so 2 pressed picks nothing until both are up.
+        let mut block = SlotBlock::default();
+        block.set_latch();
+        let f1 = set(&[Key::Function(1)]);
+        block.press(TWO, down(&f1), false);
+        assert_eq!(block.frame(down(&f1), false, true), None, "F1 holds it");
+        assert_eq!(block.frame(down(&set(&[])), false, true), None);
+        block.press(TWO, down(&set(&[])), false);
+        assert_eq!(
+            block.frame(down(&set(&[])), false, true),
+            Some(StellarPick::Slot(1))
+        );
     }
 
     #[test]

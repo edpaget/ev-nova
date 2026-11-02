@@ -42,7 +42,9 @@
 //! ours latches one pass later
 //! (rdm:phase/play-feel-8-fidelity/phase-11-latched-keys-under-unlatching-dialogs-left-outs).
 
+#[cfg(doc)]
 use super::map_wait::UNLATCHED_KEYS;
+use super::map_wait::{OWN_LATCH_KEYS, reads_live};
 use super::{
     BOARD_KEY, ESCORT_ATTACK_KEY, ESCORT_DEFEND_KEY, ESCORT_HOLD_KEY, ESCORT_RECALL_KEY,
     FRAME_RATE_KEY, FlightView, HAIL_KEY, HYPER_SELECT_KEY, HYPERSPACE_MODE_KEY, JUMP_KEY,
@@ -206,7 +208,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     #[must_use]
     pub fn take_back_live_input(&mut self, live: LiveKeys) -> Vec<Input> {
         let latch_all = std::mem::take(&mut self.latch_at_close) || self.map_open;
-        self.held.retain(|key| !UNLATCHED_KEYS.contains(key));
+        self.held.retain(|&key| !reads_live(key));
         self.latched_down.clear();
         for &key in &live.down {
             self.hold_live_key(key);
@@ -214,6 +216,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
         self.cursor.button(live.button);
         if latch_all {
             self.latch_held_keys(live.down);
+            self.set_every_latch();
             return Vec::new();
         }
         let waiting = live
@@ -222,13 +225,18 @@ impl<C, S: FlightSim> FlightView<C, S> {
             .copied()
             .filter(|key| live.down_before.contains(key));
         self.latch_held_keys(waiting);
-        let fresh = POLL_ORDER.into_iter().filter(|key| {
-            live.down.contains(key) && !live.down_before.contains(key) && !self.held.contains(key)
-        });
         let mut presses = Vec::new();
         let mut polled_before = false;
         self.after_poll.clear();
-        for key in fresh {
+        for key in POLL_ORDER.into_iter().filter(|key| live.down.contains(key)) {
+            if OWN_LATCH_KEYS.contains(&key) {
+                // Held, and read by its own latch at the next poll.
+                polled_before |= !self.own_latch(key);
+                continue;
+            }
+            if live.down_before.contains(&key) || self.held.contains(&key) {
+                continue;
+            }
             let at_poll = self.acts_at_the_poll(key);
             if polled_before && !at_poll {
                 self.after_poll.push(key);
@@ -238,6 +246,16 @@ impl<C, S: FlightSim> FlightView<C, S> {
             polled_before |= at_poll;
         }
         presses
+    }
+
+    /// Whether `key`'s own latch is set, one of [`OWN_LATCH_KEYS`]: L's
+    /// (the `faded_keys` module's) or B's ([`FlightView::board_latch`]).
+    fn own_latch(&self, key: Key) -> bool {
+        if key == LAND_KEY {
+            self.faded_keys.land_latched()
+        } else {
+            self.board_latch
+        }
     }
 
     /// Whether flight acts on `key` only at its next key poll or step,
@@ -280,6 +298,10 @@ impl<
     /// follows its dialog latches them.
     pub(super) fn read_after_poll(&mut self) -> bool {
         let kept = std::mem::take(&mut self.after_poll);
+        if !kept.is_empty() && self.opened_something() {
+            // The poll's own read opened it: B's board, its key held.
+            return true;
+        }
         for key in kept {
             let _ = self.input(&press(key));
             if self.opened_something() {

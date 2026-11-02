@@ -70,8 +70,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// the arrival tick still counts as jumping, and the first tick after
     /// it is the original's first frame to act (@0x6c625).
     pub(super) fn held_keys_frame(&mut self) {
-        let down = |key: Key| self.held.contains(&key);
-        let (jump, board) = (down(JUMP_KEY), down(BOARD_KEY));
+        let (jump, board) = (self.reads_down(JUMP_KEY), self.held.contains(&BOARD_KEY));
         self.nav_held_frame();
         // The Board key's and the jump's frames ask their own gates
         // (`FlightCommand::gate`).
