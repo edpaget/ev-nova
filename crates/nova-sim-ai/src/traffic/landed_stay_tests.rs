@@ -4,7 +4,9 @@
 //! wait down (@0x35025-0x35048) and skips its turn and thrust
 //! (@0x34a54-0x34a72), and flies the goal its think gives once the wait
 //! is out. Its slot still counts toward the system's `AvgShips`
-//! (`_EnterMoreShips` @0x43b14-0x43b5c), and its berth stays taken.
+//! (`_EnterMoreShips` @0x43b14-0x43b5c), and its berth stays taken. A
+//! landed fleet lead and its fleet are in
+//! [`landed_lead_tests`](super::landed_lead_tests).
 
 use super::tests::{placed, table};
 use super::{Traffic, spawn};

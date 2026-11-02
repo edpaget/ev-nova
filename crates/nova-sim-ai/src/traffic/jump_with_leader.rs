@@ -180,7 +180,11 @@ impl Npc {
 /// @0x83a1a-0x83a5f): in sub 4 or 0xd, in goal 2 braking for its jump
 /// (sub 1, [`Leg::Brake`]), or with its +0x50 above 0. A lead running out
 /// inside 1000 (sub 3) draws no one: its escorts keep formation until it
-/// brakes or jumps.
+/// brakes or jumps. Nor does a lead whose think wrote goal 2 during its
+/// landed wait: the original's dword compare reads sub 1 literally
+/// (@0x83a33), and the wait gate (@0x8d4b9-0x8d4d2) holds the sub at the
+/// landing's 0, as the lead stays at rest ([`Leg::Brake`] needs it
+/// moving) with no warp goal or stage until its wait is out.
 #[must_use]
 pub fn draws_followers(lead: &Npc) -> bool {
     lead.warp.goal.is_some() || brakes_for_jump(lead) || lead.warp.stage > 0.0

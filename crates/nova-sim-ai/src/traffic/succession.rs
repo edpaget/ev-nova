@@ -135,9 +135,14 @@
 //! It writes no order word (+0xc90a): a follower flies the word its old
 //! lead gave it until its new lead's next order frame. Nor a follower's
 //! travel stellar (+0x6c, the lost lead's slot, kept), +0x8c or +0x96. A
-//! lead that landed holds no record here, where the original keeps it in
-//! its slot, so its successor takes the other government's branch
-//! (rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-1-landed-lead-keeps-its-fleet).
+//! lead that landed stays in its slot, waiting at the stellar
+//! ([`land_flight::stay`](super::land_flight::stay)), active and intact,
+//! so the check (@0x89287-0x892a9) finds it present and nothing here
+//! runs; only a mission lead under
+//! [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)' other reading
+//! leaves as it lands, unrecorded ([`gone`](super::gone)), and its
+//! successor takes the other government's branch
+//! (rdm:phase/play-feel-9/phase-3-landed-lead-keeps-its-fleet).
 //!
 //! **No gate entry meets the check.** No ship entering a gate (sub 0x17,
 //! [`Mode::EnteringGate`], `_AIShipIsEnteringHypergate` @0x89502) has an
