@@ -57,7 +57,7 @@
 //!   rdm:phase/play-feel-7-fidelity/phase-3-speed-mult-ramp-after-a-landing-or-dialog;
 //! - the stellar step of the two frozen `_DoPlayGameWork(1)` passes
 //!   (@0x1a38a, @0x4580c),
-//!   rdm:phase/play-feel-7-cross-roadmap/phase-1-stellar-step-of-the-frozen-entry-passes.
+//!   rdm:phase/combat-and-flight/phase-10-stellar-step-of-the-frozen-entry-passes.
 
 use crate::catalog::StellarId;
 use crate::chance::Chance;

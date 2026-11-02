@@ -24,7 +24,7 @@
 //!    gone is lost ([`projectile`](super::projectile)). An interfered one
 //!    (999) is tested as a clear one. A shot locked on an asteroid
 //!    ([`Jam::Asteroid`], jam 1) hits no ship here, though the original
-//!    lets it on (rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot).
+//!    lets it on (rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot).
 //!    As a homing shot, jammed or not, it never hits any ship but its
 //!    target, unless `Flags2` 0x0008 (@0x44812-0x44836). The jam-0 tests
 //!    that keep an interfered shot out of the missile lock (`_HandleShot`
@@ -234,7 +234,7 @@ impl Sides<'_> {
         if !target.condition.active()
             || target.ship_type >= ESCAPE_POD_SHIP
             // Lost (998) is @0x447f7's only reject; an asteroid lock is
-            // left to rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
+            // left to rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
             || matches!(shot.jam, Jam::Lost | Jam::Asteroid(_))
         {
             return false;
@@ -568,8 +568,8 @@ mod tests {
 
     #[test]
     fn a_shot_locked_on_an_asteroid_still_hits_no_ship() {
-        // Left to rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-
-        // asteroid-slot-as-ship-slot.
+        // Left to
+        // rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
         let targets = [ship(npc(2), None), ship(npc(3), None)];
         let sides = among(&targets);
         for jam in [Jam::Asteroid(Some(0)), Jam::Asteroid(None)] {

@@ -33,7 +33,7 @@
 //!   @0x38c0f-0x38c5b), filed in rdm:task/escorts-follow-up;
 //! - the escort menu showing a change a frame late, as the callback blits
 //!   the menu's frame before redrawing it (@0x38c60-0x38c77)
-//!   (rdm:phase/play-feel-followups/phase-1-escort-menu-redraw-a-frame-late).
+//!   (rdm:phase/rendering/phase-9-escort-menu-redraw-a-frame-late).
 
 use nova_sim::sprite_layer::{SpriteLayer, WORLD_PASSES, WorldPass};
 
@@ -218,7 +218,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// command draws in list order, so the text stays under the
     /// particles; drawn into a world texture under a frame upscaler, the
     /// world is laid out before the overlay and the text draws over the
-    /// particles (rdm:phase/play-feel-cross-roadmap/phase-3-floater-text-under-the-particles-upscaled).
+    /// particles (rdm:phase/rendering/phase-8-floater-text-under-the-particles-upscaled).
     fn draw_floaters(&self, list: &mut DrawList) {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         if let Some(message) = self.message() {

@@ -176,7 +176,7 @@ jobs:
           NOVA_SPARKLE_FRAMEWORKS="$PWD/target/bundle/staging/Nova.app/Contents/Frameworks" \
             cargo test --locked -p nova-appkit --test it updater
       # The signing seam (rdm phase
-      # windows-platform-cross-roadmap/phase-2-sign-windows-builds-in-ci):
+      # windows-signing/phase-2-sign-windows-builds-in-ci):
       # sign target/x86_64-pc-windows-msvc/release's nova.exe and
       # nova-dump.exe here, between the Build above and the packing below,
       # which takes the executables as they are and never rebuilds them.

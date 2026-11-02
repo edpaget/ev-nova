@@ -52,7 +52,7 @@
 //! show, though `_HandleShip` skips the turn and thrust; the engine
 //! doesn't keep +0xc8ca for an autopilot goal, so a waiting ship leaves
 //! the head's word and writes nothing
-//! (rdm:phase/combat-ai-fidelity-cross-roadmap-followups/phase-1-left-out-of-phase-19).
+//! (rdm:phase/npc-ai/phase-6-left-out-of-phase-19).
 //! Nothing here plays a sound.
 
 use super::autopilot::{self, Beside, Readings, TopSpeeds};

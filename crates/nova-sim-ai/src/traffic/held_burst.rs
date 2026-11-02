@@ -92,7 +92,7 @@
 //!
 //! Neither the burst nor `_AIMakeShipStopJumping` plays a sound. The
 //! mining orders' thrusts are
-//! rdm:phase/escort-fleet-fidelity-cross-roadmap/phase-2-mining-orders-burst-an-owed-burst's;
+//! rdm:phase/npc-ai/phase-13-mining-orders-burst-an-owed-burst's;
 //! sub 0xc's inspection hold is dead code on any data
 //! (rdm:phase/escort-fleet-fidelity-followups/phase-2-left-out-of-formation-flight).
 //!

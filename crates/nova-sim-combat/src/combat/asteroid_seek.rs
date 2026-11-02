@@ -64,7 +64,7 @@
 //!   `Flags2` 0x0008 (@0x44821-0x44836); and its end-of-life sub-munitions
 //!   are aimed at that ship (@0x35f3e-0x35f49). Here a locked shot hits no
 //!   ship ([`Sides`](super::sides::Sides)) and its sub-munitions are aimed
-//!   at none: rdm:phase/asteroids-fidelity/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
+//!   at none: rdm:phase/combat-and-flight/phase-1-locked-shot-reads-asteroid-slot-as-ship-slot.
 
 use super::projectile::{Guide, HOMING_DELAY, Jam, LockAngle, Shot, wrap_turned};
 use super::weapon::{Guidance, SEEKS_ASTEROIDS};

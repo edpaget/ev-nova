@@ -66,10 +66,10 @@
 //!
 //! **Filed.**
 //! - A ship `_GenericRandomShipSpawn` places keeps its berth's last mark
-//!   (rdm:phase/play-feel-5-followups/phase-5-berth-keeps-command-mark).
+//!   (rdm:phase/npc-ai/phase-16-berth-keeps-command-mark).
 //! - A jump's arrival frame skips the bookkeeping, and the menu fades on
 //!   both of double time's passes
-//!   (rdm:phase/play-feel-5-followups/phase-7-handle-player-double-fade-and-arrival-orders).
+//!   (rdm:phase/flight-controls/phase-7-handle-player-double-fade-and-arrival-orders).
 
 use super::{Space, Statics};
 use crate::escort::{EscortClass, EscortOrder};

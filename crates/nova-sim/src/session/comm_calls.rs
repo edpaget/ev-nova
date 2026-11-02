@@ -121,7 +121,7 @@
 //! after the loop, so it stays with [`Session::tick_quotes`].
 //!
 //! Two orders are left out, each in
-//! rdm:phase/play-feel-6-followups/phase-19-quotes-after-the-loop-against-the-docks-lines:
+//! rdm:phase/npc-ai/phase-18-quotes-after-the-loop-against-the-docks-lines:
 //! a quote from before the loop lands after the frame's fleet arrival line
 //! ([`Session::say_quotes_before_the_line`] follows `announce_fleets`),
 //! where the collision passes come before `_EnterMoreShips` @0x44237 and
