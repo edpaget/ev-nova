@@ -9,18 +9,23 @@
 //! and the readings of
 //! [`RuleKey::RleCollisionWalk`] and [`RuleKey::ShotContact`]. Combat
 //! lays each rect out where the walk meets the sprite (see
-//! `nova_sim::combat::contact`). The frame set is the one the last
-//! display drew (rdm:phase/play-feel-8/phase-18-ship-frames-stepped-at-each-display).
+//! `nova_sim::combat::contact`). The player's frame set is the one its
+//! display stepped this pass, as `_HandleShipDisplay` runs for it
+//! (@0x43e29) before the collision passes (@0x43e70-0x44015); each NPC's is
+//! the one its last display drew, as the NPCs display in the ship loop
+//! after them (@0x444ad), which is the original's order too (see the
+//! `ship_display` module).
 //!
 //! **The scoop** ([`Session::scoop_masks`]). `_ShipCollisionHandler`'s
 //! scoop branch (@0x370ab-0x371ac) runs in the collision passes, after
 //! `_HandlePlayer` turned the player and its display drew it (@0x43e29),
 //! with every rect where the last frame placed it, relative to the player
-//! as it stood then. So the scoop runs after the player's move
-//! ([`Session::scoop_after_turn`]), the player's mask its frame after this
-//! pass's turn but placed at the screen's centre, where it stood before
-//! the move, and every NPC's and box's rect laid out from that same place,
-//! at the places the move didn't change. A box is laid out by the box
+//! as it stood then. So the scoop runs after the player's move and its
+//! display step ([`Session::scoop_after_display`]), the player's mask its
+//! frame after this pass's turn, on the set its display this pass stepped,
+//! but placed at the screen's centre, where it stood before the move, and
+//! every NPC's and box's rect laid out from that same place, at the places
+//! the move didn't change, each NPC on the set its last display drew. A box is laid out by the box
 //! rule at its frame (`nova_sim::scoop::Scooping`).
 
 use super::Session;
@@ -315,6 +320,136 @@ mod tests {
             own.frame,
             frames.index(session.ship.ship_display.drawn.set, after)
         );
+    }
+
+    /// A sheet of two sets of 36 frames, each 40 square: set 0 drawn in
+    /// its left eighth alone, set 1 solid.
+    fn strip_then_solid() -> RleSheet {
+        let frame = |set: u32| -> Vec<String> {
+            (0..40)
+                .map(|_| {
+                    (0..40)
+                        .map(|x| if set == 1 || x < 5 { '#' } else { '.' })
+                        .collect()
+                })
+                .collect()
+        };
+        let frames: Vec<Vec<String>> = (0..72).map(|frame_index| frame(frame_index / 36)).collect();
+        let rows: Vec<Vec<&str>> = frames
+            .iter()
+            .map(|rows| rows.iter().map(String::as_str).collect())
+            .collect();
+        let frames: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
+        sheet(&frames)
+    }
+
+    /// Gives `catalog`'s class `id` an animated `shän` of two sets,
+    /// `AnimDelay` 0, so its set steps at every display, 36 frames a turn.
+    fn alternating(catalog: &mut FakePilotCatalog, id: i16) {
+        let hull = catalog
+            .hulls
+            .iter_mut()
+            .find(|hull| hull.id == ShipId(id))
+            .expect("the class's hull");
+        hull.display = Some(crate::catalog::ShipDisplay {
+            flags: crate::combat::ship_frames::ANIMATED,
+            base_sets: 2,
+            anim_delay: 0,
+            ..crate::catalog::ShipDisplay::default()
+        });
+        hull.exits = Some(crate::catalog::ShipExits {
+            frames: 36,
+            ..crate::catalog::ShipExits::default()
+        });
+    }
+
+    #[test]
+    fn an_npcs_shot_meets_the_player_by_the_set_its_display_this_pass_steps() {
+        use crate::session::tests::Firing;
+        use crate::testkit::work_with;
+        // `_HandleShipDisplay` steps the player (@0x43e29) before the
+        // collision passes' `_ShipCollisionHandler` tests a shot against
+        // its sprite (@0x37045). The player's set alternates each display;
+        // the NPC's shots, down the player's middle, meet only set 1.
+        let mut catalog = armed();
+        alternating(&mut catalog, 128);
+        catalog.rle_sheets = vec![
+            (MaskSheet::Ship(ShipId(128)), strip_then_solid()),
+            (BLASTER_SHOT, square(2, |_, _| true)),
+        ];
+        for start in [0, 1] {
+            let mut session = facing_an_npc(&catalog, 180);
+            session.ship.ship_display.frames.anim_set = start;
+            session.ship.ship_display.drawn.set = start.cast_unsigned();
+            let mut strikes = 0;
+            for _ in 0..30 {
+                let before = session.reserves();
+                work_with(
+                    &mut session,
+                    &catalog,
+                    Controls::default(),
+                    &Firing,
+                    Rules::default(),
+                    &mut NeverFires,
+                );
+                let after = session.reserves();
+                if after.shield.now < before.shield.now || after.armor.now < before.armor.now {
+                    strikes += 1;
+                    assert_eq!(session.player_drawn().set, 1, "from set {start}");
+                }
+            }
+            assert!(strikes > 0, "from set {start}: struck");
+        }
+    }
+
+    #[test]
+    fn the_players_shot_meets_an_npc_by_the_set_its_last_display_drew() {
+        // The NPCs display in the ship loop (@0x444ad), after the
+        // collision passes (@0x43e70-0x44015): a shot meets an NPC by the
+        // set its display drew on the pass before. Its set alternates each
+        // display, set 0 drawn in its left quarter alone; the player's
+        // shots, 15 right of its centre, meet only set 1.
+        let mut catalog = armed();
+        alternating(&mut catalog, 129);
+        let left_quarter_then_solid = {
+            let frame = |set: u32| -> Vec<String> {
+                (0..40)
+                    .map(|_| {
+                        (0..40)
+                            .map(|x| if set == 1 || x < 10 { '#' } else { '.' })
+                            .collect()
+                    })
+                    .collect()
+            };
+            let frames: Vec<Vec<String>> = (0..72).map(|index| frame(index / 36)).collect();
+            let rows: Vec<Vec<&str>> = frames
+                .iter()
+                .map(|rows| rows.iter().map(String::as_str).collect())
+                .collect();
+            let frames: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
+            sheet(&frames)
+        };
+        catalog.rle_sheets = vec![
+            (NPC_SHIP, left_quarter_then_solid),
+            (BLASTER_SHOT, square(2, |_, _| true)),
+        ];
+        for start in [0, 1] {
+            let mut session = shooting(&catalog, -15.0, Rulebook::default());
+            session.space.traffic.npcs_mut()[0].display.frames.anim_set = start;
+            session.space.traffic.npcs_mut()[0].display.drawn.set = start.cast_unsigned();
+            let mut strikes = 0;
+            for _ in 0..30 {
+                let last_drawn = session.npcs()[0].display.drawn.set;
+                if struck(&mut session, &catalog, 1) {
+                    strikes += 1;
+                    assert_eq!(last_drawn, 1, "from set {start}");
+                }
+                if strikes == 3 {
+                    break;
+                }
+            }
+            assert!(strikes > 0, "from set {start}: struck");
+        }
     }
 
     #[test]

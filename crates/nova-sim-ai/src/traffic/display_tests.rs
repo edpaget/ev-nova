@@ -190,15 +190,25 @@ fn a_ship_jumping_out_glows_up_as_it_warps() {
 }
 
 #[test]
-fn the_display_steps_every_ship_after_the_fight() {
-    let mut animated = idle(ANIMATED);
-    animated.display.rolls.anim = AnimRoll::Own;
-    animated.govt = Some(GovtId(140));
-    animated.display.rolls.derelict_glow = true;
-    animated.display.glow = 32;
-    let mut traffic = holding(animated);
+fn an_npcs_display_steps_that_npc_alone() {
+    // `_HandleShipDisplay` runs for each NPC right after its own
+    // `_HandleShip` in the ship loop (@0x444ad): one ship's display steps
+    // no other's.
+    let owing = |id: u32| {
+        let mut animated = idle(ANIMATED);
+        animated.id = crate::traffic::npc::NpcId(id);
+        animated.display.rolls.anim = AnimRoll::Own;
+        animated.govt = Some(GovtId(140));
+        animated.display.rolls.derelict_glow = true;
+        animated.display.glow = 32;
+        animated
+    };
+    let mut traffic = holding(owing(1));
+    traffic.npcs.push(owing(2));
     let mut draws = Draws::of(&[3, 2]);
-    traffic.display_ships(
+    traffic.display_npc(
+        crate::traffic::npc::NpcId(1),
+        false,
         |govt| govt == Some(GovtId(140)),
         DisplayRules::ENGINE,
         &mut draws,
@@ -207,6 +217,8 @@ fn the_display_steps_every_ship_after_the_fight() {
     assert_eq!(draws.asked, [6, 5], "its rolls");
     assert_eq!(shown.drawn.set, 3);
     assert_eq!(shown.glow, 0, "a derelict government's");
+    let other = traffic.npcs()[1].display;
+    assert_eq!(other, owing(2).display, "the other untouched");
 }
 
 /// The stock triangle, which 51 of the 106 stock 0x0040 ships with lights
@@ -229,16 +241,13 @@ fn lit(flags: u16) -> Npc {
 }
 
 /// The lights levels `traffic`'s NPC is drawn at over `n` displays, by
-/// `rules`, disabled when `disabled`.
+/// `rules`, each display reading it disabled when `disabled`: the
+/// `_IsDisabled` its display kept (@0x2b61f), whatever its condition now.
 fn lights(traffic: &mut Traffic, n: usize, disabled: bool, rules: DisplayRules) -> Vec<Option<u8>> {
-    traffic.npcs[0].condition = if disabled {
-        crate::combat::hull::Condition::Disabled
-    } else {
-        crate::combat::hull::Condition::Intact
-    };
+    let id = traffic.npcs[0].id;
     (0..n)
         .map(|_| {
-            traffic.display_ships(|_| false, rules, &mut Draws::of(&[]));
+            traffic.display_npc(id, disabled, |_| false, rules, &mut Draws::of(&[]));
             traffic.npcs()[0].display.drawn.lights
         })
         .collect()

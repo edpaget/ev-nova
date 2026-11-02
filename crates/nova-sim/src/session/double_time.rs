@@ -176,8 +176,9 @@ impl Session {
     /// fight by `rules`, the NPCs answering its hits as `behaviour` says,
     /// drawing on `chance` (see the module docs), in `_DoPlayGameWork(0)`'s
     /// order: `_HandlePlayer`'s fight before its move
-    /// ([`Session::player_fires`]), then its move; the collision passes,
-    /// their hits answered; no AI, so no NPC point defence; `_HandleShot`,
+    /// ([`Session::player_fires`]), then its move; its display, its frame
+    /// stepped again, then the scoop; the collision passes, their hits
+    /// answered; no AI, so no NPC point defence; `_HandleShot`,
     /// its hits answered; the ship loop's flights and fire; the
     /// asteroids, with no spawn (see the `asteroids` module), and the
     /// reinforcement clock; then `_HandleBeams` and what the pass leaves;
@@ -207,11 +208,9 @@ impl Session {
         let chance: &mut dyn Chance = &mut source;
         let pass = GamePass::Again;
         self.before_move(self.space.pass_frame, pass);
-        let stood = self.ship.player.position;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
         self.player_move(controls, pass);
-        self.scoop_after_turn(stood);
         if self.ship.fate.rescue_due {
             return;
         }

@@ -19,12 +19,12 @@
 //!
 //! **A ship's sprite** ([`SpriteMasks::ship_sprite`]). Its sheet is its
 //! sprite base's base image, its frame `FrameSpec::index` of the set its
-//! last display drew and its heading now. The original's display steps
-//! each ship's set before the collision passes and `_HandleDeadlyStellars`;
-//! here the set steps after the beams (`Session::display_ships`), so every
-//! reader reads the set the last pass drew, a divergence
-//! rdm:phase/play-feel-8/phase-18-ship-frames-stepped-at-each-display
-//! files. Placed ([`SpriteMasks::ship`]), its rect is the sheet's frame
+//! last display drew and its heading now. Each ship's set steps at its
+//! own display, as the original's does (see the `ship_display` module):
+//! the player's before the scoop and the collision passes, so they read
+//! this pass's; each NPC's in the ship loop, after them, so they read its
+//! last pass's and `_HandleDeadlyStellars` this pass's. Placed
+//! ([`SpriteMasks::ship`]), its rect is the sheet's frame
 //! size by the standard rule, as `_HandleShipDisplay` lays a ship out: the
 //! player at (−w/2, −h/2).
 //!

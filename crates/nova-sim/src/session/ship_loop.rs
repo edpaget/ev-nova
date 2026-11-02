@@ -11,9 +11,17 @@
 //! (@0x35080-0x3557b): its escape pods and escape-ship roll (see the
 //! `npc_escape` module); then its display, which may make its final
 //! explosion ([`Combat::handle_npc`]; for a dying NPC
-//! [`Combat::step_npc`], the dying block, then [`Combat::display_npc`]).
-//! So:
+//! [`Combat::step_npc`], the dying block, then [`Combat::display_npc`]);
+//! then, from the fight's record of that display, its frame: its sets,
+//! lights and ion tint, and its berth's blink timer
+//! ([`Space::display_npc_frames`], see the `ship_display` module). The
+//! loop returns the NPCs it displayed, for the pass's tail to step those
+//! it didn't reach ([`Space::display_undisplayed`]). So:
 //!
+//! - **Each NPC's frame** is this pass's from its display on: the deadly
+//!   stellars (@0x4450e) read it, and a later slot's shockwave or fire
+//!   that disables or ionizes it shows from the next frame, as in the
+//!   original. One its own display destroys steps once, as disabled.
 //! - **A final explosion's push** (`_DamageShip` @0x2da89) reaches each
 //!   ship of a later slot where it still stands, and that ship's own
 //!   flight, later in the loop, moves it by the pushed velocity: it is
@@ -49,7 +57,7 @@ use std::collections::BTreeSet;
 
 use super::game_work::PassStart;
 use super::npc_escape::{AtStep, escape_may_run};
-use super::{Session, Space, TrafficMarks};
+use super::{Session, Setup, Space, Statics, TrafficMarks};
 use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::{GamePass, Rules, ShipRef};
@@ -75,13 +83,14 @@ impl Session {
     /// by slot, each NPC flies and takes its step, a dying one running its
     /// escape pods and escape-ship roll against its condition as the pass
     /// `start`ed (see the `npc_escape` module), the words the pass's stray
-    /// beams stepped settled first, between its step and its display;
-    /// then what the fly half
+    /// beams stepped settled first, between its step and its display, and
+    /// each one displayed has its frame stepped; then what the fly half
     /// leaves: its end, and the session's work after it; the ships laid
     /// out ([`Session::lay_out_displayed`]); every NPC's cloak fade steps
     /// ([`Traffic::step_fades`](crate::traffic::Traffic::step_fades)); and
     /// the pick fired is cleared or kept
     /// ([`Traffic::after_firing`](crate::traffic::Traffic::after_firing)).
+    /// The NPCs it displayed.
     ///
     /// A fighter whose flight docks it goes aboard its carrier at its own
     /// slot ([`Session::dock_fighter`]), as `_LowLevelAIHandler` calls
@@ -112,7 +121,7 @@ impl Session {
         pass: GamePass,
         rules: Rules,
         chance: &mut dyn Chance,
-    ) {
+    ) -> BTreeSet<NpcId> {
         self.space.traffic.ease_stray();
         let again_marks = matches!(motion, Motion::Again)
             .then(|| self.space.mission_marks())
@@ -125,6 +134,7 @@ impl Session {
             Motion::Again | Motion::Populated => None,
         };
         let mut shown = vec![ShipRef::Player];
+        let mut displayed = BTreeSet::new();
         let mut after = None;
         while let Some((berth, id)) = self.space.next_in_loop(after) {
             after = Some(berth);
@@ -148,6 +158,13 @@ impl Session {
                     |combat, fighters, arena, chance| {
                         combat.handle_npc(fighters, arena, ship, &mut shown, chance);
                     },
+                );
+                self.space.step_displayed_npc(
+                    id,
+                    &mut displayed,
+                    &self.statics,
+                    &self.setup,
+                    chance,
                 );
                 continue;
             };
@@ -173,6 +190,8 @@ impl Session {
                     combat.display_npc(fighters, arena, ship, &mut shown);
                 },
             );
+            self.space
+                .step_displayed_npc(id, &mut displayed, &self.statics, &self.setup, chance);
         }
         if let Some(fly) = fly {
             self.space.traffic.end_fly(fly);
@@ -196,6 +215,7 @@ impl Session {
         self.lay_out_displayed();
         self.space.traffic.step_fades();
         self.space.traffic.after_firing(&self.statics.arsenal);
+        displayed
     }
 
     /// NPC `id`'s flight in the fly half `fly`, drawing on `chance`: its
@@ -226,6 +246,31 @@ impl Session {
 }
 
 impl Space {
+    /// NPC `id`'s frames, lights and ion tint stepped right after its
+    /// display in the ship loop (`_HandleShipDisplay` @0x444ad), read as
+    /// that display's `_IsDisabled` (@0x2b61f), and `id` noted in
+    /// `displayed`, drawing on `chance`; nothing for an NPC its display
+    /// didn't reach, already destroyed (the original's inactive-slot
+    /// branch, @0x2b522-0x2b60a). The fight's display (the settle, then
+    /// the dying block) ran before it, where the original's set step and
+    /// lights (@0x2b7d8, @0x2c2ea) come between them: reading the record
+    /// makes the two equal, so a ship its own display destroys steps as
+    /// disabled.
+    fn step_displayed_npc(
+        &mut self,
+        id: NpcId,
+        displayed: &mut BTreeSet<NpcId>,
+        statics: &Statics,
+        setup: &Setup,
+        chance: &mut dyn Chance,
+    ) {
+        let Some(shown) = self.combat.displayed(ShipRef::Npc(id)) else {
+            return;
+        };
+        displayed.insert(id);
+        self.display_npc_frames(id, shown.disabled, statics, setup, chance);
+    }
+
     /// The NPC in the lowest berth above `after` (any, with none), and
     /// its berth, read afresh from the traffic: so the loop reaches a
     /// fighter launched into a berth above the one it is at, and passes
@@ -329,6 +374,48 @@ mod tests {
     }
 
     const WRECKED: Vec2 = Vec2::new(600.0, 0.0);
+
+    /// A lit square wave: lit for 1 tick, twice, then a gap of 20.
+    const SQUARE: crate::blink::Blink = crate::blink::Blink {
+        mode: 1,
+        a: 4,
+        b: 1,
+        c: 2,
+        d: 20,
+    };
+
+    #[test]
+    fn a_wreck_its_display_explodes_steps_its_lights_and_leaves_its_berth_the_timer() {
+        // `_HandleShipDisplay` runs the lights (@0x2c2ea) before its dying
+        // block explodes the ship and frees its slot (@0x2d7ef, @0x2ded6),
+        // and nothing clears +0xc8ec at the freeing: the next ship brought
+        // into the slot blinks on the timer that final step left, one step
+        // on from the pass before.
+        let catalog = armed();
+        let mut session = empty(&catalog);
+        let gone = wreck(&mut session, 1, WRECKED);
+        let ship = session.space.npc_mut(gone).expect("there");
+        ship.hull.frames.blink = SQUARE;
+        ship.hull.frames.lights = true;
+        ship.hull.frames.flags = 0x0040;
+        ship.display.frames.lights.intensity = 32.0;
+        ship.display.frames.lights.timer = 5.0;
+        pass(&mut session, &catalog, &Keep);
+        assert!(session.space.npc(gone).is_none(), "exploded and taken out");
+        let next = session
+            .space
+            .traffic
+            .add_npc_at(npc(0, ShipStats::new(FAST, &[])), 1);
+        let timer = session
+            .space
+            .npc(next)
+            .expect("there")
+            .display
+            .frames
+            .lights
+            .timer;
+        assert_eq!(timer, 4.0, "5, then the final step's tick");
+    }
 
     #[test]
     fn a_later_slot_is_moved_by_a_wrecks_push_in_the_explosion_pass() {

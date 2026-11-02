@@ -109,7 +109,16 @@ impl Session {
     /// A ship touches a box by their placed masks, the ship's first
     /// (`_SWRLECollision` @0x3710c, [`Scooping::touches`]), laid out from
     /// the player standing at `stood`, its own frame the one this pass's
-    /// turn gave it (see the `contact_masks` module), or else by its disc.
+    /// turn gave it on the set its display this pass stepped, each NPC's
+    /// the set its last display drew (see the `contact_masks` module), or
+    /// else by its disc.
+    ///
+    /// It runs after the player's display step, as collision pass 1 runs
+    /// after `_HandleShipDisplay` (@0x43e29): the eject check and the
+    /// display's settle come first, so a player its display disables,
+    /// breaks up or destroys takes no box that pass. A pass the escape
+    /// pod's rescue ends (@0x68ddd, before the collision passes) scoops
+    /// nothing and steps no box; the landing clears the boxes anyway.
     ///
     /// *Ordering against the original.* The places tested are the
     /// player's before this pass's move, every other ship's after the last
@@ -175,10 +184,11 @@ impl Session {
     }
 
     /// `_ShipCollisionHandler`'s scoop branch and `_HandleBoxes`' step, after
-    /// this pass's player move, the player having stood at `stood` before
-    /// it (see the `contact_masks` module): the boxes the ships touch are
-    /// scooped ([`Session::scoop_boxes`]), then the boxes step.
-    pub(super) fn scoop_after_turn(&mut self, stood: Vec2) {
+    /// this pass's player move and the player's display step, the player
+    /// having stood at `stood` before the move (see the `contact_masks`
+    /// module): the boxes the ships touch are scooped
+    /// ([`Session::scoop_boxes`]), then the boxes step.
+    pub(super) fn scoop_after_display(&mut self, stood: Vec2) {
         self.scoop_boxes(stood);
         self.space.boxes_tick();
     }
@@ -736,10 +746,26 @@ mod tests {
 
     #[test]
     fn a_disabled_player_takes_no_box() {
+        // The scoop (@0x43e46-0x43e70) reads `_IsDisabled` after the
+        // player's display (@0x43e29) settles its condition from its
+        // armour, so the player is disabled by the rule, not by a poke the
+        // settle would undo.
         let catalog = scoopable();
         let mut session = scooper(&catalog, 0);
         session.ship.condition = Condition::Disabled;
-        assert_no_scoop(session);
+        let before = held(&session);
+        drop_on_ship(&mut session, Some(2));
+        work_with(
+            &mut session,
+            &crate::testkit::catalog(),
+            Controls::default(),
+            &Peaceful,
+            crate::session::tests::DISABLING,
+            &mut NeverFires,
+        );
+        assert_eq!(session.ship.condition, Condition::Disabled);
+        assert_eq!(held(&session), before);
+        assert_eq!(session.cargo_boxes().len(), 1, "the box is left");
     }
 
     #[test]
@@ -1037,6 +1063,45 @@ mod tests {
             own.rect,
             crate::sprite_mask::MaskRect::placed((-2, -2), (4, 4))
         );
+    }
+
+    #[test]
+    fn the_scoop_meets_the_player_by_the_set_its_display_this_pass_steps() {
+        use crate::catalog::{ShipDisplay, ShipExits};
+        // `_ShipCollisionHandler`'s scoop branch (@0x3710c) runs in the
+        // collision passes, after the player's display (@0x43e29) stepped
+        // its set. An animated class of two sets, `AnimDelay` 0, so its set
+        // steps at every display: set 0 drawn nowhere, set 1 solid.
+        let base = player_base(&scoopable());
+        let empty: Vec<&str> = vec!["...."; 4];
+        let solid: Vec<&str> = vec!["####"; 4];
+        let mut frames: Vec<&[&str]> = vec![empty.as_slice(); 36];
+        frames.extend(vec![solid.as_slice(); 36]);
+        let mut catalog = masked(nova_sim_base::fixture::rle::sheet(&frames), None, base);
+        let hull = catalog
+            .hulls
+            .iter_mut()
+            .find(|hull| hull.id == base)
+            .expect("the player's hull");
+        hull.display = Some(ShipDisplay {
+            flags: crate::combat::ship_frames::ANIMATED,
+            base_sets: 2,
+            anim_delay: 0,
+            ..ShipDisplay::default()
+        });
+        hull.exits = Some(ShipExits {
+            frames: 36,
+            ..ShipExits::default()
+        });
+        for (set, taken) in [(0, true), (1, false)] {
+            let mut session = scooper(&catalog, 0);
+            session.ship.ship_display.frames.anim_set = set;
+            session.ship.ship_display.drawn.set = set.cast_unsigned();
+            drop_on_ship(&mut session, Some(2));
+            work(&mut session, &catalog, Controls::default());
+            assert_eq!(session.player_drawn().set, 1 - set.cast_unsigned());
+            assert_eq!(session.cargo_boxes().is_empty(), taken, "from set {set}");
+        }
     }
 
     #[test]

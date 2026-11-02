@@ -90,6 +90,23 @@ impl Combat {
         std::mem::take(&mut self.displays)
     }
 
+    /// The latest display step of `ship` not yet taken
+    /// ([`Combat::take_displays`]), if any: none for a ship already
+    /// destroyed when its display began, whose slot is inactive
+    /// (@0x2b522-0x2b60a). Its `disabled` is the `_IsDisabled` the rest of
+    /// the display reads (@0x2b61f, kept at -0x152): the set step
+    /// (@0x2b7d8) and the lights (@0x2c2ea) among it, before the dying
+    /// block (@0x2d7ef), so a ship its own display destroys was displayed
+    /// disabled. Peeking takes nothing.
+    #[must_use]
+    pub fn displayed(&self, ship: ShipRef) -> Option<Displayed> {
+        self.displays
+            .iter()
+            .rev()
+            .find(|displayed| displayed.ship == ship)
+            .copied()
+    }
+
     /// The display step of the ship at `index` among `fighters`, by
     /// `rule`, the ships in `shown` displayed before it this pass: a
     /// destroyed ship's slot is inactive, and nothing is done (the

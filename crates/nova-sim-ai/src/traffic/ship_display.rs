@@ -83,14 +83,20 @@
 //! up, its timer `-Rand(10)`. The rolls are made as its first flight or
 //! display begins, before it is drawn, which is all that reads them.
 //!
-//! **The display** ([`display`]): each frame after the flight and the
-//! fight, [`ShipFrames::step`] on its class's [`FrameSpec`], its fold and
-//! whether it is disabled and its key ship aboard; its lights
+//! **The display** ([`display`], one NPC at a time by
+//! [`Traffic::display_npc`]): right after its own step in the ship loop,
+//! as `_HandleShipDisplay` runs for each slot right after its
+//! `_HandleShip` (@0x444ad), [`ShipFrames::step`] on its class's
+//! [`FrameSpec`], its fold, whether it is disabled and its key ship
+//! aboard. Its caller passes the disabled: the `_IsDisabled` that display
+//! kept (@0x2b61f), read by the set step and the lights before the dying
+//! block, so one its display destroys steps as disabled. Then its lights
 //! ([`ShipFrames::light`], random lights rolling on the traffic's chance;
 //! a new ship's blink timer is its berth's,
 //! [`berth_blink`](crate::traffic::berth_blink)); then its ion tint
 //! ([`ion_tint::display`]), on its class's capacity, its colour cleared
-//! once its charge is gone. No sound plays in any of it.
+//! once its charge is gone; then its blink timer kept as its berth's. No
+//! sound plays in any of it.
 
 use crate::catalog::GovtId;
 use crate::chance::Chance;
@@ -105,7 +111,7 @@ use crate::flight::{Controls, FlightRules, Turn};
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::Traffic;
-use crate::traffic::npc::{Mode, Npc};
+use crate::traffic::npc::{Mode, Npc, NpcId};
 use crate::traffic::spawn::{Entry, NewShip};
 
 /// The most an NPC banks either way (8.0 @0xdd044).
@@ -507,10 +513,13 @@ pub fn settle_spawn(
 
 /// `_HandleShipDisplay`'s frame for `npc` by `rules`, what its spawn owes
 /// made first: its glow of 0 when its government is `derelict`, and its
-/// rolls on `chance`, its anim rolls on the class `first` says; then its sets and its lights, random lights rolling
-/// on `chance` (see the module docs).
+/// rolls on `chance`, its anim rolls on the class `first` says; then its
+/// sets and its lights, read as `disabled` (the `_IsDisabled` its display
+/// kept, @0x2b61f), random lights rolling on `chance`; then its ion tint
+/// (see the module docs).
 pub fn display(
     npc: &mut Npc,
+    disabled: bool,
     derelict: bool,
     rules: DisplayRules,
     first: &FirstClass,
@@ -519,7 +528,7 @@ pub fn display(
     settle_spawn(npc, derelict, first, chance);
     let spec = npc.hull.frames;
     let moment = Moment {
-        disabled: npc.is_disabled(),
+        disabled,
         key_aboard: npc
             .armament
             .key_ship_aboard(npc.hull.key_carried, &npc.rounds),
@@ -556,23 +565,28 @@ impl Traffic {
         self.first_class
     }
 
-    /// Every NPC's display this frame ([`display`]) by `rules`, after the
-    /// flight and the fight: a ship of a government `derelict` says is
-    /// derelict glowing 0 from its spawn, its spawn's rolls and its random
-    /// lights rolled on `chance`; then each blink timer kept as its
-    /// berth's ([`Traffic::keep_berth_blink`]).
-    pub fn display_ships(
+    /// NPC `id`'s display ([`display`]) by `rules`, read as `disabled`,
+    /// right after its own step in the ship loop (`_HandleShipDisplay`
+    /// @0x444ad): a ship of a government `derelict` says is derelict
+    /// glowing 0 from its spawn, its spawn's rolls and its random lights
+    /// rolled on `chance`; then its blink timer kept as its berth's
+    /// ([`Traffic::keep_berth_blink_of`]). No other NPC is touched; none
+    /// for an NPC not in the traffic.
+    pub fn display_npc(
         &mut self,
+        id: NpcId,
+        disabled: bool,
         derelict: impl Fn(Option<GovtId>) -> bool,
         rules: DisplayRules,
         chance: &mut (impl Chance + ?Sized),
     ) {
         let first = self.first_class;
-        for npc in &mut self.npcs {
-            let derelict = derelict(npc.govt);
-            display(npc, derelict, rules, &first, &mut *chance);
-        }
-        self.keep_berth_blink();
+        let Some(npc) = self.npcs.iter_mut().find(|npc| npc.id == id) else {
+            return;
+        };
+        let derelict = derelict(npc.govt);
+        display(npc, disabled, derelict, rules, &first, chance);
+        self.keep_berth_blink_of(id);
     }
 }
 
@@ -930,6 +944,7 @@ mod tests {
             ship.display = spawned;
             display(
                 &mut ship,
+                false,
                 derelict,
                 DisplayRules::ENGINE,
                 &FirstClass::default(),
@@ -939,6 +954,7 @@ mod tests {
             ship.display.glow = 9;
             display(
                 &mut ship,
+                false,
                 derelict,
                 DisplayRules::ENGINE,
                 &FirstClass::default(),
@@ -971,6 +987,7 @@ mod tests {
         display(
             &mut ship,
             false,
+            false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
             &mut draws,
@@ -982,6 +999,7 @@ mod tests {
         assert_eq!(ship.display.rolls, Rolls::default());
         display(
             &mut ship,
+            false,
             false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
@@ -1145,44 +1163,53 @@ mod tests {
         traffic.npcs = vec![ship];
         traffic.set_spawn_anim_rolls_first_class(RuleSource::Engine);
         let mut draws = Draws::of(&[2]);
-        traffic.display_ships(|_| false, DisplayRules::ENGINE, &mut draws);
+        let id = traffic.npcs[0].id;
+        traffic.display_npc(id, false, |_| false, DisplayRules::ENGINE, &mut draws);
         assert_eq!(draws.asked, [3]);
         assert_eq!(traffic.npcs()[0].display.drawn.set, 2);
     }
 
     #[test]
-    fn the_display_reads_its_condition_and_key_ship() {
+    fn the_display_reads_the_disabled_it_is_given_and_its_key_ship() {
         let mut ship = folding(KEY_CARRIED, 2);
         ship.hull.key_carried = Some(ShipId(140));
         display(
             &mut ship,
+            false,
             false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
         assert_eq!(ship.display.drawn.set, 0, "no bay aboard");
+        // The set step reads the `_IsDisabled` its display kept (@0x2ba56
+        // reads -0x152, from @0x2b61f), not the condition as it is now.
         let mut still = folding(ANIMATED | 0x0010, 3);
-        still.condition = Condition::Disabled;
         display(
             &mut still,
+            true,
             false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
-        assert_eq!(still.display.frames.anim_timer, 0.0, "disabled, still");
-        let mut guard = crate::traffic::fixture::breaking_up_guard(folding(ANIMATED | 0x0010, 3));
+        assert_eq!(
+            still.display.frames.anim_timer, 0.0,
+            "displayed disabled, still"
+        );
+        let mut moving = folding(ANIMATED | 0x0010, 3);
+        moving.condition = Condition::Disabled;
         display(
-            &mut guard,
+            &mut moving,
+            false,
             false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
             &mut Draws::of(&[]),
         );
         assert_ne!(
-            guard.display.frames.anim_timer, 0.0,
-            "a defence ship breaking up is not disabled (@0x2d6f)"
+            moving.display.frames.anim_timer, 0.0,
+            "displayed not disabled"
         );
     }
 

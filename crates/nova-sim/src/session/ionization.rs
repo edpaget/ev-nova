@@ -83,7 +83,7 @@ impl PlayerShip {
     /// The ion charge at which the player is fully ionized: its class's
     /// `IonizeMax` and its Ion Absorbers' (see the module docs).
     #[must_use]
-    fn ion_capacity(&self) -> f32 {
+    pub(super) fn ion_capacity(&self) -> f32 {
         self.fit.stats.ion.capacity(Flyer::Player)
     }
 
@@ -698,6 +698,37 @@ mod tests {
             fired, hit_and_after,
             "fires on the hit's fight and the next"
         );
+    }
+
+    #[test]
+    fn a_hit_that_ionizes_the_player_tints_it_from_the_next_frame() {
+        use crate::session::tests::knocking;
+        // The player's display (@0x43e29), whose ion tint block
+        // (@0x2beb9-0x2bf94) reads the charge, comes before the collision
+        // passes and `_HandleShot` land the hit: the frame drawn after the
+        // hit shows no tint, the next one does.
+        let dosing = of_ionize_max_100();
+        let mut session = knocking(&dosing, (None, 100.0), (Some(ion_bolt()), 100.0));
+        let pass = |session: &mut Session| {
+            work_with(
+                session,
+                &catalog(),
+                Controls::default(),
+                &Passive,
+                crate::combat::Rules::default(),
+                &mut crate::chance::NeverFires,
+            );
+        };
+        for _ in 0..12 {
+            pass(&mut session);
+            if session.ion().charge > 0.0 {
+                assert_eq!(session.player_ion_tint(), None, "displayed before the hit");
+                pass(&mut session);
+                assert!(session.player_ion_tint().is_some(), "the next display's");
+                return;
+            }
+        }
+        panic!("never dosed");
     }
 
     #[test]

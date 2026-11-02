@@ -12,7 +12,9 @@
 //! [`ship_lights`](crate::combat::ship_lights)).
 //!
 //! [`BerthBlink`], a [`BerthKept`], keeps that timer for each berth,
-//! written after each display ([`Traffic::keep_berth_blink`]), and gives a
+//! written after each NPC's display ([`Traffic::keep_berth_blink_of`]), as
+//! each slot's `_HandleShipDisplay` in the ship loop (@0x444ad) moves its
+//! own +0xc8ec on, and gives a
 //! new ship its berth's by the reading of
 //! [`RuleKey::ReusedSlotBlinkTimer`](crate::RuleKey::ReusedSlotBlinkTimer):
 //! the last ship's by the engine, 0 by the other reading. An escort
@@ -28,17 +30,18 @@ use crate::rulebook::RuleSource;
 
 use super::Traffic;
 use super::berth_kept::BerthKept;
+use super::npc::NpcId;
 
 /// The blink timer each berth's last ship left, and the reading a new
 /// ship takes it by (see the module docs).
 pub type BerthBlink = BerthKept<f32>;
 
 impl Traffic {
-    /// Writes each NPC's blink timer as its berth's, after a display has
-    /// moved it on: the destroyed too, as they are still in the system
-    /// until taken out.
-    pub fn keep_berth_blink(&mut self) {
-        for npc in &self.npcs {
+    /// Writes NPC `id`'s blink timer as its berth's, after its display has
+    /// moved it on ([`Traffic::display_npc`]): one its display destroyed
+    /// too, as nothing clears +0xc8ec when its slot is freed (@0x2ded6).
+    pub fn keep_berth_blink_of(&mut self, id: NpcId) {
+        if let Some(npc) = self.npcs.iter().find(|npc| npc.id == id) {
             let timer = npc.display.frames.lights.timer;
             self.berth_blink.write(npc.berth, Some(timer));
         }
@@ -110,7 +113,7 @@ mod tests {
         let first = traffic.add_npc(npc(0, ShipStats::default()));
         traffic.add_npc(npc(0, ShipStats::default()));
         traffic.npcs_mut()[0].display.frames.lights.timer = 15.0;
-        traffic.keep_berth_blink();
+        traffic.keep_berth_blink_of(first);
         traffic.remove(first);
         traffic
     }
@@ -204,7 +207,14 @@ mod tests {
             spawning(&mut traffic);
             (0..30)
                 .position(|_| {
-                    traffic.display_ships(|_| false, DisplayRules::ENGINE, &mut Draws::of(&[]));
+                    let id = traffic.npcs()[1].id;
+                    traffic.display_npc(
+                        id,
+                        false,
+                        |_| false,
+                        DisplayRules::ENGINE,
+                        &mut Draws::of(&[]),
+                    );
                     traffic.npcs()[1].display.drawn.lights.is_some()
                 })
                 .expect("lit")
@@ -214,18 +224,36 @@ mod tests {
     }
 
     #[test]
-    fn each_display_writes_every_ships_timer_as_its_berths() {
+    fn each_npcs_display_writes_its_own_timer_as_its_berths_and_no_others() {
+        // Each NPC's `_HandleShipDisplay` (@0x444ad) moves its own +0xc8ec
+        // on, in its own slot, as the ship loop reaches it.
         let mut traffic = Traffic::new();
+        let first = traffic.add_npc(npc(0, ShipStats::default()));
         traffic.add_npc(npc(0, ShipStats::default()));
-        traffic.npcs_mut()[0].hull.frames = FrameSpec {
-            blink: SHUTTLE,
-            lights: true,
-            ..FrameSpec::NONE
-        };
-        traffic.display_ships(|_| false, DisplayRules::ENGINE, &mut Draws::of(&[]));
-        traffic.display_ships(|_| false, DisplayRules::ENGINE, &mut Draws::of(&[]));
+        for ship in traffic.npcs_mut() {
+            ship.hull.frames = FrameSpec {
+                blink: SHUTTLE,
+                lights: true,
+                ..FrameSpec::NONE
+            };
+        }
+        for _ in 0..2 {
+            traffic.display_npc(
+                first,
+                false,
+                |_| false,
+                DisplayRules::ENGINE,
+                &mut Draws::of(&[]),
+            );
+        }
         let timer = traffic.npcs()[0].display.frames.lights.timer;
         assert_eq!(timer, 1.0, "lit for B on its second tick");
         assert_eq!(traffic.berth_blink.left(1), Some(timer));
+        assert_eq!(
+            traffic.npcs()[1].display.frames.lights.timer,
+            0.0,
+            "not displayed"
+        );
+        assert_eq!(traffic.berth_blink.left(2), None, "its berth unwritten");
     }
 }

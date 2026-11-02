@@ -22,9 +22,10 @@
 //!
 //! **A ship's mask** ([`Session::ship_masks`]) is its sprite as the
 //! `sprite_sheets` module lays it out, at its place after this pass's
-//! move, the frame set its last display drew (a divergence
-//! rdm:phase/play-feel-8/phase-18-ship-frames-stepped-at-each-display
-//! files).
+//! move, on the frame set its display this pass stepped: the player's
+//! right after `_HandlePlayer` (@0x43e29), each NPC's in the ship loop
+//! (@0x444ad), both before `_HandleDeadlyStellars` (@0x4450e; see the
+//! `ship_display` module).
 //!
 //! Where either mask can't be read, the touch falls back to discs (see
 //! `nova_sim::combat::stellar_hazards`). None of this plays a sound.
@@ -315,48 +316,138 @@ mod tests {
         assert!(!lives(&mut down, &catalog), "heading 180's touches");
     }
 
-    #[test]
-    fn each_ship_touches_by_the_frame_its_own_display_set_draws() {
-        use crate::combat::hull::Condition;
-        // Two sets of 36: set 0's frames a dot in the hole, set 1's solid.
-        let frames: Vec<Vec<String>> = (0..72)
+    /// A sheet of `sets` sets of 36 frames, each frame [`SIDE`] square:
+    /// solid on the sets `solid` names, else a dot in a ring's hole.
+    fn sets_of(sets: u16, solid: impl Fn(u16) -> bool) -> RleSheet {
+        let frames: Vec<Vec<String>> = (0..sets * 36)
             .map(|frame| {
-                if frame < 36 {
-                    square(SIDE, |x, y| x == SIDE / 2 && y == SIDE / 2, false)
-                } else {
+                if solid(frame / 36) {
                     square(SIDE, |_, _| true, false)
+                } else {
+                    square(SIDE, |x, y| x == SIDE / 2 && y == SIDE / 2, false)
                 }
             })
             .collect();
-        let catalog = holding(vec![
-            (MaskSheet::Stellar(3), ringed()),
-            (MaskSheet::Ship(ShipId(128)), sheet_of(&frames)),
-            (NPC_SHIP, sheet_of(&frames)),
-        ]);
-        // A second ring centred on the player, clear of the NPC.
-        let on_the_player = LandingSite {
+        sheet_of(&frames)
+    }
+
+    /// Gives `catalog`'s class `id` a `shän` of `Flags` `flags`, `sets`
+    /// base sets and `AnimDelay` 0, 36 frames a turn.
+    fn shän(catalog: &mut FakePilotCatalog, id: i16, flags: u16, sets: i16) {
+        let hull = catalog
+            .hulls
+            .iter_mut()
+            .find(|hull| hull.id == ShipId(id))
+            .expect("the class's hull");
+        hull.display = Some(crate::catalog::ShipDisplay {
+            flags,
+            base_sets: sets,
+            anim_delay: 0,
+            ..crate::catalog::ShipDisplay::default()
+        });
+        hull.exits = Some(crate::catalog::ShipExits {
+            frames: 36,
+            ..crate::catalog::ShipExits::default()
+        });
+    }
+
+    /// A deadly stellar 141 of graphic type 3, [`SIDE`] square, centred on
+    /// the player at the centre and clear of the NPC.
+    fn on_the_player() -> LandingSite {
+        LandingSite {
             flags2: DEADLY_STELLAR,
             graphic: 3,
             frame_size: Some((SIDE, SIDE)),
             ..planet(141, 0.0, 0.0)
-        };
-        for (player_set, npc_set) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-            let mut session = among(
-                &catalog,
-                &[on_the_npc(), on_the_player],
-                180,
-                Rulebook::default(),
-            );
-            session.ship.ship_display.drawn.set = player_set;
-            session.space.traffic.npcs_mut()[0].display.drawn.set = npc_set;
-            let npc_lives = lives(&mut session, &catalog);
-            let player_lives = session.ship.condition != Condition::Destroyed;
-            assert_eq!(
-                (player_lives, npc_lives),
-                (player_set == 0, npc_set == 0),
-                "player on set {player_set}, NPC on set {npc_set}"
-            );
         }
+    }
+
+    /// The right or left turn key held.
+    fn turning(turn: crate::flight::Turn) -> Controls {
+        Controls {
+            turn,
+            ..Controls::default()
+        }
+    }
+
+    #[test]
+    fn the_player_touches_by_the_set_its_display_this_pass_steps() {
+        use crate::combat::hull::Condition;
+        use crate::flight::Turn;
+        // `_HandleShipDisplay` steps the player's set right after
+        // `_HandlePlayer` (@0x43e29), before `_HandleDeadlyStellars`
+        // (@0x4450e) tests its sprite (@0x39d97). A banking class: sets 0
+        // and 1 a dot in the hole, set 2 (banked right) solid.
+        let mut catalog = holding(vec![
+            (MaskSheet::Stellar(3), ringed()),
+            (MaskSheet::Ship(ShipId(128)), sets_of(3, |set| set == 2)),
+        ]);
+        shän(&mut catalog, 128, crate::combat::ship_frames::BANKS, 3);
+        let dies = |bank: f32, flag: i8, drawn: u16, way: Turn| {
+            let mut session = among(&catalog, &[on_the_player()], 180, Rulebook::default());
+            session.ship.ship_display.frames.bank = bank;
+            session.ship.ship_display.frames.flag = flag;
+            session.ship.ship_display.drawn.set = drawn;
+            work(&mut session, &catalog, turning(way));
+            session.ship.condition == Condition::Destroyed
+        };
+        assert!(dies(6.0, 0, 0, Turn::Right), "banked onto set 2 this pass");
+        assert!(
+            !dies(7.0, 1, 2, Turn::Left),
+            "levelled onto set 0 this pass"
+        );
+    }
+
+    #[test]
+    fn an_npc_touches_by_the_set_its_loop_display_this_pass_steps() {
+        // Each NPC's `_HandleShipDisplay` in the ship loop (@0x444ad) comes
+        // before `_HandleDeadlyStellars` (@0x4450e). A folding class of
+        // `AnimDelay` 0, which folds a set each display: set 0 a dot in
+        // the hole, set 1 solid.
+        let mut catalog = holding(vec![
+            (MaskSheet::Stellar(3), ringed()),
+            (NPC_SHIP, sets_of(2, |set| set == 1)),
+        ]);
+        shän(&mut catalog, 129, crate::combat::ship_frames::FOLDS, 2);
+        let lives_folding = |set: u16, dir: i8| {
+            let mut session = among(&catalog, &[on_the_npc()], 180, Rulebook::default());
+            let npc = &mut session.space.traffic.npcs_mut()[0];
+            npc.armament.fold_mut().set = set;
+            npc.armament.fold_mut().dir = dir;
+            npc.display.frames.bank = 0.0;
+            npc.display.drawn.set = set;
+            lives(&mut session, &catalog)
+        };
+        assert!(!lives_folding(0, 1), "folded onto set 1 this pass");
+        assert!(lives_folding(1, -1), "unfolded onto set 0 this pass");
+    }
+
+    #[test]
+    fn each_pass_of_double_time_touches_by_its_own_display() {
+        use crate::combat::hull::Condition;
+        // `tick_again` displays the player again (@0x43e29 on
+        // `_DoPlayGameWork(0)`), so its second pass's touch reads the set
+        // that pass stepped. An animated class of `AnimDelay` 0, stepping
+        // a set each display: set 0 a dot in the hole, set 1 solid.
+        let mut catalog = holding(vec![
+            (MaskSheet::Stellar(3), ringed()),
+            (MaskSheet::Ship(ShipId(128)), sets_of(2, |set| set == 1)),
+        ]);
+        shän(&mut catalog, 128, crate::combat::ship_frames::ANIMATED, 2);
+        let mut session = among(&catalog, &[on_the_player()], 180, Rulebook::default());
+        session.ship.ship_display.frames.anim_set = 1;
+        session.ship.ship_display.drawn.set = 1;
+        work(&mut session, &catalog, Controls::default());
+        assert_eq!(session.player_drawn().set, 0);
+        assert_ne!(session.ship.condition, Condition::Destroyed, "the dot");
+        session.tick_again(
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.player_drawn().set, 1);
+        assert_eq!(session.ship.condition, Condition::Destroyed, "solid");
     }
 
     #[test]

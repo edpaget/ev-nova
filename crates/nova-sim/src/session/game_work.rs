@@ -16,8 +16,13 @@
 //!    (@0x68ddd); then the player's display step: its death timer's tick
 //!    (@0x6d7e6), the klaxon (@0x6f1e4), the eject check (@0x6f22c) and
 //!    its display (@0x43e29), which starts its breakup's countdown or
-//!    explodes it ([`Session::player_display_step`]).
-//! 3. The collision passes (@0x43e70-0x44015), their hits settled and
+//!    explodes it, then steps its frame, sets, lights and ion tint (see
+//!    the `ship_display` module; [`Session::player_display_step`]).
+//! 3. The scoop, collision pass 1's `_ShipCollisionHandler` scoop branch
+//!    (@0x43e46-0x43e70, @0x3710c), on the player's frame its display
+//!    just stepped, then the boxes' step
+//!    ([`Session::scoop_after_display`]); then the collision passes
+//!    (@0x43e70-0x44015), their hits settled and
 //!    answered at once, each in turn, as `_DamageShip`'s reaction block
 //!    runs in them, a shot's hit that starts a ship dying queuing the
 //!    victory of the escort attacking it (`_HandleShipHit`
@@ -50,7 +55,8 @@
 //!    a dying NPC's escape pods and escape-ship roll (see the
 //!    `npc_escape` module), then its display (@0x444ad), which starts its
 //!    breakup's countdown or explodes it, its shockwave reaching the
-//!    later slots before they move; an escape fighter launched into a
+//!    later slots before they move, then steps its frame (see the
+//!    `ship_display` module); an escape fighter launched into a
 //!    later slot is reached in the same loop; then the session's work
 //!    after the fly half, the line work its docks and repairs queued
 //!    settled ([`Session::ship_loop`]); then the +0x47 pass, each nav
@@ -127,6 +133,8 @@
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).
 
+use std::collections::BTreeSet;
+
 use super::ship_loop::Motion;
 use super::{FightTerms, NpcBefore, Session, Space, TrafficMarks};
 use crate::ai::Behaviour;
@@ -137,6 +145,7 @@ use crate::combat::asteroid_walk::AsteroidField;
 use crate::combat::hull::Condition;
 use crate::combat::{Arena, Combat, Fighter, GamePass, Rules, Scenery, ShipRef};
 use crate::flight::Controls;
+use crate::geometry::Vec2;
 use crate::traffic::npc::NpcId;
 
 /// What a pass's fight reads of the session as it began: every NPC, and
@@ -146,6 +155,9 @@ pub(super) struct PassStart {
     npcs: Vec<NpcBefore>,
     /// The player as the pass began.
     player: PlayerHead,
+    /// Where the player stood before the pass's move, which the scoop
+    /// lays every mask out from (see the `contact_masks` module).
+    stood: Vec2,
 }
 
 /// What `_HandlePlayer` computes of the player at its top
@@ -178,6 +190,7 @@ impl PassStart {
         Self {
             npcs: session.space.npcs_before(),
             player: PlayerHead::of(session.ship.condition),
+            stood: session.ship.player.position,
         }
     }
 
@@ -227,7 +240,6 @@ impl Session {
             double_time: self.ship.warp.double_time,
         };
         self.before_move(frame, pass);
-        let stood = self.ship.player.position;
         self.ship.fate.player_exploded_this_tick = false;
         let start = PassStart::of(self);
         self.player_fires(pass, rules, chance);
@@ -235,7 +247,6 @@ impl Session {
         // The sheets the pass's contacts read, before the scoop, the first
         // (see the `sprite_sheets` module).
         self.load_sprite_masks(catalog);
-        self.scoop_after_turn(stood);
         // `_HandlePlayer`'s warning on a new jump (@0x6b3de-0x6b565).
         self.warn_fighters_left_behind(chance);
         if self.rescue_if_due(catalog, chance) {
@@ -291,8 +302,10 @@ impl Session {
     }
 
     /// The rest of a pass of the game's work after the player's move, from
-    /// the player's display step ([`Session::player_display_step`]) on, on
-    /// `pass` by `rules`, against the session as the pass `start`ed, the
+    /// the player's display step ([`Session::player_display_step`]) on,
+    /// then the scoop and the boxes' step from where the player stood as
+    /// the pass `start`ed ([`Session::scoop_after_display`]), on `pass` by
+    /// `rules`, against the session as the pass `start`ed, the
     /// NPCs answering its hits as `behaviour` says, drawing on `chance`:
     /// both passes run it, [`Session::game_work`] and
     /// [`Session::tick_again`], as the original runs one routine,
@@ -329,6 +342,9 @@ impl Session {
     ) {
         // The end of `_HandlePlayer` and its display (@0x43e29).
         self.player_display_step(behaviour, pass, rules, start.player_head(), chance);
+        // The scoop branch of collision pass 1 (@0x43e46-0x43e70) and the
+        // box step after it (see `Session::scoop_after_display`).
+        self.scoop_after_display(start.stood);
         // The collision passes (@0x43e70-0x44015).
         self.collision_passes(behaviour, pass, rules, chance);
         self.answer_strikes(behaviour);
@@ -381,7 +397,7 @@ impl Session {
             Some(None) => Motion::Populated,
             None => Motion::Again,
         };
-        self.ship_loop(behaviour, start, motion, pass, rules, chance);
+        let displayed = self.ship_loop(behaviour, start, motion, pass, rules, chance);
         // `_DoPlayGameWork`'s +0x47 pass (@0x443d4-0x4444f), after the
         // ship loop and before the guns read it (see the
         // `stellar_defence` module).
@@ -400,7 +416,7 @@ impl Session {
         // The stellar hazards and `_HandleBeams` (@0x44509-0x4453d), and
         // what the pass leaves.
         self.beams_phase(behaviour, sheets, pass, rules, chance);
-        self.fight_tail(rules, chance);
+        self.fight_tail(&displayed, rules, chance);
     }
 
     /// `_HandlePlayer`'s fight before its move, on `pass` by `rules`,
@@ -743,13 +759,22 @@ impl Session {
     /// (see the `deadly_stellars` module), then each NPC destroyed taken
     /// out; the
     /// fighters orphaned; a target gone let go; the stellars seen; the
-    /// ships laid out and their frames displayed (see the `ship_display`
-    /// module); and the heading each ship is drawn at noted, which its
-    /// next tick's shots leave from.
+    /// ships laid out; the frames of each NPC not in `displayed`, the ones
+    /// the ship loop displayed, stepped by
+    /// [`RuleKey::UndisplayedShips`](crate::RuleKey::UndisplayedShips)'
+    /// other reading alone, every other ship's frame having stepped at
+    /// its own display (see the `ship_display` module); and the heading
+    /// each ship is drawn at noted, which its next tick's shots leave
+    /// from.
     /// Each dying NPC's escape pods and escape-ship roll ran before it, in
     /// its own turn of the ship loop ([`Session::ship_loop`]; see the
     /// `npc_escape` module).
-    pub(super) fn fight_tail(&mut self, rules: Rules, chance: &mut dyn Chance) {
+    pub(super) fn fight_tail(
+        &mut self,
+        displayed: &BTreeSet<NpcId>,
+        rules: Rules,
+        chance: &mut dyn Chance,
+    ) {
         self.space.traffic.keep_berth_exits();
         let sorties = self.space.combat.take_sorties();
         self.launch_fighters(&sorties, chance);
@@ -772,7 +797,8 @@ impl Session {
         self.see_stellars();
         self.space.hold_derelicts(&self.statics);
         self.lay_out_ships();
-        self.display_ships(&mut *chance);
+        self.space
+            .display_undisplayed(displayed, &self.statics, &self.setup, &mut *chance);
         self.note_drawn();
     }
 }

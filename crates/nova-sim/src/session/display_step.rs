@@ -27,10 +27,20 @@
 //!    (`_HandleShipDisplay` @0x2d088-0x2d17e for slot 0, pod or not; see
 //!    the `player_cloak` module), then [`Combat::display_player`]: its
 //!    condition settles from its armour, its breakup's countdown starts,
-//!    or its final explosion goes off, with its shockwave.
+//!    or its final explosion goes off, with its shockwave. Then its frame:
+//!    its sets, lights and ion tint step
+//!    ([`PlayerShip::display_frames`](super::PlayerShip::display_frames),
+//!    see the `ship_display` module), reading the `_IsDisabled` that
+//!    display kept (@0x2b61f) from the fight's record of it, as the set
+//!    step (@0x2b7d8) and the lights (@0x2c2ea) come before the dying
+//!    block (@0x2d7ef) the fight ran with the settle. A player its display
+//!    destroyed so steps as disabled; one destroyed before it has no
+//!    record and steps nothing. The cloak fade touches nothing the frame
+//!    reads, so it stays first.
 //! 5. The player laid out in the layer its display read
 //!    ([`Session::lay_out_displayed`], `_HandleShipDisplay`'s layer block
-//!    @0x2bd24-0x2bdad), just before the collision passes walk it.
+//!    @0x2bd24-0x2bdad), just before the scoop and the collision passes
+//!    read its sprite, at this pass's set.
 //! 6. An explosion holds the game's end, and halts
 //!    [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)
 //!    after the klaxon (@0x2d86d-0x2d8ea).
@@ -44,7 +54,7 @@ use super::game_work::PlayerHead;
 use crate::ai::Behaviour;
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
-use crate::combat::{Combat, GamePass, Rules};
+use crate::combat::{Combat, GamePass, Rules, ShipRef};
 use crate::player_fate::{Ending, HOLD_TICKS};
 use crate::sound::SimSound;
 
@@ -90,6 +100,19 @@ impl Session {
                 Combat::display_player(combat, fighters, arena);
             },
         );
+        // The set step and the lights (@0x2b7d8, @0x2c2ea) come between
+        // the settle and the dying block, reading the `_IsDisabled` kept
+        // before both (@0x2b61f): the fight's record of it, so stepping
+        // after the dying block reads what the original's does.
+        if let Some(shown) = self.space.combat.displayed(ShipRef::Player) {
+            self.ship.display_frames(
+                &mut self.pilot,
+                &self.statics,
+                &self.setup,
+                shown.disabled,
+                &mut *chance,
+            );
+        }
         self.lay_out_displayed();
         if !was_destroyed && self.ship.condition == Condition::Destroyed {
             self.settle_player_explosion();

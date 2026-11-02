@@ -950,7 +950,8 @@ pub struct Traffic {
     /// fight, kept as it dies or leaves, and across systems.
     berth_exits: BerthExits,
     /// The blink timer (+0xc8ec) of the ship last at each berth, which a
-    /// new ship there takes ([`berth_blink`]): written after each display,
+    /// new ship there takes ([`berth_blink`]): written after each NPC's
+    /// display,
     /// kept as it dies or leaves, and across systems.
     berth_blink: BerthBlink,
     /// The first class, ID 128, a spawn of most origins rolls its

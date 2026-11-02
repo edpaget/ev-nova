@@ -251,6 +251,7 @@ mod tests {
         display(
             &mut ship,
             false,
+            false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
             &mut Draws::of(&[3]),
@@ -266,6 +267,7 @@ mod tests {
         display(
             &mut ship,
             false,
+            false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
             &mut Draws::of(&[]),
@@ -275,6 +277,7 @@ mod tests {
         ship.ion.charge = 0.0;
         display(
             &mut ship,
+            false,
             false,
             DisplayRules::ENGINE,
             &FirstClass::default(),
