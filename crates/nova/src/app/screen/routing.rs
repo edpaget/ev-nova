@@ -648,7 +648,9 @@ impl AppScreen {
                 Some(Point::new(at.x - offset.x, at.y))
             }
             Input::PointerLeft => None,
-            Input::Key { .. } | Input::Text(_) | Input::Scroll { .. } => return,
+            // Keys, text and the wheel leave it, and so does a held move
+            // outside the game: the `PointerLeft` before it set `None`.
+            _ => return,
         };
     }
 }

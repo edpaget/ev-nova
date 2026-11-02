@@ -247,6 +247,9 @@ mod tests {
         assert!(HeldKeys::waits(&key(Key::Enter, true)));
         assert!(HeldKeys::waits(&Input::Text('a')));
         assert!(!HeldKeys::waits(&Input::PointerLeft));
+        assert!(!HeldKeys::waits(&Input::PointerMovedOutside(Point::new(
+            -5.0, 0.0
+        ))));
         assert!(!HeldKeys::waits(&left(true, Point::new(0.0, 0.0))));
     }
 }

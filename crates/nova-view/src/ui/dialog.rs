@@ -838,7 +838,10 @@ impl Dialog {
                 }
                 None
             }
-            Input::Key { .. } | Input::Text(_) | Input::PointerLeft => None,
+            Input::Key { .. }
+            | Input::Text(_)
+            | Input::PointerLeft
+            | Input::PointerMovedOutside(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }

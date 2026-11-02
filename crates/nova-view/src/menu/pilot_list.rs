@@ -274,7 +274,11 @@ impl Screen for PilotList {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat),
-            Input::Key { .. } | Input::Text(_) | Input::PointerLeft | Input::Scroll { .. } => {}
+            Input::Key { .. }
+            | Input::Text(_)
+            | Input::PointerLeft
+            | Input::PointerMovedOutside(_)
+            | Input::Scroll { .. } => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
         ScreenAction::None

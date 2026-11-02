@@ -331,6 +331,7 @@ mod tests {
         let inputs = [
             Input::PointerMoved(at),
             Input::PointerLeft,
+            Input::PointerMovedOutside(at),
             Input::PointerButton {
                 button: MouseButton::Left,
                 pressed: true,
