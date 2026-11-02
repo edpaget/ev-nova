@@ -81,6 +81,7 @@ use crate::fade::{DEATH_FADE_FOR, ScreenFade, whole_view_around_frame};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key, MouseButton};
 use crate::system::camera::VIEW_SIZE;
+use crate::time::sixtieths;
 
 /// A movie file's frames: opened (`NewMovieFromDataRef`), clocked
 /// (`IsMovieDone`), shown (`MoviesTask`) and drawn. It decides nothing of how the original plays a movie.
@@ -251,23 +252,20 @@ struct Service {
     /// The display time since the movie started playing.
     elapsed: Duration,
     /// The 60 Hz tick of the last service, or none before the first.
-    last: Option<u64>,
+    last: Option<u128>,
 }
 
 impl Service {
-    /// The 60 Hz tick count: the time between services.
-    const TICK: Duration = Duration::from_nanos(1_000_000_000 / 60);
     /// How many ticks a service must pass, `TickCount > last + 6` (`jbe`
     /// @0x55dfd).
-    const GAP: u64 = 6;
+    const GAP: u128 = 6;
 
     /// Moves on by `dt`: whether the movie is serviced now, which notes
-    /// it. Time is counted in whole ticks rounded to the nearest, so seven
-    /// 60 Hz display frames make seven ticks.
+    /// it. Time is counted in whole Mac ticks ([`sixtieths`]), whose
+    /// truncated period counts seven 60 Hz display frames as seven ticks.
     fn passed(&mut self, dt: Duration) -> bool {
         self.elapsed = self.elapsed.saturating_add(dt);
-        let tick = Self::TICK.as_nanos();
-        let ticks = u64::try_from((self.elapsed.as_nanos() + tick / 2) / tick).unwrap_or(u64::MAX);
+        let ticks = sixtieths(self.elapsed);
         let due = self.last.is_none_or(|last| ticks > last + Self::GAP);
         if due {
             self.last = Some(ticks);
@@ -1600,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn display_frames_shorter_than_a_tick_count_ticks_rounded_to_the_nearest() {
+    fn display_frames_shorter_than_a_tick_count_whole_ticks_passed() {
         let player = MockMoviePlayer::playing((160, 120), 100);
         let mut stage = staged(&player, 0);
         stage.begin();
@@ -1609,8 +1607,8 @@ mod tests {
         }
         assert_eq!(
             player.presented(),
-            [1, 13, 25],
-            "0.6 ticks a frame: ticks 1, 8 and 15 once rounded"
+            [1, 12, 24],
+            "0.6 ticks a frame: ticks 0, 7 and 14, rounded down"
         );
     }
 
