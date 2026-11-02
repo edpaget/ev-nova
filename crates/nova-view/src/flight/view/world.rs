@@ -49,7 +49,7 @@ use crate::system::scene::{self, SystemScene};
 use crate::{Color, DrawList, Point};
 
 use super::stars;
-use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE};
+use super::{FlightView, HELP, HELP_AT, OVERLAY_SIZE, TITLE, TITLE_SIZE, point};
 
 impl<C, S: FlightSim> FlightView<C, S> {
     /// Draws the sprite world over the scene laid out
@@ -159,7 +159,11 @@ impl<C, S: FlightSim> FlightView<C, S> {
                 WorldPass::BeamsOverShips => {
                     weapons::draw_beams(list, &beams, &self.looks, false, lightning);
                 }
-                WorldPass::Particles => self.effects.draw_particles(list, camera),
+                WorldPass::Particles => {
+                    let at_rest = point(self.previous.position);
+                    let scrolled_from = self.scroll.drawn_from(camera.center(), at_rest);
+                    self.effects.draw_particles(list, camera, scrolled_from);
+                }
                 WorldPass::Layer(
                     layer @ (SpriteLayer::Disabled
                     | SpriteLayer::PointDefence

@@ -1412,6 +1412,9 @@ pub struct FlightView<C, S: FlightSim = SessionFlight<C>> {
     between_passes: Option<between_passes::BetweenPasses>,
     /// The player's ship's place a step before the frame's.
     previous: ShipPlace,
+    /// The player the particles are drawn by, and when they move; see the
+    /// `scroll_offset` module.
+    scroll: crate::flight::scroll_offset::ScrollOffset,
     /// How far the display is from `previous` to the session's ship.
     alpha: f32,
     /// Time since the view opened, which drives the stellars' animations

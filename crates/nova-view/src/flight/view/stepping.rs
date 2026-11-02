@@ -277,8 +277,13 @@ impl<C, S: FlightSim> FlightView<C, S> {
     /// Steps the view's effects, flashes, glows, shot looks and stars
     /// after `pass`, as the view stepped them after each pass: `first`
     /// the ship's position before the step on its first pass, the ship
-    /// drawn at `anchor`.
+    /// drawn at `anchor`. The post-animate a frame left moves the
+    /// particles first, and a first pass leaves one, as a frame stands
+    /// after it (see the `scroll_offset` module).
     pub(super) fn step_effects(&mut self, pass: &PassReport, first: Option<Vec2>, anchor: Anchor) {
+        if self.scroll.begin_pass() {
+            self.effects.move_particles();
+        }
         let dying = dying(&pass.ships, &self.sheet, &self.npc_sheets);
         let chance = &mut self.effects_chance;
         let scene = self.presentation.scene(pass.player_position);
@@ -303,6 +308,9 @@ impl<C, S: FlightSim> FlightView<C, S> {
             first,
             chance,
         );
+        if first.is_some() {
+            self.scroll.drawn(point(pass.player_position));
+        }
     }
 }
 

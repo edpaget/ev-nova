@@ -110,8 +110,10 @@
 //!   beam's hit on a ship, a shot's on an asteroid or a stellar, an
 //!   asteroid destroyed) is `_SpawnParticles`
 //!   (@0x44b70-0x44d4e) as a plain particle effect: each of its pieces
-//!   leaves where it went off, or `_Accel(Rand(360), Rand(spread × 100)
-//!   × 0.01)` off it with a spread, along `Rand(360)` at its speed,
+//!   leaves where it went off, truncated toward zero as every caller
+//!   passes it (e.g. @0x366ee-0x366f8), or `_Accel(Rand(360),
+//!   Rand(spread × 100) × 0.01)` off that with a spread, its start then
+//!   truncated again (@0x44d19-0x44d2a), along `Rand(360)` at its speed,
 //!   varied as `speed × (100 + Rand(2v + 1) − v) / 100` for a variation
 //!   `v` of 1-99, and lives `min + Rand(max − min + 1)` ticks, or `min`
 //!   when `min` is at or above `max`; it takes on no source's velocity,
@@ -124,6 +126,19 @@
 //!   (+0x24, @0xc50de), is only ever tested against 0x20 by the drawing
 //!   (@0xc5a61, @0xc5b2b), and both its paths draw the same: it changes
 //!   nothing, so a burst carries none.
+//! - Every particle is kept as the original keeps it, in 1/256 of a pixel
+//!   ([`Fixed`]): it starts on a whole pixel, its
+//!   velocity is `trunc(v × 256)`, and it moves by integer addition
+//!   ([`Effects::move_particles`], `_MoveParticles` @0xc6145-0xc615d),
+//!   once a drawn frame (see [`scroll_offset`](super::scroll_offset)).
+//! - Each is plotted as `_DrawParticlesOffscreen` plots it: a pixel at
+//!   its whole pixel, floored, less the scroll offset the frame before
+//!   left, `trunc(player - centre)` (@0xc5a29-0xc5a3b;
+//!   [`Camera::particle_pixel`]). None with a tick of life or less is
+//!   drawn, and none on the play area's first column or row
+//!   ([`Effects::draw_particles`]). The flight view holds the offset
+//!   ([`ScrollOffset`](super::scroll_offset::ScrollOffset)), whose docs
+//!   say how it reads between steps.
 //!
 //! - A stellar's gun ([`CombatEvent::StellarFired`]) sounds its weapon's
 //!   `snd ` from the stellar at its [`FireSound`](nova_sim::FireSound)'s
@@ -159,6 +174,7 @@ use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
 
 use super::catalog::{BoomId, Looks, WeaponId};
 use super::murk::SeenMurk;
+use super::particle::Fixed;
 use super::pods::{EscapePods, Pod, carry_point};
 use super::slot_pool::SlotPool;
 use super::weapons::LOOPED_SOUND;
@@ -309,10 +325,11 @@ pub struct Explosion {
 /// A particle: a piece of debris, or of a burst.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Particle {
-    /// Where it is, in world units.
-    pub at: Point,
-    /// How far it moves a tick.
-    pub velocity: Point,
+    /// Where it is, in the original's 1/256 of a world unit
+    /// ([`Fixed`]).
+    pub at: Fixed,
+    /// How far it moves a tick, in the same units.
+    pub velocity: Fixed,
     /// The ticks it has left.
     pub life: u32,
     /// Its colour.
@@ -483,7 +500,9 @@ impl Effects {
     /// module docs): a fight's burst, or a shot's trail
     /// ([`trails`](super::trails)).
     pub fn spray(&mut self, burst: &ParticleBurst, caps: bool, chance: &mut dyn Chance) {
-        let at = point(burst.at);
+        // Every caller of `_SpawnParticles` truncates the point toward
+        // zero first (`cvttss2si`, e.g. @0x366ee-0x366f8).
+        let at = Point::new(burst.at.x.trunc(), burst.at.y.trunc());
         let color = particle_color(burst.color);
         let (least, most) = burst.life;
         for _ in 0..burst.count {
@@ -509,8 +528,8 @@ impl Effects {
                 at
             };
             let piece = Particle {
-                at: start,
-                velocity: offset_along(Point::new(0.0, 0.0), heading, speed),
+                at: Fixed::spawned(start),
+                velocity: Fixed::velocity(offset_along(Point::new(0.0, 0.0), heading, speed)),
                 life,
                 color,
             };
@@ -548,8 +567,11 @@ impl Effects {
             let life = DEBRIS_LIFE_MIN + chance.below(DEBRIS_LIFE_MAX - DEBRIS_LIFE_MIN + 1);
             let (sin, cos) = heading.to_radians().sin_cos();
             let piece = Particle {
-                at,
-                velocity: Point::new(velocity.x + sin * speed, velocity.y - cos * speed),
+                at: Fixed::spawned(at),
+                velocity: Fixed::velocity(Point::new(
+                    velocity.x + sin * speed,
+                    velocity.y - cos * speed,
+                )),
                 life,
                 color: DEBRIS_COLOR,
             };
@@ -629,7 +651,26 @@ impl Effects {
         self.spawn(explosion.boom, at, 0.0, looks, caps);
     }
 
-    /// Advances the explosions and debris a step, and the looped sounds
+    /// Moves the particles a step, as `_MoveParticles` does
+    /// (@0xc6134-0xc615d): each takes a tick off its life and is gone at
+    /// none, unmoved; the rest move by their velocity, by integer
+    /// addition. `_gGravity` (@0xc6160) is always 0 (`_InitParticles(0x400,
+    /// 0)` @0x22170-0x2217f), so it is not kept. The original moves them
+    /// once a drawn frame, after the draw (`_PostAnimateHandler` @0x38f07),
+    /// not once a pass, so the flight view calls this apart from
+    /// [`Effects::step`] (see [`scroll_offset`](super::scroll_offset)).
+    pub fn move_particles(&mut self) {
+        self.particles.retain_mut(|piece| {
+            piece.life = piece.life.saturating_sub(1);
+            if piece.life == 0 {
+                return false;
+            }
+            piece.at = piece.at.moved_by(piece.velocity);
+            true
+        });
+    }
+
+    /// Advances the explosions a step, and the looped sounds
     /// playing, then sets off the explosions of the ships `dying`, but
     /// for those on their breakup's first tick, heard from the player in
     /// `scene`, under its caps or not.
@@ -651,11 +692,6 @@ impl Effects {
             }
             let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
             (explosion.frame as u32) < u32::from(frames)
-        });
-        self.particles.retain_mut(|piece| {
-            piece.at = Point::new(piece.at.x + piece.velocity.x, piece.at.y + piece.velocity.y);
-            piece.life = piece.life.saturating_sub(1);
-            piece.life > 0
         });
         // The original never reaches its puff branch (0x2dd01) on the
         // frame it sets the timer: both its paths jump past it to 0x2def0.
@@ -717,16 +753,31 @@ impl Effects {
         }
     }
 
-    /// Draws the particles, the bursts' and the debris, where `camera`
-    /// shows them: last of the world, after the beams over the ships
+    /// Draws the particles, the bursts' and the debris, by the scroll
+    /// offset taken from the player at `scrolled_from`, on `camera`'s
+    /// anchor: last of the world, after the beams over the ships
     /// ([`WorldPass::Particles`](nova_sim::sprite_layer::WorldPass::Particles)).
-    pub fn draw_particles(&self, list: &mut DrawList, camera: &Camera) {
-        for piece in &self.particles {
+    /// As `_DrawParticlesOffscreen` draws them at 16 bits, each is a pixel
+    /// at its whole pixel less the offset ([`Camera::particle_pixel`],
+    /// @0xc5a29-0xc5a3b), but none with a tick or less left
+    /// (@0xc5a20-0xc5a27), and none on the play area's first column or
+    /// first row: the routine clips strictly inside the play area's rect,
+    /// whose top left is (0, 0) (@0xc5a41-0xc5a5f; `_SetupSpriteWorld`
+    /// @0x21b54-0x21ba4). The right and bottom edges are the world's clip
+    /// to the play area.
+    pub fn draw_particles(&self, list: &mut DrawList, camera: &Camera, scrolled_from: Point) {
+        for piece in self.particles.iter().filter(|piece| piece.life > 1) {
+            let at = camera.particle_pixel(piece.at.whole(), scrolled_from);
+            // A pixel's centre: 0.5 is the first column's, or the first
+            // row's.
+            if at.x <= 0.5 || at.y <= 0.5 {
+                continue;
+            }
             let color = Color {
                 a: particle_alpha(piece.life),
                 ..piece.color
             };
-            list.dot(camera.world_to_screen(piece.at), DEBRIS_SIZE, color);
+            list.dot(at, DEBRIS_SIZE, color);
         }
     }
 
@@ -764,7 +815,10 @@ impl Effects {
     /// Carries the explosions within `wrap`'s reach
     /// (`_WrapPlayerPosition`'s loop of `_explodData` @0x68097-0x68119) and
     /// the escape pods. The particles stay, as no code in the routine reads
-    /// `_gParticleArray`: they leave the screen.
+    /// `_gParticleArray`. On the wrap's frame they are drawn in their place
+    /// by the offset from before it, which the routine doesn't touch either
+    /// (see [`scroll_offset`](super::scroll_offset)), and they leave the
+    /// screen on the next.
     pub fn carry(&mut self, wrap: &PlayerWrap) {
         for explosion in self.explosions.iter_mut() {
             carry_point(wrap, &mut explosion.at);
@@ -931,10 +985,17 @@ mod tests {
         effects.explosions().iter().map(|e| e.frame).collect()
     }
 
+    /// `n` single-time passes: the particles moved, then the rest stepped.
     fn steps(effects: &mut Effects, n: u32) {
         for _ in 0..n {
+            effects.move_particles();
             effects.step(&[], &scene(), &looks(), &mut Script::default());
         }
+    }
+
+    /// Within a 256th of a pixel, the original's unit.
+    fn near(got: f32, want: f32) -> bool {
+        (got - want).abs() <= 1.0 / 256.0
     }
 
     /// `looks` with the escape pods' sheet, `rlëD` 1095 of 36 rotations.
@@ -1189,7 +1250,7 @@ mod tests {
             &mut chance,
         );
         assert_eq!(effects.particles(), [], "never kept to be drawn");
-        effects.step(&[], &capped(), &looks(), &mut chance);
+        effects.move_particles();
         effects.apply(
             &burst(30, 0, (10, 10), 0.0),
             &capped(),
@@ -1212,7 +1273,7 @@ mod tests {
             &looks(),
             &mut chance,
         );
-        uncapped.step(&[], &scene(), &looks(), &mut chance);
+        uncapped.move_particles();
         uncapped.apply(
             &burst(30, 0, (10, 10), 0.0),
             &scene(),
@@ -2062,19 +2123,24 @@ mod tests {
         effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         assert_eq!(effects.explosions(), [], "no Explode2");
         let first = effects.particles()[0];
-        assert_eq!(first.at, at(200.0, 100.0));
-        assert!((first.velocity.x - 3.0).abs() < 1e-5, "{first:?}");
-        assert!((first.velocity.y + 2.0).abs() < 1e-5, "{first:?}");
+        assert_eq!(first.at, Fixed::spawned(at(200.0, 100.0)));
+        let velocity = first.velocity.point();
+        assert!(near(velocity.x, 3.0) && near(velocity.y, -2.0), "{first:?}");
         assert_eq!(first.life, 15);
         let second = effects.particles()[1];
-        assert!((second.velocity.x - 6.0).abs() < 1e-5, "{second:?}");
-        assert!((second.velocity.y + 1.0).abs() < 1e-5, "{second:?}");
+        let velocity = second.velocity.point();
+        assert!(
+            near(velocity.x, 6.0) && near(velocity.y, -1.0),
+            "{second:?}"
+        );
         assert_eq!(second.life, 45);
         let third = effects.particles()[2];
-        assert!((third.velocity.y + 3.0).abs() < 1e-5, "up at 2: {third:?}");
+        assert!(near(third.velocity.point().y, -3.0), "up at 2: {third:?}");
         steps(&mut effects, 1);
         let moved = effects.particles()[0];
-        assert!((moved.at.x - 203.0).abs() < 1e-4 && (moved.at.y - 98.0).abs() < 1e-4);
+        assert_eq!(moved.at, first.at.moved_by(first.velocity));
+        let place = moved.at.point();
+        assert!(near(place.x, 203.0) && near(place.y, 98.0), "{moved:?}");
         assert_eq!(moved.life, 14);
         steps(&mut effects, 14);
         assert_eq!(effects.particles().len(), 1, "the first expired");
@@ -2092,7 +2158,7 @@ mod tests {
         let camera = Camera::centred_on(at(10.0, 20.0));
         let mut list = DrawList::new();
         effects.draw_explosions(&mut list, &camera, &looks(), CLEAR);
-        effects.draw_particles(&mut list, &camera);
+        effects.draw_particles(&mut list, &camera, camera.center());
         let commands: Vec<DrawCommand> = list.iter().cloned().collect();
         assert_eq!(
             commands[0],
@@ -2108,7 +2174,9 @@ mod tests {
         assert_eq!(
             commands[1],
             DrawCommand::Dot {
-                center: camera.world_to_screen(at(200.0, 100.0)),
+                // (200, 100) less trunc((10, 20) - (512, 384)), a pixel's
+                // centre.
+                center: at(200.0 + 502.0 + 0.5, 100.0 + 364.0 + 0.5),
                 size: DEBRIS_SIZE,
                 color: Color {
                     a: particle_alpha(15),
@@ -2267,7 +2335,7 @@ mod tests {
     fn draw_particles_draws_the_particles_alone() {
         let effects = exploded_and_debris();
         let mut list = DrawList::new();
-        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER), PLAYER);
         assert_eq!(list.iter().count(), 16);
         assert!(
             list.iter()
@@ -2288,7 +2356,7 @@ mod tests {
         effects.apply(&burst(1, 0, (40, 40), 0.0), &scene(), &looks(), &mut chance);
         let alphas = |effects: &Effects| {
             let mut list = DrawList::new();
-            effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+            effects.draw_particles(&mut list, &Camera::centred_on(PLAYER), PLAYER);
             list.iter()
                 .filter_map(|command| match *command {
                     DrawCommand::Dot { color, .. } => Some(color.a),
@@ -2299,8 +2367,11 @@ mod tests {
         assert_eq!(alphas(&effects), [255], "40 ticks left");
         steps(&mut effects, 24);
         assert_eq!(alphas(&effects), [128], "16 left");
-        steps(&mut effects, 15);
-        assert_eq!(alphas(&effects), [8], "1 left");
+        steps(&mut effects, 14);
+        assert_eq!(alphas(&effects), [16], "2 left");
+        steps(&mut effects, 1);
+        assert_eq!(alphas(&effects), [] as [u8; 0], "1 left: not drawn");
+        assert_eq!(effects.particles()[0].life, 1, "but still kept");
     }
 
     /// A burst of `count` at (10, 20), 2 pixels a tick varied by
@@ -2333,11 +2404,11 @@ mod tests {
         assert_eq!(chance.asked, [360, 41, 8, 360, 41, 8]);
         let pieces = effects.particles();
         assert_eq!(pieces.len(), 2);
-        assert_eq!(pieces[0].at, at(10.0, 20.0));
-        assert!((pieces[0].velocity.y + 1.6).abs() < 1e-5, "{:?}", pieces[0]);
-        assert!(pieces[0].velocity.x.abs() < 1e-5, "{:?}", pieces[0]);
+        assert_eq!(pieces[0].at, Fixed::spawned(at(10.0, 20.0)));
+        // Up at 1.6: trunc(-1.6 x 256) = -409.
+        assert_eq!(pieces[0].velocity, Fixed { x: 0, y: -409 });
         assert_eq!((pieces[0].life, pieces[0].color), (30, ORANGE));
-        assert!((pieces[1].velocity.x - 2.4).abs() < 1e-5, "{:?}", pieces[1]);
+        assert!(near(pieces[1].velocity.point().x, 2.4), "{:?}", pieces[1]);
         assert_eq!(pieces[1].life, 37);
         assert_eq!(effects.explosions(), []);
         assert_eq!(effects.take_sounds(), []);
@@ -2357,7 +2428,7 @@ mod tests {
             assert_eq!(chance.asked, [360], "{variation}");
             let piece = effects.particles()[0];
             assert!(
-                (piece.velocity.x - 2.0).abs() < 1e-5,
+                near(piece.velocity.point().x, 2.0),
                 "{variation}: {piece:?}"
             );
             assert_eq!(piece.life, 5);
@@ -2382,9 +2453,162 @@ mod tests {
             &mut chance,
         );
         assert_eq!(chance.asked, [360, 41, 8, 360, 1000]);
+        // 10 + 9.99 = 19.99, its start truncated to a whole pixel.
+        assert_eq!(effects.particles()[0].at.whole(), (19, 20));
+    }
+
+    #[test]
+    fn a_bursts_point_is_truncated_toward_zero_before_its_pieces_leave_it() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[0]);
+        let event = CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(10.75, -3.25),
+            ..fractional_burst(0.0)
+        });
+        effects.apply(&event, &scene(), &looks(), &mut chance);
+        assert_eq!(effects.particles()[0].at, Fixed::spawned(at(10.0, -3.0)));
+        assert_eq!(effects.particles()[0].at.whole(), (10, -3));
+    }
+
+    /// One piece of [`burst`]'s, its speed and life fixed, spread over
+    /// `spread`.
+    fn fractional_burst(spread: f32) -> ParticleBurst {
+        ParticleBurst {
+            at: Vec2::new(10.75, 20.5),
+            speed: 2.0,
+            variation: 0,
+            life: (30, 30),
+            color: 0x00FF_8000,
+            count: 1,
+            spread,
+        }
+    }
+
+    #[test]
+    fn a_spread_burst_truncates_its_point_then_each_pieces_start() {
+        let mut effects = Effects::default();
+        // East, then 9.99 east of the point.
+        let mut chance = Script::of(&[0, 90, 999]);
+        let event = CombatEvent::Particles(fractional_burst(10.0));
+        effects.apply(&event, &scene(), &looks(), &mut chance);
+        assert_eq!(chance.asked, [360, 360, 1000]);
+        // trunc(10.75) + 9.99 = 19.99, then 19: unless the point were
+        // truncated first it would be 20.74, and 20.
+        assert_eq!(effects.particles()[0].at.whole(), (19, 20));
+    }
+
+    #[test]
+    fn debris_starts_on_the_ships_point_truncated_toward_zero() {
+        let mut effects = Effects::default();
+        let event = CombatEvent::Destroyed {
+            ship: NPC,
+            ship_type: nova_sim::ShipId(129),
+            at: Vec2::new(200.6, -100.4),
+            velocity: Vec2::new(3.0, -1.0),
+            explosion: None,
+            size: 0.0,
+        };
+        effects.apply(&event, &scene(), &looks(), &mut Script::default());
+        assert!(
+            effects
+                .particles()
+                .iter()
+                .all(|piece| piece.at == Fixed::spawned(at(200.0, -100.0))),
+            "{:?}",
+            effects.particles()
+        );
+    }
+
+    #[test]
+    fn a_piece_steps_by_its_velocity_in_256ths_from_its_whole_start() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[90]);
+        let event = CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(5.0, 5.0),
+            speed: 0.3,
+            ..fractional_burst(0.0)
+        });
+        effects.apply(&event, &scene(), &looks(), &mut chance);
+        // East at trunc(0.3 x 256) = 76 a step.
+        assert_eq!(effects.particles()[0].velocity.x, 76);
+        steps(&mut effects, 10);
         let piece = effects.particles()[0];
-        assert!((piece.at.x - 19.99).abs() < 1e-3, "{piece:?}");
-        assert!((piece.at.y - 20.0).abs() < 1e-3, "{piece:?}");
+        assert_eq!(piece.at.x, 5 * 256 + 760);
+        // 2040 / 256 = 7.97: pixel 7, where 0.3 a step in floats reaches 8.
+        assert_eq!(piece.at.whole().0, 7);
+    }
+
+    #[test]
+    fn stepping_the_effects_leaves_the_particles_to_their_move() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[90]);
+        effects.apply(&burst(1, 0, (5, 5), 0.0), &scene(), &looks(), &mut chance);
+        let sprayed = effects.particles()[0];
+        effects.step(&[], &scene(), &looks(), &mut Script::default());
+        assert_eq!(effects.particles(), [sprayed], "not moved by a step");
+        effects.move_particles();
+        assert_eq!(
+            effects.particles()[0].at,
+            sprayed.at.moved_by(sprayed.velocity)
+        );
+        assert_eq!(effects.particles()[0].life, 4);
+    }
+
+    /// The dots drawn of `effects`, by `camera` and the offset from its
+    /// center.
+    fn dots(effects: &Effects, camera: &Camera) -> Vec<Point> {
+        let mut list = DrawList::new();
+        effects.draw_particles(&mut list, camera, camera.center());
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot { center, .. } => Some(center),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_particle_is_drawn_at_its_floor_less_the_offset() {
+        let mut effects = Effects::default();
+        let mut chance = Script::of(&[180]);
+        let event = CombatEvent::Particles(ParticleBurst {
+            at: Vec2::new(-3.0, 4.0),
+            speed: 0.25,
+            ..fractional_burst(0.0)
+        });
+        effects.apply(&event, &scene(), &looks(), &mut chance);
+        steps(&mut effects, 1);
+        // Down a quarter: y 4.25, x -3 less a 256th's float error at most.
+        let camera = Camera::centred_on(at(0.5, -0.5));
+        let piece = effects.particles()[0];
+        let (x, y) = piece.at.whole();
+        assert_eq!(y, 4);
+        // trunc(0.5 - 512) = -511, trunc(-0.5 - 384) = -384.
+        assert_eq!(
+            dots(&effects, &camera),
+            [at(x as f32 + 511.0 + 0.5, 4.0 + 384.0 + 0.5)]
+        );
+    }
+
+    #[test]
+    fn a_particle_on_the_play_areas_first_column_or_row_is_not_drawn() {
+        // The anchor is (512, 384): from the camera at (512, 384), world
+        // pixel n is drawn on screen pixel n.
+        let camera = Camera::centred_on(at(512.0, 384.0));
+        let drawn = |x: f32, y: f32| {
+            let mut effects = Effects::default();
+            let event = CombatEvent::Particles(ParticleBurst {
+                at: Vec2::new(x, y),
+                speed: 0.0,
+                ..fractional_burst(0.0)
+            });
+            effects.apply(&event, &scene(), &looks(), &mut Script::default());
+            dots(&effects, &camera)
+        };
+        assert_eq!(drawn(1.0, 1.0), [at(1.5, 1.5)]);
+        assert_eq!(drawn(0.0, 5.0), [], "the first column");
+        assert_eq!(drawn(5.0, 0.0), [], "the first row");
+        assert_eq!(drawn(-1.0, 5.0), [], "left of it");
     }
 
     #[test]
@@ -2394,8 +2618,8 @@ mod tests {
         effects.apply(&burst(1, 0, (2, 2), 0.0), &scene(), &looks(), &mut chance);
         steps(&mut effects, 1);
         let moved = effects.particles()[0];
-        assert!((moved.at.x - 12.0).abs() < 1e-4, "{moved:?}");
-        assert!((moved.at.y - 20.0).abs() < 1e-4, "{moved:?}");
+        let place = moved.at.point();
+        assert!(near(place.x, 12.0) && near(place.y, 20.0), "{moved:?}");
         assert_eq!(moved.life, 1);
         steps(&mut effects, 1);
         assert_eq!(effects.particles(), []);
@@ -2417,7 +2641,7 @@ mod tests {
             &mut Script::default(),
         );
         let mut list = DrawList::new();
-        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER));
+        effects.draw_particles(&mut list, &Camera::centred_on(PLAYER), PLAYER);
         let colours: Vec<Color> = list
             .iter()
             .filter_map(|command| match command {

@@ -116,6 +116,7 @@ mod murk_sprites;
 mod nav;
 mod outputs;
 mod painted_ships;
+mod particle_pixels;
 mod port_screen_map;
 mod rescue;
 mod ship_drawing;

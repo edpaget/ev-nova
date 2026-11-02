@@ -318,6 +318,31 @@ impl Camera {
         Point::new(screen.x.trunc() + 0.5, screen.y.trunc() + 0.5)
     }
 
+    /// The centre of the pixel a particle on world pixel `whole` is plotted
+    /// on, by the scroll offset taken from the player at `scrolled_from`.
+    /// `_DrawParticlesOffscreen` plots `whole - offset` (@0xc5a29-0xc5a3b),
+    /// and `_PostAnimateHandler` takes the offset as `trunc(player -
+    /// centre)`, toward zero (@0x38f1a-0x38f53), so the pixel is `whole -
+    /// trunc(scrolled_from - anchor)` on each axis. The anchor stands for
+    /// `_screenCenter`, and [`WORLD_SCALE`] is 1, so the rule is in the
+    /// original's pixels. It adds 0.5 on each axis because a dot of size 1
+    /// is a square centred on its point: a whole point would straddle four
+    /// pixels. The camera's own center is not read, because the caller
+    /// passes the player the offset was taken from.
+    #[must_use]
+    pub fn particle_pixel(&self, whole: (i64, i64), scrolled_from: Point) -> Point {
+        let anchor = self.anchor();
+        // A whole pixel and a screen offset are far within an `f32`'s
+        // whole numbers.
+        #[allow(clippy::cast_precision_loss)]
+        let plotted =
+            |whole: i64, from: f32, anchor: f32| whole as f32 - (from - anchor).trunc() + 0.5;
+        Point::new(
+            plotted(whole.0, scrolled_from.x, anchor.x),
+            plotted(whole.1, scrolled_from.y, anchor.y),
+        )
+    }
+
     /// The rect, in world coordinates, a sprite whose frame is `size` is
     /// drawn in when it stands at world point `at`: its top left the world
     /// point of [`Camera::sprite_top_left`], its sides `size`. A ship's
@@ -764,5 +789,60 @@ mod tests {
         assert_eq!(camera.pixel_centre(at(89.3, 204.6)), at(404.5, 387.5));
         // A point drawn left of the screen: -10.7 truncates to -10.
         assert_eq!(camera.pixel_centre(at(100.25 - 425.7, 200.75)).x, -9.5);
+    }
+
+    #[test]
+    fn a_particle_is_plotted_at_its_whole_pixel_less_the_offset_truncated() {
+        // The anchor is (415, 384); the offset trunc(100.25 - 415) = -314
+        // and trunc(200.75 - 384) = -183, toward zero.
+        let camera = on_fraction();
+        let from = at(100.25, 200.75);
+        assert_eq!(
+            camera.particle_pixel((110, 195), from),
+            at(110.0 + 314.0 + 0.5, 195.0 + 183.0 + 0.5)
+        );
+        // Below zero the whole pixel is the caller's floor: -1 for a
+        // quarter below, plotted a pixel left of 0's.
+        assert_eq!(
+            camera.particle_pixel((-1, 0), from),
+            at(-1.0 + 314.0 + 0.5, 183.5)
+        );
+    }
+
+    #[test]
+    fn a_particles_offset_truncates_toward_zero_on_each_side_of_the_anchor() {
+        let camera = on_fraction();
+        // 415.75 - 415 = 0.75 truncates to 0; 383.25 - 384 = -0.75 to 0.
+        assert_eq!(
+            camera.particle_pixel((420, 380), at(415.75, 383.25)),
+            at(420.5, 380.5)
+        );
+        // 417.5 - 415 = 2.5 to 2; 380.5 - 384 = -3.5 to -3.
+        assert_eq!(
+            camera.particle_pixel((420, 380), at(417.5, 380.5)),
+            at(418.5, 383.5)
+        );
+        // It reads the player passed, not the camera's own center.
+        assert_eq!(camera.center(), at(100.25, 200.75));
+    }
+
+    #[test]
+    fn a_particle_is_plotted_by_the_anchor_flight_draws_from() {
+        let view = (1365.0, 768.0);
+        let camera = Camera::centred_on_in(at(0.0, 0.0), view)
+            .with_anchor(Anchor::in_flight(RuleSource::Engine));
+        // The widened play area's centre: (trunc((1365 - 194) / 2), 384)
+        // = (585, 384), so trunc(10.5 - 585) = -574.
+        assert_eq!(
+            camera.particle_pixel((10, 0), at(10.5, 0.0)),
+            at(10.0 + 574.0 + 0.5, 384.5)
+        );
+        let centred = Camera::centred_on_in(at(0.0, 0.0), view)
+            .with_anchor(Anchor::in_flight(RuleSource::Bible));
+        // The view's centre: (682, 384).
+        assert_eq!(
+            centred.particle_pixel((10, 0), at(10.5, 0.0)),
+            at(10.0 + 671.0 + 0.5, 384.5)
+        );
     }
 }

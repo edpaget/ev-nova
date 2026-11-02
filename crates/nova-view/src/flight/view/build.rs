@@ -648,6 +648,7 @@ impl<C, S: FlightSim> FlightView<C, S> {
             glow_rolls: HashedRolls::new(1),
             npc_sheets: BTreeMap::new(),
             npc_previous: Vec::new(),
+            scroll: crate::flight::scroll_offset::ScrollOffset::default(),
             unread_looks: opening.unread_looks,
             looks: opening.looks,
             cards: BTreeMap::new(),

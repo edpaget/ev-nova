@@ -46,13 +46,13 @@ fn stepping_by(catalog: FakeCatalog, rules: &Rulebook) -> Faked {
 }
 
 /// [`stepping_by`] Nova's rules.
-fn stepping(catalog: FakeCatalog) -> Faked {
+pub(super) fn stepping(catalog: FakeCatalog) -> Faked {
     stepping_by(catalog, &Rulebook::default())
 }
 
 /// Runs a frame of `view` whose flight reports `report`, asked for as
 /// many steps as it holds: whether the rescue ended it.
-fn frame(view: &mut Faked, report: StepReport) -> bool {
+pub(super) fn frame(view: &mut Faked, report: StepReport) -> bool {
     let steps = u32::try_from(report.steps.len()).expect("a frame's steps");
     view.sim.queue_report(report);
     view.step_frame(steps, anchor())
@@ -889,7 +889,8 @@ fn a_shot_in_flight_trails_each_pass_and_smokes_on_a_smoke_frame() {
     assert_eq!(puffs(&view), 2, "a puff each smoke-frame pass");
     let newest = view.effects.particles()[8];
     let start = crate::flight::trails::trail_start(Vec2::new(0.0, -50.0), 0.0, 0);
-    assert_eq!(newest.at, Point::new(start.x, start.y));
+    let start = crate::flight::particle::Fixed::spawned(Point::new(start.x, start.y));
+    assert_eq!(newest.at, start, "unmoved, on its whole pixel");
 }
 
 #[test]
@@ -1078,20 +1079,20 @@ fn a_star_of_factor_0_stays_fixed_in_world_units() {
 // it (see the `stepping` module).
 
 /// Where the ship stood as it wrapped.
-const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 40.0);
+pub(super) const STOOD: Vec2 = Vec2::new(WRAP_EDGE + 10.0, 40.0);
 
 /// What the wrap added.
-const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
+pub(super) const SHIFT: Vec2 = Vec2::new(-WRAP_SHIFT, 0.0);
 
 /// The ship's move a pass.
-const MOVE: Vec2 = Vec2::new(8.0, -4.0);
+pub(super) const MOVE: Vec2 = Vec2::new(8.0, -4.0);
 
-fn wrap() -> PlayerWrap {
+pub(super) fn wrap() -> PlayerWrap {
     PlayerWrap::of(STOOD).expect("past the edge")
 }
 
 /// A pass that ended with the ship at `at`, `wrap` run at its head.
-fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
+pub(super) fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
     PassReport {
         ships: vec![the_player(at)],
         player_position: at,
@@ -1101,7 +1102,7 @@ fn wrapping(at: Vec2, wrap: Option<PlayerWrap>) -> PassReport {
 }
 
 /// The ship's place before a step, at `at`.
-fn place(at: Vec2) -> ShipPlace {
+pub(super) fn place(at: Vec2) -> ShipPlace {
     ShipPlace {
         position: at,
         ..ShipPlace::default()
@@ -1360,7 +1361,7 @@ fn places(view: &Faked) -> (Vec<Point>, Vec<Point>, Vec<Vec2>, Point) {
             .iter()
             .map(|puff| puff.at)
             .collect(),
-        view.effects.particles()[0].at,
+        view.effects.particles()[0].at.point(),
     )
 }
 
