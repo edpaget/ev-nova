@@ -404,6 +404,16 @@ mod tests {
             0,
             "below the slop rect: unchanged"
         );
+        assert_eq!(
+            bar.dragged_value(1, 4, press, Point::new(189.0 - 113.0, 64.0)),
+            1,
+            "left of the slop rect: unchanged"
+        );
+        assert_eq!(
+            bar.dragged_value(0, 4, press, Point::new(189.0 - 112.0, 64.0)),
+            2,
+            "its left edge is in"
+        );
     }
 
     #[test]
@@ -467,6 +477,13 @@ mod tests {
             max: Point::new(205.0, 93.0),
         };
         assert!(drawn(&paged).contains(&fill_command(below, HELD)));
+        let mut back = DrawList::new();
+        bar.draw(&mut back, 4, 4, Some(BarPart::PageUp), None);
+        let above = Bounds {
+            min: Point::new(189.0, 39.0),
+            max: Point::new(205.0, 77.0),
+        };
+        assert!(drawn(&back).contains(&fill_command(above, HELD)));
         let mut dragged = DrawList::new();
         let outline = bar.thumb(2, 4);
         bar.draw(&mut dragged, 0, 4, Some(BarPart::Thumb), Some(outline));

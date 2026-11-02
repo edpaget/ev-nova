@@ -3039,6 +3039,27 @@ mod tests {
     }
 
     #[test]
+    fn ticks_hold_the_computers_bar_arrow_and_a_cancel_loads_the_row_reached() {
+        let mut screen = screen_of(many_offers(20));
+        let down = Point::new(470.0, 450.0);
+        screen.input(&button(true, down));
+        screen.tick(mac_ticks(12));
+        assert_eq!(screen.rows().map(RowList::first), Some(2), "held");
+        screen.input(&button(false, down));
+        let mut dragged = screen_of(many_offers(3));
+        let _ = dragged.take_text_request();
+        dragged.input(&button(true, computer_row_at(0.0)));
+        dragged.input(&Input::PointerMoved(computer_row_at(1.0)));
+        dragged.cancel_pointer();
+        assert_eq!(
+            dragged.take_text_request(),
+            Some(MissionId(131)),
+            "as a release"
+        );
+        assert_eq!(item_text(&dragged, TEXT_ITEM), "Text 1.");
+    }
+
+    #[test]
     fn a_press_on_the_computers_list_tracks_to_its_release() {
         let mut screen = screen_of(many_offers(3));
         let _ = screen.take_text_request();
