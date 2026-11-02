@@ -1127,4 +1127,25 @@ mod tests {
         let settled = (f64::from(0.2_f32) * 0.95) as f32;
         assert_eq!(lost.speed, settled);
     }
+
+    #[test]
+    fn approaching_it_caps_at_its_step_and_closing_near_at_its_slot() {
+        // Sub 9 writes +0x34 = 0 (@0x878e4); sub 0xb within 100 half its
+        // slot's (@0x8765d-0x8767b).
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let cap = |start: ShipState| {
+            let mut ship = escort(start);
+            fly(
+                &mut ship,
+                Some(&leader),
+                Beside::default(),
+                &HANDLING,
+                FlightRules::default(),
+                Inertia::Inertial,
+            )
+            .cap
+        };
+        assert_eq!(cap(at(0.0, 2000.0, 0.0, 0.0, 0.0)), Cap::Step, "sub 9");
+        assert_eq!(cap(at(0.0, 90.0, 0.0, 0.0, 0.0)), Cap::Slot, "sub 0xb near");
+    }
 }

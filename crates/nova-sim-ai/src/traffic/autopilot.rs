@@ -3932,4 +3932,119 @@ mod tests {
         assert_eq!(fly(&mut carrierless, &[], Some(&carrier)), Outcome::Flying);
         assert_ne!(carrierless.state.heading, 180.0, "{:?}", carrierless.state);
     }
+
+    #[test]
+    fn the_swarm_and_the_rush_cap_at_their_slot_and_the_other_bodies_at_their_step() {
+        use crate::ai::fire::Manoeuvre;
+        use crate::ai::pursuit::Frame;
+        use crate::traffic::slot_word::Cap;
+        // Sub 0x12 keeps the head's +0x34 (@0x8533d), sub 0x11 writes 1.8 of
+        // it (@0x865e3); subs 7, 6, 5 and 0x10 write none.
+        let cap = |manoeuvre: Manoeuvre| {
+            let mut ship = fighter(Goal::Attack(FOE), 0.0);
+            ship.pursuit.frame = Some(Frame {
+                goal: ship.goal,
+                bodies: [
+                    Some(crate::ai::pursuit::Body {
+                        manoeuvre,
+                        heading: 0,
+                    }),
+                    None,
+                ],
+                speed_cap: None,
+            });
+            let target = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+            let weapons = crate::ai::fixture::records_of([&ship]);
+            let speeds = TopSpeeds::own_of(&ship);
+            let (word, _) = low_level(
+                &mut ship,
+                &[],
+                &BTreeMap::new(),
+                (Some(&target), false, Beside::default()),
+                speeds,
+                (FlightRules::default(), Readings::default(), &weapons),
+                &mut Draws::of(&[]),
+            );
+            word.cap()
+        };
+        assert_eq!(cap(Manoeuvre::Swarm), Cap::Slot);
+        assert_eq!(cap(Manoeuvre::Rush), Cap::Slot);
+        for step in [
+            Manoeuvre::Approach,
+            Manoeuvre::Dogfight,
+            Manoeuvre::Flee,
+            Manoeuvre::BreakOff,
+        ] {
+            assert_eq!(cap(step), Cap::Step, "{step:?}");
+        }
+    }
+
+    #[test]
+    fn an_inertialess_approach_wants_its_top_speed_toward_its_mark() {
+        // The port's earlier approach matches a velocity of its top speed
+        // toward the mark: at it far off it thrusts nothing, and at rest a
+        // little way off it thrusts toward it.
+        let handling = fast();
+        let top = handling.max_speed;
+        let far = at(0.0, 0.0, 0.0, -top, 0.0);
+        let (cruising, _) = low_level::approach(
+            &far,
+            &handling,
+            Vec2::new(0.0, -5000.0),
+            Inertia::Inertialess { speed: top },
+        );
+        assert!(!cruising.thrust && !cruising.reverse, "{cruising:?}");
+        let near = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let (starting, _) = low_level::approach(
+            &near,
+            &handling,
+            Vec2::new(0.0, -2.0),
+            Inertia::Inertialess { speed: 0.0 },
+        );
+        assert!(starting.thrust, "{starting:?}");
+    }
+
+    #[test]
+    fn the_approach_brake_thrusts_facing_back_above_half_a_ticks_thrust() {
+        // Moving down, facing up, its retro heading: it thrusts while it moves
+        // more than half its thrust a tick, strictly.
+        let handling = Handling {
+            accel: 1.0,
+            ..fast()
+        };
+        let brake = |speed: f32| {
+            let state = at(0.0, 0.0, 0.0, speed, 0.0);
+            low_level::approach_brake(&state, &handling, Inertia::Inertial)
+        };
+        assert!(brake(0.75).0.thrust, "0.75 past 0.5");
+        assert!(brake(3.0).0.thrust);
+        assert!(!brake(0.5).0.thrust, "strictly");
+        assert_eq!(brake(0.75).1, 0, "its retro heading");
+    }
+
+    #[test]
+    fn by_the_earlier_formation_an_escort_is_nudged_from_where_its_leaders_velocity_takes_it() {
+        // 6 right of its slot and moving with its leader at 3 a tick: the
+        // move takes it 9 off, past the slack, so it is nudged.
+        let leader = at(400.0, -200.0, 3.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        let mut ship = escort(FAST, at(slot.x + 6.0, slot.y, 0.0, 0.0, 0.0));
+        fly_earlier(&mut ship, Some(&leader));
+        let off = ship.state.position - slot;
+        assert!((off - Vec2::new(9.0 - 1.8, 0.0)).length() < 1e-4, "{off:?}");
+    }
+
+    #[test]
+    fn a_fighter_inside_a_carriers_window_far_from_the_centre_is_pulled_toward_it() {
+        // The window is measured from the carrier, wherever it is.
+        let carrier = at(1000.0, 1000.0, 0.0, 0.0, 0.0);
+        let mut ship = docking(FAST, at(930.0, 1001.5, 0.0, 0.0, 270.0));
+        fly(&mut ship, &[], Some(&carrier));
+        let pulled = Vec2::new(931.8, 1001.5);
+        assert!(
+            (ship.state.position - pulled).length() < 1e-3,
+            "{:?}",
+            ship.state
+        );
+    }
 }

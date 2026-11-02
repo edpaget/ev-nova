@@ -390,4 +390,82 @@ mod tests {
         let attacker = off_its_target(&mut traffic);
         assert_eq!(traffic.word_of(attacker), None);
     }
+
+    #[test]
+    fn a_follower_keeps_formation_at_its_slot_as_its_sub_0xd_found_or_by_its_leaders_stage() {
+        use crate::traffic::warp_out::WarpGoal;
+        let world_at = |stage: f32| {
+            let mut world = World::new(&[]);
+            world.warp.player.stage = stage;
+            world
+        };
+        let mut traffic = Traffic::with_interval(1);
+        let lead = traffic.add_npc_at(ship(0, TRADERS, AiType::WimpyTrader, 0.0, 0.0), 1);
+        let mut follower = ship(0, TRADERS, AiType::WimpyTrader, 50.0, 0.0);
+        follower.leader = Some(lead);
+        follower.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+        let follower = traffic.add_npc_at(follower, 2);
+        let keeps = |traffic: &Traffic, world: &World| {
+            let npc = of(traffic, follower);
+            traffic.keeps_formation_at_slot(npc, world)
+        };
+        assert!(keeps(&traffic, &world_at(1.0)), "the player's stage at 1");
+        assert!(!keeps(&traffic, &world_at(2.0)));
+        traffic.npcs_mut()[1].warp.goal = Some(WarpGoal::Follow(ShipRef::Npc(lead)));
+        traffic.npcs_mut()[0].warp.stage = 1.0;
+        assert!(keeps(&traffic, &world_at(5.0)), "its leader's stage at 1");
+        traffic.npcs_mut()[0].warp.stage = 2.0;
+        assert!(!keeps(&traffic, &world_at(5.0)));
+        // A leader that left at its slot this tick, by its record.
+        let mut left = traffic.npcs()[0].clone();
+        left.warp.stage = 1.0;
+        traffic.npcs.remove(0);
+        traffic.left_in_dispatch.push(left);
+        assert!(keeps(&traffic, &world_at(5.0)));
+        traffic.followed.insert(follower, false);
+        assert!(!keeps(&traffic, &world_at(5.0)), "as its sub 0xd found");
+        traffic.npcs_mut()[0].warp.goal = Some(WarpGoal::Own);
+        traffic.followed.clear();
+        assert!(!keeps(&traffic, &world_at(1.0)), "on its own jump");
+    }
+
+    #[test]
+    fn a_ship_whose_warp_the_warp_out_flies_leaves_the_heads_word() {
+        // Sub 4 under way writes no +0x68 of its own here: the head's own
+        // whole heading and no thrust stand, where its goal's brake would
+        // want its retro heading.
+        let mut traffic = Traffic::with_interval(1);
+        let mut runner = ship(0, TRADERS, AiType::WimpyTrader, 2000.0, 0.0);
+        runner.goal = Goal::JumpOut;
+        runner.begin_own_jump();
+        runner.state.heading = 90.4;
+        runner.state.velocity = crate::geometry::Vec2::new(1.0, 0.0);
+        let runner = traffic.add_npc_at(runner, 3);
+        let index = traffic.npcs().iter().position(|npc| npc.id == runner);
+        traffic.autopilot_in_dispatch(index.expect("there"), &World::new(&[]), &mut NeverFires);
+        let word = traffic.word_of(runner).expect("kept");
+        assert_eq!(word.wanted(), Some(90));
+        assert!(!word.thrusts());
+    }
+
+    #[test]
+    fn a_docking_ships_gone_victim_is_read_by_its_own_record() {
+        use crate::traffic::gone::Freed;
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let mut traffic = Traffic::with_interval(1);
+        let mut other = ship(0, TRADERS, AiType::WimpyTrader, -700.0, 0.0);
+        other.id = NpcId(40);
+        let mut victim = ship(0, TRADERS, AiType::WimpyTrader, 300.0, 0.0);
+        victim.id = NpcId(41);
+        traffic.left_the_system(other, Freed::InDispatch);
+        traffic.left_the_system(victim.clone(), Freed::InDispatch);
+        let mut pirate = ship(0, PIRATES, AiType::Warship, 0.0, 0.0);
+        pirate.docking = Some(Docking {
+            ship: ShipRef::Npc(victim.id),
+            sub: DockSub::Approach,
+        });
+        traffic.add_npc_at(pirate, 2);
+        let (read, ..) = traffic.reads_at_slot(0, &World::new(&[]));
+        assert_eq!(read, Some(victim.state));
+    }
 }

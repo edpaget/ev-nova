@@ -548,6 +548,10 @@ fn a_ship_with_no_low_level_since_its_spawn_thrusts_nothing_and_turns_toward_its
 fn by_the_other_reading_it_keeps_its_own_whole_heading() {
     let mut traffic = berth_4_wanting_90();
     traffic.set_reused_slot_heading(crate::rulebook::RuleSource::Bible);
+    assert_eq!(
+        traffic.reused_slot_heading(),
+        crate::rulebook::RuleSource::Bible
+    );
     let [first, second] = spawned_in_berth_4(&mut traffic);
     assert_eq!(first.velocity, Vec2::ZERO);
     assert_eq!((first.heading, second.heading), (10.0, 10.0));

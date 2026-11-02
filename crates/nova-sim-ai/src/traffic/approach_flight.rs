@@ -178,4 +178,16 @@ mod tests {
         assert!(!controls.thrust);
         assert_eq!(flown, HANDLING);
     }
+
+    #[test]
+    fn its_flight_caps_at_its_step_far_off_thrusting_and_at_its_slot_otherwise() {
+        // +0x34 = 0 beyond 500 as it thrusts (@0x857b3), a quarter of the
+        // slot's within (@0x8579e), the head's while it doesn't thrust.
+        let cap =
+            |x: f32, y: f32, heading: f32| flight(&at(x, y, heading), Vec2::ZERO, &HANDLING).cap;
+        let (x, y) = (0.0, 800.0);
+        assert_eq!(cap(x, y, bearing(x, y)), Cap::Step, "far, thrusting");
+        assert_eq!(cap(0.0, 300.0, bearing(0.0, 300.0)), Cap::Slot, "near");
+        assert_eq!(cap(x, y, bearing(x, y) + 90.0), Cap::Slot, "not thrusting");
+    }
 }

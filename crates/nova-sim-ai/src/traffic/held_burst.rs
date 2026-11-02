@@ -675,4 +675,24 @@ mod tests {
         assert_eq!(npc.owed_burst, None);
         assert_eq!(npc.mode, Mode::Coasting { ticks_left: 30 });
     }
+
+    #[test]
+    fn an_inertialess_burst_pulls_its_velocity_by_its_steps_adjust_accel() {
+        let mut npc = owing(Some(30.0));
+        let flown = handling(&npc);
+        let mut drifted = npc.clone();
+        let pulled = Handling {
+            accel: 0.01,
+            ..flown
+        };
+        crate::traffic::inertialess::drift(&mut drifted, &pulled);
+        step(
+            &mut npc,
+            &flown,
+            Controls::default(),
+            FlightRules::default(),
+            (INERTIALESS, Word::Keeps { thrust: 0.5 }, 0.01),
+        );
+        assert!(close(npc.state.velocity, drifted.state.velocity));
+    }
 }

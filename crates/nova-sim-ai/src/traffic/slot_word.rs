@@ -292,10 +292,7 @@ impl SlotWord {
     pub(crate) fn of(flight: Flight, handling: &Handling, inertia: Inertia) -> Self {
         Self {
             wanted: flight.wanted,
-            controls: Controls {
-                turn: Turn::None,
-                ..flight.controls
-            },
+            controls: flight.controls,
             flown: flight.flown.unwrap_or(*handling),
             cap: flight.cap,
             inertia,

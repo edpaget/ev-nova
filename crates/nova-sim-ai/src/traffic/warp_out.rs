@@ -2132,4 +2132,31 @@ mod tests {
         assert_eq!(ship.state.position, Vec2::new(2002.0, 0.0));
         assert_eq!(ship.trigger, crate::combat::armament::Trigger::default());
     }
+
+    #[test]
+    fn an_inertialess_jumping_ship_drifts_by_its_steps_adjust_accel() {
+        // `_AdjustInertialessShipVelocity`'s own `_ShipAccelRate` (@0x334e1).
+        let mut jumper = ship();
+        jumper.stats.inertialess_hull = true;
+        jumper.goal = crate::ai::Goal::JumpOut;
+        jumper.begin_own_jump();
+        jumper.speed = 2.0;
+        jumper.warp.aim = 90;
+        let mut drifted = jumper.clone();
+        let world = World::new(&[]);
+        let outcome = fly_jump(
+            &mut jumper,
+            &BTreeMap::new(),
+            &world,
+            (Some(false), false),
+            0.01,
+        );
+        assert_eq!(outcome, Some(Outcome::Flying));
+        let pulled = Handling {
+            accel: 0.01,
+            ..stats().handling
+        };
+        crate::traffic::inertialess::drift(&mut drifted, &pulled);
+        assert_eq!(jumper.state.velocity, drifted.state.velocity);
+    }
 }
