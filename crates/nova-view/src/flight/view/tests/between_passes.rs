@@ -251,6 +251,41 @@ fn a_line_said_between_the_frames_stands_over_the_held_one() {
     assert_eq!(view.message(), Some("Pressed"));
 }
 
+/// A view holding [`SimMessage::NoActiveMissions`] from a second pass,
+/// written over between the frames by `write`, then run through a frame
+/// that stopped: what its message line shows then.
+fn written_over_between_the_frames(write: impl FnOnce(&mut Faked)) -> Option<String> {
+    let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
+    let mut view = held_lines(None, held);
+    write(&mut view);
+    super::stepping::frame(&mut view, stopped());
+    view.message().map(str::to_owned)
+}
+
+#[test]
+fn a_cut_between_the_frames_cuts_the_held_line() {
+    let shown = written_over_between_the_frames(|view| view.cut_message(0));
+    assert_eq!(shown, None, "the frame-rate key's cut to 0 acts on it");
+}
+
+#[test]
+fn a_clear_by_name_between_the_frames_clears_the_held_line() {
+    let shown = written_over_between_the_frames(|view| view.clear_message(NO_ACTIVE_MISSIONS));
+    assert_eq!(shown, None, "the line it clears by name is the held one");
+}
+
+#[test]
+fn return_between_the_frames_clears_the_held_line() {
+    let shown = written_over_between_the_frames(Faked::acknowledge_message);
+    assert_eq!(shown, None);
+}
+
+#[test]
+fn a_blank_between_the_frames_empties_the_held_line() {
+    let shown = written_over_between_the_frames(Faked::blank_message);
+    assert_eq!(shown, None);
+}
+
 #[test]
 fn a_hold_dropped_by_place_ship_relays_its_lines() {
     let held = vec![RaisedLine::Message(SimMessage::NoActiveMissions)];
