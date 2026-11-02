@@ -703,8 +703,9 @@
 //! default too: after an abort, the original's rows pick missions by
 //! their place among every active slot, hidden ones counted, so with a
 //! hidden mission active a row's Abort can abort a mission it doesn't
-//! name, a hidden story link included (stock has 88 hidden `mïsn`, three
-//! of them abortable: 133, 609 and 610). That loses stock missions, so the
+//! name, a hidden story link included (stock has 88 hidden `mïsn`, five
+//! of them abortable: 133, 609, 610, 896 and the "Silent Mission" story
+//! link 905). That loses stock missions, so the
 //! intended reading is the default, as CLAUDE.md's rule for the original's
 //! bugs says. The Bible says nothing of it; the engine's reading restores
 //! the original's table.
