@@ -65,6 +65,7 @@ use crate::ai::death_star::{self, DeathStar};
 use crate::ai::defence_ship::DefenceShipAi;
 use crate::ai::fire::FireRules;
 use crate::ai::flee_drop;
+use crate::ai::inspect_high;
 use crate::ai::lost_sight;
 use crate::ai::miner::{self, MinerAi};
 use crate::ai::pirate::PirateWarship;
@@ -370,7 +371,8 @@ impl Behaviour for NovaAi {
     /// Unless that search or give-up ended the handler
     /// ([`lost_sight::ends_high_level`], the jump to @0x8fb47), a plunder
     /// is flown by goal 0xd's high level, whatever type holds it
-    /// ([`plunder_high::after_think`]), a flight
+    /// ([`plunder_high::after_think`]), a kept inspection is ended by goal
+    /// 7's ([`inspect_high::after_think`]), a flight
     /// from a ship gone from its slot ends with its provocation
     /// ([`flight_ended`](crate::traffic::provocation::flight_ended),
     /// @0x8d4e4-0x8d50d → @0x8e228-0x8e23d), and its flee
@@ -416,8 +418,10 @@ impl Behaviour for NovaAi {
         if lost_sight::ends_high_level(&decision) {
             return decision;
         }
-        // Goal 0xd's high level, whoever holds the plunder (@0x8e740).
+        // Goal 0xd's high level, whoever holds the plunder (@0x8e740), then
+        // goal 7's, whoever keeps the inspection (@0x8f11e).
         let decision = plunder_high::after_think(npc, decision, around);
+        let decision = inspect_high::after_think(npc, decision, around);
         // A think that clears its target has ended its fight itself, so
         // the high level finds no flight of the old goal's to end.
         let decision = Decision {

@@ -58,6 +58,7 @@ pub mod flee_drop;
 pub mod fleet_escort;
 pub mod held_attack;
 pub mod idle_block;
+pub mod inspect_high;
 pub mod interceptor;
 pub mod leave;
 pub mod lost_sight;

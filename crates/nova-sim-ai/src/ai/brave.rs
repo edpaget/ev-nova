@@ -226,6 +226,23 @@ mod tests {
     }
 
     #[test]
+    fn an_unprovoked_brave_trader_keeps_an_inspection_and_a_provoked_one_fights_or_flees() {
+        // Any goal but 0 is kept unprovoked (@0x8b4d6, @0x8b616), goal 7
+        // included (`inspect_high`).
+        let inspecting = |x, y| {
+            let mut npcs = provoked(x, y);
+            npcs[0].goal = Goal::Inspect(ShipRef::Player);
+            npcs
+        };
+        let mut calm = inspecting(0.0, 0.0);
+        calm[0].provoked = 0.0;
+        calm[0].target = None;
+        assert_eq!(decided(&calm), Goal::Inspect(ShipRef::Player));
+        assert_eq!(decided(&inspecting(0.0, 0.0)), Goal::Attack(n(2)));
+        assert_eq!(decided(&inspecting(1251.0, 0.0)), Goal::Flee(n(2)));
+    }
+
+    #[test]
     fn a_provoked_held_brave_trader_fights_within_1250_or_flees() {
         let held = |x, y| {
             let mut npcs = provoked(x, y);

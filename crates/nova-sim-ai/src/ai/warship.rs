@@ -138,6 +138,16 @@
 //! 6 and 0x14 (@0x8b835-0x8b875, @0x8bb56-0x8bba2, @0x8bbab-0x8bbc2), so
 //! with no word and no provocation it holds ([`idle`](super::idle)).
 //!
+//! An inspecting warship (goal 7, a lost interceptor lead's that the
+//! succession copied) looks for no target either: `_WarshipAI` runs no
+//! block for it, the goal-0 block needing goal 0 (@0x8b835), the searches
+//! goals 1, 0x14, 2 (@0x8bb56) or 6 (@0x8bbab), and goal 7 jumping past
+//! the retreats (@0x8be10). So it keeps the inspection, ended or not,
+//! and goal 7's high level flies and ends it whatever the type
+//! ([`inspect_high`](super::inspect_high)). Provoked, the original keeps
+//! it too (@0x8bb2d, @0x8be10), where here it answers its provoker:
+//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-20-left-out-of-phase-18.
+//!
 //! A fleet's escort of a government with `Flags` 0x1000 thinks here,
 //! word and retreats included, as every fleet escort does until
 //! rdm:phase/escort-fleet-fidelity/phase-3-npc-led-escorts gives them
@@ -284,7 +294,12 @@ pub fn hunt(
             // re-pick comes after, see `interceptor`), it answers only its
             // provoker. An inspection this think ends (within reach or
             // gone) leaves it the search.
-            if inspection_holds(npc, around) || (npc.goal == Goal::Hold && !retreat.search_gate) {
+            // A warship runs no block for goal 7, ended or not
+            // (@0x8b835, @0x8bb56, @0x8bbab, @0x8be10): the state-7 block
+            // ends it (`inspect_high`).
+            let warship_inspects =
+                matches!(npc.goal, Goal::Inspect(_) | Goal::Hold) && !retreat.search_gate;
+            if inspection_holds(npc, around) || warship_inspects {
                 return Hunt {
                     goal: provoker.map(|ship| hunted(npc, ship, around, retreat)),
                     ..nothing(false)
@@ -582,12 +597,12 @@ impl Behaviour for Warship {
             chance,
         );
         let idles = hunt.goal.is_none() && npc.goal != Goal::Wait;
-        let decision = hunt.or(|| {
-            if npc.goal == Goal::Wait {
-                wait::warship_waits(npc, around)
-            } else {
-                idle(npc, around, chance)
-            }
+        let decision = hunt.or(|| match npc.goal {
+            Goal::Wait => wait::warship_waits(npc, around),
+            // Unprovoked it keeps goal 7, which the state-7 block flies
+            // and ends whatever the type (`inspect_high`).
+            Goal::Inspect(_) => npc.goal,
+            _ => idle(npc, around, chance),
         });
         let picked = if idles {
             idle_block::pick_write(npc, around, decision.goal)
@@ -679,6 +694,38 @@ mod tests {
             Goal::Attack(P),
             "its government's word"
         );
+    }
+
+    #[test]
+    fn a_warship_unprovoked_keeps_an_inspection() {
+        // `_WarshipAI` runs no block for goal 7: the goal-0 block needs
+        // goal 0 (@0x8b835), the search goals 1, 0x14 or 2 (@0x8bb56) or
+        // 6 (@0x8bbab), and goal 7 jumps past the retreats (@0x8be10); the
+        // state-7 block ends it (`inspect_high`). A wanted player in view,
+        // the ship inspected there, out of reach, or gone.
+        let mut inspector = police();
+        inspector.goal = Goal::Inspect(n(2));
+        inspector.target = Some(n(2));
+        for npcs in [
+            vec![
+                inspector.clone(),
+                ship(2, TRADERS, AiType::WimpyTrader, 0.0, 500.0),
+            ],
+            vec![
+                inspector.clone(),
+                ship(2, TRADERS, AiType::WimpyTrader, 0.0, 50.0),
+            ],
+            vec![inspector.clone()],
+        ] {
+            let sites = sites();
+            let govts = govts(0, 0);
+            let around = around(&sites, &npcs, &govts, (0.0, -300.0), -10);
+            let mut chance = Draws::of(&[0]);
+            let decision = Warship::default().decision(&npcs[0], &around, &mut chance);
+            assert_eq!(decision.goal, Goal::Inspect(n(2)), "{} ships", npcs.len());
+            assert_eq!(decision.travel, TravelWrite::Keep);
+            assert!(chance.asked.is_empty(), "no search or pick");
+        }
     }
 
     #[test]

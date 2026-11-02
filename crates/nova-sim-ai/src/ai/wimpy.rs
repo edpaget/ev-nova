@@ -213,6 +213,29 @@ mod tests {
     }
 
     #[test]
+    fn an_unprovoked_wimpy_trader_keeps_an_inspection_and_a_provoked_one_flees() {
+        // Any goal but 0 is kept unprovoked (@0x8b06c, @0x8b1ac), goal 7
+        // included, its state-7 block type-free (`inspect_high`).
+        let govts = govts(0, 0);
+        let sites = sites();
+        let mut trader = ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        trader.goal = Goal::Inspect(ShipRef::Player);
+        let npcs = [trader.clone(), ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        let around = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        let decision = WimpyTrader::default().decision(&npcs[0], &around, &mut Draws::of(&[0]));
+        assert_eq!(decision.goal, Goal::Inspect(ShipRef::Player));
+        assert_eq!(decision.travel, crate::ai::travel::TravelWrite::Keep);
+        trader.provoked = 10.0;
+        trader.target = Some(n(2));
+        let npcs = [trader, ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        let around = crate::ai::fixture::around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+        assert_eq!(
+            WimpyTrader::default().decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            Goal::Flee(n(2))
+        );
+    }
+
+    #[test]
     fn a_provoked_held_wimpy_trader_flees() {
         let govts = govts(0, 0);
         let sites = sites();

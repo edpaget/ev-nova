@@ -27,7 +27,11 @@
 //! - a mine, a scoop and a stellar attack (goals 0x10, 0x11 and 0x12),
 //!   whose high-level blocks are type-free and end none of them
 //!   (@0x8f832-0x8f903, @0x8faf3-0x8fafd, @0x8f906-0x8faeb), as the
-//!   traffic flies them by their goal.
+//!   traffic flies them by their goal;
+//! - an inspection (goal 7), whether its ship is there or gone: the
+//!   state-7 block (@0x8f11e-0x8f3c5) is type-free too, and ends it with
+//!   its ship gone or within reach, scanning the player there
+//!   ([`inspect_high`](super::inspect_high)).
 //!
 //! The goals the idle block's [`kept`](super::kept) keeps already (a
 //! stellar, a gate, a jump out, a hold, a wait, a drift) stay its own. A
@@ -35,12 +39,6 @@
 //! standing for the high level's drop that frame (goal 4 or 3 with target
 //! -1, @0x8e263 → @0x8e731, @0x8dff6 → @0x8e228), and a brave trader reads
 //! a gone attacker it still names ([`fight_on_gone`](crate::traffic::provocation::fight_on_gone)).
-//! Nor is an inspection (goal 7) kept: the original's state-7 block
-//! (@0x8f11e-0x8f391), its end within reach and its scan of the player, is
-//! type-free, but here it is the interceptor's think's
-//! ([`inspection_holds`](super::interceptor::inspection_holds)), so a
-//! trader keeping it would never end it: filed as
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-18-left-out-of-phase-16.
 //! A fighter's return (goal 5) is never copied: no ship leads a fighter.
 //!
 //! **Goal 4's high level** ([`high_level`]): a kept attack or snipe, or a
@@ -66,9 +64,9 @@ use crate::traffic::npc::Npc;
 
 /// The goal trader `npc`'s think keeps among `around`, unprovoked, of
 /// those its idle block's [`kept`](super::kept) doesn't (see the module
-/// docs): a plunder, a count wait, a mine, a scoop or a stellar attack,
-/// and an attack, snipe or flight on a ship still in the system. None for
-/// any other goal.
+/// docs): a plunder, a count wait, a mine, a scoop, a stellar attack or
+/// an inspection, and an attack, snipe or flight on a ship still in the
+/// system. None for any other goal.
 #[must_use]
 pub fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
     match npc.goal {
@@ -76,7 +74,8 @@ pub fn kept(npc: &Npc, around: &Surroundings) -> Option<Goal> {
         | Goal::CountWait
         | Goal::Mine
         | Goal::Scoop
-        | Goal::AttackStellar(_) => Some(npc.goal),
+        | Goal::AttackStellar(_)
+        | Goal::Inspect(_) => Some(npc.goal),
         Goal::Attack(ship) | Goal::Snipe(ship) | Goal::Flee(ship)
             if around.state_of(ship).is_some() =>
         {
@@ -198,9 +197,22 @@ mod tests {
     }
 
     #[test]
-    fn an_inspection_an_idle_or_the_idle_blocks_own_goals_are_not_kept_here() {
+    fn an_inspection_is_kept_whether_its_ship_is_there_or_gone() {
+        // The state-7 block ends it whatever the type (`inspect_high`).
+        let goal = Goal::Inspect(n(2));
+        let npcs = holding(goal, Condition::Intact);
+        assert_eq!(kept_among(&npcs), Some(goal), "there");
+        assert_eq!(kept_among(&npcs[..1]), Some(goal), "gone");
+        let player = Goal::Inspect(ShipRef::Player);
+        assert_eq!(
+            kept_among(&holding(player, Condition::Intact)),
+            Some(player)
+        );
+    }
+
+    #[test]
+    fn an_idle_or_the_idle_blocks_own_goals_are_not_kept_here() {
         for goal in [
-            Goal::Inspect(n(2)),
             Goal::Idle,
             Goal::Land(StellarId(128)),
             Goal::JumpOut,

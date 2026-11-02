@@ -57,8 +57,10 @@
 //!
 //!    The successor thinks as its class's type in the same tick, as the
 //!    marking pass runs before the dispatch, and that think decides what
-//!    it keeps of the copy: a trader keeps a copied fight, plunder or
-//!    count wait unprovoked ([`trader_keep`](crate::ai::trader_keep)), an
+//!    it keeps of the copy: a trader keeps a copied fight, plunder, count
+//!    wait or inspection unprovoked ([`trader_keep`](crate::ai::trader_keep)),
+//!    a warship an inspection, which goal 7's high level ends whatever the
+//!    type ([`inspect_high`](crate::ai::inspect_high)), an
 //!    interceptor any goal behind its gate
 //!    ([`gate_closed`](crate::ai::interceptor::gate_closed)), and goal
 //!    0xd's high level then flies a plunder whoever holds it
