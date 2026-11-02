@@ -38,7 +38,11 @@ pub(super) fn at_gate(kind: GateKind) -> Answer {
 
 /// The answer to a refused press, its stellar's gate `gate`.
 fn refused(refusal: LandingRefusal, gate: Option<GateKind>) -> Answer {
-    Answer::LandRefused { refusal, gate }
+    Answer::LandRefused {
+        refusal,
+        gate,
+        requested: true,
+    }
 }
 
 /// Presses L on `view`'s flight, which answers `answer`.

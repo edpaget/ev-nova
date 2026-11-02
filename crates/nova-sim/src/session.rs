@@ -3548,24 +3548,34 @@ impl Session {
     /// (`_FindNearestStellar` gives -1, @0x6a94c), so its
     /// [`LandingRefusal::NothingLandable`] is silent.
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
-        let press = self.land_press();
+        self.land_requesting().0
+    }
+
+    /// [`Session::land`], and whether the press made a dock request,
+    /// which sets L's latch `_dockTryFlag` (@0x6a938-0x6a953): every press
+    /// whose pick found a stellar, the target or the nearest, whatever the
+    /// request then answered. A press refused before the pick (a jump
+    /// under way, a breaking-up or destroyed ship, @0x6a8cb-0x6a8df) or
+    /// whose pick found nothing (@0x6a90f) makes none.
+    pub(crate) fn land_requesting(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
+        let (press, requested) = self.land_press();
         if let Err(refusal) = &press
             && refusal.beeps()
         {
             self.out.sounds.push(SimSound::Refused);
         }
-        press
+        (press, requested)
     }
 
-    fn land_press(&mut self) -> Result<LandPress, LandingRefusal> {
+    fn land_press(&mut self) -> (Result<LandPress, LandingRefusal>, bool) {
         if self.mode.jump().is_some() {
-            return Err(LandingRefusal::Jumping);
+            return (Err(LandingRefusal::Jumping), false);
         }
         let disabled = match self.ship.condition {
             Condition::Intact => false,
             Condition::Disabled => true,
             Condition::Dying { .. } | Condition::Destroyed => {
-                return Err(LandingRefusal::Disabled);
+                return (Err(LandingRefusal::Disabled), false);
             }
         };
         let blessing = self.blessing();
@@ -3576,6 +3586,7 @@ impl Session {
         // player's system ([`Chart::held_here`]), and active, which the
         // stellars shown hold as the last rebuild point left them.
         let target = self.chart.land_key_target();
+        let had_target = target.is_some();
         let held = |site: &LandingSite| {
             self.chart.sites.iter().any(|shown| shown.id == site.id)
                 && self.chart.held_here(&self.pilot, &self.statics, site.id)
@@ -3595,6 +3606,17 @@ impl Session {
             self.setup.rules.source_for(RuleKey::LandingSpeed),
             self.setup.rules.source_for(RuleKey::GatePickRange),
         );
+        let requested = had_target || press.selected.is_some();
+        (self.land_picked(press, disabled), requested)
+    }
+
+    /// The rest of the land key's press once its pick is made, `press`
+    /// what [`land_or_select`] gave and the ship `disabled` or not.
+    fn land_picked(
+        &mut self,
+        press: crate::landing::DockPress,
+        disabled: bool,
+    ) -> Result<LandPress, LandingRefusal> {
         // The fee's refusal (@0x669b4) comes before the cloak's
         // (`_ShipIsCloaked` @0x66a8e), which comes before the disabled one
         // (@0x66aee), all after the landability (@0x66977-0x669ae).

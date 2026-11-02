@@ -7,7 +7,7 @@
 //! flight's names ([`FlightView::word`]).
 
 use nova_sim::flight_frame::{Answer, FlightCommand, GateEntry};
-use nova_sim::landing::{LandOutcome, LandingRefusal};
+use nova_sim::landing::LandOutcome;
 use nova_sim::{CombatEvent, GateKind, GateRefusal, LandPress};
 
 use crate::Input;
@@ -52,11 +52,9 @@ impl<
     /// press.
     ///
     /// Whether the press made a dock request, which sets L's latch
-    /// (`_dockTryFlag` @0x6a953): every answer but a press not taken, a
-    /// refusal before the pick ([`LandingRefusal::Jumping`]; a dying or
-    /// destroyed ship's press is not taken) and a pick that found nothing
-    /// ([`LandingRefusal::NoStellars`], [`LandingRefusal::NothingLandable`],
-    /// @0x6a90f, @0x6a94c).
+    /// (`_dockTryFlag` @0x6a953), as the flight answers it: every press it
+    /// took, but a refusal it says made none ([`Answer::LandRefused`]'s
+    /// `requested`). A press not taken, or a flight that failed, made none.
     pub(super) fn land(&mut self) -> bool {
         let pressed = self.send_gated(FlightCommand::Land);
         if pressed.is_refused() {
@@ -64,15 +62,10 @@ impl<
             // nothing was pressed.
             return false;
         }
-        let requested = !matches!(
-            pressed,
-            Answer::LandRefused {
-                refusal: LandingRefusal::Jumping
-                    | LandingRefusal::NoStellars
-                    | LandingRefusal::NothingLandable,
-                ..
-            }
-        );
+        let requested = match pressed {
+            Answer::LandRefused { requested, .. } => requested,
+            _ => true,
+        };
         self.say_messages();
         match pressed {
             Answer::LandPress(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
@@ -100,7 +93,7 @@ impl<
                 kind: GateKind::Wormhole,
                 ..
             }) => self.enter_with_movie(GateEntry::Wormhole),
-            Answer::LandRefused { refusal, gate } => {
+            Answer::LandRefused { refusal, gate, .. } => {
                 // A stellar the scene doesn't hold, such as one another
                 // system owns, by its spöb name (`stellar_name`).
                 let name = refusal

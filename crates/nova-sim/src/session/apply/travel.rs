@@ -60,13 +60,14 @@ impl Session {
                     refusal,
                 },
             },
-            FlightCommand::Land => match self.land() {
-                Ok(press) => Answer::LandPress(press),
-                Err(refusal) => Answer::LandRefused {
+            FlightCommand::Land => match self.land_requesting() {
+                (Ok(press), _) => Answer::LandPress(press),
+                (Err(refusal), requested) => Answer::LandRefused {
                     gate: refusal
                         .stellar()
                         .and_then(|stellar| self.chart.gate_kind(stellar)),
                     refusal,
+                    requested,
                 },
             },
             FlightCommand::EndPlay => {
@@ -133,6 +134,7 @@ mod tests {
     use super::*;
     use crate::catalog::{StellarId, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::hull::Condition;
     use crate::flight::Controls;
     use crate::gate::{GateKind, GateRefusal};
     use crate::hyperspace::JumpRefusal;
@@ -259,7 +261,7 @@ mod tests {
         ));
         session.take_sounds();
         let answer = apply_bare(&mut session, FlightCommand::Land);
-        let Answer::LandRefused { refusal, gate } = answer else {
+        let Answer::LandRefused { refusal, gate, .. } = answer else {
             panic!("refused: {answer:?}");
         };
         assert!(
@@ -275,8 +277,76 @@ mod tests {
             Answer::LandRefused {
                 refusal: LandingRefusal::Jumping,
                 gate: None,
+                requested: false,
             },
             "a refusal naming no stellar names no gate"
+        );
+    }
+
+    /// The refusal's `requested`: whether L's press made a dock request,
+    /// which sets `_dockTryFlag` (@0x6a938-0x6a953).
+    fn requested(answer: &Answer) -> bool {
+        let Answer::LandRefused { requested, .. } = *answer else {
+            panic!("refused: {answer:?}");
+        };
+        requested
+    }
+
+    #[test]
+    fn a_refused_land_says_whether_its_press_made_a_dock_request() {
+        // Past the pick, the request refused: a second L before the
+        // approach clears is too far.
+        let gates = gated();
+        let mut session = Session::start(&gates).expect("starts");
+        let _ = apply_bare(&mut session, FlightCommand::Land);
+        let answer = apply_bare(&mut session, FlightCommand::Land);
+        assert!(requested(&answer), "too far: {answer:?}");
+        // A disabled ship's press is refused by the request
+        // (`_HandlePlayerDockRequest` @0x66af7), after the pick.
+        let mut session = Session::start(&gates).expect("starts");
+        session.ship.condition = Condition::Disabled;
+        let answer = apply_bare(&mut session, FlightCommand::Land);
+        assert!(requested(&answer), "disabled: {answer:?}");
+        // A breaking-up or destroyed ship's is refused before the pick
+        // (@0x6a8cb), with the same refusal.
+        for condition in [
+            Condition::Dying {
+                ticks_left: 10,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
+            let mut session = Session::start(&gates).expect("starts");
+            session.ship.condition = condition;
+            let answer = apply_bare(&mut session, FlightCommand::Land);
+            assert_eq!(
+                answer,
+                Answer::LandRefused {
+                    refusal: LandingRefusal::Disabled,
+                    gate: None,
+                    requested: false,
+                },
+                "{condition:?}"
+            );
+        }
+        // A jump under way, before the pick.
+        let mut session = super::super::tests::jumping();
+        assert!(!requested(&apply_bare(&mut session, FlightCommand::Land)));
+        // A pick that found nothing (@0x6a90f).
+        let mut empty = catalog();
+        empty.sites[0].1.clear();
+        let mut session = Session::start(&empty).expect("starts");
+        let answer = apply_bare(&mut session, FlightCommand::Land);
+        assert!(
+            matches!(
+                answer,
+                Answer::LandRefused {
+                    refusal: LandingRefusal::NoStellars,
+                    requested: false,
+                    ..
+                }
+            ),
+            "{answer:?}"
         );
     }
 

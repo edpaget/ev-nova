@@ -1009,8 +1009,9 @@ fn a_second_pass_line_stands_over_a_refusal_the_keys_said_after_the_steps() {
 }
 
 // L's latch, `_dockTryFlag` (0xdee34), is set only as L makes a dock
-// request (@0x6a938-0x6a953): a pick that finds nothing (@0x6a90f) or a
-// refusal before the pick leaves it clear, so L held reads again on the
+// request (@0x6a938-0x6a953), which the flight says of its refusal
+// (`Answer::LandRefused`'s `requested`; nova-sim pins which make one): a
+// refusal that made none leaves it clear, so L held reads again on the
 // next pass, as silently.
 
 #[test]
@@ -1026,6 +1027,7 @@ fn a_land_press_that_finds_no_stellar_leaves_the_latch_clear_and_reads_again() {
             view.sim.queue_answer(Answer::LandRefused {
                 refusal,
                 gate: None,
+                requested: false,
             });
         }
         view.input(&key(LAND_KEY, true));
@@ -1053,12 +1055,14 @@ fn a_land_press_that_requests_sets_the_latch() {
     view.tick(TICK);
     view.tick(TICK);
     assert_eq!(sent(&view, from), [FlightCommand::Land], "latched");
-    // A refusal past the pick is a request too: the dock request refused.
+    // A refusal the flight says made a request sets it too: the dock
+    // request refused it.
     let mut view = faked(super::frames::sol());
     let from = sent_count(&view);
     view.sim.queue_answer(Answer::LandRefused {
         refusal: nova_sim::LandingRefusal::Disabled,
         gate: None,
+        requested: true,
     });
     view.input(&key(LAND_KEY, true));
     view.tick(TICK);

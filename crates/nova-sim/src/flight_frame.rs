@@ -1338,7 +1338,8 @@ pub enum Answer {
         /// Whether the player is told.
         told: bool,
     },
-    /// What a [`FlightCommand::Land`] did, when it was not refused.
+    /// What a [`FlightCommand::Land`] did, when it was not refused: always
+    /// a dock request made, which sets L's latch `_dockTryFlag`.
     LandPress(LandPress),
     /// Why a [`FlightCommand::Land`] was refused, and what gate the
     /// stellar it names is, if any
@@ -1350,6 +1351,12 @@ pub enum Answer {
         /// The gate the refusal's stellar is, if it names one and it is a
         /// gate.
         gate: Option<GateKind>,
+        /// Whether the press made a dock request all the same, which sets
+        /// L's latch `_dockTryFlag` (@0x6a953): its pick found a stellar
+        /// and the request refused it. Not for a press refused before the
+        /// pick or whose pick found nothing
+        /// ([`Session::land_requesting`](crate::Session::land_requesting)).
+        requested: bool,
     },
     /// The links a [`FlightCommand::OpenHypergate`] offers.
     Offered(Vec<SystemId>),
