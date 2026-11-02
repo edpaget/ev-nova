@@ -238,6 +238,26 @@ fn hiding_the_cursor_abandons_a_drag_on_the_open_map() {
     assert!(view.map_open());
 }
 
+#[test]
+fn the_map_hides_flights_cursor_until_the_pointer_moves() {
+    // `_HandlePlayer` hides the sprite before `_DoSystemMap` (@0x6a826),
+    // and nothing writes `_cursorAlpha` again before `_HandleMouse`.
+    use super::controls::{NOWHERE, cursor_sprites};
+    let mut view = in_flight();
+    view.input(&Input::PointerMoved(NOWHERE));
+    tap(&mut view, MAP);
+    assert!(view.map_open());
+    tap(&mut view, MAP);
+    assert!(!view.map_open());
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(view.cursor_at(), None, "a same-point move after the map");
+    assert_eq!(cursor_sprites(&drawn(&view)), []);
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(view.cursor_at(), Some(other));
+}
+
 // The jump's filter.
 
 #[test]

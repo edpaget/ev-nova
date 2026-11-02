@@ -458,6 +458,30 @@ fn without_hyperspace_effects_a_hypergate_flashes_white() {
 }
 
 #[test]
+fn the_hypergate_map_hides_flights_cursor_until_the_pointer_moves() {
+    // `_PlayerEnterHypergate` hides the sprite before `_DoSystemMap`
+    // (@0x63836).
+    use super::controls::NOWHERE;
+    let mut view = faked(sol());
+    view.input(&Input::PointerMoved(NOWHERE));
+    let opening = map_opening(&view.frame, Some(130));
+    view.sim.queue_screen(opening);
+    view.sim.queue_answer(at_gate(GateKind::Hypergate));
+    view.sim
+        .queue_answer(Answer::Offered(vec![SystemId(131), SystemId(132)]));
+    view.land();
+    assert!(view.map_open());
+    close_on(&mut view, None, Answer::GateRefused(GateRefusal::Cancelled));
+    assert!(!view.map_open());
+    view.input(&Input::PointerMoved(NOWHERE));
+    view.tick(TICK);
+    assert_eq!(view.cursor_at(), None, "a same-point move after the map");
+    let other = Point::new(60.0, 420.0);
+    view.input(&Input::PointerMoved(other));
+    assert_eq!(view.cursor_at(), Some(other));
+}
+
+#[test]
 fn closing_the_hypergate_map_without_a_pick_cancels_in_silence() {
     let mut view = at_the_hypergate();
     close_on(&mut view, None, Answer::GateRefused(GateRefusal::Cancelled));

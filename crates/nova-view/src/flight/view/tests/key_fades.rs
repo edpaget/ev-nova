@@ -292,6 +292,14 @@ fn a_key_that_opens_nothing_keeps_the_button_held() {
     assert_eq!(faked_cursor_alpha(&view), WHOLE, "restamped");
 }
 
+/// The pointer moves once the map has closed: the map hid the cursor with
+/// a zero fade (`_HideCursorSprite` before `_DoSystemMap`, @0x6a826), so
+/// only a move (`_HandleMouse` @0x3801c-0x3806d) shows it whole again, for
+/// what follows to fade.
+fn moved_after_the_map(view: &mut Faked) {
+    view.input(&Input::PointerMoved(Point::new(60.0, 420.0)));
+}
+
 #[test]
 fn a_map_opened_with_the_button_down_still_takes_its_release_for_the_cursor() {
     let mut view = in_flight();
@@ -305,6 +313,7 @@ fn a_map_opened_with_the_button_down_still_takes_its_release_for_the_cursor() {
     });
     tap(&mut view, MAP_KEY);
     assert!(!view.map_open());
+    moved_after_the_map(&mut view);
     fades_with_no_release(&mut view);
 }
 
@@ -315,6 +324,7 @@ fn a_key_typed_into_the_map_latches_no_fade_for_after_it_closes() {
     view.open_map();
     tap(&mut view, NEAREST_KEY);
     view.close_map();
+    moved_after_the_map(&mut view);
     view.tick(TICK);
     assert_eq!(faked_cursor_alpha(&view), WHOLE);
 }
@@ -327,6 +337,7 @@ fn the_m_that_opens_the_map_fades_once_on_the_first_step_after_it_closes() {
     assert!(view.map_open(), "opened");
     tap(&mut view, MAP_KEY);
     assert!(!view.map_open(), "closed");
+    moved_after_the_map(&mut view);
     view.tick(TICK);
     assert_eq!(faked_cursor_alpha(&view), ONE);
     view.tick(TICK);

@@ -348,7 +348,14 @@ impl<C, S: FlightSim> FlightView<C, S> {
     ///
     /// Clear Route is enabled off the hypergate map with a course
     /// (`showClearRouteButton`, @0x12396-0x123c3), and never on it.
+    ///
+    /// Flight's cursor hides first, with a zero fade
+    /// ([`FlightView::hide_cursor`]), as `_HandlePlayer` (@0x6a826) and
+    /// `_PlayerEnterHypergate` (@0x63836) call `_HideCursorSprite` before
+    /// `_DoSystemMap`, and nothing writes `_cursorAlpha` again before
+    /// `_HandleMouse` next sees the mouse move.
     pub(super) fn open_map(&mut self) {
+        self.hide_cursor();
         self.open_map_as(MapOpening::Plain);
     }
 
