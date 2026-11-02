@@ -1,6 +1,6 @@
 //! The [`MoviePlayer`] over decoded frames: it finds the file, opens it,
-//! and shows each frame on its [`MovieScreen`] once the movie's clock
-//! reaches it. It decides only when frames show and when the movie ends;
+//! and, once presented, shows on its [`MovieScreen`] the last frame the
+//! movie's clock has reached, those before it skipped. It decides only when frames show and when the movie ends;
 //! how a movie is played (fades, skipping, the window) is
 //! [`nova_view::movie::MovieStage`]'s.
 //!
@@ -44,6 +44,8 @@ struct Playing<S> {
     clock: Duration,
     /// The next frame, decoded but not yet due.
     next: Option<Frame>,
+    /// The last frame due by the clock, not yet presented.
+    pending: Option<Frame>,
     /// When the last frame shown stops showing.
     last_end: Duration,
     /// Whether decoding failed: the movie then ends as its last good
@@ -150,6 +152,7 @@ impl<O: Open, F: Folders> MoviePlayer for Player<O, F> {
             source: Some(source),
             clock: Duration::ZERO,
             next: None,
+            pending: None,
             last_end,
             failed: false,
             ended: false,
@@ -157,22 +160,34 @@ impl<O: Open, F: Folders> MoviePlayer for Player<O, F> {
         Some((width, height))
     }
 
-    /// Moves the clock on by `dt` and shows the last frame due by then,
-    /// skipping any before it. It plays until the clock reaches the
-    /// movie's end; after a decode error, that is the end of the last
-    /// frame decoded.
+    /// Moves the clock on by `dt`, decoding the frames due by then and
+    /// keeping the last for [`MoviePlayer::present`], the ones before it
+    /// skipped. It plays until the clock reaches the movie's end; after a
+    /// decode error, that is the end of the last frame decoded.
     fn advance(&self, dt: Duration) -> bool {
         let mut state = self.state.borrow_mut();
-        let State { screen, playing } = &mut *state;
-        let Some(playing) = playing.as_mut().filter(|playing| !playing.ended) else {
+        let Some(playing) = state.playing.as_mut().filter(|playing| !playing.ended) else {
             return false;
         };
         playing.clock += dt;
         if let Some(frame) = playing.due() {
-            show(screen, frame);
+            playing.pending = Some(frame);
         }
         playing.ended = playing.end().is_some_and(|end| playing.clock >= end);
         !playing.ended
+    }
+
+    /// Shows the last frame due, if one is waiting; nothing before a
+    /// start, after a stop or once the movie has ended.
+    fn present(&self) {
+        let mut state = self.state.borrow_mut();
+        let State { screen, playing } = &mut *state;
+        let Some(playing) = playing.as_mut().filter(|playing| !playing.ended) else {
+            return;
+        };
+        if let Some(frame) = playing.pending.take() {
+            show(screen, frame);
+        }
     }
 
     /// Lets the movie go. Its last frame stays shown, as `StopMovie`
@@ -324,9 +339,55 @@ mod tests {
         let player = player(ten());
         player.start("Race 1.mov");
         assert!(player.advance(MS * 99));
+        player.present();
         assert_eq!(red(&player), Some(0));
         assert!(player.advance(MS));
+        player.present();
         assert_eq!(red(&player), Some(10));
+    }
+
+    #[test]
+    fn advance_alone_keeps_the_shown_frame() {
+        let player = player(ten());
+        player.start("Race 1.mov");
+        let before = drawn(&player)[0].0.generation();
+        assert!(player.advance(MS * 450));
+        assert_eq!(red(&player), Some(0));
+        assert_eq!(drawn(&player)[0].0.generation(), before);
+    }
+
+    #[test]
+    fn present_shows_the_last_frame_due_skipping_those_before() {
+        let player = player(ten());
+        player.start("Race 1.mov");
+        let before = drawn(&player)[0].0.generation();
+        player.advance(MS * 150);
+        player.advance(MS * 150);
+        player.present();
+        assert_eq!(red(&player), Some(30));
+        assert_eq!(
+            drawn(&player)[0].0.generation(),
+            before + 1,
+            "10 and 20 skipped"
+        );
+        player.present();
+        assert_eq!(
+            drawn(&player)[0].0.generation(),
+            before + 1,
+            "nothing new is due"
+        );
+    }
+
+    #[test]
+    fn present_before_start_or_after_stop_does_nothing() {
+        let player = player(ten());
+        player.present();
+        assert!(drawn(&player).is_empty());
+        player.start("Race 1.mov");
+        player.advance(MS * 300);
+        player.stop();
+        player.present();
+        assert_eq!(red(&player), Some(0), "the due frame went with the movie");
     }
 
     #[test]
@@ -335,6 +396,7 @@ mod tests {
         player.start("Race 1.mov");
         let before = drawn(&player)[0].0.generation();
         assert!(player.advance(MS * 450));
+        player.present();
         assert_eq!(red(&player), Some(40));
         assert_eq!(
             drawn(&player)[0].0.generation(),
@@ -348,6 +410,7 @@ mod tests {
         let player = player(ten());
         player.start("Race 1.mov");
         assert!(player.advance(MS * 999));
+        player.present();
         assert_eq!(red(&player), Some(90));
         assert!(!player.advance(MS));
         assert!(!player.advance(MS * 100));
@@ -370,20 +433,26 @@ mod tests {
         let player = player(movie(vec![frame(0, 0), frame(100, 10)], None));
         player.start("Race 1.mov");
         assert!(player.advance(MS * 100));
+        player.present();
         assert_eq!(red(&player), Some(10));
         assert!(player.advance(MS * 99), "the last frame lasts 100 ms");
         assert!(!player.advance(MS));
     }
 
     #[test]
-    fn a_last_frame_of_no_known_duration_ends_the_movie_as_it_shows() {
+    fn a_last_frame_of_no_known_duration_ends_the_movie_as_it_falls_due_unshown() {
         let mut last = frame(100, 10);
         last.duration = None;
         let player = player(movie(vec![frame(0, 0), last], None));
         player.start("Race 1.mov");
         assert!(player.advance(MS * 99));
         assert!(!player.advance(MS));
-        assert_eq!(red(&player), Some(10));
+        player.present();
+        assert_eq!(
+            red(&player),
+            Some(0),
+            "the ended movie shows nothing new, as the last service before its end showed"
+        );
     }
 
     #[test]
@@ -401,6 +470,7 @@ mod tests {
         let player = player(script);
         player.start("Race 1.mov");
         assert!(player.advance(MS * 200));
+        player.present();
         assert_eq!(red(&player), Some(20));
         assert!(!player.advance(MS * 100));
         assert!(!player.advance(MS * 100));
@@ -479,6 +549,7 @@ mod tests {
         let player = player(ten());
         player.start("Race 1.mov");
         player.advance(MS * 300);
+        player.present();
         player.stop();
         assert_eq!(red(&player), Some(30));
         assert!(!player.advance(MS * 100));
@@ -490,6 +561,7 @@ mod tests {
         let player = player(ten());
         player.start("Race 1.mov");
         player.advance(MS * 500);
+        player.present();
         let before = drawn(&player)[0].0.clone();
         player.stop();
         assert_eq!(player.start("Race 1.mov"), Some((1, 1)));
@@ -498,6 +570,7 @@ mod tests {
         assert_eq!(again.stream(), before.stream());
         assert!(again.generation() > before.generation());
         assert!(player.advance(MS * 100));
+        player.present();
         assert_eq!(red(&player), Some(10));
     }
 

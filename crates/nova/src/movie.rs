@@ -56,6 +56,9 @@ impl MoviePlayer for NoMoviePlayer {
     }
 
     /// Never reached: nothing started.
+    fn present(&self) {}
+
+    /// Never reached: nothing started.
     fn stop(&self) {}
 
     /// Never reached: nothing started.

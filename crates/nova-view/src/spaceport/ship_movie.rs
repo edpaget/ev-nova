@@ -165,15 +165,17 @@ impl ShipMovie {
     }
 
     /// The dialog takes an event `dt` after the last: the loop moves on by
-    /// that and by any time owed from a cover (`_LoopingMovieIdle`'s
-    /// `MoviesTask` @0x558f3), and an ended loop starts again from its
-    /// start, or, failing that, stops.
+    /// that and by any time owed from a cover, then shows the frame due
+    /// (`_LoopingMovieIdle`'s `MoviesTask` @0x558f3, on every event); an
+    /// ended loop starts again from its start, which shows its first frame,
+    /// or, failing that, stops.
     pub fn idle(&mut self, dt: Duration) {
         let owed = std::mem::take(&mut self.owed);
         let Some(playing) = &self.playing else {
             return;
         };
         if playing.player.advance(owed.saturating_add(dt)) {
+            playing.player.present();
             return;
         }
         if playing.player.start(&playing.file).is_none() {
@@ -389,6 +391,25 @@ mod tests {
     }
 
     #[test]
+    fn each_idle_presents_after_an_advance_still_playing_with_no_throttle() {
+        let reel = MockMoviePlayer::playing((32, 32), 3);
+        let (mut movie, _) = looping_on(&reel);
+        movie.select(ship(128));
+        for _ in 0..3 {
+            movie.idle(Duration::from_millis(16));
+        }
+        assert_eq!(
+            reel.presented(),
+            [1, 2],
+            "every idle (@0x558f3), but not the one that ended it"
+        );
+        movie.covered(TICK);
+        assert_eq!(reel.presented(), [1, 2], "a cover presents nothing");
+        movie.idle(TICK);
+        assert_eq!(reel.presented(), [1, 2, 1], "the restarted loop, once");
+    }
+
+    #[test]
     fn an_ended_loop_that_cannot_start_again_stops_playing() {
         /// Plays its first start for one advance, then refuses.
         struct Once(Rc<MockMoviePlayer>, std::cell::Cell<bool>);
@@ -399,6 +420,9 @@ mod tests {
             }
             fn advance(&self, dt: Duration) -> bool {
                 self.0.advance(dt)
+            }
+            fn present(&self) {
+                self.0.present();
             }
             fn stop(&self) {
                 self.0.stop();
