@@ -276,6 +276,8 @@ pub mod jump_with_leader;
 pub mod kept_berths;
 pub mod land_flight;
 #[cfg(test)]
+mod landed_lead_tests;
+#[cfg(test)]
 mod landed_stay_tests;
 mod last_wait_frame;
 #[cfg(test)]
