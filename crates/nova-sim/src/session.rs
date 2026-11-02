@@ -1682,7 +1682,8 @@ impl Session {
     /// Alert's check, and its blink on the advance pass alone, as
     /// `_HandleAlertSprite` runs on it alone, the tutorial's hints, the
     /// target brackets. The cargo boxes are scooped and aged after the
-    /// move ([`Session::scoop_after_turn`]).
+    /// move and the player's display step
+    /// ([`Session::scoop_after_display`]).
     fn before_move(&mut self, frame: i16, pass: GamePass) {
         // The very top of `_HandlePlayer`, before the pod's return (see
         // the `tractor_hold` module).
