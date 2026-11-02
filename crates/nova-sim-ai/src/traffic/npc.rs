@@ -1049,8 +1049,10 @@ impl Npc {
     /// the lead's target too) holds no target, where the original's holds
     /// the inspected ship. The thinks that read +0x70 with a copied goal 7
     /// read this: the provoked branches ([`provoked_by`](crate::ai::provoked_by)),
-    /// the pirate's ([`pirate::think`](crate::ai::pirate::think)) and the
-    /// defence ship's ([`defence_ship::think`](crate::ai::defence_ship::think)).
+    /// the pirate's ([`pirate::think`](crate::ai::pirate::think)), the
+    /// defence ship's ([`defence_ship::think`](crate::ai::defence_ship::think))
+    /// and goal 7's high level
+    /// ([`inspect_high::after_think`](crate::ai::inspect_high::after_think)).
     #[must_use]
     pub fn slot_target(&self) -> Option<ShipRef> {
         self.target.or(self.goal.inspecting())

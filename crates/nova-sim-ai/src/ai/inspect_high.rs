@@ -70,8 +70,9 @@ pub fn after_think(npc: &Npc, decision: Decision, around: &Surroundings) -> Deci
     if decision.goal != npc.goal || npc.high_level_waits_under(decision.goal) {
         return decision;
     }
-    // The block reads +0x70 (@0x8f11e), which a hit rewrites.
-    let ship = npc.target.unwrap_or(kept);
+    // The block reads +0x70 (@0x8f11e), which a hit rewrites: under goal
+    // 7 it is never none.
+    let ship = npc.slot_target().unwrap_or(kept);
     let moved = Decision {
         goal: Goal::Inspect(ship),
         re_picked: decision.re_picked || ship != kept,
