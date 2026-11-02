@@ -1211,6 +1211,36 @@ mod tests {
     }
 
     #[test]
+    fn by_the_other_reading_the_tail_steps_a_disabled_ship_as_disabled() {
+        // A ship no loop display reached has no record of one: the tail
+        // reads it disabled as it is now. A 0x0040 class whose lights burn
+        // steady goes dark disabled.
+        let catalog = displaying(0, 1);
+        let rules = Rulebook::default().with_override(RuleKey::UndisplayedShips, RuleSource::Bible);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        let lit = |session: &mut Session| {
+            let mut ship = crate::traffic::fixture::npc(0, crate::stats::ShipStats::default());
+            ship.hull.frames = FrameSpec {
+                flags: 0x0040,
+                lights: true,
+                blink: crate::blink::Blink::STEADY,
+                ..FrameSpec::NONE
+            };
+            session.space.traffic.add_npc(ship)
+        };
+        let downed = lit(&mut session);
+        let well = lit(&mut session);
+        crate::fixture::disable(&mut session, downed);
+        let (statics, setup) = (&session.statics, &session.setup);
+        session
+            .space
+            .display_undisplayed(&BTreeSet::new(), statics, setup, &mut NeverFires);
+        let lights = |id| session.space.npc(id).expect("there").display.drawn.lights;
+        assert_eq!(lights(downed), None, "out while disabled");
+        assert_eq!(lights(well), Some(32), "steady");
+    }
+
+    #[test]
     fn the_tail_steps_a_fleet_arriving_after_the_loop_by_the_other_reading_and_no_ship_twice() {
         use crate::session::reinforcements::tests::{FED, TIME, fight, flying, reinforced};
         // The second pass's `_HandleReinforcements` (@0x44504) brings the

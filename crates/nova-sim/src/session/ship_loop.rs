@@ -384,6 +384,41 @@ mod tests {
         d: 20,
     };
 
+    /// An idle NPC at berth `berth` at `at`, of a 0x0040 class whose
+    /// lights burn steady: drawn lit at once, and dark while disabled.
+    fn steady_lights(session: &mut Session, berth: u32, at: Vec2) -> NpcId {
+        let id = place(session, berth, at, Vec2::ZERO);
+        let ship = session.space.npc_mut(id).expect("there");
+        ship.hull.frames.blink = crate::blink::Blink::STEADY;
+        ship.hull.frames.lights = true;
+        ship.hull.frames.flags = 0x0040;
+        id
+    }
+
+    #[test]
+    fn an_npc_disabled_at_its_loop_display_steps_its_lights_as_disabled() {
+        // Each NPC's lights (@0x2c2ea) read the `_IsDisabled` its own
+        // display kept (@0x2b61f, tested @0x2c585): a 0x0040 class's go
+        // out while it is disabled, and burn while it is not. For a ship
+        // that stays in the system the fight's record and its condition
+        // after the display agree; they differ only for one the display
+        // destroyed, whose stepped lights and sets go with it at the
+        // take-out, its berth's blink timer stepping alike either way.
+        let catalog = armed();
+        let mut session = empty(&catalog);
+        let downed = steady_lights(&mut session, 1, WRECKED);
+        let well = steady_lights(&mut session, 2, Vec2::new(-600.0, 0.0));
+        crate::fixture::disable(&mut session, downed);
+        pass(&mut session, &catalog, &Keep);
+        let lights = |id| session.space.npc(id).expect("there").display.drawn.lights;
+        assert_eq!(
+            session.space.npc(downed).expect("there").condition,
+            Condition::Disabled
+        );
+        assert_eq!(lights(downed), None, "out while disabled");
+        assert_eq!(lights(well), Some(32), "steady");
+    }
+
     #[test]
     fn a_wreck_its_display_explodes_steps_its_lights_and_leaves_its_berth_the_timer() {
         // `_HandleShipDisplay` runs the lights (@0x2c2ea) before its dying
