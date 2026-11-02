@@ -95,7 +95,6 @@ fn the_moved_inspection_holds_on_the_next_tick_and_lets_the_attacker_go_within_r
         tick(&mut traffic, &govts, far);
         let after = of(&traffic, cop);
         assert_ne!(after.goal, Goal::Attack(n(attacker.0)), "{:?}", after.goal);
-        assert_ne!(after.goal, Goal::Inspect(ShipRef::Player));
         assert_eq!(after.provoked, 3.0, "+0x96 kept");
     }
 }

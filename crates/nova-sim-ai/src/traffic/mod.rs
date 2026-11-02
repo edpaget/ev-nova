@@ -17,7 +17,7 @@
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
 //!   and duty as the player's escort, stats, reserves, flight state and
 //!   goal, its condition, armament and fire command, its provocation,
-//!   aggression and the ship it last inspected, and the carrier that
+//!   aggression and the ship its last inspection pick named, and the carrier that
 //!   launched it from a fighter bay, if any, and the person flying it,
 //!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
@@ -2661,12 +2661,15 @@ impl Traffic {
     }
 
     /// Gives each NPC the goal of its decision, if any, the player where
-    /// `world` has it, if anywhere: one that stops inspecting a ship
-    /// remembers it, and has scanned the player when it was inspecting the
+    /// `world` has it, if anywhere: it forgets the ship it last inspected
+    /// when its think says so ([`Decision::forgets_inspected`]), then
+    /// records its think's inspection pick
+    /// ([`Decision::inspection_pick`]) as that ship; one that stops
+    /// inspecting a ship has scanned the player when it was inspecting the
     /// player within its reach, unless an interceptor's re-pick gave the
     /// new goal ([`Decision::re_picked`]); a ship the think looked over at
-    /// once ([`Decision::looked_over`]) is remembered last, and is a scan
-    /// if it is the player, a write on top of the first, as a kept
+    /// once ([`Decision::looked_over`]) is a scan if it is the player, a
+    /// write on top of the first, as a kept
     /// inspection of the player can end in the think of a pick that ends
     /// too, which the original does on two frames; its provocation takes the
     /// decision's writes ([`provocation::take`]: zeroed where the high
@@ -2721,6 +2724,8 @@ impl Traffic {
                 visits,
                 re_picked,
                 looked_over,
+                inspection_pick,
+                forgets_inspected,
                 ends_wait,
                 order_word,
                 ..
@@ -2732,18 +2737,24 @@ impl Traffic {
                 };
                 self.berth_search.write(npc.berth, npc.lost_sight);
             }
+            // The think's clear of a slot gone (@0x8cc58), then its pick's
+            // write (@0x8ce3b): nothing else writes +0x90.
+            if forgets_inspected {
+                npc.inspected = None;
+            }
+            if let Some(ship) = inspection_pick {
+                npc.inspected = Some(ship);
+            }
             let mut scans = false;
             if let Goal::Inspect(ship) = npc.goal
                 && goal != npc.goal
             {
-                npc.inspected = Some(ship);
                 // A re-pick moves the reach onto its own target (@0x8f11e).
                 scans = !re_picked
                     && ship == ShipRef::Player
                     && player_at.is_some_and(|at| within_reach(at - npc.state.position));
             }
             if let Some(ship) = looked_over {
-                npc.inspected = Some(ship);
                 scans |= ship == ShipRef::Player;
             }
             // The calls carry the odds the think read, before the pass.
@@ -5547,6 +5558,8 @@ mod tests {
             visits: None,
             re_picked: false,
             looked_over: None,
+            inspection_pick: None,
+            forgets_inspected: false,
             ends_wait: false,
             order_word: None,
             leaves_fleet: false,
@@ -6356,15 +6369,47 @@ mod tests {
     }
 
     #[test]
-    fn an_npc_that_stops_inspecting_a_ship_remembers_it() {
-        let mut traffic = populated(1, 1);
-        traffic.npcs[0].goal = Goal::Inspect(ShipRef::Player);
-        let still = Fighting::deciding(Goal::Inspect(ShipRef::Player));
-        traffic.tick_in(&still, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].inspected, None, "still at it");
-        let next = Fighting::deciding(Goal::Inspect(ShipRef::Npc(NpcId(7))));
-        traffic.tick_in(&next, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(traffic.npcs()[0].inspected, Some(ShipRef::Player));
+    fn an_npc_records_only_its_inspection_pick() {
+        // +0x90 is written by the pick alone (@0x8ce3b) and cleared for a
+        // slot gone (@0x8cc40-0x8cc58), in that order in the think.
+        let seven = ShipRef::Npc(NpcId(7));
+        let after = |inspected: Option<ShipRef>, decision: crate::ai::Decision| {
+            let mut traffic = populated(1, 1);
+            traffic.npcs[0].goal = Goal::Inspect(ShipRef::Player);
+            traffic.npcs[0].inspected = inspected;
+            traffic.tick_in(
+                &Decides(decision),
+                World::new(&[]),
+                &[],
+                &mut Draws::of(&[]),
+            );
+            traffic.npcs()[0].inspected
+        };
+        let decided = |goal| crate::ai::Decision {
+            goal,
+            ..crate::ai::Decision::default()
+        };
+        assert_eq!(after(None, decided(Goal::Inspect(seven))), None, "a move");
+        assert_eq!(after(None, decided(Goal::Idle)), None, "an end");
+        let picked = crate::ai::Decision {
+            inspection_pick: Some(seven),
+            ..decided(Goal::Inspect(seven))
+        };
+        assert_eq!(after(None, picked), Some(seven), "a pick");
+        let forgets = crate::ai::Decision {
+            forgets_inspected: true,
+            ..decided(Goal::Idle)
+        };
+        assert_eq!(after(Some(ShipRef::Player), forgets), None, "a clear");
+        let both = crate::ai::Decision {
+            forgets_inspected: true,
+            ..picked
+        };
+        assert_eq!(
+            after(Some(ShipRef::Player), both),
+            Some(seven),
+            "clear, then pick"
+        );
     }
 
     #[test]

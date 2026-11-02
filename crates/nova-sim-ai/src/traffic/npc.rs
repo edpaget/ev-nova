@@ -381,7 +381,11 @@ pub struct Npc {
     /// How aggressive it is: 0, 2 or 3 for traffic; 1, 2 or 4 for a
     /// person.
     pub aggression: u8,
-    /// The ship it last inspected, if any.
+    /// The ship its last inspection pick named (+0x90, `_InterceptorAI`
+    /// @0x8ce3b; see [`Decision::inspection_pick`](crate::ai::Decision::inspection_pick)),
+    /// which its next pick skips; set -1 at setup (`_AISetup` @0x7f403),
+    /// which a fresh `None` stands for, and cleared once its slot goes
+    /// (@0x8cc40-0x8cc58).
     pub inspected: Option<ShipRef>,
     /// Its `düde`'s `Booty` flags, what boarding it yields, and whose
     /// 0x0100 bit the hit rules read ([`sides`](crate::combat::sides));

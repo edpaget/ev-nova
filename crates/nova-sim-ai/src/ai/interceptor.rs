@@ -42,8 +42,16 @@
 //!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
 //!   again; a pick already within reach ends in the think that made it,
 //!   as goal 7's block runs after the think (@0x8f11e-0x8f394,
-//!   [`Decision::looked_over`]). The traffic remembers the ship
-//!   ([`Npc::inspected`]). Having looked the player over, it has scanned
+//!   [`Decision::looked_over`]). The traffic records the ship it picked
+//!   ([`Npc::inspected`], +0x90, [`Decision::inspection_pick`]), and only
+//!   that: the pick writes +0x90 beside +0x70 and state 7 (@0x8ce3b),
+//!   before the hail, the out-of-ammo flight, the lost-sight drop, the
+//!   re-pick and the reach, none of which writes it, so a ship it was
+//!   moved to and looked over may be picked again. Each think past its
+//!   early returns (goal 0x16 @0x8c8c2, the helps @0x8cb07; a disabled
+//!   ship never reaches the think, @0x8c8ae) forgets it once its slot has
+//!   gone (@0x8cc40-0x8cc58, [`Decision::forgets_inspected`]), under a
+//!   wait too. Having looked the player over, it has scanned
 //!   the player
 //!   ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)): the
 //!   session checks the player's mission cargo against the interceptor's
@@ -339,6 +347,10 @@ impl Behaviour for Interceptor {
                 ..Decision::default()
             };
         }
+        // Its clear of a last-inspected ship gone from its slot runs past
+        // the helps' return (@0x8cb07), before the gate (@0x8cc40-0x8cc58).
+        let forgets_inspected = !matches!(npc.goal, Goal::Assist(_))
+            && npc.inspected.is_some_and(|ship| !around.active(ship));
         // A hit's target is the inspection's ship from here on.
         let redirected = self.slot_inspection(npc);
         let moved = redirected
@@ -358,6 +370,7 @@ impl Behaviour for Interceptor {
             chance,
         );
         let mut comm_call = None;
+        let mut inspection_pick = None;
         let mut stops = false;
         // The 0x0040 word wrote +0x70 -1 and goal 0 (@0x8cbc0): its gate
         // runs from there.
@@ -383,8 +396,9 @@ impl Behaviour for Interceptor {
             stops = out_of_ammo::stops(&let_go, goal);
         }
         let decision = hunt.or(|| {
-            let (goal, call) = self.patrol(patroller, around, chance);
+            let (goal, call, pick) = self.patrol(patroller, around, chance);
             comm_call = call;
+            inspection_pick = pick;
             stops = out_of_ammo::stops(patroller, goal);
             out_of_ammo::after_patrol(patroller, goal)
         });
@@ -392,6 +406,8 @@ impl Behaviour for Interceptor {
             npc,
             Decision {
                 comm_call,
+                inspection_pick,
+                forgets_inspected,
                 ..decision
             },
             around,
@@ -454,17 +470,19 @@ impl Interceptor {
     }
 
     /// Its goal with nothing to fight: its inspection, hold or patrol;
-    /// and the pre-scan hail when its pick is the player, fresh
+    /// the pre-scan hail when its pick is the player, fresh
     /// (`_InterceptorAI` @0x8ce34-0x8ce4b: the block runs only as the
-    /// pick sets slot 0, never for an inspection kept).
+    /// pick sets slot 0, never for an inspection kept); and the ship a
+    /// fresh pick names, which it records as the last inspected (+0x90,
+    /// @0x8ce3b).
     fn patrol(
         self,
         npc: &Npc,
         around: &Surroundings,
         chance: &mut dyn Chance,
-    ) -> (Goal, Option<CommCall>) {
+    ) -> (Goal, Option<CommCall>, Option<ShipRef>) {
         if inspection_holds(npc, around) {
-            return (npc.goal, None);
+            return (npc.goal, None, None);
         }
         if search_shut(npc, around) || searches_nothing(npc) {
             // The patrol and inspect block needs goal 1 or below, or
@@ -473,12 +491,12 @@ impl Interceptor {
             // 6) waits, and a leaving, plundering or drifting one keeps at
             // it. Inside the gate a kept +0x70 skips it too
             // (@0x8cc93-0x8ccc9 → @0x8d13f).
-            return (super::kept(npc, around).unwrap_or(npc.goal), None);
+            return (super::kept(npc, around).unwrap_or(npc.goal), None, None);
         }
         match inspect(npc, around, chance) {
-            Some(goal) => {
-                let call = (goal == Goal::Inspect(ShipRef::Player)).then_some(CommCall::PreScan);
-                (goal, call)
+            Some(ship) => {
+                let call = (ship == ShipRef::Player).then_some(CommCall::PreScan);
+                (Goal::Inspect(ship), call, Some(ship))
             }
             None => (
                 idle_block::patrol(
@@ -487,6 +505,7 @@ impl Interceptor {
                     chance,
                     self.patrol_uninhabited == RuleSource::Engine,
                 ),
+                None,
                 None,
             ),
         }
@@ -557,10 +576,10 @@ fn reached(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
 
 /// A ship for `npc` to inspect among `around`, picked on `chance`: the
 /// player or an NPC, not itself, not another unled interceptor (see the
-/// module docs), not the one it last inspected nor the one it has just
-/// looked over.
-fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<Goal> {
-    let done = [npc.inspected, npc.goal.inspecting()];
+/// module docs), and not the one its last pick named ([`Npc::inspected`],
+/// +0x90, the only "done" the count and the pick skip, @0x8cd45,
+/// @0x8cdf1): a ship it looked over but did not pick may be picked again.
+fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<ShipRef> {
     let player = (around.active(ShipRef::Player) && around.sees(npc, ShipRef::Player))
         .then_some(ShipRef::Player);
     let npcs = around
@@ -572,15 +591,13 @@ fn inspect(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Option<
     let candidates: Vec<ShipRef> = player
         .into_iter()
         .chain(npcs)
-        .filter(|ship| !done.contains(&Some(*ship)))
+        .filter(|&ship| npc.inspected != Some(ship))
         .collect();
     if candidates.is_empty() {
         return None;
     }
     let len = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
-    candidates
-        .get(chance.below(len) as usize)
-        .map(|&ship| Goal::Inspect(ship))
+    candidates.get(chance.below(len) as usize).copied()
 }
 
 #[cfg(test)]
@@ -1131,6 +1148,8 @@ mod tests {
     fn it_closes_in_until_within_100_on_both_axes_and_then_decides_again() {
         let mut cop = police();
         cop.goal = Goal::Inspect(n(2));
+        // As its pick of NPC 2 recorded it (@0x8ce3b).
+        cop.inspected = Some(n(2));
         let far = ship(2, TRADERS, AiType::WimpyTrader, 100.0, 100.1);
         let npcs = [cop.clone(), far];
         let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[]);
@@ -2086,6 +2105,8 @@ mod tests {
                 visits: None,
                 re_picked: false,
                 looked_over: None,
+                inspection_pick: None,
+                forgets_inspected: false,
                 ends_wait: false,
                 order_word: None,
                 leaves_fleet: false,
@@ -2159,6 +2180,7 @@ mod tests {
             decision_by(0, &[police()], intact, 0, &[0]),
             Decision {
                 comm_call: Some(CommCall::PreScan),
+                inspection_pick: Some(P),
                 ..not(Goal::Inspect(P))
             },
             "an inspection"
@@ -3003,6 +3025,112 @@ mod tests {
         let (decision, _) = hit_by_engine(cop, &[inspected_at(500.0, 0.0)], &[]);
         assert_eq!(decision.goal, Goal::Inspect(n(2)));
         assert!(!decision.re_picked);
+    }
+
+    // The last-inspected ship (+0x90): written by the pick alone
+    // (@0x8ce3b), cleared when its slot goes (@0x8cc40-0x8cc58).
+
+    #[test]
+    fn its_pick_records_the_ship_it_picked() {
+        let (decision, _) = re_picked(police(), &[], 0, None, &[0]);
+        assert_eq!(decision.goal, Goal::Inspect(P));
+        assert_eq!(decision.inspection_pick, Some(P), "@0x8ce3b");
+        let (cop, trader) = trader_cop_inspecting();
+        let (kept, _) = re_picked(cop, &[trader], 0, None, &[]);
+        assert_eq!(kept.goal, Goal::Inspect(n(2)));
+        assert_eq!(
+            kept.inspection_pick, None,
+            "a kept inspection picks nothing"
+        );
+    }
+
+    #[test]
+    fn a_pick_re_picked_or_turned_to_a_flight_in_the_same_think_still_records_the_pick() {
+        // The re-pick (@0x8d41e) comes after the pick's write.
+        let mut cop = ship(1, TRADERS, AiType::Interceptor, 0.0, 0.0);
+        cop.goal = Goal::Idle;
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let (decision, _) = re_picked(
+            cop.clone(),
+            std::slice::from_ref(&trader),
+            0,
+            Some(PIRATES),
+            &[1, 1, 0],
+        );
+        assert_eq!(decision.goal, Goal::Attack(P), "the re-pick's");
+        assert_eq!(decision.inspection_pick, Some(n(2)), "the pick's");
+        // The out-of-ammo flight (@0x8d391) comes after it too.
+        let dry = short(Goal::Idle, AmmoLeft::OnlyUnlimited, true);
+        let (decision, _) = re_picked(dry, std::slice::from_ref(&trader), 0, None, &[1]);
+        assert_eq!(decision.goal, Goal::Flee(n(2)));
+        assert_eq!(decision.inspection_pick, Some(n(2)));
+        // And so does the reach (@0x8f391).
+        let near = ship(2, TRADERS, AiType::WimpyTrader, 50.0, 0.0);
+        let (decision, _) = re_picked(police(), &[near], 0, None, &[1]);
+        assert_eq!(decision.looked_over, Some(n(2)));
+        assert_eq!(decision.inspection_pick, Some(n(2)));
+    }
+
+    #[test]
+    fn it_may_pick_again_a_ship_it_looked_over_but_did_not_pick() {
+        // Only +0x90 is skipped (@0x8cd45, @0x8cdf1).
+        let cop = |inspected| Npc {
+            goal: Goal::Inspect(n(2)),
+            inspected: Some(inspected),
+            ..police()
+        };
+        let others = [
+            ship(2, TRADERS, AiType::WimpyTrader, 50.0, 0.0),
+            ship(4, TRADERS, AiType::WimpyTrader, 900.0, 0.0),
+        ];
+        let (decision, asked) = re_picked(cop(P), &others, 0, None, &[0]);
+        assert_eq!(asked, [2], "NPC 2 and NPC 4");
+        assert_eq!(decision.inspection_pick, Some(n(2)));
+        assert_eq!(decision.looked_over, Some(n(2)), "within reach again");
+        let (decision, asked) = re_picked(cop(n(2)), &others, 0, None, &[0]);
+        assert_eq!(asked, [2], "the player and NPC 4");
+        assert_eq!(decision.goal, Goal::Inspect(P));
+    }
+
+    #[test]
+    fn a_last_inspected_ship_gone_from_its_slot_is_forgotten() {
+        // @0x8cc40-0x8cc58: +0x90 -1 for a slot with +0xb8 clear.
+        let trader = ship(2, TRADERS, AiType::WimpyTrader, 500.0, 0.0);
+        let forgets = |cop: Npc, player: bool| {
+            let npcs = [cop, trader.clone()];
+            let (sites, govts) = (sites(), govts(0, 0));
+            let mut seen = around(&sites, &npcs, &govts, (0.0, -1000.0), 0);
+            if !player {
+                seen.player = None;
+            }
+            Interceptor::default()
+                .decision(&npcs[0], &seen, &mut Draws::of(&[0; 4]))
+                .forgets_inspected
+        };
+        let after = |inspected| Npc {
+            inspected: Some(inspected),
+            ..police()
+        };
+        assert!(forgets(after(n(9)), true), "an NPC gone");
+        assert!(forgets(after(P), false), "the player gone");
+        assert!(!forgets(after(n(2)), true), "an NPC there");
+        assert!(!forgets(after(P), true), "the player there");
+        assert!(!forgets(police(), true), "none to forget");
+        // The think returns first for goal 0x16 (@0x8c8c2) and the helps
+        // (@0x8cb07).
+        for goal in [Goal::CountWait, Goal::Assist(crate::ai::Help::Refuel)] {
+            let cop = Npc {
+                goal,
+                ..after(n(9))
+            };
+            assert!(!forgets(cop, true), "{goal:?}");
+        }
+        // The clear comes before the wait test (@0x8cc86).
+        let waiting = Npc {
+            ai_wait: 5,
+            ..after(n(9))
+        };
+        assert!(forgets(waiting, true), "under a wait");
     }
 
     #[test]

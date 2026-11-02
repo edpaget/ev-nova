@@ -1161,9 +1161,25 @@ pub struct Decision {
     /// The ship an interceptor's think picked, or re-picked, and looked
     /// over at once, already within reach: goal 7's block runs after the
     /// think in one dispatch (@0x8f11e-0x8f394), so the pick ends there,
-    /// goal 0 and no target. The traffic records the ship
-    /// ([`Npc::inspected`]) and scans the player when it is the player.
+    /// goal 0 and no target. The traffic scans the player when it is the
+    /// player, and records nothing of it: only the pick writes +0x90
+    /// ([`inspection_pick`](Self::inspection_pick)).
     pub looked_over: Option<ShipRef>,
+    /// The ship an interceptor's inspection pick named, if it made one
+    /// (`_InterceptorAI` @0x8ce3b writes +0x90 beside +0x70 and state 7):
+    /// the traffic records it as [`Npc::inspected`], which its next pick
+    /// skips (@0x8cd45, @0x8cdf1). The pick's write comes before every
+    /// later write of the think, so it stands when the out-of-ammo flight,
+    /// the lost-sight drop, the re-pick or the reach then moves the goal
+    /// off it. Neither the re-pick nor the reach writes +0x90.
+    pub inspection_pick: Option<ShipRef>,
+    /// Whether an interceptor's think forgets the ship it last inspected,
+    /// whose slot has gone inactive: its clear writes +0x90 -1 for a slot
+    /// with +0xb8 clear (`_InterceptorAI` @0x8cc40-0x8cc58), after the
+    /// provoked branch and before the gate and wait tests. The traffic
+    /// clears [`Npc::inspected`] before it records
+    /// [`inspection_pick`](Self::inspection_pick), in the think's order.
+    pub forgets_inspected: bool,
     /// Whether the think ends its AI wait (+0x4c = -1.0): `_EscortAI`'s
     /// Defend, Attack and formation blocks write it (@0x83c6b-0x83c73,
     /// @0x83d62-0x83d6a, @0x83ea8-0x83eb0) whoever the parent, an NPC
