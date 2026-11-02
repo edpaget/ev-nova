@@ -3,14 +3,16 @@
 //! whatever that ship's state, searching nothing (@0x8bb34, @0x8be1a,
 //! @0x8cc6d-0x8cc7d → @0x8d13f), and goal 3's block ends a flight from a
 //! ship gone from its slot that think, with no search (@0x8dff6 →
-//! @0x8e228-0x8e23d, [`flee_drop`]). The next think searches.
+//! @0x8e228-0x8e23d, [`flee_drop`]), as it ends one from a hitter whose
+//! slot went though the goal's quarry stays. The next think searches.
 //!
 //! [`flee_drop`]: crate::ai::flee_drop
 #![allow(clippy::float_cmp)]
 
 use super::{Traffic, World};
-use crate::ai::fixture::{PIRATES, TRADERS, govts, n, player, ship};
+use crate::ai::fixture::{NEUTRAL, PIRATES, TRADERS, govts, n, player, ship};
 use crate::ai::{Goal, NovaAi};
+use crate::combat::fixture::strike;
 use crate::combat::hull::Condition;
 use crate::govt::Governments;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -121,4 +123,56 @@ fn a_warship_flees_a_ship_breaking_up_until_its_wreck_goes() {
     );
     tick(&mut traffic, &govts);
     assert_eq!(of(&traffic, runner).goal, Goal::Attack(n(pirate.0)));
+}
+
+#[test]
+fn a_hunter_whose_hitter_leaves_idles_that_think_though_the_ship_it_fled_stays() {
+    // A hit rewrites +0x70 (`_DamageShip` @0x3bcf6) and keeps goal 3; the
+    // hitter's slot going makes +0x70 -1 (@0x8d4e4-0x8d50d), and goal 3's
+    // block then ends the flight on +0x70 alone, whatever the goal's
+    // quarry (@0x8dff6 → @0x8e228-0x8e23d). The next think searches,
+    // finding the pirate: the ship it fled is no enemy of it.
+    let govts = govts(0, 0);
+    for ai_type in [AiType::Warship, AiType::Interceptor] {
+        let fled = ship(0, NEUTRAL, AiType::Warship, 0.0, 300.0);
+        let (mut traffic, runner, fled, pirate) = scene(ai_type, fled);
+        let mut hitter = ship(0, PIRATES, AiType::Warship, 300.0, 0.0);
+        hitter.no_ai = true;
+        let hitter = traffic.add_npc_at(hitter, 4);
+        tick(&mut traffic, &govts);
+        assert_eq!(
+            of(&traffic, runner).goal,
+            Goal::Flee(n(fled.0)),
+            "{ai_type:?}"
+        );
+        traffic.answer(
+            &NovaAi::default(),
+            &world(&govts),
+            &[strike(n(runner.0), n(hitter.0))],
+        );
+        let hit = of(&traffic, runner);
+        assert_eq!(
+            (hit.goal, hit.target),
+            (Goal::Flee(n(fled.0)), Some(n(hitter.0))),
+            "{ai_type:?}"
+        );
+        remove(&mut traffic, hitter);
+        // The hunter's own step lets go of it before its next think
+        // (`_HandleShip` @0x33865-0x33888).
+        traffic.let_go_at_step(runner, true);
+        assert_eq!(of(&traffic, runner).target, None, "{ai_type:?}");
+        tick(&mut traffic, &govts);
+        let idle = of(&traffic, runner);
+        assert_eq!(
+            (idle.goal, idle.target, idle.provoked),
+            (Goal::Idle, None, 0.0),
+            "goal 0, sub 0, +0x96 0, no search: {ai_type:?}"
+        );
+        tick(&mut traffic, &govts);
+        assert_eq!(
+            of(&traffic, runner).goal,
+            Goal::Attack(n(pirate.0)),
+            "{ai_type:?}"
+        );
+    }
 }

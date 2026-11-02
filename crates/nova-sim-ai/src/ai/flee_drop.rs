@@ -12,7 +12,8 @@
 //! type. The block never tests the fled ship's condition, so a disabled
 //! or breaking-up one is fled on until its slot goes. The hunters reach it
 //! from their own flight, which they keep on +0x70 whatever that ship's
-//! state ([`warship::hunt`](super::warship::hunt)); a flight a trader
+//! state, and end there themselves when +0x70 is already -1, whatever the
+//! goal's quarry ([`warship::hunt`](super::warship::hunt)); a flight a trader
 //! keeps unprovoked ([`trader_keep`](super::trader_keep)) from a ship
 //! destroyed but still listed ends here too.
 //!
