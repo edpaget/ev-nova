@@ -740,7 +740,9 @@ mod tests {
             assert_eq!(npc.state.heading, held.state.heading, "{at}: no turn");
             assert_eq!(npc.state.velocity, held.state.velocity, "{at}: no thrust");
             assert_eq!(npc.state.position, held.state.position, "{at}: still");
-            assert_eq!(npc.goal, held.goal, "{at}");
+            // Its goal is its type think's, which runs through the wait
+            // (`_AIDispatch` @0x8ff18-0x90016; the traffic's
+            // `waiting_think`): the hold is of its flight alone.
         }
         assert_eq!(session.npcs()[0].mode, Mode::Flying, "the wait is out");
         // It flies its goal: it moves off, or, over the stellar it was

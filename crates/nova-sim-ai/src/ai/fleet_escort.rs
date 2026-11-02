@@ -213,6 +213,8 @@ pub fn decide_by(
     let Some(lead) = parent(npc, around) else {
         return Decision {
             leaves_fleet: true,
+            // Goal 0 and sub 0 (@0x83942-0x8396b).
+            writes_sub: true,
             ..goal_of(Goal::Idle, false)
         };
     };
@@ -588,6 +590,8 @@ mod tests {
                 let (decision, asked) = decided_with(&npcs, order, (0.0, 300.0), &[0]);
                 assert_eq!(decision.goal, Goal::Idle, "{:?} {order:?}", first.condition);
                 assert!(decision.leaves_fleet, "{:?} {order:?}", first.condition);
+                // Its sub 0 (@0x8396b) ends a gate entry under the wait.
+                assert!(decision.writes_sub, "{:?} {order:?}", first.condition);
                 assert!(!decision.ends_wait);
                 assert!(!decision.clears_target);
                 assert!(asked.is_empty());
@@ -604,8 +608,8 @@ mod tests {
         let npcs = [lead(Goal::Idle), fighter(n(1)), threat];
         let (decision, _) = decided_with(&npcs, Some(EscortOrder::Dock), (0.0, 300.0), &[0]);
         assert_eq!(
-            (decision.goal, decision.leaves_fleet),
-            (Goal::Dock(n(1)), false)
+            (decision.goal, decision.leaves_fleet, decision.writes_sub),
+            (Goal::Dock(n(1)), false, false)
         );
     }
 

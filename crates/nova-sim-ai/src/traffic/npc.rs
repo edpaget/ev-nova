@@ -1757,15 +1757,26 @@ impl Npc {
     /// [`Decision::ends_wait`](crate::ai::Decision::ends_wait)), as do
     /// `_AIMakeShipRefuelPlayer` and `_AIMakeShipRepairPlayer` (@0x82de9,
     /// @0x82e20), and `_HandleShip` then steers, thrusts and fires it in
-    /// the same frame (@0x34a54-0x34a72). Any other mode is left: only a
-    /// ship flying or held at its gate decides.
+    /// the same frame (@0x34a54-0x34a72). A ship holding its course
+    /// ([`Mode::Coasting`]) or entering a gate ([`Mode::EnteringGate`])
+    /// runs its think through that wait too, so one whose think ends it
+    /// flies its goal at once, keeping what it owes of a burst: the high
+    /// level runs in the same dispatch and writes its goal's own sub over
+    /// the entry's 0x17 (see
+    /// [`waiting_think`](crate::traffic::waiting_think)). Any other mode is
+    /// left: a ship gliding in, waiting in its gate or bursting out of it
+    /// runs no think.
     pub fn end_wait(&mut self, burst: RuleSource) {
         self.ai_wait = 0;
-        if matches!(self.mode, Mode::HeldAtGate { .. }) {
-            let word = self.burst_word();
-            self.mode = Mode::Flying;
-            self.owed_burst = word.filter(|_| burst == RuleSource::Engine);
-            self.bursts_own_word = false;
+        match self.mode {
+            Mode::HeldAtGate { .. } => {
+                let word = self.burst_word();
+                self.mode = Mode::Flying;
+                self.owed_burst = word.filter(|_| burst == RuleSource::Engine);
+                self.bursts_own_word = false;
+            }
+            Mode::Coasting { .. } | Mode::EnteringGate { .. } => self.mode = Mode::Flying,
+            _ => {}
         }
     }
 
@@ -2930,11 +2941,9 @@ mod tests {
         held.end_wait(RuleSource::Engine);
         assert_eq!((held.mode, held.ai_wait), (Mode::Flying, 0));
         assert!(!held.wait_running());
-        for mode in [
-            Mode::Emerging { ticks_left: 15 },
-            Mode::Coasting { ticks_left: 15 },
-            Mode::Flying,
-        ] {
+        // Waiting in its gate (goal 0x15) it runs no type think
+        // (@0x8ff18-0x8ff20), so no think ends that wait.
+        for mode in [Mode::Emerging { ticks_left: 15 }, Mode::Flying] {
             let mut npc = Npc {
                 mode,
                 ai_wait: 30,
@@ -2943,6 +2952,31 @@ mod tests {
             npc.end_wait(RuleSource::Engine);
             assert_eq!((npc.mode, npc.ai_wait), (mode, 0), "{mode:?}");
             assert_eq!(npc.owed_burst, None, "{mode:?}: no hold, no burst");
+        }
+    }
+
+    #[test]
+    fn a_think_ending_the_wait_of_a_coasting_or_entering_ship_flies_it() {
+        // +0x4c = -1.0 (`_EscortAI` @0x83c73, `_AIMakeShipRefuelPlayer`
+        // @0x82de9): the coast and the entry are that wait, and the high
+        // level runs in the same dispatch, writing its goal's own sub.
+        for mode in [
+            Mode::Coasting { ticks_left: 9 },
+            Mode::EnteringGate {
+                gate: StellarId(300),
+                ticks_left: 9,
+            },
+        ] {
+            let mut npc = Npc {
+                mode,
+                ai_wait: 30,
+                owed_burst: Some(12.0),
+                ..crate::traffic::fixture::npc(1, ShipStats::default())
+            };
+            npc.end_wait(RuleSource::Engine);
+            assert_eq!((npc.mode, npc.ai_wait), (Mode::Flying, 0), "{mode:?}");
+            assert!(!npc.wait_running(), "{mode:?}");
+            assert_eq!(npc.owed_burst, Some(12.0), "{mode:?}: what it owed");
         }
     }
 

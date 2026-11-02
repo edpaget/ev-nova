@@ -790,6 +790,8 @@ impl Behaviour for Warship {
             // The fully-dry drop's +0x70 -1 (@0x8c111).
             clears_target: decision.clears_target || dry,
             holds_target: decision.holds_target.filter(|_| !dry),
+            // Its sub 0 (@0x8c108).
+            writes_sub: decision.writes_sub || dry,
             ..decision
         }
     }
@@ -2693,9 +2695,10 @@ mod tests {
             Decision {
                 travel: TravelWrite::Clear,
                 clears_target: true,
+                writes_sub: true,
                 ..turning(Goal::Idle, true)
             },
-            "fully dry without 0x0080, it drops the player at once, +0x70 and +0x6c -1 (@0x8c111, @0x8c117)"
+            "fully dry without 0x0080, it drops the player at once, sub 0, +0x70 and +0x6c -1 (@0x8c108, @0x8c111, @0x8c117)"
         );
     }
 
@@ -2972,11 +2975,18 @@ mod tests {
         let mut hunter = short_of_ammo(trader_cop(false), AmmoLeft::Dry, false);
         hunter.goal = Goal::Attack(n(2));
         hunter.target = Some(n(2));
-        let decision = decision_of(0, &[hunter, pirate()], 0);
+        let decision = decision_of(0, &[hunter.clone(), pirate()], 0);
         assert_eq!(
             (decision.goal, decision.travel, decision.clears_target),
             (Goal::Idle, TravelWrite::Clear, true)
         );
+        // The sub 0 (@0x8c108) ends a gate entry under the wait
+        // (`waiting_think`).
+        assert!(decision.writes_sub, "sub 0 (@0x8c108)");
+        let armed = short_of_ammo(hunter, AmmoLeft::OnlyUnlimited, false);
+        let kept = decision_of(0, &[armed, pirate()], 0);
+        assert_eq!(kept.goal, Goal::Attack(n(2)), "no drop");
+        assert!(!kept.writes_sub, "no sub written");
     }
 
     #[test]

@@ -527,18 +527,19 @@ mod tests {
 
     #[test]
     fn a_kept_trigger_takes_its_berth_too() {
-        // A disabled ship decides nothing; a coasting one keeps its
-        // trigger, whose launch the wait gate lets through.
+        // A ship with no AI decides nothing (`_DoPlayGameWork` @0x4427e)
+        // and keeps its trigger. (A coasting ship decides through its
+        // wait, `waiting_think`.)
         let mut traffic = Traffic::new();
-        let coasting = Npc {
-            mode: Mode::Coasting { ticks_left: 5 },
+        let unthinking = Npc {
+            no_ai: true,
             trigger: sniping(true),
             ..carrier()
         };
-        traffic.add_npc_at(coasting, 1);
+        traffic.add_npc_at(unthinking, 1);
         let later = traffic.add_npc_at(carrier(), 2);
         let (rooms, triggers) = think(&mut traffic, 60);
-        assert_eq!(rooms, [(later, false)], "only the flying one asks");
+        assert_eq!(rooms, [(later, false)], "only the thinking one asks");
         assert_eq!(triggers[0], sniping(true));
         assert!(!triggers[1].launches());
     }

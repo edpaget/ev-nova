@@ -2636,7 +2636,9 @@ mod tests {
                 board_wait: None,
                 clears_target: false,
                 holds_target: None,
-                writes_sub: false,
+                // The unarmed warship's think dropped its pick fully dry,
+                // writing sub 0 (@0x8c108), before the hunt.
+                writes_sub: true,
                 plunders: None,
                 lost_sight: Some(crate::ai::lost_sight::LostSight::Seen),
                 // The idle block's -1 (@0x8b8ed), with no candidate, which

@@ -159,9 +159,14 @@ impl Npc {
 
     /// It leaves its fleet to jump on its own: no leader, its class's AI
     /// type ([`Npc::leave_fleet`]), goal 2 and sub 4 (`_EscortAI`
-    /// @0x83c11-0x83c51, sub 0xd's detach @0x85ab6-0x85af1). Its stage
-    /// and desired heading are its caller's.
+    /// @0x83c11-0x83c51, sub 0xd's detach @0x85ab6-0x85af1). The sub 4
+    /// (@0x83c3a) ends a gate entry ([`Npc::ends_gate_entry`]), as the fade
+    /// reads sub 0x17 alone: a successor that copied its lost lead's entry
+    /// stays (see
+    /// [`waiting_think`](crate::traffic::waiting_think)). Its stage and
+    /// desired heading are its caller's.
     pub fn detach_for_own_jump(&mut self) {
+        self.ends_gate_entry();
         self.leave_fleet();
         self.goal = Goal::JumpOut;
         self.warp.goal = Some(WarpGoal::Own);
@@ -933,6 +938,71 @@ mod tests {
     }
 
     #[test]
+    fn an_inertialess_successor_entering_a_gate_that_detaches_stays() {
+        // A successor copies its lost lead's goal 0x14 and sub 0x17
+        // (rdm:phase/escort-fleet-fidelity-followups/phase-17-left-out-of-check-parent-exists);
+        // its think's detach writes sub 4 (@0x83c3a), which the fade
+        // reads by sub 0x17 alone, so the entry ends and it stays, holding
+        // its course through the wait left (`waiting_think`).
+        use crate::traffic::autopilot::Outcome;
+        use crate::traffic::npc::Mode;
+        let gate = crate::catalog::StellarId(300);
+        let mut traffic = Traffic::with_interval(1);
+        let mut lead = far(0);
+        lead.state.position = Vec2::new(1500.0, 0.0);
+        lead.begin_own_jump();
+        let lead = traffic.add_npc(lead);
+        let mut escort = far(0);
+        escort.state.position = Vec2::new(500.0, 500.0);
+        escort.leader = Some(lead);
+        escort.stats.inertialess_hull = true;
+        escort.goal = Goal::EnterGate(gate);
+        escort.mode = Mode::EnteringGate {
+            gate,
+            ticks_left: 5,
+        };
+        let escort = traffic.add_npc(escort);
+        traffic.tick_in(
+            &crate::ai::FleetEscortAi::default(),
+            jumping_world(0.0),
+            &[],
+            &mut NeverFires,
+        );
+        let ship = of(&traffic, escort);
+        assert_eq!(ship.leader, None, "detached");
+        assert_eq!(ship.goal, Goal::JumpOut);
+        assert_eq!(ship.mode, Mode::Coasting { ticks_left: 4 }, "it stays");
+        for _ in 0..4 {
+            traffic.tick_in(
+                &crate::ai::FleetEscortAi::default(),
+                jumping_world(0.0),
+                &[],
+                &mut NeverFires,
+            );
+            assert!(
+                !traffic
+                    .departed()
+                    .contains(&(escort, Outcome::EnteredGate(gate))),
+                "it never enters"
+            );
+        }
+        assert_eq!(of(&traffic, escort).mode, Mode::Flying);
+    }
+
+    #[test]
+    fn a_detach_for_its_own_jump_ends_a_gate_entry() {
+        // Sub 4 (@0x83c3a) over sub 0x17.
+        use crate::traffic::npc::Mode;
+        let mut npc = far(1);
+        npc.mode = Mode::EnteringGate {
+            gate: crate::catalog::StellarId(300),
+            ticks_left: 6,
+        };
+        npc.detach_for_own_jump();
+        assert_eq!(npc.mode, Mode::Coasting { ticks_left: 6 });
+    }
+
+    #[test]
     fn a_ship_taken_off_sub_4_by_its_brake_ends_its_stage_facing_it_and_jumps_later() {
         let mut traffic = Traffic::with_interval(1);
         let mut ship = far(0);
@@ -1483,7 +1553,7 @@ mod tests {
     }
 
     #[test]
-    fn after_a_coast_its_first_think_sets_the_jump() {
+    fn a_coast_joins_the_jump_and_its_first_think_after_sets_it() {
         use crate::traffic::npc::Mode;
         let mut traffic = Traffic::with_interval(1);
         let mut ship = players_ship(Goal::Idle, Mode::Coasting { ticks_left: 1 }, 0);
@@ -1492,7 +1562,11 @@ mod tests {
         let mut world = jumping_world(5.0);
         world.player = Some(crate::ai::fixture::player(0.0, 0.0));
         traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
-        assert_eq!(of(&traffic, id).warp.goal, None, "its coast runs no think");
+        // Its coast thinks (`_AIDispatch` @0x8ff18-0x90016): the entry
+        // under the wait writes goal 0xb alone (@0x83a92).
+        let coasted = of(&traffic, id);
+        assert_eq!(coasted.warp.goal, None, "no sub 0xd under the wait");
+        assert!(coasted.warp.joining, "goal 0xb");
         traffic.tick_in(&crate::ai::NovaAi::default(), world, &[], &mut NeverFires);
         assert_eq!(
             of(&traffic, id).warp.goal,

@@ -65,6 +65,7 @@ use crate::ai::fire::Manoeuvre;
 use crate::ai::travel::TravelWrite;
 use crate::ai::{Decision, Goal};
 use crate::combat::ShipRef;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// The ticks a pirate waits while another ship boards its victim (+0x4c
@@ -146,11 +147,14 @@ fn sniping(npc: &Npc, goal: Goal) -> bool {
 
 /// `npc` taking `goal`: one whose goal becomes 0x16 from another takes
 /// [`BOARD_WAIT`] ticks of AI wait ([`Npc::ai_wait`], +0x4c = 120.0
-/// @0x8c71c) and loses its provocation (+0x96 = 0, @0x8c713); one
-/// already waiting keeps what is left of its wait, and its provocation.
-pub(crate) fn enter(npc: &mut Npc, goal: Goal) {
+/// @0x8c71c) over any wait its mode ran, a coast, a gate entry or a hold
+/// at its gate, as `burst` reads a held ship's burst
+/// ([`Npc::takes_count_wait`]), and loses its provocation (+0x96 = 0,
+/// @0x8c713); one already waiting keeps what is left of its wait, and its
+/// provocation.
+pub(crate) fn enter(npc: &mut Npc, goal: Goal, burst: RuleSource) {
     if goal == Goal::CountWait && npc.goal != Goal::CountWait {
-        npc.ai_wait = BOARD_WAIT;
+        npc.takes_count_wait(burst);
         npc.provoked = 0.0;
     }
 }
@@ -479,19 +483,23 @@ mod tests {
     #[test]
     fn a_ship_taking_goal_0x16_waits_120_and_one_already_waiting_keeps_its_count() {
         let mut idle = ship(1, 1, Goal::Idle);
-        enter(&mut idle, Goal::CountWait);
+        enter(&mut idle, Goal::CountWait, RuleSource::Engine);
         assert_eq!(idle.ai_wait, BOARD_WAIT, "+0x4c = 120 (@0x8c71c)");
         let mut kept = waiting(2, 7);
         kept.provoked = 5.0;
-        enter(&mut kept, Goal::CountWait);
+        enter(&mut kept, Goal::CountWait, RuleSource::Engine);
         assert_eq!(kept.ai_wait, 7, "its think keeps goal 0x16");
         assert_eq!(kept.provoked, 5.0, "@0x8c713 runs only on the way in");
         let mut turned = waiting(3, 7);
-        enter(&mut turned, Goal::Attack(ShipRef::Player));
+        enter(
+            &mut turned,
+            Goal::Attack(ShipRef::Player),
+            RuleSource::Engine,
+        );
         assert_eq!(turned.ai_wait, 7, "a new goal writes no +0x4c");
         let mut held = ship(4, 4, Goal::Hold);
         held.ai_wait = 9;
-        enter(&mut held, Goal::Idle);
+        enter(&mut held, Goal::Idle, RuleSource::Engine);
         assert_eq!(held.ai_wait, 9);
     }
 

@@ -358,6 +358,9 @@ pub mod vacated;
 mod voice_cue_tests;
 #[cfg(test)]
 mod wait_sub_1_tests;
+pub mod waiting_think;
+#[cfg(test)]
+mod waiting_think_tests;
 pub mod warp_out;
 #[cfg(test)]
 mod warship_ally_tests;
@@ -1672,16 +1675,17 @@ impl Traffic {
     }
 
     /// Whether each NPC `picked` says (one flag an NPC) thinks this tick:
-    /// flying or held at its gate, intact, with AI, not a pod, not one
-    /// whose type's think returns at once, not paused, and on its own tick
-    /// of the AI timer.
+    /// in a mode that decides ([`waiting_think::decides_in`]: flying, held
+    /// at its gate, holding its course or entering a gate), intact, with
+    /// AI, not a pod, not one whose type's think returns at once, not
+    /// paused, and on its own tick of the AI timer.
     fn thinks_due(&self, picked: &[bool]) -> Vec<bool> {
         self.npcs
             .iter()
             .zip(picked)
             .map(|(npc, &picked)| {
                 picked
-                    && matches!(npc.mode, Mode::Flying | Mode::HeldAtGate { .. })
+                    && waiting_think::decides_in(npc.mode)
                     && npc.condition == Condition::Intact
                     && !npc.no_ai
                     && !pod_flight::is_pod(npc)
@@ -2730,7 +2734,13 @@ impl Traffic {
             if !plunder_dock::kept_by(npc, &decision) {
                 npc.docking = None;
             }
-            board_wait::enter(npc, goal);
+            // The sub write first among the writes of the mode, so a think
+            // that also enters the count wait or ends the wait flies
+            // (`waiting_think`).
+            if decision.writes_sub {
+                npc.takes_sub_write();
+            }
+            board_wait::enter(npc, goal, world.held_burst);
             // The scan's state-7 block writes +0x6c -1 first (@0x8f369).
             let travel = if scans {
                 crate::ai::travel::TravelWrite::Clear
@@ -3717,7 +3727,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_jumping_in_never_decides_while_it_glides_and_holds_its_course() {
+    fn a_ship_jumping_in_never_decides_while_it_glides_and_decides_as_it_holds_its_course() {
+        // Goal 8 takes the glide-in path (`_AIDispatch` @0x8fcf5); the
+        // coast after it is goal 0, whose type AI runs whatever +0x4c
+        // (@0x8ff18-0x90016, `waiting_think`).
         let mut traffic = populated(1, 1);
         traffic.table.avg_ships = 2;
         let behaviour = Recording::deciding(Goal::Idle);
@@ -3728,8 +3741,13 @@ mod tests {
         assert_eq!(behaviour.take(), [NpcId(0)], "the newcomer is jumping in");
         let mut coasted = 0;
         while traffic.npcs()[1].mode != Mode::Flying {
+            let coasting = matches!(traffic.npcs()[1].mode, Mode::Coasting { .. });
             traffic.tick(&behaviour, &[], &mut Draws::of(&[2]));
-            assert_eq!(behaviour.take(), [NpcId(0)]);
+            if coasting {
+                assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)], "coasting");
+            } else {
+                assert_eq!(behaviour.take(), [NpcId(0)], "gliding");
+            }
             if let Mode::Coasting { .. } = traffic.npcs()[1].mode {
                 coasted += 1;
             }
@@ -3742,6 +3760,9 @@ mod tests {
 
     #[test]
     fn a_ship_coming_out_of_a_gate_never_decides_until_it_is_out() {
+        // Goal 0x15 skips the type AI (@0x8ff18) and the burst is goal 8's
+        // glide-in path (@0x8fcf5); the coast after it is goal 0, which
+        // decides through its wait, its fire held (`waiting_think`).
         let mut traffic = populated(2, 1);
         traffic.npcs[1].mode = Mode::Emerging { ticks_left: 2 };
         let firing = Trigger {
@@ -3754,16 +3775,29 @@ mod tests {
             ..Recording::deciding(Goal::JumpOut)
         };
         let mut ticks = 0;
+        let mut coasted = 0;
         while traffic.npcs()[1].mode != Mode::Flying {
+            let coasting = matches!(traffic.npcs()[1].mode, Mode::Coasting { .. });
             traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
-            assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
-            assert_eq!(traffic.npcs()[1].goal, Goal::Idle);
-            assert_eq!(
-                traffic.npcs()[1].trigger,
-                Trigger::default(),
-                "tick {ticks}"
-            );
-            assert_eq!(traffic.npcs()[1].target, None, "tick {ticks}");
+            let ship = &traffic.npcs()[1];
+            if coasting {
+                coasted += 1;
+                assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)], "tick {ticks}");
+                assert_eq!(ship.goal, Goal::JumpOut, "tick {ticks}");
+                assert_eq!(ship.target, Some(ShipRef::Player), "tick {ticks}");
+                if ship.mode != Mode::Flying {
+                    assert_eq!(
+                        crate::ai::fire::gated(ship),
+                        Trigger::default(),
+                        "tick {ticks}"
+                    );
+                }
+            } else {
+                assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
+                assert_eq!(ship.goal, Goal::Idle);
+                assert_eq!(ship.trigger, Trigger::default(), "tick {ticks}");
+                assert_eq!(ship.target, None, "tick {ticks}");
+            }
             ticks += 1;
             assert!(ticks < 100, "out");
         }
@@ -3772,9 +3806,8 @@ mod tests {
         // tick, is 21 ticks; then, with no lead, 30 + Rand(30) holding its
         // course, the draw its last, 29.
         assert_eq!(ticks, 2 + 21 + 59);
-        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
-        assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
-        assert_eq!(traffic.npcs()[1].trigger, firing, "its first decision");
+        assert_eq!(coasted, 59);
+        assert_eq!(traffic.npcs()[1].trigger, firing, "its fire held no more");
     }
 
     /// A planet at the centre and a hypergate at (300, -400) heading ships
@@ -5020,13 +5053,18 @@ mod tests {
         assert!(!released.spared, "the bribe's word is overwritten");
     }
 
-    /// Answers every hit on itself by attacking the player.
+    /// Answers every hit on itself by attacking the player, keeping its
+    /// goal and targeting its quarry as it decides.
     #[derive(Debug)]
     struct Turning;
 
     impl Behaviour for Turning {
         fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
             npc.goal
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
         }
 
         fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
@@ -5043,7 +5081,10 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_entering_a_gate_decides_nothing_but_is_live_and_answers_a_hit() {
+    fn a_ship_entering_a_gate_decides_through_its_entry_and_still_leaves() {
+        // `_AIDispatch` runs the type AI for goal 0x14 whatever +0x4c
+        // (@0x8ff18-0x90016, `waiting_think`), and a goal written over it
+        // leaves the sub 0x17 the fade reads (@0x89508).
         let mut traffic = populated(1, 1);
         traffic.npcs[0].goal = Goal::EnterGate(GATE);
         traffic.npcs[0].mode = Mode::EnteringGate {
@@ -5053,7 +5094,9 @@ mod tests {
         let sites = [gate_at_centre()];
         let recording = Recording::deciding(Goal::JumpOut);
         traffic.tick(&recording, &sites, &mut Draws::of(&[]));
-        assert_eq!(recording.take(), [], "never asked to decide");
+        assert_eq!(recording.take(), [NpcId(0)], "asked to decide");
+        assert_eq!(traffic.npcs()[0].goal, Goal::JumpOut);
+        assert!(traffic.npcs()[0].entering_gate(), "still entering");
         let around = World::new(&sites).around(traffic.npcs());
         assert!(around.live(ShipRef::Npc(NpcId(0))));
         traffic.tick_in(
@@ -5975,13 +6018,18 @@ mod tests {
     }
 
     /// Has ship 0 answer a strike on ship 1, its escort, as a strike on
-    /// itself, and ship 1 answer its own.
+    /// itself, and ship 1 answer its own; each keeps its goal and target
+    /// as it decides, a coasting ship deciding through its wait
+    /// (`waiting_think`).
     #[derive(Debug)]
     struct Guarding;
 
     impl Behaviour for Guarding {
         fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
             npc.goal
+        }
+        fn target(&self, npc: &Npc, _: &Surroundings) -> Option<ShipRef> {
+            npc.target
         }
         fn react(&self, npc: &Npc, strike: &Strike, _: &Surroundings) -> Reaction {
             let answers = strike.ship == ShipRef::Npc(npc.id)
