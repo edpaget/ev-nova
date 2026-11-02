@@ -415,7 +415,7 @@ pub struct Defence {
     /// strength test (`_AICallForReinforcements(ship, 1)` @0x9636d):
     /// rank battle help alone does, whatever the pick found.
     pub reinforce: bool,
-    /// Whether its travel stellar is dropped (+0x6c = -1, `Npc::travel_set`
+    /// Whether its travel stellar is dropped (+0x6c = -1, `Npc::travel`
     /// false) as it takes a threat: `_AIFightThreatToPlayer` does
     /// (@0x81949), `_AIFightEnemyThreatToPlayer` doesn't.
     pub drop_travel: bool,

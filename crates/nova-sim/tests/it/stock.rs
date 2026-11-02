@@ -1580,7 +1580,7 @@ fn test_hits(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
 /// ([`Combat::defend_npcs`]).
 fn defend_npcs(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
     run(combat, ships, arsenal, |combat, fighters, arena, chance| {
-        combat.defend_npcs(fighters, arena, None, false, chance);
+        combat.defend_npcs(fighters, arena, None, None, chance);
     });
 }
 
@@ -2591,10 +2591,15 @@ fn a_stock_point_defence_shot_downs_a_polaron_torpedo_it_touches_but_never_aims_
             180.0,
         )
     };
-    let player = nova_sim::combat::defence::Side {
-        ship: ShipRef::Player,
-        fleet: ShipRef::Player,
-        govt: None,
+    let player = nova_sim::combat::defence::Guard {
+        side: nova_sim::combat::defence::Side {
+            ship: ShipRef::Player,
+            fleet: ShipRef::Player,
+            govt: None,
+        },
+        leader: None,
+        threatens_player: false,
+        scanner: false,
     };
     let shots = [at_player];
     let chosen = nova_sim::combat::defence::choose(
@@ -4416,6 +4421,33 @@ fn boarding(session: &Session, quarry: &nova_sim::Npc) -> nova_sim::Controls {
     }
 }
 
+/// A pass of `session` with the thrust key held and `escort` flying
+/// alongside, every other NPC held disabled first: the Federation's ships
+/// still come in and attack the player, so as the run's draws fall their
+/// shots may strike the escort and destroy it, and disabled they fire no
+/// more.
+fn thrust_alongside(
+    session: &mut Session,
+    data: &GameData,
+    escort: nova_sim::NpcId,
+    chance: &mut dyn nova_sim::Chance,
+) {
+    let others: Vec<_> = session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.id != escort)
+        .map(|npc| npc.id)
+        .collect();
+    for id in others {
+        nova_sim::fixture::disable(session, id);
+    }
+    let thrust = nova_sim::Controls {
+        thrust: true,
+        ..nova_sim::Controls::default()
+    };
+    crate::passes::nova(session, data, thrust, chance);
+}
+
 /// The Done scenario, to the end: once the trader is disabled, the player
 /// flies over it and boards it, which costs 5 more with the Civvies and
 /// with the Federation (the Civvies' `BoardPenalty`); its plunder offers
@@ -4511,11 +4543,7 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     session.plot_course(next).expect("a route");
     let mut tries = 0;
     while session.player().position.length() < session.stats().jump_distance {
-        let thrust = nova_sim::Controls {
-            thrust: true,
-            ..nova_sim::Controls::default()
-        };
-        crate::passes::nova(session, &data, thrust, &mut fight.chance);
+        thrust_alongside(session, &data, fight.trader, &mut fight.chance);
         tries += 1;
         assert!(tries < 10_000, "never got out");
     }
@@ -6791,7 +6819,7 @@ fn every_stock_point_defence_shot_rolls_its_miss_in_its_ships_class() {
             ground,
             &mut chance,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         let rolls: Vec<Option<u32>> = combat

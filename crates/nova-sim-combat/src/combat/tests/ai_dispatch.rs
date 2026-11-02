@@ -94,9 +94,10 @@ fn an_npcs_launch_comes_after_a_lower_slots_point_defence_and_before_a_higher_sl
         bays: true,
         ..Trigger::default()
     };
-    // C flies in A's fleet, so defends against a missile aimed at A.
+    // C follows A, so defends against a missile aimed at A.
     let mut wing = defender(3, -30.0);
     wing.fleet = A;
+    wing.leader = Some(A);
     let mut ships = [
         carrying(2, 30.0, launching),
         wing,
@@ -171,7 +172,7 @@ fn the_npcs_launch_in_their_point_defence_phase_and_never_with_their_picks() {
     assert_eq!(ships[0].rounds.slot(BAY), 2);
     {
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.defend_npcs(&mut fighters, on, None, false, &mut NeverFires);
+        combat.defend_npcs(&mut fighters, on, None, None, &mut NeverFires);
     }
     assert_eq!(combat.take_sorties().len(), 1, "one: the bay then reloads");
     assert_eq!(fired(&combat.take_events()), [(A, BAY, Some(5))]);
@@ -180,7 +181,7 @@ fn the_npcs_launch_in_their_point_defence_phase_and_never_with_their_picks() {
 
 /// The NPCs' whole step-4 loop, on `arena`'s pass.
 fn defend(combat: &mut Combat, fighters: &mut [Fighter], arena: Arena, chance: &mut dyn Chance) {
-    combat.defend_npcs(fighters, arena, None, false, chance);
+    combat.defend_npcs(fighters, arena, None, None, chance);
 }
 
 #[test]
@@ -236,21 +237,15 @@ fn a_reload_zero_bay_launches_on_both_calls_of_one_tick() {
     assert_eq!(ships[0].rounds.slot(BAY), 1);
 }
 
-// A loop that stops after a launch and resumes (rdm weapons-fidelity
-// phase 44): `_LaunchFighter` marks the fighter's slot active at once
-// (@0x3c90b), and the loop rereads each slot as it comes
-// (@0x44270-0x442ae), so the session stops after the slot that launched,
-// puts its fighter in the system and resumes from the next slot.
+// A loop run in bounded runs (rdm combat-ai-fidelity-cross-roadmap phase
+// 6): `_LaunchFighter` marks the fighter's slot active at once (@0x3c90b),
+// and the loop rereads each slot as it comes (@0x44270-0x442ae), so the
+// session runs each slot's turn apart, with what it left in the system
+// before the next.
 
-/// One run of the NPCs' step-4 loop among `ships` on the advance pass,
-/// resuming `after` that slot, stopping at a launch when `stop` is set:
-/// the slot it stopped after.
-fn dispatch(
-    combat: &mut Combat,
-    ships: &mut [Ship],
-    after: Option<Slot>,
-    stop: bool,
-) -> Option<Slot> {
+/// One run of the NPCs' step-4 loop among `ships` on the advance pass: the
+/// slots above `after`, up to `through`.
+fn dispatch(combat: &mut Combat, ships: &mut [Ship], after: Option<Slot>, through: Option<Slot>) {
     let (arsenal, govts) = (Arsenal::default(), Governments::default());
     let arena = Arena {
         pass: GamePass::Advance { double_time: false },
@@ -260,7 +255,7 @@ fn dispatch(
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    combat.defend_npcs(&mut fighters, arena, after, stop, &mut NeverFires)
+    combat.defend_npcs(&mut fighters, arena, after, through, &mut NeverFires);
 }
 
 /// A's defender in slot 1, B's carrier launching in slot 2, C's wing of
@@ -272,6 +267,7 @@ fn launch_between_defenders(combat: &mut Combat) -> [Ship; 4] {
     };
     let mut wing = defender(3, -30.0);
     wing.fleet = A;
+    wing.leader = Some(A);
     let mut ships = [
         defender(1, 0.0),
         carrying(2, 30.0, launching),
@@ -283,11 +279,10 @@ fn launch_between_defenders(combat: &mut Combat) -> [Ship; 4] {
 }
 
 #[test]
-fn the_loop_stops_after_the_slot_that_launched() {
+fn a_run_takes_only_the_slots_up_to_its_last() {
     let mut combat = Combat::default();
     let mut ships = launch_between_defenders(&mut combat);
-    let stopped = dispatch(&mut combat, &mut ships, None, true);
-    assert_eq!(stopped, Some(Slot::Berth(2)));
+    dispatch(&mut combat, &mut ships, None, Some(Slot::Berth(2)));
     assert_eq!(
         fired(&combat.take_events()),
         [(A, QUAD, Some(3)), (B, BAY, Some(5))],
@@ -297,7 +292,7 @@ fn the_loop_stops_after_the_slot_that_launched() {
 }
 
 #[test]
-fn a_resumed_loop_runs_only_the_slots_after() {
+fn a_later_run_takes_only_the_slots_after_the_last_one() {
     let mut combat = Combat::default();
     let mut ships = launch_between_defenders(&mut combat);
     // A bay of `Reload` 0, ready again at once: a second turn would
@@ -309,11 +304,10 @@ fn a_resumed_loop_runs_only_the_slots_after() {
         }),
         1,
     )]);
-    dispatch(&mut combat, &mut ships, None, true);
+    dispatch(&mut combat, &mut ships, None, Some(Slot::Berth(2)));
     combat.take_events();
     combat.take_sorties();
-    let stopped = dispatch(&mut combat, &mut ships, Some(Slot::Berth(2)), true);
-    assert_eq!(stopped, None, "reached the end");
+    dispatch(&mut combat, &mut ships, Some(Slot::Berth(2)), None);
     assert_eq!(
         fired(&combat.take_events()),
         [(C, QUAD, Some(3))],
@@ -326,24 +320,10 @@ fn a_resumed_loop_runs_only_the_slots_after() {
 fn a_loop_that_does_not_stop_runs_every_slot_once() {
     let mut combat = Combat::default();
     let mut ships = launch_between_defenders(&mut combat);
-    let stopped = dispatch(&mut combat, &mut ships, None, false);
-    assert_eq!(stopped, None);
+    dispatch(&mut combat, &mut ships, None, None);
     assert_eq!(
         fired(&combat.take_events()),
         [(A, QUAD, Some(3)), (B, BAY, Some(5)), (C, QUAD, Some(3))]
-    );
-}
-
-#[test]
-fn a_loop_with_no_launch_reaches_the_end_though_it_may_stop() {
-    let mut combat = Combat::default();
-    let mut ships = launch_between_defenders(&mut combat);
-    ships[1].trigger = Trigger::default();
-    let stopped = dispatch(&mut combat, &mut ships, None, true);
-    assert_eq!(stopped, None);
-    assert_eq!(
-        fired(&combat.take_events()),
-        [(A, QUAD, Some(3)), (C, QUAD, Some(3))]
     );
 }
 
@@ -358,17 +338,16 @@ fn a_later_slots_point_defence_can_pick_a_fighter_placed_since() {
         defender(3, 0.0),
         Ship::at(5, 0.0, 150.0).attacking(C),
     ];
-    let stopped = dispatch(&mut combat, &mut ships, Some(Slot::Berth(2)), true);
-    assert_eq!(stopped, None);
+    dispatch(&mut combat, &mut ships, Some(Slot::Berth(2)), None);
     assert_eq!(fired(&combat.take_events()), [(C, QUAD, Some(3))]);
     let mut combat = Combat::default();
     let mut alone = [carrying(2, 30.0, Trigger::default()), defender(3, 0.0)];
-    dispatch(&mut combat, &mut alone, Some(Slot::Berth(2)), true);
+    dispatch(&mut combat, &mut alone, Some(Slot::Berth(2)), None);
     assert_eq!(fired(&combat.take_events()), [], "nothing else to fire at");
 }
 
 #[test]
-fn on_double_times_second_pass_a_run_does_nothing_and_reaches_the_end() {
+fn on_double_times_second_pass_a_run_does_nothing() {
     let launching = Trigger {
         bays: true,
         ..Trigger::default()
@@ -384,7 +363,133 @@ fn on_double_times_second_pass_a_run_does_nothing_and_reaches_the_end() {
         field: Field::default(),
     };
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-    let stopped = combat.defend_npcs(&mut fighters, arena, None, true, &mut NeverFires);
-    assert_eq!(stopped, None);
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
     assert_eq!(combat.take_sorties(), []);
+}
+
+#[test]
+fn a_run_in_which_no_npc_acts_notes_what_the_loop_leaves_of_it() {
+    // A run of ships whose triggers ask nothing of the loop writes only the
+    // field and each ship's slot record (`Combat::defend_npcs`), so the
+    // session can skip the fight's assembly and note them from its ships.
+    let idle = |ship: Ship| Ship {
+        trigger: Trigger::default(),
+        ..ship
+    };
+    let mut ships = [
+        idle(Ship::at(1, 0.0, 0.0).targeting(B)),
+        Ship {
+            plundering: true,
+            docked: true,
+            ..idle(Ship::at(2, 50.0, 20.0).targeting(A))
+        },
+    ];
+    let field = Field {
+        frame: 7,
+        interference: 3,
+        ..Field::default()
+    };
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    for pass in [GamePass::Advance { double_time: false }, GamePass::Again] {
+        let arena = Arena {
+            pass,
+            arsenal: &arsenal,
+            govts: &govts,
+            rules: Rules::default(),
+            field,
+        };
+        let mut looped = Combat::default();
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        looped.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
+        let records: Vec<(Slot, SlotShip)> = fighters
+            .iter()
+            .map(|fighter| {
+                let ship = SlotShip {
+                    class: fighter.ship_type,
+                    plunderer: plunder::Plunderer::of(fighter),
+                    position: fighter.state.position,
+                };
+                (fighter.slot, ship)
+            })
+            .collect();
+        let mut noted = Combat::default();
+        noted.note_idle_run(pass, field, records);
+        assert_eq!(noted, looped, "{pass:?}");
+        let wrote = pass != GamePass::Again;
+        assert_eq!(looped != Combat::default(), wrote, "{pass:?}");
+    }
+}
+
+#[test]
+fn a_jumping_ships_point_defence_acts_in_the_loop_but_fires_nothing() {
+    // `_HandleShipPointDefense` is held back while a jump is under way
+    // (+0x50 above 0), so `Trigger::acts_in_dispatch`, which leaves the
+    // jump aside, says such a ship acts though its run does nothing: the
+    // run leaves the fight as an idle run's notes would.
+    let mut jumping = defender(1, 0.0);
+    jumping.jumping = true;
+    let mut ships = [jumping, missile_firer(2)];
+    let mut combat = Combat::default();
+    missile_flying(&mut combat, &mut ships, B);
+    assert!(ships[0].trigger.acts_in_dispatch(), "point defence asked");
+    let field = Field {
+        frame: 4,
+        ..Field::default()
+    };
+    let (arsenal, govts) = (Arsenal::default(), Governments::default());
+    let arena = Arena {
+        pass: GamePass::Advance { double_time: false },
+        arsenal: &arsenal,
+        govts: &govts,
+        rules: Rules::default(),
+        field,
+    };
+    let mut idle = combat.clone();
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
+    let records: Vec<(Slot, SlotShip)> = fighters
+        .iter()
+        .map(|fighter| {
+            let ship = SlotShip {
+                class: fighter.ship_type,
+                plunderer: plunder::Plunderer::of(fighter),
+                position: fighter.state.position,
+            };
+            (fighter.slot, ship)
+        })
+        .collect();
+    idle.note_idle_run(arena.pass, field, records);
+    assert_eq!(fired(&combat.take_events()), [], "no point defence");
+    assert_eq!(combat, idle);
+    // Not jumping, the same ship fires at the missile.
+    ships[0].jumping = false;
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+    combat.defend_npcs(&mut fighters, arena, None, None, &mut NeverFires);
+    assert_eq!(fired(&combat.take_events()), [(A, QUAD, Some(3))]);
+}
+
+/// B as the fight sees it, in `condition`.
+fn b_in(condition: Condition) -> Target {
+    let mut ship = Ship::at(2, 0.0, 0.0);
+    ship.condition = condition;
+    ship.fighter().as_target()
+}
+
+#[test]
+fn a_pick_finds_its_target_while_its_slot_is_active_breaking_up_included() {
+    use crate::combat::ai_dispatch::active;
+    let breaking_up = Condition::Dying {
+        ticks_left: 9,
+        starting: false,
+    };
+    for condition in [Condition::Intact, Condition::Disabled, breaking_up] {
+        let targets = [b_in(condition)];
+        let found = active(Some(B), &targets);
+        assert_eq!(found.map(|target| target.ship), Some(B), "{condition:?}");
+    }
+    let destroyed = [b_in(Condition::Destroyed)];
+    assert_eq!(active(Some(B), &destroyed), None);
+    let others = [b_in(Condition::Intact)];
+    assert_eq!(active(Some(C), &others), None);
+    assert_eq!(active(None, &others), None);
 }

@@ -4,18 +4,25 @@
 //! and whose leader +0x9a is -1, in place of its AI type's think
 //! (@0x8ff64-0x8ff96; see [`NovaAi`](crate::ai::NovaAi)).
 //!
-//! Its decision ([`decide`]), in the original's order:
+//! Its decision ([`decide`]) and its writes of the travel stellar (+0x6c,
+//! [`Decision::travel`]), in the original's order:
 //!
 //! - **Disabled** (`_IsDisabled`): goal and sub-goal 0, travel stellar and
 //!   target -1 (@0x8b217-0x8b23e): [`Goal::Idle`]. The traffic never
-//!   decides for a disabled ship, so only this core's own test reaches it.
+//!   decides for a disabled ship, as `_AIDispatch` sends one to its reset
+//!   first (@0x8fece-0x8ff13), which writes the same -1, so only this
+//!   core's own test reaches it.
 //! - **Waiting** in goal 0x16 ([`Goal::CountWait`]): it keeps waiting
 //!   (@0x8b24a). Only a pirate takes goal 0x16, and `_AIDispatch` sends a
 //!   miner to this AI before a pirate's (@0x8ff64), so no ship reaches it.
 //! - **Provoked** (+0x96 > 0 with a target): state 3, [`Goal::Flee`] from
 //!   its attacker ([`provoked_by`]), then a tail call to `_AICallForHelp`
 //!   (@0x8b46c-0x8b483): its [`Decision::comm_call`] (see
-//!   [`call_for_help`](crate::ai::call_for_help)).
+//!   [`call_for_help`](crate::ai::call_for_help)). The target is +0x70,
+//!   which names the inspected ship of a goal 7 a successor copied from a
+//!   lost interceptor lead ([`Npc::slot_target`]), so it flees that ship.
+//!   Unprovoked, the tests below write a goal every think, so a copied
+//!   goal 7 never survives it.
 //! - **[`MINES`]**, unless already leaving (state 2, [`Goal::JumpOut`]):
 //!   with asteroid slot 0 live ([`Surroundings::mining_rock`]) state 16,
 //!   [`Goal::Mine`]; without, state 6, [`Goal::Wait`], its target and
@@ -34,11 +41,16 @@
 //! - **[`MINES`] alone** keeps the goal the first test gave.
 //! - **The shuttle** (@0x8b35f-0x8b463): while its AI wait (+0x4c) runs
 //!   ([`Npc::wait_running`]), state 0 with no travel stellar
-//!   ([`Goal::Idle`]). Otherwise it keeps the stellar it is bound for
-//!   (+0x6c), if the system still lists it, shown or not, or picks the
-//!   nearest the system lists ([`select_nearest_any_stellar`] over
-//!   [`Surroundings::listed`]), leaving out the stellar it last
-//!   visited (+0x92, [`Npc::visited`], @0x8b373). With a stellar, and not
+//!   ([`Goal::Idle`], +0x6c -1 @0x8b45d). Otherwise it keeps the stellar
+//!   its travel stellar holds ([`travel::held`]: its goal's, its gate's or
+//!   [`Npc::travel`]), testing it against -1 alone (@0x8b36c-0x8b371), so
+//!   a stellar the system doesn't list, or a slot read as the stellar of
+//!   ID 128 + slot ([`travel::of_slot`]), is landed on as one it does; or
+//!   with none it picks the nearest the system lists
+//!   ([`select_nearest_any_stellar`] over [`Surroundings::listed`]),
+//!   leaving out the stellar it last visited (+0x92, [`Npc::visited`],
+//!   @0x8b373), and writes the pick, or -1 for none, to +0x6c (@0x8b386),
+//!   leaving or fleeing or not. With a stellar, and not
 //!   leaving or fleeing (states 2 and 3), it lands there (state 1),
 //!   recording it as visited on every think it heads off, a fresh pick or
 //!   one kept (+0x92 = +0x6c, @0x8b3a1-0x8b3ae, [`Decision::visits`]).
@@ -68,6 +80,7 @@
 //! a stage at or below 0 before then.
 
 use crate::ai::call_for_help::when_fleeing;
+use crate::ai::travel::{self, TravelWrite};
 use crate::ai::{Behaviour, Decision, Goal, Surroundings, leave, provoked_by};
 use crate::cargo_box::any_scoopable;
 use crate::catalog::StellarId;
@@ -90,13 +103,13 @@ pub const MINER_BITS: u16 = 0x0003;
 
 /// Whether `_AIDispatch` sends `npc` to `_MinerAI` in place of its type's
 /// think (@0x8ff64-0x8ff96): a `shïp` `Flags3` & 3 and leader +0x9a -1,
-/// which the player's escorts and fighters, mission escorts and an NPC
-/// carrier's fighters never have.
+/// which the player's escorts and fighters, mission escorts, let go or not
+/// ([`Npc::thinks_as_escort`]), and an NPC carrier's fighters never have.
 #[must_use]
 pub fn thinks_for(npc: &Npc) -> bool {
     npc.miner & MINER_BITS != 0
         && npc.leader.is_none()
-        && !npc.escorts_player()
+        && !npc.thinks_as_escort()
         && npc.carrier.is_none()
 }
 
@@ -111,12 +124,12 @@ impl Behaviour for MinerAi {
         decide(npc, around)
     }
 
-    /// Its [`decide`] goal, with a distress call fleeing, as `_MinerAI`
-    /// tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483,
-    /// [`when_fleeing`]), and the stellar it sets off for recorded as
-    /// visited (+0x92 = +0x6c, @0x8b3ae).
+    /// Its [`think`]'s goal and travel-stellar write, with a distress call
+    /// fleeing, as `_MinerAI` tail-calls `_AICallForHelp` in state 3
+    /// (@0x8b46c-0x8b483, [`when_fleeing`]), and the stellar it sets off for
+    /// recorded as visited (+0x92 = +0x6c, @0x8b3ae).
     fn decision(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Decision {
-        let goal = decide(npc, around);
+        let (goal, travel) = think(npc, around);
         // Only the shuttle lands (state 1): the mining path gives a mine,
         // a stop or a leave.
         let visits = match goal {
@@ -127,6 +140,7 @@ impl Behaviour for MinerAi {
             goal,
             comm_call: when_fleeing(goal),
             visits,
+            travel,
             ..Decision::default()
         }
     }
@@ -139,83 +153,95 @@ impl Behaviour for MinerAi {
 }
 
 /// `npc`'s goal among `around`, as `_MinerAI` decides it (see the module
-/// docs).
+/// docs): its think's.
 #[must_use]
 pub fn decide(npc: &Npc, around: &Surroundings) -> Goal {
+    think(npc, around).0
+}
+
+/// `npc`'s goal among `around` and how `_MinerAI` writes its travel
+/// stellar (+0x6c) on the way (see the module docs).
+fn think(npc: &Npc, around: &Surroundings) -> (Goal, TravelWrite) {
     if npc.condition != Condition::Intact {
-        return Goal::Idle;
+        // +0x6c and +0x70 -1 (@0x8b232-0x8b238).
+        return (Goal::Idle, TravelWrite::Clear);
     }
     if let Goal::CountWait = npc.goal {
-        return npc.goal;
+        return (npc.goal, TravelWrite::Keep);
     }
     if let Some(attacker) = provoked_by(npc, around) {
         // `_MinerAI` tail-calls `_AICallForHelp` in state 3 (@0x8b46c-0x8b483):
         // its decision carries the call (`MinerAi::decision`).
-        return Goal::Flee(attacker);
+        return (Goal::Flee(attacker), TravelWrite::Keep);
     }
     let mines = npc.miner & MINES != 0;
     let scoops = npc.miner & SCOOPS != 0;
     let mut state = npc.goal;
-    let mut nav = bound_for(npc.goal, around);
+    let mut held = travel::held(npc);
+    let mut write = TravelWrite::Keep;
     if mines && state != Goal::JumpOut {
         if around.mining_rock.is_some() {
             state = Goal::Mine;
         } else {
+            // +0x70 and +0x6c -1, state 6 (@0x8b2c5-0x8b2d1).
             state = Goal::Wait;
-            nav = None;
+            held = None;
+            write = TravelWrite::Clear;
         }
     }
     if !scoops {
         return if mines {
-            state
+            (state, write)
         } else {
-            shuttle(npc, around, state, nav)
+            shuttle(npc, around, state, held)
         };
     }
     if npc.can_scoop {
         if npc.cargo.total() >= u64::from(npc.holds) {
-            return Goal::JumpOut;
+            return (Goal::JumpOut, write);
         }
         if any_scoopable(around.boxes) {
-            return Goal::Scoop;
+            return (Goal::Scoop, write);
         }
         if mines {
-            return Goal::Mine;
+            return (Goal::Mine, write);
         }
     }
-    shuttle(npc, around, state, nav)
-}
-
-/// The stellar a ship flying `goal` is bound for (+0x6c), while the
-/// system still lists it, shown or not ([`Surroundings::listed`]).
-fn bound_for(goal: Goal, around: &Surroundings) -> Option<StellarId> {
-    match goal {
-        Goal::Land(stellar) if around.listed.iter().any(|site| site.id == stellar) => Some(stellar),
-        _ => None,
-    }
+    shuttle(npc, around, state, held)
 }
 
 /// The nearest-stellar shuttle (@0x8b35f-0x8b463) of `npc` among
-/// `around`, its state so far `state` and the stellar it is bound for
-/// `nav` (see the module docs).
-fn shuttle(npc: &Npc, around: &Surroundings, state: Goal, nav: Option<StellarId>) -> Goal {
+/// `around`, its state so far `state` and the travel stellar it holds
+/// `held` (see the module docs), and how it writes +0x6c: -1 while its
+/// wait runs (@0x8b45d), the pick's result when it held none (@0x8b386),
+/// and nothing when it held one.
+fn shuttle(
+    npc: &Npc,
+    around: &Surroundings,
+    state: Goal,
+    held: Option<StellarId>,
+) -> (Goal, TravelWrite) {
     if npc.wait_running() {
-        return Goal::Idle;
+        return (Goal::Idle, TravelWrite::Clear);
     }
-    let nav = nav.or_else(|| {
-        select_nearest_any_stellar(
+    let (nav, write) = if let Some(stellar) = held {
+        (Some(stellar), TravelWrite::Keep)
+    } else {
+        let pick = select_nearest_any_stellar(
             npc.state.position,
             npc.govt,
             around.listed,
             around.govts,
             npc.visited,
-        )
-    });
-    match nav {
+        );
+        (pick, travel::copying(pick))
+    };
+    let goal = match nav {
         Some(stellar) if !matches!(state, Goal::JumpOut | Goal::Flee(_)) => Goal::Land(stellar),
         _ if leave::can_jump(npc, around.jump_fuel) => Goal::JumpOut,
         _ => Goal::Wait,
-    }
+    };
+    (goal, write)
 }
 
 #[cfg(test)]
@@ -223,6 +249,7 @@ fn shuttle(npc: &Npc, around: &Surroundings, state: Goal, nav: Option<StellarId>
 mod tests {
     use super::*;
     use crate::ai::fixture::{PIRATES, TRADERS, n, ship};
+    use crate::ai::travel::{self, TravelWrite};
     use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::cargo_box::CargoBox;
     use crate::catalog::{LandingSite, StellarId};
@@ -350,8 +377,8 @@ mod tests {
         let gone = [planet(129, 0.0, -100.0), planet(130, -200.0, 0.0)];
         assert_eq!(
             deciding(&bound, &gone, None),
-            Goal::Land(StellarId(129)),
-            "its stellar gone, it picks again"
+            Goal::Land(StellarId(128)),
+            "kept though the system lists it no longer: the read tests -1 alone (@0x8b36c)"
         );
     }
 
@@ -473,6 +500,152 @@ mod tests {
         let around = Surroundings::new(&[], &npcs);
         let decided = MinerAi.decision(&fleeing, &around, &mut Draws::of(&[]));
         assert_eq!((decided.goal, decided.visits), (Goal::Flee(n(2)), None));
+    }
+
+    // Its +0x6c.
+
+    /// A stellar held before the think, listed in [`stellars`].
+    const HELD: StellarId = StellarId(130);
+
+    /// `npc` holding `travel` in goal 0.
+    fn holding(npc: Npc, travel: Option<StellarId>) -> Npc {
+        Npc {
+            goal: Goal::Idle,
+            travel,
+            ..npc
+        }
+    }
+
+    /// `npc`'s decision's goal and travel write among [`stellars`].
+    fn wrote(npc: &Npc, rock: Option<Asteroid>) -> (Goal, TravelWrite) {
+        let decided = decision(npc, &stellars(), rock);
+        (decided.goal, decided.travel)
+    }
+
+    #[test]
+    fn a_disabled_miner_clears_its_travel_stellar() {
+        // Goal and sub-goal 0, +0x6c and +0x70 -1 (@0x8b220-0x8b238).
+        let mut disabled = holding(miner(SCOOPS, false), Some(HELD));
+        disabled.condition = Condition::Disabled;
+        assert_eq!(wrote(&disabled, None), (Goal::Idle, TravelWrite::Clear));
+    }
+
+    #[test]
+    fn a_mining_miner_with_no_rock_clears_it() {
+        // +0x70 and +0x6c -1, state 6 (@0x8b2c5-0x8b2d1).
+        let zephyr = holding(miner(MINES, false), Some(HELD));
+        assert_eq!(wrote(&zephyr, None), (Goal::Wait, TravelWrite::Clear));
+        assert_eq!(
+            wrote(&zephyr, Some(rock())),
+            (Goal::Mine, TravelWrite::Keep),
+            "a live rock writes none"
+        );
+    }
+
+    #[test]
+    fn a_shuttle_whose_wait_runs_clears_it() {
+        // +0x6c -1, state 0 (@0x8b45d-0x8b463).
+        let mut waiting = holding(miner(SCOOPS, false), Some(HELD));
+        waiting.ai_wait = 5;
+        assert_eq!(wrote(&waiting, None), (Goal::Idle, TravelWrite::Clear));
+    }
+
+    #[test]
+    fn a_shuttle_with_no_pick_clears_it() {
+        // The nearest pick's -1 written (@0x8b386).
+        let shuttle = holding(miner(SCOOPS, false), None);
+        let decided = decision(&shuttle, &[], None);
+        assert_eq!(
+            (decided.goal, decided.travel),
+            (Goal::JumpOut, TravelWrite::Clear)
+        );
+    }
+
+    #[test]
+    fn a_shuttle_leaving_that_picks_writes_it() {
+        // State 2 or 3 picks all the same (@0x8b36c-0x8b386), then leaves
+        // (@0x8b38e-0x8b39f).
+        for goal in [Goal::JumpOut, Goal::Flee(n(2))] {
+            let shuttle = Npc {
+                goal,
+                ..miner(SCOOPS, false)
+            };
+            assert_eq!(
+                wrote(&shuttle, None),
+                (Goal::JumpOut, TravelWrite::Set(StellarId(129))),
+                "{goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shuttle_bound_for_a_stellar_keeps_it() {
+        let bound = Npc {
+            goal: Goal::Land(StellarId(128)),
+            ..miner(SCOOPS, false)
+        };
+        assert_eq!(
+            wrote(&bound, None),
+            (Goal::Land(StellarId(128)), TravelWrite::Keep)
+        );
+        let leaving = Npc {
+            goal: Goal::JumpOut,
+            travel: Some(HELD),
+            ..miner(SCOOPS, false)
+        };
+        assert_eq!(
+            wrote(&leaving, None),
+            (Goal::JumpOut, TravelWrite::Keep),
+            "held while it leaves"
+        );
+    }
+
+    #[test]
+    fn a_shuttle_holding_a_stellar_lands_on_it_though_its_landing_goal_ended() {
+        // The read tests +0x6c against -1 alone (@0x8b36c), so a goal 3
+        // that ended at the high level leaves the stellar to land on.
+        let shuttle = holding(miner(SCOOPS, false), Some(HELD));
+        let decided = decision(&shuttle, &stellars(), None);
+        assert_eq!(decided.goal, Goal::Land(HELD), "not the nearest, 129");
+        assert_eq!(decided.visits, Some(HELD), "+0x92 = +0x6c (@0x8b3ae)");
+    }
+
+    #[test]
+    fn a_shuttle_holding_a_slot_lands_on_the_stellar_it_names() {
+        // No bounds test: slot 6 names stellar 134, not among the system's.
+        let shuttle = holding(miner(SCOOPS, false), Some(travel::of_slot(6)));
+        assert_eq!(
+            wrote(&shuttle, None),
+            (Goal::Land(StellarId(134)), TravelWrite::Keep)
+        );
+        let bound = Npc {
+            goal: Goal::Land(StellarId(140)),
+            ..miner(SCOOPS, false)
+        };
+        assert_eq!(
+            deciding(&bound, &stellars(), None),
+            Goal::Land(StellarId(140)),
+            "its goal's stellar, listed or not"
+        );
+    }
+
+    #[test]
+    fn a_landed_shuttle_picks_afresh_once_its_wait_cleared_it() {
+        // `stay` leaves +0x6c set; the think in its wait clears it, and
+        // the next pick leaves out the stellar it visited.
+        let mut shuttle = miner(SCOOPS, false);
+        crate::traffic::land_flight::stay(&mut shuttle, StellarId(129), &mut Draws::of(&[0]));
+        assert_eq!(shuttle.travel, Some(StellarId(129)));
+        let decided = decision(&shuttle, &stellars(), None);
+        assert_eq!(decided.goal, Goal::Idle);
+        travel::take(&mut shuttle, decided.travel, decided.goal);
+        shuttle.goal = decided.goal;
+        assert_eq!(shuttle.travel, None);
+        shuttle.ai_wait = 0;
+        assert_eq!(
+            wrote(&shuttle, None),
+            (Goal::Land(StellarId(130)), TravelWrite::Set(StellarId(130)))
+        );
     }
 
     #[test]
@@ -732,6 +905,47 @@ mod tests {
             Goal::Mine,
             "its attacker gone, it decides as unprovoked"
         );
+    }
+
+    #[test]
+    fn a_provoked_miner_with_a_copied_inspection_flees_the_inspected_ship() {
+        // Its provoked branch reads +0x70 (@0x8b254-0x8b265), the inspected
+        // ship of a lost lead's goal 7 (`Npc::slot_target`).
+        let mut provoked = miner(MINER_BITS, true);
+        provoked.provoked = 5.0;
+        provoked.goal = Goal::Inspect(n(2));
+        let npcs = [provoked, ship(2, PIRATES, AiType::Warship, 50.0, 0.0)];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(decide(&npcs[0], &around), Goal::Flee(n(2)));
+    }
+
+    #[test]
+    fn a_miner_overwrites_a_copied_inspection_every_think() {
+        // Unprovoked, its `Flags3` writes a goal every think: mine 0x10
+        // (@0x8b2ba), wait 6 (@0x8b2c5-0x8b2d1), scoop 0x11 (@0x8b33b) or
+        // the shuttle's (@0x8b35f-0x8b463).
+        let inspecting = |bits, can_scoop| Npc {
+            goal: Goal::Inspect(n(2)),
+            ..miner(bits, can_scoop)
+        };
+        let sites = stellars();
+        assert_eq!(
+            deciding(&inspecting(MINES, false), &sites, Some(rock())),
+            Goal::Mine
+        );
+        assert_eq!(
+            deciding(&inspecting(MINES, false), &sites, None),
+            Goal::Wait
+        );
+        for (bits, can_scoop) in [(SCOOPS, true), (MINES, false), (MINER_BITS, true)] {
+            for rock in [Some(rock()), None] {
+                let goal = deciding(&inspecting(bits, can_scoop), &sites, rock);
+                assert!(
+                    !matches!(goal, Goal::Inspect(_)),
+                    "{bits:#x} {can_scoop} {rock:?}: {goal:?}"
+                );
+            }
+        }
     }
 
     #[test]

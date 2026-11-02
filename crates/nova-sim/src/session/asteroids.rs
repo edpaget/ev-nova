@@ -8,7 +8,7 @@
 //! `_DoPlayGameWork`'s edge spawn (@0x44243) and `_HandleAsteroids`
 //! (@0x444f5). [`Session::game_work`] runs it after the ship loop and
 //! before the beams (`_HandleBeams` @0x4453d), jumping too, so it steps
-//! the field through a jump's lead-in, and [`Session::tick_again`]
+//! the field through a jump, and [`Session::tick_again`]
 //! runs it in the same place of the second pass without the spawn:
 //! `_DoPlayGameWork(0)` jumps past it with the AI (@0x4402a to
 //! @0x44350), and `_HandleAsteroids` runs on both passes. The original

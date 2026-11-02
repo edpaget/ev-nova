@@ -111,6 +111,8 @@ mod tests {
             wage,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -194,7 +196,8 @@ mod tests {
 
     #[test]
     fn a_disabled_ship_the_player_leads_counts_for_nothing() {
-        // `_IsDisabled` @0x6c0ce; a disabled mission escort stays led.
+        // `_IsDisabled` @0x6c0ce; a disabled mission escort is led until
+        // its dispatch's reset.
         use crate::session::mission_escorts::tests::{escorting, flying};
         use crate::session::mission_ships::tests::ships_catalog;
         let mut catalog = ships_catalog(escorting(-1, 0));

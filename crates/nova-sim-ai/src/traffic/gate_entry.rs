@@ -61,6 +61,19 @@
 //!   leaves through a gate counts nothing and comes back at the next
 //!   setup, as [`RuleKey::GateExitCounts`](crate::RuleKey::GateExitCounts)
 //!   says.
+//! - **Disabled while it fades**, `_AIDispatch`'s reset reaches it: its
+//!   +0x50 is 0 (@0x8db8f), off the glide and jump paths, and the throttle
+//!   passes it at the simulation's interval of 1 (@0x8fdee-0x8fe6f). A ship
+//!   `_IsDisabled` there (disabled, or breaking up but for a stellar's
+//!   defence ship) takes goal 0 and sub 0 (@0x8ff0a), so from that dispatch
+//!   it is no longer entering: drawn unfaded and not freed, it drifts
+//!   disabled (@0x33950-0x339a1, @0x34424 → @0x34679) while its +0x4c
+//!   counts down (@0x3501f-0x35048), and one breaking up explodes where it
+//!   is ([`Npc::ends_gate_entry`](crate::traffic::npc::Npc::ends_gate_entry),
+//!   [`disabled_reset`](crate::traffic::disabled_reset)). Disabled after
+//!   the dispatch (`_HandleShot`, the ship loop, the beams), that frame's
+//!   display still fades it and frees it once its wait is below 1.0, and
+//!   the next dispatch resets it.
 //! - **Hit while it fades**, `_DamageShip` can call
 //!   `_AIMakeShipAttackPlayer` (@0x3be69): for goal 0x14 it sets goal 4,
 //!   +0x6c = -1 and the target, but leaves the sub-goal (@0x89d0b-0x89d4d).
@@ -107,7 +120,7 @@ use crate::handling::Handling;
 use crate::landing::{TypeWidth, stellar_width};
 use crate::traffic::approach_flight;
 use crate::traffic::emerge::FULL_LEVEL;
-use crate::traffic::held_burst::{Flight, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::npc::AiType;
 
 /// The wait a ship entering a gate starts at, as it reaches the box: 16.0
@@ -136,17 +149,12 @@ pub fn gate_reach(site: &LandingSite, type_widths: &BTreeMap<StellarId, TypeWidt
 }
 
 /// State 20's flight outside the gate's box (@0x8dc42-0x8dc55): sub 2,
-/// [`approach_flight::toward`] the gate at `gate` for a ship at `state` on
-/// `handling`, whose thrust writes +0x34 ([`Word::Writes`]) and which
-/// flies by the handling it hands back, capped near the gate as it
+/// [`approach_flight::flight`] toward the gate at `gate` for a ship at
+/// `state` on `handling`, whose thrust writes +0x34 (`Word::Writes`) and
+/// which flies by the handling it hands back, capped near the gate as it
 /// thrusts. It never brakes: inside the box the velocity is zeroed.
-pub(crate) fn approach(state: &mut ShipState, gate: Vec2, handling: &Handling) -> Flight {
-    let (controls, flown) = approach_flight::toward(state, gate, handling);
-    Flight {
-        controls,
-        word: Word::Writes,
-        flown: Some(flown),
-    }
+pub(crate) fn approach(state: &ShipState, gate: Vec2, handling: &Handling) -> Flight {
+    approach_flight::flight(state, gate, handling)
 }
 
 /// Whether a ship at `ship` is inside the box of the gate at `gate`, of

@@ -897,14 +897,24 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
 // The fuel is compared with the very value saved.
 #[test]
 #[allow(clippy::float_cmp)]
-fn an_opened_pilot_resumes_where_its_saved_jump_left_it_with_its_fuel() {
+fn an_opened_pilot_left_in_flight_past_a_jump_reopens_where_it_was_last_saved() {
     let store = MemoryPilots::new();
     let mut first = Harness::on_the_menu(SharedChance::default(), &store);
     first.new_pilot("Ada");
-    first.jump_to_beta();
+    let start = first.session().system();
     let fuel = first.session().reserves().fuel.now;
+    first.jump_to_beta();
+    assert_ne!(
+        first.session().reserves().fuel.now,
+        fuel,
+        "the jump burned fuel"
+    );
     first.press(Key::Escape);
-    assert_ne!(first.showing(), Showing::Flight, "left flight, saving");
+    assert_ne!(
+        first.showing(),
+        Showing::Flight,
+        "left flight, saving nothing"
+    );
 
     let mut harness = Harness::on_the_menu(SharedChance::default(), &store);
     harness.choose(MenuChoice::OpenPilot);
@@ -912,7 +922,8 @@ fn an_opened_pilot_resumes_where_its_saved_jump_left_it_with_its_fuel() {
     harness.enter_ship();
     assert_eq!(harness.showing(), Showing::Flight);
     let session = harness.session();
-    assert_eq!(session.system(), SystemId(129));
+    assert_ne!(start, SystemId(129));
+    assert_eq!(session.system(), start, "not past the jump");
     assert_eq!(session.reserves().fuel.now, fuel);
 }
 

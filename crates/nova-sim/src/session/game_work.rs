@@ -29,31 +29,35 @@
 //!    @0x36c7f-0x36d45).
 //! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
 //!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
-//!    module), the traffic's think half,
-//!    the damage aimed read after the passes (`_CalculateTargetedDamage`
-//!    @0x44223), the arrivals (`_EnterMoreShips` @0x44237), the fleets
-//!    announced and the refuel landed, then every NPC's point defence and
-//!    fighter launches, slot by slot (`_AIFireTurret` @0x80b0d,
-//!    `_AILaunchFighter` @0x8e6fa and @0x8732f; [`Combat::defend_npcs`]),
-//!    each fighter launched put in the system as its slot's turn ends
-//!    (`_LaunchFighter`, see the `fighters` module), a fighter above its
-//!    carrier thinking then, and the loop resumed after that slot
-//!    ([`Session::dispatch_npcs`]); then the thinks' voice cues answered
-//!    in berth order; then the attack quotes from before the loop said
-//!    ([`Session::say_quotes_before_the_line`]), and the frame's work on
-//!    the line, every think's attack quote, calls, scan, plunders and
-//!    refuel note, the launched fighters' among them, settled in slot
-//!    order ([`Session::settle_line_queue`], see the `comm_calls` module).
-//!    All before `_HandleShot`, so the fighters move on their launch
-//!    frame.
+//!    module), the damage aimed read after the passes
+//!    (`_CalculateTargetedDamage` @0x44223), the arrivals
+//!    (`_EnterMoreShips` @0x44237) and the passes run for every ship
+//!    before the first slot, the fleets announced and the arrivals of a
+//!    Derelict government held; the attack quotes from before the loop
+//!    said ([`Session::say_quotes_before_the_line`]); then `_AIDispatch`'s
+//!    loop ([`Session::dispatch_npcs`]): for each occupied slot in turn,
+//!    its think, the refuel it gave landed, its point defence and fighter
+//!    launches (`_AIFireTurret` @0x80b0d, `_AILaunchFighter` @0x8e6fa and
+//!    @0x8732f; [`Combat::defend_npcs`]), each fighter it launched put in
+//!    the system (`_LaunchFighter`, see the `fighters` module), so a
+//!    fighter above its carrier is reached as its slot comes, and its work
+//!    on the line, its attack quote, calls, scan, plunders and refuel
+//!    note, settled ([`Session::settle_line_through`], see the
+//!    `comm_calls` module); then the thinks' voice cues answered in berth
+//!    order, and what is left on the line settled
+//!    ([`Session::settle_line_queue`]). All before `_HandleShot`, so the
+//!    fighters move on their launch frame.
 //! 5. `_HandleShot` (@0x44385): slot by slot, each spent shot's end of
 //!    life or each other shot's move and lock, landing at its visit,
 //!    their hits settled and answered.
 //! 6. The ship loop (@0x4445c-0x444c4): slot by slot, each NPC's
-//!    `_HandleShip` (@0x44483), its flight (the traffic's fly half, one
-//!    NPC at a time), reloads, regeneration, fire and death timer's tick,
-//!    a dying NPC's escape pods and escape-ship roll (see the
-//!    `npc_escape` module), then its display (@0x444ad), which starts its
+//!    `_HandleShip` (@0x44483), the let-go of a target whose slot is
+//!    inactive, its flight (the traffic's fly half, one NPC at a time),
+//!    reloads, regeneration, fire and death timer's tick, a dying NPC's
+//!    dying branch, a mission escort it still is leaving the formation
+//!    (see the `mission_escorts` module), and its escape pods and
+//!    escape-ship roll (see the `npc_escape` module), then its display
+//!    (@0x444ad), which starts its
 //!    breakup's countdown or explodes it, its shockwave reaching the
 //!    later slots before they move, then steps its frame (see the
 //!    `ship_display` module); an escape fighter launched into a
@@ -89,7 +93,7 @@
 //! branches on its argument (@0x44026-0x4402a).
 //!
 //! **What remains**, none crossing a boundary the player sees, so none
-//! filed:
+//! filed but the last, which is:
 //!
 //! - What the ship loop's departures leave the session, and the fly
 //!   half's end, settle after the loop (see [`Session::ship_loop`]).
@@ -98,14 +102,6 @@
 //!   the same pass and before the frame is drawn, where
 //!   `_HandleShipDisplay` runs it at the ship's display
 //!   (@0x2daa2-0x2dcfc).
-//! - Every existing NPC's point defence and launches run after every
-//!   existing NPC's decision, where `_AIDispatch` interleaves them slot by
-//!   slot; a fighter launched in the loop decides at its launch.
-//! - Every think's work on the line settles after the whole loop, in slot
-//!   order, where each slot's `_AIDispatch` says its own (see
-//!   [`Session::dispatch_npcs`]); a dock or repair the fly half makes
-//!   settles after the ship loop, where `_LowLevelAIHandler` makes it in
-//!   the AI loop.
 //! - The asteroid edge spawn runs with the step after the ship loop,
 //!   where `_SpawnAsteroid` (@0x44243) runs before the AI: a new asteroid
 //!   is met by no shot until the next pass either way, and the step comes
@@ -115,12 +111,11 @@
 //!   after `_HandleShot`'s phase ([`Session::settle_landed`]), where
 //!   `_DamageShip` settles it at the landing; the fight clears its leader
 //!   at the landing, which is all the later visits read.
-//!
-//! **Filed.** An existing NPC in a slot above a carrier thinks before
-//! the loop, blind to the fighter launched that frame, and a launched
-//! fighter's own launch settles against the room left after every
-//! existing claim, where the original's loop reaches them in slot order
-//! (rdm:phase/combat-ai-fidelity-cross-roadmap/phase-6-left-out-of-weapons-fidelity-phase-44).
+//! - **Filed.** What the fly half still settles, where the high and low
+//!   level make it in the AI loop (a dock's completion, a repair, goal
+//!   0xb's check), a higher slot's think reads a drawn frame late (see
+//!   [`Session::dispatch_npcs`],
+//!   rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9).
 //!
 //! **The phases.** Each builds the fight's [`Fighter`]s afresh from the
 //! session ([`Session::with_fighters`]): the player, then every NPC, each
@@ -314,11 +309,12 @@ impl Session {
     /// `ai` is the advance pass's AI, its traffic drawn from the catalog
     /// it holds; the second pass has none, as `_DoPlayGameWork(0)` jumps
     /// past it (@0x4402a to @0x44350). Where the original branches on its
-    /// argument, this branches on `ai`: with it, the traffic thinks and
-    /// its fleets are said, every NPC's point defence fires and its
-    /// fighters launch, each put in the system as its slot's turn ends
-    /// ([`Session::dispatch_npcs`]), then the frame's work on the line
-    /// settles in slot order ([`Session::settle_line_queue`]), all before
+    /// argument, this branches on `ai`: with it, the arrivals come and
+    /// the fleets are said, then for each slot in turn the NPC thinks, its
+    /// point defence fires and its fighters launch, each put in the system
+    /// as its slot's turn ends, and its work on the line settles
+    /// ([`Session::dispatch_npcs`]), then what is left
+    /// on the line settles ([`Session::settle_line_queue`]), all before
     /// the shots, and the ship loop's traffic flies its fly half, its
     /// reinforcement clock included ([`Session::traffic_tail`]); without
     /// it, the traffic only moves, and the reinforcement clock
@@ -357,21 +353,23 @@ impl Session {
             let marks = self.traffic_think(catalog, behaviour, chance);
             // The arrivals of a Derelict government come in disabled.
             self.space.hold_derelicts(&self.statics);
-            // `_LaunchFighter` marks each fighter's slot active in
-            // `_AIDispatch` (@0x3c90b, @0x3d680), so the rest of the loop,
-            // `_HandleShot` and its own `_HandleShip` see it that frame.
-            self.dispatch_npcs(pass, behaviour, rules, chance);
-            // `_EscortAI`'s variants and target calls, in berth order.
-            self.space.answer_voice_cues(&self.statics, &mut *chance);
+            // The quotes from before the loop, ahead of the first slot's
+            // line work (see the `comm_calls` module).
+            self.say_quotes_before_the_line(chance);
             #[cfg(test)]
             for event in std::mem::take(&mut self.space.queued_in_frame) {
                 self.space.traffic.queue_pirate_event(event);
             }
-            // The quotes from before the loop, ahead of the frame's line
-            // work (see the `comm_calls` module).
-            self.say_quotes_before_the_line(chance);
-            // Every think's work on the line, the launched fighters'
-            // among it, in slot order (see `Session::dispatch_npcs`).
+            // `_AIDispatch`'s loop (@0x44270-0x442ae), each slot's think,
+            // turn in the fight and work on the line. `_LaunchFighter`
+            // marks each fighter's slot active in it (@0x3c90b, @0x3d680),
+            // so the rest of the loop, `_HandleShot` and its own
+            // `_HandleShip` see it that frame.
+            self.dispatch_npcs(marks.is_some(), pass, behaviour, rules, chance);
+            // `_EscortAI`'s variants and target calls, in berth order.
+            self.space.answer_voice_cues(&self.statics, &mut *chance);
+            // What the slots' runs left on the line, and the reinforcement
+            // clock's tick held behind it.
             self.settle_line_queue(rules.law, chance);
             Some(marks)
         } else {
@@ -461,13 +459,15 @@ impl Session {
     /// says and drawing on `chance`: on the first pass in a system not
     /// yet set up, its population ([`Session::populate`]), which moves
     /// from the next; otherwise the session's work before the AI and the
-    /// traffic's think half ([`Traffic::think_holding`]), and the fleets
-    /// it brings said and the refuel it gave landed
-    /// (`Space::after_traffic_ai`); the work it queues on the line
-    /// settles after the launch frame's loop. What its motion is read
-    /// against, when it thought.
+    /// traffic's think up to the first slot's
+    /// ([`Traffic::open_think`]: the arrivals, as `_EnterMoreShips` comes
+    /// before the loop, @0x44237, and the succession and formations, whose
+    /// marking pass runs before every dispatch), and the fleets it brings said
+    /// (`Space::announce_fleets`). Each slot's think comes in
+    /// [`Session::dispatch_npcs`]. What its motion is read against, when
+    /// it opened.
     ///
-    /// [`Traffic::think_holding`]: crate::traffic::Traffic::think_holding
+    /// [`Traffic::open_think`]: crate::traffic::Traffic::open_think
     fn traffic_think(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -484,10 +484,10 @@ impl Session {
         }
         let (strikes, marks) = self.before_traffic_ai(catalog, chance);
         self.step_traffic(|traffic, world| {
-            traffic.think_holding(behaviour, world, &strikes, chance);
+            traffic.open_think(behaviour, world, &strikes, chance);
         });
         self.space
-            .after_traffic_ai(&mut self.pilot, &self.setup, &mut self.out, chance);
+            .announce_fleets(&self.setup, &mut self.out, chance);
         Some(marks)
     }
 
@@ -754,7 +754,8 @@ impl Session {
     /// `rules`, drawing on `chance`: each NPC's exit cursors kept for its
     /// berth; the fighters launched from bays put in the system (see the
     /// `fighters` module); the words the pass's stray beams stepped; the
-    /// fleet kept in step; the escorts whose ship is gone lost; the NPCs'
+    /// fleet kept in step; the escorts whose ship is gone lost (a dying
+    /// mission escort leaves at its own step, in the ship loop); the NPCs'
     /// self-repair; each NPC a deadly stellar killed vanished or destroyed
     /// (see the `deadly_stellars` module), then each NPC destroyed taken
     /// out; the
@@ -788,7 +789,6 @@ impl Session {
         // Each phase lost the escorts its hits downed; what is left is
         // those whose ship is gone.
         self.lose_escorts(&[], &std::collections::BTreeSet::new());
-        self.lose_dying_mission_escorts();
         self.self_repair(rules, &mut *chance);
         self.take_out_the_killed(chance);
         self.space
@@ -829,6 +829,7 @@ mod tests {
     use crate::session::tests::{FIRE, armed, blaster, facing_an_npc};
     use crate::story::{Fate, StoryEvent};
     use crate::testkit::FakePilotCatalog;
+    use crate::traffic::autopilot::Outcome;
     use crate::traffic::npc::{Mode, Npc, NpcId};
 
     /// What a decision saw of an NPC: whether it was provoked, the ship it
@@ -1226,7 +1227,7 @@ mod tests {
     #[test]
     fn the_warps_lead_in_still_steps_each_npcs_fade() {
         // The traffic flies the lead-in, and each NPC's display steps its
-        // fade (@0x2d088), though the fight stands still.
+        // fade (@0x2d088).
         let catalog = crate::testkit::catalog();
         let mut session = crate::session::tests::bound_for_131(
             &catalog,
@@ -1355,5 +1356,54 @@ mod tests {
         let (lead, escort) = fleet_after_a_pass(earlier);
         assert_eq!(slot(&escort), Some((2, 2)));
         assert_ne!(escort.state.velocity, lead.state.velocity);
+    }
+
+    /// Every NPC keeps its goal, each decision recording the ships gone
+    /// that it read.
+    #[derive(Debug, Default)]
+    struct ReadingGone(RefCell<Vec<NpcId>>);
+
+    impl Behaviour for ReadingGone {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            let gone = around.gone.iter().map(|gone| gone.ship.id);
+            self.0.borrow_mut().extend(gone);
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_ship_gone_at_its_slot_is_read_by_a_higher_slots_think_that_pass_and_its_record_stands() {
+        // Its own jump frees it in its own dispatch (@0x859b8), before the
+        // higher slot's think; its record stands until a ship takes the
+        // slot (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b).
+        let catalog = armed();
+        let mut session = warmed(&catalog);
+        let npc = &mut session.space.traffic.npcs_mut()[0];
+        npc.goal = Goal::Hold;
+        // The warm-up pass landed it on planet 128; neither ship waits.
+        npc.ai_wait = 0;
+        let mut stays = npc.clone();
+        stays.state.position.x += 250.0;
+        npc.begin_own_jump();
+        let leaver = npc.id;
+        session.space.traffic.add_npc(stays);
+        let behaviour = ReadingGone::default();
+        let reads = |session: &mut Session| {
+            pass(session, &catalog, Controls::default(), &behaviour);
+            behaviour.0.take()
+        };
+        let mut passes = 0;
+        let read = loop {
+            let read = reads(&mut session);
+            if !session.departed().is_empty() {
+                break read;
+            }
+            assert_eq!(read, [], "pass {passes}: none gone yet");
+            passes += 1;
+            assert!(passes < 1000, "it never jumped out");
+        };
+        assert_eq!(session.departed(), [(leaver, Outcome::JumpedOut)]);
+        assert_eq!(read, [leaver], "the higher slot's think that pass");
+        assert_eq!(reads(&mut session), [leaver], "its record stands");
     }
 }

@@ -39,6 +39,8 @@ fn hired() -> nova_sim::Escort {
         wage: Some(WAGE),
         person: None,
         mark: None,
+        voice: None,
+        berth: None,
     }
 }
 

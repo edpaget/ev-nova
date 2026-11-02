@@ -7,16 +7,38 @@
 //!
 //! - **The high level** ([`high_level`]), on each think while its AI wait
 //!   is out (@0x8d4b9-0x8d4d2 returns for every goal but 10 and 0xe while
-//!   it runs). With no target nothing changes (@0x8f6e9). Its target is
+//!   it runs). With no target nothing changes (@0x8f6e9), nor with one
+//!   whose slot went, which the high level's slot test has made -1
+//!   (@0x8d4e4-0x8d50d). Its target is
 //!   any ship: the player it was asked to repair, or the NPC an NPC's hit
-//!   turned it on (`_DamageShip` @0x3bcf6). With that ship gone or not
+//!   turned it on (`_DamageShip` @0x3bcf6). With that ship not
 //!   disabled (@0x8f702-0x8f715, `_IsDisabled`: disabled or breaking up)
 //!   it gives up: goal 0, sub 0, target and nav -1 (@0x8f717-0x8f732), so
-//!   a hit by an intact ship ends the help. Otherwise nav = the target
+//!   a hit by an intact ship ends the help. The +0xb8 test at @0x8f702
+//!   never fails: the slot test came first.
+//! - **A patient gone.** The type AIs return at once for goal 0xf (see
+//!   [`assist_think`](crate::traffic::assist_think)), so a repairer whose
+//!   patient's slot went keeps its goal, its sub and its nav (+0x6c,
+//!   [`Npc::docking`]), which no slot test clears: closing (sub 0xb), it
+//!   closes on the freed slot's record and holds there, no high level
+//!   writing sub 0xf; docking (sub 0xf), it matches the record's velocity,
+//!   starts its dock and completes on it, then drifts. The armour and the
+//!   boarded flag land on the record, which nothing reads before a spawn
+//!   rewrites it (+0xb9 @0x3c981). A spawn into the slot hands the
+//!   docking to the newcomer, as the nav names the slot
+//!   ([`Traffic::slot_taken`](crate::traffic::Traffic::slot_taken)). The
+//!   dock's start, completion, creep and velocity match are decided at the
+//!   repairer's own slot of the AI loop, reading the record there (the
+//!   traffic's `dispatch_dock`). Otherwise nav = the target
 //!   (@0x8f74c) and, within [`repair_box`] of it on both axes,
 //!   inclusive, it docks (sub 0xf, @0x8f815); otherwise it closes (sub 0xb,
 //!   @0x8f823). There is no approach (sub 9): the box is 2-way, not the
-//!   plunder's 3-way one.
+//!   plunder's 3-way one. The box is
+//!   [`INERTIALESS_BOX`](plunder_dock::INERTIALESS_BOX) times as wide for
+//!   an inertialess repairer (`_ShipIsInertialess` @0x8f781-0x8f797), the
+//!   integer box multiplied, so a fractional one truncates first. The
+//!   original takes the result as a 16-bit word (`movswl %bx` @0x8f79d);
+//!   this keeps an `i32`.
 //! - **The dock** is the plunder's sub 0xf: inside 3 pixels with no wait
 //!   left, the ship (the player or an NPC) is boarded and the wait is
 //!   `Rand(80)` + 100 (@0x86fa4-0x8700a).
@@ -30,7 +52,12 @@
 //!   or silently for an NPC, from
 //!   [`PirateEvent::NpcRepaired`](crate::traffic::plunder::PirateEvent::NpcRepaired).
 //!   The repairer then drifts (goal 0xe) with a wait of [`REPAIR_HOLD`],
-//!   its target, nav and substate cleared (@0x86f09-0x86f31).
+//!   its target, nav and substate cleared (@0x86f09-0x86f31). All of it is
+//!   the repairer's low level, at its slot of the AI loop: the drift at
+//!   once, and the event queued on the line at its berth, which the
+//!   session settles as that slot's run ends, so a higher slot's think
+//!   reads the patient repaired that tick (the traffic's
+//!   `dispatch_dock`).
 //!
 //! With the wait counted down after each tick's flight (`_HandleShip`
 //! @0x35037-0x35048, after every ship's `_AIDispatch`), a dock started on
@@ -43,9 +70,6 @@
 //! [`assist_think`](crate::traffic::assist_think)), but `_AIDispatch`
 //! runs the high and low levels whatever they did (@0x901e5-0x901f4).
 //!
-//! Left out: the ×4 box for an inertialess repairer (@0x8f781-0x8f797),
-//! which needs sub 0xf's inertialess branch,
-//! rdm:phase/combat-ai-fidelity-cross-roadmap/phase-3-inertialess-repair-box.
 //! Only `_AIMakeShipRepairPlayer` (@0x82df2) sets goal 0xf, always at the
 //! player; the NPC target comes from a hit's retarget, which names the
 //! strike's maker whatever its state, so a shot from a ship since disabled
@@ -55,13 +79,15 @@
 //! that never lets the ship fly still ends.
 
 use crate::ai::{Goal, Surroundings};
+use crate::combat::ShipRef;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::hail::Help;
+use crate::inertialess::InertialDampener;
 use crate::reserves::Gauge;
 use crate::traffic::npc::Npc;
 #[cfg(doc)]
 use crate::traffic::plunder_dock;
-use crate::traffic::plunder_dock::{BOX_PER_TURN, BOX_TURNS, DockStep, DockSub};
+use crate::traffic::plunder_dock::{BOX_PER_TURN, BOX_TURNS, DockStep, DockSub, inertialess_box};
 
 /// What a repair box adds (the float 50.0 @0xdd064).
 pub const REPAIR_BOX_BASE: f32 = 50.0;
@@ -84,13 +110,27 @@ pub fn repair_box(class_turn: f32) -> i32 {
 }
 
 /// The high level of `npc`'s repair of the ship it targets among `around`
-/// (see the module docs): none when it is no repair or has no target.
+/// (see the module docs): none when it is no repair or has no target, nor
+/// when its target's slot is inactive, which the high level's slot test
+/// makes -1 first (@0x8d4e4-0x8d50d), so the block is skipped
+/// (@0x8f6e9) and the goal, sub and nav kept (the traffic's
+/// `dispatch_leave` runs the test itself). A dampener counts toward its
+/// inertialess box as `rule` says.
 #[must_use]
-pub fn high_level(npc: &Npc, around: &Surroundings) -> Option<DockStep> {
+pub fn high_level(npc: &Npc, around: &Surroundings, rule: InertialDampener) -> Option<DockStep> {
     if npc.goal != Goal::Assist(Help::Repair) {
         return None;
     }
     let ship = npc.target?;
+    // The player's slot is active while the AI loop runs in its system,
+    // so the block reads it whatever the world shows of it.
+    let gone = match ship {
+        ShipRef::Npc(_) => !around.condition_of(ship).is_some_and(Condition::active),
+        ShipRef::Player => false,
+    };
+    if gone {
+        return None;
+    }
     let Some(at) = around
         .state_of(ship)
         .filter(|_| around.condition_of(ship).is_some_and(Condition::disabled))
@@ -100,7 +140,7 @@ pub fn high_level(npc: &Npc, around: &Surroundings) -> Option<DockStep> {
     };
     // f32: the box is converted back to a float for the test.
     #[allow(clippy::cast_precision_loss)]
-    let side = repair_box(npc.hull.class_turn) as f32;
+    let side = inertialess_box(npc, repair_box(npc.hull.class_turn), rule) as f32;
     let off = npc.state.position - at;
     Some(DockStep::Sub(
         if off.x.abs() <= side && off.y.abs() <= side {
@@ -119,7 +159,7 @@ pub fn complete(npc: &mut Npc) {
     npc.ai_wait = REPAIR_HOLD;
     npc.target = None;
     npc.docking = None;
-    npc.travel_set = false;
+    npc.travel = None;
 }
 
 /// A repaired ship's armour raised (`_LowLevelAIHandler`'s loop
@@ -182,14 +222,36 @@ mod tests {
         }
     }
 
-    /// The high level of `ship` with `player` in the system, if any.
+    /// The high level of `ship` with `player` in the system, if any, a
+    /// dampener counting for the player alone.
     fn step(ship: &Npc, player: Option<&PlayerSide>) -> Option<DockStep> {
+        step_under(ship, player, InertialDampener::PlayerOnly)
+    }
+
+    /// [`step`], a dampener counting as `rule` says.
+    fn step_under(
+        ship: &Npc,
+        player: Option<&PlayerSide>,
+        rule: InertialDampener,
+    ) -> Option<DockStep> {
         let npcs = [ship.clone()];
         let world = World {
             player: player.copied(),
             ..World::new(&[])
         };
-        high_level(&npcs[0], &world.around(&npcs))
+        high_level(&npcs[0], &world.around(&npcs), rule)
+    }
+
+    /// `ship` on an inertialess hull ([`FAST`]'s, `Flags2` 0x0040).
+    fn inertialess(mut ship: Npc) -> Npc {
+        ship.stats = ShipStats::new(
+            crate::handling::ShipFields {
+                flags2: crate::stats::INERTIALESS_HULL,
+                ..FAST
+            },
+            &[],
+        );
+        ship
     }
 
     #[test]
@@ -257,7 +319,7 @@ mod tests {
             player: Some(player(0.0, 0.0, Condition::Disabled)),
             ..World::new(&[])
         };
-        high_level(&npcs[0], &world.around(&npcs))
+        high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly)
     }
 
     #[test]
@@ -267,10 +329,15 @@ mod tests {
             step_at_npc(&ship, 0.0, 0.0, Condition::Intact),
             Some(DockStep::GiveUp)
         );
-        assert_eq!(
-            step_at_npc(&ship, 0.0, 0.0, Condition::Destroyed),
-            Some(DockStep::GiveUp)
-        );
+    }
+
+    #[test]
+    fn a_repair_whose_target_slot_went_skips_its_block() {
+        // The slot test makes +0x70 -1 first (@0x8d4e4-0x8d50d), so the
+        // block is skipped (@0x8f6e9): +0xb8's test at @0x8f702 is never
+        // reached by a gone slot.
+        let ship = repairer(0.0, 0.0);
+        assert_eq!(step_at_npc(&ship, 0.0, 0.0, Condition::Destroyed), None);
         let mut gone = ship;
         gone.target = Some(ShipRef::Npc(NpcId(7)));
         let world = World {
@@ -279,9 +346,9 @@ mod tests {
         };
         let npcs = [gone];
         assert_eq!(
-            high_level(&npcs[0], &world.around(&npcs)),
-            Some(DockStep::GiveUp),
-            "a ship gone, @0x8f702"
+            high_level(&npcs[0], &world.around(&npcs), InertialDampener::PlayerOnly),
+            None,
+            "a ship gone"
         );
     }
 
@@ -313,6 +380,53 @@ mod tests {
     }
 
     #[test]
+    fn an_inertialess_repairer_docks_within_four_times_the_box_and_closes_outside_it() {
+        let downed = player(0.0, 0.0, Condition::Disabled);
+        let at = |x: f32, y: f32| step(&inertialess(repairer(x, y)), Some(&downed));
+        let (dock, close) = (
+            Some(DockStep::Sub(DockSub::Dock)),
+            Some(DockStep::Sub(DockSub::Close)),
+        );
+        assert_eq!(at(1040.0, -1040.0), dock, "inclusive");
+        assert_eq!(at(1041.0, 0.0), close);
+        assert_eq!(at(0.0, 1041.0), close);
+        assert_eq!(at(1041.0, 1041.0), close);
+        assert_eq!(at(5000.0, 0.0), close, "never an approach");
+        let inertial = |x: f32| step(&repairer(x, 0.0), Some(&downed));
+        assert_eq!(inertial(1040.0), close);
+        assert_eq!(inertial(260.0), dock);
+    }
+
+    #[test]
+    fn the_inertialess_box_multiplies_the_truncated_box() {
+        let downed = player(0.0, 0.0, Condition::Disabled);
+        let at = |x: f32| {
+            let mut ship = inertialess(repairer(x, 0.0));
+            // 259.7, so 259, so 1036, where ×4 of the float is 1038.8.
+            ship.hull.class_turn = 3.01;
+            step(&ship, Some(&downed))
+        };
+        assert_eq!(at(1036.0), Some(DockStep::Sub(DockSub::Dock)));
+        assert_eq!(at(1037.0), Some(DockStep::Sub(DockSub::Close)));
+    }
+
+    #[test]
+    fn a_dampener_widens_a_repair_box_only_by_the_bible() {
+        let downed = player(0.0, 0.0, Condition::Disabled);
+        let mut ship = repairer(1040.0, 0.0);
+        ship.stats.dampener = true;
+        let under = |rule| step_under(&ship, Some(&downed), rule);
+        assert_eq!(
+            under(InertialDampener::PlayerOnly),
+            Some(DockStep::Sub(DockSub::Close))
+        );
+        assert_eq!(
+            under(InertialDampener::AnyShip),
+            Some(DockStep::Sub(DockSub::Dock))
+        );
+    }
+
+    #[test]
     fn the_repair_high_level_changes_nothing_with_no_target() {
         let mut ship = repairer(0.0, 0.0);
         ship.target = None;
@@ -340,12 +454,12 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Dock,
         });
-        ship.travel_set = true;
+        ship.travel = Some(crate::catalog::StellarId(150));
         complete(&mut ship);
         assert_eq!(ship.goal, Goal::Drift);
         assert_eq!(ship.ai_wait, REPAIR_HOLD);
         assert_eq!((ship.target, ship.docking), (None, None));
-        assert!(!ship.travel_set, "nav -1, @0x86f31");
+        assert!(!ship.travel_set(), "nav -1, @0x86f31");
     }
 
     /// The armour `raise_armor` leaves a gauge of `now` of `max` with,

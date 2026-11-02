@@ -69,7 +69,7 @@
 //! any boundary the player sees.
 //!
 //! Left out, the display-mode check:
-//! rdm:phase/main-screen-fidelity/phase-6-entry-left-outs. The starfield's
+//! rdm:phase/front-end/phase-5-entry-left-outs. The starfield's
 //! re-randomising at entry, and its clear in a system of negative murk,
 //! are the flight's (`nova_view::flight::FlightView`), which scatters its
 //! stars when it is first caught up with.

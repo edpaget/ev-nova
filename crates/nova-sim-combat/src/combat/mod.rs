@@ -474,6 +474,7 @@ use projectile::{
 use report::{Reports, SimDiagnostic};
 use shot_slots::ShotSlots;
 use sides::{PassThrough, Sides, Ties};
+pub use source_slot::SlotShip;
 pub use sprite_load::SpriteLoad;
 use stellar::{StellarStrike, StellarTarget};
 use stellar_hazards::{HazardResistance, StellarHazards, StellarKill};
@@ -933,7 +934,7 @@ pub struct Fighter<'a> {
     pub ship: ShipRef,
     /// Its ship type.
     pub ship_type: ShipId,
-    /// Its fleet: the lead it escorts, or itself.
+    /// Its fleet: the root of its chain of leads, or itself.
     pub fleet: ShipRef,
     /// Its government, or `None` for an independent ship or the player.
     pub govt: Option<GovtId>,
@@ -2046,12 +2047,12 @@ impl Combat {
     /// the centre. An `ExitType` of -1 indexes the word before the cursors,
     /// the fold set, and steps it as one by the engine (@0x450fa-0x4523d;
     /// [`exits::step_stray`]), the beam starting at the centre
-    /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 5 lands on
-    /// +0xc908, outside the fight (the crew pods left, or the player's pod
-    /// countdown), and one of 6 on +0xc90a (the order word): by the engine
-    /// each is returned for the caller to raise
-    /// for the firer ([`Combat::take_stray_steps`]), the beam starting at
-    /// the centre ([`StrayWord`]).
+    /// (`_HandleBeams` @0x30469-0x3049f). An `ExitType` of 4 lands on
+    /// +0xc906, outside the fight (the swarm leader), one of 5 on +0xc908
+    /// (the crew pods left, or the player's pod countdown), and one of 6
+    /// on +0xc90a (the order word): by the engine each is returned for the
+    /// caller to raise for the firer ([`Combat::take_stray_steps`]), the
+    /// beam starting at the centre ([`StrayWord`]).
     fn beam_exit(
         &self,
         muzzle: &mut Muzzle,
@@ -2152,7 +2153,10 @@ impl Combat {
     }
 
     /// `fighter` fires what its trigger holds, aimed at its target among
-    /// `targets` while that can be hit: the player as step 1 fires it
+    /// `targets`: the player's trigger and an NPC's primary or secondary
+    /// while that can be hit ([`ai_dispatch::standing`]), an NPC's pick
+    /// while its slot is active, breaking up included
+    /// ([`ai_dispatch::active`]). The player as step 1 fires it
     /// ([`Combat::fire_player`]), an NPC at its own step of `_HandleShip`
     /// (@0x34ffd, [`Combat::handle_npcs`]).
     /// An NPC fires a primary or secondary trigger through
@@ -2196,6 +2200,7 @@ impl Combat {
             return;
         };
         let arc = self.quadrant_arc;
+        let picked = ai_dispatch::active(fighter.target, targets);
         let volley = fighter.armament.fire_pick(
             pick,
             *fighter.condition,
@@ -2204,7 +2209,7 @@ impl Combat {
             &mut fighter.reserves.fuel,
             chance,
             self.ai_spend,
-            &mut |spec| ai_fire::spawn(spec, &state, &hull, target, arc),
+            &mut |spec| ai_fire::spawn(spec, &state, &hull, picked, arc),
             // Only a ship whose target is slot 0, the player, is stretched
             // (@0x88fb3).
             (fighter.target == Some(ShipRef::Player)).then_some(self.field.player_rating),
@@ -2425,7 +2430,7 @@ impl Combat {
             room,
             &mut |spec| {
                 if let Some(missile) =
-                    defence::choose(side, &state, &hull, spec, shots, rule, govts)
+                    defence::choose(guard, &state, &hull, spec, shots, rule, govts)
                 {
                     return Some((Pointing::At(missile.position), Quarry::Missile(missile.id)));
                 }
@@ -3137,6 +3142,13 @@ impl Combat {
         std::mem::take(&mut self.stray_steps)
     }
 
+    /// Raises a step of `word` for `ship`, as a beam of stray `ExitType`
+    /// does, for the session's tests of a firer gone by the time it steps.
+    #[cfg(any(test, feature = "fixture"))]
+    pub fn raise_stray_step(&mut self, ship: ShipRef, word: StrayWord) {
+        self.stray_steps.push((ship, word));
+    }
+
     /// The hits on stellars made since they were last taken, in order;
     /// taking them empties the list.
     pub fn take_stellar_strikes(&mut self) -> Vec<StellarStrike> {
@@ -3284,10 +3296,10 @@ impl Fighter<'_> {
         }
     }
 
-    /// The ship as its point defence's ship branch reads it.
+    /// The ship as its point defence reads it.
     fn guard(&self) -> Guard {
         Guard {
-            ship: self.ship,
+            side: self.side(),
             leader: self.leader,
             threatens_player: self.threatens_player,
             scanner: self.cloak_scanner,
@@ -3731,7 +3743,9 @@ mod tests {
     mod interfered_hits;
     mod ion_lockout_tick;
     mod lineup;
+    mod pd_parent;
     mod phase;
+    mod pick_at_breakup;
     mod placed_contact;
     mod planet_hits;
     mod player_gain;
@@ -7141,7 +7155,7 @@ mod tests {
                 &mut ships,
                 rules,
                 |combat, fighters, arena, chance| {
-                    combat.defend_npcs(fighters, arena, None, false, chance);
+                    combat.defend_npcs(fighters, arena, None, None, chance);
                 },
             );
             combat
@@ -7334,7 +7348,7 @@ mod tests {
                     arena,
                     &mut NeverFires,
                     |combat, fighters, arena, chance| {
-                        combat.defend_npcs(fighters, arena, None, false, chance);
+                        combat.defend_npcs(fighters, arena, None, None, chance);
                     },
                 );
             }
@@ -7371,7 +7385,7 @@ mod tests {
             &mut ships,
             DOUBLE_TIME,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         assert_eq!(combat.beams().len(), 1, "fired at the missile");
@@ -7405,7 +7419,7 @@ mod tests {
             &mut ships,
             DOUBLE_TIME,
             |combat, fighters, arena, chance| {
-                combat.defend_npcs(fighters, arena, None, false, chance);
+                combat.defend_npcs(fighters, arena, None, None, chance);
             },
         );
         beams(&mut combat, &mut ships, DOUBLE_TIME);
@@ -11195,7 +11209,7 @@ mod tests {
     /// ([`phase::defend_npcs`]).
     fn defend_drawing(combat: &mut Combat, ships: &mut [Ship], chance: &mut dyn Chance) {
         drawing(combat, ships, chance, |combat, fighters, arena, chance| {
-            combat.defend_npcs(fighters, arena, None, false, chance);
+            combat.defend_npcs(fighters, arena, None, None, chance);
         });
     }
 
@@ -12037,7 +12051,7 @@ mod tests {
             arena,
             &mut chance,
             |c, f, a, ch| {
-                c.defend_npcs(f, a, None, false, ch);
+                c.defend_npcs(f, a, None, None, ch);
             },
         );
         phase::run_in(
@@ -12158,7 +12172,7 @@ mod tests {
             combat.set_pd_hostility(source);
             let mut ships = fighter_attack(quad(), 0.0, -100.0);
             phase::run_by(&mut combat, &mut ships, rules, |c, f, a, ch| {
-                c.defend_npcs(f, a, None, false, ch);
+                c.defend_npcs(f, a, None, None, ch);
             });
             assert_eq!(fired(&combat.take_events(), A), 1, "{source:?}");
         }
@@ -13244,7 +13258,7 @@ mod tests {
         let mut rocks = Rocks::of([rock(0, 0.0, -40.0)]);
         missile_in_flight(&mut combat, &mut ships);
         phase::run_by(&mut combat, &mut ships, rules, |c, f, a, ch| {
-            c.defend_npcs(f, a, None, false, ch);
+            c.defend_npcs(f, a, None, None, ch);
         });
         assert_eq!(pd_shots(&combat).len(), 1, "fired at the missile");
         // Its second move, from 20 to 40 pixels out, meets the asteroid.

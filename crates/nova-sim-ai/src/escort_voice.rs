@@ -141,7 +141,7 @@ pub fn victory_speaker<'a>(
             npc.condition.active()
                 && ShipRef::Npc(npc.id) != victim
                 && npc.target == Some(victim)
-                && matches!(npc.goal, Goal::Attack(_))
+                && npc.goal.attacking().is_some()
                 && !npc.hull.mute
                 && npc.original_ai_type() > 2
         })
@@ -295,13 +295,23 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_sniping_at_the_victim_says_the_victory_too() {
+        // `_IsShipAttacking` (@0x36ce5) is goal 4, a snipe's included.
+        let sniper = Npc {
+            goal: Goal::Snipe(VICTIM),
+            ..attacker(1, 4, VICTIM)
+        };
+        assert_eq!(victor(&[sniper]), Some(NpcId(1)));
+    }
+
+    #[test]
     fn a_trader_one_not_attacking_one_on_another_or_a_mute_one_says_nothing() {
         let mut trader = attacker(1, 9, VICTIM);
         trader.ai_type = AiType::BraveTrader;
         assert_eq!(victor(&[trader.clone()]), None, "a trader");
         let carried = Npc {
             carrier: Some(Carrier {
-                ship: ShipRef::Player,
+                ship: ShipRef::Npc(NpcId(5)),
                 window: 100.0,
                 reach: 40.0,
             }),

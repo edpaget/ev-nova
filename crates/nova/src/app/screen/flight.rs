@@ -139,8 +139,8 @@ impl AppScreen {
         self.switch_to(Side::Spaceport);
     }
 
-    /// Puts the pilot away and shows `side`: saves it (unless it may not
-    /// be saved), or deletes a strict pilot dying
+    /// Puts the pilot away and shows `side`: saves it (when ending play
+    /// saves it), or deletes a strict pilot dying
     /// ([`AppScreen::put_away_pilot`]), before anything can show the menu
     /// or list the pilots, and drops flight, the spaceport and any dialog
     /// open over flight, so nothing is left to re-enter
@@ -376,7 +376,10 @@ impl AppScreen {
     /// escape pod ([`SessionFlight::deletes_pilot_on_ending_play`](nova_view::flight::SessionFlight::deletes_pilot_on_ending_play)), as
     /// `_EnterGameFromMainScreen` does once `_PlayGame` returns
     /// (@0x1a4ab-0x1a4e1), and otherwise saves it
-    /// ([`AppScreen::save_pilot`]). A failed delete becomes a warning.
+    /// ([`AppScreen::save_pilot`]) when ending play saves it
+    /// ([`SessionFlight::saves_on_ending_play`](nova_view::flight::SessionFlight::saves_on_ending_play)):
+    /// landed, but by default not in flight, so the file keeps the pilot as
+    /// it was at its last landing. A failed delete becomes a warning.
     /// Nothing writes the pilot back afterwards: a dying pilot may not be
     /// saved.
     pub(super) fn put_away_pilot(&mut self) {
@@ -384,7 +387,9 @@ impl AppScreen {
             return;
         };
         if !flight.sim().deletes_pilot_on_ending_play() {
-            self.save_pilot();
+            if flight.sim().saves_on_ending_play() {
+                self.save_pilot();
+            }
             return;
         }
         let Some(pilot) = flight.sim().pilot() else {
@@ -663,7 +668,10 @@ impl AppScreen {
     }
 
     /// Saves the pilot if flight says a save is due: it has landed, taken
-    /// off or changed in the spaceport.
+    /// off or changed in the spaceport. The sim decides which saves are
+    /// written in flight (by default only the take-off's and a rescue's;
+    /// the rest wait for the next landing, see `nova_sim`'s
+    /// `in_flight_save` module).
     pub(super) fn save_if_due(&mut self) {
         if self.flight.as_mut().is_some_and(FlightView::take_save_due) {
             self.save_pilot();

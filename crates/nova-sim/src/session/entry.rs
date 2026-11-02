@@ -1071,11 +1071,15 @@ impl Session {
                 let defences = self.space.traffic.take_defences();
                 self.space.traffic = Traffic::new();
                 self.space.traffic.keep_defences(defences);
-                // A new traffic reads reused slots' picks, exit cursors and
-                // blink timers and search timers by the rulebook.
+                // A new traffic reads reused slots' picks, headings, exit
+                // cursors and blink timers and search timers by the
+                // rulebook.
                 self.space
                     .traffic
                     .set_reused_slot_pick(self.setup.rules.source_for(RuleKey::ReusedSlotPick));
+                self.space.traffic.set_reused_slot_heading(
+                    self.setup.rules.source_for(RuleKey::ReusedSlotHeading),
+                );
                 self.space
                     .traffic
                     .set_reused_slot_exits(self.setup.rules.source_for(RuleKey::ReusedSlotExits));
@@ -1090,6 +1094,9 @@ impl Session {
                 self.space
                     .traffic
                     .set_reused_slot_search(self.setup.rules.source_for(RuleKey::ReusedSlotSearch));
+                self.space
+                    .traffic
+                    .set_reused_slot_voice(self.setup.rules.source_for(RuleKey::ReusedSlotVoice));
                 self.space.traffic.keep_berths(kept);
                 self.space.set_first_class(&self.statics, &self.setup);
                 self.space.traffic_due = true;

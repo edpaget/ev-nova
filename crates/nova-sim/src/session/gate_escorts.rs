@@ -101,6 +101,8 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::cloak::Cloak;
     use crate::combat::armament::Trigger;
+    use crate::escort::{EscortCommand, EscortGroup};
+    use crate::fleet::OrderWord;
     use crate::gate::GateKind;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
@@ -122,6 +124,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -177,6 +181,38 @@ mod tests {
                 assert!(npc.led_out, "{kind:?}");
                 assert_eq!(npc.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
             }
+        }
+    }
+
+    #[test]
+    fn an_escort_in_its_gate_compares_a_command_with_the_word_it_kept() {
+        // Goal 0x15 runs past the type think (@0x8ff18-0x8ff20), so a
+        // command reads the word the ship held in the system it left.
+        for (command, word, marked) in [
+            (EscortCommand::Hold, 4, false),
+            (EscortCommand::Defend, 1, true),
+        ] {
+            let catalog = catalog();
+            let mut session = flying(&catalog, Rulebook::default());
+            let id = session.space.escorts.fleet[0].expect("placed");
+            session.space.npc_mut(id).expect("here").order_word = OrderWord(4);
+            exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+            let hired = |session: &Session| {
+                let id = session.space.escorts.fleet[0].expect("placed");
+                session.space.npc(id).expect("here").clone()
+            };
+            assert!(matches!(hired(&session).mode, Mode::Emerging { .. }));
+            session.command_escorts(EscortGroup::All, command, &mut NeverFires);
+            assert_eq!(hired(&session).order_word, OrderWord(word));
+            assert_eq!(
+                session
+                    .space
+                    .escorts
+                    .commanded
+                    .contains(&hired(&session).id),
+                marked,
+                "{command:?}"
+            );
         }
     }
 

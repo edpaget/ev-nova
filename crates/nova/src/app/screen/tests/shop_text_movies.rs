@@ -227,6 +227,8 @@ fn selling_an_escort(ada: &mut nova_sim::Pilot) {
         wage: None,
         person: None,
         mark: Some(nova_sim::fleet::EscortMark::Sell),
+        voice: None,
+        berth: None,
     });
 }
 

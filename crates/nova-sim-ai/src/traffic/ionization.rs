@@ -28,9 +28,15 @@
 //! @0x335a1/@0x335c8 return before it): disabled, warping, waiting and
 //! immobile ships all shed. The engine runs it at the start of each NPC's
 //! flight, before the next move, which makes the same sequence of moves
-//! and pulls; the charge it leaves is what the turn and thrust that follow
-//! read, as in the original. The pull's cap is the NPC's own
-//! `_ShipMaxSpeed`. None of this plays a sound.
+//! and pulls; the charge it leaves is what the turn that follows reads, as
+//! in the original. `_HandleShip`'s thrust reads no `_ShipAccelRate` but
+//! the +0x30 the low level wrote at its slot, before the shed: every NPC
+//! flies the word its low level left there
+//! ([`slot_word`](super::slot_word)), on both passes, turning by its turn
+//! rate after the shed; its inertialess adjustment reads its accel at its
+//! step before it.
+//! The pull's cap is the NPC's own `_ShipMaxSpeed`. None of this plays a
+//! sound.
 
 use crate::flight::{FlightRules, Flyer};
 use crate::handling::Handling;
@@ -353,7 +359,6 @@ mod tests {
 
     #[test]
     fn an_ionized_pirate_docking_thrusts_and_turns_slower() {
-        use crate::traffic::autopilot::TopSpeeds;
         use crate::traffic::plunder::fly_docking;
         use crate::traffic::plunder_dock::{DockSub, Docking};
         let victim = crate::flight::ShipState::default();
@@ -362,15 +367,7 @@ mod tests {
                 ship: crate::combat::ShipRef::Player,
                 sub: DockSub::Approach,
             });
-            let speeds = TopSpeeds::own_of(ship);
-            let flown = fly_docking(
-                ship,
-                Some(&victim),
-                speeds,
-                FlightRules::default(),
-                None,
-                &mut nova_sim_base::fixture::Draws::of(&[]),
-            );
+            let flown = fly_docking(ship, Some(&victim), 1.0, FlightRules::default(), None);
             assert!(flown.is_some());
         };
         // Approaching the victim straight up the screen.

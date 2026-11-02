@@ -1,18 +1,23 @@
 //! Tests of the player's escorts answering hits through the session's
 //! tick, as `NovaAi` flies them (`EscortAi`): `_DamageShip` makes the
 //! attacker an escort's target (@0x3bcf6), and `_EscortAI` keeps it by
-//! order, the player included (@0x83c67-0x83cd6, @0x83d5d-0x83d6d); out
-//! of ammunition they fall back (@0x83b88-0x83bda).
+//! order (@0x83c67-0x83cd6, @0x83d5d-0x83d6d); out of ammunition they fall
+//! back (@0x83b88-0x83bda). What an escort does about the player's hit is
+//! `nova_sim_ai`'s to pin (`nova_sim_ai::ai::attack_drop`); here only its
+//! wiring.
 
 use super::Session;
 use super::fighters::tests::{
     PIRATES, VIPERS, carrying, fight, fleet, out, pirate, sitting_ai, warship,
 };
 use crate::ai::Goal;
+use crate::ai::{Behaviour, Reaction, Surroundings};
 use crate::catalog::StellarId;
+use crate::chance::Chance;
 use crate::chance::NeverFires;
 use crate::combat::Rules;
 use crate::combat::ShipRef;
+use crate::combat::Strike;
 use crate::combat::armament::Armament;
 use crate::combat::fixture::strike;
 use crate::escort::EscortOrder;
@@ -21,6 +26,7 @@ use crate::geometry::Vec2;
 use crate::pilot::Escort;
 use crate::testkit::FakePilotCatalog;
 use crate::testkit::work_with;
+use crate::traffic::npc::Npc;
 use crate::traffic::npc::{Mode, NpcId};
 
 /// A session with the warship escort following `order`; the session and
@@ -37,31 +43,43 @@ fn fighting(session: &Session, id: NpcId) -> (Goal, Option<ShipRef>) {
     (npc.goal, npc.target)
 }
 
-#[test]
-fn a_defending_or_attacking_escort_the_player_hits_turns_on_the_player_and_keeps_at_it() {
-    // `_AIMakeShipAttackPlayer` (goal 4, +0x70 = 0, @0x89d3e-0x89d4d);
-    // then each think keeps it: Defend measures the player from itself,
-    // 0, and Attack keeps any target left.
-    let catalog = carrying();
-    for order in [EscortOrder::Defend, EscortOrder::Attack] {
-        let (mut session, escort) = escorted(&catalog, order);
-        session.space.strikes = vec![strike(ShipRef::Npc(escort), ShipRef::Player)];
-        for tick in 0..10 {
-            work_with(
-                &mut session,
-                &catalog,
-                Controls::default(),
-                &sitting_ai(),
-                Rules::default(),
-                &mut NeverFires,
-            );
-            assert_eq!(
-                fighting(&session, escort),
-                (Goal::Attack(ShipRef::Player), Some(ShipRef::Player)),
-                "{order:?}: tick {tick}"
-            );
-        }
+/// Answers nothing, recording the ships and strikes it was asked of.
+#[derive(Debug, Default)]
+struct Recording {
+    asked: std::cell::RefCell<Vec<(NpcId, ShipRef, Option<ShipRef>)>>,
+}
+
+impl Behaviour for Recording {
+    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        Goal::Idle
     }
+
+    fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
+        self.asked
+            .borrow_mut()
+            .push((npc.id, strike.ship, strike.by));
+        Reaction::default()
+    }
+}
+
+#[test]
+fn a_strike_on_an_escort_by_the_player_reaches_its_behaviours_answer() {
+    // Wiring only: what the escort does about it is `nova_sim_ai`'s
+    // (`EscortAi`, then the attack block's drop of an attack on the
+    // player, @0x8e306 → @0x8e381).
+    let catalog = carrying();
+    let (mut session, escort) = escorted(&catalog, EscortOrder::Attack);
+    session.space.strikes = vec![strike(ShipRef::Npc(escort), ShipRef::Player)];
+    let recording = Recording::default();
+    session.answer_strikes(&recording);
+    assert!(
+        recording
+            .asked
+            .borrow()
+            .contains(&(escort, ShipRef::Npc(escort), Some(ShipRef::Player))),
+        "{:?}",
+        recording.asked.borrow()
+    );
 }
 
 /// Runs `session`'s NPC `id` out of ammunition: no weapon left, its hull
@@ -288,5 +306,4 @@ fn a_player_escort_held_at_its_gate_by_the_players_hit_flies_at_its_first_think(
     let npc = session.space.npc(escort).expect("there");
     assert_eq!(npc.mode, Mode::Flying);
     assert!(!npc.wait_running());
-    assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
 }

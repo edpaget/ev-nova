@@ -62,6 +62,8 @@ exclude_re = [
     # `Impact`: `moves` returns before it for an `Impact` of none, so
     # `impact < 0.0` and `impact <= 0.0` split the rest the same way.
     "asteroid_beam\\.rs:[0-9]+:[0-9]+: replace < with <= in moves$",
+    # The trait's default `landing_site` gives `None` already.
+    "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::landing_site -> Option<LandingSite> with None$",
     # The trait's default `boom_sounds` is empty already: `vec![]` is the
     # same empty list as `Vec::new()`.
     "nova-sim-catalog/src/catalog\\.rs:[0-9]+:[0-9]+: replace PilotCatalog::boom_sounds -> Vec<\\(BoomId, SoundId\\)> with vec!\\[\\]$",
@@ -642,6 +644,10 @@ exclude_re = [
     # A berth holds one ship, so a fighter just put in the system never
     # shares its carrier's: `>` and `>=` pick the same fighters above it.
     "nova-sim/src/session/launch_frame\\.rs:.*replace > with >= in Session::dispatch_npcs$",
+    # A follower never shares its leader's berth: a berth holds one ship,
+    # and a ship that takes a leader's freed berth this tick is not led by
+    # it, so `<` and `<=` pick the same view of the leader.
+    "nova-sim-ai/src/traffic/fly_pass\\.rs:.*replace < with <= in FlyPass::leaders_for$",
     # The fold steps only with a direction (`fold.dir == 0` is the other
     # arm), so its tests of `dir > 0` and `dir < 0` read the same as
     # `>= 0` and `<= 0` there.
@@ -724,4 +730,7 @@ exclude_re = [
     "nova-view/src/ui/desc\\.rs:[0-9]+:[0-9]+: replace match guard text\\.can_scroll_(up|down)\\(\\) with true in page_key$",
     # The trait's default, already an empty list.
     "nova-view/src/spaceport/modal\\.rs:[0-9]+:[0-9]+: replace Modal::take_unclaimed -> Vec<Input> with vec!\\[\\]$",
+    # Whether a follower's berth is below its parent's: a berth holds one
+    # ship and a ship is never its own follower, so the two never tie.
+    "nova-sim-ai/src/traffic/fleet_formation\\.rs:[0-9]+:[0-9]+: replace < with <= in written$",
 ]

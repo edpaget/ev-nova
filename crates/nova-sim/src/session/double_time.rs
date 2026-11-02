@@ -833,22 +833,24 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         assert!(session.led_speed() > 1.0, "a pilot without Strict Play");
         let escort = &mut session.space.traffic.npcs_mut()[0];
-        escort.mission = Some(crate::traffic::npc::MissionMark {
-            slot: 0,
-            behav: crate::mission::ships::ShipBehav::EscortPlayer,
-            formation: Some(crate::escort::FormationSlot::default()),
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
             order: None,
         });
         escort.goal = crate::ai::Goal::Formation { guard: None };
         escort.state.position = Vec2::new(0.0, -5000.0);
         let own = escort.stats.handling.max_speed;
-        let fastest = (0..200)
-            .map(|_| {
-                again(&mut session, Controls::default());
-                session.npcs()[0].state.velocity.length()
-            })
-            .fold(0.0, f32::max);
-        assert!(fastest > own * 1.01, "{fastest} against its own {own}");
+        // Each second pass flies the word its advance pass's low level left
+        // at its slot, capped at the led top speed at its step: past its
+        // own top speed it still gains.
+        let speed = |session: &Session| session.npcs()[0].state.velocity.length();
+        let gained_past_own = (0..200).any(|_| {
+            work(&mut session, &catalog, Controls::default());
+            let before = speed(&session);
+            again(&mut session, Controls::default());
+            before > own * 1.01 && speed(&session) > before
+        });
+        assert!(gained_past_own, "{} against its own {own}", speed(&session));
     }
 
     #[test]

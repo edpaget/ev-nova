@@ -1214,13 +1214,13 @@ fn a_save_due_while_a_strict_pilot_dies_writes_nothing_after_the_delete() {
 }
 
 #[test]
-fn a_strict_pilot_put_away_flying_is_saved_not_deleted() {
+fn a_strict_pilot_put_away_flying_is_not_deleted_and_keeps_its_take_off_save() {
     let store = MemoryPilots::new();
     let mut screen = strict_landed_and_took_off(&store);
     let writes = store.writes();
     screen.input(&key(Key::Escape, true));
     assert_eq!(screen.showing(), Showing::MainMenu);
-    assert_eq!(store.writes(), writes + 1, "saved");
+    assert_eq!(store.writes(), writes, "in flight, nothing saved");
     assert_eq!(store.deleted(), Vec::<String>::new());
     assert!(saved(&store, "Ada").strict_play());
 }

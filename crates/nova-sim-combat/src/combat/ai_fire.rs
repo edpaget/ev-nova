@@ -6,6 +6,8 @@
 //! call, and [`Combat`](super::Combat) wires it into the fight; this
 //! module holds its decisions as plain functions:
 //!
+//! - what it aims at: its target while that ship's slot is active,
+//!   breaking up included, as the call reads no `_IsDying` ([`spawn`]);
 //! - how many copies fire in a call ([`copies`], `_WeaponMaxSimultShots`);
 //! - whether each copy spawns, and which way ([`spawn`]): turrets only
 //!   inside the box of their reach, the full turrets clear of their blind
@@ -144,6 +146,12 @@ fn in_box(spec: &WeaponSpec, firer: &ShipState, target: &Target) -> bool {
 ///   the heading, at nothing (`Combat` aims the damage at the firer's
 ///   target).
 /// - 5, 9, 10, 99 and anything else: nothing.
+///
+/// `target` is any ship whose slot is active, breaking up as much as
+/// intact ([`Combat`](super::Combat)'s `ai_dispatch::active`): neither
+/// `_FireAIShipWeapon` (@0x8873d-0x89269) nor `_SpawnShot` (@0x3e550) or
+/// `_SpawnBeam` (@0x44ff3) calls `_IsDying`, so a pick at a ship breaking
+/// up spawns as at one intact. A destroyed ship is no target.
 #[must_use]
 pub fn spawn(
     spec: &WeaponSpec,

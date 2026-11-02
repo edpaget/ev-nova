@@ -152,8 +152,10 @@ impl Session {
     }
 
     /// Each NPC among the fight's kills by deadly stellars
-    /// ([`Combat::take_stellar_kills`]) still here vanishes or is
-    /// destroyed, as [`Session::take_out_the_killed`] says.
+    /// ([`Combat::take_stellar_kills`]) still here vanishes, its record
+    /// kept for the next think
+    /// ([`Traffic::remove_killed`](crate::traffic::Traffic::remove_killed)),
+    /// or is destroyed, as [`Session::take_out_the_killed`] says.
     fn settle_stellar_kills(&mut self) {
         let rule = DeadlyStellarKill::from(self.setup.rules.source_for(RuleKey::DeadlyStellarKill));
         let led: BTreeSet<NpcId> = self.player_led().map(|npc| npc.id).collect();
@@ -173,7 +175,7 @@ impl Session {
         }
         for &id in &killed {
             match rule {
-                DeadlyStellarKill::Vanishes => self.space.traffic.remove(id),
+                DeadlyStellarKill::Vanishes => self.space.traffic.remove_killed(id),
                 DeadlyStellarKill::Destroyed => {
                     if let Some(npc) = self.space.npc_mut(id) {
                         npc.condition = Condition::Destroyed;
@@ -306,6 +308,104 @@ pub(super) mod tests {
         };
         npc_mut(&mut session).person = Some(NpcPerson::of(&record, false));
         session
+    }
+
+    /// Keeps every goal and target, noting each ship that reads a gone
+    /// ship's slot in its think.
+    #[derive(Debug, Default)]
+    struct ReadingGone(std::cell::RefCell<Vec<NpcId>>);
+
+    impl crate::ai::Behaviour for ReadingGone {
+        fn decide(
+            &self,
+            npc: &Npc,
+            around: &crate::ai::Surroundings,
+            _chance: &mut dyn crate::chance::Chance,
+        ) -> crate::ai::Goal {
+            if around.held_gone(npc).is_some() {
+                self.0.borrow_mut().push(npc.id);
+            }
+            npc.goal
+        }
+
+        fn target(
+            &self,
+            npc: &Npc,
+            _around: &crate::ai::Surroundings,
+        ) -> Option<crate::combat::ShipRef> {
+            npc.target
+        }
+    }
+
+    #[test]
+    fn a_ship_a_stellar_killed_is_held_by_every_slot_until_its_next_step() {
+        // `_HandleDeadlyStellars` (@0x4450e) frees the slot after the ship
+        // loop (@0x39dac), so every other slot reads it in the next pass's
+        // think, and lets go at that pass's `_HandleShip` (@0x33865).
+        let catalog = armed();
+        let mut session = among(&catalog, &[on_the_npc()], 1, Rulebook::default());
+        npc_mut(&mut session).berth = 3;
+        let killed = crate::combat::ShipRef::Npc(session.npcs()[0].id);
+        let mut holding = |berth| {
+            let mut ship = crate::testkit::npc(0, crate::stats::ShipStats::default());
+            ship.state.position = Vec2::new(900.0, 0.0);
+            ship.target = Some(killed);
+            session.space.traffic.add_npc_at(ship, berth)
+        };
+        let (earlier, later) = (holding(2), holding(5));
+        let reading = ReadingGone::default();
+        let pass = |session: &mut Session| {
+            session.game_work(
+                Controls::default(),
+                &catalog,
+                &reading,
+                Rules::default(),
+                &mut NeverFires,
+            );
+        };
+        let target = |session: &Session, id| session.space.npc(id).expect("there").target;
+        pass(&mut session);
+        assert_eq!(session.npcs().len(), 2, "it vanished");
+        assert_eq!(reading.0.borrow().as_slice(), []);
+        assert_eq!(target(&session, earlier), Some(killed));
+        assert_eq!(target(&session, later), Some(killed));
+        pass(&mut session);
+        assert_eq!(reading.0.borrow().as_slice(), [earlier, later]);
+        assert_eq!(target(&session, earlier), None);
+        assert_eq!(target(&session, later), None);
+    }
+
+    #[test]
+    fn a_ship_held_by_a_ship_a_stellar_killed_is_pulled_by_its_record_at_the_next_pass_then_let_go()
+    {
+        // `_HandleShip`'s pull reads the freed slot (@0x3401f-0x34032) with
+        // no +0xb8 test, and its release (@0x353ba-0x35421) comes after.
+        use crate::combat::impact::TractorLock;
+        use crate::flight::DISABLED_DRAG;
+        let catalog = armed();
+        let mut session = among(&catalog, &[on_the_npc()], 1, Rulebook::default());
+        npc_mut(&mut session).berth = 3;
+        let killed = crate::combat::ShipRef::Npc(session.npcs()[0].id);
+        let mut ship = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        ship.state.position = Vec2::new(900.0, 0.0);
+        ship.state.velocity = Vec2::new(5.0, 0.0);
+        ship.condition = crate::combat::hull::Condition::Disabled;
+        ship.tractor = Some(TractorLock::by(killed));
+        let held = session.space.traffic.add_npc_at(ship, 5);
+        let held_ship = |session: &Session| session.space.npc(held).expect("there").clone();
+        fight(&mut session);
+        assert_eq!(session.npcs().len(), 1, "it vanished");
+        let before = held_ship(&session);
+        assert!(before.tractor.is_some(), "held by it live on its pass");
+        fight(&mut session);
+        let after = held_ship(&session);
+        assert_eq!(after.tractor, None, "let go at the next pass");
+        assert!(
+            after.state.velocity.x < before.state.velocity.x * DISABLED_DRAG,
+            "pulled by the record: {:?} from {:?}",
+            after.state.velocity,
+            before.state.velocity
+        );
     }
 
     #[test]

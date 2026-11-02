@@ -207,3 +207,67 @@ fn the_setup_may_bring_a_fleet_out_of_a_gate_its_system_lists_but_does_not_show(
         lead.mode
     );
 }
+
+/// The testkit catalog with a hypergate, 135, in 131 at (500, 500): what
+/// slot 7 names as a stellar in 130, which doesn't list it.
+fn slot_gated() -> FakePilotCatalog {
+    let mut catalog = catalog();
+    let gate = crate::catalog::LandingSite {
+        flags2: crate::gate::HYPERGATE,
+        ..planet(135, 500.0, 500.0)
+    };
+    for (system, sites) in &mut catalog.sites {
+        if *system == SystemId(131) {
+            sites.push(gate);
+        }
+    }
+    catalog
+}
+
+/// The stellar slot 7 names: 135.
+const SLOT_GATE: StellarId = crate::ai::travel::of_slot(7);
+
+#[test]
+fn a_gate_named_by_a_slot_takes_the_unloaded_width() {
+    // Another system's gate: the owner test comes first (@0xacb9-0xacc1).
+    let catalog = slot_gated();
+    let session = Session::start(&catalog).expect("starts");
+    assert_eq!(session.system(), SystemId(130));
+    assert_eq!(
+        session.gate_type_widths().get(&SLOT_GATE),
+        Some(&TypeWidth::Unloaded)
+    );
+    assert_eq!(
+        session.gate_type_widths().get(&StellarId(128)),
+        None,
+        "no gate"
+    );
+}
+
+#[test]
+fn an_npc_bound_for_a_gate_its_slot_names_enters_it_and_leaves() {
+    // Goal 1 on a record of `Flags2` 0x3000 hands off to goal 0x14
+    // (@0x8d8ed-0x8d8f5), which enters it as any gate.
+    let catalog = slot_gated();
+    let mut session = Session::start(&catalog).expect("starts");
+    // The first pass sets the system up.
+    pass(&mut session, &catalog);
+    let id = session
+        .space
+        .traffic
+        .add_npc(trader(Goal::Land(SLOT_GATE), (500.0, 500.0)));
+    for _ in 0..100 {
+        pass(&mut session, &catalog);
+        if session
+            .departed()
+            .contains(&(id, Outcome::EnteredGate(SLOT_GATE)))
+        {
+            assert!(ship_of(&session, id).is_none(), "gone from the system");
+            assert_eq!(session.system(), SystemId(130));
+            return;
+        }
+        let npc = ship_of(&session, id).expect("still entering");
+        assert_eq!(npc.goal, Goal::EnterGate(SLOT_GATE));
+    }
+    panic!("it never entered the gate");
+}

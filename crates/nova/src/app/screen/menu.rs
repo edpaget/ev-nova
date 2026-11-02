@@ -407,7 +407,7 @@ impl AppScreen {
     /// (@0x766fb-0x76701); each is a warning too. The original resets the
     /// held player before its load fails, which the engine's whole-file
     /// load leaves out
-    /// (rdm:phase/main-screen-fidelity/phase-3-main-screen-left-outs).
+    /// (rdm:phase/front-end/phase-2-main-screen-left-outs).
     pub(super) fn open_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let list = self.open_pilot.as_mut().expect("open");
         list.input(input);

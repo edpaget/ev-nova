@@ -51,8 +51,14 @@
 //! ([`repair_dock`](crate::traffic::repair_dock)). The ships refuelling run
 //! in berth order, each reading the fuel the last left, as the original's
 //! thinks run slot by slot. The player's fuel given is tallied
-//! ([`Traffic::take_fuel_given`]) and lands in the session after the
-//! traffic's tick, before the frame is drawn, so no boundary is crossed.
+//! ([`Traffic::take_fuel_given`]) and lands in the session after each
+//! slot's run (`nova_sim::Session::dispatch_npcs`), so the next run's
+//! world holds it, as the original's tank is live.
+//!
+//! The player's warp changes none of this: `_DoPlayGameWork`'s AI loop
+//! (@0x44270-0x442ae) tests only that a ship is active, has AI and is in
+//! the player's system, and nothing here reads the target's +0x50. The
+//! player's move-off takes the refueller out of its box, and it closes.
 //!
 //! Recorded only: the `_statusRedraw` writes (@0x8f56e-0x8f573,
 //! @0x8f6a6-0x8f6af), as the status display reads live state; the box
@@ -168,11 +174,22 @@ pub fn take(npc: &mut Npc, ship: ShipRef, step: RefuelStep) {
             npc.goal = Goal::Idle;
             npc.target = None;
             npc.docking = None;
-            npc.travel_set = false;
+            npc.travel = None;
             return;
         }
     };
     npc.docking = Some(Docking { ship, sub });
+}
+
+impl World<'_> {
+    /// This world with `given` more fuel in the player's tank: what a
+    /// slot's think reads of the refuels of the slots below it.
+    pub(super) fn with_fuel_given(mut self, given: f32) -> Self {
+        if let Some(player) = &mut self.player {
+            player.reserves.fuel.now += given;
+        }
+        self
+    }
 }
 
 impl Traffic {
@@ -398,11 +415,11 @@ mod tests {
             ship: ShipRef::Player,
             sub: DockSub::Close,
         });
-        ship.travel_set = true;
+        ship.travel = Some(crate::catalog::StellarId(150));
         take(&mut ship, ShipRef::Player, RefuelStep::Done);
         assert_eq!(ship.goal, Goal::Idle);
         assert_eq!((ship.target, ship.docking), (None, None));
-        assert!(!ship.travel_set, "nav -1, @0x8f6ce");
+        assert!(!ship.travel_set(), "nav -1, @0x8f6ce");
         assert_eq!(ship.state.velocity, Vec2::ZERO);
     }
 }

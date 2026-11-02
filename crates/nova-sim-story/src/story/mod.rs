@@ -2819,12 +2819,12 @@
 //!     brackets and the hail dialog's picture sized by the slot, and the
 //!     scene's problems for an uncounted `spïn` (the original reports
 //!     nothing; none is added):
-//!     rdm:phase/stellar-fidelity-followups/phase-7-uncounted-slot-readers.
+//!     rdm:phase/rendering/phase-3-uncounted-slot-readers.
 //!   - A positive `xTiles` × `yTiles` below the `rlëD`'s frame count: the
 //!     loader makes min(count, tiles) frames (@0xa9a28-0xa9a41) and the
 //!     count is the tiles (@0x1ed8c-0x1ed97), so the original animates
 //!     over the tiles; the view counts the decoded frames:
-//!     rdm:phase/stellar-fidelity-followups/phase-8-tiles-below-frame-count.
+//!     rdm:phase/rendering/phase-4-tiles-below-frame-count.
 //!   - Memory-layout accidents, not copied: a slot reused across a system
 //!     change that keeps another stellar's +0x54 through a failed clone
 //!     (@0x32fe0-0x32fea, @0x331c6), the engine keeping the state per

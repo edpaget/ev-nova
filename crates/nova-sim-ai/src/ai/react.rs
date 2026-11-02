@@ -237,7 +237,7 @@ pub fn answer(
 /// (@0x89d3e), whatever goal it had, a ship assisting the player
 /// included (`_AIMakeShipStopRefuelling` after it, @0x3bec7, then finds
 /// goal 4 and does nothing). Its travel stellar cleared (+0x6c -1,
-/// @0x89d47) the traffic writes ([`Npc::travel_set`]). Its one other
+/// @0x89d47) the traffic writes ([`Npc::travel`]). Its one other
 /// change, clearing a jump's sub-goal (4 or 0xd under goals 2, 3 and 0xb,
 /// @0x89cf2-0x89d35), the new goal makes here, as the engine has no jump
 /// stage; any other sub-goal it keeps, so a ship already attacking keeps
@@ -353,7 +353,8 @@ fn hits(npc: &Npc, strike: &Strike, around: &Surroundings) -> bool {
 ///   whichever ship answers: it keeps its target when it is attacking
 ///   ([`Goal::attacking`] some, `_IsShipAttacking` @0x82f6a, which tests
 ///   the goal word alone), its target T ([`Npc::target`], +0x70, not the
-///   goal's quarry) is live, it faces within [`FOCUS_DEGREES`] of the
+///   goal's quarry) holds its slot ([`Surroundings::active`]), it faces
+///   within [`FOCUS_DEGREES`] of the
 ///   heading it last wanted (`_AngularDifference(trunc(+0x44), +0x68)`),
 ///   and dist²(`attacker`) > [`FOCUS`] × dist²(T). The two part when an
 ///   earlier hit of the pass set the target and left the goal. +0x68 is
@@ -363,7 +364,10 @@ fn hits(npc: &Npc, strike: &Strike, around: &Surroundings) -> bool {
 ///   while a pass is answered it is that heading as the pass began
 ///   ([`Surroundings::wanted`]), as no reaction writes +0x68; with no such
 ///   frame, the whole-degree bearing to T stands in. The original reads
-///   T's slot whatever is in it; a dead or departed T is not kept here.
+///   T's slot whatever is in it, so a T arriving or breaking up is kept;
+///   only a destroyed or departed T is not: what the original reads there
+///   is a freed slot's stale record, or a new ship in it, and the engine
+///   keeps no such record.
 /// - By the other reading, the engine's before weapons-fidelity phase 37,
 ///   `answering` tests itself: it keeps its target when T is nearer than
 ///   half the attacker's distance (dist²(T) < [`FOCUS`] × dist²(attacker))
@@ -392,7 +396,7 @@ fn focused(hit: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
         .goal
         .attacking()
         .and(hit.target)
-        .filter(|&own| around.live(own))
+        .filter(|&own| around.active(own))
     else {
         return false;
     };
@@ -466,6 +470,7 @@ fn good_samaritan(npc: &Npc, victim: ShipRef, around: &Surroundings) -> bool {
 mod tests {
     use super::*;
     use crate::catalog::{GovtId, GovtRecord, StellarId};
+    use crate::combat::hull::Condition;
     use crate::geometry::Vec2;
     use crate::govt::{DERELICT, Governments, IGNORED_WHEN_ATTACKED, NOSY, XENOPHOBIC};
     use crate::rulebook::RuleSource;
@@ -1093,6 +1098,38 @@ mod tests {
             TAKES(n(3)),
             "no target, no keep"
         );
+    }
+
+    #[test]
+    fn the_focus_reads_a_target_gliding_in_or_breaking_up_and_lets_go_of_one_destroyed() {
+        // `_DamageShip` tests nothing of T (@0x3bbf3-0x3bcac); the other
+        // reading asks `live`.
+        let govts = relations(0, 0);
+        let hit = strike(n(1), n(3));
+        let by = |focus, target: &dyn Fn(&mut Npc)| {
+            let mut npcs = hunted(20.0);
+            npcs[2].state.position = Vec2::new(500.0, 0.0);
+            target(&mut npcs[1]);
+            focused_by(focus, &govts, &npcs, 0, &hit)
+        };
+        let gliding = |other: &mut Npc| other.mode = Mode::JumpingIn { tick: 1 };
+        let dying = |other: &mut Npc| {
+            other.condition = Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            };
+        };
+        assert_eq!(by(RuleSource::Engine, &gliding), Reaction::default());
+        assert_eq!(by(RuleSource::Engine, &dying), Reaction::default());
+        assert_eq!(
+            by(RuleSource::Engine, &|other| {
+                other.condition = Condition::Destroyed;
+            }),
+            TAKES(n(3))
+        );
+        assert_eq!(by(RuleSource::Bible, &|_| {}), Reaction::default());
+        assert_eq!(by(RuleSource::Bible, &gliding), TAKES(n(3)));
+        assert_eq!(by(RuleSource::Bible, &dying), TAKES(n(3)));
     }
 
     #[test]

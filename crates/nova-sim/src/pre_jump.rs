@@ -65,7 +65,8 @@
 //! velocity following its heading.
 
 use crate::flight::{
-    Caps, FlightRules, Flyer, ShipState, Turn, advance, drag_by, facing, inertialess_advance,
+    Adjusted, Caps, FlightRules, Flyer, ShipState, Turn, advance, drag_by, facing,
+    inertialess_advance,
 };
 use crate::geometry::Vec2;
 use crate::handling::Handling;
@@ -165,16 +166,8 @@ pub fn fly(
             rule,
             gain,
         );
-        inertialess_advance(
-            ship,
-            speed,
-            handling,
-            brake,
-            caps,
-            flight,
-            Flyer::Player,
-            gain,
-        );
+        let by = Adjusted::by_own(brake, handling);
+        inertialess_advance(ship, speed, handling, by, caps, flight, Flyer::Player, gain);
         return false;
     }
     let (aim, thrust) = match stage {

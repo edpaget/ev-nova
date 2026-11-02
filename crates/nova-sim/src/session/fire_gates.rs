@@ -83,6 +83,71 @@ fn a_ship_holding_its_course_after_its_burst_fires_nothing_then_fires_its_kept_p
     assert_eq!(session.npcs()[0].mode, Mode::Flying);
 }
 
+/// Every NPC waits (state 6, a stop that keeps the burst word), targets
+/// the player and holds [`PICKED`].
+#[derive(Debug)]
+struct Stopping;
+
+impl Behaviour for Stopping {
+    fn decide(
+        &self,
+        _npc: &Npc,
+        _around: &crate::ai::Surroundings,
+        _chance: &mut dyn Chance,
+    ) -> crate::ai::Goal {
+        crate::ai::Goal::Wait
+    }
+
+    fn trigger(&self, _npc: &Npc, _around: &crate::ai::Surroundings) -> Trigger {
+        PICKED
+    }
+
+    fn target(&self, _npc: &Npc, _around: &crate::ai::Surroundings) -> Option<ShipRef> {
+        Some(ShipRef::Player)
+    }
+}
+
+#[test]
+fn a_ship_whose_burst_ends_in_its_wait_fires_that_frame_then_nothing_through_the_wait() {
+    // Its stop brakes, moving away from the player and facing it, bursting
+    // out the little it owes above its cap. `_HandleShip`'s fire step comes
+    // after the end and its wait, and tests neither (@0x34d32-0x34d8b,
+    // @0x34fcb-0x35018).
+    let (catalog, mut session) = waiting(Mode::Flying);
+    let npc = &mut session.space.traffic.npcs_mut()[0];
+    npc.goal = crate::ai::Goal::Wait;
+    npc.state.velocity = Vec2::new(0.0, -2.0);
+    npc.owed_burst = Some(npc.stats.handling.max_speed + 0.01);
+    let pass = |session: &mut Session| {
+        work_with(
+            session,
+            &catalog,
+            Controls::default(),
+            &Stopping,
+            Rules::default(),
+            &mut NeverFires,
+        );
+        npc_fired(&session.take_combat_events())
+    };
+    assert_eq!(pass(&mut session), 1, "the frame it ends");
+    let ship = &session.npcs()[0];
+    assert_eq!(ship.owed_burst, None);
+    assert!(
+        matches!(ship.mode, Mode::Coasting { .. }),
+        "{:?}",
+        ship.mode
+    );
+    assert_eq!(ship.trigger, Trigger::default(), "the coast fires nothing");
+    assert!(!ship.fires_on_burst_end);
+    assert_eq!(ship.pick, None, "a primary's, cleared");
+    let mut passes = 0;
+    while matches!(session.npcs()[0].mode, Mode::Coasting { .. }) {
+        assert_eq!(pass(&mut session), 0, "pass {passes} of its wait");
+        passes += 1;
+        assert!(passes < 100, "never ended");
+    }
+}
+
 #[test]
 fn a_ship_entering_a_gate_fires_nothing_it_held() {
     let (_, mut session) = waiting(Mode::EnteringGate {

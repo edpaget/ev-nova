@@ -4,37 +4,59 @@
 //!
 //! **Who pauses.** `_AICheckParentExists` (@0x8926a-0x89501) writes goal
 //! 0x13 to every follower of a lost lead but the successor, its substate
-//! (+0xc8ca) kept, while its warp stage +0x50 is below 0.0 (@0x8949d-0x894a6),
-//! and to a disabled follower with no intact fellow, substate 0
-//! (@0x894b1-0x894f3). The traffic's succession pass writes it
-//! ([`succession`](crate::traffic::succession)). An escort rests at 0, so
-//! it takes the pause only once its jump gave its stage up; its sub 4 or
-//! 0xd is then kept, and the jump path runs on it every frame
-//! ([`jump_with_leader`](crate::traffic::jump_with_leader)).
+//! (+0xc8ca) kept, while its warp stage +0x50 is strictly below 0.0
+//! (@0x8949d-0x894a6), and to a disabled follower with no intact fellow,
+//! substate 0 (@0x894b1-0x894f3). The traffic's succession pass writes it
+//! ([`succession`](crate::traffic::succession)).
+//!
+//! **Which substates reach it.** Only sub 0, or sub 4 or 0xd on the jump
+//! path, on any data. The check runs for an escort alone (AI type above 4
+//! with a parent, @0x440d8, @0x440f4), which rests at +0x50 = 0: every
+//! negative write leaves one of those substates by the time the check
+//! reads it.
+//!
+//! - `_EscortAI`'s Defend, Attack and formation writes (@0x83c70, @0x83d67,
+//!   @0x83ead) leave goal 4 or 0xa with +0x4c -1.0, so the high level's
+//!   hold zeroes +0x50 in the same dispatch (@0x8d513-0x8d52e).
+//! - Its lost parent and the check's own writes (@0x83974, @0x8937c,
+//!   @0x894ec) leave no parent: no longer a follower.
+//! - Sub 0xd's give-up (@0x85ba5) runs after the hold and keeps sub 0xd,
+//!   or, a high level on, goal 0, sub 0 (@0x8df31-0x8df49, @0x8deb9-0x8ded1).
+//! - The jump path's cancels (@0x9011e, @0x9019c) write goal 0, sub 0, and
+//!   last past the hold only under a wait, in which no high level writes
+//!   a substate.
+//! - The emerge (@0x89555) writes goal 0x15, sub 0 under a wait that skips
+//!   the hold; a hit there keeps sub 0 (@0x89d3e).
+//! - The disabled cancel (@0x8fce9) stays only on the jump path, in sub 4
+//!   or 0xd: off it the reset drops the parent.
+//! - A ship gliding in (-999.0) takes the write, overwritten in the same
+//!   frame by the glide path (@0x8fcf5-0x8fd18): no pause.
+//!
+//! So subs 1, 9, 0xb and 0xc, a fight's and goal 5's never reach it.
 //!
 //! **What it flies** ([`Kept`]). `_AIDispatch` draws its release first
-//! (@0x8fe73-0x8febb, [`Traffic::release_regroups`](crate::traffic::Traffic::release_regroups)); held,
-//! it skips the disabled reset, the type think and `_HighLevelAIHandler`
-//! (@0x9002d → @0x900c6 → @0x901ea): only `_LowLevelAIHandler` runs, flying
-//! the substate it kept with that substate's own fire. The engine has no
-//! substate apart from the goal, so the goal keeps one in [`Kept`]
+//! (@0x8fe73-0x8febb, [`Traffic::release_regroups`](crate::traffic::Traffic::release_regroups));
+//! held, it skips the disabled reset, the type think and
+//! `_HighLevelAIHandler` (@0x9002d → @0x900c6 → @0x901ea): only
+//! `_LowLevelAIHandler` runs, flying the substate it kept. The engine has
+//! no substate apart from the goal, so the goal keeps one in [`Kept`]
 //! ([`Kept::of`]), and the fly half flies [`Goal::flown`] in its place
 //! ([`Npc::flown_goal`]):
 //!
-//! - a formation substate (the original's subs 9, 0xb and 0xc of goal 0xa)
-//!   keeps formation on its lead, now the successor, on the slot the
-//!   formation pass gives it, firing its turret at its guard
-//!   ([`Kept::Formation`]);
-//! - a fight's substate (goal 4's) keeps flying its fight at its target
-//!   ([`Kept::Attack`], [`Kept::Snipe`]), firing its passes but launching
-//!   no fighter through the high level (@0x8e6fa);
-//! - sub 0 (a hold, a drift or an assist, which fly with no thrust or
-//!   turn) coasts ([`Kept::Coast`]);
-//! - sub 1 and anything else (a wait, a count wait, an idle, a dock) stops
-//!   ([`Kept::Stop`]).
+//! - sub 0 moves on at its velocity with no thrust or turn (@0x8521e-0x85236,
+//!   [`Kept::Coast`]), and fires `_AIEscortFireUnprovoked`;
+//! - sub 0xd follows its new lead's jump on the jump path, its release
+//!   undrawn ([`Kept::FollowsJump`]). Under a lead at +0x50 ≤ 1.0 it takes
+//!   the lead's whole heading and velocity, `_AIMaintainFormation`
+//!   (ship, 0) and the lead's glow, with no thrust (@0x859df-0x85a4a);
+//! - sub 4 turns outward on its own jump, on the jump path too, and
+//!   never leaves: the hold, with goal 0x13 at its head, zeroes the stage
+//!   it starts each frame (@0x8585b-0x859c5, @0x8d52e), and
+//!   `_AIIsShipJumping` reads goal 0x13, so the warp-out zeroes or restamps
+//!   it (@0x34a27, @0x34a31) ([`Kept::OwnJump`]).
 //!
-//! Every kept substate but a fight's fires `_AIEscortFireUnprovoked`
-//! (subs 0, 1, 9, 0xb and 0xc, AI type above 4 only).
+//! Subs 4 and 0xd fire nothing: neither block calls an `_AIFire*`, and the
+//! low level clears +0xba (@0x851f6).
 //!
 //! **Its readers.** Besides the pause, only `_AIIssueEscortOrders` reads
 //! goal 0x13 (@0x89aa9, exempt from the all-Return override,
@@ -43,95 +65,65 @@
 //! leaves 0x13 to its default: it is no attack, no fight, not in form and
 //! not spared as a threat.
 //!
-//! The kept substates where the engine's flight differs from the
-//! original's (no re-pick; subs 9 and 0xb steering at the lost lead's
-//! +0x6c; a returning fighter's docking at its lost carrier) are
-//! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
 //! Nothing here plays a sound or draws a random number.
 
 use crate::ai::Goal;
-use crate::combat::ShipRef;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::Npc;
+use crate::traffic::warp_out::WarpGoal;
 
 /// The substate a ship in the regroup pause keeps flying (see the module
 /// docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kept {
-    /// Sub 0: it moves on at its velocity with no thrust or turn.
+    /// Sub 0: it moves on at its velocity with no thrust or turn. It holds
+    /// no [`WarpGoal`], so its dispatch reaches the release draw.
     Coast,
-    /// Sub 1: it stops.
-    Stop,
-    /// Goal 0xa's substates: it keeps formation on its lead, firing its
-    /// turret at `guard`.
-    Formation {
-        /// The ship its turrets fire at, if any.
-        guard: Option<ShipRef>,
-    },
-    /// Goal 4's fight at this ship.
-    Attack(ShipRef),
-    /// Goal 4's stand-off fight at this ship.
-    Snipe(ShipRef),
+    /// Sub 0xd, its [`WarpGoal::Follow`] kept: the jump path flies it.
+    FollowsJump,
+    /// Sub 4, its [`WarpGoal::Own`] kept: the jump path flies it.
+    OwnJump,
 }
 
 impl Kept {
-    /// The substate a ship in `goal` keeps as it pauses (see the module
-    /// docs): a formation's, a fight's, a coast for a hold, a drift or an
-    /// assist, a stop for the rest; a ship already paused keeps its own.
+    /// The substate `npc` keeps as it pauses (see the module docs): a ship
+    /// already paused keeps its own; else its jump's sub 4 or 0xd, or sub
+    /// 0 off a jump, whatever its goal.
     #[must_use]
-    pub fn of(goal: Goal) -> Self {
-        match goal {
-            Goal::Follow { guard, .. } | Goal::Formation { guard } => Self::Formation { guard },
-            Goal::Attack(ship) => Self::Attack(ship),
-            Goal::Snipe(ship) => Self::Snipe(ship),
-            Goal::Hold | Goal::Drift | Goal::Assist(_) => Self::Coast,
-            Goal::Regroup { kept } => kept,
-            Goal::Idle
-            | Goal::Wait
-            | Goal::Land(_)
-            | Goal::EnterGate(_)
-            | Goal::JumpOut
-            | Goal::Flee(_)
-            | Goal::Inspect(_)
-            | Goal::Dock(_)
-            // No miner pauses: only a led ship regroups, and a led ship
-            // never thinks as a miner.
-            | Goal::Mine
-            | Goal::Scoop
-            | Goal::Plunder { .. }
-            | Goal::CountWait
-            | Goal::AttackStellar(_) => Self::Stop,
+    pub fn of(npc: &Npc) -> Self {
+        if let Goal::Regroup { kept } = npc.goal {
+            return kept;
+        }
+        match npc.warp.goal {
+            Some(WarpGoal::Follow(_)) => Self::FollowsJump,
+            Some(WarpGoal::Own) => Self::OwnJump,
+            None => Self::Coast,
         }
     }
 }
 
 impl Goal {
-    /// The goal whose flight a ship in this goal, led by `leader`, flies:
-    /// for the regroup pause its kept substate's (a coast as a hold, a
-    /// stop as a wait, a formation on `leader`, or a hold with none, as
-    /// goal 0xa with no leader flies, a fight as itself); any other goal
-    /// flies itself.
+    /// The goal whose flight a ship in this goal flies: for the regroup
+    /// pause its kept substate's (a coast or a kept follow as a hold, its
+    /// own jump as a jump out); any other goal flies itself.
     #[must_use]
-    pub fn flown(self, leader: Option<NpcId>) -> Self {
-        let Self::Regroup { kept } = self else {
-            return self;
-        };
-        match kept {
-            Kept::Coast => Self::Hold,
-            Kept::Stop => Self::Wait,
-            Kept::Formation { guard } => {
-                leader.map_or(Self::Hold, |lead| Self::Follow { lead, guard })
-            }
-            Kept::Attack(ship) => Self::Attack(ship),
-            Kept::Snipe(ship) => Self::Snipe(ship),
+    pub fn flown(self) -> Self {
+        match self {
+            Self::Regroup {
+                kept: Kept::Coast | Kept::FollowsJump,
+            } => Self::Hold,
+            Self::Regroup {
+                kept: Kept::OwnJump,
+            } => Self::JumpOut,
+            goal => goal,
         }
     }
 }
 
 impl Npc {
-    /// The goal its flight flies ([`Goal::flown`] under its leader).
+    /// The goal its flight flies ([`Goal::flown`]).
     #[must_use]
     pub fn flown_goal(&self) -> Goal {
-        self.goal.flown(self.leader)
+        self.goal.flown()
     }
 
     /// Runs `fly` on it with its goal the one it flies
@@ -156,122 +148,113 @@ mod tests {
     use super::*;
     use crate::ai::Help;
     use crate::catalog::StellarId;
+    use crate::combat::ShipRef;
+    use crate::stats::ShipStats;
+    use crate::traffic::fixture::npc;
+    use crate::traffic::npc::NpcId;
 
     const T: ShipRef = ShipRef::Npc(NpcId(7));
     const LEAD: NpcId = NpcId(3);
+    const ALL: [Kept; 3] = [Kept::Coast, Kept::FollowsJump, Kept::OwnJump];
+
+    /// A ship in `goal`, on the jump `warp` says.
+    fn in_goal(goal: Goal, warp: Option<WarpGoal>) -> Npc {
+        let mut ship = npc(1, ShipStats::default());
+        ship.goal = goal;
+        ship.warp.goal = warp;
+        ship
+    }
 
     #[test]
-    fn each_goal_keeps_the_substate_its_flight_had() {
+    fn off_its_jump_a_ship_keeps_sub_0_whatever_its_goal() {
         let guard = Some(T);
         let plunder = Goal::Plunder {
             ship: T,
             hopeless: false,
         };
-        for (goal, kept) in [
-            (
-                Goal::Follow { lead: LEAD, guard },
-                Kept::Formation { guard },
-            ),
-            (Goal::Formation { guard }, Kept::Formation { guard }),
-            (Goal::Attack(T), Kept::Attack(T)),
-            (Goal::Snipe(T), Kept::Snipe(T)),
-            (Goal::Hold, Kept::Coast),
-            (Goal::Drift, Kept::Coast),
-            (Goal::Assist(Help::Repair), Kept::Coast),
-            (Goal::Assist(Help::Refuel), Kept::Coast),
-            (Goal::Idle, Kept::Stop),
-            (Goal::Wait, Kept::Stop),
-            (Goal::Land(StellarId(128)), Kept::Stop),
-            (Goal::EnterGate(StellarId(300)), Kept::Stop),
-            (Goal::JumpOut, Kept::Stop),
-            (Goal::Flee(T), Kept::Stop),
-            (Goal::Inspect(T), Kept::Stop),
-            (Goal::Dock(T), Kept::Stop),
-            (Goal::Mine, Kept::Stop),
-            (Goal::Scoop, Kept::Stop),
-            (plunder, Kept::Stop),
-            (Goal::CountWait, Kept::Stop),
-            (
-                Goal::Regroup {
-                    kept: Kept::Attack(T),
-                },
-                Kept::Attack(T),
-            ),
+        for goal in [
+            Goal::Follow { lead: LEAD, guard },
+            Goal::Formation { guard },
+            Goal::Attack(T),
+            Goal::Snipe(T),
+            Goal::Hold,
+            Goal::Drift,
+            Goal::Assist(Help::Repair),
+            Goal::Assist(Help::Refuel),
+            Goal::Idle,
+            Goal::Wait,
+            Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(300)),
+            Goal::JumpOut,
+            Goal::Flee(T),
+            Goal::Inspect(T),
+            Goal::Dock(T),
+            Goal::Mine,
+            Goal::Scoop,
+            plunder,
+            Goal::CountWait,
         ] {
-            assert_eq!(Kept::of(goal), kept, "{goal:?}");
+            assert_eq!(Kept::of(&in_goal(goal, None)), Kept::Coast, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn on_its_jump_a_ship_keeps_its_jumps_substate() {
+        for goal in [Goal::Idle, Goal::Attack(T), Goal::JumpOut] {
+            assert_eq!(
+                Kept::of(&in_goal(goal, Some(WarpGoal::Own))),
+                Kept::OwnJump,
+                "{goal:?}"
+            );
+            assert_eq!(
+                Kept::of(&in_goal(goal, Some(WarpGoal::Follow(T)))),
+                Kept::FollowsJump,
+                "{goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_paused_ship_keeps_its_own_whatever_its_warp_says() {
+        for kept in ALL {
+            let paused = Goal::Regroup { kept };
+            for warp in [None, Some(WarpGoal::Own), Some(WarpGoal::Follow(T))] {
+                assert_eq!(Kept::of(&in_goal(paused, warp)), kept, "{warp:?}");
+            }
         }
     }
 
     #[test]
     fn a_paused_ship_flies_its_kept_substate() {
-        let regroup = |kept| Goal::Regroup { kept };
-        for (kept, led, alone) in [
-            (Kept::Coast, Goal::Hold, Goal::Hold),
-            (Kept::Stop, Goal::Wait, Goal::Wait),
-            (
-                Kept::Formation { guard: Some(T) },
-                Goal::Follow {
-                    lead: LEAD,
-                    guard: Some(T),
-                },
-                Goal::Hold,
-            ),
-            (Kept::Attack(T), Goal::Attack(T), Goal::Attack(T)),
-            (Kept::Snipe(T), Goal::Snipe(T), Goal::Snipe(T)),
+        for (kept, flown) in [
+            (Kept::Coast, Goal::Hold),
+            (Kept::FollowsJump, Goal::Hold),
+            (Kept::OwnJump, Goal::JumpOut),
         ] {
-            assert_eq!(regroup(kept).flown(Some(LEAD)), led, "{kept:?}");
-            assert_eq!(regroup(kept).flown(None), alone, "{kept:?}");
+            assert_eq!(Goal::Regroup { kept }.flown(), flown, "{kept:?}");
+            let ship = in_goal(Goal::Regroup { kept }, None);
+            assert_eq!(ship.flown_goal(), flown, "{kept:?}");
         }
         for goal in [Goal::Idle, Goal::Attack(T), Goal::Hold] {
-            assert_eq!(goal.flown(Some(LEAD)), goal);
+            assert_eq!(goal.flown(), goal);
         }
-    }
-
-    #[test]
-    fn an_npc_flies_its_goal_under_its_leader() {
-        let mut npc = crate::traffic::fixture::npc(1, crate::stats::ShipStats::default());
-        npc.goal = Goal::Regroup {
-            kept: Kept::Formation { guard: None },
-        };
-        assert_eq!(npc.flown_goal(), Goal::Hold);
-        npc.leader = Some(LEAD);
-        assert_eq!(
-            npc.flown_goal(),
-            Goal::Follow {
-                lead: LEAD,
-                guard: None
-            }
-        );
     }
 
     #[test]
     fn a_flight_reads_the_flown_goal_and_leaves_the_pause_as_it_was() {
-        let mut npc = crate::traffic::fixture::npc(1, crate::stats::ShipStats::default());
-        npc.leader = Some(LEAD);
         let paused = Goal::Regroup {
-            kept: Kept::Formation { guard: Some(T) },
+            kept: Kept::OwnJump,
         };
-        npc.goal = paused;
-        let read = npc.fly_as_flown(|npc| npc.goal);
-        assert_eq!(
-            read,
-            Goal::Follow {
-                lead: LEAD,
-                guard: Some(T)
-            }
-        );
-        assert_eq!(npc.goal, paused);
-        npc.fly_as_flown(|npc| npc.goal = Goal::JumpOut);
-        assert_eq!(npc.goal, Goal::JumpOut, "a goal the flight wrote stands");
+        let mut ship = in_goal(paused, None);
+        assert_eq!(ship.fly_as_flown(|ship| ship.goal), Goal::JumpOut);
+        assert_eq!(ship.goal, paused);
+        ship.fly_as_flown(|ship| ship.goal = Goal::Idle);
+        assert_eq!(ship.goal, Goal::Idle, "a goal the flight wrote stands");
     }
 
     #[test]
     fn the_pause_is_no_attack_no_fight_not_in_form_and_not_spared_as_a_threat() {
-        for kept in [
-            Kept::Attack(T),
-            Kept::Formation { guard: Some(T) },
-            Kept::Coast,
-        ] {
+        for kept in ALL {
             let goal = Goal::Regroup { kept };
             assert_eq!(goal.attacking(), None);
             assert!(!goal.fights());

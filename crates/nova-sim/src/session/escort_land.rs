@@ -157,7 +157,7 @@ impl Session {
     /// berth, keeping what the slot keeps (see the module docs). With no
     /// record of `ship`, its NPC is gone and none takes its place, as for
     /// any escort whose class has no record.
-    fn upgrade_escort(
+    pub(super) fn upgrade_escort(
         &mut self,
         index: usize,
         ship: crate::catalog::ShipId,
@@ -185,9 +185,12 @@ impl Session {
         if let Some(npc) = placed.and_then(|id| self.space.npc_mut(id)) {
             npc.afterburner = old.afterburner;
             npc.aux = old.aux;
-            npc.voice = old.voice;
+            npc.order_word = old.order_word;
             npc.cloak = old.cloak;
             npc.state = old.state;
+        }
+        if let Some((id, variant)) = placed.zip(old.voice) {
+            self.space.traffic.set_voice(id, variant);
         }
         self.space.escorts.fleet[index] = placed;
     }
@@ -570,6 +573,7 @@ mod tests {
             npc.voice = Some(VoiceVariant::Odd);
             npc.cloak = cloak;
             npc.state = state;
+            npc.order_word = crate::fleet::OrderWord(4);
         }
         mark(&mut session, 0, EscortMark::Upgrade);
         session
@@ -578,6 +582,7 @@ mod tests {
         let id = ids(&session)[0].expect("placed");
         assert_ne!(id, old, "a new NPC");
         let npc = session.space.npc(id).expect("in the system");
+        assert_eq!(npc.order_word, crate::fleet::OrderWord(4), "the slot's");
         assert_eq!(npc.ship, ShipId(130));
         assert!(npc.afterburner, "afterburner");
         assert_eq!(npc.aux, Some(4), "aux");

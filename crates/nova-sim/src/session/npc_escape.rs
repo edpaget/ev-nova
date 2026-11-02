@@ -194,13 +194,9 @@ impl Session {
         };
         let cut = match self.setup.rules.source_for(RuleKey::EscapeShipCut) {
             RuleSource::Engine => match launched {
-                Some(_) => self
-                    .space
-                    .traffic
-                    .npcs()
-                    .iter()
-                    .find(|npc| npc.berth == 1)
-                    .map(|npc| ShipRef::Npc(npc.id)),
+                // The ship slot 1 holds now, past a wreck there not yet
+                // taken out.
+                Some(_) => self.space.traffic.holder_of(1).map(ShipRef::Npc),
                 None => Some(ShipRef::Player),
             },
             RuleSource::Bible => launched.map(ShipRef::Npc),
@@ -685,6 +681,166 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_the_cut_lands_on_the_escape_ship_in_a_wrecks_berth_1_not_the_wreck() {
+        // The escape ship takes berth 1, which a wreck displayed earlier in
+        // the loop freed (@0x2dee0) and still lies in until the take-out.
+        // The cut lands on what slot 1 holds now: the escape ship.
+        let catalog = escaping(0);
+        let (mut session, id) = carrier(&catalog, RuleSource::Engine, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        assert!(session.space.npc(wreck).is_none(), "taken out");
+        let fighter = vipers(&session).remove(0);
+        assert_eq!(fighter.berth, 1, "the wreck's slot");
+        let from = at_escape(&session, id);
+        let pushed = crate::bay::launch_velocity(from.velocity, from.heading, 4.0, 6.0);
+        assert_eq!(fighter.state.velocity, pushed * ESCAPE_CUT_VELOCITY, "cut");
+        assert_eq!(fighter.reserves.shield.now, 7.0, "Rand(66)");
+        assert!(chance.asked.contains(&66), "its own shield rolled below");
+        let held = session.space.npc(id).expect("dying");
+        assert_eq!(held.reserves.shield.now, 40.0, "the carrier uncut");
+    }
+
+    #[test]
+    fn an_escape_ship_takes_the_berth_a_lower_wreck_freed_at_its_display_that_loop() {
+        // The wreck's slot frees at its own display (@0x2dee0), so the
+        // escape ship's `_LaunchFighter` (@0x354ea) finds it first
+        // (@0x3c8c6-0x3c8e9). A later slot whose `_HandleShip` hasn't come
+        // still holds the wreck's +0x70 and finds the slot active: it now
+        // fights the escape ship.
+        let catalog = escaping(0);
+        let (mut session, id) = carrier(&catalog, RuleSource::Bible, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let aim = ShipRef::Npc(wreck);
+        let mut holder = npc(0, ShipStats::new(FAST, &[]));
+        holder.goal = crate::ai::Goal::Attack(aim);
+        holder.target = Some(aim);
+        holder.state.position = Vec2::new(0.0, 900.0);
+        let holder = session.space.traffic.add_npc_at(holder, 3);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        assert!(
+            session.space.npc(wreck).is_none(),
+            "destroyed and taken out"
+        );
+        assert!(session.space.npc(id).is_some(), "the carrier still dying");
+        let fighter = vipers(&session).remove(0);
+        assert_eq!(fighter.berth, 1, "the wreck's slot");
+        let held = session.space.npc(holder).expect("there");
+        assert_eq!(held.target, Some(ShipRef::Npc(fighter.id)));
+        assert_eq!(held.goal, crate::ai::Goal::Attack(ShipRef::Npc(fighter.id)));
+    }
+
+    #[test]
+    fn an_escape_ship_taking_a_wrecks_berth_holds_a_later_slots_hold_on_the_wreck() {
+        // +0xc8dc is a slot (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b
+        // leaves it): a later slot's `_HandleShip` reads the escape ship as
+        // its holder (@0x3401f-0x34032, @0x353e2-0x3540c) and keeps it.
+        use crate::combat::impact::TractorLock;
+        let catalog = escaping(0);
+        let (mut session, _) = carrier(&catalog, RuleSource::Bible, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let mut held = npc(0, ShipStats::new(FAST, &[]));
+        held.condition = crate::combat::hull::Condition::Disabled;
+        held.state.position = Vec2::new(0.0, 900.0);
+        held.tractor = Some(TractorLock::by(ShipRef::Npc(wreck)));
+        let held = session.space.traffic.add_npc_at(held, 3);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        let escape = vipers(&session).remove(0);
+        assert_eq!(escape.berth, 1, "the wreck's slot");
+        let lock = session.space.npc(held).expect("there").tractor;
+        assert_eq!(
+            lock.map(|lock| lock.holder),
+            Some(ShipRef::Npc(escape.id)),
+            "held by the escape ship"
+        );
+    }
+
+    #[test]
+    fn an_escape_ship_taking_a_wrecked_leads_berth_leads_its_follower_at_the_next_think() {
+        // The lead's +0x9a is a slot (`_AICheckParentExists` @0x89276): the
+        // escape ship rewrites it, and the next marking pass finds it
+        // active and runs no succession (@0x89296-0x892a9). A bribed
+        // follower, which the pass skips (@0x440d8), still names the slot
+        // as the lead breaks up.
+        let catalog = escaping(0);
+        let (mut session, _) = carrier(&catalog, RuleSource::Bible, 2);
+        let mut wreck = npc(0, ShipStats::new(FAST, &[]));
+        wreck.condition = crate::combat::hull::Condition::Dying {
+            ticks_left: 1,
+            starting: false,
+        };
+        wreck.state.position = Vec2::new(-300.0, 0.0);
+        let wreck = session.space.traffic.add_npc_at(wreck, 1);
+        let mut follower = npc(0, ShipStats::new(FAST, &[]));
+        follower.leader = Some(wreck);
+        follower.goal = crate::ai::Goal::Follow {
+            lead: wreck,
+            guard: None,
+        };
+        follower.take_bribe();
+        follower.state.position = Vec2::new(0.0, 900.0);
+        let follower = session.space.traffic.add_npc_at(follower, 3);
+        let mut chance = Rolls::launching(0, 7);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &Passive,
+            Rules::default(),
+            &mut chance,
+        );
+        let escape = vipers(&session).remove(0);
+        assert_eq!(escape.berth, 1, "the wreck's slot");
+        let world = crate::traffic::World::new(&[]);
+        let traffic = &mut session.space.traffic;
+        traffic.think_holding(&crate::ai::NovaAi::default(), world, &[], &mut chance);
+        let led = session.space.npc(follower).expect("there");
+        assert_eq!(led.leader, Some(escape.id));
+    }
+
+    #[test]
     fn by_the_engine_the_cut_lands_on_berth_1_whichever_ship_holds_it() {
         let catalog = escaping(0);
         // The carrier at berth 2: the fighter takes berth 1, and the cut.
@@ -1068,15 +1224,20 @@ mod tests {
     fn an_escape_fighter_launched_above_its_carrier_is_drawn_on_its_launch_frame() {
         // `_LaunchFighter` makes its slot active at once (@0x3c90b,
         // @0x3d680), so the ship loop (@0x4445c-0x444c4) reaches berth 2
-        // after the carrier's: its `_HandleShip` moves it, unsteered, and
-        // its display shows it before the frame.
+        // after the carrier's: its `_HandleShip` moves it, with no low
+        // level to steer it, unthrust and turning toward its berth's last
+        // heading, 0 for a berth no ship has held, and its display shows it
+        // before the frame.
         let (catalog, mut session, carrier) = dying_carrier(1, 100, HALFWAY);
         launch_pass(&mut session, &catalog);
         let fighter = &vipers(&session)[0];
         assert_eq!(fighter.berth, 2);
         let from = session.space.npc(carrier).expect("dying").state.position;
         assert_eq!(fighter.state.position, from + fighter.state.velocity);
-        assert_eq!(fighter.state.heading, 90.0, "unsteered");
+        let turn = (session.setup.flight_rules())
+            .handling(fighter.stats.handling)
+            .turn_rate;
+        assert_eq!(fighter.state.heading, 90.0 - turn, "toward 0, unthrust");
         assert!(
             session.draw_order().contains(&ShipRef::Npc(fighter.id)),
             "{:?}",

@@ -19,13 +19,16 @@
 //!   ([`Goal::Dock`]).
 //! - With its carrier not in the system it idles; the session leaves
 //!   such a fighter on its own AI type.
+//! - An attack ends its launch glide at its first think
+//!   ([`Decision::ends_wait`]), as `_EscortAI`'s Attack block does
+//!   (@0x83d5d-0x83d6d); docking or idling keeps the glide.
 //! - It fires as any ship does at what it attacks ([`fire::trigger`]),
 //!   and targets that ship.
 //! - A hit takes its attacker as its target, as any ship does
 //!   ([`react::victim`]); it never comes to another ship's help.
 
 use crate::ai::fire::FireRules;
-use crate::ai::{Behaviour, GateWait, Goal, Reaction, Surroundings, escort, fire, react};
+use crate::ai::{Behaviour, Decision, GateWait, Goal, Reaction, Surroundings, escort, fire, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
@@ -57,6 +60,20 @@ impl Behaviour for CarriedAi {
                 Goal::Attack(npc.target.filter(|&own| around.live(own)).unwrap_or(quarry))
             }
             None => Goal::Dock(ShipRef::Npc(carrier.id)),
+        }
+    }
+
+    /// [`CarriedAi::decide`]'s goal, an attack ending its wait: `_EscortAI`'s
+    /// Attack block writes +0x4c = -1.0 for any target (@0x83d5d-0x83d6d).
+    /// [`Goal::Dock`] keeps it, as the Return block does (@0x83e79-0x83ea3),
+    /// and so does [`Goal::Idle`], as the lost-parent branch writes no
+    /// +0x4c.
+    fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+        let goal = self.decide(npc, around, chance);
+        Decision {
+            goal,
+            ends_wait: matches!(goal, Goal::Attack(_)),
+            ..Decision::default()
         }
     }
 
@@ -94,14 +111,25 @@ impl Behaviour for CarriedAi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::fixture::{PIRATES, TRADERS, n, player, ship};
+    use crate::ai::NovaAi;
+    use crate::ai::fixture::{PIRATES, TRADERS, cloaked_player, n, player, ship};
+    use crate::ai::lost_sight::LostSight;
     use crate::bay::Carrier;
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::traffic::npc::{AiType, NpcId};
     use nova_sim_base::fixture::Draws;
     use nova_sim_catalog::fixture::weapon;
+
+    /// A ship breaking up.
+    fn breaking_up() -> Condition {
+        Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        }
+    }
 
     /// The carrier, NPC 1, a pirate warship at the centre with `goal`.
     fn carrier(goal: Goal) -> Npc {
@@ -236,6 +264,87 @@ mod tests {
         lost.carrier = None;
         let npcs = [carrier(Goal::Attack(ShipRef::Player)), lost];
         assert_eq!(decide(&npcs), Goal::Idle, "no carrier at all");
+    }
+
+    #[test]
+    fn a_fighter_that_attacks_ends_its_wait_and_one_that_docks_or_idles_keeps_it() {
+        let check = |npcs: &[Npc], goal: Goal, ends_wait: bool| {
+            let around = Surroundings {
+                player: Some(player(0.0, 200.0)),
+                ..Surroundings::new(&[], npcs)
+            };
+            let mut chance = Draws::of(&[]);
+            let decision = CarriedAi::default().decision(&npcs[1], &around, &mut chance);
+            assert_eq!(chance.asked, [0_u32; 0], "no draws");
+            assert_eq!(decision.goal, decide(npcs), "what it decides");
+            assert_eq!((decision.goal, decision.ends_wait), (goal, ends_wait));
+        };
+        // The Attack block writes +0x4c = -1.0 for any target (@0x83d62).
+        for order in [
+            Goal::Attack(n(3)),
+            Goal::Snipe(n(3)),
+            Goal::Plunder {
+                ship: n(3),
+                hopeless: true,
+            },
+        ] {
+            let npcs = [carrier(order), fighter(Goal::Idle, None), trader()];
+            check(&npcs, Goal::Attack(n(3)), true);
+        }
+        let npcs = [
+            carrier(Goal::Attack(n(3))),
+            fighter(Goal::Idle, Some(ShipRef::Player)),
+            trader(),
+        ];
+        check(&npcs, Goal::Attack(ShipRef::Player), true);
+        let mut wreck = trader();
+        wreck.id = NpcId(4);
+        wreck.condition = breaking_up();
+        let npcs = [
+            carrier(Goal::Attack(n(3))),
+            fighter(Goal::Idle, Some(n(4))),
+            trader(),
+            wreck,
+        ];
+        check(&npcs, Goal::Attack(n(3)), true);
+        // The Return block leaves +0x4c (@0x83e79-0x83ea3).
+        let npcs = [carrier(Goal::Idle), fighter(Goal::Idle, None)];
+        check(&npcs, Goal::Dock(n(1)), false);
+        // So does the lost-parent branch.
+        let npcs = [trader(), fighter(Goal::Idle, None)];
+        check(&npcs, Goal::Idle, false);
+    }
+
+    #[test]
+    fn through_novas_stages_an_attack_that_ends_the_wait_reaches_the_drop_and_the_search() {
+        let rules = Rulebook::default().with_override(RuleKey::NpcEscortAi, RuleSource::Bible);
+        let ai = NovaAi::from_rulebook(&rules);
+        let mut gliding = fighter(Goal::Idle, None);
+        gliding.ai_wait = 30;
+        let think = |npcs: &[Npc], seen: Option<crate::ai::PlayerSide>| {
+            let around = Surroundings {
+                player: seen,
+                ..Surroundings::new(&[], npcs)
+            };
+            ai.decision(&npcs[1], &around, &mut Draws::of(&[0]))
+        };
+
+        let mut wreck = trader();
+        wreck.condition = breaking_up();
+        let npcs = [carrier(Goal::Attack(n(3))), gliding.clone(), wreck];
+        let dropped = think(&npcs, None);
+        assert_eq!(dropped.goal, Goal::Idle, "the quarry breaks up");
+        assert!(dropped.clears_target && dropped.ends_wait);
+
+        let npcs = [carrier(Goal::Attack(ShipRef::Player)), gliding.clone()];
+        let unseen = think(&npcs, Some(cloaked_player(player(0.0, 2000.0))));
+        assert_eq!(unseen.goal, Goal::Attack(ShipRef::Player));
+        assert!(matches!(unseen.lost_sight, Some(LostSight::Searching(_))));
+        assert!(unseen.ends_wait);
+
+        let seen = think(&npcs, Some(player(0.0, 200.0)));
+        assert_eq!(seen.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(seen.lost_sight, Some(LostSight::Seen));
     }
 
     #[test]

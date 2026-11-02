@@ -20,9 +20,12 @@
 //!   so it reads the ships of lower slots as their thinks this frame left
 //!   them and the higher ones as last frame's: of two pirates on one
 //!   boarded victim, the lower waits and the higher attacks. The traffic
-//!   decides every NPC from one view, so [`resolve`] replays that order
-//!   as a pass over the decisions, by berth: a lower berth's new goal, a
-//!   higher berth's goal as the tick found it. A lower berth's sub-goal
+//!   thinks each slot in its own run, so a lower berth reads as its goal
+//!   stands, this tick's; a run of several slots
+//!   ([`RuleKey::LaunchFrameAi`](crate::RuleKey::LaunchFrameAi)'s other
+//!   reading) decides them from one view, so [`resolve`] replays that
+//!   order as a pass over the decisions, by berth: a lower berth's new
+//!   goal, a higher berth's goal as the tick found it. A lower berth's sub-goal
 //!   0xe is read from its goal and the frame it flew last tick, its new
 //!   frame being worked out after the decisions
 //!   ([`pursuit`](crate::ai::pursuit)): a stand-off ship that took up its
@@ -97,10 +100,11 @@ pub fn resolve(npcs: &[Npc], decisions: &mut [Option<Decision>]) {
                 goal: Goal::CountWait,
                 calls_reinforcements: false,
                 clears_target: true,
-                keeps_pursuit: false,
                 plunders: None,
                 // +0x6c -1 (@0x8c70d).
                 travel: TravelWrite::Clear,
+                // Sub 0 (@0x8c6fe), ending a dock under its wait.
+                writes_sub: true,
                 ..*decision
             };
         }
@@ -271,19 +275,15 @@ mod tests {
     #[test]
     fn a_wait_keeps_the_thinks_call_on_the_player_and_calls_for_no_reinforcements() {
         let npcs = [ship(1, 1, Goal::Idle), ship(2, 2, plunder(n(9))), victim()];
-        let kept = Decision {
-            keeps_pursuit: true,
-            ..waiting_on(n(9))
-        };
-        let mut decisions = vec![Some(kept), None, None];
+        let mut decisions = vec![Some(waiting_on(n(9))), None, None];
         resolve(&npcs, &mut decisions);
         let waited = decisions[0].expect("decided");
         assert_eq!(waited.goal, WAIT);
         assert!(!waited.calls_reinforcements, "@0x8d4b9-0x8d4d2");
         assert!(waited.turns_on_player, "made before the loop");
         assert!(
-            waited.clears_target && !waited.keeps_pursuit,
-            "target -1, sub 0"
+            waited.clears_target && waited.writes_sub,
+            "target -1, sub 0 (@0x8c6fe)"
         );
         assert_eq!(waited.travel, TravelWrite::Clear, "+0x6c -1, @0x8c70d");
         let lone = [ship(1, 1, Goal::Idle), victim()];
@@ -661,12 +661,10 @@ mod tests {
     }
 
     /// Leaves its target set, but its think cleared it or not as
-    /// `clears` says; drops its fight keeping the pursuit as `keeps`
-    /// says.
+    /// `clears` says, and drops its fight.
     #[derive(Debug)]
     struct Dropping {
         clears: bool,
-        keeps: bool,
     }
 
     impl Behaviour for Dropping {
@@ -683,7 +681,6 @@ mod tests {
             Decision {
                 goal: Goal::Idle,
                 clears_target: self.clears,
-                keeps_pursuit: self.keeps,
                 ..Decision::default()
             }
         }
@@ -694,19 +691,17 @@ mod tests {
     }
 
     #[test]
-    fn the_traffic_clears_a_target_and_keeps_a_pursuit_as_the_decision_says() {
-        for (clears, keeps) in [(false, false), (true, false), (false, true), (true, true)] {
+    fn the_traffic_clears_a_target_as_the_decision_says_and_a_drop_keeps_no_pursuit() {
+        // A drop to goal 0 reaches the handler's tail, which writes sub 0
+        // (@0x8fb09-0x8fb13).
+        for clears in [false, true] {
             let mut pirate = ship(1, 1, Goal::Attack(n(9)));
             pirate.pursuit.kept = Some(Kept::Rush);
             let mut traffic = traffic_of(vec![pirate, victim()]);
-            tick(&mut traffic, &Dropping { clears, keeps });
+            tick(&mut traffic, &Dropping { clears });
             let npc = &traffic.npcs()[0];
-            assert_eq!(npc.target, (!clears).then_some(n(9)), "{clears} {keeps}");
-            assert_eq!(
-                npc.pursuit.kept,
-                keeps.then_some(Kept::Rush),
-                "{clears} {keeps}"
-            );
+            assert_eq!(npc.target, (!clears).then_some(n(9)), "{clears}");
+            assert_eq!(npc.pursuit.kept, None, "{clears}");
             assert_eq!(npc.pursuit.frame, None, "no fight to fly");
         }
     }

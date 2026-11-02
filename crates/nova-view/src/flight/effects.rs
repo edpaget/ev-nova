@@ -41,11 +41,11 @@
 //!     height; their 32-pixel fallback can't happen for a shown explosion.
 //!   - Left out: the 8-bit blits
 //!     (@0xbb5a9-0xbb88b), as the engine draws at 16 bits only
-//!     (rdm:phase/stellar-fidelity-cross-roadmap/phase-1-translucent-8-bit-sheets).
+//!     (rdm:phase/rendering/phase-2-translucent-8-bit-sheets).
 //!     The frozen flag `*0x3b523c`'s gates on the delay countdown
 //!     (@0x2f629) and the frame step (@0x2f7eb), as the engine has no
 //!     frozen pass
-//!     (rdm:phase/weapons-fidelity-followups/phase-2-left-out-of-weapons-fidelity-47).
+//!     (rdm:phase/combat-and-flight/phase-2-left-out-of-weapons-fidelity-47).
 //! - Under the original's caps
 //!   ([`RuleKey::CombatCaps`](nova_sim::RuleKey::CombatCaps)'s engine
 //!   reading, [`Scene::caps`]; by default nothing is capped) at most

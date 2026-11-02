@@ -18,7 +18,9 @@
 //!   ship that is still the nearest to plunder is taken again.
 //! - **The search** (@0x8c339-0x8c385), with no goal ([`Goal::Idle`]) or
 //!   no target: its target cleared (@0x8c35d), first the ship to plunder
-//!   ([`plunder_target::find`]), then the warship's target
+//!   ([`plunder_target::find`], which writes sub 0 itself, @0x7fea5:
+//!   [`Decision::writes_sub`], and so no rush or break-off kept, and no
+//!   plunder below), then the warship's target
 //!   ([`pick_target`] with none kept, `_SelectWarshipTarget`), then its
 //!   copy of the idle block ([`idle_block::pirate_idle`],
 //!   @0x8c410-0x8c5d2), its target left cleared
@@ -36,6 +38,11 @@
 //!   bound to land that an NPC's hit gave a target lands on, holding the
 //!   target, one holding holds, and one waiting waits. Its target is the reaction's
 //!   (`_DamageShip` @0x3be5d), which [`PirateWarship::target`] keeps.
+//!   A successor that copied a lost interceptor lead's goal 7 holds the
+//!   inspected ship in +0x70 ([`Npc::slot_target`]): so it keeps the
+//!   inspection while that ship is in its slot, which goal 7's high level
+//!   flies and ends ([`inspect_high`](super::inspect_high)), and the head
+//!   drop takes one breaking up or gone, with the same think's search.
 //! - **The classification** (@0x8c5e1-0x8c743), of the ship it found or
 //!   the target an attack or plunder holds (the reaction's write included):
 //!   the player, a former escort (+0xc8de, [`Npc::former`]) or a ship whose
@@ -48,9 +55,12 @@
 //!   (@0x8c38b-0x8c40b) is always overridden by this one, so it is not
 //!   modelled apart: with a `Crew` of -1 the first gives 0xd and this one
 //!   goal 4.
-//! - **A plunder** of an intact ship snipes when the chase is hopeless,
-//!   outside [`DOGFIGHT_BOX`] on either axis alone (`_HighLevelAIHandler`
-//!   @0x8ea49-0x8eacb, [`hopeless_chase`]); it has no ally drop, no
+//! - **A plunder** is flown by goal 0xd's high level
+//!   ([`plunder_high::fold`], as every holder's is): of an intact ship it
+//!   snipes when the chase is hopeless, outside
+//!   [`DOGFIGHT_BOX`](super::fire::DOGFIGHT_BOX) on either axis alone
+//!   (`_HighLevelAIHandler` @0x8ea49-0x8eacb,
+//!   [`hopeless_chase`](super::odds::hopeless_chase)); it has no ally drop, no
 //!   stand-off band, no fighter launch but the snipe's and no call for
 //!   reinforcements (see [`pursuit`](super::pursuit)). A plunder of a
 //!   disabled ship docks with it (@0x8e873-0x8ea44, see
@@ -63,25 +73,43 @@
 //!   with ([`Decision::plunders`], which the traffic runs:
 //!   [`plunder`](crate::traffic::plunder)) and drifts ([`Goal::Drift`]).
 //!   So a dry pirate still plunders, and one whose wait loop makes it wait
-//!   doesn't.
+//!   doesn't. Under goal 0xd it is sub 0xf's own completion, at its slot,
+//!   that plunders the nav while the wait is in (0, 100]
+//!   ([`plunder_dock`](crate::traffic::plunder_dock)): reached once its
+//!   victim's slot has gone and the warship's pick gives it another ship
+//!   to plunder under the dock wait, which skips goal 0xd's high level.
 //! - **The drift** (goal 0xe): with no target the search is skipped
 //!   (@0x8c353 → @0x8c74c), and with one the goal and target are kept
 //!   (@0x8c5e8-0x8c5f8), so the drift runs on until the traffic ends it.
 //! - **The disabled-warship drop** (@0x8c7b4-0x8c842): attacking a disabled
 //!   NPC of a class whose `InherentAI` is above 2, not a former escort,
 //!   with no destroying weapon ([`fire::destroys`]) or fully dry, it drops
-//!   it: goal 0 and target -1 alone, so a kept rush or break-off carries
-//!   over to its next fight ([`Decision::keeps_pursuit`]).
+//!   it: goal 0 and target -1 alone (@0x8c839-0x8c842). It reaches the
+//!   handler's tail, which writes sub 0 on goal 0 (@0x8c839-0x8c842 →
+//!   @0x901e5, @0x8fb09-0x8fb13), so no kept rush or break-off carries
+//!   over to its next fight.
 //! - **The dry drop** (@0x8c848-0x8c887): attacking or plundering fully dry
-//!   ([`AmmoLeft::Dry`]), it drops the fight, its sub-goal too. It comes
+//!   ([`AmmoLeft::Dry`]), it drops the fight, its sub-goal too
+//!   ([`Decision::writes_sub`], as the plunder and the count wait's entry
+//!   write it, @0x8c788, @0x8c6fe). It comes
 //!   after the wait loop, so a dry pirate waits all the same when another
 //!   ship boards its victim.
-//! - **An attack** it keeps is goal 4's, as `_HighLevelAIHandler` flies it
-//!   in the same frame: it drops a target it spares (the ally drop
-//!   @0x8e277-0x8e2e4, [`spares`]: goal and sub 0, the target kept), then
-//!   one breaking up or gone (@0x8e3ef → @0x8e714: target -1, goal 0, the
-//!   sub kept), and snipes a hopeless chase unless it stands off (as
-//!   [`warship::hunt`](super::warship::hunt)'s hunted ship does).
+//! - **An attack** it keeps is goal 4, which `_HighLevelAIHandler`'s
+//!   state-4 block takes in the same frame, as it takes every type's
+//!   ([`attack_drop`](super::attack_drop)): it drops an ally keeping the
+//!   target, a ship breaking up zeroing +0x96 (so does a fresh pick
+//!   breaking up, @0x8e71d), and snipes a hopeless chase outside the
+//!   dogfight box unless it stands off.
+//! - **Under its AI wait** the high level returns at once for goal 4 and
+//!   0xd (@0x8d4b9-0x8d4d2, [`handler_head`](super::handler_head)), so none
+//!   of that runs: an attack, a boarded victim's included, is a plain
+//!   attack, no ally or gone-or-breaking-up drop and no snipe, and a
+//!   plunder stays unsniped ([`plunder_high::fold`]). The drops the think
+//!   makes itself, the head drop, the disabled-warship drop and the dry
+//!   drop, still apply. The head drop takes a target breaking up first, so
+//!   an attack on one is never met under the wait. A docked pirate whose
+//!   victim's slot went so attacks the warship's pick through its wait and
+//!   plunders at its end.
 //!
 //! It takes no government's word, has no odds, shield or out-of-ammunition
 //! retreat, reads no provocation, and plays no sound. A pirate that picks
@@ -95,7 +123,9 @@
 //! sets it, the count wait (@0x8c70d), the plunder (@0x8c7ae) and the dry
 //! drop (@0x8c887) clear it, and the head drop and the disabled-warship
 //! drop leave it; goal 0xd's high level clears it against an intact ship
-//! (@0x8ea50) and sets it to a disabled one's slot (@0x8e8c9). So a pirate
+//! (@0x8ea50) and sets it to a disabled one's slot (@0x8e8c9), except while
+//! its AI wait skips that high level (@0x8d4b9-0x8d4d2), so a docked
+//! pirate's nav still names its victim's slot. So a pirate
 //! dropped from a fight with its stellar set leaves or waits without a
 //! pick, and one whose pick failed picks again once it can.
 //!
@@ -103,15 +133,18 @@
 //! rdm:phase/combat-ai-fidelity/phase-9-pirates-disable-and-board,
 //! rdm:phase/combat-ai-fidelity/phase-12-idle-block-and-patrols and
 //! rdm:phase/combat-ai-fidelity/phase-20-left-out-of-phase-12): none. The
-//! plunder's +0x8c write (-1, @0x8c791), the ship it takes into its fleet
-//! defending no stellar, is the take's ([`plunder`](crate::traffic::plunder)).
+//! plunder's +0x8c write (-1, @0x8c791) is the pirate's own, the plunder's
+//! ([`plunder`](crate::traffic::plunder)); the captured ship keeps its
+//! own, which `_AIPlunderShipContents` never writes.
 
-use crate::ai::fire::{AmmoLeft, DOGFIGHT_BOX, FireRules, ammo_left};
-use crate::ai::odds::{hopeless_chase, state4_attack};
-use crate::ai::target::{TargetRules, pick_target, spares};
+#[cfg(doc)]
+use crate::ai::fire::DOGFIGHT_BOX;
+use crate::ai::fire::{AmmoLeft, FireRules, ammo_left};
+use crate::ai::target::{TargetRules, pick_target};
 use crate::ai::travel::TravelWrite;
 use crate::ai::{
-    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_target, react,
+    Behaviour, Decision, Goal, Reaction, Surroundings, fire, idle_block, plunder_high,
+    plunder_target, react,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -143,12 +176,10 @@ impl Behaviour for PirateWarship {
         think(npc, around, self.target, chance)
     }
 
-    /// Its weapon pick, but nothing while it docks (subs 9 and 0xb end in
-    /// `_AIEscortFireUnprovoked`, which fires nothing for its AI type, and
-    /// 0xf fires nothing; its high level, skipped while it waits, launches
-    /// no fighters) or drifts (sub 0).
+    /// Its weapon pick, but nothing while it docks or drifts
+    /// ([`fire::quiet`]).
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        if npc.docking.is_some() || npc.goal == Goal::Drift {
+        if fire::quiet(npc) {
             return Trigger::default();
         }
         fire::trigger(npc, around, self.fire)
@@ -183,17 +214,19 @@ pub fn think(
     if matches!(npc.goal, Goal::CountWait) {
         return of(npc.goal);
     }
-    let dropped = npc.target.is_some_and(|ship| gone_or_dying(ship, around));
+    // +0x70, which names the ship of a lost lead's goal 7 too.
+    let held = npc.slot_target();
+    let dropped = held.is_some_and(|ship| gone_or_dying(ship, around));
     let goal = if dropped { Goal::Idle } else { npc.goal };
-    let kept = npc.target.filter(|_| !dropped && goal != Goal::Idle);
-    let (target, turns_on_player) = if let Some(ship) = kept {
+    let kept = held.filter(|_| !dropped && goal != Goal::Idle);
+    let (target, found) = if let Some(ship) = kept {
         if !matches!(
             goal,
             Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. }
         ) {
             return of(npc.goal);
         }
-        (ship, false)
+        (ship, Found::Kept)
     } else if goal == Goal::Drift {
         // The goal-0xe search skip (@0x8c353 → @0x8c74c).
         return of(goal);
@@ -212,44 +245,75 @@ pub fn think(
             ..Decision::default()
         };
     };
+    // The plunder find writes sub 0 (@0x7fea5): the plunder's test of goal
+    // 4 with sub 0xf (@0x8c74c) fails after it, and a drop that leaves the
+    // sub keeps none of a rush or break-off.
+    let by_find = found == Found::ToPlunder;
+    let docked = docked_victim(npc).filter(|_| !by_find);
+    let decision = fought(npc, target, docked, around);
     Decision {
-        turns_on_player,
-        ..fought(npc, target, around, rules)
+        turns_on_player: found == Found::TurningOnPlayer,
+        writes_sub: decision.writes_sub || by_find,
+        ..decision
     }
 }
 
+/// How the think came by the ship it classifies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Found {
+    /// Its target, kept.
+    Kept,
+    /// `_AIFindShipToPlunder`'s find, which writes +0x70, goal 0xd and
+    /// sub 0 (@0x7fe98-0x7fea5).
+    ToPlunder,
+    /// The warship's pick, turning it on the player.
+    TurningOnPlayer,
+    /// The warship's pick of any other ship.
+    Picked,
+}
+
 /// The search (@0x8c35d-0x8c385): the ship `npc` plunders first among
-/// `around`, else the warship's pick by `rules` on `chance`, with whether
-/// the pick turns it on the player; none when there is neither.
+/// `around`, else the warship's pick by `rules` on `chance`, with how it
+/// was found; none when there is neither.
 fn search(
     npc: &Npc,
     around: &Surroundings,
     rules: TargetRules,
     chance: &mut dyn Chance,
-) -> Option<(ShipRef, bool)> {
+) -> Option<(ShipRef, Found)> {
     if let Some(ship) = plunder_target::find(npc, around) {
-        return Some((ship, false));
+        return Some((ship, Found::ToPlunder));
     }
-    pick_target(npc, None, around, rules, chance).map(|pick| (pick.ship, pick.turns_on_player))
+    pick_target(npc, None, around, rules, chance).map(|pick| {
+        let found = if pick.turns_on_player {
+            Found::TurningOnPlayer
+        } else {
+            Found::Picked
+        };
+        (pick.ship, found)
+    })
 }
 
-/// What `npc` does about `target` among `around`, by `rules`: the
-/// classification, then the plunder's or the attack's high level, the
+/// What `npc` does about `target` among `around`, `docked` the ship it is
+/// docked with to plunder ([`docked_victim`]) as the plunder's test reads
+/// it: the classification, then the plunder's high level, the
 /// disabled-warship drop and the dry drop (see the module docs).
-fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules) -> Decision {
+fn fought(npc: &Npc, target: ShipRef, docked: Option<ShipRef>, around: &Surroundings) -> Decision {
     let dry = ammo_left(npc) == AmmoLeft::Dry;
     let dropped = Decision {
         clears_target: true,
         ..of(Goal::Idle)
     };
     // The dry drop clears the travel stellar too (@0x8c887).
+    // ... and sub 0 (@0x8c878), ending a dock under its wait.
     let dry_dropped = Decision {
         travel: TravelWrite::Clear,
+        writes_sub: true,
         ..dropped
     };
     let class = classify(target, around);
     if class != Class::Plunder
-        && let Some(victim) = docked_victim(npc)
+        && let Some(victim) = docked
     {
         // Goal 4 with sub 0xf, its wait out: the plunder (@0x8c74c-0x8c7ae),
         // after the wait loop and before the drops. Its target is cleared
@@ -258,58 +322,37 @@ fn fought(npc: &Npc, target: ShipRef, around: &Surroundings, rules: TargetRules)
             goal: Goal::Drift,
             plunders: Some(victim),
             board_wait: (class == Class::Boarded).then_some(target),
-            // Its travel stellar cleared after the plunder (@0x8c7ae).
+            // Its travel stellar cleared after the plunder (@0x8c7ae), its
+            // sub 0 (@0x8c788).
             travel: TravelWrite::Clear,
+            writes_sub: true,
             ..Decision::default()
         };
     }
     match class {
         Class::Plunder if dry => dry_dropped,
         Class::Plunder => {
-            let wreck = disabled(target, around);
-            Decision {
-                // Goal 0xd's high level, every frame: -1 against the ship
-                // intact (@0x8ea50), the victim's slot against it disabled
-                // (@0x8e8c9).
-                travel: if wreck {
-                    TravelWrite::Set
-                } else {
-                    TravelWrite::Clear
-                },
-                ..of(Goal::Plunder {
-                    ship: target,
-                    hopeless: !wreck
-                        && outside_box(npc, target, around)
-                        && hopeless_chase(npc, target, around),
-                })
-            }
+            // Goal 0xd's high level, every frame its AI wait doesn't skip.
+            let (goal, travel) = plunder_high::fold(npc, target, around);
+            Decision { travel, ..of(goal) }
         }
         Class::Boarded => Decision {
             board_wait: Some(target),
             ..if dry {
                 dry_dropped
             } else {
-                of(state4_attack(npc, target, around))
+                of(Goal::Attack(target))
             }
         },
+        // The think's drops; goal 4's high level then takes the attack
+        // that frame, as it does every type's (`attack_drop`).
         Class::Attack => {
-            // The think's drops, then goal 4's high level in the same
-            // frame: its ally drop (goal and sub 0, the target kept), then
-            // its gone-or-breaking-up drop (the sub kept).
-            let keeps = Decision {
-                keeps_pursuit: true,
-                ..dropped
-            };
             if drops_disabled_warship(npc, target, around) {
-                keeps
+                dropped
             } else if dry {
                 dry_dropped
-            } else if spares(npc, target, around, rules) {
-                of(Goal::Idle)
-            } else if gone_or_dying(target, around) {
-                keeps
             } else {
-                of(state4_attack(npc, target, around))
+                of(Goal::Attack(target))
             }
         }
     }
@@ -322,12 +365,6 @@ fn docked_victim(npc: &Npc) -> Option<ShipRef> {
     npc.docking
         .filter(|docking| docking.sub == DockSub::Dock && npc.ai_wait == 0)
         .map(|docking| docking.ship)
-}
-
-/// Whether `ship` is disabled among `around` (`_IsDisabled`): a plunder of
-/// it docks, so it is never a hopeless chase (@0x8e866-0x8e86d).
-fn disabled(ship: ShipRef, around: &Surroundings) -> bool {
-    around.condition_of(ship).is_some_and(Condition::disabled)
 }
 
 /// How `_PirateWarshipAI`'s second classification (@0x8c5e1-0x8c743) takes
@@ -385,16 +422,6 @@ fn drops_disabled_warship(npc: &Npc, target: ShipRef, around: &Surroundings) -> 
     })
 }
 
-/// Whether `target` is outside [`DOGFIGHT_BOX`] of `npc` on either axis,
-/// by float abs (`_HighLevelAIHandler` @0x8ea49-0x8eac6); a ship not in
-/// the system is not.
-fn outside_box(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-    around.state_of(target).is_some_and(|at| {
-        let off = at.position - npc.state.position;
-        off.x.abs() > DOGFIGHT_BOX || off.y.abs() > DOGFIGHT_BOX
-    })
-}
-
 /// Whether `ship` has left the system or is breaking up, as the head drop
 /// reads it (its slot +0xb8 clear, or `_IsDying`, @0x8c315-0x8c328): a ship
 /// still jumping in is neither.
@@ -417,7 +444,7 @@ mod tests {
     use crate::ai::fixture::{
         NEUTRAL, PIRATES, TRADERS, around, govts, n, player, ship, short_of_ammo, sites,
     };
-    use crate::ai::travel::TravelWrite;
+    use crate::ai::travel::{self, TravelWrite};
     use crate::catalog::{GovtRecord, ShipId, StellarId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
@@ -514,6 +541,22 @@ mod tests {
         )
     }
 
+    /// The goal of `npcs[0]` by `govts` through Nova's AI, the pirate its
+    /// warships' think: the think, then the high level.
+    fn flown_by(govts: &Governments, npcs: &[Npc], side: Option<&PlayerSide>) -> Goal {
+        flown_decision(govts, npcs, side).goal
+    }
+
+    /// [`flown_by`]'s whole decision.
+    fn flown_decision(govts: &Governments, npcs: &[Npc], side: Option<&PlayerSide>) -> Decision {
+        let sites = sites();
+        let mut seen = around(&sites, npcs, govts, (0.0, 0.0), 0);
+        seen.player = side.copied();
+        crate::ai::NovaAi::default()
+            .with(AiType::Warship, std::rc::Rc::new(PirateWarship::default()))
+            .decision(&npcs[0], &seen, &mut Draws::of(&[0, 0, 0]))
+    }
+
     /// The decision of `npcs[0]`, the player intact far off with no crew.
     fn decided(npcs: &[Npc]) -> Decision {
         decided_by(&govts(0, 0), npcs, Some(&player(0.0, 3000.0)))
@@ -548,10 +591,12 @@ mod tests {
         }
     }
 
-    /// The dry drop: [`dropped`], its travel stellar cleared (@0x8c887).
+    /// The dry drop: [`dropped`], its travel stellar cleared (@0x8c887) and
+    /// its sub 0 (@0x8c878).
     fn dry_dropped() -> Decision {
         Decision {
             travel: TravelWrite::Clear,
+            writes_sub: true,
             ..dropped()
         }
     }
@@ -566,11 +611,24 @@ mod tests {
     }
 
     /// A plunder of `ship` disabled: the travel stellar is its slot
-    /// (@0x8e8c9).
+    /// (@0x8e8c9): the player's 0, a fixture NPC's berth its id.
     fn plundered_wreck(ship: ShipRef) -> Decision {
+        let slot = match ship {
+            ShipRef::Player => 0,
+            ShipRef::Npc(crate::traffic::npc::NpcId(id)) => id,
+        };
         Decision {
-            travel: TravelWrite::Set,
+            travel: TravelWrite::Set(travel::of_slot(slot)),
             ..only(plunder(ship))
+        }
+    }
+
+    /// [`plundered_wreck`] as the plunder find gives it, which writes sub
+    /// 0 itself (@0x7fea5).
+    fn found_wreck(ship: ShipRef) -> Decision {
+        Decision {
+            writes_sub: true,
+            ..plundered_wreck(ship)
         }
     }
 
@@ -579,7 +637,7 @@ mod tests {
         let npcs = [pirate(), trader(2, 100.0), wreck(3, 300.0)];
         assert_eq!(
             decided(&npcs),
-            plundered_wreck(n(3)),
+            found_wreck(n(3)),
             "before the intact trader"
         );
     }
@@ -608,7 +666,7 @@ mod tests {
         let downed = |crew| side(0.0, 100.0, Condition::Disabled, crew);
         assert_eq!(
             decided_by(&govts, &[pirate()], Some(&downed(1))),
-            plundered_wreck(P),
+            found_wreck(P),
             "its plunder pick, which makes no call"
         );
         let attacking = [holding(Goal::Attack(P), Some(P))];
@@ -651,6 +709,8 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             },
         });
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), escort];
@@ -658,19 +718,26 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_warship_class_is_dropped_keeping_the_pursuit_without_destroying_weapons() {
-        // AI type 1, so a plunder candidate, but of a warship's class.
+    fn a_disabled_warship_class_is_dropped_without_destroying_weapons() {
+        // AI type 1, so a plunder candidate, but of a warship's class. The
+        // drop writes goal 0 and target -1 alone (@0x8c839-0x8c842), and the
+        // handler's tail writes sub 0 (@0x8fb13).
         let downed = Npc {
             condition: Condition::Disabled,
             ..warship_class(2, 300.0)
         };
         assert_eq!(
+            decided(&[holding(Goal::Attack(n(2)), Some(n(2))), downed.clone()]),
+            dropped(),
+            "held: goal 0 and target -1 alone (@0x8c839-0x8c842)"
+        );
+        assert_eq!(
             decided(&[pirate(), downed.clone()]),
             Decision {
-                keeps_pursuit: true,
+                writes_sub: true,
                 ..dropped()
             },
-            "goal 0 and target -1 alone (@0x8c839-0x8c842)"
+            "found, its sub 0 by the find (@0x7fea5): no pursuit to keep"
         );
         let mut armed = pirate();
         armed.armament = Armament::new([(
@@ -682,16 +749,21 @@ mod tests {
         )]);
         assert_eq!(
             decided(&[armed, downed]),
-            only(Goal::Attack(n(2))),
+            Decision {
+                writes_sub: true,
+                ..only(Goal::Attack(n(2)))
+            },
             "it finishes it off"
         );
     }
 
     #[test]
-    fn a_warship_class_found_breaking_up_is_dropped_keeping_the_pursuit_with_destroying_weapons() {
+    fn a_warship_class_found_breaking_up_is_dropped_with_destroying_weapons() {
         // The plunder search finds it (`_IsDisabled` counts breaking up),
-        // the destroying weapon passes the disabled-warship drop, and goal
-        // 4's high level drops it in the same frame, its sub kept.
+        // writing sub 0 (@0x7fea5); the destroying weapon passes the
+        // disabled-warship drop, and goal 4's high level drops it in the
+        // same frame, zeroing +0x96 (@0x8e3ef → @0x8e714-0x8e726), its sub
+        // the find's 0.
         let mut armed = pirate();
         armed.armament = Armament::new([(
             WeaponSpec::new(&WeaponRecord {
@@ -707,12 +779,24 @@ mod tests {
             },
             ..warship_class(2, 300.0)
         };
+        let npcs = [armed.clone(), breaking_up];
         assert_eq!(
-            decided(&[armed.clone(), breaking_up]),
+            decided(&npcs),
             Decision {
-                keeps_pursuit: true,
-                ..dropped()
+                writes_sub: true,
+                ..only(Goal::Attack(n(2)))
             },
+            "the think's"
+        );
+        let flown = flown_decision(&govts(0, 0), &npcs, Some(&player(0.0, 3000.0)));
+        assert_eq!(
+            (
+                flown.goal,
+                flown.clears_target,
+                flown.forgets_provocation,
+                flown.writes_sub
+            ),
+            (Goal::Idle, true, true, true),
             "goal 4's gone-or-breaking-up drop"
         );
         let downed = Npc {
@@ -721,7 +805,10 @@ mod tests {
         };
         assert_eq!(
             decided(&[armed, downed]),
-            only(Goal::Attack(n(2))),
+            Decision {
+                writes_sub: true,
+                ..only(Goal::Attack(n(2)))
+            },
             "breaking up drops it, not being disabled"
         );
     }
@@ -751,13 +838,41 @@ mod tests {
             starting: false,
         };
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), dying];
-        assert_eq!(decided(&npcs), plundered_wreck(n(2)), "the nearest still");
+        assert_eq!(decided(&npcs), found_wreck(n(2)), "the nearest still");
         let gone = [holding(plunder(n(9)), Some(n(9)))];
         assert_eq!(decided(&gone), dropped().goal_of(IDLE));
         let mut jumping = trader(2, 300.0);
         jumping.mode = crate::traffic::npc::Mode::JumpingIn { tick: 3 };
         let npcs = [holding(plunder(n(2)), Some(n(2))), jumping];
         assert_eq!(decided(&npcs), plundered(n(2)), "a ship jumping in stays");
+    }
+
+    #[test]
+    fn a_pirate_keeps_a_copied_inspection_with_no_target() {
+        // A lost interceptor lead's goal 7 names its ship in +0x70
+        // (`Npc::slot_target`): with it in its slot, neither inactive
+        // (@0x8c315) nor breaking up (@0x8c321), only goals 4 and 0xd act
+        // (@0x8c5e8), so goal 7 stands, with no search though a ship to
+        // plunder is in view.
+        let npcs = [holding(Goal::Inspect(n(2)), None), trader(2, 300.0)];
+        assert_eq!(decided(&npcs), only(Goal::Inspect(n(2))));
+        let npcs = [holding(Goal::Inspect(P), None), trader(2, 300.0)];
+        assert_eq!(decided(&npcs), only(Goal::Inspect(P)), "the player's");
+    }
+
+    #[test]
+    fn a_pirate_drops_a_copied_inspection_of_a_ship_breaking_up_or_gone_and_searches() {
+        // +0x70 -1 and goal 0 (@0x8c32a-0x8c330), then the same think's
+        // search (@0x8c35d).
+        let mut dying = trader(2, 300.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let npcs = [holding(Goal::Inspect(n(2)), None), dying, wreck(3, 400.0)];
+        assert_eq!(decided(&npcs), found_wreck(n(2)), "the nearest still");
+        let gone = [holding(Goal::Inspect(n(9)), None), wreck(3, 400.0)];
+        assert_eq!(decided(&gone), found_wreck(n(3)));
     }
 
     #[test]
@@ -778,7 +893,7 @@ mod tests {
         let idle = holding(Goal::Idle, Some(n(3)));
         assert_eq!(
             decided(&[idle.clone(), hitter.clone(), wreck(2, 300.0)]),
-            plundered_wreck(n(2))
+            found_wreck(n(2))
         );
         assert_eq!(decided(&[idle, hitter]), dropped().goal_of(IDLE));
     }
@@ -788,7 +903,7 @@ mod tests {
         // The idle block's fuel test (@0x8c52d-0x8c5d2): state 2 or 6.
         // Its travel stellar set by the pick it left on.
         let mut leaving = Npc {
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..holding(Goal::JumpOut, None)
         };
         leaving.reserves.fuel.now = 0.0;
@@ -826,7 +941,7 @@ mod tests {
         assert_eq!(decided(&npcs), only(Goal::Hold));
         assert_eq!(
             decided(&[holding(Goal::Hold, None), wreck(2, 300.0)]),
-            plundered_wreck(n(2))
+            found_wreck(n(2))
         );
         assert_eq!(
             decided(&[holding(Goal::Hold, None)]),
@@ -847,7 +962,7 @@ mod tests {
         let unbound = holding(IDLE, None);
         assert_eq!(
             decided(&[unbound.clone(), wreck(2, 300.0)]),
-            plundered_wreck(n(2))
+            found_wreck(n(2))
         );
         let sites = sites();
         let govts = govts(0, 0);
@@ -913,7 +1028,7 @@ mod tests {
     fn a_pirate_dropped_from_a_fight_with_its_travel_stellar_set_leaves_without_a_pick() {
         // The head drop (@0x8c2fc-0x8c330) leaves +0x6c.
         let fighting = Npc {
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..holding(Goal::Attack(n(9)), Some(n(9)))
         };
         assert_eq!(
@@ -926,7 +1041,7 @@ mod tests {
         };
         assert_eq!(alone(stranded), (dropped().goal_of(Goal::Wait), vec![]));
         let unbound = Npc {
-            travel_set: false,
+            travel: None,
             ..fighting
         };
         assert_eq!(alone(unbound), (dropped().goal_of(IDLE), vec![1]));
@@ -949,7 +1064,7 @@ mod tests {
         );
         assert_eq!(
             travel(&[pirate(), wreck(2, 300.0)]),
-            TravelWrite::Set,
+            TravelWrite::Set(travel::of_slot(2)),
             "the victim's slot, @0x8e8c9"
         );
         let docked = docked(holding(Goal::Attack(n(2)), Some(n(2))), n(2), 0);
@@ -983,7 +1098,7 @@ mod tests {
     fn a_waiting_pirate_picks_again_only_while_its_travel_stellar_is_clear() {
         let waiting = Npc {
             class_fuel: 99,
-            travel_set: true,
+            travel: Some(StellarId(150)),
             ..holding(Goal::Wait, None)
         };
         assert_eq!(
@@ -991,7 +1106,7 @@ mod tests {
             (dropped().goal_of(Goal::Wait), vec![])
         );
         let failed = Npc {
-            travel_set: false,
+            travel: None,
             ..waiting
         };
         assert_eq!(
@@ -1138,13 +1253,20 @@ mod tests {
         }
         let mut attacker = heavy.clone();
         attacker.goal = Goal::Attack(P);
-        let mut crewless = running(-100.0);
-        crewless.hull.crew = 0;
-        assert_eq!(
-            decided_by(&govts, &[attacker], Some(&crewless)),
-            only(Goal::Snipe(P)),
-            "goal 4 asks inside too"
-        );
+        for (y, goal) in [(-100.0, Goal::Attack(P)), (-400.0, Goal::Snipe(P))] {
+            let mut crewless = running(y);
+            crewless.hull.crew = 0;
+            assert_eq!(
+                decided_by(&govts, &[attacker.clone()], Some(&crewless)),
+                only(Goal::Attack(P)),
+                "{y}: the think's goal 4"
+            );
+            assert_eq!(
+                flown_by(&govts, &[attacker.clone()], Some(&crewless)),
+                goal,
+                "{y}: goal 4 isn't asked inside either (@0x8e473 → @0x8e6a2)"
+            );
+        }
     }
 
     #[test]
@@ -1155,10 +1277,12 @@ mod tests {
         assert_eq!(decided(&npcs), plundered(n(2)), "goal 0xd keeps it");
         kin.hull.inherent_ai = 3;
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), kin];
+        assert_eq!(decided(&npcs), only(Goal::Attack(n(2))), "the think's");
+        let dropped = flown_decision(&govts(0, 0), &npcs, Some(&player(0.0, 3000.0)));
         assert_eq!(
-            decided(&npcs),
-            only(Goal::Idle),
-            "goal 4's ally drop: goal and sub 0, the target kept"
+            (dropped.goal, dropped.holds_target),
+            (Goal::Idle, Some(n(2))),
+            "goal 4's ally drop: goal and sub 0, the target kept (@0x8e2d2)"
         );
     }
 
@@ -1169,12 +1293,114 @@ mod tests {
         fleeing.state.velocity = Vec2::new(0.0, 1.0);
         let mut heavy = holding(Goal::Attack(n(2)), Some(n(2)));
         heavy.hull.mass = 100.0;
+        let far = Some(player(0.0, 3000.0));
+        let govts = govts(0, 0);
+        let npcs = [heavy.clone(), fleeing.clone()];
+        assert_eq!(decided(&npcs), only(Goal::Attack(n(2))), "the think's");
         assert_eq!(
-            decided(&[heavy.clone(), fleeing.clone()]),
-            only(Goal::Snipe(n(2)))
+            flown_by(&govts, &npcs, far.as_ref()),
+            Goal::Snipe(n(2)),
+            "the block's (@0x8e614)"
         );
         heavy.hull.stands_off = true;
-        assert_eq!(decided(&[heavy, fleeing]), only(Goal::Attack(n(2))));
+        assert_eq!(
+            flown_by(&govts, &[heavy, fleeing], far.as_ref()),
+            Goal::Attack(n(2))
+        );
+    }
+
+    #[test]
+    fn under_its_ai_wait_a_pirate_attacking_a_ship_it_spares_keeps_the_attack() {
+        // The high level returns at once while +0x4c > 0 (@0x8d4b9-0x8d4d2),
+        // so goal 4's ally drop (@0x8e277-0x8e2e4) doesn't run.
+        let mut kin = warship_class(2, 300.0);
+        kin.govt = Some(PIRATES);
+        let mut waiting = holding(Goal::Attack(n(2)), Some(n(2)));
+        waiting.ai_wait = 30;
+        assert_eq!(decided(&[waiting, kin]), only(Goal::Attack(n(2))));
+    }
+
+    #[test]
+    fn under_its_ai_wait_a_hopeless_chase_is_no_snipe() {
+        // Goal 4's hopeless test (@0x8e5f8) is skipped with the high level:
+        // its sub stays as the wait left it, never 0xe.
+        let mut fleeing = warship_class(2, 300.0);
+        fleeing.goal = Goal::Flee(n(1));
+        fleeing.state.velocity = Vec2::new(0.0, 1.0);
+        let mut heavy = holding(Goal::Attack(n(2)), Some(n(2)));
+        heavy.hull.mass = 100.0;
+        heavy.ai_wait = 30;
+        assert_eq!(
+            decided(&[heavy.clone(), fleeing]),
+            only(Goal::Attack(n(2))),
+            "an attack"
+        );
+        // A boarded victim the wait loop finds no boarder of is attacked.
+        let mut boarded = trader(2, 300.0);
+        boarded.boarded = true;
+        boarded.goal = Goal::Flee(n(1));
+        boarded.state.velocity = Vec2::new(0.0, 1.0);
+        let decision = decided(&[heavy, boarded]);
+        assert_eq!(decision.goal, Goal::Attack(n(2)), "a boarded victim");
+        assert_eq!(decision.board_wait, Some(n(2)));
+    }
+
+    #[test]
+    fn under_its_ai_wait_a_hopeless_plunder_is_no_snipe() {
+        // Goal 0xd's hopeless test (@0x8eace) is skipped with the high level.
+        let mut fleeing = trader(2, 300.0);
+        fleeing.goal = Goal::Flee(n(1));
+        fleeing.state.velocity = Vec2::new(0.0, 1.0);
+        let mut heavy = holding(plunder(n(2)), Some(n(2)));
+        heavy.hull.mass = 100.0;
+        heavy.ai_wait = 30;
+        assert_eq!(decided(&[heavy, fleeing]), only(plunder(n(2))));
+    }
+
+    #[test]
+    fn under_its_ai_wait_an_attack_on_a_ship_breaking_up_is_kept_for_the_head_drop() {
+        // Goal 4's gone-or-breaking-up drop (@0x8e3ef → @0x8e714) is the
+        // high level's, skipped under the wait; the think's head drop
+        // (@0x8c2fc-0x8c330) takes such a target first, so only `fought`
+        // read on its own meets one.
+        let mut dying = warship_class(2, 300.0);
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let mut waiting = holding(Goal::Attack(n(2)), Some(n(2)));
+        waiting.ai_wait = 30;
+        // A destroying weapon passes the think's disabled-warship drop.
+        waiting.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                mass_dmg: 1,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        let govts = pirate_govts(0);
+        let sites = sites();
+        let npcs = [waiting, dying];
+        let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
+        let thought = fought(&npcs[0], n(2), None, &around);
+        assert_eq!(thought, only(Goal::Attack(n(2))));
+        assert!(
+            crate::ai::handler_head::skips(&npcs[0], &thought),
+            "the high level skipped under the wait"
+        );
+        let mut free = npcs.clone();
+        free[0].ai_wait = 0;
+        let around = crate::ai::fixture::around(&sites, &free, &govts, (0.0, -5000.0), 0);
+        let thought = fought(&free[0], n(2), None, &around);
+        assert!(!crate::ai::handler_head::skips(&free[0], &thought));
+        assert_eq!(
+            crate::ai::attack_drop::attack_block(&free[0], thought, &around, RuleSource::Engine),
+            Decision {
+                forgets_provocation: true,
+                ..dropped()
+            },
+            "without the wait the high level drops it"
+        );
     }
 
     #[test]
@@ -1250,13 +1476,7 @@ mod tests {
         assert_eq!(decided(&npcs), only(Goal::Attack(n(2))));
         crewless.hull.inherent_ai = 3;
         let npcs = [holding(Goal::Attack(n(2)), Some(n(2))), crewless];
-        assert_eq!(
-            decided(&npcs),
-            Decision {
-                keeps_pursuit: true,
-                ..dropped()
-            }
-        );
+        assert_eq!(decided(&npcs), dropped());
     }
 
     #[test]
@@ -1303,13 +1523,15 @@ mod tests {
         }
     }
 
-    /// The plunder of `victim`, a drift, its travel stellar cleared.
+    /// The plunder of `victim`, a drift, its travel stellar cleared and its
+    /// sub 0 (@0x8c788).
     fn plundering(victim: ShipRef, board_wait: Option<ShipRef>) -> Decision {
         Decision {
             goal: Goal::Drift,
             plunders: Some(victim),
             board_wait,
             travel: TravelWrite::Clear,
+            writes_sub: true,
             ..Decision::default()
         }
     }
@@ -1391,6 +1613,42 @@ mod tests {
     }
 
     #[test]
+    fn under_its_ai_wait_a_plunder_leaves_its_travel_stellar() {
+        // Goal 0xd's high level writes +0x6c (@0x8ea50, @0x8e8c9), and
+        // returns first while +0x4c runs (@0x8d4b9-0x8d4d2).
+        let plundering = holding(plunder(n(2)), Some(n(2)));
+        let waiting = Npc {
+            ai_wait: 1,
+            ..plundering.clone()
+        };
+        for ship in [trader(2, 300.0), wreck(2, 300.0)] {
+            let npcs = [waiting.clone(), ship.clone()];
+            assert_eq!(decided(&npcs).travel, TravelWrite::Keep);
+            let npcs = [plundering.clone(), ship];
+            assert_ne!(decided(&npcs).travel, TravelWrite::Keep);
+        }
+    }
+
+    #[test]
+    fn docked_with_its_wait_out_a_ship_its_plunder_find_takes_ends_the_dock_unplundered() {
+        // Its victim gone, the find writes sub 0 (@0x7fea5) before the
+        // plunder's goal-4-and-sub-0xf test (@0x8c74c): a warship's class
+        // of AI type 1 it found is then dropped, nothing plundered.
+        let pirate = docked(holding(Goal::Idle, None), n(2), 0);
+        let downed = Npc {
+            condition: Condition::Disabled,
+            ..warship_class(3, 300.0)
+        };
+        assert_eq!(
+            decided(&[pirate, downed]),
+            Decision {
+                writes_sub: true,
+                ..dropped()
+            }
+        );
+    }
+
+    #[test]
     fn drifting_it_skips_the_search_and_keeps_drifting() {
         assert_eq!(
             decided(&[holding(Goal::Drift, None), wreck(2, 300.0)]),
@@ -1409,7 +1667,7 @@ mod tests {
         };
         assert_eq!(
             decided(&[holding(Goal::Drift, Some(n(3))), dying, wreck(2, 300.0)]),
-            plundered_wreck(n(3)),
+            found_wreck(n(3)),
             "the head drop sets goal 0 and the search takes it again"
         );
     }

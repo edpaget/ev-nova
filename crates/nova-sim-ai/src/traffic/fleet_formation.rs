@@ -2,12 +2,30 @@
 //! NPC holds a slot in that NPC's formation
 //! ([`Npc::fleet_slot`](super::npc::Npc::fleet_slot)).
 //!
-//! **The parent** (`_DoPlayGameWork` @0x4415c-0x441de): a ship's
-//! formation parent +0xc92e is its swarm leader while it attacks with a
-//! target, else its leader ([`swarm::formation_parent`]). The slot that
-//! +0xc92e names gets +0xc2, "is a formation parent", which makes its
-//! dispatch work its followers' slots out. Neither is stored here: the
-//! pass groups the NPCs by their parents each tick.
+//! **The parent** (`_DoPlayGameWork` @0x4415c-0x441de): a ship of AI type
+//! above 4 has its formation parent +0xc92e rewritten each pass, to its
+//! swarm leader while it attacks with a target, else its leader
+//! ([`swarm::formation_parent`]). The pass skips any other ship
+//! (@0x440d8), which keeps the word it holds ([`Npc::form_parent`]), so
+//! a ship whose AI type dropped holds a stale parent, for as long as it
+//! stays. Stale or not, a ship counts in its parent's formation.
+//!
+//! **The mark.** The slot that +0xc92e names gets +0xc2, "is a formation
+//! parent", which makes its dispatch work its followers' slots out; a stale
+//! ship sets it only on the pass the check drops it (@0x441c7-0x441de,
+//! [`Traffic::succeed_leaders`] hands those ships over). So a formation is
+//! worked out only for a marked parent: its followers, stale or not, take
+//! [`Npc::fleet_slot`] and the absolute place that gives them,
+//! [`Npc::slot_place`], the original's +0x28/+0x2c. A follower of an
+//! unmarked parent keeps both: the place stays where it was while the
+//! parent moves. So does a follower of a word naming an empty slot: the
+//! mark tests no +0xb8 (@0x441d1-0x441de), but the dispatch loop does
+//! (@0x44275-0x4427c), so no calc runs for that slot, and the word stands
+//! too. `_HandlePlayer` tests the player's mark the same way
+//! (@0x6f1cb-0x6f1df), so a ship on the player takes its place only while
+//! the player is marked, here from the slot the session numbered it. The
+//! formations group the NPCs by their parents each tick, and only a ship
+//! with no parent has its [`Npc::fleet_slot`] cleared.
 //!
 //! **The slots** (`_AICalcFormationPositions` @0x85040-0x851d9): the
 //! parent's followers are every other ship whose parent it is, disabled
@@ -19,49 +37,69 @@
 //! in that ship's formation and moves the slots of the swarm leader's own
 //! escorts on. The player's formation is the session's (`Session::reform`).
 //!
-//! **When.** The think half of a tick works the slots out
+//! **When.** The think half of a tick works the numbers out
 //! ([`Traffic::form_fleets`]) after the answers to the last tick's hits,
 //! which the original lands before its marking pass, and before any
-//! think, as the marking pass precedes the `_AIDispatch` loop. Each slot
-//! is a place relative to its parent ([`FormationSlot`]), so a follower
-//! reads it from its parent's state as the fly half began. The original
-//! writes the slots' positions in the parent's own dispatch
-//! (@0x8fcaf-0x8fcc3): a follower in a lower slot than its parent is
-//! nudged toward the frame before's, and a parent that never dispatches
-//! leaves them fixed. Those two differences are filed whole as
-//! rdm:phase/escort-fleet-fidelity-followups/phase-7-npc-formation-slots-at-the-parents-dispatch.
+//! think, as the marking pass precedes the `_AIDispatch` loop. A slot's
+//! place is the absolute word of the follower's berth (+0x28/+0x2c), which
+//! the parent's own dispatch writes from where the parent then stands
+//! (@0x8fcaf-0x8fcc3): before its own think, so before a drift of its own.
+//! The same pass stands for those dispatches
+//! ([`write_places`](super::formation_places)): a follower in a higher
+//! berth than its parent reads this frame's place, one in a lower berth
+//! the frame before's, and the followers of a parent whose dispatch never
+//! gets there ([`dispatch_gate::reaches_formation_calc`]) keep the place
+//! last written, though the parent moves. A disabled or breaking-up parent
+//! still writes.
 //!
 //! **Arriving** (`_HyperSpawnFleet` @0x425e4-0x42602): once a fleet is
-//! placed, `_AICalcFormationPositions(lead, 1)` puts each escort that
-//! jumps in on its slot, position only (`_AIMaintainFormation(ship, 1)`
-//! @0x84fc2-0x84fce), and leaves one out of a gate (goal 0x15,
-//! @0x851a7-0x851af) at the gate's centre ([`snap`]). Both the pass and
-//! the snap are the engine's reading of
+//! placed, `_AICalcFormationPositions(lead, 1)` writes each follower's
+//! word and puts each escort that jumps in on its slot, position only
+//! (`_AIMaintainFormation(ship, 1)` @0x84fc2-0x84fce), and leaves one out
+//! of a gate (goal 0x15, @0x851a7-0x851af) at the gate's centre
+//! ([`snap`]). The snap, and flying the slots, are the engine's reading of
 //! [`RuleKey::NpcFormation`](crate::RuleKey::NpcFormation); by the other
-//! the slots are still worked out, but nothing flies them.
+//! the slots are still worked out, but nothing flies them, but for a
+//! returning swarm fighter
+//! ([`return_flight`](crate::traffic::return_flight)).
 //!
 //! None of these routines plays a sound or draws a random number.
 
+use std::collections::BTreeSet;
+
 use super::Traffic;
+use super::formation_places::BerthPlaces;
 use super::npc::{Mode, Npc, NpcId};
+use super::pod_flight;
+use crate::ai::dispatch_gate;
 use crate::ai::swarm::{self, FormationParent};
 use crate::escort::{self, FormationSlot};
+use crate::flight::ShipState;
+use crate::geometry::Vec2;
 
-/// The slot of each ship whose formation parent is an NPC here, in that
-/// NPC's formation (see the module docs). A ship whose parent is the
-/// player, or an NPC not here, holds none, nor does a ship that is its own
-/// parent.
+/// The word +0xc92e holds for the player: its slot.
+const PLAYER_WORD: u32 = 0;
+
+/// The slot of each ship whose formation parent is an NPC here and marked
+/// (see the module docs), in that NPC's formation: `dropped` names the
+/// ships the check dropped this pass ([`Traffic::succeed_leaders`]). A
+/// ship whose parent is the player, or a berth with no ship, gets no
+/// entry, nor does a ship that is its own parent, and nor does the
+/// follower of an unmarked parent: no entry writes nothing, so each keeps
+/// what it holds ([`Traffic::form_fleets`]).
 #[must_use]
-pub fn slots(npcs: &[Npc]) -> Vec<(NpcId, FormationSlot)> {
+pub fn slots(npcs: &[Npc], dropped: &BTreeSet<NpcId>) -> Vec<(NpcId, FormationSlot)> {
     let parents = parents(npcs);
+    let marked = marked(npcs, &parents, dropped);
     (0..npcs.len())
+        .filter(|&at| marked[at])
         .flat_map(|at| formation(npcs, &parents, at))
         .collect()
 }
 
 /// Where among `npcs` each one's formation parent is: its leader by its
-/// number, its swarm leader by its berth; none for the player, or a
-/// parent not here.
+/// number, its swarm leader or stored word by its berth; none for the
+/// player, or a parent not here.
 fn parents(npcs: &[Npc]) -> Vec<Option<usize>> {
     npcs.iter()
         .map(|npc| match swarm::formation_parent(npc)? {
@@ -70,6 +108,46 @@ fn parents(npcs: &[Npc]) -> Vec<Option<usize>> {
             FormationParent::Berth(berth) => npcs.iter().position(|other| other.berth == berth),
         })
         .collect()
+}
+
+/// Whether `npc` sets its parent's +0xc2 (@0x441c7-0x441de): the marking
+/// pass reaches it, above AI type 4 or dropped by the check this pass.
+fn marks(npc: &Npc, dropped: &BTreeSet<NpcId>) -> bool {
+    swarm::marks_its_parent(npc) || dropped.contains(&npc.id)
+}
+
+/// Whether each of `npcs` is marked: a formation parent, among `parents`,
+/// of a ship that marks (see the module docs).
+fn marked(npcs: &[Npc], parents: &[Option<usize>], dropped: &BTreeSet<NpcId>) -> Vec<bool> {
+    let mut marked = vec![false; npcs.len()];
+    for (npc, parent) in npcs.iter().zip(parents) {
+        if let Some(&at) = parent.as_ref().filter(|_| marks(npc, dropped)) {
+            marked[at] = true;
+        }
+    }
+    marked
+}
+
+/// `npc`'s parent as the word +0xc92e holds it, among `npcs`: the player's
+/// slot, [`PLAYER_WORD`], a berth, or none, for no parent or a leader not
+/// here.
+fn word(npc: &Npc, npcs: &[Npc]) -> Option<u32> {
+    match swarm::formation_parent(npc)? {
+        FormationParent::Player => Some(PLAYER_WORD),
+        FormationParent::Berth(berth) => Some(berth),
+        FormationParent::Leader(id) => npcs
+            .iter()
+            .find(|other| other.id == id)
+            .map(|other| other.berth),
+    }
+}
+
+/// Whether some ship among `npcs` marks the player as its formation
+/// parent (`_HandlePlayer` @0x6f1cb-0x6f1df), `dropped` as [`slots`] reads
+/// it.
+fn player_marked(npcs: &[Npc], dropped: &BTreeSet<NpcId>) -> bool {
+    npcs.iter()
+        .any(|npc| word(npc, npcs) == Some(PLAYER_WORD) && marks(npc, dropped))
 }
 
 /// The slots of the formation of `npcs[at]`, whose followers are the
@@ -85,37 +163,116 @@ fn formation(npcs: &[Npc], parents: &[Option<usize>], at: usize) -> Vec<(NpcId, 
     escort::number_formation(npcs[at].hull.sprite_size, followers)
 }
 
+/// One word a parent's formation calc writes (see the module docs): the
+/// place of `follower`, in `berth`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Written {
+    /// The follower.
+    pub follower: NpcId,
+    /// Its berth, which keeps the word.
+    pub berth: u32,
+    /// The place worked out from its parent's state.
+    pub place: Vec2,
+    /// Whether its dispatch comes before its parent's, so it reads the
+    /// word only on the next frame.
+    pub late: bool,
+}
+
+/// The words the formation calcs among `npcs` write: of every marked
+/// parent (+0xc2, @0x8fcaf, `dropped` as [`slots`] reads it) whose
+/// dispatch reaches the calc ([`dispatch_gate::reaches_formation_calc`]),
+/// or, for a dispatch of its own, of `only` alone, marked and not a pod.
+/// Numbers come from the parents and followers as they stand: a pod
+/// follower below its parent is freed at its own dispatch (@0x8fbb3) and
+/// out of the original's count that frame, but it needs a plug-in fleet
+/// naming shïp 895, and lives one frame, in which its fellows are jumping
+/// in and take no nudge, so no boundary shows it.
+#[must_use]
+pub fn written(npcs: &[Npc], only: Option<NpcId>, dropped: &BTreeSet<NpcId>) -> Vec<Written> {
+    let parents = parents(npcs);
+    let marked = marked(npcs, &parents, dropped);
+    let writes = |npc: &Npc| match only {
+        Some(parent) => npc.id == parent && !pod_flight::is_pod(npc),
+        None => dispatch_gate::reaches_formation_calc(npc),
+    };
+    (0..npcs.len())
+        .filter(|&at| marked[at] && writes(&npcs[at]))
+        .flat_map(|at| {
+            let parent = &npcs[at];
+            formation(npcs, &parents, at)
+                .into_iter()
+                .filter_map(move |(follower, slot)| {
+                    let berth = npcs.iter().find(|npc| npc.id == follower)?.berth;
+                    Some(Written {
+                        follower,
+                        berth,
+                        place: slot.position(&parent.state),
+                        late: berth < parent.berth,
+                    })
+                })
+        })
+        .collect()
+}
+
 /// Works `lead`'s formation out among `npcs` (as [`slots`] does) and
 /// puts each of its followers on its slot as a fleet arrives (see the
-/// module docs): each writes its [`Npc::fleet_slot`], and each not still
-/// out of a gate ([`Mode::Emerging`]) is moved onto its slot's place from
-/// `lead`'s state, its heading and velocity left as they are.
-pub fn snap(npcs: &mut [Npc], lead: NpcId) {
+/// module docs): each writes its [`Npc::fleet_slot`], its
+/// [`Npc::slot_place`] and its word in `places`, and each not still out of
+/// a gate ([`Mode::Emerging`]) is moved onto that place, its heading and
+/// velocity left as they are.
+pub fn snap(npcs: &mut [Npc], lead: NpcId, places: &mut BerthPlaces) {
     let Some(at) = npcs.iter().position(|npc| npc.id == lead) else {
         return;
     };
     let state = npcs[at].state;
     for (id, slot) in formation(npcs, &parents(npcs), at) {
         if let Some(npc) = npcs.iter_mut().find(|npc| npc.id == id) {
+            let place = slot.position(&state);
             npc.fleet_slot = Some(slot);
+            npc.slot_place = Some(place);
+            places.write(npc.berth, Some(place));
             if !matches!(npc.mode, Mode::Emerging { .. }) {
-                npc.state.position = slot.position(&state);
+                npc.state.position = place;
             }
         }
     }
 }
 
+impl Npc {
+    /// `_AISetup`'s +0xc906 and +0xc92e (@0x7f415-0x7f41e), for a ship
+    /// that stays in its slot and runs it: a release, a capture, or a
+    /// former escort boarded back. No swarm leader and no formation
+    /// parent, so no formation numbers it while its AI type stays down.
+    pub fn clear_swarm_words(&mut self) {
+        self.swarm_leader = None;
+        self.form_parent = None;
+    }
+}
+
 impl Traffic {
-    /// Writes each NPC's place in its NPC parent's formation ([`slots`]),
-    /// and none to every NPC that holds none (see the module docs).
-    pub(crate) fn form_fleets(&mut self) {
-        let slots = slots(&self.npcs);
-        for npc in &mut self.npcs {
-            npc.fleet_slot = slots
-                .iter()
-                .find(|&&(id, _)| id == npc.id)
-                .map(|&(_, slot)| slot);
+    /// Writes each NPC's formation parent ([`Npc::form_parent`]) and its
+    /// number in each marked NPC parent's formation ([`slots`]), then the
+    /// places ([`Traffic::write_places`], with `player` the player's
+    /// state, if it is here and marked; see the module docs). `dropped`
+    /// names the ships the check dropped this pass
+    /// ([`Traffic::succeed_leaders`]). A follower of an unmarked parent
+    /// keeps its number and its place, and only a ship with no parent has
+    /// its [`Npc::fleet_slot`] cleared.
+    pub(crate) fn form_fleets(&mut self, player: Option<&ShipState>, dropped: &BTreeSet<NpcId>) {
+        let npcs = &self.npcs;
+        let words: Vec<Option<u32>> = npcs.iter().map(|npc| word(npc, npcs)).collect();
+        let slots = slots(npcs, dropped);
+        let player = player.filter(|_| player_marked(npcs, dropped));
+        for (npc, word) in self.npcs.iter_mut().zip(words) {
+            npc.form_parent = word;
+            if word.is_none() {
+                npc.fleet_slot = None;
+            }
+            if let Some(&(_, slot)) = slots.iter().find(|&&(id, _)| id == npc.id) {
+                npc.fleet_slot = Some(slot);
+            }
         }
+        self.write_places(player, dropped);
     }
 }
 
@@ -137,6 +294,11 @@ mod tests {
         ship.leader = leader.map(NpcId);
         ship.hull.sprite_size = width;
         ship
+    }
+
+    /// The slots of `npcs` with no ship dropped ([`super::slots`]).
+    fn slots(npcs: &[Npc]) -> Vec<(NpcId, FormationSlot)> {
+        super::slots(npcs, &BTreeSet::new())
     }
 
     /// The slot numbers of `slots`, each with its ship's number, sorted by
@@ -234,8 +396,11 @@ mod tests {
         use super::*;
         use crate::ai::{Behaviour, Surroundings};
         use crate::chance::Chance;
+        use crate::flight::ShipState;
+        use crate::geometry::Vec2;
         use crate::traffic::World;
         use nova_sim_base::fixture::Draws;
+        use std::collections::BTreeSet;
 
         /// Every NPC keeps its goal.
         #[derive(Debug)]
@@ -270,6 +435,250 @@ mod tests {
                 })
             };
             assert_eq!(slots, [None, at(2), at(3), None]);
+        }
+
+        /// Runs the pass with no ship dropped, the player at `player`.
+        fn formed(traffic: &mut Traffic, player: Option<ShipState>) {
+            traffic.form_fleets(player.as_ref(), &BTreeSet::new());
+        }
+
+        fn of(traffic: &Traffic, id: NpcId) -> &Npc {
+            traffic
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there")
+        }
+
+        /// A ship of AI type 4 or below holding the parent word `word`.
+        fn stale(word: u32, width: Option<f32>) -> Npc {
+            let mut ship = ship(0, 0, None, width);
+            ship.form_parent = Some(word);
+            ship
+        }
+
+        const FAR: ShipState = ShipState {
+            position: Vec2::new(300.0, -100.0),
+            velocity: Vec2::new(1.0, 0.0),
+            heading: 90.0,
+        };
+
+        /// A traffic of a parent at berth 1, [`FAR`], 20 wide.
+        fn parented() -> (Traffic, NpcId) {
+            let mut traffic = Traffic::with_interval(1);
+            let mut parent = ship(0, 0, None, Some(20.0));
+            parent.state = FAR;
+            let id = traffic.add_npc_at(parent, 1);
+            (traffic, id)
+        }
+
+        #[test]
+        fn a_stale_follower_takes_a_number_and_a_width_in_a_marked_formation() {
+            // @0x850bc, @0x85166: neither loop tests the AI type.
+            let (mut traffic, parent) = parented();
+            let was_stale = traffic.add_npc_at(stale(1, Some(100.0)), 3);
+            let mut real = ship(0, 0, Some(parent.0), Some(10.0));
+            real.state = FAR;
+            let real = traffic.add_npc_at(real, 5);
+            formed(&mut traffic, None);
+            let slot = |number| FormationSlot {
+                slot: number,
+                ships: 3,
+                spacing: 60.0,
+            };
+            assert_eq!(of(&traffic, was_stale).fleet_slot, Some(slot(2)));
+            assert_eq!(of(&traffic, real).fleet_slot, Some(slot(3)));
+            assert_eq!(
+                of(&traffic, was_stale).slot_place,
+                Some(slot(2).position(&FAR)),
+                "on the parent's slot after the pass"
+            );
+            assert_eq!(of(&traffic, real).slot_place, Some(slot(3).position(&FAR)));
+        }
+
+        #[test]
+        fn with_no_ship_above_ai_4_naming_the_parent_a_stale_follower_keeps_both() {
+            let (mut traffic, parent) = parented();
+            let mut held = stale(1, None);
+            let slot = FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            };
+            held.fleet_slot = Some(slot);
+            held.slot_place = Some(Vec2::new(7.0, 8.0));
+            let held = traffic.add_npc_at(held, 3);
+            formed(&mut traffic, None);
+            if let Some(npc) = traffic.npcs_mut().iter_mut().find(|npc| npc.id == parent) {
+                npc.state.position = Vec2::new(900.0, 900.0);
+            }
+            formed(&mut traffic, None);
+            let npc = of(&traffic, held);
+            assert_eq!(npc.fleet_slot, Some(slot));
+            assert_eq!(npc.slot_place, Some(Vec2::new(7.0, 8.0)), "fixed");
+            assert_eq!(npc.form_parent, Some(1));
+        }
+
+        #[test]
+        fn a_follower_of_a_berth_with_no_ship_keeps_its_parent_slot_and_place() {
+            // The mark tests no +0xb8 (@0x441d1-0x441de), but the dispatch
+            // loop does (@0x44275-0x4427c): no calc runs for an empty slot.
+            const EMPTY: u32 = 7;
+            let slot = FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            };
+            let place = Vec2::new(7.0, 8.0);
+            let holding = |mut npc: Npc| {
+                npc.form_parent = Some(EMPTY);
+                npc.fleet_slot = Some(slot);
+                npc.slot_place = Some(place);
+                npc
+            };
+            let (mut traffic, parent) = parented();
+            let mut attacking = ship(0, 0, Some(parent.0), None);
+            attacking.goal = Goal::Attack(ShipRef::Npc(NpcId(9)));
+            attacking.target = Some(ShipRef::Npc(NpcId(9)));
+            attacking.swarm_leader = Some(EMPTY);
+            assert!(swarm::marks_its_parent(&attacking), "above AI 4");
+            let attacking = traffic.add_npc_at(holding(attacking), 3);
+            let held = traffic.add_npc_at(holding(stale(EMPTY, None)), 4);
+            formed(&mut traffic, None);
+            for id in [attacking, held] {
+                let npc = of(&traffic, id);
+                assert_eq!(npc.form_parent, Some(EMPTY));
+                assert_eq!(npc.fleet_slot, Some(slot));
+                assert_eq!(npc.slot_place, Some(place));
+            }
+        }
+
+        #[test]
+        fn the_pass_writes_the_word_the_rule_gives() {
+            let (mut traffic, parent) = parented();
+            let led = traffic.add_npc_at(ship(0, 0, Some(parent.0), None), 3);
+            let mut swarming = ship(0, 0, Some(parent.0), None);
+            swarming.goal = Goal::Attack(ShipRef::Npc(NpcId(9)));
+            swarming.target = Some(ShipRef::Npc(NpcId(9)));
+            swarming.swarm_leader = Some(7);
+            let swarming = traffic.add_npc_at(swarming, 4);
+            let mut escort = ship(0, 0, None, None);
+            escort.escort = Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            });
+            let escort = traffic.add_npc_at(escort, 5);
+            let mut orphan = ship(0, 0, Some(40), None);
+            orphan.form_parent = Some(9);
+            let orphan = traffic.add_npc_at(orphan, 6);
+            let mut none = ship(0, 0, None, None);
+            none.form_parent = None;
+            none.fleet_slot = Some(FormationSlot::default());
+            let none = traffic.add_npc_at(none, 8);
+            formed(&mut traffic, None);
+            let word = |id| of(&traffic, id).form_parent;
+            assert_eq!(word(led), Some(1), "its leader as its berth");
+            assert_eq!(word(swarming), Some(7));
+            assert_eq!(word(escort), Some(0), "the player");
+            assert_eq!(word(orphan), None, "its leader not here");
+            assert_eq!(word(none), None);
+            assert_eq!(of(&traffic, none).fleet_slot, None);
+        }
+
+        #[test]
+        fn a_berth_used_again_reads_as_its_new_ship() {
+            let (mut traffic, parent) = parented();
+            let held = traffic.add_npc_at(stale(1, None), 3);
+            let driver = traffic.add_npc_at(ship(0, 0, Some(parent.0), None), 4);
+            formed(&mut traffic, None);
+            traffic.remove(parent);
+            let mut new = ship(0, 0, None, Some(40.0));
+            new.state.position = Vec2::new(-500.0, 40.0);
+            let new_state = new.state;
+            let new = traffic.add_npc_at(new, 1);
+            if let Some(npc) = traffic.npcs_mut().iter_mut().find(|npc| npc.id == driver) {
+                npc.leader = Some(new);
+            }
+            formed(&mut traffic, None);
+            let npc = of(&traffic, held);
+            assert_eq!(npc.form_parent, Some(1));
+            assert_eq!(
+                npc.slot_place,
+                npc.fleet_slot.map(|slot| slot.position(&new_state))
+            );
+            assert_eq!(npc.fleet_slot.map(|slot| slot.ships), Some(3));
+        }
+
+        #[test]
+        fn a_ship_that_regains_a_leader_is_rewritten() {
+            let (mut traffic, parent) = parented();
+            let back = traffic.add_npc_at(stale(9, None), 3);
+            if let Some(npc) = traffic.npcs_mut().iter_mut().find(|npc| npc.id == back) {
+                npc.leader = Some(parent);
+            }
+            formed(&mut traffic, None);
+            assert_eq!(of(&traffic, back).form_parent, Some(1));
+        }
+
+        #[test]
+        fn clearing_the_swarm_words_leaves_a_ship_with_no_parent() {
+            let mut held = stale(1, None);
+            held.swarm_leader = Some(1);
+            held.clear_swarm_words();
+            assert_eq!((held.swarm_leader, held.form_parent), (None, None));
+            assert_eq!(swarm::formation_parent(&held), None);
+        }
+
+        /// A ship the player leads, in `slot`.
+        fn escorting(slot: FormationSlot) -> Npc {
+            let mut hired = ship(0, 0, None, None);
+            hired.escort = Some(EscortDuty {
+                formation: slot,
+                order: None,
+            });
+            hired
+        }
+
+        #[test]
+        fn a_ship_on_the_player_takes_its_place_from_the_slot_it_holds() {
+            let held = FormationSlot {
+                slot: 2,
+                ships: 3,
+                spacing: 40.0,
+            };
+            let leftover = FormationSlot {
+                slot: 4,
+                ships: 5,
+                spacing: 60.0,
+            };
+            let mut traffic = Traffic::with_interval(1);
+            let mut rejoined = escorting(held);
+            rejoined.fleet_slot = Some(leftover);
+            let rejoined = traffic.add_npc_at(rejoined, 1);
+            let mut lost = stale(0, None);
+            lost.fleet_slot = Some(leftover);
+            let lost = traffic.add_npc_at(lost, 2);
+            formed(&mut traffic, Some(FAR));
+            let npc = of(&traffic, rejoined);
+            assert_eq!(npc.slot_place, Some(held.position(&FAR)), "its duty's");
+            assert_eq!(npc.fleet_slot, Some(leftover), "left alone");
+            assert_eq!(npc.form_parent, Some(0));
+            let npc = of(&traffic, lost);
+            assert_eq!(npc.slot_place, Some(leftover.position(&FAR)));
+            assert_eq!(npc.fleet_slot, Some(leftover));
+        }
+
+        #[test]
+        fn a_lone_stale_ship_on_the_player_keeps_its_place_as_the_player_moves() {
+            // `_HandlePlayer` works its formation out under +0xc2 alone
+            // (@0x6f1cb-0x6f1df), which a stale ship doesn't set (@0x440d8).
+            let mut traffic = Traffic::with_interval(1);
+            let mut lost = stale(0, None);
+            lost.fleet_slot = Some(FormationSlot::default());
+            lost.slot_place = Some(Vec2::new(7.0, 8.0));
+            let lost = traffic.add_npc_at(lost, 2);
+            formed(&mut traffic, Some(FAR));
+            assert_eq!(of(&traffic, lost).slot_place, Some(Vec2::new(7.0, 8.0)));
         }
     }
 
@@ -315,7 +724,8 @@ mod tests {
                 ship(9, 1, None, None),
                 other,
             ];
-            snap(&mut npcs, NpcId(0));
+            let mut places = BerthPlaces::default();
+            snap(&mut npcs, NpcId(0), &mut places);
             // 64 wide with no sprite: spaced 38, four ships, by berth.
             let slot = |slot| FormationSlot {
                 slot,
@@ -324,7 +734,11 @@ mod tests {
             };
             for (at, number) in [(1, 4), (2, 2), (3, 3)] {
                 assert_eq!(npcs[at].fleet_slot, Some(slot(number)), "NPC {at}");
+                let place = Some(slot(number).position(&lead_state));
+                assert_eq!(npcs[at].slot_place, place, "NPC {at}");
+                assert_eq!(places.left(npcs[at].berth), place, "NPC {at}'s word");
             }
+            assert_eq!(places.left(npcs[5].berth), None, "not its");
             for at in [1, 2] {
                 let on = slot(npcs[at].fleet_slot.map_or(0, |slot| slot.slot));
                 assert_eq!(
@@ -335,6 +749,7 @@ mod tests {
                     },
                     "NPC {at}: position only"
                 );
+                assert_eq!(npcs[at].slot_place, Some(on.position(&lead_state)));
             }
             assert_eq!(npcs[3].state.position, lead_state.position, "out of a gate");
             assert_eq!(npcs[5].state.position, Vec2::new(7.0, 7.0), "not its");

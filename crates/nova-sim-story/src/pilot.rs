@@ -102,6 +102,7 @@ use crate::control::{Bit, ControlBitSet};
 use crate::cron::CronState;
 use crate::date::GameDate;
 pub use crate::fleet::Escort;
+use crate::fleet::OrderWord;
 use crate::legal::LegalRecords;
 use crate::market::{ActiveEvent, Good, Trader};
 use crate::mission::ActiveMissions;
@@ -202,6 +203,16 @@ pub struct Pilot {
     pub stock_weapons_pending: bool,
     /// The fleet: every ship escorting the player, in the order it joined.
     pub escorts: Vec<Escort>,
+    /// The order kept for each escort class as the save sees it, the
+    /// original's table at 0x3b5394, saved raw at pilot +0x5d90 + 2i
+    /// (`_WritePilotData` @0x72b01-0x72b25): indexed in
+    /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order, -1
+    /// unset, 0 formation, 1-4 the orders ([`OrderWord`]). A new pilot's
+    /// is all -1, as `_InitObjects` and `_ResetPlayer` leave it (@0x1cebd,
+    /// @0x1dac2). A loaded pilot's escorts take their first words from it
+    /// (`_LoadPilotData` @0x760ec-0x76147; see `nova_sim`'s `class_table`
+    /// module, which writes it in flight).
+    pub class_orders: [OrderWord; 4],
     /// The persons gone for good, who never appear again (see
     /// [`person`](crate::person)).
     pub gone_persons: BTreeSet<PersonId>,
@@ -302,6 +313,7 @@ impl Pilot {
             default_outfits_pending: false,
             stock_weapons_pending: false,
             escorts: Vec::new(),
+            class_orders: [OrderWord::NONE; 4],
             gone_persons: BTreeSet::new(),
             grudges: BTreeSet::new(),
             bits: ControlBitSet::new(),
@@ -857,6 +869,13 @@ mod tests {
     }
 
     #[test]
+    fn a_new_pilots_class_table_is_unset() {
+        // `_InitObjects` @0x1cebd, `_ResetPlayer` @0x1dac2.
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.class_orders, [crate::fleet::OrderWord(-1); 4]);
+    }
+
+    #[test]
     fn a_new_pilot_has_no_nickname_until_given_one() {
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert_eq!(pilot.nickname(), "");
@@ -1219,6 +1238,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);
@@ -1236,6 +1257,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         pilot.escorts = vec![escort(true), escort(false), escort(true), escort(false)];
         assert_eq!(pilot.escort_count(), 2);
@@ -1253,6 +1276,8 @@ mod tests {
             wage,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         assert!(!escort(None).hired(), "captured");
         assert!(escort(Some(0)).hired());

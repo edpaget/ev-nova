@@ -3,12 +3,15 @@
 
 use nova_view::ui::text_input::{CANCEL_ITEM, OK_ITEM, PROMPT_ITEM};
 
-use super::encounters::{assignment_click, boarding_data, captured, captured_over, drawn_at};
+use super::encounters::{
+    assignment_click, boarding_data, captured, captured_by, captured_over, drawn_at,
+};
 use super::*;
 
-/// [`captured`], Use As My Ship clicked: the rename open.
+/// [`captured`], Use As My Ship clicked: the rename open, a save due in
+/// flight written when it comes ([`saving_in_flight`]).
 fn naming(store: &MemoryPilots) -> AppScreen {
-    let mut screen = captured(store);
+    let mut screen = captured_by(store, saving_in_flight());
     assignment_click(&mut screen, MY_SHIP_ITEM);
     assert_eq!(screen.showing(), Showing::CaptureNaming);
     screen

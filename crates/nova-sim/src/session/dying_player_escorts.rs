@@ -16,31 +16,73 @@
 //! original's AI loop (@0x44270) follows them (@0x43e70-0x44015): a hit
 //! there frees the escorts before the next frame's eject (`_HandlePlayer`
 //! @0x6f22c), and a player who then ejects into a pod has lost them. Each
-//! leaves the fleet as the pod releases it ([`Session::release_led`]). A
-//! mission escort stays its mission's: the dispatch leads it again each
-//! frame (@0x8fbcd-0x8fc22), so it idles under its own think
-//! ([`EscortAi`](crate::ai::EscortAi)); its +0x9a of -1 between its think
-//! and the next dispatch is
-//! rdm:phase/escort-fleet-fidelity-followups/phase-9-left-out-of-leader-succession's.
-//! An escort's own fighters are led by the escort, not the player, and
-//! stay. No rulebook key: no reading disagrees with the original's.
+//! leaves the fleet as the pod releases it
+//! ([`Session::release_for_the_pod`]). An escort's own fighters are led by
+//! the escort, not the player, and stay. No rulebook key: no reading
+//! disagrees with the original's.
+//!
+//! **Who `_EscortAI` reaches** ([`dispatch_gate::reaches_escort_think`]).
+//! It doesn't run for a ship in goal 0x15, gliding or bursting
+//! (@0x8fd38-0x8fd7e), on the jump path, or in goal 0x16 (@0x838ef), so a
+//! ship the player leads in any of those is freed at the think it next
+//! makes. A ship on the player's jump is cancelled (@0x900e3-0x9011e) and
+//! freed the frame after, which the gate gives for free: the cancel reads
+//! the player's `_IsDisabled`, for slot 0 its armour line alone
+//! (@0x2d79-0x2e00), which every dying player meets, its armour gone by a
+//! hit or self-destruct's -1.0, while the free reads `_IsDying`.
+//!
+//! **A mission escort let go**
+//! ([`Npc::mission_let_go`](crate::traffic::npc::Npc::mission_let_go)).
+//! `_AIDispatch` writes AI 6 and parent 0 for a `ShipBehav` 1 ship not
+//! disabled (@0x8fc03-0x8fc22, [`dispatch_gate::led_again`]), and
+//! `_EscortAI`'s lost parent then writes parent -1, goal 0 and its class's
+//! `InherentAI`. The re-lead's parent 0 lives only inside its own dispatch,
+//! where nothing reads it, so at every other reader, from its first think
+//! after the player starts dying, it has parent -1 and that AI type: it is
+//! drawn with the other ships (@0x2bd35)
+//! and faintly when cloaked (@0x2d1b4), the radar, brackets, hit rules and
+//! threat tests read a stranger, it flies at its own top speed, the pod's
+//! walk fails `+0x9a == 0` (@0x6f71d) and leaves it to its next dispatch,
+//! its mission's end only clears its mark (@0x8fc3a-0x8fc4b), and its own
+//! break-up takes no cargo share (@0x350ab). It idles under its own think
+//! ([`EscortAi`](crate::ai::EscortAi)). Each traffic tick here is that
+//! dispatch: once the player is whole, it is led again and the formation
+//! re-forms, the hired ships perhaps gone. A ship not intact isn't led
+//! again (@0x8fc0c), and its dispatch's reset drops a disabled one's
+//! parent and never reaches `_EscortAI` (@0x8feda, @0x8ff13 → @0x90032), so
+//! one disabled while the player breaks up is a stranger but not let go
+//! until it is whole, led again and then let go (see the
+//! [`disabled_mission_escorts`](super::disabled_mission_escorts) module).
+//! Its +0xc92e and the player's +0xc2 have no reader
+//! here (@0x440d8, @0x6f1cb): it flies sub 0, and no other ship keeps the
+//! player's formation.
+//!
+//! **A captured mission ship.** One of another `ShipBehav` is no re-lead's
+//! (@0x8fc07 → @0x8fc2d), so `_EscortAI` frees it for good
+//! ([`dispatch_gate::not_led_again`]); a disabled one is out of the
+//! formation already, by its reset, reading 6 until its think whole. One
+//! of `ShipBehav` 2 runs `_DeathStarAI` in `_EscortAI`'s place (@0x8ff3a),
+//! and stays led while it is whole.
 //!
 //! Nothing here plays a sound or draws a random number.
 
-use super::Session;
-use crate::ai::Goal;
+use super::{Session, Space};
+use crate::ai::{Goal, dispatch_gate};
+use crate::combat::hull::Condition;
 use crate::traffic::npc::NpcId;
 
 impl Session {
     /// While the player breaks up or is destroyed, every ship it leads
-    /// that is its own (hired or captured escorts, launched fighters)
-    /// leaves its fleet (see the module docs).
+    /// whose think reaches `_EscortAI` leaves its fleet, but a `ShipBehav`
+    /// 1 ship, which is let go until the next dispatch; a ship that thinks
+    /// as `_DeathStarAI` stays led (see the module docs).
     pub(super) fn free_dying_players_escorts(&mut self) {
-        if !self
+        let dying = self
             .ship
             .condition
-            .dying_or_destroyed(self.pilot.reserves.armor)
-        {
+            .dying_or_destroyed(self.pilot.reserves.armor);
+        self.space.let_go_of_mission_escorts(dying);
+        if !dying {
             return;
         }
         let led: Vec<NpcId> = self
@@ -48,11 +90,12 @@ impl Session {
             .traffic
             .npcs()
             .iter()
-            .filter(|npc| npc.is_players())
+            .filter(|npc| dispatch_gate::reaches_escort_think(npc))
+            .filter(|npc| npc.is_players() || dispatch_gate::not_led_again(npc))
             .map(|npc| npc.id)
             .collect();
         for id in led {
-            self.release_led(id);
+            self.release_for_the_pod(id);
         }
     }
 
@@ -72,6 +115,30 @@ impl Session {
     }
 }
 
+impl Space {
+    /// Each intact `ShipBehav` 1 ship is led again, as the dispatch leads
+    /// it ([`dispatch_gate::led_again`]): the disabled reset's drop ends
+    /// ([`Npc::mission_dropped`](crate::traffic::npc::Npc::mission_dropped),
+    /// see the `disabled_mission_escorts` module), and it is let go again
+    /// if the player is `dying` and its think reaches `_EscortAI`. One not
+    /// intact isn't led again (@0x8fc0c), so a drop or a let go stands.
+    /// One that rejoins takes its slot from the same pass's
+    /// [`Session::reform_on_swarm_change`], the hired ships perhaps gone
+    /// meanwhile.
+    pub(super) fn let_go_of_mission_escorts(&mut self, dying: bool) {
+        for npc in self
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .filter(|npc| npc.condition == Condition::Intact)
+        {
+            npc.mission_dropped = false;
+            npc.mission_let_go =
+                dying && dispatch_gate::led_again(npc) && dispatch_gate::reaches_escort_think(npc);
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -86,11 +153,12 @@ mod tests {
     use crate::mission::ships::ShipBehav;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
-    use crate::rulebook::RuleSource;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
     use crate::testkit::work_with;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, npc};
-    use crate::traffic::npc::{AiType, MissionMark, Npc};
+    use crate::traffic::npc::{AiType, MissionMark, Mode, Npc};
+    use crate::traffic::warp_out::WarpGoal;
 
     /// Every ship keeps its goal and target.
     #[derive(Debug)]
@@ -126,6 +194,8 @@ mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -278,13 +348,19 @@ mod tests {
                 dying(&mut fleet.session, timer);
                 tick(&mut fleet.session, &catalog);
                 let session = &fleet.session;
+                // The lost parent keeps its target, but with no death delay
+                // the armour's end explodes the player at its display
+                // (@0x2dee0), before each slot's `_HandleShip`, which lets
+                // go (@0x33865-0x33888).
+                assert_eq!(session.ship.condition.active(), timer, "{name}");
+                let kept = timer.then_some(ShipRef::Player);
                 for id in [fleet.escort, fleet.fighter] {
                     let freed = session.space.npc(id).expect("here");
                     assert!(!freed.escorts_player(), "{name} {timer}: {id:?}");
                     assert_eq!(freed.ai_type, AiType::Warship, "{name} {timer}");
                     assert_eq!(freed.goal, Goal::Idle, "{name} {timer}");
                     assert_eq!(freed.carrier, None, "{name} {timer}");
-                    assert_eq!(freed.target, Some(ShipRef::Player), "{name} {timer}");
+                    assert_eq!(freed.target, kept, "{name} {timer}");
                 }
                 let fighter = session.space.npc(fleet.fighter).expect("here");
                 assert_eq!(
@@ -308,21 +384,276 @@ mod tests {
         }
     }
 
+    const NOVA_TICKS: [(&str, Tick); 2] = [
+        ("traffic", nova_traffic_tick),
+        ("advance", nova_advance_pass),
+    ];
+
+    /// A mission mark of `behav`, in the formation.
+    fn mark(behav: ShipBehav) -> MissionMark {
+        MissionMark {
+            slot: 0,
+            behav,
+            formation: Some(FormationSlot::default()),
+            order: None,
+        }
+    }
+
+    fn let_go(session: &Session, id: NpcId) -> bool {
+        session.space.npc(id).expect("here").mission_let_go
+    }
+
     #[test]
-    fn a_mission_escort_idles_keeping_its_target_and_stays_its_missions() {
-        let ticks: [(&str, Tick); 2] = [
-            ("traffic", nova_traffic_tick),
-            ("advance", nova_advance_pass),
-        ];
-        for (name, tick) in ticks {
+    fn a_mission_escort_is_let_go_idling_keeping_its_mark() {
+        for (name, tick) in NOVA_TICKS {
             let (mut fleet, catalog) = fleet();
             dying(&mut fleet.session, true);
             tick(&mut fleet.session, &catalog);
             let mission = fleet.session.space.npc(fleet.mission).expect("here");
-            assert!(mission.mission_escort(), "{name}");
+            assert!(mission.mission_let_go, "{name}");
+            assert!(!mission.escorts_player(), "{name}");
+            assert!(
+                mission.mission.is_some_and(|mark| mark.formation.is_some()),
+                "{name}: its mark stays, as +0xc92e does"
+            );
+            // What becomes of its target is the escort AI's to pin.
             assert_eq!(mission.goal, Goal::Idle, "{name}");
-            assert_eq!(mission.target, Some(ShipRef::Player), "{name}");
             assert_eq!(mission.ai_type, AiType::WimpyTrader, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_let_go_is_drawn_with_the_other_ships() {
+        // `_HandleShipDisplay`'s layer reads +0x9a (@0x2bd35).
+        for overlap in RuleSource::ALL {
+            let (mut fleet, catalog) = fleet();
+            let session = &mut fleet.session;
+            session.setup.rules = Rulebook::default().with_override(RuleKey::ShipOverlap, overlap);
+            let stranger = session.space.traffic.add_npc(ship());
+            let late = session.space.traffic.add_npc(Npc {
+                mission: Some(mark(ShipBehav::EscortPlayer)),
+                goal: Goal::Formation { guard: None },
+                ..ship()
+            });
+            session.reform();
+            traffic_tick(session, &catalog);
+            let at = |session: &Session, id: NpcId| {
+                let drawn = ShipRef::Npc(id);
+                session.draw_order().iter().position(|&ship| ship == drawn)
+            };
+            assert!(at(session, late) < at(session, stranger), "{overlap:?}");
+            dying(session, true);
+            traffic_tick(session, &catalog);
+            traffic_tick(session, &catalog);
+            assert!(at(session, stranger) < at(session, late), "{overlap:?}");
+        }
+    }
+
+    #[test]
+    fn the_dispatch_leads_a_mission_escort_again_once_the_player_is_whole() {
+        for (name, tick) in NOVA_TICKS {
+            let (mut fleet, catalog) = fleet();
+            dying(&mut fleet.session, true);
+            tick(&mut fleet.session, &catalog);
+            fleet.session.ship.condition = Condition::Intact;
+            tick(&mut fleet.session, &catalog);
+            let mission = fleet.session.space.npc(fleet.mission).expect("here");
+            assert!(!mission.mission_let_go, "{name}");
+            assert!(mission.mission_escort(), "{name}");
+            assert_eq!(
+                mission.goal,
+                Goal::Formation { guard: None },
+                "{name}: from its think"
+            );
+            let slot = mission.formation().expect("in the formation");
+            assert_eq!((slot.slot, slot.ships), (2, 2), "{name}: alone in it");
+        }
+    }
+
+    #[test]
+    fn a_disabled_mission_escort_is_not_led_again_until_it_is_whole() {
+        // @0x8fc0c.
+        let (mut fleet, catalog) = fleet();
+        dying(&mut fleet.session, true);
+        traffic_tick(&mut fleet.session, &catalog);
+        let session = &mut fleet.session;
+        let mission = session.space.npc_mut(fleet.mission).expect("here");
+        mission.condition = Condition::Disabled;
+        session.ship.condition = Condition::Intact;
+        traffic_tick(session, &catalog);
+        assert!(let_go(session, fleet.mission));
+        let mission = session.space.npc_mut(fleet.mission).expect("here");
+        mission.condition = Condition::Intact;
+        traffic_tick(session, &catalog);
+        assert!(!let_go(session, fleet.mission));
+    }
+
+    #[test]
+    fn a_disabled_mission_escort_is_dropped_through_the_players_death_and_let_go_once_whole() {
+        // Its reset's +0x9a -1 (@0x8feda), no `_EscortAI` while disabled
+        // (@0x8ff13 → @0x90032); whole, the re-lead and then the let go.
+        let (mut fleet, catalog) = fleet();
+        let session = &mut fleet.session;
+        let mission = session.space.npc_mut(fleet.mission).expect("here");
+        mission.condition = Condition::Disabled;
+        mission.reserves.armor.now = 1.0;
+        dying(session, true);
+        traffic_tick(session, &catalog);
+        let dropped = session.space.npc(fleet.mission).expect("here");
+        assert!(!dropped.escorts_player(), "no longer led");
+        assert!(!let_go(session, fleet.mission));
+        let mission = session.space.npc_mut(fleet.mission).expect("here");
+        mission.condition = Condition::Intact;
+        mission.reserves.armor.now = mission.reserves.armor.max;
+        traffic_tick(session, &catalog);
+        assert!(let_go(session, fleet.mission), "led again, then let go");
+    }
+
+    #[test]
+    fn a_mission_ending_while_let_go_clears_only_the_mark() {
+        // With +0x9a -1 the slot-freed branch clears only the mark: no
+        // leave (@0x8fc3a-0x8fc4b).
+        let (mut fleet, catalog) = fleet();
+        dying(&mut fleet.session, true);
+        nova_traffic_tick(&mut fleet.session, &catalog);
+        let session = &mut fleet.session;
+        assert!(session.pilot.missions.free(0).is_some(), "finished");
+        traffic_tick(session, &catalog);
+        let mission = session.space.npc(fleet.mission).expect("here");
+        assert_eq!(mission.mission, None);
+        assert!(!mission.mission_let_go);
+        assert_eq!(mission.goal, Goal::Idle, "no leave");
+        assert_eq!(mission.ai_type, AiType::Warship);
+    }
+
+    /// The fleet with a ship of the mission marked `behav` beside it,
+    /// which the player's death reaches.
+    fn with_captured(behav: ShipBehav) -> (Fleet, FakePilotCatalog, NpcId) {
+        let (mut fleet, catalog) = fleet();
+        let captured = fleet.session.space.traffic.add_npc(Npc {
+            mission: Some(mark(behav)),
+            goal: Goal::Formation { guard: None },
+            ..ship()
+        });
+        fleet.session.reform();
+        (fleet, catalog, captured)
+    }
+
+    #[test]
+    fn a_captured_mission_ship_of_another_behav_is_freed_for_good() {
+        // No re-lead's (@0x8fc07 → @0x8fc2d).
+        for behav in [ShipBehav::AttackPlayer, ShipBehav::Own] {
+            let (mut fleet, catalog, captured) = with_captured(behav);
+            dying(&mut fleet.session, true);
+            traffic_tick(&mut fleet.session, &catalog);
+            let freed = fleet.session.space.npc(captured).expect("here");
+            assert_eq!(
+                freed.mission.and_then(|mark| mark.formation),
+                None,
+                "{behav:?}"
+            );
+            assert!(freed.mission.is_some(), "{behav:?}: its mark stays");
+            assert!(!freed.mission_let_go, "{behav:?}");
+            assert_eq!(freed.ai_type, AiType::Warship, "{behav:?}");
+            fleet.session.ship.condition = Condition::Intact;
+            traffic_tick(&mut fleet.session, &catalog);
+            let freed = fleet.session.space.npc(captured).expect("here");
+            assert!(!freed.mission_escort(), "{behav:?}: not led again");
+        }
+    }
+
+    #[test]
+    fn a_captured_behav_2_ship_stays_led() {
+        // `_DeathStarAI` runs in `_EscortAI`'s place (@0x8ff3a).
+        let (mut fleet, catalog, captured) = with_captured(ShipBehav::AttackStellars);
+        dying(&mut fleet.session, true);
+        traffic_tick(&mut fleet.session, &catalog);
+        let led = fleet.session.space.npc(captured).expect("here");
+        assert!(led.mission_escort());
+        assert!(!led.mission_let_go);
+        assert_eq!(led.ai_type, AiType::WimpyTrader);
+    }
+
+    #[test]
+    fn a_ship_in_its_gate_or_on_the_jump_path_or_in_a_count_wait_is_freed_at_its_think() {
+        type Change = fn(&mut Npc);
+        let cases: [(&str, Change, Change); 3] = [
+            (
+                "gate",
+                |npc| npc.mode = Mode::Emerging { ticks_left: 30 },
+                |npc| npc.mode = Mode::Flying,
+            ),
+            (
+                "jump",
+                |npc| npc.warp.goal = Some(WarpGoal::Own),
+                |npc| npc.warp.goal = None,
+            ),
+            (
+                "count wait",
+                |npc| npc.goal = Goal::CountWait,
+                |npc| npc.goal = Goal::Idle,
+            ),
+        ];
+        for (name, waits, thinks) in cases {
+            let (mut fleet, catalog) = fleet();
+            let session = &mut fleet.session;
+            waits(session.space.npc_mut(fleet.escort).expect("here"));
+            waits(session.space.npc_mut(fleet.mission).expect("here"));
+            dying(session, true);
+            traffic_tick(session, &catalog);
+            for id in [fleet.escort, fleet.mission] {
+                let npc = session.space.npc(id).expect("here");
+                assert!(npc.escorts_player(), "{name}: {id:?}");
+            }
+            thinks(session.space.npc_mut(fleet.escort).expect("here"));
+            thinks(session.space.npc_mut(fleet.mission).expect("here"));
+            traffic_tick(session, &catalog);
+            let hired = session.space.npc(fleet.escort).expect("here");
+            assert!(!hired.escorts_player(), "{name}");
+            assert_eq!(hired.ai_type, AiType::Warship, "{name}");
+            assert!(let_go(session, fleet.mission), "{name}");
+        }
+    }
+
+    #[test]
+    fn ships_on_the_players_jump_are_cancelled_and_freed_the_tick_after() {
+        // The cancel reads the player's `_IsDisabled`, its armour line for
+        // slot 0 (@0x900e3-0x9011e, @0x2d79-0x2e00); the free its
+        // `_IsDying` (@0x253d). The tick's goal 0xb flight gives up a
+        // follower of a player who isn't leaving too, so the free here
+        // holds whichever of the two runs first; the cancel's own reading
+        // is the traffic's `jump_with_leader`'s to pin. A player destroyed
+        // with its armour above the line cancels no one, and what its
+        // followers then fly is goal 0xb's own.
+        type Breaks = fn(&mut Session);
+        let cases: [(&str, Breaks); 3] = [
+            ("timer", |session| dying(session, true)),
+            ("armour 0", |session| dying(session, false)),
+            ("destroyed, armour gone", |session| {
+                session.ship.condition = Condition::Destroyed;
+                session.pilot.reserves.armor.now = 0.0;
+            }),
+        ];
+        for (name, breaks) in cases {
+            let (mut fleet, catalog) = fleet();
+            let session = &mut fleet.session;
+            for id in [fleet.escort, fleet.mission] {
+                let npc = session.space.npc_mut(id).expect("here");
+                npc.warp.goal = Some(WarpGoal::Follow(ShipRef::Player));
+            }
+            breaks(session);
+            traffic_tick(session, &catalog);
+            for id in [fleet.escort, fleet.mission] {
+                let npc = session.space.npc(id).expect("here");
+                assert!(npc.escorts_player(), "{name}: {id:?} led on the jump path");
+            }
+            traffic_tick(session, &catalog);
+            let hired = session.space.npc(fleet.escort).expect("here");
+            assert!(!hired.escorts_player(), "{name}: the hired escort freed");
+            assert!(
+                let_go(session, fleet.mission),
+                "{name}: the mission escort let go"
+            );
         }
     }
 

@@ -236,6 +236,7 @@ mod tests {
             cloaked: false,
             quote: None,
             cargo: None,
+            rolls_voice: false,
         }
     }
 

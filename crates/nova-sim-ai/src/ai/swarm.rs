@@ -47,8 +47,19 @@
 //!   @0x64ff-0x6539): a ship spawned at a berth another ship still names
 //!   as its swarm leader has no afterburner.
 //! - **The formation parent** ([`formation_parent`], `_DoPlayGameWork`
-//!   @0x44160-0x441c0): a ship with a leader (the original's AI type 5 or
-//!   6) attacking with a swarm leader forms on it, any other on its leader.
+//!   @0x44160-0x441c0): a ship of AI type above 4 attacking with a swarm
+//!   word forms on it (word 0 is the player, whoever leads it), any other
+//!   of them on its leader; a ship at or below it holds the last word
+//!   written ([`Npc::form_parent`]), which a dropped ship keeps stale (see
+//!   [`fleet_formation`](crate::traffic::fleet_formation)). The test is the
+//!   original's AI word, not a leader: a bribed ship keeps its leader and
+//!   reads 1, and a kept former escort has none and reads 6.
+//! - **The stray word.** A beam of `ExitType` 4 steps its firer's word to
+//!   0-3 (`_SpawnBeam` @0x450fa-0x4523d, `nova_sim::stray_words`). A
+//!   swarmer drops it at its next check for what Find gives, a class that
+//!   doesn't swarm keeps it (Verify's early true), and [`named`] and
+//!   [`formation_parent`] read it as any other. It also runs the swarm
+//!   branch of substates 5, 7, 0x11 and 0xb, which test the word alone.
 //! - Nothing here plays a sound.
 //!
 //! # Not modelled
@@ -61,13 +72,15 @@
 //! - The mission escort's +0xc906 of 0 (@0x430da): no reader tells it from
 //!   -1, as every swarm test needs one above 0 and the parent it gives is
 //!   its own leader.
-//! - The swarm leader's slot formation for an escort or fighter, the
-//!   `_AIMaintainFormation` calls and glow copies in substates 5, 0x11 and
-//!   7, the stale parent of a ship whose AI type `_AICheckParentExists`
-//!   dropped, a leftover substate 0x12
-//!   outside state 4, and a beam of `ExitType` 4 stepping its firer's
-//!   swarm leader as an exit cursor (`_SpawnBeam` @0x450fa-0x4511e): rdm
-//!   phase combat-ai-fidelity/phase-22-left-out-of-phase-14.
+//! - A leftover substate 0x12 outside state 4. A walk of
+//!   `_HighLevelAIHandler` from entry to exit, avoiding its 76 writes of
+//!   +0xc8ca, finds no path a ship holding 0x12 can fly: each exit that
+//!   writes no substate is an AI wait, where `_HandleShip` skips its turn
+//!   and thrust and the missile needs state 4 (@0x85340-0x85357), or a goal
+//!   that no ship in 0x12 holds there. 0x12 is written only at @0x8e679
+//!   (@0x80296 is dead), and the successor's copy of its lead's substate
+//!   copies goal 4 with it (@0x893c8-0x893e1). The table is in rdm phase
+//!   combat-ai-fidelity-cross-roadmap/phase-1-left-out-of-combat-ai-fidelity-14.
 
 use crate::ai::Surroundings;
 use crate::combat::ShipRef;
@@ -171,10 +184,21 @@ pub struct SwarmLead {
 }
 
 /// `npc`'s swarm lead among `around` (see the module docs): none with no
-/// swarm leader, or none at its berth.
+/// swarm leader, or none at its berth. A berth whose ship is gone is read
+/// by its record among `around`'s gone ships, which stands until a ship
+/// takes the berth: the readers of the swarm leader's slot test no +0xb8
+/// (sub 0x12 @0x8525e-0x852c4, the swarm branches @0x85c87, @0x867e0,
+/// @0x87364, @0x8660b), so a swarmer that kept its word past its swarm
+/// check (off its AI timer, in the regroup pause, on the jump path, or a
+/// class that doesn't swarm holding a stray word) reads the freed slot.
 #[must_use]
 pub fn lead(npc: &Npc, around: &Surroundings) -> Option<SwarmLead> {
-    let leader = at_berth(around.npcs, npc.swarm_leader?)?;
+    let berth = npc.swarm_leader?;
+    let leader = at_berth(around.npcs, berth).or_else(|| {
+        (around.gone.iter())
+            .map(|gone| &gone.ship)
+            .find(|ship| ship.berth == berth)
+    })?;
     let ahead = npc.top_speed(around.led_speed) * SWARM_AHEAD;
     Some(SwarmLead {
         aim: leader.state.position + trig::accel(trig::whole(leader.state.heading), ahead),
@@ -197,9 +221,10 @@ pub fn named(berth: u32, npcs: &[Npc]) -> bool {
 /// The ship a led ship forms on (the original's +0xc92e).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormationParent {
-    /// The player.
+    /// The player: slot 0.
     Player,
-    /// The ship at this berth: its swarm leader.
+    /// The ship at this berth: its swarm leader, or the word it was left
+    /// with.
     Berth(u32),
     /// Its NPC leader ([`Npc::leader`]), whose formation the formation
     /// pass gives it a slot in
@@ -207,20 +232,51 @@ pub enum FormationParent {
     Leader(NpcId),
 }
 
-/// The ship `npc` forms on (`_DoPlayGameWork` @0x44160-0x441c0): its
-/// swarm leader while it attacks or snipes (`_IsShipAttacking`, state 4)
-/// with a target, else its leader; none with no leader, as the
-/// original's AI types 1-4 are left out (@0x440d8).
+impl FormationParent {
+    /// The parent a word of +0xc906 or +0xc92e names: slot 0 is the
+    /// player's, whatever ship holds the berth here.
+    fn of_word(word: u32) -> Self {
+        if word == 0 {
+            Self::Player
+        } else {
+            Self::Berth(word)
+        }
+    }
+}
+
+/// The highest AI type the marking pass leaves alone (`cmpw $0x4`
+/// @0x440d8, @0x44160): a ship at or below it keeps the parent last
+/// written.
+const PASS_SKIPS_AI: i16 = 4;
+
+/// Whether the marking pass reaches `npc`, so it marks its formation
+/// parent (+0xc2, @0x441c7-0x441de): above AI type 4 (@0x440d8).
+#[must_use]
+pub fn marks_its_parent(npc: &Npc) -> bool {
+    npc.original_ai_type() > PASS_SKIPS_AI
+}
+
+/// The ship `npc` forms on (`_DoPlayGameWork` @0x44160-0x441c0): above AI
+/// type 4 ([`Npc::original_ai_type`], not whether it has a leader, as a
+/// bribed ship keeps its leader and a kept former escort has none), its
+/// swarm word while it attacks or snipes (`_IsShipAttacking`, state 4)
+/// with a target, else its leader, none with no leader; at or below it,
+/// the word it holds ([`Npc::form_parent`]), as the pass skips it
+/// (@0x440d8).
 #[must_use]
 pub fn formation_parent(npc: &Npc) -> Option<FormationParent> {
-    let leader = npc.leader_ref()?;
-    let attacking = npc.goal.attacking().is_some() && npc.target.is_some();
-    Some(match (attacking, npc.swarm_leader) {
-        (true, Some(berth)) => FormationParent::Berth(berth),
-        _ => match leader {
-            ShipRef::Player => FormationParent::Player,
-            ShipRef::Npc(id) => FormationParent::Leader(id),
-        },
+    if !marks_its_parent(npc) {
+        return npc.form_parent.map(FormationParent::of_word);
+    }
+    if npc.goal.attacking().is_some()
+        && npc.target.is_some()
+        && let Some(word) = npc.swarm_leader
+    {
+        return Some(FormationParent::of_word(word));
+    }
+    npc.leader_ref().map(|leader| match leader {
+        ShipRef::Player => FormationParent::Player,
+        ShipRef::Npc(id) => FormationParent::Leader(id),
     })
 }
 
@@ -233,7 +289,8 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::flight::ShipState;
     use crate::stats::ShipStats;
-    use crate::traffic::npc::Mode;
+    use crate::traffic::Traffic;
+    use crate::traffic::npc::{AiType, Mode};
     use crate::trig;
     use nova_sim_base::fixture::FAST;
 
@@ -523,6 +580,147 @@ mod tests {
         let mut traffic = swarmer(3, 5);
         traffic.swarm_leader = Some(1);
         assert_eq!(formation_parent(&traffic), None);
+    }
+
+    #[test]
+    fn an_attacker_that_let_go_marks_its_leader_as_its_parent() {
+        // The mark reads +0x70 of each ship before any dispatch (@0x44177),
+        // so one whose `_HandleShip` cleared it forms on its leader though
+        // its goal still attacks.
+        let mut npc = escort(1, 3);
+        npc.swarm_leader = Some(2);
+        let mut traffic = Traffic::new();
+        let id = traffic.add_npc_at(npc, 3);
+        let parent = |traffic: &Traffic| formation_parent(&traffic.npcs()[0]);
+        assert_eq!(parent(&traffic), Some(FormationParent::Berth(2)));
+        traffic.let_go_at_step(id, true);
+        assert_eq!(parent(&traffic), Some(FormationParent::Player));
+        assert!(traffic.npcs()[0].goal.attacking().is_some());
+    }
+
+    #[test]
+    fn the_pass_reaches_ai_types_above_4_alone() {
+        // `cmpw $0x4; jle` @0x440d8, @0x44160.
+        for ai_type in [
+            AiType::WimpyTrader,
+            AiType::BraveTrader,
+            AiType::Warship,
+            AiType::Interceptor,
+        ] {
+            let mut ship = swarmer(3, 5);
+            ship.ai_type = ai_type;
+            ship.form_parent = Some(6);
+            assert!(!marks_its_parent(&ship), "{ai_type:?}");
+            assert_eq!(
+                formation_parent(&ship),
+                Some(FormationParent::Berth(6)),
+                "{ai_type:?}"
+            );
+        }
+        let mut led = swarmer(3, 5);
+        led.leader = Some(NpcId(8));
+        assert!(marks_its_parent(&led), "AI 6");
+    }
+
+    #[test]
+    fn a_ship_of_ai_type_4_or_below_forms_on_the_word_it_holds_whatever_its_target() {
+        // No leader and no word of its own to read (@0x44160-0x44168,
+        // @0x441b9-0x441c0 and the pass that skips it, @0x440d8).
+        for (word, parent) in [
+            (Some(6), Some(FormationParent::Berth(6))),
+            (Some(0), Some(FormationParent::Player)),
+            (None, None),
+        ] {
+            let mut ship = swarmer(3, 5);
+            ship.form_parent = word;
+            ship.swarm_leader = Some(1);
+            assert_eq!(formation_parent(&ship), parent, "{word:?}, attacking");
+            ship.goal = Goal::Idle;
+            ship.target = None;
+            assert_eq!(formation_parent(&ship), parent, "{word:?}, idle");
+        }
+    }
+
+    #[test]
+    fn a_bribed_led_ship_reads_the_word_not_its_leader() {
+        let mut bribed = swarmer(3, 5);
+        bribed.leader = Some(NpcId(8));
+        bribed.take_bribe();
+        assert_eq!(formation_parent(&bribed), None);
+        bribed.form_parent = Some(6);
+        assert_eq!(formation_parent(&bribed), Some(FormationParent::Berth(6)));
+    }
+
+    #[test]
+    fn a_kept_former_escort_attacking_with_a_word_forms_on_it() {
+        // AI 6 with no leader (+0x9a -1): the attack's word, not the leader
+        // it hasn't (`disabled_reset`, @0x44177-0x44195).
+        let mut kept = swarmer(3, 5);
+        kept.kept_escort_ai = true;
+        kept.swarm_leader = Some(2);
+        assert_eq!(formation_parent(&kept), Some(FormationParent::Berth(2)));
+        kept.swarm_leader = None;
+        assert_eq!(formation_parent(&kept), None, "no word, no leader");
+    }
+
+    /// A fighter of `carrier` with no leader and no duty, and the word
+    /// `word` stored.
+    fn carried_off(carrier: ShipRef, word: Option<u32>) -> Npc {
+        let mut fighter = swarmer(3, 5);
+        fighter.goal = Goal::Idle;
+        fighter.target = None;
+        fighter.form_parent = word;
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: carrier,
+            window: 100.0,
+            reach: 40.0,
+        });
+        fighter
+    }
+
+    #[test]
+    fn a_fighter_the_player_lost_holds_the_player_and_an_npc_carriers_reads_the_rule() {
+        // `Session::unfleet` leaves the carrier, and its type is its class's
+        // (`_DamageShip` @0x3b0d7): the store.
+        assert_eq!(
+            formation_parent(&carried_off(ShipRef::Player, Some(0))),
+            Some(FormationParent::Player)
+        );
+        // An NPC carrier's fighter after the reset stays AI 5: the pass
+        // runs, and answers -1 with no leader and no target.
+        assert_eq!(
+            formation_parent(&carried_off(ShipRef::Npc(NpcId(7)), Some(6))),
+            None
+        );
+    }
+
+    #[test]
+    fn word_0_attacking_is_the_player_whoever_leads_it() {
+        // @0x44195: parent 0, and no ship but the player is slot 0.
+        let mut fleet = swarmer(2, 4);
+        fleet.leader = Some(NpcId(8));
+        fleet.swarm_leader = Some(0);
+        assert_eq!(formation_parent(&fleet), Some(FormationParent::Player));
+    }
+
+    #[test]
+    fn a_stepped_word_on_a_class_that_does_not_swarm_stands() {
+        // A word of 1-3, as a beam of `ExitType` 4 leaves it.
+        let mut stepped = escort(4, 7);
+        stepped.hull.swarms = false;
+        stepped.swarm_leader = Some(2);
+        // The formation parent reads it (@0x4418a-0x44195).
+        assert_eq!(formation_parent(&stepped), Some(FormationParent::Berth(2)));
+        // Verify's early true (@0x7e316) keeps it, and the afterburner's
+        // test reads it (@0x64ff-0x6539).
+        let lead = swarmer(1, 2);
+        let mut npcs = [lead, stepped.clone()];
+        assert_eq!(passed(&mut npcs)[1], Some(2));
+        assert!(named(2, &npcs));
+        // A swarmer drops it for what Find gives.
+        let mut npcs = [swarmer(1, 2), swarmer(2, 5)];
+        npcs[1].swarm_leader = Some(3);
+        assert_eq!(passed(&mut npcs)[1], Some(2));
     }
 
     #[test]

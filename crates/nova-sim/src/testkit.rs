@@ -33,6 +33,20 @@ use crate::session::LandPress;
 use crate::session::Session;
 use crate::traffic::npc::{Npc, NpcId};
 
+/// Each ship the player leads in `session` holds the word of its standing
+/// order, as if it had thought: for a test that places a fleet and runs no
+/// step. Plain data, reading no rule of the think's (`nova_sim_ai` owns
+/// that, and a fixture here neither tests the fallback nor gives a ship
+/// that is no fighter a Return).
+pub(crate) fn words_of_orders(session: &mut Session) {
+    let led: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
+    for id in led {
+        if let Some(npc) = session.npc_mut(id) {
+            npc.order_word = crate::fleet::OrderWord::of(npc.escort_order());
+        }
+    }
+}
+
 /// A bar, stellar 128, of tech level 7 (above 5, so no low-tech
 /// discount), at the centre, so a ship taking off flies out as one
 /// starting.

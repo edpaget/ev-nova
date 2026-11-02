@@ -475,7 +475,7 @@ pub(super) fn captured(store: &MemoryPilots) -> AppScreen {
 }
 
 /// [`captured`], the router's rule set `rules`.
-fn captured_by(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
+pub(super) fn captured_by(store: &MemoryPilots, rules: Rulebook) -> AppScreen {
     captured_over(store, with_dialogs(boarding_data()).with_rules(rules))
 }
 
@@ -530,9 +530,19 @@ fn use_as_escort_closes_the_plunder_dialog_under_it() {
 }
 
 #[test]
-fn a_capture_asks_its_assignment_and_use_as_escort_joins_the_fleet_and_saves() {
+fn by_the_engine_use_as_escort_in_flight_writes_nothing() {
     let store = MemoryPilots::new();
     let mut screen = captured(&store);
+    let writes = store.writes();
+    assignment_click(&mut screen, ESCORT_ITEM);
+    assert_eq!(pilot(&screen).escorts().len(), 1);
+    assert_eq!(store.writes(), writes, "held for the next landing");
+}
+
+#[test]
+fn a_capture_asks_its_assignment_and_use_as_escort_joins_the_fleet_and_saves() {
+    let store = MemoryPilots::new();
+    let mut screen = captured_by(&store, saving_in_flight());
     let alpha = flight(&screen).alpha();
     screen.tick(TICK / 2);
     assert_eq!(
@@ -554,7 +564,7 @@ fn a_capture_asks_its_assignment_and_use_as_escort_joins_the_fleet_and_saves() {
 #[test]
 fn use_as_my_ship_flies_the_captured_ship_once_named() {
     let store = MemoryPilots::new();
-    let mut screen = captured(&store);
+    let mut screen = captured_by(&store, saving_in_flight());
     assignment_click(&mut screen, MY_SHIP_ITEM);
     assert_eq!(screen.showing(), Showing::CaptureNaming);
     screen.input(&key(Key::Enter, true));

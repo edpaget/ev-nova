@@ -30,10 +30,12 @@
 //!   with no reverse key. Its
 //!   passes run nothing, and it asks for no point defence: it goes
 //!   straight to `_AILaunchFighter` (@0x87329).
-//! - **Moving and inertialess** ([`inertialess_brake`], @0x8710f-0x8713a):
-//!   its thrust is `_ShipAccelRate` reversed, a whole tick's acceleration
-//!   off its speed, with no thrust shown and no heading wanted, so its
-//!   heading is truncated; then, as above, it
+//! - **Moving and inertialess** (@0x8710f-0x8713a): its thrust is
+//!   `_ShipAccelRate` reversed, which its word carries to `_HandleShip`,
+//!   a whole tick's acceleration off its speed there
+//!   ([`SlotWord`](crate::traffic::slot_word::SlotWord)), with no thrust
+//!   shown and no heading wanted, so its heading is truncated; then, as
+//!   above, it
 //!   runs no pass and goes to the launch (@0x8713a → @0x87329). The
 //!   autopilot chooses it for an inertialess sniper.
 //! - **At rest**: its velocity slows by [`DAMPING`] each tick
@@ -47,10 +49,11 @@
 
 use crate::ai::fire::{self, GUN_FACING};
 use crate::combat::armament::Arsenal;
-use crate::flight::{self, Controls, ShipState};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
-use crate::inertialess::{REVERSE, step_speed};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 use crate::trig;
@@ -98,69 +101,46 @@ pub fn facing(npc: &Npc, at: &ShipState) -> bool {
     )
 }
 
-/// A moving inertialess sniper's brake (@0x8710f-0x87137): its thrust
-/// +0x30 is `_ShipAccelRate` reversed, which `_HandleShip` takes as a whole
-/// tick's acceleration off its speed, capped at its top speed and floored
-/// at none ([`step_speed`] by [`REVERSE`], @0x34aef-0x34b68). It takes no
-/// heading (+0x68 stays the handler entry's, its own), so its heading is
-/// truncated ([`flight::turn_to_own`]), and a reversed thrust shows none
-/// (@0x34eef-0x34eff), so the controls are none. The
-/// speed is moved here, as no thrust key is held for the step to move it,
-/// at full gain until `_HandleShip` reads the frame's
-/// (rdm:phase/play-feel-8/phase-22-handle-ship-reads-the-gain).
-pub fn inertialess_brake(npc: &mut Npc, handling: &Handling) -> Controls {
-    npc.speed = step_speed(
-        npc.speed,
-        REVERSE,
-        handling.accel,
-        handling.max_speed,
-        crate::speed_mult::SpeedMult::FULL,
-    );
-    flight::turn_to_own(&mut npc.state);
-    Controls::default()
-}
-
 /// The controls `npc` snipes by this tick at its target at `target`, on
-/// `handling`, slowing it first when it is at rest; the lead angle a
-/// moving one with a last gun turns to by `lead`'s reading, for that gun's
-/// record in `weapons` (see the module docs), turned to the heading it
-/// wants ([`flight::turn_to`]). With no target it coasts, its heading
-/// truncated.
+/// `handling`, and the heading it wants, slowing it first at its slot when
+/// it is at rest; the lead angle a moving one with a last gun wants by
+/// `lead`'s reading, for that gun's record in `weapons` (see the module
+/// docs), which `_HandleShip` turns it to ([`flight::turn_to`]). With no
+/// target it coasts, wanting its own whole heading. A moving inertialess
+/// sniper's brake (@0x8710f-0x87137, +0x30 = −`_ShipAccelRate` and no
+/// +0x68) is its word's, which `_HandleShip` takes off its speed
+/// ([`SlotWord`](crate::traffic::slot_word::SlotWord)).
 pub fn fly(
     npc: &mut Npc,
     target: Option<&ShipState>,
     handling: &Handling,
     lead: RuleSource,
     weapons: &Arsenal,
-) -> Controls {
+) -> (Controls, i16) {
     let Some(target) = target else {
         // No +0x68 written: the low level's default (@0x8522d).
-        flight::turn_to_own(&mut npc.state);
-        return Controls::default();
+        return (Controls::default(), trig::whole(npc.state.heading));
     };
     let state = npc.state;
     if !moving(&state) {
         npc.state.velocity = state.velocity * DAMPING;
         // +0x68, the table's whole-degree bearing (@0x872aa, @0x872b7).
         let bearing = trig::intercept_angle(state.position, target.position);
-        return Controls {
-            turn: flight::turn_to(&mut npc.state, bearing, handling.turn_rate),
-            ..Controls::default()
-        };
+        return (Controls::default(), bearing);
     }
     // +0x68, a whole degree either way (@0x871ac, @0x871eb).
     let wanted = match (npc.armament.last_gun(), lead) {
         (Some(gun), RuleSource::Engine) => fire::lead(npc, target, weapons.weapon(gun)),
         _ => retro(state.velocity),
     };
-    // By its heading before `_HandleShip` turns it.
+    // By its heading before `_HandleShip` turns it, its turn rate the
+    // slot's (@0x87210).
     let thrust = fire::off_by(state.heading, wanted) < handling.turn_rate + THRUST_SLACK;
-    Controls {
+    let controls = Controls {
         thrust,
-        turn: flight::turn_to(&mut npc.state, wanted, handling.turn_rate),
-        reverse: false,
         ..Controls::default()
-    }
+    };
+    (controls, wanted)
 }
 
 #[cfg(test)]
@@ -231,6 +211,21 @@ mod tests {
         );
         assert_eq!(npc.armament.last_gun(), Some(WeaponId(128)));
         npc
+    }
+
+    /// [`super::fly`]'s controls, turned as `_HandleShip` turns `npc` to
+    /// the heading it wants on `handling` ([`flight::turn_to`]): its slot
+    /// and its step on the same handling.
+    fn fly(
+        npc: &mut Npc,
+        target: Option<&ShipState>,
+        handling: &Handling,
+        lead: RuleSource,
+        weapons: &Arsenal,
+    ) -> Controls {
+        let (controls, wanted) = super::fly(npc, target, handling, lead, weapons);
+        let turn = crate::flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        Controls { turn, ..controls }
     }
 
     /// The handling of [`FAST`]: 3 degrees a tick, 0.3 thrust.
@@ -547,35 +542,6 @@ mod tests {
         assert_eq!(controls, Controls::default());
         assert_eq!(npc.state.velocity, Vec2::new(0.1, 2.0), "not slowed");
         assert_eq!(npc.state.heading, 12.0, "+0x68's default (@0x8522d)");
-    }
-
-    #[test]
-    fn an_inertialess_brake_takes_a_whole_ticks_acceleration_off_its_speed_and_truncates_its_heading()
-     {
-        // FAST: 0.18 a tick, 6 at most.
-        let handling = ShipStats::new(FAST, &[]).handling;
-        assert_eq!((handling.accel, handling.max_speed), (0.18, 6.0));
-        let braked = |speed: f32| {
-            let start = at(10.0, -20.0, 0.0, -3.0, 40.6);
-            let mut npc = Npc {
-                speed,
-                ..sniper(start)
-            };
-            let controls = inertialess_brake(&mut npc, &handling);
-            assert_eq!(controls, Controls::default());
-            assert_eq!(
-                npc.state,
-                ShipState {
-                    heading: 40.0,
-                    ..start
-                },
-                "its velocity untouched, its heading +0x68's default"
-            );
-            npc.speed
-        };
-        assert!((braked(3.0) - 2.82).abs() < 1e-6, "{}", braked(3.0));
-        assert_eq!(braked(0.1), 0.0, "floored");
-        assert_eq!(braked(7.0), 6.0, "capped at its top speed");
     }
 
     #[test]

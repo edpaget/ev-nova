@@ -15,8 +15,11 @@
 //! 1. **The guard** (@0x8d8b8-0x8d8d1): the block runs for goal +0xc8c8 ==
 //!    1 with a travel stellar +0x6c ≠ −1; with −1 it does nothing and
 //!    keeps its sub-goal. A [`Goal::Land`] always names its stellar, so
-//!    the engine can't reach that branch; one whose stellar is not among
-//!    the system's brakes (the autopilot's).
+//!    the engine can't reach that branch. A stellar the system doesn't
+//!    list, as a slot names, is flown among the slot stellars
+//!    ([`slot_stellars`](crate::traffic::slot_stellars)): to its record's
+//!    place, in whichever system it is; one with no record brakes (the
+//!    autopilot's).
 //! 2. **The gate hand-off** (@0x8d8d7-0x8d8fe): a stellar whose `Flags2`
 //!    (record +0x34, 0x498-byte records at *0x3b5010) has 0x3000, a
 //!    hypergate or wormhole, turns the goal to 0x14 and runs state 20 in
@@ -76,13 +79,12 @@ use crate::ai::leave::Leg;
 use crate::ai::miner::SCOOPS;
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
-use crate::flight::FlightRules;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::landing;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::held_burst::{self, Word};
+use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
 use crate::traffic::{approach_flight, leave_flight, ship_display};
@@ -91,32 +93,45 @@ use crate::traffic::{approach_flight, leave_flight, ship_display};
 /// velocity and its speed each pass (the double 0.98 @0xdd988).
 pub const LANDING_DRAG: f64 = 0.98;
 
-/// Flies `npc`, landing on `site` (not a gate), one tick on `handling`
-/// under `flight`, as `inertia` says, by `_HighLevelAIHandler` state 1
-/// (see the module docs): outside its box it approaches, inside it
-/// unfolds and brakes while it moves 0.35 or more on an axis, and
-/// otherwise lands.
-pub fn fly(
+/// The low level of `npc`, landing on `site` (not a gate), one tick on
+/// `handling`, as `inertia` says, by `_HighLevelAIHandler` state 1 (see
+/// the module docs): outside its box it approaches, inside it unfolds and
+/// brakes while it moves 0.35 or more on an axis, and otherwise lands, its
+/// wait rolled on `chance`, with no step that pass ([`Outcome::Landed`]).
+pub(crate) fn low_level(
     npc: &mut Npc,
     site: &LandingSite,
     handling: &Handling,
-    flight: FlightRules,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
-) -> Outcome {
+) -> Result<Flight, Outcome> {
     let turn = handling.turn_rate;
     if !landing::npc_over(site, npc.state.position, turn, RuleSource::Engine) {
-        let (controls, flown) = approach_flight::toward(&mut npc.state, site.position, handling);
-        held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
-        return Outcome::Flying;
+        return Ok(approach_flight::flight(&npc.state, site.position, handling));
     }
     ship_display::landing_unfold(npc);
     if inertialess::moving(npc.state.velocity) {
         npc.drag_in_doubles(LANDING_DRAG);
-        return leave_flight::fly(npc, Leg::Brake, handling, flight, inertia);
+        return leave_flight::low_level(npc, Leg::Brake, handling, inertia);
     }
     stay(npc, site.id, chance);
-    Outcome::Landed(site.id)
+    Err(Outcome::Landed(site.id))
+}
+
+/// `npc`'s low level landing on `site` on `handling`, flown at once by
+/// `_HandleShip` under `flight`, as `inertia` says: what became of it,
+/// for the tests.
+#[cfg(test)]
+pub(crate) fn fly(
+    npc: &mut Npc,
+    site: &LandingSite,
+    handling: &Handling,
+    flight: crate::flight::FlightRules,
+    inertia: Inertia,
+    chance: &mut (impl Chance + ?Sized),
+) -> Outcome {
+    let low = low_level(npc, site, handling, inertia, chance);
+    crate::traffic::slot_word::fly_low(npc, low, handling, flight, inertia)
 }
 
 /// Whether `npc`, landed, leaves the system as it lands, under
@@ -146,7 +161,7 @@ pub const STAY_SPAN: u32 = 200;
 /// and speed (+0x48) none, takes goal 0 ([`Goal::Idle`], sub-goal 0), marks
 /// the stellar visited (+0x92 = +0x6c @0x8db00, [`Npc::visited`]) and
 /// keeps it as its travel stellar (+0x6c is not written, so
-/// [`Npc::travel_set`] holds), and starts its AI wait (+0x4c): a class
+/// [`Npc::travel`] holds), and starts its AI wait (+0x4c): a class
 /// that scoops (`shïp` `Flags3` 0x0002, class +0x9ec, copied from the
 /// record's +0x726 @0x7a204-0x7a20b; [`SCOOPS`])
 /// [`SHORT_STAY_BASE`] + `Rand(`[`SHORT_STAY_SPAN`]`)`, any other
@@ -159,7 +174,7 @@ pub fn stay(npc: &mut Npc, stellar: StellarId, chance: &mut (impl Chance + ?Size
     npc.speed = 0.0;
     npc.goal = Goal::Idle;
     npc.visited = Some(stellar);
-    npc.travel_set = true;
+    npc.travel = Some(stellar);
     npc.ai_wait = if npc.miner & SCOOPS != 0 {
         SHORT_STAY_BASE + chance.below(SHORT_STAY_SPAN)
     } else {
@@ -171,7 +186,7 @@ pub fn stay(npc: &mut Npc, stellar: StellarId, chance: &mut (impl Chance + ?Size
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::flight::ShipState;
+    use crate::flight::{FlightRules, ShipState};
     use crate::stats::ShipStats;
     use nova_sim_base::fixture::{Draws, FAST};
     use nova_sim_catalog::fixture::planet;
@@ -236,15 +251,13 @@ mod tests {
     /// `npc`'s twin flown a tick of sub 2's approach on `handling`.
     fn approached(npc: &Npc, handling: &Handling) -> Npc {
         let mut twin = npc.clone();
-        let (controls, capped) =
-            approach_flight::toward(&mut twin.state, site().position, handling);
-        held_burst::step(
+        let flight = approach_flight::flight(&twin.state, site().position, handling);
+        crate::traffic::slot_word::fly_at_once(
             &mut twin,
-            &capped,
-            controls,
+            flight,
+            handling,
             FlightRules::default(),
             Inertia::Inertial,
-            Word::Writes,
         );
         twin
     }
@@ -479,13 +492,19 @@ mod tests {
     }
 
     #[test]
+    fn a_landed_ship_holds_the_stellar_it_landed_on() {
+        // +0x6c is not written: it holds the stellar goal 1 flew to.
+        let (npc, _) = stayed(0, 0);
+        assert_eq!(npc.travel, Some(StellarId(140)));
+    }
+
+    #[test]
     fn a_landed_ship_stops_takes_goal_0_and_marks_the_stellar_visited() {
         let (npc, _) = stayed(0, 0);
         assert_eq!(npc.state.velocity, Vec2::ZERO);
         assert_eq!(npc.speed, 0.0);
         assert_eq!(npc.goal, Goal::Idle);
         assert_eq!(npc.visited, Some(StellarId(140)), "+0x92 @0x8db00");
-        assert!(npc.travel_set, "+0x6c keeps the stellar");
         assert_eq!(npc.state.position, site().position + Vec2::new(10.0, 0.0));
         assert_eq!(npc.target, Some(crate::combat::ShipRef::Player), "kept");
         assert_eq!(npc.provoked, 7.0, "kept");

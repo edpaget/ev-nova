@@ -122,6 +122,7 @@ impl Traffic {
                 continue;
             };
             let id = self.npcs[at].id;
+            let turned_out = self.turned_out(id);
             // The victim's reaction ran when it took a target or was
             // provoked: an answered hit by no ship, which takes none,
             // always has a nominal damage above none, as the answer
@@ -146,15 +147,22 @@ impl Traffic {
                 // `_AIMakeShipAttackPlayer`'s +0x6c = -1 (@0x89d47),
                 // whatever the ship was doing: a ship held at its gate
                 // loses its gate there too (`Npc::hold_at_gate`).
-                npc.travel_set = false;
+                npc.travel = None;
             }
             if on_itself {
                 autopilot::cut_wait(npc);
             }
             npc.provoked += reaction.provoked;
             match npc.mode {
-                Mode::JumpingIn { .. } | Mode::LeavingGate { .. } => {}
-                Mode::Emerging { .. } if attacks_player || reaction.goal.is_some() => {
+                // Goal 8, which the glide path puts back over a goal 4
+                // (@0x8fcf5-0x8fd18): the frame its wait ran out once this
+                // pass's dispatch turned it out (`last_wait_frame`), or later.
+                Mode::JumpingIn { .. } | Mode::LeavingGate { tick: 1.. } => {}
+                Mode::LeavingGate { tick: 0 } if turned_out => {}
+                // Goal 0x15 still, which a goal 4 is written over.
+                Mode::Emerging { .. } | Mode::LeavingGate { tick: 0 }
+                    if attacks_player || reaction.goal.is_some() =>
+                {
                     npc.hold_at_gate();
                 }
                 _ => {

@@ -327,6 +327,16 @@ impl PilotCatalog for FakePilotCatalog {
             .map_or_else(Vec::new, |(_, sites)| sites.clone())
     }
 
+    /// The first of [`FakePilotCatalog::sites`]' sites of `id`, of any
+    /// system.
+    fn landing_site(&self, id: StellarId) -> Option<LandingSite> {
+        self.sites
+            .iter()
+            .flat_map(|(_, sites)| sites)
+            .find(|site| site.id == id)
+            .copied()
+    }
+
     fn star_map(&self) -> Vec<StarSystem> {
         *self.star_map_reads.borrow_mut() += 1;
         self.star_map.clone()
@@ -635,6 +645,26 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, StellarId(140));
         assert_eq!(listed[0].systems, [SystemId(131)]);
+    }
+
+    #[test]
+    fn the_fake_reads_a_stellar_of_any_system_it_holds() {
+        let fake = FakePilotCatalog {
+            sites: vec![
+                (SystemId(130), vec![planet(128, 0.0, 0.0)]),
+                (SystemId(131), vec![planet(140, 5.0, 6.0)]),
+            ],
+            ..catalog()
+        };
+        let site = fake.landing_site(StellarId(140)).expect("131's");
+        assert_eq!(
+            (site.id, site.position),
+            (
+                StellarId(140),
+                crate::fixture::planet(140, 5.0, 6.0).position
+            )
+        );
+        assert_eq!(fake.landing_site(StellarId(141)), None, "in none");
     }
 
     #[test]

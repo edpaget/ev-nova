@@ -43,7 +43,7 @@ impl Behaviour for Watching {
 /// [`facing_an_npc`] with NPC 0, 100 pixels ahead of the player, enlisted
 /// as its escort, its shield down and its armour one point above the
 /// line, and a bystander far off to decide each pass.
-fn escorted(catalog: &FakePilotCatalog) -> Session {
+pub(super) fn escorted(catalog: &FakePilotCatalog) -> Session {
     let mut session = facing_an_npc(catalog, 180);
     let mut bystander = session.npcs()[0].clone();
     bystander.state.position.x += 3000.0;
@@ -61,6 +61,8 @@ fn escorted(catalog: &FakePilotCatalog) -> Session {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         },
     );
     let npc = session.space.npc_mut(NpcId(0)).expect("there");
@@ -71,7 +73,7 @@ fn escorted(catalog: &FakePilotCatalog) -> Session {
 
 /// The player fires one shot, which is then made no ship's and set on a
 /// move into NPC 0, for the next pass's collision passes to land.
-fn shot_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) {
+pub(super) fn shot_into_the_escort(session: &mut Session, catalog: &FakePilotCatalog) {
     session.hold_trigger(FIRE);
     session.game_work(
         Controls::default(),

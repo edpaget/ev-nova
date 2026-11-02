@@ -14,7 +14,6 @@ use crate::hail::Help;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
-use crate::traffic::autopilot::TopSpeeds;
 use crate::traffic::fixture::assisting::{Recording, player_in};
 use crate::traffic::fixture::npc;
 use crate::traffic::inertialess::Inertia;
@@ -87,14 +86,12 @@ fn docked_by_hand(npc: &Npc, sub: DockSub) -> Npc {
         ship: ShipRef::Player,
         sub,
     });
-    let speeds = TopSpeeds::own_of(&flown);
     plunder::fly_docking(
         &mut flown,
         Some(&player_in(Condition::Intact).state),
-        speeds,
+        1.0,
         FlightRules::default(),
         None,
-        &mut Scripted::default(),
     );
     flown
 }
@@ -214,7 +211,7 @@ fn a_refuel_ends_on_the_think_after_the_fuel_passes_100_and_queues_its_note() {
     let done = ship(&traffic, HELPER);
     assert_eq!(done.goal, Goal::Idle);
     assert_eq!((done.target, done.docking), (None, None));
-    assert!(!done.travel_set);
+    assert!(!done.travel_set());
 }
 
 #[test]
@@ -236,6 +233,55 @@ fn two_refuellers_read_the_fuel_in_berth_order() {
         traffic.take_on_line(),
         [OnLine::RefuelDone(NpcId(2), ShipId(128))]
     );
+}
+
+#[test]
+fn two_refuellers_in_one_run_read_the_fuel_in_berth_order() {
+    // One run of every slot, as the other reading of `LaunchFrameAi` thinks
+    // them (`nova_sim::Session::dispatch_npcs`): its world holds the tank
+    // as the run began, so the lower's unit reaches the higher in the run.
+    let mut traffic = traffic_of(vec![
+        refueller(2, 5, (0.0, 0.0), (0.0, 0.0), 0.0),
+        refueller(3, 4, (10.0, 0.0), (0.0, 0.0), 0.0),
+    ]);
+    let recording = Recording::default();
+    let tank = 100.0;
+    let world = world(tank, 300.0, RuleSource::Engine);
+    let mut chance = Scripted::default();
+    traffic.open_think(&recording, world, &[], &mut chance);
+    traffic.think_run(
+        &recording,
+        world,
+        |_| true,
+        &crate::traffic::NoBay::new(),
+        &mut chance,
+    );
+    assert_eq!(tank + traffic.take_fuel_given(), 101.0);
+    assert_eq!(ship(&traffic, NpcId(3)).goal, Goal::Assist(Help::Refuel));
+    assert_eq!(ship(&traffic, NpcId(2)).goal, Goal::Idle, "it read 101");
+    assert_eq!(
+        traffic.take_on_line(),
+        [OnLine::RefuelDone(NpcId(2), ShipId(128))]
+    );
+}
+
+#[test]
+fn a_tick_reads_only_the_fuel_given_in_that_tick_on_top_of_its_tank() {
+    // The world holds the tank as the tick began, and a tally not yet taken
+    // is already in a later world's tank: 99 then 100, both ticks.
+    let mut traffic = traffic_of(vec![
+        refueller(2, 5, (0.0, 0.0), (0.0, 0.0), 0.0),
+        refueller(3, 4, (10.0, 0.0), (0.0, 0.0), 0.0),
+    ]);
+    for _ in 0..2 {
+        tick(
+            &mut traffic,
+            &Recording::default(),
+            &world(99.0, 300.0, RuleSource::Engine),
+        );
+    }
+    assert_eq!(traffic.take_fuel_given(), 4.0);
+    assert_eq!(traffic.take_on_line(), [], "neither read past 100");
 }
 
 #[test]

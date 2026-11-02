@@ -153,6 +153,30 @@
 //!   data no longer lists and zeroes a dominated stellar's count (see the
 //!   session's `stellar_defence` module). No older save kept them, so the
 //!   upgrade gives `false` and `[]`.
+//! - Version 36: adds each escort's voice variant (`voice`: `even`, `odd`
+//!   or `null`), the original's pilot `+0xe92e + 2i`. `_WritePilotData`
+//!   writes it for every active ship the player leads, hired escorts too
+//!   (@0x72717-0x7276c), but `_LoadPilotData` reads it only for a carried
+//!   fighter (@0x75b65-0x75b85): a hired escort's copy has no reader, and
+//!   is `null` here. No older save kept one, so the upgrade gives `null`
+//!   and a fighter from it holds its berth's word.
+//! - Version 37: adds the class table (`class_orders`), the order kept
+//!   for each escort class, the original's table at 0x3b5394, which
+//!   `_WritePilotData` copies raw to pilot +0x5d90 + 2i (@0x72b01-0x72b25)
+//!   and `_LoadPilotData` reads back with any negative word as -1
+//!   (@0x760c2-0x760ea), before it writes each loaded escort's order word
+//!   from it. The original loads no file without it (it refuses every
+//!   older version, @0x75c67-0x75cc7), so an older save's reading is the
+//!   engine's: the upgrade gives `[-1, -1, -1, -1]`, a pilot who hasn't
+//!   flown, and its escorts hold -1 until their first think.
+//! - Version 38: adds each escort's berth (`berth`, a ship-table slot, or
+//!   `null`), the slot `i` the original's save indexes its escort and
+//!   fighter tables by (+0xe72e and +0xe7ae, `_WritePilotData`
+//!   @0x725f6-0x72711), which `_LoadPilotData` walks up to spawn them in
+//!   (@0x759af-0x75b91): a load packs the escorts into berths 1 up in
+//!   that order (see the session's `loaded_berths` module). No older save
+//!   kept it, so the upgrade gives `null`, and its escorts load in fleet
+//!   order.
 //!
 //! IDs are saved as their raw numbers, the nickname (`nickname`) as its
 //! text, the ship's name (`ship_name`) as
@@ -165,8 +189,11 @@
 //! standing order (`defend`, `attack`, `hold`, `dock`, or `null` for
 //! none), whether it is `carried`, its `wage` in credits a day (`null`
 //! for an escort that was not hired), and the `person` it is (a `përs`
-//! ID, or `null`; one whose record is gone is kept as saved), and its
-//! `mark` (`upgrade`, `sell` or `null`). The
+//! ID, or `null`; one whose record is gone is kept as saved), its
+//! `mark` (`upgrade`, `sell` or `null`), its `voice` and its `berth`. The class table
+//! (`class_orders`) is four raw words in the escort menu's class order
+//! (fighters, medium ships, warships, freighters): -1 unset, 0 formation, 1
+//! defend, 2 attack, 3 return, 4 hold. The
 //! fighters aboard a bay are its
 //! rounds, the ammunition outfits saved with the outfits; the fighters
 //! out are the carried escorts. Which carrier a fighter came from is
@@ -244,7 +271,7 @@ use crate::control::Bit;
 use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
-use crate::fleet::EscortMark;
+use crate::fleet::{EscortMark, OrderWord};
 use crate::market::{ActiveEvent, Good};
 use crate::mission::aux_ships::AuxShips;
 use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
@@ -253,9 +280,10 @@ use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 use crate::traffic::stellar_defence::DefenceShips;
+use crate::voice::VoiceVariant;
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 35;
+pub const CURRENT: u64 = 38;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -355,6 +383,36 @@ struct SavedEscort {
     person: Option<i16>,
     #[serde(deserialize_with = "Option::deserialize")]
     mark: Option<SavedMark>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    voice: Option<SavedVoice>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    berth: Option<u32>,
+}
+
+/// A saved fighter's voice variant (see the module docs' version 36).
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SavedVoice {
+    Even,
+    Odd,
+}
+
+impl From<VoiceVariant> for SavedVoice {
+    fn from(variant: VoiceVariant) -> Self {
+        match variant {
+            VoiceVariant::Even => Self::Even,
+            VoiceVariant::Odd => Self::Odd,
+        }
+    }
+}
+
+impl From<SavedVoice> for VoiceVariant {
+    fn from(saved: SavedVoice) -> Self {
+        match saved {
+            SavedVoice::Even => Self::Even,
+            SavedVoice::Odd => Self::Odd,
+        }
+    }
 }
 
 /// A saved escort's mark for the next shipyard.
@@ -1003,6 +1061,9 @@ struct Saved {
     /// save from before they were outfits.
     stock_weapons_fitted: bool,
     escorts: Vec<SavedEscort>,
+    /// The class table's words, raw, in class order (see the module docs'
+    /// version 37).
+    class_orders: [i16; 4],
     gone_persons: Vec<i16>,
     grudges: Vec<i16>,
     bits: Vec<Bit>,
@@ -1170,8 +1231,11 @@ pub fn encode(pilot: &Pilot) -> String {
                 wage: escort.wage,
                 person: escort.person.map(|person| person.0),
                 mark: escort.mark.map(SavedMark::from),
+                voice: escort.saved_voice().map(SavedVoice::from),
+                berth: escort.berth,
             })
             .collect(),
+        class_orders: pilot.class_orders.map(|word| word.0),
         gone_persons: pilot.gone_persons.iter().map(|person| person.0).collect(),
         grudges: pilot.grudges.iter().map(|person| person.0).collect(),
         bits: pilot.bits.iter().collect(),
@@ -1236,7 +1300,33 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     nickname,
     escort_marks,
     dominations,
+    fighter_voices,
+    class_orders,
+    escort_berths,
 ];
+
+/// Version 37 to 38: no escort's berth, as no older save kept it, so its
+/// escorts load in fleet order.
+fn escort_berths(save: &mut Value) {
+    add_to_each(save, "escorts", "berth", &Value::Null);
+}
+
+/// Version 36 to 37: the class table unset, as a pilot who hasn't flown
+/// holds it (`_InitObjects` @0x1cebd), since no older save kept it.
+fn class_orders(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert(
+            "class_orders".to_owned(),
+            serde_json::json!([-1, -1, -1, -1]),
+        );
+    }
+}
+
+/// Version 35 to 36: no fighter's voice variant, as no older save kept it,
+/// so a fighter from one holds its berth's word.
+fn fighter_voices(save: &mut Value) {
+    add_to_each(save, "escorts", "voice", &Value::Null);
+}
 
 /// Version 34 to 35: no stellar dominated, and every defence count its
 /// decode, as no older save kept them.
@@ -1568,6 +1658,16 @@ fn add_empty(save: &mut Value, fields: &[&str]) {
     }
 }
 
+/// The class table's word a saved `word` loads as: any negative one as -1,
+/// unset, and any other raw (`_LoadPilotData`'s `js` @0x760de).
+fn class_word_of(word: i16) -> OrderWord {
+    if word < 0 {
+        OrderWord::NONE
+    } else {
+        OrderWord(word)
+    }
+}
+
 /// The good and tons a saved hold entry keeps.
 fn cargo_of(saved: &SavedCargo) -> (Good, u32) {
     let good = match saved.good {
@@ -1673,8 +1773,11 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
                 wage: saved.wage,
                 person: saved.person.map(PersonId),
                 mark: saved.mark.map(EscortMark::from),
+                voice: saved.voice.map(VoiceVariant::from),
+                berth: saved.berth,
             })
             .collect(),
+        class_orders: saved.class_orders.map(class_word_of),
         gone_persons: saved.gone_persons.into_iter().map(PersonId).collect(),
         grudges: saved.grudges.into_iter().map(PersonId).collect(),
         bits: saved.bits.into_iter().collect(),
@@ -1709,6 +1812,7 @@ mod tests {
     use crate::control::ControlBitSet;
     use crate::date::GameDate;
     use crate::escort::EscortOrder;
+    use crate::fleet::OrderWord;
     use crate::market::Good;
     use crate::pilot::{Escort, ExploredLevel};
     use crate::reserves::{Gauge, Reserves};
@@ -1760,6 +1864,8 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(141),
@@ -1769,6 +1875,8 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(144),
@@ -1778,6 +1886,8 @@ mod tests {
                 wage: None,
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(128),
@@ -1787,6 +1897,8 @@ mod tests {
                 wage: Some(100),
                 person: None,
                 mark: None,
+                voice: None,
+                berth: None,
             },
             Escort {
                 ship: ShipId(136),
@@ -1796,6 +1908,8 @@ mod tests {
                 wage: None,
                 person: Some(PersonId(128)),
                 mark: None,
+                voice: None,
+                berth: None,
             },
         ]
     }
@@ -1841,6 +1955,7 @@ mod tests {
             default_outfits_pending: false,
             stock_weapons_pending: false,
             escorts: seasoned_escorts(),
+            class_orders: [OrderWord(3), OrderWord(0), OrderWord(2), OrderWord(-1)],
             gone_persons: BTreeSet::from([PersonId(151), PersonId(600)]),
             grudges: BTreeSet::from([PersonId(510)]),
             bits: [0, 512, 9999].into_iter().filter_map(Bit::new).collect(),
@@ -1856,6 +1971,15 @@ mod tests {
             seen_intro: true,
             nickname: String::new(),
             defence_ships: crate::traffic::stellar_defence::DefenceShips::default(),
+        }
+    }
+
+    /// [`seasoned`] as a save from before version 37 loads it: its class
+    /// table unset.
+    fn unflown() -> Pilot {
+        Pilot {
+            class_orders: [OrderWord::NONE; 4],
+            ..seasoned()
         }
     }
 
@@ -2008,7 +2132,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 35);
+        assert_eq!(CURRENT, 38);
         assert_eq!(value["nickname"], "");
         assert_eq!(value["seen_intro"], true);
         assert_eq!(value["course_start"], 131);
@@ -2090,9 +2214,19 @@ mod tests {
                 "carried": false,
                 "wage": null,
                 "person": null,
-                "mark": null
+                "mark": null,
+                "voice": null,
+                "berth": null
             })
         );
+        assert_eq!(value["strict_play"], false);
+        assert_eq!(value["jumped_from"], 130);
+        assert!(text.contains("\n  \"version\": 38"), "{text}");
+    }
+
+    #[test]
+    fn a_save_lists_each_escorts_own_fields() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
         assert_eq!(value["escorts"][4]["person"], 128);
         assert_eq!(value["escorts"][1]["ship"], 141);
         assert_eq!(value["escorts"][1]["order"], serde_json::Value::Null);
@@ -2102,9 +2236,6 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert_eq!(value["strict_play"], false);
-        assert_eq!(value["jumped_from"], 130);
-        assert!(text.contains("\n  \"version\": 35"), "{text}");
     }
 
     #[test]
@@ -2339,6 +2470,8 @@ mod tests {
                     wage: None,
                     person: None,
                     mark: None,
+                    voice: None,
+                    berth: None,
                 },
                 Escort {
                     ship: ShipId(141),
@@ -2348,6 +2481,8 @@ mod tests {
                     wage: None,
                     person: None,
                     mark: None,
+                    voice: None,
+                    berth: None,
                 },
             ]
         );
@@ -2844,7 +2979,7 @@ mod tests {
         object.remove("strict_play");
         let pilot = decode(&value.to_string()).expect("loads");
         assert!(!pilot.strict_play());
-        assert_eq!(pilot, without_uniform_types(seasoned()));
+        assert_eq!(pilot, without_uniform_types(unflown()));
     }
 
     #[test]
@@ -3811,7 +3946,7 @@ mod tests {
     fn a_version_33_save_loads_with_no_escort_marked_and_saves_at_the_current_version() {
         let pilot = decode(&at_version_33(&marked())).expect("loads");
         assert!(pilot.escorts.iter().all(|escort| escort.mark.is_none()));
-        assert_eq!(pilot, seasoned());
+        assert_eq!(pilot, unflown());
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
         assert_eq!(value["version"], CURRENT);
         assert_eq!(value["escorts"][1]["mark"], serde_json::Value::Null);
@@ -3880,7 +4015,7 @@ mod tests {
     #[test]
     fn a_version_34_save_loads_with_none_dominated_and_the_decoded_counts() {
         let pilot = decode(&at_version_34(&dominating())).expect("loads");
-        assert_eq!(pilot, seasoned());
+        assert_eq!(pilot, unflown());
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
         assert_eq!(value["version"], CURRENT);
         assert_eq!(value["galaxy"]["stellars"][0]["dominated"], false);
@@ -3938,7 +4073,7 @@ mod tests {
         let nicknamed = seasoned().with_nickname("Hunter".to_owned());
         let pilot = decode(&at_version_32(&nicknamed)).expect("loads");
         assert_eq!(pilot.nickname(), "");
-        assert_eq!(pilot, seasoned());
+        assert_eq!(pilot, unflown());
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
         assert_eq!(value["version"], CURRENT);
         assert_eq!(value["nickname"], "");
@@ -3988,7 +4123,7 @@ mod tests {
         };
         let pilot = decode(&at_version_31(&elsewhere)).expect("loads");
         assert_eq!(pilot.course_start(), Some(SystemId(131)));
-        assert_eq!(pilot, seasoned());
+        assert_eq!(pilot, unflown());
     }
 
     #[test]
@@ -4051,7 +4186,7 @@ mod tests {
         };
         let pilot = decode(&at_version_30(&unseen)).expect("loads");
         assert!(pilot.seen_intro());
-        assert_eq!(pilot, seasoned());
+        assert_eq!(pilot, unflown());
     }
 
     #[test]
@@ -4120,7 +4255,7 @@ mod tests {
     fn a_version_29_save_loads_with_no_reinforcement_countdown() {
         let pilot = decode(&at_version_29(&seasoned())).expect("loads");
         assert!(pilot.reinforcement_days.is_empty());
-        assert_eq!(pilot, without_reinforcement_days(seasoned()));
+        assert_eq!(pilot, without_reinforcement_days(unflown()));
     }
 
     #[test]
@@ -4171,7 +4306,7 @@ mod tests {
         let pilot = decode(&at_version_28(&seasoned())).expect("loads");
         assert_eq!(pilot.charted().count(), 0);
         assert_eq!(pilot.explored_level(SystemId(131)), ExploredLevel::Explored);
-        assert_eq!(pilot, uncharted(seasoned()));
+        assert_eq!(pilot, uncharted(unflown()));
     }
 
     #[test]
@@ -4238,7 +4373,7 @@ mod tests {
         // (`met_at_return`): a goal-blind upgrade can't tell it from one
         // met by a moment, so it leaves the moment to come.
         assert_eq!(met_and_done(9), Some((true, false)));
-        assert_eq!(pilot, without_ship_done(seasoned()));
+        assert_eq!(pilot, without_ship_done(unflown()));
     }
 
     #[test]
@@ -4303,7 +4438,7 @@ mod tests {
             pilot,
             Pilot {
                 jumped_from: None,
-                ..without_ship_done(seasoned())
+                ..without_ship_done(unflown())
             }
         );
     }
@@ -4334,7 +4469,7 @@ mod tests {
             Some(None),
             "drawn at its next spawn"
         );
-        assert_eq!(pilot, without_uniform_types(seasoned()));
+        assert_eq!(pilot, without_uniform_types(unflown()));
     }
 
     /// `pilot` with no mission's ships keeping a type, no system
@@ -4684,13 +4819,173 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 35", "\"version\": 36");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 36 }));
+        let newer = encode(&seasoned()).replace("\"version\": 38", "\"version\": 39");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 39 }));
         assert_eq!(
-            SaveError::Newer { version: 36 }.to_string(),
+            SaveError::Newer { version: 39 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 36, and this version of Nova reads up to 35)."
+             (it is version 39, and this version of Nova reads up to 38)."
         );
+    }
+
+    /// `pilot` flying a carried fighter of `voice`, and a hired escort.
+    fn with_a_fighter(mut pilot: Pilot, voice: VoiceVariant) -> Pilot {
+        let escort = pilot.escorts.first().copied().map_or_else(
+            || Escort {
+                ship: ShipId(136),
+                reserves: Reserves::full(10.0, 10.0, 100.0),
+                order: None,
+                carried: false,
+                wage: None,
+                person: None,
+                mark: None,
+                voice: None,
+                berth: None,
+            },
+            |escort| Escort {
+                voice: None,
+                berth: None,
+                ..escort
+            },
+        );
+        pilot.escorts = vec![
+            Escort {
+                carried: true,
+                voice: Some(voice),
+                ..escort
+            },
+            Escort {
+                carried: false,
+                ..escort
+            },
+        ];
+        pilot
+    }
+
+    #[test]
+    fn a_hired_escort_saves_null_whatever_its_record_holds() {
+        let mut pilot = with_a_fighter(seasoned(), VoiceVariant::Odd);
+        pilot.escorts[1].voice = Some(VoiceVariant::Odd);
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(value["escorts"][0]["voice"], "odd");
+        assert_eq!(value["escorts"][1]["voice"], serde_json::Value::Null);
+        let decoded = decode(&text).expect("loads");
+        assert_eq!(decoded.escorts[1].voice, None);
+    }
+
+    #[test]
+    fn a_carried_fighters_variant_round_trips() {
+        for voice in [VoiceVariant::Even, VoiceVariant::Odd] {
+            let pilot = with_a_fighter(seasoned(), voice);
+            let text = encode(&pilot);
+            assert_eq!(decode(&text), Ok(pilot.clone()));
+            let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+            assert_eq!(
+                value["escorts"][0]["voice"],
+                match voice {
+                    VoiceVariant::Even => "even",
+                    VoiceVariant::Odd => "odd",
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_35_saves_escorts_load_with_no_variant() {
+        let pilot = with_a_fighter(seasoned(), VoiceVariant::Odd);
+        let mut value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(35);
+        for escort in value["escorts"].as_array_mut().expect("escorts") {
+            escort.as_object_mut().expect("an escort").remove("voice");
+        }
+        let decoded = decode(&value.to_string()).expect("loads");
+        assert_eq!(decoded.escorts.len(), 2);
+        assert!(decoded.escorts.iter().all(|escort| escort.voice.is_none()));
+    }
+
+    #[test]
+    fn a_save_missing_an_escorts_voice_at_the_current_version_is_refused() {
+        let pilot = with_a_fighter(seasoned(), VoiceVariant::Odd);
+        let mut value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        value["escorts"][0]
+            .as_object_mut()
+            .expect("an escort")
+            .remove("voice");
+        assert!(unusable(&value.to_string()).contains("voice"));
+    }
+
+    // Each escort's berth, the slot `_WritePilotData` indexes its tables by
+    // (@0x725f6-0x72711).
+
+    #[test]
+    fn an_escorts_berth_round_trips_none_included() {
+        let mut pilot = seasoned();
+        pilot.escorts[0].berth = Some(3);
+        pilot.escorts[2].berth = Some(1);
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(value["escorts"][0]["berth"], 3);
+        assert_eq!(value["escorts"][1]["berth"], serde_json::Value::Null);
+        assert_eq!(value["escorts"][2]["berth"], 1);
+        assert_eq!(decode(&text), Ok(pilot));
+    }
+
+    #[test]
+    fn a_version_37_saves_escorts_load_with_no_berth() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(37);
+        for escort in value["escorts"].as_array_mut().expect("escorts") {
+            escort.as_object_mut().expect("an escort").remove("berth");
+        }
+        assert_eq!(decode(&value.to_string()), Ok(seasoned()));
+    }
+
+    #[test]
+    fn a_save_missing_an_escorts_berth_at_the_current_version_is_refused() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["escorts"][0]
+            .as_object_mut()
+            .expect("an escort")
+            .remove("berth");
+        assert!(unusable(&value.to_string()).contains("berth"));
+    }
+
+    // The class table (`_WritePilotData` @0x72b01-0x72b25, `_LoadPilotData`
+    // @0x760c2-0x760ea).
+
+    #[test]
+    fn a_save_keeps_the_class_table_raw_in_class_order() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(value["class_orders"], serde_json::json!([3, 0, 2, -1]));
+    }
+
+    #[test]
+    fn a_saved_negative_class_word_loads_unset_and_any_other_raw() {
+        // `js` @0x760de.
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["class_orders"] = serde_json::json!([-7, 5, -1, 0]);
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert_eq!(
+            pilot.class_orders,
+            [OrderWord(-1), OrderWord(5), OrderWord(-1), OrderWord(0)]
+        );
+    }
+
+    #[test]
+    fn a_version_36_save_loads_as_a_pilot_who_has_not_flown() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(36);
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("class_orders");
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert_eq!(pilot, unflown());
     }
 
     fn unusable(text: &str) -> String {

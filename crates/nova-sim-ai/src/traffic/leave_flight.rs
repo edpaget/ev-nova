@@ -66,16 +66,22 @@
 //!   next pass and departs it ([`Outcome::JumpedOut`]) once its stage is
 //!   done.
 
-use crate::ai::fire;
 use crate::ai::leave::{self, Leg};
-use crate::flight::{self, Controls, FlightRules, ShipState};
+use crate::ai::{Goal, fire};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::{Controls, ShipState};
 use crate::geometry::Vec2;
+use crate::hail::Help;
 use crate::handling::Handling;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::held_burst::{self, Flight};
+#[cfg(doc)]
+use crate::traffic::held_burst;
+use crate::traffic::held_burst::Flight;
 use crate::traffic::inertialess::{self, Inertia};
 use crate::traffic::npc::Npc;
+use crate::traffic::slot_word::Cap;
 use crate::traffic::snipe;
 use crate::trig;
 
@@ -98,86 +104,123 @@ pub const BRAKE_DAMPING: f64 = 0.94;
 /// each tick (the double 0.95 @0xdd618, @0x855e3-0x85624).
 pub const SETTLE: f64 = 0.95;
 
-/// Flies `npc` one tick of `leg` on `handling` under `flight`, as
-/// `inertia` says (see the module docs): flying on, on [`Leg::Jump`]
-/// with its warp out begun where it is.
-pub fn fly(
+/// The low level of `npc` on one tick of `leg` on `handling`, as
+/// `inertia` says (see the module docs): its flight, or, on [`Leg::Jump`],
+/// its warp out begun where it is, with no step that pass
+/// ([`Outcome::Flying`]).
+pub(crate) fn low_level(
     npc: &mut Npc,
     leg: Leg,
     handling: &Handling,
-    flight: FlightRules,
     inertia: Inertia,
-) -> Outcome {
-    let (flown, chosen) = match leg {
+) -> Result<Flight, Outcome> {
+    match leg {
         Leg::Jump => {
             npc.begin_own_jump();
-            return Outcome::Flying;
+            Err(Outcome::Flying)
         }
-        Leg::RunOut => (*handling, Flight::from(run_out(&mut npc.state, handling))),
+        Leg::RunOut => {
+            let (mut controls, out) = run_out(&npc.state, handling);
+            if npc.warp.under_way() {
+                // Sub 3 writes +0x68 and, inside its thrust window, +0x34 = 0
+                // (@0x85845-0x85858): `_HandleShip` skips the thrust of a
+                // ship under way with no burst word (@0x34a96), and its
+                // warp-out test reads that bearing, so the stage ends as it
+                // faces out (@0x346f2-0x34741).
+                npc.warp.aim = out;
+                if controls.thrust {
+                    npc.owed_burst = None;
+                }
+                controls.thrust = false;
+            }
+            // +0x34 = 0 (@0x857d9): its top speed at its step.
+            Ok(Flight::writes(controls, out, Cap::Step))
+        }
         // Sub 1 leaves +0x34 alone: its brake bursts an owed burst out.
-        Leg::Brake => {
-            let chosen = stop_flight(npc, handling, inertia);
-            (chosen.flown.unwrap_or(*handling), chosen)
-        }
-    };
-    held_burst::step(npc, &flown, chosen.controls, flight, inertia, chosen.word);
-    Outcome::Flying
+        Leg::Brake => Ok(stop_flight(npc, handling, inertia)),
+    }
 }
 
-/// Flies `npc` leaving (state 2) one tick on `handling` under `flight`,
-/// as `inertia` says: [`leave::leg`]'s leg, by [`fly`].
-pub fn leaving(
+/// `npc`'s low level of `leg` on `handling`, flown at once by
+/// `_HandleShip` under `rules`, as `inertia` says: what became of it, for
+/// the tests of the flights that share it.
+#[cfg(test)]
+pub(crate) fn fly(
     npc: &mut Npc,
+    leg: Leg,
     handling: &Handling,
-    flight: FlightRules,
+    rules: crate::flight::FlightRules,
     inertia: Inertia,
 ) -> Outcome {
-    let leg = leave::leg(&npc.state, leave::expedites(npc));
-    fly(npc, leg, handling, flight, inertia)
+    let low = low_level(npc, leg, handling, inertia);
+    crate::traffic::slot_word::fly_low(npc, low, handling, rules, inertia)
 }
 
-/// Flies `npc` fleeing beyond its attacker's reach (state 3's far branch)
-/// one tick on `handling` under `flight`, as `inertia` says:
-/// [`leave::flee_leg`]'s leg, whether it can jump read by `jump_fuel`
-/// ([`leave::can_jump`]), by [`fly`].
-pub fn fleeing_afar(
+/// The low level of `npc` leaving (state 2) one tick on `handling`, as
+/// `inertia` says: [`leave::leg`]'s leg, by [`low_level`].
+pub(crate) fn leaving(
     npc: &mut Npc,
     handling: &Handling,
-    flight: FlightRules,
+    inertia: Inertia,
+) -> Result<Flight, Outcome> {
+    let leg = leave::leg(&npc.state, leave::expedites(npc));
+    low_level(npc, leg, handling, inertia)
+}
+
+/// The low level of `npc` fleeing beyond its attacker's reach (state 3's
+/// far branch) one tick on `handling`, as `inertia` says:
+/// [`leave::flee_leg`]'s leg, whether it can jump read by `jump_fuel`
+/// ([`leave::can_jump`]), by [`low_level`].
+pub(crate) fn fleeing_afar(
+    npc: &mut Npc,
+    handling: &Handling,
     inertia: Inertia,
     jump_fuel: RuleSource,
-) -> Outcome {
+) -> Result<Flight, Outcome> {
     let leg = leave::flee_leg(
         &npc.state,
         leave::expedites(npc),
         leave::can_jump(npc, jump_fuel),
     );
-    fly(npc, leg, handling, flight, inertia)
+    low_level(npc, leg, handling, inertia)
 }
 
 /// Substate 1 (@0x8536d-0x85633, see the module docs) for `npc` on
-/// `handling`, as `inertia` says, turned as `_HandleShip` turns it to the
-/// heading the substate wants ([`stop_wanting`], [`flight::turn_to`]):
-/// the controls, and the handling they fly by. The caller skips it while
-/// the ship's AI wait runs.
+/// `handling`, as `inertia` says ([`stop_wanting`]), as its flight
+/// ([`Flight::stop`]): flown by the handling it hands back, wanting the
+/// heading it hands back, and leaving +0x34 alone, so its brake bursts an
+/// owed burst out. The caller skips its turn and thrust while the ship's
+/// AI wait runs.
 pub(crate) fn stop(
     npc: &mut Npc,
     handling: &Handling,
     inertia: Inertia,
     refuelling: bool,
-) -> (Controls, Handling) {
+) -> Flight {
     let (controls, flown, wanted) = stop_wanting(npc, handling, inertia, refuelling);
-    let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
-    (Controls { turn, ..controls }, flown)
+    if npc.warp.under_way() && npc.goal == Goal::JumpOut {
+        // Its +0x68, which the warp-out's test reads (@0x346f2-0x34741):
+        // goal 2's is the one stop still under way past the hold.
+        npc.warp.aim = wanted;
+    }
+    Flight::stop(controls, &flown, inertia, wanted)
 }
 
-/// Substate 1 (a stop that isn't a refuel) for `npc` on `handling`, as
-/// `inertia` says ([`stop`]), as its flight ([`Flight::stop`]): flown by
-/// the handling it hands back, and leaving +0x34 alone, so its brake
-/// bursts an owed burst out.
+/// Substate 1 for a stop that isn't a refuel ([`stop`]).
 pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) -> Flight {
-    let (controls, flown) = stop(npc, handling, inertia, false);
-    Flight::stop(controls, &flown, inertia)
+    stop(npc, handling, inertia, false)
+}
+
+/// Substate 1 for `npc` on `handling`, as `inertia` says, while its AI
+/// wait runs with sub 1 stored ([`Npc::stopping`]): the high level writes
+/// no sub under +0x4c (@0x8d4b9-0x8d4d2) and the low level runs sub 1 on
+/// its kept value, whose cuts ([`stop_wanting`]) stand though
+/// `_HandleShip` skips its turn and thrust (@0x34a54-0x34a72). A refuel,
+/// the original's goal 9 (+0xc8c8 @0x85595), is cut off its retro heading
+/// too. Its settle below 0.35 stores sub 0, ending it (@0x85624).
+pub(crate) fn stop_under_wait(npc: &mut Npc, handling: &Handling, inertia: Inertia) {
+    let refuelling = matches!(npc.goal, Goal::Assist(Help::Refuel));
+    stop_wanting(npc, handling, inertia, refuelling);
 }
 
 /// Substate 1 for `npc` on `handling`, as `inertia` says, before
@@ -195,13 +238,19 @@ pub(crate) fn stop_flight(npc: &mut Npc, handling: &Handling, inertia: Inertia) 
 /// ([`Npc::drag_in_doubles`]), with no thrust (@0x855e3-0x8561f). Neither of those writes
 /// +0x68, so it wants its own whole heading, the low level's default
 /// (@0x8522d).
+///
+/// Every sub 1 flight passes here, so it notes what stays stored of it
+/// ([`Npc::stopping`]): sub 1 while it brakes, and sub 0 from the settle
+/// (@0x85624).
 pub(crate) fn stop_wanting(
     npc: &mut Npc,
     handling: &Handling,
     inertia: Inertia,
     refuelling: bool,
 ) -> (Controls, Handling, i16) {
-    if !inertialess::moving(npc.state.velocity) {
+    let moving = inertialess::moving(npc.state.velocity);
+    npc.stopping = moving;
+    if !moving {
         // Velocity and +0x48, in doubles, back to floats (@0x855e3-0x8561f).
         npc.drag_in_doubles(SETTLE);
         return (
@@ -255,25 +304,26 @@ fn brake(npc: &mut Npc, handling: &Handling, refuelling: bool) -> (Controls, Han
     (controls, soft, retro)
 }
 
-/// Sub 3's controls for a ship at `state` on `handling`: thrusting
-/// within its turn rate and [`RUN_OUT_THRUST`] of the bearing out from
-/// the centre, then turned to it as `_HandleShip` turns it
+/// Sub 3's controls for a ship at `state` on `handling`, and the heading
+/// it wants: thrusting within its turn rate and [`RUN_OUT_THRUST`] of the
+/// bearing out from the centre, which `_HandleShip` turns it to
 /// ([`flight::turn_to`]).
-fn run_out(state: &mut ShipState, handling: &Handling) -> Controls {
+fn run_out(state: &ShipState, handling: &Handling) -> (Controls, i16) {
     let out = trig::intercept_angle(Vec2::ZERO, state.position);
     let thrust = fire::off_by(state.heading, out).abs() < handling.turn_rate + RUN_OUT_THRUST;
-    let turn = flight::turn_to(state, out, handling.turn_rate);
-    Controls {
+    let controls = Controls {
         thrust,
-        turn,
         ..Controls::default()
-    }
+    };
+    (controls, out)
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::flight::{self, FlightRules};
+
     use crate::flight::Turn;
 
     const HANDLING: Handling = Handling {
@@ -290,8 +340,32 @@ mod tests {
         }
     }
 
+    /// Sub 1's controls and handling for `npc` ([`super::stop`]), `npc`
+    /// turned as `_HandleShip` turns it to the heading it wants
+    /// ([`flight::turn_to`]), the turn in the controls.
+    fn stop(
+        npc: &mut Npc,
+        handling: &Handling,
+        inertia: Inertia,
+        refuelling: bool,
+    ) -> (Controls, Handling) {
+        let flight = super::stop(npc, handling, inertia, refuelling);
+        let wanted = flight.wanted.expect("sub 1 wants a heading");
+        let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
+        let flown = flight.flown.unwrap_or(*handling);
+        (
+            Controls {
+                turn,
+                ..flight.controls
+            },
+            flown,
+        )
+    }
+
     fn run_out(state: &ShipState) -> Controls {
-        super::run_out(&mut state.clone(), &HANDLING)
+        let (controls, out) = super::run_out(state, &HANDLING);
+        let turn = flight::turn_to(&mut state.clone(), out, HANDLING.turn_rate);
+        Controls { turn, ..controls }
     }
 
     #[test]
@@ -556,6 +630,28 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_leaves_sub_1_stored_while_it_brakes_but_not_once_it_settles() {
+        let stored = |vy: f32, inertia: Inertia, refuelling: bool| {
+            let mut npc = npc_at(braking(0.0, vy, 180.0), inertia);
+            npc.goal = Goal::Wait;
+            stop(&mut npc, &HANDLING, inertia, refuelling);
+            npc.stopping
+        };
+        let inertialess = Inertia::Inertialess { speed: 3.0 };
+        for (inertia, refuelling) in [
+            (Inertia::Inertial, false),
+            (Inertia::Inertial, true),
+            (inertialess, false),
+        ] {
+            assert!(stored(-3.0, inertia, refuelling), "{inertia:?}");
+            assert!(
+                !stored(-0.2, inertia, refuelling),
+                "the settle writes sub 0 (@0x85624): {inertia:?}"
+            );
+        }
+    }
+
+    #[test]
     fn on_the_soft_brake_an_inertial_ships_speed_is_cut_to_0_94_with_its_velocity() {
         // An inertial fighter launched by an inertialess carrier holds its
         // carrier's +0x48 (`_LaunchFighter` @0x3d6da-0x3d6e0); the soft
@@ -720,18 +816,110 @@ mod tests {
         let mut expected = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
         expected.speed = 1.0;
         let (controls, by) = stop(&mut expected, &HANDLING, inertia, false);
-        autopilot::plain_step(&mut expected, &by, controls, rules, inertia);
+        autopilot::plain_step(
+            &mut expected,
+            &by,
+            controls,
+            rules,
+            (inertia, HANDLING.accel),
+        );
         assert_eq!(
             (inertialess.state, inertialess.speed),
             (expected.state, expected.speed)
         );
     }
 
+    // A stage still under way.
+
+    #[test]
+    fn running_out_under_way_inside_its_thrust_window_drops_what_it_owes_with_no_thrust() {
+        // Sub 3 writes +0x34 inside its window whatever `_HandleShip` then
+        // skips (@0x85845-0x85858, @0x34a96).
+        let mut inside = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::JumpOut,
+            at(500.0, 0.0, 90.0),
+        );
+        inside.warp.stage = 3.0;
+        inside.owed_burst = Some(1.0);
+        let rules = FlightRules::default();
+        fly(
+            &mut inside,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(inside.owed_burst, None);
+        assert_eq!(inside.state.velocity, Vec2::ZERO, "no thrust");
+        // Outside it, off the bearing by its turn and 3 degrees, sub 3
+        // writes nothing.
+        let off = 90.0 + HANDLING.turn_rate + RUN_OUT_THRUST;
+        let mut outside = ship(
+            ShipStats::new(FAST, &[]),
+            Goal::JumpOut,
+            at(500.0, 0.0, off),
+        );
+        outside.warp.stage = 3.0;
+        outside.owed_burst = Some(1.0);
+        fly(
+            &mut outside,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(outside.owed_burst, Some(1.0));
+    }
+
+    #[test]
+    fn running_out_under_way_it_takes_no_thrust_and_reads_its_out_bearing_until_its_stage_ends() {
+        // Sub 3 writes +0x68 and +0x34 = 0, so `_HandleShip` skips its
+        // thrust (@0x34a96-0x34a9a) and turns its warp-out test on that
+        // bearing (@0x346f2-0x34741).
+        let start = at(500.0, 0.0, 90.0);
+        let mut runner = ship(ShipStats::new(FAST, &[]), Goal::JumpOut, start);
+        runner.warp.stage = 3.0;
+        runner.warp.aim = 300;
+        let rules = FlightRules::default();
+        fly(
+            &mut runner,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert_eq!(runner.state.velocity, Vec2::ZERO, "no thrust");
+        assert_eq!(runner.warp.aim, 90, "out from the centre");
+        runner.warp.stage = 0.0;
+        fly(
+            &mut runner,
+            Leg::RunOut,
+            &HANDLING,
+            rules,
+            Inertia::Inertial,
+        );
+        assert!(runner.state.velocity.x > 0.0, "it thrusts the tick after");
+    }
+
+    #[test]
+    fn a_stop_under_way_reads_the_heading_it_wants_as_its_aim() {
+        // Sub 1's +0x68 is what the warp-out's test reads (@0x346f2-0x34741).
+        let stopped = |stage: f32, vy: f32| {
+            let mut npc = npc_at(braking(0.0, vy, 90.0), Inertia::Inertial);
+            npc.warp.stage = stage;
+            npc.warp.aim = 300;
+            stop(&mut npc, &HANDLING, Inertia::Inertial, false);
+            npc.warp.aim
+        };
+        assert_eq!(stopped(3.0, -3.0), 180, "its retro heading");
+        assert_eq!(stopped(3.0, -0.2), 90, "settling, its own whole heading");
+        assert_eq!(stopped(0.0, -3.0), 300, "no stage, none read");
+    }
+
     // The leave flown through the autopilot.
 
-    use crate::ai::Goal;
     use crate::combat::ShipRef;
-    use crate::flight::FlightRules;
     use crate::fuel::OutfitMod;
     use crate::handling::ShipFields;
     use crate::stats::{HYPERSPACE_DISTANCE, INERTIALESS_HULL, ShipStats};

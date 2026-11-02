@@ -2,8 +2,10 @@
 //! (@0x971c-0x9809 in the `EV Nova` executable) with an NPC observer
 //! ([`Surroundings::sees`]).
 //!
-//! The rule is [`cloak::visible`](crate::cloak::visible)'s: a ship coming
-//! out of a gate is seen by nobody (@0x972d); an uncloaked one is seen;
+//! The rule is [`cloak::visible`](crate::cloak::visible)'s: a ship of goal
+//! 0x15 is seen by nobody (@0x972d, [`Npc::emerging`]), the cloak's tests
+//! not reached, and that is all of an arrival this reads, so a ship
+//! gliding in or bursting out of its gate is seen; an uncloaked one is seen;
 //! a cloaked one is seen by an escort of it that has a cloak
 //! (@0x9788-0x97a2, `_HasCloak`: its own, or the target's area cloak it
 //! rides in close formation, [`rides_area_cloak`]), or by a ship with a
@@ -11,12 +13,13 @@
 //! The player is seen by the same rule ([`sees_player`]), its escorts with
 //! a cloak of their own, or riding its area cloak, seeing it cloaked. `_ShipVisibleToShip` tests no presence, so a ship
 //! not in the system (or no player in it) reads as seen: the gates that
-//! drop a gone target (`target::dropped`, [`Surroundings::live`]) are not
-//! a search's.
+//! drop a gone target (`target::dropped`, [`Surroundings::standing`]) are
+//! not a search's.
 //!
 //! Its readers: an NPC's fire ([`fire`](crate::ai::fire), whose sight of
 //! its target holds its fire: `_AIFireGun` @0x7ff25, `_AIFireTurret`
-//! @0x80b69), the lost-sight search ([`lost_sight`](crate::ai::lost_sight),
+//! @0x80b69; `_AIFireMissile` @0x8115d-0x8121c doesn't call it, and reads
+//! the slot and the cloak alone), the lost-sight search ([`lost_sight`](crate::ai::lost_sight),
 //! @0x8d738), the escorts' pick of a nearby threat
 //! ([`escort::threat_score`](crate::escort::threat_score),
 //! [`escort::player_threat_score`](crate::escort::player_threat_score),
@@ -188,7 +191,7 @@ pub fn sees_player(observer: &Npc, player: &PlayerSide) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, ship, sites};
+    use crate::ai::fixture::{TRADERS, around, cloaked, govts, n, scanning, ship, sites};
     use crate::combat::ShipRef;
     use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
@@ -240,6 +243,37 @@ mod tests {
         let mut emerging = other(50.0, 0.0);
         emerging.mode = Mode::Emerging { ticks_left: 5 };
         assert!(!sees(&warship(), emerging));
+    }
+
+    #[test]
+    fn only_goal_0x15_hides_an_arriving_ship() {
+        for (mode, seen) in [
+            (Mode::Emerging { ticks_left: 5 }, false),
+            (Mode::LeavingGate { tick: 0 }, false),
+            (Mode::LeavingGate { tick: 1 }, true),
+            (Mode::JumpingIn { tick: 1 }, true),
+            (Mode::HeldAtGate { ticks_left: 5 }, true),
+            (Mode::Coasting { ticks_left: 5 }, true),
+            (
+                Mode::EnteringGate {
+                    gate: crate::catalog::StellarId(128),
+                    ticks_left: 5,
+                },
+                true,
+            ),
+        ] {
+            let mut target = other(50.0, 0.0);
+            target.mode = mode;
+            assert_eq!(sees(&warship(), target), seen, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_scanner_on_screen_does_not_see_a_ship_on_the_last_frame_of_its_wait() {
+        // The goal test comes before the cloak's (@0x972d).
+        let mut target = other(50.0, 0.0);
+        target.mode = Mode::LeavingGate { tick: 0 };
+        assert!(!sees(&scanning(warship()), target));
     }
 
     #[test]
@@ -337,7 +371,7 @@ mod tests {
 
     #[test]
     fn the_player_is_seen_by_its_cloak_and_a_ship_not_in_the_system_reads_seen() {
-        use crate::ai::fixture::{cloaked_player, player, scanning};
+        use crate::ai::fixture::{cloaked_player, player};
         use crate::escort::{EscortDuty, FormationSlot};
         let (sites, govts) = (sites(), govts(0, 0));
         let sees_player = |observer: Npc, at: (f32, f32), cloak: bool| {

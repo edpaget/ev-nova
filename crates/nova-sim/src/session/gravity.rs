@@ -33,7 +33,7 @@
 //! None of this plays a sound.
 
 use super::{Chart, PlayerShip, Session, Setup};
-use crate::ai::sight;
+use crate::ai::{PlayerSide, sight};
 use crate::combat::ShipRef;
 use crate::combat::stellar_hazards::{GravitySource, HazardResistance, StellarHazards};
 use crate::deadly_stellar::resists_deadly;
@@ -60,10 +60,12 @@ impl Session {
     /// close formation reads its leader's place and its sight of it
     /// (`_ShipVisibleToShip` @0x8ed5f, [`sight::sees_leader`], as the
     /// formation flight reads it): an escort that can't see its cloaked
-    /// player stops (sub 1) and so keeps no close formation.
-    fn npc_resists_gravity(&self, npc: &Npc) -> bool {
+    /// player stops (sub 1) and so keeps no close formation. `player_side`
+    /// is the player as the sight reads it ([`Session::player_side`]),
+    /// taken once by a caller asking of many NPCs.
+    fn npc_resists_gravity(&self, npc: &Npc, player_side: &PlayerSide) -> bool {
         let leader = self.leader_state(npc);
-        let seen = sight::sees_leader(npc, self.npcs(), Some(&self.player_side()));
+        let seen = sight::sees_leader(npc, self.npcs(), Some(player_side));
         resists_gravity(
             npc.hull.stellar_immune,
             npc.flies_inertialess(leader.as_ref(), seen, self.setup.flight_rules()),
@@ -105,10 +107,15 @@ impl Session {
         }
     }
 
-    /// Which stellar hazards `npc` resists, its outfits never counting.
-    pub(super) fn npc_hazard_resistance(&self, npc: &Npc) -> HazardResistance {
+    /// Which stellar hazards `npc` resists, its outfits never counting,
+    /// the player as `player_side` (see [`Session::npc_resists_gravity`]).
+    pub(super) fn npc_hazard_resistance(
+        &self,
+        npc: &Npc,
+        player_side: &PlayerSide,
+    ) -> HazardResistance {
         HazardResistance {
-            gravity: self.npc_resists_gravity(npc),
+            gravity: self.npc_resists_gravity(npc, player_side),
             deadly: resists_deadly(
                 npc.hull.stellar_immune,
                 npc.stats.deadly_resistance,

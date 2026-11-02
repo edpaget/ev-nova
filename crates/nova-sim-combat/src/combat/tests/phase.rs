@@ -126,7 +126,7 @@ pub(super) fn test_hits(combat: &mut Combat, ships: &mut [Ship], rule: &dyn Disa
 /// ([`Combat::defend_npcs`]), the whole loop at once.
 pub(super) fn defend_npcs(combat: &mut Combat, ships: &mut [Ship], rule: &dyn DisableRule) {
     run(combat, ships, rule, |combat, fighters, arena, chance| {
-        combat.defend_npcs(fighters, arena, None, false, chance);
+        combat.defend_npcs(fighters, arena, None, None, chance);
     });
 }
 

@@ -29,13 +29,13 @@
 //! again at once. Nothing is said and no sound plays: the line and
 //! `snd ` 151 are for the player's nav alone (@0x86dd4).
 //!
-//! The original says it inside the repairer's think; here it is said
-//! after the traffic's tick, before the frame is drawn
-//! (rdm:phase/combat-ai-fidelity/phase-22-frame-lines-in-slot-order owns
-//! the slot order). An NPC's repair settles in the same place, after
-//! the traffic's tick and before the frame is drawn: no boundary is
-//! crossed. The `_statusRedraw` writes are left out, as the status
-//! display reads the live state.
+//! The original says it inside the repairer's own dispatch, its low
+//! level; here the traffic queues it at the repairer's slot of the AI
+//! loop, and [`Session::dispatch_npcs`] settles it as that slot's run
+//! ends, so a higher slot's think reads the repaired ship that frame and
+//! a lower slot's as the frame began. An NPC's repair settles in the same
+//! place. The `_statusRedraw` writes are left out, as the status display
+//! reads the live state.
 
 use super::{Session, Setup, Space, Statics};
 use crate::catalog::ShipId;
@@ -391,6 +391,85 @@ mod tests {
         assert_eq!(session.player_condition(), Condition::Intact);
         assert_eq!(session.take_comm().len(), 1);
         assert_eq!(session.take_sounds(), [SimSound::RepairsComplete]);
+    }
+
+    /// Keeps every ship's goal; each think records the condition and the
+    /// armour it reads of `watched`.
+    #[derive(Debug)]
+    struct Watch {
+        watched: NpcId,
+        seen: RefCell<std::collections::BTreeMap<NpcId, (Condition, f32)>>,
+    }
+
+    impl crate::ai::Behaviour for Watch {
+        fn decide(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            around: &crate::ai::Surroundings,
+            _chance: &mut dyn crate::chance::Chance,
+        ) -> Goal {
+            if let Some(ship) = around.npc(self.watched) {
+                let read = (ship.condition, ship.reserves.armor.now);
+                self.seen.borrow_mut().insert(npc.id, read);
+            }
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_higher_slots_think_reads_the_patient_a_lower_repairer_repaired_that_tick() {
+        // The completion is the repairer's own low level's (@0x86d54-0x86f37),
+        // and the session settles its line as the repairer's slot's run ends,
+        // so slot 6's think reads the raised armour and the patient whole
+        // that frame, and slot 2's as the frame began.
+        use crate::traffic::plunder_dock::{DockSub, Docking};
+        let catalog = catalog();
+        let (mut session, helper) = downed(&catalog, Rc::new(Below20::default()));
+        session.ship.condition = Condition::Intact;
+        session.ship.fate.player_boarded = false;
+        let template = session.space.npc(helper).expect("here").clone();
+        let mut patient = template.clone();
+        patient.condition = Condition::Disabled;
+        patient.boarded = true;
+        patient.reserves.armor = Gauge {
+            now: 10.0,
+            max: 45.0,
+        };
+        let patient = session.space.traffic.add_npc_at(patient, 5);
+        let watcher = |session: &mut Session, berth| {
+            let mut ship = template.clone();
+            ship.state.position = Vec2::new(-800.0, 800.0);
+            session.space.traffic.add_npc_at(ship, berth)
+        };
+        let below = watcher(&mut session, 2);
+        let above = watcher(&mut session, 6);
+        let npc = session.space.npc_mut(helper).expect("here");
+        npc.berth = 3;
+        npc.goal = Goal::Assist(Help::Repair);
+        npc.target = Some(ShipRef::Npc(patient));
+        npc.ai_wait = 50;
+        npc.state.position = template.state.position + Vec2::new(1.0, 1.0);
+        npc.docking = Some(Docking {
+            ship: ShipRef::Npc(patient),
+            sub: DockSub::Dock,
+        });
+        let watch = Watch {
+            watched: patient,
+            seen: RefCell::default(),
+        };
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &watch,
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 64]),
+        );
+        let seen = watch.seen.borrow();
+        assert_eq!(seen[&below], (Condition::Disabled, 10.0), "as it began");
+        let (condition, armor) = seen[&above];
+        assert_eq!(condition, Condition::Intact, "repaired at slot 3");
+        assert!(armor >= 20.0, "{armor}");
     }
 
     #[test]

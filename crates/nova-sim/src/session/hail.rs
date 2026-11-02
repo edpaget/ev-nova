@@ -117,7 +117,7 @@
 //!   `reinforcements` module); a paid warship, interceptor or brave
 //!   trader (`_AIFightEnemyThreatToPlayer`) calls none; a ship of AI type
 //!   0 or above 4 (`_AIFightThreatToPlayer` @0x8183c) calls none and drops
-//!   its travel stellar ([`Npc::travel_set`], +0x6c = -1, @0x81949).
+//!   its travel stellar ([`Npc::travel`], +0x6c = -1, @0x81949).
 //!   The target is picked at the press, which the comm dialog makes over
 //!   the paused flight, as the original's modal dialog does, so it is
 //!   still in the system when the deed is done.
@@ -694,7 +694,7 @@ impl Session {
                         npc.goal = Goal::Attack(ShipRef::Npc(threat));
                         npc.target = Some(ShipRef::Npc(threat));
                         if defence.drop_travel {
-                            npc.travel_set = false;
+                            npc.travel = None;
                         }
                     }
                     None => npc.target = None,
@@ -2407,6 +2407,27 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_ship_given_help_while_firing_holds_no_fire() {
+        // `_AIMakeShipRepairPlayer` and `_AIMakeShipRefuelPlayer` write sub
+        // 0 (@0x82e17, @0x82de0), whose low level fires through
+        // `_AIEscortFireUnprovoked`, nothing for AI type 4 or below
+        // (@0x80e59-0x80e61): the engine holds no fire between thinks.
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        session.pilot.reserves.fuel.now = 40.0;
+        npc(&mut session).trigger = Trigger {
+            primary: true,
+            ..Trigger::default()
+        };
+        hail(&mut session, &catalog);
+        press(&mut session, &catalog, 1, 99);
+        haggle(&mut session, &catalog, Haggle::Accept);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.trigger, Trigger::default());
+    }
+
+    #[test]
     fn by_the_other_reading_a_held_ship_asked_for_help_owes_no_burst() {
         let catalog = hailable();
         let rules = Rulebook::default().with_override(RuleKey::HeldGateBurst, RuleSource::Bible);
@@ -2636,7 +2657,7 @@ pub(super) mod tests {
         let ship = npc(&mut session);
         ship.goal = Goal::Idle;
         ship.target = Some(ShipRef::Player);
-        ship.travel_set = true;
+        ship.travel = Some(StellarId(150));
         let options = HailOptions::empty().with(Rc::new(Sends(defence(pirate))));
         session
             .hail(&catalog, &options, &mut Draws::of(&opening(0)))
@@ -2661,7 +2682,7 @@ pub(super) mod tests {
         let helper = &session.npcs()[0];
         assert_eq!(helper.target, None);
         assert_eq!(helper.goal, Goal::Idle, "nothing else changes");
-        assert!(helper.travel_set, "+0x6c is dropped only with a threat");
+        assert!(helper.travel_set(), "+0x6c is dropped only with a threat");
         assert_eq!(session.reinforcements_coming(), FED_COMING);
     }
 
@@ -2676,7 +2697,7 @@ pub(super) mod tests {
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
         assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
         assert!(
-            helper.travel_set,
+            helper.travel_set(),
             "`_AIFightEnemyThreatToPlayer` keeps +0x6c"
         );
         assert_eq!(session.reinforcements_coming(), None);
@@ -2692,7 +2713,7 @@ pub(super) mod tests {
         });
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
-        assert!(!helper.travel_set);
+        assert!(!helper.travel_set());
         assert_eq!(session.reinforcements_coming(), None);
     }
 
@@ -2767,7 +2788,7 @@ pub(super) mod tests {
         // `_AIFightThreatToPlayer` (@0x81949-0x81953).
         let (catalog, mut session, pirate) = unranked();
         in_a_fleet(&mut session);
-        npc(&mut session).travel_set = true;
+        npc(&mut session).travel = Some(StellarId(150));
         hail(&mut session, &catalog);
         let mut chance = Draws::of(&[0]);
         let view = session
@@ -2779,7 +2800,7 @@ pub(super) mod tests {
         assert_eq!(session.pilot().cash, 100_000);
         let helper = &session.npcs()[0];
         assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
-        assert!(!helper.travel_set);
+        assert!(!helper.travel_set());
         assert_eq!(session.reinforcements_coming(), None);
     }
 
@@ -3644,6 +3665,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -3801,6 +3824,24 @@ pub(super) mod tests {
         assert_eq!(session.space.npc(NpcId(0)).expect("here").cloak, fading);
     }
 
+    /// A hail's join calls no `_AISetup` (@0x62509), so the person keeps
+    /// its word.
+    #[test]
+    fn a_person_joining_by_hail_keeps_its_order_word() {
+        use crate::fleet::OrderWord;
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        session.space.npc_mut(NpcId(0)).expect("here").order_word = OrderWord(2);
+        opened(&mut session, &catalog, &bible);
+        session
+            .answer(2, &catalog, &bible, &mut Draws::of(&[]))
+            .expect("open");
+        assert!(session.is_escort(NpcId(0)), "joined");
+        let npc = session.space.npc(NpcId(0)).expect("here");
+        assert_eq!(npc.order_word, OrderWord(2));
+    }
+
     #[test]
     fn by_the_other_reading_a_person_whose_mission_is_unavailable_lists_no_way_to_join() {
         let mut catalog = merchants();
@@ -3854,6 +3895,8 @@ pub(super) mod tests {
                 wage: None,
                 person: Some(crate::catalog::PersonId(600)),
                 mark: None,
+                voice: None,
+                berth: Some(1),
             }],
             "its reserves as they were, not halved"
         );

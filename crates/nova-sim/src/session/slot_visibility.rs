@@ -92,7 +92,7 @@
 //! Left out, each with its owner: the box of a slot never laid out this
 //! run (`_InitSprites`' clone rect @0x1f135, here no box), and
 //! `_PlayGame`'s frozen `_DoPlayGameWork(1)` at entry (@0x457f3-0x4580c):
-//! rdm:phase/weapons-fidelity-followups/phase-2-left-out-of-weapons-fidelity-47.
+//! rdm:phase/combat-and-flight/phase-2-left-out-of-weapons-fidelity-47.
 
 use super::player_led::slot_of;
 use super::{Session, Setup, Space};

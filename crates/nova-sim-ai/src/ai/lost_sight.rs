@@ -8,8 +8,9 @@
 //! It runs after the type's think (`_AIDispatch` @0x901e5) and the
 //! `ShipBehav` 0 mission hunt (@0x8d628-0x8d6e9), on the goal they leave:
 //! an attack or snipe (state 4) or a plunder (0xd), with a target. Like
-//! the rest of the handler it is skipped while the ship's AI wait runs
-//! ([`Npc::ai_wait`], @0x8d4b9-0x8d4d2). It asks whether the ship sees
+//! the rest of the handler it is never reached by a ship that waits out at
+//! the handler's head ([`handler_head::skips`](crate::ai::handler_head::skips),
+//! @0x8d4b9-0x8d4d2), which `NovaAi` asks first. It asks whether the ship sees
 //! its target ([`Surroundings::sees`], `_ShipVisibleToShip` @0x8d738).
 //!
 //! - Seen, the search timer (+0xc90c, [`Npc::lost_sight`]) is cleared
@@ -131,9 +132,6 @@ pub fn after_think(
     around: &Surroundings,
     chance: &mut dyn Chance,
 ) -> Decision {
-    if npc.ai_wait > 0 {
-        return decision;
-    }
     let Some(target) = decision
         .goal
         .attacking()
@@ -235,13 +233,15 @@ pub fn trader_target(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 
 /// `decision`, an interceptor's think, through `_InterceptorAI`'s
 /// lost-sight tail among `around` (@0x8d39a-0x8d3ee): an inspection of a
-/// ship `npc` doesn't see is dropped.
+/// ship `npc` doesn't see is dropped, its target and travel stellar -1
+/// (@0x8d3d9, @0x8d3df).
 #[must_use]
 pub fn after_inspection(npc: &Npc, decision: Decision, around: &Surroundings) -> Decision {
     match decision.goal {
         Goal::Inspect(ship) if !around.sees(npc, ship) => Decision {
             goal: Goal::Idle,
             clears_target: true,
+            travel: crate::ai::travel::TravelWrite::Clear,
             ..decision
         },
         _ => decision,
@@ -387,14 +387,6 @@ mod tests {
             let decision = lost(&warship, of(goal), &mut Draws::of(&[]));
             assert_eq!(decision, of(goal), "{goal:?}");
         }
-    }
-
-    #[test]
-    fn a_ship_whose_ai_wait_runs_skips_the_block() {
-        let mut warship = hunter(AiType::Warship, SearchTimer::Searching(5));
-        warship.ai_wait = 3;
-        let decision = lost(&warship, of(Goal::Attack(n(2))), &mut Draws::of(&[]));
-        assert_eq!(decision, of(Goal::Attack(n(2))), "@0x8d4b9-0x8d4d2");
     }
 
     #[test]
@@ -585,6 +577,16 @@ mod tests {
         assert_eq!(kept, of(Goal::Inspect(n(2))));
         let fled = inspected(quarry(true), of(Goal::Flee(n(2))));
         assert_eq!(fled, of(Goal::Flee(n(2))), "a flight is left alone");
+    }
+
+    #[test]
+    fn an_inspection_dropped_for_lost_sight_clears_the_travel_stellar() {
+        // +0x70 and +0x6c -1, goal and sub-goal 0 (@0x8d3d9-0x8d3ee).
+        use crate::ai::travel::TravelWrite;
+        let dropped = inspected(quarry(true), of(Goal::Inspect(n(2))));
+        assert_eq!(dropped.travel, TravelWrite::Clear);
+        let kept = inspected(quarry(false), of(Goal::Inspect(n(2))));
+        assert_eq!(kept.travel, TravelWrite::Keep, "in sight, none");
     }
 
     #[test]

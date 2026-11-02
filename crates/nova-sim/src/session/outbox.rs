@@ -36,6 +36,9 @@ pub(super) struct Outbox {
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     pub(super) save_due: bool,
+    /// Whether the save due is one written even in flight (see the
+    /// `in_flight_save` module and [`Outbox::save_now`]).
+    pub(super) save_in_flight: bool,
     /// Whether the hold ran out on a tick since
     /// [`Session::take_hold_expired`](super::Session::take_hold_expired) was last asked.
     pub(super) hold_expiry_due: bool,

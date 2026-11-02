@@ -233,30 +233,27 @@ struct Target<'a> {
 
 impl<'a> Target<'a> {
     /// What `leader` reads of its target among `around`: an NPC in the
-    /// system, or by its record once gone; the player for its condition
+    /// system, or by its record once gone, a leader that let go at its step
+    /// included ([`Surroundings::held_gone`]); the player for its condition
     /// alone, as it never attacks in this sense.
     fn of(leader: &Npc, around: &Surroundings<'a>) -> Self {
-        match leader.target {
-            Some(ShipRef::Npc(id)) => {
-                let ship = around.npc(id).or_else(|| around.held_gone(leader));
-                Self {
-                    disabled: ship.is_some_and(Npc::is_disabled),
-                    attacker: ship.filter(|ship| {
-                        ship.target == Some(ShipRef::Npc(leader.id))
-                            && ship.goal.attacking().is_some()
-                    }),
-                }
+        let ship = match leader.target {
+            Some(ShipRef::Npc(id)) => around.npc(id).or_else(|| around.held_gone(leader)),
+            Some(ShipRef::Player) => {
+                return Self {
+                    disabled: around
+                        .condition_of(ShipRef::Player)
+                        .is_some_and(Condition::disabled),
+                    attacker: None,
+                };
             }
-            Some(ShipRef::Player) => Self {
-                disabled: around
-                    .condition_of(ShipRef::Player)
-                    .is_some_and(Condition::disabled),
-                attacker: None,
-            },
-            None => Self {
-                disabled: false,
-                attacker: None,
-            },
+            None => around.held_gone(leader),
+        };
+        Self {
+            disabled: ship.is_some_and(Npc::is_disabled),
+            attacker: ship.filter(|ship| {
+                ship.target == Some(ShipRef::Npc(leader.id)) && ship.goal.attacking().is_some()
+            }),
         }
     }
 }
@@ -637,7 +634,7 @@ mod tests {
     fn a_leader_in_the_regroup_pause_issues_its_banded_table_not_all_return() {
         // Goal 0x13 is exempt from the override (@0x89aa9-0x89aad).
         use crate::ai::regroup::Kept;
-        for kept in [Kept::Coast, Kept::Stop, Kept::Formation { guard: None }] {
+        for kept in [Kept::Coast, Kept::FollowsJump, Kept::OwnJump] {
             let paused = leader(Goal::Regroup { kept }, 100.0);
             for reach in RuleSource::ALL {
                 assert_eq!(
@@ -750,6 +747,27 @@ mod tests {
             orders(&npcs[0], &around, RuleSource::Engine).map(|word| word.0),
             [2, 2, 1, 0]
         );
+    }
+
+    #[test]
+    fn a_leader_that_let_go_of_a_gone_target_reads_no_record() {
+        // Its `_HandleShip` cleared +0x70 (@0x33865-0x33888), so its next
+        // dispatch reads no target.
+        let mut reader = leader(Goal::Attack(n(2)), 10.0);
+        reader.berth = 5;
+        let npcs = [reader];
+        let mut record = disabled(attacker(2, 100.0));
+        record.berth = 1;
+        let gone = [GoneShip {
+            ship: record,
+            freed: Freed::InDispatch,
+        }];
+        let around = Surroundings {
+            gone: &gone,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let words = orders(&npcs[0], &around, RuleSource::Engine).map(|word| word.0);
+        assert_eq!(words, [1, 1, 1, 0], "no target, no record");
     }
 
     #[test]

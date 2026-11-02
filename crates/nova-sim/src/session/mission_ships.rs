@@ -2971,7 +2971,7 @@ pub(super) mod tests {
             behav: 0,
             ..shipping(-1, 0)
         };
-        // Wimpy traders, which never attack unprovoked.
+        // Wimpy traders, which turn on no one unprovoked.
         let mut catalog = ships_catalog(hunters);
         catalog.dudes[0].1.ai_type = 1;
         let mut session = accepted(&catalog);
@@ -2980,12 +2980,19 @@ pub(super) mod tests {
         assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
         assert_eq!(session.npcs().len(), 2, "they stay");
         assert!(marked(&session).is_empty());
+        // `_AbortMission` writes no goal of a leaderless ship
+        // (@0x99ab5-0x99b24): what the AI then does with it is the AI's.
+        assert_eq!(
+            session.npcs()[0].goal,
+            Goal::Attack(ShipRef::Player),
+            "abort_mission writes no goal"
+        );
         let world = session.world();
         let around = world.around(session.npcs());
         let ai = NovaAi::default();
-        let decided =
-            crate::ai::Behaviour::decide(&ai, &session.npcs()[0], &around, &mut NeverFires);
-        assert_ne!(decided, Goal::Attack(ShipRef::Player), "no longer hunting");
+        let decision =
+            crate::ai::Behaviour::decision(&ai, &session.npcs()[0], &around, &mut NeverFires);
+        assert!(!decision.turns_on_player, "no longer hunting (@0x8d6b7)");
     }
 
     #[test]

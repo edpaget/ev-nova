@@ -579,4 +579,69 @@ mod tests {
         assert_eq!(session.pilot.missions.get(0), None, "failed");
         assert!(session.take_sounds().contains(&SimSound::CargoStolen));
     }
+
+    /// Every NPC keeps its goal; each think records whether it reads the
+    /// player as boarded.
+    #[derive(Debug, Default)]
+    struct ReadsBoarded(std::cell::RefCell<std::collections::BTreeMap<NpcId, bool>>);
+
+    impl crate::ai::Behaviour for ReadsBoarded {
+        fn decide(
+            &self,
+            npc: &crate::traffic::npc::Npc,
+            around: &crate::ai::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> crate::ai::Goal {
+            let boarded = around.player.is_some_and(|player| player.boarded);
+            self.0.borrow_mut().insert(npc.id, boarded);
+            npc.goal
+        }
+    }
+
+    #[test]
+    fn a_higher_slots_think_reads_the_player_boarded_by_a_lower_pirates_dock_that_tick() {
+        // The dock start's +0xb9 = 1 (@0x86fc7) is the pirate's own low
+        // level's, and its line work settles at its slot.
+        let catalog = catalog_of(vec![]);
+        let (mut session, pirate) = plundering(&catalog, 20);
+        // Its armour low, so it stays disabled through its own pass.
+        session.pilot.reserves.armor.now = 1.0;
+        session.pilot.reserves.shield.now = 0.0;
+        let at = session.ship.player;
+        let npc = session.space.npc_mut(pirate).expect("here");
+        npc.goal = crate::ai::Goal::Plunder {
+            ship: ShipRef::Player,
+            hopeless: false,
+        };
+        npc.target = Some(ShipRef::Player);
+        npc.state.position = at.position;
+        npc.state.velocity = at.velocity;
+        npc.docking = Some(Docking {
+            ship: ShipRef::Player,
+            sub: DockSub::Dock,
+        });
+        npc.ai_wait = 0;
+        // A box of 210 for the high level's sub 0xf, and no search under
+        // way, which would stop it instead.
+        npc.hull.class_turn = 3.0;
+        npc.lost_sight = crate::ai::lost_sight::SearchTimer::default();
+        let pirate_berth = npc.berth;
+        let mut watcher = crate::testkit::npc(0, crate::stats::ShipStats::new(FAST, &[]));
+        watcher.state.position = at.position + crate::geometry::Vec2::new(-3000.0, 0.0);
+        let above = session.space.traffic.add_npc_at(watcher, pirate_berth + 3);
+        assert!(!session.player_boarded());
+        let reads = ReadsBoarded::default();
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &reads,
+            crate::Rules::default(),
+            &mut Draws::of(&[0; 16]),
+        );
+        assert!(session.player_boarded(), "docked");
+        let seen = reads.0.into_inner();
+        assert!(!seen[&pirate], "its own think came first");
+        assert!(seen[&above], "boarded at the pirate's slot");
+    }
 }

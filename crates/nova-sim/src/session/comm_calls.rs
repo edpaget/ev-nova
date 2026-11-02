@@ -79,14 +79,17 @@
 //! later slot's line replaces an earlier one's. The traffic queues all of
 //! it at each ship's berth (see `nova_sim::traffic::on_line`), the
 //! refuel note among it (see `nova_sim::traffic::refuel_dock`), and
-//! [`Session::settle_line_queue`] settles it after `_HandlePlayer`'s part
-//! of the frame (the propulsion repair, the sabotage, and the eject in
-//! the player's display step), so their lines come before every call, as
-//! the original's do, and the scans' law is at hand: in
-//! [`Session::game_work`] after `_AIDispatch`'s loop
-//! (`Session::dispatch_npcs`), the fighters launched and thinking in it
-//! among the slots, and again after the ship loop for the docks and
-//! repairs the fly half made:
+//! [`Session::settle_line_through`] settles each slot's work as that
+//! slot's run of `_AIDispatch`'s loop ends (`Session::dispatch_npcs`), a
+//! fighter launched in it at its own slot, so the next slot's think reads
+//! the legal record its scan wrote and the reinforcement clock its call
+//! started. All of it comes after `_HandlePlayer`'s part of the frame (the
+//! propulsion repair, the sabotage, and the eject in the player's display
+//! step), so their lines come before every call, as the original's do, and
+//! the scans' law is at hand; a pirate's dock with the player starts at
+//! its slot too (the traffic's `dispatch_leave`). [`Session::settle_line_queue`]
+//! settles what is left after the loop, and again after the ship loop for
+//! the repairs the fly half completed:
 //!
 //! - an earlier slot's attack quote, scan line, stolen line, refuel or
 //!   repair note keeps a later slot's distress call and pre-scan hail
@@ -98,7 +101,7 @@
 //! - The reinforcement clock ticks after the frame's calls, as
 //!   `_HandleReinforcements` (@0x44504) runs after the `_AIDispatch` loop
 //!   (@0x4429d), so on a frame whose line work is queued its tick is held
-//!   too, and runs right after it settles: a `ReinfTime` 1 call's fleet
+//!   too, and runs right after the loop's last settles: a `ReinfTime` 1 call's fleet
 //!   still arrives in its frame, and the frame's announcement still
 //!   follows its calls and refuel note.
 //!
@@ -118,7 +121,7 @@
 //! after the loop, so it stays with [`Session::tick_quotes`].
 //!
 //! Two orders are left out, each in
-//! rdm:phase/play-feel-6-followups/phase-19-quotes-after-the-loop-against-the-docks-lines:
+//! rdm:phase/npc-ai/phase-18-quotes-after-the-loop-against-the-docks-lines:
 //! a quote from before the loop lands after the frame's fleet arrival line
 //! ([`Session::say_quotes_before_the_line`] follows `announce_fleets`),
 //! where the collision passes come before `_EnterMoreShips` @0x44237 and
@@ -215,40 +218,67 @@ impl Session {
         }
     }
 
-    /// Settles the frame's work on the message line
-    /// ([`Traffic::take_on_line`](crate::traffic::Traffic::take_on_line)),
-    /// in slot order: each think's attack quote
-    /// ([`Session::say_attack_quote`]); each scan of the player
-    /// ([`Session::scanned_by`]), convicting by `law`; each call; each
-    /// pirate's or repairer's deed
-    /// ([`Session::answer_pirate`]); and each refuel's note, drawing on
-    /// `chance`, so an earlier slot's line keeps a later slot's call off
-    /// as the original's does (see the module docs). Then the
-    /// reinforcement clock's tick held behind them runs, if one was (see
-    /// the `reinforcements` module). Nothing settles while the player is
-    /// landed.
+    /// Settles the frame's work on the message line left after
+    /// `_AIDispatch`'s loop ([`Session::settle_line_through`] of it all):
+    /// what the thinks' runs did not settle, and the fly half's repairs.
+    /// Then the reinforcement clock's tick held behind them runs, if one
+    /// was (see the `reinforcements` module), as `_HandleReinforcements`
+    /// comes after the loop (@0x44504). Nothing settles while the player
+    /// is landed.
     ///
-    /// *Ordering against the original.* The plunder's cargo, credits and
-    /// mission failures and the repair's armour settle here, after the
-    /// loop, where the original carries them out inside it. All of it is
-    /// later in the pass than the loop, but before the shots, the frame's
-    /// drawing and any dialog, landing, jump or save, so no boundary is
-    /// crossed.
-    ///
-    /// The pass settles it jumping or not; each scan is held past the
-    /// warp's lead-in by `_ScanPlayer`'s jump-timing check
-    /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
-    /// the think that queued it to its pass's settling, so it settles
-    /// before the frame is drawn. In the warp the view steps the session only
-    /// while its lead-in lasts, and the arrival comes after its last step,
-    /// so work queued in the lead-in settles before the arrival too. Work
-    /// the arrival would cut off is dropped with the system's traffic, as
-    /// the original's would be held.
+    /// *Ordering against the original.* The repair's armour and its note
+    /// settle here, after the ship loop, where the original carries them
+    /// out inside the AI loop's low level (@0x86ef4). All of it is later in
+    /// the pass than the loop, but before the frame's drawing and any
+    /// dialog, landing, jump or save; a higher slot's think reading the
+    /// repaired armour a frame late is filed in
+    /// rdm:phase/combat-ai-fidelity-cross-roadmap/phase-12-left-out-of-phase-9.
     pub(super) fn settle_line_queue(&mut self, law: &dyn LegalCode, chance: &mut dyn Chance) {
         if self.mode.landed().is_some() {
             return;
         }
-        for work in self.space.traffic.take_on_line() {
+        self.settle_line_through(None, law, chance);
+        if std::mem::take(&mut self.space.reinforcements_held) {
+            self.tick_reinforcements(chance);
+        }
+    }
+
+    /// Settles the frame's work on the message line up to slot `through`
+    /// (all of it with none;
+    /// [`Traffic::take_on_line_through`](crate::traffic::Traffic::take_on_line_through)),
+    /// in slot order: each think's attack quote
+    /// ([`Session::say_attack_quote`]); each scan of the player
+    /// ([`Session::scanned_by`]), convicting by `law`; each call; each
+    /// pirate's or repairer's deed ([`Session::answer_pirate`]); and each
+    /// refuel's note, drawing on `chance`, so an earlier slot's line keeps
+    /// a later slot's call off as the original's does (see the module
+    /// docs). [`Session::dispatch_npcs`] runs it as each slot's run ends,
+    /// so the next slot's think reads the legal record a scan wrote and
+    /// the reinforcement clock a call started, as the original's do inside
+    /// the slot's `_AIDispatch`. Nothing settles while the player is
+    /// landed.
+    ///
+    /// The pass settles it jumping or not; each scan is held past the
+    /// warp's lead-in by `_ScanPlayer`'s jump-timing check
+    /// (@0x7e562-0x7e633; see [`Session::scanned_by`]). The work waits from
+    /// the think that queued it to its slot's settling, so it settles
+    /// before the frame is drawn. The session runs through the whole warp,
+    /// and the arrival comes after its last step, so work queued on any
+    /// pass of the warp settles in that pass, before the arrival.
+    pub(super) fn settle_line_through(
+        &mut self,
+        through: Option<u32>,
+        law: &dyn LegalCode,
+        chance: &mut dyn Chance,
+    ) {
+        if self.mode.landed().is_some() {
+            return;
+        }
+        let work = match through {
+            Some(berth) => self.space.traffic.take_on_line_through(berth),
+            None => self.space.traffic.take_on_line(),
+        };
+        for work in work {
             match work {
                 OnLine::AttackQuote(id) => self.say_attack_quote(id, chance),
                 OnLine::Scan(id) => self.scanned_by(id, law, chance),
@@ -268,9 +298,6 @@ impl Session {
                     );
                 }
             }
-        }
-        if std::mem::take(&mut self.space.reinforcements_held) {
-            self.tick_reinforcements(chance);
         }
     }
 
@@ -432,6 +459,7 @@ mod tests {
         SystemId,
     };
     use crate::chance::NeverFires;
+    use crate::combat::armament::Trigger;
     use crate::combat::{ShipRef, Strike};
     use crate::mission::{ActiveMission, SpecialShips};
     use crate::pilot::Pilot;
@@ -1076,6 +1104,94 @@ mod tests {
         assert_eq!(messages, [smuggling()], "no call for help");
         assert_eq!(sounds, [SimSound::Smuggling], "no snd 154");
         assert_eq!(asked, [100], "the scan's roll, no distress line drawn");
+    }
+
+    /// [`calling_catalog`], with a bay and the fighter it carries, ship
+    /// 144.
+    fn launching_catalog() -> FakePilotCatalog {
+        let mut catalog = calling_catalog();
+        catalog.ship_records.push(ship(144, FAST));
+        catalog.hulls.push(crate::testkit::hull(144));
+        catalog.weapons.push(crate::session::fighters::tests::bay());
+        catalog
+    }
+
+    /// [`Calling`], the carrier launching and every fighter it launches
+    /// calling for help as it decides.
+    #[derive(Debug)]
+    struct FighterCalls(Calling, NpcId);
+
+    impl Behaviour for FighterCalls {
+        fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+            self.decision(npc, around, chance).goal
+        }
+
+        fn decision(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Decision {
+            Decision {
+                comm_call: (npc.ship == crate::session::fighters::tests::VIPER)
+                    .then_some(CommCall::Distress),
+                ..self.0.decision(npc, around, chance)
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                bays: npc.id == self.1,
+                ..Trigger::default()
+            }
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.target
+        }
+    }
+
+    /// A pass with a scanner at slot 1, whose find it is when `finds`, and
+    /// a trader's carrier launching into a slot above it: the messages and
+    /// sounds it raised.
+    fn scanned_around_a_launch(finds: bool) -> (Vec<SimMessage>, Vec<SimSound>) {
+        let catalog = launching_catalog();
+        let mut session = flying(&catalog);
+        if finds {
+            session.pilot.missions.put(0, carrying(140, 4));
+        }
+        scanner(&mut session);
+        let quarry = add(&mut session, None, ShipId(128));
+        let mut ship = crate::session::fighters::tests::carrier_npc(quarry, 2);
+        ship.leader = None;
+        ship.govt = Some(TRADERS);
+        ship.state.position = session.ship.player.position;
+        ship.goal = Goal::Attack(ShipRef::Npc(quarry));
+        ship.target = Some(ShipRef::Npc(quarry));
+        let carrier = session.space.traffic.add_npc(ship);
+        let behaviour = FighterCalls(Calling::default(), carrier);
+        work_with(
+            &mut session,
+            &catalog,
+            Controls::default(),
+            &behaviour,
+            Rules::default(),
+            &mut Draws::of(&[0, 0, 0]),
+        );
+        (session.take_messages(), session.take_sounds())
+    }
+
+    #[test]
+    fn a_lower_slots_scan_line_keeps_a_launched_fighters_call_off() {
+        // The scan's line at slot 1 sets `_commCount` (@0x9024b), and the
+        // fighter, launched in the same frame, reaches its own slot after.
+        let (messages, sounds) = scanned_around_a_launch(true);
+        assert_eq!(messages, [smuggling()], "no call for help");
+        assert!(!sounds.contains(&SimSound::CallForHelp), "no snd 154");
+        // With nothing found, it says its call.
+        let (messages, sounds) = scanned_around_a_launch(false);
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, SimMessage::CallForHelp(_))),
+            "{messages:?}"
+        );
+        assert!(sounds.contains(&SimSound::CallForHelp));
     }
 
     #[test]

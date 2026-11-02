@@ -19,18 +19,22 @@
 //!   ([`Armament::fire_point_defence`](super::armament::Armament::fire_point_defence)).
 //! - A candidate is a homing shot that is not jammed (lost), that point
 //!   defence can target (no `Flags` 0x0080), whose damage is aimed at this
-//!   ship or at its fleet's lead (an escort defends its lead), that is
-//!   within the weapon's [`engagement_range`] and not in a blind spot (see
+//!   ship or at its parent, the ship it follows, one level up (+0x9a read
+//!   directly, @0x3940e-0x39426, with no walk to the root of its chain of
+//!   leads and no test of how the parent stands: an escort defends its
+//!   lead, a fighter its carrier), that is within the weapon's
+//!   [`engagement_range`] and not in a blind spot (see
 //!   [`aim`](super::aim)), its squared distance truncated. The nearest
 //!   wins; of two as near, the one in the lower shot slot, as the shots
 //!   are kept by slot ([`shot_slots`](super::shot_slots)). The original has no
-//!   hostility test: "fired at me or my lead" is the whole rule, so by
+//!   hostility test: "fired at me or my parent" is the whole rule, so by
 //!   default the player's point defence engages its own escort's stray
 //!   missile, and police an allied trader's. By the other reading of
 //!   [`RuleKey::PdHostility`](crate::RuleKey::PdHostility) the
 //!   [`PointDefenceRule`] must also call the firer hostile: Nova's
 //!   [`Allegiance`] calls a missile hostile unless its firer is in the
-//!   defender's fleet, or both have governments that are allies. A shot
+//!   defender's fleet, the root of its chain of leads for both, or both
+//!   have governments that are allies. A shot
 //!   no ship launched ([`Source::Other`]) has no firer to ask about, so it
 //!   is hostile unasked: a stellar's (see
 //!   [`stellar_guns`](super::stellar_guns)), whose firer and fleet are
@@ -104,12 +108,15 @@ use crate::trig;
 /// A point-defence turret's engagement range, per pixel of its range.
 pub const PD_RANGE_FACTOR: f32 = 1.5;
 
-/// A ship, its fleet (the lead it escorts, or itself) and its government.
+/// A ship, its fleet (the root of its chain of leads, or itself) and its
+/// government.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Side {
     /// The ship.
     pub ship: ShipRef,
-    /// Its fleet.
+    /// Its fleet: the root of its chain of leads, which [`Allegiance`]
+    /// reads as membership. What a defender defends is its parent, on
+    /// [`Guard`], not this.
     pub fleet: ShipRef,
     /// Its government, or `None` for an independent ship or the player.
     pub govt: Option<GovtId>,
@@ -164,14 +171,15 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
     }
 }
 
-/// The missile among `shots` that point defence `spec` on `defender`, at
-/// `at` with `hull`, engages, if any (`_HandleShipPointDefense`
+/// The missile among `shots` that point defence `spec` on the defender
+/// `guard`, at `at` with `hull`, engages, if any (`_HandleShipPointDefense`
 /// @0x393b1-0x394bd): a homing shot not jammed ([`Jam::Clear`]), with life
 /// left (not [`Shot::expired`]: the missile loop skips a life of 0.0 or
 /// less, @0x393bb-0x393c7, so one whose move spent it, waiting for its end
 /// of life, is passed over), that point defence can target (no `Flags` 0x0080), whose damage is aimed at the
-/// defender or at its fleet's lead ([`Shot::aimed_at`], shot +0x2a, not
-/// its quarry), within the weapon's [`engagement_range`] and not in a
+/// defender or at its [leader](Guard::leader) ([`Shot::aimed_at`], shot
+/// +0x2a, not its quarry; a leader of none matches nothing, @0x39415),
+/// within the weapon's [`engagement_range`] and not in a
 /// blind spot ([`blind_spot`], by the table's bearing to it,
 /// `_CalcInterceptAngle` @0x39477). Its squared distance is truncated before the range test
 /// and before the nearest test, so a missile under a square pixel past
@@ -189,7 +197,7 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 /// past 2³¹ (about 46,341 pixels) reads in range; here it is not wrapped.
 #[must_use]
 pub fn choose<'a>(
-    defender: Side,
+    guard: Guard,
     at: &ShipState,
     hull: &HullSpec,
     spec: &WeaponSpec,
@@ -204,7 +212,9 @@ pub fn choose<'a>(
     for shot in shots {
         let off = shot.position - at.position;
         let distance = (off.x * off.x + off.y * off.y).trunc();
-        let aimed = shot.aimed_at == Some(defender.ship) || shot.aimed_at == Some(defender.fleet);
+        let aimed = shot
+            .aimed_at
+            .is_some_and(|aim| aim == guard.side.ship || Some(aim) == guard.leader);
         let candidate = shot.weapon.guidance == Guidance::Homing
             && shot.jam == Jam::Clear
             && !shot.expired()
@@ -218,7 +228,7 @@ pub fn choose<'a>(
                 trig::intercept_angle(at.position, shot.position),
             )
             && rule.is_none_or(|rule| {
-                shot.source == Source::Other || rule.hostile(defender, Side::of(shot), govts)
+                shot.source == Source::Other || rule.hostile(guard.side, Side::of(shot), govts)
             });
         if candidate {
             best = Some((shot, distance));
@@ -260,13 +270,18 @@ pub struct Candidate {
     pub attacking: Option<ShipRef>,
 }
 
-/// The defender as point defence's ship branch reads it.
+/// The defender as both of point defence's branches read it ([`choose`],
+/// [`choose_ship`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Guard {
-    /// Its ship.
-    pub ship: ShipRef,
-    /// The ship it follows (the original's +0x9a): the player for a ship
-    /// that escorts the player; none for the player.
+    /// Its side, as [`PointDefenceRule`] asks about it.
+    pub side: Side,
+    /// The ship it follows (the original's +0x9a), one level up: the
+    /// player for a ship that escorts the player; the carrier for a
+    /// fighter, whoever leads the carrier; none for the player. All three
+    /// of `_HandleShipPointDefense`'s reads of it come here: the missile
+    /// branch's aim (@0x3940e), and the ship branch's skip (@0x3952e) and
+    /// fighting test (@0x39641).
     pub leader: Option<ShipRef>,
     /// Whether it threatens the player (`_ExtendedIsThreatToPlayer`);
     /// never the player's own.
@@ -322,9 +337,9 @@ pub fn choose_ship<'a>(
         } else {
             candidate
                 .attacking
-                .is_some_and(|ship| ship == guard.ship || Some(ship) == guard.leader)
+                .is_some_and(|ship| ship == guard.side.ship || Some(ship) == guard.leader)
         };
-        let chosen = target.ship != guard.ship
+        let chosen = target.ship != guard.side.ship
             && candidate.pd_target
             && Some(target.ship) != guard.leader
             && target.condition == Condition::Intact
@@ -554,6 +569,14 @@ mod tests {
         govt: None,
     };
 
+    /// `ESCORT` as point defence reads it, led by `LEAD`.
+    const ESCORT_GUARD: Guard = Guard {
+        side: ESCORT,
+        leader: Some(LEAD),
+        threatens_player: false,
+        scanner: false,
+    };
+
     /// The missile the defender, an escort of `LEAD` at the centre facing
     /// up, picks among `shots` with `quad(flags)` and a hull with
     /// `blind_spots`, by the engine: with no hostility test.
@@ -563,7 +586,7 @@ mod tests {
             ..HullSpec::default()
         };
         choose(
-            ESCORT,
+            ESCORT_GUARD,
             &ShipState::default(),
             &hull,
             &quad(flags),
@@ -642,7 +665,7 @@ mod tests {
         let rule = Recording::default();
         let shots = [own];
         let chosen = choose(
-            ESCORT,
+            ESCORT_GUARD,
             &ShipState::default(),
             &HullSpec::default(),
             &quad(0),
@@ -662,6 +685,52 @@ mod tests {
         assert_eq!(picked(&at(Some(ShipRef::Player)), 0, 0), None);
         assert_eq!(picked(&at(None), 0, 0), None, "at nothing");
         assert_eq!(picked(&[], 0, 0), None);
+    }
+
+    /// The missile `guard`, at the centre facing up, picks among `shots`
+    /// with a Quad, by the engine.
+    fn picked_by(guard: Guard, shots: &[Shot]) -> Option<ShotId> {
+        choose(
+            guard,
+            &ShipState::default(),
+            &HullSpec::default(),
+            &quad(0),
+            shots,
+            None,
+            &Governments::default(),
+        )
+        .map(|shot| shot.id)
+    }
+
+    #[test]
+    fn a_fighter_engages_a_missile_at_its_parent_not_at_its_root() {
+        // Shot +0x2a against +0x9a, one level (@0x3940e-0x39426), where
+        // `_ShipsShareParent` would walk to the root.
+        const ROOT: ShipRef = ShipRef::Npc(NpcId(12));
+        let fighter = Guard {
+            side: Side {
+                fleet: ROOT,
+                ..ESCORT
+            },
+            ..ESCORT_GUARD
+        };
+        let at = |target| [missile(1, 0.0, -100.0, Some(target))];
+        assert_eq!(
+            picked_by(fighter, &at(LEAD)),
+            Some(ShotId(1)),
+            "its carrier"
+        );
+        assert_eq!(picked_by(fighter, &at(ROOT)), None, "its carrier's lead");
+        assert_eq!(picked_by(fighter, &at(DEFENDER)), Some(ShotId(1)), "itself");
+    }
+
+    #[test]
+    fn a_ship_with_no_leader_engages_only_a_missile_at_itself() {
+        // +0x9a of -1 matches nothing (@0x39415-0x3941d).
+        let at = |target| [missile(1, 0.0, -100.0, target)];
+        assert_eq!(picked_by(GUARD, &at(Some(DEFENDER))), Some(ShotId(1)));
+        assert_eq!(picked_by(GUARD, &at(None)), None, "aimed at none");
+        assert_eq!(picked_by(GUARD, &at(Some(ENEMY))), None, "another");
     }
 
     #[test]
@@ -742,7 +811,7 @@ mod tests {
         let ahead = [missile(1, 0.0, -100.0, Some(DEFENDER))];
         let from_turned = |flags| {
             choose(
-                ESCORT,
+                ESCORT_GUARD,
                 &turned,
                 &HullSpec::default(),
                 &quad(flags),
@@ -765,7 +834,7 @@ mod tests {
         let near = [missile(1, 1000.0, 700.0, Some(DEFENDER))];
         let none = Governments::default();
         let chosen = choose(
-            ESCORT,
+            ESCORT_GUARD,
             &at,
             &HullSpec::default(),
             &quad(0),
@@ -780,7 +849,7 @@ mod tests {
         );
         let far = [missile(1, 0.0, 0.0, Some(DEFENDER))];
         let chosen = choose(
-            ESCORT,
+            ESCORT_GUARD,
             &at,
             &HullSpec::default(),
             &quad(0),
@@ -820,7 +889,7 @@ mod tests {
         let peaceful = Recording::default();
         let govts = Governments::new([nova_sim_catalog::fixture::govt(128)]);
         let chosen = choose(
-            ESCORT,
+            ESCORT_GUARD,
             &ShipState::default(),
             &HullSpec::default(),
             &quad(0),
@@ -870,7 +939,10 @@ mod tests {
         let govts = Governments::default();
         let pick = |rule: &dyn PointDefenceRule| {
             choose(
-                player,
+                Guard {
+                    side: player,
+                    ..GUARD
+                },
                 &ShipState::default(),
                 &HullSpec::default(),
                 &quad(0),
@@ -1142,7 +1214,11 @@ mod tests {
     /// The defender, led by no one, no threat to the player, with no
     /// cloak scanner.
     const GUARD: Guard = Guard {
-        ship: DEFENDER,
+        side: Side {
+            ship: DEFENDER,
+            fleet: DEFENDER,
+            govt: None,
+        },
         leader: None,
         threatens_player: false,
         scanner: false,
@@ -1392,7 +1468,11 @@ mod tests {
     #[test]
     fn the_players_point_defence_picks_a_ship_attacking_the_player_but_not_its_escort() {
         let player = Guard {
-            ship: ShipRef::Player,
+            side: Side {
+                ship: ShipRef::Player,
+                fleet: ShipRef::Player,
+                govt: None,
+            },
             ..GUARD
         };
         let at = |attacking| [fighter(ENEMY, 0.0, -100.0, Some(attacking))];

@@ -231,11 +231,11 @@ fn an_npcs_hit_on_an_assister_keeps_its_goal_and_takes_the_attacker_by_ai_type()
 #[test]
 fn the_players_hit_clears_its_victims_travel_stellar() {
     let mut pirate = ship(1, AiType::Warship, 0.0, Goal::Attack(n(3)));
-    pirate.travel_set = true;
+    pirate.travel = Some(crate::catalog::StellarId(150));
     let mut refueller = ship(2, AiType::WimpyTrader, 100.0, Goal::Assist(Help::Refuel));
-    refueller.travel_set = true;
+    refueller.travel = Some(crate::catalog::StellarId(150));
     let mut struck_by_npc = ship(3, AiType::WimpyTrader, 3000.0, Goal::Idle);
-    struck_by_npc.travel_set = true;
+    struck_by_npc.travel = Some(crate::catalog::StellarId(150));
     let ships = answered(
         vec![pirate, refueller, struck_by_npc],
         &[
@@ -244,9 +244,9 @@ fn the_players_hit_clears_its_victims_travel_stellar() {
             strike(n(3), n(1)),
         ],
     );
-    assert!(!ships[0].travel_set, "+0x6c -1, @0x89d47");
-    assert!(!ships[1].travel_set, "+0x6c -1, @0x89d47");
-    assert!(ships[2].travel_set, "an NPC's hit keeps it");
+    assert!(!ships[0].travel_set(), "+0x6c -1, @0x89d47");
+    assert!(!ships[1].travel_set(), "+0x6c -1, @0x89d47");
+    assert!(ships[2].travel_set(), "an NPC's hit keeps it");
 }
 
 #[test]

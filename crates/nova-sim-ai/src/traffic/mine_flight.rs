@@ -42,17 +42,21 @@
 use crate::ai::Goal;
 use crate::ai::mine_orders::{self, MineOrder, THRUST_SLACK};
 use crate::combat::armament::Arsenal;
-use crate::flight::{self, Controls};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::Controls;
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 use crate::traffic::held_burst::Flight;
 use crate::traffic::npc::Npc;
+use crate::traffic::slot_word::Cap;
 use crate::trig;
 use nova_sim_combat::asteroid::Asteroid;
 
 /// `npc`'s flight in [`Goal::Mine`] with `rock` in slot 0, on `handling`,
 /// its lead by the global records `weapons`: order 0x13 or 0x14 (see the
 /// module docs); none for order 1, which the autopilot flies as its stop.
+/// Order 0x14's hold moves the ship at its slot.
 pub(crate) fn mine(
     npc: &mut Npc,
     rock: Option<&Asteroid>,
@@ -60,7 +64,7 @@ pub(crate) fn mine(
     weapons: &Arsenal,
 ) -> Option<Flight> {
     let rock = rock?;
-    let controls = match mine_orders::order(npc, Some(rock)) {
+    Some(match mine_orders::order(npc, Some(rock)) {
         MineOrder::Stop => return None,
         MineOrder::Chase => {
             let wanted = trig::intercept_angle(npc.state.position, rock.position);
@@ -72,41 +76,41 @@ pub(crate) fn mine(
             let wanted = mine_orders::kill_heading(&npc.state, rock, pick);
             steer(npc, wanted, handling, false)
         }
-    };
-    Some(controls.into())
+    })
 }
 
 /// `npc`'s flight in [`Goal::Scoop`], the box it steers to at
 /// `scoop_box`, if any, on `handling`: order 0x15, or order 0 with no box
-/// (see the module docs).
+/// (see the module docs). Order 0x15's brake cuts the velocity at its
+/// slot.
 pub(crate) fn scoop(npc: &mut Npc, scoop_box: Option<Vec2>, handling: &Handling) -> Flight {
     let Some(at) = scoop_box else {
         // Order 0: the low level's own whole heading, no thrust.
         let wanted = trig::whole(npc.state.heading);
-        return steer(npc, wanted, handling, false).into();
+        return steer(npc, wanted, handling, false);
     };
     let wanted = trig::intercept_angle(npc.state.position, at);
-    let controls = steer(npc, wanted, handling, true);
-    if !controls.thrust {
+    let flight = steer(npc, wanted, handling, true);
+    if !flight.controls.thrust {
         let step = mine_orders::scoop_brake_step(handling.accel);
         npc.state.velocity = mine_orders::brake(npc.state.velocity, step);
     }
-    controls.into()
+    flight
 }
 
-/// The controls of `npc` wanting `wanted` on `handling`, thrusting, when
+/// The flight of `npc` wanting `wanted` on `handling`, thrusting, when
 /// `thrusts`, while it faces `wanted` within its turn and
-/// [`THRUST_SLACK`], strictly, as it heads before its turn; it is turned
-/// to `wanted` as `_HandleShip` turns it ([`flight::turn_to`]).
-fn steer(npc: &mut Npc, wanted: i16, handling: &Handling, thrusts: bool) -> Controls {
+/// [`THRUST_SLACK`], strictly, as it heads at its slot, before
+/// `_HandleShip` turns it ([`flight::turn_to`]). Orders 0x13 and 0x15
+/// keep the head's +0x34 (@0x881c4, @0x88583).
+fn steer(npc: &Npc, wanted: i16, handling: &Handling, thrusts: bool) -> Flight {
     let thrust =
         thrusts && mine_orders::faces(npc.state.heading, wanted, handling.turn_rate, THRUST_SLACK);
-    let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
-    Controls {
-        turn,
+    let controls = Controls {
         thrust,
         ..Controls::default()
-    }
+    };
+    Flight::writes(controls, wanted, Cap::Slot)
 }
 
 #[cfg(test)]
@@ -268,11 +272,11 @@ mod tests {
     fn with_slot_0_empty_a_miner_brakes_as_order_1() {
         let start = at(0.0, 0.0, 4.0, -3.0, 10.0);
         let mut mining_ship = miner(Goal::Mine, start);
-        let mut idle = miner(Goal::Idle, start);
+        let mut waiting = miner(Goal::Wait, start);
         for _ in 0..50 {
             flown(&mut mining_ship, Beside::default());
-            flown(&mut idle, Beside::default());
-            assert_eq!(mining_ship.state, idle.state);
+            flown(&mut waiting, Beside::default());
+            assert_eq!(mining_ship.state, waiting.state, "sub 1, a stop");
         }
     }
 

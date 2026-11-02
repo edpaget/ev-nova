@@ -356,6 +356,8 @@ mod tests {
             wage,
             person: Some(PersonId(700)),
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 

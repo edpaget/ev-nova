@@ -1,9 +1,11 @@
 //! The player's fleet as data: each ship in it ([`Escort`]), what a save
 //! keeps of it, and the standing order it follows ([`EscortOrder`]); and
-//! the order word a ship an NPC leads holds ([`OrderWord`]).
+//! the order word every NPC holds ([`OrderWord`]).
 //!
 //! How the escorts fly, take orders and keep formation is
 //! `nova_sim::escort`'s; the pilot keeps the fleet (`nova_sim::Pilot`).
+
+use nova_sim_catalog::voice::VoiceVariant;
 
 use crate::catalog::{PersonId, ShipId};
 use crate::reserves::Reserves;
@@ -41,6 +43,20 @@ pub struct Escort {
     /// sale (+0xbe), which never both stand; none at every join, as
     /// `_SpawnEscort` @0x3ff98 and a capture clear both.
     pub mark: Option<EscortMark>,
+    /// The variant of its voice a save keeps for a carried fighter: the
+    /// original writes every escort's at pilot +0xe92e (`_WritePilotData`
+    /// @0x72717-0x7276c) but reads back only a fighter's (`_LoadPilotData`
+    /// @0x75b65-0x75b85). None for any other escort, which holds its
+    /// slot's word (see `nova_sim_ai::traffic::berth_voices`). Read it
+    /// through [`Escort::saved_voice`], which holds to that rule.
+    pub voice: Option<VoiceVariant>,
+    /// The ship-table slot it holds, which a save writes it from, as
+    /// `_WritePilotData` indexes its tables by slot (@0x725f6-0x72711),
+    /// and which a load packs the fleet by, as `_LoadPilotData` spawns
+    /// the saved ships in slot order (@0x759af-0x75b91; see
+    /// `nova_sim::Session::load`). None for a record from a save older
+    /// than the field, or one never placed.
+    pub berth: Option<u32>,
 }
 
 /// What an escort is marked for at the next shipyard (`_DoEscortLand`
@@ -58,6 +74,14 @@ impl Escort {
     #[must_use]
     pub fn hired(&self) -> bool {
         self.wage.is_some()
+    }
+
+    /// The variant a save writes and a loaded ship takes: a carried
+    /// fighter's alone, as `_LoadPilotData` reads no other (@0x75b65-0x75b85,
+    /// see [`Escort::voice`]).
+    #[must_use]
+    pub fn saved_voice(&self) -> Option<VoiceVariant> {
+        self.voice.filter(|_| self.carried)
     }
 }
 
@@ -77,12 +101,19 @@ pub enum EscortOrder {
     Dock,
 }
 
-/// The order word a ship led by an NPC holds, the original's +0xc90a
-/// (see `nova_sim_ai::ai::escort_orders`): -1 ([`OrderWord::NONE`]) at
-/// every spawn, launch and placement, then whatever its leader's
-/// `_AIIssueEscortOrders` last wrote (1 Defend, 2 Attack, 3 Return, 4
-/// Hold, 0 formation). Kept raw, as a stray beam of `ExitType` 6 steps it
-/// as a cursor and tells -1 from 0. Never saved.
+/// The order word an NPC holds, the original's +0xc90a: -1
+/// ([`OrderWord::NONE`]) at every new spawn and launch, then, under an NPC
+/// leader, whatever its `_AIIssueEscortOrders` last wrote (see
+/// `nova_sim_ai::ai::escort_orders`), or, on a ship the player leads, what
+/// its last think or the player's last command wrote (see
+/// `nova_sim_ai::ai::escort::think_word`, `nova_sim`'s `command_word`
+/// module): 1 Defend, 2 Attack, 3 Return, 4 Hold, 0 formation. A fleet's
+/// placement on an entry keeps the word the ship held, or with no ship
+/// its class's word in the pilot's saved class table, raw (see `nova_sim`'s
+/// `escorts` and `class_table` modules). Kept raw, as a stray beam of
+/// `ExitType` 6 steps it as a cursor, and a command and a think's validity
+/// step tell -1 from 0. An NPC's word is never saved, but the class table
+/// is, in the same words. Held by `nova_sim_ai`'s `Npc::order_word`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderWord(pub i16);
 
@@ -127,6 +158,30 @@ impl Default for OrderWord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An escort of `voice`, carried or not.
+    fn voiced(carried: bool, voice: Option<VoiceVariant>) -> Escort {
+        Escort {
+            ship: ShipId(128),
+            reserves: Reserves::full(1.0, 1.0, 1.0),
+            order: None,
+            carried,
+            wage: None,
+            person: None,
+            mark: None,
+            voice,
+            berth: None,
+        }
+    }
+
+    #[test]
+    fn only_a_carried_fighters_voice_is_its_saved_one() {
+        for voice in [VoiceVariant::Even, VoiceVariant::Odd] {
+            assert_eq!(voiced(true, Some(voice)).saved_voice(), Some(voice));
+            assert_eq!(voiced(false, Some(voice)).saved_voice(), None);
+        }
+        assert_eq!(voiced(true, None).saved_voice(), None);
+    }
 
     #[test]
     fn an_order_word_gives_1_to_4_as_orders_and_anything_else_as_formation() {

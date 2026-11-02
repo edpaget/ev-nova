@@ -3,7 +3,7 @@
 //! disabled half of `_HighLevelAIHandler` (@0x8e873-0x8ea44 in the `EV
 //! Nova` executable, [`high_level`]) and the substates 9, 0xb and 0xf of
 //! `_LowLevelAIHandler` it leaves the pirate in (@0x8769a-0x878f4,
-//! @0x87337-0x87692, @0x86a08-0x8709a, [`fly`]). The docking it keeps from
+//! @0x87337-0x87692, @0x86a08-0x8709a, [`low_level`]). The docking it keeps from
 //! tick to tick, its sub-goal and nav (+0xc8ca, +0x6c), is
 //! [`Npc::docking`].
 //!
@@ -31,12 +31,17 @@
 //!   [`CLOSE_CAP_BOX`] on both axes, it thrusts up to half its top speed
 //!   ([`CLOSE_CAP`]). Closing with a swarm leader (+0xc906 > 0), it first
 //!   takes its swarm leader's glow ([`swarm_branch`], @0x87364-0x873a3);
-//!   its nudge toward a formation slot there is none, as a docking ship
-//!   has no formation parent (+0xc92e) and `_AIMaintainFormation` returns
-//!   at once (@0x84f30). Both fire nothing: they end in
+//!   a docking ship is of AI type 4 or below, so the marking pass leaves
+//!   its formation parent (+0xc92e) alone: with none,
+//!   `_AIMaintainFormation` returns at once (@0x84f30), and with a stale
+//!   one it nudges the ship toward the place it holds
+//!   ([`swarm_low_level::slot_place`]). Both fire nothing: they end in
 //!   `_AIEscortFireUnprovoked`, which does nothing for AI type 4 or below.
 //!   An escort keeping formation flies them too
-//!   ([`formation_flight`](crate::traffic::formation_flight)).
+//!   ([`formation_flight`](crate::traffic::formation_flight)), as a
+//!   returning fighter flies sub 0xb
+//!   ([`return_flight`](crate::traffic::return_flight)) and an inspector
+//!   flies sub 9 ([`autopilot`](crate::traffic::autopilot)).
 //! - **Dock** (sub 0xf, [`DockSub::Dock`]), while it is intact
 //!   (`_LowLevelAIHandler`'s -0x32d flag, `!_IsDisabled`, @0x85240):
 //!   - **Matching** while its velocity differs from the victim's by
@@ -56,21 +61,46 @@
 //!     tick towards it, its speed zeroed, inertialess or not
 //!     (@0x8700f-0x87095, @0x8702d). Inside, its speed is left alone:
 //!     while its AI wait is above [`DOCK_WAIT`] it holds; above none, under
-//!     goal 0xd it would plunder ([`DockOutcome::Completed`],
-//!     @0x86f3c-0x86f93: never reached by a pirate, whose think turns a
-//!     boarded victim's plunder into goal 4 first), under goal 0xf it
+//!     goal 0xd it plunders its nav ([`DockOutcome::Completed`],
+//!     @0x86f3c-0x86f93, the traffic's `dispatch_dock`). A pirate's
+//!     think turns a live boarded victim's plunder into goal 4 first, so
+//!     it gets here once the victim's slot has gone and its think, under
+//!     the dock wait, writes goal 0xd on another ship, the warship's pick
+//!     (see [`pirate`](crate::ai::pirate)): it plunders the record, which
+//!     yields nothing, or a ship that took the berth since. Under goal 0xf it
 //!     repairs its nav, the player or an NPC ([`DockOutcome::Repaired`],
 //!     @0x86d84-0x86f37, see
 //!     [`repair_dock`](crate::traffic::repair_dock)), under goal 4 or 9
 //!     nothing; at none, unless drifting (goal 0xe), it starts the dock
-//!     (@0x86fa4-0x8700a): the victim boarded, its AI wait [`DOCK_WAIT`] +
-//!     `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its velocity the victim's
-//!     ([`DockOutcome::Started`]).
+//!     (@0x86fa4-0x8700a, [`DockOutcome::Started`]): the victim boarded,
+//!     its AI wait [`DOCK_WAIT`] + `Rand(`[`DOCK_WAIT_SPREAD`]`)`, its
+//!     velocity the victim's. The start and the completion are two
+//!     branches of one pass, so a pass that starts a dock completes none.
+//! - **At the slot.** All of this is the low level ([`low_level`]), which
+//!   runs at the ship's own slot of `_AIDispatch`'s loop (the traffic's
+//!   `dispatch_dock`): the start, the completion, the creep, the match and
+//!   the approach's and close's swarm branch are written there, so a
+//!   higher slot's think reads them that tick and a lower one's as the
+//!   tick began. Double time's second pass runs no low level.
 //! - **The turn**: subs 9, 0xb, 0xf and 1 set only the heading they want
 //!   (+0x68; sub 1's is [`leave_flight::stop_wanting`]'s), and
 //!   `_HandleShip` turns the ship to it ([`flight::turn_to`],
 //!   @0x34460-0x3458e): by its turn while it is off by more than that,
-//!   whole degrees, and onto it otherwise.
+//!   whole degrees, and onto it otherwise ([`slot_word::handle_ship`], in
+//!   the fly half, on both passes, by the [`SlotWord`] the low level
+//!   left). The turn is `_ShipTurnRate` read at `_HandleShip`'s own step
+//!   (@0x344b0, @0x34510, @0x34554), after that pass's ion block, with the
+//!   hold as it stands then ([`AtStep`](slot_word::AtStep)); each window
+//!   reads the slot's.
+//! - **The thrust** (@0x34a7b-0x34d93) reads no `_ShipAccelRate`: it is
+//!   the +0x30 the low level wrote at its slot, before the frame's ion
+//!   block, and double time's second pass thrusts by the advance pass's
+//!   again. Its cap is +0x34 as the low level left it ([`Cap`]): the
+//!   head's `_ShipMaxSpeed` at the slot for sub 1, half of it for sub 0xb
+//!   within [`CLOSE_CAP_BOX`], and for sub 9, sub 0xb outside the box and
+//!   sub 0xf's match, which write none, `_ShipMaxSpeed` at the step
+//!   (@0x34a8a-0x34aab), which reads the hold as it stands then and no
+//!   charge.
 //! - While its AI wait runs `_HandleShip` skips its turn and thrust
 //!   (@0x3443f-0x34454, @0x34a54-0x34a72): it moves on at the velocity
 //!   the substate left it, its heading where it was.
@@ -81,9 +111,9 @@
 //! ([`DockSub::Stop`], [`refuel_dock`](crate::traffic::refuel_dock)).
 //! Nothing here plays a sound.
 
-use crate::ai::Goal;
 use crate::ai::fire::off_by;
 use crate::ai::swarm::SwarmLead;
+use crate::ai::{Decision, Goal};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::flight::{self, Controls, FlightRules, ShipState};
@@ -92,11 +122,15 @@ use crate::hail::Help;
 use crate::handling::Handling;
 use crate::inertialess::InertialDampener;
 use crate::traffic::formation_flight;
-use crate::traffic::held_burst::{self, Word};
-use crate::traffic::inertialess::{self, Inertia};
+use crate::traffic::held_burst::Flight;
+use crate::traffic::inertialess::Inertia;
 use crate::traffic::leave_flight;
 use crate::traffic::npc::Npc;
 use crate::traffic::ship_display::GlowCopy;
+#[cfg(doc)]
+use crate::traffic::slot_word;
+use crate::traffic::slot_word::{Cap, SlotWord};
+use crate::traffic::swarm_low_level;
 use nova_sim_base::trig;
 
 /// The turns a docking box is worked out from, less the class's turn (the
@@ -142,7 +176,7 @@ pub const DOCK_WAIT: u32 = 100;
 /// `Rand(80)`: the spread of the dock's wait.
 pub const DOCK_WAIT_SPREAD: u16 = 80;
 /// How many times the docking box an inertialess ship's is (`leal
-/// (,%ebx,4)` @0x8e904).
+/// (,%ebx,4)`: goal 0xd's @0x8e904, goal 0xf's @0x8f786).
 pub const INERTIALESS_BOX: i32 = 4;
 
 /// The docking a pirate keeps from tick to tick: the ship it docks with
@@ -153,6 +187,25 @@ pub struct Docking {
     pub ship: ShipRef,
     /// The substate it flies.
     pub sub: DockSub,
+}
+
+/// Whether `npc` keeps its docking as it takes `decision`, its think's:
+/// under a fight, a plunder or an assist, whose high level then decides
+/// it; under any other goal only while the AI wait skips the high level
+/// that goal's state would rewrite the sub in (@0x8d4b9-0x8d4d2,
+/// [`Npc::high_level_waits_under`]), as sub 0xf and the nav fly on at the
+/// ship docked with whatever the think writes. A think that writes the sub
+/// itself ([`Decision::writes_sub`]) ends it either way.
+#[must_use]
+pub fn kept_by(npc: &Npc, decision: &Decision) -> bool {
+    if decision.writes_sub {
+        return false;
+    }
+    let goal = decision.goal;
+    matches!(
+        goal,
+        Goal::Attack(_) | Goal::Snipe(_) | Goal::Plunder { .. } | Goal::Assist(_)
+    ) || npc.high_level_waits_under(goal)
 }
 
 /// A docking's substate.
@@ -180,6 +233,19 @@ pub fn dock_box(class_turn: f32) -> i32 {
     side
 }
 
+/// The box `side`, [`INERTIALESS_BOX`] times as wide when `npc` flies
+/// inertialess, a dampener counting as `rule` says: `_ShipIsInertialess`
+/// with no leader, as a plunder and a repair are no formation. The ×4 is
+/// on the truncated integer, so a fractional box truncates first.
+#[must_use]
+pub(crate) fn inertialess_box(npc: &Npc, side: i32, rule: InertialDampener) -> i32 {
+    if npc.hull_inertialess(rule) {
+        side * INERTIALESS_BOX
+    } else {
+        side
+    }
+}
+
 /// What the high level of a plunder of a disabled ship does (see the
 /// module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,16 +265,9 @@ pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool, rule: InertialDampener
     if boarded && npc.ai_wait == 0 {
         return DockStep::GiveUp;
     }
-    let side = dock_box(npc.hull.class_turn);
-    // `_ShipIsInertialess` with no leader: a plunder is no formation.
-    let side = if npc.hull_inertialess(rule) {
-        side * INERTIALESS_BOX
-    } else {
-        side
-    };
     // f32: the box is converted back to a float for the test.
     #[allow(clippy::cast_precision_loss)]
-    let side = side as f32;
+    let side = inertialess_box(npc, dock_box(npc.hull.class_turn), rule) as f32;
     let off = npc.state.position - victim;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
     DockStep::Sub(if within(side) {
@@ -225,16 +284,14 @@ pub fn high_level(npc: &Npc, victim: Vec2, boarded: bool, rule: InertialDampener
 pub enum DockOutcome {
     /// It flies on.
     Flying,
-    /// It started the dock: the victim is boarded, and it waits `wait`.
-    Started {
-        /// The ship it docked with.
-        victim: ShipRef,
-        /// Its AI wait.
-        wait: u32,
-    },
-    /// Docked under goal 0xd with its wait at most [`DOCK_WAIT`]: the
-    /// original plunders here, which no pirate reaches (see the module
-    /// docs).
+    /// Docked with no wait left, it started the dock (@0x86fa4-0x8700a):
+    /// its wait [`DOCK_WAIT`] + `Rand(`[`DOCK_WAIT_SPREAD`]`)` and its
+    /// velocity the victim's. Boarding the victim (+0xb9 = 1, @0x86fc7) is
+    /// its caller's.
+    Started,
+    /// Docked under goal 0xd with its wait at most [`DOCK_WAIT`]: it
+    /// plunders its nav (see the module docs), its caller's
+    /// ([`plunder::plunder`](crate::traffic::plunder::plunder)).
     Completed,
     /// Docked under goal 0xf (a repair of the player) with its wait above
     /// none and at most [`DOCK_WAIT`]: the repair completes
@@ -242,24 +299,29 @@ pub enum DockOutcome {
     Repaired,
 }
 
-/// Flies `npc` one tick of its docking with a victim at `victim`, on
+/// `npc`'s low level of its docking with a victim at `victim`, on
 /// `handling` under `flight` (an inertialess ship as the autopilot flies
 /// one, see [`inertialess`](crate::traffic::inertialess)), with `swarm`
-/// its swarm lead, the dock's wait rolled on `chance` (see the module
-/// docs). It flies nothing without a docking.
-pub fn fly(
+/// its swarm lead, rolling a dock's wait on `chance` (see the module
+/// docs): its writes to its own velocity, speed and place (matching, the
+/// creep, the start), the word it leaves `_HandleShip`
+/// ([`slot_word::handle_ship`]), and what became of the docking. It runs
+/// at the ship's own slot of `_AIDispatch`'s loop (the traffic's
+/// `dispatch_dock`). With no docking it sets nothing.
+pub fn low_level(
     npc: &mut Npc,
     victim: &ShipState,
     handling: &Handling,
     flight: FlightRules,
     swarm: Option<SwarmLead>,
     chance: &mut (impl Chance + ?Sized),
-) -> DockOutcome {
-    let Some(docking) = npc.docking else {
-        return DockOutcome::Flying;
-    };
+) -> (SlotWord, DockOutcome) {
     // A plunderer holds no formation goal, so the sight is moot.
     let inertia = Inertia::of(npc, Some(victim), true, flight);
+    let Some(docking) = npc.docking else {
+        let inertia = Inertia::of(npc, None, true, flight);
+        return (SlotWord::none(npc, handling, inertia), DockOutcome::Flying);
+    };
     let (controls, flown, wanted, outcome) = match docking.sub {
         DockSub::Stop => {
             let (controls, flown, wanted) =
@@ -267,53 +329,51 @@ pub fn fly(
             (controls, flown, wanted, DockOutcome::Flying)
         }
         DockSub::Dock => {
-            let (controls, wanted, outcome) =
-                dock(npc, (docking.ship, victim), handling, inertia, chance);
+            let (controls, wanted, outcome) = dock(npc, victim, handling, inertia, chance);
             (controls, *handling, wanted, outcome)
         }
         sub => {
             let close = sub == DockSub::Close;
             if close {
-                swarm_branch(npc, swarm, None, handling);
+                let slot = swarm_low_level::slot_place(npc, flight);
+                swarm_branch(npc, swarm, slot, handling);
             }
             let (controls, flown, wanted) = approach(npc, victim, handling, close);
             (controls, flown, wanted, DockOutcome::Flying)
         }
     };
-    if npc.ai_wait > 0 {
-        match inertia {
-            Inertia::Inertial => npc.state.position = npc.state.position + npc.state.velocity,
-            Inertia::Inertialess { .. } => inertialess::drift(npc, &flown),
-        }
-    } else {
-        let turn = flight::turn_to(&mut npc.state, wanted, handling.turn_rate);
-        let controls = Controls { turn, ..controls };
+    // Sub 1 keeps the head's +0x34; closing within the box writes half
+    // the slot's, lowering what it flies by; every other thrust here
+    // writes none.
+    let flight = if docking.sub == DockSub::Stop {
         // The refuel's stop is sub 1, which leaves +0x34 alone: its brake
         // bursts an owed burst out.
-        let word = if docking.sub == DockSub::Stop {
-            Word::stop(controls, &flown, inertia)
-        } else {
-            Word::Writes
-        };
-        held_burst::step(npc, &flown, controls, flight, inertia, word);
-    }
-    outcome
+        Flight::stop(controls, &flown, inertia, wanted)
+    } else {
+        let halved = flown.max_speed < handling.max_speed;
+        let cap = if halved { Cap::Slot } else { Cap::Step };
+        Flight::writes(controls, wanted, cap).by(flown)
+    };
+    (SlotWord::of(flight, handling, inertia), outcome)
 }
 
-/// Sub 0xb's swarm branch (@0x87364-0x873a3), before it steers: with a
-/// swarm leader (+0xc906 > 0, [`Npc::swarm_leader`]), `npc` is nudged
-/// toward its formation slot at `slot`, when it has one, by its thrust on
-/// `handling` (`_AIMaintainFormation(ship, 0)`,
-/// [`formation_flight::maintain`]), and takes the glow of its swarm
-/// leader, `swarm`'s, when that ship is there (the original reads
-/// whatever ship holds the slot). Nothing without a swarm leader.
+/// The swarm branch of subs 5, 7, 0xb and 0x11 (@0x85c87-0x85cbf,
+/// @0x867e0-0x86818, @0x87364-0x873a3, @0x8660b-0x8663d): with a swarm
+/// leader (+0xc906 above 0, tested signed, `testw; jle`,
+/// [`Npc::swarm_leader`]), `npc` is nudged toward its formation slot at
+/// `slot`, when it has one, by its thrust on `handling`
+/// (`_AIMaintainFormation(ship, 0)`, [`formation_flight::maintain`]), and
+/// takes the glow of its swarm leader, `swarm`'s, when that ship is there
+/// (the original reads whatever ship holds the slot). Nothing with a word
+/// of 0 or none. Sub 0xb runs it before it steers (see
+/// [`swarm_low_level`](crate::traffic::swarm_low_level) for the others).
 pub(crate) fn swarm_branch(
     npc: &mut Npc,
     swarm: Option<SwarmLead>,
     slot: Option<Vec2>,
     handling: &Handling,
 ) {
-    if npc.swarm_leader.is_none() {
+    if npc.swarm_leader.is_none_or(|word| word == 0) {
         return;
     }
     if let Some(slot) = slot {
@@ -404,14 +464,16 @@ pub(crate) fn mismatched(gap: Vec2) -> bool {
     off(gap.x) || off(gap.y)
 }
 
-/// Sub 0xf (see the module docs) of a docking with `ship` at `victim`,
-/// flown as `inertia` says: the controls but the turn, the heading it
-/// wants (+0x68, which `_HandleShip` turns it to, [`flight::turn_to`]),
-/// and what became of the docking, its velocity, speed and AI wait set
-/// as the substate sets them.
+/// Sub 0xf (see the module docs) of a docking with the ship at `victim`,
+/// flown as `inertia` says, rolling a dock's wait on `chance`: the
+/// controls but the turn, the heading it wants (+0x68, which `_HandleShip`
+/// turns it to, [`flight::turn_to`]), and what became of the docking, its
+/// velocity and speed set as the substate sets them. Its completion and
+/// its start are one pass's two branches: the completion needs a wait in
+/// (0, [`DOCK_WAIT`]] (@0x86d54-0x86d6d), the start none (@0x86f98-0x86f9e).
 fn dock(
     npc: &mut Npc,
-    (ship, victim): (ShipRef, &ShipState),
+    victim: &ShipState,
     handling: &Handling,
     inertia: Inertia,
     chance: &mut (impl Chance + ?Sized),
@@ -452,14 +514,22 @@ fn dock(
         1.. if matches!(npc.goal, Goal::Plunder { .. }) => DockOutcome::Completed,
         1.. if npc.goal == Goal::Assist(Help::Repair) => DockOutcome::Repaired,
         1.. => DockOutcome::Flying,
+        // Unless drifting (goal 0xe, @0x86fa7-0x86faf).
         0 if npc.goal == Goal::Drift => DockOutcome::Flying,
         0 => {
-            let wait = DOCK_WAIT + u32::from(chance.roll(DOCK_WAIT_SPREAD));
-            npc.ai_wait = wait;
-            DockOutcome::Started { victim: ship, wait }
+            start(npc, victim, chance);
+            DockOutcome::Started
         }
     };
     (controls, wanted, outcome)
+}
+
+/// `npc` starts its dock with the ship at `victim`: its wait 100 +
+/// `Rand(80)` (@0x86fcf-0x86fea), rolled on `chance`, and its velocity the
+/// victim's (@0x86ff1-0x87007). The victim's boarded flag is its caller's.
+fn start(npc: &mut Npc, victim: &ShipState, chance: &mut (impl Chance + ?Sized)) {
+    npc.ai_wait = DOCK_WAIT + u32::from(chance.roll(DOCK_WAIT_SPREAD));
+    npc.state.velocity = victim.velocity;
 }
 
 #[cfg(test)]
@@ -471,7 +541,8 @@ mod tests {
     use crate::inertialess::InertialDampener;
     use crate::stats::ShipStats;
     use crate::traffic::fixture::npc;
-    use nova_sim_base::fixture::{Draws, FAST, Scripted};
+    use crate::traffic::slot_word::{AtStep, handle_ship};
+    use nova_sim_base::fixture::{FAST, Scripted};
 
     const VICTIM: ShipRef = ShipRef::Npc(NpcId(9));
 
@@ -550,16 +621,76 @@ mod tests {
         );
     }
 
-    /// `ship` flown one tick at `victim`, and what became of it.
-    fn flown(mut ship: Npc, victim: &ShipState, rolls: &[u16]) -> (Npc, DockOutcome) {
-        let outcome = fly(
-            &mut ship,
-            victim,
-            &HANDLING,
-            FlightRules::default(),
-            None,
-            &mut Scripted::rolling(rolls),
+    /// `ship`'s whole tick of its docking at `victim`, its swarm lead
+    /// `swarm`: its low level at its slot, then `_HandleShip`'s turn and
+    /// thrust, a dock's wait rolling 0. What became of the docking.
+    fn fly(
+        ship: &mut Npc,
+        victim: &ShipState,
+        handling: &Handling,
+        flight: FlightRules,
+        swarm: Option<SwarmLead>,
+    ) -> DockOutcome {
+        let chance = &mut nova_sim_base::chance::NeverFires;
+        let (flown, outcome) = low_level(ship, victim, handling, flight, swarm, chance);
+        handle_ship(ship, &flown, AtStep::of(handling), flight);
+        outcome
+    }
+
+    #[test]
+    fn the_low_level_starts_or_completes_a_dock_never_both_in_one_pass() {
+        // The completion needs a wait in (0, 100] (@0x86d54-0x86d6d), the
+        // start none (@0x86f98-0x86f9e): a start's wait of 100 is read by
+        // the next pass, not this one.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
+        ship.goal = Goal::Assist(Help::Repair);
+        let pass = |ship: &mut Npc| {
+            let chance = &mut Scripted::rolling(&[0]);
+            low_level(
+                ship,
+                &victim,
+                &HANDLING,
+                FlightRules::default(),
+                None,
+                chance,
+            )
+            .1
+        };
+        assert_eq!(pass(&mut ship), DockOutcome::Started);
+        assert_eq!(ship.ai_wait, DOCK_WAIT, "100 + Rand(80) of 0");
+        assert_eq!(pass(&mut ship), DockOutcome::Repaired, "the next pass");
+        // A plunder's completion, likewise.
+        let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
+        assert_eq!(pass(&mut ship), DockOutcome::Started);
+        assert_eq!(pass(&mut ship), DockOutcome::Completed);
+    }
+
+    #[test]
+    fn handle_ship_flies_the_low_levels_heading_and_thrust_without_matching_again() {
+        // `_HandleShip` turns to +0x68 and thrusts by +0x30 (@0x34460,
+        // @0x34a96); the match's damping is the low level's alone
+        // (@0x86c08-0x86cb2), which double time's second pass doesn't run.
+        let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut ship = pirate(at(50.0, 0.0, 0.0, 3.0, 0.0), DockSub::Dock);
+        let chance = &mut nova_sim_base::chance::NeverFires;
+        let flight = FlightRules::default();
+        let (flown, _) = low_level(&mut ship, &victim, &HANDLING, flight, None, chance);
+        assert_eq!(ship.state.velocity, Vec2::new(0.0, 2.85), "damped");
+        assert_eq!(ship.state.position, Vec2::new(50.0, 0.0), "not moved");
+        handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
+        assert_eq!(ship.state.velocity, Vec2::new(0.0, 2.35), "thrust");
+        handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
+        assert_eq!(
+            ship.state.velocity,
+            Vec2::new(0.0, 2.35 - 0.5),
+            "thrust again, no damping"
         );
+    }
+
+    /// `ship` flown one tick at `victim`, and what became of it.
+    fn flown(mut ship: Npc, victim: &ShipState) -> (Npc, DockOutcome) {
+        let outcome = fly(&mut ship, victim, &HANDLING, FlightRules::default(), None);
         (ship, outcome)
     }
 
@@ -570,14 +701,12 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.0, 0.0, 3.9), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 0.0, "3 whole degrees off: onto it");
         assert!(ship.state.velocity.y < 0.0, "thrust");
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.0, 0.0, 4.0), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.velocity, Vec2::ZERO, "4 is not below 4");
         assert_eq!(ship.state.heading, 1.0, "4 off: it turns by 3");
@@ -589,7 +718,7 @@ mod tests {
         // puts it on the bearing.
         let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
         for sub in [DockSub::Approach, DockSub::Close] {
-            let (ship, _) = flown(pirate(at(0.0, 0.0, 0.0, 0.0, 1.4), sub), &victim, &[]);
+            let (ship, _) = flown(pirate(at(0.0, 0.0, 0.0, 0.0, 1.4), sub), &victim);
             assert_eq!(ship.state.heading, 0.0, "{sub:?}");
         }
         // Near it, keeping its heading, it keeps its whole heading.
@@ -597,7 +726,6 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.0, -2.0, 90.6), DockSub::Approach),
             &near,
-            &[],
         );
         assert_eq!(ship.state.heading, 90.0);
     }
@@ -610,7 +738,6 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.0, -2.0, 90.0), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 90.0);
         assert_eq!(ship.state.velocity, Vec2::new(0.5, -2.0));
@@ -619,7 +746,6 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 2.0, 0.0, 90.0), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 87.0, "turning towards 333");
     }
@@ -635,14 +761,52 @@ mod tests {
         let direction = trig::intercept_angle(Vec2::ZERO, moving.velocity * 100.0);
         assert!((i32::from(direction) - i32::from(bearing)).abs() > VELOCITY_SLACK);
         assert!(i32::from(trig::angular_difference(direction, bearing)) <= VELOCITY_SLACK);
-        let (ship, _) = flown(pirate(moving, DockSub::Approach), &victim, &[]);
+        let (ship, _) = flown(pirate(moving, DockSub::Approach), &victim);
         assert_ne!(ship.state.heading, 180.0, "it corrects");
         // Just right of the bearing too: it keeps its heading.
         let near = at(0.0, 0.0, 0.09, -1.0, 180.0);
         let direction = trig::intercept_angle(Vec2::ZERO, near.velocity * 100.0);
         assert!((i32::from(direction) - i32::from(bearing)).abs() <= VELOCITY_SLACK);
-        let (ship, _) = flown(pirate(near, DockSub::Approach), &victim, &[]);
+        let (ship, _) = flown(pirate(near, DockSub::Approach), &victim);
         assert_eq!(ship.state.heading, 180.0);
+    }
+
+    #[test]
+    fn closing_with_a_stale_parent_and_a_swarm_leader_it_is_nudged_to_the_place_it_holds() {
+        // A plunderer's AI type is 4 or below, so the pass left +0xc92e
+        // as it was (@0x84f30 passes on a parent of 63 or below).
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let close = || {
+            let mut ship = pirate(at(50.0, -50.0, 0.0, 0.0, 90.0), DockSub::Close);
+            ship.swarm_leader = Some(4);
+            ship.form_parent = Some(4);
+            ship.slot_place = Some(Vec2::new(500.0, 500.0));
+            ship
+        };
+        let flown = |mut ship: Npc, flight: FlightRules| {
+            fly(&mut ship, &victim, &HANDLING, flight, None);
+            ship.state.position
+        };
+        let by = HANDLING.accel * crate::escort::FORMATION_NUDGE;
+        assert_eq!(
+            flown(close(), FlightRules::default()),
+            Vec2::new(50.0 + by, -50.0 + by)
+        );
+        // No parent, no nudge, whatever place it holds.
+        let parentless = Npc {
+            form_parent: None,
+            ..close()
+        };
+        assert_eq!(
+            flown(parentless, FlightRules::default()),
+            Vec2::new(50.0, -50.0)
+        );
+        // Nor on an NPC parent's slot, by the other reading.
+        let earlier = FlightRules {
+            npc_formation: crate::flight::NpcFormation::Earlier,
+            ..FlightRules::default()
+        };
+        assert_eq!(flown(close(), earlier), Vec2::new(50.0, -50.0));
     }
 
     #[test]
@@ -662,7 +826,6 @@ mod tests {
                 &HANDLING,
                 FlightRules::default(),
                 Some(lead),
-                &mut Draws::of(&[]),
             );
             assert_eq!(ship.state.position, Vec2::ZERO, "no nudge, no thrust");
             ship.display.drive.glow
@@ -680,15 +843,15 @@ mod tests {
         // the cap still carries past it).
         let start = at(0.0, 0.0, 0.0, -2.0, 0.0);
         let near = at(0.0, -100.0, 0.0, 0.0, 0.0);
-        let (ship, _) = flown(pirate(start, DockSub::Close), &near, &[]);
+        let (ship, _) = flown(pirate(start, DockSub::Close), &near);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, -2.0), "capped at 2");
-        let (ship, _) = flown(pirate(start, DockSub::Approach), &near, &[]);
+        let (ship, _) = flown(pirate(start, DockSub::Approach), &near);
         assert_eq!(
             ship.state.velocity.y, -2.5,
             "sub 9 has no cap but its top speed"
         );
         let far = at(0.0, -100.5, 0.0, 0.0, 0.0);
-        let (ship, _) = flown(pirate(start, DockSub::Close), &far, &[]);
+        let (ship, _) = flown(pirate(start, DockSub::Close), &far);
         assert_eq!(ship.state.velocity.y, -2.5);
     }
 
@@ -696,11 +859,7 @@ mod tests {
     fn docking_it_turns_against_its_velocity_off_the_victims_and_thrusts_within_a_turn_and_one() {
         let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
         // 3 apart going down: it wants to face up (0), facing it.
-        let (ship, _) = flown(
-            pirate(at(50.0, 0.0, 0.0, 3.0, 0.0), DockSub::Dock),
-            &victim,
-            &[],
-        );
+        let (ship, _) = flown(pirate(at(50.0, 0.0, 0.0, 3.0, 0.0), DockSub::Dock), &victim);
         assert_eq!(ship.state.heading, 0.0);
         assert_eq!(
             ship.state.velocity,
@@ -708,17 +867,12 @@ mod tests {
             "damped by x's 0 to 2.85, then thrust"
         );
         // 2 apart on y, 0 on x: damped to 0.95 of it before thrust.
-        let (ship, _) = flown(
-            pirate(at(50.0, 0.0, 0.0, 2.0, 0.0), DockSub::Dock),
-            &victim,
-            &[],
-        );
+        let (ship, _) = flown(pirate(at(50.0, 0.0, 0.0, 2.0, 0.0), DockSub::Dock), &victim);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.9 - 0.5));
         // Both axes above 1.75: no damping.
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 2.0, 2.0, 130.0), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 127.0, "turning to 315");
         assert_eq!(
@@ -734,13 +888,11 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 1.524, 0.0, 0.0), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.velocity, victim.velocity, "aligned below 0.525");
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 1.0, 0.53, 0.0), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_ne!(ship.state.velocity, victim.velocity, "matching");
     }
@@ -751,7 +903,6 @@ mod tests {
         let (ship, outcome) = flown(
             pirate(at(0.0, 10.0, 0.5, 0.2, 10.0), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_eq!(outcome, DockOutcome::Flying);
         assert_eq!(ship.state.heading, 12.0, "2 off: onto 12");
@@ -766,38 +917,48 @@ mod tests {
 
     #[test]
     fn inside_3_with_no_wait_it_starts_the_dock_for_100_to_179_ticks() {
+        // @0x86fa4-0x8700a, at its slot of the AI loop.
         let victim = at(0.0, 0.0, 0.5, 0.0, 0.0);
         for (roll, wait) in [(0, 100), (79, 179)] {
-            let (ship, outcome) = flown(
-                pirate(at(3.0, -3.0, 0.5, 0.0, 0.0), DockSub::Dock),
-                &victim,
-                &[roll],
-            );
-            assert_eq!(
-                outcome,
-                DockOutcome::Started {
-                    victim: VICTIM,
-                    wait
-                }
-            );
+            let mut ship = pirate(at(3.0, -3.0, 0.5, 0.0, 0.0), DockSub::Dock);
+            let mut chance = Scripted::rolling(&[roll]);
+            let flight = FlightRules::default();
+            let (flown, outcome) =
+                low_level(&mut ship, &victim, &HANDLING, flight, None, &mut chance);
+            assert_eq!(outcome, DockOutcome::Started, "inside 3, matched, no wait");
+            assert_eq!(chance.sides_asked, [DOCK_WAIT_SPREAD]);
             assert_eq!(ship.ai_wait, wait);
-            assert_eq!(
-                ship.state.position,
-                Vec2::new(3.5, -3.0),
-                "moved on, its turn and thrust skipped"
-            );
+            assert_eq!(ship.state.velocity, victim.velocity, "@0x86ff1-0x87007");
+            // `_HandleShip` then moves it on, its turn and thrust skipped.
+            handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
+            assert_eq!(ship.state.position, Vec2::new(3.5, -3.0), "{roll}");
         }
-        let mut chance = Scripted::rolling(&[0]);
-        let mut ship = pirate(at(0.0, 0.0, 0.5, 0.0, 0.0), DockSub::Dock);
-        fly(
-            &mut ship,
-            &victim,
-            &HANDLING,
-            FlightRules::default(),
-            None,
-            &mut chance,
-        );
-        assert_eq!(chance.sides_asked, [DOCK_WAIT_SPREAD]);
+    }
+
+    #[test]
+    fn a_dock_starts_only_at_sub_0xf_matched_inside_3_with_no_wait_and_not_drifting() {
+        // Whether it flies intact is its caller's (`plunder::dock_low_level`).
+        let victim = at(0.0, 0.0, 0.5, 0.0, 0.0);
+        let starting = |change: &dyn Fn(&mut Npc)| {
+            let mut ship = pirate(at(3.0, -3.0, 0.5, 0.0, 0.0), DockSub::Dock);
+            change(&mut ship);
+            flown(ship, &victim).1 == DockOutcome::Started
+        };
+        assert!(starting(&|_| {}));
+        assert!(!starting(&|ship| ship.docking = None), "no docking");
+        let close = |ship: &mut Npc| {
+            ship.docking = Some(Docking {
+                ship: VICTIM,
+                sub: DockSub::Close,
+            });
+        };
+        assert!(!starting(&close), "sub 0xb");
+        assert!(!starting(&|ship| ship.state.position.x = 3.5), "outside 3");
+        assert!(!starting(&|ship| ship.state.position.y = -3.5), "outside 3");
+        assert!(!starting(&|ship| ship.state.velocity.x = 2.0), "mismatched");
+        assert!(!starting(&|ship| ship.state.velocity.y = 1.0), "mismatched");
+        assert!(!starting(&|ship| ship.ai_wait = 1), "its wait");
+        assert!(!starting(&|ship| ship.goal = Goal::Drift), "goal 0xe");
     }
 
     #[test]
@@ -807,7 +968,7 @@ mod tests {
             let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
             ship.goal = goal;
             ship.ai_wait = wait;
-            flown(ship, &victim, &[]).1
+            flown(ship, &victim).1
         };
         let plunder = Goal::Plunder {
             ship: VICTIM,
@@ -824,10 +985,11 @@ mod tests {
             DockOutcome::Flying,
             "goal 9 completes in its high level"
         );
-        assert!(matches!(
+        assert_eq!(
             docked(Goal::Attack(VICTIM), 0),
-            DockOutcome::Started { .. }
-        ));
+            DockOutcome::Started,
+            "at none it starts, whatever its goal but 0xe"
+        );
     }
 
     #[test]
@@ -837,18 +999,12 @@ mod tests {
             let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.0), DockSub::Dock);
             ship.goal = Goal::Assist(Help::Repair);
             ship.ai_wait = wait;
-            flown(ship, &victim, &[0]).1
+            flown(ship, &victim).1
         };
         assert_eq!(docked(101), DockOutcome::Flying);
         assert_eq!(docked(100), DockOutcome::Repaired);
         assert_eq!(docked(1), DockOutcome::Repaired);
-        assert_eq!(
-            docked(0),
-            DockOutcome::Started {
-                victim: VICTIM,
-                wait: DOCK_WAIT
-            }
-        );
+        assert_eq!(docked(0), DockOutcome::Started, "starts at none");
     }
 
     #[test]
@@ -873,7 +1029,7 @@ mod tests {
         let victim = at(0.0, 0.0, 0.0, 0.0, 0.0);
         let mut ship = pirate(at(50.0, 0.0, 0.0, 2.0, 90.0), DockSub::Dock);
         ship.ai_wait = 150;
-        let (ship, _) = flown(ship, &victim, &[]);
+        let (ship, _) = flown(ship, &victim);
         assert_eq!(ship.state.heading, 90.0);
         assert_eq!(ship.state.velocity, Vec2::new(0.0, 1.9));
         assert_eq!(ship.state.position, Vec2::new(50.0, 1.9));
@@ -881,16 +1037,16 @@ mod tests {
         // put on it.
         let mut ship = pirate(at(1.0, 1.0, 0.0, 0.0, 0.5), DockSub::Dock);
         ship.ai_wait = 150;
-        let (ship, _) = flown(ship, &victim, &[]);
+        let (ship, _) = flown(ship, &victim);
         assert_eq!(ship.state.heading, 0.5);
         // Stopping (sub 1) within its turn of its retro heading, 0: put on
         // it with no wait, and left where it was while the wait runs.
         let stopping = || pirate(at(500.0, 0.0, 0.0, 2.0, 1.5), DockSub::Stop);
-        let (ship, _) = flown(stopping(), &victim, &[]);
+        let (ship, _) = flown(stopping(), &victim);
         assert_eq!(ship.state.heading, 0.0);
         let mut waiting = stopping();
         waiting.ai_wait = 150;
-        let (ship, _) = flown(waiting, &victim, &[]);
+        let (ship, _) = flown(waiting, &victim);
         assert_eq!(ship.state.heading, 1.5);
     }
 
@@ -902,14 +1058,12 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(1000.0, -850.0, 2.0, 0.0, 340.0), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 337.0, "turning towards 333");
         // 250 below it, outside: it turns to the bearing, 0.
         let (ship, _) = flown(
             pirate(at(1000.0, -750.0, 2.0, 0.0, 10.0), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 7.0);
     }
@@ -923,7 +1077,6 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(0.0, 0.0, 0.1, -0.2, 90.0), DockSub::Approach),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 92.0, "onto the gap");
     }
@@ -945,7 +1098,6 @@ mod tests {
                     DockSub::Approach,
                 ),
                 &victim,
-                &[],
             );
             ship.state.heading
         };
@@ -964,7 +1116,6 @@ mod tests {
                 DockSub::Approach,
             ),
             &right,
-            &[],
         );
         assert_eq!(ship.state.heading, 180.0);
     }
@@ -976,20 +1127,17 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 3.0, 0.0, 260.0), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 263.0);
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 3.0, 0.0, 280.0), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 277.0);
         // 1.4 off it: `_HandleShip` puts it on 270.
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 3.0, 0.0, 271.4), DockSub::Dock),
             &victim,
-            &[],
         );
         assert_eq!(ship.state.heading, 270.0);
     }
@@ -1001,7 +1149,6 @@ mod tests {
         let (ship, _) = flown(
             pirate(at(50.0, 0.0, 1.6, 3.0, 90.0), DockSub::Dock),
             &victim,
-            &[],
         );
         let expected = Vec2::new(1.0 + 0.57, 1.0 + 1.9);
         assert!(
@@ -1019,7 +1166,6 @@ mod tests {
             let (ship, _) = flown(
                 pirate(at(50.0, 0.0, 0.0, 2.0, heading), DockSub::Dock),
                 &victim,
-                &[],
             );
             ship.state.velocity.y < 1.89
         };
@@ -1030,19 +1176,12 @@ mod tests {
     #[test]
     fn aligned_it_reads_the_docked_box_from_the_victim_where_it_is() {
         let victim = at(1000.0, -1000.0, 0.5, 0.0, 0.0);
-        let (ship, outcome) = flown(
-            pirate(at(1003.0, -997.0, 0.5, 0.0, 0.0), DockSub::Dock),
-            &victim,
-            &[0],
-        );
-        assert!(matches!(outcome, DockOutcome::Started { .. }), "inside 3");
+        let inside = pirate(at(1003.0, -997.0, 0.5, 0.0, 0.0), DockSub::Dock);
+        let (ship, outcome) = flown(inside, &victim);
+        assert_eq!(outcome, DockOutcome::Started, "inside 3");
         assert_eq!(ship.state.position, Vec2::new(1003.5, -997.0));
-        let (_, outcome) = flown(
-            pirate(at(1003.5, -1000.0, 0.5, 0.0, 0.0), DockSub::Dock),
-            &victim,
-            &[0],
-        );
-        assert_eq!(outcome, DockOutcome::Flying, "outside 3");
+        let outside = pirate(at(1003.5, -1000.0, 0.5, 0.0, 0.0), DockSub::Dock);
+        assert_eq!(flown(outside, &victim).1, DockOutcome::Flying, "outside 3");
     }
 
     /// `ship` on an inertialess hull ([`FAST`]'s, `Flags2` 0x0040).
@@ -1069,7 +1208,7 @@ mod tests {
         let matched = |speed: f32| {
             let mut ship = inertialess(pirate(start, DockSub::Dock));
             ship.speed = speed;
-            let (ship, outcome) = flown(ship, &victim, &[]);
+            let (ship, outcome) = flown(ship, &victim);
             assert_eq!(outcome, DockOutcome::Flying);
             assert_eq!(
                 ship.state.heading, 90.0,
@@ -1104,7 +1243,6 @@ mod tests {
                     ..ship.clone()
                 },
                 &victim,
-                &[],
             );
             assert_eq!(crept.speed, 0.0, "@0x8702d");
             // Inside 3 the dock starts and leaves its speed alone
@@ -1114,8 +1252,8 @@ mod tests {
                 state: at(3.0, -3.0, 0.5, 0.0, 0.0),
                 ..ship
             };
-            let (docked, outcome) = flown(inside, &victim, &[0]);
-            assert!(matches!(outcome, DockOutcome::Started { .. }));
+            let (docked, outcome) = flown(inside, &victim);
+            assert_eq!(outcome, DockOutcome::Started);
             assert_eq!(docked.speed, 2.0);
         }
     }
@@ -1155,19 +1293,171 @@ mod tests {
         );
     }
 
+    /// A pirate approaching a victim 1000 up the screen from the centre,
+    /// heading `heading`, of `IonizeMax` 400 and charged 200 at its slot.
+    fn ionized_approach(heading: f32) -> Npc {
+        let mut ship = pirate(at(0.0, 0.0, 0.0, 0.0, heading), DockSub::Approach);
+        ship.stats.ion.class_capacity = 400.0;
+        ship.ion.charge = 200.0;
+        ship
+    }
+
+    /// `ship`'s low level at the victim 1000 up the screen at its slot,
+    /// its charge `shed` by the frame's ion block after, then
+    /// `_HandleShip`'s turn and thrust by its turn rate and top speed at
+    /// its step: the handling its slot read and the one its step read.
+    fn shed_between(ship: &mut Npc, shed: f32) -> (Handling, Handling) {
+        let victim = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let flight = FlightRules::default();
+        let top = ship.stats.handling.max_speed;
+        let slot = ship.flying_handling(top, flight);
+        let chance = &mut nova_sim_base::chance::NeverFires;
+        let (flown, _) = low_level(ship, &victim, &slot, flight, None, chance);
+        ship.ion.charge -= shed;
+        let step = ship.flying_handling(top, flight);
+        handle_ship(ship, &flown, AtStep::of(&step), flight);
+        (slot, step)
+    }
+
     #[test]
-    fn with_no_docking_it_flies_nothing() {
-        let mut ship = pirate(at(0.0, 0.0, 1.0, 0.0, 0.0), DockSub::Dock);
+    fn handle_ship_turns_by_its_turn_rate_after_the_frames_ion_shed() {
+        // `_HandleShip` reads `_ShipTurnRate` at its own step (@0x344b0,
+        // @0x34510, @0x34554), after its ion block (@0x342b2-0x34421).
+        let mut ship = ionized_approach(90.0);
+        let (slot, step) = shed_between(&mut ship, 200.0);
+        assert!(step.turn_rate > slot.turn_rate, "the shed sped its turn");
+        assert_eq!(ship.state.heading, 90.0 - step.turn_rate);
+    }
+
+    #[test]
+    fn handle_ship_thrusts_by_the_accel_its_low_level_read_before_the_shed() {
+        // Its thrust reads the +0x30 its low level wrote from
+        // `_ShipAccelRate` at its slot (@0x878dc-0x878eb), before the
+        // frame's ion block.
+        let mut ship = ionized_approach(0.0);
+        let (slot, step) = shed_between(&mut ship, 200.0);
+        assert!(step.accel > slot.accel, "the shed raised its thrust");
+        assert_eq!(ship.state.velocity, Vec2::new(0.0, -slot.accel));
+    }
+
+    #[test]
+    fn at_its_step_it_reads_its_turn_rate_after_the_shed_and_its_top_speed_held_and_led() {
+        // `_HandleShip` reads `_ShipTurnRate` after the frame's ion block
+        // (@0x344b0) and `_ShipMaxSpeed` with the hold as it stands then,
+        // times the led speed for a ship the player leads, and no charge
+        // (@0x34aab).
+        use crate::combat::impact::TractorLock;
+        use crate::escort::{EscortDuty, FormationSlot};
+        let flight = FlightRules::default();
+        let mut ship = ionized_approach(0.0);
+        ship.tractor = Some(TractorLock::by(ShipRef::Npc(NpcId(2))));
+        ship.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let held = ship.own_handling();
+        assert!(held.max_speed < ship.class_handling().max_speed, "held");
+        let at_step = AtStep::of_npc(&ship, 1.5, flight, 0.0);
+        assert_eq!(at_step.top_speed, held.max_speed * 1.5);
+        let ionized = ship.flying_handling(held.max_speed, flight);
+        assert!(
+            ionized.turn_rate < flight.handling(held).turn_rate,
+            "ionized"
+        );
+        assert_eq!(at_step.turn_rate, ionized.turn_rate);
+    }
+
+    #[test]
+    fn an_approaching_docker_caps_its_thrust_by_its_top_speed_at_its_step() {
+        // Sub 9 (@0x878e4), sub 0xb outside 100 (@0x87685) and sub 0xf's
+        // match (%edi 0, @0x86b45, @0x86c02) write +0x34 = 0, so
+        // `_HandleShip` caps the thrust by `_ShipMaxSpeed` at its step
+        // (@0x34a8a-0x34aab), which a lock laid since the slot lowers.
+        // Sub 0xb within 100 writes half the slot's (@0x8765d-0x8767b), and
+        // sub 1 leaves the slot's as it was.
+        let flight = FlightRules::default();
+        let chance = &mut nova_sim_base::chance::NeverFires;
+        let mut thrust = |ship: Npc, victim: ShipState, top_speed: f32| {
+            let mut ship = ship;
+            let (flown, _) = low_level(&mut ship, &victim, &HANDLING, flight, None, chance);
+            let at_step = AtStep {
+                top_speed,
+                ..AtStep::of(&HANDLING)
+            };
+            handle_ship(&mut ship, &flown, at_step, flight);
+            ship.state.velocity.y
+        };
+        let far = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let start = at(0.0, 0.0, 0.0, -2.0, 0.0);
+        for sub in [DockSub::Approach, DockSub::Close] {
+            assert_eq!(thrust(pirate(start, sub), far, 4.0), -2.5, "{sub:?}");
+            assert_eq!(
+                thrust(pirate(start, sub), far, 2.0),
+                -2.0,
+                "{sub:?}: capped at 2 by its step"
+            );
+        }
+        let near = at(0.0, -100.0, 0.0, 0.0, 0.0);
+        assert_eq!(
+            thrust(pirate(start, DockSub::Close), near, 8.0),
+            -2.0,
+            "within 100, half its slot's"
+        );
+        // Matching: 0.6 slower down the screen than the victim, damped
+        // to -3.03, then thrust up the screen.
+        let matching = at(50.0, 0.0, 0.0, -3.0, 0.0);
+        let victim = at(0.0, 0.0, 0.0, -3.6, 0.0);
+        let gap = -3.0_f32 - -3.6_f32;
+        let damped = -3.6 + (f64::from(gap) * DAMPING) as f32;
+        assert_eq!(
+            thrust(pirate(matching, DockSub::Dock), victim, 8.0),
+            damped - 0.5
+        );
+        assert_eq!(
+            thrust(pirate(matching, DockSub::Dock), victim, 2.0),
+            damped,
+            "above its step's top speed"
+        );
+        // Sub 1 keeps the head's +0x34, its slot's `_ShipMaxSpeed`
+        // (@0x85200-0x8520d). An inertial brake thrusts against its
+        // velocity, which the soft cap never stops, so an inertialess
+        // one shows it: braking from 3 by half a tick's thrust, under its
+        // slot's 4 and above its step's 2.
+        let mut ship = inertialess(pirate(at(500.0, 0.0, 0.0, 3.0, 0.0), DockSub::Stop));
+        ship.speed = 3.0;
+        let (flown, _) = low_level(&mut ship, &far, &HANDLING, flight, None, chance);
+        let at_step = AtStep {
+            top_speed: 2.0,
+            ..AtStep::of(&HANDLING)
+        };
+        handle_ship(&mut ship, &flown, at_step, flight);
+        assert_eq!(
+            ship.speed,
+            crate::inertialess::BRAKE.mul_add(HANDLING.accel, 3.0),
+            "sub 1: capped by its slot's 4, not its step's 2"
+        );
+    }
+
+    #[test]
+    fn with_no_docking_its_low_level_sets_nothing() {
+        let mut ship = pirate(at(0.0, 0.0, 1.0, 0.0, 0.5), DockSub::Dock);
         ship.docking = None;
         let before = ship.clone();
-        let outcome = fly(
+        let flight = FlightRules::default();
+        let (flown, outcome) = low_level(
             &mut ship,
             &at(0.0, 0.0, 0.0, 0.0, 0.0),
             &HANDLING,
-            FlightRules::default(),
+            flight,
             None,
-            &mut Draws::of(&[]),
+            &mut nova_sim_base::chance::NeverFires,
         );
-        assert_eq!((ship, outcome), (before, DockOutcome::Flying));
+        assert_eq!((&ship, outcome), (&before, DockOutcome::Flying));
+        let inertia = Inertia::of(&ship, None, true, flight);
+        assert_eq!(flown, SlotWord::none(&ship, &HANDLING, inertia));
+        // `_HandleShip` keeps its whole heading and doesn't thrust.
+        handle_ship(&mut ship, &flown, AtStep::of(&HANDLING), flight);
+        assert_eq!(ship.state.heading, 0.0);
+        assert_eq!(ship.state.velocity, Vec2::new(1.0, 0.0));
     }
 }

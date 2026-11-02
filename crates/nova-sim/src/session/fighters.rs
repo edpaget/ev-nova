@@ -9,17 +9,17 @@
 //! right after its carrier's turn in the NPCs' point-defence loop
 //! ([`Session::dispatch_npcs`]), before `_HandleShot`
 //! ([`Session::game_work`]), so each moves on its launch tick. An NPC's
-//! fighter in a slot above its carrier's thinks then and takes its turn
-//! in the rest of the loop, and every later slot's point defence can
-//! choose it, as [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
+//! fighter in a slot above its carrier's is reached as its slot comes,
+//! and every later slot's think and point defence can choose it, as
+//! [`RuleKey::LaunchFrameAi`] reads. `_LaunchFighter` needs
 //! a ship slot free below the reserve it leaves (8 @0x3d648, so none at
 //! 55 NPCs, as [`RuleKey::SpawnReserve`] reads; see [`SPAWN_RESERVE`]):
 //! the player's bay attempts a copy only while one is free, spending,
 //! counting, sounding and reloading nothing for the rest
 //! ([`Space::count_player_berths`], `_FirePlayerWeapon`
-//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as the
-//! traffic counts the free slots as its NPCs fire (see
-//! `nova_sim::traffic`'s room ledger). A fighter whose ship type has no
+//! @0x62c61-0x62c72), and an NPC's launch has its slot already, as each
+//! slot's think reads the slots free as it comes (see `nova_sim::traffic`'s
+//! `launch_room`). A fighter whose ship type has no
 //! record goes back into its bay, a round again. The player's glow bay
 //! lights the weapon glow only for a fighter put in the system.
 //!
@@ -30,9 +30,12 @@
 //!   ([`Session::with_rules`]): by the engine it takes the
 //!   order kept for its class, Return to
 //!   Hangar excepted, and no target (`_LaunchFighter` @0x3dbec, `_EscortAI`
-//!   @0x83ae4-0x83b34); by the other reading, launched while the player
-//!   targets a ship that is not one of its escorts, it attacks that ship
-//!   at once. Launching makes no save due, as firing ammunition does not.
+//!   @0x83ae4-0x83b34), its order word -1 (`_AISetup` @0x3dd5e, @0x7f40c)
+//!   until its first think, so that think's validity step drops a disabled
+//!   target whatever the class's order; by the other reading, launched
+//!   while the player targets a ship that is not one of its escorts, it
+//!   attacks that ship at once, holding Attack's word as a command would
+//!   leave it. Launching makes no save due, as firing ammunition does not.
 //! - **An NPC's fighter** is led by its carrier (+0x9a = the carrier,
 //!   @0x3d866-0x3d870), of the carrier's government, with goal 0 and no
 //!   order of its own (`_AISetup` @0x7f3e8, @0x7f40c), and takes the
@@ -42,9 +45,11 @@
 //!   [`FleetEscortAi`](crate::FleetEscortAi) under the carrier, or by the
 //!   other reading of [`RuleKey::NpcEscortAi`](crate::RuleKey::NpcEscortAi)
 //!   by [`CarriedAi`](crate::CarriedAi). Its side for hits, sparing and
-//!   point defence is still its carrier's lead's: the root of its chain
-//!   of leads (`_ShipsShareParent` @0x7926-0x79c1,
-//!   [`Npc::fleet_among`]).
+//!   [`Allegiance`](crate::combat::defence::Allegiance) is still its
+//!   carrier's lead's: the root of its chain of leads
+//!   (`_ShipsShareParent` @0x7926-0x79c1, [`Npc::fleet_among`]). Its point
+//!   defence defends its carrier, its parent one level up
+//!   (`_HandleShipPointDefense` @0x3940e-0x39426).
 //!
 //! **Every fighter** launches full at a fighter's capacities
 //! ([`RuleKey::FighterCapacity`]) and glides: its AI wait is its bay's
@@ -83,6 +88,7 @@ use crate::combat::ion::Ion;
 use crate::combat::weapon::WeaponSpec;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
+use crate::fleet::OrderWord;
 use crate::flight::ShipState;
 use crate::has_max;
 use crate::hyperspace::JUMP_FUEL;
@@ -197,14 +203,14 @@ impl Session {
         // The glide: +0x4c = the bay's `Count` (@0x3d843-0x3d85b), which
         // its first think ends unless it holds or returns.
         npc.ai_wait = bay.map_or(0, |bay| bay.lifetime);
-        let id = match sortie.carrier {
+        // `_LaunchFighter` rolls its voice, the player's fighter and an
+        // NPC carrier's alike (@0x3d9cc-0x3da3a; see the `voices` module),
+        // before it joins, so its record and its berth take it.
+        npc.voice = Some(self.statics.rolled_variant(npc.ship, &mut *chance));
+        match sortie.carrier {
             ShipRef::Player => Some(self.join_as_fighter(npc, sortie.target)),
             ShipRef::Npc(id) => self.space.join_carrier(npc, id),
-        }?;
-        // `_LaunchFighter` rolls its voice, the player's fighter and an
-        // NPC carrier's alike (@0x3d9cc-0x3da3a; see the `voices` module).
-        self.space.roll_voice(id, &self.statics, &mut *chance);
-        Some(id)
+        }
     }
 
     /// The reach of a fighter docking with `carrier`: its sprite's width,
@@ -243,6 +249,10 @@ impl Session {
                 ShipRef::Player => false,
             });
         let order = if target.is_some() {
+            // Without the word, its first think's validity step would drop
+            // the disabled target this reading keeps (`_LaunchFighter`
+            // leaves -1, @0x3dd5e).
+            npc.order_word = OrderWord::of(Some(EscortOrder::Attack));
             Some(EscortOrder::Attack)
         } else {
             self.space.class_order(npc.class)
@@ -261,6 +271,8 @@ impl Session {
             wage: None,
             person: None,
             mark: None,
+            voice: npc.voice,
+            berth: None,
         };
         let id = self.space.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
@@ -701,7 +713,7 @@ fn fighter(
         led_out: false,
         emerges_from: None,
         visited: None,
-        travel_set: false,
+        travel: None,
         self_repair: kind.self_repair,
         immobile: kind.immobile,
         skill: 1.0,
@@ -722,9 +734,16 @@ fn fighter(
         lost_sight: crate::ai::lost_sight::SearchTimer::Unset,
         swarm_leader: None,
         owed_burst: None,
+        fled_hopeless: None,
+        bursts_own_word: false,
+        fires_on_burst_end: false,
         close_form: false,
+        stopping: false,
         fleet_slot: None,
+        form_parent: None,
+        slot_place: None,
         order_word: crate::fleet::OrderWord::NONE,
+        ordered_by_lead: false,
         marines: kind.marines,
         // `_LaunchFighter` @0x3d8fe.
         pods_left: kind.hull.signed_pod_count,
@@ -744,6 +763,8 @@ fn fighter(
         odds: crate::traffic::odds_cache::STALE,
         no_ai: false,
         kept_escort_ai: false,
+        mission_let_go: false,
+        mission_dropped: false,
         defends: None,
     };
     fighter.independent();
@@ -896,6 +917,14 @@ pub(super) mod tests {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot.outfits.insert(VIPERS, vipers);
         pilot.escorts = escorts;
+        pilot
+    }
+
+    /// `pilot` as saved after flying with its escorts' orders: its class
+    /// table the raw words `table`, in class order, which its escorts
+    /// take as they are placed (see the `class_table` module).
+    pub(in crate::session) fn flown(mut pilot: Pilot, table: [i16; 4]) -> Pilot {
+        pilot.class_orders = table.map(crate::fleet::OrderWord);
         pilot
     }
 
@@ -1340,6 +1369,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
@@ -1557,6 +1588,41 @@ pub(super) mod tests {
         );
         let ai = sitting_ai();
         assert!(shield_drops(&mut session, &catalog, &ai, quarry, 300));
+    }
+
+    #[test]
+    fn by_the_engine_a_fighter_launched_on_an_attack_class_holds_no_word() {
+        // `_AISetup` writes -1 last in `_LaunchFighter` (@0x3dd5e, @0x7f40c).
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        session.command_escorts(EscortGroup::All, EscortCommand::Attack, &mut NeverFires);
+        let id = launch_now(&mut session).expect("launched");
+        let fighter = session.space.npc(id).expect("here");
+        assert_eq!(fighter.escort_order(), Some(EscortOrder::Attack));
+        assert_eq!(fighter.order_word, crate::fleet::OrderWord::NONE);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_fighter_launched_at_a_target_holds_attacks_word() {
+        // That reading gives the launch an Attack as a command would, whose
+        // word is what keeps a disabled target through the next think.
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Bible);
+        let quarry = pirate(&mut session, 0.0, -300.0);
+        let sortie = Sortie {
+            carrier: ShipRef::Player,
+            bay: BAY,
+            ship: VIPER,
+            from: *session.player(),
+            heading: 0.0,
+            target: Some(ShipRef::Npc(quarry)),
+        };
+        let id = session
+            .launch_fighter(&sortie, &mut NeverFires)
+            .expect("launched");
+        let fighter = session.space.npc(id).expect("here");
+        assert_eq!(fighter.target, Some(ShipRef::Npc(quarry)));
+        assert_eq!(fighter.order_word, crate::fleet::OrderWord(2));
     }
 
     #[test]
@@ -1980,6 +2046,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         }
     }
 
@@ -1993,6 +2061,16 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
+        }
+    }
+
+    /// `escort` as its record holds it at `berth`.
+    fn at_berth(berth: u32, escort: Escort) -> Escort {
+        Escort {
+            berth: Some(berth),
+            ..escort
         }
     }
 
@@ -2094,7 +2172,9 @@ pub(super) mod tests {
             None,
             "nothing changed"
         );
-        let mut session = fleet(&catalog, 0, vec![warship(None), out()]);
+        // Saved after flying in formation, each word 0.
+        let saved = flown(pilot(&catalog, 0, vec![warship(None), out()]), [0; 4]);
+        let mut session = flying_by(&catalog, saved, kept_orders());
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires),
             Some(Commanded {
@@ -2168,7 +2248,7 @@ pub(super) mod tests {
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         let ticks = until_docked(&mut session, &catalog, 600);
         assert!(ticks.is_some(), "{:?}", fleet_npcs(&session));
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().escorts(), [at_berth(2, warship(None))]);
         assert_eq!(session.npcs().len(), 1, "their NPCs are gone");
         assert_eq!(
             fleet_npcs(&session)[0]
@@ -2182,8 +2262,40 @@ pub(super) mod tests {
         assert!(!session.take_save_due(), "as rounds are");
     }
 
+    /// Double time's pairs of passes of `session`, each second pass first,
+    /// until the fighters out are `docked` many fewer than `out`, at most
+    /// 600: whether they docked, never on a second pass. That pass runs no
+    /// `_AIDispatch` (@0x44350), and its low level docks a fighter
+    /// (@0x87fef → @0x80404).
+    fn docked_in_double_time(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        out: usize,
+        docked: usize,
+    ) -> bool {
+        (1..=600).any(|_| {
+            session.tick_again(
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            let left = session.pilot().escorts().len();
+            assert_eq!(left, out, "not on the second pass");
+            work_with(
+                session,
+                catalog,
+                Controls::default(),
+                &NovaAi::default(),
+                Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().len() == out - docked
+        })
+    }
+
     #[test]
-    fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
+    fn a_fighter_docking_in_double_time_is_aboard_again_from_an_advance_pass() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
         let id = session.space.escorts.fleet[0].expect("placed");
@@ -2198,16 +2310,8 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
-        let docked = (1..=600).find(|_| {
-            session.tick_again(
-                Controls::default(),
-                &crate::ai::NovaAi::default(),
-                crate::Rules::default(),
-                &mut NeverFires,
-            );
-            session.pilot().escorts().is_empty()
-        });
-        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        let docked = docked_in_double_time(&mut session, &catalog, 1, 1);
+        assert!(docked, "{:?}", fleet_npcs(&session));
         assert_eq!(session.npcs(), []);
         assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
     }
@@ -2250,7 +2354,10 @@ pub(super) mod tests {
         session.command_escorts(EscortGroup::All, EscortCommand::Dock, &mut NeverFires);
         let passes = until_docked_in_game_work(&mut session, &catalog, 600);
         assert!(passes.is_some(), "{:?}", fleet_npcs(&session));
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            session.pilot().escorts(),
+            [at_berth(berth(&session, escort), warship(None))]
+        );
         assert_eq!(
             session.space.escorts.fleet,
             [Some(escort)],
@@ -2261,7 +2368,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_fighter_docking_on_double_times_second_pass_below_another_slot_makes_no_save_due() {
+    fn a_fighter_docking_in_double_time_below_another_slot_makes_no_save_due() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out(), warship(None)]);
         let fighter = session.space.escorts.fleet[0].expect("placed");
@@ -2278,16 +2385,8 @@ pub(super) mod tests {
             &mut NeverFires,
         );
         session.take_save_due();
-        let docked = (1..=600).find(|_| {
-            session.tick_again(
-                Controls::default(),
-                &NovaAi::default(),
-                Rules::default(),
-                &mut NeverFires,
-            );
-            session.pilot().escorts().len() == 1
-        });
-        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        let docked = docked_in_double_time(&mut session, &catalog, 2, 1);
+        assert!(docked, "{:?}", fleet_npcs(&session));
         assert_eq!(
             session.space.escorts.fleet,
             [Some(escort)],
@@ -2373,17 +2472,26 @@ pub(super) mod tests {
             .with(AiType::Warship, Rc::new(Raiding))
     }
 
-    /// [`raiding_ai`] with the ships with an NPC parent raiding too: a
-    /// led carrier keeps whatever goal a test gives it, a snipe among them.
-    fn sniping_ai() -> NovaAi {
-        raiding_ai().with_fleet_escorts(Rc::new(Raiding))
+    /// One [`work_with`] of `session` with every NPC [`Raiding`] alone, so
+    /// a carrier keeps whatever goal a test gives it, a snipe among them,
+    /// with no high level after it: these tests pin the snipe's launches,
+    /// which the AI's attack block would make an attack within the box.
+    fn snipe(session: &mut Session, catalog: &FakePilotCatalog) {
+        work_with(
+            session,
+            catalog,
+            Controls::default(),
+            &Raiding,
+            Rules::default(),
+            &mut NeverFires,
+        );
     }
 
     /// [`raiding_ai`] by the other reading of [`RuleKey::NpcEscortAi`],
     /// the port's earlier routing: the carrier, which escorts its lead,
     /// raids by its type, and its fighters fly
     /// [`CarriedAi`](crate::CarriedAi).
-    fn earlier_raiding_ai() -> NovaAi {
+    pub(in crate::session) fn earlier_raiding_ai() -> NovaAi {
         NovaAi::from_rulebook(&earlier_escorts())
             .with(AiType::Interceptor, Rc::new(Sitting))
             .with(AiType::WimpyTrader, Rc::new(Sitting))
@@ -2630,7 +2738,7 @@ pub(super) mod tests {
             for n in 0..ships - 2 {
                 pirate(&mut session, 1000.0 + n as f32, 1000.0);
             }
-            fight(&mut session, &catalog, &sniping_ai());
+            snipe(&mut session, &catalog);
             (session, raider)
         };
         let (mut full, raider) = sniped(55);
@@ -2686,7 +2794,7 @@ pub(super) mod tests {
         for n in 0..ships - 2 {
             pirate(&mut session, 1000.0 + n as f32, 1000.0);
         }
-        fight(&mut session, catalog, &sniping_ai());
+        snipe(&mut session, catalog);
         (session, raider)
     }
 
@@ -3295,7 +3403,12 @@ pub(super) mod tests {
             fight(&mut session, &catalog, &ai);
         }
         assert_eq!(vipers(&session).len(), 2);
-        session.space.npc_mut(raider).expect("there").goal = Goal::Idle;
+        // The carrier stops attacking where it is, out of its lead's fleet
+        // so it follows no one, at rest so its fighters can reach it.
+        let carrier = session.space.npc_mut(raider).expect("there");
+        carrier.goal = Goal::Idle;
+        carrier.leader = None;
+        carrier.state.velocity = Vec2::ZERO;
         let docked = (0..600).find(|_| {
             fight(&mut session, &catalog, &ai);
             vipers(&session).is_empty()
@@ -3795,7 +3908,7 @@ pub(super) mod tests {
         let mut session = fleet(&catalog, 0, vec![warship(None), out(), dart_out()])
             .with_rules(kept_orders().with_override(RuleKey::FighterRecall, RuleSource::Bible));
         land_now(&mut session).expect("lands");
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().escorts(), [at_berth(1, warship(None))]);
         assert_eq!(
             (session.pilot().owned(VIPERS), session.pilot().owned(DARTS)),
             (1, 1)
@@ -3923,6 +4036,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
         assert!(
@@ -3968,6 +4083,8 @@ pub(super) mod tests {
             wage: None,
             person: None,
             mark: None,
+            voice: None,
+            berth: None,
         };
         let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
         let facts = session.ship.facts(&session.pilot, &session.statics);
@@ -4052,7 +4169,7 @@ pub(super) mod tests {
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().escorts(), [at_berth(2, warship(None))]);
         assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
         session
             .take_off(&catalog, &mut NeverFires)
@@ -4086,7 +4203,11 @@ pub(super) mod tests {
         session
             .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            session.pilot().escorts(),
+            [at_berth(1, warship(None))],
+            "the berth it will take, the fighters gone"
+        );
     }
 
     /// Whether the outfitter sells another Viper to a pilot with `aboard`

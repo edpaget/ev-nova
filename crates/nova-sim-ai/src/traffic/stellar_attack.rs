@@ -30,12 +30,15 @@ use crate::ai::death_star::{self, Band};
 use crate::ai::leave::Leg;
 use crate::catalog::LandingSite;
 use crate::combat::armament::Arsenal;
-use crate::flight::{self, Controls, FlightRules};
+#[cfg(doc)]
+use crate::flight;
+use crate::flight::Controls;
 use crate::handling::Handling;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::held_burst::{self, Word};
+use crate::traffic::held_burst::{Flight, Word};
 use crate::traffic::inertialess::Inertia;
 use crate::traffic::npc::Npc;
+use crate::traffic::slot_word::Cap;
 use crate::traffic::{approach_flight, leave_flight};
 use crate::trig;
 
@@ -43,44 +46,51 @@ use crate::trig;
 /// each tick (the double 0.98 @0xdd988).
 pub const IN_BAND_DRAG: f64 = 0.98;
 
-/// Flies `npc`, attacking a stellar among `sites`, one tick on `handling`
-/// under `flight`, as `inertia` says, its planet weapon's range read from
+/// The low level of `npc`, attacking a stellar among `sites`, one tick on
+/// `handling`, as `inertia` says, its planet weapon's range read from
 /// `weapons` (see the module docs). A stellar no longer among `sites`
 /// brakes it.
-pub fn fly(
+pub(crate) fn low_level(
     npc: &mut Npc,
     sites: &[LandingSite],
     weapons: &Arsenal,
     handling: &Handling,
-    (flight, inertia): (FlightRules, Inertia),
-) -> Outcome {
+    inertia: Inertia,
+) -> Result<Flight, Outcome> {
     let Some((band, site)) = death_star::attack_band(npc, sites, weapons) else {
-        return leave_flight::fly(npc, Leg::Brake, handling, flight, inertia);
+        return leave_flight::low_level(npc, Leg::Brake, handling, inertia);
     };
     if matches!(band, Band::Brake | Band::Aim) {
         // The in-band drag (@0x8faaf-0x8faeb).
         npc.drag_in_doubles(IN_BAND_DRAG);
     }
     match band {
-        Band::Approach => {
-            let (controls, flown) =
-                approach_flight::toward(&mut npc.state, site.position, handling);
-            held_burst::step(npc, &flown, controls, flight, inertia, Word::Writes);
-            Outcome::Flying
-        }
-        Band::RunOut => leave_flight::fly(npc, Leg::RunOut, handling, flight, inertia),
-        Band::Brake => leave_flight::fly(npc, Leg::Brake, handling, flight, inertia),
+        Band::Approach => Ok(approach_flight::flight(&npc.state, site.position, handling)),
+        Band::RunOut => leave_flight::low_level(npc, Leg::RunOut, handling, inertia),
+        Band::Brake => leave_flight::low_level(npc, Leg::Brake, handling, inertia),
         Band::Aim => {
+            // Sub 0x16: the bearing, no thrust (+0x30 the head's 0, +0x34
+            // untouched).
             let bearing = trig::intercept_angle(npc.state.position, site.position);
-            let controls = Controls {
-                turn: flight::turn_to(&mut npc.state, bearing, handling.turn_rate),
-                ..Controls::default()
-            };
-            let word = Word::Keeps { thrust: 0.0 };
-            held_burst::step(npc, handling, controls, flight, inertia, word);
-            Outcome::Flying
+            let flight = Flight::writes(Controls::default(), bearing, Cap::Slot);
+            Ok(flight.doing(Word::Keeps { thrust: 0.0 }))
         }
     }
+}
+
+/// `npc`'s low level attacking a stellar among `sites`, flown at once by
+/// `_HandleShip` on `handling` under the flight rules, as its inertia
+/// says: what became of it, for the tests.
+#[cfg(test)]
+pub(crate) fn fly(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    weapons: &Arsenal,
+    handling: &Handling,
+    (flight, inertia): (crate::flight::FlightRules, Inertia),
+) -> Outcome {
+    let low = low_level(npc, sites, weapons, handling, inertia);
+    crate::traffic::slot_word::fly_low(npc, low, handling, flight, inertia)
 }
 
 #[cfg(test)]
@@ -91,7 +101,7 @@ mod tests {
     use crate::catalog::{HullRecord, ShipId, StellarId, StockWeapon, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::{PLANET_TYPE, WeaponSpec};
-    use crate::flight::ShipState;
+    use crate::flight::{FlightRules, ShipState};
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
     use crate::traffic::npc::Mode;
