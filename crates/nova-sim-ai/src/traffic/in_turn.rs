@@ -13,11 +13,12 @@
 //! ([`Traffic::answer_in_turn`]). Nothing else the flag reads
 //! (@0x3b408-0x3bb74) is written by a reaction. `_DamageShip`'s prologue
 //! reads a plunderer's target and goal too (@0x3a95b-0x3a9a3), but for
-//! the fight's can't-kill, not the flag; the fight reads its
-//! [`Fighter`](crate::combat::Fighter)s as each phase began, a divergence
-//! for two hits inside one phase, filed as rdm phases
-//! play-feel-5-followups/phase-12-cant-kill-reads-plunderer-in-turn and
-//! phase-13-fight-reads-targets-in-turn.
+//! the fight's can't-kill, not the flag. The fight lends its
+//! [`Fighter`](crate::combat::Fighter)s afresh after each answered direct
+//! hit of the collision passes and the beams
+//! ([`hit_turns`](crate::combat::hit_turns)), so a later hit of the same
+//! phase reads what this answer wrote; the reads left are `_HandleShot`'s,
+//! rdm:phase/play-feel-9/phase-11-fight-reads-targets-in-turn.
 //!
 //! Between two `_DamageShip` calls of one pass (the collision passes,
 //! `_HandleShot`, `_HandleBeams`, `_HandleAsteroidHit`,

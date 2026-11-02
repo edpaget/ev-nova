@@ -27,7 +27,7 @@
 //! where the shot is. The walks' places are the only ones that shift: a
 //! blast, a fuse and a stellar read world positions in the original too
 //! (`_CheckShotProximities`, `stellar::met`), so they read them here. The
-//! pass ends the shift (`Combat::hit_pass`).
+//! pass ends the shift (`Combat::hit_stretch`).
 
 use super::Combat;
 use super::ShipRef;

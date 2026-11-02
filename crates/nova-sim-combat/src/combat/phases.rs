@@ -382,6 +382,15 @@ impl Combat {
     /// stopped (the Bible's reading of
     /// [`RuleKey::BeamStellars`](crate::RuleKey::BeamStellars)) hit no ship,
     /// so it runs the asteroid pass too, short of the stellar.
+    ///
+    /// It runs in stretches ([`hit_turns`](super::hit_turns)): it stops
+    /// just after each beam's hit lands and the ship it struck settles
+    /// ([`Stretch::Answer`]), its walk kept for the next stretch, which
+    /// tests the next beam among the ships lent afresh, so a beam reads
+    /// its firer's target, and its can't-kill its firer's and its leader's
+    /// plunder, as the answers of the hits before it left them. The beams'
+    /// moves, stamps and point defence run once, at the first stretch; the
+    /// late steps at the last, which runs to the end ([`Stretch::Done`]).
     pub fn close_tick_in_turn(
         &mut self,
         fighters: &mut [Fighter],
@@ -491,7 +500,7 @@ impl Combat {
     /// deadly stellars' kills (`_HandleGravity` @0x44509,
     /// `_HandleDeadlyStellars` @0x4450e; see [`stellar_hazards`]), which
     /// `_DoPlayGameWork` runs after the ship loop and before
-    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick_in`]), on either pass.
+    /// `_HandleBeams` (@0x4453d, [`Combat::close_tick_in_turn`]), on either pass.
     /// So a ship a deadly stellar kills is out of the beams.
     ///
     /// [`stellar_hazards`]: super::stellar_hazards

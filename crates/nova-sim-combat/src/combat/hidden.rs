@@ -20,7 +20,7 @@
 //!   `Combat::hit_asteroid`): the explosion, the particles, the player's
 //!   blast, and the damage, the break or the push.
 //!
-//! The pass that tests them is the one in the same `test_hits` for a
+//! The pass that tests them is the one in the same collision passes for a
 //! point-defence shot's meeting, whose layer the original collides right
 //! before `_CheckShotProximities` (@0x43fff-0x44015), and the next tick's
 //! for a beam's kill, as `_HandleBeams` is the frame's last step

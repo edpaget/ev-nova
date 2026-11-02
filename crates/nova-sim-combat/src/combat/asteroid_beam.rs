@@ -62,7 +62,7 @@
 //!
 //! # The engine
 //!
-//! [`Combat::close_tick_in`](super::Combat::close_tick_in) runs the pass
+//! [`Combat::close_tick_in_turn`](super::Combat::close_tick_in_turn) runs the pass
 //! for each beam whose ship hit gave nothing, in beam order, on the field
 //! the session lends ([`AsteroidField`]). It destroys an asteroid inline, as
 //! the original does, so a later beam meets the fragments: the remains'

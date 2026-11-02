@@ -17,10 +17,11 @@
 //!    (@0x6d7e6), the klaxon (@0x6f1e4), the eject check (@0x6f22c) and
 //!    its display (@0x43e29), which starts its breakup's countdown or
 //!    explodes it ([`Session::player_display_step`]).
-//! 3. The collision passes (@0x43e70-0x44015), their hits settled and
-//!    answered at once, each in turn, as `_DamageShip`'s reaction block
-//!    runs in them, a shot's hit that starts a ship dying queuing the
-//!    victory of the escort attacking it (`_HandleShipHit`
+//! 3. The collision passes (@0x43e70-0x44015), each direct hit settled
+//!    and answered before the next lands, the fighters lent afresh after
+//!    it, as `_DamageShip`'s reaction block runs in them (see the
+//!    `hit_turns` module), a shot's hit that starts a ship dying queuing
+//!    the victory of the escort attacking it (`_HandleShipHit`
 //!    @0x36c7f-0x36d45).
 //! 4. The advance pass's AI (@0x44223-0x442ae): the escorts' voice
 //!    channel played (`_HandleVoiceSound` @0x44219, see the `voices`
@@ -70,7 +71,8 @@
 //!    (`_HandleReinforcements` @0x44504); then the stellar hazards,
 //!    gravity's pull and the deadly stellars' kills (`_HandleGravity`
 //!    @0x44509, `_HandleDeadlyStellars` @0x4450e), then `_HandleBeams`
-//!    (@0x4453d), its hits settled and answered and the field lent to it, so a beam
+//!    (@0x4453d), each beam's hit settled and answered before the next
+//!    beam is tested (see the `hit_turns` module) and the field lent to it, so a beam
 //!    meets each asteroid where this pass's step left it
 //!    ([`Session::beams_phase`], see the `asteroid_beams` module), then
 //!    what the pass leaves ([`Session::fight_tail`]).
@@ -116,8 +118,11 @@
 //! on the terms the session works out for it. A phase that lands hits is
 //! settled at once ([`Session::settle_landed`]): the player's downing
 //! lines, the pushes, the NPCs' fates, the crimes and kills, and each
-//! strike weighed and answered in turn, the beams' as `_HandleBeams`
-//! answers each beam hit as it lands (@0x4453d). A target that starts breaking up, emerging or cloaked in a
+//! strike weighed and answered in turn. The collision passes and the
+//! beams run in stretches, each stopping after a direct hit, settled and
+//! answered before the fighters are built afresh for the next, as
+//! `_DamageShip` answers each hit as it lands (see the `hit_turns`
+//! module); `_HandleShot`'s hits settle after its phase. A target that starts breaking up, emerging or cloaked in a
 //! phase stays the target through the pass and is let go at the next
 //! pass's head (see the `lost_target` module). What the whole pass leaves
 //! is settled once, after its last phase ([`Session::fight_tail`]).

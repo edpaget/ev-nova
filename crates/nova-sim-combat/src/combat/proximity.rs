@@ -51,7 +51,8 @@
 //!
 //! *Ordering against the original.* Each hit lands as the pass finds it,
 //! a hidden shot's asteroid blast included, before the next slot is
-//! tested.
+//! tested; a live shot's direct hit is answered before its blast, its
+//! sub-munitions and the next slot ([`hit_turns`](super::hit_turns)).
 
 use super::asteroid_walk::{AsteroidField, Struck};
 use super::collision::{Among, WalkTerms};
@@ -73,13 +74,16 @@ enum Turn {
 }
 
 impl Combat {
-    /// The hit pass's proximity pass (see the module docs), among
-    /// `fighters` as `lineup` reads them: every slot held by a shot in
-    /// flight or a hidden one, in ascending order, takes its turn
-    /// ([`Combat::live_turn`], [`Combat::hidden_turn`]) among `stellars`
-    /// and the asteroid field, as the passes have left it, drawing on
-    /// `chance`. Then every hidden shot is let go, as `_HandleShot` frees
-    /// it before any later pass; its slot stays held until then.
+    /// The hit pass's proximity pass (see the module docs) from slot
+    /// `next` on, among `fighters` as `lineup` reads them: every slot held
+    /// by a shot in flight or a hidden one, in ascending order, takes its
+    /// turn ([`Combat::live_turn`], [`Combat::hidden_turn`]) among
+    /// `stellars` and the asteroid field, as the passes have left it,
+    /// drawing on `chance`. It stops just after a live shot's direct hit,
+    /// giving the slot to go on from and what of the hit is still to come
+    /// (its blast and sub-munitions, see the `walk` module). At its end
+    /// every hidden shot is let go, as `_HandleShot` frees it before any
+    /// later pass; its slot stays held until then.
     pub(super) fn proximity_pass(
         &mut self,
         mut next: usize,
@@ -143,11 +147,12 @@ impl Combat {
     /// shot meeting a stellar on its move strikes it
     /// ([`Combat::strike_stellar`]), and goes no further; or else the
     /// first ship in slot order whose reach its fuse is in
-    /// ([`Shot::fused`]) takes its hit at once ([`Combat::land_hit`]), and
-    /// the shot releases its sub-munitions at that ship
-    /// (`_HandleShipHit` @0x36f12-0x36f47), their weapons read from
-    /// `terms`' arsenal and their spread drawn on `chance`, seeking among
-    /// the ships as the pass's earlier hits and its own left them; or else
+    /// ([`Shot::fused`]) takes its direct hit at once
+    /// ([`Combat::land_direct`]), and the turn gives its blast and the
+    /// release of its sub-munitions at that ship (`_HandleShipHit`
+    /// @0x36ec0, @0x36f12-0x36f47), for the next stretch to land after
+    /// the direct hit's answer, seeking among the ships as the pass's
+    /// earlier hits and its own, and their answers, left them; or else
     /// the first active asteroid in slot order its fuse reaches takes its
     /// hit ([`Combat::land_on_asteroid`]), destroyed at once below 0,
     /// drawing on `chance`. The shot is spent on whatever it meets,

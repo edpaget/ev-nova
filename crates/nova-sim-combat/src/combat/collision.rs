@@ -94,7 +94,7 @@
 //! (@0x448ce-0x448d5,
 //! [`Target::disabled`](super::projectile::Target::disabled)). Here each
 //! hit lands through [`Combat::land`] as the walk finds it
-//! ([`Combat::land_hit`]), and each ship struck is read again after it
+//! ([`Combat::land_direct`], [`Combat::land_blast`]), and each ship struck is read again after it
 //! ([`Lineup::refresh`]).
 //!
 //! **The proximity pass** (`_CheckShotProximities` @0x371bc-0x37775)
@@ -152,9 +152,21 @@
 //! life is still its `Count` (@0x3720e-0x3721e), nor tested in the frame
 //! it spawns (its sprite is not shown).
 //!
+//! **Built in play-feel-9 phase 10: each direct hit answered in place.**
+//! `_DamageShip`'s reaction block runs inside the direct hit's
+//! `_DamageShip` (@0x36c7a), before `_HandleShipHit` blasts the ships
+//! around (@0x36ec0) and releases its sub-munitions (@0x36f47), and the
+//! next pair's `_DamageShip` reads the attacker's target and goal live
+//! (@0x3a95b-0x3a9a3). So the walk stops just after each direct hit
+//! ([`Combat::land_direct`]) for the session to answer it, and goes on
+//! among the ships lent afresh: the blast, then the sub-munitions, then
+//! the next pair ([`hit_turns`](super::hit_turns), the `walk` module).
+//!
 //! *Ordering against the original.* The struck ships' conditions settle
-//! after the pass (`Combat::settle_struck`), as nothing in the pass reads
-//! them but whether a ship is destroyed, which no hit there changes.
+//! at each stop and at the pass's end (`Combat::settle_struck`), where
+//! `_DamageShip` settles each as it lands: an asteroid's or a blast's hit
+//! settles at the next stop, as nothing in the pass reads a condition
+//! but whether a ship is destroyed, which no hit there changes.
 
 use super::asteroid_hit::{self, Rock};
 use super::asteroid_walk::{AsteroidField, Shown, Struck, WalkTurn};
@@ -233,8 +245,9 @@ pub(super) struct WalkTerms<'a> {
 pub(super) type Among<'f, 'a, 'l> = (&'f mut [Fighter<'a>], &'f mut Lineup<'l>);
 
 impl Combat {
-    /// The hit pass's collision passes (see [`Combat::hit_pass`] and the
-    /// module docs), among `fighters` as `lineup` reads them, in
+    /// The hit pass's collision passes from where `walk` is (see
+    /// [`Combat::hit_stretch`] and the module docs), among `fighters` as
+    /// `lineup` reads them, in
     /// `_DoPlayGameWork`'s order: the contact passes, a shot layer at a
     /// time in [`SHOT_LAYER_WALK`]'s order, each walking the ships in
     /// [`walk_order`] and, for each, the layer's shots in `entry`'s order
@@ -244,14 +257,15 @@ impl Combat {
     /// layer against the missiles ([`Combat::intercept`]), which meets
     /// none an earlier pass spent; then the proximity pass among
     /// `stellars` and the asteroid field, slot by slot, the hidden shots
-    /// among the live ones ([`Combat::proximity_pass`]). Each hit and its
-    /// blast land as they are found ([`Combat::land_hit`]), and an
-    /// asteroid's blast likewise; an asteroid a hit leaves below 0 is
+    /// among the live ones ([`Combat::proximity_pass`]). Each direct hit
+    /// lands as it is found ([`Combat::land_direct`]), and an asteroid's
+    /// blast likewise; an asteroid a hit leaves below 0 is
     /// destroyed in the field at once, drawing on `chance`. The asteroid
     /// passes visit the asteroids shown as the passes begin ([`Shown`]).
-    /// Each proximity hit releases its sub-munitions in place, their
-    /// weapons read from `terms`' arsenal and their spread drawn on
-    /// `chance`.
+    /// Whether it stopped: just after a direct hit of the contact walk or
+    /// of the proximity pass, `walk` left where the next stretch goes on,
+    /// which lands that hit's blast and, for a proximity hit, releases its
+    /// sub-munitions at its ship first (see the `walk` module).
     ///
     /// The move that spends a shot is never tested against a ship
     /// (`_ShotCanHitShip` @0x447c2, `_CheckShotProximities` @0x371ea), nor

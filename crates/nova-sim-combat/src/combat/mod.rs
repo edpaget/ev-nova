@@ -93,7 +93,7 @@
 //!    [`PointDefenceRule`] which missiles are hostile only by the other
 //!    reading of [`RuleKey::PdHostility`](crate::RuleKey::PdHostility), and
 //!    never of a ship.
-//! 2. The hit pass (`Combat::hit_pass`, [`Combat::test_hits`]): each shot
+//! 2. The hit pass (`Combat::hit_stretch`, [`Combat::test_hits_in_turn`]): each shot
 //!    that moved in the last tick is tested on that move, as the original's next frame tests
 //!    it before `_HandleShot` moves it again; a shot fired since has not
 //!    moved, and is not tested. The pass meets every ship where it is now,
@@ -146,6 +146,13 @@
 //!    past it. Each age read is the one its move left, as the pass comes
 //!    before the shots move again. Sub-munitions released here take their
 //!    first move in step 5.
+//!
+//!    The pass stops just after each direct hit, a contact's or a fuse's,
+//!    before its blast and its sub-munitions, for the session to answer it
+//!    and lend the ships afresh before the walk goes on, as `_DamageShip`'s
+//!    reaction block runs inside `_HandleShipHit` (@0x36c7a): so each
+//!    later hit, its own blast included, reads the ships as that answer
+//!    left them ([`hit_turns`]).
 //!
 //!    2a. Each shot meets the asteroids of the field the session lends the
 //!    tick ([`AsteroidField`]), slot by slot,
@@ -245,7 +252,7 @@
 //!    @0x44509 and `_HandleDeadlyStellars` @0x4450e, [`Combat::hazards`]),
 //!    before every beam step, so a ship a deadly stellar kills is out of
 //!    the beams. Then, in `_HandleBeams` (@0x4453d,
-//!    [`Combat::close_tick_in`]), each beam spends a tick of its life, or
+//!    [`Combat::close_tick_in_turn`]), each beam spends a tick of its life, or
 //!    fades a tick at its end ([`Beam::live`]), one that has ended going
 //!    before it hits or is drawn again. The rest follow their firers
 //!    ([`Beam::follow`]), each from its exit on the frame its firer is
@@ -269,9 +276,12 @@
 //!    Bible's, a planet-type beam meeting a stellar nearer than its ship
 //!    strikes the stellar instead ([`beam_stellar`]). A beam that hits no
 //!    ship, or a mining NPC's, which passes every ship, goes on to the
-//!    asteroids the session lends ([`Combat::close_tick_in`]): it cuts,
+//!    asteroids the session lends ([`Combat::close_tick_in_turn`]): it cuts,
 //!    wears down, breaks, pushes or tractors the one it reaches before the
-//!    next beam is tested ([`asteroid_beam`]).
+//!    next beam is tested ([`asteroid_beam`]). The beams stop after each
+//!    beam's hit for the session to answer it and lend the ships afresh
+//!    before the next beam is tested, as `_HandleBeams` damages the ship
+//!    in its loop (@0x316a1, [`hit_turns`]).
 //!
 //!    Shots, beams and blasts reach a ship breaking up as they do any other
 //!    not destroyed; a hit on it is a [`Strike`] that downs nothing, and
@@ -334,7 +344,7 @@
 //!     `_HandleShip` in step 6 (@0x34424).
 //!
 //! After step 10 each ship's place is kept: the next tick's hit pass meets
-//! each NPC there (`Combat::hit_pass`).
+//! each NPC there (`Combat::hit_stretch`).
 //!
 //! **Frame to tick.** Tick t is the original's frame t
 //! (`_DoPlayGameWork` @0x43de5-0x4453d, drawn after it returns,
@@ -1330,7 +1340,7 @@ pub struct Combat {
     proximity_fuse: ProximityFuse,
     /// Where the player stood as the last tick closed, which the next
     /// tick's contact and point defence's sprites meet it at (see
-    /// `Combat::hit_pass`): `_HandlePlayer` moves it before the collision
+    /// `Combat::hit_stretch`): `_HandlePlayer` moves it before the collision
     /// passes. Every NPC is met where it is, as the original reads each
     /// ship's record live (`_HandleShot`'s blasts @0x3603c-0x3605b).
     player_stood: Option<Vec2>,
@@ -1828,7 +1838,7 @@ impl Combat {
     /// passes and before the AI runs (`_DoPlayGameWork` @0x44223, before
     /// `_AIDispatch` @0x4429d), so no shot the passes hit counts. The
     /// session's `nova_sim::Session::game_work` reads them there, after
-    /// [`Combat::test_hits`].
+    /// [`Combat::test_hits_in_turn`].
     #[must_use]
     pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
         let mut aimed = BTreeMap::new();
@@ -2667,6 +2677,12 @@ impl Combat {
     /// firer before that ([`Combat::tractor`]). A direct hit's negative
     /// `Impact` is gated from its firer's centre, which a firer no longer
     /// in the fight has none of.
+    ///
+    /// A direct hit's can't-kill reads its attacker and its leader as
+    /// `fighters` lend them ([`plunder::cant_kill`]): the collision passes
+    /// and the beams stop after each direct hit for it to be answered,
+    /// and lend the ships afresh after ([`hit_turns`]), so the read is of
+    /// what the answers of the hits before it wrote.
     ///
     /// The original writes each push to the ship's velocity at once, and
     /// the ship moves by it the next frame; here the session sets the

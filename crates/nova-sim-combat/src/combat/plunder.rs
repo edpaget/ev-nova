@@ -32,6 +32,25 @@
 //! NPC, is (`_AIShipIsPlundering` @0x89841, the leader's own target not
 //! read).
 //!
+//! The prologue reads the attacker's and its leader's records live at
+//! every hit (`*0x3b5138 + slot * 0xc940`, @0x3a8cb-0x3a8e5; the target
+//! @0x3a95b, the attacker's goal @0x3a964, the leader's +0x9a @0x3a97a and
+//! goal @0x3a98b-0x3a99a), so it reads them as the reactions of the hits
+//! before it in the loop left them: their target (@0x3bcf6, @0x3bd79,
+//! @0x3be5d, `_AIMakeShipAttackPlayer` @0x89d4d, `_DoGoodSamaritan`
+//! @0x82b97) and their goal, 0xd to 4 (@0x89d3e, @0x82b82). Here
+//! [`cant_kill`] reads the fighters as they are lent, and the collision
+//! passes and the beams stop after each direct hit for it to be
+//! answered, the fighters lent afresh after
+//! ([`hit_turns`](super::hit_turns)). The launch flag, the caller's
+//! disable-only argument (+0x28), seeds the byte (@0x3a846), which the
+//! prologue can only set. As a plunderer's own shot leaves disable-only
+//! (above), the read decides a kill only for a shot or beam fired while
+//! its firer was not in goal 0xd, a beam at a ship its firer doesn't
+//! plunder, or an escort's fire whose leader plunders. `_HandleShot`'s
+//! hits are missile locks, which can't kill, and end-of-life blasts, which
+//! are no real hit, so it doesn't stop.
+//!
 //! `_AIShipIsPlunderingShip`'s other half (@0x83f6e) is goal 4 with
 //! sub-goal 0xf, a pirate docked with the ship it plunders
 //! ([`Fighter::docked`]): it plunders its target too ([`plunders`]), so
